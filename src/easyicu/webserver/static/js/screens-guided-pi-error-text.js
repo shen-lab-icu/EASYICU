@@ -24,6 +24,11 @@
         || developmentResumeFailureText(error.message)
         || developmentResumeFailureText(typeof error === 'string' ? error : '');
       if (resumeFailure) return resumeFailure;
+      // The hosted login gateway ended the session (js/hosted-session.js
+      // shows the way back to the login page).
+      if (error.code === 'login_required') {
+        return tr('Your sign-in has expired. Sign in again to continue.', '登录已过期，请重新登录后继续。');
+      }
       if (error.code === 'pi_session_authority_stale') {
         return tr('The study binding changed after this conversation was saved. Rebind it before continuing.', '这段对话保存后研究绑定发生了变化，请先重新绑定再继续。');
       }

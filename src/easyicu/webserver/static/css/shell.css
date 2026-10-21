@@ -67,3 +67,17 @@ body[data-reduce-motion="true"] .mode-seg.consequential{ box-shadow:none; }
 /* A hosted instance shows only the data its administrator prepared: the
    demo/real switches are not offered there (app.js marks the root). */
 :root[data-eu-hosted] [data-datamode-switch]{ display:none; }
+
+/* The hosted login session ended (js/hosted-session.js). The page stays
+   put so unsent text can be copied; the notice links back to the login. */
+.eu-session-expired{
+  position:fixed; left:50%; bottom:20px; z-index:1000; transform:translateX(-50%);
+  display:flex; align-items:center; gap:14px; max-width:calc(100vw - 32px);
+  padding:10px 12px 10px 16px; border:1px solid var(--hair-2); border-radius:var(--r-2);
+  background:var(--surface); box-shadow:var(--sh-3); color:var(--ink); font-size:13px;
+}
+.eu-session-expired a{
+  flex:none; padding:6px 12px; border-radius:var(--r-2);
+  background:var(--ink); color:var(--surface); font-weight:600; text-decoration:none;
+}
+.eu-session-expired a:focus-visible{ outline:2px solid var(--ink-3); outline-offset:2px; }
