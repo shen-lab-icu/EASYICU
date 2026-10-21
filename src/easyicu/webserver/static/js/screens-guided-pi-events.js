@@ -409,10 +409,6 @@
         }
         if (MESSAGE_ACTIONS.handleClick(event)) return;
         if (event.target.closest('[data-gpi-starter-browse]')) { location.hash = '#skills'; return; }
-        if (event.target.closest('[data-gpi-starter-shuffle]')) {
-          if (STARTERS && STARTERS.shuffle) STARTERS.shuffle(state.host, tr);
-          return;
-        }
         const starterAction = STARTERS && STARTERS.actionFromEvent(event, tr);
         if (starterAction && starterAction.kind === 'send') {
           sendText(starterAction.text, [], starterAction.intent, true, 'host_prompt');
@@ -487,7 +483,6 @@
             return;
           }
         }
-        if (event.target.matches('[data-gpi-starter-search]') && STARTERS && STARTERS.filter) STARTERS.filter(state.host, event.target.value);
         if (event.target.matches('[data-gpi-material-search]')) STUDY_WORKSPACE.filterMaterials(state.host, event.target.value);
         if (event.target.matches('[data-gpi-skill-search]')) STUDY_WORKSPACE.filterSkills(state.host, event.target.value);
       });
