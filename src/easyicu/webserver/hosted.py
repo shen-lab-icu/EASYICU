@@ -84,7 +84,7 @@ _ADMIN_ROUTES = frozenset({
 })
 _DISPLAY_SETTINGS = frozenset({"language", "density", "reduce_motion"})
 _DATA_FIELDS = frozenset({
-    "path", "paths", "source_path", "source_paths", "data_path", "data_root", "root",
+    "path", "paths", "folder", "source_path", "source_paths", "data_path", "data_root", "root",
     "raw_root", "out_dir", "output_dir", "export_dir", "export_path", "export_root",
     "parent_dir", "active_path", "crossdb_paths", "registered_export_path",
 })

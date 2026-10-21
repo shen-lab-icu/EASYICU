@@ -44,6 +44,7 @@ from easyicu.research_agent.literature_concepts import (
 from easyicu.research_agent.know_how.registry import KnowHowRegistry
 from easyicu.webserver import state_paths
 from easyicu.webserver import dataio
+from easyicu.webserver import hosted
 from easyicu.webserver.capabilities import pubmed_connector_block_reason
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.ideas import direct_evidence_search
@@ -286,6 +287,9 @@ def scan_literature_folder(body: Dict[str, Any]) -> Dict[str, Any]:
                 "reason": "Choose a local folder that contains downloaded papers.",
             }
         )
+    # A hosted instance reads only its data roots, whatever field named the
+    # folder (the request guard matches field names; this owner reads files).
+    hosted.require_path(raw_path)
     folder = Path(raw_path).expanduser()
     try:
         folder = folder.resolve()
