@@ -39,6 +39,7 @@ from easyicu.webserver.figure_presentation import verified_presentation_gallery
 from easyicu.webserver.research_input_progress import project_research_input_state
 from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.run_record import (
+    MAX_ARTIFACT_SIZE_BYTES,
     RunDirectory,
     RunRecord,
     RunRecordReadError,
@@ -1913,6 +1914,13 @@ def _artifact_from_raw(
         "sha256": hashlib.sha256(raw).hexdigest(),
         "kind": path.suffix.lstrip(".") or "file",
     }
+    try:
+        size = path.stat(follow_symlinks=False).st_size
+    except OSError:
+        pass
+    else:
+        if type(size) is int and 0 <= size <= MAX_ARTIFACT_SIZE_BYTES:
+            out["size_bytes"] = size
     if summary is not None:
         out["summary"] = summary
     return out

@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, Dict, Literal, Mapping, Optional, Sequence
 
 from easyicu.databases.profiles import get_database_profile
-from easyicu.webserver import demo_sources
+from easyicu.webserver import sources
 
 SelectionReason = Literal[
     "most_complete_local_dataset",
@@ -135,16 +135,9 @@ def _registered_source_projection(
     modules = [
         str(item)[:120] for item in (source.get("modules") or []) if str(item).strip()
     ][:64]
-    official_demo_specs = (
-        demo_sources.get_source(source_id)
-        for source_id in demo_sources.allowed_source_ids()
-    )
-    official_demo_labels = {
-        f"{spec.title} v{spec.version}".casefold() for spec in official_demo_specs
-    }
     source_scope = (
         "official_demo"
-        if label.casefold() in official_demo_labels
+        if sources.is_official_demo_source(source)
         else "registered_export"
     )
     return {

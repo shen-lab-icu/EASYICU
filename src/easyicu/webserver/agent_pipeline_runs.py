@@ -4340,7 +4340,7 @@ def _write_projection(
         ),
         "pending_reviews": pending_requests,
         "trace_timings": _trace_timings_projection(
-            run_dir, source=run_context.get("source")
+            run_dir, source=run_context.get("source"), plan=plan,
         ),
         "plan_approval_allowed": bool(
             pending_requests

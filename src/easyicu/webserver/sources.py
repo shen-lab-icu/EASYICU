@@ -348,6 +348,35 @@ def load_registry() -> Dict[str, Any]:
     }
 
 
+def is_official_demo_source(source: Mapping[str, Any]) -> bool:
+    """Use the same official-demo identity in offers and source counts."""
+    from easyicu.webserver import demo_sources
+
+    label = str(source.get("label") or "").strip().casefold()
+    return any(
+        label == f"{spec.title} v{spec.version}".casefold()
+        for source_id in demo_sources.allowed_source_ids()
+        for spec in (demo_sources.get_source(source_id),)
+    )
+
+
+def registered_source_counts() -> Dict[str, Dict[str, int]]:
+    """Count validated full exports from the conversation's source registry."""
+    from easyicu.databases.profiles import get_database_profile, iter_database_profiles
+
+    counts = {profile.key: 0 for profile in iter_database_profiles(public_only=True)}
+    for row in load_registry().get("sources") or []:
+        if not isinstance(row, Mapping) or not row.get("ok") or not row.get("id"):
+            continue
+        try:
+            profile = get_database_profile(str(row.get("database") or ""))
+        except KeyError:
+            continue
+        if profile.is_public and not is_official_demo_source(row):
+            counts[profile.key] += 1
+    return {"by_database": counts}
+
+
 @_registry_locked
 def stored_registration_state(path: str) -> tuple[bool, bool]:
     """Return persisted registration/active flags without rescanning exports.

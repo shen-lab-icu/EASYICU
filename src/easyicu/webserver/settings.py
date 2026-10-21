@@ -24,6 +24,7 @@ import os
 import sys
 import threading
 import time
+import unicodedata
 from typing import Any, Dict, Iterator, List
 
 import easyicu
@@ -35,9 +36,10 @@ _CONFIG_DIR = state_paths.state_root()
 _CONFIG_PATH = _CONFIG_DIR / "webserver_settings.json"
 _LOCK = threading.RLock()
 
-# Only these keys are accepted from the client. Each one must have a reader
-# somewhere in ``easyicu`` outside this module — see the invariant above.
+# Known persisted keys, including the administrator-owned support contact.
+# Each one has a reader outside this module — see the invariant above.
 DEFAULTS: Dict[str, Any] = {
+    "support_contact": "",  # administrator-owned, read-only in the browser
     "ai_enabled": False,  # external-LLM opt-in gate — OFF by default
     "language": "en",  # "en" | "zh"
     "data_mode": "demo",  # "demo" | "real"
@@ -82,6 +84,12 @@ def _optional_path(value: Any) -> str | None:
     return text or None
 
 
+def _support_contact(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return "".join(char for char in value if unicodedata.category(char) != "Cc")[:200]
+
+
 _CHOICES = {
     "language": {"en", "zh"},
     "data_mode": {"demo", "real"},
@@ -102,6 +110,7 @@ def _choice(key: str):
 
 
 _COERCE = {
+    "support_contact": _support_contact,
     "ai_enabled": parse_bool,
     "language": _choice("language"),
     "data_mode": _choice("data_mode"),
@@ -295,9 +304,10 @@ def update_settings(patch: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def reset_settings() -> Dict[str, Any]:
-    """Reset local settings to the current backend defaults."""
+    """Reset preferences while retaining the administrator's contact."""
     with _LOCK, _file_lock():
         current = dict(DEFAULTS)
+        current["support_contact"] = _merged_from_disk()["support_contact"]
         _write_settings(current)
         return current
 

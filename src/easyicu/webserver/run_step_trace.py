@@ -80,6 +80,8 @@ TRACE_FACT_KEYS = (
     "queries",
     "source_label",
     "source_database",
+    "group_variable_label",
+    "outcome_label",
 )
 
 _S = rf"(?P<step>{STEP_ID_PATTERN})"
@@ -436,8 +438,83 @@ def _source_facts(source: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _reader_label_pair(labels: Mapping[str, Any]) -> Dict[str, str]:
+    shown: Dict[str, str] = {}
+    for language in ("zh", "en"):
+        value = labels.get(language)
+        if not isinstance(value, str):
+            continue
+        text = " ".join(value.split())[:240]
+        if text and run_artifact_disclosure.scan_browser_projection({"label": text})["passed"]:
+            shown[language] = text
+    return shown
+
+
+def _run_reader_facts(
+    run_dir: Path, *, plan: Optional[Mapping[str, Any]] = None,
+    step_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Reader names from the grouping owner and recorded primary outcome.
+
+    The current plan's digest-bound authority supplies its display label;
+    the context identifies the primary endpoint. No column name is a label.
+    """
+    from easyicu.research_agent.orchestration.exposure_group_labels import (
+        recorded_exposure_group_labels,
+    )
+    from easyicu.webserver.literature_projection import load_current_plan_authority
+    from easyicu.webserver.pi_copilot.exposure_group_notes import project_exposure_groups
+
+    if plan is None:
+        plan = load_current_plan_authority(run_dir)
+    context = _read_json(_child(run_dir, "research_context.json"), MAX_INDEX_BYTES)
+    context = context if isinstance(context, Mapping) else {}
+    projected = project_exposure_groups(recorded_exposure_group_labels(run_dir, plan=plan))
+    groupings = (projected or {}).get("groupings") or []
+    variable = context.get("primary_exposure")
+    if step_id:
+        steps = plan.get("steps")
+        step = next((item for item in steps or [] if isinstance(item, Mapping)
+                     and item.get("step_id") == step_id), {})
+        inputs = step.get("inputs")
+        candidates = [row for row in groupings if row["variable"] in (
+            inputs if isinstance(inputs, list) else []
+        )]
+        if len(candidates) == 1:
+            variable = candidates[0]["variable"]
+    elif variable is None and len(groupings) == 1:
+        variable = groupings[0]["variable"]
+    grouping = next((row for row in groupings if row["variable"] == variable), {})
+    facts: Dict[str, Any] = {}
+    group_label = _reader_label_pair({
+        "zh": f"{grouping['concept_label_zh']}分组" if grouping.get("concept_label_zh") else "",
+        "en": f"{grouping['concept_label_en']} groups" if grouping.get("concept_label_en") else "",
+    })
+    if group_label:
+        facts["group_variable_label"] = group_label
+    labels = plan.get("display_labels")
+    outcome = context.get("target_outcome")
+    label = labels.get(outcome) if isinstance(labels, Mapping) and isinstance(outcome, str) else None
+    if isinstance(label, str) and label.strip():
+        # One recorded display label serves both languages unless the context
+        # also records an English description for this same endpoint.
+        english = label
+        if re.search(r"[㐀-鿿]", label):
+            variables = context.get("variables")
+            for item in variables if isinstance(variables, list) else []:
+                if isinstance(item, Mapping) and item.get("name") == outcome:
+                    description = item.get("description")
+                    if isinstance(description, str) and description.strip() and not re.search(r"[㐀-鿿]", description):
+                        english = description
+        outcome_label = _reader_label_pair({"zh": label, "en": english})
+        if outcome_label:
+            facts["outcome_label"] = outcome_label
+    return facts
+
+
 def trace_timings_projection(
-    run_dir: Optional[Path], *, source: Optional[Mapping[str, Any]] = None
+    run_dir: Optional[Path], *, source: Optional[Mapping[str, Any]] = None,
+    plan: Optional[Mapping[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Read only audit lifecycle coordinates and typed action facts.
 
@@ -456,6 +533,8 @@ def trace_timings_projection(
         return []
     rows: List[Dict[str, Any]] = []
     literature: Optional[Dict[str, Any]] = None
+    reader_facts = _run_reader_facts(Path(run_dir), plan=plan)
+    step_reader_facts: Dict[str, Dict[str, Any]] = {}
     for line in raw.decode("utf-8", errors="replace").splitlines():
         try:
             event = json.loads(line)
@@ -489,6 +568,14 @@ def trace_timings_projection(
         if facts.get("step_id") and "step_id" not in row:
             row["step_id"] = facts["step_id"]
         row.update({key: facts[key] for key in facts if key != "step_id"})
+        if clean_step := row.get("step_id"):
+            if clean_step not in step_reader_facts:
+                step_reader_facts[clean_step] = _run_reader_facts(
+                    Path(run_dir), plan=plan, step_id=clean_step,
+                )
+            row.update(step_reader_facts[clean_step])
+        elif facts.get("action") == "exposure_groups_staged":
+            row.update(reader_facts)
         if facts.get("action") == "literature_build":
             if literature is None:
                 literature = _literature_facts(Path(run_dir))
@@ -801,7 +888,9 @@ def _step_inputs(
     records it -- nothing is inferred.
     """
 
-    facts: Dict[str, Any] = dict(_source_facts(source))
+    facts: Dict[str, Any] = {
+        **_source_facts(source), **_run_reader_facts(run_dir, step_id=step_id),
+    }
     for row in run_rows:
         if row.get("action") == "context_built" and isinstance(row.get("stay_count"), int):
             facts["stay_count"] = row["stay_count"]

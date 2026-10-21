@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from ...planning.exposure_group_reader_names import exposure_group_reader_names
 from ...research_context.typed import parse_research_context_json
 from .typed_input_binding import contained_regular_file, sha256_file
 
@@ -77,7 +78,27 @@ def load_bound_variable_descriptions(
             unit = str(variable.unit or "").strip()
             description = f"time to {description}" + (f" ({unit})" if unit else "")
         result[variable.name] = description
+    # Grouping and level names are sealed into this context; a derived
+    # column's source description may instead be CJK or its internal code.
+    result.update(exposure_group_reader_names(context))
     return result
+
+
+def load_bound_grouping_variable(
+    *, run_dir: Path, resolved_inputs: Path | Mapping[str, Any],
+) -> str | None:
+    """Return the recorded primary grouping, only when its levels are sealed."""
+    manifest = (
+        resolved_inputs
+        if isinstance(resolved_inputs, Mapping)
+        else json.loads(Path(resolved_inputs).read_text(encoding="utf-8"))
+    )
+    if not isinstance(manifest, Mapping) or manifest.get("context") is None:
+        return None
+    context_bytes, _context_sha = _bound_bytes(run_dir, manifest, "context")
+    context = parse_research_context_json(context_bytes)
+    primary = context.primary_exposure
+    return primary if primary and primary in exposure_group_reader_names(context) else None
 
 
 def load_bound_variable_display(
