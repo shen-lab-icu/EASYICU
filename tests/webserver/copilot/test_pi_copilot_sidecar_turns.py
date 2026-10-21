@@ -158,8 +158,8 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
     assert reopened_state["enabled_tools"] == state["enabled_tools"]
 
 
-def test_sidecar_projects_bounded_reasoning_summaries_for_the_trace() -> None:
-    """Reasoning summaries reach the browser bounded; tool arguments do not."""
+def test_sidecar_projects_reasoning_lifecycle_without_summary_text() -> None:
+    """Only reasoning start/end and a transcript marker reach the browser."""
 
     node = shutil.which("node")
     if node is None:
@@ -188,13 +188,13 @@ def test_sidecar_projects_bounded_reasoning_summaries_for_the_trace() -> None:
     payload = json.loads(completed.stdout)
     assert [event["type"] if event else None for event in payload["events"]] == [
         "thinking_start",
-        "thinking_delta",
+        None,
         "thinking_end",
         None,
     ]
-    assert len(payload["events"][1]["delta"]) == 4000
+    assert payload["events"][1] is None
     assert [part["type"] for part in payload["transcript"]["content"]] == ["thinking", "tool_call"]
-    assert payload["transcript"]["content"][0] == {"type": "thinking", "text": "**Listing eICU data sources**\n\n"}
+    assert payload["transcript"]["content"][0] == {"type": "thinking"}
     assert "must-not-leak" not in completed.stdout
 
 

@@ -57,7 +57,7 @@ const TOOL_CATALOG_FIELDS = new Set([
 const TOOL_ARGUMENT_FIELDS = new Set(["model", "host", "required"]);
 // Effort ("thinking") levels the researcher may pick per session. Pi clamps
 // them to what the selected model supports; whatever the level, only the
-// bounded, sanitized reasoning summary from event-projection crosses the bridge.
+// reasoning lifecycle timing from event-projection crosses the bridge.
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high"]);
 const DEFAULT_THINKING_LEVEL = "medium";
 function thinkingLevelParam(value) {

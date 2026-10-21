@@ -125,8 +125,8 @@ def test_transcript_projection_tolerates_unexpected_shapes() -> None:
     ]
 
 
-def test_reasoning_summaries_are_sanitized_like_replies_and_only_for_the_model() -> None:
-    """The conversation shows the model's reasoning summary as trace rows."""
+def test_reasoning_summaries_stay_out_of_the_browser_projection() -> None:
+    """Only a reasoning marker reaches the trace; its prose stays in the SDK session."""
 
     rows = [
         {
@@ -144,6 +144,6 @@ def test_reasoning_summaries_are_sanitized_like_replies_and_only_for_the_model()
 
     projected = project_transcript(rows)
 
-    assert projected[0]["content"][0] == {"type": "thinking", "text": "**Checking run status**"}
+    assert projected[0]["content"][0] == {"type": "thinking"}
     assert projected[0]["content"][1]["text"] == "运行已失败。"
     assert [block["type"] for block in projected[1]["content"]] == ["text"]

@@ -153,7 +153,7 @@ def test_planning_progress_and_run_failures_read_as_progress_and_reasons() -> No
     assert "activity.runningNote = progressText" in childjob
     assert "function planningProgressText(progress)" in activity
     assert "String(row.runningNote || '').trim() ||" in activity
-    assert "planningProgressText, reasoningHtml, render" in activity
+    assert "planningProgressText, notePipelineEvent, finishPipelineSteps, pipelineTime, render" in activity
     # To-do row: stage sentence + failure explanation, never the raw step/code.
     assert "host.progressLabel(progress)" in aside
     assert "host.runFailureText(failureCode" in aside
@@ -863,8 +863,8 @@ def test_reply_turn_reads_as_intro_traces_with_reasoning_and_answer() -> None:
 
     The model's opening sentence sits above the traces, the traces list
     interleaves the model's interim narration after the tool call it follows,
-    the model's reasoning summary is a row with its headline and full text,
-    the streaming reasoning row exposes a patch target, and the answer with
+    reasoning is a row with measured elapsed time and no summary text,
+    and the answer with
     its actions stays last. A running turn groups the same way.
     """
 
@@ -943,24 +943,28 @@ def test_reply_turn_reads_as_intro_traces_with_reasoning_and_answer() -> None:
       ], replayTurns: [{{ status: 'done', events: [
         {{ type: 'run_start', at: '2026-09-21T09:00:00.100Z' }},
         {{ type: 'assistant_start', at: '2026-09-21T09:00:00.200Z' }},
+        {{ type: 'thinking_start', at: '2026-09-21T09:00:00.200Z' }},
+        {{ type: 'thinking_end', at: '2026-09-21T09:00:06.200Z' }},
         {{ type: 'tool_start', at: '2026-09-21T09:00:06.200Z', tool_call_id: 'c1', tool_name: 'easyicu_list_data_sources' }},
         {{ type: 'message_end', at: '2026-09-21T09:00:06.250Z', stop_reason: 'toolUse' }},
         {{ type: 'tool_end', at: '2026-09-21T09:00:06.300Z', tool_call_id: 'c1', tool_name: 'easyicu_list_data_sources', code: 'ok' }},
         {{ type: 'assistant_start', at: '2026-09-21T09:00:06.400Z' }},
+        {{ type: 'thinking_start', at: '2026-09-21T09:00:06.400Z' }},
+        {{ type: 'thinking_end', at: '2026-09-21T09:00:12.400Z' }},
         {{ type: 'message_end', at: '2026-09-21T09:00:12.400Z', stop_reason: 'stop' }},
         {{ type: 'run_end', at: '2026-09-21T09:00:12.500Z' }},
       ] }}] }});
       const persistedActivity = persisted.find(row => row.role === 'activity');
       process.stdout.write(JSON.stringify({{
-        groupedOrder: ascending(order(grouped, ['data-segment="intro" data-row="a1"', '<details class="gpi-activity complete"', 'kind-thinking', 'aria-label="Listing eICU data sources"', 'data-gpi-thinking-stream="thinking-1"', 'EasyICU 内部状态', 'kind-tool', 'gpi-activity-narration', 'data-row="a2"', 'aria-label="已保存研究配置"', 'data-row="a3"'])),
+        groupedOrder: ascending(order(grouped, ['data-segment="intro" data-row="a1"', '<details class="gpi-activity complete"', 'kind-thinking', 'aria-label="思考"', 'kind-tool', 'gpi-activity-narration', 'data-row="a2"', 'aria-label="已保存研究配置"', 'data-row="a3"'])),
         narrationAfterFirstTool: grouped.indexOf('gpi-activity-narration') > grouped.indexOf('检查 EasyICU 数据源目录')
           && grouped.indexOf('gpi-activity-narration') < grouped.indexOf('保存研究配置'),
         introNotAnArticleRow: !grouped.includes('<article data-row="a1">') && !grouped.includes('<article data-row="a2">'),
         answerIsFullRow: grouped.includes('<article data-row="a3">'),
-        reasoningBodyRendered: grouped.includes('<strong>Listing eICU data sources</strong><span class="gpi-activity-reasoning" data-gpi-thinking-stream="thinking-1"><p>Need the catalog before EasyICU 内部状态.</p></span>'),
+        reasoningBodyHidden: !decodeURIComponent(grouped).includes('Listing eICU data sources') && !decodeURIComponent(grouped).includes('Need the catalog'),
         reasoningRowDuration: grouped.includes('1.2 秒'),
         legacyKeepsFullRows: legacy.includes('<article data-row="a1">') && legacy.includes('<article data-row="a2">') && !legacy.includes('gpi-activity-narration'),
-        runningOrder: ascending(order(running, ['data-segment="intro" data-row="a1"', 'gpi-activity-running', 'kind-thinking', 'gpi-activity-reasoning is-streaming', 'data-gpi-thinking-stream="thinking-2"', 'gpi-activity-note', 'data-row="a2s"'])),
+        runningOrder: ascending(order(running, ['data-segment="intro" data-row="a1"', 'gpi-activity-running', 'kind-thinking', 'gpi-activity-note', 'data-row="a2s"'])),
         runningRows: (running.match(/<li class="/g) || []).length,
         persistedThinking: persistedActivity.steps.filter(step => step.kind === 'thinking').map(step => step.text),
         persistedAfterSteps: persisted.filter(row => row.role === 'assistant').map(row => row.afterSteps),
@@ -975,12 +979,12 @@ def test_reply_turn_reads_as_intro_traces_with_reasoning_and_answer() -> None:
         "narrationAfterFirstTool": True,
         "introNotAnArticleRow": True,
         "answerIsFullRow": True,
-        "reasoningBodyRendered": True,
+        "reasoningBodyHidden": True,
         "reasoningRowDuration": True,
         "legacyKeepsFullRows": True,
         "runningOrder": True,
         "runningRows": 3,
-        "persistedThinking": ["**Listing eICU data sources**", "**Saving the setup**"],
+        "persistedThinking": [None, None],
         "persistedAfterSteps": [0, 1],
         "persistedOrder": "submitted,thinking,tool,thinking,settled",
         "persistedThinkingDurations": [6000, 6000],
@@ -988,8 +992,8 @@ def test_reply_turn_reads_as_intro_traces_with_reasoning_and_answer() -> None:
     shell = _read("js/screens-guided-pi.js")
     live_stream = _read("js/screens-guided-pi-live-stream.js")
     assert "streamingRow.afterSteps = activity.steps.filter(item => item.kind === 'tool').length" in live_stream
-    assert "event.type === 'thinking_start' || event.type === 'thinking_delta' || event.type === 'thinking_end'" in live_stream
-    assert "if (patchStreamingThinking(step)) return;" in live_stream
+    assert "event.type === 'thinking_start' || event.type === 'thinking_end'" in live_stream
+    assert "patchStreamingThinking" not in live_stream
     assert "}, renderSegment);" in shell
     assert "return ACTIVITY.render(row, options && options.trace) + RUN_FILES.render(row);" in shell
     skin = _read("css/guided-pi-skin.css")

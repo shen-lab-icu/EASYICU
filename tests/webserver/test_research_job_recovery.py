@@ -195,7 +195,7 @@ def test_system_resume_survives_conversation_progress_tail():
     events = [{"type": "progress", "step": "provider_auto_resume", "current": 1}]
     events += [{"type": "progress", "step": "planning"} for _ in range(30)]
     progress = project_job({"id": "test", "events": events})["progress"]
-    assert progress[0]["step"] == "provider_auto_resume" and len(progress) == 21
+    assert progress[0]["step"] == "provider_auto_resume" and len(progress) == 31
 
 
 def test_system_recovery_labels_in_both_languages():
@@ -328,18 +328,22 @@ def test_conversation_keeps_two_distinct_system_resumes():
     root = Path(__file__).resolve().parents[2]
     script = """
 global.window = {EasyICU: {guidedPi: {declare: (n,a) => {global.api=a;}, require: () => null}}};
+require(process.argv[2]);
+const activity = api.create({tr: en => en});
 require(process.argv[1]);
 const messages = [];
 const owner = api.create({
   tr: (en,zh) => en, messages: () => messages, session: () => ({}),
-  activity: {pipelineEventLabel: e => 'System action: ' + e.current},
+  activity,
   upsertActivityStep: (a,s) => {const i=a.steps.findIndex(x=>x.id===s.id); if(i<0) a.steps.push(s); else a.steps[i]=s;}
 });
 owner.hydrateProjectedJob({present:true, job_id:'synthetic', status:'done', progress:
   [1,2].map(current => ({type:'progress',step:'provider_auto_resume',current,total:2}))});
 process.stdout.write(JSON.stringify(messages));
 """
-    result = run_node("node", script, str(root / "src/easyicu/webserver/static/js/screens-guided-pi-childjob.js"), check=True)
+    result = run_node("node", script,
+                      str(root / "src/easyicu/webserver/static/js/screens-guided-pi-childjob.js"),
+                      str(root / "src/easyicu/webserver/static/js/screens-guided-pi-activity.js"), check=True)
     rows = json.loads(result.stdout)
     assert len(rows) == 1 and rows[0]["role"] == "activity"
     resumes = [row for row in rows[0]["steps"] if row["step"] == "provider_auto_resume"]

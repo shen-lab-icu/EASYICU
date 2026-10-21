@@ -81,7 +81,8 @@
       host.messages().push(activity);
       return activity;
     }
-    function completeRunningPipelineSteps(activity) {
+    function completeRunningPipelineSteps(activity, at, status) {
+      if (typeof ACTIVITY.finishPipelineSteps === 'function') { ACTIVITY.finishPipelineSteps(activity, at, status); return; }
       activity.steps.forEach(step => {
         if (step.kind === 'pipeline' && step.status === 'running') step.status = 'complete';
       });
@@ -93,20 +94,6 @@
       return String(job.status || '') === 'failed'
         && (!Array.isArray(job.artifact_refs) || job.artifact_refs.length === 0);
     }
-    function supersedeEarlierPlanAttempts(job) {
-      if (!isPlanAttempt(job) || job.human_review_pending !== true) return;
-      const createdAt = Number(job.created_at_epoch);
-      if (!Number.isFinite(createdAt)) return;
-      const messages = host.messages();
-      for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const row = messages[index];
-        if (
-          row && row.role === 'activity' && row.childJobPlanAttempt === true
-          && String(row.childJobId || '') !== String(job.job_id || '')
-          && Number(row.childJobCreatedAt) < createdAt
-        ) messages.splice(index, 1);
-      }
-    }
     function childEventLabel(event) {
       return ACTIVITY.pipelineEventLabel(event);
     }
@@ -114,20 +101,6 @@
       return typeof ACTIVITY.planningEventFacts === 'function'
         ? ACTIVITY.planningEventFacts(event)
         : { unit: String(event && event.planning_unit || ''), phase: String(event && event.retry_phase || '') };
-    }
-    function childEventKind(event) {
-      const message = String(event && (event.message || event.label) || '').toLowerCase();
-      return String(event && event.step || '').toLowerCase() === 'planning'
-        && (planningFacts(event).phase === 'rejected'
-          || message.includes('did not satisfy the scientific contract'))
-        ? 'retry' : 'pipeline';
-    }
-    function childEventId(step, kind, event) {
-      if (step === 'provider_auto_resume') return 'pipeline-provider-auto-resume-' + Number(event.current || 0);
-      if (kind !== 'retry') return 'pipeline-' + step;
-      const attempt = Number(event && event.current);
-      const unit = String(planningFacts(event).unit || 'plan').replace(/[^a-z0-9_-]/gi, '').slice(0, 24) || 'plan';
-      return `pipeline-plan-retry-${unit}-${Number.isFinite(attempt) ? attempt : 'current'}`;
     }
     /* The progressive planner reports one validation event per outline step
        (structure, rules, then each executable step), and the activity card
@@ -155,7 +128,8 @@
       if (!event || typeof event !== 'object' || host.childJobId() !== jobId) return;
       const activity = childActivity(jobId, code);
       if (event.type === 'end') {
-        completeRunningPipelineSteps(activity);
+        const endedAt = typeof ACTIVITY.pipelineTime === 'function' ? ACTIVITY.pipelineTime(event.timestamp) : null;
+        completeRunningPipelineSteps(activity, endedAt, ['failed', 'cancelled'].includes(event.status) ? 'error' : 'complete');
         const gate = event.result && event.result.gate;
         const pending = Boolean(event.result && event.result.human_review_pending);
         const replayOwner = window.EasyICU.guidedPi.require('replay');
@@ -186,13 +160,13 @@
                 : tr('EasyICU research task completed', 'EasyICU 科研任务已完成'));
         upsertActivityStep(activity, {
           id: 'pipeline-terminal', kind: 'pipeline', step: 'terminal', label,
-          status: failed || blocked ? 'error' : 'complete', at: Date.now(),
+          status: failed || blocked ? 'error' : 'complete', at: endedAt,
           code: String((gate && (gate.reason || gate.status)) || errorCode || event.status || ''),
           owner: String((event.result && event.result.run_id) || ''),
         });
         activity.status = blocked ? 'blocked' : (failed ? (event.status === 'cancelled' ? 'cancelled' : 'error') : 'complete');
         if (presentation.title) activity.displayTitle = presentation.title;
-        activity.endedAt = Date.now();
+        activity.endedAt = endedAt;
         closeChildSource();
         archiveChildJob(jobId)
           .catch(() => null)
@@ -214,41 +188,17 @@
         return;
       }
       if (!['start', 'progress', 'gate', 'artifact', 'cancel_requested'].includes(String(event.type || ''))) return;
-      // A coder/runner event belongs to the plan step it names: it becomes
-      // that row's detail and leaves the step running.
-      const subStep = typeof ACTIVITY.planSubStepFacts === 'function' ? ACTIVITY.planSubStepFacts(event) : null;
-      if (subStep && ACTIVITY.notePlanSubStep(activity.steps, subStep)) { render(); return; }
-      completeRunningPipelineSteps(activity);
-      const planStep = typeof ACTIVITY.planStepFacts === 'function' ? ACTIVITY.planStepFacts(event) : null;
-      if (planStep) {
-        const now = Date.now();
-        const row = ACTIVITY.planStepRow(planStep, now);
-        const existing = activity.steps.find(item => item.id === row.id);
-        // A completed step keeps the start time its "started" event recorded.
-        upsertActivityStep(activity, existing && existing.startedAt ? { ...row, startedAt: existing.startedAt } : row);
-        render();
-        return;
-      }
       const step = String(event.step || event.type || 'pipeline').slice(0, 80);
       if (step === 'report_repair') {
         activity.reportOnly = true;
         activity.runningTitle = runningJobTitle('easyicu_report_repair_submitted');
       }
-      const kind = childEventKind(event);
+      const row = typeof ACTIVITY.notePipelineEvent === 'function'
+        ? ACTIVITY.notePipelineEvent(activity, event) : null;
       const progress = notePlanningProgress(activity, event);
       const progressText = progress ? ACTIVITY.planningProgressText(progress) : '';
       if (progressText) activity.runningNote = progressText;
-      upsertActivityStep(activity, {
-        // One row per pipeline step, updated in place. Keying on `seq` gave a
-        // fresh row for every event, so a single step reported four times
-        // (started / generating / running / complete) and 13 steps filled the
-        // timeline with 52 near-identical lines.
-        id: childEventId(step, kind, event),
-        kind, step, label: childEventLabel(event), status: 'running',
-        at: Date.now(), code: step,
-        owner: String(event.run_id || '').slice(0, 160),
-        ...(progressText && kind === 'pipeline' ? { text: progressText } : {}),
-      });
+      if (row && progressText && row.kind === 'pipeline') row.text = progressText;
       if (workflowStep !== step) {
         workflowStep = step;
         Promise.resolve(loadWorkflow()).then(() => {
@@ -306,7 +256,6 @@
     function hydrateProjectedJob(job) {
       if (!job || !job.present || !job.job_id || !host.session()) return;
       const jobId = String(job.job_id);
-      supersedeEarlierPlanAttempts(job);
       const activity = childActivity(jobId, job.report_only ? 'easyicu_report_repair_submitted' : String(job.kind || ''));
       activity.childJobPlanAttempt = isPlanAttempt(job);
       activity.childJobCreatedAt = Number(job.created_at_epoch);
@@ -323,30 +272,8 @@
       // follow keep counting from here.
       activity.planningProgress = null;
       progress.forEach(event => {
-        if (String(event.type || '') === 'end') return;
-        // Snapshot rows carry no timestamps, so plan-step rows show no time.
-        const planStep = typeof ACTIVITY.planStepFacts === 'function' ? ACTIVITY.planStepFacts(event) : null;
-        if (planStep) {
-          const row = ACTIVITY.planStepRow(planStep, Date.now(), { durationKnown: false });
-          upsertActivityStep(activity, row.status === 'running' ? { ...row, status: 'complete' } : row);
-          return;
-        }
-        if (typeof ACTIVITY.planSubStepFacts === 'function'
-          && ACTIVITY.notePlanSubStep(activity.steps, ACTIVITY.planSubStepFacts(event))) return;
-        const step = String(event.step || event.type || 'pipeline').slice(0, 80);
-        const kind = childEventKind(event);
-        const count = event.current != null && event.total != null ? `${event.current}/${event.total}` : '';
-        const reason = String(event.reason_code || '');
+        if (typeof ACTIVITY.notePipelineEvent === 'function') ACTIVITY.notePipelineEvent(activity, event);
         notePlanningProgress(activity, event);
-        upsertActivityStep(activity, {
-          id: childEventId(step, kind, event),
-          kind, step,
-          // Replays must use the same safe public projection as live SSE.
-          // Persisted runner prose is an audit receipt, not conversation copy.
-          label: childEventLabel(event),
-          status: ['failed', 'cancelled', 'error'].includes(String(event.status || '')) ? 'error' : 'complete',
-          at: Date.now(), code: [count, reason].filter(Boolean).join(' · '), owner: String(job.kind || 'EasyICU'),
-        });
       });
       const settled = ['done', 'failed', 'cancelled'].includes(String(job.status || ''));
       const replayedProgress = !settled && activity.planningProgress
@@ -358,7 +285,7 @@
       }
       if (settled) {
         const blocked = Boolean(presentation.blocked);
-        completeRunningPipelineSteps(activity);
+        completeRunningPipelineSteps(activity, presentation.endedAt, job.status === 'done' ? 'complete' : 'error');
         upsertActivityStep(activity, {
           // Match the live event id so replay replaces the row instead of
           // appending a second terminal state after session refresh.
@@ -368,12 +295,12 @@
             : job.status === 'cancelled'
               ? tr('EasyICU research task cancelled', 'EasyICU 科研任务已取消')
               : tr('EasyICU research task failed', 'EasyICU 科研任务失败')),
-          status: job.status === 'done' && !blocked ? 'complete' : 'error', at: Date.now(),
+          status: job.status === 'done' && !blocked ? 'complete' : 'error', at: presentation.endedAt,
           code: String(job.gate_reason_code || job.gate_status || job.error_code || job.status || ''), owner: String(job.kind || 'EasyICU'),
           resources: Array.isArray(job.artifact_refs) ? job.artifact_refs : [],
         });
         activity.status = blocked ? 'blocked' : (job.status === 'done' ? 'complete' : (job.status === 'cancelled' ? 'cancelled' : 'error'));
-        if (presentation.endedAt == null) activity.endedAt = Date.now();
+        if (presentation.endedAt == null) activity.durationKnown = false;
       }
     }
 

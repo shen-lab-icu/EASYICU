@@ -94,7 +94,7 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     assert "the next unresolved key scientific decision" not in entrypoint
     assert "pi_regenerate_intent_invalid" in entrypoint
     projection = (APP_DIR / "src" / "event-projection.mjs").read_text(encoding="utf-8")
-    assert "details.summary" in projection
+    assert "details.summary" not in projection
     assert 'receipt.status === "blocked"' in projection
     assert 'receipt.status === "failed"' in projection
     sequential_controls = {
@@ -1140,13 +1140,11 @@ def test_sidecar_contract_hides_reasoning_and_enforces_token_budget() -> None:
     assert "adult ICU population alone authorizes neither first-stay nor all-stay" in source
     assert "Every completed research reply must end with a localized standalone" in source
     assert "The host renders those bullets as clickable choices" in source
-    # The model's reasoning summary crosses the boundary bounded (the
-    # conversation shows it as trace rows); tool arguments and partial tool
-    # output still never do.
+    # Reasoning text, tool instructions and arguments stay in the SDK store.
     assert 'update.type === "thinking_delta"' in projection
     assert 'item.type === "thinking" && role === "assistant"' in projection
-    assert "boundedText(update.delta, MAX_REASONING_CHARS)" in projection
-    assert "boundedText(item.thinking, MAX_REASONING_CHARS)" in projection
+    assert "boundedText(update.delta, MAX_REASONING_CHARS)" not in projection
+    assert "boundedText(item.thinking, MAX_REASONING_CHARS)" not in projection
     assert "args: event.args" not in projection
     assert "partialResult" not in projection
     assert "arguments: item.arguments" not in projection
@@ -1439,13 +1437,13 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         "tool_progress",
         "tool_end",
         "run_end",
-        "thinking_delta",
+        None,
     ]
-    assert payload["events"][7] == {"type": "thinking_delta", "at": payload["events"][7]["at"], "delta": "private"}
+    assert payload["events"][7] is None
     assert "args" not in payload["events"][3]
     assert "partial_result" not in payload["events"][4]
     assert payload["events"][5]["code"] == "study_context_ready"
-    assert payload["events"][5]["summary"] == "Bounded summary"
+    assert "summary" not in payload["events"][5]
     assert payload["timing"]["start"]["at"] == "2024-07-03T09:46:40.000Z"
     assert (
         datetime.fromisoformat(payload["timing"]["messageEnd"]["at"].replace("Z", "+00:00"))
@@ -1456,7 +1454,7 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         >= datetime.fromtimestamp(payload["timing"]["observedBefore"] / 1000, tz=timezone.utc)
     )
     assert payload["transcript"]["content"][0]["type"] == "tool_result"
-    assert payload["transcript"]["content"][0]["summary"] == "Persisted bounded summary"
+    assert "summary" not in payload["transcript"]["content"][0]
     assert payload["blockedEvent"]["is_error"] is True
     assert payload["blockedEvent"]["code"] == "pi_session_authority_stale"
     assert payload["blockedTranscript"]["content"][0]["is_error"] is True

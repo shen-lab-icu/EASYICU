@@ -62,6 +62,7 @@ CONTRACTS: dict[str, list[str]] = {
     # Loads both dedicated Copilot data-view owners itself; takes no arguments.
     "guided_pi_data_workbench.test.js": [],
     "guided_pi_conversation_timeline.test.js": ["screens-guided-pi-activity.js"],
+    "guided_pi_trace_language.test.js": [],
     # Explicit owner list (E-P2-11): no "." directory marker — every file the
     # harness loads is named here, including product-labels.js, so a rename
     # or deletion fails fast in main()'s existence check instead of silently

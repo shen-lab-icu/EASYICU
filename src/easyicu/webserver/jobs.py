@@ -23,6 +23,7 @@ import logging
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -134,6 +135,13 @@ class Job:
 
     def _append_event_locked(self, event: Dict[str, Any]) -> None:
         payload = dict(event)
+        payload.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        try:
+            timestamp = datetime.fromisoformat(str(payload["timestamp"]))
+            if timestamp.tzinfo is None:
+                raise ValueError("event timestamp needs a timezone")
+        except (ValueError, TypeError):
+            payload["timestamp"] = datetime.now(timezone.utc).isoformat()
         payload["seq"] = self._next_seq
         self._next_seq += 1
         encoded = json.dumps(payload, ensure_ascii=False, default=str)
@@ -143,6 +151,7 @@ class Job:
             payload = {
                 "type": "end" if terminal else "progress",
                 "seq": payload["seq"],
+                "timestamp": payload["timestamp"],
                 "step": "event_payload_omitted",
                 "payload_omitted": True,
                 "reason_code": "job_event_size_limit",
@@ -292,6 +301,7 @@ class Job:
             events = []
             if start < first:
                 events.append({"type": "progress", "seq": first - 1,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "step": "history_truncated", "history_truncated": True,
                     "dropped_events": first - start,
                     "label": "Earlier progress events expired; durable artifacts remain authoritative."})
