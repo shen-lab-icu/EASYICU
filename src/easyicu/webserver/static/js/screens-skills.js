@@ -156,11 +156,15 @@
           <span class="eusk-source">${item.kind === 'method_component' ? tr('Method component', '方法组件') : item.kind === 'method' ? layerLabel(item) : sourceLabel(source)}</span><span class="eusk-state ${item.enabled ? 'on' : ''}">${item.enabled ? tr('Enabled', '已启用') : tr('Off', '未启用')}</span></div>
         </article>`).join('')}</div></section>`;
     }).join('');
-    return `<div class="eusk-head"><div><span class="eusk-eyebrow">SKILL HUB</span><h1>${tr('Skills', '技能')}</h1></div>
+    // A hosted instance's skills are installed by the administrator
+    // (screens-guided-pi-hosted.js); the clinician browses the catalogue.
+    const hostedOwner = window.EasyICU?.guidedPi?.optional('hosted');
+    const createMenu = hostedOwner && hostedOwner.active() ? '' : `
       <details class="eusk-create-menu" data-popover-menu><summary class="eusk-new">${icon('plus', 15)} ${tr('New skill', '新建技能')}</summary><div role="menu">
         <button type="button" role="menuitem" data-sk-upload aria-label="${tr('Upload SKILL.md', '上传 SKILL.md')}"><span>${icon('file', 16)}</span><span><strong>${tr('Upload SKILL.md', '上传 SKILL.md')}</strong><small>${tr('Review and install a local instruction file', '审阅并安装本地指令文件')}</small></span></button>
         <button type="button" role="menuitem" data-sk-create-with aria-label="${tr('Create with EasyICU', '使用 EasyICU 开发')}"><span>${icon('spark', 16)}</span><span><strong>${tr('Create with EasyICU', '使用 EasyICU 开发')}</strong><small>${tr('Open a new task with a Skill Builder draft', '在新任务中打开技能开发草稿')}</small></span></button>
-      </div></details></div>
+      </div></details>`;
+    return `<div class="eusk-head"><div><span class="eusk-eyebrow">SKILL HUB</span><h1>${tr('Skills', '技能')}</h1></div>${createMenu}</div>
       <label class="eusk-search">${icon('search', 17)}<input data-sk-search type="search" placeholder="${ui.catalogMode === 'methods' ? tr('Search the method library…', '搜索方法库…') : tr('Search research skills…', '搜索研究技能…')}" value="${esc(ui.query)}" autocomplete="off"></label>
       <div class="eusk-mode-tabs" role="tablist" aria-label="${tr('Catalog level', '目录层级')}">
         <button type="button" role="tab" aria-selected="${ui.catalogMode === 'skills'}" data-sk-mode="skills">${tr('Skills', '技能')} <span>${skillEntries.length}</span><small>${tr('All loadable packages', '全部可加载包')}</small></button>
