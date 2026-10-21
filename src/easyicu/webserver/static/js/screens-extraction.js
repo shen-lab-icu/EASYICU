@@ -445,7 +445,7 @@
         include_feature_definitions: exIncludeDefinitions,
         cohort: runMode === 'recommended' ? recommendedCohortContract() : cohortContract(),
       };
-      if (!hostedServer()) payload.out_dir = outDir;  // hosted: the server writes in the clinician's workspace
+      if (hostedServer()) payload.label = window.EU_EXTRACTION_HOSTED.exportLabel(database); else payload.out_dir = outDir;  // hosted: a new, recognisably named folder in the clinician's workspace
       if (Object.keys(conceptSelection).length) payload.concepts = conceptSelection;
       const ticket = continuity.prepare({
         kind: 'extract',

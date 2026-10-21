@@ -43,5 +43,15 @@
     if (!line) throw new Error(`hosted extraction copy has no line '${key}'`);
     return line(arg);
   }
-  window.EU_EXTRACTION_HOSTED = Object.freeze({ text });
+  const DATABASE_NAMES = { miiv: 'MIMIC-IV', eicu: 'eICU-CRD', mimic: 'MIMIC-III', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sic: 'SICdb' };
+  // The name a hosted extraction is registered under, so the clinician can
+  // tell it from the administrator's prepared data in every data list.
+  function exportLabel(database, now) {
+    const name = DATABASE_NAMES[database] || String(database || '').toUpperCase();
+    const at = now || new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const when = `${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+    return t(`My extraction · ${name} · ${when}`, `我的抽取 · ${name} · ${when}`);
+  }
+  window.EU_EXTRACTION_HOSTED = Object.freeze({ text, exportLabel });
 })();
