@@ -114,7 +114,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260922-run-answer1" in index
-    assert "js/screens-guided-pi-activity.js?v=20261021-step-code1" in index
+    assert "js/screens-guided-pi-activity.js?v=20261021-step-copy1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20261020-api-models1"
         in index

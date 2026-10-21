@@ -81,12 +81,11 @@
     return detail;
   }
 
-  // TODO(copy): coordinator wording for the badges and panel notes below.
   function executionBadge(mode, name) {
     if (mode === 'standard') {
       return `<span class="gpi-step-badge is-standard">${icon('layers', 12)}${esc(tr('Standard method', '标准方法'))}${name ? `: ${esc(name)}` : ''}</span>`;
     }
-    if (mode === 'generated') return `<span class="gpi-step-badge is-generated">${icon('edit', 12)}${esc(tr('New code', '新写代码'))}</span>`;
+    if (mode === 'generated') return `<span class="gpi-step-badge is-generated">${icon('edit', 12)}${esc(tr('Code written for this run', '本次编写的代码'))}</span>`;
     if (mode === 'fallback') return `<span class="gpi-step-badge is-standard">${icon('shield', 12)}${esc(tr('Fallback script', '备用脚本'))}</span>`;
     if (mode === 'host') return `<span class="gpi-step-badge">${icon('db', 12)}${esc(tr('Prepared by EasyICU', '由 EasyICU 准备'))}</span>`;
     return '';
@@ -145,7 +144,7 @@
       return `<section class="gpi-source-block is-output">${head}${note(tr('The output appears when this step finishes.', '这一步完成后显示输出。'))}</section>`;
     }
     const parts = [];
-    if (detail.state === 'failed') parts.push(note(tr('This step stopped with an error.', '这一步运行出错。'), 'error'));
+    if (detail.state === 'failed') parts.push(note(tr('This step stopped with an error.', '这一步出错停止。'), 'error'));
     if (detail.state === 'skipped') parts.push(note(tr('Skipped because a step it depends on failed.', '所依赖的步骤失败，这一步已跳过。')));
     const headline = tr(detail.headline.en || '', detail.headline.zh || '');
     if (headline) parts.push(`<p class="gpi-operation-detail">${esc(headline)}</p>`);
