@@ -40,6 +40,8 @@
     const err = new Error(res.status < 500 && human ? human : technical + (human ? ' · ' + human : ''));
     err.technical = technical; err.status = res.status; err.code = code || null;
     err.details = d && typeof d === 'object' && d.details && typeof d.details === 'object' ? d.details : {};
+    const session = window.EU_HOSTED_SESSION;
+    if (res.status === 401 && session && code === session.LOGIN_REQUIRED) session.expired();
     return err;
   }
   async function postJSON(path, body) {
