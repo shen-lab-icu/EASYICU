@@ -258,7 +258,7 @@
     onError: value => { state.error = value; render(); },
   });
   const ACTIVITY = MODULES.require('activity').create({
-    tr, esc, iconHtml, resourceName, resourceKey, resourceButton,
+    tr, esc, iconHtml, resourceName, resourceKey, resourceButton, runFailureText,
     publicText: publicAssistantText,
   });
   const CONFIRMATION = MODULES.require('confirmation').create({

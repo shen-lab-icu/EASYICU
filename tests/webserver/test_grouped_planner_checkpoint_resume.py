@@ -16,17 +16,18 @@ from tests.support.grouped_resume import (
     context as _context,
     phase as _phase,
     prepared as _prepared,
+    seal_prepared_source,
     source as _source_fixture,
 )
 
 source = _source_fixture
 
 
-@pytest.fixture(params=["metadata", "prepared"])
+@pytest.fixture(params=["metadata", "prepared", "patient_grouped"])
 def grouped_source(source, tmp_path, request):
     cohort = (
         _catalog(tmp_path / "input", "lact", "age")
-        if request.param == "metadata" else _prepared(tmp_path / "input")
+        if request.param == "metadata" else _prepared(tmp_path / "input", patient_grouped=request.param == "patient_grouped")
     )
     # Both copies begin with exactly the same input, including its typed authority.
     shutil.copytree(cohort.parent, source.run, dirs_exist_ok=True)
@@ -41,11 +42,298 @@ def grouped_source(source, tmp_path, request):
             kind="log", description=name, source_path=source.run / f"{name}.json",
             evidence_id=name, producer="pipeline", generation_mode="system",
         )
+    if request.param != "metadata":
+        seal_prepared_source(source, evidence)
     return source
 
 
 def test_sealed_grouped_source_is_available_without_a_provider(grouped_source):
     assert grouped_source.scope().budget_mode == "planner_canary"
+
+
+def test_offer_refuses_a_missing_prepared_materialization(grouped_source):
+    if grouping.load_resume_exposure_groupings(grouped_source.run).materialized_authority_raw is None:
+        return
+    grouped_source.cohort.unlink()
+    with pytest.raises(owner.ResearchPipelineRunError) as refused:
+        grouped_source.scope()
+    assert refused.value.code == owner.DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED
+
+
+@pytest.mark.parametrize("damage", ["input", "authority", "capsule", "trajectory", "restore"])
+def test_prepared_offer_and_launch_share_the_actual_restore_verdict(grouped_source, monkeypatch, damage):
+    from easyicu.webserver import research_prepared_resume, study_contexts
+
+    source = grouped_source
+    if not hasattr(source, "universe"):
+        return
+    if damage == "input":
+        source.universe.write_bytes(b"changed source materialization")
+    elif damage == "authority":
+        authority = grouping.load_verified_materialized_cohort_authority(source.universe)
+        (source.universe.parent / authority.reference.file).write_text("{}")
+    elif damage == "trajectory":
+        source.universe.with_name("universe_trajectory.parquet").write_bytes(b"unexpected trajectory")
+    elif damage == "capsule":
+        capsule = source.run / "run_input_capsule.json"
+        capsule.write_bytes(capsule.read_bytes() + b"\n")
+    else:
+        def refuse(**kwargs):
+            raise ValueError("synthetic rebuilt context drift")
+        monkeypatch.setattr(research_prepared_resume, "restore_exposure_grouping_phase", refuse)
+    with pytest.raises(owner.ResearchPipelineRunError) as refused:
+        source.scope()
+    assert refused.value.code == owner.DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED
+    assert owner.development_resume_available(
+        wrapper_dir=source.run.parents[1], study_id=source.study["id"],
+        scientific_configuration_sha256=study_contexts.scientific_configuration_sha256(source.study),
+    ) is False
+
+
+def test_prepared_input_belongs_to_the_same_package(grouped_source):
+    from easyicu.webserver.research_prepared_resume import verify_prepared_grouped_continuation
+
+    source = grouped_source
+    if not hasattr(source, "universe"):
+        return
+    with pytest.raises(ValueError, match="another prepared package"):
+        verify_prepared_grouped_continuation(
+            run_dir=source.run, source=grouping.load_resume_exposure_groupings(source.run),
+            pipeline_config={}, package_binding={"export_authority_sha256": "e" * 64},
+        )
+
+
+def test_second_prepared_continuation_reuses_the_original_sibling_input(grouped_source):
+    from easyicu.webserver.research_prepared_resume import verify_prepared_grouped_continuation
+
+    source = grouped_source
+    if not hasattr(source, "universe"):
+        return
+    second = source.run.parents[2] / "run_second" / "pipeline" / "run_second_pipeline"
+    shutil.copytree(source.run, second)
+    continuation = verify_prepared_grouped_continuation(
+        run_dir=second, source=grouping.load_resume_exposure_groupings(second),
+        pipeline_config={}, package_binding=None,
+    )
+    assert continuation.cohort_path == source.universe
+    assert continuation == source.scope().prepared_grouping
+
+
+def test_prepared_continuation_restores_science_without_execution_options(grouped_source):
+    from dataclasses import replace
+
+    if not hasattr(grouped_source, "universe"):
+        return
+    continuation = grouped_source.scope().prepared_grouping
+    execution_options = {
+        "require_human_plan_review": False,
+        "execution_resume_approval_path": "prior-approval.json",
+        "execute_until_phase": "analysis",
+    }
+    with_execution_options = replace(
+        continuation, scientific_identity={**continuation.scientific_identity, **execution_options},
+    )
+    restored = with_execution_options.run_arguments()
+    assert not execution_options.keys() & restored.keys()
+    assert restored == continuation.run_arguments()
+
+
+def test_prepared_continuation_reaches_planner_on_the_original_context(grouped_source, tmp_path, monkeypatch):
+    from easyicu.research_agent import pipeline as pipeline_module
+    from easyicu.research_agent.orchestration import progressive_planning
+    from easyicu.research_agent.planning.progressive_resume import progressive_resume_context_sha256
+    from easyicu.research_agent.providers.mocks import MockLLMClient
+
+    source = grouped_source
+    if not hasattr(source, "universe"):
+        return
+    continuation = source.scope().prepared_grouping
+    acquisition = continuation.acquisition()
+    assert acquisition.universe_path == source.universe
+    assert acquisition.trajectory_path is None
+    client = MockLLMClient()
+
+    class PlannerReached(BaseException):
+        pass
+
+    def planner(**kwargs):
+        from easyicu.research_agent.research_context.typed import parse_research_context_json
+
+        restored = parse_research_context_json((kwargs["run_dir"] / "research_context.json").read_text())
+        assert progressive_resume_context_sha256(restored) == progressive_resume_context_sha256(source.context)
+        assert (kwargs["run_dir"] / "exposure_groupings.json").read_bytes() == (source.run / "exposure_groupings.json").read_bytes()
+        assert kwargs["resume_checkpoint_path"].parent == source.run
+        raise PlannerReached
+
+    monkeypatch.setattr(progressive_planning, "run_progressive_planner", planner)
+    pipeline = pipeline_module.ResearchAgentPipeline(
+        workdir=tmp_path / "continued", llm=client, planner_strategy="progressive_v2",
+        development_diagnostic=True,
+        require_human_plan_review=True, enable_visual_qa=False,
+        enable_publication_figure_skill=False, enable_nature_writing_skill=False,
+        development_progressive_resume_checkpoint_path=source.run / "progressive_planner_checkpoint_002.json",
+        development_progressive_resume_checkpoint_sha256="a" * 64,
+    )
+    with pytest.raises(PlannerReached):
+        pipeline.run(
+            **continuation.run_arguments(), cohort=acquisition.universe_path,
+            cohort_authority_path=acquisition.cohort_authority_path,
+            cohort_authority_ref=acquisition.cohort_authority_ref,
+        )
+    assert client.calls == []
+    assert not list((tmp_path / "continued").rglob("plan_approval.json"))
+
+
+@pytest.mark.parametrize("changed_after_offer", [None, "input", "scope", "package", "package_same_stat", "package_touch"])
+def test_web_preparation_continuation_never_materializes_again(grouped_source, tmp_path, monkeypatch, changed_after_offer):
+    from easyicu.research_agent import pipeline as pipeline_module
+    from easyicu.research_agent.orchestration import progressive_planning
+    from easyicu.research_agent.acquisition import foundation
+    from easyicu.research_agent.execution import runner as runner_module
+    from easyicu.research_agent.planning.progressive_resume import progressive_resume_context_sha256
+    from easyicu.research_agent.providers.mocks import MockLLMClient
+    from easyicu.webserver import agent_pipeline_runs, agent_review_recovery, dataio
+    from easyicu.webserver import provider_adapter, research_pipeline_run_preparation, study_contexts
+    from easyicu.webserver.jobs import Job
+    from tests.webserver.copilot.research_workflow_fixtures import complete_study
+
+    source = grouped_source
+    if not hasattr(source, "universe"):
+        return
+    study = complete_study()
+    study.update(id=source.study["id"], question=source.context.research_question,
+                 primary_exposure="", covariates=[], covariate_rationales={}, covariate_temporal_roles={})
+    export = source.original.parent.parent / "export"
+    study["data_source"] = {"path": str(export), "database": "miiv"}
+    study["execution_concepts"] = {"outcome": "death"}
+    source.study.clear()
+    source.study.update(study)
+    wrapper = source.run.parents[1]
+    seed = agent_review_recovery.load_recovery_seed(wrapper)
+    payload = seed.model_dump(exclude={"seed_sha256", "schema_version"})
+    payload.update(study=study, scientific_configuration_sha256=study_contexts.scientific_configuration_sha256(study),
+                   budget_mode="full_reviewed", prepared_package_binding=dataio.validate_research_pipeline_source(str(export), database="miiv")["binding"])
+    agent_review_recovery.put_recovery_seed(agent_review_recovery.WebReviewRecoverySeed.create(**payload))
+    monkeypatch.setattr(runner_module, "probe_runner_availability", lambda kind, **kw:
+                        runner_module.RunnerAvailability(kind=kind, available=True, image="synthetic"))
+    monkeypatch.setattr(pipeline_module.ResearchAgentPipeline, "_preflight_execution_runtime", lambda *a, **kw: ())
+    from easyicu.research_agent.literature import LiteratureBundle
+
+    monkeypatch.setattr(research_pipeline_run_preparation, "_development_resume_literature_bundle",
+                        lambda **kw: LiteratureBundle(research_question=study["question"], citations=[]).model_dump(mode="json"))
+    monkeypatch.setattr(research_pipeline_run_preparation, "_data_foundation_profile", lambda **kw: {
+        "allowed_modules": ("labs", "outcomes"), "static_concepts": ("age",),
+        "outcome_concepts": ("death",), "required_feature_concepts": ("lact",),
+        "require_outcome": True, "primary_exposure_source_concept": None,
+    })
+    monkeypatch.setattr(research_pipeline_run_preparation, "_development_progressive_resume_binding", lambda **kw: (source.run / "progressive_planner_checkpoint_002.json", "a" * 64))
+    monkeypatch.setattr(foundation, "acquire_universe_for_question", lambda **kw: pytest.fail("a continuation must not materialize again"))
+    client = MockLLMClient()
+    monkeypatch.setattr(provider_adapter, "build_research_agent_provider_client", lambda *a, **kw: (client, {"provider": "openai", "model": "synthetic"}))
+
+    class PlannerReached(BaseException):
+        pass
+
+    def planner(**kwargs):
+        from easyicu.research_agent.research_context.typed import parse_research_context_json
+
+        restored = parse_research_context_json((kwargs["run_dir"] / "research_context.json").read_text())
+        assert progressive_resume_context_sha256(restored) == progressive_resume_context_sha256(source.context)
+        assert kwargs["resume_checkpoint_path"].parent == source.run
+        raise PlannerReached
+
+    monkeypatch.setattr(progressive_planning, "run_progressive_planner", planner)
+    from unittest.mock import Mock
+    from easyicu.webserver import research_prepared_resume
+
+    validate_package = Mock(wraps=dataio.validate_research_pipeline_source)
+    rehearse = Mock(wraps=research_prepared_resume._rehearse_grouped_continuation)
+    monkeypatch.setattr(dataio, "validate_research_pipeline_source", validate_package)
+    monkeypatch.setattr(research_prepared_resume, "_rehearse_grouped_continuation", rehearse)
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+        export_path=str(export), study_context=study, project_root=str(wrapper.parent.parent),
+        provider={"provider": "openai", "external": True},
+        provider_environment={"EASYICU_DISABLE_PROVIDER_ENV_FILE": "1"}, budget_mode="full_reviewed",
+        development_resume_source_job_id="prior",
+    )
+    if changed_after_offer == "input":
+        source.universe.write_bytes(b"changed after the offer")
+    elif changed_after_offer == "package_same_stat":
+        import os
+
+        path = export / "labs.parquet"
+        stat = path.stat()
+        path.write_bytes(b"FAIL" + path.read_bytes()[4:])
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    elif changed_after_offer == "package_touch":
+        import os
+
+        path = export / "labs.parquet"
+        stat = path.stat()
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    elif changed_after_offer == "package":
+        manifest = export / "_manifest.json"
+        manifest.write_bytes(manifest.read_bytes() + b"\n")
+        assert owner.development_resume_available(
+            wrapper_dir=wrapper, study_id=study["id"],
+            scientific_configuration_sha256=study_contexts.scientific_configuration_sha256(study),
+        ) is False
+    elif changed_after_offer == "scope":
+        from dataclasses import replace
+
+        original = source.scope()
+        monkeypatch.setattr(owner, "_development_resume_launch_scope", lambda **kw: replace(original, prepared_grouping=None))
+    if changed_after_offer in {None, "package_touch"}:
+        with pytest.raises(PlannerReached):
+            runner(Job("continued", "agent-run"))
+        assert validate_package.call_count == 1
+        assert rehearse.call_count == 1
+    else:
+        with pytest.raises(owner.ResearchPipelineRunError) as refused:
+            runner(Job("continued", "agent-run"))
+        assert refused.value.code in {owner.DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED, "research_pipeline_development_resume_scope_mismatch"}
+    assert client.calls == []
+
+
+def test_reacquisition_adds_an_incompatible_trajectory_but_continuation_reuses_the_source(grouped_source, tmp_path):
+    from easyicu.research_agent.cohort import materializer
+    from easyicu.research_agent.intake.materialized_metadata import stage_materialized_cohort_authority
+    from easyicu.research_agent.intake.materialized_trajectory import (
+        MaterializedTrajectoryError, StagedTrajectoryBinding, stage_materialized_trajectory_authority,
+    )
+
+    source = grouped_source
+    if not hasattr(source, "universe"):
+        return
+    paths = materializer.materialize_to_parquet(
+        tmp_path / "reacquired", stem="universe", data_path=source.original.parent.parent / "export",
+        database="miiv", static_concepts=("age",), feature_concepts=("lact",), outcome_concepts=("death",),
+        emit_trajectory=True, trajectory_concepts=("lact",), trajectory_window=(0.0, 24.0),
+    )
+    target = tmp_path / "wrong-input/cohort.parquet"
+    staged = stage_materialized_cohort_authority(paths["parquet"], target, producer_implementation_sha256="a" * 64)
+    trajectory_path = target.with_name("cohort_trajectory.parquet")
+    trajectory = stage_materialized_trajectory_authority(
+        paths["trajectory"], trajectory_path, source_universe_path=paths["parquet"], target_universe_path=target,
+        expected_source_authority=None,
+        expected_target_universe_authority=staged.reference, producer_implementation_sha256="b" * 64,
+    )
+    binding = StagedTrajectoryBinding(
+        path=trajectory_path, sha256=trajectory.authority.trajectory_sha256,
+        size=trajectory.authority.trajectory_size, authority_ref=trajectory.reference,
+    )
+
+    def rebuild(path, **kwargs):
+        return _context(path, trajectory_binding=binding, **kwargs)
+
+    with pytest.raises(MaterializedTrajectoryError, match="different universe authority"):
+        grouping.restore_exposure_grouping_phase(
+            source_run_dir=source.run, context=rebuild(target), cohort_path=target,
+            run_dir=target.parent, rebuild_context=rebuild,
+        )
+    continuation = source.scope().prepared_grouping
+    assert continuation.acquisition().universe_path == source.universe
+    assert continuation.acquisition().trajectory_path is None
 
 
 def test_restore_keeps_record_bytes_columns_labels_and_context(grouped_source, tmp_path):
@@ -173,6 +461,7 @@ def test_offer_calls_the_launch_owner_instead_of_reconstructing_it(grouped_sourc
     ) is False
     assert calls == [{
         "project_root": str(source.run.parents[3]), "study": source.study, "source_job_id": "prior",
+        "offer_only": True,
     }]
 
 

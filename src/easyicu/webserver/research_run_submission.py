@@ -489,6 +489,7 @@ def submit_research_run(
                     project_root=project_root,
                     study=study_context,
                     source_job_id=development_resume_source_job_id,
+                    offer_only=True,
                 )
             except agent_pipeline_runs.ResearchPipelineRunError as exc:
                 # A seed only saves Provider work; it carries no authority. An

@@ -108,6 +108,16 @@ class ProviderJobRecovery:
         self.resumes: list[dict[str, Any]] = []
         self.stop_reason: str | None = None
         self.execution_resume_run_id: str = ""
+        self.continuation_refusal: dict[str, str] | None = None
+
+    def record_continuation_refusal(self, code: str) -> None:
+        """Keep a safe explanation even when no automatic attempt was spent."""
+        self.continuation_refusal = {
+            "code": code,
+            "message": "The saved preparation could not be verified for continuation; prepare the same reviewed candidate again.",
+        }
+        self.persist()
+        self.job.emit({"type": "progress", "step": "provider_continuation_refused", "actor": "system", "reason": code})
 
     def bind(self, *, wrapper_dir: Path, task: Any, client: Any) -> None:
         if self.task is not None and task is not self.task:
@@ -124,6 +134,7 @@ class ProviderJobRecovery:
             "max_automatic_resumes": MAX_AUTOMATIC_RESUMES,
             "probe_interval_seconds": PROBE_INTERVAL_SECONDS,
             "automatic_resumes": self.resumes, "stop_reason": self.stop_reason,
+            "continuation_refusal": self.continuation_refusal,
         }
         for root in self.wrappers:
             path = root / "provider_recovery.json"
@@ -206,7 +217,9 @@ class ProviderJobRecovery:
                     operation = current.run
         except BaseException as exc:
             self.stop_reason = str(getattr(exc, "code", "") or type(exc).__name__)
-            if self.deadline is not None:
+            if self.stop_reason.startswith("research_pipeline_development_resume_"):
+                self.record_continuation_refusal(self.stop_reason)
+            if self.deadline is not None or self.continuation_refusal is not None:
                 self.persist()
             # Failure handlers defer closing a transient call's task until
             # this job has either recovered or reached a terminal boundary.

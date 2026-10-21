@@ -419,6 +419,7 @@
 
     function pipelineEventLabel(event) {
       const type = String((event && event.type) || '');
+      if (event && event.step === 'provider_continuation_refused') return host.runFailureText(event.reason || event.reason_code);
       if (event && event.step === 'provider_auto_resume') return tr(
         'System action: provider recovered; automatically continuing from the verified checkpoint',
         '系统操作：模型服务已恢复，正在从已验证的检查点自动继续',

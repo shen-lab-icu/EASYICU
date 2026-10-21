@@ -110,6 +110,42 @@ def test_missing_verified_checkpoint_keeps_original_failure_and_page_action(reco
     assert stopped.value is error and not r.probes
 
 
+def test_a_refused_continuation_records_one_readable_sentence_without_spending_an_attempt(recovery):
+    r = recovery
+    code = "research_pipeline_development_resume_phase_not_replayed"
+
+    def select(exc):
+        r.state.record_continuation_refusal(code)
+        return None
+
+    with pytest.raises(RuntimeError):
+        r.state.run(lambda job: (_ for _ in ()).throw(http_failure()), select)
+    receipt = json.loads((r.root / "provider_recovery.json").read_text())
+    assert receipt["continuation_refusal"]["code"] == code
+    assert "prepare the same reviewed candidate again" in receipt["continuation_refusal"]["message"]
+    assert code not in receipt["continuation_refusal"]["message"]
+    assert receipt["automatic_resumes"] == [] and not r.probes
+    assert sum(event.get("step") == "provider_continuation_refused" for event in r.job.events) == 1
+
+
+def test_a_late_restore_refusal_is_recorded_after_the_provider_recovers(recovery):
+    r = recovery
+    r.clock.recover_at = 0
+    error = r.owner.ResearchPipelineRunError("research_pipeline_development_resume_phase_not_replayed", "internal")
+
+    def continued(job):
+        raise error
+
+    with pytest.raises(r.owner.ResearchPipelineRunError) as stopped:
+        r.state.run(lambda job: (_ for _ in ()).throw(http_failure()),
+                    lambda exc: r.owner.CheckpointContinuation({"kind": "planner", "sha256": "a" * 64}, continued))
+    assert stopped.value is error
+    receipt = json.loads((r.root / "provider_recovery.json").read_text())
+    assert len(receipt["automatic_resumes"]) == 1
+    assert receipt["continuation_refusal"]["code"] == error.code
+    assert "internal" not in receipt["continuation_refusal"]["message"]
+
+
 @pytest.mark.parametrize("error,code", [
     (ConnectionError("offline"), "provider_connection_failure"),
     (TimeoutError("offline"), "provider_timeout"),
