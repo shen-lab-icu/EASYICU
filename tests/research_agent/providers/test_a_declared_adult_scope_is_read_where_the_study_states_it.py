@@ -38,7 +38,7 @@ def _context(question: str = _NEUTRAL, *, stated: dict | None = None, raw: str |
         research_question=question,
         cohort=CohortDescriptor(cohort_name="local cohort", database="miiv", n_stays=0),
         variables=[
-            ConceptDescriptor(name="condition_x", dtype="int64"),
+            ConceptDescriptor(name="condition_x", description="condition-x", dtype="int64"),
             ConceptDescriptor(name="death", dtype="int64"),
         ],
         primary_exposure="condition_x",
