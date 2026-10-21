@@ -669,7 +669,7 @@
         && jobContinuity && typeof jobContinuity.start === 'function' && window.EventSource) {
       if (crossRawProgress.snapshot().starting) return;
       crossRawProgress.beginStart();
-      window.EU_API.startCrossdbReviewSummaryJob({ paths, deadline_seconds: 120 }).then(r => {
+      window.EU_API.startCrossdbReviewSummaryJob({ paths, deadline_seconds: 600 }).then(r => {
         if (!operationActive()) {
           if (r && r.job_id && window.EU_API.cancelJob) {
             window.EU_API.cancelJob(r.job_id, 'client_operation_invalidated').catch(() => {});

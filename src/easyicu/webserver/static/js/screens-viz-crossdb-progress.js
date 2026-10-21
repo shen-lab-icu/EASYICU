@@ -174,6 +174,7 @@
     const progressMessage = opts.progressMessage || (value => String(value || ''));
     const statusLabel = opts.statusLabel || (value => String(value || ''));
     const icon = opts.icon || (() => '');
+    const hosted = opts.hosted === true;
     const errorMessage = String(opts.errorMessage || '').trim();
     const p = state.progress || {};
     const registeredSummary = state.jobKind === 'crossdb-summary';
@@ -196,7 +197,7 @@
       : currentDatabase
         ? `${currentDatabase}${chunkTotal ? ` · ${t('chunk', '分块')} ${chunkCurrent || 1}/${chunkTotal}` : ''}`
         : progressMessage(p.message || (registeredSummary
-          ? t('Starting registered-export Cross-DB summary job…', '正在启动注册导出的跨库摘要任务…')
+          ? (hosted ? t('Starting the comparison…', '正在开始对比…') : t('Starting registered-export Cross-DB summary job…', '正在启动注册导出的跨库摘要任务…'))
           : t('Starting local raw Cross-DB density job…', '正在启动本地原始跨库密度任务…')));
     const rows = snapshot().databases;
     const rowHtml = rows.length ? `<ol class="crossdb-progress-databases" aria-label="${esc(t('Database progress', '数据库进度'))}" aria-live="off">
@@ -216,15 +217,16 @@
         <span class="spin accent" aria-hidden="true"></span>
         <div class="grow">
           <div class="crossdb-progress-title">${esc(registeredSummary
-            ? t('Loading aggregate summaries from registered exports…', '正在加载已注册导出的聚合摘要…')
+            ? (hosted ? t('Summarizing the prepared data…', '正在汇总已准备的数据…') : t('Loading aggregate summaries from registered exports…', '正在加载已注册导出的聚合摘要…'))
             : t('Loading real feature densities from local databases…', '正在从本地数据库加载真实特征密度…'))}</div>
-          <div class="crossdb-progress-meta mono">${esc(t('local-only · nothing uploaded', '仅本机 · 不上传任何内容'))}${p.phase ? ` · ${esc(statusLabel(p.phase))}` : ''}${sampleText}</div>
+          <div class="crossdb-progress-meta mono">${esc(hosted ? t('on the hospital server · summaries only', '在医院服务器上计算 · 只返回汇总结果') : t('local-only · nothing uploaded', '仅本机 · 不上传任何内容'))}${p.phase ? ` · ${esc(statusLabel(p.phase))}` : ''}${sampleText}</div>
         </div>
         ${databaseTotal ? `<span class="crossdb-progress-count mono">${completedDatabases}/${databaseTotal}</span>` : ''}
         <button class="btn sm" type="button" data-crossdb-cancel ${state.cancelRequested ? 'aria-disabled="true"' : ''}>${icon('stop', 13)} ${state.cancelRequested ? t('Cancel requested', '已请求取消') : t('Cancel', '取消')}</button>
       </div>
       ${progressTotal ? `<progress class="crossdb-progress-bar" max="100" value="${pct}" aria-label="${esc(t('Cross-DB loading progress', '跨库加载进度'))}">${pct}%</progress>` : '<div class="indet mt-12"></div>'}
       <div class="crossdb-progress-detail" role="status" aria-live="polite" aria-atomic="true">${esc(detail)}</div>
+      ${registeredSummary ? `<div class="note-line mt-8" data-crossdb-first-run>${esc(t('Every row is summarized, so the first comparison of two full databases can take several minutes; comparing them again is quick.', '每一行数据都会参与汇总，所以第一次对比两份完整数据可能需要几分钟；之后再对比会很快。'))}</div>` : ''}
       ${errorMessage ? `<div class="note warn mt-12 crossdb-progress-error" role="alert" aria-live="assertive"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono">${esc(errorMessage)}</div></div></div>` : ''}
       ${rowHtml}
     </div>`;

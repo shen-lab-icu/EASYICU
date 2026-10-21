@@ -700,6 +700,7 @@
       esc: h.esc,
       errorMessage: getError(config),
       fmtInt: h.fmtInt,
+      hosted: hostedServer(),
       icon: h.icon,
       progressMessage: h.progressMessage,
       sampleProfile: sampleProfile(config),

@@ -107,8 +107,29 @@ assert.match(html, /eicu/);
 assert.match(html, /is-complete/);
 assert.match(html, /data-crossdb-cancel/);
 
+// A registered-export summary names where it runs, and that the first full
+// comparison takes minutes because every row is summarized.
+progress.clear();
+progress.attach('summary-job', { phase: 'queued', job_kind: 'crossdb-summary' });
+const summaryOptions = hosted => ({
+  esc(value) { return String(value); },
+  hosted,
+  icon() { return ''; },
+  t(english, chinese) { return chinese; },
+});
+const hostedSummary = progress.render(summaryOptions(true));
+assert.match(hostedSummary, /正在汇总已准备的数据…/);
+assert.match(hostedSummary, /在医院服务器上计算 · 只返回汇总结果/);
+assert.match(hostedSummary, /data-crossdb-first-run>每一行数据都会参与汇总，所以第一次对比两份完整数据可能需要几分钟；之后再对比会很快。</);
+assert.doesNotMatch(hostedSummary, /本机|注册导出/);
+const localSummary = progress.render(summaryOptions(false));
+assert.match(localSummary, /仅本机 · 不上传任何内容/);
+assert.match(localSummary, /正在加载已注册导出的聚合摘要…/);
+assert.match(localSummary, /data-crossdb-first-run/);
+
 process.stdout.write(JSON.stringify({
   deferred_cancel: true,
+  hosted_summary_copy: true,
   cancel_api_guard: true,
   cancel_error_visible: true,
   cancel_history_restored: true,
