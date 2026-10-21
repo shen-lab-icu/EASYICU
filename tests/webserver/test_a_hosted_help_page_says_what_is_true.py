@@ -71,6 +71,8 @@ def test_the_hosted_page_names_the_server_the_prepared_data_and_the_administrato
     assert "研究数据保存在医院服务器上" in body
     assert "这台服务器上已准备好：MIMIC-IV、eICU-CRD。" in body
     assert "由管理员配置的模型" in body
+    assert "患者的逐行记录不会发给模型" in body
+    assert "不能替代对个体患者的临床判断" in body
     assert "复制问题编号发给管理员（信息科 &lt;王老师&gt; 8123）" in body
     # The local install's promises are not made on the server.
     for local_claim in ("local-first", "你的机器", "本机", "本地导出", "开始演示"):
@@ -183,6 +185,11 @@ def test_hosted_review_names_the_prepared_data_without_paths_or_registration() -
     cohort = (STATIC / "js" / "screens-viz-cohort.js").read_text(encoding="utf-8")
     assert "hostedServer() ? t('Prepared data', '已准备的数据') : t('Local export', '本地导出')" in cohort
     assert "hostedServer() ? t('Load this data', '加载这份数据') : t('Load local export', '加载本地导出')" in cohort
+    cohort_view = (STATIC / "js" / "screens-viz-cohort-view.js").read_text(encoding="utf-8")
+    assert "if (hosted && Object.prototype.hasOwnProperty.call(HOSTED_TEXT, raw)) return t(...HOSTED_TEXT[raw]);" in cohort_view
+    assert "'Local export': ['Prepared data', '已准备的数据']," in cohort_view
+    crossdb = (STATIC / "js" / "screens-viz-crossdb-setup.js").read_text(encoding="utf-8")
+    assert "hostedServer() ? h.t('Check a data folder on the server, then run bounded sampling.'" in crossdb
 
 
 def test_the_hosted_settings_sidebar_lists_only_the_sections_the_page_has() -> None:
