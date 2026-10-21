@@ -355,7 +355,7 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "打开唯一的 EasyICU 研究助手对话" in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20261021-wording1" in index_html
+        "js/screens-guided-projects.js?v=20261022-keepfiles1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -557,7 +557,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
     assert "js/api.js?v=20261021-session1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20261021-wording1" in index_html
+        "js/screens-guided-projects.js?v=20261022-keepfiles1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -2133,7 +2133,7 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "padding-right: 168px" in crossdb_css
     assert "scroll-margin-bottom: 84px" in crossdb_css
 
-    assert "js/screens-viz-crossdb-setup.js?v=20261021-hosted1" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261022-budget1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz-crossdb-results.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz.js?v=20261022-workspace1" in index_html
@@ -2674,7 +2674,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
     assert "api.js?v=20261021-session1" in index_html
-    assert "screens-guided-projects.js?v=20261021-wording1" in index_html
+    assert "screens-guided-projects.js?v=20261022-keepfiles1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
@@ -3287,7 +3287,7 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert ".official-demo-sources" in shared_css
     assert ".crossdb-offline-fallback" in crossdb_css
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
-    assert "js/screens-viz-crossdb-setup.js?v=20261021-hosted1" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261022-budget1" in index_html
     assert "js/screens-viz-crossdb-source.js?v=20260920-fast-demo-status" in index_html
 
 

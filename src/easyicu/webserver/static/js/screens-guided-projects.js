@@ -538,25 +538,28 @@
     }
     const title = projectTitle(row.title, row.question || t(...GUIDED_ROW_FALLBACK));
     const multiple = rows.length > 1;
-    const trashProjectFolder = !!state.trashProjectFolder;
+    // A hosted project lives in the clinician's workspace on the shared server,
+    // whose system trash is outside that workspace: removal only drops the entry.
+    const hosted = !!hostedOwner();
+    const trashProjectFolder = !hosted && !!state.trashProjectFolder;
     const busy = !!state.busy;
     host.innerHTML = `
       <div class="gd-folder-backdrop" data-remove-draft-close></div>
       <section class="gd-folder-dialog gd-remove-dialog" data-remove-draft-dialog role="dialog" aria-modal="true" aria-label="${t('Remove research project', '移除研究项目')}">
         <div class="gd-folder-dialog-head">
           <span class="gds-ico">${icon('folder', 15)}</span>
-          <div><strong>${multiple ? t('Remove selected research projects', '移除所选研究项目') : t('Remove research project', '移除研究项目')}</strong><span>${t('Choose whether to remove only the EasyICU list entry or also move the selected project folders to the system trash.', '请选择只从 EasyICU 列表移除，还是同时把所选项目文件夹移到系统废纸篓。')}</span></div>
+          <div><strong>${multiple ? t('Remove selected research projects', '移除所选研究项目') : t('Remove research project', '移除研究项目')}</strong><span>${hosted ? t('The project leaves your list. Its conversations, runs and results are not deleted and stay on the server; ask the administrator if you need one back.', '项目会从你的列表中移除；它的对话、运行和结果不会被删除，仍保存在服务器上。如需找回，请联系管理员。') : t('Choose whether to remove only the EasyICU list entry or also move the selected project folders to the system trash.', '请选择只从 EasyICU 列表移除，还是同时把所选项目文件夹移到系统废纸篓。')}</span></div>
           <button class="gd-folder-close" type="button" data-remove-draft-close aria-label="${t('Close', '关闭')}" ${busy ? 'disabled' : ''}>×</button>
         </div>
         <div class="gds-choice">
-          <div class="gds-choice-head"><strong>${multiple ? `${rows.length} ${t('projects selected', '个项目已选择')}` : esc(title)}</strong><span>${t('By default, project folders and all files on disk are preserved.', '默认会保留磁盘上的项目文件夹和全部文件。')}</span></div>
-          <label class="gd-remove-option ${trashProjectFolder ? 'selected' : ''}">
+          <div class="gds-choice-head"><strong>${multiple ? `${rows.length} ${t('projects selected', '个项目已选择')}` : esc(title)}</strong>${hosted ? '' : `<span>${t('By default, project folders and all files on disk are preserved.', '默认会保留磁盘上的项目文件夹和全部文件。')}</span>`}</div>
+          ${hosted ? '' : `<label class="gd-remove-option ${trashProjectFolder ? 'selected' : ''}">
             <input type="checkbox" data-remove-project-folder ${trashProjectFolder ? 'checked' : ''} ${busy || rows.some(item => !item.project_dir) ? 'disabled' : ''} />
             <span><strong>${t('Also move the local project folders to the system trash', '同时将本地项目文件夹移到系统废纸篓')}</strong><small>${t('This includes the selected projects’ conversations, configuration, runs, results, and evidence. They can normally be restored from the system trash.', '其中包括所选项目的对话、配置、运行、结果和证据；通常可以从系统废纸篓恢复。')}</small>${!multiple && row.project_dir ? `<code>${esc(compactPath(row.project_dir))}</code>` : ''}</span>
           </label>
           <div class="gd-remove-impact ${trashProjectFolder ? 'warn' : ''}">${trashProjectFolder
             ? t('The selected project folders will leave their current locations. Other EasyICU modules using them will no longer find them unless you restore them.', '所选项目文件夹将离开当前位置；其他正在使用这些目录的 EasyICU 模块将无法继续找到它们，除非你从废纸篓恢复。')
-            : t('Only the list entries will be removed. Project folders remain unchanged on disk.', '只会移除列表记录，项目文件夹在磁盘上保持不变。')}</div>
+            : t('Only the list entries will be removed. Project folders remain unchanged on disk.', '只会移除列表记录，项目文件夹在磁盘上保持不变。')}</div>`}
           ${state.error ? `<div class="gd-remove-error" role="alert">${esc(state.error)}</div>` : ''}
           <div class="row gap-8">
             <button class="btn sm gd-remove-confirm ${trashProjectFolder ? 'danger' : ''}" type="button" data-confirm-remove-draft ${busy ? 'disabled' : ''}>${trashProjectFolder ? t('Move to trash and remove', '移到废纸篓并移除') : t('Remove from list', '从列表移除')}</button>
