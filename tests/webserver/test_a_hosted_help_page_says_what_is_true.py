@@ -195,6 +195,12 @@ def test_hosted_review_names_the_prepared_data_without_paths_or_registration() -
     assert "'Local export': ['Prepared data', '已准备的数据']," in cohort_view
     crossdb = (STATIC / "js" / "screens-viz-crossdb-setup.js").read_text(encoding="utf-8")
     assert "hostedServer() ? h.t('Check a data folder on the server, then run bounded sampling.'" in crossdb
+    projects = (STATIC / "js" / "screens-guided-projects.js").read_text(encoding="utf-8")
+    # The project list names the hospital server, and a hosted project's row
+    # does not call the administrator's prepared data "local".
+    assert "? `<strong>${t('Your research workspace', '你的研究工作区')}</strong>" in projects
+    assert "'研究配置、运行、证据和对话历史都保存在医院服务器上。'" in projects
+    assert "? (hostedOwner() ? '' : t('Local data', '本地数据'))" in projects
 
 
 def test_the_hosted_settings_sidebar_lists_only_the_sections_the_page_has() -> None:

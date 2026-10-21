@@ -355,7 +355,7 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "打开唯一的 EasyICU 研究助手对话" in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20261021-hosted1" in index_html
+        "js/screens-guided-projects.js?v=20261021-wording1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -557,7 +557,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
     assert "js/api.js?v=20261021-session1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20261021-hosted1" in index_html
+        "js/screens-guided-projects.js?v=20261021-wording1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -2670,7 +2670,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
     assert "api.js?v=20261021-session1" in index_html
-    assert "screens-guided-projects.js?v=20261021-hosted1" in index_html
+    assert "screens-guided-projects.js?v=20261021-wording1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html

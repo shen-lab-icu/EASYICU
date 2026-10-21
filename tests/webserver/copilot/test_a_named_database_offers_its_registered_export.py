@@ -100,14 +100,14 @@ def test_the_recommended_export_is_the_primary_action() -> None:
           calls,
           loading: {
             copy: loading.includes('正在查找 EasyICU 中已有的 eICU 数据…'),
-            folderOnly: loading.includes('选择本地文件夹') && !loading.includes('use_registered_source'),
+            folderOnly: loading.includes('选择数据文件夹') && !loading.includes('use_registered_source'),
             noPrimary: !loading.includes('btn primary'),
           },
           ready: {
             title: ready.includes('你的问题指定了 eICU'),
             facts: ready.includes('<p class="gpi-data-consent-facts">eICU-CRD v2.0 · 2026-10-19 生成 · 200,859 例 ICU 住院 · 12 个模块</p>'),
             use: ready.includes('<button class="btn primary" type="button" data-gpi-data-source-action="use_registered_source" data-gpi-data-source-database="eicu" data-gpi-data-source-id="src_eicu_full">使用这份数据</button>'),
-            folder: ready.includes('<button class="btn" type="button" data-gpi-data-source-action="begin_local_selection" data-gpi-data-source-database="eicu">选择本地文件夹</button>'),
+            folder: ready.includes('<button class="btn" type="button" data-gpi-data-source-action="begin_local_selection" data-gpi-data-source-database="eicu">选择数据文件夹</button>'),
             notice: ready.includes('选择数据源不等于批准分析'),
             noPath: !/\\/|path/i.test(ready.replace(/<\\/[a-z]+>/g, '')),
           },
@@ -213,7 +213,7 @@ def test_the_click_posts_the_exact_export_and_the_conversation_continues() -> No
             const html = consent.renderSelectedSource(session, ctx);
             return html.includes('已确认数据源：eICU-CRD v2.0')
               && html.includes('这是 EasyICU 中已验证的数据，已按你的选择用于本次会话。')
-              && !html.includes('本地数据选择器') && html.includes('data-popover-menu');
+              && !html.includes('数据选择器中选定') && html.includes('data-popover-menu');
           }})(),
         }}));
       }})().catch(err => {{ console.error(err); process.exitCode = 1; }});

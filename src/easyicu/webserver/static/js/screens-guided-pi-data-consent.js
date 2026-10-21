@@ -54,7 +54,7 @@
     // A choice made on a card (a picked folder, or an export EasyICU offered)
     // leaves no message in the transcript, so the strip says what was chosen.
     const how = {
-      select_local_source: ctx.tr('This source was selected in the local data picker and confirmed for this conversation.', '这份数据已在本地数据选择器中选定，并确认用于本次会话。'),
+      select_local_source: ctx.tr('This source was selected in the data picker and confirmed for this conversation.', '这份数据已在数据选择器中选定，并确认用于本次会话。'),
       select_registered_source: ctx.tr('You chose this validated export EasyICU already held for this conversation.', '这是 EasyICU 中已验证的数据，已按你的选择用于本次会话。'),
     }[current.confirmation_mode];
     if (current.status !== 'confirmed' || !how) return '';
@@ -118,7 +118,7 @@
   }
 
   function folderButton(database, ctx, primary) {
-    return `<button class="btn${primary ? ' primary' : ''}" type="button" data-gpi-data-source-action="begin_local_selection" data-gpi-data-source-database="${ctx.esc(database.key)}">${ctx.tr('Choose a local folder', '选择本地文件夹')}</button>`;
+    return `<button class="btn${primary ? ' primary' : ''}" type="button" data-gpi-data-source-action="begin_local_selection" data-gpi-data-source-database="${ctx.esc(database.key)}">${ctx.tr('Choose a data folder', '选择数据文件夹')}</button>`;
   }
 
   function render(session, ctx) {
@@ -210,19 +210,19 @@
     if (current.status === 'pending') {
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
         <strong>${ctx.tr('Next, choose the data for this question', '接下来，请为这个问题选择数据源')}</strong>
-        <p>${ctx.tr('Select and confirm a local dataset. EasyICU will then propose the research plan; no analysis starts yet.', '选择并确认本地数据后，EasyICU 会据此拟定研究计划，此时不会开始分析。')}</p>
+        <p>${ctx.tr('Select and confirm the data. EasyICU will then propose the research plan; no analysis starts yet.', '选择并确认数据后，EasyICU 会据此拟定研究计划，此时不会开始分析。')}</p>
         <button class="btn primary" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose data source', '选择数据源')}</button>
       </div></section>`;
     }
     if (!selectionInProgress(session)) return '';
-    return `<section class="gpi-data-consent" aria-label="${ctx.tr('Local data selection', '本地数据选择')}">
+    return `<section class="gpi-data-consent" aria-label="${ctx.tr('Data selection', '数据选择')}">
       <span class="gpi-data-consent-icon">${ctx.icon('shield', 16)}</span>
       <div class="gpi-data-consent-body">
-        <strong>${ctx.tr('Local data selection is open', '已打开本地数据选择')}</strong>
+        <strong>${ctx.tr('Data selection is open', '已打开数据选择')}</strong>
         <p>${ctx.tr('Data tools remain locked until EasyICU validates and saves the selected source.', 'EasyICU 验证并保存所选来源之前，数据工具保持锁定。')}</p>
         <div class="gpi-data-consent-actions">
-          <button class="btn primary" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Return to local folder selection', '返回本地目录选择')}</button>
-          <button class="btn" type="button" data-gpi-data-source-action="cancel_local_selection">${ctx.tr('Leave local selection', '放弃本地选择')}</button>
+          <button class="btn primary" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Return to data selection', '返回数据选择')}</button>
+          <button class="btn" type="button" data-gpi-data-source-action="cancel_local_selection">${ctx.tr('Leave this selection', '放弃这次选择')}</button>
         </div>
         <small>${ctx.tr('Paths stay in the EasyICU interface and are never sent to the model.', '目录路径只保留在 EasyICU 界面，不会发送给模型。')}</small>
       </div>
