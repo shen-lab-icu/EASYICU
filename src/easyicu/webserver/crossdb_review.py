@@ -35,6 +35,10 @@ from easyicu.webserver import cohort_review
 from easyicu.webserver import dataio
 from easyicu.webserver import hosted
 from easyicu.webserver import sources as source_store
+from easyicu.webserver.crossdb_parquet import (
+    ParquetAggregationError,
+    parquet_feature_distributions,
+)
 
 _REQUIRED_CORE_MODULES = {"demographics", "outcome"}
 _OPTIONAL_COMPARISON_MODULES = {"sepsis3_sofa2", "sofa2_score", "vitals"}
@@ -450,6 +454,7 @@ def _crossdb_review_summary_for_sources(
                     "error": detail.get("error", "crossdb_feature_read_failed"),
                     "source": _safe_registered_source(source),
                     "error_type": type(exc).__name__,
+                    "cause_type": detail.get("cause_type", type(exc).__name__),
                     "reason": "Could not completely aggregate this source within the read budget; no partial comparison was returned.",
                     "privacy": _privacy_payload(),
                 }
@@ -851,6 +856,7 @@ class CrossdbReviewSummaryRunner:
         result_box: Dict[str, Any] = {}
         error_box: List[Exception] = []
         source_total = len(self.sources)
+        last_progress: tuple = ()
 
         def cancelled() -> bool:
             checker = getattr(job, "is_cancel_requested", None)
@@ -864,8 +870,15 @@ class CrossdbReviewSummaryRunner:
             total: int,
             source: Optional[Dict[str, Any]],
         ) -> None:
-            if abandoned.is_set():
+            nonlocal last_progress
+            if abandoned.is_set() or cancelled():
                 raise _CrossdbSummaryAbandoned("registered summary abandoned")
+            if time.monotonic() >= self._deadline_monotonic:
+                raise CrossdbSummaryDeadlineError(self.deadline_seconds)
+            progress = (phase, current, total)
+            if progress == last_progress:
+                return
+            last_progress = progress
             safe_source = _safe_registered_source(source) if source else None
             event: Dict[str, Any] = {
                 "type": "progress",
@@ -943,6 +956,16 @@ class CrossdbReviewSummaryRunner:
             ):
                 raise RuntimeError("crossdb_summary_selection_receipt_mismatch")
             return result
+        except Exception as exc:
+            cause = exc
+            while cause.__cause__ is not None and cause.__cause__ is not cause:
+                cause = cause.__cause__
+            job.emit({
+                "type": "progress", "phase": "failed",
+                "error_code": getattr(exc, "code", None) or str(exc),
+                "cause_type": type(cause).__name__,
+            })
+            raise
         finally:
             if not self._release_deferred:
                 self.release()
@@ -2709,16 +2732,25 @@ def _source_feature_distributions(
         features = [col for col in columns if _is_feature_column(col)]
         if not features:
             continue
-        frame = _read_feature_columns(path / file_name, features, checkpoint=checkpoint)
-        feature_payloads = []
-        for feature in features:
-            if checkpoint:
-                checkpoint()
-            if feature not in frame:
-                continue
-            feature_payloads.append(
-                {"feature": feature, **_summarize_feature_distribution(frame[feature])}
-            )
+        if file_name.lower().endswith(".parquet"):
+            try:
+                feature_payloads = parquet_feature_distributions(
+                    path / file_name, features, checkpoint=checkpoint
+                )
+            except ParquetAggregationError as exc:
+                raise CrossdbReviewError({
+                    "error": exc.code, "cause_type": type(exc.__cause__).__name__,
+                }) from exc
+        else:
+            frame = _read_feature_columns(path / file_name, features, checkpoint=checkpoint)
+            feature_payloads = []
+            for feature in features:
+                if checkpoint:
+                    checkpoint()
+                if feature in frame:
+                    feature_payloads.append(
+                        {"feature": feature, **_summarize_feature_distribution(frame[feature])}
+                    )
         if feature_payloads:
             out[module] = {
                 "module": module,
@@ -2813,32 +2845,18 @@ def _read_feature_columns(
     *,
     checkpoint: Optional[Callable[[], None]] = None,
 ) -> Any:
-    """Read complete projected data within a budget; never silently sample rows."""
+    """Read complete CSV/XLSX columns within the legacy pandas budgets."""
     import pandas as pd
 
     lower = str(path).lower()
+    if lower.endswith(".parquet"):
+        raise ValueError("Parquet features require parquet_feature_distributions")
     if path.stat().st_size > _FEATURE_BYTE_LIMIT:
         raise CrossdbReviewError({"error": "crossdb_feature_read_budget_exceeded"})
     row_limit = min(_FEATURE_ROW_LIMIT, _FEATURE_CELL_LIMIT // max(1, len(features)))
 
     def batches():
-        if lower.endswith(".parquet"):
-            import pyarrow.parquet as pq
-
-            with pq.ParquetFile(path) as parquet:
-                if parquet.metadata.num_rows > row_limit:
-                    raise CrossdbReviewError(
-                        {"error": "crossdb_feature_read_budget_exceeded"}
-                    )
-                for batch in parquet.iter_batches(
-                    batch_size=_FEATURE_BATCH_ROWS, columns=features
-                ):
-                    if batch.nbytes > _FEATURE_BYTE_LIMIT:
-                        raise CrossdbReviewError(
-                            {"error": "crossdb_feature_read_budget_exceeded"}
-                        )
-                    yield batch.to_pandas()
-        elif lower.endswith(".xlsx"):
+        if lower.endswith(".xlsx"):
             import openpyxl
 
             workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
@@ -2921,7 +2939,8 @@ def _summarize_feature_distribution(series: Any) -> Dict[str, Any]:
             "categories": [],
         }
 
-    counts = clean.astype(str).str.strip().replace("", "missing").value_counts().head(8)
+    counts = clean.astype(str).str.strip().replace("", "missing").value_counts()
+    counts = counts.sort_index().sort_values(ascending=False, kind="stable").head(8)
     categories = [
         {
             "label": str(label),
