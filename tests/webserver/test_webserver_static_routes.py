@@ -183,13 +183,13 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260827-no-fab1" in index_html
-    assert "js/app.js?v=20261021-hosted1" in index_html
+    assert "js/app.js?v=20261022-help1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
     assert "js/screens-extraction.js?v=20261022-workspace1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261021-named-steps1" in index_html
-    assert "js/screens-help.js?v=20261021-hosted2" in index_html
+    assert "js/screens-help.js?v=20261022-help1" in index_html
 
 
 def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
@@ -336,8 +336,8 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20261021-hosted1" in index_html
-    assert "js/screens-help.js?v=20261021-hosted2" in index_html
+    assert "js/app.js?v=20261022-help1" in index_html
+    assert "js/screens-help.js?v=20261022-help1" in index_html
 
 
 def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
@@ -1542,7 +1542,7 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     assert "css/ideas.css?v=20260803-owner-migration" in index_html
     assert "css/shell.css?v=20261021-session1" in index_html
     assert "js/icons.js?v=20260901-composer-plus1" in index_html
-    assert "js/app.js?v=20261021-hosted1" in index_html
+    assert "js/app.js?v=20261022-help1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html

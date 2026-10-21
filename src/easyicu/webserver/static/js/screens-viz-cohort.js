@@ -395,6 +395,7 @@
             <span class="spin accent"></span>
             <div class="grow"><div style="font-weight:600;font-size:12.75px;">${t('Recomputing cohort statistics…', '正在重新计算队列统计…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('reproducible · no outbound calls', '可复现 · 无外部调用')}</div></div>
           </div>
+          ${realMode ? `<div class="note-line mt-8" data-cohort-first-load>${t('The first load of a full database can take two to three minutes; opening it again is quick.', '第一次打开一份完整数据可能需要 2–3 分钟；之后再打开会很快。')}</div>` : ''}
           <div class="indet mt-12"></div>
           <div class="st-stats mt-16">${[0,1,2,3].map(() => `<div class="sk-stat"><div class="sk sk-line sm" style="width:52%"></div><div class="sk" style="height:22px;width:64%;margin-top:10px;"></div></div>`).join('')}</div>
           <div class="sk-table mt-16">${[0,1,2,3,4].map(() => `<div class="sk-trow">${[60,40,40,40,30].map(w => `<div class="sk sk-line" style="width:${w}%"></div>`).join('')}</div>`).join('')}</div>

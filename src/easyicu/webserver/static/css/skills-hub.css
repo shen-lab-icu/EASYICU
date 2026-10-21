@@ -19,6 +19,8 @@
 .euh-context-project:hover{border-color:var(--sk-line-strong);background:var(--sk-wash)}
 .euh-context-project strong,.euh-context-project small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.euh-context-project strong{font-size:13px;font-weight:650}.euh-context-project small{margin-top:6px;color:var(--sk-muted);font-size:11px}
 .euh-context-section{padding:8px 12px 0;border-top:1px solid var(--sk-line)}.euh-context-section>span{display:block;padding:4px 6px 8px}
+/* The Help aside names the hosted administrator (screens-help.js contextAside). */
+.euh-context-contact{display:grid;gap:4px;margin:12px 0 0;padding:12px 10px 0;border-top:1px solid var(--sk-line)}.euh-context-contact span{color:var(--sk-muted);font-size:10px;font-weight:700;letter-spacing:.1em}.euh-context-contact strong{color:var(--sk-ink);font-size:12.5px;font-weight:500;line-height:1.5;overflow-wrap:anywhere}
 .euh-context-nav{display:grid;gap:2px}.euh-context-nav button,.euh-context-return{display:flex;align-items:center;gap:9px;min-height:36px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--sk-ink-2);font-size:12.5px;text-align:left}
 .euh-context-nav button:hover,.euh-context-nav button:focus-visible,.euh-context-return:hover{outline:0;background:var(--sk-wash);color:var(--sk-ink)}.euh-context-nav button.active{outline:0;background:var(--sk-accent-soft);color:var(--sk-accent-ink);font-weight:650}.euh-context-nav .eudata-module-actions{margin-top:8px;padding-top:8px;border-top:1px solid var(--sk-line)}
 .euh-context-spacer{flex:1}.euh-context-return{margin:10px 12px;border-top:1px solid var(--sk-line);border-radius:0;padding-top:8px}

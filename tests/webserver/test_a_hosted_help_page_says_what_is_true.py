@@ -47,7 +47,7 @@ global.icon = () => '';
 require(process.argv[1]);
 require(process.argv[2]);
 const page = window.SCREENS.tutorial;
-process.stdout.write(JSON.stringify({ action: page.actionHtml(), rail: page.rail(), body: page.render() }));
+process.stdout.write(JSON.stringify({ action: page.actionHtml(), rail: page.rail(), body: page.render(), aside: page.contextAside() }));
 """
 
 
@@ -86,6 +86,8 @@ def test_the_hosted_page_names_the_server_the_prepared_data_and_the_administrato
     assert "data-help-startdemo" not in page["action"]
     assert "快捷键" not in rail
     assert "信息科 &lt;王老师&gt; 8123" in rail
+    # In the module shell the Help aside names the administrator.
+    assert page["aside"] == '<div class="euh-context-contact"><span>管理员</span><strong>信息科 &lt;王老师&gt; 8123</strong></div>'
 
 
 @pytest.mark.requires_node
@@ -95,6 +97,7 @@ def test_the_local_page_is_unchanged() -> None:
     assert "local-first" in page["body"]
     assert "data-help-startdemo" in page["action"]
     assert "快捷键" in page["rail"]
+    assert page["aside"] == ""
 
 
 def test_a_hosted_instance_drops_single_key_shortcuts_and_the_states_catalogue() -> None:
@@ -191,6 +194,8 @@ def test_hosted_review_names_the_prepared_data_without_paths_or_registration() -
     cohort = (STATIC / "js" / "screens-viz-cohort.js").read_text(encoding="utf-8")
     assert "hostedServer() ? t('Prepared data', '已准备的数据') : t('Local export', '本地导出')" in cohort
     assert "hostedServer() ? t('Load this data', '加载这份数据') : t('Load local export', '加载本地导出')" in cohort
+    # A full database's first summary takes minutes; the wait says so.
+    assert "${realMode ? `<div class=\"note-line mt-8\" data-cohort-first-load>${t('The first load of a full database can take two to three minutes; opening it again is quick.', '第一次打开一份完整数据可能需要 2–3 分钟；之后再打开会很快。')}</div>` : ''}" in cohort
     cohort_view = (STATIC / "js" / "screens-viz-cohort-view.js").read_text(encoding="utf-8")
     assert "if (hosted && Object.prototype.hasOwnProperty.call(HOSTED_TEXT, raw)) return t(...HOSTED_TEXT[raw]);" in cohort_view
     assert "'Local export': ['Prepared data', '已准备的数据']," in cohort_view
