@@ -91,12 +91,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-next-actions.js?v=20261020-named-source1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2" in index
-    assert "js/screens-guided-pi-starters.js?v=20260922-demo-card1" in index
+    assert "js/screens-guided-pi-starters.js?v=20261021-entry-examples1" in index
     assert "js/screens-guided-pi-idea-source.js?v=20260922-popover1" in index
     assert "js/screens-guided-pi-header.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-model-menu.js?v=20260923-keep-open1" in index
     assert "css/workspace-canvas.css?v=20260921-fit1" in index
-    assert "css/guided-pi-workspace.css?v=20260922-demo-card1" in index
+    assert "css/guided-pi-workspace.css?v=20261021-entry-examples1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
     assert "js/screens-guided-pi-demo.js?v=20261009-review-fix1" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
@@ -125,7 +125,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261021-decision-records1" in index
-    assert "js/screens-guided-pi-events.js?v=20261021-turn-layout1" in index
+    assert "js/screens-guided-pi-events.js?v=20261021-entry-examples1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261021-decision-records1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
@@ -1166,28 +1166,18 @@ def test_new_research_session_starters_minimize_interaction_cost() -> None:
         action_ids: [], claim_ceiling: 'analysis_only', enabled: true,
       }})) }} }} }};
       const catalogHtml = window.EU_GUIDED_PI_STARTERS.render({{ tr, disabled: false }});
-      const actions = {{ innerHTML: '', querySelector: () => null }};
-      const search = {{ value: 'table' }};
-      const empty = {{ hidden: false }};
-      const host = {{ querySelector: selector => selector.includes('starter-actions') ? actions
-        : selector.includes('starter-search') ? search : selector.includes('starter-empty') ? empty : null }};
-      const shuffled = window.EU_GUIDED_PI_STARTERS.shuffle(host, tr);
-      console.log(JSON.stringify({{ html, compose, clinical, article, data, catalogHtml, shuffled, shuffledHtml: actions.innerHTML, searchValue: search.value, emptyHidden: empty.hidden }}));
+      console.log(JSON.stringify({{ html, compose, clinical, article, data, catalogHtml }}));
     """
     completed = run_node(node, script, check=True)
     assert "开始一项 ICU 研究" in completed.stdout
-    assert "描述一个科学问题" in completed.stdout
-    assert "队列描述与 Table 1" in completed.stdout
-    assert "研究因素与结局分布" in completed.stdout
-    assert "生存与时间结局分析" in completed.stdout
+    assert "用自己的话写下临床问题" in completed.stdout
+    assert "试试这些问题" in completed.stdout
+    assert "血糖分组与院内死亡" in completed.stdout
     assert "浏览全部技能与方法" in completed.stdout
-    assert "data-gpi-starter-search" in completed.stdout
-    assert "data-gpi-starter-shuffle" in completed.stdout
-    assert "工作流1" in completed.stdout
-    assert '"shuffled":true' in completed.stdout
-    assert "工作流4" in completed.stdout
-    assert '"searchValue":""' in completed.stdout
-    assert '"emptyHidden":true' in completed.stdout
+    # The home offers example questions, not a workflow search or shuffle.
+    assert "data-gpi-starter-search" not in completed.stdout
+    assert "data-gpi-starter-shuffle" not in completed.stdout
+    assert "工作流1" not in completed.stdout
     assert '"kind":"compose"' in completed.stdout
     assert '"intent":"implement_scientific_question"' in completed.stdout
     assert '"id":"survival-time-to-event"' in completed.stdout
@@ -1198,8 +1188,7 @@ def test_new_research_session_starters_minimize_interaction_cost() -> None:
     assert "STUDY_WORKSPACE.selectMethodTemplate" in events
     assert "function selectMethodTemplate" in workspace
     assert "capabilityId: String(descriptor.capabilityId" in workspace
-    assert "STARTERS.filter(state.host" in events
-    assert "STARTERS.shuffle(state.host, tr)" in events
+    assert "STARTERS.filter(" not in events and "STARTERS.shuffle(" not in events
     assert "STARTERS.actionFromDiscoveryChoice(message, tr)" in events
     assert "prepareEntryCompose(discoveryAction);" in events
     assert "sendText(discoveryAction.text, [], discoveryAction.intent, true, 'host_prompt');" in events

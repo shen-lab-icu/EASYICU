@@ -1,10 +1,11 @@
 /* Owner: Guided Pi session starter widget. */
-/* The signed-in entry canvas turns a reviewed Method Skill into an editable
-   scientific question. Selecting a card never sends or grants data access. */
+/* The signed-in entry canvas offers example questions in a clinician's words
+   (each names its database and what a run of it produces) and the reviewed
+   Method Skills behind a quiet link.
+   Selecting a card never sends or grants data access: it only fills the composer. */
 (function () {
   'use strict';
   const { esc } = window.EU_HTML;
-  let shuffleOffset = 0;
 
   function fallbackCards(tr) {
     return [
@@ -46,6 +47,110 @@
     ];
   }
 
+  /* Example questions inside v1's scope, one per study kind a clinician asks
+     first. "You get" names only what that study kind's reviewed method
+     produces; no duration is shown until run records give a typical one. */
+  function exampleQuestions(tr) {
+    return [
+      {
+        id: 'example-glucose-groups-death', database: 'eICU',
+        title: tr('Glucose groups and in-hospital death', '血糖分组与院内死亡'),
+        gets: tr('Baseline table by group, death rate per group with CI, distribution figure', '分组基线表、各组死亡率与置信区间、分布图'),
+        prompt: tr(
+          'In eICU, group patients by their first-day ICU glucose into hypoglycaemia, hyperglycaemia only and normal glucose. How does in-hospital mortality differ across the three groups?',
+          '在 eICU 中，按入 ICU 第一天的血糖分为低血糖、仅高血糖和血糖正常三组，各组的院内死亡率有什么不同？',
+        ),
+      },
+      {
+        id: 'example-lactate-death', database: 'eICU',
+        title: tr('Lactate and in-hospital death', '乳酸与院内死亡'),
+        gets: tr('Adjusted association estimates, association figure, baseline table', '调整后的关联估计、关联图、基线表'),
+        prompt: tr(
+          'In eICU, is the highest lactate on the first ICU day associated with in-hospital death? Does the association hold after adjusting for age, sex and illness severity?',
+          '在 eICU 中，入 ICU 第一天的最高乳酸与院内死亡是否相关？调整年龄、性别和疾病严重程度后还成立吗？',
+        ),
+      },
+      {
+        id: 'example-predict-death', database: 'eICU',
+        title: tr('Predicting in-hospital death', '预测院内死亡'),
+        gets: tr('Discrimination (AUC), calibration curve, important variables', '区分度（AUC）、校准曲线、重要变量'),
+        prompt: tr(
+          'Using the first 24 hours of ICU data in eICU, build a model that predicts in-hospital death. How well does it discriminate and how well is it calibrated?',
+          '用 eICU 中入 ICU 前 24 小时的数据建立一个预测院内死亡的模型，它的区分度和校准怎么样？',
+        ),
+      },
+      {
+        id: 'example-sofa2-survival', database: 'MIMIC-IV',
+        title: tr('SOFA-2 and 28-day survival', 'SOFA-2 与 28 天生存'),
+        gets: tr('Survival curves, Cox model results, proportional-hazards check', '生存曲线、Cox 模型结果、比例风险检验'),
+        prompt: tr(
+          'Among patients with sepsis in MIMIC-IV, how is the SOFA-2 score on the first ICU day related to 28-day survival?',
+          '在 MIMIC-IV 的脓毒症患者中，入 ICU 第一天的 SOFA-2 评分与 28 天生存有什么关系？',
+        ),
+      },
+      {
+        id: 'example-early-norepinephrine', database: 'MIMIC-IV',
+        title: tr('Early norepinephrine and death', '早期去甲肾上腺素与死亡'),
+        gets: tr('Target-trial setup, weighted effect estimate, balance diagnostics', '目标试验设定、加权后的效应估计、平衡诊断'),
+        prompt: tr(
+          'Among patients with septic shock in MIMIC-IV, does starting norepinephrine within 6 hours of ICU admission lower 28-day mortality?',
+          '在 MIMIC-IV 的脓毒症休克患者中，入 ICU 6 小时内开始使用去甲肾上腺素，是否降低 28 天死亡？',
+        ),
+      },
+    ];
+  }
+
+  function exampleCard(row, disabled, tr) {
+    return `<button type="button" class="gpi-starter-card gpi-starter-example" data-gpi-starter-card data-gpi-starter-method="" data-gpi-starter-example="${esc(row.id)}" data-gpi-starter-intent="implement_scientific_question" data-gpi-starter-compose="${esc(row.prompt)}" ${disabled}>
+      <span class="gpi-starter-category">${esc(row.database)}</span>
+      <strong>${esc(row.title)}</strong>
+      <small>${esc(row.prompt)}</small>
+      <span class="gpi-starter-gets"><b>${esc(tr('You get', '会得到'))}</b>${esc(row.gets)}</span>
+      <span class="gpi-starter-card-foot"><span>${esc(tr('Use this question', '用这个问题'))}</span></span>
+    </button>`;
+  }
+
+  /* What EasyICU does and does not do, before the first question. Open on a
+     viewer's first visit; the viewer's own choice is remembered per browser. */
+  const NOTES_KEY = 'easyicu.entryNotes.closed';
+  function notesClosed() {
+    try { return window.localStorage.getItem(NOTES_KEY) === '1'; } catch (error) { return false; }
+  }
+  function rememberNotes(closed) {
+    try {
+      if (closed) window.localStorage.setItem(NOTES_KEY, '1');
+      else window.localStorage.removeItem(NOTES_KEY);
+    } catch (error) { /* a blocked store keeps the default */ }
+  }
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    // toggle does not bubble; one capturing listener owns the block's state.
+    document.addEventListener('toggle', event => {
+      const target = event.target;
+      if (target && target.matches && target.matches('[data-gpi-entry-notes]')) rememberNotes(!target.open);
+    }, true);
+  }
+  function entryNotes(tr) {
+    const lines = [
+      [tr('Can do', '能做'), tr('descriptive, association, prediction, survival, subtyping and causal studies on MIMIC-IV; descriptive, association and prediction studies on eICU.', 'MIMIC-IV 上的描述、关联、预测、生存、亚型与因果分析；eICU 上的描述、关联与预测分析。')],
+      [tr('Not supported', '不做'), tr('HiRID, AUMC and SICdb, and survival, causal or subtyping studies on eICU. EasyICU says why when it declines.', 'HiRID、AUMC、SICdb 数据库，以及 eICU 上的生存、因果与亚型分析。遇到这类问题会说明原因。')],
+      [tr('How it works', '流程'), tr('you confirm the data and then review the plan; analysis starts only after both. It runs on the server, so you can close the page.', '先确认数据、再审阅计划，两次确认后才开始分析。分析在服务器上运行，可以关闭页面。')],
+      [tr('Results', '结果'), tr('analysis-level evidence; review them before any publication use.', '分析级证据。用于发表前需要人工复核。')],
+    ];
+    return `<details class="gpi-entry-notes" data-gpi-entry-notes${notesClosed() ? '' : ' open'}>
+      <summary>${esc(tr('Before you start', '使用前须知'))}</summary>
+      <dl>${lines.map(([term, text]) => `<div><dt>${esc(term)}</dt><dd>${esc(text)}</dd></div>`).join('')}</dl>
+    </details>`;
+  }
+
+  // The official demo is the way in without data; an instance holding a
+  // registered full source does not offer it. An older host that reports no
+  // count keeps offering it.
+  function offersDemo() {
+    const registered = (((window.EU_CAPABILITIES || {}).registered_sources || {}).by_database);
+    if (!registered || typeof registered !== 'object') return true;
+    return !Object.values(registered).some(value => Number(value) > 0);
+  }
+
   function methodCards(tr) {
     const methodSkills = (((window.EU_CAPABILITIES || {}).capabilities || {}).method_skills || {});
     const items = Array.isArray(methodSkills.items) ? methodSkills.items : [];
@@ -71,27 +176,6 @@
       .concat(cards.filter(row => !preferred.includes(row.id)));
   }
 
-  function visibleCards(tr) {
-    const cards = methodCards(tr);
-    if (cards.length <= 3) return cards;
-    const start = shuffleOffset % cards.length;
-    return [0, 1, 2].map(index => cards[(start + index) % cards.length]);
-  }
-
-  function shuffleIcon() {
-    return '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M16 3h5v5M4 17.5h2.4c2.2 0 3.4-1.1 4.8-3.4l1.6-2.6c1.4-2.3 2.6-3.4 4.8-3.4H21M16 21h5v-5M4 6.5h2.4c1.7 0 2.8.7 3.8 2.1M13.8 15.4c1 1.4 2.1 2.1 3.8 2.1H21" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  }
-
-  function card(row, disabled, tr) {
-    const search = `${row.category} ${row.title} ${row.description}`.toLowerCase();
-    return `<button type="button" class="gpi-starter-card" data-gpi-starter-card data-gpi-starter-search-text="${esc(search)}" data-gpi-starter-method="${esc(row.id)}" data-gpi-starter-intent="implement_scientific_question" data-gpi-starter-compose="${esc(row.prompt)}" ${disabled}>
-      <span class="gpi-starter-category">${esc(row.category)}</span>
-      <strong>${esc(row.title)}</strong>
-      <small>${esc(row.description)}</small>
-      <span class="gpi-starter-card-foot"><span>${esc(tr('Start', '开始'))}</span><span class="gpi-starter-badge">${esc(tr('Method', '方法'))}</span></span>
-    </button>`;
-  }
-
   // One runnable question on official demo data.  Naming the demo lets the
   // conversation offer that exact source, so a first look needs no setup; the
   // text only fills the composer and nothing is sent or run by the click.
@@ -111,22 +195,16 @@
   function render(options) {
     const tr = options.tr;
     const disabled = options.disabled ? 'disabled' : '';
-    const cards = visibleCards(tr);
-    const canShuffle = methodCards(tr).length > 3;
     return `<section class="gpi-research-start gpi-entry-home" aria-label="${esc(tr('Start a research conversation', '开始研究对话'))}">
       <header class="gpi-entry-intro">
         <div class="gpi-entry-title"><h2>${esc(tr('Start an ICU research task', '开始一项 ICU 研究'))}</h2></div>
-        <p>${esc(tr('Describe a scientific question, or choose a reviewed workflow below.', '描述一个科学问题，或从下方选择经过审阅的研究工作流。'))}</p>
+        <p>${esc(tr('Write your clinical question in your own words. EasyICU drafts a complete study plan; once you confirm it, the analysis runs on the server.', '用自己的话写下临床问题。EasyICU 先给出完整的研究计划，经你确认后在服务器上完成分析。'))}</p>
       </header>
       ${options.composer || ''}
-      ${demoCard(disabled, tr)}
-      <div class="gpi-capability-head">
-        <strong>${esc(tr('Explore EasyICU workflows', '探索 EasyICU 研究工作流'))}</strong>
-        <div class="gpi-capability-tools"><label><span class="shell-sr-only">${esc(tr('Search workflows', '搜索研究工作流'))}</span><input type="search" data-gpi-starter-search placeholder="${esc(tr('Search…', '搜索…'))}" autocomplete="off"></label>
-        <button type="button" data-gpi-starter-shuffle aria-label="${esc(tr('Show another set of workflows', '换一组研究工作流'))}" title="${esc(tr('Shuffle', '换一组'))}" ${disabled || (!canShuffle ? 'disabled' : '')}>${shuffleIcon()}</button></div>
-      </div>
-      <div class="gpi-starter-actions">${cards.map(row => card(row, disabled, tr)).join('')}</div>
-      <p class="gpi-starter-empty" data-gpi-starter-empty hidden>${esc(tr('No matching workflows.', '没有匹配的研究工作流。'))}</p>
+      ${offersDemo() ? demoCard(disabled, tr) : ''}
+      <div class="gpi-capability-head"><strong>${esc(tr('Try one of these questions', '试试这些问题'))}</strong></div>
+      <div class="gpi-starter-actions gpi-starter-examples">${exampleQuestions(tr).map(row => exampleCard(row, disabled, tr)).join('')}</div>
+      ${entryNotes(tr)}
       <button class="gpi-starter-browse" type="button" data-gpi-starter-browse>${esc(tr('Browse all Skills and methods', '浏览全部技能与方法'))}</button>
     </section>`;
   }
@@ -139,42 +217,6 @@
     return { kind: 'compose', text: String(compose.dataset.gpiStarterCompose || ''), intent: String(compose.dataset.gpiStarterIntent || ''), method };
   }
 
-  const SEARCH_LIMIT = 6;
-  function defaultTr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
-  function cardSearchText(row) { return `${row.category} ${row.title} ${row.description}`.toLowerCase(); }
-
-  // Search covers the whole reviewed catalogue, not only the three cards on
-  // screen: a query re-renders the matching workflows (up to SEARCH_LIMIT) and
-  // an empty query restores the current shuffle set.
-  function filter(host, value, tr) {
-    const translate = typeof tr === 'function' ? tr : defaultTr;
-    const query = String(value || '').trim().toLowerCase();
-    const actions = host && host.querySelector('.gpi-entry-home .gpi-starter-actions');
-    if (!actions) return;
-    const disabled = Boolean(actions.querySelector('[data-gpi-starter-card][disabled]')) ? 'disabled' : '';
-    const rows = query
-      ? methodCards(translate).filter(row => cardSearchText(row).includes(query)).slice(0, SEARCH_LIMIT)
-      : visibleCards(translate);
-    actions.innerHTML = rows.map(row => card(row, disabled, translate)).join('');
-    const empty = host.querySelector('[data-gpi-starter-empty]');
-    if (empty) empty.hidden = rows.length > 0;
-  }
-
-  function shuffle(host, tr) {
-    const cards = methodCards(tr);
-    if (!host || cards.length <= 3) return false;
-    shuffleOffset = (shuffleOffset + 3) % cards.length;
-    const actions = host.querySelector('.gpi-entry-home .gpi-starter-actions');
-    if (!actions) return false;
-    const disabled = Boolean(actions.querySelector('[data-gpi-starter-card][disabled]'));
-    actions.innerHTML = visibleCards(tr).map(row => card(row, disabled ? 'disabled' : '', tr)).join('');
-    const search = host.querySelector('[data-gpi-starter-search]');
-    if (search) search.value = '';
-    const empty = host.querySelector('[data-gpi-starter-empty]');
-    if (empty) empty.hidden = true;
-    return true;
-  }
-
   function actionFromDiscoveryChoice(value, tr) {
     const choice = String(value || '').trim().replace(/[。. ]$/, '');
     if (choice === '从临床困惑开始' || choice === 'Start from a clinical uncertainty') return { kind: 'compose', text: tr('Use Idea Mining to discover research directions from this clinical uncertainty: ', '请用 Idea Mining 从这个临床困惑中发掘研究方向：'), intent: 'idea_mining_entry' };
@@ -183,5 +225,5 @@
     return null;
   }
 
-  window.EasyICU.guidedPi.declare('starters', { render, actionFromEvent, actionFromDiscoveryChoice, filter, shuffle });
+  window.EasyICU.guidedPi.declare('starters', { render, actionFromEvent, actionFromDiscoveryChoice });
 })();
