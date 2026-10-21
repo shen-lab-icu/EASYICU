@@ -316,6 +316,24 @@ test('P1-1 conversion filenames are escaped at the live progress renderer', () =
   assert(html.includes('&lt;img')); assert(!html.includes('<img'));
 });
 
+test('R12 a raw converter error reads as a sentence with the original folded below', () => {
+  const base = { convResult: null, convProg: null, exPath: '/synthetic', icon: () => '', pathDisplay: x => x,
+    preparedDestinationHint: () => 'prepared', runsWhere: () => 'on the server', hostedServer: () => true };
+  const raw = 'Traceback (most recent call last):\n  File "convert.py"\nOSError: [Errno 28] No space left on <device>';
+  const c = context({ ...base, convErr: raw, t: (en, zh) => zh });
+  c.escHtml = c.esc;
+  vm.runInContext(section('screens-extraction.js', '  function convertingState()', '  function startConvert()'), c);
+  const html = c.convertingState();
+  assert(html.includes('文件没有转换成功')); assert(html.includes('请把技术细节发给管理员'));
+  assert(html.includes('<details class="ex-conv-detail')); assert(html.includes('No space left on &lt;device&gt;'));
+  // A sentence the screen wrote itself stays as it is.
+  const own = context({ ...base, convErr: '转换已在完成前取消。', t: (en, zh) => zh });
+  own.escHtml = own.esc;
+  vm.runInContext(section('screens-extraction.js', '  function convertingState()', '  function startConvert()'), own);
+  const plain = own.convertingState();
+  assert(plain.includes('转换已在完成前取消。')); assert(!plain.includes('ex-conv-detail'));
+});
+
 test('P2-6 run-file evidence opens the registered run and digest; display links stay local', async () => {
   const calls = [], registered = {}, c = context({ document: { getElementById: () => null } });
   c.window.EasyICU = { guidedPi: { declare: (name, owner) => { registered[name] = owner; },

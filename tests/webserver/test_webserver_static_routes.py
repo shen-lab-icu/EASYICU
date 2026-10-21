@@ -119,8 +119,8 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.setLang(val);" in settings_js
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
-    assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20261021-decision-records1" in index_html
+    assert "js/i18n.js?v=20261021-hosted1" in index_html
+    assert "js/api.js?v=20261021-hosted1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -183,13 +183,13 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260827-no-fab1" in index_html
-    assert "js/app.js?v=20260921-route-sub1" in index_html
+    assert "js/app.js?v=20261021-hosted1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20260921-owner-split1" in index_html
-    assert "js/screens-extraction.js?v=20261021-where1" in index_html
+    assert "js/screens-extraction.js?v=20261021-readable1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261021-named-steps1" in index_html
-    assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/screens-help.js?v=20261021-hosted1" in index_html
 
 
 def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
@@ -336,8 +336,8 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260921-route-sub1" in index_html
-    assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/app.js?v=20261021-hosted1" in index_html
+    assert "js/screens-help.js?v=20261021-hosted1" in index_html
 
 
 def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
@@ -399,7 +399,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20261021-decision-records1" in index_html
+    assert "js/api.js?v=20261021-hosted1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -555,7 +555,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20260829-readability2" in index_html
     assert "css/guided-projects.css?v=20261020-project-root1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20261021-decision-records1" in index_html
+    assert "js/api.js?v=20261021-hosted1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20261021-hosted1" in index_html
     )
@@ -1194,7 +1194,7 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/extraction.css?v=20260920-stepflow4" in index_html
+    assert "css/extraction.css?v=20261021-readable1" in index_html
     assert "data-ex-analyze" in extraction_js
     assert "Choose folder and identify" in extraction_js
     assert "function copilotPrefillSummary()" in extraction_js
@@ -1538,9 +1538,9 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     assert "Evidence and literature open in its review panel" in app_js
     assert "wsi-sub" in app_js
     assert "css/ideas.css?v=20260803-owner-migration" in index_html
-    assert "css/shell.css?v=20260812-route-a11y1" in index_html
+    assert "css/shell.css?v=20261021-hosted1" in index_html
     assert "js/icons.js?v=20260901-composer-plus1" in index_html
-    assert "js/app.js?v=20260921-route-sub1" in index_html
+    assert "js/app.js?v=20261021-hosted1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2134,7 +2134,7 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz-crossdb-results.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz.js?v=20260830-viz-final1" in index_html
+    assert "js/screens-viz.js?v=20261021-hosted1" in index_html
     assert "css/crossdb.css?v=20260830-viz-final1" in index_html
     for selector in (
         ".crossdb-method-grid",
@@ -2181,7 +2181,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260830-viz-final1" in index_html
+    assert "js/screens-viz.js?v=20261021-hosted1" in index_html
 
 
 def test_native_cohort_groups_render_table_one_without_legacy_bars() -> None:
@@ -2357,7 +2357,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20261021-decision-records1" in index_html
+    assert "api.js?v=20261021-hosted1" in index_html
     assert "screens-dict.js?v=20260830-viz-final1" in index_html
     assert "deepdive.css?v=20260830-viz-final1" in index_html
 
@@ -2669,7 +2669,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20261021-decision-records1" in index_html
+    assert "api.js?v=20261021-hosted1" in index_html
     assert "screens-guided-projects.js?v=20261021-hosted1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -2885,7 +2885,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     )
     assert "js/screens-viz-patient-tables.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz-patient-overview.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz-patient.js?v=20260831-domain-owner1" in index_html
+    assert "js/screens-viz-patient.js?v=20261021-readable1" in index_html
     assert index_html.index("js/screens-viz-patient-navigation.js?") < index_html.index(
         "js/screens-viz.js?"
     )
@@ -2895,7 +2895,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20260830-viz-final1" in index_html
+    assert "js/screens-viz.js?v=20261021-hosted1" in index_html
     assert "bounded browser review', '浏览器有界审阅" in patient_domain_js
     assert "function buildPatientDrilldown" in demo_drilldown_js
     assert "function demoTablePreviewRowContext" in demo_drilldown_js
@@ -3106,7 +3106,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz.js?v=20260830-viz-final1" in index_html
+    assert "js/screens-viz.js?v=20261021-hosted1" in index_html
     assert "view: 'idle'," in cohort_js
     assert "featureScope: 'recommended'," in cohort_js
     assert 'data-cohort-config-required="true"' in cohort_js

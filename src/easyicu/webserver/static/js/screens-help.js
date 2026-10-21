@@ -5,15 +5,112 @@
    plan structure only — never invented scientific results. */
 (function () {
   const S = (window.SCREENS = window.SCREENS || {});
+  const { esc } = window.EU_HTML;
+
+  /* ---------------- GET STARTED on a hosted instance ----------------
+     A clinician reaches EasyICU on the hospital server: the administrator
+     prepared the data and the model, and the conversation is the way in.
+     The local page's promises (runs on your machine, connect a folder, bring
+     your own token) are not true there, so the hosted page says what is.
+     Facts come from their owners: deployment and prepared databases from
+     /api/capabilities, the administrator from the hosted owner. */
+  function hostedOwner() {
+    const owner = window.EasyICU?.guidedPi?.optional('hosted');
+    return owner && owner.active() ? owner : null;
+  }
+  const DATABASE_NAMES = { miiv: 'MIMIC-IV', eicu: 'eICU-CRD', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', mimic: 'MIMIC-III', sic: 'SICdb' };
+  function preparedDatabases() {
+    const counts = (((window.EU_CAPABILITIES || {}).registered_sources || {}).by_database) || {};
+    return Object.keys(DATABASE_NAMES).filter(key => Number(counts[key]) > 0).map(key => DATABASE_NAMES[key]);
+  }
+  function hostedRail(owner) {
+    const contact = owner.supportContact();
+    return `
+      <div class="rail-sep"></div>
+      <div class="rail-block">
+        <div class="rail-head"><span class="t">${t('Where to go', '常用入口')}</span></div>
+        <div class="col gap-6" style="font-size:12.5px;color:var(--ink-3);">
+          <a class="nav-item" data-nav="guided" style="height:30px;"><span class="ico">${icon('agent', 15)}</span>${t('Research conversation', '研究对话')}</a>
+          <a class="nav-item" data-nav="patient" style="height:30px;"><span class="ico">${icon('patient', 15)}</span>${t('Patient Review', '患者审阅')}</a>
+        </div>
+        ${contact ? `<div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Administrator', '管理员')}</div><div style="font-size:12.5px;color:var(--ink-2);">${esc(contact)}</div>` : ''}
+      </div>`;
+  }
+  function hostedRender(owner) {
+    const contact = owner.supportContact();
+    const databases = preparedDatabases();
+    const steps = [
+      [t('Say what you want to study', '说出研究问题'), t('Describe the patients, the factor you care about and the outcome, in your own words. If something is missing, EasyICU asks.', '用自己的话说出研究人群、关心的因素和结局。缺少什么，EasyICU 会追问。')],
+      [t('Confirm the data', '确认数据'), t('EasyICU picks a suitable database and asks you to confirm it; data for the study is prepared only after you do.', 'EasyICU 会选出合适的数据库并请你确认；确认后才会为这项研究准备数据。')],
+      [t('Review the analysis plan', '审阅分析计划'), t('Before any analysis runs you see the whole plan: the study population, the variables and the statistical methods. It runs only after you approve it.', '分析开始前，你会看到完整的计划：研究人群、变量和统计方法。你批准后才会运行。')],
+      [t('Read the results', '查看结果'), t('Results come as tables, figures and a written explanation, and every number comes from the run\'s own record. The result files open and download in the conversation.', '结果以表格、图和文字说明呈现，每个数字都来自这次运行的记录。结果文件可以在对话里查看和下载。')],
+    ];
+    const questions = [
+      [t('Where is the data?', '数据在哪里？'), t('The research data is kept on the hospital server, prepared and managed by the administrator, and the analysis runs there too.', '研究数据保存在医院服务器上，由管理员准备和管理；分析也在服务器上运行。')],
+      [t('Which databases are ready?', '这里有哪些数据？'), databases.length
+        ? t(`Ready on this server: ${databases.join(', ')}. For another database, contact the administrator.`, `这台服务器上已准备好：${databases.join('、')}。需要其他数据库，请联系管理员。`)
+        : t('No database is ready on this server yet. Please contact the administrator.', '这台服务器上还没有准备好的数据库，请联系管理员。')],
+      [t('Does it use an AI model?', '会用到 AI 模型吗？'), t('Yes. The research conversation runs on a model the administrator set up. Your messages, the analysis plan and summary statistics are sent to it so that it can understand the question and write the explanations.', '会。研究对话由管理员配置的模型支持；你的消息、分析计划和汇总统计结果会发给它，用来理解问题和撰写说明。')],
+      [t('Do I need to set up a model or an API key?', '需要自己配置模型或 API key 吗？'), t('No. The administrator sets up the model for everyone.', '不需要，模型由管理员统一配置。')],
+      [t('What if something goes wrong?', '遇到问题怎么办？'), t(`At the top of the research conversation, open “Having a problem?” and copy the problem reference for the administrator${contact ? ` (${contact})` : ''}. It holds only the codes of the project, conversation and run, never patient information.`, `在研究对话顶部点「遇到问题」，复制问题编号发给管理员${contact ? `（${contact}）` : ''}。编号只包含项目、对话和运行的代号，不含患者信息。`)],
+    ];
+    return `
+      <div class="page-head" style="margin-bottom:18px;">
+        <div class="eyebrow">${t('Get started', '快速上手')}</div>
+        <h1 style="margin-top:6px;">${t('One conversation, one ICU study', '用一次对话完成一项 ICU 研究')}</h1>
+        <p class="lead">${t('EasyICU runs on the hospital server, where the administrator has prepared the data and the model. Say what you want to study; the conversation takes you through the rest, step by step.', 'EasyICU 运行在医院服务器上，数据和模型都由管理员准备好。你只需要说出想研究的问题，其余步骤会在对话里一步步带你完成。')}</p>
+      </div>
+
+      <div class="guide-hero" data-help-hosted>
+        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;">
+          <div style="max-width:60ch;">
+            <div class="row gap-10" style="align-items:center;">
+              <div class="mode-mark accent" style="width:34px;height:34px;">${icon('agent', 17)}</div>
+              <div style="font-size:17px;font-weight:600;letter-spacing:-0.01em;">${t('Start with a question', '从一个问题开始')}</div>
+            </div>
+            <p style="font-size:12.75px;color:var(--ink-3);line-height:1.6;margin:12px 0 0;">${t('For example: “In eICU, is the highest lactate on the first ICU day associated with in-hospital death?” Plain words are fine; the conversation also offers example questions to start from.', '例如：「在 eICU 中，入 ICU 第一天的最高乳酸与院内死亡是否相关？」用平常的话说就行，对话里也有现成的示例问题可以直接选用。')}</p>
+          </div>
+          <div class="col gap-8" style="flex:none;">
+            <button class="btn primary lg" data-nav="guided" type="button">${t('Start a research conversation', '开始研究对话')} ${icon('arrow', 15)}</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="sec-stack"><div class="lbl">${t('Four steps', '四个步骤')}</div><h2>${t('How a study moves forward', '一项研究怎样推进')}</h2></div>
+      <div class="card pad">
+        <div class="guide-steps">
+          ${steps.map(([title, desc], i) => `
+            <div class="guide-step ${i === 0 ? 'accent' : ''}">
+              <div class="gs-num">${i + 1}</div>
+              <div>
+                <div class="gs-t">${title}</div>
+                <div class="gs-d">${desc}</div>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <div class="sec-stack"><div class="lbl">${t('Good to know', '你可能关心')}</div><h2>${t('Common questions', '常见问题')}</h2></div>
+      <div class="faq">
+        ${questions.map(([q, a], i) => `
+          <div class="faq-item ${i === 0 ? 'open' : ''}">
+            <button class="faq-q">${q}<span class="fq-chev">${icon('chevron', 14)}</span></button>
+            <div class="faq-a">${esc(a)}</div>
+          </div>`).join('')}
+      </div>`;
+  }
 
   /* ---------------- GET STARTED ---------------- */
   S.tutorial = {
     section: 'tutorial', nav: 'tutorial',
     crumbs: ['Home', 'Get Started'],
     actionHtml() {
+      if (hostedOwner()) return `<button class="btn primary" data-nav="guided" type="button">${t('Start a research conversation', '开始研究对话')}</button>`;
       return `<button class="btn primary" data-help-startdemo type="button">${icon('play', 13)} ${t('Start demo', '开始演示')}</button>`;
     },
     rail() {
+      const hosted = hostedOwner();
+      if (hosted) return hostedRail(hosted);
       const workflow = [
         [t('Extract', '抽取'), 'extract', 'extraction'],
         [t('Review', '审阅'), 'patient', 'patient'],
@@ -37,6 +134,8 @@
       </div>`;
     },
     render() {
+      const hosted = hostedOwner();
+      if (hosted) return hostedRender(hosted);
       const steps = [
         [
           '1',

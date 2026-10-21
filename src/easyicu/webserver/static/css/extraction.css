@@ -536,3 +536,6 @@
   .ex-collapsible .cfg-head > .pill{ display:none; }
   .modcard-head{ grid-template-columns:minmax(0,1fr) auto; }
 }
+
+/* A raw converter error folded below its plain sentence (convertingState). */
+.ex-conv-detail>summary{cursor:pointer;color:var(--ink-3)}

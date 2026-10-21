@@ -6,8 +6,8 @@
    contract with the gateway and the runner.
 
    D-P2-2 escaping contract: `errorText()` returns RAW user-facing copy — the
-   final `return String(error.message || error.code || error)` fallback carries
-   untrusted transport text verbatim. 返回值须经esc后插入innerHTML: callers
+   final `fallbackText(error)` keeps a readable server sentence verbatim, and
+   that text is untrusted transport text. 返回值须经esc后插入innerHTML: callers
    MUST pass the result through `esc()` (window.EU_HTML) before inserting it
    into innerHTML. Only `option()` in this file escapes internally. A static
    test scans every `innerHTML ... errorText` interpolation and fails the
@@ -170,7 +170,51 @@
       if (staticPreview() && String(error.message || '').includes('Failed to fetch')) {
         return tr('This is a static preview without the EasyICU backend. Start EasyICU and open http://127.0.0.1:8765/#guided.', '这是不带 EasyICU 后端的静态预览。请启动 EasyICU，再打开 http://127.0.0.1:8765/#guided。');
       }
-      return String(error.message || error.code || error);
+      return fallbackText(error);
+    }
+
+    // A job's end event carries its failure as text, usually `code: detail`;
+    // the code chooses the copy and the detail stays for the fallback.
+    function jobErrorText(raw) {
+      const text = String(raw || '').trim();
+      const match = text.match(/^([a-z][a-z0-9_]{2,79})(?:\s*:\s*|$)/);
+      if (!match) return errorText({ message: text });
+      return errorText({ code: match[1], message: text.slice(match[0].length) || match[1] });
+    }
+
+    // Whom a clinician asks: the administrator a hosted instance names.
+    function askAdministrator() {
+      const registry = window.EasyICU && window.EasyICU.guidedPi;
+      const hosted = registry && typeof registry.optional === 'function' ? registry.optional('hosted') : null;
+      const contact = hosted && hosted.active() ? hosted.supportContact() : '';
+      return contact
+        ? { en: `contact the administrator (${contact})`, zh: `请联系管理员（${contact}）` }
+        : { en: 'contact the administrator', zh: '请联系管理员' };
+    }
+
+    // A failure no copy above names. A server sentence in the reader's
+    // language is kept; a machine code, a transport string or a sentence in
+    // another language becomes a plain sentence, with the code (or the
+    // original text) in brackets for the administrator.
+    function fallbackText(error) {
+      const value = typeof error === 'object' ? error : { message: String(error) };
+      const message = String(value.message || '').trim();
+      const code = String(value.code || '').trim().slice(0, 80);
+      const status = Number(value.status || 0);
+      const ask = askAdministrator();
+      if (!status && /Failed to fetch|NetworkError|Load failed|ERR_NETWORK/i.test(message)) {
+        return tr('EasyICU could not reach its server. Check the network, then try again.', '连不上 EasyICU 服务器。请检查网络后重试。');
+      }
+      if (status >= 500) {
+        const ref = code || `HTTP ${status}`;
+        return tr(`The EasyICU server hit an error on this step (${ref}). Try again shortly; if it keeps happening, ${ask.en}.`, `EasyICU 服务器处理这一步时出错了（${ref}）。请稍后重试；如果反复出现，${ask.zh}。`);
+      }
+      const zh = tr('', 'zh') === 'zh';
+      const machine = !message || message === code || /^[A-Za-z][A-Za-z0-9_.:-]*$/.test(message) || /->\s*HTTP\s+\d+/.test(message);
+      const foreign = zh && !/[\u3400-\u9fff]/.test(message);
+      if (!machine && !foreign) return message;
+      const ref = code || (status ? `HTTP ${status}` : '') || message.slice(0, 120);
+      return tr(`This step did not complete${ref ? ` (${ref})` : ''}. If it keeps happening, ${ask.en}.`, `这一步没有完成${ref ? `（${ref}）` : ''}。如果反复出现，${ask.zh}。`);
     }
 
     // D-P2-5: hostname-exact-or-suffix preset matching. The previous raw-URL
@@ -475,6 +519,10 @@
           'The approved plan could not resume. Its review is still open, so it can be approved again.',
           '已批准的计划未能恢复执行；审阅仍然有效，可以再次批准。',
         ),
+        research_pipeline_manifest_required: tr(
+          'The bound folder is a converted database, not a data package prepared for this study. Extract this study\'s data first, then generate the plan.',
+          '绑定的是转换好的数据库，还不是为本研究准备的数据包。请先为本研究提取数据，再生成计划。',
+        ),
         data_foundation_blocked: tr(
           'Data preparation did not pass, so no plan was generated.',
           '数据准备未通过，因此没有生成计划。',
@@ -574,7 +622,7 @@
       return withDetail(tr(`The run stopped before finishing (code: ${value}).`, `运行在完成前停止（代码：${value}）。`));
     }
 
-    return Object.freeze({ errorText, modelErrorText, providerPreset, option, runFailureText });
+    return Object.freeze({ errorText, jobErrorText, modelErrorText, providerPreset, option, runFailureText });
   }
 
   window.EasyICU.guidedPi.declare('errorText', { create });

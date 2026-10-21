@@ -324,7 +324,7 @@
            marks every downstream cohort/extraction/review stale and cancels a
            running Cross-DB scan. Once there IS downstream work, give it the
            weight of a destructive action so it stops reading like EN/中. -->
-      <div class="mode-seg ${demoMode ? 'demo-active' : ''} ${consequential ? 'consequential' : ''}" role="group" aria-label="Data mode" title="${consequential ? t('Switching the data source will mark your current cohort, extraction and review as out of date.', '切换数据源会把当前的队列、抽取与审阅标记为过期。') : (demoMode ? t('Demo mode uses official public deidentified demo datasets or clearly labelled seeded examples. It is never your local data; switch to Real to load a local export.', '演示模式使用官方公开去标识 Demo 数据集，或明确标注的种子示例；都不是你的本地数据。切换到真实模式可加载本地导出。') : t('Real mode: screens compute from your local EasyICU export. Nothing is uploaded.', '真实模式：各页面从你本地的 EasyICU 导出计算，不上传任何数据。'))}">
+      <div class="mode-seg ${demoMode ? 'demo-active' : ''} ${consequential ? 'consequential' : ''}" data-datamode-switch role="group" aria-label="Data mode" title="${consequential ? t('Switching the data source will mark your current cohort, extraction and review as out of date.', '切换数据源会把当前的队列、抽取与审阅标记为过期。') : (demoMode ? t('Demo mode uses official public deidentified demo datasets or clearly labelled seeded examples. It is never your local data; switch to Real to load a local export.', '演示模式使用官方公开去标识 Demo 数据集，或明确标注的种子示例；都不是你的本地数据。切换到真实模式可加载本地导出。') : t('Real mode: screens compute from your local EasyICU export. Nothing is uploaded.', '真实模式：各页面从你本地的 EasyICU 导出计算，不上传任何数据。'))}">
         <button type="button" class="${demoMode ? 'on' : ''}" data-datamode="demo" aria-pressed="${demoMode}">${icon('flask', 12)} ${officialDemo ? t('Official demo', '官方演示') : (demoMode ? t('Demo data', '演示数据') : t('Demo', '演示'))}</button>
         <button type="button" class="${!demoMode ? 'on' : ''}" data-datamode="real" aria-pressed="${!demoMode}">${icon('db', 12)} ${t('Real', '真实')}</button>
       </div>
@@ -359,7 +359,19 @@
     return { top, bottom };
   }
 
+  // A hosted instance (/api/capabilities -> deployment.hosted) serves
+  // clinicians: the design-reference catalogue is not one of its pages, and
+  // a stray key press must not switch the page or the language.
+  const HOSTED_HIDDEN_ROUTES = new Set(['states']);
+  function hostedInstance() {
+    return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true;
+  }
   function render(opts = {}) {
+    if (hostedInstance() && HOSTED_HIDDEN_ROUTES.has(route)) {
+      route = FALLBACK_ROUTE;
+      replaceHash(route);
+    }
+    document.documentElement.toggleAttribute('data-eu-hosted', hostedInstance());
     const resetScroll = !!opts.resetScroll;
     const priorContent = app.querySelector('.content');
     const priorScrollOwner = priorContent || app.querySelector('.eudata-main') || app.querySelector('.eusk-main');
@@ -507,7 +519,7 @@
   function goto(id) { if (window.SCREENS[id]) { route = id; location.hash = '#' + id; renderRoute({ resetScroll: true }); } }
   document.addEventListener('keydown', (e) => {
     const tgt = e.target;
-    const typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable);
+    const typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT' || tgt.isContentEditable);
     // ⌘K / Ctrl+K → open the single EasyICU Copilot conversation.
     if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
       e.preventDefault();
@@ -515,7 +527,7 @@
       if (guide) guide.toggle();
       return;
     }
-    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (typing || e.metaKey || e.ctrlKey || e.altKey || hostedInstance()) return;
     // 1–5 → switch section
     if (e.key >= '1' && e.key <= '5') { goto(SHORTCUT_SECTIONS[+e.key - 1]); return; }
     // L → toggle language

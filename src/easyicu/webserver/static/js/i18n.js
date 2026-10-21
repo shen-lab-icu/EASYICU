@@ -159,6 +159,8 @@
   window.EU_HASWORK = false;
   window.setDataMode = function (m, opts) {
     if (m !== 'demo' && m !== 'real') return;
+    // A hosted instance shows only the data its administrator prepared.
+    if (m === 'demo' && ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true) return;
     if (window.getDataMode() === m) return;
     const apply = () => {
       window.EU_STALE = true;  // changing the source invalidates downstream

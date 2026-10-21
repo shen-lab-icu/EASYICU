@@ -377,6 +377,16 @@ modules.require('aside').create({ tr: en => en, esc: EU_HTML.esc, iconHtml: () =
   shell: () => 'pi', project: () => ({ title: 'Study' }), workflow: () => null,
 }).syncProjectWorkflowAside();
 assert.match(panelBody.innerHTML, /data-gpi-project-workflow-loading/);
+// A project its first conversation has not initialized yet has no progress to
+// load: the panel says what will fill it instead of loading forever.
+modules.require('aside').create({ tr: en => en, esc: EU_HTML.esc, iconHtml: () => '',
+  projectId: () => 'p', displayProjectTitle: value => value, demoMode: () => false,
+  shell: () => 'pi', project: () => ({ title: 'Study' }), workflow: () => null,
+  projectNotStarted: () => true,
+}).syncProjectWorkflowAside();
+assert.match(panelBody.innerHTML, /data-gpi-project-workflow-not-started/);
+assert.match(panelBody.innerHTML, /once the first conversation starts/);
+assert.doesNotMatch(panelBody.innerHTML, /data-gpi-project-workflow-loading|Loading project progress/);
 process.stdout.write('Study history, draft retention, reference scope and layout restoration passed.\n');
 
 const displayReference = workspace.messageView({ role: 'user', text: message }, 'project_current');

@@ -220,6 +220,11 @@
       } catch (err) {
         console.warn('[EasyICU] capability fetch failed:', err);
       }
+      // A browser that remembers demo mode opens a hosted instance on the
+      // administrator's prepared data (setDataMode refuses demo there).
+      if (((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true && window.EU_DATA === 'demo' && window.setDataMode) {
+        window.setDataMode('real', { force: true });
+      }
       // Guided owns a live conversation DOM. Rebuilding the whole screen after
       // catalog hydration destroys that DOM and starts project restoration a
       // second time. Settings that change its language or data mode still need

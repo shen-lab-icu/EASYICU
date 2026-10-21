@@ -191,10 +191,12 @@
     const workflow = skill.kind === 'method' && skill.skillLayer === 'research_workflow';
     const detail = user && ui.detail && ui.detail.name === skill.name ? ui.detail : null;
     const masterOff = !user && (method ? methodCapabilities().enabled === false : publicationCapabilities().enabled === false);
+    // The administrator owns skill state on a hosted instance: show it, offer no toggle.
+    const stateOnly = method || Boolean(window.EasyICU?.guidedPi?.optional('hosted')?.active());
     return `<button type="button" class="eusk-back" data-sk-back>← ${tr('Back to skills', '返回技能目录')}</button>
       <div class="eusk-detail-head"><div><span class="eusk-eyebrow">${esc(skill.category)} · ${skill.kind === 'method' ? layerLabel(skill) : sourceLabel(skill.source)}</span>
       <h1>${esc(skill.title)}</h1><p>${esc(skill.description)}</p><small>${esc(user ? date(skill.updated_at) : skill.version)}</small></div>
-      <div class="eusk-detail-actions">${method
+      <div class="eusk-detail-actions">${stateOnly
         ? `<span class="eusk-state-button ${skill.enabled ? 'on' : ''}" aria-label="${skill.enabled ? tr('Available', '可用') : tr('Unavailable', '不可用')}">${skill.enabled ? '✓ ' + tr('Available', '可用') : tr('Unavailable', '不可用')}</span>`
         : `<button type="button" class="eusk-state-button ${skill.enabled ? 'on' : ''}" data-sk-toggle="${esc(skill.id)}" ${ui.busy || masterOff ? 'disabled' : ''}>${skill.enabled ? '✓ ' + tr('Enabled', '已启用') : tr('Enable', '启用')}</button>`}
       <button type="button" class="eusk-use" data-sk-use="${esc(skill.id)}" ${skill.enabled ? '' : 'disabled'}>${workflow ? tr('Start workflow', '启动工作流') : method || (user && skill.enabled && skill.stages.includes('conversation')) ? tr('Use in new task', '在新任务中使用') : tr('Ask in new task', '在新任务中询问')} ↗</button>
