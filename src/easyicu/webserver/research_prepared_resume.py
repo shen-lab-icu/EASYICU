@@ -44,9 +44,12 @@ _SCIENTIFIC_ARGUMENTS = (
     "id_columns", "time_columns", "outcome_columns", "concept_descriptions",
     "user_preferences", "notes",
 )
+# Reviewed requirements are valid PipelineConfig only under plan review, so
+# the rehearsal keeps that flag exactly as the reviewed launch carries it.
 _REHEARSAL_CONFIG = (
     "bound_target_trial", "bound_baseline_requirements",
     "bound_population_requirements", "bound_analysis_inputs",
+    "require_human_plan_review",
 )
 _OFFER_CONFIG = (*_REHEARSAL_CONFIG, "required_primary_cohort_selection_mode", "bound_plan_revision_contract")
 _OFFER_MEMO_LIMIT = 128
