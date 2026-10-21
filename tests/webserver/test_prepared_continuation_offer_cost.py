@@ -459,3 +459,27 @@ def test_queued_runner_byte_fence_covers_bound_sidecars(prepared_source, kind):
     assert prepared_package_identity(str(source.export), binding) == old
     with pytest.raises(ValueError, match="bytes changed"):
         prepared_package_identity(str(source.export), binding, verify_content=True)
+
+
+def test_rehearsal_keeps_the_plan_review_flag_real_seeds_carry(prepared_source, monkeypatch):
+    """A reviewed requirement is valid config only under plan review (attempt 10's seed)."""
+    from easyicu.research_agent.planning.baseline_requirements import AcceptedBaselineRequirements
+
+    source = prepared_source
+    seed = agent_review_recovery.load_recovery_seed(source.run.parents[1])
+    requirements = AcceptedBaselineRequirements.model_validate({
+        "source_plan_sha256": "b" * 64, "tables": [{
+            "source_step_id": "baseline", "group_by": {"name": "lact_group_x1"},
+            "variables": [{"name": "age"}],
+        }],
+    }).model_dump(mode="json")
+    update_seed(source, pipeline_config={
+        **seed.pipeline_config, "bound_baseline_requirements": requirements,
+        "require_human_plan_review": True,
+    })
+    # The source context here predates the added requirement, so the restore
+    # comparison is not the subject; the rehearsal's config construction is.
+    rehearsal = Mock(return_value=None)
+    monkeypatch.setattr(prepared_owner, "restore_exposure_grouping_phase", rehearsal)
+    assert offer(source)
+    assert rehearsal.call_count == 1
