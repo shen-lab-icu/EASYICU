@@ -1353,7 +1353,9 @@
       </div>
       <div class="page-head" style="margin-bottom:14px;">
         <h1 style="margin-top:0;">${t('Cross-database comparison', '跨库对比')}</h1>
-        <p class="lead">${dataMode === 'real' ? t('Check concept coverage and aggregate distributions across prepared exports or locally sampled ICU databases.', '检查已准备导出或本地抽样 ICU 数据库之间的概念覆盖和聚合分布。') : t('Compare the official MIMIC-IV and eICU demo exports through the same aggregate pipeline used for local data.', '通过与本地数据相同的聚合流程，对比官方 MIMIC-IV 与 eICU Demo 导出。')}</p>
+        <p class="lead">${dataMode === 'real' ? (hostedServer()
+          ? t('Check concept coverage and aggregate distributions across the data the administrator prepared.', '检查管理员准备的各份数据之间的概念覆盖和聚合分布。')
+          : t('Check concept coverage and aggregate distributions across prepared exports or locally sampled ICU databases.', '检查已准备导出或本地抽样 ICU 数据库之间的概念覆盖和聚合分布。')) : t('Compare the official MIMIC-IV and eICU demo exports through the same aggregate pipeline used for local data.', '通过与本地数据相同的聚合流程，对比官方 MIMIC-IV 与 eICU Demo 导出。')}</p>
       </div>`;
   }
   S.crossdb = {
