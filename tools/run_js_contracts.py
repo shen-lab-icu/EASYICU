@@ -85,6 +85,21 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-aside.js",
         "screens-guided-pi-header.js",
     ],
+    # The conversation's record lines, rail state, run-file coordinates, stale
+    # gate and host-action replay, through the real owners.
+    "guided_pi_decision_records.test.js": [
+        "html-escape.js",
+        "screens-guided-pi-data-consent.js",
+        "screens-guided-pi-decision-records.js",
+        "screens-agent-reader-vocab.js",
+        "screens-agent-render.js",
+        "screens-guided-pi-run-files.js",
+        "screens-guided-pi-study-workspace.js",
+        "screens-guided-pi-confirmation.js",
+        "screens-guided-pi-activity.js",
+        "screens-guided-pi-transcript.js",
+        "screens-guided-pi-session-view.js",
+    ],
     "guided_pi_run_files_manuscript.test.js": [
         "screens-guided-pi-modules.js",
         "html-escape.js",

@@ -10,24 +10,25 @@ global.EU_HTML = { esc: String };
 require(path.resolve(__dirname, '../../src/easyicu/webserver/static/js/product-labels.js'));
 require(path.resolve(__dirname, '../../src/easyicu/webserver/static/js/screens-guided-pi-run-files.js'));
 
-const run = (id, study = 'a') => ({ run_id: id, study_id: study, project_dir: `/runs/${study}/${id}` });
+// The host names each listed run by an opaque ref; the page never sees its folder.
+const run = (id, study = 'a') => ({ run_id: id, study_id: study, run_ref: `ref-${study}-${id}` });
 const review = row => ({ ok: true, ...row, readiness: { signable: true }, signed: false,
   artifacts: [{ name: 'result_tables.json' }, { name: 'evidence_ledger.json' }] });
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const calls = [];
 const api = {
   listStudyContexts: async () => ({ contexts: [{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }] }),
-  loadIdeaAgentProjects: async () => ({ projects: [{ study_id: 'a', project_dir: '/seed/a' }] }),
+  loadIdeaAgentProjects: async () => ({ projects: [{ study_id: 'a', project_dir: '/seed/a', runs: [{ run_id: 'unlisted', label: 'unlisted', project_dir: '/seed/a/runs/unlisted' }] }] }),
   loadGuidedDrafts: async () => ({ drafts: [] }),
   loadAgentRunHistory: async request => {
     calls.push(['history', request]);
     return { ok: true, runs: [run(request.project_seed_dir ? 'old' : 'new', request.study_id || 'a')], count: 1 };
   },
-  loadAgentRunReview: async dir => review({ run_id: dir.split('/').pop(), study_id: dir.split('/')[2], project_dir: dir }),
-  loadAgentRunArtifact: async (dir, name) => { calls.push(['artifact', dir, name]); return { ok: true, payload: { source: dir } }; },
-  downloadAgentRunArtifact: async (dir, name) => { calls.push(['download', dir, name]); },
-  downloadAgentRunBundle: async dir => { calls.push(['bundle', dir]); },
-  signoffAgentRun: async (dir, body) => { calls.push(['sign', dir, body]); return { ...review(run('old')), signed: true, reportable: false, draft_unlocked: false }; },
+  loadAgentRunReview: async ({ run_ref: ref }) => review({ run_id: ref.split('-')[2], study_id: ref.split('-')[1], run_ref: ref }),
+  loadAgentRunArtifact: async ({ run_ref: ref }, name) => { calls.push(['artifact', ref, name]); return { ok: true, payload: { source: ref } }; },
+  downloadAgentRunArtifact: async ({ run_ref: ref }, name) => { calls.push(['download', ref, name]); },
+  downloadAgentRunBundle: async ({ run_ref: ref }) => { calls.push(['bundle', ref]); },
+  signoffAgentRun: async ({ run_ref: ref }, body) => { calls.push(['sign', ref, body]); return { ...review(run('old')), signed: true, reportable: false, draft_unlocked: false }; },
 };
 
 (async () => {
@@ -57,12 +58,15 @@ const api = {
   assert.equal(ctl.state.selected.id, 'a');
   assert.deepEqual(ctl.state.runs.map(row => row.run_id).sort(), ['new', 'old']);
   assert(calls.some(([, request]) => request && request.project_seed_dir === '/seed/a'));
+  // Every listing asks for path-free rows; a run the host did not list has no ref to open.
+  assert(calls.filter(([kind]) => kind === 'history').every(([, request]) => request.path_free === true));
+  assert(!ctl.state.runs.some(row => row.run_id === 'unlisted' || row.project_dir));
   await ctl.openRun(run('old'));
   await ctl.artifact('result_tables.json');
-  assert.equal(ctl.state.artifact.payload.source, '/runs/a/old');
+  assert.equal(ctl.state.artifact.payload.source, 'ref-a-old');
   await ctl.download('result_tables.json'); await ctl.download();
-  assert(calls.some(row => row[0] === 'download' && row[1] === '/runs/a/old'));
-  assert(calls.some(row => row[0] === 'bundle' && row[1] === '/runs/a/old'));
+  assert(calls.some(row => row[0] === 'download' && row[1] === 'ref-a-old'));
+  assert(calls.some(row => row[0] === 'bundle' && row[1] === 'ref-a-old'));
   await ctl.artifact('../../secret'); await ctl.download('../../secret');
   assert(!calls.some(row => row.includes('../../secret')));
   await ctl.sign(['evidence_reviewed']); assert(!calls.some(row => row[0] === 'sign'));
@@ -111,7 +115,7 @@ const api = {
   const thread = owner.create({ api: () => ({ ...api, loadAgentRunReview: () => threadPending.promise }),
     context: () => context, changed: () => { repaints++; }, resourceButton: () => '' });
   await thread.sync();
-  const opening = thread.open('/runs/a/old');
+  const opening = thread.open('ref-a-old');
   context = { projectId: 'draft-b', studyId: 'b', sessionId: 'chat-b' };
   await thread.sync();
   const settledPaints = repaints;

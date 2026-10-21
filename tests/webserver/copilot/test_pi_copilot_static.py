@@ -124,12 +124,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-provider-control.js") < index.index(
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
-    assert "js/screens-guided-pi-study-workspace.js?v=20261016-session-labels1" in index
+    assert "js/screens-guided-pi-study-workspace.js?v=20261021-decision-records1" in index
     assert "js/screens-guided-pi-events.js?v=20261020-registered-offer1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20261020-registered-offer2" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20261021-decision-records1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261020-prepare-label1" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261021-decision-records1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -142,8 +142,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261021-grouped-resume1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20261020-prepare-label1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261021-decision-records1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261021-decision-records1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261021-trace-language1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261021-prepared-continuation1" in index
     assert "js/screens-guided-pi.js?v=20261021-prepared-continuation1" in index
@@ -152,7 +152,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20261021-step-code1" in index
+    assert "js/api.js?v=20261021-decision-records1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -845,7 +845,8 @@ def test_candidate_plan_upgrade_waits_for_review_then_uses_explicit_confirmation
         render: () => {{}},
         recordHostAction: async (...args) => calls.push(['host-action', ...args]),
         watchChildJob: (...args) => calls.push(['child', ...args]),
-        refreshSession: async () => {{}}, loadWorkflow: async () => {{}}, setBusy: () => {{}},
+        refreshSession: async (...args) => {{calls.push(['refresh', ...args]);}},
+        loadWorkflow: async () => {{}}, setBusy: () => {{}},
         setError: () => {{}}, appendMessage: value => calls.push(['message', value.text]),
         truncateMessagesAt: () => {{}},
       }};
@@ -874,9 +875,13 @@ def test_candidate_plan_upgrade_waits_for_review_then_uses_explicit_confirmation
     assert len(plan_calls) == 1
     assert plan_calls[0][1]["planner_start_mode"] == "auto"
     assert plan_calls[0][1]["plan_revision_source_run_id"] == "candidate-run"
-    assert [call for call in payload["calls"] if call[0] == "message"] == [
-        ["message", "确认方案并准备分析数据"]
-    ]
+    # The confirmation leaves the host's record line, read back with the
+    # session, not a quotation this page cannot keep across a reload.
+    assert [call for call in payload["calls"] if call[0] == "message"] == []
+    child_at = payload["calls"].index(
+        ["child", "upgrade-job", "easyicu_full_run_upgrade_submitted"]
+    )
+    assert ["refresh", True] in payload["calls"][child_at:]
     assert plan_calls[0][1]["host_action"]["action_code"] == "prepare_analysis_data"
     assert plan_calls[0][1]["host_action"]["decision"]["next_action_code"] == (
         "plan_execution_upgrade_required"
@@ -6522,7 +6527,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20261021-trace-language1" in index
+    assert "screens-guided-pi-transcript.js?v=20261021-decision-records1" in index
     assert "screens-guided-pi.js?v=20261021-prepared-continuation1" in index
 
 

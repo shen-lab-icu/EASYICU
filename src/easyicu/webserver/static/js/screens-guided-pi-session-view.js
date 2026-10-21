@@ -16,6 +16,10 @@
 
     function messageHtml(row, options) {
       if (row.childJobHandoff) return '';
+      if (row.role === 'decision_record') {
+        const records = MODULES.optional('decisionRecords');
+        return records ? records.render(row, { tr, esc }) : '';
+      }
       if (row.role === 'activity') return ACTIVITY.render(row, options && options.trace) + RUN_FILES.render(row);
       if (row.role === 'host_notice') return HOST_JOBS && typeof HOST_JOBS.renderNotice === 'function' ? HOST_JOBS.renderNotice(row) : '';
       if (row.role === 'saved_run') {
@@ -117,6 +121,19 @@
       </article>`;
     }
 
+    // Each answered gate leaves its record line where it was decided
+    // (owner: screens-guided-pi-decision-records.js). A source label the
+    // researcher typed already shows its past choice under that reply.
+    function withDecisionRecords(timeline) {
+      const records = MODULES.optional('decisionRecords');
+      if (!records) return timeline;
+      const typedSource = timeline.some(row => row && row.role === 'user'
+        && DATA_CONSENT && typeof DATA_CONSENT.matchesSourceSelection === 'function'
+        && DATA_CONSENT.matchesSourceSelection(state.session, row.text));
+      return records.place(timeline, records.rows(state.session)
+        .filter(record => !(typedSource && record.code === 'data_chosen')));
+    }
+
     // A refused automatic plan configuration shows the plan card and the
     // cohort decision together; otherwise the cohort decision, when the plan
     // needs one, replaces the confirmation card.
@@ -178,7 +195,7 @@
       const showProjectContinuationCards = !workspace && !freshTask && !ideaExplorationTurn;
       const dataConsentRequired = showProjectContinuationCards
         && DATA_CONSENT && DATA_CONSENT.requiresConfirmation(session);
-      const fullTimeline = freshTask ? [] : RUN_FILES.timeline(state.messages.concat(state.workflowReceipts));
+      const fullTimeline = freshTask ? [] : withDecisionRecords(RUN_FILES.timeline(state.messages.concat(state.workflowReceipts)));
       const timeline = state.regenerating && REGENERATION
         ? REGENERATION.visibleRows(fullTimeline, state.regeneration)
         : fullTimeline;

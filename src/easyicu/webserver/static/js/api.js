@@ -349,8 +349,13 @@
     const body = file ? { file: file } : {};
     return postJSON('/api/jobs/' + encodeURIComponent(jobId || '') + '/open-output', body);
   }
-  function loadAgentRunReview(projectDir) {
-    return postJSON('/api/agent-runs/review', { project_dir: projectDir });
+  // A run is named by the opaque `run_ref` its history listing issued
+  // ({ run_ref }); a bare string is the classic workspace's local folder.
+  function runCoordinate(run) {
+    return run && typeof run === 'object' ? { run_ref: String(run.run_ref || '') } : { project_dir: run };
+  }
+  function loadAgentRunReview(run) {
+    return postJSON('/api/agent-runs/review', runCoordinate(run));
   }
   function loadAgentScienceWorkbench(body) {
     return postJSON('/api/agent-runs/science-workbench', body || {});
@@ -409,8 +414,8 @@
   function loadCapabilityAuditEvents(body) {
     return postJSON('/api/capabilities/audit-events', body || {});
   }
-  function signoffAgentRun(projectDir, body) {
-    const payload = Object.assign({}, body || {}, { project_dir: projectDir });
+  function signoffAgentRun(run, body) {
+    const payload = Object.assign({}, body || {}, runCoordinate(run));
     return postJSON('/api/agent-runs/signoff', payload);
   }
   function loadAgentRunHistory(body) {
@@ -703,16 +708,16 @@
   function loadIdeaRun(body) {
     return postJSON('/api/ideas/run', body || {});
   }
-  function loadAgentRunArtifact(projectDir, artifact) {
-    return postJSON('/api/agent-runs/artifact', { project_dir: projectDir, artifact: artifact });
+  function loadAgentRunArtifact(run, artifact) {
+    return postJSON('/api/agent-runs/artifact', Object.assign(runCoordinate(run), { artifact: artifact }));
   }
-  async function downloadAgentRunArtifact(projectDir, artifact) {
-    const file = await postBlob('/api/agent-runs/download-artifact', { project_dir: projectDir, artifact: artifact });
+  async function downloadAgentRunArtifact(run, artifact) {
+    const file = await postBlob('/api/agent-runs/download-artifact', Object.assign(runCoordinate(run), { artifact: artifact }));
     triggerDownload(file.blob, file.filename);
     return file;
   }
-  async function downloadAgentRunBundle(projectDir) {
-    const file = await postBlob('/api/agent-runs/download-bundle', { project_dir: projectDir });
+  async function downloadAgentRunBundle(run) {
+    const file = await postBlob('/api/agent-runs/download-bundle', runCoordinate(run));
     triggerDownload(file.blob, file.filename);
     return file;
   }

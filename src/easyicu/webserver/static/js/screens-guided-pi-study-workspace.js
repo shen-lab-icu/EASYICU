@@ -12,10 +12,26 @@
     let skillPicker = { context: '', open: false, query: '', catalog: 'skills', category: 'all', focused: false };
     const contextKey = (projectId, sessionId) => JSON.stringify([projectId, sessionId]);
     const materialKey = resource => JSON.stringify([resource.kind, resource.run_id, resource.artifact, resource.sha256]);
+    // The rail state comes from the conversation's latest job -- a reply or
+    // a research job it started -- as the host reports it
+    // (``conversation_status``); a row without one reads its last reply.
+    const RAIL_STATES = {
+      running: { label: () => tr('Running', '进行中'), cls: ' is-running' },
+      needs_user: { label: () => tr('Needs you', '待确认'), cls: ' needs-user' },
+      stopped: { label: () => tr('Stopped', '已停止'), cls: ' needs-attention' },
+      done: { label: () => tr('Done', '已完成'), cls: ' is-complete' },
+    };
+    function railState(row) {
+      if (!row) return null;
+      if (row.active_message_job_id || row.last_turn_status === 'running') return RAIL_STATES.running;
+      const reported = RAIL_STATES[String(row.conversation_status || '')];
+      if (reported || row.conversation_status !== undefined) return reported || null;
+      if (['failed', 'interrupted', 'cancelled'].includes(String(row.last_turn_status || ''))) return RAIL_STATES.stopped;
+      return row.last_turn_status === 'done' ? RAIL_STATES.done : null;
+    }
     function sessionStatusLabel(row) {
-      if (row && (row.active_message_job_id || row.last_turn_status === 'running')) return tr('Running', '运行中');
-      if (row && ['failed', 'interrupted', 'cancelled'].includes(String(row.last_turn_status || ''))) return tr('Needs attention', '需处理');
-      if (row && row.last_turn_status === 'done') return tr('Completed', '已完成');
+      const state = railState(row);
+      if (state) return state.label();
       const count = Number(row && row.history_turn_count || 0);
       if (count > 0) return tr(`${count} turns`, `${count} 轮`);
       if (row && row.has_history) return tr('Has conversation', '已有对话');
@@ -358,9 +374,7 @@
             const status = typeof ctx.status === 'function' ? ctx.status(row)
               : (row.agent_mode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究'));
             const time = typeof ctx.time === 'function' ? ctx.time(row) : '';
-            const stateClass = row.active_message_job_id || row.last_turn_status === 'running' ? ' is-running'
-              : ['failed', 'interrupted', 'cancelled'].includes(String(row.last_turn_status || '')) ? ' needs-attention'
-              : row.last_turn_status === 'done' ? ' is-complete' : '';
+            const stateClass = (railState(row) || { cls: '' }).cls;
             const title = ctx.title(row);
             const canRemove = !row.has_history && !row.active_message_job_id && !row.last_message_job_id && !row.last_turn_status;
             return `<div class="gpi-conversation-row" data-gpi-rail-session-row data-gpi-rail-session-text="${esc(`${title} ${status}`.toLowerCase())}"><button type="button" class="gpi-conversation-item${stateClass}" data-gpi-rail-session="${esc(row.session_id)}" ${row.session_id === ctx.selectedId ? 'aria-current="page"' : ''} ${locked ? 'disabled' : ''}><span class="gpi-conversation-copy"><strong>${esc(title)}</strong><small><i aria-hidden="true"></i>${esc(status)}</small></span>${time ? `<time datetime="${esc(row.last_activity_at || row.created_at || '')}">${esc(time)}</time>` : ''}</button><details class="gpi-conversation-menu" data-popover-menu data-popover-key="${esc(row.session_id)}"><summary aria-label="${esc(tr('Conversation actions', '对话操作'))}" title="${esc(tr('Conversation actions', '对话操作'))}">•••</summary><div><button type="button" data-gpi-rail-rename="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Rename', '重命名')}</button>${canRemove ? `<button type="button" data-gpi-rail-remove="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Remove empty conversation', '删除空对话')}</button>` : ''}</div></details></div>`;

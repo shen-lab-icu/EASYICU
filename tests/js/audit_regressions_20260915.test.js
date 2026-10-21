@@ -322,7 +322,7 @@ test('P2-6 run-file evidence opens the registered run and digest; display links 
   c.window.EU_PRODUCT_LABELS = { projectTitle: (value, fallback) => value || fallback };
   registered.evidencePreview = { kindLabel: () => 'Result' };
   const artifactSha = 'b'.repeat(64), evidenceSha = 'a'.repeat(64);
-  const run = { run_id: 'original-run', study_id: 'study', project_dir: '/synthetic/original' };
+  const run = { run_id: 'original-run', study_id: 'study', run_ref: 'rr_' + 'c'.repeat(32) };
   const api = { listStudyContexts: async () => ({ contexts: [{ id: 'study' }] }), loadIdeaAgentProjects: async () => ({ projects: [] }),
     loadGuidedDrafts: async () => ({ drafts: [] }), loadAgentRunHistory: async () => ({ runs: [run] }),
     loadAgentRunReview: async () => ({ ...run, artifacts: [{ name: 'manuscript_provenance.json', sha256: artifactSha }] }),
@@ -335,7 +335,7 @@ test('P2-6 run-file evidence opens the registered run and digest; display links 
   const owner = registered.runFiles.create({ api: () => api, context: () => ({ projectId: 'project', studyId: 'study', sessionId: 'session' }), changed() {} });
   await owner.sync();
   let scrolled = 0;
-  const sectionNode = { dataset: { runFiles: run.project_dir }, querySelectorAll: () => [{ dataset: { gpiDisplayAnchor: 'Table 1' }, scrollIntoView: () => { scrolled++; } }] };
+  const sectionNode = { dataset: { runFiles: run.run_ref }, querySelectorAll: () => [{ dataset: { gpiDisplayAnchor: 'Table 1' }, scrollIntoView: () => { scrolled++; } }] };
   const click = (selector, element) => owner.handleClick({ preventDefault() {}, target: { closest: query => query === '[data-run-files]' ? sectionNode : query === selector ? element : null } });
   click('summary', { parentElement: sectionNode }); await flush();
   click('[data-run-files-artifact]', { dataset: { runFilesArtifact: '0' } }); await flush();

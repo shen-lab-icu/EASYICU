@@ -265,6 +265,17 @@ class PiSessionDataSourceAuthorization(BaseModel):
     confirmed_at: Optional[str] = None
 
 
+class PiSessionResearchJob(BaseModel):
+    """One research job's rail state, and when the job and that state began."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str = Field(min_length=1, max_length=160)
+    state: Literal["running", "needs_user", "stopped", "done"]
+    started_at: str = Field(min_length=1, max_length=40)
+    at: str = Field(min_length=1, max_length=40)
+
+
 class PiSessionRecord(BaseModel):
     """Bounded EasyICU metadata; Pi's JSONL remains separate UX state."""
 
@@ -325,6 +336,10 @@ class PiSessionRecord(BaseModel):
         Literal["running", "done", "failed", "cancelled", "interrupted"]
     ] = None
     last_turn_allowed_actions: list[str] = Field(default_factory=list, max_length=16)
+    # The latest research job this conversation started or submitted, with
+    # its rail state (``conversation_status``).  The task rail is
+    # metadata-only, so the job's state is kept here.
+    latest_research_job: Optional[PiSessionResearchJob] = None
     pinned_for_presentation: bool = False
 
     @property
