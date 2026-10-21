@@ -77,7 +77,7 @@
       color: colors.series.slice(),
       textStyle: {
         color: colors.ink,
-        fontFamily: 'IBM Plex Sans, system-ui, sans-serif',
+        fontFamily: 'IBM Plex Sans, system-ui, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif',
       },
       aria: {
         show: true,
@@ -108,7 +108,7 @@
       axisTick: { show: false },
       axisLabel: {
         color: colors.muted,
-        fontFamily: 'IBM Plex Mono, ui-monospace, monospace',
+        fontFamily: 'IBM Plex Mono, ui-monospace, Menlo, Consolas, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", monospace',
         fontSize: 9,
         hideOverlap: true,
         formatter: options.formatter,

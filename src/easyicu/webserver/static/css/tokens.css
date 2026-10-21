@@ -1,8 +1,10 @@
 /* ===== EasyICU shell redesign — design tokens ===== */
 :root{
   /* —— Type —— */
-  --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Chinese glyphs: PingFang on macOS, YaHei on Windows. Without a named
+     font, Chrome on Chinese Windows sets Chinese in monospace as NSimSun. */
+  --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, system-ui, 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', monospace;
   --font-cn: 'IBM Plex Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   --type-caption: 12.5px;        /* provenance, timestamps, secondary metadata */
   --type-meta: 13px;             /* compact status and control support copy */
