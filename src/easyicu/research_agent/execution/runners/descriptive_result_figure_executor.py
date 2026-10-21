@@ -23,7 +23,7 @@ from ...contracts.figure_plan import (
     EMPIRICAL_DISTRIBUTION_FIGURE_PANELS,
     GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS,
 )
-from ...figures.display_labels import scoped_label_lookup
+from ...figures.display_labels import figure_language_labels, scoped_label_lookup
 from ...figures.publication import (
     PALETTE_CLINICAL,
     apply_publication_style,
@@ -33,6 +33,10 @@ from ...figures.publication import (
 from ...schema import AnalysisStep
 from ...numeric_scalars import coerce_optional_finite_float as _finite
 from ._shared import method_head as _method_head, typed_product_value as _typed_product
+from .bound_variable_display import (
+    load_bound_grouping_variable,
+    load_bound_variable_descriptions,
+)
 
 __all__ = [
     "DESCRIPTIVE_DISTRIBUTION_COLUMNS",
@@ -402,6 +406,13 @@ def run_descriptive_result_figure(
         step_id=step_id,
         input_key=input_key,
     )
+    display_labels = figure_language_labels(
+        display_labels,
+        load_bound_variable_descriptions(run_dir=Path(run_dir), resolved_inputs=resolved_inputs),
+    )
+    primary_scope = load_bound_grouping_variable(
+        run_dir=Path(run_dir), resolved_inputs=resolved_inputs,
+    )
     apply_publication_style()
     fig, ax = plt.subplots(figsize=(7.2, 3.6))
 
@@ -562,9 +573,15 @@ def run_descriptive_result_figure(
         ax.set_yticks(positions)
         ax.set_yticklabels(
             [
-                (group_scope and scoped_label_lookup(group_scope, value, display_labels))
+                scoped_label_lookup(
+                    group_scope or (primary_scope if row_role == "exposure_level" else row_role),
+                    value, display_labels,
+                )
                 or text
-                for value, text in zip(frame["group"].dropna(), groups)
+                for value, text, row_role in zip(
+                    frame["group"].dropna(), groups,
+                    frame.get("row_role", pd.Series("", index=frame.index)),
+                )
             ]
         )
         ax.invert_yaxis()
@@ -573,7 +590,7 @@ def run_descriptive_result_figure(
             if "unit" in frame.columns
             else []
         )
-        axis_label = variables[0]
+        axis_label = display_labels.get(variables[0], variables[0])
         if len(units) == 1 and units[0]:
             axis_label = f"{axis_label} ({units[0]})"
         ax.set_xlabel(axis_label)

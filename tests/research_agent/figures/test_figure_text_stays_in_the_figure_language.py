@@ -7,7 +7,6 @@ English source description instead, and names an event time after its event.
 
 from __future__ import annotations
 
-import hashlib
 import re
 from pathlib import Path
 
@@ -17,7 +16,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pytest  # noqa: E402
 
-import easyicu.research_agent as ra  # noqa: E402
 from easyicu.research_agent.execution.runners.bound_variable_display import (  # noqa: E402
     load_bound_variable_descriptions,
 )
@@ -29,36 +27,12 @@ from easyicu.research_agent.figures.display_labels import (  # noqa: E402
 )
 from easyicu.research_agent.figures.presentation import wrap_figure_label  # noqa: E402
 
+from tests.support.exposure_group_display_fixtures import (  # noqa: E402
+    context_manifest as _context_manifest,
+    grouped_context_manifest as _grouped_context_manifest,
+)
+
 _CJK = re.compile(r"[㐀-鿿]")
-
-
-def _context_manifest(run_dir: Path) -> dict:
-    context = ra.ResearchContext(
-        research_question="Is the lactate tertile associated with ICU readmission?",
-        cohort=ra.CohortDescriptor(
-            cohort_name="Adult ICU stays", database="mimiciv", n_patients=380, n_stays=412,
-        ),
-        variables=[
-            ra.ConceptDescriptor(
-                name="icu_readmission", description="ICU readmission", role="outcome",
-                dtype="bool", source_concept="readmission",
-            ),
-            ra.ConceptDescriptor(
-                name="readmission_time_hours", description="ICU readmission", role="time",
-                dtype="float64", unit="h", source_concept="readmission",
-            ),
-            ra.ConceptDescriptor(
-                name="lactate_tertile", description="lactate tertile", role="lab",
-                dtype="int64", source_concept="lact",
-            ),
-        ],
-        primary_exposure="lactate_tertile",
-        target_outcome="icu_readmission",
-    )
-    path = run_dir / "research_context.json"
-    path.write_text(context.model_dump_json(), encoding="utf-8")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    return {"context": {"relative_path": path.name, "sha256": digest}}
 
 
 def test_a_label_in_another_script_becomes_the_english_source_description() -> None:
@@ -120,6 +94,18 @@ def test_figure_descriptions_come_only_from_the_digest_bound_context(tmp_path: P
     with pytest.raises(ValueError, match="digest mismatch"):
         load_bound_variable_descriptions(run_dir=tmp_path, resolved_inputs=manifest)
     assert load_bound_variable_descriptions(run_dir=tmp_path, resolved_inputs={}) == {}
+
+
+@pytest.mark.parametrize("planner_labels", [{"lactate_tertile": "乳酸分组"}, {}])
+def test_a_chinese_grouping_caption_uses_its_sealed_english_reader_name(tmp_path, planner_labels):
+    descriptions = load_bound_variable_descriptions(
+        run_dir=tmp_path, resolved_inputs=_grouped_context_manifest(tmp_path),
+    )
+    labels = figure_language_labels(planner_labels, descriptions)
+    assert labels["lactate_tertile"] == "Lactate group"
+    assert labels["lactate_tertile=1"] == "Lower band"
+    assert labels["lactate_tertile=2"] == "Upper band"
+    assert "lactate_tertile" not in " ".join(labels.values())
 
 
 def test_wrapping_keeps_punctuation_with_its_word() -> None:

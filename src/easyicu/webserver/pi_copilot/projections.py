@@ -14,6 +14,7 @@ from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
 
 from ..research_input_progress import project_research_input_state
 from ..run_step_trace import TRACE_ACTION_KEYS, TRACE_FACT_KEYS
+from ..run_record import MAX_ARTIFACT_SIZE_BYTES
 from ..target_trial_setup import project_target_trial_compile
 from . import cohort_eligibility
 from .contracts import PiCopilotError, plan_approval_allowed
@@ -716,6 +717,18 @@ def _trace_facts(event: Mapping[str, Any]) -> Dict[str, Any]:
         text = _visible_fact_text(event.get(key), 160)
         if text:
             facts[key] = text
+    for key in ("group_variable_label", "outcome_label"):
+        raw = event.get(key)
+        if not isinstance(raw, Mapping):
+            continue
+        labels = {
+            language: text
+            for language in ("zh", "en")
+            if isinstance(raw.get(language), str)
+            and (text := _visible_fact_text(raw[language], 240))
+        }
+        if labels:
+            facts[key] = labels
     queries = event.get("queries")
     if isinstance(queries, list):
         shown = [text for text in (_visible_fact_text(item, 200) for item in queries[:4]) if text]
@@ -1398,6 +1411,9 @@ def project_artifacts(rows: Iterable[Mapping[str, Any]]) -> list[Dict[str, Any]]
                 for key, value in (
                     ("name", row.get("name")),
                     ("size", size),
+                    ("size_bytes", row.get("size_bytes")
+                     if type(row.get("size_bytes")) is int
+                     and 0 <= row["size_bytes"] <= MAX_ARTIFACT_SIZE_BYTES else None),
                     ("sha256", row.get("sha256")),
                     ("media_type", media_type),
                     ("kind", kind),

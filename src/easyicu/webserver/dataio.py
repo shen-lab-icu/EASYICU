@@ -457,7 +457,7 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
             source = "raw"
             ready = False
 
-    conversion_quality = _conversion_quality_for_path(path)
+    conversion_quality = _conversion_quality_for_path(path, require_record=source == "raw")
     ready = ready and conversion_quality["data_quality_status"] == "clean"
     result: Dict[str, Any] = {
         "ok": True,
@@ -563,9 +563,11 @@ def _conversion_quality(results: Mapping[str, Any]) -> Dict[str, Any]:
             "ready_for_analysis": not partial}
 
 
-def _conversion_quality_for_path(path: Path) -> Dict[str, Any]:
+def _conversion_quality_for_path(path: Path, *, require_record: bool = False) -> Dict[str, Any]:
     receipt = path / ".easyicu_conversion_status.json"
     if not receipt.exists():
+        if require_record:
+            return {"bad_rows_skipped": None, "data_quality_status": "not_converted", "ready_for_analysis": False}
         return _conversion_quality({})
     try:
         results = json.loads(receipt.read_text(encoding="utf-8"))

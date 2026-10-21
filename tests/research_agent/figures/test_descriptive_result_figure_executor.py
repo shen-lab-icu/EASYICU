@@ -131,6 +131,33 @@ def _canonical_grouped_distribution_frame() -> pd.DataFrame:
     )
 
 
+@pytest.mark.parametrize("row_role", ["lactate_tertile", "exposure_level"])
+def test_a_long_table_names_group_codes_from_its_bound_grouping(tmp_path, monkeypatch, row_role):
+    import sys
+
+    from tests.support.exposure_group_display_fixtures import (
+        grouped_context_manifest,
+    )
+
+    frame = _canonical_grouped_distribution_frame()
+    frame["row_role"] = row_role
+    frame["group"] = [1, 2]
+    monkeypatch.setattr(sys.modules[__name__], "_distribution_frame", lambda: frame)
+    step = _distribution_step()
+    run_dir, manifest, _binding_row = _binding(tmp_path, step=step, kind="table")
+    manifest.update(grouped_context_manifest(run_dir))
+    out = tmp_path / "long-table-figure"
+    run_descriptive_result_figure(
+        out_dir=out, run_dir=run_dir, resolved_inputs=manifest,
+        step_id=step.step_id, input_key=step.inputs[0], figure_product="long_table",
+        display_labels={"lactate_tertile": "乳酸分组"},
+    )
+    svg = (out / "long_table.svg").read_text()
+    assert "Lower band" in svg and "Upper band" in svg
+    source = pd.read_csv(out / "long_table_source_data.csv")
+    pd.testing.assert_frame_equal(source[list(frame.columns)], frame)
+
+
 def _wide_grouped_distribution_frame() -> pd.DataFrame:
     return pd.DataFrame(
         [

@@ -33,24 +33,30 @@ def figure_language_labels(
     """Keep only labels a figure can show in its own (English) text.
 
     A variable label in another script is replaced by that variable's English
-    source description, first letter capitalised.  A level label
-    (``variable=level``) or a variable without an English description keeps
-    no label, so the renderer's case-neutral rendering of the key applies.
+    source description, first letter capitalised. A sealed grouping's
+    descriptions also carry its English level names (``variable=level``),
+    including ones the Planner did not label.
     """
 
     english = {
         str(name): " ".join(str(text or "").split())
         for name, text in (descriptions or {}).items()
     }
-    result: dict[str, str] = {}
+    result: dict[str, str] = {
+        name: text for name, description in english.items()
+        if "=" in name and (text := _figure_text(description)) is not None
+    }
+    for name in tuple(result):
+        scope = name.partition("=")[0]
+        if _figure_text(english.get(scope)) is not None:
+            result.setdefault(scope, english[scope])
     for key, label in (display_labels or {}).items():
         text = _figure_text(label)
         if text is not None:
             result[str(key)] = text
             continue
-        name, separator, _level = str(key).partition("=")
-        description = _figure_text(english.get(name))
-        if not separator and description is not None:
+        description = _figure_text(english.get(str(key)))
+        if description is not None:
             result[str(key)] = description[:1].upper() + description[1:]
     return result
 

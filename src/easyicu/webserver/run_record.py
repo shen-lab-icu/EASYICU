@@ -10,6 +10,8 @@ from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Union
 from easyicu.research_agent.contracts.frozen_payload import freeze_payload, thaw_payload
 from easyicu.webserver.run_file_guide import RunFileGuideEntry, run_file_guide
 
+MAX_ARTIFACT_SIZE_BYTES = 2**53 - 1
+
 
 @dataclass(frozen=True)
 class RunDirectory:
@@ -132,9 +134,11 @@ class RunArtifact:
     sha256: str
     kind: str
     summary: Any = None
+    size_bytes: Optional[int] = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "RunArtifact":
+        size = payload.get("size_bytes")
         return cls(
             name=str(payload.get("name") or ""),
             path=str(payload.get("path") or ""),
@@ -143,6 +147,7 @@ class RunArtifact:
             sha256=str(payload.get("sha256") or ""),
             kind=str(payload.get("kind") or ""),
             summary=freeze_payload(payload.get("summary")),
+            size_bytes=(size if type(size) is int and 0 <= size <= MAX_ARTIFACT_SIZE_BYTES else None),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -156,6 +161,8 @@ class RunArtifact:
         }
         if self.summary is not None:
             payload["summary"] = thaw_payload(self.summary)
+        if self.size_bytes is not None:
+            payload["size_bytes"] = self.size_bytes
         return payload
 
 

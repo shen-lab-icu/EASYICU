@@ -8,6 +8,7 @@ It does not execute external tools or remote compute by itself.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import urllib.parse
@@ -20,6 +21,7 @@ from easyicu.research_agent.method_skills import (
     method_skill_package,
 )
 from easyicu.webserver import state_paths
+from easyicu.webserver import sources
 from easyicu.webserver import settings as settings_store
 
 _STATE_DIR = state_paths.state_root()
@@ -695,6 +697,8 @@ def capability_status() -> Dict[str, Any]:
     }
     return {
         "ok": True,
+        "registered_sources": sources.registered_source_counts(),
+        "deployment": {"hosted": os.environ.get("EASYICU_HOSTED") == "1"},
         "settings": settings,
         "capabilities": {
             "science_skills": {

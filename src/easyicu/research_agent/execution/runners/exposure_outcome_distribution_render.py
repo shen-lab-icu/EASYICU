@@ -46,9 +46,10 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
-from ...figures.display_labels import label_lookup, scoped_label_lookup
+from ...figures.display_labels import figure_language_labels, label_lookup, scoped_label_lookup
 from ...figures.presentation import wrap_figure_label as _wrap_category_label
 from ...numeric_scalars import coerce_optional_finite_float as _finite
+from .bound_variable_display import load_bound_variable_descriptions
 from .exposure_outcome_distribution_executor import (
     COUNTS_ONLY_COVARIANCE,
     EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS,
@@ -809,6 +810,10 @@ def run_exposure_outcome_distribution_figure(
     out_dir.mkdir(parents=True, exist_ok=True)
     bound = _load_binding(
         run_dir=Path(run_dir), resolved_inputs=resolved_inputs, step_id=step_id
+    )
+    display_labels = figure_language_labels(
+        display_labels,
+        load_bound_variable_descriptions(run_dir=Path(run_dir), resolved_inputs=resolved_inputs),
     )
     frame, binding, source_name = bound.frame, bound.binding, bound.path.name
     levels, total, design, contrast = _validate(frame)

@@ -221,6 +221,33 @@ def test_scoped_category_labels_support_named_and_ordinal_levels():
     assert scoped_label_lookup("unmapped", 3, labels) is None
 
 
+def test_a_chinese_display_label_keeps_the_sealed_group_name_in_the_caption(tmp_path, monkeypatch):
+    import sys
+
+    from tests.support.exposure_group_display_fixtures import (
+        grouped_context_manifest,
+    )
+
+    monkeypatch.setattr(sys.modules[__name__], "EXPOSURE", "lactate_tertile")
+    monkeypatch.setattr(sys.modules[__name__], "OUTCOME", "icu_readmission")
+    frame = pd.DataFrame({EXPOSURE: [1] * 10 + [2] * 10, OUTCOME: [0, 1] * 10})
+    table = _produced_table(tmp_path, monkeypatch, frame=frame,
+                            spec_updates={"exposure_levels": [1, 2]})
+    run_dir, manifest = _bound(tmp_path, table)
+    manifest.update(grouped_context_manifest(run_dir))
+    out = tmp_path / "caption"
+    run_exposure_outcome_distribution_figure(
+        out_dir=out, run_dir=run_dir, resolved_inputs=manifest,
+        step_id=STEP_ID, figure_product=PRODUCT,
+        display_labels={EXPOSURE: "乳酸分组", OUTCOME: "ICU再入院"},
+    )
+    contract = json.loads((out / f"{PRODUCT}.figure_contract.json").read_text())
+    assert "Exposure: Lactate group; outcome: ICU readmission." in contract["reader_caption"]
+    assert EXPOSURE not in contract["reader_caption"]
+    svg = (out / f"{PRODUCT}.svg").read_text()
+    assert "Lower band" in svg and "Upper band" in svg
+
+
 def _tampered(tmp_path: Path, monkeypatch, mutate) -> tuple[Path, dict]:
     """Rebind a table after ``mutate`` has changed one published number."""
 

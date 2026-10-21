@@ -57,6 +57,11 @@ def post_settings(patch: Dict[str, Any]) -> dict:
     discarded one.
     """
     try:
+        if "support_contact" in patch:
+            raise settings_store.SettingsValidationError([{
+                "key": "support_contact", "code": "read_only_setting",
+                "reason": "support_contact is managed by the instance administrator",
+            }])
         updated = settings_store.update_settings(patch)
     except settings_store.SettingsValidationError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
