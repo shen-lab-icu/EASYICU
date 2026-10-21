@@ -381,7 +381,7 @@
           <div class="pk">Callouts</div>
           <div class="pdemo" style="display:block;">
             <div class="note ok" style="padding:8px 11px;"><div class="ico">${icon('check', 14)}</div><div class="body"><span class="t" style="font-size:12px;">Success</span></div></div>
-            <div class="note bad" style="padding:8px 11px;margin-top:8px;background:var(--bad-soft);border-color:oklch(88% 0.05 25);"><div class="ico" style="color:var(--bad);">${icon('beaker', 14)}</div><div class="body"><span class="t" style="font-size:12px;">Error</span></div></div>
+            <div class="note bad" style="padding:8px 11px;margin-top:8px;background:var(--bad-soft);border-color:#f7cbc7;"><div class="ico" style="color:var(--bad);">${icon('beaker', 14)}</div><div class="body"><span class="t" style="font-size:12px;">Error</span></div></div>
           </div>
         </div>
         <div class="prim">
@@ -407,7 +407,7 @@
           <div class="row gap-6">${icon('layers', 13)} Empty · first run</div>
           <div class="row gap-6">${icon('list', 13)} No data · 0 results</div>
           <div class="row gap-6" style="color:var(--bad);">${icon('beaker', 13)} Error · recoverable</div>
-          <div class="row gap-6" style="color:oklch(50% 0.11 70);">${icon('lock', 13)} Blocked · gated</div>
+          <div class="row gap-6" style="color:#8a5600;">${icon('lock', 13)} Blocked · gated</div>
           <div class="row gap-6" style="color:var(--ok);">${icon('check', 13)} Success · loaded</div>
         </div>
         <div class="eyebrow mt-16" style="margin-bottom:8px;">Principles</div>

@@ -78,7 +78,7 @@
 .pi-node{ width: 22px; height: 22px; border-radius: 50%; display:grid; place-items:center;
   border: 1.5px solid var(--hair-2); color: var(--ink-4); }
 .plan-item.ready .pi-node{ border-color: var(--ok); background: var(--ok-soft); color: var(--ok); }
-.plan-item.running .pi-node{ border-color: var(--warn); background: var(--warn-soft); color: oklch(50% 0.11 70); }
+.plan-item.running .pi-node{ border-color: var(--warn); background: var(--warn-soft); color: #8a5600; }
 .plan-item.gated .pi-node{ border-style: dashed; }
 .plan-item.queued .pi-node{ border-style: dashed; }
 .pi-t{ font-size: 13px; font-weight: 500; }

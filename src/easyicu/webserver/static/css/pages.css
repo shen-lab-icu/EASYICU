@@ -123,7 +123,7 @@
 }
 .msg.bot .m-ava{ background: var(--accent-soft); color: var(--accent-ink); border: 1px solid var(--accent-border); }
 .msg.user{ align-self: flex-end; flex-direction: row-reverse; }
-.msg.user .m-ava{ background: oklch(82% 0.05 70); color: oklch(35% 0.06 60); }
+.msg.user .m-ava{ background: #dabfa2; color: #513217; }
 .m-body{ min-width: 0; }
 .m-bubble{
   padding: 11px 14px; border-radius: var(--r-3);

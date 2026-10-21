@@ -111,9 +111,9 @@
   color: var(--accent-ink);
 }
 .cov-badge.unaudited {
-  border-color: oklch(86% 0.06 75);
+  border-color: #e9cca6;
   background: var(--warn-soft);
-  color: oklch(48% 0.10 70);
+  color: #81520a;
 }
 
 .dict-empty {
@@ -146,7 +146,7 @@
 .cov-rowh { display: flex; align-items: center; font-size: 11.75px; color: var(--ink-2); font-weight: 500; padding-right: 8px; }
 .cov-cell.cov-v { font-weight: 600; }
 .cov-legend { display: flex; align-items: center; gap: 10px; margin-top: 14px; font-size: 11px; color: var(--ink-4); }
-.cov-legend .cl-bar { flex: 1; max-width: 160px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, oklch(93% 0.06 70), oklch(94% 0.03 90), oklch(90% 0.04 200), oklch(72% 0.07 200)); }
+.cov-legend .cl-bar { flex: 1; max-width: 160px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #ffe2bd, #f3ebd5, #c0e7e8, #6db2b6); }
 
 .elig-flow { display: flex; flex-direction: column; gap: 4px; }
 .elig-step { position: relative; padding: 9px 12px; border-radius: var(--r-2); background: var(--surface-2); overflow: hidden; }
@@ -175,7 +175,7 @@
 
 .rc-kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 18px; }
 .rc-kpi { border: 1px solid var(--hair); border-radius: var(--r-3); background: var(--surface); padding: 13px 14px; border-top: 2px solid var(--hair-3); }
-.rc-kpi.rc-swap { border-top-color: oklch(62% 0.13 40); }
+.rc-kpi.rc-swap { border-top-color: #c66846; }
 .rc-kpi.rc-up { border-top-color: var(--bad); }
 .rc-kpi.rc-down { border-top-color: var(--ok); }
 .rc-kpi.rc-delta { border-top-color: var(--ink-3); }
@@ -223,9 +223,9 @@
 .rc-matrix-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-size: 10.5px; color: var(--ink-4); }
 .rc-matrix-legend .rml { display: inline-flex; align-items: center; gap: 5px; }
 .rc-matrix-legend .rml::before { content: ""; width: 9px; height: 9px; border-radius: 2px; }
-.rc-matrix-legend .rml.up::before { background: oklch(70% 0.09 25); }
-.rc-matrix-legend .rml.diag::before { background: oklch(70% 0.09 255); }
-.rc-matrix-legend .rml.down::before { background: oklch(70% 0.09 150); }
+.rc-matrix-legend .rml.up::before { background: #d18882; }
+.rc-matrix-legend .rml.diag::before { background: #78a1d6; }
+.rc-matrix-legend .rml.down::before { background: #75ae81; }
 
 /* ---------- responsive ---------- */
 @media (max-width: 1080px) {

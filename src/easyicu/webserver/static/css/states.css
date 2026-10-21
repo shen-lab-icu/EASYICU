@@ -96,7 +96,7 @@
 
 /* segmented state switcher carries a status hue on the active item */
 .seg.state button.active[data-state="error"]{ color: var(--bad); }
-.seg.state button.active[data-state="blocked"]{ color: oklch(48% 0.11 70); }
+.seg.state button.active[data-state="blocked"]{ color: #845000; }
 .seg.state button.active[data-state="success"]{ color: var(--ok); }
 
 /* ---------- Stage frame (the screen being demonstrated) ---------- */
@@ -213,9 +213,9 @@
 .state-hero.solid{ border-style: solid; border-color: var(--hair); background: var(--surface); }
 
 /* status-tinted glyphs + accents */
-.state-hero.error .glyph{ background: var(--bad-soft); color: var(--bad); border-color: oklch(88% 0.05 25); }
-.state-hero.blocked .glyph{ background: var(--warn-soft); color: oklch(50% 0.11 70); border-color: oklch(88% 0.06 75); }
-.state-hero.success .glyph{ background: var(--ok-soft); color: var(--ok); border-color: oklch(88% 0.05 150); }
+.state-hero.error .glyph{ background: var(--bad-soft); color: var(--bad); border-color: #f7cbc7; }
+.state-hero.blocked .glyph{ background: var(--warn-soft); color: #8a5600; border-color: #efd3ac; }
+.state-hero.success .glyph{ background: var(--ok-soft); color: var(--ok); border-color: #c1e1c6; }
 .state-hero.empty-state .glyph{ background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent-border); }
 .state-hero.nodata .glyph{ background: var(--surface-3); color: var(--ink-3); }
 
@@ -246,7 +246,7 @@
 .ok-banner{
   display: flex; align-items: center; gap: 11px;
   padding: 11px 14px; border-radius: var(--r-2);
-  background: var(--ok-soft); border: 1px solid oklch(88% 0.05 150);
+  background: var(--ok-soft); border: 1px solid #c1e1c6;
   color: var(--ink-2); font-size: 12.5px;
 }
 .ok-banner .mk{
@@ -266,7 +266,7 @@
 }
 .st-toast .mk{
   width: 22px; height: 22px; border-radius: 50%; flex: none;
-  background: rgba(255,255,255,.14); color: oklch(78% 0.13 150);
+  background: rgba(255,255,255,.14); color: #76cf8a;
   display: grid; place-items: center;
 }
 .st-toast .tt{ font-size: 12.5px; font-weight: 600; }
