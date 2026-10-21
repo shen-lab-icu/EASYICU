@@ -122,6 +122,16 @@ assert.match(hostedSummary, /正在汇总已准备的数据…/);
 assert.match(hostedSummary, /在医院服务器上计算 · 只返回汇总结果/);
 assert.match(hostedSummary, /data-crossdb-first-run>每一行数据都会参与汇总，所以第一次对比两份完整数据可能需要几分钟；之后再对比会很快。</);
 assert.doesNotMatch(hostedSummary, /本机|注册导出/);
+// While it runs, the card says which step it is on, in the page language,
+// and shows no sampling limits: every row is summarized.
+progress.applyProgress({ type: 'progress', phase: 'summarizing', current: 1, total: 2, job_kind: 'crossdb-summary',
+  message: 'Computing bounded cohort aggregates for registered exports.' });
+const summarizing = progress.render({ ...summaryOptions(true), sampleProfile: { maxPatients: 200, sampleSize: 600 },
+  progressMessage(value) { return String(value || ''); }, statusLabel(value) { return String(value || ''); } });
+assert.match(summarizing, /正在汇总第 2 份数据（共 2 份）…/);
+assert.doesNotMatch(summarizing, /≤|summarizing|Computing bounded/);
+progress.applyProgress({ type: 'progress', phase: 'finalizing', current: 2, total: 2, job_kind: 'crossdb-summary' });
+assert.match(progress.render(summaryOptions(true)), /正在检查各份数据能否对比…/);
 const localSummary = progress.render(summaryOptions(false));
 assert.match(localSummary, /仅本机 · 不上传任何内容/);
 assert.match(localSummary, /正在加载已注册导出的聚合摘要…/);
