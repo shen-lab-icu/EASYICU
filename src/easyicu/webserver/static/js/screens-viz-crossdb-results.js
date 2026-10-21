@@ -212,6 +212,7 @@
 
   function recordCards(payload, config) {
     const h = helpersOf(config);
+    const sampled = payload.source_type === 'raw_database_root';
     return `<div class="xdb-source-summary-grid">
       ${(payload.sources || []).map((source, index) => {
         const summary = source.summary || {};
@@ -219,7 +220,7 @@
         return `<article class="xdb-source-summary" style="--xdb-source-color:${palette(index)}">
           <div><span class="xdb-source-dot"></span><b>${h.esc(source.label || source.database || `${h.t('Source', '来源')} ${index + 1}`)}</b></div>
           <strong>${records == null ? '—' : h.fmtInt(records)}</strong>
-          <span>${h.t('records in this bounded comparison', '条记录纳入本次有界对比')}</span>
+          <span>${sampled ? h.t('records in this bounded comparison', '条记录纳入本次有界对比') : h.t('records, every one summarized', '条记录，全部参与汇总')}</span>
         </article>`;
       }).join('')}
     </div>`;
@@ -261,7 +262,9 @@
         </div>
         ${partialScopeNotice(payload, config)}
         ${threeScaleComparison(payload, config)}
-        <div class="viz-cap"><b>${h.t('What this shows', '这组数字是什么')}</b><span>${h.t('Per-source record volume in this bounded comparison. It is a size reference, not an outcome result.', '本次有界对比中各来源的记录规模；它只是样本量参照，不是结局结果。')}</span></div>
+        <div class="viz-cap"><b>${h.t('What this shows', '这组数字是什么')}</b><span>${payload.source_type === 'raw_database_root'
+          ? h.t('Per-source record volume in this bounded comparison. It is a size reference, not an outcome result.', '本次有界对比中各来源的记录规模；它只是样本量参照，不是结局结果。')
+          : h.t('Per-source record volume; every record was summarized. It is a size reference, not an outcome result.', '各来源的记录规模，所有记录都参与了汇总；它只是样本量参照，不是结局结果。')}</span></div>
         <div class="note info mt-16">
           <div class="ico">${h.icon('benchmark', 16)}</div>
           <div class="body">
@@ -274,7 +277,7 @@
           <!-- State the scope limit here, where the choice is made, rather than
                letting Guided Copilot refuse the run later. The gate is the same one
                either way; only the moment the user learns about it changes. -->
-          <div class="grow"><div class="nb-t">${h.t('Comparison checked — what’s next?', '跨库对比已检查 —— 下一步？')}</div><div class="nb-d">${h.t('Review one cohort in detail, or carry this bounded comparison into an analysis plan. A cross-DB plan stops at the plan: running it needs one reviewed cohort from a single export.', '深入审阅一个队列，或把这次有界对比带入分析计划。跨库计划止于计划本身：真正运行需要来自单个导出的、已审阅的队列。')}</div></div>
+          <div class="grow"><div class="nb-t">${h.t('Comparison checked — what’s next?', '跨库对比已检查 —— 下一步？')}</div><div class="nb-d">${h.t('Review one cohort in detail, or carry this comparison into an analysis plan. A cross-DB plan stops at the plan: running it needs one reviewed cohort from a single export.', '深入审阅一个队列，或把这次对比带入分析计划。跨库计划止于计划本身：真正运行需要来自单个导出的、已审阅的队列。')}</div></div>
           <button class="btn" data-nav="cohort">${h.icon('cohort', 13)} ${h.t('Back to Cohort Statistics', '返回队列统计')}</button>
           <!-- Typed handoff, not a bare data-nav. screens-viz-study-context.js
                maps route 'crossdb' to stage 'crossdb_plan_only', and Guided

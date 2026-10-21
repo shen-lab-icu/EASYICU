@@ -18,6 +18,8 @@
 .eudata-modulenav button.active{color:#273128;font-weight:650}
 .eudata-modulenav button.active::after{position:absolute;right:11px;bottom:-1px;left:11px;height:2px;border-radius:2px;background:#c7d75f;content:""}
 .eudata-module-actions{display:flex;align-items:center;gap:8px;flex:none}
+/* In the narrow context column the page actions wrap instead of running past its edge. */
+.euh-context-nav .eudata-module-actions{flex-wrap:wrap;margin-top:10px}.euh-context-nav .eudata-module-actions .btn{flex:1 1 auto;justify-content:center}
 .eudata-module-content{min-width:0}
 .eudata-head{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding-bottom:24px;border-bottom:1px solid var(--sk-line)}
 .eudata-head h1{margin:0;color:var(--sk-ink);font-size:31px;line-height:1.15;font-weight:650;letter-spacing:-.035em}

@@ -137,6 +137,13 @@ def test_hosted_get_started_sits_in_the_module_shell_under_help() -> None:
     assert ".euh-context-contact{" in css
 
 
+def test_page_actions_wrap_inside_the_context_column() -> None:
+    # Cross-database results put three actions in the 260 px context column;
+    # the third ran past its edge before they wrapped.
+    css = _read("css", "extraction.css")
+    assert ".euh-context-nav .eudata-module-actions{flex-wrap:wrap;margin-top:10px}" in css
+
+
 def test_data_shell_keeps_source_controls_and_extraction_actions_visible() -> None:
     extraction = _read("js", "screens-extraction.js")
     css = _read("css", "extraction.css")

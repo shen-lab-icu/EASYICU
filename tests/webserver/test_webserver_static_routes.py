@@ -1194,7 +1194,7 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/extraction.css?v=20261021-readable1" in index_html
+    assert "css/extraction.css?v=20261022-wrap1" in index_html
     assert "data-ex-analyze" in extraction_js
     assert "Choose folder and identify" in extraction_js
     assert "function copilotPrefillSummary()" in extraction_js
@@ -2135,7 +2135,7 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
 
     assert "js/screens-viz-crossdb-setup.js?v=20261022-gate1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz-crossdb-results.js?v=20260830-viz-final1" in index_html
+    assert "js/screens-viz-crossdb-results.js?v=20261022-full1" in index_html
     assert "js/screens-viz.js?v=20261022-crossdb1" in index_html
     assert "css/crossdb.css?v=20261022-progress1" in index_html
     for selector in (
