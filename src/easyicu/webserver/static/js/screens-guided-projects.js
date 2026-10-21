@@ -178,7 +178,8 @@
     const mode = row.data_mode === 'demo'
       ? t('Demo data', '演示数据')
       : (row.data_mode === 'real'
-        ? t('Local data', '本地数据')
+        // Every hosted project uses data its administrator prepared.
+        ? (hostedOwner() ? '' : t('Local data', '本地数据'))
         : (row.data_mode === 'unbound' ? t('No data selected', '未选择数据') : (row.data_mode || '')));
     return [status, mode].filter(Boolean).join(' · ');
   }
@@ -243,7 +244,7 @@
         </div>
       </div>` : '';
     const draftHtml = ctx.guidedDrafts.loading
-      ? `${externalHtml}<div class="gd-empty-local"><div class="ss-t">${t('Loading study folders', '正在加载研究文件夹')}</div><div class="ss-m">${t('Reading the local project registry.', '正在读取本地项目列表。')}</div></div>`
+      ? `${externalHtml}<div class="gd-empty-local"><div class="ss-t">${t('Loading study folders', '正在加载研究文件夹')}</div><div class="ss-m">${t('Reading the project list.', '正在读取项目列表。')}</div></div>`
       : ctx.guidedDrafts.error
         ? `${externalHtml}<div class="gd-empty-local warn"><div class="ss-t">${t('Study folders unavailable', '研究文件夹不可用')}</div><div class="ss-m">${esc(ctx.guidedDrafts.error)}</div></div>`
         : rows.length
@@ -290,7 +291,9 @@
       <div class="gd-project-picker-list">
       <div class="gd-project-heading"><span>${t('Research projects', '研究项目')}</span><span class="gd-project-heading-actions"><button class="gd-manage-mini ${projectManagementActive ? 'active' : ''}" type="button" data-project-manage>${projectManagementActive ? t('Done', '完成') : t('Manage', '管理')}</button><button class="gd-refresh-mini" type="button" data-refreshdrafts title="${t('Refresh research projects', '刷新研究项目')}" aria-label="${t('Refresh research projects', '刷新研究项目')}">${icon('refresh', 12)}</button></span></div>
       ${rows.length ? `<label class="gd-project-search"><span class="shell-sr-only">${t('Search research projects', '搜索研究项目')}</span><input type="search" data-project-search placeholder="${t('Search projects…', '搜索项目…')}" value="${esc(search)}" autocomplete="off"></label>` : ''}
-      <div class="gd-project-summary">${icon('folder', 14)}<div><strong>${t('Local research workspace', '本地研究工作区')}</strong><span>${t('Study setup, runs, evidence, and conversation history stay here.', '研究配置、运行、证据和对话历史都保存在这里。')}</span></div></div>
+      <div class="gd-project-summary">${icon('folder', 14)}<div>${hostedOwner()
+        ? `<strong>${t('Your research workspace', '你的研究工作区')}</strong><span>${t('Study setup, runs, evidence, and conversation history are kept on the hospital server.', '研究配置、运行、证据和对话历史都保存在医院服务器上。')}</span>`
+        : `<strong>${t('Local research workspace', '本地研究工作区')}</strong><span>${t('Study setup, runs, evidence, and conversation history stay here.', '研究配置、运行、证据和对话历史都保存在这里。')}</span>`}</div></div>
       ${draftHtml}
       ${rows.length ? `<p class="gd-project-search-empty" data-project-search-empty hidden>${t('No matching projects', '没有匹配的项目')}</p>` : ''}
       ${projectManagementActive ? `<div class="gd-project-selection-bar"><label><input type="checkbox" data-select-all-projects ${eligibleCount && selectedRows.length === eligibleCount ? 'checked' : ''} ${eligibleCount ? '' : 'disabled'} /> ${t('Select all', '全选')}</label><span><strong>${selectedRows.length}</strong> ${t('selected; current project excluded', '项已选；当前项目不参与')}</span><button class="btn sm danger" type="button" data-remove-selected-projects ${selectedRows.length ? '' : 'disabled'}>${t('Remove selected', '移除所选')}</button></div>` : ''}</div></details>`;

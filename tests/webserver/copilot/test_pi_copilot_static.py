@@ -127,7 +127,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-study-workspace.js?v=20261021-decision-records1" in index
     assert "js/screens-guided-pi-events.js?v=20261021-help1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20261021-where1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20261021-wording1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
     assert "js/screens-guided-pi-session-view.js?v=20261021-where1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
@@ -142,7 +142,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261021-decision-records1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261021-wording1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261021-decision-records1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261021-session1" in index
@@ -498,8 +498,8 @@ def test_new_research_conversation_keeps_chat_open_until_data_is_needed() -> Non
     api = _read("js/api.js")
 
     assert "selection_in_progress" in owner
-    assert "Return to local folder selection" in owner
-    assert "Local data selection is open" in owner
+    assert "Return to data selection" in owner
+    assert "Data selection is open" in owner
     assert "No data selected" not in owner
     assert "Keep chatting; choose data" not in owner
     assert "Paths stay in the EasyICU interface" in owner
@@ -2388,7 +2388,10 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "extraction_ready" in confirmation_owner
     assert "plan_ready" in aside_owner
     assert "grants: ['run']" in confirmation_owner
-    assert "运行本地预检" in confirmation_owner
+    assert "运行预检" in confirmation_owner
+    # A clinician reads the preflight card: no "local" and no internal agent names.
+    assert "运行本地预检" not in confirmation_owner
+    assert "授权 Research Agent Planner" not in confirmation_owner
     assert "provider_ready_to_generate_plan" in pi_owner
     assert "开始生成研究计划" in confirmation_owner
     assert "计划会先决定需要哪些数据，不读取患者行" in confirmation_owner

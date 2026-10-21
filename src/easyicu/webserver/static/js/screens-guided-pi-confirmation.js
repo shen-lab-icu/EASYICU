@@ -122,9 +122,9 @@
       if (code === 'plan_ready') return {
         code, grants: ['run'],
         message: tr('Run the local executability preflight for the approved research brief. Do not generate or claim a formal plan yet.', '请对已确认的研究简报运行本地可执行性预检；此时不要生成或声称已有正式计划。'),
-        title: tr('Study setup is ready. Run the local executability preflight?', '研究设定已就绪，是否运行本地可执行性预检？'),
-        note: tr('This is a deterministic local check. A separate confirmation will authorize the Research Agent Planner only after preflight passes.', '这是确定性的本地检查；预检通过后，才会另行确认是否授权 Research Agent Planner 生成候选计划。'),
-        approve: tr('Run local preflight', '运行本地预检'),
+        title: tr('Study setup is ready. Run the executability preflight?', '研究设定已就绪，是否运行可执行性预检？'),
+        note: tr('This is a deterministic check. Only after it passes will you be asked, separately, whether to generate a candidate research plan.', '这是确定性检查；预检通过后，才会另行请你确认是否生成候选研究计划。'),
+        approve: tr('Run preflight', '运行预检'),
       };
       if (code === 'provider_ready_to_generate_plan') return {
         code, grants: ['provider_run', 'literature'],
