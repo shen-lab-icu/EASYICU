@@ -119,7 +119,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.setLang(val);" in settings_js
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
-    assert "js/i18n.js?v=20261021-hosted1" in index_html
+    assert "js/i18n.js?v=20261021-lang1" in index_html
     assert "js/api.js?v=20261021-session1" in index_html
 
 

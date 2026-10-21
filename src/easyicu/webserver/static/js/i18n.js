@@ -3,11 +3,14 @@
    t('English', '中文') → returns the active language string.
    setLang('en'|'zh') persists + re-renders the whole shell. */
 (function () {
-  try { window.EU_LANG = localStorage.getItem('easyicu_lang') || 'en'; } catch (e) { window.EU_LANG = 'en'; }
+  // Without a stored choice, start from the page's language: a hosted
+  // instance serves its index in the language its administrator set (app.py).
+  const pageLang = /^zh\b/i.test(document.documentElement.getAttribute('lang') || '') ? 'zh' : 'en';
+  try { window.EU_LANG = localStorage.getItem('easyicu_lang') || pageLang; } catch (e) { window.EU_LANG = pageLang; }
   function validLang(l) { return l === 'en' || l === 'zh'; }
   function validMode(m) { return m === 'demo' || m === 'real'; }
   function applyLangDom(l) {
-    document.documentElement.setAttribute('lang', l === 'zh' ? 'zh' : 'en');
+    document.documentElement.setAttribute('lang', l === 'zh' ? 'zh-CN' : 'en');
     document.body && document.body.classList.toggle('lang-zh', l === 'zh');
   }
   function applyDisplayDom(settings) {
