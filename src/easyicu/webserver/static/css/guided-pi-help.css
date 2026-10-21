@@ -9,5 +9,6 @@
 .gpi-help-menu{position:absolute;z-index:50;top:calc(100% + 7px);right:0;width:220px;display:grid;gap:3px;padding:6px;border:1px solid var(--hair-2);border-radius:8px;background:var(--paper);box-shadow:0 14px 36px rgba(14,17,22,.14);white-space:normal}
 .gpi-help-menu button{min-height:35px;display:flex;align-items:center;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--ink-2);font:inherit;font-size:13.5px;text-align:left;cursor:pointer}
 .gpi-help-menu button:hover{background:var(--wash);color:var(--ink-1)}
+.gpi-help-reference{margin:2px 0;padding:8px 10px;border-radius:6px;background:var(--wash);color:var(--ink-1);font:12px/1.5 var(--mono,ui-monospace,monospace);white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}
 .gpi-help-contact{margin:2px 0 0;padding:6px 10px 4px;border-top:1px solid var(--hair);color:var(--ink-3);font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
 @media (max-width:560px){.gpi-help-menu{right:auto;left:0}}
