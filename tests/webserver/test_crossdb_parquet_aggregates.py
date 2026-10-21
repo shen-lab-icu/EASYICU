@@ -90,7 +90,7 @@ def test_categories_use_count_then_label_in_both_paths(tmp_path):
 
 @pytest.mark.parametrize("values", [
     pytest.param([0, 1, np.inf, -np.inf, np.nan], id="float-infinities"),
-    pytest.param(["0", "1", "1e999", "nan"], id="overflowing-decimal-text"),
+    pytest.param(["0", "1", "inf", "nan"], id="infinity-text"),
 ])
 def test_nonfinite_untrimmed_histogram_preserves_failure(tmp_path, values):
     path = tmp_path / "nonfinite.parquet"
@@ -100,6 +100,17 @@ def test_nonfinite_untrimmed_histogram_preserves_failure(tmp_path, values):
         c._summarize_feature_distribution(frame.value)
     with pytest.raises(ValueError, match="not finite"):
         p.parquet_feature_distributions(path, ["value"])
+
+
+def test_an_overflowing_decimal_reads_as_missing(tmp_path):
+    # pandas 2 (the hosted runtime) reads 1e999 as missing, pandas 3 as
+    # infinity; the summary keeps the pandas 2 reading on every version.
+    path = tmp_path / "overflow.parquet"
+    pd.DataFrame({"value": ["0", "1", "1e999", "-1e999", "2", "nan"]}).to_parquet(path, index=False)
+    as_missing = pd.Series(["0", "1", None, None, "2", "nan"])
+    assert p.parquet_feature_distributions(path, ["value"])[0] == {
+        "feature": "value", **c._summarize_feature_distribution(as_missing)
+    }
 
 
 def test_parquet_cannot_enter_row_reader(tmp_path):

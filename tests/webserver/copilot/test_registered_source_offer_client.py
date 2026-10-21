@@ -17,7 +17,7 @@ def _node(script):
         pytest.skip("Node.js is unavailable")
     harness = """
       global.window = global;
-      global.document = {readyState:'loading', addEventListener:()=>{}};
+      global.document = {readyState:'loading', addEventListener:()=>{}, querySelector:()=>null};
     """ + (JS / "api.js").read_text() + script
     return json.loads(run_node(node, harness, check=True).stdout)
 

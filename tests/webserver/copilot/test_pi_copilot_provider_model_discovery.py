@@ -380,7 +380,7 @@ def test_api_client_discovery_posts_body_and_preserves_typed_error():
         """
 const assert = require('node:assert/strict');
 global.window = {};
-global.document = { readyState: 'loading', addEventListener() {} };
+global.document = { readyState: 'loading', addEventListener() {}, querySelector() { return null; } };
 const calls = [];
 global.fetch = async (url, options) => {
   calls.push([url, options]);

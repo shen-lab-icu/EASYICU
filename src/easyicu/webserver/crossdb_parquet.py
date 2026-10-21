@@ -310,12 +310,14 @@ def _projection(feature: str, dtype: str) -> str:
         text = f"CASE WHEN {column} THEN 'True' WHEN NOT {column} THEN 'False' END"
     numeric = f"TRY_CAST({column} AS DOUBLE)"
     if dtype == "VARCHAR" or dtype.startswith("ENUM"):
-        # TRY_CAST also accepts hex and underscores, unlike pandas.to_numeric;
-        # both read an overflowing decimal such as 1e999 as infinity.
+        # TRY_CAST also accepts hex and underscores, unlike pandas.to_numeric.
+        # An overflowing decimal such as 1e999 is missing, as pandas 2 reads
+        # it (pandas 3 reads infinity); only the words inf/infinity are.
         pattern = r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
         numeric = (
             f"CASE WHEN regexp_full_match({text}, '{pattern}') "
-            f"OR regexp_full_match(lower({text}), '[+-]?inf(?:inity)?') "
+            f"AND isfinite({numeric}) THEN {numeric} "
+            f"WHEN regexp_full_match(lower({text}), '[+-]?inf(?:inity)?') "
             f"THEN {numeric} END"
         )
     return (
