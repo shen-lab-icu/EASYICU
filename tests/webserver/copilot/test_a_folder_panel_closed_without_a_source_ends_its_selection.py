@@ -159,8 +159,8 @@ def test_the_open_selection_card_offers_to_leave_it() -> None:
     )
 
     assert shown["actions"] == [
-        ["begin_local_selection", "返回本地目录选择"],
-        ["cancel_local_selection", "放弃本地选择"],
+        ["begin_local_selection", "返回数据选择"],
+        ["cancel_local_selection", "放弃这次选择"],
     ]
 
 

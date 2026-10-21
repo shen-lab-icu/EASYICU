@@ -265,7 +265,7 @@ def test_hosted_settings_keep_the_clinicians_display_and_the_administrator_conta
     hosted = _settings("hosted")
     assert hosted == {
         "hosted": True, "contact": True, "language": True, "diagnostics": True,
-        "adminControls": False, "paths": False, "reset": False, "railTargets": 2,
+        "adminControls": False, "paths": False, "reset": False, "railTargets": 3,
     }
 
     local = _settings("local")

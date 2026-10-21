@@ -5165,7 +5165,7 @@ def test_extraction_job_registers_finished_export_as_active(
             return {
                 "out_dir": str(export_dir),
                 "manifest": "_manifest.json",
-                "files": [],
+                "files": [{"module": "demographics"}, {"module": "outcome"}],
                 "file_count": 0,
                 "total_rows": 0,
             }
