@@ -206,10 +206,8 @@ def test_hosted_review_names_the_prepared_data_without_paths_or_registration() -
 def test_the_hosted_settings_sidebar_lists_only_the_sections_the_page_has() -> None:
     shell = (STATIC / "js" / "desktop-module-shell.js").read_text(encoding="utf-8")
 
-    assert (
-        "].filter(([id]) => !hostedInstance() || id === 'set-language' || id === 'set-about').map("
-        in shell
-    )
+    assert "const HOSTED_SETTINGS = new Set(['set-language', 'set-account', 'set-about']);" in shell
+    assert "].filter(([id]) => (hostedInstance() ? HOSTED_SETTINGS.has(id) : id !== 'set-account')).map(" in shell
 
 
 _MARK = '<meta name="easyicu-deployment" content="hosted" />'

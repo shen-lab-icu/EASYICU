@@ -4,7 +4,9 @@
    an /api/ call whose session has ended with 401 and the code
    `login_required`. api.js reports that here. One notice offers the way back
    to the login page instead of leaving the page at once, so a question the
-   clinician is still typing can be copied first. */
+   clinician is still typing can be copied first. Sign-out is a plain form
+   POST to the gateway: the browser sends the page's Origin, which the
+   gateway checks, and the gateway answers with the login page. */
 (function () {
   'use strict';
 
@@ -32,5 +34,9 @@
     document.body.appendChild(notice);
   }
 
-  window.EU_HOSTED_SESSION = Object.freeze({ LOGIN_REQUIRED, expired });
+  function logoutForm() {
+    return `<form class="hosted-logout" method="post" action="/logout"><button class="btn sm" type="submit">${tr('Sign out', '退出登录')}</button></form>`;
+  }
+
+  window.EU_HOSTED_SESSION = Object.freeze({ LOGIN_REQUIRED, expired, logoutForm });
 })();

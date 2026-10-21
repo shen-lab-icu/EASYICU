@@ -496,6 +496,17 @@
 `;
   }
 
+  // The gateway owns the sign-in; js/hosted-session.js owns the sign-out form.
+  function accountSection() {
+    const session = window.EU_HOSTED_SESSION;
+    return `
+      <div class="sec-stack" id="set-account"><div class="lbl">${T('Account', '账号')}</div><h2>${T('Sign-in', '登录')}</h2></div>
+      <div class="card pad">
+        ${row(T('Signed in', '已登录'), T('On a shared computer, sign out when you finish.', '在多人共用的电脑上，用完请退出登录。'), session ? session.logoutForm() : '')}
+      </div>
+`;
+  }
+
   function aboutSection(hosted) {
     return `
       <div class="sec-stack" id="set-about"><div class="lbl">${T('About', '关于')}</div><h2>${T('Environment', '环境')}</h2></div>
@@ -522,6 +533,7 @@
         <div class="set-nav col gap-6" style="font-size:12.5px;">
           ${[
             [T('Language', '语言'), 'globe', 'set-language'],
+            [T('Account', '账号'), 'lock', 'set-account'],
             [T('About', '关于'), 'help', 'set-about'],
           ].map(([label, ic, target]) =>
             `<button type="button" class="nav-item set-nav-btn" data-settings-jump="${target}" style="height:30px;"><span class="ico">${icon(ic, 15)}</span>${label}</button>`).join('')}
@@ -538,6 +550,7 @@
       </div>
       ${settingsNotice ? `<div class="note ok mt-12" data-settings-notice><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${T('Settings updated', '设置已更新')}</div><div class="d">${h(settingsNotice)}</div></div></div>` : ''}
       ${languageSection()}
+      ${accountSection()}
       ${aboutSection(true)}
       </div>`;
   }
