@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from easyicu.webserver import sources, state_paths
-from easyicu.webserver.hosted import require_path
+from easyicu.webserver.hosted import require_instance_path, require_path
 
 
 MAX_EXPORT_DOWNLOAD_BYTES = 512 * 1024 * 1024
@@ -166,6 +166,7 @@ def prepare_registered_export_bundle(
         )
 
     bundle_dir = Path(temp_dir) if temp_dir is not None else state_paths.state_root() / "downloads"
+    require_instance_path(bundle_dir)
     bundle_dir.mkdir(parents=True, exist_ok=True)
     descriptor, raw_path = tempfile.mkstemp(
         prefix=f"easyicu-{source_id}-", suffix=".zip", dir=bundle_dir

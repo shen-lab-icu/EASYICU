@@ -89,7 +89,12 @@ def test_path_routes_refuse_before_io_only_when_hosted(isolated, monkeypatch, me
     response = TestClient(app).request(method, route, **arguments)
     if hosted:
         assert response.status_code == 403, response.text
-        assert response.json()["detail"]["error"] == "path_outside_data_roots"
+        expected = "path_outside_data_roots"
+        if field.startswith("project_") or field in {"out_dir", "parent_dir"}:
+            expected = "hosted_data_read_only"
+        if route in {"/api/jobs/convert", "/api/fs/mkdir"}:
+            expected = "unavailable_when_hosted"
+        assert response.json()["detail"]["error"] == expected
         assert not calls
     else:
         assert response.status_code == 200, response.text
@@ -141,7 +146,9 @@ def test_picker_starts_at_root_hides_parent_shortcuts_and_escaping_links(isolate
     assert client.get("/api/fs/list", params={"path": "/"}).status_code == 403
     assert client.get("/api/fs/list", params={"path": str(root.parent)}).status_code == 403
     created = client.post("/api/fs/mkdir", json={"path": str(root / "new")})
-    assert created.status_code == 200 and (root / "new").is_dir()
+    assert created.status_code == 403
+    assert created.json()["detail"]["error"] == "unavailable_when_hosted"
+    assert not (root / "new").exists()
 
 
 @pytest.mark.parametrize("hosted", [True, False])
@@ -295,7 +302,7 @@ def test_saved_project_coordinate_cannot_escape_through_notes(isolated, monkeypa
     monkeypatch.setenv("EASYICU_HOSTED", "1")
     response = TestClient(app).get("/api/guided/projects/synthetic/notes")
     assert response.status_code == 403
-    assert response.json()["detail"]["error"] == "path_outside_data_roots"
+    assert response.json()["detail"]["error"] == "hosted_data_read_only"
 
 
 def test_project_notes_symlink_cannot_read_another_user(isolated, monkeypatch):

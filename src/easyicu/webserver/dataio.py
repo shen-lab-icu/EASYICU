@@ -211,8 +211,10 @@ def create_dir(raw_path: Optional[str]) -> Dict[str, Any]:
     file. ``parents=True`` lets the user create a nested export parent folder
     from the Web UI without switching to Finder or a shell.
     """
-    from easyicu.webserver.hosted import require_path
+    from easyicu.webserver.hosted import is_hosted, require_path, unavailable
 
+    if is_hosted():
+        unavailable()
     require_path(raw_path)
     if not raw_path or not str(raw_path).strip():
         return {"ok": False, "error": "path_required"}
@@ -513,11 +515,15 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
     convert_all is idempotent: already-converted files are skipped, so a re-run
     finishes fast."""
 
-    from easyicu.webserver.hosted import require_path
+    from easyicu.webserver.hosted import is_hosted, require_path, unavailable
 
+    if is_hosted():
+        unavailable()
     require_path(raw_path)
 
     def runner(job: Any) -> Dict[str, Any]:
+        if is_hosted():
+            unavailable()
         require_path(raw_path)
         from easyicu.io.data_converter import ConversionStatus, DataConverter
 
@@ -890,9 +896,9 @@ def _resolve_export_out_dir(
         if out_dir
         else (state_paths.state_root() / "exports")
     )
-    from easyicu.webserver.hosted import require_path
+    from easyicu.webserver.hosted import require_instance_path
 
-    require_path(root, instance_owned=not out_dir)
+    require_instance_path(root)
     if not create_run_subdir:
         return root
     import time
@@ -2397,19 +2403,23 @@ def make_export_runner(
     ``progress`` event per module.
     """
     import os
-    from easyicu.webserver.hosted import require_path
+    from easyicu.webserver.hosted import is_hosted, require_path
 
     require_path(data_path)
-    if out_dir:
-        require_path(out_dir)
+    if is_hosted():
+        _resolve_export_out_dir(
+            out_dir=out_dir, database=database, export_format=export_format, create_run_subdir=False,
+        )
 
     def runner(job: Any) -> Dict[str, Any]:
         import json
         import time
 
         require_path(data_path)
-        if out_dir:
-            require_path(out_dir)
+        if is_hosted():
+            _resolve_export_out_dir(
+                out_dir=out_dir, database=database, export_format=export_format, create_run_subdir=False,
+            )
         quality = _conversion_quality_for_path(Path(data_path).expanduser())
         if quality["data_quality_status"] != "clean":
             raise ExportCohortError("source_conversion_quality_incomplete", quality)

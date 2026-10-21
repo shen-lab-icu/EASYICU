@@ -9,7 +9,7 @@ from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Union
 
 from easyicu.research_agent.contracts.frozen_payload import freeze_payload, thaw_payload
 from easyicu.webserver.run_file_guide import RunFileGuideEntry, run_file_guide
-from easyicu.webserver.hosted import require_path
+from easyicu.webserver.hosted import require_instance_path
 
 MAX_ARTIFACT_SIZE_BYTES = 2**53 - 1
 
@@ -25,7 +25,7 @@ class RunDirectory:
         text = str(value or "").strip()
         if not text:
             return None
-        require_path(text, instance_owned=True)
+        require_instance_path(text)
         return cls(Path(text).expanduser().resolve())
 
     @classmethod
@@ -33,7 +33,7 @@ class RunDirectory:
         study = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(study_id or "study")).strip("-.")
         study = study[:96] or "study"
         path = project_root.expanduser().resolve() / study / f"run_{job_id}"
-        require_path(path, instance_owned=True)
+        require_instance_path(path)
         return cls(path)
 
     def artifact(self, name: str) -> Path:

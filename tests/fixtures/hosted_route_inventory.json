@@ -6,7 +6,9 @@
       "path:asset"
     ],
     "reaches": "ContentHashedStaticFiles -> packaged static asset",
-    "protection": "owner check: Starlette StaticFiles directory containment; follow_symlink=False"
+    "protection": "owner check: Starlette StaticFiles directory containment; follow_symlink=False",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -18,38 +20,51 @@
       "body:name"
     ],
     "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
-    "protection": "field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
+    "protection": "instance-only project field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
     "guarded_fields": [
       "body:project_dir"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination.",
+    "guarded_errors": {
+      "body:project_dir": "hosted_data_read_only"
+    }
   },
   {
     "method": "POST",
     "route": "/api/agent-runs/codex-auth/cancel",
     "fields": [],
     "reaches": "codex_account_sessions -> fixed Codex authentication subprocess",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "POST",
     "route": "/api/agent-runs/codex-auth/login",
     "fields": [],
     "reaches": "codex_account_sessions -> fixed Codex authentication subprocess",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "POST",
     "route": "/api/agent-runs/codex-auth/logout",
     "fields": [],
     "reaches": "codex_account_sessions -> fixed Codex authentication subprocess",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "GET",
     "route": "/api/agent-runs/codex-auth/status",
     "fields": [],
     "reaches": "provider enum or browser-session cookie selects server-owned status; no client pathname",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -61,10 +76,15 @@
       "body:name"
     ],
     "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
-    "protection": "field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
+    "protection": "instance-only project field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
     "guarded_fields": [
       "body:project_dir"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination.",
+    "guarded_errors": {
+      "body:project_dir": "hosted_data_read_only"
+    }
   },
   {
     "method": "POST",
@@ -74,10 +94,15 @@
       "body:run_ref"
     ],
     "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
-    "protection": "field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
+    "protection": "instance-only project field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
     "guarded_fields": [
       "body:project_dir"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination.",
+    "guarded_errors": {
+      "body:project_dir": "hosted_data_read_only"
+    }
   },
   {
     "method": "POST",
@@ -89,12 +114,19 @@
       "body:study_id"
     ],
     "reaches": "agent_runs.list_run_history -> study directory -> RunDirectory -> whitelisted artifacts",
-    "protection": "field guard + owner check (this patch) at root, study and run",
+    "protection": "instance-only project field guard + owner check (this patch) at root, study and run",
     "guarded_fields": [
       "body:project_root",
       "body:project_seed_dir",
       "body:project_seed_path"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination.",
+    "guarded_errors": {
+      "body:project_root": "hosted_data_read_only",
+      "body:project_seed_dir": "hosted_data_read_only",
+      "body:project_seed_path": "hosted_data_read_only"
+    }
   },
   {
     "method": "POST",
@@ -105,14 +137,18 @@
       "body:model"
     ],
     "reaches": "provider_adapter private configuration -> future provider network calls",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "GET",
     "route": "/api/agent-runs/provider-status",
     "fields": [],
     "reaches": "provider enum or browser-session cookie selects server-owned status; no client pathname",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -122,10 +158,15 @@
       "body:run_ref"
     ],
     "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
-    "protection": "field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
+    "protection": "instance-only project field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
     "guarded_fields": [
       "body:project_dir"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination.",
+    "guarded_errors": {
+      "body:project_dir": "hosted_data_read_only"
+    }
   },
   {
     "method": "POST",
@@ -134,10 +175,15 @@
       "body:project_dir"
     ],
     "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
-    "protection": "field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
+    "protection": "instance-only project field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
     "guarded_fields": [
       "body:project_dir"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination.",
+    "guarded_errors": {
+      "body:project_dir": "hosted_data_read_only"
+    }
   },
   {
     "method": "POST",
@@ -147,24 +193,33 @@
       "body:run_ref"
     ],
     "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
-    "protection": "field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
+    "protection": "instance-only project field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
     "guarded_fields": [
       "body:project_dir"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "RunDirectory.resolve checks the instance-only run before signoff writes; allowlisted artifact owner rejects symlinked files.",
+    "guarded_errors": {
+      "body:project_dir": "hosted_data_read_only"
+    }
   },
   {
     "method": "GET",
     "route": "/api/capabilities",
     "fields": [],
     "reaches": "fixed capability probes including administrator-enabled localhost Zotero API",
-    "protection": "owner check: fixed server-configured endpoints; no client URL"
+    "protection": "owner check: fixed server-configured endpoints; no client URL",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
     "route": "/api/capabilities/audit-events",
     "fields": [],
     "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "GET",
@@ -173,21 +228,27 @@
       "path:skill_id"
     ],
     "reaches": "capabilities -> registered built-in method package",
-    "protection": "owner check: exact catalog lookup, packaged resource only"
+    "protection": "owner check: exact catalog lookup, packaged resource only",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
     "route": "/api/capabilities/tool-check",
     "fields": [],
     "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "instance home",
+    "write_owner": "capabilities audit events and literature authority receipts use fixed instance state_paths; inputs do not choose a write destination."
   },
   {
     "method": "POST",
     "route": "/api/capabilities/zotero/import",
     "fields": [],
     "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "instance home",
+    "write_owner": "capabilities audit events and literature authority receipts use fixed instance state_paths; inputs do not choose a write destination."
   },
   {
     "method": "POST",
@@ -196,7 +257,9 @@
       "body:query"
     ],
     "reaches": "capabilities.search_zotero -> URL-encoded query at fixed localhost Zotero API",
-    "protection": "owner check: administrator-controlled connector, fixed endpoint"
+    "protection": "owner check: administrator-controlled connector, fixed endpoint",
+    "writes": "instance home",
+    "write_owner": "capabilities audit events and literature authority receipts use fixed instance state_paths; inputs do not choose a write destination."
   },
   {
     "method": "POST",
@@ -206,28 +269,36 @@
       "body:key"
     ],
     "reaches": "capabilities.zotero_source -> quoted item key appended to fixed localhost Zotero API; item metadata URLs are not fetched",
-    "protection": "owner check: administrator-controlled connector, fixed origin (see network notes)"
+    "protection": "owner check: administrator-controlled connector, fixed origin (see network notes)",
+    "writes": "instance home",
+    "write_owner": "capabilities audit events and literature authority receipts use fixed instance state_paths; inputs do not choose a write destination."
   },
   {
     "method": "POST",
     "route": "/api/capabilities/zotero/test",
     "fields": [],
     "reaches": "fixed capability probes including administrator-enabled localhost Zotero API",
-    "protection": "owner check: fixed server-configured endpoints; no client URL"
+    "protection": "owner check: fixed server-configured endpoints; no client URL",
+    "writes": "instance home",
+    "write_owner": "capabilities audit events and literature authority receipts use fixed instance state_paths; inputs do not choose a write destination."
   },
   {
     "method": "GET",
     "route": "/api/catalog",
     "fields": [],
     "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "GET",
     "route": "/api/catalog/lineage/{concept_id}",
     "fields": [],
     "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -241,7 +312,9 @@
     "guarded_fields": [
       "body:source_path",
       "body:path"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -254,7 +327,9 @@
     "protection": "owner check: generated instance paths, fixed registry session lookup; nested path field guard",
     "guarded_fields": [
       "body:context.selected_source.path"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "copilot_sessions checks generated or saved project/file coordinates with require_instance_path; registry and provider receipts use state_paths."
   },
   {
     "method": "POST",
@@ -267,7 +342,9 @@
     "protection": "owner check: generated instance paths, fixed registry session lookup; nested path field guard",
     "guarded_fields": [
       "body:context.selected_source.path"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "copilot_sessions checks generated or saved project/file coordinates with require_instance_path; registry and provider receipts use state_paths."
   },
   {
     "method": "GET",
@@ -276,7 +353,9 @@
       "path:pmid"
     ],
     "reaches": "mining.review_literature_source -> fixed NCBI/PMC URLs",
-    "protection": "owner check: numeric PMID, connector gate, fixed origins"
+    "protection": "owner check: numeric PMID, connector gate, fixed origins",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -285,7 +364,9 @@
       "query/body:project_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -294,7 +375,9 @@
       "path:project_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -303,7 +386,9 @@
       "path:project_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -312,7 +397,9 @@
       "path:project_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -321,7 +408,9 @@
       "path:project_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -332,7 +421,9 @@
       "path:artifact_name"
     ],
     "reaches": "Pi service -> bound run history -> allowlisted artifact/evidence/document/step owner",
-    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks"
+    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -343,7 +434,9 @@
       "path:artifact_name"
     ],
     "reaches": "Pi service -> bound run history -> allowlisted artifact/evidence/document/step owner",
-    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks"
+    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -354,7 +447,9 @@
       "path:document_name"
     ],
     "reaches": "Pi service -> bound run history -> allowlisted artifact/evidence/document/step owner",
-    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks"
+    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -365,7 +460,9 @@
       "path:evidence_id"
     ],
     "reaches": "Pi service -> bound run history -> allowlisted artifact/evidence/document/step owner",
-    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks"
+    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -376,7 +473,9 @@
       "path:step_id"
     ],
     "reaches": "Pi service -> bound run history -> allowlisted artifact/evidence/document/step owner",
-    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks"
+    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -385,7 +484,9 @@
       "path:project_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -395,7 +496,9 @@
       "query:file"
     ],
     "reaches": "ProjectWorkspace._candidate -> isolated hashed project file; preview requires checked digest",
-    "protection": "owner check: relative-file contract, root identity and symlink containment"
+    "protection": "owner check: relative-file contract, root identity and symlink containment",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -405,7 +508,9 @@
       "query:file"
     ],
     "reaches": "ProjectWorkspace._candidate -> isolated hashed project file; preview requires checked digest",
-    "protection": "owner check: relative-file contract, root identity and symlink containment"
+    "protection": "owner check: relative-file contract, root identity and symlink containment",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -415,7 +520,9 @@
       "body:model"
     ],
     "reaches": "provider connection network requests / fixed Codex auth process",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "POST",
@@ -425,63 +532,81 @@
       "body:model"
     ],
     "reaches": "provider connection network requests / fixed Codex auth process",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "GET",
     "route": "/api/copilot/pi/research-provider/api/models",
     "fields": [],
     "reaches": "configured provider/gateway status and models; fixed server-selected endpoints/argv",
-    "protection": "owner check: server configuration, no client pathname/URL"
+    "protection": "owner check: server configuration, no client pathname/URL",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
     "route": "/api/copilot/pi/research-provider/codex/cancel",
     "fields": [],
     "reaches": "provider connection network requests / fixed Codex auth process",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "POST",
     "route": "/api/copilot/pi/research-provider/codex/login",
     "fields": [],
     "reaches": "provider connection network requests / fixed Codex auth process",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "POST",
     "route": "/api/copilot/pi/research-provider/codex/logout",
     "fields": [],
     "reaches": "provider connection network requests / fixed Codex auth process",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "GET",
     "route": "/api/copilot/pi/research-provider/codex/models",
     "fields": [],
     "reaches": "configured provider/gateway status and models; fixed server-selected endpoints/argv",
-    "protection": "owner check: server configuration, no client pathname/URL"
+    "protection": "owner check: server configuration, no client pathname/URL",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
     "route": "/api/copilot/pi/research-provider/codex/status",
     "fields": [],
     "reaches": "configured provider/gateway status and models; fixed server-selected endpoints/argv",
-    "protection": "owner check: server configuration, no client pathname/URL"
+    "protection": "owner check: server configuration, no client pathname/URL",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
     "route": "/api/copilot/pi/research-provider/model",
     "fields": [],
     "reaches": "provider connection network requests / fixed Codex auth process",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "GET",
     "route": "/api/copilot/pi/resource-status",
     "fields": [],
     "reaches": "configured provider/gateway status and models; fixed server-selected endpoints/argv",
-    "protection": "owner check: server configuration, no client pathname/URL"
+    "protection": "owner check: server configuration, no client pathname/URL",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -490,7 +615,9 @@
       "body:quarantine_id"
     ],
     "reaches": "SessionStorageMaintenance.restore -> timestamp-ID quarantine directory + manifest-bound basenames",
-    "protection": "owner check: strict quarantine ID, manifest require_path (this patch), regular-file checks before restore"
+    "protection": "owner check: strict quarantine ID, manifest require_path (this patch), regular-file checks before restore",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -499,7 +626,9 @@
       "query/body:project_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -508,7 +637,9 @@
       "query/body:project_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -518,7 +649,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -528,7 +661,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -538,7 +673,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -548,7 +685,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -558,7 +697,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -569,7 +710,9 @@
       "body:source_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -579,7 +722,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -589,7 +734,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -601,7 +748,9 @@
       "body:idea_source"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -611,7 +760,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -621,7 +772,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -631,7 +784,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -641,7 +796,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -651,7 +808,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -663,7 +822,9 @@
       "body:idea_source"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
@@ -673,7 +834,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -683,7 +846,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -693,7 +858,9 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -703,14 +870,18 @@
       "path:session_id"
     ],
     "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
-    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "GET",
     "route": "/api/copilot/pi/status",
     "fields": [],
     "reaches": "configured provider/gateway status and models; fixed server-selected endpoints/argv",
-    "protection": "owner check: server configuration, no client pathname/URL"
+    "protection": "owner check: server configuration, no client pathname/URL",
+    "writes": "instance home",
+    "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
     "method": "POST",
@@ -723,14 +894,18 @@
     "protection": "owner check: generated instance paths, fixed registry session lookup; nested path field guard",
     "guarded_fields": [
       "body:context.selected_source.path"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "copilot_sessions checks generated or saved project/file coordinates with require_instance_path; registry and provider receipts use state_paths."
   },
   {
     "method": "POST",
     "route": "/api/copilot/sessions/list",
     "fields": [],
     "reaches": "fixed instance registry listing only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -740,14 +915,18 @@
       "body:llm_provider"
     ],
     "reaches": "study_intent -> opt-in configured provider request",
-    "protection": "owner check: provider allowlist and canonical opt-in; no client URL or argv"
+    "protection": "owner check: provider allowlist and canonical opt-in; no client URL or argv",
+    "writes": "instance home",
+    "write_owner": "copilot_sessions checks generated or saved project/file coordinates with require_instance_path; registry and provider receipts use state_paths."
   },
   {
     "method": "POST",
     "route": "/api/crossdb-review/demo-distribution",
     "fields": [],
     "reaches": "seeded synthetic aggregates only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -761,7 +940,9 @@
     "guarded_fields": [
       "body:data_root",
       "body:root"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -775,7 +956,9 @@
     "guarded_fields": [
       "body:data_root",
       "body:root"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -789,7 +972,9 @@
     "guarded_fields": [
       "body:paths[]",
       "body:source_paths[]"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -801,21 +986,27 @@
     "protection": "field guard + owner check: dataio.require_path; export children rechecked",
     "guarded_fields": [
       "body:path"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "GET",
     "route": "/api/demo-sources",
     "fields": [],
     "reaches": "fixed catalog and instance readiness only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "GET",
     "route": "/api/extensions",
     "fields": [],
     "reaches": "fixed instance extension registry only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -824,7 +1015,9 @@
       "body:url"
     ],
     "reaches": "ExtensionRegistry / MCP HTTP transport",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "POST",
@@ -833,7 +1026,9 @@
       "body:url"
     ],
     "reaches": "ExtensionRegistry / MCP HTTP transport",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "POST",
@@ -843,7 +1038,9 @@
       "body:skill_md"
     ],
     "reaches": "ExtensionRegistry / MCP HTTP transport",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "POST",
@@ -853,7 +1050,9 @@
       "body:skill_md"
     ],
     "reaches": "ExtensionRegistry / MCP HTTP transport",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "GET",
@@ -862,7 +1061,9 @@
       "path:name"
     ],
     "reaches": "ExtensionRegistry.current_skill -> registered skill.md under instance extension root",
-    "protection": "owner check: validated extension name + registry-selected digest-checked package"
+    "protection": "owner check: validated extension name + registry-selected digest-checked package",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -872,7 +1073,9 @@
       "body:skill_md"
     ],
     "reaches": "ExtensionRegistry / MCP HTTP transport",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "POST",
@@ -886,7 +1089,9 @@
     "guarded_fields": [
       "body:source_path",
       "body:path"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -900,7 +1105,9 @@
     "guarded_fields": [
       "body:source_path",
       "body:path"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "GET",
@@ -912,7 +1119,9 @@
     "protection": "field guard + owner check: dataio.require_path; export children rechecked",
     "guarded_fields": [
       "query:path"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -921,10 +1130,15 @@
       "body:path"
     ],
     "reaches": "dataio.list_dir/create_dir/scan_path/summarize_export_workspace",
-    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "protection": "refused route: unavailable_when_hosted",
     "guarded_fields": [
       "body:path"
-    ]
+    ],
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects before dispatch; preparation owners also refuse direct and queued calls.",
+    "guarded_errors": {
+      "body:path": "unavailable_when_hosted"
+    }
   },
   {
     "method": "POST",
@@ -939,7 +1153,9 @@
     "guarded_fields": [
       "body:context.selected_source.path",
       "body:context.extraction.export_dir"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "guided_sessions checks project parents, directories and child files with require_instance_path; metadata registry is fixed in state_paths. System-trash writes are refused when hosted."
   },
   {
     "method": "POST",
@@ -952,14 +1168,21 @@
     "protection": "field guard + owner check: _safe_project_parent_dir; sanitized folder slug",
     "guarded_fields": [
       "body:parent_dir"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "guided_sessions checks project parents, directories and child files with require_instance_path; metadata registry is fixed in state_paths. System-trash writes are refused when hosted.",
+    "guarded_errors": {
+      "body:parent_dir": "hosted_data_read_only"
+    }
   },
   {
     "method": "POST",
     "route": "/api/guided/drafts/list",
     "fields": [],
     "reaches": "generated IDs / fixed instance registry; no request-selected pathname",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "DELETE",
@@ -970,10 +1193,15 @@
       "body:id"
     ],
     "reaches": "saved draft path -> optional send2trash",
-    "protection": "field guard + owner check; saved trash coordinate rechecked (this patch), exact draft confirmation",
+    "protection": "instance-only project field guard + owner check; saved trash coordinate rechecked (this patch), exact draft confirmation",
     "guarded_fields": [
       "body:project_dir"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "guided_sessions checks project parents, directories and child files with require_instance_path; metadata registry is fixed in state_paths. System-trash writes are refused when hosted.",
+    "guarded_errors": {
+      "body:project_dir": "hosted_data_read_only"
+    }
   },
   {
     "method": "POST",
@@ -984,10 +1212,15 @@
       "body:id"
     ],
     "reaches": "saved draft path -> optional send2trash",
-    "protection": "field guard + owner check; saved trash coordinate rechecked (this patch), exact draft confirmation",
+    "protection": "instance-only project field guard + owner check; saved trash coordinate rechecked (this patch), exact draft confirmation",
     "guarded_fields": [
       "body:project_dir"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "guided_sessions checks project parents, directories and child files with require_instance_path; metadata registry is fixed in state_paths. System-trash writes are refused when hosted.",
+    "guarded_errors": {
+      "body:project_dir": "hosted_data_read_only"
+    }
   },
   {
     "method": "POST",
@@ -1002,7 +1235,9 @@
     "guarded_fields": [
       "body:context.selected_source.path",
       "body:context.extraction.export_dir"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "guided_sessions checks project parents, directories and child files with require_instance_path; metadata registry is fixed in state_paths. System-trash writes are refused when hosted."
   },
   {
     "method": "POST",
@@ -1011,10 +1246,15 @@
       "body:project_dir"
     ],
     "reaches": "guided_sessions._safe_project_dir -> draft/session metadata",
-    "protection": "field guard + owner check; metadata child paths rechecked (this patch)",
+    "protection": "instance-only project field guard + owner check; metadata child paths rechecked (this patch)",
     "guarded_fields": [
       "body:project_dir"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "guided_sessions checks project parents, directories and child files with require_instance_path; metadata registry is fixed in state_paths. System-trash writes are refused when hosted.",
+    "guarded_errors": {
+      "body:project_dir": "hosted_data_read_only"
+    }
   },
   {
     "method": "GET",
@@ -1023,7 +1263,9 @@
       "path:project_id"
     ],
     "reaches": "guided_sessions._draft_project_dir -> project_notes.md",
-    "protection": "owner check: saved project and notes require_path"
+    "protection": "owner check: saved project and notes require_path",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1032,35 +1274,45 @@
       "path:project_id"
     ],
     "reaches": "guided_sessions._draft_project_dir -> project_notes.md",
-    "protection": "owner check: saved project and notes require_path"
+    "protection": "owner check: saved project and notes require_path",
+    "writes": "instance home",
+    "write_owner": "guided_sessions checks project parents, directories and child files with require_instance_path; metadata registry is fixed in state_paths. System-trash writes are refused when hosted."
   },
   {
     "method": "POST",
     "route": "/api/guided/session",
     "fields": [],
     "reaches": "generated IDs / fixed instance registry; no request-selected pathname",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "instance home",
+    "write_owner": "guided_sessions checks project parents, directories and child files with require_instance_path; metadata registry is fixed in state_paths. System-trash writes are refused when hosted."
   },
   {
     "method": "POST",
     "route": "/api/guided/sessions/list",
     "fields": [],
     "reaches": "generated IDs / fixed instance registry; no request-selected pathname",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "GET",
     "route": "/api/health",
     "fields": [],
     "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
     "route": "/api/ideas/agent-projects",
     "fields": [],
     "reaches": "generated/slugged IDs under instance Idea state; registered active export read via dataio",
-    "protection": "owner check: generated instance state + dataio; run-directory recheck (this patch)"
+    "protection": "owner check: generated instance state + dataio; run-directory recheck (this patch)",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1070,7 +1322,9 @@
       "body:idea_id"
     ],
     "reaches": "mining._run_dir -> fixed Idea JSON receipts; active registry export via dataio; prior-art may query fixed NCBI",
-    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in"
+    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in",
+    "writes": "instance home",
+    "write_owner": "ideas.mining checks run receipts and project_seed.json with require_instance_path; history and literature authority/audit receipts are fixed in state_paths."
   },
   {
     "method": "POST",
@@ -1080,7 +1334,9 @@
       "body:idea_id"
     ],
     "reaches": "mining._run_dir -> fixed Idea JSON receipts; active registry export via dataio; prior-art may query fixed NCBI",
-    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in"
+    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in",
+    "writes": "instance home",
+    "write_owner": "ideas.mining checks run receipts and project_seed.json with require_instance_path; history and literature authority/audit receipts are fixed in state_paths."
   },
   {
     "method": "POST",
@@ -1092,7 +1348,9 @@
       "body:queries"
     ],
     "reaches": "mining discovery -> URL-encoded query on fixed NCBI endpoints",
-    "protection": "owner check: PubMed connector + network opt-in; fixed service origins"
+    "protection": "owner check: PubMed connector + network opt-in; fixed service origins",
+    "writes": "instance home",
+    "write_owner": "ideas.mining checks run receipts and project_seed.json with require_instance_path; history and literature authority/audit receipts are fixed in state_paths."
   },
   {
     "method": "POST",
@@ -1102,21 +1360,27 @@
       "body:idea_id"
     ],
     "reaches": "mining._run_dir -> fixed Idea JSON receipts; active registry export via dataio; prior-art may query fixed NCBI",
-    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in"
+    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in",
+    "writes": "instance home",
+    "write_owner": "ideas.mining checks run receipts and project_seed.json with require_instance_path; history and literature authority/audit receipts are fixed in state_paths."
   },
   {
     "method": "POST",
     "route": "/api/ideas/history",
     "fields": [],
     "reaches": "generated/slugged IDs under instance Idea state; registered active export read via dataio",
-    "protection": "owner check: generated instance state + dataio; run-directory recheck (this patch)"
+    "protection": "owner check: generated instance state + dataio; run-directory recheck (this patch)",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
     "route": "/api/ideas/ingest-pdf",
     "fields": [],
     "reaches": "base64 bytes parsed in memory; filename/name/source_file_name are metadata, never opened",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "instance home",
+    "write_owner": "ideas.mining checks run receipts and project_seed.json with require_instance_path; history and literature authority/audit receipts are fixed in state_paths."
   },
   {
     "method": "POST",
@@ -1130,14 +1394,18 @@
     "guarded_fields": [
       "body:path",
       "body:folder"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "ideas.mining checks run receipts and project_seed.json with require_instance_path; history and literature authority/audit receipts are fixed in state_paths."
   },
   {
     "method": "POST",
     "route": "/api/ideas/mine",
     "fields": [],
     "reaches": "generated/slugged IDs under instance Idea state; registered active export read via dataio",
-    "protection": "owner check: generated instance state + dataio; run-directory recheck (this patch)"
+    "protection": "owner check: generated instance state + dataio; run-directory recheck (this patch)",
+    "writes": "instance home",
+    "write_owner": "ideas.mining checks run receipts and project_seed.json with require_instance_path; history and literature authority/audit receipts are fixed in state_paths."
   },
   {
     "method": "POST",
@@ -1147,7 +1415,9 @@
       "body:idea_id"
     ],
     "reaches": "mining._run_dir -> fixed Idea JSON receipts; active registry export via dataio; prior-art may query fixed NCBI",
-    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in"
+    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in",
+    "writes": "instance home",
+    "write_owner": "ideas.mining checks run receipts and project_seed.json with require_instance_path; history and literature authority/audit receipts are fixed in state_paths."
   },
   {
     "method": "POST",
@@ -1157,7 +1427,9 @@
       "body:idea_id"
     ],
     "reaches": "mining._run_dir -> fixed Idea JSON receipts; active registry export via dataio; prior-art may query fixed NCBI",
-    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in"
+    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in",
+    "writes": "instance home",
+    "write_owner": "ideas.mining checks run receipts and project_seed.json with require_instance_path; history and literature authority/audit receipts are fixed in state_paths."
   },
   {
     "method": "POST",
@@ -1166,7 +1438,9 @@
       "body:url"
     ],
     "reaches": "mining.resolve_source -> _fetch_url_metadata / Crossref DOI metadata",
-    "protection": "owner check: connector opt-in; HTTP(S), public pinned IPs, every redirect revalidated"
+    "protection": "owner check: connector opt-in; HTTP(S), public pinned IPs, every redirect revalidated",
+    "writes": "instance home",
+    "write_owner": "ideas.mining checks run receipts and project_seed.json with require_instance_path; history and literature authority/audit receipts are fixed in state_paths."
   },
   {
     "method": "POST",
@@ -1176,7 +1450,9 @@
       "body:idea_id"
     ],
     "reaches": "mining._run_dir -> fixed Idea JSON receipts; active registry export via dataio; prior-art may query fixed NCBI",
-    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in"
+    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1189,13 +1465,20 @@
       "body:study_context_id"
     ],
     "reaches": "dataio export -> seed JSON -> RunDirectory / research_run_submission -> DockerRunner mounts of host-bound data and output",
-    "protection": "field guard + owner check: dataio, RunDirectory, seed file (this patch); provider opt-in and reviewed host grants",
+    "protection": "instance-only project field guard + owner check: dataio, RunDirectory, seed file (this patch); provider opt-in and reviewed host grants",
     "guarded_fields": [
       "body:path",
       "body:project_root",
       "body:project_seed_dir",
       "body:project_seed_path"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "RunDirectory and receipt owners use require_instance_path; extraction validates destination at submission and execution. Registry/usage/recovery receipts use state_paths.",
+    "guarded_errors": {
+      "body:project_root": "hosted_data_read_only",
+      "body:project_seed_dir": "hosted_data_read_only",
+      "body:project_seed_path": "hosted_data_read_only"
+    }
   },
   {
     "method": "POST",
@@ -1205,7 +1488,9 @@
       "body:study_context_id"
     ],
     "reaches": "pending-review registry -> digest-bound continuation -> fixed runner/provider execution",
-    "protection": "owner check: server pending-review binding + source/run owners; no client pathname"
+    "protection": "owner check: server pending-review binding + source/run owners; no client pathname",
+    "writes": "instance home",
+    "write_owner": "RunDirectory and receipt owners use require_instance_path; extraction validates destination at submission and execution. Registry/usage/recovery receipts use state_paths."
   },
   {
     "method": "POST",
@@ -1214,10 +1499,15 @@
       "body:path"
     ],
     "reaches": "dataio.make_convert_runner -> DataConverter (database is a schema selector)",
-    "protection": "field guard + owner check before submission and execution",
+    "protection": "refused route: unavailable_when_hosted",
     "guarded_fields": [
       "body:path"
-    ]
+    ],
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects before dispatch; preparation owners also refuse direct and queued calls.",
+    "guarded_errors": {
+      "body:path": "unavailable_when_hosted"
+    }
   },
   {
     "method": "POST",
@@ -1231,7 +1521,9 @@
     "guarded_fields": [
       "body:data_root",
       "body:root"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1245,7 +1537,9 @@
     "guarded_fields": [
       "body:paths[]",
       "body:source_paths[]"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1254,7 +1548,9 @@
       "body:source_id"
     ],
     "reaches": "demo_sources.get_source -> fixed PhysioNet URL -> download/conversion under instance demo state",
-    "protection": "owner check: exact catalog ID, no URLs/paths accepted, bounded archive extraction"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects before dispatch; preparation owners also refuse direct and queued calls."
   },
   {
     "method": "POST",
@@ -1265,33 +1561,44 @@
       "body:registered_export_path"
     ],
     "reaches": "dataio.make_export_runner -> load_concepts + generated export files; module and format names are allowlisted/sanitized",
-    "protection": "field guard + owner check before submission and execution",
+    "protection": "input field guard; instance-only output owner at submission and execution; default instance export registered after completion",
     "guarded_fields": [
       "body:path",
       "body:out_dir",
       "body:registered_export_path"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "RunDirectory and receipt owners use require_instance_path; extraction validates destination at submission and execution. Registry/usage/recovery receipts use state_paths.",
+    "guarded_errors": {
+      "body:out_dir": "hosted_data_read_only"
+    }
   },
   {
     "method": "GET",
     "route": "/api/jobs/{job_id}",
     "fields": [],
     "reaches": "job_id selects in-memory JobManager state only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
     "route": "/api/jobs/{job_id}/cancel",
     "fields": [],
     "reaches": "job_id selects in-memory JobManager state only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "instance home",
+    "write_owner": "RunDirectory and receipt owners use require_instance_path; extraction validates destination at submission and execution. Registry/usage/recovery receipts use state_paths."
   },
   {
     "method": "GET",
     "route": "/api/jobs/{job_id}/events",
     "fields": [],
     "reaches": "job_id selects in-memory JobManager state only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1301,7 +1608,9 @@
       "body:file"
     ],
     "reaches": "job result output -> fixed OS opener argv",
-    "protection": "refused route: unavailable_when_hosted (503)"
+    "protection": "refused route: unavailable_when_hosted (503)",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "POST",
@@ -1314,7 +1623,9 @@
     "protection": "owner check: generated instance paths, fixed registry session lookup; nested path field guard",
     "guarded_fields": [
       "body:context.selected_source.path"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "copilot_sessions checks generated or saved project/file coordinates with require_instance_path; registry and provider receipts use state_paths."
   },
   {
     "method": "POST",
@@ -1327,7 +1638,9 @@
     "protection": "owner check: generated instance paths, fixed registry session lookup; nested path field guard",
     "guarded_fields": [
       "body:context.selected_source.path"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "copilot_sessions checks generated or saved project/file coordinates with require_instance_path; registry and provider receipts use state_paths."
   },
   {
     "method": "POST",
@@ -1340,14 +1653,18 @@
     "protection": "owner check: generated instance paths, fixed registry session lookup; nested path field guard",
     "guarded_fields": [
       "body:context.selected_source.path"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "copilot_sessions checks generated or saved project/file coordinates with require_instance_path; registry and provider receipts use state_paths."
   },
   {
     "method": "POST",
     "route": "/api/page-guide/sessions/list",
     "fields": [],
     "reaches": "fixed instance registry listing only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1361,7 +1678,9 @@
     "guarded_fields": [
       "body:source_path",
       "body:path"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1375,7 +1694,9 @@
     "guarded_fields": [
       "body:source_path",
       "body:path"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1389,7 +1710,9 @@
     "guarded_fields": [
       "body:source_path",
       "body:path"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1403,14 +1726,18 @@
     "guarded_fields": [
       "body:source_path",
       "body:path"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
     "route": "/api/patient-review/sources",
     "fields": [],
     "reaches": "sources.load_registry -> dataio.describe_export_source for administrator/instance-scoped candidates",
-    "protection": "owner check: path_allowed and require_path; no client path input"
+    "protection": "owner check: path_allowed and require_path; no client path input",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1424,14 +1751,18 @@
     "guarded_fields": [
       "body:source_path",
       "body:path"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "GET",
     "route": "/api/settings",
     "fields": [],
     "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1440,21 +1771,27 @@
       "body:export_dir"
     ],
     "reaches": "settings.update_settings -> export destination used by later jobs",
-    "protection": "refused non-display settings when hosted"
+    "protection": "refused non-display settings when hosted",
+    "writes": "instance home",
+    "write_owner": "settings and study_contexts atomically replace their fixed state_paths metadata files. Hosted settings accept display fields only."
   },
   {
     "method": "POST",
     "route": "/api/settings/reset",
     "fields": [],
     "reaches": "settings reset",
-    "protection": "refused route: unavailable_when_hosted"
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
     "method": "GET",
     "route": "/api/study-contexts",
     "fields": [],
     "reaches": "context IDs select entries in fixed instance metadata registry; no dynamic pathname",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1466,28 +1803,36 @@
     "protection": "field guard; exact data_source schema; execution owner source checks",
     "guarded_fields": [
       "body:data_source.path"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "settings and study_contexts atomically replace their fixed state_paths metadata files. Hosted settings accept display fields only."
   },
   {
     "method": "GET",
     "route": "/api/study-contexts/active",
     "fields": [],
     "reaches": "context IDs select entries in fixed instance metadata registry; no dynamic pathname",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
     "route": "/api/study-contexts/handoff",
     "fields": [],
     "reaches": "context IDs select entries in fixed instance metadata registry; no dynamic pathname",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "instance home",
+    "write_owner": "settings and study_contexts atomically replace their fixed state_paths metadata files. Hosted settings accept display fields only."
   },
   {
     "method": "GET",
     "route": "/api/study-contexts/{context_id}",
     "fields": [],
     "reaches": "context IDs select entries in fixed instance metadata registry; no dynamic pathname",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1499,7 +1844,9 @@
     "protection": "field guard + owner check: dataio.require_path; export children rechecked",
     "guarded_fields": [
       "body:path"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1511,7 +1858,9 @@
     "protection": "field guard + owner check: dataio.require_path; export children rechecked",
     "guarded_fields": [
       "body:paths[]"
-    ]
+    ],
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1520,7 +1869,9 @@
       "body:source_id"
     ],
     "reaches": "export_download.prepare_registered_export_bundle -> registry-resolved export and manifest files",
-    "protection": "owner check: require_path plus manifest-relative containment"
+    "protection": "owner check: require_path plus manifest-relative containment",
+    "writes": "instance home",
+    "write_owner": "export_download reads registered data roots or own exports; require_instance_path checks the state_paths downloads destination."
   },
   {
     "method": "POST",
@@ -1532,14 +1883,18 @@
     "protection": "field guard + owner check: dataio.require_path; export children rechecked",
     "guarded_fields": [
       "body:path"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "sources._write_raw writes only the fixed state_paths registry; source paths are read coordinates, never renamed or removed on disk."
   },
   {
     "method": "GET",
     "route": "/api/workspaces/registry",
     "fields": [],
     "reaches": "sources.load_registry -> dataio.describe_export_source for administrator/instance-scoped candidates",
-    "protection": "owner check: path_allowed and require_path; no client path input"
+    "protection": "owner check: path_allowed and require_path; no client path input",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "POST",
@@ -1555,7 +1910,9 @@
       "body:sources[].path",
       "body:active_path",
       "body:crossdb_paths[]"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "sources._write_raw writes only the fixed state_paths registry; source paths are read coordinates, never renamed or removed on disk."
   },
   {
     "method": "POST",
@@ -1567,7 +1924,9 @@
     "protection": "field guard + owner check: dataio.require_path; export children rechecked",
     "guarded_fields": [
       "body:path"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "sources._write_raw writes only the fixed state_paths registry; source paths are read coordinates, never renamed or removed on disk."
   },
   {
     "method": "POST",
@@ -1579,69 +1938,89 @@
     "protection": "field guard + owner check: dataio.require_path; export children rechecked",
     "guarded_fields": [
       "body:path"
-    ]
+    ],
+    "writes": "instance home",
+    "write_owner": "sources._write_raw writes only the fixed state_paths registry; source paths are read coordinates, never renamed or removed on disk."
   },
   {
     "method": "GET",
     "route": "/docs",
     "fields": [],
     "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "HEAD",
     "route": "/docs",
     "fields": [],
     "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "GET",
     "route": "/docs/oauth2-redirect",
     "fields": [],
     "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "HEAD",
     "route": "/docs/oauth2-redirect",
     "fields": [],
     "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "GET",
     "route": "/favicon.ico",
     "fields": [],
     "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "GET",
     "route": "/openapi.json",
     "fields": [],
     "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "HEAD",
     "route": "/openapi.json",
     "fields": [],
     "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "GET",
     "route": "/redoc",
     "fields": [],
     "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
     "method": "HEAD",
     "route": "/redoc",
     "fields": [],
     "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
-    "protection": "no path inputs"
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   }
 ]

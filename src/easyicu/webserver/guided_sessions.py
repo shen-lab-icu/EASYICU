@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from send2trash import send2trash as _send2trash
 
 from easyicu.webserver import state_paths
-from easyicu.webserver.hosted import is_hosted, require_path
+from easyicu.webserver.hosted import is_hosted, require_instance_path, unavailable
 
 _CONFIG_DIR = state_paths.state_root()
 _CONFIG_PATH = _CONFIG_DIR / "webserver_guided_drafts.json"
@@ -606,7 +606,7 @@ def _safe_project_dir(
     text = str(value or "").strip()
     if not text:
         return None
-    require_path(text, instance_owned=True)
+    require_instance_path(text)
     try:
         candidate = Path(text).expanduser().resolve()
         root = _PROJECTS_ROOT.expanduser().resolve()
@@ -625,7 +625,7 @@ def _safe_project_dir(
 
 def _safe_project_parent_dir(value: Any) -> Path | None:
     text = str(value or "").strip()
-    require_path(text or _PROJECTS_ROOT, instance_owned=not text)
+    require_instance_path(text or _PROJECTS_ROOT)
     if not text:
         return _PROJECTS_ROOT
     try:
@@ -654,7 +654,7 @@ def _find_session_by_project_dir(project_dir: Path) -> Dict[str, Any] | None:
 
 def _session_file(project_dir: Path) -> Path:
     path = project_dir / "guided_copilot_session.json"
-    require_path(path, instance_owned=True)
+    require_instance_path(path)
     return path
 
 
@@ -681,6 +681,7 @@ def _persist_session(session: Dict[str, Any]) -> None:
         session.get("project_dir"), allow_marked_external=True
     ) or _project_dir_for_session(str(session["id"]))
     session["project_dir"] = str(project_dir)
+    require_instance_path(project_dir)
     project_dir.mkdir(parents=True, exist_ok=True)
     _refresh_privacy(session)
     _session_file(project_dir).write_text(
@@ -1012,7 +1013,7 @@ def open_guided_project(body: Dict[str, Any]) -> Dict[str, Any]:
     title = _clean_text(payload.get("title"), "Guided project", max_len=90)
     draft_id = _clean_text(payload.get("draft_id"), max_len=80)
     draft_path = project_dir / "guided_draft.json"
-    require_path(draft_path, instance_owned=True)
+    require_instance_path(draft_path)
     try:
         draft = json.loads(draft_path.read_text(encoding="utf-8"))
         if isinstance(draft, dict):
@@ -1521,7 +1522,7 @@ def _notes_payload(project_id: str, project_dir: Path | None) -> Dict[str, Any]:
             "updated_at": None,
         }
     path = project_dir / _NOTES_FILE
-    require_path(path, instance_owned=True)
+    require_instance_path(path)
     if not path.is_file():
         return {
             "ok": True,
@@ -1584,17 +1585,21 @@ def write_project_notes(project_id: str, text: Any) -> Dict[str, Any]:
             "project_id": clean_project,
         }
     path = project_dir / _NOTES_FILE
+    require_instance_path(path)
     with _LOCK:
         if not body.strip() and not path.exists():
             return _notes_payload(clean_project, project_dir)
         temporary = path.with_name(f".{_NOTES_FILE}.tmp")
+        require_instance_path(temporary)
         temporary.write_text(body, encoding="utf-8")
         temporary.replace(path)
     return _notes_payload(clean_project, project_dir)
 
 
 def _trash_guided_project_folder(project_dir_value: Any, draft_id: str) -> None:
-    require_path(project_dir_value, instance_owned=True)
+    require_instance_path(project_dir_value)
+    if is_hosted():
+        unavailable()  # The Unix user's system trash is outside the instance.
     raw_path = Path(str(project_dir_value or "")).expanduser()
     if not draft_id:
         raise GuidedProjectTrashError(
@@ -1751,6 +1756,7 @@ def create_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
             "persisted": False,
         }
     project_dir = Path(str(draft["project_dir"]))
+    require_instance_path(project_dir / "guided_draft.json")
     try:
         project_dir.mkdir(parents=True, exist_ok=True)
         (project_dir / "guided_draft.json").write_text(

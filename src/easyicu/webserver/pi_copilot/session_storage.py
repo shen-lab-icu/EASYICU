@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
-from easyicu.webserver.hosted import require_path
+from easyicu.webserver.hosted import require_instance_path
 
 from .contracts import PiCopilotError
 
@@ -75,6 +75,7 @@ class SessionStorageMaintenance:
         *,
         now: Optional[float] = None,
     ) -> SessionStorageInventory:
+        require_instance_path(self.session_dir)
         references = _resolved_references(referenced_paths)
         observed_now = time.time() if now is None else float(now)
         files: list[tuple[Path, os.stat_result]] = []
@@ -133,6 +134,7 @@ class SessionStorageMaintenance:
             }
         quarantine_id = _utc_batch_id(observed_now)
         destination = self.quarantine_root / quarantine_id
+        require_instance_path(destination)
         destination.mkdir(parents=True, exist_ok=False, mode=0o700)
         moved: list[dict[str, object]] = []
         try:
@@ -196,6 +198,7 @@ class SessionStorageMaintenance:
         }
 
     def restore(self, quarantine_id: str, *, confirm: bool) -> dict[str, object]:
+        require_instance_path(self.session_dir)
         clean_id = str(quarantine_id or "").strip()
         if not confirm:
             raise PiCopilotError(
@@ -210,7 +213,7 @@ class SessionStorageMaintenance:
                 status_code=422,
             )
         source_root = self.quarantine_root / clean_id
-        require_path(source_root / "manifest.json", instance_owned=True)
+        require_instance_path(source_root / "manifest.json")
         try:
             manifest = json.loads(
                 (source_root / "manifest.json").read_text(encoding="utf-8")

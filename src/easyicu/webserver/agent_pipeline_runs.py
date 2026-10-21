@@ -356,6 +356,9 @@ def _read_json_with_digest(path: Path) -> Dict[str, Any]:
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    from easyicu.webserver.hosted import require_instance_path
+
+    require_instance_path(path)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",

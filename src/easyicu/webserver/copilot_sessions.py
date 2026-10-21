@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from easyicu.webserver import state_paths
+from easyicu.webserver.hosted import require_instance_path
 
 _CONFIG_DIR = state_paths.state_root()
 _CONFIG_PATH = _CONFIG_DIR / "webserver_copilot_sessions.json"
@@ -428,10 +429,11 @@ def create_session(body: Dict[str, Any]) -> Dict[str, Any]:
             else "copilot_session_json_keys"
         ),
     }
-    project_dir.mkdir(parents=True, exist_ok=True)
     artifact_name = (
         "page_guide_session.json" if scope == "page_guide" else "copilot_session.json"
     )
+    require_instance_path(project_dir / artifact_name)
+    project_dir.mkdir(parents=True, exist_ok=True)
     (project_dir / artifact_name).write_text(
         json.dumps(session, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -513,12 +515,13 @@ def post_message(body: Dict[str, Any]) -> Dict[str, Any]:
                 else "copilot_session_json_keys"
             ),
         }
-        Path(str(session["project_dir"])).mkdir(parents=True, exist_ok=True)
         artifact_name = (
             "page_guide_session.json"
             if session.get("scope") == "page_guide"
             else "copilot_session.json"
         )
+        require_instance_path(Path(str(session["project_dir"])) / artifact_name)
+        Path(str(session["project_dir"])).mkdir(parents=True, exist_ok=True)
         (Path(str(session["project_dir"])) / artifact_name).write_text(
             json.dumps(session, indent=2, ensure_ascii=False), encoding="utf-8"
         )
