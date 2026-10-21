@@ -6,6 +6,8 @@ Run from the shared checkout (no server is started by create/provision):
     --data-root /srv/icu --runner-image easyicu-runner:reviewed \
     --public-origin https://doctor.hospital.example --support-contact 'Help desk'
   python tools/hosted_instances.py provision-model doctor --key-file /private/key
+  python tools/hosted_instances.py add-source doctor /srv/icu/prepared --label 'ICU data'
+  python tools/hosted_instances.py list-sources doctor
   python tools/hosted_instances.py start doctor
   python tools/hosted_instances.py status doctor
   python tools/hosted_instances.py list
@@ -21,6 +23,10 @@ catalog + bounded inference verifier and enables the external-model opt-in
 only after it succeeds. Key files must be private regular files; keys and
 provider responses are never printed. stop/status use only the recorded PID,
 creation time, and exact socket command, with no process or port sweep.
+Source commands run in a subprocess with the instance's environment and use
+the shared sources owner. add-source accepts only prepared exports under that
+instance's data roots; --inactive keeps the current active source. Their output
+contains labels, databases, counts and active flags, never source paths.
 """
 
 from __future__ import annotations
@@ -55,6 +61,19 @@ def _private_dir(path: Path) -> None:
     path.chmod(0o700)
 
 
+def _update_instance_settings(state: Path, patch: dict) -> None:
+    from easyicu.webserver import settings
+
+    _private_dir(state)
+    previous = os.umask(0o077)
+    try:
+        path = state / "webserver_settings.json"
+        settings.update_settings(patch, config_path=path)
+        path.chmod(0o600)
+    finally:
+        os.umask(previous)
+
+
 def instance_environment(instance: Path) -> dict[str, str]:
     """Read only the administrator's instance env, never provider credentials."""
     _name(instance.name)
@@ -75,8 +94,6 @@ def instance_environment(instance: Path) -> dict[str, str]:
 
 
 def create_instance(users: Path, args: argparse.Namespace) -> None:
-    from easyicu.webserver import settings
-
     name = _name(args.name)
     roots = [Path(value) for value in args.data_root]
     if any(not root.is_absolute() or not root.is_dir() or os.pathsep in str(root)
@@ -116,13 +133,13 @@ def create_instance(users: Path, args: argparse.Namespace) -> None:
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         for key, value in env.items():
             handle.write(f"{key}={json.dumps(value, ensure_ascii=False)}\n")
-    settings.update_settings({"support_contact": args.support_contact, "language": "zh", "data_mode": "real"},
-                             config_path=instance / "home/.easyicu/webserver_settings.json")
+    _update_instance_settings(instance / "home/.easyicu", {
+        "support_contact": args.support_contact, "language": "zh", "data_mode": "real",
+    })
 
 
 def provision_model(instance: Path, key_file: Path, *, verifier=None) -> None:
     """Verify and save via the same provider owner as the connection page."""
-    from easyicu.webserver import settings
     from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
 
     env = instance_environment(instance)
@@ -136,11 +153,75 @@ def provision_model(instance: Path, key_file: Path, *, verifier=None) -> None:
     if not key or len(key) > 8192 or any(ch.isspace() for ch in key):
         raise ValueError("key file must contain exactly one key")
     state = Path(env["EASYICU_HOME"]) / ".easyicu"
+    _private_dir(state)
     store = PiProviderConfigStore(config_path=state / "pi-provider.env",
                                   receipt_path=state / "pi-provider-verification.json")
     store.verify_and_save(provider="deepseek", api_key=key, base_url="https://api.deepseek.com/v1",
                           model="deepseek-chat", api_transport="openai-completions", verifier=verifier)
-    settings.update_settings({"ai_enabled": True}, config_path=state / "webserver_settings.json")
+    _update_instance_settings(state, {"ai_enabled": True})
+
+
+def _source_metadata(command: str, path: str | None = None, *, label: str | None = None,
+                     active: bool = True) -> dict:
+    """Run only in the instance subprocess; return registry-safe metadata."""
+    from fastapi import HTTPException
+
+    from easyicu.webserver import sources
+    from easyicu.webserver.hosted import require_path
+
+    try:
+        if command == "add-source":
+            # No instance-owned exception: this explicit grant must be in data roots.
+            require_path(path)
+        _private_dir(Path(os.environ["EASYICU_HOME"]) / ".easyicu")
+        registry = (sources.register_source(path, label=label, active=active)
+                    if command == "add-source" else sources.load_registry())
+        if not registry.get("ok"):
+            return {"ok": False, "error": registry["error"]}
+        rows = registry.get("sources") or []
+        if command == "add-source":
+            selected = str(Path(path).expanduser().resolve())
+            rows = [row for row in rows if row["path"] == selected]
+        return {
+            "ok": True,
+            "sources": [{
+                "label": row.get("label"), "database": row.get("database"),
+                "stays": (row.get("summary") or {}).get("stays"),
+                "total_rows": (row.get("summary") or {}).get("total_rows"),
+                "active": row.get("path") == registry.get("active_path"),
+            } for row in rows],
+            "registered_source_counts": sources.registered_source_counts(),
+        }
+    except HTTPException as exc:
+        return {"ok": False, "error": exc.detail["error"]}
+    except Exception as exc:
+        return {"ok": False, "error": getattr(exc, "code", type(exc).__name__)}
+
+
+def instance_sources(instance: Path, args: argparse.Namespace) -> int:
+    """Import sources afresh under the instance environment, never the admin's."""
+    env = {key: value for key, value in os.environ.items()
+           if key in {"PATH", "LANG", "TMPDIR", "SYSTEMROOT"} or key.startswith("LC_")}
+    env.update(instance_environment(instance))
+    checkout = Path(env["EASYICU_CODE_ROOT"])
+    env["HOME"] = env["EASYICU_HOME"]
+    env["PYTHONPATH"] = str(checkout / "src")
+    options = {"command": args.command}
+    if args.command == "add-source":
+        options.update(path=str(args.path), label=args.label, active=not args.inactive)
+    script = (
+        "import json, os, sys; os.umask(0o077); "
+        "from tools.hosted_instances import _source_metadata; "
+        "print(json.dumps(_source_metadata(**json.loads(sys.argv[1])), ensure_ascii=False))"
+    )
+    result = subprocess.run([sys.executable, "-c", script, json.dumps(options)],
+                            cwd=checkout, env=env, capture_output=True, text=True, check=True)
+    payload = json.loads(result.stdout)
+    if not payload.get("ok"):
+        print(f"Instance action failed ({payload['error']}).", file=sys.stderr)
+        return 1
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
 
 
 def _pid_path(instance: Path) -> Path:
@@ -214,11 +295,17 @@ def main(argv=None) -> int:
     create.add_argument("--runner-image", required=True)
     create.add_argument("--checkout", type=Path, default=CHECKOUT)
     create.add_argument("--public-origin", default="")
-    for name in ("start", "stop", "status", "provision-model"):
-        command = commands.add_parser(name)
+    for name in ("start", "stop", "status", "provision-model", "add-source", "list-sources"):
+        help_text = {"add-source": "Register a prepared export in this instance's data roots",
+                     "list-sources": "List source labels, databases, counts and active flags"}.get(name)
+        command = commands.add_parser(name, help=help_text)
         command.add_argument("name")
         if name == "provision-model":
             command.add_argument("--key-file", type=Path, required=True)
+        elif name == "add-source":
+            command.add_argument("path", type=Path)
+            command.add_argument("--label")
+            command.add_argument("--inactive", action="store_true", help="Keep the current active source")
     commands.add_parser("list")
     args = parser.parse_args(argv)
     try:
@@ -238,6 +325,8 @@ def main(argv=None) -> int:
                 stop_instance(instance)
             elif args.command == "provision-model":
                 provision_model(instance, args.key_file)
+            elif args.command in {"add-source", "list-sources"}:
+                return instance_sources(instance, args)
             else:
                 instance_environment(instance)
                 print(f"{instance.name}: {'running' if _recorded_process(instance) else 'stopped'}")
