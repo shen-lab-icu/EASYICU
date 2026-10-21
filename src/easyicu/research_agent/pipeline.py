@@ -217,6 +217,7 @@ from .orchestration.instance_lifecycle import (
 from .orchestration.exposure_grouping_phase import (
     bound_context_on,
     register_exposure_groupings_record,
+    restore_exposure_grouping_phase,
     resumed_cohort_is_the_sources_copy,
     run_exposure_grouping_phase,
 )
@@ -3228,7 +3229,24 @@ class ResearchAgentPipeline:
             context = builder(**context_kwargs)
             context = bind_reviewed_requirements(context, self._config)
             # A fixed skill plans without the Planner, so it is not asked.
-            if (
+            if self._config.development_progressive_resume_checkpoint_path is not None:
+                from .planning.progressive_contract import ProgressivePlanCompileError
+
+                try:
+                    context = restore_exposure_grouping_phase(
+                        source_run_dir=Path(self._config.development_progressive_resume_checkpoint_path).parent,
+                        context=context, cohort_path=cohort_path, run_dir=run_dir,
+                        rebuild_context=functools.partial(
+                            bound_context_on, builder, context_kwargs, self._config
+                        ),
+                    ).context
+                except ValueError as exc:
+                    raise ProgressivePlanCompileError(
+                        "development_resume_source_phase_not_replayed",
+                        "The source grouping or its rebuilt context failed verification.",
+                        path="exposure_groupings",
+                    ) from exc
+            elif (
                 self._config.enable_exposure_grouping
                 and builder is build_research_context
                 and skill_obj is None

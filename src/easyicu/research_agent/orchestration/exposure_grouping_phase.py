@@ -46,6 +46,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
@@ -58,7 +59,11 @@ from ..agents.exposure_grouping_planner import (
     ask_exposure_groupings,
 )
 from ..authority.evidence_store import sha256_of_file
-from ..authority.runtime_artifacts import write_json_artifact
+from ..authority.evidence_snapshot import (
+    EvidenceAuthorityIntegrityError,
+    load_current_evidence_snapshot,
+)
+from ..authority.runtime_artifacts import verified_run_evidence_path, write_json_artifact
 from ..contracts import exposure_group_rules
 from ..contracts.exposure_group_rules import (
     ExposureGroupRuleError,
@@ -69,9 +74,13 @@ from ..gates.preplan import preplan_data_findings
 from ..intake import materialized_metadata
 from ..intake.materialized_metadata import (
     EXPOSURE_GROUP_STAGE_PRODUCER,
+    MaterializedCohortAuthority,
+    MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
     VerifiedMaterializedCohortAuthority,
     implementation_bundle_sha256,
+    load_verified_materialized_cohort_authority,
+    materialized_provenance_path,
     stage_exposure_grouped_cohort_authority,
 )
 from ..planning.exposure_group_compile import (
@@ -87,7 +96,9 @@ from ..planning.exposure_group_spec import (
     read_stated_exposure_groupings,
 )
 from ..planning.progressive_contract import ProgressivePlanCompileError
+from ..planning.progressive_resume import progressive_resume_context_sha256
 from ..providers.structured_retry import StructuredResponseFailure
+from ..research_context.typed import parse_research_context_json
 from ..schema import ResearchContext
 from .config import PipelineConfig
 from .reviewed_requirements import bind_reviewed_requirements
@@ -257,30 +268,45 @@ def run_exposure_grouping_phase(
         )
     if not compiled.applied:
         return ExposureGroupingPhase(context=context, record_path=record_path)
+    grouped = _stage_groupings(
+        context=context, applied=compiled.applied, cohort_path=cohort_path,
+        record_path=record_path, rebuild_context=rebuild_context,
+        context_overrides=context_overrides,
+    )
+    emit_progress(
+        "context",
+        "Exposure groups staged: "
+        + ", ".join(str(item.variable) for item in compiled.applied)
+        + ".",
+    )
+    return ExposureGroupingPhase(context=grouped, record_path=record_path)
+
+
+def _stage_groupings(
+    *, context: ResearchContext, applied: Sequence[CompiledGrouping],
+    cohort_path: Path, record_path: Path,
+    rebuild_context: Callable[..., ResearchContext], context_overrides: Mapping[str, Any],
+) -> ResearchContext:
+    """Fresh planning and checkpoint restoration use identical staging rules."""
+
     if planned_on_metadata(context):
         _declare_on_metadata(
             Path(cohort_path),
-            compiled.applied,
+            applied,
             groupings_record_sha256=sha256_of_file(record_path),
         )
     else:
-        _refuse_empty_groups(Path(cohort_path), compiled.applied)
+        _refuse_empty_groups(Path(cohort_path), applied)
         stage_exposure_grouped_cohort_authority(
             cohort_path,
-            groupings=[_staged(item) for item in compiled.applied],
+            groupings=[_staged(item) for item in applied],
             groupings_record_sha256=sha256_of_file(record_path),
-            producer_implementation_sha256=implementation_bundle_sha256(
-                (
-                    Path(__file__),
-                    Path(exposure_group_rules.__file__),
-                    Path(materialized_metadata.__file__),
-                )
-            ),
+            producer_implementation_sha256=_grouping_implementation_sha256(),
         )
     grouped = rebuild_context(Path(cohort_path), **context_overrides)
     unbound = [
         str(item.variable)
-        for item in compiled.applied
+        for item in applied
         if grouped.variable(str(item.variable)) is None
     ]
     if unbound:
@@ -291,15 +317,179 @@ def run_exposure_grouping_phase(
             + ".",
             path="exposure_groupings",
         )
-    emit_progress(
-        "context",
-        "Exposure groups staged: "
-        + ", ".join(str(item.variable) for item in compiled.applied)
-        + ".",
-    )
     # The builder states each grouping's reference and contrast from its
     # declaration, so the plan compares the groups the study compares.
+    return grouped
+
+
+@dataclass(frozen=True)
+class ResumeExposureGroupings:
+    """Sealed grouping bytes and context, read without opening cohort rows."""
+
+    raw: bytes
+    context: ResearchContext
+    materialized_authority_raw: Optional[bytes] = None
+
+
+def load_resume_exposure_groupings(run_dir: Path) -> Optional[ResumeExposureGroupings]:
+    """Verify a continuation's grouping authority without asking a Provider.
+
+    Evidence owns both the original record and the context used for planning.
+    A changed working record is refused, even if its sealed copy still exists.
+    The complete checkpoint dependency check remains with Progressive Planner.
+    """
+
+    path = Path(run_dir) / EXPOSURE_GROUPINGS_FILENAME
+    try:
+        records = {item["evidence_id"]: item for item in load_current_evidence_snapshot(run_dir).records}
+        if not path.exists() and not path.is_symlink():
+            if EXPOSURE_GROUPINGS_EVIDENCE_ID in records:
+                raise ValueError("the source grouping record is missing")
+            return None
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > _MAX_RECORD_BYTES:
+            raise ValueError("the source grouping record is not a bounded regular file")
+        raw = path.read_bytes()
+        record = json.loads(raw)
+        if not isinstance(record, Mapping) or record.get("schema_version") != EXPOSURE_GROUPINGS_RECORD_SCHEMA:
+            raise ValueError("the source grouping record has an invalid schema")
+        sealed = verified_run_evidence_path(run_dir, records.get(EXPOSURE_GROUPINGS_EVIDENCE_ID))
+        if EXPOSURE_GROUPINGS_EVIDENCE_ID in records and (sealed is None or sealed.read_bytes() != raw):
+            raise ValueError("the source grouping record failed its evidence digest")
+        if record.get("not_asked") in NOT_ASKED_REASONS:
+            return None
+        candidate = candidate_exposure_groupings(record, record_sha256=hashlib.sha256(raw).hexdigest())
+        if not candidate.stated.groupings:
+            return None
+        context_path = verified_run_evidence_path(run_dir, records.get("research_context"))
+        if sealed is None or context_path is None or sealed.read_bytes() != raw:
+            raise ValueError("the source grouping record or context failed its evidence digest")
+        context = parse_research_context_json(context_path.read_text(encoding="utf-8"))
+        materialized = context.model_dump(mode="json").get("materialized_inputs") or {}
+        cohort = materialized.get("cohort") or {}
+        authority_raw = None
+        if cohort:
+            reference = cohort["authority_ref"]
+            authority_path = Path(run_dir) / reference["file"]
+            if (
+                Path(reference["file"]).name != reference["file"]
+                or authority_path.is_symlink() or not authority_path.is_file()
+                or authority_path.stat().st_size > _MAX_RECORD_BYTES
+            ):
+                raise ValueError("the source grouping authority is not a bounded regular file")
+            authority_raw = authority_path.read_bytes()
+            if hashlib.sha256(authority_raw).hexdigest() != reference["sha256"]:
+                raise ValueError("the source input does not seal this grouping record")
+            authority = MaterializedCohortAuthority.from_dict(json.loads(authority_raw))
+            if (
+                authority.producer != EXPOSURE_GROUP_STAGE_PRODUCER
+                or authority.producer_parameters.get("groupings_record_sha256")
+                != hashlib.sha256(raw).hexdigest()
+            ):
+                raise ValueError("the source input does not seal this grouping record")
+        variables = {grouping_variable_name(item) for item in candidate.stated.groupings}
+        ungrouped = context.model_copy(update={
+            "variables": [item for item in context.variables if item.name not in variables],
+        })
+        compiled = compile_exposure_groupings(candidate.stated, ungrouped)
+        if compiled.record() != record.get("compiled") or compiled.sha256() != record.get("compiled_sha256"):
+            raise ValueError("the source grouping columns, labels or rules changed")
+        if any(context.variable(str(item.variable)) is None for item in compiled.applied):
+            raise ValueError("the source context lacks a staged grouping column")
+        return ResumeExposureGroupings(raw=raw, context=context, materialized_authority_raw=authority_raw)
+    except (OSError, KeyError, TypeError, EvidenceAuthorityIntegrityError) as exc:
+        raise ValueError("the source grouping authority cannot be verified") from exc
+
+
+def restore_exposure_grouping_phase(
+    *, source_run_dir: Path, context: ResearchContext, cohort_path: Path,
+    run_dir: Path, rebuild_context: Callable[..., ResearchContext],
+) -> ExposureGroupingPhase:
+    """Restage the source's exact record; never ask for or approve a new grouping."""
+
+    source = load_resume_exposure_groupings(source_run_dir)
+    if source is None:
+        return ExposureGroupingPhase(context=context)
+    record = json.loads(source.raw)
+    candidate = candidate_exposure_groupings(record, record_sha256=hashlib.sha256(source.raw).hexdigest())
+    compiled = compile_exposure_groupings(candidate.stated, context)
+    if compiled.record() != record["compiled"] or compiled.sha256() != record["compiled_sha256"]:
+        raise ValueError("the resumed context does not compile the source grouping")
+    record_path = Path(run_dir) / EXPOSURE_GROUPINGS_FILENAME
+    record_path.write_bytes(source.raw)
+    binding = record.get("primary_exposure_binding") or {}
+    overrides = {"primary_exposure": binding["variable"]} if binding.get("variable") else {}
+    grouped = _stage_groupings(
+        context=context, applied=compiled.applied, cohort_path=cohort_path,
+        record_path=record_path, rebuild_context=rebuild_context, context_overrides=overrides,
+    )
+    if source.materialized_authority_raw is not None:
+        _restore_grouping_materialization(source, cohort_path)
+        grouped = rebuild_context(Path(cohort_path), **overrides)
+    if progressive_resume_context_sha256(grouped) != progressive_resume_context_sha256(source.context):
+        raise ValueError("the restored grouping context differs from the source checkpoint context")
     return ExposureGroupingPhase(context=grouped, record_path=record_path)
+
+
+def _restore_grouping_materialization(source: ResumeExposureGroupings, cohort_path: Path) -> None:
+    """Reuse the original envelope only after independently reproducing its bytes.
+
+    The original producer identity describes the restored artifact. A separate
+    receipt records this verification's implementation; it is not attributed to
+    the old producer. Every other authority field must match, including parent,
+    source, cohort/row/schema hashes, column bindings, labels and derivations.
+    """
+
+    current = load_verified_materialized_cohort_authority(cohort_path)
+    if current is None:
+        raise ValueError("the restored grouping has no verified materialization")
+    original = json.loads(source.materialized_authority_raw)
+    observed = current.authority.to_dict()
+    def comparable(payload: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            key: value for key, value in payload.items()
+            if key != "producer_implementation_sha256"
+        }
+
+    if comparable(original) != comparable(observed):
+        raise ValueError("the restored grouping materialization differs from the sealed source")
+    reference = source.context.model_dump(mode="json")["materialized_inputs"]["cohort"]["authority_ref"]
+    target = Path(cohort_path).parent / reference["file"]
+    if target.is_symlink():
+        raise ValueError("the restored grouping authority target is a link")
+    if target.exists():
+        if target.read_bytes() != source.materialized_authority_raw:
+            raise ValueError("the restored grouping authority target changed")
+    else:
+        with target.open("xb") as stream:
+            stream.write(source.materialized_authority_raw)
+    selector = materialized_provenance_path(cohort_path)
+    if selector.is_symlink():
+        raise ValueError("the restored grouping selector is a link")
+    provenance = json.loads(selector.read_bytes())
+    provenance["column_metadata"]["authority"] = reference
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=selector.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        json.dump(provenance, stream, ensure_ascii=False)
+    try:
+        os.replace(temporary, selector)
+    finally:
+        temporary.unlink(missing_ok=True)
+    restored = load_verified_materialized_cohort_authority(
+        cohort_path, expected_authority=MaterializedCohortAuthorityRef.from_dict(reference),
+    )
+    if restored is None:
+        raise ValueError("the restored grouping lost its source authority")
+    write_json_artifact(Path(cohort_path).parent / "exposure_grouping_resume.json", {
+        "source_authority_sha256": reference["sha256"],
+        "groupings_record_sha256": hashlib.sha256(source.raw).hexdigest(),
+        "verified_by_implementation_sha256": observed["producer_implementation_sha256"],
+    })
+
+
+def _grouping_implementation_sha256() -> str:
+    return implementation_bundle_sha256((
+        Path(__file__), Path(exposure_group_rules.__file__), Path(materialized_metadata.__file__),
+    ))
 
 
 def candidate_exposure_groupings(
@@ -503,6 +693,13 @@ def bound_context_on(
 def register_exposure_groupings_record(evidence: Any, run_dir: Path) -> None:
     """Register the run's grouping record as evidence, once, when it was written."""
 
+    receipt = Path(run_dir) / "exposure_grouping_resume.json"
+    if receipt.is_file() and evidence.get("exposure_grouping_resume") is None:
+        evidence.register_file(
+            kind="log", description="Verification of the restored source grouping materialization.",
+            source_path=receipt, evidence_id="exposure_grouping_resume",
+            producer="exposure_grouping_phase", generation_mode="system",
+        )
     path = Path(run_dir) / EXPOSURE_GROUPINGS_FILENAME
     if not path.is_file() or evidence.get(EXPOSURE_GROUPINGS_EVIDENCE_ID) is not None:
         return
@@ -685,8 +882,10 @@ __all__ = [
     "PlanningRunGroupings",
     "bound_context_on",
     "candidate_exposure_groupings",
+    "load_resume_exposure_groupings",
     "planning_run_groupings",
     "register_exposure_groupings_record",
+    "restore_exposure_grouping_phase",
     "resumed_cohort_is_the_sources_copy",
     "run_exposure_grouping_phase",
 ]

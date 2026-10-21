@@ -282,7 +282,11 @@
           { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'literature_evidence.json', label: tr('Literature evidence', '文献依据'), media_type: 'application/json' },
         ],
       };
-      if (code === 'plan_execution_upgrade_required') return {
+      if (code === 'plan_execution_upgrade_required') {
+        const retryPreparation = workflow.latest_attempt_failure
+          && workflow.latest_attempt_failure.candidate_run_id === reviewedPlanRunId
+          && workflow.latest_attempt_failure.checkpoint_resume_available === false;
+        return {
         // One visible confirmation owns the whole bounded upgrade: persist the
         // accepted candidate, prepare its exact data package, and let the
         // Research Agent generate the package-bound plan. Splitting the
@@ -293,15 +297,18 @@
           'I confirm this candidate plan as the basis for data preparation. Keep the plan, prepare only the cohort, variables, and time windows it requires, then generate a package-bound execution plan and pause again for my review before analysis.',
           '我确认以这份候选计划作为数据准备依据。请保留计划，只准备计划所需的队列、变量和时间窗；数据包就绪后再生成与数据包绑定的可执行计划，并在分析前再次停下让我审核。',
         ),
-        title: tr(
+        title: retryPreparation ? tr('Prepare data again for the retained candidate', '按保留的候选方案重新准备数据') : tr(
           'Candidate plan ready; confirm data preparation next',
           '候选研究计划已生成，请确认数据准备',
         ),
-        note: tr(
+        note: retryPreparation ? tr(
+          'The checkpoint cannot be resumed. Prepare the same candidate again, then review the resulting plan before analysis.',
+          '该检查点无法继续。请按同一份候选方案重新准备数据，待计划生成后再次审阅，再决定是否分析。',
+        ) : tr(
           'This plan used metadata only; it does not mean a prepared package already exists. EasyICU will prepare the required data first and will not start analysis yet.',
           '这份计划只使用了能力目录，并不代表数据包已经准备好。EasyICU 将先按计划准备所需数据，此时不会开始分析。',
         ),
-        approve: tr('Confirm plan and prepare data', '确认方案并准备数据'),
+        approve: retryPreparation ? tr('Prepare data again', '重新准备数据') : tr('Confirm plan and prepare data', '确认方案并准备数据'),
         // The researcher confirms this plan, so its core settings are shown
         // with the card instead of behind a preview link.
         showPlanPreview: true,
@@ -311,6 +318,7 @@
           { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'literature_evidence.json', label: tr('View its literature evidence', '查看当前文献依据'), media_type: 'application/json' },
         ],
       };
+      }
       if (code === 'agent_plan_revision_nonconvergent') return {
         code,
         nonApprovable: true,
@@ -719,7 +727,10 @@
       const detail = tr(
         'The previous candidate remains available below. This failed attempt did not add plan approval or validated results.',
         '下方保留的是之前的候选方案；这次失败没有新增计划批准或已验证结果。',
-      );
+      ) + (failure.checkpoint_resume_available === false ? tr(
+        ' This checkpoint cannot be resumed; use the action below to recover.',
+        '该检查点无法继续，请使用下方操作恢复。',
+      ) : '');
       const receipt = resourceButton({
         kind: 'research_artifact', run_id: failure.run_id, artifact: 'source_run_manifest.json',
         media_type: 'application/json', label: tr('View failure receipt', '查看失败回执'),

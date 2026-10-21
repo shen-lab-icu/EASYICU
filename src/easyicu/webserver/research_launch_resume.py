@@ -5,13 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence
 
 from easyicu.research_agent.literature import LiteratureBundle
-from easyicu.research_agent.orchestration.exposure_group_labels import (
-    recorded_exposure_group_labels,
+from easyicu.research_agent.orchestration.exposure_grouping_phase import (
+    load_resume_exposure_groupings,
 )
 from easyicu.research_agent.planning.progressive_artifacts import (
     ProgressivePlanningArtifactError,
@@ -157,25 +157,21 @@ def _development_progressive_resume_binding(
 class _DevelopmentResumeLaunchScope:
     budget_mode: Literal["planner_canary", "full_reviewed"]
     plan_contract: str | None
+    planning_requirements: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _formed_exposure_groupings(run_dir: Path) -> bool:
-    """Whether a planning run staged a grouped exposure into its input.
+    """Whether the source has groupings that cannot be restored exactly."""
 
-    A grouping record that cannot be read counts as one: the context it
-    shaped cannot be shown to be the one a continuation rebuilds.
-    """
+    try:
+        load_resume_exposure_groupings(run_dir)
+    except ValueError:
+        return True
+    return False
 
-    rows = recorded_exposure_group_labels(run_dir)
-    return rows is None or bool(rows)
 
-
-#: The phases a planning run performs before its Planner that a Planner
-#: continuation does not perform again, each with how the source pipeline
-#: run's directory shows it performed one.  A continuation rebuilds its
-#: context without them, so a checkpoint bound to the source's context
-#: cannot be resumed when the source performed one; a phase added here, or a
-#: new one a continuation does not replay, needs its row.
+#: Source phases whose exact restoration cannot be verified. Groupings are
+#: restored from sealed records; unavailable or corrupt authority still stops.
 _PHASES_A_CONTINUATION_DOES_NOT_REPLAY: tuple[
     tuple[str, Callable[[Path], bool]], ...
 ] = (("exposure_grouping", _formed_exposure_groupings),)
@@ -205,6 +201,9 @@ def _development_resume_launch_scope(
     phases).
     """
     from easyicu.webserver import agent_review_recovery, study_contexts
+    from easyicu.research_agent.planning.accepted_analysis_inputs import AcceptedAnalysisInputs
+    from easyicu.research_agent.planning.baseline_requirements import AcceptedBaselineRequirements
+    from easyicu.research_agent.planning.population_requirements import PlanPopulationRequirements
 
     checkpoint, _ = _development_progressive_resume_binding(
         project_root=project_root,
@@ -260,13 +259,56 @@ def _development_resume_launch_scope(
             DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED,
             "The prior Planner's run performed "
             + ", ".join(not_replayed)
-            + ", which a continuation does not perform again; plan anew.",
+            + ", whose sealed authority cannot be restored; plan anew.",
             details={
                 "reason_code": "development_resume_source_phase_not_replayed",
                 "phases": list(not_replayed),
             },
         )
-    return _DevelopmentResumeLaunchScope(seed.budget_mode, contract)
+    # These host-owned requirements shaped the sealed planning context. They
+    # carry no execution approval or Provider grant. Do not inherit runtime,
+    # budget, or execution options from a prior configuration.
+    requirements = {
+        name: seed.pipeline_config.get(name)
+        for name in (
+            "bound_baseline_requirements", "bound_population_requirements",
+            "bound_analysis_inputs", "required_primary_cohort_selection_mode",
+        )
+        if name in seed.pipeline_config
+    }
+    try:
+        for name, model in (
+            ("bound_baseline_requirements", AcceptedBaselineRequirements),
+            ("bound_population_requirements", PlanPopulationRequirements),
+            ("bound_analysis_inputs", AcceptedAnalysisInputs),
+        ):
+            if requirements.get(name) is not None:
+                requirements[name] = model.model_validate(requirements[name]).model_dump(mode="json")
+        if requirements.get("required_primary_cohort_selection_mode") not in {
+            None, "all_input_rows", "predicate_filtered",
+        }:
+            raise ValueError("invalid cohort selection mode")
+    except (ValueError, TypeError) as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_scope_invalid",
+            "The prior Planner's reviewed requirements did not pass validation.",
+        ) from exc
+    return _DevelopmentResumeLaunchScope(seed.budget_mode, contract, requirements)
+
+
+def development_resume_requirement(
+    scope: _DevelopmentResumeLaunchScope, name: str, current: Any,
+) -> Any:
+    """Restore a sealed reviewed requirement without accepting a new one."""
+
+    original = scope.planning_requirements.get(name)
+    current_value = current.model_dump(mode="json") if hasattr(current, "model_dump") else current
+    if current_value is not None and current_value != original:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_plan_contract_mismatch",
+            "A Planner continuation cannot change its reviewed requirements.",
+        )
+    return original
 
 
 def _development_resume_plan_contract(
@@ -279,6 +321,35 @@ def _development_resume_plan_contract(
             "A Planner continuation cannot change the sealed plan contract.",
         )
     return scope.plan_contract
+
+
+def development_resume_available(
+    *, wrapper_dir: Path, study_id: str, scientific_configuration_sha256: str,
+) -> bool:
+    """Read-only offer projection of the launch owner, never checkpoint presence.
+
+    History supplies only owned coordinates and the current configuration digest.
+    The sealed seed supplies the study; the same validator used on click decides.
+    """
+    from easyicu.webserver import agent_review_recovery
+
+    match = re.fullmatch(r"run_([A-Za-z0-9][A-Za-z0-9_-]{0,79})", wrapper_dir.name)
+    if match is None or wrapper_dir.is_symlink():
+        return False
+    try:
+        seed = agent_review_recovery.load_recovery_seed(wrapper_dir)
+        if (
+            seed is None or str(seed.study.get("id") or "") != study_id
+            or seed.scientific_configuration_sha256 != scientific_configuration_sha256
+        ):
+            return False
+        _development_resume_launch_scope(
+            project_root=str(wrapper_dir.parent.parent), study=seed.study,
+            source_job_id=match.group(1),
+        )
+    except (ResearchPipelineRunError, agent_review_recovery.WebReviewRecoveryError, OSError):
+        return False
+    return True
 
 
 def _development_resume_literature_bundle(*, checkpoint_path: Path) -> Dict[str, Any]:

@@ -29,8 +29,8 @@ def preserved_plan_failure(
 ) -> PreservedPlanFailure | None:
     """Keep a newer failed preparation visible without transferring authority.
 
-    A checkpoint flag offers a route only. Launch still validates the owned
-    path, input authority, configuration and complete checkpoint hash chain.
+    Run history obtains the checkpoint flag from the launch validator. Launch
+    rechecks it on click so changes after this projection cannot grant a resume.
     """
 
     run_id = latest_attempt.get("run_id")

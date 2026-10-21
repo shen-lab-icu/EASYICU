@@ -21,7 +21,7 @@ function confirmation(review) {
   }).workflowConfirmation();
 }
 
-function confirmationOwner(workflow) {
+function confirmationOwner(workflow, language = 'en') {
   const context = { window: {} };
   vm.createContext(context);
   for (const name of ['modules', 'confirmation']) {
@@ -30,7 +30,7 @@ function confirmationOwner(workflow) {
   }
   return context.window.EasyICU.guidedPi.require('confirmation').create({
     workflow: () => workflow, session: () => ({}), busy: () => false,
-    tr: en => en, esc: value => String(value).replaceAll('<', '&lt;'), iconHtml: () => '',
+    tr: (en, zh) => language === 'zh' ? zh : en, esc: value => String(value).replaceAll('<', '&lt;'), iconHtml: () => '',
     resourceButton: ref => `[resource:${ref.run_id}:${ref.artifact}]`,
     sessionIsStale: () => false,
   });
@@ -92,6 +92,29 @@ test('a plan that can no longer resume is not blamed on a changed study', () => 
   assert.match(lost.title, /can no longer be approved or resumed/);
   assert.doesNotMatch(lost.title, /study changed/);
   assert.match(card('plan_configuration_superseded').title, /The study changed/);
+});
+
+test('an unavailable checkpoint offers preparation of the same retained candidate', () => {
+  const workflow = {
+    next_action_code: 'plan_execution_upgrade_required',
+    plan_review_summary: { run_id: 'retained-candidate' },
+    latest_attempt_failure: {
+      run_id: 'failed-preparation', candidate_run_id: 'retained-candidate',
+      reason: 'provider_unavailable', checkpoint_resume_available: false,
+    },
+  };
+  const owner = confirmationOwner(workflow);
+  const card = owner.workflowConfirmation();
+  assert.match(card.approve, /Prepare data again/);
+  assert.match(card.note, /same candidate/);
+  assert.match(owner.workflowConfirmationHtml(), /checkpoint cannot be resumed/);
+  assert.doesNotMatch(card.message, /approve.*analysis/i);
+  assert.ok(card.grants.includes('extract'));
+  for (const resource of card.reviewResources) assert.equal(resource.run_id, 'retained-candidate');
+  const chinese = confirmationOwner(workflow, 'zh');
+  assert.equal(chinese.workflowConfirmation().approve, '重新准备数据');
+  assert.match(chinese.workflowConfirmation().note, /同一份候选方案/);
+  assert.match(chinese.workflowConfirmationHtml(), /该检查点无法继续/);
 });
 
 test('the fresh-plan card names the cause its failed run recorded', () => {
