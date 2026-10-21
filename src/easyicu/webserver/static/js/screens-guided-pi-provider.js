@@ -179,6 +179,8 @@
 
   function renderBindingSummary(options) {
     const { state, tr, esc } = options;
+    const hosted = window.EasyICU.guidedPi.optional('hosted');
+    if (hosted && hosted.active()) return hosted.summaryHtml({ tr, esc, connectionReady: options.connectionReady });
     const codex = state.researchProvider === 'codex';
     const auth = state.codexAuth || {};
     const label = codex

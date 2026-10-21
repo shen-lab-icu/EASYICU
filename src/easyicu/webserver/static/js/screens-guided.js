@@ -2997,6 +2997,34 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       });
     });
   }
+  // A hosted instance (screens-guided-pi-hosted.js) opens the clinician's own
+  // project when the address names none, creating 「我的研究」 on first use in
+  // the instance's default study folder. No folder choice, no dialog.
+  async function openHostedLandingProject(piOwner) {
+    const hosted = window.EasyICU.guidedPi.optional('hosted');
+    if (!hosted || !hosted.active()) return;
+    // The rail rendered before /api/capabilities answered; show its hosted form.
+    renderGuidedFolderControls();
+    if (selectedGuidedDraft) return;
+    const bound = piOwner && piOwner.historyContext ? piOwner.historyContext().projectId : '';
+    if (bound || !window.EU_API || !window.EU_API.createGuidedDraft) return;
+    try {
+      const row = hosted.landingProject(localDraftRows());
+      if (row) {
+        selectedGuidedDraft = row;
+        await openGuidedProjectMemory(row, null, 'draft');
+        return;
+      }
+      const result = await window.EU_API.createGuidedDraft(blankGuidedDraftPayload(hosted.DEFAULT_PROJECT_TITLE));
+      if (!result || result.ok === false || !result.draft) return;
+      selectedGuidedDraft = result.draft;
+      loadGuidedDrafts(true);
+      const opened = await bindGuidedDraftMemory(selectedGuidedDraft, true);
+      if (opened && opened.ok && piProjectShellActive()) await bindProjectToPi(opened, selectedGuidedDraft);
+    } catch (_) {
+      // The project panel stays, and the rail's New research project still works.
+    }
+  }
   function createLocalGuidedDraft(label, folderSlug, parentDir, opts) {
     const options = opts || {};
     const text = label || defaultStudyTitle();
@@ -3373,7 +3401,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         }
       }
       const draftsReady = loadGuidedDrafts();
-      Promise.allSettled([Promise.resolve(draftsReady), piReady]).finally(() => {
+      Promise.allSettled([Promise.resolve(draftsReady), piReady]).then(() => openHostedLandingProject(piOwner)).finally(() => {
         let projectReady = Promise.resolve();
         if (selectedGuidedDraft && piOwner && piOwner.bindProject) {
           const bindingReceipt = selectedGuidedDraft.binding_receipt || null;

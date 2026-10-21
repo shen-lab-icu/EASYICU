@@ -28,6 +28,11 @@
 .gpi-api-model-step{margin-top:14px;padding-top:14px;border-top:1px solid var(--provider-line)}
 .gpi-provider-shell .gpi-link.gpi-provider-rediscover{display:block;margin:8px auto 0;padding:4px 8px;border-radius:6px;color:#55564f;font-size:13px;text-decoration:none}
 .gpi-provider-shell .gpi-link.gpi-provider-rediscover:hover,.gpi-provider-shell .gpi-link.gpi-provider-rediscover:focus-visible{background:var(--provider-accent-soft);color:var(--provider-ink);outline:0}
+/* Hosted instance (screens-guided-pi-hosted.js): the administrator owns the
+   model, so the dialog only says it is missing and whom to contact. */
+.gpi-hosted-notice{padding:10px 24px 4px;color:var(--ink-2);font-size:14px;line-height:1.6}
+.gpi-hosted-notice p{margin:0}
+.gpi-hosted-notice .gpi-hosted-contact{margin-top:8px;color:var(--provider-ink);font-weight:600;overflow-wrap:anywhere}
 @keyframes gpiConnectFade{from{opacity:0}to{opacity:1}}
 @media (prefers-reduced-motion:reduce){.gpi-connect-backdrop{animation:none}}
 @media (max-width:560px){
@@ -35,4 +40,5 @@
   .gpi-provider-shell.gpi-connect-dialog{max-height:calc(100dvh - 32px)}
   .gpi-connect-head{padding:18px 18px 2px}
   .gpi-connect-dialog>.gpi-error.inline{margin:0 18px 12px}
+  .gpi-hosted-notice{padding:10px 18px 4px}
 }

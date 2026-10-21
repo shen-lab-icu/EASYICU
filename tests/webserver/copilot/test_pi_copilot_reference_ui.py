@@ -63,17 +63,18 @@ def test_composer_row_and_compact_rail_heading_never_overlap() -> None:
     assert ".gpi-activity.complete>summary .gpi-activity-meta," in desktop_css
 
 
-def test_entry_search_covers_the_whole_catalogue_and_collapsed_rail_keeps_navigation() -> None:
+def test_entry_offers_fixed_examples_and_collapsed_rail_keeps_navigation() -> None:
     starters = _read("js/screens-guided-pi-starters.js")
     guided = _read("js/screens-guided.js")
     projects = _read("js/screens-guided-projects.js")
     desktop_css = _read("css/guided-pi-desktop.css")
     settings_css = _read("css/settings.css")
     workspace = _read("js/screens-guided-pi-study-workspace.js")
-    # Entry search re-renders matches from the full reviewed catalogue, capped.
-    assert "function filter(host, value, tr)" in starters
-    assert "methodCards(translate).filter(row => cardSearchText(row).includes(query)).slice(0, SEARCH_LIMIT)" in starters
-    assert "row.hidden = Boolean(query && !String(row.dataset.gpiStarterSearchText" not in starters
+    # The entry offers a few clinician questions; the catalogue search and
+    # shuffle retired with the 2026-10-21 home (test_pi_entry_plan_first_starters).
+    assert "function exampleQuestions(tr)" in starters
+    assert "function filter(" not in starters
+    assert "SEARCH_LIMIT" not in starters
     # Manual collapse compacts the rail to the global nav; Projects restores it.
     assert ".gd-main.gpi-workspace.gd-project-rail-collapsed>.gd-rail{display:flex;grid-column:1;grid-row:1;box-sizing:border-box;width:59px" in desktop_css
     assert ".gd-main.gpi-workspace.gd-project-rail-collapsed>.gd-rail-restore{display:none}" in desktop_css
