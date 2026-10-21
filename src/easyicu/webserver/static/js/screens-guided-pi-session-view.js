@@ -11,7 +11,7 @@
       publicAssistantText, assistantTextHtml, sessionIsStale, agentMode,
       accessModeLabel, projectTitle, navigationSessionTitle,
       workflowConfirmationHtml, hostJobs: HOST_JOBS, followUps: FOLLOW_UPS,
-      effortMenu: EFFORT_MENU, workflowConfirmation, runFailureText,
+      effortMenu: EFFORT_MENU, workflowConfirmation, runFailureText, help: HELP,
     } = deps;
     // A stopped run's block (owner: screens-guided-pi-run-stop.js).
     const stopOwner = MODULES.optional('runStop');
@@ -273,8 +273,11 @@
           namedDatabase: HOST_JOBS && typeof HOST_JOBS.namedDatabase === 'function' ? HOST_JOBS.namedDatabase() : null,
         })
         : '';
+      const hostedOwner = MODULES.optional('hosted');
       const headerOptions = {
         tr, esc, icon: iconHtml,
+        hosted: Boolean(hostedOwner && hostedOwner.active()),
+        helpHtml: HELP ? HELP.render() : '',
         projectTitle: projectTitle(),
         sessionTitle: navigationSessionTitle(session),
         busy: interactionLocked,

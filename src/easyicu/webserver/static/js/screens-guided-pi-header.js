@@ -1,6 +1,8 @@
 /* Owner: Guided Pi conversation header widget. */
 /* Guided Copilot conversation header owner. Keeps the primary session controls
-   visible and groups infrequent actions without changing their permissions. */
+   visible and groups infrequent actions without changing their permissions.
+   A hosted instance (screens-guided-pi-hosted.js) leaves out the expert menu
+   and the connection settings its administrator owns. */
 (function () {
   'use strict';
 
@@ -23,7 +25,7 @@
     // the connection page. It is now a menu: the model rows are filled by the
     // model-menu owner when the details opens, so switching needs no composer
     // re-render, and the connection settings stay reachable as one row inside.
-    return `<details class="gpi-model-control" data-popover-menu><summary class="gpi-model-binding" title="${esc(tr('Switch model on this connection', '在当前连接上切换模型'))}" aria-label="${esc(tr('Available models', '可用模型'))}"><span title="${esc(options.connectionLabel)}">${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</summary><div class="gpi-model-popover" role="group" aria-label="${esc(tr('Models on this connection', '当前连接的模型'))}" data-gpi-model-popover><button type="button" class="gpi-model-settings" data-gpi-config>${esc(tr('Connection settings', '连接设置'))}</button></div></details>`;
+    return `<details class="gpi-model-control" data-popover-menu><summary class="gpi-model-binding" title="${esc(tr('Switch model on this connection', '在当前连接上切换模型'))}" aria-label="${esc(tr('Available models', '可用模型'))}"><span title="${esc(options.connectionLabel)}">${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</summary><div class="gpi-model-popover" role="group" aria-label="${esc(tr('Models on this connection', '当前连接的模型'))}" data-gpi-model-popover>${options.hosted ? '' : `<button type="button" class="gpi-model-settings" data-gpi-config>${esc(tr('Connection settings', '连接设置'))}</button>`}</div></details>`;
   }
 
   /* While a server job runs the top bar says so with its elapsed time; the
@@ -55,7 +57,8 @@
             ].map(([key, label]) => `<button type="button" data-gpi-layout-toggle="${key}" aria-label="${esc(label)}" aria-pressed="${Boolean(options.layout && options.layout[key])}"><span>${esc(label)}</span><span aria-hidden="true">${options.layout && options.layout[key] ? '✓' : ''}</span></button>`).join('')}
           </div>
         </details>
-        <details class="gpi-head-overflow" data-popover-menu>
+        ${options.helpHtml || ''}
+        ${options.hosted ? '' : `<details class="gpi-head-overflow" data-popover-menu>
           <summary>${tr('More', '更多')}<span aria-hidden="true">⌄</span></summary>
           <div class="gpi-head-overflow-menu" role="menu">
             <div class="gpi-mode-switch" role="group" aria-label="${tr('Agent mode', 'Agent 模式')}">
@@ -66,7 +69,7 @@
             <button type="button" role="menuitem" data-gpi-presentation-pin aria-pressed="${options.pinned ? 'true' : 'false'}">${options.pinned ? tr('Remove from presentation', '取消保留演示') : tr('Save for presentation', '保留演示')}</button>
             <button type="button" role="menuitem" data-gpi-demo>${icon('play', 13)} ${tr('Reviewer demo', '审稿流程演示')}</button>
           </div>
-        </details>
+        </details>`}
       </div>
     </header>`;
   }

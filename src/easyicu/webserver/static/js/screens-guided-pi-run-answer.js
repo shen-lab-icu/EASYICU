@@ -424,8 +424,11 @@
       const view = current.projection;
       const sentences = view ? answerSentences(view) : [];
       if (!view || !sentences.length) return '';
+      // The answer, then the data it rests on, then how to read it: the same
+      // order every finished run reads in.
+      const data = materials(latestRun);
       return `<div class="gpi-run-answer" data-gpi-run-answer="${esc(latestRun.run_id)}">
-        <div class="gpi-run-answer-text">${sentences.map(text => `<p>${esc(text)}</p>`).join('')}<p class="gpi-run-answer-caveat">${esc(caveat(view))}</p></div>
+        <div class="gpi-run-answer-text">${sentences.map(text => `<p>${esc(text)}</p>`).join('')}${data ? `<p class="gpi-run-answer-data"><span>${esc(tr('Data', '数据'))}</span>${esc(data)}</p>` : ''}<p class="gpi-run-answer-caveat"><span>${esc(tr('Keep in mind', '需要注意'))}</span>${esc(caveat(view))}</p></div>
         ${figureButton(latestRun, view)}
       </div>`;
     }

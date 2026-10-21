@@ -81,6 +81,8 @@
 .gpi-run-answer.is-loading{color:var(--muted,#66716f)}
 .gpi-run-answer-text p{margin:0 0 8px;color:var(--ink,#1f2a28);font-size:15px;line-height:1.7}
 .gpi-run-outcome-copy .gpi-run-answer-text p.gpi-run-answer-caveat{margin-top:4px;color:var(--muted,#66716f);font-size:12.5px;line-height:1.6}
+.gpi-run-outcome-copy .gpi-run-answer-text p.gpi-run-answer-data{margin-top:10px;color:var(--ink-2,#3b4644);font-size:13px;line-height:1.6}
+.gpi-run-answer-text p.gpi-run-answer-data>span,.gpi-run-answer-text p.gpi-run-answer-caveat>span{display:inline-block;min-width:4.5em;margin-right:8px;color:var(--ink-3,#5d6866);font-weight:600}
 .gpi-run-answer-figure{max-width:620px;margin:12px 0 0;min-width:0}
 .gpi-run-answer-figure-open{display:block;width:100%;padding:6px;border:1px solid var(--hair,#d8e3e1);border-radius:8px;background:#fff;cursor:zoom-in}
 .gpi-run-answer-figure-open:hover,.gpi-run-answer-figure-open:focus-visible{border-color:var(--accent,#187d78)}

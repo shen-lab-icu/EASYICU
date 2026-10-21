@@ -1,0 +1,13 @@
+/* Owner: screens-guided-pi-help.js — the 遇到问题 menu in the conversation
+   header. It wears the header's menu look (guided-pi.css .gpi-head-overflow)
+   and loads after the skin sheet, so the skin's header rules apply first. */
+.gpi-help-control{position:relative;flex:none;white-space:nowrap}
+.gpi-help-control>summary{min-height:32px;display:inline-flex;align-items:center;padding:0 9px;border:1px solid transparent;border-radius:6px;color:var(--ink-3);font-size:12.5px;font-weight:500;cursor:pointer;list-style:none}
+.gpi-help-control>summary::-webkit-details-marker{display:none}
+.gpi-help-control>summary:hover,.gpi-help-control[open]>summary{border-color:var(--hair-2);background:var(--paper);color:var(--ink-1)}
+.gpi-help-control>summary:focus-visible,.gpi-help-menu button:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
+.gpi-help-menu{position:absolute;z-index:50;top:calc(100% + 7px);right:0;width:220px;display:grid;gap:3px;padding:6px;border:1px solid var(--hair-2);border-radius:8px;background:var(--paper);box-shadow:0 14px 36px rgba(14,17,22,.14);white-space:normal}
+.gpi-help-menu button{min-height:35px;display:flex;align-items:center;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--ink-2);font:inherit;font-size:13.5px;text-align:left;cursor:pointer}
+.gpi-help-menu button:hover{background:var(--wash);color:var(--ink-1)}
+.gpi-help-contact{margin:2px 0 0;padding:6px 10px 4px;border-top:1px solid var(--hair);color:var(--ink-3);font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
+@media (max-width:560px){.gpi-help-menu{right:auto;left:0}}
