@@ -60,6 +60,16 @@
   button:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 2px; }
   .help { margin: 18px 2px 0; color: var(--ink-4); font-size: 12.5px; }
   .help p { margin: 0 0 4px; }
+  /* The workspace needs Chrome/Edge 105+ (it draws older theme colours
+     itself). IE, 360's compatibility mode and older cores ignore this
+     @supports rule and keep the note; plain hex because IE has no var(). */
+  .browser-note {
+    margin: 0 0 16px; padding: 12px 14px; border: 1px solid #E8D3A6; border-radius: 8px;
+    background: #FBF4E6; color: #6B4A12; font-size: 13px;
+  }
+  .browser-note strong { display: block; margin-bottom: 2px; color: #4F360B; }
+  .browser-note p { margin: 0; }
+  @supports selector(:has(a)) { .browser-note { display: none; } }
 </style>
 </head>
 <body>
@@ -69,6 +79,10 @@
       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>
     </div>
     <div><strong>EasyICU</strong><span>ICU 研究工作台</span></div>
+  </div>
+  <div class="browser-note" role="note" data-browser-note>
+    <strong>当前浏览器版本较旧，或处于兼容模式</strong>
+    <p>登录后部分页面可能无法正常显示。请用新版 Chrome 或 Edge 打开这个地址；用 360 等双核浏览器时，请点地址栏右侧的图标，切换到「极速模式」。</p>
   </div>
   <div class="card">
     <h1>登录</h1>
