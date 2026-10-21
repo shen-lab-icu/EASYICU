@@ -123,6 +123,7 @@
         ? 'retry' : 'pipeline';
     }
     function childEventId(step, kind, event) {
+      if (step === 'provider_auto_resume') return 'pipeline-provider-auto-resume-' + Number(event.current || 0);
       if (kind !== 'retry') return 'pipeline-' + step;
       const attempt = Number(event && event.current);
       const unit = String(planningFacts(event).unit || 'plan').replace(/[^a-z0-9_-]/gi, '').slice(0, 24) || 'plan';

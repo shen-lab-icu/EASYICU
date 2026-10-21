@@ -255,6 +255,23 @@ def safe_provider_http_status_code(exc: BaseException) -> Optional[int]:
     return status_code if status_code is not None and status_code >= 400 else None
 
 
+def transient_transport_failure(exc: BaseException) -> dict[str, str | int] | None:
+    """Classify typed transient failures without parsing response text."""
+    status = safe_provider_http_status_code(exc)
+    if status is not None:
+        return {"reason_code": "provider_http_error", "status_code": status} if 500 <= status <= 599 else None
+    sdk = type(exc).__module__.split(".")[0] in {"httpx", "openai", "httpcore", "requests"}
+    if isinstance(exc, TimeoutError) or (sdk and type(exc).__name__ in {
+        "APITimeoutError", "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout",
+    }):
+        return {"reason_code": "provider_timeout"}
+    if isinstance(exc, ConnectionError) or (sdk and type(exc).__name__ in {
+        "APIConnectionError", "ConnectError", "ConnectionError", "RemoteProtocolError",
+    }):
+        return {"reason_code": "provider_connection_failure"}
+    return None
+
+
 def _is_rate_limit_error(exc: Exception) -> bool:
     text = f"{type(exc).__name__}: {exc}".lower()
     return _provider_http_status_code(exc) == 429 or any(

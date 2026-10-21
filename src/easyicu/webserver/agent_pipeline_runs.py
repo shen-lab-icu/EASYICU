@@ -198,6 +198,7 @@ from easyicu.webserver.agent_review_recovery import (
     resume_pending_review,
     unregister_pipeline_work_root_if_unused,
 )
+from easyicu.webserver.research_job_recovery import RecordedProviderStop, recover_review, recoverable_execution_stop
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 # Planner canaries use the same non-streaming OpenAI-compatible transport as
@@ -4609,6 +4610,21 @@ def _finish_web_provider_hard_stop(
     task.finish(error=error)
 
 
+def _write_terminal_projection(*, job: Any, provider_task: Any, **kwargs: Any) -> Dict[str, Any]:
+    """Settle terminal usage, retaining an active task only for recovery."""
+    run_dir = kwargs["run_dir"]
+    axes = _readiness_axes(run_dir)
+    gate = _gate_from_axes(axes, pending=False)
+    gate["detail"] = _failed_closed_detail(axes)
+    try:
+        recoverable_execution_stop(job, run_dir, {"gate": gate})
+    except RecordedProviderStop:
+        _write_projection(**kwargs)
+        raise
+    _finish_web_provider_hard_stop(provider_task)
+    return _write_projection(**kwargs)
+
+
 def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     from easyicu.webserver.pi_copilot.population_preparation import population_preparation_proposal
 
@@ -5716,6 +5732,23 @@ def _resolve_execution_resume_wrapper(
     )
 
 
+def execution_resume_checkpoint(
+    *, study: Mapping[str, Any], project_root: Optional[str], source_run_id: str,
+) -> Dict[str, Any] | None:
+    """Verified checkpoint coordinates from the exact-plan launch owner."""
+    try:
+        target = _resolve_execution_resume_wrapper(
+            study=study, project_root=project_root, source_run_id=source_run_id,
+        )
+        _verified_execution_resume_inputs(target)
+    except ResearchPipelineRunError:
+        return None
+    path = target.wrapper_dir / "pipeline" / target.pipeline_run_id / "human_review_checkpoint.json"
+    return {"kind": "execution", "run_id": target.pipeline_run_id,
+            "path": path.relative_to(target.wrapper_dir).as_posix(),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
 def execution_retry_assessment(
     *,
     study: Mapping[str, Any],
@@ -5948,23 +5981,22 @@ def make_research_pipeline_run_runner(
 ) -> Any:
     """Build the JobManager runner for a real, evidence-bound pipeline run."""
 
-    prepared = prepare_research_pipeline_run(
-        ResearchPipelineLaunchRequest(
-            export_path=export_path,
-            study_context=study_context,
-            project_root=project_root,
-            provider=provider,
-            provider_environment=provider_environment,
-            credential_source=credential_source,
-            literature_search_authorized=literature_search_authorized,
-            plan_revision_source_run_id=plan_revision_source_run_id,
-            execution_resume_source_run_id=execution_resume_source_run_id,
-            development_resume_source_job_id=development_resume_source_job_id,
-            budget_mode=budget_mode,
-            runner_image=runner_image,
-            plan_change_request=plan_change_request,
-        )
+    request = ResearchPipelineLaunchRequest(
+        export_path=export_path,
+        study_context=study_context,
+        project_root=project_root,
+        provider=provider,
+        provider_environment=provider_environment,
+        credential_source=credential_source,
+        literature_search_authorized=literature_search_authorized,
+        plan_revision_source_run_id=plan_revision_source_run_id,
+        execution_resume_source_run_id=execution_resume_source_run_id,
+        development_resume_source_job_id=development_resume_source_job_id,
+        budget_mode=budget_mode,
+        runner_image=runner_image,
+        plan_change_request=plan_change_request,
     )
+    prepared = prepare_research_pipeline_run(request)
     if prepared.execution.execution_resume_source_run_id:
         # The page hides a futile retry, but a stale page or a direct request
         # can still ask.  Answer afresh, against the image this launch would
@@ -6242,7 +6274,9 @@ def make_research_pipeline_run_runner(
             from easyicu.research_agent.orchestration.workflow import HumanReviewPending
             from easyicu.research_agent.providers.hard_stop import HardStopClient
 
-            provider_hard_stop = _start_web_provider_hard_stop(
+            from easyicu.webserver.research_job_recovery import bind_provider_recovery, existing_provider_task
+
+            provider_hard_stop = existing_provider_task(job) or _start_web_provider_hard_stop(
                 wrapper_dir=wrapper_dir,
                 job_id=str(job.id),
                 declaration_sha256=(
@@ -6255,6 +6289,7 @@ def make_research_pipeline_run_runner(
                     else "provider_hard_stop_ledger.json"
                 ),
             )
+            bind_provider_recovery(job, wrapper_dir=wrapper_dir, task=provider_hard_stop, client=client)
             provider_public["provider_hard_stop"] = {
                 "schema_version": "easyicu.web-provider-hard-stop-policy/1",
                 "required": True,
@@ -7124,6 +7159,7 @@ def make_research_pipeline_run_runner(
                 put_review_recovery_record(recovery_seed.record(str(outcome.run_id)))
                 entry = _PendingRun(
                     pipeline=pipeline,
+                    provider_client=client,
                     pending=outcome,
                     wrapper_dir=wrapper_dir,
                     study=study,
@@ -7145,8 +7181,9 @@ def make_research_pipeline_run_runner(
                     pending=outcome,
                     plan_revision_source_run_id=source_run_id,
                 )
-            _finish_web_provider_hard_stop(provider_hard_stop)
-            projection = _write_projection(
+            projection = _write_terminal_projection(
+                job=job,
+                provider_task=provider_hard_stop,
                 wrapper_dir=wrapper_dir,
                 study=study,
                 provider=provider_public,
@@ -7160,10 +7197,15 @@ def make_research_pipeline_run_runner(
             )
             return projection
         except ResearchPipelineRunError as exc:
-            _finish_web_provider_hard_stop(
-                provider_hard_stop,
-                error="research_pipeline_error",
-            )
+            if isinstance(exc, RecordedProviderStop):
+                raise
+            from easyicu.webserver.provider_job_recovery import defer_provider_failure
+
+            if not defer_provider_failure(job, exc):
+                _finish_web_provider_hard_stop(
+                    provider_hard_stop,
+                    error="research_pipeline_error",
+                )
             _record_pipeline_failure(
                 wrapper_dir=wrapper_dir,
                 study=study,
@@ -7176,10 +7218,13 @@ def make_research_pipeline_run_runner(
             )
             raise
         except Exception as exc:
-            _finish_web_provider_hard_stop(
-                provider_hard_stop,
-                error=_pipeline_failure_category(exc),
-            )
+            from easyicu.webserver.provider_job_recovery import defer_provider_failure
+
+            if not defer_provider_failure(job, exc):
+                _finish_web_provider_hard_stop(
+                    provider_hard_stop,
+                    error=_pipeline_failure_category(exc),
+                )
             code = _pipeline_failure_code(exc, budget_mode=selected_budget_mode)
             diagnostic = _record_pipeline_failure(
                 wrapper_dir=wrapper_dir,
@@ -7261,9 +7306,12 @@ def make_research_pipeline_run_runner(
                 },
             ) from exc
 
-    return runner
+    from easyicu.webserver.research_job_recovery import wrap_pipeline_runner
+
+    return wrap_pipeline_runner(runner, request)
 
 
+@recover_review
 def resume_research_pipeline(
     *,
     run_id: str,
@@ -7475,6 +7523,9 @@ def resume_research_pipeline(
         step="human_review",
         label=f"Applying {resolved} decision to the digest-bound Research Agent plan",
     )
+    from easyicu.webserver.research_job_recovery import bind_review_recovery
+
+    bind_review_recovery(job, entry, provider_environment)
     try:
         resume_result = resume_pending_review(
             _PENDING_REVIEWS,
@@ -7518,12 +7569,15 @@ def resume_research_pipeline(
             review_resumable=remains_resumable,
         )
         if not remains_resumable:
-            _finish_web_provider_hard_stop(
-                entry.provider_hard_stop,
-                error=_pipeline_failure_category(exc),
-            )
-            remove_review_recovery_record(key)
-            _remove_local_recovery(entry.wrapper_dir)
+            from easyicu.webserver.provider_job_recovery import defer_provider_failure
+
+            if not defer_provider_failure(job, exc):
+                _finish_web_provider_hard_stop(
+                    entry.provider_hard_stop,
+                    error=_pipeline_failure_category(exc),
+                )
+                remove_review_recovery_record(key)
+                _remove_local_recovery(entry.wrapper_dir)
             reason_code = typed_failure.get("reason_code")
             _record_unresumable_review_failure(
                 wrapper_dir=entry.wrapper_dir,
@@ -7590,15 +7644,16 @@ def resume_research_pipeline(
             pending=outcome,
         )
     outcome = resume_result.outcome
-    _finish_web_provider_hard_stop(entry.provider_hard_stop)
-    remove_review_recovery_record(key)
-    projection = _write_projection(
+    projection = _write_terminal_projection(
+        job=job,
+        provider_task=entry.provider_hard_stop,
         wrapper_dir=entry.wrapper_dir,
         study=entry.study,
         provider=entry.provider,
         acquisition=entry.acquisition,
         run_dir=Path(outcome.manifest_path).parent,
     )
+    remove_review_recovery_record(key)
     _cleanup_recovery_after_projection(
         wrapper_dir=entry.wrapper_dir,
         projection=projection,
@@ -7662,6 +7717,7 @@ def refresh_literature_evidence_projection(wrapper_dir: Path) -> Dict[str, Any]:
 
 __all__ = [
     "ResearchPipelineRunError",
+    "execution_resume_checkpoint",
     "make_research_pipeline_run_runner",
     "pending_review",
     "refresh_literature_evidence_projection",

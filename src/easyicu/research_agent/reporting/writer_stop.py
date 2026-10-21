@@ -4,10 +4,10 @@ Owner
 -----
 The write phase records a Writer failure as a ``writer_agent`` error finding.
 This module owns the one Writer stop that names its cause: the model
-provider's transport failed with a typed server status (5xx), after the
-attempts its transport policy allowed.  The status is read only from the
-exception's typed fields (``safe_provider_http_status_code``), never from its
-text, so a message that quotes "503" names nothing.  Any other Writer failure
+provider's transport failed with a typed server status (5xx), connection
+failure or timeout after the attempts its transport policy allowed. The cause
+is read from typed exception fields/classes, never from response text, so a
+message that quotes "503" names nothing. Any other Writer failure
 names no stop, and its finding stays as it was.
 
 The stop travels in the finding's detail.  Readiness reports the stop of the
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Sequence
 
-from ..providers.clients import safe_provider_http_status_code
+from ..providers.clients import safe_provider_http_status_code, transient_transport_failure
 from ..providers.transport_retry import RETRY_STOP_REASONS
 
 WRITER_PROVIDER_TRANSPORT_UNAVAILABLE = "writer_provider_transport_unavailable"
@@ -32,14 +32,16 @@ def _server_status(value: Any) -> Optional[int]:
     return None
 
 
-def _stop(status: Any, attempts: Any, exhausted: Any) -> Optional[dict[str, Any]]:
+def _stop(status: Any, attempts: Any, exhausted: Any, failure_code: Any = None) -> Optional[dict[str, Any]]:
     server_status = _server_status(status)
     if server_status is None:
-        return None
-    stop: dict[str, Any] = {
-        "reason_code": WRITER_PROVIDER_TRANSPORT_UNAVAILABLE,
-        "provider_http_status": server_status,
-    }
+        if status is not None or failure_code not in {"provider_timeout", "provider_connection_failure"}:
+            return None
+        stop: dict[str, Any] = {"reason_code": WRITER_PROVIDER_TRANSPORT_UNAVAILABLE,
+                                "provider_failure_code": failure_code}
+    else:
+        stop = {"reason_code": WRITER_PROVIDER_TRANSPORT_UNAVAILABLE,
+                "provider_http_status": server_status}
     if isinstance(attempts, int) and not isinstance(attempts, bool) and attempts >= 1:
         stop["transport_attempts"] = attempts
     if isinstance(exhausted, str) and exhausted in RETRY_STOP_REASONS:
@@ -58,6 +60,7 @@ def writer_transport_stop(exc: BaseException) -> Optional[dict[str, Any]]:
         safe_provider_http_status_code(exc),
         getattr(exc, "easyicu_transport_attempts", None),
         getattr(exc, "easyicu_transport_retry_exhausted", None),
+        (transient_transport_failure(exc) or {}).get("reason_code"),
     )
 
 
@@ -83,6 +86,7 @@ def writer_stop(detail: Any) -> Optional[dict[str, Any]]:
         detail.get("provider_http_status"),
         detail.get("transport_attempts"),
         detail.get("transport_retry_exhausted"),
+        detail.get("provider_failure_code"),
     )
 
 

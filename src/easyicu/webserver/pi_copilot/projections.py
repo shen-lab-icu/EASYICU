@@ -459,7 +459,14 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     events = snapshot.get("events")
     events = events if isinstance(events, list) else []
     progress = []
-    for event in events[-20:]:
+    # System resumes remain visible after later pipeline progress fills the tail.
+    from easyicu.webserver.provider_job_recovery import MAX_AUTOMATIC_RESUMES
+
+    resume_indices = [i for i, event in enumerate(events) if isinstance(event, Mapping)
+                      and event.get("step") == "provider_auto_resume"][-MAX_AUTOMATIC_RESUMES:]
+    for index, event in enumerate(events):
+        if index < len(events) - 20 and index not in resume_indices:
+            continue
         if not isinstance(event, Mapping):
             continue
         if str(event.get("type") or "") == "end":

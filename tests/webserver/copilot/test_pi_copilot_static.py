@@ -114,7 +114,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260922-run-answer1" in index
-    assert "js/screens-guided-pi-activity.js?v=20261009-target-trial1" in index
+    assert "js/screens-guided-pi-activity.js?v=20261021-provider-recovery1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20261020-api-models1"
         in index
@@ -144,8 +144,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-confirmation.js?v=20261021-grouped-resume1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261020-prepare-label1" in index
-    assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261021-grouped-resume1" in index
+    assert "js/screens-guided-pi-childjob.js?v=20261021-provider-recovery1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261021-provider-recovery1" in index
     assert "js/screens-guided-pi.js?v=20261020-registered-offer1" in index
     assert "js/screens-guided.js?v=20261020-folder-preview1" in index
     assert (

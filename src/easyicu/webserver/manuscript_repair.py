@@ -51,6 +51,10 @@ from easyicu.research_agent.reporting.revision_figures import (
     build_revision_figure_bundle,
 )
 from easyicu.webserver.report_revision_replay import load_failed_writer_replay
+from easyicu.webserver.provider_job_recovery import (
+    CheckpointContinuation, ProviderJobRecovery, defer_provider_failure,
+)
+from easyicu.webserver.research_job_recovery import bind_provider_recovery, existing_provider_task
 
 
 # The Web repair/export entry surface wires the execution-owned deterministic
@@ -224,7 +228,7 @@ def make_report_only_run_runner(
     )
     run_dir = target.wrapper_dir / "pipeline" / target.pipeline_run_id
     draft_path, parent_revision = _current_revision_input(target)
-    prepare_registered_report_repair(run_dir, migration_draft=draft_path)
+    prepared_source = prepare_registered_report_repair(run_dir, migration_draft=draft_path)
     source_digest = _source_fingerprint(run_dir)
     request_text = " ".join(str(report_revision_request or "").split())[:1_200]
 
@@ -271,20 +275,19 @@ def make_report_only_run_runner(
                 output / "revision_request.json",
                 {"schema_version": "easyicu.report-revision-request/1", "request": request_text},
             )
-        ledger_path = output / "runtime" / "provider_hard_stop.json"
-        ledger = ProviderHardStopLedger(
-            path=ledger_path,
-            task_ids=[str(job.id)],
-            limits=limits,
-            batch_id="report-" + str(job.id),
-            declaration_sha256=seed.scientific_configuration_sha256,
-        )
-        task = ledger.start_task(str(job.id))
+        task = existing_provider_task(job)
+        if task is None:
+            ledger = ProviderHardStopLedger(
+                path=output / "runtime" / "provider_hard_stop.json",
+                task_ids=[str(job.id)], limits=limits,
+                batch_id="report-" + str(job.id),
+                declaration_sha256=seed.scientific_configuration_sha256,
+            )
+            task = ledger.start_task(str(job.id))
+        ledger_path = task.ledger.path
         meter = CostMeter(runtime_dir=output / "runtime")
         public_provider = {key: provider.get(key) for key in ("provider", "model")}
-        # Saved sections answer the instructions they were written for; a new
-        # revision request changes every instruction, so nothing is replayed.
-        replay = None if request_text else load_failed_writer_replay(target.wrapper_dir, prepared)
+        replay = load_failed_writer_replay(target.wrapper_dir, prepared, revision_request=request_text)
         try:
             client, _ = provider_adapter.build_research_agent_provider_client(
                 dict(provider),
@@ -292,6 +295,7 @@ def make_report_only_run_runner(
                 request_hard_timeout=task.cap_timeout(240),
                 environ=provider_environment,
             )
+            bind_provider_recovery(job, wrapper_dir=target.wrapper_dir, task=task, client=client)
             metered = MeteredClient(
                 HardStopClient(client, role="writer", task=task),
                 role="writer",
@@ -417,7 +421,8 @@ def make_report_only_run_runner(
             task.finish(score={"report_quality": "pass", "publication_authorized": False})
             return projected
         except BaseException as exc:
-            task.finish(error=type(exc).__name__)
+            if not defer_provider_failure(job, exc):
+                task.finish(error=type(exc).__name__)
             publish_writer_only_failure(
                 prepared,
                 output_dir=output,
@@ -434,7 +439,28 @@ def make_report_only_run_runner(
             )
             raise
 
-    return runner
+    def recovered_runner(job):
+        recovery = ProviderJobRecovery(job)
+
+        def continuation(exc):
+            current = study_contexts.get_context(study_context["id"])
+            if (study_contexts.scientific_configuration_sha256(current) != seed.scientific_configuration_sha256
+                or _source_fingerprint(run_dir) != source_digest
+                or _current_revision_input(target) != (draft_path, parent_revision)):
+                return None
+            replay = load_failed_writer_replay(target.wrapper_dir, prepared_source, revision_request=request_text)
+            if replay is None:
+                return None
+            return CheckpointContinuation(
+                checkpoint={"kind": "writer", "revision_id": replay.revision_id,
+                            "source_sha256": source_digest,
+                            "sections": [{"path": p.name, "sha256": digest} for p, digest, _ in replay.rows]},
+                run=runner,
+            )
+
+        return recovery.run(runner, continuation)
+
+    return recovered_runner
 
 
 def _project_revision(

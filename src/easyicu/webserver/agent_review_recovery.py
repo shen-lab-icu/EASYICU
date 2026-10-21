@@ -52,6 +52,7 @@ class PendingReviewEntry:
     budget_mode: str = "full_reviewed"
     prepared_package_binding: Optional[Dict[str, Any]] = None
     provider_hard_stop: Optional[Any] = None
+    provider_client: Optional[Any] = None
 
 
 class PendingReviewRegistry:
@@ -573,6 +574,7 @@ def recover_pending_review(
     )
     return PendingReviewEntry(
         pipeline=pipeline,
+        provider_client=client,
         pending=pending,
         wrapper_dir=wrapper_dir,
         study=dict(record.study),

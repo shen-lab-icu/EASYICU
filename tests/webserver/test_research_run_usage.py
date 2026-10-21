@@ -15,6 +15,50 @@ from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver.research_run_usage import research_run_usage
 
 
+@pytest.mark.parametrize("tamper", [None, "digest", "task", "declaration", "escape", "symlink"])
+def test_automatic_continuation_accounts_shared_ledger_after_seed_cleanup(tmp_path, tamper):
+    from types import SimpleNamespace
+    from easyicu.webserver.research_run_usage import bind_shared_provider_task
+
+    original = tmp_path / "run_original/.runtime/provider_hard_stop_ledger.json"
+    _ledger(original, [_call(failed=True), _call("provider_recovery_probe")])
+    ledger = json.loads(original.read_text())
+    ledger["declaration_sha256"] = "d" * 64
+    ledger["tasks"][0]["task_id"] = "task"
+    ledger.pop("sha256")
+    ledger["sha256"] = canonical_sha256(ledger, trailing_newline=True)
+    original.write_text(json.dumps(ledger))
+    continued = tmp_path / "run_continued"
+    task = SimpleNamespace(task_id="task", ledger=SimpleNamespace(path=original, snapshot=lambda: ledger))
+    bind_shared_provider_task(continued, task)
+    reference = continued / ".runtime/shared_provider_task.json"
+    if tamper == "symlink":
+        saved = continued / "saved-binding.json"
+        saved.write_bytes(reference.read_bytes())
+        reference.unlink()
+        reference.symlink_to(saved)
+    elif tamper:
+        binding = json.loads(reference.read_text())
+        if tamper == "digest":
+            binding["sha256"] = "e" * 64
+        else:
+            if tamper == "escape":
+                outside = tmp_path.parent / f"outside-{tmp_path.name}.json"
+                outside.write_bytes(original.read_bytes())
+                binding["ledger"] = "../" + outside.name
+            else:
+                binding[{"task": "task_id", "declaration": "declaration_sha256"}[tamper]] = "changed"
+            binding.pop("sha256")
+            binding["sha256"] = canonical_sha256(binding)
+        reference.write_text(json.dumps(binding))
+    usage = research_run_usage(continued)
+    if tamper:
+        assert usage["accounting_complete"] is False
+    else:
+        assert usage["calls"] == 2 and usage["failed_calls"] == 1
+        assert usage["usage_unknown_calls"] == 1 and usage["estimated_cost_usd"] == pytest.approx(0.05)
+
+
 def _ledger(path, calls, status="completed"):
     payload = {
         "schema_version": PROVIDER_HARD_STOP_SCHEMA,
@@ -23,6 +67,58 @@ def _ledger(path, calls, status="completed"):
     payload["sha256"] = canonical_sha256(payload, trailing_newline=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload))
+
+
+def _shared_task(path, calls):
+    from types import SimpleNamespace
+    _ledger(path, calls)
+    payload = json.loads(path.read_text())
+    payload["declaration_sha256"] = "d" * 64
+    payload["tasks"][0]["task_id"] = "task"
+    payload.pop("sha256")
+    payload["sha256"] = canonical_sha256(payload, trailing_newline=True)
+    path.write_text(json.dumps(payload))
+    return SimpleNamespace(task_id="task", ledger=SimpleNamespace(path=path, snapshot=lambda: payload))
+
+
+def test_later_report_task_cannot_replace_continuation_accounting_lineage(tmp_path):
+    from easyicu.webserver.research_run_usage import bind_shared_provider_task
+    original = _shared_task(tmp_path / "run_original/.runtime/provider_hard_stop_ledger.json", [_call(failed=True)])
+    continued = tmp_path / "run_continued"
+    bind_shared_provider_task(continued, original)
+    reference = continued / ".runtime/shared_provider_task.json"
+    before = reference.read_bytes()
+    report = _shared_task(continued / "report_revisions/revision/runtime/provider_hard_stop.json", [_call("writer")])
+    bind_shared_provider_task(continued, report)
+    assert reference.read_bytes() == before
+    assert research_run_usage(continued)["accounted_tokens"] == 300
+    later = _shared_task(tmp_path / "run_later/.runtime/provider_hard_stop_ledger.json", [_call("writer")])
+    bind_shared_provider_task(continued, later)
+    assert reference.read_bytes() == before
+    assert research_run_usage(continued)["accounted_tokens"] == 300
+
+
+def test_shared_ledger_is_counted_once_when_also_a_revision_ledger(tmp_path):
+    wrapper = tmp_path / "run_continued"
+    report = _shared_task(wrapper / "report_revisions/revision/runtime/provider_hard_stop.json", [_call("writer")])
+    # The reader counts a referenced ledger once even when another owned
+    # path enumeration reaches it. This reference is synthetic input metadata.
+    binding = {"schema_version": "easyicu.shared-provider-task/1", "task_id": "task",
+               "declaration_sha256": "d" * 64, "ledger": report.ledger.path.relative_to(tmp_path).as_posix()}
+    binding["sha256"] = canonical_sha256(binding)
+    (wrapper / ".runtime").mkdir()
+    (wrapper / ".runtime/shared_provider_task.json").write_text(json.dumps(binding))
+    usage = research_run_usage(wrapper)
+    assert usage["calls"] == 1 and usage["accounted_tokens"] == 100
+
+
+def test_new_report_cannot_disguise_missing_pipeline_usage_as_complete(tmp_path):
+    from easyicu.webserver.research_run_usage import bind_shared_provider_task
+    wrapper = tmp_path / "run_incomplete"
+    report = _shared_task(wrapper / "report_revisions/revision/runtime/provider_hard_stop.json", [_call("writer")])
+    bind_shared_provider_task(wrapper, report)
+    assert not (wrapper / ".runtime/shared_provider_task.json").exists()
+    assert research_run_usage(wrapper)["accounting_complete"] is False
 
 
 def _call(role="planner", *, failed=False):

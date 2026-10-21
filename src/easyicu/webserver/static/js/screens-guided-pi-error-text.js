@@ -520,6 +520,10 @@
           'An analysis step failed while running.',
           '有一个分析步骤在运行中失败了。',
         ),
+        research_pipeline_provider_recovery_exhausted: tr(
+          'Automatic provider recovery reached its limit; the verified checkpoint is preserved.',
+          '模型服务自动恢复已达到上限，已保留验证通过的检查点。',
+        ),
         research_pipeline_provider_timeout: tr(
           'The model service did not answer in time. Try again shortly.',
           '模型服务响应超时，请稍后重试。',

@@ -30,7 +30,7 @@ class SavedWriterReplay:
         return row["text"]
 
 
-def load_failed_writer_replay(wrapper: Path, prepared) -> SavedWriterReplay | None:
+def load_failed_writer_replay(wrapper: Path, prepared, *, revision_request: str = "") -> SavedWriterReplay | None:
     root = wrapper / "report_revisions"
     if root.is_symlink() or not root.exists():
         return None
@@ -40,10 +40,19 @@ def load_failed_writer_replay(wrapper: Path, prepared) -> SavedWriterReplay | No
             continue
         receipt = json.loads(path.read_text())
         if (receipt.get("status") != "failed"
-            or receipt.get("reason_code") != "WRITER_ONLY_AUTHORITY_REPAIR_FAILED_PRIOR_PRESERVED"
+            or receipt.get("reason_code") not in {
+                "WRITER_ONLY_REPAIR_FAILED_PRIOR_PRESERVED",
+                "WRITER_ONLY_AUTHORITY_REPAIR_FAILED_PRIOR_PRESERVED",
+            }
             or receipt.get("source_run_modified") is not False
             or receipt.get("source_hashes") != dict(prepared.source_hashes)
             or receipt.get("source_run_dir") != str(prepared.source_run_dir)):
+            continue
+        request_path = path.parent / "revision_request.json"
+        if request_path.is_symlink():
+            continue
+        saved_request = json.loads(request_path.read_text()).get("request", "") if request_path.exists() else ""
+        if saved_request != revision_request:
             continue
         preflight_path = path.parent / "preflight.json"
         if preflight_path.is_symlink():
