@@ -89,7 +89,7 @@ const upsert = (target, row) => {
     assert.equal(rows.length, 8);
     assert.ok(rows.slice(1).every(row => row.endedAt - row.startedAt === 3000));
     const rendered = activity.render(live);
-    assert.ok(rendered.includes(tr('Preparation already completed', '准备阶段已完成')));
+    assert.ok(rendered.includes(tr('Already completed during preparation; skipped', '已在准备阶段完成，跳过')));
     assert.ok(rendered.includes(tr('System action:', '系统操作：')));
     assert.doesNotMatch(decodeURIComponent(rendered), /Plan it as|do not ask|analysis_[2-8]/);
     child.hydrateProjectedJob({ ...job, job_id: 'planning', human_review_pending: true, progress: [

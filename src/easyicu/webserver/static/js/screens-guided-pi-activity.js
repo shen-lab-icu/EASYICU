@@ -110,6 +110,10 @@
     }
     function activityIcon(step) {
       if (!step) return 'spark';
+      if (step.icon) return step.icon;
+      // A plan step's icon says how it ran: a registered standard method or
+      // code written for this study.
+      if (step.step === 'plan_step' && EXECUTION_ICONS[step.execution]) return EXECUTION_ICONS[step.execution];
       if (step.kind === 'submitted') return 'arrow';
       if (step.kind === 'turn' || step.kind === 'retry') return 'refresh';
       if (step.kind === 'assistant') return 'wand';
@@ -313,6 +317,76 @@
       trajectory: ['trajectory', '轨迹'], phenotype: ['phenotype', '表型'], prediction: ['prediction', '预测'],
       calibration: ['calibration', '校准'], discrimination: ['discrimination', '区分度'], table: ['table', '表'],
     };
+    /* A plan step's row says what it did. A registered standard executor
+       names its own action; otherwise a known step id, or a step id ending
+       in a kind word, gives one. The step's model-written purpose stays in
+       the plan. TODO(copy): coordinator wording; name the grouping variable
+       and the outcome once the plan carries their reader names. */
+    const EXECUTION_ICONS = { standard: 'layers', generated: 'edit', fallback: 'shield', host: 'db' };
+    const STEP_VERBS = {
+      build: ['Build the', '生成'], draw: ['Draw the', '画'], summarize: ['Summarize the', '汇总'],
+      audit: ['Audit the', '审计'], run: ['Run the', '运行'], fit: ['Fit the', '拟合'],
+    };
+    const EXECUTOR_ACTIONS = {
+      grouped_table_one: ['build', 'baseline characteristics table by exposure group', '基线特征表（按暴露分组）'],
+      cohort_flow_figure: ['draw', 'cohort selection flow chart', '队列筛选流程图'],
+      exposure_outcome_distribution: ['summarize', 'outcomes by exposure group', '各组的结局'],
+      exposure_outcome_distribution_figure: ['draw', 'outcome distribution by exposure group', '各组结局分布图'],
+      descriptive_cohort_summary: ['summarize', 'cohort characteristics', '队列特征'],
+      missingness_audit: ['audit', 'measurements and missing data', '测量与缺失情况'],
+      missingness_measurement_audit: ['audit', 'measurements and missing data', '测量与缺失情况'],
+      prevalence_outcome_figure: ['draw', 'prevalence and outcome figure', '患病比例与结局图'],
+      prevalence_mortality_figure: ['draw', 'prevalence and mortality figure', '患病比例与死亡率图'],
+      descriptive_result_figure: ['draw', 'result figure', '结果图'],
+      composite_descriptive_figure: ['draw', 'combined descriptive figure', '描述性组合图'],
+      measurement_missingness_figure: ['draw', 'missing-data figure', '缺失情况图'],
+      missingness_measurement_figure: ['draw', 'missing-data figure', '缺失情况图'],
+      audit_panel: ['draw', 'data-quality audit panel', '数据质量审计图'],
+      robustness_figure: ['draw', 'robustness figure', '稳健性分析图'],
+      robustness: ['run', 'robustness re-analysis', '稳健性重分析'],
+      absolute_risk_context: ['summarize', 'absolute risks', '绝对风险'],
+      grouped_descriptive_distribution: ['summarize', 'distribution by group', '各组分布'],
+      continuous_outcome_summary: ['summarize', 'continuous outcomes by group', '各组的连续结局'],
+      association_model_grid: ['fit', 'adjusted association models', '调整后的关联模型'],
+      adjusted_association_estimates: ['fit', 'adjusted association model', '调整后的关联模型'],
+      adjusted_association_figure: ['draw', 'adjusted association figure', '调整后关联图'],
+      association_overview_figure: ['draw', 'association overview figure', '关联概览图'],
+      survival_primary_cox: ['fit', 'primary Cox model', '主要 Cox 模型'],
+      static_prediction_model: ['fit', 'prediction model', '预测模型'],
+    };
+    const STEP_ACTIONS = {
+      cohort_accounting: ['Count the cohort and its denominators', '核算队列与分母'],
+      baseline_context: ['Build the baseline characteristics table', '生成基线特征表'],
+      table_one: ['Build the baseline characteristics table', '生成基线特征表'],
+      exposure_outcome_distribution: ['Summarize group proportions and outcomes', '汇总分组比例与结局'],
+      measurement_audit: ['Audit measurements and missing data', '审计测量与缺失情况'],
+      measurement_quality: ['Audit measurement quality', '审计测量质量'],
+      descriptive_context_figure: ['Draw the result figure', '画结果图'],
+      cohort_accounting_figure: ['Draw the cohort flow chart', '画队列流程图'],
+      data_quality_figure: ['Draw the data-quality figure', '画数据质量图'],
+      robustness_replay: ['Run the robustness re-analysis', '运行稳健性重分析'],
+      robustness_replay_figure: ['Draw the robustness figure', '画稳健性图'],
+      functional_form_sensitivity: ['Run the functional-form sensitivity analysis', '运行函数形式敏感性分析'],
+    };
+    const LAST_TOKEN_VERBS = { figure: 'draw', table: 'build', model: 'fit', distribution: 'summarize' };
+    function verbPhrase(verb, noun) {
+      const words = STEP_VERBS[verb];
+      const english = /^[A-Z][a-z]/.test(noun) ? noun.charAt(0).toLowerCase() + noun.slice(1) : noun;
+      return tr(`${words[0]} ${english}`, `${words[1]}${noun}`);
+    }
+    function executorName(key) {
+      const action = EXECUTOR_ACTIONS[String(key || '')];
+      return action ? tr(action[1], action[2]) : '';
+    }
+    function planStepTitle(row) {
+      const action = EXECUTOR_ACTIONS[String(row && row.executor || '')];
+      if (action) return verbPhrase(action[0], tr(action[1], action[2]));
+      const id = String(row && row.stepId || '').replace(/^\d+_/, '').toLowerCase();
+      if (STEP_ACTIONS[id]) return tr(...STEP_ACTIONS[id]);
+      const verb = LAST_TOKEN_VERBS[id.split(/[_.-]+/).pop()];
+      const noun = planStepName(id);
+      return verb && noun !== tr('Analysis step', '分析步骤') ? verbPhrase(verb, noun) : '';
+    }
     function planStepName(stepId) {
       const id = String(stepId || '').replace(/^\d+_/, '').toLowerCase();
       if (!id) return tr('Analysis step', '分析步骤');
@@ -331,12 +405,17 @@
       const stepId = String(event.step_id || (match && match[4]) || '').replace(/\.$/, '');
       if (!stepId) return null;
       const skipped = /^Skipped (?:step already completed by pre-execution|completed step from prior run):/.test(label);
-      const phase = skipped ? 'precompleted' : ['error', 'failed', 'blocked', 'skipped'].includes(event.status) ? 'failed'
-        : event.status === 'complete' || (match && /^complete/i.test(match[3])) ? 'complete'
-          : match && /^failed/i.test(match[3]) ? 'failed' : 'started';
-      return { index: Number(event.current_step || (match && match[1])) || null,
+      const phase = skipped ? 'precompleted' : event.action === 'step_skipped' ? 'skipped'
+        : ['error', 'failed', 'blocked', 'skipped'].includes(event.status) ? 'failed'
+          : event.status === 'complete' || (match && /^complete/i.test(match[3])) ? 'complete'
+            : match && /^failed/i.test(match[3]) ? 'failed' : 'started';
+      const facts = { index: Number(event.current_step || (match && match[1])) || null,
         total: Number(event.total_steps || (match && match[2])) || null, phase, stepId };
+      // The run the step belongs to addresses its detail; never a path.
+      if (RUN_ID.test(String(event.run_id || ''))) facts.runId = String(event.run_id);
+      return facts;
     }
+    const RUN_ID = /^[A-Za-z][A-Za-z0-9_.-]{0,159}$/;
     function planStepLabel(facts) {
       if (!facts.index || !facts.total) return planStepName(facts.stepId);
       return tr(`Step ${facts.index}/${facts.total}: ${planStepName(facts.stepId)}`,
@@ -344,12 +423,16 @@
     }
     function planStepRow(facts, at, options) {
       const opts = options || {};
-      const status = ['complete', 'precompleted'].includes(facts.phase) ? 'complete' : facts.phase === 'failed' ? 'error' : 'running';
+      const status = ['complete', 'precompleted'].includes(facts.phase) ? 'complete'
+        : facts.phase === 'failed' ? 'error' : facts.phase === 'skipped' ? 'skipped' : 'running';
       return {
         id: `pipeline-plan-step-${facts.index || facts.stepId}`, kind: 'pipeline', step: 'plan_step', stepId: facts.stepId,
         label: planStepLabel(facts), status, at,
+        ...(facts.index && facts.total ? { stepIndex: facts.index, stepTotal: facts.total } : {}),
+        ...(facts.runId ? { runId: facts.runId } : {}),
         ...(facts.phase === 'started' ? { startedAt: at } : { endedAt: at }),
         ...(facts.phase === 'precompleted' ? { precompleted: true } : {}),
+        ...(facts.phase === 'skipped' ? { skipped: true } : {}),
         ...(opts.durationKnown === false ? { durationKnown: false } : {}),
       };
     }
@@ -368,8 +451,13 @@
     // Receipt times describe server work; a reload never starts a new clock.
     function notePipelineEvent(activity, event) {
       if (!event || event.type === 'end') return null;
+      const actionRow = noteActionEvent(activity, event);
+      if (actionRow !== undefined) return actionRow;
       const facts = planStepFacts(event);
-      if (!facts && notePlanSubStep(activity.steps, planSubStepFacts(event))) return null;
+      if (!facts && notePlanSubStep(activity.steps, planSubStepFacts(event))) {
+        closeRunningRows(activity, pipelineTime(event.timestamp), '', true);
+        return null;
+      }
       const at = pipelineTime(event.timestamp);
       const start = pipelineTime(event.started_at);
       const end = pipelineTime(event.ended_at);
@@ -385,12 +473,7 @@
           : event.status === 'complete' || (system && step !== 'provider_recovery_wait') ? 'complete' : 'running',
       };
       const previous = activity.steps.find(row => row.id === next.id);
-      activity.steps.forEach(row => {
-        if (row.kind === 'pipeline' && row.step !== 'plan_step' && row.id !== next.id && row.status === 'running') {
-          row.status = 'complete';
-          if (at != null) row.endedAt = at;
-        }
-      });
+      closeRunningRows(activity, at, next.id, false);
       const started = previous && previous.durationKnown !== false && previous.startedAt != null
         ? previous.startedAt : start != null ? start : next.status === 'running' ? at : null;
       Object.assign(next, { startedAt: started, durationKnown: started != null && at != null });
@@ -399,21 +482,184 @@
       if (previous) Object.assign(previous, next); else activity.steps.push(next);
       return previous || next;
     }
+    // A running span ends when the next event of the run arrives. Coder and
+    // runner events inside a plan step end only typed action rows.
+    function closeRunningRows(activity, at, exceptId, actionsOnly) {
+      activity.steps.forEach(row => {
+        if (row.kind !== 'pipeline' || row.step === 'plan_step' || row.id === exceptId || row.status !== 'running') return;
+        if (actionsOnly && row.step !== 'action') return;
+        row.status = 'complete';
+        if (at != null) row.endedAt = at;
+      });
+    }
+
+    /* Actions the host names by a closed code (run_step_trace.trace_action)
+       are rows of their own with their own times: planning validations,
+       data preparation, the literature search, and a repair or an error
+       inside a plan step. A completion-only event has no measured duration.
+       TODO(copy): coordinator wording for every action label and fact. */
+    const ACTION_STAGES = {
+      runtime_validated: 'setup', context_built: 'inputs', exposure_groups_staged: 'inputs',
+      cohort_materialized: 'inputs', cohort_verified: 'inputs', trajectory_staged: 'inputs',
+      cohort_audit: 'inputs', literature_build: 'evidence', plan_validation: 'plan', plan_ready: 'plan',
+      repair: 'analysis', repair_retry: 'analysis', deterministic_repair: 'analysis',
+      repair_failed: 'analysis', step_error: 'analysis', figure_audit: 'figure',
+    };
+    const SPAN_ACTIONS = new Set(['plan_validation', 'literature_build', 'figure_audit', 'repair', 'repair_retry']);
+    const ACTION_ICONS = {
+      runtime_validated: 'gear', context_built: 'file', exposure_groups_staged: 'layers', cohort_materialized: 'db',
+      cohort_verified: 'db', trajectory_staged: 'db', cohort_audit: 'shield', literature_build: 'search',
+      plan_validation: 'shield', plan_ready: 'list', repair: 'refresh', repair_retry: 'refresh',
+      deterministic_repair: 'refresh', repair_failed: 'alert', step_error: 'alert', figure_audit: 'eye',
+    };
+    function boundedCount(value) {
+      const number = Number(value);
+      return Number.isInteger(number) && number >= 0 && number <= 100000 ? number : null;
+    }
+    function actionFieldsOf(event) {
+      const text = (value, limit) => String(value == null ? '' : value).slice(0, limit);
+      const code = value => (/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(String(value || '')) ? String(value) : '');
+      return {
+        planningUnit: code(event.planning_unit), retryPhase: code(event.retry_phase),
+        current: boundedCount(event.current), total: boundedCount(event.total),
+        attempt: boundedCount(event.attempt), repairKind: code(event.repair_kind),
+        queryCount: boundedCount(event.query_count), recordCount: boundedCount(event.record_count),
+        queries: (Array.isArray(event.queries) ? event.queries : []).slice(0, 4).map(value => text(value, 200)).filter(Boolean),
+        sourceLabel: text(event.source_label, 160), sourceDatabase: text(event.source_database, 64),
+        groupVariableCount: boundedCount(event.group_variable_count), planStepCount: boundedCount(event.plan_step_count),
+        stepId: /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,159}$/.test(String(event.step_id || '')) ? String(event.step_id) : '',
+        ...(RUN_ID.test(String(event.run_id || '')) ? { runId: String(event.run_id) } : {}),
+      };
+    }
+    function actionRowId(event) {
+      const action = String(event.action);
+      if (action === 'plan_validation') return `pipeline-action-plan_validation-${event.planning_unit || 'plan'}-${boundedCount(event.current) || 0}`;
+      if (ACTION_STAGES[action] === 'analysis') {
+        return `pipeline-action-${action}-${event.step || ''}-${event.step_id || ''}-${event.repair_kind || ''}-${boundedCount(event.attempt) || 0}`;
+      }
+      return `pipeline-action-${action}`;
+    }
+    // Returns the action's row, or undefined when the event names no action.
+    function noteActionEvent(activity, event) {
+      const action = String(event && event.action || '');
+      if (!ACTION_STAGES[action]) return undefined;
+      const at = pipelineTime(event.timestamp);
+      const start = pipelineTime(event.started_at);
+      const end = pipelineTime(event.ended_at);
+      const id = actionRowId(event);
+      const span = SPAN_ACTIONS.has(action) && !(action === 'plan_validation' && event.retry_phase !== 'started');
+      const failed = ['error', 'failed', 'blocked'].includes(String(event.status || ''))
+        || ['repair_failed', 'step_error'].includes(action)
+        || (action === 'plan_validation' && event.retry_phase === 'rejected');
+      const previous = activity.steps.find(row => row.id === id);
+      closeRunningRows(activity, at, id, false);
+      const row = previous || { id, kind: 'pipeline', step: 'action', action, stage: ACTION_STAGES[action], icon: ACTION_ICONS[action] };
+      Object.assign(row, actionFieldsOf(event), { at, status: failed ? 'error' : span ? 'running' : 'complete' });
+      if (span) {
+        row.startedAt = previous && previous.startedAt != null ? previous.startedAt : start != null ? start : at;
+        delete row.endedAt;
+        row.durationKnown = row.startedAt != null;
+      } else if (previous && previous.startedAt != null && SPAN_ACTIONS.has(action)) {
+        // The verdict of a started span (a validation attempt) ends it.
+        row.endedAt = end != null ? end : at;
+        row.durationKnown = row.endedAt != null;
+      } else {
+        row.endedAt = end != null ? end : at;
+        row.durationKnown = false;
+      }
+      if (!previous) activity.steps.push(row);
+      return row;
+    }
+    function actionLabel(row) {
+      const attempt = Number(row.attempt) > 0 ? tr(` (attempt ${row.attempt})`, `（第 ${row.attempt} 次）`) : '';
+      const repairs = {
+        runtime: tr('The run failed; repairing the code', '运行失败，修复代码'),
+        contract: tr('A contract check failed; repairing the code', '合同校验未通过，修复代码'),
+        concept: tr('A concept check failed; repairing the code', '概念校验未通过，修复代码'),
+        figure_layout: tr('Repairing the figure layout', '修复图件版式'),
+      };
+      const labels = {
+        runtime_validated: tr('Check the execution environment', '检查执行环境'),
+        context_built: tr('Build the research context', '构建研究上下文'),
+        exposure_groups_staged: tr('Form the exposure groups', '划分暴露分组'),
+        cohort_materialized: tr('Build the analysis cohort', '生成分析队列'),
+        cohort_verified: tr('Verify the prepared cohort', '核验已准备的队列'),
+        trajectory_staged: tr('Prepare the trajectory input', '准备轨迹输入'),
+        cohort_audit: tr('Check the initial cohort', '核查初始队列'),
+        literature_build: tr('Search the literature and build the hypotheses', '检索文献并构建研究假设'),
+        plan_ready: Number(row.planStepCount) > 0
+          ? tr(`Analysis plan ready: ${row.planStepCount} steps`, `分析计划就绪：共 ${row.planStepCount} 步`)
+          : tr('Analysis plan ready', '分析计划就绪'),
+        repair: (repairs[row.repairKind] || tr('Repairing the code', '修复代码')) + attempt,
+        repair_retry: tr('The repair gave no usable code; retrying it', '修复未产出可用代码，重试修复') + attempt,
+        deterministic_repair: tr('Applied a deterministic repair', '应用确定性修复'),
+        repair_failed: tr('The repair failed', '修复失败'),
+        step_error: tr('This step hit an error', '这一步运行出错'),
+        figure_audit: tr('Check the generated figures', '检查生成的图件'),
+      };
+      if (row.action === 'plan_validation') {
+        return pipelineEventLabel({ step: 'planning', planning_unit: row.planningUnit, retry_phase: row.retryPhase, current: row.current, total: row.total });
+      }
+      return labels[row.action] || tr('Research-task status updated', '研究任务状态已更新');
+    }
+    function actionDetail(row) {
+      if (row.action === 'literature_build' && row.queryCount != null) {
+        return row.recordCount != null
+          ? tr(`${row.queryCount} queries · ${row.recordCount} records`, `${row.queryCount} 条检索式 · ${row.recordCount} 条记录`)
+          : tr(`${row.queryCount} queries`, `${row.queryCount} 条检索式`);
+      }
+      return '';
+    }
+    // Typed inputs of a host action, for the workbench's Input section.
+    function actionFacts(row) {
+      const facts = [];
+      const add = (label, value) => { if (value != null && value !== '') facts.push({ label, value: String(value) }); };
+      const units = { structure: tr('Study structure', '研究结构'), rules: tr('Cohort and analysis rules', '队列与分析规则'),
+        step: tr('Current executable step', '当前可执行步骤'), plan: tr('Candidate plan', '候选计划') };
+      if (row.action === 'plan_validation') {
+        add(tr('Checked', '校验对象'), units[row.planningUnit] || units.plan);
+        add(tr('Attempt', '尝试'), row.current && row.total ? `${row.current}/${row.total}` : '');
+      }
+      if (row.action === 'literature_build') {
+        add(tr('Queries', '检索式数'), row.queryCount);
+        add(tr('Records found', '检索到的记录'), row.recordCount);
+        (row.queries || []).forEach(query => add(tr('Query', '检索式'), query));
+      }
+      if (row.action === 'context_built') {
+        add(tr('Data source', '数据源'), [row.sourceLabel, row.sourceDatabase ? `(${row.sourceDatabase})` : ''].filter(Boolean).join(' '));
+      }
+      if (row.action === 'exposure_groups_staged') add(tr('Grouping variables', '分组变量数'), row.groupVariableCount);
+      if (row.action === 'plan_ready') add(tr('Plan steps', '计划步骤数'), row.planStepCount);
+      if (['repair', 'repair_retry'].includes(row.action)) add(tr('Repair attempt', '修复次数'), row.attempt);
+      return facts.slice(0, 12);
+    }
+
     // How a coder/runner event says the step ran, for the step row's detail.
     function planSubStepFacts(event) {
       const step = String(event && event.step || '').toLowerCase();
       if (!['coder', 'runner'].includes(step)) return null;
       const label = String(event && (event.label || event.message) || '').trim();
       const match = PLAN_SUB_STEP_EVENT.exec(label);
-      if (!match) return null;
-      const text = /^Running standard executor script/i.test(label)
+      const action = String(event.action || '');
+      // A finished run's audit rows name the step only by typed coordinates.
+      const typedStep = action && /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,159}$/.test(String(event.step_id || '')) ? String(event.step_id) : '';
+      if (!match && !typedStep) return null;
+      const execution = action === 'standard_executor' ? 'standard' : action === 'code_generation' ? 'generated'
+        : action === 'fallback_code' ? 'fallback'
+          : action === 'run' ? ({ standard: 'standard', fallback: 'fallback' }[event.run_kind] || 'generated') : '';
+      const typed = {
+        ...(execution ? { execution } : {}),
+        ...(action === 'standard_executor' && /^[a-z][a-z0-9_]{0,79}$/.test(String(event.executor || '')) ? { executor: String(event.executor) } : {}),
+        ...(RUN_ID.test(String(event.run_id || '')) ? { runId: String(event.run_id) } : {}),
+      };
+      const text = /^Running standard executor script/i.test(label) || (action === 'run' && event.run_kind === 'standard')
         ? tr('Ran the standard executor script; no model call.', '运行标准执行脚本，不调用模型。')
         : /^Using (?:planner-scoped|digest-bound)\b/i.test(label) || /deterministic standard executor/i.test(label)
           ? tr('Rendered by the deterministic renderer the plan names.', '由计划指定的确定性渲染器生成。')
-          : /generat|draft|writ/i.test(label) && step === 'coder'
+          : (/generat|draft|writ/i.test(label) && step === 'coder') || action === 'code_generation'
             ? tr('The model wrote the analysis code for this step.', '由模型为这一步编写分析代码。')
             : '';
-      return { stepId: match[1], text };
+      return { stepId: match ? match[1] : typedStep, text, ...typed };
     }
     // Attach a coder/runner event to its plan-step row. False when no row
     // names that step, so the caller can keep its generic analysis row.
@@ -423,6 +669,9 @@
         .find(item => item && item.step === 'plan_step' && item.stepId === facts.stepId);
       if (!row) return false;
       if (facts.text) row.text = facts.text;
+      if (facts.execution) row.execution = facts.execution;
+      if (facts.executor) row.executor = facts.executor;
+      if (facts.runId && !row.runId) row.runId = facts.runId;
       return true;
     }
 
@@ -548,7 +797,7 @@
       const projected = [];
       const stageIndexes = new Map();
       source.forEach(step => {
-        if (step.kind !== 'pipeline' || step.step === 'plan_step' || String(step.step || '').startsWith('provider_')) { projected.push(step); return; }
+        if (step.kind !== 'pipeline' || ['plan_step', 'action'].includes(step.step) || String(step.step || '').startsWith('provider_')) { projected.push(step); return; }
         const sourceStage = pipelineStage(step.step);
         let stage = sourceStage;
         if (stage === 'terminal' && hasPlanStage) stage = 'plan';
@@ -596,8 +845,10 @@
         const isStage = row.kind === 'pipeline' && String(row.id || '').startsWith('pipeline-stage-');
         const order = isStage ? STAGE_ORDER.indexOf(String(row.step || '')) : -1;
         if (isStage && order >= 0) previous = order;
-        // Plan-step rows are the analysis stage, in the order they ran.
+        // Plan-step rows are the analysis stage, in the order they ran; an
+        // action row belongs to its own stage.
         if (row.kind === 'pipeline' && row.step === 'plan_step') return { row, index, key: STAGE_ORDER.indexOf('analysis') };
+        if (row.kind === 'pipeline' && row.step === 'action') return { row, index, key: STAGE_ORDER.indexOf(row.stage) };
         return { row, index, key: isStage && order >= 0 ? order : previous };
       });
       keyed.sort((a, b) => (a.key - b.key) || (a.index - b.index));
@@ -634,6 +885,8 @@
         ? tr(`${toolLabel(step.toolName, step.resource)} returned an error`, `${toolLabel(step.toolName, step.resource)} 返回错误`)
         : done ? completedToolLabel(step.toolName, step.resource)
           : tr(`Calling ${toolLabel(step.toolName, step.resource)}`, `正在调用 ${toolLabel(step.toolName, step.resource)}`);
+      if (step.kind === 'pipeline' && step.step === 'action') return actionLabel(step);
+      if (step.kind === 'pipeline' && step.step === 'plan_step') return planStepTitle(step) || String(step.label || planStepName(step.stepId));
       if (step.kind === 'pipeline') return String(step.label || tr('EasyICU research pipeline updated', 'EasyICU 科研流程已更新'));
       if (step.kind === 'retry') {
         if (step.label) return String(step.label);
@@ -659,6 +912,9 @@
         run_id: String(resource.run_id || '').slice(0, 160),
         sha256: String(resource.sha256 || '').slice(0, 64),
       }));
+      // A plan step is addressed by its run and step ids, server-issued
+      // coordinates the workbench uses to read the code it ran.
+      const planStep = step.kind === 'pipeline' && step.step === 'plan_step';
       return encodeURIComponent(JSON.stringify({
         id: String(step.id || `${step.kind || 'step'}-${label}`).slice(0, 240),
         title: label,
@@ -669,6 +925,15 @@
         duration: stepDuration(step),
         toolName: step.kind === 'tool' ? toolLabel(step.toolName) : '',
         resources: safeResources,
+        ...(planStep && step.runId && step.stepId ? { run: String(step.runId).slice(0, 160), step: String(step.stepId).slice(0, 160) } : {}),
+        ...(planStep ? {
+          execution: String(step.execution || (step.precompleted ? 'host' : '')).slice(0, 40),
+          executor: String(step.executor || '').slice(0, 80),
+          executorName: executorName(step.executor),
+          stepIndex: Number(step.stepIndex) || 0,
+          stepTotal: Number(step.stepTotal) || 0,
+        } : {}),
+        ...(step.step === 'action' ? { facts: actionFacts(step) } : {}),
       }));
     }
     /* One trace row is one button: icon, action, elapsed time, chevron. The
@@ -713,7 +978,9 @@
     }
     function localizedStepText(step) {
       if (step.kind === 'thinking') return '';
-      if (step.precompleted) return tr('Preparation already completed', '准备阶段已完成');
+      if (step.precompleted) return tr('Already completed during preparation; skipped', '已在准备阶段完成，跳过');
+      if (step.skipped) return tr('Skipped: a step it depends on failed', '已跳过：所依赖的步骤失败');
+      if (step.step === 'action') return actionDetail(step);
       if (step.kind === 'tool') {
         const receipt = step.receipt;
         if (step.status === 'complete' && step.toolName === 'easyicu_update_study_context'
@@ -918,7 +1185,7 @@
       return output.join('');
     }
 
-    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, notePlanSubStep, pipelineEventLabel, planStepFacts, planStepRow, planSubStepFacts, planningEventFacts, planningProgressText, notePipelineEvent, finishPipelineSteps, pipelineTime, render, renderTimeline, startTurn, stepLabel, syncLiveClock, timeMs });
+    return Object.freeze({ appendPublicDelta, durationText, executorName, finishTurn, focusLatest, notePlanSubStep, pipelineEventLabel, planStepFacts, planStepRow, planStepTitle, planSubStepFacts, planningEventFacts, planningProgressText, notePipelineEvent, finishPipelineSteps, pipelineTime, render, renderTimeline, startTurn, stepLabel, syncLiveClock, timeMs });
   }
 
   window.EasyICU.guidedPi.declare('activity', { create });

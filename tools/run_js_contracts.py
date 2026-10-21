@@ -63,6 +63,13 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_pi_data_workbench.test.js": [],
     "guided_pi_conversation_timeline.test.js": ["screens-guided-pi-activity.js"],
     "guided_pi_trace_language.test.js": [],
+    # Rows, then the step workbench: activity owns rows, step-detail the
+    # step's Input/Output, source-view the tabs and the code renderer.
+    "guided_pi_step_detail.test.js": [
+        "screens-guided-pi-activity.js",
+        "screens-guided-pi-step-detail.js",
+        "screens-guided-pi-source-view.js",
+    ],
     # Explicit owner list (E-P2-11): no "." directory marker — every file the
     # harness loads is named here, including product-labels.js, so a rename
     # or deletion fails fast in main()'s existence check instead of silently

@@ -141,6 +141,11 @@ from easyicu.webserver.research_input_progress import (
     research_input_state,
 )
 from easyicu.webserver.run_record import RunDirectory, RunRecordReadError
+from easyicu.webserver.run_step_trace import (
+    TRACE_ACTION_KEYS,
+    trace_action,
+    trace_timings_projection as _trace_timings_projection,
+)
 from easyicu.webserver.research_launch_resume import (
     _DevelopmentResumeAcquisition,
     _slug,
@@ -3121,7 +3126,8 @@ def _progress(job: Any, *, step: str, label: str, **extra: Any) -> None:
         "label": _clean_text(label, 240),
     }
     for key in ("current", "total", "status", "run_id", "timestamp", "step_id",
-                "actor", "planning_unit", "retry_phase", "current_step", "total_steps"):
+                "actor", "planning_unit", "retry_phase", "current_step", "total_steps",
+                *TRACE_ACTION_KEYS):
         if extra.get(key) is not None:
             event[key] = extra[key]
     job.emit(event)
@@ -3133,77 +3139,18 @@ def _progress(job: Any, *, step: str, label: str, **extra: Any) -> None:
 
 
 def _pipeline_progress(job: Any, event: Mapping[str, Any]) -> None:
-    _progress(
-        job,
-        step=str(
-            event.get("step")
-            or event.get("stage")
-            or event.get("phase")
-            or "research_pipeline"
-        ),
-        label=str(
-            event.get("label") or event.get("message") or "Research Agent working"
-        ),
-        current=event.get("current"),
-        total=event.get("total"),
-        status=event.get("status"),
-        run_id=event.get("run_id"),
-        **{key: event[key] for key in (
-            "timestamp", "step_id", "actor", "planning_unit", "retry_phase",
-            "current_step", "total_steps",
-        ) if key in event},
+    step = str(
+        event.get("step") or event.get("stage") or event.get("phase") or "research_pipeline"
     )
-
-
-def _trace_timings_projection(run_dir: Optional[Path]) -> List[Dict[str, Any]]:
-    """Read only audit lifecycle coordinates; diagnostic detail stays private.
-
-    Audit events are free prose. Only the executor's fixed step envelopes are
-    useful to the trace parser; every other event is represented by its phase
-    and status, never by its message or detail.
-    """
-    from datetime import datetime
-
-    if run_dir is None:
-        return []
-    path = run_dir / "audit_log.jsonl"
-    rows: List[Dict[str, Any]] = []
-    try:
-        if path.is_symlink() or path.stat().st_size > 8_000_000:
-            return []
-        with path.open(encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    raw = json.loads(line)
-                    if not isinstance(raw, dict):
-                        continue
-                    timestamp = datetime.fromisoformat(str(raw.get("timestamp", "")))
-                    if timestamp.tzinfo is None:
-                        continue
-                except (ValueError, TypeError):
-                    continue
-                phase = str(raw.get("phase") or "")
-                step_id = str(raw.get("step_id") or "")
-                status = str(raw.get("status") or "running")
-                if not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", phase):
-                    continue
-                if not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", status):
-                    status = "running"
-                event = str(raw.get("event") or "")
-                if not re.fullmatch(
-                    r"(?:Step \d+/\d+ (?:started|complete|failed contract checks|failed Critic review): "
-                    r"|Skipped step already completed by pre-execution: "
-                    r"|Skipped completed step from prior run: )[A-Za-z0-9_.-]+\.", event
-                ):
-                    event = ""
-                row = {"timestamp": timestamp.isoformat(), "phase": phase,
-                       "event": event, "status": status}
-                if re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,159}", step_id):
-                    row["step_id"] = step_id
-                rows.append(row)
-    except (OSError, UnicodeDecodeError):
-        return []
-    return rows
+    label = str(event.get("label") or event.get("message") or "Research Agent working")
+    # The same closed action facts the finished run's audit projection
+    # carries; the event's own typed coordinates take precedence.
+    extra: Dict[str, Any] = trace_action(step, label, event)
+    extra.update({key: event[key] for key in (
+        "current", "total", "status", "run_id", "timestamp", "step_id", "actor",
+        "planning_unit", "retry_phase", "current_step", "total_steps",
+    ) if event.get(key) is not None})
+    _progress(job, step=step, label=label, **extra)
 
 
 def _safe_claims(run_dir: Path) -> List[Dict[str, Any]]:
@@ -4384,7 +4331,9 @@ def _write_projection(
             for item in pending_requests
         ),
         "pending_reviews": pending_requests,
-        "trace_timings": _trace_timings_projection(run_dir),
+        "trace_timings": _trace_timings_projection(
+            run_dir, source=run_context.get("source")
+        ),
         "plan_approval_allowed": bool(
             pending_requests
             and all(item.get("approval_allowed", True) for item in pending_requests)

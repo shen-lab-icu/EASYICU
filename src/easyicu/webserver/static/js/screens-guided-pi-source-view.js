@@ -1,4 +1,6 @@
-/* Owner: digest-pinned source and public operation workbench. */
+/* Owner: digest-pinned source and public operation workbench. A plan
+   step's Input/Output belongs to screens-guided-pi-step-detail.js; this
+   owner keeps the tabs, the code renderer and the evidence tab. */
 (function () {
   'use strict';
 
@@ -45,6 +47,10 @@
         run_id: clean(resource && resource.run_id, 160),
         sha256: clean(resource && resource.sha256, 64),
       })) : [];
+      const step = stepDetailOwner() && stepDetailOwner().coordinates(raw.run, raw.step);
+      const facts = Array.isArray(raw.facts) ? raw.facts.slice(0, 12).map(fact => ({
+        label: clean(fact && fact.label, 80), value: clean(fact && fact.value, 400),
+      })).filter(fact => fact.label && fact.value) : [];
       return {
         id: clean(raw.id || `${raw.kind || 'step'}-${raw.title || ''}`, 240),
         title: clean(raw.title || tr('Execution step', '执行步骤')),
@@ -55,10 +61,17 @@
         duration: clean(raw.duration, 80),
         toolName: clean(raw.toolName, 160),
         resources,
+        facts,
+        step,
+        execution: clean(raw.execution, 40),
+        executorName: clean(raw.executorName, 160),
+        stepIndex: Number.isInteger(raw.stepIndex) && raw.stepIndex > 0 ? raw.stepIndex : 0,
+        stepTotal: Number.isInteger(raw.stepTotal) && raw.stepTotal > 0 ? raw.stepTotal : 0,
       };
     } catch (_) { return null; }
   }
 
+  function stepDetailOwner() { return window.EasyICU.guidedPi.optional('stepDetail'); }
   function setOpen(open) {
     if (!state.host) return;
     state.host.hidden = !open;
@@ -94,10 +107,19 @@
     const end = !tab.showFull && tab.descriptor.focusEnd ? Math.min(lines.length, tab.descriptor.focusEnd) : lines.length;
     return { lines: lines.slice(start - 1, end), start, end, total: lines.length };
   }
+  function codeLines(lines, language, start) {
+    return lines.map((line, index) => `<span class="gpi-source-line"><i>${start + index}</i><code>${highlightedLine(line, language)}</code></span>`).join('');
+  }
   function codeRows(tab) {
     const payload = tab.payload || {};
     const windowed = sourceWindow(tab);
-    return windowed.lines.map((line, index) => `<span class="gpi-source-line"><i>${windowed.start + index}</i><code>${highlightedLine(line, payload.language)}</code></span>`).join('');
+    return codeLines(windowed.lines, payload.language, windowed.start);
+  }
+  // The same numbered, highlighted renderer for a step's whole script.
+  function textRows(text, language) {
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+    if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+    return codeLines(lines, language, 1);
   }
   function tabById(id) { return state.tabs.find(tab => tab.id === id) || null; }
   function activeTab() { return tabById(state.activeId) || state.tabs[0] || null; }
@@ -135,11 +157,15 @@
     </div>`;
   }
 
+  function statusLabel(value) {
+    return value === 'error' || value === 'failed' || value === 'cancelled' ? tr('Needs attention', '需要处理')
+      : value === 'running' ? tr('Running', '运行中') : value === 'skipped' ? tr('Skipped', '已跳过') : tr('Complete', '已完成');
+  }
   function renderOperation(tab) {
     const operation = tab.operation;
-    const status = operation.status === 'error' || operation.status === 'failed' || operation.status === 'cancelled'
-      ? tr('Needs attention', '需要处理')
-      : operation.status === 'running' ? tr('Running', '运行中') : tr('Complete', '已完成');
+    const owner = stepDetailOwner();
+    if (operation.step && owner) return owner.render(tab, { codeRows: textRows, statusLabel });
+    const status = statusLabel(operation.status);
     const category = {
       tool: tr('EasyICU tool', 'EasyICU 工具'),
       pipeline: tr('Research workflow', '科研流程'),
@@ -157,7 +183,9 @@
       <header class="gpi-source-title gpi-operation-title"><span class="gpi-operation-title-icon" aria-hidden="true">${icon(operation.icon, 18)}</span><div><h2>${esc(operation.title)}</h2><p><span>${esc(category)}</span><b class="status-${esc(operation.status)}">${esc(status)}</b>${operation.duration ? `<span>${icon('clock', 12)}${esc(operation.duration)}</span>` : ''}</p></div></header>
       <section class="gpi-source-block">
         <div class="gpi-source-block-head"><strong>Input</strong></div>
-        <dl class="gpi-operation-facts"><div><dt>${esc(tr('Step type', '步骤类型'))}</dt><dd>${esc(category)}</dd></div><div><dt>${esc(tr('Action', '动作'))}</dt><dd>${esc(operation.title)}</dd></div></dl>
+        <dl class="gpi-operation-facts">${(operation.facts.length ? operation.facts : [
+          { label: tr('Step type', '步骤类型'), value: category }, { label: tr('Action', '动作'), value: operation.title },
+        ]).map(fact => `<div><dt>${esc(fact.label)}</dt><dd>${esc(fact.value)}</dd></div>`).join('')}</dl>
       </section>
       <section class="gpi-source-block is-output">
         <div class="gpi-source-block-head"><strong>Output</strong></div>
@@ -166,11 +194,21 @@
     </div>`;
   }
 
+  // A registered table or summary a step produced opens in the existing
+  // evidence renderer, read through the digest-pinned evidence route.
+  function renderEvidence(tab) {
+    const renderer = window.EasyICU.guidedPi.optional('evidencePreview');
+    const body = tab.loading ? `<div class="gpi-source-loading" role="status">${esc(tr('Loading registered evidence…', '正在读取已登记证据…'))}</div>`
+      : tab.error ? `<div class="gpi-source-error" role="alert"><strong>${esc(tr('Evidence unavailable', '证据暂不可用'))}</strong><p>${esc(tab.error)}</p></div>`
+        : renderer ? renderer.render(tab.payload || {}) : '';
+    return `<div class="gpi-source-document"><header class="gpi-source-title"><h2>${esc(tab.title)}</h2></header>${body}</div>`;
+  }
   function render() {
     if (!state.host) return;
     const tab = activeTab();
     if (!tab) { state.host.replaceChildren(); setOpen(false); return; }
-    state.host.innerHTML = `${renderTabs()}${tab.kind === 'operation' ? renderOperation(tab) : renderCode(tab)}`;
+    const body = tab.kind === 'operation' ? renderOperation(tab) : tab.kind === 'evidence' ? renderEvidence(tab) : renderCode(tab);
+    state.host.innerHTML = `${renderTabs()}${body}`;
   }
 
   async function copyText(value, button) {
@@ -232,12 +270,61 @@
     state.projectId = project || state.projectId;
     state.runId = clean(runId, 240) || state.runId;
     state.openResource = typeof openResource === 'function' ? openResource : state.openResource;
-    const id = `operation:${operation.id}`;
+    // A plan step's tab is its run and step; other operations keep their id.
+    const id = operation.step ? `step:${operation.step.runId}:${operation.step.stepId}` : `operation:${operation.id}`;
     const existing = tabById(id);
-    if (existing) existing.operation = operation;
+    if (existing) { existing.operation = operation; existing.title = operation.title; }
     else state.tabs.push({ id, kind: 'operation', title: operation.title, operation });
     state.activeId = id; setOpen(true); render();
+    if (operation.step && state.projectId) void loadStep(tabById(id));
     return true;
+  }
+  /* Read the step through its route. While the step runs, read it again
+     so its code appears once written and its output once it finishes. */
+  async function loadStep(tab) {
+    const owner = stepDetailOwner();
+    if (!tab || !owner || !tab.operation.step) return;
+    const ticket = (tab.stepTicket || 0) + 1;
+    tab.stepTicket = ticket;
+    window.clearTimeout(tab.stepTimer);
+    tab.stepLoading = true; tab.stepError = '';
+    try {
+      const detail = await owner.load(state.projectId, tab.operation.step.runId, tab.operation.step.stepId);
+      if (tab.stepTicket !== ticket || !tabById(tab.id)) return;
+      tab.stepDetail = detail;
+    } catch (error) {
+      if (tab.stepTicket !== ticket || !tabById(tab.id)) return;
+      tab.stepError = String(error && (error.message || error.code) || error);
+    }
+    tab.stepLoading = false;
+    if (state.activeId === tab.id) render();
+    if (tab.stepDetail && tab.stepDetail.state === 'running') {
+      tab.stepTimer = window.setTimeout(() => { if (tabById(tab.id) && state.activeId === tab.id) void loadStep(tab); }, 4000);
+    }
+  }
+  async function openEvidenceTab(evidence) {
+    const current = activeTab();
+    const run = current && current.operation && current.operation.step ? current.operation.step.runId : state.runId;
+    if (!evidence || !state.projectId || !run) return;
+    const id = `evidence:${evidence.id}:${evidence.sha256}`;
+    let tab = tabById(id);
+    if (!tab) {
+      tab = { id, kind: 'evidence', title: evidence.title, evidence, runId: run, payload: null, loading: true, error: '' };
+      state.tabs.push(tab);
+    }
+    state.activeId = id; render();
+    if (tab.payload) return;
+    try {
+      const api = window.EU_API || {};
+      if (typeof api.loadPiCopilotResearchEvidence !== 'function') throw new Error(tr('The evidence API is unavailable.', '证据接口不可用。'));
+      const response = await api.loadPiCopilotResearchEvidence(state.projectId, tab.runId, evidence.id, evidence.sha256);
+      tab.payload = response && response.payload ? response.payload : {};
+    } catch (error) {
+      tab.error = String(error && (error.message || error.code) || error);
+    } finally {
+      tab.loading = false;
+      if (tabById(id) && state.activeId === id) render();
+    }
   }
 
   function closeTab(id) {
@@ -266,6 +353,12 @@
       const tab = activeTab();
       if (!tab) return;
       if (event.target.closest('[data-gpi-source-full]') && tab.kind === 'code') { tab.showFull = !tab.showFull; render(); return; }
+      if (tab.kind === 'operation' && tab.stepDetail) {
+        const stepEvidence = event.target.closest('[data-gpi-step-evidence]');
+        if (stepEvidence) { void openEvidenceTab(stepDetailOwner().evidenceAt(tab, stepEvidence.dataset.gpiStepEvidence)); return; }
+        const stepCopy = event.target.closest('[data-gpi-step-copy]');
+        if (stepCopy) { void copyText(tab.stepDetail.code && tab.stepDetail.code.text, stepCopy); return; }
+      }
       const resource = event.target.closest('[data-gpi-operation-resource]');
       if (resource && tab.kind === 'operation' && state.openResource) {
         const descriptor = tab.operation.resources[Number(resource.dataset.gpiOperationResource)];

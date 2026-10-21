@@ -28,6 +28,7 @@ from easyicu.webserver import (
     jobs,
     primary_cohort,
     provider_gate,
+    run_step_trace,
     settings,
     source_identity_authority,
     sources,
@@ -4648,20 +4649,9 @@ class PiCopilotService:
         clean_sha = str(expected_sha256 or "").strip().lower()
         row = self._research_run_row(project_id, clean_run)
         project_dir = str(row.get("project_dir") or "")
-        wrapper = Path(project_dir).expanduser().resolve()
-        pipeline_root = (wrapper / "pipeline").resolve()
-        declared_pipeline_run = pipeline_root / clean_run
-        evidence_run_dir = wrapper
-        if (
-            not declared_pipeline_run.is_symlink()
-            and declared_pipeline_run.is_dir()
-            and declared_pipeline_run.resolve().parent == pipeline_root
-        ):
-            # Wrapper-level artifacts are copied up for result browsing, while
-            # the immutable evidence registry remains owned by the concrete
-            # pipeline run. Keep governance at wrapper scope, but preview the
-            # digest-pinned record from its actual run directory.
-            evidence_run_dir = declared_pipeline_run.resolve()
+        # Keep governance at wrapper scope, but preview the digest-pinned
+        # record from the concrete pipeline run that owns the registry.
+        evidence_run_dir = run_step_trace.pipeline_run_dir(project_dir, clean_run)
         loaded = agent_runs.read_run_evidence_preview(
             str(evidence_run_dir), clean_evidence, clean_sha
         )
@@ -4726,6 +4716,32 @@ class PiCopilotService:
                 key: value for key, value in governance.items() if key != "ok"
             },
         }
+
+    def get_research_step(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        step_id: str,
+    ) -> Dict[str, Any]:
+        """Return one executed step of a project run, addressed by its ids."""
+
+        clean_run = str(run_id or "").strip()
+        clean_step = str(step_id or "").strip()
+        row = self._research_run_row(project_id, clean_run)
+        run_dir = run_step_trace.pipeline_run_dir(
+            str(row.get("project_dir") or ""), clean_run
+        )
+        try:
+            step = run_step_trace.project_step_detail(run_dir, clean_step)
+        except run_step_trace.RunStepDetailError as exc:
+            raise PiCopilotError(
+                exc.code,
+                exc.message,
+                status_code=exc.status_code,
+                details={"step_id": clean_step[:160]},
+            ) from exc
+        return {"ok": True, "run_id": clean_run, "step": step}
 
     def get_research_document(
         self,
