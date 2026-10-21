@@ -390,10 +390,11 @@ def jobs_crossdb_raw_distribution(body: Dict[str, Any]) -> dict:
     many concepts, so the native UI runs them through the same local job/SSE
     model as extraction instead of a foreground request.
     """
-    job = submit_job(
-        "crossdb-raw-distribution",
-        crossdb_review.make_crossdb_raw_distribution_runner(body),
-    )
+    try:
+        runner = crossdb_review.make_crossdb_raw_distribution_runner(body)
+    except crossdb_review.CrossdbReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+    job = submit_job("crossdb-raw-distribution", runner)
     return {"job_id": job.id, "kind": job.kind, "status": job.status}
 
 

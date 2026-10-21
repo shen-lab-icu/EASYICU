@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
+from easyicu.webserver.hosted import require_path
+
 from .contracts import PiCopilotError
 
 
@@ -208,6 +210,7 @@ class SessionStorageMaintenance:
                 status_code=422,
             )
         source_root = self.quarantine_root / clean_id
+        require_path(source_root / "manifest.json", instance_owned=True)
         try:
             manifest = json.loads(
                 (source_root / "manifest.json").read_text(encoding="utf-8")

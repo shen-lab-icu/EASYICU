@@ -33,6 +33,7 @@ from easyicu.io.data_paths import (
 )
 from easyicu.webserver import cohort_review
 from easyicu.webserver import dataio
+from easyicu.webserver import hosted
 from easyicu.webserver import sources as source_store
 
 _REQUIRED_CORE_MODULES = {"demographics", "outcome"}
@@ -705,6 +706,7 @@ def crossdb_raw_root_scan(body: Dict[str, Any]) -> Dict[str, Any]:
             "runnable": False,
         }
 
+    hosted.require_path(raw)
     path = Path(raw).expanduser()
     if not path.exists() or not path.is_dir():
         return {
@@ -989,6 +991,10 @@ def make_crossdb_raw_distribution_runner(body: Dict[str, Any]):
     boundaries. It never force-kills a currently executing database read.
     """
     request_body = dict(body or {})
+    if hosted.is_hosted():
+        # Reject before scheduling a job; repeat resolution when it executes.
+        root = _resolve_raw_data_root(request_body)
+        _resolve_raw_databases(root, request_body)
 
     def runner(job) -> Dict[str, Any]:
         def _should_cancel() -> bool:
@@ -1406,6 +1412,10 @@ def _catalog_unit(feature: str) -> str:
 
 def _resolve_raw_data_root(body: Dict[str, Any]) -> Path:
     raw = str(body.get("data_root") or body.get("root") or "").strip()
+    if raw or hosted.is_hosted():
+        # Desktop discovery may use legacy environment/default locations.
+        # A hosted request must name an administrator-permitted root.
+        hosted.require_path(raw)
     if raw:
         path = Path(raw).expanduser()
         if path.exists() and path.is_dir():
@@ -1448,11 +1458,16 @@ def _resolve_raw_data_root(body: Dict[str, Any]) -> Path:
 
 
 def _normalize_raw_root(path: Path) -> Path:
+    hosted.require_path(path)
     aliases = {alias for names in DATABASE_ALIASES.values() for alias in names}
     name = path.name.lower()
     if name in aliases or any(alias in name for alias in aliases):
         parent = path.parent
-        if parent != path and len(_detect_raw_databases(parent)) >= 2:
+        if (
+            parent != path
+            and hosted.path_allowed(parent)
+            and len(_detect_raw_databases(parent)) >= 2
+        ):
             return parent
     return path
 
@@ -1536,10 +1551,18 @@ def _raw_database_exists(root: Path, db: str) -> bool:
 
 
 def _raw_database_resolved_path(root: Path, db: str) -> Path | None:
+    hosted.require_path(root)
+    if hosted.is_hosted() and root.is_dir():
+        # The shared resolver lists an alias directory to choose its version.
+        # Check links before it can list an alias outside the permitted roots.
+        for child in root.iterdir():
+            if child.is_symlink():
+                hosted.require_path(child)
     try:
         resolved = Path(find_database_path(str(root), db)).expanduser()
     except Exception:
         return None
+    hosted.require_path(resolved)
     if not resolved.exists() or not resolved.is_dir():
         return None
     try:

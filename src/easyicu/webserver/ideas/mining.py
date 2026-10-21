@@ -6153,7 +6153,15 @@ def _pubmed_esummary(ids: List[str]) -> List[Dict[str, Any]]:
 
 
 def _run_dir(run_id: str) -> Path:
-    return _RUN_ROOT / _slug(run_id, fallback="idea_run")
+    path = _RUN_ROOT / _slug(run_id, fallback="idea_run")
+    hosted.require_path(path, instance_owned=True)
+    if hosted.is_hosted() and path.is_dir():
+        # All receipts are immediate children of this metadata-only run. A
+        # valid run ID must not let a pre-existing link redirect their reads
+        # or writes outside the instance, even when the directory is allowed.
+        for child in path.iterdir():
+            hosted.require_path(child, instance_owned=True)
+    return path
 
 
 def _assert_no_row_payload(payload: Dict[str, Any]) -> None:

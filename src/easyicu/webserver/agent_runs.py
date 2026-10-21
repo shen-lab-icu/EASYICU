@@ -684,10 +684,13 @@ def list_run_history(
     limit: int = 50,
 ) -> Dict[str, Any]:
     """List local agent run directories by reading whitelisted artifacts only."""
+    from easyicu.webserver.hosted import require_path
+
     root = (
         Path(project_root).expanduser() if project_root else state_paths.projects_root()
     )
     root = root.resolve()
+    require_path(root, instance_owned=True)
     if not root.exists() or not root.is_dir():
         return {
             "ok": True,
@@ -703,6 +706,7 @@ def list_run_history(
         study_dirs = [p for p in root.iterdir() if p.is_dir()]
     runs = []
     for study_dir in study_dirs:
+        require_path(study_dir, instance_owned=True)
         if not study_dir.exists() or not study_dir.is_dir():
             continue
         for run_dir in study_dir.iterdir():
