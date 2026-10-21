@@ -186,7 +186,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261021-hosted1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261021-readable1" in index_html
+    assert "js/screens-extraction.js?v=20261022-workspace1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261021-named-steps1" in index_html
     assert "js/screens-help.js?v=20261021-hosted2" in index_html
@@ -1394,7 +1394,7 @@ def test_native_extraction_uses_separate_feature_cohort_and_export_steps() -> No
     assert ".ex-collapsible .cfg-body[hidden]{ display:none; }" in extraction_css
     assert ".ex-action-dock{" in extraction_css
     assert "exExpandedMod && String(exExpandedMod).startsWith('sepsis3_')" in extraction_js
-    assert "const exportReady = dataMode() === 'demo' || !!currentExportDir();" in extraction_js
+    assert "const exportReady = dataMode() === 'demo' || hostedServer() || !!currentExportDir();" in extraction_js
     assert ".cohort-preset-grid" not in redesign_css
     assert ".range-ctl" not in redesign_css
     assert ".ex-export-destination" not in redesign_css
@@ -1424,7 +1424,7 @@ def test_native_extraction_prefers_parquet_export_by_default() -> None:
     assert "尚未选择导出目录" in extraction_js
     assert "Choose an export destination before extracting." in extraction_js
     assert "请先选择导出目录再开始抽取。" in extraction_js
-    assert "const exportReady = dataMode() === 'demo' || !!currentExportDir();" in extraction_js
+    assert "const exportReady = dataMode() === 'demo' || hostedServer() || !!currentExportDir();" in extraction_js
     assert (
         "extractDisabled = !selMods().length || !support.ok || !exportReady"
         in extraction_js
@@ -1432,6 +1432,8 @@ def test_native_extraction_prefers_parquet_export_by_default() -> None:
     assert "window.EU_API.saveSetting('export_dir', exExportDir)" in extraction_js
     assert "payload.out_dir = outDir" in extraction_js
     assert "if (outDir) payload.out_dir = outDir" not in extraction_js
+    # A hosted export omits out_dir (tests/js/extraction_hosted_workspace.test.js).
+    assert "if (!hostedServer()) payload.out_dir = outDir;" in extraction_js
     assert "rememberExportPath(exportResult.out_dir)" in extraction_js
     assert "window.EU_PATIENT_SOURCES = null;" in extraction_js
     assert "~/easyicu/exports/${dataMode()}" not in extraction_js
@@ -2134,7 +2136,7 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "js/screens-viz-crossdb-setup.js?v=20261021-hosted1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz-crossdb-results.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz.js?v=20261021-hosted3" in index_html
+    assert "js/screens-viz.js?v=20261022-workspace1" in index_html
     assert "css/crossdb.css?v=20260830-viz-final1" in index_html
     for selector in (
         ".crossdb-method-grid",
@@ -2181,7 +2183,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20261021-hosted3" in index_html
+    assert "js/screens-viz.js?v=20261022-workspace1" in index_html
 
 
 def test_native_cohort_groups_render_table_one_without_legacy_bars() -> None:
@@ -2358,7 +2360,9 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
     assert "api.js?v=20261021-session1" in index_html
-    assert "screens-dict.js?v=20260830-viz-final1" in index_html
+    assert "screens-dict.js?v=20261022-workspace1" in index_html
+    # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
+    assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
     assert "deepdive.css?v=20260830-viz-final1" in index_html
 
 
@@ -2895,7 +2899,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20261021-hosted3" in index_html
+    assert "js/screens-viz.js?v=20261022-workspace1" in index_html
     assert "bounded browser review', '浏览器有界审阅" in patient_domain_js
     assert "function buildPatientDrilldown" in demo_drilldown_js
     assert "function demoTablePreviewRowContext" in demo_drilldown_js
@@ -3106,7 +3110,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz.js?v=20261021-hosted3" in index_html
+    assert "js/screens-viz.js?v=20261022-workspace1" in index_html
     assert "view: 'idle'," in cohort_js
     assert "featureScope: 'recommended'," in cohort_js
     assert 'data-cohort-config-required="true"' in cohort_js
@@ -3123,7 +3127,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     assert "请先选择或添加本地 EasyICU 导出，再加载队列统计。" in cohort_js
     assert "const body = { source_path: active };" in cohort_js
     assert "if (!registryActivePath()) {" in cohort_js
-    assert "No active export selected" in cohort_js
+    assert "No current data selected" in cohort_js
     assert "state.view = 'idle';" in cohort_js
     assert "window.EU_COHORT_REVIEW = null;" in cohort_js
     assert "data-viz-reset" in cohort_js

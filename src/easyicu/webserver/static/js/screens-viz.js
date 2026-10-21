@@ -1206,7 +1206,7 @@
       'Local exports': '本地导出',
       'Local export': '本地导出',
       'Demo cohort': '演示队列',
-      'Not configured': '未配置',
+      'No data loaded': '未加载数据',
       'Cross-DB benchmark': '跨库对比',
       'Cross-DB benchmark ready': '跨库对比已就绪',
       'Raw ICU data root': '原始 ICU 数据根目录',
@@ -1344,9 +1344,11 @@
     const xdbRaw = xdb && xdb.source_type === 'raw_database_root';
     const dataMode = displayDataMode();
     const officialDemo = officialDemoContext();
+    const hosted = hostedServer();
+    const preparedData = t('Prepared data', '已准备的数据');
     const sourceLabel = xdb
-      ? (xdbDemo ? crossTerm('Demo simulated frames') : (xdbRaw ? t('Local raw databases', '本地原始数据库') : (officialDemo ? t('Official demo pair', '官方 Demo 组合') : crossTerm('Local exports'))))
-      : (ws ? crossTerm('Local export') : (dataMode === 'real' ? crossTerm('Not configured') : crossTerm('Demo cohort')));
+      ? (xdbDemo ? crossTerm('Demo simulated frames') : (xdbRaw ? (hosted ? t('Raw databases', '原始数据库') : t('Local raw databases', '本地原始数据库')) : (officialDemo ? t('Official demo pair', '官方 Demo 组合') : (hosted ? preparedData : crossTerm('Local exports')))))
+      : (ws ? (hosted ? preparedData : crossTerm('Local export')) : (dataMode === 'real' ? crossTerm('No data loaded') : crossTerm('Demo cohort')));
     return `
       <div class="row gap-8" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px;white-space:nowrap;flex-wrap:wrap;row-gap:2px;">
         <span>${crossTerm('Workspace')}</span> ${icon('chevron', 11)} <span>${sourceLabel}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">${t('Cross-database comparison', '跨库对比')}</span>

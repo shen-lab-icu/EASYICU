@@ -215,7 +215,7 @@
 
       <div class="dict-catalog-note">
         ${icon('help', 14)}
-        <span>${t('This column counts how many supported ICU databases have a dictionary mapping for each feature. It is independent of the currently registered local export.', '这一列统计字典中每个特征覆盖了多少个支持的 ICU 数据库,与当前注册的本地导出无关。')}</span>
+        <span>${t('This column counts how many supported ICU databases have a dictionary mapping for each feature. It does not depend on the data currently selected.', '这一列统计字典中每个特征覆盖了多少个支持的 ICU 数据库，与当前选择的数据无关。')}</span>
       </div>
 
       <div class="dict-search">
@@ -279,7 +279,10 @@
           if (!api || typeof api.loadConceptLineage !== 'function') throw new Error(L('Lineage API is unavailable.', '血缘 API 不可用。'));
           dictLineage = await api.loadConceptLineage(dictSelected);
         } catch (error) {
-          dictLineageError = String(error && error.message || error);
+          // A listed concept the lineage owner does not declare (the SOFA-2
+          // scores keep their own dictionary) has no raw-source mapping to show.
+          if (error && error.code === 'concept_not_found') dictLineage = { concept: dictSelected, lanes: [] };
+          else dictLineageError = String(error && error.message || error);
         } finally {
           dictLineageLoading = false;
           paintResults(); paintLineage();

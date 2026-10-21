@@ -72,7 +72,7 @@
       'Workspace': '工作区',
       'Local export': '本地导出',
       'Demo cohort': '演示队列',
-      'Not configured': '未配置',
+      'No data loaded': '未加载数据',
       'Cohort statistics': '队列统计',
       'Agent preflight': 'Agent 预检',
       'current session': '当前会话',
