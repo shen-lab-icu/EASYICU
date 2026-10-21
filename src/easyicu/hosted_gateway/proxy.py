@@ -4,17 +4,13 @@ from __future__ import annotations
 
 import anyio
 import httpx
-from starlette.responses import HTMLResponse, StreamingResponse
+from starlette.responses import StreamingResponse
 
 from .auth import CSRF_COOKIE, SESSION_COOKIE
+from .pages import unavailable
 
 HOP_HEADERS = {b"connection", b"keep-alive", b"proxy-authenticate", b"proxy-authorization",
                b"te", b"trailer", b"transfer-encoding", b"upgrade"}
-
-
-def unavailable() -> HTMLResponse:
-    return HTMLResponse("你的 EasyICU 暂时不可用，请联系管理员。", status_code=503,
-                        headers={"cache-control": "no-store"})
 
 
 def end_to_end(headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>暂时无法打开 · EasyICU</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='12' fill='%230E1116'/%3E%3Cpath d='M12 5l1.5 4.4L18 11l-4.5 1.6L12 17l-1.5-4.4L6 11l4.5-1.6z' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+  /* Same look as login.html: self-contained, EasyICU tokens as plain hex. */
+  :root {
+    --bg: #FAFAF7; --surface: #FFFFFF; --ink: #0E1116; --ink-2: #2E3338;
+    --ink-3: #56606C; --ink-4: #667085; --hair: #E7E5DF;
+    --accent: #2E7A86; --accent-ink: #1F5560; --accent-soft: #EEF6F7;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 24px 16px; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  main { width: 100%; max-width: 360px; }
+  .brand { display: flex; align-items: center; gap: 10px; margin: 0 0 22px 2px; }
+  .mark {
+    flex: none; display: grid; place-items: center; width: 36px; height: 36px;
+    border-radius: 50%; background: var(--ink); color: #fff;
+  }
+  .brand strong { display: block; font-size: 17px; letter-spacing: -0.01em; }
+  .brand span { display: block; font-size: 12.5px; color: var(--ink-3); }
+  .card {
+    background: var(--surface); border: 1px solid var(--hair); border-radius: 10px;
+    padding: 26px 24px 22px; box-shadow: 0 4px 12px rgba(14, 17, 22, 0.06), 0 1px 0 rgba(14, 17, 22, 0.04);
+  }
+  h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+  p { margin: 0 0 8px; color: var(--ink-2); }
+  .hint { margin-bottom: 20px; color: var(--ink-3); font-size: 13px; }
+  a.button {
+    display: block; height: 42px; line-height: 42px; border-radius: 6px; text-align: center;
+    background: var(--accent); color: #fff; font-size: 15px; font-weight: 600; text-decoration: none;
+  }
+  a.button:hover { background: var(--accent-ink); }
+  a.button:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">
+    <div class="mark" aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>
+    </div>
+    <div><strong>EasyICU</strong><span>ICU 研究工作台</span></div>
+  </div>
+  <div class="card" role="alert">
+    <h1>暂时无法打开</h1>
+    <p>你的 EasyICU 暂时不可用，请联系管理员。</p>
+    <p class="hint">如果管理员正在更新系统，几分钟后刷新本页即可。</p>
+    <a class="button" href="">刷新本页</a>
+  </div>
+</main>
+</body>
+</html>

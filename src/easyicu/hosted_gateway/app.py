@@ -11,7 +11,6 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from starlette.applications import Starlette
@@ -25,11 +24,11 @@ from .auth import (
     CSRF_COOKIE, LOGIN_WINDOW, SESSION_COOKIE, SESSION_SECONDS, LoginLimiter, Signer, verify_password,
 )
 from .config import GatewayConfig
-from .proxy import InstanceProxy, unavailable
+from .pages import CSP, TEMPLATES, unavailable
+from .proxy import InstanceProxy
 from .storage import read_secret, read_users
 
 ACCESS_LOG = logging.getLogger("easyicu.hosted_gateway.access")
-CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; frame-ancestors 'none'"
 LOGIN_ERROR = "用户名或密码错误，请重试。"
 STATE_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError)
 
@@ -74,7 +73,7 @@ def create_app(config: GatewayConfig, *, clock=time.time) -> Starlette:
     limiter = LoginLimiter(clock)
     auth_lock = asyncio.Lock()
     proxy = InstanceProxy()
-    template = (Path(__file__).parent / "templates/login.html").read_text(encoding="utf-8")
+    template = (TEMPLATES / "login.html").read_text(encoding="utf-8")
 
     def login_page(*, error: str = "", status: int = 200, csrf: str = ""):
         csrf = csrf or signer.issue("csrf", {"nonce": secrets.token_urlsafe(32)}, LOGIN_WINDOW)
