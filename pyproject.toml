@@ -58,6 +58,7 @@ viz = [
 ]
 webapp = [
   "fastapi>=0.115",
+  "httpx>=0.27",
   "uvicorn>=0.30",
   "psutil>=5.9",
   "anthropic>=0.119.0,<2",
@@ -120,6 +121,7 @@ all = [
 [project.scripts]
 easyicu = "easyicu.scripts.extract_features:main"
 easyicu-webapp = "easyicu.webserver.__main__:main"
+easyicu-hosted-gateway = "easyicu.hosted_gateway.cli:main"
 easyicu-llm-server = "easyicu.hosted_llm_server:main"
 easyicu-research-agent = "easyicu.research_agent.cli:main"
 easyicu-research-replication = "easyicu.research_agent.replication_cli:main"
@@ -139,6 +141,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 easyicu = ["data/*.json", "data/*.md", "data/research_know_how/*.json"]
+"easyicu.hosted_gateway" = ["templates/*.html"]
 "easyicu.webserver" = [
   "static/index.html",
   "static/THIRD_PARTY_NOTICES.md",
