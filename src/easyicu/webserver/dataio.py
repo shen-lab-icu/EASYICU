@@ -23,6 +23,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -3583,7 +3584,26 @@ def _read_export_frame(
     columns: Optional[List[str]] = None,
     stay_ids: Optional[set[str]] = None,
 ) -> Any:
-    return _read_export_projection(path, columns=columns, stay_ids=stay_ids)
+    """Read export columns with the stay key under the canonical ``stay_id``.
+
+    Callers name the stay key ``stay_id``; an export keeps its database's own
+    key (eICU ``patientunitstayid`` ...). Reading by the canonical name alone
+    found no key in such a file, so every module frame came back empty and the
+    eICU patient/cohort views showed blank ages, scores and outcomes.
+    """
+
+    canonical = entity_id_contract.CANONICAL_ENTITY_ID
+    entity_column = entity_id_contract.resolve_entity_id_column(_read_columns(path)) or canonical
+    requested = (
+        None if columns is None
+        else [entity_column if column == canonical else column for column in columns]
+    )
+    frame = _read_export_projection(
+        path, columns=requested, stay_ids=stay_ids, entity_column=entity_column,
+    )
+    if entity_column != canonical and entity_column in getattr(frame, "columns", ()):
+        frame = frame.rename(columns={entity_column: canonical})
+    return frame
 
 
 def _read_stay_id_frame(
@@ -4042,6 +4062,33 @@ def _series_payload(vitals: Any, stay_id: str) -> List[Dict[str, Any]]:
     return out
 
 
+#: A fresh PhysioNet download keeps its tables in module folders (MIMIC-IV
+#: ``hosp/`` and ``icu/``), sometimes under a version folder (``3.1/hosp``).
+#: The converter walks the whole tree; the scan looks this deep, no deeper.
+_RAW_SCAN_DEPTH = 2
+_RAW_SCAN_MAX_FILES = 5000
+
+
+def _raw_table_files(path: Path) -> List[Path]:
+    """Raw CSV / CSV.GZ tables at the root or up to two folders below it.
+
+    Hidden entries are skipped; the listing is bounded so a scan of a large
+    unrelated tree stays cheap. Only names and sizes are read, never rows.
+    """
+
+    found: List[Path] = []
+    for root, dirs, files in os.walk(path):
+        depth = len(Path(root).relative_to(path).parts)
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".")) if depth < _RAW_SCAN_DEPTH else []
+        for name in sorted(files):
+            if name.startswith(".") or not (name.endswith(".csv") or name.endswith(".csv.gz")):
+                continue
+            found.append(Path(root) / name)
+            if len(found) >= _RAW_SCAN_MAX_FILES:
+                return found
+    return found
+
+
 def _check_data_status(path: Path, db_key: str) -> Dict[str, Any]:
     """Count prepared parquet (flat + shard dirs) vs raw csv, and judge ready.
 
@@ -4061,11 +4108,7 @@ def _check_data_status(path: Path, db_key: str) -> Dict[str, Any]:
     except OSError:
         pass
 
-    csv_files = [
-        f
-        for f in list(path.glob("*.csv")) + list(path.glob("*.csv.gz"))
-        if not f.name.startswith(".")
-    ]
+    csv_files = _raw_table_files(path)
 
     required = _CORE_TABLES.get(db_key, [])
     found = {n.lower() for n in parquet_names}
@@ -4096,7 +4139,7 @@ def _estimate_size(path: Path) -> Optional[str]:
     """Rough total size of raw csv(.gz) files, formatted for display."""
     total = 0
     try:
-        for f in list(path.glob("*.csv")) + list(path.glob("*.csv.gz")):
+        for f in _raw_table_files(path):
             try:
                 total += f.stat().st_size
             except OSError:
