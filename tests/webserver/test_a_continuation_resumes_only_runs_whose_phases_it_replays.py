@@ -215,14 +215,15 @@ def test_a_grouping_record_that_cannot_be_read_counts_as_formed(source, record) 
 def test_any_phase_a_continuation_does_not_replay_refuses_its_source(
     source, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The rule is the table's, not a special case of the grouping."""
+    """The generic guard also applies to phases other than grouping restore."""
 
     monkeypatch.setattr(
         owner,
         "_PHASES_A_CONTINUATION_DOES_NOT_REPLAY",
         (("synthetic_phase", lambda run_dir: (run_dir / "synthetic.json").is_file()),),
     )
-    _write(source.run, _formed_record())
+    # Keep grouping verification valid while exercising the independent guard.
+    _write(source.run, _NOT_ASKED)
     assert source.scope().budget_mode == "planner_canary"
 
     (source.run / "synthetic.json").write_text("{}")

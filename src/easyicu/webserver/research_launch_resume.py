@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import json
 import re
 from dataclasses import dataclass, field
@@ -21,11 +22,16 @@ from easyicu.webserver.research_launch_scientific import (
     _normalized_metadata_planning_operationalized_columns,
 )
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.research_prepared_resume import (
+    PreparedGroupedContinuation,
+    verify_prepared_grouped_continuation,
+)
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED = (
     "research_pipeline_development_resume_phase_not_replayed"
 )
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -158,6 +164,7 @@ class _DevelopmentResumeLaunchScope:
     budget_mode: Literal["planner_canary", "full_reviewed"]
     plan_contract: str | None
     planning_requirements: Mapping[str, Any] = field(default_factory=dict)
+    prepared_grouping: PreparedGroupedContinuation | None = None
 
 
 def _formed_exposure_groupings(run_dir: Path) -> bool:
@@ -188,7 +195,10 @@ def _development_resume_phases_not_replayed(run_dir: Path) -> tuple[str, ...]:
 
 
 def _development_resume_launch_scope(
-    *, project_root: str, study: Mapping[str, Any], source_job_id: str
+    *, project_root: str, study: Mapping[str, Any], source_job_id: str,
+    offer_only: bool = False,
+    validated_package_binding: Mapping[str, Any] | None = None,
+    previously_verified: _DevelopmentResumeLaunchScope | None = None,
 ) -> _DevelopmentResumeLaunchScope:
     """Restore a selected continuation's sealed input scope, not plan approval.
 
@@ -205,7 +215,7 @@ def _development_resume_launch_scope(
     from easyicu.research_agent.planning.baseline_requirements import AcceptedBaselineRequirements
     from easyicu.research_agent.planning.population_requirements import PlanPopulationRequirements
 
-    checkpoint, _ = _development_progressive_resume_binding(
+    checkpoint, checkpoint_sha256 = _development_progressive_resume_binding(
         project_root=project_root,
         study_id=str(study.get("id") or ""),
         source_job_id=source_job_id,
@@ -293,7 +303,57 @@ def _development_resume_launch_scope(
             "research_pipeline_development_resume_scope_invalid",
             "The prior Planner's reviewed requirements did not pass validation.",
         ) from exc
-    return _DevelopmentResumeLaunchScope(seed.budget_mode, contract, requirements)
+    try:
+        groupings = load_resume_exposure_groupings(checkpoint.parent)
+        package_identity = ""
+        prepared_grouping = (
+            verify_prepared_grouped_continuation(
+                run_dir=checkpoint.parent, source=groupings,
+                pipeline_config=seed.pipeline_config,
+                package_binding=seed.prepared_package_binding,
+                scope_identity=(checkpoint_sha256, digest, str(study.get("id") or "")),
+                offer_only=offer_only,
+                previously_verified=previously_verified.prepared_grouping if previously_verified else None,
+            ) if groupings is not None else None
+        )
+        if prepared_grouping is not None and seed.prepared_package_binding is not None:
+            from easyicu.webserver.dataio import validate_research_pipeline_source
+            from easyicu.webserver.research_resume_package import (
+                prepared_package_identity, prepared_package_offer_matches,
+            )
+
+            source = study.get("data_source") or {}
+            path = str(source.get("path") or "")
+            package_identity = prepared_package_identity(
+                path, seed.prepared_package_binding, verify_content=previously_verified is not None,
+            )
+            if offer_only:
+                if not prepared_package_offer_matches(
+                    path, database=source.get("database"), binding=seed.prepared_package_binding,
+                    identity=package_identity,
+                ):
+                    raise ValueError("the prepared package does not match the saved preparation")
+            elif previously_verified is None:
+                # Preparation already opened and verified this launch's package.
+                # Direct callers still get a full uncached package check here.
+                binding = validated_package_binding
+                if binding is None:
+                    binding = validate_research_pipeline_source(path, database=source.get("database"))["binding"]
+                if binding.get("export_authority_sha256") != seed.prepared_package_binding.get("export_authority_sha256"):
+                    raise ValueError("the prepared package does not match the saved preparation")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ResearchPipelineRunError(
+            DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED,
+            "The saved preparation could not be verified for continuation; prepare the same reviewed candidate again.",
+            details={"reason_code": "development_resume_source_phase_not_replayed", "phases": ["exposure_grouping"]},
+        ) from exc
+    scope = _DevelopmentResumeLaunchScope(seed.budget_mode, contract, requirements, prepared_grouping)
+    if previously_verified is not None and scope != previously_verified:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_scope_mismatch",
+            "The saved preparation changed after continuation was offered.",
+        )
+    return scope
 
 
 def development_resume_requirement(
@@ -333,10 +393,10 @@ def development_resume_available(
     """
     from easyicu.webserver import agent_review_recovery
 
-    match = re.fullmatch(r"run_([A-Za-z0-9][A-Za-z0-9_-]{0,79})", wrapper_dir.name)
-    if match is None or wrapper_dir.is_symlink():
-        return False
     try:
+        match = re.fullmatch(r"run_([A-Za-z0-9][A-Za-z0-9_-]{0,79})", wrapper_dir.name)
+        if match is None or wrapper_dir.is_symlink():
+            return False
         seed = agent_review_recovery.load_recovery_seed(wrapper_dir)
         if (
             seed is None or str(seed.study.get("id") or "") != study_id
@@ -346,8 +406,15 @@ def development_resume_available(
         _development_resume_launch_scope(
             project_root=str(wrapper_dir.parent.parent), study=seed.study,
             source_job_id=match.group(1),
+            offer_only=True,
         )
-    except (ResearchPipelineRunError, agent_review_recovery.WebReviewRecoveryError, OSError):
+    except Exception as exc:
+        # A read-only offer may disappear, but must not take down the page.
+        # Keep this boundary out of the authoritative launch and omit payloads.
+        _LOGGER.warning(
+            "development_resume_offer_unavailable reason=%s exception_type=%s",
+            getattr(exc, "code", "development_resume_offer_error"), type(exc).__name__,
+        )
         return False
     return True
 

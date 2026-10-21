@@ -1,6 +1,8 @@
 """Synthetic grouped inputs and sealed Web launch coordinates for resume tests."""
 
 import json
+import hashlib
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +10,8 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.cohort import materializer
+from easyicu.research_agent.authority.run_input import build_scientific_identity, seal_run_input_capsule
+from easyicu.research_agent.intake.materialized_metadata import load_verified_materialized_cohort_authority
 from easyicu.research_agent.intake.materialized_metadata import stage_materialized_cohort_authority
 from easyicu.research_agent.orchestration.exposure_grouping_phase import run_exposure_grouping_phase
 from easyicu.research_agent.research_context.builder import build_research_context
@@ -30,12 +34,14 @@ ANSWER = json.dumps({"groupings": [{
 }]})
 
 
-def context(cohort: Path, *, primary_exposure=None):
+def context(cohort: Path, *, primary_exposure=None, trajectory_binding=None):
+    typed = load_verified_materialized_cohort_authority(cohort)
     return build_research_context(
         research_question="Compare hospital death across lactate groups in the first day.",
         cohort=cohort, cohort_name="synthetic", database="miiv",
         primary_exposure=primary_exposure, target_outcome="death",
-        id_columns=("stay_id",), outcome_columns=("death",),
+        trajectory_binding=trajectory_binding,
+        id_columns=(typed.authority.identity_column if typed else "stay_id",), outcome_columns=("death",),
         user_preferences={"data_constraints": json.dumps({"materialization_window": {
             "role": "outer_observation_window", "anchor": "icu_admission", "hours": 24,
         }})},
@@ -57,12 +63,29 @@ def catalog(root: Path, *columns: str) -> Path:
     return path
 
 
-def prepared(root: Path) -> Path:
+def prepared(root: Path, *, patient_grouped: bool = False) -> Path:
     root.mkdir(parents=True, exist_ok=True)
+    identity = {}
+    if patient_grouped:
+        from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
+
+        mapping = root / "synthetic_grouping.parquet"
+        pd.DataFrame({"stay_id": [1, 2], "patient_key": [7, 8]}).to_parquet(mapping, index=False)
+        digest = hashlib.sha256(mapping.read_bytes()).hexdigest()
+        identity = PatientGroupingBinding(
+            mapping_path=mapping, mapping_sha256=digest,
+            mapping_stay_column="stay_id", mapping_patient_column="patient_key",
+            authority_coordinates={
+                "schema_version": "easyicu.patient_grouping_runtime_authority/1",
+                "authority_ref": "synthetic/patient_grouping", "mapping_sha256": digest,
+                "grouping_derivation": "prefix_before_:s", "provider_visible_values": False,
+            },
+        ).materializer_kwargs()
     paths = materializer.materialize_to_parquet(
         root / "materialized", stem="universe", data_path=typed_export(root / "export"),
         database="miiv", static_concepts=("age",), feature_concepts=("lact",),
         outcome_concepts=("death",),
+        **identity,
     )
     copy = root / "run/cohort.parquet"
     stage_materialized_cohort_authority(paths["parquet"], copy, producer_implementation_sha256="a" * 64)
@@ -75,6 +98,32 @@ def phase(cohort: Path, client):
         planner=client, rebuild_context=context, capability_review_pending=False,
         trajectory_staged=False, emit_progress=lambda *_args, **_kwargs: None,
     )
+
+
+def seal_prepared_source(source, evidence):
+    """Keep the real materializer input and capsule, as a Web preparation does."""
+    original_dir = source.original.parent.parent / "materialized"
+    input_dir = source.run.parents[1] / "pipeline_input"
+    shutil.copytree(original_dir, input_dir)
+    universe = input_dir / "universe.parquet"
+    typed = load_verified_materialized_cohort_authority(universe)
+    initial = context(universe)
+    identity = build_scientific_identity(
+        cohort=universe, question=initial.research_question, cohort_name="synthetic",
+        database="miiv", target_outcome="death", primary_exposure=None,
+        cross_database_validation=None, inclusion_criteria=None, exclusion_criteria=None,
+        id_columns=initial.cohort.id_columns, time_columns=None, outcome_columns=("death",),
+        time_windows=None, concept_descriptions=None,
+        user_preferences=initial.user_preferences.model_dump(mode="json"), notes=None,
+        skill_key=None, experiment_spec=None, source_files=None, disable_icu_context=False,
+        materialized_cohort_authority_ref=typed.reference.to_dict(),
+    )
+    seal_run_input_capsule(
+        run_dir=source.run, evidence=evidence, scientific_identity=identity,
+        initial_environment={}, context_path=source.run / "research_context.json",
+        cohort_path=source.cohort, experiment_spec_path=None,
+    )
+    source.universe = universe
 
 
 @pytest.fixture

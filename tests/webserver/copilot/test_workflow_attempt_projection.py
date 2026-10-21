@@ -62,6 +62,7 @@ def test_failed_preparation_is_visible_without_erasing_candidate_or_repeating_pl
 @pytest.mark.parametrize("change", [
     {"development_planner_checkpoint_available": False},
     {"gate_reason": "research_pipeline_progressive_compile_failed"},
+    {"gate_reason": "research_pipeline_development_resume_phase_not_replayed"},
 ])
 def test_nonresumable_attempt_stays_visible_but_never_invents_resume(change):
     study, candidate, failed, review = case()

@@ -61,6 +61,8 @@ def test_changed_study_or_owner_refusal_never_launches(source, monkeypatch):
     monkeypatch.setattr(study_contexts, "get_context", lambda _: source.study)
     monkeypatch.setattr(research_launch_resume, "development_resume_available", lambda **kw: False)
     assert research_job_recovery._continuation(state, launch) is None
+    assert state.continuation_refusal is not None
+    assert "prepare the same reviewed candidate again" in state.continuation_refusal["message"]
 
 
 def test_exhausted_outage_preserves_the_existing_planner_page_action(source, monkeypatch):
@@ -221,6 +223,45 @@ process.stdout.write(JSON.stringify({labels,stops}));
     assert labels[1][0].startswith("系统操作：") and "自动继续" in labels[1][0]
     assert "job budget" in labels[0][1] and "任务预算" in labels[1][1]
     assert "checkpoint is preserved" in output["stops"][0] and "已保留" in output["stops"][1]
+
+
+def test_continuation_refusal_uses_the_error_text_owner_in_both_languages():
+    from pathlib import Path
+    from tests.support.node import run_node
+
+    root = Path(__file__).resolve().parents[2] / "src/easyicu/webserver/static/js"
+    script = r"""
+const modules = {};
+global.window = {EU_HTML: {esc:x=>x}, EasyICU: {guidedPi: {declare: (name, api) => {modules[name] = api;}}}};
+require(process.argv[1]); require(process.argv[2]);
+const shell = require('node:fs').readFileSync(process.argv[3], 'utf8');
+const activityInit = shell.match(/const ACTIVITY = MODULES\.require\('activity'\)\.create\(\{[\s\S]*?\}\);/)[0];
+const output = ['en','zh'].map(lang => {
+  const tr = (en,zh) => lang === 'zh' ? zh : en;
+  const errors = modules.errorText.create({tr});
+  // Execute the production host wiring, including its error-text dependency.
+  const activity = require('node:vm').runInNewContext(activityInit + '\nACTIVITY', {
+    MODULES:{require:name=>modules[name]}, tr, runFailureText:errors.runFailureText,
+    esc:x=>x, iconHtml:()=>'', resourceName:x=>x, resourceKey:x=>x,
+    resourceButton:()=>'', publicAssistantText:x=>x,
+  });
+  const code = 'research_pipeline_development_resume_phase_not_replayed';
+  const live = activity.pipelineEventLabel({step:'provider_continuation_refused',reason:code});
+  const saved = activity.pipelineEventLabel({step:'provider_continuation_refused',reason_code:code});
+  return {live,saved,expected:errors.runFailureText(code)};
+});
+process.stdout.write(JSON.stringify(output));
+"""
+    output = json.loads(run_node("node", script, str(root / "screens-guided-pi-error-text.js"),
+                                 str(root / "screens-guided-pi-activity.js"),
+                                 str(root / "screens-guided-pi.js"), check=True).stdout)
+    for row in output:
+        assert row["live"] == row["saved"] == row["expected"]
+        assert "research_pipeline" not in row["live"]
+    assert "same reviewed candidate again" in output[0]["live"]
+    assert output[0]["live"].count(".") == 1
+    assert "原已审阅的候选方案重新准备数据" in output[1]["live"]
+    assert output[1]["live"].count("。") == 1
 
 
 def test_real_launch_failure_defers_ledger_finish_until_checkpoint_continuation(tmp_path, monkeypatch):

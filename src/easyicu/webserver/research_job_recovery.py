@@ -47,10 +47,14 @@ def _continuation(
             plan_revision_source_run_id="", plan_change_request=None,
         )
     if checkpoint is None:
+        if not kwargs.get("execution_resume_source_run_id"):
+            recovery.record_continuation_refusal("research_pipeline_development_resume_checkpoint_invalid")
         return None
     try:
         runner = agent_pipeline_runs.make_research_pipeline_run_runner(**kwargs)
-    except ResearchPipelineRunError:
+    except ResearchPipelineRunError as exc:
+        if exc.code.startswith("research_pipeline_development_resume_"):
+            recovery.record_continuation_refusal(exc.code)
         return None
     return CheckpointContinuation(checkpoint=checkpoint, run=runner)
 

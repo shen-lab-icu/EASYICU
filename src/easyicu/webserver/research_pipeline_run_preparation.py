@@ -593,6 +593,14 @@ def _prepare_launch_execution(
             budget_mode=budget_mode,
             checkpoint_sequence=os.environ.get(_DEVELOPMENT_RESUME_SEQUENCE_ENV),
         )
+    development_resume_scope = (
+        _development_resume_launch_scope(
+            project_root=project_root, study=scientific.study,
+            source_job_id=selected_resume_source,
+            validated_package_binding=scientific.prepared_package_binding,
+        )
+        if development_resume_binding is not None else None
+    )
     development_resume_acquisition = (
         _development_resume_acquisition_profile(
             checkpoint_path=development_resume_binding[0],
@@ -611,7 +619,7 @@ def _prepare_launch_execution(
                 scientific.metadata_operationalized_columns
             ),
         )
-        if development_resume_binding is not None
+        if development_resume_binding is not None and development_resume_scope.prepared_grouping is None
         else None
     )
     development_resume_literature = (
@@ -620,13 +628,6 @@ def _prepare_launch_execution(
         )
         if development_resume_binding is not None
         else None
-    )
-    development_resume_scope = (
-        _development_resume_launch_scope(
-            project_root=project_root, study=scientific.study,
-            source_job_id=selected_resume_source,
-        )
-        if development_resume_binding is not None else None
     )
     if development_resume_scope is not None and development_resume_scope.budget_mode != budget_mode:
         raise ResearchPipelineRunError(

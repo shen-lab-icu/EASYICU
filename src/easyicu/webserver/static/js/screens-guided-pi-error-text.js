@@ -406,15 +406,15 @@
       const value = String(code || '').trim();
       if (!value.startsWith('research_pipeline_development_resume_')) return '';
       const reason = value === 'research_pipeline_development_resume_phase_not_replayed'
-        ? tr('The saved exposure groups or their research context could not be restored exactly.', '无法原样恢复已保存的暴露分组或对应的研究上下文。')
+        ? tr('The exposure groups or research context saved with the planning checkpoint could not be restored exactly.', '无法原样恢复规划检查点保存的暴露分组或对应的研究上下文。')
         : /scope_mismatch|plan_contract_mismatch|acquisition_authority_mismatch/.test(value)
           ? tr('The saved planning checkpoint belongs to different study inputs or requirements.', '已保存的规划检查点与当前研究输入或要求不一致。')
           : /literature_/.test(value)
             ? tr('The literature bound to the saved planning checkpoint could not be verified.', '无法校验规划检查点绑定的文献依据。')
             : tr('The saved planning checkpoint could not be verified for continuation.', '已保存的规划检查点未通过继续生成计划所需的校验。');
-      return reason + tr(
-        ' Use the recovery action on the study card to prepare the same candidate again or generate a new plan. Analysis has not started.',
-        '请使用研究卡片上的恢复操作，按原候选方案重新准备数据，或重新生成计划。分析尚未开始。',
+      return reason.replace(/[。.]+$/, '') + tr(
+        '; use the study card to prepare the same reviewed candidate again.',
+        '，请在研究卡片上按原已审阅的候选方案重新准备数据。',
       );
     }
 

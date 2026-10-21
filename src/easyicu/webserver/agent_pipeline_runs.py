@@ -6062,6 +6062,22 @@ def make_research_pipeline_run_runner(
         development_resume_binding = execution.development_resume_binding
         development_resume_acquisition = execution.development_resume_acquisition
         development_resume_literature = execution.development_resume_literature
+        grouped_continuation = None
+        if execution.development_resume_scope is not None and execution.development_resume_scope.prepared_grouping is not None:
+            from easyicu.webserver.research_launch_resume import _development_resume_launch_scope
+
+            # Preparation just rehearsed this launch uncached. Recheck its
+            # content-bound receipt before side effects, without another copy.
+            grouped_continuation = _development_resume_launch_scope(
+                project_root=project_root, study=study,
+                source_job_id=development_resume_binding[0].parents[2].name.removeprefix("run_"),
+                previously_verified=execution.development_resume_scope,
+            ).prepared_grouping
+            if grouped_continuation != execution.development_resume_scope.prepared_grouping:
+                raise ResearchPipelineRunError(
+                    "research_pipeline_development_resume_scope_mismatch",
+                    "The saved preparation changed after continuation was offered.",
+                )
         publication_skill_flags = authority.publication_skill_flags
         user_extension_activation = authority.user_extension_activation
         research_provider_environment = authority.provider_environment
@@ -6077,7 +6093,7 @@ def make_research_pipeline_run_runner(
         source_run_id = execution.plan_revision_source_run_id
         execution_resume_run_id = execution.execution_resume_source_run_id
         selected_runner_image = execution.runner_image
-        if prepared_package_binding is not None:
+        if prepared_package_binding is not None and grouped_continuation is None:
             try:
                 dataio.validate_research_pipeline_source(
                     export_path,
@@ -6332,6 +6348,8 @@ def make_research_pipeline_run_runner(
                 acquisition = _execution_resume_acquisition_projection(
                     execution_resume_inputs
                 )
+            elif grouped_continuation is not None:
+                acquisition = grouped_continuation.acquisition()
             elif (
                 metadata_only_planning
                 and development_resume_acquisition is not None
@@ -6517,7 +6535,9 @@ def make_research_pipeline_run_runner(
                     plan_revision_source_run_id=source_run_id,
                 )
             resolved_primary_exposure = primary_exposure
-            if execution_resume_inputs is not None:
+            if grouped_continuation is not None:
+                resolved_primary_exposure = grouped_continuation.scientific_identity.get("primary_exposure")
+            elif execution_resume_inputs is not None:
                 # Exact execution retries reuse the reviewed scientific request;
                 # fresh proposal heuristics may now select another aggregation.
                 resolved_primary_exposure = execution_resume_inputs.scientific_identity.get(
@@ -6559,7 +6579,10 @@ def make_research_pipeline_run_runner(
                     )
             pipeline_target = target
             pipeline_outcome_columns: tuple[str, ...] | None = None
-            if execution_resume_inputs is not None:
+            if grouped_continuation is not None:
+                pipeline_target = grouped_continuation.scientific_identity.get("target_outcome")
+                pipeline_outcome_columns = tuple(grouped_continuation.scientific_identity.get("outcome_columns") or ())
+            elif execution_resume_inputs is not None:
                 pipeline_target = execution_resume_inputs.scientific_identity.get(
                     "target_outcome"
                 )
@@ -6628,7 +6651,7 @@ def make_research_pipeline_run_runner(
                         if reading.get("role") == "measurement"
                     ),
                 )
-            if candidate_outcome_concepts and execution_resume_inputs is None:
+            if candidate_outcome_concepts and execution_resume_inputs is None and grouped_continuation is None:
                 resolve_outcomes = (
                     _resolve_planning_outcome_columns
                     if metadata_only_planning
@@ -7137,6 +7160,8 @@ def make_research_pipeline_run_runner(
                 sealed_preferences = dict(identity.get("user_preferences") or {})
                 UserPreferences.model_validate(sealed_preferences)
                 run_arguments["user_preferences"] = sealed_preferences
+            if grouped_continuation is not None:
+                run_arguments.update(grouped_continuation.run_arguments())
             outcome = pipeline.run(**run_arguments)
             if execution_resume_target is not None and isinstance(
                 outcome, HumanReviewPending

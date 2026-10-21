@@ -246,10 +246,16 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
         "resumable_planner_checkpoint_job_id",
         lambda **_kwargs: resume_source_job_id,
     )
+    scope_calls = []
+
+    def offer_scope(**kwargs):
+        scope_calls.append(kwargs)
+        return SimpleNamespace(budget_mode="planner_canary", plan_contract=None)
+
     monkeypatch.setattr(
         research_run_submission,
         "_development_resume_launch_scope",
-        lambda **_kwargs: SimpleNamespace(budget_mode="planner_canary", plan_contract=None),
+        offer_scope,
     )
     monkeypatch.setattr(
         agent_route.PiProviderConfigStore,
@@ -358,6 +364,7 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     if resume_source_job_id and not plan_revision_source_run_id:
         assert captured["development_resume_source_job_id"] == resume_source_job_id
         assert result["resume_source_job_id"] == resume_source_job_id
+        assert scope_calls[0]["offer_only"] is True
     else:
         assert "development_resume_source_job_id" not in captured
     if plan_revision_source_run_id:
