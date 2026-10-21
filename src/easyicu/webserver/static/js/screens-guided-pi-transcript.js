@@ -282,6 +282,14 @@
       const resultsVerified = Boolean(job && job.analysis_results_available
         && job.analysis_validated && job.numeric_verified);
       const progress = Array.isArray(job && job.progress) ? job.progress : [];
+      if (typeof ACTIVITY.notePipelineEvent === 'function') {
+        const activity = { steps };
+        progress.forEach(event => ACTIVITY.notePipelineEvent(activity, event));
+        if (jobStatus !== 'running') ACTIVITY.finishPipelineSteps(activity,
+          Number.isFinite(Number(job && job.finished_at_epoch)) ? Number(job.finished_at_epoch) * 1000 : null,
+          failed ? 'error' : 'complete');
+        return steps;
+      }
       const completedSteps = progress.map(row => {
         const match = /Step\s+(\d+)\/(\d+)\s+complete/i.exec(String(row && row.label || ''));
         return match ? [Number(match[1]), Number(match[2])] : null;
@@ -399,6 +407,14 @@
           text: tr('The prepared cohort and source manifest were registered before analysis.', '分析前已登记准备队列和数据来源清单。'),
         });
       }
+      if (typeof ACTIVITY.notePipelineEvent === 'function') {
+        const activity = { steps };
+        progress.forEach(event => ACTIVITY.notePipelineEvent(activity, event));
+        if (jobStatus !== 'running') ACTIVITY.finishPipelineSteps(activity,
+          Number.isFinite(Number(job && job.finished_at_epoch)) ? Number(job.finished_at_epoch) * 1000 : null,
+          failed ? 'error' : 'complete');
+        return steps;
+      }
       const completedSteps = progress.map(row => {
         const match = /Step\s+(\d+)\/(\d+)\s+complete/i.exec(String(row && row.label || ''));
         return match ? [Number(match[1]), Number(match[2])] : null;
@@ -487,17 +503,17 @@
         // An assistant row's text precedes its own tool calls, so the segment
         // follows only the tool calls recorded before this row.
         const toolsBeforeRow = activity ? activity.steps.filter(step => step.kind === 'tool').length : 0;
-        // The model's reasoning summary opens the row: it is the thought that
-        // led to this row's tool calls or answer.
+        // The SDK marker records that reasoning occurred; only its measured
+        // lifecycle time is displayed. Historical prose stays in the SDK store.
         if (activity && row.role === 'assistant') {
           // One assistant row is one model phase; the phase's lifecycle
           // timing (below) gives the persisted reasoning row its duration.
           activity.assistantRows = Number(activity.assistantRows || 0) + 1;
           const phase = activity.assistantRows;
-          parts.filter(p => p && p.type === 'thinking' && String(p.text || '').trim()).forEach((thought, partIndex) => {
+          parts.filter(p => p && p.type === 'thinking').forEach(() => {
             upsertActivityStep(activity, {
-              id: `history-thinking-${index}-${partIndex}`, kind: 'thinking', status: 'complete',
-              text: String(thought.text || ''), phase, at: rowAt, startedAt: rowAt, endedAt: rowAt, durationKnown: false,
+              id: `thinking-${phase}`, kind: 'thinking', status: 'complete',
+              phase, at: rowAt, durationKnown: false,
             });
           });
         }
@@ -524,7 +540,7 @@
             tools.set(id, toolStep);
           }
           Object.assign(toolStep, {
-            status: receipt.is_error ? 'error' : 'complete', text: receipt.summary || '',
+            status: receipt.is_error ? 'error' : 'complete', receipt: receipt.receipt || null,
             code: receipt.code || '', owner: receipt.owner || '',
             resource: receipt.resource || toolStep.resource || null,
             resources: Array.isArray(receipt.resources) ? receipt.resources : [],
@@ -631,6 +647,15 @@
           else if (event.type === 'assistant_start') {
             const phase = replayActivity.steps.filter(item => item.kind === 'assistant').length + 1;
             upsertActivityStep(replayActivity, { id: 'assistant-' + phase, kind: 'assistant', phase, status: 'running', at, startedAt: at });
+          } else if (event.type === 'thinking_start' || event.type === 'thinking_end') {
+            const phase = Math.max(1, replayActivity.steps.filter(item => item.kind === 'assistant').length);
+            const id = `thinking-${phase}`;
+            const previous = replayActivity.steps.find(item => item.id === id);
+            upsertActivityStep(replayActivity, {
+              id, kind: 'thinking', phase, at: previous && previous.at || at,
+              status: event.type === 'thinking_end' ? 'complete' : 'running',
+              ...(event.type === 'thinking_start' ? { startedAt: at, durationKnown: true } : { endedAt: at }),
+            });
           } else if (event.type === 'message_end') {
             const phase = replayActivity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
             if (phase) { phase.status = event.error_code ? 'error' : 'complete'; phase.endedAt = at; phase.stopReason = event.stop_reason || ''; }
@@ -639,23 +664,10 @@
           } else if (event.type === 'tool_progress') {
             upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at });
           } else if (event.type === 'tool_end') {
-            upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: event.is_error ? 'error' : 'complete', code: event.code || '', owner: event.owner || '', jobId: event.job_id || '', at, endedAt: at, resource: event.resource || null, resources: Array.isArray(event.resources) ? event.resources : [] });
+            upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: event.is_error ? 'error' : 'complete', code: event.code || '', owner: event.owner || '', receipt: event.receipt || null, jobId: event.job_id || '', at, endedAt: at, resource: event.resource || null, resources: Array.isArray(event.resources) ? event.resources : [] });
           } else if (event.type === 'retry') upsertActivityStep(replayActivity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'complete', attempt: event.attempt, maxAttempts: event.max_attempts, at, startedAt: at, endedAt: at });
           else if (event.type === 'compaction_start') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: 'running', at, startedAt: at });
           else if (event.type === 'compaction_end') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: event.aborted ? 'error' : 'complete', at, endedAt: at });
-        });
-        // A persisted reasoning row spans its model phase: from the phase's
-        // start to its first tool call, or to the end of the phase.
-        replayActivity.steps.filter(step => step.kind === 'thinking' && step.phase).forEach(step => {
-          const phase = replayActivity.steps.find(item => item.id === `assistant-${step.phase}`);
-          if (!phase || !Number.isFinite(Number(phase.startedAt))) return;
-          const started = Number(phase.startedAt);
-          const firstTool = replayActivity.steps
-            .filter(item => item.kind === 'tool' && Number(item.startedAt) >= started)
-            .sort((left, right) => Number(left.startedAt) - Number(right.startedAt))[0];
-          const ended = firstTool ? Number(firstTool.startedAt) : Number(phase.endedAt);
-          if (!Number.isFinite(ended) || ended < started) return;
-          Object.assign(step, { at: started, startedAt: started, endedAt: ended, durationKnown: true });
         });
         replayActivity.steps.sort((left, right) => Number(left.at || 0) - Number(right.at || 0));
         replayActivity.steps.forEach(step => {

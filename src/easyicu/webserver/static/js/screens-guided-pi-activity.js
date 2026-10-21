@@ -1,6 +1,6 @@
 /* Guided Copilot activity timeline.
    Owner: browser-safe lifecycle/tool rendering. It shows the model's own
-   reasoning summary as trace rows (bounded and sanitized upstream) and never
+   reasoning duration as trace rows and never
    receives tool arguments, credentials, patient rows, or host paths. */
 (function () {
   'use strict';
@@ -19,7 +19,6 @@
     const resourceName = host.resourceName;
     const resourceKey = host.resourceKey;
     const resourceButton = host.resourceButton;
-    const publicText = typeof host.publicText === 'function' ? host.publicText : value => String(value || '');
     let liveClock = 0;
     let liveClockRoot = null;
 
@@ -29,11 +28,11 @@
     }
     function durationText(startedAt, endedAt) {
       const elapsed = Math.max(0, Number(endedAt || Date.now()) - Number(startedAt || Date.now()));
-      if (elapsed < 100) return tr('<0.1s', '<0.1 秒');
+      if (elapsed < 100) return tr('<0.1 s', '<0.1 秒');
       const seconds = elapsed / 1000;
       if (seconds < 60) {
         const value = seconds.toFixed(1);
-        return tr(`${value}s`, `${value} 秒`);
+        return tr(`${value} s`, `${value} 秒`);
       }
       const roundedSeconds = Math.round(seconds);
       const minutes = Math.floor(roundedSeconds / 60);
@@ -82,29 +81,6 @@
       const turn = activity.steps.slice().reverse()
         .find(item => item.kind === 'turn' && item.status === 'running');
       if (turn) { turn.status = 'complete'; turn.endedAt = at; }
-    }
-    /* The reasoning summary arrives as short bold headlines separated by
-       blank lines. The first headline names the row; the whole summary is
-       shown under it in the model's own words, whatever language they are in. */
-    function reasoningHeadline(text) {
-      const value = publicText(String(text || ''));
-      const bold = value.match(/\*\*([^*\n]{1,160})\*\*/);
-      if (bold) return bold[1].trim();
-      const line = value.split(/\n+/).map(item => item.trim()).find(Boolean) || '';
-      return line.replace(/[*_`#>]/g, '').trim().slice(0, 160);
-    }
-    /* The row label already carries the first headline, so the body starts
-       after it; a summary that is only a headline renders as a single line. */
-    function reasoningHtml(text) {
-      const value = publicText(String(text || '')).trim();
-      if (!value) return '';
-      const paragraphs = value.split(/\n{2,}/).map(paragraph => paragraph.trim()).filter(Boolean);
-      const headline = reasoningHeadline(text);
-      if (paragraphs.length && headline && paragraphs[0].replace(/\*\*/g, '').trim() === headline) paragraphs.shift();
-      return paragraphs.map(paragraph => {
-        const safe = esc(paragraph).replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
-        return `<p>${safe}</p>`;
-      }).join('');
     }
     function stepDuration(step) {
       if (step && step.durationKnown === false) return '';
@@ -191,7 +167,7 @@
         easyicu_check_project_file: tr('Check project file', '检查项目文件'),
         easyicu_preview_project_file: tr('Prepare web preview', '准备网页预览'),
       };
-      const label = labels[String(name || '')] || String(name || tr('EasyICU tool', 'EasyICU 工具'));
+      const label = labels[String(name || '')] || tr('EasyICU tool', 'EasyICU 工具');
       const file = resourceName(resource);
       return file ? `${label} · ${file}` : label;
     }
@@ -246,16 +222,16 @@
       const step = String(value || '').toLowerCase();
       if (step === 'submitted') return 'submitted';
       if (['provider', 'research_pipeline', 'run', 'runtime'].includes(step)) return 'setup';
-      if (['data_foundation', 'cohort', 'context', 'audit', 'extraction', 'data'].includes(step)) return 'inputs';
+      if (['data_foundation', 'cohort', 'context', 'audit', 'extraction', 'data', 'source', 'snapshot', 'cache'].includes(step)) return 'inputs';
       if (['hypothesis', 'literature', 'evidence'].includes(step)) return 'evidence';
-      if (['planning', 'plan', 'scientific_review'].includes(step)) return 'plan';
-      if (['step', 'coder', 'runner', 'analysis'].includes(step)) return 'analysis';
+      if (['planning', 'plan', 'scientific_review', 'contract'].includes(step)) return 'plan';
+      if (['step', 'coder', 'runner', 'analysis', 'runner_repair'].includes(step)) return 'analysis';
       if (['figure', 'visual_qa'].includes(step)) return 'figure';
       if (['writer', 'latex', 'manuscript', 'report'].includes(step)) return 'report';
       if (step === 'terminal') return 'terminal';
       if (step === 'resume') return 'resume';
       if (step === 'report_repair') return 'report_repair';
-      if (['event_stream', 'cancel_requested'].includes(step)) return 'attention';
+      if (['event_stream', 'cancel_requested', 'pause', 'human_review', 'scientific_action_gap'].includes(step)) return 'attention';
       return 'progress';
     }
 
@@ -291,6 +267,9 @@
       if (stage === 'progress') return done
         ? tr('Research-task progress updated', '研究任务进度已更新')
         : tr('Research task is progressing', '研究任务正在推进');
+      // TODO(copy): dedicated pause/action-gap detail; reuse the existing
+      // attention label until the coordinator supplies the wording.
+      if (stage === 'attention') return fallback || tr('Needs attention', '需处理');
       return String(fallback || tr('Research-task status updated', '研究任务状态已更新'));
     }
 
@@ -343,29 +322,82 @@
         const words = tokens.map(token => STEP_TOKENS[token]);
         return tr(words.map(word => word[0]).join(' '), words.map(word => word[1]).join(''));
       }
-      return id.replace(/[_.-]+/g, ' ');
+      return tr('Analysis step', '分析步骤');
     }
     function planStepFacts(event) {
-      if (String(event && event.step || '').toLowerCase() !== 'step') return null;
-      const match = PLAN_STEP_EVENT.exec(String(event && (event.label || event.message) || '').trim());
-      if (!match) return null;
-      const phase = /^complete/i.test(match[3]) ? 'complete' : /^failed/i.test(match[3]) ? 'failed' : 'started';
-      return { index: Number(match[1]), total: Number(match[2]), phase, stepId: match[4].replace(/\.$/, '') };
+      if (!['step', 'resume'].includes(String(event && event.step || '').toLowerCase())) return null;
+      const label = String(event && (event.label || event.message) || '').trim();
+      const match = PLAN_STEP_EVENT.exec(label);
+      const stepId = String(event.step_id || (match && match[4]) || '').replace(/\.$/, '');
+      if (!stepId) return null;
+      const skipped = /^Skipped (?:step already completed by pre-execution|completed step from prior run):/.test(label);
+      const phase = skipped ? 'precompleted' : ['error', 'failed', 'blocked', 'skipped'].includes(event.status) ? 'failed'
+        : event.status === 'complete' || (match && /^complete/i.test(match[3])) ? 'complete'
+          : match && /^failed/i.test(match[3]) ? 'failed' : 'started';
+      return { index: Number(event.current_step || (match && match[1])) || null,
+        total: Number(event.total_steps || (match && match[2])) || null, phase, stepId };
     }
     function planStepLabel(facts) {
+      if (!facts.index || !facts.total) return planStepName(facts.stepId);
       return tr(`Step ${facts.index}/${facts.total}: ${planStepName(facts.stepId)}`,
         `第 ${facts.index}/${facts.total} 步：${planStepName(facts.stepId)}`);
     }
-    // One trace row per approved plan step; `at` is when this event arrived.
     function planStepRow(facts, at, options) {
       const opts = options || {};
-      const status = facts.phase === 'complete' ? 'complete' : facts.phase === 'failed' ? 'error' : 'running';
+      const status = ['complete', 'precompleted'].includes(facts.phase) ? 'complete' : facts.phase === 'failed' ? 'error' : 'running';
       return {
-        id: `pipeline-plan-step-${facts.index}`, kind: 'pipeline', step: 'plan_step', stepId: facts.stepId,
+        id: `pipeline-plan-step-${facts.index || facts.stepId}`, kind: 'pipeline', step: 'plan_step', stepId: facts.stepId,
         label: planStepLabel(facts), status, at,
         ...(facts.phase === 'started' ? { startedAt: at } : { endedAt: at }),
+        ...(facts.phase === 'precompleted' ? { precompleted: true } : {}),
         ...(opts.durationKnown === false ? { durationKnown: false } : {}),
       };
+    }
+    function pipelineTime(value) {
+      const at = Date.parse(String(value || ''));
+      return Number.isFinite(at) ? at : null;
+    }
+    function finishPipelineSteps(activity, at, status) {
+      activity.steps.forEach(row => {
+        if (row.kind !== 'pipeline' || row.status !== 'running') return;
+        row.status = status || 'complete';
+        if (at != null) row.endedAt = at;
+      });
+    }
+    // One reducer for SSE, hydrated jobs and host-action transcript replay.
+    // Receipt times describe server work; a reload never starts a new clock.
+    function notePipelineEvent(activity, event) {
+      if (!event || event.type === 'end') return null;
+      const facts = planStepFacts(event);
+      if (!facts && notePlanSubStep(activity.steps, planSubStepFacts(event))) return null;
+      const at = pipelineTime(event.timestamp);
+      const start = pipelineTime(event.started_at);
+      const end = pipelineTime(event.ended_at);
+      const step = String(event.step || event.type || 'pipeline');
+      const system = step.startsWith('provider_');
+      const kind = step === 'planning' && planningEventFacts(event).phase === 'rejected' ? 'retry' : 'pipeline';
+      const id = system ? `pipeline-${step}-${event.current || event.seq || 0}` : kind === 'retry'
+        ? `pipeline-plan-retry-${planningEventFacts(event).unit || 'plan'}-${event.current || 0}` : `pipeline-${step}`;
+      const next = facts ? planStepRow(facts, at, { durationKnown: at != null }) : {
+        id, kind, step, label: pipelineEventLabel(event), at, actor: event.actor,
+        status: ['error', 'failed', 'cancelled', 'blocked'].includes(event.status)
+          || step === 'provider_continuation_refused' ? 'error'
+          : event.status === 'complete' || (system && step !== 'provider_recovery_wait') ? 'complete' : 'running',
+      };
+      const previous = activity.steps.find(row => row.id === next.id);
+      activity.steps.forEach(row => {
+        if (row.kind === 'pipeline' && row.step !== 'plan_step' && row.id !== next.id && row.status === 'running') {
+          row.status = 'complete';
+          if (at != null) row.endedAt = at;
+        }
+      });
+      const started = previous && previous.durationKnown !== false && previous.startedAt != null
+        ? previous.startedAt : start != null ? start : next.status === 'running' ? at : null;
+      Object.assign(next, { startedAt: started, durationKnown: started != null && at != null });
+      if (next.status !== 'running') next.endedAt = end != null ? end : at;
+      else if (previous) delete previous.endedAt;
+      if (previous) Object.assign(previous, next); else activity.steps.push(next);
+      return previous || next;
     }
     // How a coder/runner event says the step ran, for the step row's detail.
     function planSubStepFacts(event) {
@@ -380,7 +412,7 @@
           ? tr('Rendered by the deterministic renderer the plan names.', '由计划指定的确定性渲染器生成。')
           : /generat|draft|writ/i.test(label) && step === 'coder'
             ? tr('The model wrote the analysis code for this step.', '由模型为这一步编写分析代码。')
-            : tr(label, '');
+            : '';
       return { stepId: match[1], text };
     }
     // Attach a coder/runner event to its plan-step row. False when no row
@@ -419,6 +451,11 @@
 
     function pipelineEventLabel(event) {
       const type = String((event && event.type) || '');
+      // TODO(copy): specialized copy for the remaining provider lifecycle codes.
+      // Existing localized status wording is the safe fallback.
+      if (event && String(event.step || '').startsWith('provider_')
+        && !['provider_continuation_refused', 'provider_auto_resume', 'provider_recovery_wait'].includes(event.step))
+        return tr('Research-task status updated', '研究任务状态已更新');
       if (event && event.step === 'provider_continuation_refused') return host.runFailureText(event.reason || event.reason_code);
       if (event && event.step === 'provider_auto_resume') return tr(
         'System action: provider recovered; automatically continuing from the verified checkpoint',
@@ -507,11 +544,11 @@
     function projectPipelineSteps(steps, running) {
       const source = Array.isArray(steps) ? steps : [];
       const hasPlanStage = source.some(step => step.kind === 'pipeline'
-        && ['planning', 'plan', 'scientific_review'].includes(String(step.step || '').toLowerCase()));
+        && ['planning', 'plan', 'scientific_review', 'contract'].includes(String(step.step || '').toLowerCase()));
       const projected = [];
       const stageIndexes = new Map();
       source.forEach(step => {
-        if (step.kind !== 'pipeline' || step.step === 'plan_step') { projected.push(step); return; }
+        if (step.kind !== 'pipeline' || step.step === 'plan_step' || String(step.step || '').startsWith('provider_')) { projected.push(step); return; }
         const sourceStage = pipelineStage(step.step);
         let stage = sourceStage;
         if (stage === 'terminal' && hasPlanStage) stage = 'plan';
@@ -536,6 +573,10 @@
           resources: [],
         };
         if (stageIndexes.has(stage)) {
+          const previous = projected[stageIndexes.get(stage)];
+          next.startedAt = previous.startedAt == null ? next.startedAt : next.startedAt == null ? previous.startedAt : Math.min(previous.startedAt, next.startedAt);
+          next.endedAt = next.endedAt == null ? previous.endedAt : next.endedAt;
+          next.durationKnown = next.startedAt != null && (next.status === 'running' || next.endedAt != null);
           projected[stageIndexes.get(stage)] = next;
         } else {
           stageIndexes.set(stage, projected.length);
@@ -588,11 +629,7 @@
         if (step.publicChars) return tr(`Streaming public response phase ${step.phase}`, `正在流式输出公开回复阶段 ${step.phase}`);
         return tr(`Preparing the next visible action ${step.phase}`, `正在准备下一步可见操作 ${step.phase}`);
       }
-      if (step.kind === 'thinking') {
-        const headline = reasoningHeadline(step.text);
-        if (headline) return headline;
-        return done ? tr('Thought it through', '已完成思考') : tr('Thinking…', '正在思考…');
-      }
+      if (step.kind === 'thinking') return tr('Thought', '思考');
       if (step.kind === 'tool') return failed
         ? tr(`${toolLabel(step.toolName, step.resource)} returned an error`, `${toolLabel(step.toolName, step.resource)} 返回错误`)
         : done ? completedToolLabel(step.toolName, step.resource)
@@ -628,9 +665,9 @@
         kind: String(step.kind || 'operation').slice(0, 80),
         icon: String(activityIcon(step) || 'play').slice(0, 40),
         status: String(step.status || 'complete').slice(0, 40),
-        detail: step.kind === 'thinking' ? String(step.text || '').slice(0, 4000) : localizedStepText(step),
+        detail: step.kind === 'thinking' ? '' : localizedStepText(step),
         duration: stepDuration(step),
-        toolName: String(step.toolName || step.step || '').slice(0, 160),
+        toolName: step.kind === 'tool' ? toolLabel(step.toolName) : '',
         resources: safeResources,
       }));
     }
@@ -642,9 +679,6 @@
       const thinking = step.kind === 'thinking';
       const detail = thinking ? '' : localizedStepText(step);
       const running = step.status === 'running';
-      const reasoning = thinking
-        ? `<span class="gpi-activity-reasoning${running ? ' is-streaming' : ''}" data-gpi-thinking-stream="${esc(step.id || '')}">${reasoningHtml(step.text)}</span>`
-        : '';
       const publicStream = step.kind === 'assistant' && running && step.publicText
         ? `<span class="gpi-activity-public-stream"><em>${tr('Public output', '公开输出')}</em>${esc(step.publicText)}<i aria-hidden="true"></i></span>`
         : '';
@@ -660,7 +694,7 @@
         : iconHtml(activityIcon(step), 16);
       return `<button type="button" class="gpi-activity-step-open" data-gpi-operation="${esc(operation)}" aria-label="${esc(label)}">
         <span class="gpi-activity-step-icon" aria-hidden="true">${icon}</span>
-        <span class="gpi-activity-step-copy"><strong>${esc(label)}</strong>${publicStream}${detail ? `<span>${esc(detail)}</span>` : ''}${reasoning}</span>
+        <span class="gpi-activity-step-copy"><strong>${esc(label)}${thinking ? ' ·' : ''}</strong>${publicStream}${detail ? `<span>${esc(detail)}</span>` : ''}</span>
         ${duration}
         <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
       </button>`;
@@ -678,6 +712,20 @@
       return `<div class="gpi-resource-list" aria-label="${tr('Run artifacts', '运行产物')}">${resources.map(resource => resourceButton(resource)).join('')}</div>`;
     }
     function localizedStepText(step) {
+      if (step.kind === 'thinking') return '';
+      if (step.precompleted) return tr('Preparation already completed', '准备阶段已完成');
+      if (step.kind === 'tool') {
+        const receipt = step.receipt;
+        if (step.status === 'complete' && step.toolName === 'easyicu_update_study_context'
+          && receipt && receipt.study_family === 'descriptive_epidemiology') {
+          const words = (Array.isArray(receipt.question_evidence) ? receipt.question_evidence : []).slice(0, 4).join(' / ');
+          if (words) return tr(`Saved the study configuration: a descriptive study, as the question asks ('${words}')`,
+            `保存了研究配置：按题目定为描述性研究（题目问“${words}”）`);
+        }
+        // TODO(copy): detailed receipts for other study families and partial saves.
+        // The existing completed/error tool label is their host receipt.
+        return '';
+      }
       const value = String(step && step.text || '').trim();
       if (!value) return '';
       const containsChinese = /[\u3400-\u9fff]/.test(value);
@@ -870,7 +918,7 @@
       return output.join('');
     }
 
-    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, notePlanSubStep, pipelineEventLabel, planStepFacts, planStepRow, planSubStepFacts, planningEventFacts, planningProgressText, reasoningHtml, render, renderTimeline, startTurn, stepLabel, syncLiveClock, timeMs });
+    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, notePlanSubStep, pipelineEventLabel, planStepFacts, planStepRow, planSubStepFacts, planningEventFacts, planningProgressText, notePipelineEvent, finishPipelineSteps, pipelineTime, render, renderTimeline, startTurn, stepLabel, syncLiveClock, timeMs });
   }
 
   window.EasyICU.guidedPi.declare('activity', { create });

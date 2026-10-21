@@ -114,7 +114,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260922-run-answer1" in index
-    assert "js/screens-guided-pi-activity.js?v=20261021-prepared-continuation1" in index
+    assert "js/screens-guided-pi-activity.js?v=20261021-trace-language1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20261020-api-models1"
         in index
@@ -144,7 +144,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-confirmation.js?v=20261021-grouped-resume1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261020-prepare-label1" in index
-    assert "js/screens-guided-pi-childjob.js?v=20261021-provider-recovery1" in index
+    assert "js/screens-guided-pi-childjob.js?v=20261021-trace-language1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261021-prepared-continuation1" in index
     assert "js/screens-guided-pi.js?v=20261021-prepared-continuation1" in index
     assert "js/screens-guided.js?v=20261020-folder-preview1" in index
@@ -2986,7 +2986,7 @@ def test_pending_review_activity_does_not_unfold_its_build_log() -> None:
     assert "Analysis plan ready for review" in owner
 
 
-def test_new_reviewable_plan_hides_only_superseded_plan_attempts() -> None:
+def test_new_reviewable_plan_keeps_each_job_trace() -> None:
     """The main conversation shows the authoritative plan, not every retry."""
 
     node = shutil.which("node")
@@ -3040,8 +3040,8 @@ process.stdout.write(JSON.stringify({
     result = run_node(node, script, str(replay_owner), str(child_owner), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == {
-        "beforeReplacement": ["review-old", "failed-current"],
-        "afterReplacement": ["analysis-history", "review-current"],
+        "beforeReplacement": ["failed-old", "review-old", "failed-current"],
+        "afterReplacement": ["failed-old", "review-old", "failed-current", "analysis-history", "review-current"],
     }
 
 
@@ -3260,12 +3260,12 @@ process.stdout.write(JSON.stringify({
     shell = _read("js/screens-guided-pi.js")
     childjob_owner = _read("js/screens-guided-pi-childjob.js")
     assert "ACTIVITY.pipelineEventLabel(event)" in childjob_owner
-    assert "label: childEventLabel(event)" in childjob_owner
+    assert "ACTIVITY.notePipelineEvent(activity, event)" in childjob_owner
     assert "if (event.label) return String(event.label);" not in shell
     # Ordinary stages update in place; rejected plan attempts remain as
     # separate, bounded lifecycle facts so researchers can see real retries.
-    assert "return 'pipeline-' + step" in childjob_owner
-    assert "pipeline-plan-retry-" in childjob_owner
+    assert "`pipeline-${step}`" in _read("js/screens-guided-pi-activity.js")
+    assert "pipeline-plan-retry-" in _read("js/screens-guided-pi-activity.js")
     assert "String(event.seq == null ? step : event.seq)" not in shell
 
 
@@ -4914,17 +4914,17 @@ def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
           && !html.includes('Public response phase 1 finished'),
         readTool: html.includes('Read project file · plan.json'),
         retryLabel: html.includes('Plan contract retry') && !html.includes('undefined'),
-        stepDuration: !html.includes('0.5s') && html.includes('1.0s') && html.includes('<0.1s'),
-        totalDuration: html.includes('total 2.5s'),
+        stepDuration: !html.includes('0.5 s') && html.includes('1.0 s') && html.includes('<0.1 s'),
+        totalDuration: html.includes('total 2.5 s'),
         runningLifecycleHidden: !liveHtml.includes('Streaming public response phase 2')
           && !liveHtml.includes('Visible public answer chunk')
           && liveHtml.includes('data-gpi-live-elapsed'),
         traceBeforeFinalAnswer: timelineHtml === '[user]<div class="gpi-turn-trace">[activity]</div>[assistant]',
         noZeroMs: !html.includes('0 ms') && !liveHtml.includes('0 ms'),
         hiddenOverlappingTurns: !turnHtml.includes('Model turn 1 finished') && !turnHtml.includes('Model turn 2 finished'),
-        englishReceiptVisibleInEnglish: html.includes('Loaded the governed project file.'),
+        hostReceiptVisibleInEnglish: html.includes('Read project file') && !html.includes('Loaded the governed project file.'),
         mismatchedReceiptHiddenInChinese: !zhHtml.includes('Loaded StudyContext revision 5.')
-          && zhHtml.includes('已读取科研流程。'),
+          && zhHtml.includes('已读取科研流程'),
         privacyNotice: html.includes('tool arguments, credentials, and patient rows are never displayed'),
         leaked: html.includes('secret-token') || html.includes('secret-thought'),
       }}));
@@ -4947,7 +4947,7 @@ def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
         "traceBeforeFinalAnswer": True,
         "noZeroMs": True,
         "hiddenOverlappingTurns": True,
-        "englishReceiptVisibleInEnglish": True,
+        "hostReceiptVisibleInEnglish": True,
         "mismatchedReceiptHiddenInChinese": True,
         "privacyNotice": True,
         "leaked": False,
@@ -6522,7 +6522,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20261009-target-trial1" in index
+    assert "screens-guided-pi-transcript.js?v=20261021-trace-language1" in index
     assert "screens-guided-pi.js?v=20261021-prepared-continuation1" in index
 
 

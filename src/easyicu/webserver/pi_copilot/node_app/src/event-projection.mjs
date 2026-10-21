@@ -1,22 +1,15 @@
 /* Safe, dependency-neutral projection from Pi SDK events/session messages to
    EasyICU's browser contract. Tool arguments and partial tool output never
-   cross this boundary. The model's own reasoning text (the provider-returned
-   thinking / reasoning summary) crosses it bounded, so the conversation can
-   show the chain of work the way the reference research UIs do; the
-   transcript projection sanitizes it like any other assistant text. */
+   cross this boundary. Reasoning text and model-directed tool summaries stay
+   in the SDK session; only lifecycle times and typed receipt facts cross. */
 
 const MAX_TEXT_CHARS = 12000;
-const MAX_REASONING_CHARS = 4000;
 const WORKSPACE_FILE_TOOLS = new Set([
   "easyicu_read_project_file",
   "easyicu_write_project_file",
   "easyicu_edit_project_file",
   "easyicu_check_project_file",
   "easyicu_preview_project_file",
-]);
-const START_TIMESTAMP_EVENTS = new Set([
-  "agent_start", "turn_start", "message_start", "tool_execution_start",
-  "compaction_start", "auto_retry_start",
 ]);
 
 function boundedText(value, limit = MAX_TEXT_CHARS) {
@@ -56,9 +49,8 @@ export function pairTranscriptMessages(messages, contextMessages) {
 }
 
 function eventTimestamp(event, { useMessageTimestamp = false } = {}) {
-  const value = Number(
-    event?.timestamp ?? (useMessageTimestamp ? event?.message?.timestamp : undefined),
-  );
+  const raw = event?.timestamp ?? (useMessageTimestamp ? event?.message?.timestamp : undefined);
+  const value = typeof raw === "string" ? Date.parse(raw) : Number(raw);
   return Number.isFinite(value) && value > 0
     ? new Date(value).toISOString()
     : new Date().toISOString();
@@ -367,8 +359,6 @@ function toolReceipt(result) {
   const ownerDetails = details.details && typeof details.details === "object"
     ? details.details
     : {};
-  const content = Array.isArray(result?.content) ? result.content : [];
-  const fallback = content.find((item) => item && item.type === "text")?.text || "";
   const resource = projectedResource(details.resource || ownerDetails.resource);
   const resources = projectedResources(details.resources || ownerDetails.resources);
   const ideaMining = projectedIdeaMining(
@@ -376,10 +366,17 @@ function toolReceipt(result) {
   );
   const jobId = safeJobId(ownerDetails.job_id || details.job_id);
   const hostRebindAfterTurn = ownerDetails.host_rebind_after_turn === true;
+  const reading = ownerDetails.study_family_reading;
+  const receipt = details.status === "ok" && details.code === "study_context_updated"
+    && reading?.source === "question_wording" && !reading.conflict
+    && reading.family === "descriptive_epidemiology"
+    ? { study_family: reading.family, question_evidence: (Array.isArray(reading.elements) ? reading.elements : [])
+      .slice(0, 4).map(item => boundedText(item?.evidence, 300)).filter(Boolean) }
+    : undefined;
   return {
     status: boundedText(details.status || "", 40),
     code: boundedText(details.code || "", 160),
-    summary: boundedText(details.summary || fallback, 2000),
+    ...(receipt ? { receipt } : {}),
     owner: boundedText(details.owner || "", 240),
     ...(jobId ? { job_id: jobId } : {}),
     ...(hostRebindAfterTurn ? { host_rebind_after_turn: true } : {}),
@@ -391,8 +388,7 @@ function toolReceipt(result) {
 
 export function normalizePiEvent(event) {
   if (!event || typeof event !== "object") return undefined;
-  const startEvent = START_TIMESTAMP_EVENTS.has(event.type);
-  const at = eventTimestamp(startEvent ? event : {}, {
+  const at = eventTimestamp(["message_end", "turn_end"].includes(event.type) ? {} : event, {
     // Pi message timestamps identify when generation started. Reusing them on
     // message_end/turn_end made multi-second provider calls look like 0 ms.
     useMessageTimestamp: event.type === "message_start",
@@ -411,7 +407,7 @@ export function normalizePiEvent(event) {
     }
     if (update.type === "thinking_start") return { type: "thinking_start", at };
     if (update.type === "thinking_delta") {
-      return { type: "thinking_delta", at, delta: boundedText(update.delta, MAX_REASONING_CHARS) };
+      return undefined;
     }
     if (update.type === "thinking_end") return { type: "thinking_end", at };
     return undefined;
@@ -517,8 +513,7 @@ export function projectTranscriptMessage(message) {
     if (item.type === "text") {
       parts.push({ type: "text", text: boundedText(item.text, MAX_TEXT_CHARS) });
     } else if (item.type === "thinking" && role === "assistant") {
-      const thinking = boundedText(item.thinking, MAX_REASONING_CHARS);
-      if (thinking.trim()) parts.push({ type: "thinking", text: thinking });
+      if (String(item.thinking || "").trim()) parts.push({ type: "thinking" });
     } else if (item.type === "toolCall") {
       const resource = toolResource(item.name, item.arguments);
       parts.push({

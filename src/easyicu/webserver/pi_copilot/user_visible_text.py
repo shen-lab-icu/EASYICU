@@ -18,16 +18,18 @@ it one.
 
 Scope
 -----
-Identifiers only.  This deletes a closed set of machine-facing tokens from text
+For assistant prose, delete a closed set of machine-facing tokens from text
 on its way to the browser; it never paraphrases, summarizes, or rewrites the
 model's sentences.  Clumsy prose is a prompt problem and stays visible.  The
 receipts Pi itself reads are untouched -- the model still needs its own
-vocabulary to reason.
+vocabulary to reason. Tool receipts have a stricter boundary: the browser
+receives typed facts and host-owned labels, never the model-directed summary.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Final
 
 # One-turn grant names and the internal action vocabulary that rides with them.
@@ -168,4 +170,22 @@ def project_user_turn_text(value: str) -> str:
     return text
 
 
-__all__ = ["project_user_turn_text", "sanitize_user_visible_text"]
+def project_tool_receipt(value: Mapping) -> dict:
+    """Keep typed receipt facts, never the model's instruction-bearing prose.
+
+    Localized sentences belong to the existing activity copy owner. The SDK
+    session retains the original tool result for review/debugging.
+    """
+    result = {key: item for key, item in value.items() if key not in {"summary", "text", "receipt"}}
+    receipt = value.get("receipt")
+    if isinstance(receipt, Mapping) and receipt.get("study_family") == "descriptive_epidemiology":
+        evidence = receipt.get("question_evidence")
+        if isinstance(evidence, list):
+            result["receipt"] = {
+                "study_family": "descriptive_epidemiology",
+                "question_evidence": [str(item)[:300] for item in evidence[:4] if isinstance(item, str)],
+            }
+    return result
+
+
+__all__ = ["project_tool_receipt", "project_user_turn_text", "sanitize_user_visible_text"]

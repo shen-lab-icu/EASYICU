@@ -35,9 +35,8 @@
       } else if (event.type === 'assistant_start') {
         const phase = activity.steps.filter(item => item.kind === 'assistant').length + 1;
         upsertActivityStep(activity, { id: 'assistant-' + phase, kind: 'assistant', phase, status: 'running', at, startedAt: at });
-      } else if (event.type === 'thinking_start' || event.type === 'thinking_delta' || event.type === 'thinking_end') {
-        // The model's reasoning summary is part of the turn's trace: one row
-        // per model phase that grows while the model thinks.
+      } else if (event.type === 'thinking_start' || event.type === 'thinking_end') {
+        // Only measured reasoning time enters the conversation.
         const phase = Math.max(1, activity.steps.filter(item => item.kind === 'assistant').length);
         const id = 'thinking-' + phase;
         let step = activity.steps.find(item => item.id === id);
@@ -45,10 +44,7 @@
           step = { id, kind: 'thinking', status: 'running', at, startedAt: at, text: '' };
           activity.steps.push(step);
         }
-        if (event.type === 'thinking_delta') {
-          step.text = (String(step.text || '') + String(event.delta || '')).slice(0, 4000);
-          if (patchStreamingThinking(step)) return;
-        } else if (event.type === 'thinking_end') {
+        if (event.type === 'thinking_end') {
           step.status = 'complete'; step.endedAt = at;
         }
       } else if (event.type === 'text_delta') {
@@ -92,7 +88,7 @@
         upsertActivityStep(activity, {
           id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name,
           status: event.is_error ? 'error' : 'complete', code: event.code || '',
-          owner: event.owner || '', text: event.summary || '', at, endedAt: at,
+          owner: event.owner || '', receipt: event.receipt || null, at, endedAt: at,
           jobId: event.job_id || '',
           resource: event.resource || null,
           resources: Array.isArray(event.resources) ? event.resources : [],
@@ -130,18 +126,6 @@
         finishActivity('complete', event.at, 'settled');
       }
       render();
-    }
-    function patchStreamingThinking(step) {
-      if (!state.host || !step || step.status !== 'running') return false;
-      const node = state.host.querySelector(`[data-gpi-thinking-stream="${step.id}"]`);
-      if (!node) return false;
-      node.innerHTML = ACTIVITY.reasoningHtml(step.text);
-      const box = node.closest('.gpi-activity-body, .gpi-activity-running');
-      const scroller = box ? box.querySelector('ol') : null;
-      if (scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120) scroller.scrollTop = scroller.scrollHeight;
-      const log = state.host.querySelector('[data-gpi-log]');
-      if (log && log.scrollHeight - log.scrollTop - log.clientHeight < 160) log.scrollTop = log.scrollHeight;
-      return true;
     }
     function patchStreamingMessage(row) {
       if (!state.host || !row || row.role !== 'assistant' || row.complete) return false;

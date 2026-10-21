@@ -16,7 +16,7 @@ from ..research_input_progress import project_research_input_state
 from ..target_trial_setup import project_target_trial_compile
 from . import cohort_eligibility
 from .contracts import PiCopilotError, plan_approval_allowed
-from .user_visible_text import project_user_turn_text, sanitize_user_visible_text
+from .user_visible_text import project_tool_receipt, project_user_turn_text, sanitize_user_visible_text
 
 MAX_PROJECTION_BYTES = 32_768
 MAX_TEXT_CHARS = 2_000
@@ -458,15 +458,19 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         return {"present": False}
     events = snapshot.get("events")
     events = events if isinstance(events, list) else []
+    result = snapshot.get("result")
+    result = result if isinstance(result, Mapping) else {}
+    # Completed jobs recover early timings from the audit projection even if
+    # the transient Job history has rolled over. No diagnostic detail enters.
+    timings = result.get("trace_timings")
+    timings = timings if isinstance(timings, list) else []
+    audit_events = [
+        {"type": "progress", "step": row.get("phase"), "label": row.get("event"),
+         **{key: row[key] for key in ("timestamp", "status", "step_id") if key in row}}
+        for row in timings if isinstance(row, Mapping)
+    ]
     progress = []
-    # System resumes remain visible after later pipeline progress fills the tail.
-    from easyicu.webserver.provider_job_recovery import MAX_AUTOMATIC_RESUMES
-
-    resume_indices = [i for i, event in enumerate(events) if isinstance(event, Mapping)
-                      and event.get("step") == "provider_auto_resume"][-MAX_AUTOMATIC_RESUMES:]
-    for index, event in enumerate(events):
-        if index < len(events) - 20 and index not in resume_indices:
-            continue
+    for event in [*audit_events, *events]:
         if not isinstance(event, Mapping):
             continue
         if str(event.get("type") or "") == "end":
@@ -489,16 +493,23 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                     "current",
                     "total",
                     "step",
+                    "timestamp",
+                    "step_id",
+                    "actor",
+                    "planning_unit",
+                    "retry_phase",
+                    "current_step",
+                    "total_steps",
                 )
                 if event.get(key) is not None
             }
             | {
                 **({"label": label} if label else {}),
-                "reason_code": stable_code(event.get("reason"))
+                "reason_code": stable_code(event.get("reason") or event.get("reason_code"))
             }
         )
-    result = snapshot.get("result")
-    result = result if isinstance(result, Mapping) else {}
+    if len(progress) > MAX_LIST_ITEMS or audit_events:
+        progress = _compact_job_progress(progress)
     run_id = stable_code(result.get("run_id"))
     gate = result.get("gate")
     gate = gate if isinstance(gate, Mapping) else {}
@@ -660,6 +671,34 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             ),
         }
     )
+
+
+def _compact_job_progress(events: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    """Bound repeated updates by operation, preserving both timing endpoints.
+
+    Keeping a tail of messages erased entire early steps. Compaction is by
+    typed step identity (or the legacy fixed envelope), never by recency.
+    """
+    grouped: Dict[tuple, Dict[str, Any]] = {}
+    for event in events:
+        step = str(event.get("step") or event.get("type") or "")
+        step_id = str(event.get("step_id") or "")
+        if not step_id and step in {"step", "coder", "runner", "resume"}:
+            match = re.search(r"(?:Step \d+/\d+ [^:]+: |for |completed[^:]*: )([A-Za-z0-9_.-]+)\.?$", str(event.get("label") or ""))
+            step_id = match[1].rstrip(".") if match else ""
+        key = (step, step_id, event.get("planning_unit"), event.get("retry_phase"),
+               event.get("current") if step.startswith("provider_") else None)
+        previous = grouped.get(key)
+        timestamp = str(event.get("timestamp") or "")
+        row = {**(previous or {}), **event}
+        if timestamp:
+            start = str((previous or {}).get("started_at") or timestamp)
+            end = str((previous or {}).get("ended_at") or timestamp)
+            row.update(started_at=min(start, timestamp), ended_at=max(end, timestamp))
+        if step_id:
+            row["step_id"] = step_id
+        grouped[key] = row
+    return list(grouped.values())
 
 
 def project_run_outcome(
@@ -979,9 +1018,9 @@ def project_transcript(
 ) -> list[Dict[str, Any]]:
     """Bound the transcript and strip machine-facing identifiers from replies.
 
-    Assistant turns have machine-facing identifiers removed from their text
-    and from the model's reasoning summary, which the conversation shows as
-    part of the turn's trace. User turns remain verbatim except for exact,
+    Assistant turns have machine-facing identifiers removed from their text.
+    Reasoning prose and model-directed tool summaries stay in the SDK session.
+    User turns remain verbatim except for exact,
     known host-generated legacy action text that was previously persisted
     under the user role.
     """
@@ -993,7 +1032,7 @@ def project_transcript(
         if not isinstance(row, Mapping):
             continue
         role = str(row.get("role") or "")
-        if role not in {"assistant", "user"}:
+        if role not in {"assistant", "user", "tool"}:
             projected.append(dict(row))
             continue
         content = row.get("content")
@@ -1002,6 +1041,9 @@ def project_transcript(
             continue
         blocks: list[Any] = []
         for block in content:
+            if isinstance(block, Mapping) and block.get("type") == "tool_result":
+                blocks.append(project_tool_receipt(block))
+                continue
             if (
                 isinstance(block, Mapping)
                 and block.get("type") == "text"
@@ -1021,13 +1063,10 @@ def project_transcript(
             if (
                 isinstance(block, Mapping)
                 and block.get("type") == "thinking"
-                and isinstance(block.get("text"), str)
             ):
                 if role != "assistant":
                     continue
-                blocks.append(
-                    {**block, "text": sanitize_user_visible_text(block["text"])}
-                )
+                blocks.append({"type": "thinking"})
                 continue
             blocks.append(block)
         projected.append({**row, "content": blocks})
@@ -1042,6 +1081,8 @@ def project_pi_replay_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]
         "run_start",
         "turn_start",
         "assistant_start",
+        "thinking_start",
+        "thinking_end",
         "tool_start",
         "tool_progress",
         "tool_end",
@@ -1090,6 +1131,8 @@ def project_pi_replay_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]
         payload["will_retry"] = bool(event.get("will_retry"))
     if event.get("aborted") is not None:
         payload["aborted"] = bool(event.get("aborted"))
+    if event_type == "tool_end":
+        payload.update({key: value for key, value in project_tool_receipt(event).items() if key == "receipt"})
     resource = _project_replay_resource(event.get("resource"))
     if resource is not None:
         payload["resource"] = resource

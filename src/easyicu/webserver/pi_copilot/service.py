@@ -77,7 +77,7 @@ from .projections import (
     project_transcript,
     reject_sensitive_message,
 )
-from .user_visible_text import sanitize_user_visible_text
+from .user_visible_text import project_tool_receipt, sanitize_user_visible_text
 from .replay_store import PiConversationReplayStore
 from .session_storage import SessionStorageMaintenance
 from .run_authority import (
@@ -125,9 +125,8 @@ PRIVILEGED_ONE_SHOT_TURN_ACTIONS = frozenset(
     {"provider_run", "extract", "report_revision"}
 )
 # Effort ("thinking") levels a researcher may choose per session. The bridge
-# clamps them to the selected model; whatever the level, only the bounded,
-# sanitized reasoning summary is projected, so raw provider reasoning never
-# reaches the host UI or the transcript store.
+# clamps them to the selected model; only reasoning lifecycle times reach the
+# browser. Reasoning prose stays in the SDK session's review/debug record.
 THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high"})
 DEFAULT_THINKING_LEVEL = "medium"
 
@@ -1524,7 +1523,7 @@ class PiCopilotService:
         resolved_language = "zh" if language == "zh" else "en"
         # The effort level is the researcher's per-session choice (default
         # medium). Raw provider reasoning still never crosses the bridge: the
-        # sidecar projects only a bounded, sanitized reasoning summary.
+        # sidecar projects only reasoning markers and lifecycle times.
         resolved_thinking = resolve_thinking_level(thinking_level)
         session_id = f"pi_{secrets.token_hex(10)}"
         binding = self._binding_for_context(
@@ -2492,6 +2491,10 @@ class PiCopilotService:
             def emit(event: Dict[str, Any]) -> None:
                 if job.cancel_requested:
                     return
+                if event.get("type") == "thinking_delta":
+                    return
+                if event.get("type") == "tool_end":
+                    event = project_tool_receipt(event)
                 # Best effort on the live stream: a token split across two
                 # deltas still slips through, but the authoritative transcript
                 # replaces this text at turn end and is sanitized in full. Done
