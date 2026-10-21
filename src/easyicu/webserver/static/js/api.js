@@ -10,6 +10,13 @@
 
   window.EU_API = window.EU_API || {};
 
+  // A hosted instance marks its index (app.py). Until /api/capabilities
+  // answers, the first render then already shows the hosted page.
+  const deploymentMark = document.querySelector('meta[name="easyicu-deployment"]');
+  if (deploymentMark && deploymentMark.getAttribute('content') === 'hosted') {
+    window.EU_CAPABILITIES = { deployment: { hosted: true } };
+  }
+
   async function getJSON(path) {
     const res = await fetch(path, { headers: { Accept: 'application/json' } });
     if (!res.ok) {

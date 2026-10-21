@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers
 from starlette.middleware.gzip import GZipMiddleware
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, Response
 from starlette.staticfiles import NotModifiedResponse
 
 from easyicu.webserver.host_security import (
@@ -66,6 +66,16 @@ from easyicu.webserver.routes.system import router as system_router
 from easyicu.webserver.routes.workspaces import router as workspaces_router
 
 STATIC_DIR = Path(__file__).with_name("static")
+_INDEX_HTML = (STATIC_DIR / "index.html").resolve()
+# The page's first render runs before /api/capabilities answers. A hosted
+# instance marks its index so that render already shows the hosted page
+# (js/api.js reads the mark) instead of flashing the local one.
+_HOSTED_MARK = b'<meta charset="UTF-8" />\n<meta name="easyicu-deployment" content="hosted" />'
+
+
+def _hosted_index_response(status_code: int) -> Response:
+    body = _INDEX_HTML.read_bytes().replace(b'<meta charset="UTF-8" />', _HOSTED_MARK, 1)
+    return Response(body, status_code=status_code, media_type="text/html")
 
 
 class ContentHashedStaticFiles(StaticFiles):
@@ -84,6 +94,8 @@ class ContentHashedStaticFiles(StaticFiles):
         }
 
     def file_response(self, full_path, stat_result, scope, status_code=200):
+        if hosted.is_hosted() and Path(full_path).resolve() == _INDEX_HTML:
+            return _hosted_index_response(status_code)
         request_headers = Headers(scope=scope)
         response = FileResponse(full_path, status_code=status_code, stat_result=stat_result)
         key = Path(full_path).resolve()

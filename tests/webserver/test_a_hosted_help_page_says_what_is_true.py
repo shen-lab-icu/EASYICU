@@ -6,7 +6,8 @@ that holds for a clinician on the hospital server, so the hosted page names
 where the data is, which databases the administrator prepared, that the
 conversation uses the administrator's model, and whom to ask. A hosted
 instance also drops the expert single-key shortcuts, the design-reference
-page and the demo data switches; a local build keeps all of them.
+page and the demo data switches; a local build keeps all of them. The first
+paint, before /api/capabilities answers, is already the hosted page.
 """
 
 from __future__ import annotations
@@ -16,7 +17,9 @@ import shutil
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
+from easyicu.webserver.app import app
 from tests.support.node import run_node
 
 STATIC = Path(__file__).resolve().parents[2] / "src" / "easyicu" / "webserver" / "static"
@@ -199,3 +202,49 @@ def test_the_hosted_settings_sidebar_lists_only_the_sections_the_page_has() -> N
         "].filter(([id]) => !hostedInstance() || id === 'set-language' || id === 'set-about').map("
         in shell
     )
+
+
+_MARK = '<meta name="easyicu-deployment" content="hosted" />'
+
+
+@pytest.mark.parametrize("path", ["/", "/index.html"])
+@pytest.mark.parametrize("flag", ["1", "0", ""])
+def test_a_hosted_index_marks_itself_for_the_first_render(monkeypatch, path: str, flag: str) -> None:
+    monkeypatch.setenv("EASYICU_HOSTED", flag)
+    response = TestClient(app).get(path)
+
+    assert response.status_code == 200
+    assert response.text.count(_MARK) == (1 if flag == "1" else 0)
+    assert '<script src="js/api.js?v=' in response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert "script-src 'self'" in response.headers["content-security-policy"]
+
+
+_SEED = r"""
+global.window = { EU_LANG: 'zh' };
+global.document = {
+  readyState: 'loading',
+  addEventListener: () => {},
+  querySelector: selector => (
+    selector === 'meta[name="easyicu-deployment"]' && process.argv[2] !== 'none'
+      ? { getAttribute: name => (name === 'content' ? process.argv[2] : null) }
+      : null
+  ),
+};
+require(process.argv[1]);
+process.stdout.write(JSON.stringify(window.EU_CAPABILITIES || null));
+"""
+
+
+@pytest.mark.requires_node
+@pytest.mark.parametrize(
+    ("mark", "expected"),
+    [("hosted", {"deployment": {"hosted": True}}), ("local", None), ("none", None)],
+)
+def test_the_first_render_knows_a_hosted_instance_from_its_mark(mark: str, expected) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    result = run_node(node, _SEED, str(STATIC / "js" / "api.js"), mark, check=False)
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert json.loads(result.stdout) == expected
