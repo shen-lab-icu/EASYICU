@@ -385,13 +385,11 @@ def _development_resume_plan_contract(
 
 def development_resume_available(
     *, wrapper_dir: Path, study_id: str, scientific_configuration_sha256: str,
+    verify_now: bool = False,
 ) -> bool:
-    """Read-only offer projection of the launch owner, never checkpoint presence.
-
-    History supplies only owned coordinates and the current configuration digest.
-    The sealed seed supplies the study; the same validator used on click decides.
-    """
+    """Cheap persisted offer; only the failed job requests synchronous verification."""
     from easyicu.webserver import agent_review_recovery
+    from easyicu.webserver.research_resume_offer import cached_offer
 
     try:
         match = re.fullmatch(r"run_([A-Za-z0-9][A-Za-z0-9_-]{0,79})", wrapper_dir.name)
@@ -403,10 +401,9 @@ def development_resume_available(
             or seed.scientific_configuration_sha256 != scientific_configuration_sha256
         ):
             return False
-        _development_resume_launch_scope(
-            project_root=str(wrapper_dir.parent.parent), study=seed.study,
-            source_job_id=match.group(1),
-            offer_only=True,
+        return cached_offer(
+            wrapper=wrapper_dir, seed=seed, study_id=study_id,
+            digest=scientific_configuration_sha256, verify_now=verify_now,
         )
     except Exception as exc:
         # A read-only offer may disappear, but must not take down the page.
@@ -416,7 +413,14 @@ def development_resume_available(
             getattr(exc, "code", "development_resume_offer_error"), type(exc).__name__,
         )
         return False
-    return True
+
+
+def verify_development_resume_offer(*, wrapper_dir: Path, study: Mapping[str, Any]) -> None:
+    """Run the full uncached launch verifier offline, without creating a runner."""
+    _development_resume_launch_scope(
+        project_root=str(wrapper_dir.parent.parent), study=study,
+        source_job_id=wrapper_dir.name.removeprefix("run_"),
+    )
 
 
 def development_resume_checkpoint(
@@ -426,6 +430,7 @@ def development_resume_checkpoint(
     if not development_resume_available(
         wrapper_dir=wrapper_dir, study_id=study_id,
         scientific_configuration_sha256=scientific_configuration_sha256,
+        verify_now=True,
     ):
         return None
     path, digest = _development_progressive_resume_binding(

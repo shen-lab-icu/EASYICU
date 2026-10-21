@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import time
+import threading
 from unittest.mock import Mock
 
 import pytest
@@ -14,22 +15,33 @@ from easyicu.research_agent.intake import export_package
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.webserver import agent_review_recovery, dataio, research_launch_resume as owner
 from easyicu.webserver import research_prepared_resume as prepared_owner, study_contexts
+from easyicu.webserver import research_resume_offer as offers
 from easyicu.webserver.pi_copilot import run_authority, workflow
 from tests.support.grouped_resume import ANSWER, phase, prepared, seal_prepared_source, source as _source
 from tests.webserver.copilot.research_workflow_fixtures import complete_study
 
 source = _source
+_SUBPROCESS_VERIFY = offers._verify_background
+_REAL_CHECKPOINT_BINDING = owner._development_progressive_resume_binding
 
 
 @pytest.fixture(autouse=True)
-def empty_offer_memos():
-    from easyicu.webserver import research_resume_package
-
-    prepared_owner._OFFER_VERDICTS.clear()
-    research_resume_package._package_offer_verdict.cache_clear()
+def finish_offer_work(monkeypatch):
+    offers._WORK.join()
+    # Run the exact verifier in an instrumentable thread for unit assertions.
+    # The real subprocess boundary has its own integration test below.
+    monkeypatch.setattr(offers, '_verify_background', offers._verify)
     yield
-    prepared_owner._OFFER_VERDICTS.clear()
-    research_resume_package._package_offer_verdict.cache_clear()
+    offers._WORK.join()
+
+
+def page_offer(source):
+    return owner.development_resume_available(
+        wrapper_dir=source.run.parents[1], study_id=source.study["id"],
+        scientific_configuration_sha256=study_contexts.scientific_configuration_sha256(source.study),
+    )
+
+
 
 
 @pytest.fixture
@@ -81,6 +93,7 @@ def offer(source):
     return owner.development_resume_available(
         wrapper_dir=source.run.parents[1], study_id=source.study["id"],
         scientific_configuration_sha256=study_contexts.scientific_configuration_sha256(source.study),
+        verify_now=True,
     )
 
 
@@ -123,35 +136,19 @@ def projection(source, monkeypatch):
     return project, history
 
 
-def test_two_workflow_reads_and_both_roots_rehearse_and_snapshot_once(prepared_source, monkeypatch):
-    rehearsal = Mock(wraps=prepared_owner.restore_exposure_grouping_phase)
-    package = Mock(wraps=export_package.open_export_package)
-    monkeypatch.setattr(prepared_owner, "restore_exposure_grouping_phase", rehearsal)
-    monkeypatch.setattr(export_package, "open_export_package", package)
-    project, history = projection(prepared_source, monkeypatch)
-    start = time.perf_counter()
-    first = project()
-    first_seconds = time.perf_counter() - start
-    start = time.perf_counter()
-    second = project()
-    second_seconds = time.perf_counter() - start
-    print(json.dumps({"first_seconds": first_seconds, "second_seconds": second_seconds,
-                      "rehearsals": rehearsal.call_count, "package_snapshots": package.call_count}))
-    assert first.workflow.next_action_code == second.workflow.next_action_code == "planner_checkpoint_resume_available"
-    assert history.call_count == 4
-    assert rehearsal.call_count == 1
-    assert package.call_count == 1
 
 
 def test_unexpected_rehearsal_error_only_hides_offer(prepared_source, monkeypatch, caplog):
     rehearsal = Mock(side_effect=RuntimeError("synthetic rehearsal defect"))
     monkeypatch.setattr(prepared_owner, "restore_exposure_grouping_phase", rehearsal)
     project, _ = projection(prepared_source, monkeypatch)
+    project()
+    offers._WORK.join()
     result = project()
     assert result.workflow.latest_attempt_failure.checkpoint_resume_available is False
     assert result.workflow.next_action_code == "plan_execution_upgrade_required"
     assert "RuntimeError" in caplog.text
-    assert rehearsal.call_count == 1
+    assert rehearsal.call_count == 2
     # Programming errors in the authoritative launch must still surface.
     with pytest.raises(RuntimeError, match="synthetic rehearsal defect"):
         prepared_source.scope()
@@ -214,50 +211,9 @@ def test_changed_sealed_inputs_cannot_hit_a_true_offer(prepared_source, changed)
     assert offer(source) is False
 
 
-@pytest.mark.parametrize("changed", [
-    "scope", "capsule", "grouping_record", "grouped_authority",
-    "source_cohort_authority", "reviewed_configuration", "prepared_package",
-])
-def test_each_verified_content_identity_separates_memo_entries(prepared_source, monkeypatch, changed):
-    """Isolate each verified identity, including seals redundant in real inputs.
-
-    Integrity tests above reject unsealed changes. Here the cheap verifier has
-    already accepted a new receipt; changing exactly one identity must miss.
-    """
-    original = prepared_owner._rehearsal_identity
-    captured = []
-
-    def identity(inputs):
-        captured.append(dict(inputs))
-        return original(inputs)
-
-    monkeypatch.setattr(prepared_owner, "_rehearsal_identity", identity)
-    assert offer(prepared_source)
-    capsule_path = prepared_source.run / "run_input_capsule.json"
-    capsule = json.loads(capsule_path.read_bytes())
-    context = prepared_source.context.model_dump(mode="json")
-    expected = {
-        "scope": (
-            hashlib.sha256((prepared_source.run / "progressive_planner_checkpoint_002.json").read_bytes()).hexdigest(),
-            study_contexts.scientific_configuration_sha256(prepared_source.study), prepared_source.study["id"],
-        ),
-        "capsule": hashlib.sha256(capsule_path.read_bytes()).hexdigest(),
-        "grouping_record": hashlib.sha256((prepared_source.run / "exposure_groupings.json").read_bytes()).hexdigest(),
-        "grouped_authority": context["materialized_inputs"]["cohort"]["authority_ref"]["sha256"],
-        "source_cohort_authority": capsule["scientific_identity"]["materialized_cohort_authority_ref"]["sha256"],
-        "reviewed_configuration": {"bound_plan_revision_contract": None},
-        "prepared_package": prepared_source.binding["export_authority_sha256"],
-    }
-    assert captured[0][changed] == expected[changed]
-    old_key = original(captured[0])
-    new_inputs = dict(captured[0], **{changed: {"synthetic_revised_receipt": True}})
-    new_key = original(new_inputs)
-    assert new_key != old_key
-    assert old_key in prepared_owner._OFFER_VERDICTS
-    assert new_key not in prepared_owner._OFFER_VERDICTS
 
 
-def test_requirements_key_is_canonical_and_ignores_execution_options(prepared_source, monkeypatch):
+def test_configuration_changes_invalidate_the_persisted_verdict(prepared_source, monkeypatch):
     source = prepared_source
     seed = agent_review_recovery.load_recovery_seed(source.run.parents[1])
     config = dict(seed.pipeline_config, required_primary_cohort_selection_mode="all_input_rows")
@@ -269,20 +225,9 @@ def test_requirements_key_is_canonical_and_ignores_execution_options(prepared_so
     config["execute_until_phase"] = "planning"
     update_seed(source, pipeline_config=config)
     assert offer(source)
-    assert rehearsal.call_count == 1
+    assert rehearsal.call_count == 2
 
 
-def test_offer_rehearsal_memo_is_bounded(prepared_source, monkeypatch):
-    source = prepared_source
-    monkeypatch.setattr(prepared_owner, "_OFFER_MEMO_LIMIT", 2)
-    rehearsal = Mock(wraps=prepared_owner.restore_exposure_grouping_phase)
-    monkeypatch.setattr(prepared_owner, "restore_exposure_grouping_phase", rehearsal)
-    seed = agent_review_recovery.load_recovery_seed(source.run.parents[1])
-    for mode in (None, "all_input_rows", "predicate_filtered", None):
-        update_seed(source, pipeline_config={**seed.pipeline_config, "required_primary_cohort_selection_mode": mode})
-        assert offer(source)
-        assert len(prepared_owner._OFFER_VERDICTS) <= 2
-    assert rehearsal.call_count == 4
 
 
 @pytest.mark.parametrize("change", ["inode", "mtime", "size", "sidecar", "manifest"])
@@ -380,18 +325,17 @@ def test_package_identity_includes_device(prepared_source, monkeypatch):
     assert prepared_package_identity(str(source.export), source.binding) != old
 
 
-def test_package_memo_is_bounded():
-    from easyicu.webserver import research_resume_package
-
-    assert research_resume_package._package_offer_verdict.cache_info().maxsize == 128
 
 
 def test_memo_hit_does_not_copy_build_or_snapshot(prepared_source, monkeypatch):
+    from easyicu.research_agent.intake import materialized_metadata
+
     assert offer(prepared_source)
     refuse = Mock(side_effect=AssertionError("a memo hit must not redo expensive work"))
     monkeypatch.setattr(prepared_owner, "stage_materialized_cohort_authority", refuse)
     monkeypatch.setattr(prepared_owner, "build_research_context", refuse)
     monkeypatch.setattr(export_package, "open_export_package", refuse)
+    monkeypatch.setattr(materialized_metadata, "_row_identity_sha256", refuse)
     assert offer(prepared_source)
     assert refuse.call_count == 0
 
@@ -483,3 +427,355 @@ def test_rehearsal_keeps_the_plan_review_flag_real_seeds_carry(prepared_source, 
     monkeypatch.setattr(prepared_owner, "restore_exposure_grouping_phase", rehearsal)
     assert offer(source)
     assert rehearsal.call_count == 1
+
+
+def test_workflow_reads_only_metadata_and_stats_with_persisted_verdicts(prepared_source, monkeypatch):
+    from easyicu.research_agent.intake import materialized_metadata
+
+    source = prepared_source
+    project, history = projection(source, monkeypatch)
+    for name in ('run_prior', 'run_second'):
+        assert owner.development_resume_available(
+            wrapper_dir=source.run.parents[2] / name, study_id=source.study['id'],
+            scientific_configuration_sha256=study_contexts.scientific_configuration_sha256(source.study),
+            verify_now=True,
+        )
+    refuse = Mock(side_effect=AssertionError('a page must not verify cohort bytes or rehearse'))
+    for module, name in (
+        (materialized_metadata, '_row_identity_sha256'),
+        (prepared_owner, 'build_research_context'),
+        (prepared_owner, 'stage_materialized_cohort_authority'),
+        (export_package, 'open_export_package'),
+        (prepared_owner, 'load_verified_run_input_capsule'),
+    ):
+        monkeypatch.setattr(module, name, refuse)
+    first, second = project(), project()
+    assert first.workflow.next_action_code == second.workflow.next_action_code == 'planner_checkpoint_resume_available'
+    assert history.call_count == 4
+    assert refuse.call_count == 0
+
+
+@pytest.mark.parametrize('stale', [False, True])
+def test_missing_or_stale_verdict_is_prompt_and_deduplicates_until_finished(prepared_source, monkeypatch, stale):
+    source = prepared_source
+    if stale:
+        assert offer(source)
+        path = source.universe
+        before = path.stat()
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000))
+    entered, release = threading.Event(), threading.Event()
+    real = owner.verify_development_resume_offer
+    calls = []
+
+    def slow(**kwargs):
+        calls.append(threading.current_thread().name)
+        entered.set()
+        assert release.wait(10)
+        return real(**kwargs)
+
+    monkeypatch.setattr(owner, 'verify_development_resume_offer', slow)
+    try:
+        start = time.perf_counter()
+        assert page_offer(source) is False
+        assert time.perf_counter() - start < 0.1
+        assert entered.wait(5)
+        for _ in range(5):
+            assert page_offer(source) is False
+        assert calls == ['continuation-offers']
+        assert len(offers._PENDING) == 1
+        assert offers._WORK.qsize() == 0
+    finally:
+        release.set()
+        offers._WORK.join()
+    assert page_offer(source) is True
+    assert calls == ['continuation-offers']
+
+
+def test_restart_reads_only_the_persisted_key_and_boolean(prepared_source, monkeypatch):
+    from easyicu.webserver import research_resume_package
+
+    source = prepared_source
+    assert offer(source)
+    prepared_owner._OFFER_VERDICTS.clear()
+    research_resume_package._package_offer_verdict.cache_clear()
+    wrapper = source.run.parents[1]
+    record = json.loads((wrapper / offers.RECORD_NAME).read_bytes())
+    assert set(record) == {'schema_version', 'key', 'verdict'}
+    assert len(record['key']) == 64 and record['verdict'] is True
+    # No in-memory verdict is needed. Reload in a fresh interpreter as well.
+    import subprocess
+    import sys
+
+    code = """
+import json, sys
+from pathlib import Path
+from easyicu.webserver import research_launch_resume as owner
+owner.verify_development_resume_offer = lambda **kw: (_ for _ in ()).throw(AssertionError('restart rehearsed'))
+print(json.dumps(owner.development_resume_available(wrapper_dir=Path(sys.argv[1]), study_id=sys.argv[2], scientific_configuration_sha256=sys.argv[3])))
+"""
+    result = subprocess.run([sys.executable, '-c', code, str(wrapper), source.study['id'],
+                             study_contexts.scientific_configuration_sha256(source.study)],
+                            check=True, capture_output=True, text=True)
+    assert json.loads(result.stdout) is True
+
+
+@pytest.mark.parametrize('changed', ['device', 'inode', 'size', 'mtime', 'provenance', 'source_authority', 'grouped_authority', 'record', 'config', 'package'])
+def test_every_input_change_hides_the_old_verdict_before_reverification(prepared_source, monkeypatch, changed):
+    from pathlib import Path
+
+    source = prepared_source
+    assert offer(source)
+    record = source.run.parents[1] / offers.RECORD_NAME
+    before = json.loads(record.read_bytes())
+    path = source.universe
+    if changed == 'device':
+        original = Path.lstat
+        class AnotherDevice:
+            def __init__(self, value):
+                self.value, self.st_dev = value, value.st_dev + 1
+            def __getattr__(self, name):
+                return getattr(self.value, name)
+        monkeypatch.setattr(Path, 'lstat', lambda p, *a, **kw: AnotherDevice(original(p, *a, **kw)) if p == path else original(p, *a, **kw))
+    elif changed == 'inode':
+        replacement = path.with_suffix('.replacement')
+        replacement.write_bytes(path.read_bytes())
+        info = path.stat()
+        replacement.chmod(info.st_mode)
+        os.utime(replacement, ns=(info.st_atime_ns, info.st_mtime_ns))
+        replacement.replace(path)
+    elif changed in {'mtime', 'package'}:
+        path = source.export / 'labs.parquet' if changed == 'package' else path
+        info = path.stat()
+        os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000))
+    elif changed == 'config':
+        seed = agent_review_recovery.load_recovery_seed(source.run.parents[1])
+        update_seed(source, pipeline_config={**seed.pipeline_config, 'require_human_plan_review': True})
+    else:
+        if changed == 'record':
+            path = source.run / 'exposure_groupings.json'
+        elif changed == 'provenance':
+            path = prepared_owner.materialized_provenance_path(path)
+        elif changed == 'source_authority':
+            capsule = json.loads((source.run / 'run_input_capsule.json').read_bytes())
+            path = path.parent / capsule['scientific_identity']['materialized_cohort_authority_ref']['file']
+        elif changed == 'grouped_authority':
+            path = source.run / source.context.materialized_inputs.cohort.authority_ref['file']
+        info = path.stat()
+        path.write_bytes(path.read_bytes() + b'\n')
+        if changed == 'size':
+            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+    assert page_offer(source) is False
+    offers._WORK.join()
+    after = json.loads(record.read_bytes())
+    assert after['key'] != before['key']
+    assert page_offer(source) is after['verdict']
+
+
+def test_background_worker_is_bounded_and_queue_full_never_verifies_inline(prepared_source, monkeypatch):
+    from queue import Queue
+
+    source = prepared_source
+    assert offers._WORK.maxsize == 128
+    work = Queue(maxsize=2)
+    monkeypatch.setattr(offers, '_WORK', work)
+    monkeypatch.setattr(offers, '_WORKER', Mock(is_alive=lambda: True))
+    monkeypatch.setattr(owner, 'verify_development_resume_offer', lambda **kw: pytest.fail('inline verification'))
+    try:
+        for index in range(3):
+            seed = agent_review_recovery.load_recovery_seed(source.run.parents[1])
+            update_seed(source, pipeline_config={**seed.pipeline_config, 'synthetic_generation': index})
+            assert page_offer(source) is False
+        assert work.qsize() == len(offers._PENDING) == 2
+        assert offers.Queue is Queue
+    finally:
+        while not work.empty():
+            wrapper, _, _, _, key = work.get_nowait()
+            offers._finish((wrapper, key))
+            work.task_done()
+
+
+def test_failed_job_records_the_verdict_in_its_thread_before_terminal(prepared_source, monkeypatch):
+    from easyicu.webserver import agent_pipeline_runs, research_job_recovery
+    from easyicu.webserver import provider_job_recovery as policy
+    from easyicu.webserver.jobs import Job
+    from types import SimpleNamespace
+
+    source = prepared_source
+    job = Job('synthetic', 'agent-run')
+    job.status = 'running'
+    state = policy.ProviderJobRecovery(job)
+    state.bind(wrapper_dir=source.run.parents[1], client=object(), task=SimpleNamespace(
+        ledger=SimpleNamespace(snapshot=lambda: {'tasks': []})))
+    monkeypatch.setattr(study_contexts, 'get_context', lambda _: source.study)
+    # Stop at the selection boundary: no provider probe, job or approval.
+    def no_launch(**kw):
+        assert (source.run.parents[1] / offers.RECORD_NAME).is_file()
+        assert job.status == 'running'
+        raise owner.ResearchPipelineRunError('research_pipeline_development_resume_checkpoint_invalid', 'synthetic stop')
+    monkeypatch.setattr(agent_pipeline_runs, 'make_research_pipeline_run_runner', no_launch)
+    real = owner.verify_development_resume_offer
+    verified = []
+    def verify(**kw):
+        verified.append((threading.current_thread().name, job.status))
+        return real(**kw)
+    monkeypatch.setattr(owner, 'verify_development_resume_offer', verify)
+    failures = []
+    def run():
+        try:
+            state.run(lambda _: (_ for _ in ()).throw(ConnectionError('synthetic')),
+                      lambda exc: research_job_recovery._continuation(state, {'study_context': source.study}))
+        except ConnectionError:
+            failures.append(json.loads((source.run.parents[1] / offers.RECORD_NAME).read_bytes())['verdict'])
+            job.status = 'failed'
+    thread = threading.Thread(target=run, name='synthetic-job-thread')
+    thread.start()
+    thread.join(20)
+    assert not thread.is_alive()
+    assert verified == [('synthetic-job-thread', 'running')]
+    assert failures == [True] and job.status == 'failed'
+
+
+def test_verification_never_calls_a_provider_or_changes_approval(prepared_source, monkeypatch):
+    from easyicu.webserver import agent_pipeline_runs, provider_adapter
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+
+    refuse = Mock(side_effect=AssertionError('verification cannot spend or launch'))
+    monkeypatch.setattr(HardStopClient, 'complete', refuse)
+    monkeypatch.setattr(provider_adapter, 'build_research_agent_provider_client', refuse)
+    monkeypatch.setattr(agent_pipeline_runs, 'make_research_pipeline_run_runner', refuse)
+    monkeypatch.setattr(agent_pipeline_runs, 'resume_research_pipeline', refuse)
+    assert page_offer(prepared_source) is False
+    offers._WORK.join()
+    assert page_offer(prepared_source) is True
+    assert refuse.call_count == 0
+    assert not list(prepared_source.run.parents[1].rglob('*approval*'))
+
+
+def test_grouping_content_digest_invalidates_even_with_unchanged_stat(prepared_source):
+    source = prepared_source
+    assert offer(source)
+    path = source.run / 'exposure_groupings.json'
+    before = path.stat()
+    raw = path.read_bytes()
+    changed = raw.replace(b'lactate below', b'Lactate below')
+    assert changed != raw and len(changed) == len(raw)
+    path.write_bytes(changed)
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert page_offer(source) is False
+    offers._WORK.join()
+    assert page_offer(source) is False
+
+
+def test_launch_rechecks_cohort_bytes_even_when_stat_and_offer_are_unchanged(prepared_source):
+    source = prepared_source
+    assert offer(source)
+    path = source.universe
+    before = path.stat()
+    path.write_bytes(b'FAIL' + path.read_bytes()[4:])
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert page_offer(source) is True
+    with pytest.raises(owner.ResearchPipelineRunError) as refused:
+        source.scope()
+    assert refused.value.code == owner.DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED
+
+
+def real_checkpoint(source):
+    from easyicu.research_agent.canonical_json import canonical_sha256
+    from easyicu.research_agent.planning.progressive_artifacts import (
+        ProgressivePlannerCheckpointEmitter, persist_progressive_planner_checkpoint,
+    )
+    from easyicu.research_agent.planning.progressive_contract import ProgressivePlanOutline
+    from tests.research_agent.planning.progressive_planner_fixtures import _outline_payload
+
+    outline = ProgressivePlanOutline.model_validate(_outline_payload())
+    checkpoints = []
+    ProgressivePlannerCheckpointEmitter(callback=checkpoints.append, request_authority_sha256='a' * 64).emit(
+        stage='outline', outline=outline, foundation=None, materializations=[],
+        prompt_metrics={'outline_sha256': canonical_sha256(outline.model_dump(mode='json'))},
+    )
+    (source.run / 'progressive_planner_checkpoint_002.json').unlink()
+    persist_progressive_planner_checkpoint(
+        run_dir=source.run, evidence=EvidenceStore(root=source.run), checkpoint=checkpoints[0],
+        prompt_pack_version='synthetic-v1',
+    )
+
+
+def test_real_background_subprocess_publishes_a_reusable_verdict(prepared_source, monkeypatch):
+    source = prepared_source
+    real_checkpoint(source)
+    monkeypatch.setattr(owner, '_development_progressive_resume_binding', _REAL_CHECKPOINT_BINDING)
+    monkeypatch.setattr(offers, '_verify_background', _SUBPROCESS_VERIFY)
+    monkeypatch.setattr(owner, 'verify_development_resume_offer', Mock(side_effect=AssertionError('background verification must leave the web interpreter')))
+    assert page_offer(source) is False
+    offers._WORK.join()
+    assert page_offer(source) is True
+    record = json.loads((source.run.parents[1] / offers.RECORD_NAME).read_bytes())
+    assert record['verdict'] is True
+    assert not list(source.run.parents[1].rglob('*approval*'))
+
+
+def test_distinct_keys_share_one_background_verifier(prepared_source, monkeypatch):
+    source = prepared_source
+    entered, second, release = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+    real = offers._verify
+    def blocked(*args):
+        calls.append(args[-1])
+        (entered if len(calls) == 1 else second).set()
+        assert release.wait(10)
+        return real(*args)
+    monkeypatch.setattr(offers, '_verify_background', blocked)
+    try:
+        assert page_offer(source) is False
+        assert entered.wait(5)
+        seed = agent_review_recovery.load_recovery_seed(source.run.parents[1])
+        update_seed(source, pipeline_config={**seed.pipeline_config, 'require_human_plan_review': True})
+        assert page_offer(source) is False
+        assert not second.wait(0.1)
+        assert offers._WORK.qsize() == 1
+    finally:
+        release.set()
+        offers._WORK.join()
+    assert len(calls) == 2 and calls[0] != calls[1]
+    assert page_offer(source) is True
+
+
+def test_verdict_replace_is_atomic_and_failed_replace_preserves_old(tmp_path, monkeypatch):
+    offers._write_verdict(tmp_path, 'a' * 64, True)
+    path = tmp_path / offers.RECORD_NAME
+    before = path.read_bytes()
+    def refuse_replace(temporary, target):
+        from pathlib import Path
+        assert target == path and path.read_bytes() == before
+        assert json.loads(Path(temporary).read_bytes())['key'] == 'b' * 64
+        raise OSError('synthetic interrupted replace')
+    monkeypatch.setattr(offers.os, 'replace', refuse_replace)
+    with pytest.raises(OSError, match='synthetic interrupted replace'):
+        offers._write_verdict(tmp_path, 'b' * 64, False)
+    assert path.read_bytes() == before
+    assert not list(tmp_path.glob('.resume-offer-*'))
+
+
+def test_offer_metadata_never_follows_a_symlink(tmp_path):
+    target = tmp_path / 'synthetic.json'
+    target.write_text('{}')
+    link = tmp_path / 'linked.json'
+    link.symlink_to(target)
+    with pytest.raises(OSError):
+        offers._small_bytes(link)
+
+
+def test_a_hung_background_verifier_is_bounded(monkeypatch, caplog):
+    import subprocess
+    from pathlib import Path
+
+    seen = {}
+
+    def hung(command, **kwargs):
+        seen.update(kwargs)
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(offers.subprocess, "run", hung)
+    _SUBPROCESS_VERIFY(Path("run_synthetic"), None, "study", "digest", "key")
+    assert seen["timeout"] == offers._VERIFIER_TIMEOUT_SECONDS
+    assert "development_resume_offer_worker_timeout" in caplog.text
