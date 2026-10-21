@@ -12,8 +12,8 @@
   --canvas-muted-fg: #635E57;         /* HSL(30, 10%, 35%) secondary captions */
   --canvas-border: #DDD8CE;           /* HSL(48, 15%, 82%) hairline structural border */
   --canvas-hairline: rgba(0, 0, 0, 0.08);
-  --canvas-font: 'DieGrotesk', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --canvas-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --canvas-font: 'DieGrotesk', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
+  --canvas-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', monospace;
   --workspace-global-rail-width: 59px;
   --workspace-project-rail-width: clamp(330px, 15vw, 380px);
 }

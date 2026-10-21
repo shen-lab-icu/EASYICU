@@ -2228,7 +2228,7 @@ def test_native_patient_time_series_uses_module_grouped_single_feature_charts() 
         assert ".pt-echart" not in _static_css(unrelated_css)
     assert (
         index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
-        < index_html.index("js/screens-viz-echarts.js?v=20260728-shared-echarts1")
+        < index_html.index("js/screens-viz-echarts.js?v=20261022-winfont1")
         < index_html.index("js/screens-viz-patient-charts.js?v=20260830-viz-final1")
         < index_html.index("js/screens-viz-patient-series.js?v=20260830-viz-final1")
     )
@@ -3528,9 +3528,9 @@ def test_review_routes_share_echarts_theme_without_cross_route_owner_leaks() -> 
     crossdb_css = _static_css("crossdb.css")
 
     vendor = index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
-    shared = index_html.index("js/screens-viz-echarts.js?v=20260728-shared-echarts1")
+    shared = index_html.index("js/screens-viz-echarts.js?v=20261022-winfont1")
     patient = index_html.index("js/screens-viz-patient-charts.js?v=20260830-viz-final1")
-    cohort = index_html.index("js/screens-viz-cohort-charts.js?v=20260830-viz-final1")
+    cohort = index_html.index("js/screens-viz-cohort-charts.js?v=20261022-winfont1")
     crossdb = index_html.index("js/screens-viz-crossdb-charts.js?v=20260830-viz-final1")
     assert vendor < shared < patient < cohort < crossdb
 

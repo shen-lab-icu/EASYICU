@@ -83,7 +83,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-analysis-report.css?v=20260916-study-workspace3" in index
     assert "css/guided-pi-article-report.css?v=20260830-e2-report1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260829-data-readiness1" in index
-    assert "css/guided-pi-source-view.css?v=20261021-step-code1" in index
+    assert "css/guided-pi-source-view.css?v=20261022-winfont1" in index
     assert "css/guided-pi-literature.css?v=20260902-type-scale2" in index
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
     assert "js/screens-guided-pi-literature.js?v=20261017-planning-evidence1" in index
@@ -95,7 +95,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-idea-source.js?v=20260922-popover1" in index
     assert "js/screens-guided-pi-header.js?v=20261021-help1" in index
     assert "js/screens-guided-pi-model-menu.js?v=20260923-keep-open1" in index
-    assert "css/workspace-canvas.css?v=20260921-fit1" in index
+    assert "css/workspace-canvas.css?v=20261022-winfont1" in index
     assert "css/guided-pi-workspace.css?v=20261021-entry-examples1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
     assert "js/screens-guided-pi-demo.js?v=20261009-review-fix1" in index

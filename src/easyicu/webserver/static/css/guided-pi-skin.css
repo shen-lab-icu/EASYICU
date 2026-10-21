@@ -30,9 +30,9 @@
   --skin-primary-soft:rgba(var(--skin-primary-rgb),.35);
   --skin-primary-tint:rgba(var(--skin-primary-rgb),.1);
   --skin-shadow:0 10px 15px -3px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.1);
-  --skin-font:"DieGrotesk","Inter","IBM Plex Sans",-apple-system,BlinkMacSystemFont,system-ui,"PingFang SC","Hiragino Sans GB",sans-serif;
+  --skin-font:"DieGrotesk","Inter","IBM Plex Sans",-apple-system,BlinkMacSystemFont,system-ui,"PingFang SC","Hiragino Sans GB","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
   --skin-serif:"Signifier",Georgia,"Times New Roman","Songti SC",serif;
-  --skin-mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --skin-mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono","PingFang SC","Microsoft YaHei UI","Microsoft YaHei",monospace;
 }
 
 /* —— Route palette: paper everywhere, separation by ink borders —— */

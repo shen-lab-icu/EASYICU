@@ -366,7 +366,7 @@
         label: {
           show: !dense,
           color: '#17202a',
-          fontFamily: 'IBM Plex Mono, ui-monospace, monospace',
+          fontFamily: 'IBM Plex Mono, ui-monospace, Menlo, Consolas, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", monospace',
           fontSize: 12,
           formatter: params => spec.mode === 'count'
             ? chartCore.formatNumber(params.value[3], 0)
