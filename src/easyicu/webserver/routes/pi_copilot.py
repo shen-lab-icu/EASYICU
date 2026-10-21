@@ -83,6 +83,17 @@ EvidenceIdText = Annotated[
         pattern=r"^[A-Za-z0-9_.-]{1,160}$",
     ),
 ]
+# One plan step of a run: a single path component, never a client path.
+# Pattern shared with webserver/run_step_trace.py (STEP_ID_PATTERN).
+StepIdText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,159}$",
+    ),
+]
 ResearchDocumentNameText = Annotated[
     str,
     StringConstraints(
@@ -781,6 +792,22 @@ def get_pi_copilot_research_evidence_preview(
             run_id=run_id,
             evidence_id=evidence_id,
             expected_sha256=expected_sha256,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.get("/api/copilot/pi/projects/{project_id}/runs/{run_id}/steps/{step_id}")
+def get_pi_copilot_research_step(
+    project_id: ShortText,
+    run_id: RunIdText,
+    step_id: StepIdText,
+) -> dict:
+    try:
+        return get_pi_copilot_service().get_research_step(
+            project_id=project_id,
+            run_id=run_id,
+            step_id=step_id,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

@@ -599,6 +599,14 @@
       + '?expected_sha256=' + encodeURIComponent(expectedSha256)
     );
   }
+  // One executed plan step, addressed by its run and step ids.
+  function loadPiCopilotRunStep(projectId, runId, stepId) {
+    return getJSON(
+      '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/runs/' + encodeURIComponent(runId)
+      + '/steps/' + encodeURIComponent(stepId)
+    );
+  }
   function loadPiCopilotDataPackageReview(projectId, studyRevision, reviewSha256) {
     return getJSON(
       '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
@@ -844,6 +852,7 @@
   window.EU_API.loadPiCopilotResearchArtifact = loadPiCopilotResearchArtifact;
   window.EU_API.piCopilotResearchArtifactDownloadUrl = piCopilotResearchArtifactDownloadUrl;
   window.EU_API.loadPiCopilotResearchEvidence = loadPiCopilotResearchEvidence;
+  window.EU_API.loadPiCopilotRunStep = loadPiCopilotRunStep;
   window.EU_API.loadPiCopilotDataPackageReview = loadPiCopilotDataPackageReview;
   window.EU_API.preparePiCopilotDataPackageReview = preparePiCopilotDataPackageReview;
   window.EU_API.preparePiCopilotDataWorkbenchSnapshot = preparePiCopilotDataWorkbenchSnapshot;

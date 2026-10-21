@@ -83,7 +83,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-analysis-report.css?v=20260916-study-workspace3" in index
     assert "css/guided-pi-article-report.css?v=20260830-e2-report1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260829-data-readiness1" in index
-    assert "css/guided-pi-source-view.css?v=20260921-workbench-rail1" in index
+    assert "css/guided-pi-source-view.css?v=20261021-step-code1" in index
     assert "css/guided-pi-literature.css?v=20260902-type-scale2" in index
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
     assert "js/screens-guided-pi-literature.js?v=20261017-planning-evidence1" in index
@@ -109,12 +109,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-analysis-report.js?v=20261010-exposure-labels1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
-    assert "js/screens-guided-pi-source-view.js?v=20260922-run-answer1" in index
+    assert "js/screens-guided-pi-source-view.js?v=20261021-step-code1" in index
     assert "js/screens-guided-pi-preview.js?v=20261010-source-gate1" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260922-run-answer1" in index
-    assert "js/screens-guided-pi-activity.js?v=20261021-trace-language1" in index
+    assert "js/screens-guided-pi-activity.js?v=20261021-step-code1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20261020-api-models1"
         in index
@@ -152,7 +152,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20261020-registered-source-offer1" in index
+    assert "js/api.js?v=20261021-step-code1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"

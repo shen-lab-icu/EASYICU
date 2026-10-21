@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
 
 from ..research_input_progress import project_research_input_state
+from ..run_step_trace import TRACE_ACTION_KEYS, TRACE_FACT_KEYS
 from ..target_trial_setup import project_target_trial_compile
 from . import cohort_eligibility
 from .contracts import PiCopilotError, plan_approval_allowed
@@ -464,9 +465,14 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     # the transient Job history has rolled over. No diagnostic detail enters.
     timings = result.get("trace_timings")
     timings = timings if isinstance(timings, list) else []
+    audit_run_id = stable_code(result.get("run_id"))
     audit_events = [
         {"type": "progress", "step": row.get("phase"), "label": row.get("event"),
-         **{key: row[key] for key in ("timestamp", "status", "step_id") if key in row}}
+         **({"run_id": audit_run_id} if audit_run_id else {}),
+         **{key: row[key] for key in (
+             "timestamp", "status", "step_id", "current", "total", "planning_unit",
+             "retry_phase", *TRACE_ACTION_KEYS, *TRACE_FACT_KEYS,
+         ) if key in row}}
         for row in timings if isinstance(row, Mapping)
     ]
     progress = []
@@ -507,6 +513,7 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 **({"label": label} if label else {}),
                 "reason_code": stable_code(event.get("reason") or event.get("reason_code"))
             }
+            | _trace_facts(event)
         )
     if len(progress) > MAX_LIST_ITEMS or audit_events:
         progress = _compact_job_progress(progress)
@@ -673,6 +680,45 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     )
 
 
+def _visible_fact_text(value: Any, limit: int) -> str:
+    text = _bounded_text(value, limit)
+    if not text:
+        return ""
+    try:
+        reject_sensitive_message(text)
+    except PiCopilotError:
+        return ""
+    return text
+
+
+def _trace_facts(event: Mapping[str, Any]) -> Dict[str, Any]:
+    """Project the closed trace-action facts of one job event.
+
+    ``run_step_trace.trace_action`` produced them from fixed host envelopes;
+    the projection re-checks each type so a transport cannot widen them.
+    """
+
+    facts: Dict[str, Any] = {}
+    for key in ("action", "executor", "run_kind", "repair_kind", "run_id"):
+        code = stable_code(event.get(key))
+        if code:
+            facts[key] = code
+    for key in ("attempt", "group_variable_count", "plan_step_count", "query_count", "record_count"):
+        value = event.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100_000:
+            facts[key] = value
+    for key in ("source_label", "source_database"):
+        text = _visible_fact_text(event.get(key), 160)
+        if text:
+            facts[key] = text
+    queries = event.get("queries")
+    if isinstance(queries, list):
+        shown = [text for text in (_visible_fact_text(item, 200) for item in queries[:4]) if text]
+        if shown:
+            facts["queries"] = shown
+    return facts
+
+
 def _compact_job_progress(events: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
     """Bound repeated updates by operation, preserving both timing endpoints.
 
@@ -686,8 +732,11 @@ def _compact_job_progress(events: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
         if not step_id and step in {"step", "coder", "runner", "resume"}:
             match = re.search(r"(?:Step \d+/\d+ [^:]+: |for |completed[^:]*: )([A-Za-z0-9_.-]+)\.?$", str(event.get("label") or ""))
             step_id = match[1].rstrip(".") if match else ""
+        # Typed actions stay distinct: each repair attempt and each planning
+        # validation attempt is its own operation with its own times.
         key = (step, step_id, event.get("planning_unit"), event.get("retry_phase"),
-               event.get("current") if step.startswith("provider_") else None)
+               event.get("current") if step.startswith("provider_") or event.get("action") else None,
+               event.get("action"), event.get("repair_kind"), event.get("attempt"))
         previous = grouped.get(key)
         timestamp = str(event.get("timestamp") or "")
         row = {**(previous or {}), **event}
