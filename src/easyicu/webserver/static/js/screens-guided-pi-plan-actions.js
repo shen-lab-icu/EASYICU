@@ -304,7 +304,9 @@
         if (guardedTransition) startedTransitions.delete(guardKey);
         return false;
       }
-      if (!automatic) {
+      // Confirming the plan leaves the host's record line, not a quotation
+      // this page cannot keep (showRecordedDecision).
+      if (!automatic && !executionUpgrade) {
         host.appendMessage({
           id: 'plan-generation-' + Date.now(), role: 'user', complete: true,
           text: request.text,
@@ -379,6 +381,7 @@
             ? 'easyicu_full_run_upgrade_submitted'
             : 'easyicu_full_run_submitted',
         );
+        showRecordedDecision();
         return true;
       } catch (error) {
         if (!stillCurrent()) return false;
@@ -625,6 +628,16 @@
       return true;
     }
 
+    // The host records a decision in the request that starts its job; the
+    // session it returns carries the decision's record line and the rail
+    // state, so the page shows what a reload would.
+    function showRecordedDecision() {
+      Promise.resolve()
+        .then(() => host.refreshSession(true))
+        .then(() => host.render())
+        .catch(() => null);
+    }
+
     async function submitReview(decision) {
       if (unavailable()) return;
       const session = host.session() || {};
@@ -640,13 +653,6 @@
         host.render();
         return;
       }
-      const approved = decision === 'approved';
-      host.appendMessage({
-        id: 'plan-review-' + Date.now(), role: 'user', complete: true,
-        text: approved
-          ? tr('Approve plan and start analysis', '批准计划并开始分析')
-          : tr('Reject this plan', '拒绝当前计划'),
-      });
       const hostDecision = hostAction('execute_plan', 'plan_review');
       setPending(true);
       try {
@@ -659,6 +665,7 @@
         });
         host.setBusy(false);
         host.watchChildJob(String(payload.job_id || ''), 'easyicu_review_submitted');
+        showRecordedDecision();
       } catch (error) {
         host.setBusy(false);
         if (followHostDecisionRefusal(error)) return;

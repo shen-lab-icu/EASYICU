@@ -1,0 +1,5 @@
+/* Owner: Guided Copilot decision records (screens-guided-pi-decision-records.js).
+   One quiet past-tense line where an answered gate stood. A system action is
+   set apart from the researcher's own decisions. */
+.gpi-decision-record{margin:10px 0 6px;padding:6px 0 6px 10px;border-left:2px solid var(--accent);color:var(--ink-2);font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.gpi-decision-record.is-system{border-left-color:var(--hair);color:var(--ink-3);font-style:italic}

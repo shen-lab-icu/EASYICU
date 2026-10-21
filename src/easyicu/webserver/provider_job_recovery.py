@@ -8,6 +8,8 @@ It never constructs a plan, review decision, or execution grant.
 from __future__ import annotations
 
 import json
+import re
+import stat
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,6 +26,12 @@ from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunEr
 RECOVERY_WINDOW_SECONDS = 1800.0
 PROBE_INTERVAL_SECONDS = 120.0
 MAX_AUTOMATIC_RESUMES = 2
+#: The system-action receipt each wrapper of a recovered job keeps.
+RECEIPT_NAME = "provider_recovery.json"
+RECEIPT_SCHEMA = "easyicu.provider_job_recovery/1"
+_RECEIPT_MAX_BYTES = 64 * 1024
+_CAUSE_CODE = re.compile(r"[a-z][a-z0-9_]{0,79}")
+_JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}")
 
 
 class ProviderRecoveryExhausted(ResearchPipelineRunError):
@@ -129,7 +137,7 @@ class ProviderJobRecovery:
 
     def persist(self) -> None:
         record = {
-            "schema_version": "easyicu.provider_job_recovery/1",
+            "schema_version": RECEIPT_SCHEMA,
             "job_id": self.job.id, "window_seconds": RECOVERY_WINDOW_SECONDS,
             "max_automatic_resumes": MAX_AUTOMATIC_RESUMES,
             "probe_interval_seconds": PROBE_INTERVAL_SECONDS,
@@ -137,7 +145,7 @@ class ProviderJobRecovery:
             "continuation_refusal": self.continuation_refusal,
         }
         for root in self.wrappers:
-            path = root / "provider_recovery.json"
+            path = root / RECEIPT_NAME
             temporary = path.with_suffix(".json.tmp")
             temporary.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
             temporary.replace(path)
@@ -228,6 +236,55 @@ class ProviderJobRecovery:
                 if any(row.get("task_id") == self.task.task_id and row.get("status") in {"running", "paused"} for row in rows):
                     self.task.finish(error=self.stop_reason)
             raise
+
+
+def read_recovery_receipt(wrapper_dir: Path) -> dict[str, Any] | None:
+    """The automatic continuations one wrapper's receipt records, path-free.
+
+    Each continuation is a system action: the receipt names the job it
+    continued, when, after which transport cause, and its number within the
+    bound.  An unreadable, oversized, linked or malformed receipt is ``None``
+    -- it is never read as somebody else's action.
+    """
+
+    path = Path(wrapper_dir) / RECEIPT_NAME
+    try:
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _RECEIPT_MAX_BYTES:
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema_version") != RECEIPT_SCHEMA:
+        return None
+    job_id = str(payload.get("job_id") or "")
+    limit = payload.get("max_automatic_resumes")
+    rows = payload.get("automatic_resumes")
+    if (
+        not _JOB_ID.fullmatch(job_id)
+        or type(limit) is not int
+        or not 0 < limit <= 16
+        or not isinstance(rows, list)
+    ):
+        return None
+    resumes: list[dict[str, Any]] = []
+    for row in rows[:limit]:
+        if not isinstance(row, dict) or row.get("actor") != "system":
+            return None
+        number = row.get("number")
+        cause = str(row.get("cause_code") or "")
+        try:
+            at = datetime.fromisoformat(str(row.get("at") or ""))
+        except ValueError:
+            return None
+        if type(number) is not int or not 0 < number <= limit or at.tzinfo is None:
+            return None
+        resumes.append({
+            "at": at.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "number": number,
+            "cause_code": cause if _CAUSE_CODE.fullmatch(cause) else "",
+        })
+    return {"job_id": job_id, "max_automatic_resumes": limit, "automatic_resumes": resumes}
 
 
 def recovery_for_job(job: Any) -> ProviderJobRecovery | None:

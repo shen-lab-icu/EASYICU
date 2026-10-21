@@ -651,7 +651,7 @@ def test_every_reader_of_a_runs_groups_is_given_its_context() -> None:
 
     run_files = source("screens-guided-pi-run-files.js")
     preview = source("screens-guided-pi-preview.js")
-    assert "api.loadAgentRunArtifact(review.project_dir, 'run_context.json')" in run_files
+    assert "api.loadAgentRunArtifact({ run_ref: review.run_ref }, 'run_context.json')" in run_files
     assert "window.AGENT_EXPOSURE_LEVELS.namedIn(name)" in run_files
     assert "artifactStructuredView(state.artifact.name, state.artifact.payload || {}, state.artifact.context)" in run_files
     assert "loadPiCopilotResearchArtifact(state.projectId, state.resource.run_id, 'run_context.json')" in preview

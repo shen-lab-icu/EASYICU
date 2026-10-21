@@ -77,6 +77,59 @@ def research_pipeline_project_root(study_context_id: Optional[str]) -> Path:
     )
 
 
+#: A conversation's own child jobs are few; this bounds the receipts read.
+_MAX_RECOVERY_RECEIPT_JOBS = 64
+_JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}")
+
+
+def provider_recovery_receipts(
+    *,
+    study_context_id: Optional[str],
+    job_ids: Sequence[str],
+    project_root: Optional[Path | str] = None,
+) -> list[Dict[str, Any]]:
+    """The provider-recovery receipts of these jobs of one study, path-free.
+
+    A job's receipt lives in the wrapper its continuation bound: its own, or
+    the wrapper of the run it resumed or reviewed -- which another of the
+    conversation's jobs created.  Only receipts naming one of ``job_ids`` are
+    returned.  Reading creates nothing.
+    """
+
+    from easyicu.webserver.provider_job_recovery import read_recovery_receipt
+    from easyicu.webserver.run_record import RunDirectory
+
+    study_id = str(study_context_id or "").strip()
+    wanted = [
+        job_id
+        for job_id in dict.fromkeys(str(value or "").strip() for value in job_ids)
+        if _JOB_ID.fullmatch(job_id)
+    ][-_MAX_RECOVERY_RECEIPT_JOBS:]
+    if not study_id or not wanted:
+        return []
+    try:
+        root = (
+            Path(project_root)
+            if project_root is not None
+            else research_pipeline_workspace().existing_project_root(study_id)
+        )
+    except Exception:  # noqa: BLE001 -- an unreadable workspace has no receipts
+        return []
+    if root is None:
+        return []
+    # One receipt is written to every wrapper its job bound; keep the copy
+    # that records the most continuations.
+    receipts: Dict[str, Dict[str, Any]] = {}
+    for job_id in wanted:
+        receipt = read_recovery_receipt(RunDirectory.create(root, study_id, job_id).path)
+        if receipt is None or receipt["job_id"] not in wanted:
+            continue
+        held = receipts.get(receipt["job_id"])
+        if held is None or len(receipt["automatic_resumes"]) > len(held["automatic_resumes"]):
+            receipts[receipt["job_id"]] = receipt
+    return list(receipts.values())
+
+
 def list_bound_run_history(
     *,
     study_context_id: Optional[str],
@@ -394,6 +447,7 @@ def _continued_a_planner_checkpoint(project_dir: Path) -> bool:
 __all__ = [
     "latest_bound_run_id",
     "list_bound_run_history",
+    "provider_recovery_receipts",
     "resumable_planner_checkpoint_job_id",
     "research_pipeline_project_root",
     "research_pipeline_workspace",

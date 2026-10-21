@@ -12,7 +12,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 from easyicu.databases.profiles import get_database_profile
 from easyicu.extensions import (
@@ -54,11 +54,19 @@ from .contracts import (
     PiSessionDataSourceAuthorization,
     PiSessionDataSourceReference,
     PiSessionRecord,
+    PiSessionResearchJob,
     ResearchProviderBinding,
     ToolExecutionContext,
     utc_now,
 )
 from .codex_gateway import CodexPiGatewayPool
+from .conversation_status import (
+    later_research_job,
+    research_job_state,
+    research_job_state_at,
+    session_rail_status,
+)
+from .decision_records import conversation_job_ids, project_decision_records
 from .gateway import PiGatewayClient
 from .message_input import prepare_user_message
 from .project_authority import (
@@ -84,6 +92,7 @@ from .session_storage import SessionStorageMaintenance
 from .run_authority import (
     latest_bound_run_id,
     list_bound_run_history,
+    provider_recovery_receipts,
     research_pipeline_project_root,
 )
 from .turn_authority import (
@@ -521,11 +530,14 @@ class PiCopilotService:
     def _save_record(self, record: PiSessionRecord) -> PiSessionRecord:
         record.updated_at = utc_now()
         with self._lock:
-            rows = [
-                row
-                for row in self._read_records()
-                if row.session_id != record.session_id
-            ]
+            rows = []
+            for row in self._read_records():
+                if row.session_id != record.session_id:
+                    rows.append(row)
+                else:
+                    # ``_note_research_job`` owns this field; a record read
+                    # before its last note must not erase it.
+                    record.latest_research_job = row.latest_research_job
             rows.insert(0, record)
             overflow = max(0, len(rows) - MAX_SESSIONS)
             evicted: list[PiSessionRecord] = []
@@ -2747,6 +2759,78 @@ class PiCopilotService:
             "session_id": record.session_id,
         }
 
+    def _note_research_job(
+        self,
+        session_id: str,
+        job: Optional[Mapping[str, Any]] = None,
+        *,
+        stopped: Optional[PiSessionResearchJob] = None,
+    ) -> None:
+        """Keep the rail state of this conversation's latest research job.
+
+        ``job`` is a ``project_job`` projection; ``stopped`` is a running
+        note whose job this process no longer runs.  Only this field of the
+        stored record changes, in place.
+        """
+
+        if stopped is not None:
+            noted: Optional[PiSessionResearchJob] = stopped.model_copy(
+                update={"state": "stopped", "at": utc_now()}
+            )
+        else:
+            job = job or {}
+            state = research_job_state(job)
+            job_id = str(job.get("job_id") or "").strip()
+            started_at = research_job_state_at(job, "running")
+            at = research_job_state_at(job, state)
+            noted = (
+                PiSessionResearchJob(
+                    job_id=job_id[:160], state=state, started_at=started_at, at=at
+                )
+                if job_id and started_at and at
+                else None
+            )
+        if noted is None:
+            return
+        with self._lock:
+            rows = self._read_records()
+            row = next((item for item in rows if item.session_id == session_id), None)
+            if row is None:
+                return
+            kept = later_research_job(row.latest_research_job, noted)
+            if kept == row.latest_research_job:
+                return
+            row.latest_research_job = kept
+            row.updated_at = utc_now()
+            self._write_records(rows)
+
+    def _rail_status(self, record: PiSessionRecord) -> Optional[str]:
+        def job_is_running(job_id: str) -> bool:
+            job = jobs.MANAGER.get(job_id)
+            return job is not None and job.status == "running"
+
+        return session_rail_status(record, job_is_running=job_is_running)
+
+    def _decision_records(
+        self, record: PiSessionRecord, child_jobs: Sequence[Mapping[str, Any]]
+    ) -> list[Dict[str, Any]]:
+        """The conversation's decision records, from the owners that keep them."""
+
+        turns = self.replay_store.host_action_turns(
+            session_id=record.session_id, project_id=str(record.project_id)
+        )
+        receipts = provider_recovery_receipts(
+            study_context_id=record.binding.study_context_id,
+            job_ids=conversation_job_ids(turns, child_jobs),
+        )
+        return project_decision_records(
+            host_action_turns=turns,
+            data_source_authorization=record.data_source_authorization.model_dump(
+                mode="json"
+            ),
+            recovery_receipts=receipts,
+        )
+
     def _watch_child_job_for_replay(
         self,
         *,
@@ -2779,11 +2863,13 @@ class PiCopilotService:
                             child_job_id=job_id,
                             status=child.status,
                         )
+                        projected = project_job(child.snapshot())
                         self.replay_store.archive_child_job(
                             session_id=session_id,
                             project_id=project_id,
-                            job=project_job(child.snapshot()),
+                            job=projected,
                         )
+                        self._note_research_job(session_id, projected)
                         return
                     time.sleep(0.2)
             except PiCopilotError:
@@ -3011,6 +3097,8 @@ class PiCopilotService:
             status=status,
         )
         if child is not None:
+            projected = project_job(child.snapshot())
+            self._note_research_job(record.session_id, projected)
             if status == "running":
                 self._watch_child_job_for_replay(
                     session_id=record.session_id,
@@ -3021,7 +3109,7 @@ class PiCopilotService:
                 self.replay_store.archive_child_job(
                     session_id=record.session_id,
                     project_id=str(record.project_id),
-                    job=project_job(child.snapshot()),
+                    job=projected,
                 )
         return {"ok": True, "host_action": turn}
 
@@ -3069,6 +3157,8 @@ class PiCopilotService:
             project_id=str(record.project_id),
             job=projected,
         )
+        if child.kind == "agent-run":
+            self._note_research_job(record.session_id, projected)
         return {"ok": True, "job": saved, "already_archived": False}
 
     def set_presentation_pin(
@@ -3184,6 +3274,8 @@ class PiCopilotService:
                 "last_message_job_id": row.last_message_job_id,
                 "active_message_job_id": row.active_message_job_id,
                 "last_turn_status": row.last_turn_status,
+                # The rail's state, from the conversation's latest job.
+                "conversation_status": self._rail_status(row),
                 "pinned_for_presentation": row.pinned_for_presentation,
             }
             has_history = bool(
@@ -4944,6 +5036,14 @@ class PiCopilotService:
             "last_message_job_id": record.last_message_job_id,
             "active_message_job_id": record.active_message_job_id,
             "last_turn_status": record.last_turn_status,
+            "conversation_status": self._rail_status(record),
+            # What was decided, by whom and when, read from the owners that
+            # recorded each decision (``decision_records``).
+            "decision_records": (
+                self._decision_records(record, replay.get("child_jobs") or [])
+                if include_replay
+                else []
+            ),
             "last_turn_allowed_actions": list(record.last_turn_allowed_actions),
             "last_turn_events": list(latest_replay_turn.get("events") or []),
             "conversation_replay": replay,
@@ -5040,6 +5140,17 @@ class PiCopilotService:
                     project_id=str(record.project_id),
                     job=project_job(child.snapshot()),
                 )
+        noted = record.latest_research_job
+        if noted is not None and noted.state == "running":
+            job = jobs.MANAGER.get(noted.job_id)
+            if job is None:
+                # The Web process restarted: the job ended without a record.
+                self._note_research_job(record.session_id, stopped=noted)
+            elif job.status != "running":
+                self._note_research_job(record.session_id, project_job(job.snapshot()))
+            record.latest_research_job = self._get_record(
+                record.session_id
+            ).latest_research_job
         self._backfill_host_action_row(record)
         return record
 

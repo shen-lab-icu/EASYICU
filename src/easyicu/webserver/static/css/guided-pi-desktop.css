@@ -61,6 +61,8 @@
  .gpi-conversation-item.is-complete small i{border-color:#71806b;background:#71806b}
  .gpi-conversation-item.needs-attention small{color:#9b4f36}
  .gpi-conversation-item.needs-attention small i{border-color:#b75e40;background:#b75e40}
+ .gpi-conversation-item.needs-user small{color:#174547}
+ .gpi-conversation-item.needs-user small i{border:2px solid var(--accent);background:transparent}
  .gpi-conversation-item time{align-self:start;padding-top:2px;color:var(--ink-4);font:400 11px/1.4 var(--font);white-space:nowrap}
  .gpi-project-materials{flex:0 0 min(35%,310px);min-height:150px;overflow-y:auto;border-top:1px solid #a7a69d;padding:4px 9px 12px}
  .gpi-project-materials .gpi-conversations-heading{border-bottom:2px solid #246366}

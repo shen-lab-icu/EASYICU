@@ -31,6 +31,12 @@ const statuses = [
   {last_turn_status: 'interrupted', history_turn_count: 4},
   {last_turn_status: 'done', history_turn_count: 4},
   {history_turn_count: 4}, {has_history: true}, null,
+  // The host's state of the conversation's latest job wins over its last reply.
+  {conversation_status: 'running', last_turn_status: 'done'},
+  {conversation_status: 'needs_user', last_turn_status: 'done'},
+  {conversation_status: 'stopped', last_turn_status: 'done'},
+  {conversation_status: 'done', last_turn_status: 'failed'},
+  {conversation_status: null, last_turn_status: 'done', history_turn_count: 4},
 ].map(owner.sessionStatusLabel);
 const times = [
   null, {created_at: 'invalid'}, {created_at: '2026-10-17T12:00:00Z'},
@@ -42,15 +48,23 @@ process.stdout.write(JSON.stringify({statuses, times}));
     result = run_node(node, program, str(owner.resolve()), language, check=True)
     payload = json.loads(result.stdout)
     assert payload["statuses"] == (
-        ["运行中", "需处理", "已完成", "4 轮", "已有对话", "未开始"]
+        [
+            "进行中", "已停止", "已完成", "4 轮", "已有对话", "未开始",
+            "进行中", "待确认", "已停止", "已完成", "4 轮",
+        ]
         if language == "zh"
         else [
             "Running",
-            "Needs attention",
-            "Completed",
+            "Stopped",
+            "Done",
             "4 turns",
             "Has conversation",
             "Not started",
+            "Running",
+            "Needs you",
+            "Stopped",
+            "Done",
+            "4 turns",
         ]
     )
     assert payload["times"] == (

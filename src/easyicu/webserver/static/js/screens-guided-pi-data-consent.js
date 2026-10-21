@@ -254,6 +254,7 @@
 
   window.EasyICU.guidedPi.declare('dataConsent', {
     authorization,
+    sourceLabel,
     requiresConfirmation,
     selectionInProgress,
     matchesSourceSelection,

@@ -17,8 +17,8 @@ const modules = global.EasyICU.guidedPi;
 const runFiles = modules.require('runFiles');
 const resources = modules.require('resources').create({ esc: global.EU_HTML.esc });
 
-const DIR = '/runs/a/run_flagship';
-const run = { run_id: 'run_flagship', study_id: 'a', project_dir: DIR };
+const REF = 'rr_' + 'f'.repeat(32);
+const run = { run_id: 'run_flagship', study_id: 'a', run_ref: REF };
 function listFor(names, readiness, fileGuide) {
   const api = {
     listStudyContexts: async () => ({ contexts: [{ id: 'a', title: 'A' }] }),
@@ -34,7 +34,7 @@ function listFor(names, readiness, fileGuide) {
   });
   return (async () => {
     await view.sync();
-    await view.open(DIR);
+    await view.open(REF);
     const html = view.render({ savedRuns: [run] });
     const [primary, extra = ''] = html.split('<details class="gpi-run-extra"');
     return { primary, extra };

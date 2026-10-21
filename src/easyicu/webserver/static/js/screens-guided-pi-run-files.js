@@ -1,7 +1,8 @@
 /* Owner: Guided Pi run-files widget. */
 /* Copilot's in-message run files owner. Browsing never changes the
    active study or starts a model turn; all reads/downloads/reviews use the
-   existing host contracts and the selected run's exact directory. */
+   existing host contracts and the selected run's exact directory, which the
+   page names only by the opaque `run_ref` the host's history issued. */
 (function () {
   'use strict';
   const modules = window.EasyICU.guidedPi;
@@ -42,7 +43,7 @@
       state.loading = true; state.error = ''; state.warning = ''; state.review = null; state.artifact = null; update();
       const results = await Promise.allSettled([
         api.listStudyContexts(), api.loadIdeaAgentProjects({ limit: 100 }),
-        api.loadGuidedDrafts({ limit: 100 }), api.loadAgentRunHistory({ limit: 200 }),
+        api.loadGuidedDrafts({ limit: 100 }), api.loadAgentRunHistory({ limit: 200, path_free: true }),
       ]);
       if (ticket !== revision) return;
       const payloads = results.map(result => {
@@ -84,19 +85,14 @@
       state.review = null; state.artifact = null; state.error = ''; state.loading = true; update();
       try {
         // Read both roots: selecting a seed must not hide later pipeline runs.
-        const requests = [{ study_id: project.id, limit: 200 }];
-        if (project.seedDir) requests.push({ study_id: project.id, project_seed_dir: project.seedDir, limit: 200 });
+        const requests = [{ study_id: project.id, limit: 200, path_free: true }];
+        if (project.seedDir) requests.push({ study_id: project.id, project_seed_dir: project.seedDir, limit: 200, path_free: true });
         const results = await Promise.all(requests.map(request => api.loadAgentRunHistory(request).then(checked)));
         if (ticket !== revision) return;
-        const byDir = new Map();
-        results.forEach(result => rows(result.runs).forEach(run => { if (run.project_dir) byDir.set(run.project_dir, run); }));
-        rows(project.seed && project.seed.runs).forEach(run => {
-          if (run.project_dir && !byDir.has(run.project_dir)) byDir.set(run.project_dir, {
-            ...run, study_id: project.id, run_id: run.run_id || run.label,
-            run_label: run.label, run_status: run.status,
-          });
-        });
-        state.runs = Array.from(byDir.values()).sort((a, b) => Number(b.updated_at_epoch || 0) - Number(a.updated_at_epoch || 0));
+        // Only a run the host listed has a ref this page can open.
+        const byRef = new Map();
+        results.forEach(result => rows(result.runs).forEach(run => { if (run.run_ref) byRef.set(run.run_ref, run); }));
+        state.runs = Array.from(byRef.values()).sort((a, b) => Number(b.updated_at_epoch || 0) - Number(a.updated_at_epoch || 0));
         state.count = state.runs.length;
         if (results.some(result => Number(result.count) > rows(result.runs).length)) {
           state.warning = tr('This project exceeds the history display limit; older records remain in its folder.', '本项目超出历史展示上限，更早记录仍保存在项目文件夹中。');
@@ -108,9 +104,9 @@
       const ticket = ++revision;
       state.review = null; state.artifact = null; state.error = ''; state.loading = true; update();
       try {
-        const review = checked(await api.loadAgentRunReview(run.project_dir));
+        const review = checked(await api.loadAgentRunReview({ run_ref: run.run_ref }));
         if (ticket !== revision) return;
-        if (review.project_dir !== run.project_dir || (review.study_id && review.study_id !== state.selected.id)) throw new Error('Run identity mismatch');
+        if (!run.run_ref || review.run_ref !== run.run_ref || (review.study_id && review.study_id !== state.selected.id)) throw new Error('Run identity mismatch');
         state.review = review;
       } catch (error) { if (ticket === revision) state.error = String(error.message || error); }
       finally { if (ticket === revision) { state.loading = false; update(); } }
@@ -121,12 +117,12 @@
       const ticket = ++revision;
       state.loading = true; state.error = ''; state.artifact = null; update();
       try {
-        const data = checked(await api.loadAgentRunArtifact(review.project_dir, name));
+        const data = checked(await api.loadAgentRunArtifact({ run_ref: review.run_ref }, name));
         // A reader that names the run's exposure groups reads them from its
         // context (screens-agent-exposure-levels.js); without it they keep their codes.
         const context = window.AGENT_EXPOSURE_LEVELS && window.AGENT_EXPOSURE_LEVELS.namedIn(name)
           && rows(review.artifacts).some(item => item.name === 'run_context.json')
-          ? await api.loadAgentRunArtifact(review.project_dir, 'run_context.json').then(checked).then(row => row.payload, () => null)
+          ? await api.loadAgentRunArtifact({ run_ref: review.run_ref }, 'run_context.json').then(checked).then(row => row.payload, () => null)
           : null;
         if (ticket === revision) state.artifact = { name, payload: data.payload, context };
       } catch (error) { if (ticket === revision) state.error = String(error.message || error); }
@@ -138,8 +134,8 @@
       if (name && !rows(review.artifacts).some(item => item.name === name)) return;
       const ticket = revision;
       try {
-        if (name) await api.downloadAgentRunArtifact(review.project_dir, name);
-        else await api.downloadAgentRunBundle(review.project_dir);
+        if (name) await api.downloadAgentRunArtifact({ run_ref: review.run_ref }, name);
+        else await api.downloadAgentRunBundle({ run_ref: review.run_ref });
       } catch (error) { if (ticket === revision) { state.error = String(error.message || error); update(); } }
     }
     async function sign(provided) {
@@ -150,7 +146,7 @@
       const ticket = revision;
       state.signing = true; state.error = ''; update();
       try {
-        const result = checked(await api.signoffAgentRun(review.project_dir, {
+        const result = checked(await api.signoffAgentRun({ run_ref: review.run_ref }, {
           reviewer: 'local_reviewer', confirmations: provided, note: 'Reviewed from EasyICU Copilot',
         }));
         if (ticket === revision) state.review = result;
@@ -177,7 +173,7 @@
       const target = matches.filter(row => row.role === 'assistant').pop() || matches.pop();
       if (target) { target.savedRuns.push(run); return; }
       const at = Date.parse(run.updated_at || '') || Number(run.updated_at_epoch || 0) * 1000;
-      const receipt = { id: 'saved-run-' + run.project_dir, role: 'saved_run', timelineAt: at, savedRuns: [run] };
+      const receipt = { id: 'saved-run-' + run.run_ref, role: 'saved_run', timelineAt: at, savedRuns: [run] };
       const index = at ? projected.findIndex(row => Number(row.timelineAt || row.startedAt || 0) > at) : -1;
       if (index >= 0) projected.splice(index, 0, receipt); else projected.push(receipt);
     });
@@ -287,22 +283,22 @@
     }
     function render(row) {
       return rows(row.savedRuns).map(run => {
-        const entry = entries.get(run.project_dir);
+        const entry = entries.get(run.run_ref);
         const status = runStatus(run);
-        return `<details class="gpi-run-files" data-run-files="${esc(run.project_dir)}" ${entry && entry.open ? 'open' : ''}><summary><span>${tr('Run files & review', '本次运行文件与审阅')}</span><small>${esc(run.run_id)} · ${esc(tr('Original run: ', '原运行：') + status)}</small></summary>${entry && entry.open ? detail(entry) : ''}</details>`;
+        return `<details class="gpi-run-files" data-run-files="${esc(run.run_ref)}" ${entry && entry.open ? 'open' : ''}><summary><span>${tr('Run files & review', '本次运行文件与审阅')}</span><small>${esc(run.run_id)} · ${esc(tr('Original run: ', '原运行：') + status)}</small></summary>${entry && entry.open ? detail(entry) : ''}</details>`;
       }).join('');
     }
-    async function open(dir) {
-      if (!catalog) return;
-      const run = catalog.state.runs.find(item => item.project_dir === dir);
+    async function open(ref) {
+      if (!catalog || !ref) return;
+      const run = catalog.state.runs.find(item => item.run_ref === ref);
       if (!run) return;
       const ticket = generation;
-      let entry = entries.get(dir);
+      let entry = entries.get(ref);
       if (!entry) {
         entry = { open: true, checks: new Set(), reviewOpen: false };
         entry.controller = createController(api(), () => { if (ticket === generation) changed(); });
         entry.controller.state.selected = catalog.state.selected;
-        entries.set(dir, entry);
+        entries.set(ref, entry);
       }
       entry.open = true; entry.checks.clear();
       await entry.controller.openRun(run);
@@ -312,8 +308,8 @@
       if (target.closest('[data-run-files-retry]')) { reset(); sync(); changed(); return true; }
       const section = target.closest('[data-run-files]');
       if (!section) return false;
-      const dir = section.dataset.runFiles;
-      const entry = entries.get(dir);
+      const ref = section.dataset.runFiles;
+      const entry = entries.get(ref);
       const evidence = target.closest('[data-gpi-evidence-open]');
       if (evidence) {
         event.preventDefault();
@@ -359,7 +355,7 @@
       const summary = target.closest('summary');
       if (summary && summary.parentElement === section) {
         event.preventDefault();
-        if (entry && entry.open) { entry.open = false; changed(); } else open(dir);
+        if (entry && entry.open) { entry.open = false; changed(); } else open(ref);
         return true;
       }
       if (!entry) return true;
@@ -371,7 +367,7 @@
         if (item) entry.controller.artifact(item.name);
         return true;
       }
-      if (target.closest('[data-run-files-reload]')) { open(dir); return true; }
+      if (target.closest('[data-run-files-reload]')) { open(ref); return true; }
       if (target.closest('[data-run-files-bundle]')) { entry.controller.download(); return true; }
       const download = target.closest('[data-run-files-download]');
       if (download && !download.disabled) {

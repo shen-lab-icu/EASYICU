@@ -282,14 +282,6 @@
       const resultsVerified = Boolean(job && job.analysis_results_available
         && job.analysis_validated && job.numeric_verified);
       const progress = Array.isArray(job && job.progress) ? job.progress : [];
-      if (typeof ACTIVITY.notePipelineEvent === 'function') {
-        const activity = { steps };
-        progress.forEach(event => ACTIVITY.notePipelineEvent(activity, event));
-        if (jobStatus !== 'running') ACTIVITY.finishPipelineSteps(activity,
-          Number.isFinite(Number(job && job.finished_at_epoch)) ? Number(job.finished_at_epoch) * 1000 : null,
-          failed ? 'error' : 'complete');
-        return steps;
-      }
       const completedSteps = progress.map(row => {
         const match = /Step\s+(\d+)\/(\d+)\s+complete/i.exec(String(row && row.label || ''));
         return match ? [Number(match[1]), Number(match[2])] : null;

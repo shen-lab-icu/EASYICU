@@ -255,6 +255,61 @@ def decision_key(
     )
 
 
+class DecisionKeyFacts(BaseModel):
+    """What one decision key names, read back from the key ``decision_key`` made."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    family: Literal["plan_review", "plan_transition", "execution_retry"]
+    #: The reviewed run, the plan's source run ("" before the first run), or
+    #: the retried run.
+    run_id: str = ""
+    review_decision: Literal["", "approved", "rejected"] = ""
+    next_action_code: str = ""
+
+
+_DIGEST_PREFIX = r"[0-9a-f]{%d}" % _KEY_DIGEST_CHARS
+_KEY_IDENTIFIER = _IDENTIFIER[1:-1]
+_REVIEW_KEY = re.compile(
+    rf"review:(?P<run>{_KEY_IDENTIFIER}):(?P<decision>approved|rejected)"
+    rf":{_DIGEST_PREFIX}:{_DIGEST_PREFIX}"
+)
+_PLAN_KEY = re.compile(
+    rf"plan:{_DIGEST_PREFIX}:(?P<run>-|{_KEY_IDENTIFIER}):(?P<code>{_CODE[1:-1]})"
+)
+_RETRY_KEY = re.compile(rf"retry:(?P<run>{_KEY_IDENTIFIER}):{_DIGEST_PREFIX}:.+")
+
+
+def decision_key_facts(action_key: Any) -> Optional[DecisionKeyFacts]:
+    """Read a key ``decision_key`` made; ``None`` for any other key.
+
+    Only the host makes these keys, in the request that starts a decision's
+    job (``host_action_jobs``).  A row recorded under another key -- a
+    browser-recorded row from before the host recorded them -- is not proof
+    of the decision it may resemble.
+    """
+
+    key = str(action_key or "")
+    review = _REVIEW_KEY.fullmatch(key)
+    if review is not None:
+        return DecisionKeyFacts(
+            family="plan_review",
+            run_id=review["run"],
+            review_decision=review["decision"],
+        )
+    plan = _PLAN_KEY.fullmatch(key)
+    if plan is not None:
+        return DecisionKeyFacts(
+            family="plan_transition",
+            run_id="" if plan["run"] == "-" else plan["run"],
+            next_action_code=plan["code"],
+        )
+    retry = _RETRY_KEY.fullmatch(key)
+    if retry is not None:
+        return DecisionKeyFacts(family="execution_retry", run_id=retry["run"])
+    return None
+
+
 def host_action_id(session_id: str, action_code: str, action_key: str) -> str:
     """The replay row id of one host action in one conversation."""
 
@@ -286,6 +341,7 @@ def mismatched_fields(
 
 __all__ = [
     "ACTION_DECISION_FAMILIES",
+    "DecisionKeyFacts",
     "ExecutionRetryDecision",
     "HostActionCode",
     "HostActionDecision",
@@ -298,6 +354,7 @@ __all__ = [
     "ReviewDecision",
     "StartingEntry",
     "decision_key",
+    "decision_key_facts",
     "host_action_id",
     "mismatched_fields",
     "retry_options_sha256",

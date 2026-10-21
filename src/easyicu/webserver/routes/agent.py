@@ -21,6 +21,7 @@ from easyicu.webserver import dataio
 from easyicu.webserver import host_action_jobs
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import research_run_submission
+from easyicu.webserver import run_refs
 from easyicu.webserver import codex_account_sessions
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import science_workbench
@@ -997,13 +998,37 @@ def post_agent_run_provider_config(body: Dict[str, Any]) -> dict:
     }
 
 
+def _run_coordinate(body: Mapping[str, Any]) -> tuple[str, str]:
+    """The run directory a request names, and the ref it was named by.
+
+    The conversation names a run by the opaque ``run_ref`` its history
+    listing issued (``run_refs``) and never sees the directory; a
+    ``project_dir`` is the classic workspace's local coordinate.
+    """
+
+    ref = str(body.get("run_ref") or "").strip()
+    if not ref:
+        return str(body.get("project_dir") or ""), ""
+    project_dir = run_refs.resolve(ref)
+    if project_dir is None:
+        raise HTTPException(
+            status_code=404, detail={"ok": False, "error": "run_ref_unknown"}
+        )
+    return project_dir, ref
+
+
+def _addressed(result: Mapping[str, Any], ref: str) -> Dict[str, Any]:
+    return run_refs.path_free_result(result, ref) if ref else dict(result)
+
+
 @control_router.post("/api/agent-runs/review")
 def post_agent_run_review(body: Dict[str, Any]) -> dict:
     """Read a bounded local artifact bundle for human review."""
-    result = agent_runs.read_run_review(str(body.get("project_dir") or ""))
+    project_dir, ref = _run_coordinate(body)
+    result = agent_runs.read_run_review(project_dir)
     if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
-    return result
+        raise HTTPException(status_code=400, detail=_addressed(result, ref))
+    return _addressed(result, ref)
 
 
 @control_router.post("/api/agent-runs/science-workbench")
@@ -1028,8 +1053,9 @@ def post_agent_run_science_workbench(body: Dict[str, Any]) -> dict:
 @control_router.post("/api/agent-runs/signoff")
 def post_agent_run_signoff(body: Dict[str, Any]) -> dict:
     """Write a local human signoff artifact without unlocking the draft."""
+    project_dir, ref = _run_coordinate(body)
     result = agent_runs.create_human_signoff(
-        str(body.get("project_dir") or ""),
+        project_dir,
         reviewer=agent_pipeline_runs.server_reviewer_identity(),
         confirmations=(
             body.get("confirmations")
@@ -1039,8 +1065,8 @@ def post_agent_run_signoff(body: Dict[str, Any]) -> dict:
         note=body.get("note"),
     )
     if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
-    return result
+        raise HTTPException(status_code=400, detail=_addressed(result, ref))
+    return _addressed(result, ref)
 
 
 @control_router.post("/api/agent-runs/history")
@@ -1054,12 +1080,16 @@ def post_agent_run_history(body: Dict[str, Any]) -> dict:
     study_id = str(body.get("study_id") or "").strip() or None
     limit = body_int(body, "limit", 50, min_value=1, max_value=200)
     explicit_root = body.get("project_root") or _agent_seed_run_root(seed_dir)
+    # The conversation's run files ask for rows that name each run by an
+    # opaque ref; the directories stay on the server (``run_refs``).
+    path_free = body.get("path_free") is True
     if explicit_root:
-        return agent_runs.list_run_history(
+        history = agent_runs.list_run_history(
             study_id=study_id,
             project_root=explicit_root,
             limit=limit,
         )
+        return _path_free_history(history) if path_free else history
 
     histories = [
         agent_runs.list_run_history(study_id=study_id, limit=200),
@@ -1086,7 +1116,7 @@ def post_agent_run_history(body: Dict[str, Any]) -> dict:
         key=lambda row: row.get("updated_at_epoch") or 0,
         reverse=True,
     )
-    return {
+    merged = {
         "ok": True,
         "project_root": str(state_paths.projects_root().resolve()),
         "project_roots": [history.get("project_root") for history in histories],
@@ -1094,31 +1124,43 @@ def post_agent_run_history(body: Dict[str, Any]) -> dict:
         "runs": rows[:limit],
         "count": len(rows),
     }
+    return _path_free_history(merged) if path_free else merged
+
+
+def _path_free_history(history: Mapping[str, Any]) -> Dict[str, Any]:
+    rows = [run_refs.path_free_row(row) for row in history.get("runs") or []]
+    public = {
+        key: value for key, value in history.items() if key not in run_refs.PATH_FIELDS
+    }
+    public["runs"] = [row for row in rows if row is not None]
+    return public
 
 
 @artifact_router.post("/api/agent-runs/artifact")
 def post_agent_run_artifact(body: Dict[str, Any]) -> dict:
     """Return a bounded JSON viewer payload for one whitelisted artifact."""
+    project_dir, ref = _run_coordinate(body)
     result = agent_runs.read_run_artifact(
-        str(body.get("project_dir") or ""),
+        project_dir,
         str(body.get("artifact") or body.get("name") or ""),
     )
     if not result.get("ok"):
         status_code = 409 if result.get("error") == "artifact_privacy_scan_failed" else 400
-        raise HTTPException(status_code=status_code, detail=result)
-    return result
+        raise HTTPException(status_code=status_code, detail=_addressed(result, ref))
+    return _addressed(result, ref)
 
 
 @artifact_router.post("/api/agent-runs/download-artifact")
 def post_agent_run_download_artifact(body: Dict[str, Any]) -> Response:
     """Download one whitelisted artifact as its original local JSON bytes."""
+    project_dir, ref = _run_coordinate(body)
     result = agent_runs.read_run_artifact_bytes(
-        str(body.get("project_dir") or ""),
+        project_dir,
         str(body.get("artifact") or body.get("name") or ""),
     )
     if not result.get("ok"):
         status_code = 409 if result.get("error") == "artifact_privacy_scan_failed" else 400
-        raise HTTPException(status_code=status_code, detail=result)
+        raise HTTPException(status_code=status_code, detail=_addressed(result, ref))
     filename = str(result.get("name") or "artifact.json").replace('"', "")
     return Response(
         content=result["content"],
@@ -1130,10 +1172,11 @@ def post_agent_run_download_artifact(body: Dict[str, Any]) -> Response:
 @artifact_router.post("/api/agent-runs/download-bundle")
 def post_agent_run_download_bundle(body: Dict[str, Any]) -> Response:
     """Download a zip bundle of whitelisted artifacts for one local run."""
-    result = agent_runs.build_run_bundle(str(body.get("project_dir") or ""))
+    project_dir, ref = _run_coordinate(body)
+    result = agent_runs.build_run_bundle(project_dir)
     if not result.get("ok"):
         status_code = 409 if result.get("error") == "artifact_privacy_scan_failed" else 400
-        raise HTTPException(status_code=status_code, detail=result)
+        raise HTTPException(status_code=status_code, detail=_addressed(result, ref))
     filename = str(result.get("name") or "agent_run_artifacts.zip").replace('"', "")
     return Response(
         content=result["content"],

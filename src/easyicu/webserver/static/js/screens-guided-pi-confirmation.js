@@ -591,9 +591,22 @@
         ${pending ? `<p><strong>${esc(tr('Current decision', '当前待确认'))}：</strong>${esc(pending.quote)}</p>` : `<p>${esc(tr('All listed omissions are recorded. Review the complete plan before approving execution.', '所列局限已逐条记录，请继续审阅完整计划后再决定是否批准执行。'))}</p>`}</div>`;
     }
 
+    // A gate offered against state that has since changed says so in place
+    // instead of offering its buttons (the strip above offers the rebind).
+    function staleConfirmationHtml(confirmation) {
+      return `<section class="gpi-confirmation is-stale" data-gpi-stale-gate aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
+        <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
+        <div class="gpi-confirmation-body"><strong>${esc(confirmation.title)}</strong><small>${esc(tr(
+          'This decision was for an earlier state of the study and can no longer be answered here. Rebind the current state above first.',
+          '这项确认针对研究之前的状态，已不能在这里作答。请先在上方重新绑定当前状态。',
+        ))}</small></div>
+      </section>`;
+    }
+
     function workflowConfirmationHtml() {
       const confirmation = workflowConfirmation();
-      if (host.busy() || sessionIsStale() || !confirmation) return '';
+      if (host.busy() || !confirmation) return '';
+      if (sessionIsStale()) return staleConfirmationHtml(confirmation);
       const reviewResourceButtons = (confirmation.reviewResources || [])
         .filter(resource => resource.run_id)
         .map(resource => resourceButton(resource, resource.label));
