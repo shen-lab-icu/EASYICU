@@ -64,7 +64,18 @@ test('a hosted extraction request carries no output folder; a local one carries 
     assert.equal(posted[0].url, '/api/jobs/extract');
     if (hosted) assert.equal(Object.prototype.hasOwnProperty.call(posted[0].body, 'out_dir'), false);
     else assert.equal(posted[0].body.out_dir, '/Users/me/exports');
+    // A hosted export is listed under a name the clinician recognises.
+    if (hosted) assert.match(posted[0].body.label, /^我的抽取 · eICU-CRD · \d\d-\d\d \d\d:\d\d$/);
+    else assert.equal(Object.prototype.hasOwnProperty.call(posted[0].body, 'label'), false);
   }
+});
+
+test('a hosted export label names the database and the local time', () => {
+  const c = page(true);
+  const label = c.window.EU_EXTRACTION_HOSTED.exportLabel;
+  assert.equal(label('miiv', new Date(2026, 9, 22, 9, 5)), '我的抽取 · MIMIC-IV · 10-22 09:05');
+  assert.equal(label('eicu', new Date(2026, 0, 3, 23, 59)), '我的抽取 · eICU-CRD · 01-03 23:59');
+  assert.equal(label('newdb', new Date(2026, 0, 3, 0, 0)), '我的抽取 · NEWDB · 01-03 00:00');
 });
 
 test('a local extraction without a destination still stops for one; a hosted one never asks', () => {
