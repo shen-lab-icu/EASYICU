@@ -87,6 +87,7 @@ def test_prepared_offer_and_launch_share_the_actual_restore_verdict(grouped_sour
     assert owner.development_resume_available(
         wrapper_dir=source.run.parents[1], study_id=source.study["id"],
         scientific_configuration_sha256=study_contexts.scientific_configuration_sha256(source.study),
+        verify_now=True,
     ) is False
 
 
@@ -441,6 +442,10 @@ def test_offer_uses_launch_verdict_for_the_same_grouped_source(grouped_source, t
     else:
         accepted = True
     assert accepted is not tampered
+    owner.development_resume_available(
+        wrapper_dir=source.run.parents[1], study_id=source.study["id"],
+        scientific_configuration_sha256=row["scientific_configuration_sha256"], verify_now=True,
+    )
     assert _development_planner_checkpoint_available(row) is accepted
 
 
@@ -458,10 +463,10 @@ def test_offer_calls_the_launch_owner_instead_of_reconstructing_it(grouped_sourc
     assert owner.development_resume_available(
         wrapper_dir=source.run.parents[1], study_id=source.study["id"],
         scientific_configuration_sha256=study_contexts.scientific_configuration_sha256(source.study),
+        verify_now=True,
     ) is False
     assert calls == [{
         "project_root": str(source.run.parents[3]), "study": source.study, "source_job_id": "prior",
-        "offer_only": True,
     }]
 
 
@@ -609,6 +614,7 @@ def test_untyped_reviewed_requirements_cannot_offer_resume(source, field):
     assert owner.development_resume_available(
         wrapper_dir=wrapper, study_id=source.study["id"],
         scientific_configuration_sha256=study_contexts.scientific_configuration_sha256(source.study),
+        verify_now=True,
     ) is False
 
 
