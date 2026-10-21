@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from easyicu.webserver import dataio, guided_sessions, settings, sources, state_paths
+from easyicu.webserver import capabilities, dataio, guided_sessions, settings, sources, state_paths
 from easyicu.webserver.app import app
 from tests.support.hosted_http import stub_route
 
@@ -177,6 +177,53 @@ def test_registry_does_not_probe_stale_outside_paths(isolated, monkeypatch):
     monkeypatch.setattr(dataio, "describe_export_source", lambda path: probed.append(path) or {"ok": False})
     assert sources.load_registry()["sources"] == []
     assert all(Path(path).is_relative_to(root) or Path(path).is_relative_to(home) for path in probed)
+
+
+def _server_paths(value, roots):
+    if isinstance(value, dict):
+        return [path for item in value.values() for path in _server_paths(item, roots)]
+    if isinstance(value, list):
+        return [path for item in value for path in _server_paths(item, roots)]
+    if isinstance(value, str) and value.startswith("/"):
+        if any(Path(value).is_relative_to(root) for root in roots):
+            return [value]
+    return []
+
+
+@pytest.mark.parametrize("route", ["/api/settings", "/api/capabilities", "/api/workspaces/registry"])
+@pytest.mark.parametrize("hosted", [True, False])
+def test_diagnostic_responses_hide_instance_paths_only_when_hosted(isolated, monkeypatch, route, hosted):
+    from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
+
+    root, home = isolated
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
+    monkeypatch.setattr(capabilities, "_AUDIT_PATH", home / "capability_tool_audit.jsonl")
+    monkeypatch.setattr(PiProviderConfigStore, "public_status", lambda self: {"connection_verified": False})
+    settings.update_settings({"export_dir": str(home / "exports")})
+    response = TestClient(app).get(route)
+    assert response.status_code == 200
+    paths = _server_paths(response.json(), (home, root))
+    assert bool(paths) is not hosted
+
+
+@pytest.mark.parametrize("hosted", [True, False])
+def test_audit_responses_keep_paths_on_desktop_only(isolated, monkeypatch, hosted):
+    root, home = isolated
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
+    monkeypatch.setattr(capabilities, "_STATE_DIR", home)
+    monkeypatch.setattr(capabilities, "_AUDIT_PATH", home / "audit.jsonl")
+    result = capabilities.record_tool_event("synthetic", {"count": 1})
+    assert result["recorded"] is True
+    assert bool(_server_paths(result, (home, root))) is not hosted
+    response = TestClient(app).post("/api/capabilities/audit-events", json={})
+    assert response.status_code == 200
+    assert response.json()["count"] == 1
+    assert bool(_server_paths(response.json(), (home, root))) is not hosted
+    capabilities._AUDIT_PATH.unlink()
+    capabilities._AUDIT_PATH.mkdir()
+    failure = capabilities.record_tool_event("synthetic", {})
+    assert failure["reason"] == "tool_audit_write_failed"
+    assert bool(_server_paths(failure, (home, root))) is not hosted
 
 
 def test_download_rechecks_id_resolved_path_before_manifest_read(isolated, monkeypatch):

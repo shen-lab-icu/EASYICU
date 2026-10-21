@@ -345,9 +345,18 @@ def about() -> Dict[str, Any]:
     literal string, so it would have shown a green tick even with the host
     policy widened — a privacy page grading its own homework.
     """
-    return {
+    result = {
         "version": _easyicu_version(),
         "python": "{}.{}.{}".format(*sys.version_info[:3]),
-        "config_path": str(_CONFIG_PATH),
-        "local_access": local_access_policy(),
     }
+    if not is_hosted():
+        result.update(config_path=str(_CONFIG_PATH), local_access=local_access_policy())
+    return result
+
+
+def settings_response(settings: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the browser view without exposing the hosted export directory."""
+    result = {**settings, "about": about()}
+    if is_hosted():
+        result.pop("export_dir", None)
+    return result

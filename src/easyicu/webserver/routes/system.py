@@ -45,7 +45,7 @@ def catalog_lineage(concept_id: str) -> dict:
 @router.get("/api/settings")
 def get_settings() -> dict:
     """Local settings + read-only environment facts for the Settings screen."""
-    return {**settings_store.load_settings(), "about": settings_store.about()}
+    return settings_store.settings_response(settings_store.load_settings())
 
 
 @router.post("/api/settings")
@@ -65,13 +65,13 @@ def post_settings(patch: Dict[str, Any]) -> dict:
         updated = settings_store.update_settings(patch)
     except settings_store.SettingsValidationError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
-    return {**updated, "about": settings_store.about()}
+    return settings_store.settings_response(updated)
 
 
 @router.post("/api/settings/reset")
 def post_settings_reset() -> dict:
     """Reset local settings to backend defaults."""
-    return {**settings_store.reset_settings(), "about": settings_store.about()}
+    return settings_store.settings_response(settings_store.reset_settings())
 
 
 @router.get("/api/capabilities")

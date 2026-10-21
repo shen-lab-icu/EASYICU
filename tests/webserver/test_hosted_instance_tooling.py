@@ -4,6 +4,7 @@ import importlib
 import json
 import os
 import socket
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -149,6 +150,195 @@ def test_start_uses_shared_checkout_image_and_socket_and_records_identity(toolin
     assert "EASYICU_PI_API_KEY" not in kwargs["env"]
     record = json.loads((instance / "run/instance.pid.json").read_text())
     assert record["pid"] == 12345 and record["create_time"] == 42.0
+
+
+def test_started_process_creates_private_files_and_directories(tooling, tmp_path, monkeypatch):
+    users, instance = create(tooling, tmp_path)
+    original_popen = tooling.subprocess.Popen
+    monkeypatch.setattr(tooling.psutil, "Process", lambda pid: SimpleNamespace(create_time=lambda: 42.0))
+
+    def start_writer(command, **kwargs):
+        script = (
+            "import os; from pathlib import Path; home = Path(os.environ['EASYICU_HOME']); "
+            "(home / 'project').mkdir(); "
+            "(home / '.easyicu/webserver_guided_drafts.json').write_text('{}'); "
+            "(home / '.easyicu/webserver_sources.json').write_text('{}')"
+        )
+        process = original_popen([sys.executable, "-c", script], **kwargs)
+        assert process.wait(timeout=10) == 0
+        return SimpleNamespace(pid=12345, poll=lambda: None)
+
+    monkeypatch.setattr(tooling.subprocess, "Popen", start_writer)
+    previous = os.umask(0o002)
+    try:
+        assert tooling.main(["--users-root", str(users), "start", "doctor"]) == 0
+        assert os.umask(0o002) == 0o002
+    finally:
+        os.umask(previous)
+    assert (instance / "home/project").stat().st_mode & 0o777 == 0o700
+    for name in ("webserver_guided_drafts.json", "webserver_sources.json"):
+        assert (instance / "home/.easyicu" / name).stat().st_mode & 0o777 == 0o600
+
+
+def test_start_repairs_legacy_home_without_following_symlinks_or_touching_data(tooling, tmp_path, monkeypatch):
+    users, instance = create(tooling, tmp_path)
+    home = instance / "home"
+    project = home / "projects/legacy"
+    project.mkdir(parents=True)
+    files = [home / ".easyicu/webserver_guided_drafts.json", home / ".easyicu/webserver_sources.json",
+             project / "notes.txt"]
+    for path in files:
+        path.write_text("{}")
+        path.chmod(0o664)
+    directories = [home, home / ".easyicu", home / "projects", project]
+    for path in directories:
+        path.chmod(0o775)
+    data = tmp_path / "shared-data"
+    data.chmod(0o775)
+    outside = data / "outside.txt"
+    outside.write_text("synthetic")
+    outside.chmod(0o664)
+    (home / "file-link").symlink_to(outside)
+    (home / "directory-link").symlink_to(data, target_is_directory=True)
+    (home / "broken-link").symlink_to(data / "missing")
+
+    def start(command, **kwargs):
+        assert all(path.stat().st_mode & 0o777 == 0o700 for path in directories)
+        assert all(path.stat().st_mode & 0o777 == 0o600 for path in files)
+        return SimpleNamespace(pid=12345, poll=lambda: None)
+
+    monkeypatch.setattr(tooling.subprocess, "Popen", start)
+    monkeypatch.setattr(tooling.psutil, "Process", lambda pid: SimpleNamespace(create_time=lambda: 42.0))
+    assert tooling.main(["--users-root", str(users), "start", "doctor"]) == 0
+    assert data.stat().st_mode & 0o777 == 0o775
+    assert outside.stat().st_mode & 0o777 == 0o664
+    assert all((home / name).is_symlink() for name in ("file-link", "directory-link", "broken-link"))
+
+
+@pytest.mark.parametrize("clear", [True, False])
+@pytest.mark.parametrize("newline", [b"\r\n", b"\n", b"\r", b""])
+def test_set_public_origin_preserves_other_bytes_and_private_atomic_write(
+    tooling, tmp_path, monkeypatch, capsys, clear, newline,
+):
+    from easyicu.hosted_gateway.storage import instance_socket
+
+    users, instance = create(tooling, tmp_path)
+    path = instance / "instance.env"
+    old = b'EASYICU_PUBLIC_ORIGIN="https://clinic.example"'
+    before = b"# administrator comment\r\n\r\n" + path.read_bytes().replace(old + b"\n", b"")
+    before += b'EASYICU_UNRELATED="preserve unicode \\u738b and spaces  "\r\n' + old + newline
+    path.write_bytes(before)
+    original_replace = os.replace
+    replacements = []
+
+    def replace(source, destination):
+        assert Path(destination) == path
+        assert path.read_bytes() == before
+        assert Path(source).parent == instance
+        assert Path(source).stat().st_mode & 0o777 == 0o600
+        replacements.append(source)
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(tooling.os, "replace", replace)
+    origin = "https://gateway.example:8443"
+    arguments = ["--clear"] if clear else [origin]
+    assert source_cli(tooling, users, "set-public-origin", *arguments) == 0
+    new = b'EASYICU_PUBLIC_ORIGIN=' + json.dumps("" if clear else origin).encode()
+    assert path.read_bytes() == before.replace(old + newline, new + newline)
+    assert len(replacements) == 1
+    assert not Path(replacements[0]).exists()
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert "start doctor" in capsys.readouterr().out
+    if clear:
+        with pytest.raises(ValueError):
+            instance_socket(users, "doctor", origin)
+    else:
+        assert instance_socket(users, "doctor", origin) == (instance / "run/web.sock").resolve()
+
+
+@pytest.mark.parametrize("origin", ["http://gateway.example", "https://gateway.example/path",
+                                   "https://gateway.example?query=1", "https://gateway.example#fragment",
+                                   "https://user:password@gateway.example", "https://gateway.example:invalid"])
+def test_create_and_set_public_origin_refuse_invalid_origin(tooling, tmp_path, origin):
+    users, instance = create(tooling, tmp_path)
+    path = instance / "instance.env"
+    before = path.read_bytes()
+    assert source_cli(tooling, users, "set-public-origin", origin) != 0
+    assert path.read_bytes() == before
+    assert tooling.main(["--users-root", str(users), "create", "other", "--display-name", "Synthetic",
+                         "--data-root", str(tmp_path / "shared-data"), "--runner-image", "synthetic",
+                         "--public-origin", origin]) != 0
+    assert not (users / "other").exists()
+
+
+@pytest.mark.parametrize("clear", [True, False])
+def test_set_public_origin_refuses_a_running_instance(tooling, tmp_path, monkeypatch, capsys, clear):
+    users, instance = create(tooling, tmp_path)
+    path = instance / "instance.env"
+    before = path.read_bytes()
+    (instance / "run/instance.pid.json").write_text(json.dumps({"pid": 12345, "create_time": 42.0}))
+    command = ["python", "-m", "uvicorn", "easyicu.webserver.app:app", "--uds", str(instance / "run/web.sock")]
+    process = SimpleNamespace(create_time=lambda: 42.0, cmdline=lambda: command)
+    monkeypatch.setattr(tooling.psutil, "Process", lambda pid: process)
+    assert source_cli(tooling, users, "status") == 0
+    assert "running" in capsys.readouterr().out
+    arguments = ["--clear"] if clear else ["https://other.example"]
+    assert source_cli(tooling, users, "set-public-origin", *arguments) != 0
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("arguments", [[], ["--clear", "https://gateway.example"]])
+def test_set_public_origin_requires_an_origin_or_clear(tooling, tmp_path, arguments):
+    users, instance = create(tooling, tmp_path)
+    before = (instance / "instance.env").read_bytes()
+    # Python 3.11's argparse rejects an origin after --clear itself (exit 2);
+    # later versions parse both and the command refuses (exit 1).
+    try:
+        code = source_cli(tooling, users, "set-public-origin", *arguments)
+    except SystemExit as exc:
+        code = exc.code
+    assert code != 0
+    assert (instance / "instance.env").read_bytes() == before
+
+
+def test_failed_public_origin_replacement_preserves_env_and_removes_temporary(tooling, tmp_path, monkeypatch):
+    users, instance = create(tooling, tmp_path)
+    path = instance / "instance.env"
+    before = path.read_bytes()
+
+    def fail(source, destination):
+        raise OSError("synthetic interrupted replacement")
+
+    monkeypatch.setattr(tooling.os, "replace", fail)
+    assert source_cli(tooling, users, "set-public-origin", "https://gateway.example") == 1
+    assert path.read_bytes() == before
+    assert list(instance.glob(".instance-env-*")) == []
+
+
+@pytest.mark.parametrize("newline", [b"\n", b""])
+def test_set_public_origin_adds_a_missing_legacy_key(tooling, tmp_path, newline):
+    users, instance = create(tooling, tmp_path)
+    path = instance / "instance.env"
+    before = b"".join(line for line in path.read_bytes().splitlines(keepends=True)
+                      if not line.startswith(b"EASYICU_PUBLIC_ORIGIN="))
+    before += b"# preserved final comment" + newline
+    path.write_bytes(before)
+    assert source_cli(tooling, users, "set-public-origin", "https://gateway.example") == 0
+    assert path.read_bytes().startswith(before)
+    assert tooling.instance_environment(instance)["EASYICU_PUBLIC_ORIGIN"] == "https://gateway.example"
+
+
+@pytest.mark.parametrize("command", [[], ["set-public-origin"]])
+def test_public_origin_command_is_documented_in_help(tooling, capsys, command):
+    with pytest.raises(SystemExit) as exc:
+        tooling.main([*command, "--help"])
+    assert exc.value.code == 0
+    output = capsys.readouterr().out
+    assert "set-public-origin" in output
+    if command:
+        assert "--clear" in output and "origin" in output
+    else:
+        assert "python tools/hosted_instances.py set-public-origin" in tooling.__doc__
 
 
 @pytest.mark.parametrize("mismatch", [None, "time", "application", "socket"])
