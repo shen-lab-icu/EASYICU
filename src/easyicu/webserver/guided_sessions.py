@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from send2trash import send2trash as _send2trash
 
 from easyicu.webserver import state_paths
+from easyicu.webserver.hosted import is_hosted, require_path
 
 _CONFIG_DIR = state_paths.state_root()
 _CONFIG_PATH = _CONFIG_DIR / "webserver_guided_drafts.json"
@@ -308,7 +309,7 @@ def _session_id(seed: str) -> str:
 def _sanitize_context(raw: Any) -> Dict[str, Any]:
     context = raw if isinstance(raw, dict) else {}
     route = _choice(context.get("route"), _VALID_ROUTES, "guided")
-    data_mode = _choice(context.get("data_mode"), _VALID_DATA_MODES, "demo")
+    data_mode = _choice(context.get("data_mode"), _VALID_DATA_MODES, "real" if is_hosted() else "demo")
     language = _choice(context.get("language"), {"en", "zh"}, "en")
     source = _source_meta(context.get("selected_source"))
     summary = context.get("summary") if isinstance(context.get("summary"), dict) else {}
@@ -605,6 +606,7 @@ def _safe_project_dir(
     text = str(value or "").strip()
     if not text:
         return None
+    require_path(text, instance_owned=True)
     try:
         candidate = Path(text).expanduser().resolve()
         root = _PROJECTS_ROOT.expanduser().resolve()
@@ -623,6 +625,7 @@ def _safe_project_dir(
 
 def _safe_project_parent_dir(value: Any) -> Path | None:
     text = str(value or "").strip()
+    require_path(text or _PROJECTS_ROOT, instance_owned=not text)
     if not text:
         return _PROJECTS_ROOT
     try:
@@ -767,7 +770,7 @@ def _prefill_for(goal: str, session: Dict[str, Any]) -> Dict[str, Any]:
         "source": "guided_copilot",
         "goal": goal,
         "mode": session.get("mode") or "local",
-        "data_mode": context.get("data_mode") or "demo",
+        "data_mode": context.get("data_mode") or ("real" if is_hosted() else "demo"),
         "question_hint": slots.get("question_hint") or "",
         "cohort_hint": slots.get("cohort_hint") or "",
         "module_hint": slots.get("module_hint") or "",
@@ -1363,7 +1366,7 @@ def _normalise_draft(
     )
     branch = _choice(body.get("branch"), _VALID_BRANCHES, "predict")
     depth = _choice(body.get("depth"), _VALID_DEPTHS, "full")
-    data_mode = _choice(body.get("data_mode"), _VALID_DATA_MODES, "demo")
+    data_mode = _choice(body.get("data_mode"), _VALID_DATA_MODES, "real" if is_hosted() else "demo")
     draft_id = existing_id or _draft_id("|".join([created, title, branch, depth]))
     project_dir = _project_dir_for(
         draft_id, title, body.get("folder_slug"), body.get("parent_dir")
@@ -1515,6 +1518,7 @@ def _notes_payload(project_id: str, project_dir: Path | None) -> Dict[str, Any]:
             "updated_at": None,
         }
     path = project_dir / _NOTES_FILE
+    require_path(path, instance_owned=True)
     if not path.is_file():
         return {
             "ok": True,

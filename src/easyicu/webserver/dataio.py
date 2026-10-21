@@ -124,6 +124,23 @@ def list_dir(raw_path: Optional[str]) -> Dict[str, Any]:
     When ``raw_path`` is empty/None we start from the user's home and add
     common OS shortcuts that exist on the current machine.
     """
+    from easyicu.webserver import hosted
+
+    if hosted.is_hosted():
+        roots = hosted.data_roots()
+        start = raw_path or (str(roots[0]) if roots else "/")
+        hosted.require_path(start)
+        result = _list_dir(start)
+        if not hosted.path_allowed(result.get("parent")):
+            result["parent"] = None
+        result["shortcuts"] = [{"name": root.name, "path": str(root)} for root in roots]
+        return result
+    return _list_dir(raw_path)
+
+
+def _list_dir(raw_path: Optional[str]) -> Dict[str, Any]:
+    from easyicu.webserver.hosted import path_allowed
+
     home = Path.home()
 
     if not raw_path:
@@ -150,6 +167,8 @@ def list_dir(raw_path: Optional[str]) -> Dict[str, Any]:
     entries: List[Dict[str, Any]] = []
     try:
         for child in sorted(start.iterdir(), key=lambda p: p.name.lower()):
+            if not path_allowed(child):
+                continue
             if child.name.startswith("."):
                 continue
             if not _safe_dir(child):
@@ -192,6 +211,9 @@ def create_dir(raw_path: Optional[str]) -> Dict[str, Any]:
     file. ``parents=True`` lets the user create a nested export parent folder
     from the Web UI without switching to Finder or a shell.
     """
+    from easyicu.webserver.hosted import require_path
+
+    require_path(raw_path)
     if not raw_path or not str(raw_path).strip():
         return {"ok": False, "error": "path_required"}
 
@@ -355,6 +377,9 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
     ``{ok, path, db, db_key, layout, source, tables, modules, ready, size_hint}``.
     ``source`` is one of ``prepared`` | ``module`` | ``raw`` (or ``unknown``).
     """
+    from easyicu.webserver.hosted import require_path
+
+    require_path(raw_path)
     path = Path(raw_path).expanduser()
     try:
         path = path.resolve()
@@ -488,7 +513,12 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
     convert_all is idempotent: already-converted files are skipped, so a re-run
     finishes fast."""
 
+    from easyicu.webserver.hosted import require_path
+
+    require_path(raw_path)
+
     def runner(job: Any) -> Dict[str, Any]:
+        require_path(raw_path)
         from easyicu.io.data_converter import ConversionStatus, DataConverter
 
         # Construction can raise ValueError on a bad path/database — let it
@@ -860,6 +890,9 @@ def _resolve_export_out_dir(
         if out_dir
         else (state_paths.state_root() / "exports")
     )
+    from easyicu.webserver.hosted import require_path
+
+    require_path(root, instance_owned=not out_dir)
     if not create_run_subdir:
         return root
     import time
@@ -2364,11 +2397,19 @@ def make_export_runner(
     ``progress`` event per module.
     """
     import os
+    from easyicu.webserver.hosted import require_path
+
+    require_path(data_path)
+    if out_dir:
+        require_path(out_dir)
 
     def runner(job: Any) -> Dict[str, Any]:
         import json
         import time
 
+        require_path(data_path)
+        if out_dir:
+            require_path(out_dir)
         quality = _conversion_quality_for_path(Path(data_path).expanduser())
         if quality["data_quality_status"] != "clean":
             raise ExportCohortError("source_conversion_quality_incomplete", quality)
@@ -2785,7 +2826,9 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
     disk and returns summary tables, not raw full frames.
     """
     import json
+    from easyicu.webserver.hosted import require_path
 
+    require_path(raw_path, instance_owned=True)
     path = Path(raw_path).expanduser()
     try:
         path = path.resolve()
@@ -2795,6 +2838,7 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
 
     manifest_path = path / "_manifest.json"
+    require_path(manifest_path, instance_owned=True)
     manifest: Dict[str, Any] = {}
     if manifest_path.exists():
         try:
@@ -3193,6 +3237,9 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
     parquet/csv schemas, and a stay-id column only when no manifest denominator
     is available. It does not load full export tables for registry rendering.
     """
+    from easyicu.webserver.hosted import require_path
+
+    require_path(raw_path, instance_owned=True)
     path = Path(raw_path).expanduser()
     try:
         path = path.resolve()
@@ -3445,9 +3492,11 @@ def read_prepared_export_manifest(raw_path: str) -> Optional[Dict[str, Any]]:
 
 def _read_export_manifest(path: Path) -> Dict[str, Any]:
     import json
+    from easyicu.webserver.hosted import require_path
 
     for name in ("_manifest.json", "easyicu_export_manifest.json"):
         manifest_path = path / name
+        require_path(manifest_path, instance_owned=True)
         if not manifest_path.exists():
             continue
         try:
@@ -3507,11 +3556,14 @@ def _positive_int(value: Any) -> Optional[int]:
 def _export_file_inventory(
     path: Path, manifest: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
+    from easyicu.webserver.hosted import require_path
+
     manifest_files = {
         f.get("file"): f for f in _manifest_file_entries(manifest) if f.get("file")
     }
     out: List[Dict[str, Any]] = []
     for f in sorted(path.iterdir(), key=lambda p: p.name):
+        require_path(f, instance_owned=True)
         if (
             f.name.startswith(".")
             or f.name in _MODULE_MANIFESTS

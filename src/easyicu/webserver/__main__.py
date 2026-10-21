@@ -77,6 +77,13 @@ def _health_check(host: str, port: int) -> bool:
 
 def _uvicorn_cmd(host: str, port: int, *, uds: str | None = None) -> list[str]:
     cmd = [sys.executable, "-m", "uvicorn", "easyicu.webserver.app:app"]
+    from easyicu.webserver.hosted import is_hosted
+    from easyicu.webserver.host_security import trusts_proxy
+
+    if is_hosted() and uds and trusts_proxy():
+        # UDS peers have client=None in Uvicorn. Trust all peers only on this
+        # private socket listener; no TCP listener is created in hosted mode.
+        cmd += ["--proxy-headers", "--forwarded-allow-ips", "*"]
     if uds:
         return [*cmd, "--uds", uds]
     return [*cmd, "--host", host, "--port", str(port)]
@@ -246,6 +253,11 @@ def run_app(
     uds: str | None = None,
 ) -> int:
     env = _runtime_env()
+    from easyicu.webserver.hosted import is_hosted
+
+    if is_hosted() and not uds:
+        print("Hosted EasyICU requires a private Unix socket (--uds).", file=sys.stderr)
+        return 2
     if uds:
         # On a shared host a loopback port admits every account on it; a
         # socket in a private directory admits only this one.

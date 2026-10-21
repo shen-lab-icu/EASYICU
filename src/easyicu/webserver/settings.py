@@ -25,12 +25,14 @@ import sys
 import threading
 import time
 import unicodedata
+from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
 import easyicu
 from easyicu.webserver import state_paths
 from easyicu.webserver.host_security import local_access_policy
 from easyicu.webserver.input_validation import parse_bool
+from easyicu.webserver.hosted import is_hosted
 
 _CONFIG_DIR = state_paths.state_root()
 _CONFIG_PATH = _CONFIG_DIR / "webserver_settings.json"
@@ -199,7 +201,7 @@ _LOCK_POLL_SECONDS = 0.02
 
 
 @contextlib.contextmanager
-def _file_lock() -> Iterator[None]:
+def _file_lock(config_path: Path | None = None) -> Iterator[None]:
     """Serialise read-modify-write across processes, not just threads.
 
     ``_LOCK`` is a ``threading.RLock``, so it orders writers inside one uvicorn
@@ -213,8 +215,9 @@ def _file_lock() -> Iterator[None]:
     lockfile from a killed process must not make Settings permanently
     unwritable, and the loser of that race is a lost preference, not data.
     """
-    lock_path = _CONFIG_PATH.with_name(_CONFIG_PATH.name + ".lock")
-    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config_path = config_path or _CONFIG_PATH
+    lock_path = config_path.with_name(config_path.name + ".lock")
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
     handle = None
     while True:
@@ -238,9 +241,9 @@ def _file_lock() -> Iterator[None]:
                 lock_path.unlink()
 
 
-def _read_raw() -> Dict[str, Any]:
+def _read_raw(config_path: Path | None = None) -> Dict[str, Any]:
     try:
-        text = _CONFIG_PATH.read_text(encoding="utf-8")
+        text = (config_path or _CONFIG_PATH).read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
     try:
@@ -253,14 +256,22 @@ def _read_raw() -> Dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _write_settings(payload: Dict[str, Any]) -> None:
-    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = _CONFIG_PATH.with_name(_CONFIG_PATH.name + ".tmp")
+def _write_settings(payload: Dict[str, Any], config_path: Path | None = None) -> None:
+    config_path = config_path or _CONFIG_PATH
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = config_path.with_name(config_path.name + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    tmp.replace(_CONFIG_PATH)
+    tmp.replace(config_path)
 
 
-def _merged_from_disk() -> Dict[str, Any]:
+def _defaults() -> Dict[str, Any]:
+    defaults = dict(DEFAULTS)
+    if is_hosted():
+        defaults.update(language="zh", data_mode="real")
+    return defaults
+
+
+def _merged_from_disk(config_path: Path | None = None) -> Dict[str, Any]:
     """Defaults overlaid with whatever survives coercion on disk.
 
     The read path stays tolerant on purpose: a file written by an older build
@@ -268,8 +279,8 @@ def _merged_from_disk() -> Dict[str, Any]:
     user. Unreadable and retired values are dropped; the write path is where
     a bad value is reported.
     """
-    merged = dict(DEFAULTS)
-    for key, value in _read_raw().items():
+    merged = _defaults()
+    for key, value in _read_raw(config_path).items():
         if key not in DEFAULTS:
             continue
         coerce = _COERCE.get(key)
@@ -288,7 +299,7 @@ def load_settings() -> Dict[str, Any]:
         return _merged_from_disk()
 
 
-def update_settings(patch: Dict[str, Any]) -> Dict[str, Any]:
+def update_settings(patch: Dict[str, Any], *, config_path: Path | None = None) -> Dict[str, Any]:
     """Merge-update known keys, persist, and return the full settings.
 
     Raises ``SettingsValidationError`` if any key in ``patch`` is unknown,
@@ -296,17 +307,19 @@ def update_settings(patch: Dict[str, Any]) -> Dict[str, Any]:
     apply would leave the client's view and the file disagreeing.
     """
     accepted = _validate_patch(patch)
-    with _LOCK, _file_lock():
-        current = _merged_from_disk()
+    # The administrator can target an inactive instance without changing this
+    # process's EASYICU_HOME or the browser's settings store.
+    with _LOCK, _file_lock(config_path):
+        current = _merged_from_disk(config_path)
         current.update(accepted)
-        _write_settings(current)
+        _write_settings(current, config_path)
         return current
 
 
 def reset_settings() -> Dict[str, Any]:
     """Reset preferences while retaining the administrator's contact."""
     with _LOCK, _file_lock():
-        current = dict(DEFAULTS)
+        current = _defaults()
         current["support_contact"] = _merged_from_disk()["support_contact"]
         _write_settings(current)
         return current

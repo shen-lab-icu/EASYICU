@@ -12,9 +12,11 @@ from __future__ import annotations
 import os
 import stat
 from typing import Any, Dict, Mapping
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from starlette.responses import PlainTextResponse
+
+from easyicu.webserver.hosted import is_hosted
 
 #: Headers a reverse proxy adds. A browser on this machine never sends them.
 PROXY_HEADERS = (
@@ -48,6 +50,25 @@ def trusts_proxy() -> bool:
     """
 
     return _env_flag("EASYICU_WEB_TRUST_PROXY")
+
+
+def public_origin() -> SplitResult | None:
+    """The administrator's exact gateway origin; never a request header."""
+    if not is_hosted() or not trusts_proxy():
+        return None
+    raw = os.environ.get("EASYICU_PUBLIC_ORIGIN", "")
+    if not raw:
+        return None
+    try:
+        parsed = urlsplit(raw)
+        _ = parsed.port
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username or parsed.password or parsed.path not in {"", "/"}
+                or parsed.query or parsed.fragment):
+            raise ValueError("invalid public origin")
+        return parsed
+    except ValueError as exc:
+        raise RuntimeError("EASYICU_PUBLIC_ORIGIN must be an absolute HTTP(S) origin") from exc
 
 
 #: The one Unix socket this server listens on, set by
@@ -118,6 +139,9 @@ def is_local_unix_socket_peer(scope: Mapping[str, Any]) -> bool:
 
 
 def resolve_allowed_hosts() -> list[str]:
+    origin = public_origin()
+    if origin:
+        return [*DEFAULT_ALLOWED_HOSTS, origin.hostname]
     configured = [
         host.strip()
         for host in os.getenv("EASYICU_WEB_ALLOWED_HOSTS", "").split(",")
@@ -184,7 +208,8 @@ class AllowedHostsMiddleware:
         if scope["type"] in {"http", "websocket"}:
             headers = dict(scope.get("headers") or [])
             host = headers.get(b"host", b"").decode("latin-1")
-            if not _host_allowed(host, self.allowed_hosts):
+            allowed = tuple(resolve_allowed_hosts()) if is_hosted() else self.allowed_hosts
+            if not _host_allowed(host, allowed):
                 response = PlainTextResponse("Invalid host header", status_code=400)
                 await response(scope, receive, send)
                 return
