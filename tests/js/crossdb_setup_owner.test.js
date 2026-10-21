@@ -340,6 +340,15 @@ function fakeButton() {
     assert.match(html, hosted ? /please tell the administrator/ : /use smaller exports/);
   }
   context.EU_CAPABILITIES = undefined;
+  // Data the gate cannot line up reads as what to deselect, never as its code.
+  errorMessage = 'crossdb_incompatible';
+  for (const hosted of [false, true]) {
+    context.EU_CAPABILITIES = hosted ? { deployment: { hosted: true } } : undefined;
+    const html = setup.renderReal(config);
+    assert.doesNotMatch(html, /crossdb_incompatible/);
+    assert.match(html, hosted ? /Deselect incomplete data,/ : /Deselect incomplete exports,/);
+  }
+  context.EU_CAPABILITIES = undefined;
   errorMessage = null;
 
   process.stdout.write(JSON.stringify({

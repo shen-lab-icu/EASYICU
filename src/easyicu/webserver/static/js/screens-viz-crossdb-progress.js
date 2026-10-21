@@ -186,14 +186,22 @@
     const progressTotal = totalChunks || databaseTotal;
     const pct = progressTotal ? Math.max(0, Math.min(100, Math.round((progressCurrent / progressTotal) * 100))) : 0;
     const sample = opts.sampleProfile || {};
-    const sampleText = sample.maxPatients && sample.sampleSize
+    // A registered-export summary reads every row: no sampling limits to show.
+    const sampleText = !registeredSummary && sample.maxPatients && sample.sampleSize
       ? ` · ≤${fmtInt(sample.maxPatients)} ${t('entities/db', '实体/库')} · ≤${fmtInt(sample.sampleSize)} ${t('values/feature', '值/特征')}`
       : '';
     const currentDatabase = String(p.database_label || p.database || '').trim();
     const chunkCurrent = Number(p.chunk_current || 0);
     const chunkTotal = Number(p.chunk_total || 0);
+    const sourceStep = Math.min(databaseTotal || 1, completedDatabases + 1);
+    const summaryStep = registeredSummary ? ({
+      summarizing: t(`Summarizing dataset ${sourceStep} of ${databaseTotal || 1}…`, `正在汇总第 ${sourceStep} 份数据（共 ${databaseTotal || 1} 份）…`),
+      aggregating: t('Combining the feature distributions…', '正在合并各特征的分布…'),
+      finalizing: t('Checking that the datasets can be compared…', '正在检查各份数据能否对比…'),
+    })[p.phase] : '';
     const detail = state.cancelRequested
       ? t('Cancellation requested. EasyICU will stop after the current bounded read returns.', '已请求取消。当前有界读取返回后，EasyICU 将立即停止。')
+      : summaryStep ? summaryStep
       : currentDatabase
         ? `${currentDatabase}${chunkTotal ? ` · ${t('chunk', '分块')} ${chunkCurrent || 1}/${chunkTotal}` : ''}`
         : progressMessage(p.message || (registeredSummary
@@ -219,14 +227,14 @@
           <div class="crossdb-progress-title">${esc(registeredSummary
             ? (hosted ? t('Summarizing the prepared data…', '正在汇总已准备的数据…') : t('Loading aggregate summaries from registered exports…', '正在加载已注册导出的聚合摘要…'))
             : t('Loading real feature densities from local databases…', '正在从本地数据库加载真实特征密度…'))}</div>
-          <div class="crossdb-progress-meta mono">${esc(hosted ? t('on the hospital server · summaries only', '在医院服务器上计算 · 只返回汇总结果') : t('local-only · nothing uploaded', '仅本机 · 不上传任何内容'))}${p.phase ? ` · ${esc(statusLabel(p.phase))}` : ''}${sampleText}</div>
+          <div class="crossdb-progress-meta mono">${esc(hosted ? t('on the hospital server · summaries only', '在医院服务器上计算 · 只返回汇总结果') : t('local-only · nothing uploaded', '仅本机 · 不上传任何内容'))}${p.phase && !registeredSummary ? ` · ${esc(statusLabel(p.phase))}` : ''}${sampleText}</div>
         </div>
         ${databaseTotal ? `<span class="crossdb-progress-count mono">${completedDatabases}/${databaseTotal}</span>` : ''}
         <button class="btn sm" type="button" data-crossdb-cancel ${state.cancelRequested ? 'aria-disabled="true"' : ''}>${icon('stop', 13)} ${state.cancelRequested ? t('Cancel requested', '已请求取消') : t('Cancel', '取消')}</button>
       </div>
       ${progressTotal ? `<progress class="crossdb-progress-bar" max="100" value="${pct}" aria-label="${esc(t('Cross-DB loading progress', '跨库加载进度'))}">${pct}%</progress>` : '<div class="indet mt-12"></div>'}
       <div class="crossdb-progress-detail" role="status" aria-live="polite" aria-atomic="true">${esc(detail)}</div>
-      ${registeredSummary ? `<div class="note-line mt-8" data-crossdb-first-run>${esc(t('Every row is summarized, so the first comparison of two full databases can take several minutes; comparing them again is quick.', '每一行数据都会参与汇总，所以第一次对比两份完整数据可能需要几分钟；之后再对比会很快。'))}</div>` : ''}
+      ${registeredSummary ? `<div class="crossdb-progress-note" data-crossdb-first-run>${esc(t('Every row is summarized, so the first comparison of two full databases can take several minutes; comparing them again is quick.', '每一行数据都会参与汇总，所以第一次对比两份完整数据可能需要几分钟；之后再对比会很快。'))}</div>` : ''}
       ${errorMessage ? `<div class="note warn mt-12 crossdb-progress-error" role="alert" aria-live="assertive"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono">${esc(errorMessage)}</div></div></div>` : ''}
       ${rowHtml}
     </div>`;

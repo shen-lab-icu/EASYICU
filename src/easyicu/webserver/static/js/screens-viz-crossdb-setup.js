@@ -266,6 +266,12 @@
         'One or more selected database folders were not recognized. Open Advanced settings to review detected databases.',
         '一个或多个已选数据库目录未被识别。请打开“高级设置”检查已识别数据库。'
       ),
+      // The gate needs every dataset to carry demographics, outcome and a patient count.
+      crossdb_incompatible: hostedServer()
+        ? h.t('One of the selected datasets lacks the demographics, outcome or patient count needed to line them up. Deselect incomplete data, such as an extraction of a few modules, and try again.',
+          '所选数据中有一份缺少人口学、结局或患者人数信息，无法和其他数据对齐比较。请取消选择不完整的数据（例如只抽取了部分模块的数据）后再试。')
+        : h.t('One of the selected exports lacks the demographics, outcome or patient count needed to line them up. Deselect incomplete exports, such as an extraction of a few modules, and try again.',
+          '所选导出中有一份缺少人口学、结局或患者人数信息，无法和其他导出对齐比较。请取消选择不完整的导出（例如只抽取了部分模块的导出）后再试。'),
       // The summary reads every row or none: it never samples to fake a full result.
       crossdb_feature_read_budget_exceeded: hostedServer()
         ? h.t('The selected data is too large to summarize within the server\'s limits. EasyICU does not compare a subset as if it were the whole; please tell the administrator.',

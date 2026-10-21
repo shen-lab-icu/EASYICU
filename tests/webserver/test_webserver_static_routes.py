@@ -2133,11 +2133,11 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "padding-right: 168px" in crossdb_css
     assert "scroll-margin-bottom: 84px" in crossdb_css
 
-    assert "js/screens-viz-crossdb-setup.js?v=20261022-crossdb1" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261022-gate1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz-crossdb-results.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz.js?v=20261022-crossdb1" in index_html
-    assert "css/crossdb.css?v=20260830-viz-final1" in index_html
+    assert "css/crossdb.css?v=20261022-progress1" in index_html
     for selector in (
         ".crossdb-method-grid",
         ".xdb-result-tabs",
@@ -3287,7 +3287,7 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert ".official-demo-sources" in shared_css
     assert ".crossdb-offline-fallback" in crossdb_css
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
-    assert "js/screens-viz-crossdb-setup.js?v=20261022-crossdb1" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261022-gate1" in index_html
     assert "js/screens-viz-crossdb-source.js?v=20260920-fast-demo-status" in index_html
 
 
