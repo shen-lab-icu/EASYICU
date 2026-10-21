@@ -55,9 +55,11 @@
         id: clean(raw.id || `${raw.kind || 'step'}-${raw.title || ''}`, 240),
         title: clean(raw.title || tr('Execution step', '执行步骤')),
         kind: clean(raw.kind || 'operation', 80),
-        icon: clean(raw.icon || 'play', 40),
+        // A kind icon only when the row's kind is known.
+        icon: clean(raw.icon, 40),
         status: clean(raw.status || 'complete', 40),
         detail: clean(raw.detail, 800),
+        cause: clean(raw.cause, 400),
         duration: clean(raw.duration, 80),
         toolName: clean(raw.toolName, 160),
         resources,
@@ -127,7 +129,7 @@
   function renderTabs() {
     return `<div class="gpi-source-tabbar"><div class="gpi-source-tabs" role="tablist">${state.tabs.map(tab => `
       <button type="button" class="gpi-source-tab ${tab.id === state.activeId ? 'active' : ''}" role="tab" aria-selected="${tab.id === state.activeId}" data-gpi-source-tab="${esc(tab.id)}">
-        ${icon(tab.kind === 'operation' ? tab.operation.icon : 'file', 14)}<span title="${esc(tab.title)}">${esc(tab.title)}</span><i data-gpi-source-tab-close="${esc(tab.id)}" aria-label="${esc(tr('Close tab', '关闭标签'))}">${icon('close', 12)}</i>
+        ${icon(tab.kind === 'operation' ? (tab.operation.icon || 'play') : 'file', 14)}<span title="${esc(tab.title)}">${esc(tab.title)}</span><i data-gpi-source-tab-close="${esc(tab.id)}" aria-label="${esc(tr('Close tab', '关闭标签'))}">${icon('close', 12)}</i>
       </button>`).join('')}</div><button type="button" class="gpi-source-panel-close" data-gpi-source-close aria-label="${esc(tr('Close workbench', '关闭工作台'))}" title="${esc(tr('Close workbench', '关闭工作台'))}">${icon('close', 15)}</button></div>`;
   }
 
@@ -144,13 +146,13 @@
     return `<div class="gpi-source-document">
       <header class="gpi-source-title"><h2>${esc(tab.title)}</h2><div><span>${esc(meta || 'Research Agent')}</span><b>${esc(language)}</b></div></header>
       <section class="gpi-source-block">
-        <div class="gpi-source-block-head"><strong>Input</strong><button type="button" data-gpi-source-copy="input">${icon('copy', 14)} ${esc(tr('Copy', '复制'))}</button></div>
+        <div class="gpi-source-block-head"><strong>${esc(tr('Input', '输入'))}</strong><button type="button" data-gpi-source-copy="input">${icon('copy', 14)} ${esc(tr('Copy', '复制'))}</button></div>
         <p class="gpi-source-input">${esc(descriptor.step ? `${descriptor.step} → ${descriptor.output || tab.title}` : (descriptor.output || tab.title))}</p>
         <div class="gpi-source-cell-meta"><span>${esc(payload.display_name || descriptor.displayName)}</span><div><b>${focused ? `${windowed.start}–${windowed.end} / ${windowed.total}` : language}</b>${focused || tab.showFull ? `<button type="button" data-gpi-source-full>${esc(tab.showFull ? tr('Focus', '定位') : tr('Full source', '完整源代码'))}</button>` : ''}<button type="button" data-gpi-source-copy="code">${icon('copy', 13)} ${esc(tr('Copy code', '复制代码'))}</button></div></div>
         <pre class="gpi-source-code" tabindex="0">${codeRows(tab)}</pre>
       </section>
       <section class="gpi-source-block is-output">
-        <div class="gpi-source-block-head"><strong>Output</strong><button type="button" data-gpi-source-copy="output">${icon('copy', 14)} ${esc(tr('Copy', '复制'))}</button></div>
+        <div class="gpi-source-block-head"><strong>${esc(tr('Output', '输出'))}</strong><button type="button" data-gpi-source-copy="output">${icon('copy', 14)} ${esc(tr('Copy', '复制'))}</button></div>
         <div class="gpi-source-cell-meta"><span>${esc(descriptor.output || tr('Registered figure', '已登记图件'))}</span><b>${esc(tr('COMPLETE', '已完成'))}</b></div>
         <pre class="gpi-source-output">${esc(descriptor.output || tab.title)}</pre>
       </section>
@@ -166,6 +168,7 @@
     const owner = stepDetailOwner();
     if (operation.step && owner) return owner.render(tab, { codeRows: textRows, statusLabel });
     const status = statusLabel(operation.status);
+    const failed = ['error', 'failed', 'cancelled'].includes(operation.status);
     const category = {
       tool: tr('EasyICU tool', 'EasyICU 工具'),
       pipeline: tr('Research workflow', '科研流程'),
@@ -176,20 +179,22 @@
     }[operation.kind] || tr('Execution step', '执行步骤');
     const outputs = operation.resources.length
       ? `<div class="gpi-operation-results">${operation.resources.map((resource, index) => `<button type="button" data-gpi-operation-resource="${index}">${icon(resource.kind === 'figure' ? 'viz' : 'file', 14)}<span>${esc(resource.title || resource.label || resource.filename || resource.artifact || tr('Result', '结果'))}</span>${icon('arrow', 12)}</button>`).join('')}</div>`
-      // A step that says what it did needs no generic "recorded" placeholder.
-      : operation.detail ? ''
-      : `<div class="gpi-operation-empty">${icon(['error', 'failed', 'cancelled'].includes(operation.status) ? 'alert' : 'check', 17)}<div><strong>${esc(tr('Step recorded', '步骤已记录'))}</strong><span>${esc(tr('This step updated the run record without creating a separate file.', '这一步更新了运行记录，没有生成独立文件。'))}</span></div></div>`;
+      // A step that says what it did needs no generic sentence; a failed
+      // step shows its cause in the error box instead.
+      : operation.detail || (failed && operation.cause) ? ''
+      : `<div class="gpi-operation-empty">${icon(failed ? 'alert' : 'check', 17)}<div><span>${esc(tr('This step updated the run record and produced no file.', '这一步没有生成文件，只更新了运行记录。'))}</span></div></div>`;
+    const errorBox = failed && operation.cause ? `<div class="gpi-step-error" role="alert"><p class="gpi-step-note is-error">${esc(operation.cause)}</p></div>` : '';
     return `<div class="gpi-source-document gpi-operation-document">
-      <header class="gpi-source-title gpi-operation-title"><span class="gpi-operation-title-icon" aria-hidden="true">${icon(operation.icon, 18)}</span><div><h2>${esc(operation.title)}</h2><p><span>${esc(category)}</span><b class="status-${esc(operation.status)}">${esc(status)}</b>${operation.duration ? `<span>${icon('clock', 12)}${esc(operation.duration)}</span>` : ''}</p></div></header>
+      <header class="gpi-source-title gpi-operation-title"><span class="gpi-operation-title-icon" aria-hidden="true">${operation.icon ? icon(operation.icon, 18) : ''}</span><div><h2>${esc(operation.title)}</h2><p><span>${esc(category)}</span><b class="gpi-status-chip status-${esc(operation.status)}">${esc(status)}</b>${operation.duration ? `<span>${icon('clock', 12)}${esc(operation.duration)}</span>` : ''}</p></div></header>
       <section class="gpi-source-block">
-        <div class="gpi-source-block-head"><strong>Input</strong></div>
+        <div class="gpi-source-block-head"><strong>${esc(tr('Input', '输入'))}</strong></div>
         <dl class="gpi-operation-facts">${(operation.facts.length ? operation.facts : [
           { label: tr('Step type', '步骤类型'), value: category }, { label: tr('Action', '动作'), value: operation.title },
         ]).map(fact => `<div><dt>${esc(fact.label)}</dt><dd>${esc(fact.value)}</dd></div>`).join('')}</dl>
       </section>
       <section class="gpi-source-block is-output">
-        <div class="gpi-source-block-head"><strong>Output</strong></div>
-        ${operation.detail ? `<p class="gpi-operation-detail">${esc(operation.detail)}</p>` : ''}${outputs}
+        <div class="gpi-source-block-head"><strong>${esc(tr('Output', '输出'))}</strong></div>
+        ${errorBox}${operation.detail ? `<p class="gpi-operation-detail">${esc(operation.detail)}</p>` : ''}${outputs}
       </section>
     </div>`;
   }

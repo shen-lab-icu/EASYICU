@@ -33,6 +33,14 @@
     const number = Number(value);
     return Number.isInteger(number) && number >= 0 ? number : 0;
   }
+  function bounded(value, upper) {
+    const number = Number(value);
+    return value != null && Number.isInteger(number) && number >= 0 && number <= upper ? number : null;
+  }
+  function instant(value) {
+    const at = Date.parse(String(value || ''));
+    return Number.isFinite(at) ? at : null;
+  }
 
   /* Accept only the step route's fixed shape; anything else is dropped. */
   function validDetail(raw) {
@@ -50,6 +58,8 @@
       };
     }).filter(Boolean);
     const headline = raw.headline && typeof raw.headline === 'object' ? raw.headline : {};
+    const inputs = raw.inputs && typeof raw.inputs === 'object' ? raw.inputs : {};
+    const timing = raw.timing && typeof raw.timing === 'object' ? raw.timing : {};
     return {
       stepId: String(raw.step_id),
       state: STATES.has(raw.state) ? raw.state : 'unknown',
@@ -67,6 +77,16 @@
       withheld: count(raw.withheld_output_count),
       more: count(raw.more_output_count),
       headline: { en: String(headline.en || '').slice(0, 240), zh: String(headline.zh || '').slice(0, 240) },
+      // What the step read, from receipts only (run_step_trace._step_inputs).
+      inputs: {
+        sourceLabel: String(inputs.source_label || '').slice(0, 160),
+        sourceDatabase: /^[A-Za-z0-9_.-]{1,64}$/.test(String(inputs.source_database || '')) ? String(inputs.source_database) : '',
+        stayCount: bounded(inputs.stay_count, 10000000),
+        variableCount: bounded(inputs.variable_count, 100000),
+        stepIndex: bounded(inputs.step_index, 10000),
+        stepTotal: bounded(inputs.step_total, 10000),
+      },
+      timing: { startedAt: instant(timing.started_at), endedAt: instant(timing.ended_at) },
     };
   }
 
@@ -98,6 +118,32 @@
   function note(text, kind) {
     return `<p class="gpi-step-note${kind ? ` is-${kind}` : ''}">${esc(text)}</p>`;
   }
+  // The step's own time from its audit envelopes, when the row had none.
+  function elapsed(timing) {
+    if (!timing || timing.startedAt == null || timing.endedAt == null || timing.endedAt < timing.startedAt) return '';
+    const seconds = (timing.endedAt - timing.startedAt) / 1000;
+    if (seconds < 60) return tr(`${seconds.toFixed(1)} s`, `${seconds.toFixed(1)} 秒`);
+    const minutes = Math.floor(Math.round(seconds) / 60);
+    const rest = Math.round(seconds) % 60;
+    return rest ? tr(`${minutes} min ${rest} s`, `${minutes} 分 ${rest} 秒`) : tr(`${minutes} min`, `${minutes} 分`);
+  }
+  /* Receipt facts above the code: the data source, the research cohort's
+     ICU stays, the variables the plan step names and its place in the plan.
+     A fact no receipt records is left out. The variable count is the
+     plan step's named inputs, not the columns the code read. */
+  function inputFacts(detail, operation) {
+    const facts = [];
+    const add = (label, value) => { if (value != null && value !== '') facts.push([label, String(value)]); };
+    const inputs = detail ? detail.inputs : {};
+    add(tr('Data source', '数据源'), [inputs.sourceLabel, inputs.sourceDatabase ? `(${inputs.sourceDatabase})` : ''].filter(Boolean).join(' '));
+    add(tr('ICU stays in the research cohort', '研究队列 ICU 入住数'), inputs.stayCount);
+    add(tr('Input variables listed in the plan', '计划列出的输入变量数'), inputs.variableCount);
+    const index = (inputs && inputs.stepIndex) || operation.stepIndex;
+    const total = (inputs && inputs.stepTotal) || operation.stepTotal;
+    add(tr('Plan step', '计划步骤'), index && total ? tr(`Step ${index} of ${total}`, `第 ${index}/${total} 步`) : '');
+    return facts.length
+      ? `<dl class="gpi-operation-facts gpi-step-facts">${facts.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>` : '';
+  }
 
   function inputSection(tab, codeRows) {
     const detail = tab.stepDetail;
@@ -108,18 +154,19 @@
     if (tab.stepLoading && !detail) return `<section class="gpi-source-block">${head}${note(tr('Reading the step…', '正在读取这一步…'))}</section>`;
     if (tab.stepError && !detail) return `<section class="gpi-source-block">${head}${note(tab.stepError, 'error')}</section>`;
     const code = detail && detail.code;
+    const facts = inputFacts(detail, operation);
     if (!code) {
       const text = detail && detail.state === 'precompleted'
         ? tr('EasyICU completed this step while preparing the data; it has no analysis code.', '这一步由 EasyICU 在准备数据时完成，没有分析代码。')
         : detail && detail.state === 'running'
           ? tr('The code appears here once it is written.', '代码写好后会显示在这里。')
           : tr('This step has no code to show.', '这一步没有可显示的代码。');
-      return `<section class="gpi-source-block">${head}${note(text)}</section>`;
+      return `<section class="gpi-source-block">${head}${facts}${note(text)}</section>`;
     }
     const language = code.language.toUpperCase();
     const truncated = code.truncated
       ? note(tr(`Only the first ${code.lineCount} lines are shown.`, `仅显示前 ${code.lineCount} 行`)) : '';
-    return `<section class="gpi-source-block">${head}
+    return `<section class="gpi-source-block">${head}${facts}
       <div class="gpi-source-cell-meta"><span>${esc(code.displayName)}</span><div><b>${esc(language)}</b><button type="button" data-gpi-step-copy>${icon('copy', 13)} ${esc(tr('Copy code', '复制代码'))}</button></div></div>
       <pre class="gpi-source-code" tabindex="0">${codeRows(code.text, code.language)}</pre>${truncated}
     </section>`;
@@ -144,13 +191,20 @@
       return `<section class="gpi-source-block is-output">${head}${note(tr('The output appears when this step finishes.', '这一步完成后显示输出。'))}</section>`;
     }
     const parts = [];
-    if (detail.state === 'failed') parts.push(note(tr('This step stopped with an error.', '这一步出错停止。'), 'error'));
+    // A failed step shows its error in a red box, with the stop's cause
+    // from the error-text owner when the trace row carried one.
+    if (detail.state === 'failed') {
+      parts.push(`<div class="gpi-step-error" role="alert">${note(tr('This step stopped with an error.', '这一步出错停止。'), 'error')}${tab.operation.cause ? note(tab.operation.cause, 'error') : ''}</div>`);
+    }
     if (detail.state === 'skipped') parts.push(note(tr('Skipped because a step it depends on failed.', '所依赖的步骤失败，这一步已跳过。')));
     const headline = tr(detail.headline.en || '', detail.headline.zh || '');
     if (headline) parts.push(`<p class="gpi-operation-detail">${esc(headline)}</p>`);
     const files = detail.outputs.map(outputFile).join('');
     if (files) parts.push(`<div class="gpi-step-files">${files}</div>`);
     const hidden = detail.withheld + detail.more;
+    if (!files && !hidden && detail.state === 'complete') {
+      parts.push(note(tr('This step updated the run record and produced no file.', '这一步没有生成文件，只更新了运行记录。')));
+    }
     if (hidden) {
       parts.push(note(tr(`${hidden} more file(s) are not listed: patient-level data, unsupported formats or over the list limit.`,
         `另有 ${hidden} 个文件未列出：患者级数据、不支持的格式或超出列表上限。`)));
@@ -161,12 +215,15 @@
 
   function render(tab, helpers) {
     const operation = tab.operation;
-    const statusText = helpers.statusLabel(tab.stepDetail ? ({ complete: 'complete', precompleted: 'complete',
-      failed: 'error', skipped: 'skipped', running: 'running' }[tab.stepDetail.state] || operation.status) : operation.status);
+    // The header's status chip follows the step's own record once read.
+    const status = tab.stepDetail ? ({ complete: 'complete', precompleted: 'complete',
+      failed: 'error', skipped: 'skipped', running: 'running' }[tab.stepDetail.state] || operation.status) : operation.status;
+    const statusText = helpers.statusLabel(status);
+    const duration = operation.duration || (tab.stepDetail ? elapsed(tab.stepDetail.timing) : '');
     const position = operation.stepIndex && operation.stepTotal
       ? `<span>${esc(tr(`Step ${operation.stepIndex}/${operation.stepTotal}`, `第 ${operation.stepIndex}/${operation.stepTotal} 步`))}</span>` : '';
     return `<div class="gpi-source-document gpi-operation-document gpi-step-document">
-      <header class="gpi-source-title gpi-operation-title"><span class="gpi-operation-title-icon" aria-hidden="true">${icon(operation.icon, 18)}</span><div><h2>${esc(operation.title)}</h2><p>${position}<b class="status-${esc(operation.status)}">${esc(statusText)}</b>${operation.duration ? `<span>${icon('clock', 12)}${esc(operation.duration)}</span>` : ''}</p></div></header>
+      <header class="gpi-source-title gpi-operation-title"><span class="gpi-operation-title-icon" aria-hidden="true">${operation.icon ? icon(operation.icon, 18) : ''}</span><div><h2>${esc(operation.title)}</h2><p>${position}<b class="gpi-status-chip status-${esc(status)}">${esc(statusText)}</b>${duration ? `<span>${icon('clock', 12)}${esc(duration)}</span>` : ''}</p></div></header>
       ${inputSection(tab, helpers.codeRows)}
       ${outputSection(tab)}
     </div>`;

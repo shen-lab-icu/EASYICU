@@ -11,6 +11,15 @@
   // remain in the persisted receipt, but do not become fake "work" rows.
   const VISIBLE_KINDS = new Set(['tool', 'pipeline', 'retry', 'thinking']);
   const DURATION_KINDS = new Set(['assistant', 'tool', 'pipeline', 'retry', 'compaction', 'thinking']);
+  // Traces a reader expanded keep that state across live re-renders.
+  const expandedTraces = new Set();
+  function traceExpanded(key, expanded) {
+    const value = String(key || '').slice(0, 240);
+    if (!value) return false;
+    if (expanded === true) expandedTraces.add(value);
+    else if (expanded === false) expandedTraces.delete(value);
+    return expandedTraces.has(value);
+  }
 
   function create(host) {
     const tr = host.tr;
@@ -38,7 +47,7 @@
       const minutes = Math.floor(roundedSeconds / 60);
       const remainder = roundedSeconds % 60;
       return tr(
-        remainder ? `${minutes}m ${remainder}s` : `${minutes}m`,
+        remainder ? `${minutes} min ${remainder} s` : `${minutes} min`,
         remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分`,
       );
     }
@@ -106,10 +115,11 @@
       if (/workflow|manuscript|idea|artifact|plan|step/.test(tool)) return 'list';
       if (/workspace|capability/.test(tool)) return 'db';
       if (/context/.test(tool)) return 'file';
-      return 'spark';
+      return '';
     }
+    // A row shows a kind icon only when its kind is known.
     function activityIcon(step) {
-      if (!step) return 'spark';
+      if (!step) return '';
       if (step.icon) return step.icon;
       // A plan step's icon says how it ran: a registered standard method or
       // code written for this study.
@@ -123,13 +133,15 @@
         if (/artifact|report|manuscript/.test(step.step || '')) return 'file';
         if (/gate|valid|audit|evidence/.test(step.step || '')) return 'shield';
         if (/plan/.test(step.step || '')) return 'list';
-        return 'play';
+        if (String(step.step || '').startsWith('provider_')) return 'refresh';
+        const stage = STAGE_ORDER.includes(step.step) ? step.step : pipelineStage(step.step);
+        return stage === 'progress' ? '' : 'play';
       }
       if (step.kind === 'compaction') return 'layers';
       if (step.kind === 'failed') return 'alert';
       if (step.kind === 'cancelled') return 'stop';
       if (step.kind === 'settled') return 'check';
-      return 'spark';
+      return '';
     }
     function toolLabel(name, resource) {
       const labels = {
@@ -405,12 +417,13 @@
       const stepId = String(event.step_id || (match && match[4]) || '').replace(/\.$/, '');
       if (!stepId) return null;
       const skipped = /^Skipped (?:step already completed by pre-execution|completed step from prior run):/.test(label);
+      const reused = /^Skipped completed step from prior run:/.test(label);
       const phase = skipped ? 'precompleted' : event.action === 'step_skipped' ? 'skipped'
         : ['error', 'failed', 'blocked', 'skipped'].includes(event.status) ? 'failed'
           : event.status === 'complete' || (match && /^complete/i.test(match[3])) ? 'complete'
             : match && /^failed/i.test(match[3]) ? 'failed' : 'started';
       const facts = { index: Number(event.current_step || (match && match[1])) || null,
-        total: Number(event.total_steps || (match && match[2])) || null, phase, stepId };
+        total: Number(event.total_steps || (match && match[2])) || null, phase, stepId, ...(reused ? { reused: true } : {}) };
       // The run the step belongs to addresses its detail; never a path.
       if (RUN_ID.test(String(event.run_id || ''))) facts.runId = String(event.run_id);
       return facts;
@@ -432,6 +445,7 @@
         ...(facts.runId ? { runId: facts.runId } : {}),
         ...(facts.phase === 'started' ? { startedAt: at } : { endedAt: at }),
         ...(facts.phase === 'precompleted' ? { precompleted: true } : {}),
+        ...(facts.reused ? { reused: true } : {}),
         ...(facts.phase === 'skipped' ? { skipped: true } : {}),
         ...(opts.durationKnown === false ? { durationKnown: false } : {}),
       };
@@ -468,6 +482,7 @@
         ? `pipeline-plan-retry-${planningEventFacts(event).unit || 'plan'}-${event.current || 0}` : `pipeline-${step}`;
       const next = facts ? planStepRow(facts, at, { durationKnown: at != null }) : {
         id, kind, step, label: pipelineEventLabel(event), at, actor: event.actor,
+        ...(system ? { current: boundedCount(event.current), total: boundedCount(event.total) } : {}),
         status: ['error', 'failed', 'cancelled', 'blocked'].includes(event.status)
           || step === 'provider_continuation_refused' ? 'error'
           : event.status === 'complete' || (system && step !== 'provider_recovery_wait') ? 'complete' : 'running',
@@ -511,9 +526,9 @@
       plan_validation: 'shield', plan_ready: 'list', repair: 'refresh', repair_retry: 'refresh',
       deterministic_repair: 'refresh', repair_failed: 'alert', step_error: 'alert', figure_audit: 'eye',
     };
-    function boundedCount(value) {
+    function boundedCount(value, upper) {
       const number = Number(value);
-      return Number.isInteger(number) && number >= 0 && number <= 100000 ? number : null;
+      return Number.isInteger(number) && number >= 0 && number <= (upper || 100000) ? number : null;
     }
     function actionFieldsOf(event) {
       const text = (value, limit) => String(value == null ? '' : value).slice(0, limit);
@@ -526,6 +541,7 @@
         queries: (Array.isArray(event.queries) ? event.queries : []).slice(0, 4).map(value => text(value, 200)).filter(Boolean),
         sourceLabel: text(event.source_label, 160), sourceDatabase: text(event.source_database, 64),
         groupVariableCount: boundedCount(event.group_variable_count), planStepCount: boundedCount(event.plan_step_count),
+        stayCount: boundedCount(event.stay_count, 10000000), variableCount: boundedCount(event.variable_count, 10000000),
         stepId: /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,159}$/.test(String(event.step_id || '')) ? String(event.step_id) : '',
         ...(RUN_ID.test(String(event.run_id || '')) ? { runId: String(event.run_id) } : {}),
       };
@@ -626,6 +642,8 @@
       }
       if (row.action === 'context_built') {
         add(tr('Data source', '数据源'), [row.sourceLabel, row.sourceDatabase ? `(${row.sourceDatabase})` : ''].filter(Boolean).join(' '));
+        add(tr('ICU stays', 'ICU 入住数'), row.stayCount);
+        add(tr('Variables built', '构建的变量数'), row.variableCount);
       }
       if (row.action === 'exposure_groups_staged') add(tr('Grouping variables', '分组变量数'), row.groupVariableCount);
       if (row.action === 'plan_ready') add(tr('Plan steps', '计划步骤数'), row.planStepCount);
@@ -900,7 +918,7 @@
       if (step.kind === 'settled') return tr('This turn completed', '本轮已完成');
       return tr('Agent activity updated', 'Agent 状态已更新');
     }
-    function operationPayload(step, label) {
+    function operationPayload(step, label, cause) {
       const resources = [step.resource].concat(Array.isArray(step.resources) ? step.resources : []).filter(Boolean);
       const safeResources = resources.slice(0, 12).map(resource => ({
         kind: String(resource.kind || '').slice(0, 80),
@@ -918,7 +936,7 @@
         id: String(step.id || `${step.kind || 'step'}-${label}`).slice(0, 240),
         title: label,
         kind: String(step.kind || 'operation').slice(0, 80),
-        icon: String(activityIcon(step) || 'play').slice(0, 40),
+        icon: String(activityIcon(step) || '').slice(0, 40),
         status: String(step.status || 'complete').slice(0, 40),
         detail: step.kind === 'thinking' ? '' : localizedStepText(step),
         duration: stepDuration(step),
@@ -933,13 +951,14 @@
           stepTotal: Number(step.stepTotal) || 0,
         } : {}),
         ...(step.step === 'action' ? { facts: actionFacts(step) } : {}),
+        ...(cause ? { cause: String(cause).slice(0, 400) } : {}),
       }));
     }
     /* One trace row is one button: icon, action, elapsed time, chevron. The
        whole row opens the operation workbench, as in the reference UI. */
-    function stepPrimary(step) {
+    function stepPrimary(step, cause) {
       const label = stepLabel(step);
-      const operation = operationPayload(step, label);
+      const operation = operationPayload(step, label, cause);
       const thinking = step.kind === 'thinking';
       const detail = thinking ? '' : localizedStepText(step);
       const running = step.status === 'running';
@@ -953,12 +972,15 @@
         : meta
           ? `<span class="gpi-activity-step-duration">${iconHtml('clock', 12)}${esc(meta)}</span>`
           : '<span class="gpi-activity-step-duration" aria-hidden="true"></span>';
+      const kindIcon = activityIcon(step);
       const icon = running
         ? '<span class="gpi-running-spinner" aria-hidden="true"></span>'
-        : iconHtml(activityIcon(step), 16);
+        : kindIcon ? iconHtml(kindIcon, 16) : '';
+      // A failed row's one-line cause, from the error-text owner.
+      const causeHtml = cause ? `<span class="gpi-activity-step-cause" title="${esc(cause)}">${esc(cause)}</span>` : '';
       return `<button type="button" class="gpi-activity-step-open" data-gpi-operation="${esc(operation)}" aria-label="${esc(label)}">
         <span class="gpi-activity-step-icon" aria-hidden="true">${icon}</span>
-        <span class="gpi-activity-step-copy"><strong>${esc(label)}${thinking ? ' ·' : ''}</strong>${publicStream}${detail ? `<span>${esc(detail)}</span>` : ''}</span>
+        <span class="gpi-activity-step-copy"><strong>${esc(label)}${thinking ? ' ·' : ''}</strong>${publicStream}${detail ? `<span>${esc(detail)}</span>` : ''}${causeHtml}</span>
         ${duration}
         <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
       </button>`;
@@ -977,6 +999,7 @@
     }
     function localizedStepText(step) {
       if (step.kind === 'thinking') return '';
+      if (step.precompleted && step.reused) return tr('Completed by an earlier attempt; reused', '上一次尝试已完成，直接复用');
       if (step.precompleted) return tr('Already completed during preparation; skipped', '已在准备阶段完成，跳过');
       if (step.skipped) return tr('Skipped: a step it depends on failed', '已跳过：所依赖的步骤失败');
       if (step.step === 'action') return actionDetail(step);
@@ -999,11 +1022,34 @@
         ? (containsChinese ? value : '')
         : (containsChinese ? '' : value);
     }
-    function stepRow(step) {
+    function stepRow(step, cause) {
       // Raw validator codes and Python/Node owner paths are diagnostics, not
       // user-facing research progress. Keep them in persisted receipts while
       // projecting only elapsed time in the ordinary activity timeline.
-      return `<li class="${esc(step.status || 'complete')} kind-${esc(step.kind || 'operation')}">${stepPrimary(step)}${stepResources(step)}</li>`;
+      return `<li class="${esc(step.status || 'complete')} kind-${esc(step.kind || 'operation')}">${stepPrimary(step, cause)}${stepResources(step)}</li>`;
+    }
+    // The host's own sentences (screens-guided-pi-job-narration.js); an
+    // isolated owner test without it renders every row as a row.
+    function jobNarration() {
+      const registry = window.EasyICU && window.EasyICU.guidedPi;
+      return registry && typeof registry.optional === 'function' ? registry.optional('jobNarration') : null;
+    }
+    // A muted line between rows, written by the host from a job event.
+    function hostLineRow(text) {
+      return `<li class="gpi-activity-narration gpi-trace-note"><span>${esc(text)}</span></li>`;
+    }
+    /* A failed row says why in one line, from the error-text owner, only when
+       the job's own failure code names the stop. A finished job whose earlier
+       step errors were repaired has no failure code, so no cause is shown. */
+    function failureCauses(steps, row) {
+      const causes = new Map();
+      const code = String(row && row.failureCode || '');
+      if (!code || typeof host.runFailureText !== 'function') return causes;
+      const failed = steps.filter(step => step.status === 'error' && step.kind !== 'tool'
+        && !String(step.step || '').startsWith('provider_'));
+      const cause = String(host.runFailureText(code) || '').trim();
+      if (failed.length && cause) causes.set(failed[failed.length - 1], cause);
+      return causes;
     }
     /* The model's interim narration ("I'll check the data source next") is
        part of the trace, not a separate reply: it sits between the rows it
@@ -1011,7 +1057,7 @@
     function narrationRow(html) {
       return html ? `<li class="gpi-activity-narration">${html}</li>` : '';
     }
-    function traceListHtml(steps, narration) {
+    function traceListHtml(steps, narration, causes) {
       const segments = (Array.isArray(narration) ? narration : [])
         .filter(item => item && item.html)
         .map(item => ({ after: Number.isFinite(Number(item.afterSteps)) ? Number(item.afterSteps) : Number.POSITIVE_INFINITY, html: item.html }))
@@ -1026,12 +1072,19 @@
         }
       };
       drain(0);
+      const owner = jobNarration();
+      const lineState = {};
       steps.forEach(step => {
-        items.push(stepRow(step));
+        const line = owner ? owner.lineFor(step, lineState, tr) : null;
+        if (line && line.text) items.push(hostLineRow(line.text));
+        if (!(line && line.replaces && line.text)) items.push(stepRow(step, causes && causes.get(step)));
         if (step.kind === 'tool') { tools += 1; drain(tools); }
       });
       while (cursor < segments.length) { items.push(narrationRow(segments[cursor].html)); cursor += 1; }
       return items.length ? `<ol>${items.join('')}</ol>` : '';
+    }
+    function expandButton(expanded) {
+      return `<button type="button" class="gpi-trace-expand" data-gpi-trace-expand aria-expanded="${expanded ? 'true' : 'false'}">${iconHtml('external', 12)}<span>${esc(expanded ? tr('Collapse', '收起') : tr('Expand all', '展开全部'))}</span></button>`;
     }
     function render(row, options) {
       const allSteps = Array.isArray(row && row.steps) ? row.steps : [];
@@ -1041,6 +1094,17 @@
       const latest = visibleSteps[visibleSteps.length - 1];
       const failed = row && (row.status === 'error' || row.status === 'failed' || row.status === 'cancelled');
       const kicker = tr('Show traces', '查看执行过程');
+      // One host sentence before a job's trace says what EasyICU will do.
+      const owner = jobNarration();
+      const openingText = owner && row ? owner.opening(row.jobCode, tr) : '';
+      const opening = openingText ? `<p class="gpi-turn-opening">${esc(openingText)}</p>` : '';
+      const rowCount = visibleSteps.filter(step => !(owner && owner.replaces(step))).length;
+      const longTrace = visibleSteps.length + narration.length > 5;
+      const traceKey = String(row && (row.childJobId || row.id) || '');
+      const expanded = longTrace && traceExpanded(traceKey);
+      const bodyClass = `${longTrace ? ' is-clipped' : ''}${expanded ? ' is-expanded' : ''}`;
+      const keyAttr = traceKey ? ` data-gpi-trace-key="${esc(traceKey)}"` : '';
+      const causes = failureCauses(visibleSteps, row);
       if (running) {
         const title = row.runningTitle || (latest
           ? stepLabel(latest) : tr('EasyICU Copilot is preparing the next action', 'EasyICU 研究助手正在准备下一步'));
@@ -1048,14 +1112,16 @@
           'Still running. You can wait here; EasyICU will ask when review or confirmation is needed.',
           '任务仍在进行。请在这里等待；需要审阅或确认时 EasyICU 会明确提示。',
         );
-        return `<div class="gpi-activity-running" role="status" aria-live="polite" aria-busy="true">
+        // While running the list stays open; its window keeps the newest row in view.
+        const list = traceListHtml(visibleSteps, narration, causes);
+        return `${opening}<div class="gpi-activity-running" role="status" aria-live="polite" aria-busy="true">
           <div class="gpi-activity-live">
             <span class="gpi-running-spinner" aria-hidden="true"></span>
             <span class="gpi-activity-kicker">${esc(tr('In progress', '正在进行'))}</span>
             <span class="gpi-activity-title"><strong>${esc(title)}</strong></span>
             <span class="gpi-activity-elapsed" data-gpi-live-elapsed="${Number(row.startedAt || Date.now())}">${esc(durationText(row.startedAt))}</span>
           </div>
-          ${traceListHtml(visibleSteps, narration)}
+          ${list ? `<div class="gpi-activity-body gpi-trace-live${bodyClass}"${keyAttr}><div class="gpi-trace-window">${list}</div>${longTrace ? expandButton(expanded) : ''}</div>` : ''}
           <p class="gpi-activity-note">${esc(note)}</p>
         </div>`;
       }
@@ -1064,20 +1130,19 @@
       // instead of exposing an empty or misleading execution disclosure.
       if (!visibleSteps.length && !failed) return '';
       const title = failed ? tr('Execution needs attention', '执行过程需要处理') : kicker;
-      const traceMeta = `${tr(`${visibleSteps.length} steps`, `${visibleSteps.length} 个步骤`)}${row.durationKnown === false ? '' : ` · ${tr(`total ${durationText(row.startedAt, row.endedAt)}`, `总耗时 ${durationText(row.startedAt, row.endedAt)}`)}`}`;
-      const longTrace = visibleSteps.length + narration.length > 5;
+      const traceMeta = `${tr(`${rowCount} steps`, `${rowCount} 个步骤`)}${row.durationKnown === false ? '' : ` · ${tr(`total ${durationText(row.startedAt, row.endedAt)}`, `总耗时 ${durationText(row.startedAt, row.endedAt)}`)}`}`;
       // Finished failures expose their status in the summary but keep verbose
       // diagnostic receipts collapsed. Persisted rows from older builds may
       // still carry expanded=true, so terminal rendering must not trust it.
-      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}">
+      return `${opening}<details class="gpi-activity ${failed ? 'error' : 'complete'}">
         <summary aria-label="${esc(`${title}. ${traceMeta}`)}">
           <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
           <span class="gpi-activity-kicker">${esc(title)}</span>
           <span class="gpi-activity-meta" aria-hidden="true">${esc(traceMeta)}</span>
         </summary>
-        <div class="gpi-activity-body${longTrace ? ' is-clipped' : ''}">
-          ${traceListHtml(visibleSteps, narration)}
-          ${longTrace ? `<button type="button" class="gpi-trace-expand" data-gpi-trace-expand aria-expanded="false">${iconHtml('external', 12)}<span>${esc(tr('Expand all', '展开全部'))}</span></button>` : ''}
+        <div class="gpi-activity-body${bodyClass}"${keyAttr}>
+          ${traceListHtml(visibleSteps, narration, causes)}
+          ${longTrace ? expandButton(expanded) : ''}
           <p class="sr-only">${tr('Reasoning summaries, lifecycle facts, and EasyICU receipts — tool arguments, credentials, and patient rows are never displayed.', '这里展示模型的思考摘要、生命周期事实和 EasyICU 回执；工具参数、凭据和患者行级数据不会展示。')}</p>
         </div>
       </details>`;
@@ -1187,5 +1252,5 @@
     return Object.freeze({ appendPublicDelta, durationText, executorName, finishTurn, focusLatest, notePlanSubStep, pipelineEventLabel, planStepFacts, planStepRow, planStepTitle, planSubStepFacts, planningEventFacts, planningProgressText, notePipelineEvent, finishPipelineSteps, pipelineTime, render, renderTimeline, startTurn, stepLabel, syncLiveClock, timeMs });
   }
 
-  window.EasyICU.guidedPi.declare('activity', { create });
+  window.EasyICU.guidedPi.declare('activity', { create, traceExpanded });
 })();

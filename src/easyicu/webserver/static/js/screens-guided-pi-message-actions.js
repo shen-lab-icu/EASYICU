@@ -72,13 +72,14 @@
       return copied;
     }
 
-    function markCopied(button) {
+    // An icon-only button stays icon-only; a labelled one keeps its label.
+    function markCopied(button, labelled) {
       if (!button) return;
       const label = tr('Copied', '已复制');
       button.dataset.copied = 'true';
       button.title = label;
       button.setAttribute('aria-label', label);
-      button.innerHTML = iconHtml('check', 14);
+      button.innerHTML = labelled ? `${iconHtml('check', 14)}<span>${esc(label)}</span>` : iconHtml('check', 14);
     }
 
     function messageById(id) {
@@ -108,7 +109,20 @@
       input.scrollIntoView({ block: 'nearest' });
     }
 
+    // A finished run's answer is the run-outcome card's text, as shown.
+    function answerText(button) {
+      const card = button && button.closest('[data-gpi-run-outcome]');
+      const answer = card && (card.querySelector('.gpi-run-answer-text') || card.querySelector('.gpi-run-outcome-copy > p'));
+      return answer ? String(answer.innerText || answer.textContent || '').trim() : '';
+    }
+
     function handleClick(event) {
+      const answerCopy = event.target.closest('[data-gpi-run-answer-copy]');
+      if (answerCopy) {
+        const text = answerText(answerCopy);
+        if (text) copyText(text).then(copied => { if (copied) markCopied(answerCopy, true); });
+        return true;
+      }
       const copy = event.target.closest('[data-gpi-message-copy]');
       if (copy) {
         const row = messageById(articleId(copy));

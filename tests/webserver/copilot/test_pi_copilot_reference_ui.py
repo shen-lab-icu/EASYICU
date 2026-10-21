@@ -1040,7 +1040,7 @@ def test_model_follow_up_questions_are_lifted_from_the_reply_and_offered_as_sugg
         untouched: none.text.endsWith('- 选项二') && none.questions.length === 0,
         buttons: (html.match(/data-gpi-model-followup="/g) || []).length,
         escaped: html.includes('data-gpi-model-followup="能否加入 SOFA 作为协变量？"') && html.includes('<span aria-hidden="true">↳</span>'),
-        heading: html.includes('继续追问') && html.includes('<i>help</i>'),
+        heading: html.includes('后续问题') && html.includes('<i>help</i>'),
         empty: owner.render([], {{}}) === '',
       }}));
     """

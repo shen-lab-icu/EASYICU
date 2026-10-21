@@ -437,6 +437,9 @@ def test_service_reads_a_step_only_through_the_projects_run(
     service.project_store.bind("project-b", "study-b")
     wrapper = tmp_path / "wrapper"
     _synthetic_run(wrapper / "pipeline" / RUN_ID)
+    # The wrapper's run context names the data source the step read.
+    (wrapper / "run_context.json").write_text(json.dumps({"source": {
+        "label": "eICU-CRD demo", "database": "eicu", "root": str(tmp_path / "private")}}))
     monkeypatch.setattr(
         service_module.agent_runs,
         "list_run_history",
@@ -447,6 +450,7 @@ def test_service_reads_a_step_only_through_the_projects_run(
     encoded = json.dumps(payload, ensure_ascii=False)
     assert payload["run_id"] == RUN_ID and payload["step"]["code"]["text"] == BASELINE_CODE
     assert str(tmp_path) not in encoded and "project_dir" not in encoded
+    assert payload["step"]["inputs"]["source_label"] == "eICU-CRD demo"
     with pytest.raises(PiCopilotError) as other:
         service.get_research_step(project_id="project-b", run_id=RUN_ID, step_id="baseline_table")
     assert (other.value.code, other.value.status_code) == ("pi_research_run_not_found", 404)

@@ -54,6 +54,10 @@
       activity = {
         id: 'easyicu-job-' + jobId, role: 'activity', status: 'running',
         startedAt, childJobId: jobId, runningTitle: runningJobTitle(code), steps: [], expanded: true,
+        // The code that started the job keys its opening sentence. A row found
+        // above (a replayed host action) keeps its own; a reload's guessed
+        // code never replaces it.
+        jobCode: String(code || ''),
         reportOnly: String(code || '').includes('report_repair'),
         trialCompile: isTrialCompile(code),
       };
@@ -165,6 +169,8 @@
           owner: String((event.result && event.result.run_id) || ''),
         });
         activity.status = blocked ? 'blocked' : (failed ? (event.status === 'cancelled' ? 'cancelled' : 'error') : 'complete');
+        // The stop's code, for the failed row's one-line cause.
+        activity.failureCode = failed ? (errorCode || String(gate && gate.reason || '')) : '';
         if (presentation.title) activity.displayTitle = presentation.title;
         activity.endedAt = endedAt;
         closeChildSource();
@@ -300,6 +306,7 @@
           resources: Array.isArray(job.artifact_refs) ? job.artifact_refs : [],
         });
         activity.status = blocked ? 'blocked' : (job.status === 'done' ? 'complete' : (job.status === 'cancelled' ? 'cancelled' : 'error'));
+        activity.failureCode = job.status === 'done' ? '' : String(job.error_code || '');
         if (presentation.endedAt == null) activity.durationKnown = false;
       }
     }

@@ -758,6 +758,10 @@
             startedAt, endedAt: status === 'running' ? null : endedAt,
             childJobId, runningTitle: copy.running, steps: [], expanded: status === 'running',
             timelineAt: startedAt, timelineOrder: turnIndex * 10 + 1,
+            // The action that started the job keys its opening sentence; a
+            // failed job's own code gives its failed row a cause.
+            jobCode: actionCode,
+            failureCode: ['failed', 'cancelled', 'interrupted'].includes(status) ? String((job && job.error_code) || '') : '',
           };
           hostJobProgressSteps(
             actionCode,

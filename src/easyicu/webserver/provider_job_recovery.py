@@ -160,7 +160,12 @@ class ProviderJobRecovery:
         return min(remaining, window)
 
     def wait_for_provider(self, cause: str) -> None:
-        self.job.emit({"type": "progress", "step": "provider_recovery_wait", "actor": "system", "reason": cause})
+        # The wait names the continuation it waits for, so the conversation
+        # can say which of the bounded attempts this is (n/limit).
+        self.job.emit({
+            "type": "progress", "step": "provider_recovery_wait", "actor": "system", "reason": cause,
+            "current": len(self.resumes) + 1, "total": MAX_AUTOMATIC_RESUMES,
+        })
         probe = HardStopClient(self.client, role="provider_recovery_probe", task=_ProbeTask(self))
         while True:
             wait = min(PROBE_INTERVAL_SECONDS, self.remaining())

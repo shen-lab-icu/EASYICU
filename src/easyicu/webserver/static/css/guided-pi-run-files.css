@@ -5,11 +5,13 @@
 .gpi-run-files-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
 .gpi-run-files button { cursor: pointer; border: 1px solid var(--line, #deded8); background: var(--surface, #fff); color: var(--ink-2); padding: 6px 10px; border-radius: 6px; font: inherit; font-size: 12px; }
 .gpi-run-files button:disabled { opacity: .5; cursor: default; }
-.gpi-run-file-list { display: grid; gap: 6px; max-height: 320px; overflow-y: auto; }
-.gpi-run-file { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 3px 8px; padding: 6px 0; }
-.gpi-run-file > :first-child { text-align: left; overflow-wrap: anywhere; min-width: 0; }
-.gpi-run-file small { grid-column: 1; grid-row: 2; overflow-wrap: anywhere; font-size: 11px; color: var(--ink-3); }
-.gpi-run-file > :last-child { grid-column: 2; grid-row: 1 / 3; }
+/* A 文件 | 内容 table: the file's preview link, what it is for, its download. */
+.gpi-run-file-list { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+.gpi-run-file-list th { padding: 4px 8px 4px 0; text-align: left; font-weight: 500; color: var(--ink-3); border-bottom: 1px solid var(--line, #deded8); }
+.gpi-run-file-list th:last-child, .gpi-run-file td:last-child { width: 4.5em; padding-right: 0; white-space: nowrap; text-align: right; }
+.gpi-run-file td { padding: 6px 8px 6px 0; vertical-align: top; overflow-wrap: anywhere; min-width: 0; border-bottom: 1px solid var(--line-2, #efefea); }
+.gpi-run-file-list th:first-child, .gpi-run-file td:first-child { width: 38%; text-align: left; }
+.gpi-run-file small { overflow-wrap: anywhere; font-size: 12px; color: var(--ink-3); }
 .gpi-run-signoff { margin-top: 14px; font-size: 12px; }
 .gpi-run-extra { margin-top: 10px; font-size: 12px; }
 .gpi-run-artifact { min-width: 0; overflow: auto; }

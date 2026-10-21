@@ -47,6 +47,8 @@ MAX_AUDIT_BYTES = 8_000_000
 MAX_INDEX_BYTES = 4 * 1024 * 1024
 MAX_SUMMARY_BYTES = 256 * 1024
 MAX_HASH_BYTES = 16 * 1024 * 1024
+#: An ICU database's stays fit well below this; a larger count is not one.
+MAX_STAY_COUNT = 10_000_000
 
 #: One path component: no separator, never ``.`` or ``..``.
 STEP_ID_PATTERN = r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,159}"
@@ -68,6 +70,8 @@ TRACE_ACTION_KEYS = (
     "attempt",
     "group_variable_count",
     "plan_step_count",
+    "stay_count",
+    "variable_count",
 )
 #: Facts a finished run's projection attaches to particular actions.
 TRACE_FACT_KEYS = (
@@ -271,6 +275,13 @@ def trace_action(
         facts = {"action": "plan_ready", "plan_step_count": int(match.group("count"))}
     if not facts and (stage, text) in _FIXED_ACTIONS:
         facts = {"action": _FIXED_ACTIONS[(stage, text)]}
+    if facts.get("action") == "context_built":
+        # The research context's own counts: the ICU stays it holds and the
+        # variables it built, bounded integers from the event's typed detail.
+        for key, source in (("stay_count", "n_stays"), ("variable_count", "n_variables")):
+            count = _bounded_int(extra.get(source), MAX_STAY_COUNT)
+            if count is not None:
+                facts[key] = count
     if not facts and stage in {"runner", "coder", "contract", "audit", "visual_qa"}:
         # A failure envelope names its step only through typed detail.
         status = str(extra.get("status") or "")
@@ -761,18 +772,100 @@ def _headline(summary: Mapping[str, Any]) -> Optional[Dict[str, str]]:
     return headline
 
 
-def _planned_step_ids(run_dir: Path) -> set[str]:
+def _planned_steps(run_dir: Path) -> List[Mapping[str, Any]]:
     plan = _read_json(_child(run_dir, "analysis_plan.json"), MAX_INDEX_BYTES)
     steps = plan.get("steps") if isinstance(plan, Mapping) else None
-    return {
-        str(step.get("step_id") or "")
-        for step in steps or []
-        if isinstance(step, Mapping)
-    }
+    return [step for step in steps or [] if isinstance(step, Mapping)]
 
 
-def project_step_detail(run_dir: Path, step_id: str) -> Dict[str, Any]:
-    """Return one executed step's code, execution and outputs, path-free."""
+def _planned_step_ids(run_dir: Path) -> set[str]:
+    return {str(step.get("step_id") or "") for step in _planned_steps(run_dir)}
+
+
+#: Plan inputs with a typed prefix (``artifact:``, ``table:`` ...) name a
+#: product or evidence, not a variable.
+_NON_VARIABLE_INPUT = re.compile(r"^[a-z_]+:")
+
+
+def _step_inputs(
+    run_dir: Path,
+    step_id: str,
+    run_rows: List[Mapping[str, Any]],
+    source: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """What one step read, from receipts: source, stays, variables, plan place.
+
+    The source is the run context's label; the stay count is the research
+    context's own (``context_built``); the variable count and the step's place
+    are read from the executable plan.  Each fact is absent when no receipt
+    records it -- nothing is inferred.
+    """
+
+    facts: Dict[str, Any] = dict(_source_facts(source))
+    for row in run_rows:
+        if row.get("action") == "context_built" and isinstance(row.get("stay_count"), int):
+            facts["stay_count"] = row["stay_count"]
+    steps = _planned_steps(run_dir)
+    ids = [str(step.get("step_id") or "") for step in steps]
+    if step_id in ids:
+        planned = steps[ids.index(step_id)]
+        facts["step_index"] = ids.index(step_id) + 1
+        facts["step_total"] = len(ids)
+        inputs = planned.get("inputs")
+        variables = {
+            item.strip() for item in (inputs if isinstance(inputs, list) else [])
+            if isinstance(item, str) and item.strip()
+            and not _NON_VARIABLE_INPUT.match(item.strip())
+        }
+        # A step whose plan names no variable says nothing about what it read.
+        if variables:
+            facts["variable_count"] = len(variables)
+    return facts
+
+
+def _step_timing(rows: Iterable[Mapping[str, Any]]) -> Dict[str, str]:
+    """The step's own start and end, from its fixed audit envelopes only."""
+
+    started = ""
+    ended = ""
+    for row in rows:
+        event = str(row.get("event") or "")
+        stamp = str(row.get("timestamp") or "")
+        if not stamp:
+            continue
+        if match := _STEP_EVENT.fullmatch(event):
+            if match.group("verb") == "started":
+                started = started or stamp
+            else:
+                ended = stamp
+        elif _PRECOMPLETED.fullmatch(event) or _REUSED.fullmatch(event):
+            ended = stamp
+    timing = {"started_at": started, "ended_at": ended}
+    return {key: value for key, value in timing.items() if value}
+
+
+def wrapper_source(project_dir: str) -> Optional[Dict[str, Any]]:
+    """The data source a run's wrapper context names, for the step's Input."""
+
+    if not str(project_dir or "").strip():
+        return None
+    try:
+        wrapper = Path(str(project_dir)).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return None
+    context = _read_json(_child(wrapper, "run_context.json"), MAX_SUMMARY_BYTES)
+    source = context.get("source") if isinstance(context, Mapping) else None
+    return dict(source) if isinstance(source, Mapping) else None
+
+
+def project_step_detail(
+    run_dir: Path, step_id: str, *, source: Optional[Mapping[str, Any]] = None
+) -> Dict[str, Any]:
+    """Return one executed step's code, execution and outputs, path-free.
+
+    ``source`` is the run context's data source (label and database); only
+    its browser-safe label and database code reach the step's inputs.
+    """
 
     clean = str(step_id or "").strip()
     if not _STEP_ID.fullmatch(clean):
@@ -783,10 +876,8 @@ def project_step_detail(run_dir: Path, step_id: str) -> Dict[str, Any]:
     step_dir = _child(root, "steps", clean)
     if step_dir is not None and not step_dir.is_dir():
         step_dir = None
-    rows = [
-        row for row in trace_timings_projection(root)
-        if row.get("step_id") == clean
-    ]
+    run_rows = trace_timings_projection(root)
+    rows = [row for row in run_rows if row.get("step_id") == clean]
     if step_dir is None and not rows and clean not in _planned_step_ids(root):
         raise RunStepDetailError(
             "run_step_not_found", "The step does not belong to this run.", 404
@@ -822,6 +913,8 @@ def project_step_detail(run_dir: Path, step_id: str) -> Dict[str, Any]:
         "outputs": outputs,
         "withheld_output_count": withheld,
         "more_output_count": more,
+        "inputs": _step_inputs(root, clean, run_rows, source),
+        "timing": _step_timing(rows),
     }
     headline = _headline(summary) if finished else None
     if headline:
@@ -857,4 +950,5 @@ __all__ = [
     "project_step_detail",
     "trace_action",
     "trace_timings_projection",
+    "wrapper_source",
 ]

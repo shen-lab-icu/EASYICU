@@ -4825,7 +4825,11 @@ class PiCopilotService:
             str(row.get("project_dir") or ""), clean_run
         )
         try:
-            step = run_step_trace.project_step_detail(run_dir, clean_step)
+            step = run_step_trace.project_step_detail(
+                run_dir,
+                clean_step,
+                source=run_step_trace.wrapper_source(str(row.get("project_dir") or "")),
+            )
         except run_step_trace.RunStepDetailError as exc:
             raise PiCopilotError(
                 exc.code,

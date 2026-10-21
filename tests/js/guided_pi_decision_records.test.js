@@ -243,6 +243,19 @@ assert.match(typed, /gpi-past-decision/);
   });
   assert.ok(replayed.some(row => row.role === 'activity' && row.childJobId === 'job-prepare'));
   assert.ok(replayed.some(row => row.role === 'assistant' && row.hostActionCode === 'prepare_analysis_data'));
+  // The replayed action keys the job's opening sentence; a finished job names no stop.
+  const replayedJob = replayed.find(row => row.role === 'activity' && row.childJobId === 'job-prepare');
+  assert.equal(replayedJob.jobCode, 'prepare_analysis_data');
+  assert.equal(replayedJob.failureCode, '');
+  const failedReplay = transcript.transcriptMessages({
+    transcript: [],
+    conversation_replay: { turns: [{ job_id: 'host_2', kind: 'host_action', action_code: 'execute_plan',
+      action_key: 'plan:' + 'b'.repeat(16) + ':run_candidate:plan_execution',
+      child_job_id: 'job-execute', status: 'failed', started_at: '2026-10-21T07:00:00Z', ended_at: '2026-10-21T07:20:00Z' }] },
+    archived_child_jobs: [{ job_id: 'job-execute', kind: 'agent-run', status: 'failed', error_code: 'research_pipeline_execution_failed',
+      created_at_epoch: at('2026-10-21T07:00:00Z') / 1000, finished_at_epoch: at('2026-10-21T07:20:00Z') / 1000, progress: [] }],
+  }).find(row => row.role === 'activity' && row.childJobId === 'job-execute');
+  assert.equal(failedReplay && failedReplay.failureCode, 'research_pipeline_execution_failed', 'a failed job gives its failed row a cause');
   process.stdout.write('Decision records, rail state, path-free run files, stale gate and host-action replay passed.\n');
 })().catch(error => {
   console.error(error);

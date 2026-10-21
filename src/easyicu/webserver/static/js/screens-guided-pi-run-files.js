@@ -168,7 +168,9 @@
   // invented on behalf of the model or the user.
   function projectTimeline(timeline, runs) {
     const projected = timeline.map(row => ({ ...row, savedRuns: [] }));
-    runs.forEach(run => {
+    // One place per run: a run listed under two roots keeps its newest row.
+    const seen = new Set();
+    runs.filter(run => !seen.has(run.run_id) && seen.add(run.run_id)).forEach(run => {
       const matches = projected.filter(row => !row.childJobHandoff && runIds(row).includes(run.run_id));
       const target = matches.filter(row => row.role === 'assistant').pop() || matches.pop();
       if (target) { target.savedRuns.push(run); return; }
@@ -247,8 +249,10 @@
         const canPreview = current.projectId && review.engine === 'easyicu.research_agent.pipeline' && /\.(json|pdf|html)$/i.test(item.name);
         // A reader sees what the file is for; the exact file name stays on hover.
         const note = guided(item.name, 'purpose') || (own ? own[1] : window.AGENT_RENDER.artifactSummary(item.name, false));
-        return `<div class="gpi-run-file">${canPreview ? resourceButton(resource) : /\.json$/i.test(item.name) ? `<button type="button" data-run-files-artifact="${index}" ${disabled ? 'disabled' : ''}>${esc(resource.label)}</button>` : `<span>${esc(resource.label)}</span>`}<small title="${esc(item.name)}">${esc(note || item.name)}</small><button type="button" data-run-files-download="${index}" ${disabled ? 'disabled' : ''}>${tr('Download', '下载')}</button></div>`;
+        return `<tr class="gpi-run-file"><td>${canPreview ? resourceButton(resource) : /\.json$/i.test(item.name) ? `<button type="button" data-run-files-artifact="${index}" ${disabled ? 'disabled' : ''}>${esc(resource.label)}</button>` : `<span>${esc(resource.label)}</span>`}</td><td><small title="${esc(item.name)}">${esc(note || item.name)}</small></td><td><button type="button" data-run-files-download="${index}" ${disabled ? 'disabled' : ''}>${tr('Download', '下载')}</button></td></tr>`;
       };
+      // Each file with what it is for: a 文件 | 内容 table.
+      const table = body => `<table class="gpi-run-file-list"><thead><tr><th scope="col">${tr('File', '文件')}</th><th scope="col">${tr('Contents', '内容')}</th><th scope="col"><span class="sr-only">${tr('Download', '下载')}</span></th></tr></thead><tbody>${body}</tbody></table>`;
       // Before execution the result and figure files are empty shells; lead
       // with what the researcher reviews at that stage.
       const executed = !(review.readiness && rows(review.readiness.non_human_failures).includes('execution_complete'));
@@ -259,7 +263,7 @@
       const other = artifacts.map((item, index) => primaryNames.includes(item.name) ? '' : file(item, index)).join('');
       const signable = review.readiness && review.readiness.signable === true && !review.signed && !state.selected.readOnly;
       return `${error}<div class="gpi-run-files-actions"><button type="button" data-run-files-bundle ${disabled || !artifacts.length ? 'disabled' : ''}>${tr('Download all files', '下载全部文件')}</button><button type="button" data-run-files-reload ${disabled ? 'disabled' : ''}>${tr('Refresh status', '刷新状态')}</button></div>
-        <div class="gpi-run-file-list">${primary}</div>${other ? `<details class="gpi-run-extra" ${entry.extraOpen ? 'open' : ''}><summary>${tr('More files & provenance', '更多文件与溯源')}</summary><div class="gpi-run-file-list">${other}</div></details>` : ''}
+        ${primary ? table(primary) : ''}${other ? `<details class="gpi-run-extra" ${entry.extraOpen ? 'open' : ''}><summary>${tr('More files & provenance', '更多文件与溯源')}</summary>${table(other)}</details>` : ''}
         ${review.signoff_stale ? `<p class="gpi-run-files-error">${tr('Review is stale: files changed or are missing.', '审阅已失效：文件发生变化或缺失。')}</p>` : review.signed ? `<p role="status">${tr('Local review recorded.', '已记录本地审阅。')}</p>` : ''}
         ${signable ? `<details class="gpi-run-signoff" ${entry.reviewOpen ? 'open' : ''}><summary>${tr('Record my review', '记录我的审阅')}</summary><p>${tr('Local review does not grant publication authority.', '本地审阅不授予发表权限。')}</p><fieldset>${confirmations.map(([id, en, zh]) => `<label><input type="checkbox" data-run-files-confirm="${id}" ${entry.checks.has(id) ? 'checked' : ''} ${disabled ? 'disabled' : ''}>${tr(en, zh)}</label>`).join('')}<button type="button" data-run-files-sign ${disabled || entry.checks.size !== confirmations.length ? 'disabled' : ''}>${tr('Sign reviewed run', '签署本次审阅')}</button></fieldset></details>` : ''}
         ${state.artifact ? `<article class="gpi-run-artifact"><h4>${esc(window.AGENT_RENDER.artifactTitle(state.artifact.name))}</h4>${window.AGENT_RENDER.artifactStructuredView(state.artifact.name, state.artifact.payload || {}, state.artifact.context)}<details><summary>${tr('Source JSON', '来源 JSON')}</summary><pre>${esc(JSON.stringify(state.artifact.payload, null, 2))}</pre></details></article>` : ''}`;
@@ -281,11 +285,17 @@
       const key = String(run.run_status || run.readiness_status || 'unknown').toLowerCase();
       return LIFECYCLE_STATUS[key] ? tr(...LIFECYCLE_STATUS[key]) : window.AGENT_RENDER.runStatusLabel(key);
     }
+    // The run is named by when it ran; its id stays in the run record.
+    function runTime(run) {
+      const contracts = window.EU_GUIDED_CONTRACTS || {};
+      return run.updated_at && typeof contracts.fmtRunTime === 'function' ? String(contracts.fmtRunTime(run.updated_at) || '') : '';
+    }
     function render(row) {
       return rows(row.savedRuns).map(run => {
         const entry = entries.get(run.run_ref);
         const status = runStatus(run);
-        return `<details class="gpi-run-files" data-run-files="${esc(run.run_ref)}" ${entry && entry.open ? 'open' : ''}><summary><span>${tr('Run files & review', '本次运行文件与审阅')}</span><small>${esc(run.run_id)} · ${esc(tr('Original run: ', '原运行：') + status)}</small></summary>${entry && entry.open ? detail(entry) : ''}</details>`;
+        const when = runTime(run);
+        return `<details class="gpi-run-files" data-run-files="${esc(run.run_ref)}" ${entry && entry.open ? 'open' : ''}><summary><span>${tr('Run files & review', '本次运行文件与审阅')}</span><small>${when ? `${esc(when)} · ` : ''}${esc(tr('Original run: ', '原运行：') + status)}</small></summary>${entry && entry.open ? detail(entry) : ''}</details>`;
       }).join('');
     }
     async function open(ref) {

@@ -431,7 +431,21 @@
       };
     }
 
-    return { syncProjectWorkflowAside, togglePanel, layoutOptions };
+    // The answer's 运行记录 N: show the results panel, open the run record
+    // and bring it into view. The record itself is this owner's.
+    function revealRunRecord() {
+      if (!visiblePanels.results) togglePanel('results');
+      const body = document.getElementById('gdAsideBody');
+      const section = body && body.querySelector('[data-gpi-aside-section="results"]');
+      const record = body && body.querySelector('[data-gpi-run-history]');
+      if (section) section.open = true;
+      if (!record) return false;
+      record.open = true;
+      record.scrollIntoView({ block: 'nearest' });
+      return true;
+    }
+
+    return { syncProjectWorkflowAside, togglePanel, layoutOptions, revealRunRecord };
   }
 
   window.EasyICU.guidedPi.declare('aside', { create });

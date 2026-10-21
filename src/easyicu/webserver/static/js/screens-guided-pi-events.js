@@ -279,12 +279,17 @@
         if (session) { openSession(session.dataset.gpiSession); return; }
         if (event.target.closest('[data-gpi-demo-exit]')) { closeDemo(); return; }
         if (event.target.closest('[data-gpi-demo]')) { openDemo(); return; }
+        // A finished run's 运行记录 N scrolls to the run record in the right rail.
+        if (event.target.closest('[data-gpi-open-run-record]')) { if (ASIDE && ASIDE.revealRunRecord) ASIDE.revealRunRecord(); return; }
         const traceExpand = event.target.closest('[data-gpi-trace-expand]');
         if (traceExpand) {
           event.preventDefault();
           const body = traceExpand.closest('.gpi-activity-body');
           const expanded = traceExpand.getAttribute('aria-expanded') !== 'true';
           if (body) body.classList.toggle('is-expanded', expanded);
+          // A live trace re-renders on every event; its owner keeps the choice.
+          const activityOwner = window.EasyICU.guidedPi.optional('activity');
+          if (body && body.dataset.gpiTraceKey && activityOwner && activityOwner.traceExpanded) activityOwner.traceExpanded(body.dataset.gpiTraceKey, expanded);
           traceExpand.setAttribute('aria-expanded', String(expanded));
           const label = traceExpand.querySelector('span');
           if (label) label.textContent = expanded ? tr('Collapse', '收起') : tr('Expand all', '展开全部');

@@ -26,10 +26,22 @@
     return `<details class="gpi-model-control" data-popover-menu><summary class="gpi-model-binding" title="${esc(tr('Switch model on this connection', '在当前连接上切换模型'))}" aria-label="${esc(tr('Available models', '可用模型'))}"><span title="${esc(options.connectionLabel)}">${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</summary><div class="gpi-model-popover" role="group" aria-label="${esc(tr('Models on this connection', '当前连接的模型'))}" data-gpi-model-popover><button type="button" class="gpi-model-settings" data-gpi-config>${esc(tr('Connection settings', '连接设置'))}</button></div></details>`;
   }
 
+  /* While a server job runs the top bar says so with its elapsed time; the
+     activity owner's live clock ticks the <time> element, outside the
+     status region so a reader is not interrupted every second. */
+  function liveStatus(options) {
+    const { tr, esc } = options;
+    const since = Number(options.runningSince);
+    if (options.runningSince != null && Number.isFinite(since) && since > 0) {
+      return `<span class="gpi-live is-running"><span role="status">${esc(tr('Running', '运行中'))}</span><span aria-hidden="true"> · </span><time data-gpi-live-elapsed="${since}">${esc(options.runningElapsed || '')}</time></span>`;
+    }
+    return `<span class="gpi-live" role="status" aria-live="polite">${options.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span>`;
+  }
+
   function render(options) {
     const { tr, esc, icon } = options;
     return `<header class="gpi-head">
-      <div class="gpi-head-title"><span class="gpi-kicker" title="${esc(kickerText(options))}">${esc(kickerText(options))}</span><span class="gpi-head-separator" aria-hidden="true">/</span><span class="gpi-title" title="${esc(options.sessionTitle)}"><span class="gpi-session-title-text">${esc(options.sessionTitle)}</span></span><span class="gpi-live" role="status" aria-live="polite">${options.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span></div>
+      <div class="gpi-head-title"><span class="gpi-kicker" title="${esc(kickerText(options))}">${esc(kickerText(options))}</span><span class="gpi-head-separator" aria-hidden="true">/</span><span class="gpi-title" title="${esc(options.sessionTitle)}"><span class="gpi-session-title-text">${esc(options.sessionTitle)}</span></span>${liveStatus(options)}</div>
       <div class="gpi-head-meta">
         <button class="gpi-head-new" type="button" data-gpi-new>${icon('plus', 13)} ${tr('New conversation', '新对话')}</button>
         <details class="gpi-layout-control" data-popover-menu>

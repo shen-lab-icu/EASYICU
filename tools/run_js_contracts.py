@@ -100,6 +100,27 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-transcript.js",
         "screens-guided-pi-session-view.js",
     ],
+    # One agent turn: the opening sentence and trace (activity, job
+    # narration), the running top bar, the stop block, the run-file table,
+    # the answer card and rail, and the step's Input/Output.
+    "guided_pi_turn_layout.test.js": [
+        "html-escape.js",
+        "screens-guided-pi-error-text.js",
+        "screens-guided-pi-job-narration.js",
+        "screens-guided-pi-activity.js",
+        "screens-guided-pi-header.js",
+        "screens-guided-pi-run-stop.js",
+        "screens-agent-reader-vocab.js",
+        "screens-agent-render.js",
+        "product-labels.js",
+        "screens-guided-pi-resources.js",
+        "screens-guided-pi-run-files.js",
+        "screens-guided-pi-run-outcome.js",
+        "screens-guided-pi-step-detail.js",
+        "screens-guided-pi-source-view.js",
+        "screens-guided-pi-message-actions.js",
+        "screens-guided-pi-session-view.js",
+    ],
     "guided_pi_run_files_manuscript.test.js": [
         "screens-guided-pi-modules.js",
         "html-escape.js",
