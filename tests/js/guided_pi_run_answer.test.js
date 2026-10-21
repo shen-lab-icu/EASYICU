@@ -228,7 +228,7 @@ const outcome = modules.require('runOutcome').create({
     steps: rows.concat([{ id: 'pipeline-step', kind: 'pipeline', step: 'resume', status: 'complete', label: '' }]) });
   // A row says what the step did; its position is in the step's detail.
   assert.match(trace, /<strong>汇总分组比例与结局<\/strong>/);
-  assert.match(trace, /<strong>审计测量与缺失情况<\/strong>/);
+  assert.match(trace, /<strong>检查测量与缺失情况<\/strong>/);
   assert.match(trace, /<strong>拟合KDIGO分期Logistic模型<\/strong>/);
   assert.match(trace, /复用了这次获批运行已完成的步骤/);
   assert.doesNotMatch(trace, /已完成批准的分析步骤|研究任务进度已更新/);

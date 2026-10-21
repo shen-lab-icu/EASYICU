@@ -303,7 +303,7 @@
     const STEP_TOKENS = {
       cohort: ['cohort', '队列'], accounting: ['accounting', '核算'], baseline: ['baseline', '基线'],
       context: ['context', '背景'], exposure: ['exposure', '暴露'], outcome: ['outcome', '结局'],
-      distribution: ['distribution', '分布'], measurement: ['measurement', '测量'], audit: ['audit', '审计'],
+      distribution: ['distribution', '分布'], measurement: ['measurement', '测量'], audit: ['audit', '核查'],
       quality: ['quality', '质量'], missingness: ['missingness', '缺失'], missing: ['missing', '缺失'],
       figure: ['figure', '图'], data: ['data', '数据'], descriptive: ['descriptive', '描述性'],
       primary: ['primary', '主要'], model: ['model', '模型'], logistic: ['logistic', 'Logistic'],
@@ -320,12 +320,12 @@
     /* A plan step's row says what it did. A registered standard executor
        names its own action; otherwise a known step id, or a step id ending
        in a kind word, gives one. The step's model-written purpose stays in
-       the plan. TODO(copy): coordinator wording; name the grouping variable
-       and the outcome once the plan carries their reader names. */
+       the plan. The grouping variable and the outcome get named here once
+       the plan carries their reader names (w-2). */
     const EXECUTION_ICONS = { standard: 'layers', generated: 'edit', fallback: 'shield', host: 'db' };
     const STEP_VERBS = {
-      build: ['Build the', '生成'], draw: ['Draw the', '画'], summarize: ['Summarize the', '汇总'],
-      audit: ['Audit the', '审计'], run: ['Run the', '运行'], fit: ['Fit the', '拟合'],
+      build: ['Build the', '生成'], draw: ['Draw the', '绘制'], summarize: ['Summarize the', '汇总'],
+      audit: ['Audit the', '检查'], run: ['Run the', '运行'], fit: ['Fit the', '拟合'],
     };
     const EXECUTOR_ACTIONS = {
       grouped_table_one: ['build', 'baseline characteristics table by exposure group', '基线特征表（按暴露分组）'],
@@ -341,7 +341,7 @@
       composite_descriptive_figure: ['draw', 'combined descriptive figure', '描述性组合图'],
       measurement_missingness_figure: ['draw', 'missing-data figure', '缺失情况图'],
       missingness_measurement_figure: ['draw', 'missing-data figure', '缺失情况图'],
-      audit_panel: ['draw', 'data-quality audit panel', '数据质量审计图'],
+      audit_panel: ['draw', 'data-quality audit panel', '数据质量核查图'],
       robustness_figure: ['draw', 'robustness figure', '稳健性分析图'],
       robustness: ['run', 'robustness re-analysis', '稳健性重分析'],
       absolute_risk_context: ['summarize', 'absolute risks', '绝对风险'],
@@ -359,13 +359,13 @@
       baseline_context: ['Build the baseline characteristics table', '生成基线特征表'],
       table_one: ['Build the baseline characteristics table', '生成基线特征表'],
       exposure_outcome_distribution: ['Summarize group proportions and outcomes', '汇总分组比例与结局'],
-      measurement_audit: ['Audit measurements and missing data', '审计测量与缺失情况'],
-      measurement_quality: ['Audit measurement quality', '审计测量质量'],
-      descriptive_context_figure: ['Draw the result figure', '画结果图'],
-      cohort_accounting_figure: ['Draw the cohort flow chart', '画队列流程图'],
-      data_quality_figure: ['Draw the data-quality figure', '画数据质量图'],
+      measurement_audit: ['Audit measurements and missing data', '检查测量与缺失情况'],
+      measurement_quality: ['Audit measurement quality', '检查测量质量'],
+      descriptive_context_figure: ['Draw the result figure', '绘制结果图'],
+      cohort_accounting_figure: ['Draw the cohort flow chart', '绘制队列流程图'],
+      data_quality_figure: ['Draw the data-quality figure', '绘制数据质量图'],
       robustness_replay: ['Run the robustness re-analysis', '运行稳健性重分析'],
-      robustness_replay_figure: ['Draw the robustness figure', '画稳健性图'],
+      robustness_replay_figure: ['Draw the robustness figure', '绘制稳健性图'],
       functional_form_sensitivity: ['Run the functional-form sensitivity analysis', '运行函数形式敏感性分析'],
     };
     const LAST_TOKEN_VERBS = { figure: 'draw', table: 'build', model: 'fit', distribution: 'summarize' };
@@ -496,8 +496,7 @@
     /* Actions the host names by a closed code (run_step_trace.trace_action)
        are rows of their own with their own times: planning validations,
        data preparation, the literature search, and a repair or an error
-       inside a plan step. A completion-only event has no measured duration.
-       TODO(copy): coordinator wording for every action label and fact. */
+       inside a plan step. A completion-only event has no measured duration. */
     const ACTION_STAGES = {
       runtime_validated: 'setup', context_built: 'inputs', exposure_groups_staged: 'inputs',
       cohort_materialized: 'inputs', cohort_verified: 'inputs', trajectory_staged: 'inputs',
