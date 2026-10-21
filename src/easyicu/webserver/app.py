@@ -74,7 +74,14 @@ _HOSTED_MARK = b'<meta charset="UTF-8" />\n<meta name="easyicu-deployment" conte
 
 
 def _hosted_index_response(status_code: int) -> Response:
-    body = _INDEX_HTML.read_bytes().replace(b'<meta charset="UTF-8" />', _HOSTED_MARK, 1)
+    # A clinician's first browser has no stored language, so js/i18n.js
+    # starts from the page's lang: the instance's language setting.
+    from easyicu.webserver import settings
+
+    lang = b"zh-CN" if settings.load_settings().get("language") == "zh" else b"en"
+    body = _INDEX_HTML.read_bytes()
+    body = body.replace(b'<html lang="en">', b'<html lang="' + lang + b'">', 1)
+    body = body.replace(b'<meta charset="UTF-8" />', _HOSTED_MARK, 1)
     return Response(body, status_code=status_code, media_type="text/html")
 
 

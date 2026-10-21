@@ -7,7 +7,8 @@ where the data is, which databases the administrator prepared, that the
 conversation uses the administrator's model, and whom to ask. A hosted
 instance also drops the expert single-key shortcuts, the design-reference
 page and the demo data switches; a local build keeps all of them. The first
-paint, before /api/capabilities answers, is already the hosted page.
+paint, before /api/capabilities answers, is already the hosted page, in the
+language the administrator set for the instance.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from easyicu.webserver import settings
 from easyicu.webserver.app import app
 from tests.support.node import run_node
 
@@ -207,14 +209,22 @@ def test_the_hosted_settings_sidebar_lists_only_the_sections_the_page_has() -> N
 _MARK = '<meta name="easyicu-deployment" content="hosted" />'
 
 
+@pytest.fixture
+def isolated_settings(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(settings, "_CONFIG_PATH", tmp_path / "settings.json")
+
+
 @pytest.mark.parametrize("path", ["/", "/index.html"])
 @pytest.mark.parametrize("flag", ["1", "0", ""])
-def test_a_hosted_index_marks_itself_for_the_first_render(monkeypatch, path: str, flag: str) -> None:
+def test_a_hosted_index_marks_itself_for_the_first_render(monkeypatch, isolated_settings, path: str, flag: str) -> None:
     monkeypatch.setenv("EASYICU_HOSTED", flag)
     response = TestClient(app).get(path)
 
     assert response.status_code == 200
     assert response.text.count(_MARK) == (1 if flag == "1" else 0)
+    # A hosted instance starts in Chinese (its default); a local build's page is unchanged.
+    assert response.text.count('<html lang="zh-CN">' if flag == "1" else '<html lang="en">') == 1
     assert '<script src="js/api.js?v=' in response.text
     assert response.headers["cache-control"] == "no-store"
     assert "script-src 'self'" in response.headers["content-security-policy"]
@@ -248,3 +258,44 @@ def test_the_first_render_knows_a_hosted_instance_from_its_mark(mark: str, expec
     result = run_node(node, _SEED, str(STATIC / "js" / "api.js"), mark, check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == expected
+
+
+def test_a_hosted_index_speaks_the_language_its_administrator_set(monkeypatch, isolated_settings) -> None:
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    settings.update_settings({"language": "en"})
+
+    assert '<html lang="en">' in TestClient(app).get("/").text
+
+
+_LANG = r"""
+global.localStorage = { getItem: () => (process.argv[3] === '-' ? null : process.argv[3]), setItem: () => {} };
+global.window = {};
+global.document = {
+  documentElement: {
+    getAttribute: name => (name === 'lang' ? process.argv[2] : null),
+    setAttribute: (name, value) => { if (name === 'lang') applied.push(value); },
+  },
+  addEventListener: () => {},
+};
+const applied = [];
+require(process.argv[1]);
+const first = window.EU_LANG;
+window.applySettingsState({ language: 'zh' });
+window.applySettingsState({ language: 'en' });
+process.stdout.write(JSON.stringify({ first, applied }));
+"""
+
+
+@pytest.mark.requires_node
+@pytest.mark.parametrize(
+    ("page_lang", "stored", "expected"),
+    [("zh-CN", "-", "zh"), ("en", "-", "en"), ("zh-CN", "en", "en"), ("en", "zh", "zh"), ("zhx", "-", "en")],
+)
+def test_the_first_render_starts_in_the_page_language_unless_the_browser_chose(page_lang, stored, expected) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    result = run_node(node, _LANG, str(STATIC / "js" / "i18n.js"), page_lang, stored, check=False)
+    assert result.returncode == 0, result.stderr or result.stdout
+    # Chinese pages declare zh-CN, so Windows picks Simplified Chinese glyphs.
+    assert json.loads(result.stdout) == {"first": expected, "applied": ["zh-CN", "en"]}
