@@ -33,7 +33,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from hashlib import sha1
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -42,6 +42,13 @@ from .concept_availability import (
     normalize_concept_name,
 )
 from .bibliographic_metadata import complete_missing_authors
+from .contracts.exposure_group_rules import (
+    EXPOSURE_GROUP_LABELS_KEY,
+    EXPOSURE_GROUP_TRANSFORMS,
+    ExposureGroupRuleError,
+    read_grouping_rules,
+    read_level_labels,
+)
 from .gates.data_answerability import analysis_answerability_findings
 from .literature_concepts import (
     LiteratureConceptIdentity,
@@ -148,6 +155,27 @@ class CitationRecord(BaseModel):
     )
 
 
+class LiteratureSearchTermRefusal(BaseModel):
+    """A host refusal to search an implementation label as a clinical axis."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    variable: str
+    term: str
+    reason_code: Literal[
+        "internal_column_name", "group_level_codes", "export_display_label",
+        "database_name", "grouping_record_invalid", "concept_identity_unavailable",
+    ]
+
+
+class LiteratureSearchTermError(ValueError):
+    """Query construction stopped before any retrieval could be attempted."""
+
+    def __init__(self, refusal: LiteratureSearchTermRefusal) -> None:
+        self.refusal = refusal
+        super().__init__(f"{refusal.reason_code}: {refusal.variable}: {refusal.term}")
+
+
 class LiteratureSearchProvenance(BaseModel):
     """What actually produced this bundle's references.
 
@@ -185,6 +213,10 @@ class LiteratureSearchProvenance(BaseModel):
             "statement about the literature."
         ),
     )
+    term_refusals: List[LiteratureSearchTermRefusal] = Field(
+        default_factory=list,
+        description="Host term-resolution refusals; no query was issued for these terms.",
+    )
     search_queries: Dict[str, List[str]] = Field(
         default_factory=dict,
         description=(
@@ -202,7 +234,7 @@ class LiteratureSearchProvenance(BaseModel):
     )
     search_conducted: bool = Field(
         ...,
-        description="True only when at least one retrieval source was enabled.",
+        description="True only when a retrieval source was attempted or bound search evidence was reused.",
     )
     searched_at: Optional[str] = Field(
         default=None,
@@ -1201,6 +1233,79 @@ def build_pubmed_query_for_context(context: ResearchContext) -> str:
     return " AND ".join(terms)
 
 
+def _grouped_literature_concept(context: ResearchContext, name: str) -> Optional[str]:
+    """Read the builder's projection of a grouping's sealed declaration.
+
+    A group's source_concept deliberately identifies its level codes, not the
+    measured value. Only this explicit grouping record licenses using the
+    underlying concept; arbitrary derived_from_concepts are not identities.
+    No cohort rows or ambient run files are read here.
+    """
+
+    variable = context.variable(name)
+    grouped = variable is not None and variable.unit_normalization in EXPOSURE_GROUP_TRANSFORMS
+    raw = context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY, [])
+    matches = [
+        item for item in raw if isinstance(item, Mapping) and item.get("variable") == name
+    ] if isinstance(raw, list) else []
+    if not grouped and not matches:
+        return None
+    try:
+        if not grouped or len(matches) != 1:
+            raise ExposureGroupRuleError("one sealed declaration must name the grouped column")
+        record = matches[0]
+        rules = read_grouping_rules(record.get("parameters"))
+        levels = read_level_labels(record.get("levels"), levels=len(rules.levels))
+        if (
+            record.get("concept") != rules.concept
+            or record.get("scale") != rules.scale
+            or variable.unit_normalization != rules.transform_id
+            or tuple(level["group"] for level in levels) != rules.levels
+        ):
+            raise ExposureGroupRuleError("the grouping projection differs from its rules")
+    except ExposureGroupRuleError as exc:
+        raise LiteratureSearchTermError(LiteratureSearchTermRefusal(
+            variable=name, term=name, reason_code="grouping_record_invalid",
+        )) from exc
+    return rules.concept
+
+
+def _guard_literature_term(
+    value: str, *, variable: str, context: Optional[ResearchContext] = None,
+    concepts: Sequence[str] = (),
+) -> str:
+    """Reject implementation text as a clinical term, before normalizing it.
+
+    Database aliases remain valid in the separate source-database stratum;
+    they cannot serve as an exposure, endpoint, or clinical topic.
+    """
+
+    text = " ".join(str(value or "").split())
+    database_names = [
+        *_DATABASE_RETRIEVAL_ALIASES, "eICU-CRD",
+        *(alias for aliases in _DATABASE_RETRIEVAL_ALIASES.values() for alias in aliases),
+    ]
+    if context is not None:
+        database_names.extend([context.cohort.database, *context.cross_database_validation])
+    normalized = _normalise_clinical_text(text)
+    reason = None
+    if normalized and normalized in {
+        _normalise_clinical_text(str(name or "")) for name in database_names
+    }:
+        reason = "database_name"
+    elif re.search(r"(?i)\blevel[- ]?codes?\b|\b\d+\s*=", text):
+        reason = "group_level_codes"
+    elif is_export_display_label(text, concepts):
+        reason = "export_display_label"
+    elif "_" in text or re.search(r"(?i)\b(?:groups?|bands?)\s+[a-z]*\d+\b", text):
+        reason = "internal_column_name"
+    if reason is not None:
+        raise LiteratureSearchTermError(LiteratureSearchTermRefusal(
+            variable=variable, term=text, reason_code=reason,
+        ))
+    return text
+
+
 def _variable_literature_identity(
     context: ResearchContext, name: Optional[str]
 ) -> Optional[LiteratureConceptIdentity]:
@@ -1211,11 +1316,20 @@ def _variable_literature_identity(
     concept (for example a strict stage), while its source concept is the
     component whose scale it inherits, which may have no clinical name.  Both
     keys are tried, source concept first.  The concepts a column was derived
-    from are other constructs and are never consulted.
+    from are other constructs and are never consulted. An explicitly staged
+    grouping instead reads the concept in its sealed grouping declaration.
     """
 
     if not name:
         return None
+    grouped_concept = _grouped_literature_concept(context, name)
+    if grouped_concept is not None:
+        identity = literature_concept_identity(grouped_concept)
+        if identity is None:
+            raise LiteratureSearchTermError(LiteratureSearchTermRefusal(
+                variable=name, term=grouped_concept, reason_code="concept_identity_unavailable",
+            ))
+        return identity
     variable = context.variable(name)
     keys = (
         (variable.source_concept, variable.name) if variable is not None else (name,)
@@ -1251,38 +1365,45 @@ def _protocol_search_term(context: ResearchContext, name: Optional[str]) -> str:
     if not name:
         return ""
     variable = context.variable(name)
+    identity = _variable_literature_identity(context, name)
+    if _grouped_literature_concept(context, name) is not None:
+        return _guard_literature_term(identity.canonical_phrase, variable=name, context=context)
     candidates: List[str] = []
     if variable is not None:
         description = " ".join(str(variable.description or "").strip().split())
         # An export display label names the implementation, not the construct:
         # the output's catalog identity names the construct instead.
-        if not is_export_display_label(
-            description, (variable.source_concept, variable.name)
-        ):
+        try:
+            _guard_literature_term(
+                description, variable=name, context=context,
+                concepts=(variable.source_concept or "", variable.name),
+            )
+        except LiteratureSearchTermError:
+            if identity is None:
+                raise
+            candidates.append(identity.canonical_phrase)
+        else:
             semantic_description = _clinical_phrase_from_description(description)
             if semantic_description:
                 candidates.append(semantic_description)
-        else:
-            identity = next(
-                (
-                    found
-                    for concept in (variable.source_concept, variable.name)
-                    if concept and (found := literature_concept_identity(concept))
-                ),
-                None,
+        if identity is not None:
+            candidates.append(identity.canonical_phrase)
+        if not candidates:
+            # A bare column id is not a clinical description, even when its
+            # spelling has no underscore or generated grouping suffix.
+            value = _guard_literature_term(
+                variable.source_concept or variable.name, variable=name, context=context,
             )
-            if identity is not None:
-                candidates.append(identity.canonical_phrase)
-        candidates.extend([variable.source_concept or "", variable.name])
+            raise LiteratureSearchTermError(LiteratureSearchTermRefusal(
+                variable=name, term=value, reason_code="internal_column_name",
+            ))
     else:
-        candidates.append(name)
+        candidates.append(identity.canonical_phrase if identity is not None else name)
     for candidate in candidates:
-        value = " ".join(str(candidate or "").replace("_", " ").strip().split())
+        value = _guard_literature_term(candidate, variable=name, context=context)
         if not value:
             continue
-        value = re.sub(r"_(?:max|min|mean|first|last)$", "", value, flags=re.I)
-        if value:
-            return value
+        return value
     return ""
 
 
@@ -2067,6 +2188,7 @@ def _clinical_axis_matches(term: str, blob: str, *, axis: str) -> bool:
 def _pubmed_identity_clause(context: ResearchContext, name: Optional[str]) -> str:
     if not name:
         return ""
+    term = _protocol_search_term(context, name)
     # ``death`` is the database-neutral execution concept, while the bound
     # variable description carries the endpoint window chosen by the study
     # (for example, hospital rather than ICU mortality).  Preserve that
@@ -2074,7 +2196,7 @@ def _pubmed_identity_clause(context: ResearchContext, name: Optional[str]) -> st
     # question is widened to generic mortality and a small result budget is
     # consumed by disease-specific 28/30-day papers.
     if name == context.target_outcome:
-        declared = _normalise_clinical_text(_protocol_search_term(context, name))
+        declared = _normalise_clinical_text(term)
         if declared in {"in hospital mortality", "hospital mortality"}:
             return (
                 '("in-hospital mortality"[Title/Abstract] OR '
@@ -2093,7 +2215,7 @@ def _pubmed_identity_clause(context: ResearchContext, name: Optional[str]) -> st
             )
     identity = _variable_literature_identity(context, name)
     if identity is None:
-        value = _protocol_search_term(context, name).replace('"', "")
+        value = term.replace('"', "")
         return f'"{value}"[Title/Abstract]' if value else ""
     return _pubmed_identity_alternatives_clause(identity)
 
@@ -2101,6 +2223,8 @@ def _pubmed_identity_clause(context: ResearchContext, name: Optional[str]) -> st
 def _pubmed_identity_alternatives_clause(identity: Any) -> str:
     alternatives: List[str] = []
     for alternative in identity.retrieval_alternatives:
+        for value in alternative:
+            _guard_literature_term(str(value), variable=identity.concept_id)
         atoms = [
             f'"{str(value).replace(chr(34), "")}"[Title/Abstract]'
             for value in alternative
@@ -2293,6 +2417,7 @@ def _question_topic_clause(question: str) -> str:
     topic = _question_topic_term(question)
     if not topic:
         return ""
+    _guard_literature_term(topic, variable="research_question")
     identity = literature_concept_identity(topic)
     if identity is not None:
         return _pubmed_identity_alternatives_clause(identity)
@@ -2988,6 +3113,26 @@ class LiteratureAgent:
 
     def run(self, context: ResearchContext) -> LiteratureBundle:
         baseline = _curated_for(context)
+        if self.enable_pubmed or self.enable_tavily or self.bound_seed is not None:
+            try:
+                # Resolve all query axes before any source or bound-seed screen.
+                # A refused axis must not silently become a broader query.
+                build_pubmed_protocol_queries_for_context(context)
+            except LiteratureSearchTermError as exc:
+                enabled = [
+                    source for source, on in (
+                        ("pubmed", self.enable_pubmed), ("tavily", self.enable_tavily),
+                    ) if on
+                ]
+                return LiteratureBundle(
+                    research_question=context.research_question, citations=baseline,
+                    search_provenance=LiteratureSearchProvenance(
+                        curated_seed_count=len(baseline), sources_enabled=enabled,
+                        sources_failing={source: [str(exc)] for source in enabled},
+                        term_refusals=[exc.refusal], search_conducted=False,
+                        note="Clinical search term refused before retrieval; no search or PRISMA flow was produced.",
+                    ),
+                )
         merged = list(baseline)
         seen_keys = {c.key for c in merged}
         seen_pmids = {c.pmid for c in merged if c.pmid}
@@ -3763,6 +3908,8 @@ __all__ = [
     "LiteratureAuthorityTrace",
     "LiteratureBundle",
     "LiteratureScreeningDecision",
+    "LiteratureSearchTermError",
+    "LiteratureSearchTermRefusal",
     "manuscript_citable_keys",
     "manuscript_citable_records",
     "HypothesisBlueprintAgent",

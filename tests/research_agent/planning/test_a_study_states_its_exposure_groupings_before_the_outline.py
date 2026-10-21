@@ -271,6 +271,13 @@ def test_a_stated_grouping_is_staged_on_the_run_copy_and_planned_on(
     assert staged.authority.producer_parameters["groupings_record_sha256"] == (
         hashlib.sha256(phase.record_path.read_bytes()).hexdigest()
     )
+    # The sealed grouping keeps code semantics; literature reads its concept.
+    from easyicu.research_agent.literature import build_pubmed_protocol_queries_for_context
+
+    assert variable.source_concept == "lact_group_x1"
+    queries = build_pubmed_protocol_queries_for_context(phase.context)
+    assert all("lact group x1" not in query for query in queries)
+    assert '"lactate"[Title/Abstract]' in queries[0]
 
 
 def test_a_study_forming_no_grouping_keeps_its_cohort(tmp_path: Path) -> None:
