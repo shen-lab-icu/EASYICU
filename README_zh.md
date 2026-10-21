@@ -48,6 +48,7 @@ EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 
 | 让 research-agent 跑一个研究问题 + 队列 | `easyicu-research-agent` |
 | 用 agent 复现一篇外部论文 | `easyicu-research-replication` |
 | 启动 research-agent 用的 LLM 代理服务 | `easyicu-llm-server` |
+| 为每用户独立的 Unix socket 实例提供 HTTPS 登录入口 | `easyicu-hosted-gateway`（安装 `easyicu[webapp]`；账号与 TLS 配置由管理员维护） |
 | 可直接复制运行的脚本 | [`examples/`](examples/) —— 从 [`quickstart_convert_and_load.py`](examples/quickstart_convert_and_load.py) 开始 |
 
 所有控制台脚本都在 `pyproject.toml` 的 `[project.scripts]` 里声明,安装本包后即可使用 —— 安装方式（使用版 / 开发版）见 **[路线 B](#路线-bpython-api)**。
