@@ -292,7 +292,7 @@
 }
 .pt-feature-inventory-item.available-unloaded .pt-feature-status-dot{
   background:#2563eb;
-  box-shadow:0 0 0 3px color-mix(in srgb, #2563eb 12%, transparent);
+  box-shadow:0 0 0 3px rgba(37,99,235,0.12);
 }
 .pt-feature-inventory-item.unavailable .pt-feature-status-dot{
   background:#f59e0b;

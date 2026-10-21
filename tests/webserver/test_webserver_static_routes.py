@@ -361,7 +361,7 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20261021-hosted1" in index_html
+    assert "js/screens-guided.js?v=20261022-legacy1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -552,7 +552,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260829-readability2" in index_html
+    assert "css/guided.css?v=20261022-legacy1" in index_html
     assert "css/guided-projects.css?v=20261020-project-root1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
     assert "js/api.js?v=20261021-session1" in index_html
@@ -668,7 +668,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20261021-hosted1" in index_html
+    assert "js/screens-guided.js?v=20261022-legacy1" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -1539,8 +1539,8 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     assert "Copilot and Classic share one study" not in app_js
     assert "Evidence and literature open in its review panel" in app_js
     assert "wsi-sub" in app_js
-    assert "css/ideas.css?v=20260803-owner-migration" in index_html
-    assert "css/shell.css?v=20261021-session1" in index_html
+    assert "css/ideas.css?v=20261022-legacy1" in index_html
+    assert "css/shell.css?v=20261022-legacy1" in index_html
     assert "js/icons.js?v=20260901-composer-plus1" in index_html
     assert "js/app.js?v=20261022-help1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
@@ -2363,7 +2363,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert "screens-dict.js?v=20261022-plain1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
-    assert "deepdive.css?v=20260830-viz-final1" in index_html
+    assert "deepdive.css?v=20261022-legacy1" in index_html
 
 
 def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations() -> (
@@ -2679,8 +2679,8 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20261021-hosted1" in index_html
-    assert "guided.css?v=20260829-readability2" in index_html
+    assert "screens-guided.js?v=20261022-legacy1" in index_html
+    assert "guided.css?v=20261022-legacy1" in index_html
     assert "guided-projects.css?v=20261020-project-root1" in index_html
     assert "gd-rail-heading" in projects_js
     assert "<summary title=\"${esc(t('Switch research project', '切换研究项目'))}\"><small>${t('Project', '项目')}</small><span title=\"${esc(pickerTitle)}\">${esc(pickerTitle)}</span><i aria-hidden=\"true\">⌄</i></summary>" in projects_js
@@ -2868,11 +2868,11 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert ".pt-module-ledger-card" in patient_css
     assert ".patient-flow-card" not in pages_css
     assert ".patient-flow-card" not in _static_css("cohort.css")
-    assert "css/pages.css?v=20260710-patient-owner-split" in index_html
+    assert "css/pages.css?v=20261022-legacy1" in index_html
     assert "css/patient-navigation.css?v=20260710-bounded-pages" in index_html
     assert "css/patient-tables.css?v=20260830-viz-final1" in index_html
     assert "css/patient.css?v=20260830-viz-final1" in index_html
-    assert "css/patient-series.css?v=20260830-viz-final1" in index_html
+    assert "css/patient-series.css?v=20261022-legacy1" in index_html
     assert "js/screens-viz-demo.js?v=20260727-patient-demo2" in index_html
     assert "js/screens-viz-demo-drilldown.js?v=20260727-owner-split" in index_html
     assert "js/screens-viz-patient-features.js?v=20260727-patient-demo2" in index_html

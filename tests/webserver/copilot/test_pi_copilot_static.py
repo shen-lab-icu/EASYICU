@@ -70,7 +70,7 @@ process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20261020-registered-offer1" in index
+    assert "css/guided-pi.css?v=20261022-legacy1" in index
     # The connection dialog sheet reads the provider tokens the base sheet defines.
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261021-hosted1") < index.index("css/guided-pi-header.css?v=")
     # The header's narrow-width layout is its own owner, loaded right after the base sheet.
@@ -147,7 +147,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-childjob.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261022-hosted1" in index
     assert "js/screens-guided-pi.js?v=20261021-readable2" in index
-    assert "js/screens-guided.js?v=20261021-hosted1" in index
+    assert "js/screens-guided.js?v=20261022-legacy1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index

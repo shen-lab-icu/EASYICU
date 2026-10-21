@@ -18,9 +18,9 @@
   padding:3px 6px; border-radius:999px; border:1px solid var(--hair-2);
   color:var(--ink-4); background:var(--surface);
 }
-.stage-chip.done{ color:oklch(42% 0.09 155); border-color:oklch(84% 0.05 155); background:oklch(97% 0.02 155); }
-.stage-chip.active{ color:oklch(42% 0.10 245); border-color:oklch(84% 0.055 245); background:oklch(97% 0.022 245); }
-.stage-chip.stale{ color:oklch(46% 0.11 65); border-color:oklch(83% 0.07 65); background:oklch(97% 0.03 65); }
+.stage-chip.done{ color:#185b37; border-color:#b2d5bd; background:#ebf9ef; }
+.stage-chip.active{ color:#0b517f; border-color:#adcfed; background:#e9f7ff; }
+.stage-chip.stale{ color:#814800; border-color:#e8bf98; background:#fff2e1; }
 .stage-chip svg{ flex:none; }
 
 .shared-note.plan-only{ margin-top:6px; }
@@ -28,16 +28,16 @@
 /* Demo <-> Real is a data-source swap that invalidates downstream work, not a
    display preference. Once downstream work exists, stop letting it look like
    the EN/中 toggle sitting next to it. */
-.mode-seg.consequential{ border-color:oklch(78% 0.09 65); box-shadow:0 0 0 2px oklch(95% 0.035 65); }
-.mode-seg.consequential button:not(.on){ color:oklch(46% 0.11 65); }
+.mode-seg.consequential{ border-color:#e0ac79; box-shadow:0 0 0 2px #ffead7; }
+.mode-seg.consequential button:not(.on){ color:#814800; }
 body[data-reduce-motion="true"] .mode-seg.consequential{ box-shadow:none; }
 
 .ideas-entry{ background:var(--surface); border-color:var(--hair-2); margin-top:3px; }
-.ideas-entry:hover{ border-color:oklch(71% 0.09 225); box-shadow:var(--sh-1); }
-.ideas-entry.on{ border-color:oklch(64% 0.10 225); box-shadow:var(--sh-1); background:linear-gradient(180deg, oklch(97% 0.018 225), var(--surface)); }
-.ideas-entry .cp-ico{ background:oklch(48% 0.10 225); }
+.ideas-entry:hover{ border-color:#5daecc; box-shadow:var(--sh-1); }
+.ideas-entry.on{ border-color:#3a99ba; box-shadow:var(--sh-1); background:linear-gradient(180deg, oklch(97% 0.018 225), var(--surface)); }
+.ideas-entry .cp-ico{ background:#006888; }
 .ideas-entry .cp-d{ color:var(--ink-4); }
-.ideas-entry .cp-go{ color:oklch(48% 0.10 225); }
+.ideas-entry .cp-go{ color:#006888; }
 
 /* Data Workspace: one producer, three consumers. Rendering them as four peers
    hid the order of operations, so a new user's first click could only fail. */

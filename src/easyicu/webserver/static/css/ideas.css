@@ -2,8 +2,8 @@
    this file, so appending would have been the smaller change to cascade
    order — but nothing else defines .idea-band, and prepending keeps this
    file's own later rules able to override it, which is the owner's right. */
-.idea-band{ border:1px solid oklch(88% 0.05 280); background:oklch(97% 0.02 280); border-radius:var(--r-3); padding:14px 16px; display:flex; gap:12px; align-items:flex-start; }
-.idea-band .ico{ color:oklch(46% 0.10 280); flex:none; margin-top:1px; }
+.idea-band{ border:1px solid #d0d5f9; background:#f2f4ff; border-radius:var(--r-3); padding:14px 16px; display:flex; gap:12px; align-items:flex-start; }
+.idea-band .ico{ color:#4e508e; flex:none; margin-top:1px; }
 
 /* ---------- inline jargon tooltip ---------- */
 
@@ -500,7 +500,7 @@
   align-items:flex-start;
   padding:8px 10px;
   border:1px solid var(--info);
-  border-color:oklch(88% 0.04 240);
+  border-color:#c1dcf0;
   border-radius:var(--r-2);
   background:var(--info-soft);
   color:var(--ink-3);

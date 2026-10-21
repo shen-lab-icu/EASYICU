@@ -719,12 +719,12 @@
   gap: 8px;
   align-items: start;
   padding: 9px 10px;
-  border: 1px solid oklch(88% 0.05 150);
+  border: 1px solid #c1e1c6;
   border-radius: var(--r-2);
   background: color-mix(in srgb, var(--ok-soft) 70%, var(--surface));
 }
 .gdx-source.blocked{
-  border-color: oklch(87% 0.06 75);
+  border-color: #eccfa9;
   background: color-mix(in srgb, var(--warn-soft) 70%, var(--surface));
 }
 .gdx-source strong,
@@ -934,7 +934,7 @@
   background: var(--surface-2);
 }
 .gdx-status.ok{
-  border-color: oklch(88% 0.05 150);
+  border-color: #c1e1c6;
   background: var(--ok-soft);
 }
 .gdx-status.bad{
@@ -1970,9 +1970,9 @@
 
 /* run task rows styled like tool calls */
 .gd-task .tt-cmd{ font-family: var(--font-mono); font-size: 11px; color: var(--ink-4); background: var(--surface-2); border: 1px solid var(--hair); border-radius: var(--r-pill); padding: 1px 7px; margin-right: 7px; flex: none; }
-.gd-task.fail .tk{ background: var(--bad-soft); border-color: oklch(80% 0.08 25); color: var(--bad); }
+.gd-task.fail .tk{ background: var(--bad-soft); border-color: #edaaa4; color: var(--bad); }
 .gd-task.fail{ color: var(--bad); }
-.tk-repair{ display: flex; align-items: center; gap: 6px; margin: 2px 0 4px 26px; font-size: 12px; color: oklch(50% 0.11 70); font-family: var(--font-mono); }
+.tk-repair{ display: flex; align-items: center; gap: 6px; margin: 2px 0 4px 26px; font-size: 12px; color: #8a5600; font-family: var(--font-mono); }
 .tk-repair.done{ color: var(--ok); opacity: .8; }
 
 /* outputs panel in the aside */
@@ -2006,16 +2006,16 @@
 
 /* code preview */
 .code-block{ font-family: var(--font-mono); font-size: 13px; line-height: 1.7; color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--hair); border-radius: var(--r-2); padding: 12px 14px; white-space: pre; overflow-x: auto; }
-.code-block .ln-k{ color: oklch(48% 0.12 290); }
-.code-block .ln-s{ color: oklch(46% 0.10 150); }
+.code-block .ln-k{ color: #5e4f9c; }
+.code-block .ln-s{ color: #266739; }
 .code-block .ln-c{ color: var(--ink-4); }
-.code-block .ln-f{ color: oklch(48% 0.12 245); }
+.code-block .ln-f{ color: #02629c; }
 
 /* ROC svg */
 .roc-svg{ display: block; width: 100%; height: auto; background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r-2); }
 .json-block{ font-family: var(--font-mono); font-size: 13px; line-height: 1.65; color: var(--ink-2); white-space: pre-wrap; word-break: break-word; }
-.json-block .jk{ color: oklch(48% 0.12 245); }
-.json-block .jn{ color: oklch(46% 0.10 150); }
+.json-block .jk{ color: #02629c; }
+.json-block .jn{ color: #266739; }
 
 /* ---- collapsed step summary (completed / editable) ---- */
 .gd-collapsed{
@@ -2100,7 +2100,7 @@
 }
 .gdx-step.on .gdx-step-n{ background: var(--accent); border-color: transparent; color: #fff; }
 .gdx-step.done{ color: var(--ink-3); }
-.gdx-step.done .gdx-step-n{ background: var(--ok-soft); border-color: oklch(88% 0.05 150); color: var(--ink); }
+.gdx-step.done .gdx-step-n{ background: var(--ok-soft); border-color: #c1e1c6; color: var(--ink); }
 .gdx-step.ahead{ opacity: 0.6; }
 .gdx-step-sep{ width: 6px; height: 1px; background: var(--hair); flex: 0 0 auto; }
 .gdx-recap{

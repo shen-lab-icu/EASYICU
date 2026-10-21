@@ -822,7 +822,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       // active source there is no manifest, so the card must not claim one.
       return `
       <div class="gd-card" style="max-width:600px;margin-left:39px;">
-        <div class="gc-head"><div class="gc-ico" style="background:var(--ok-soft);color:var(--ok);border-color:oklch(88% 0.05 150);">${icon(src ? 'check' : 'alert', 14, 3)}</div><div class="grow"><div class="gc-t">${src ? `Detected ${esc(activeExportLabel())}` : 'No export detected'}</div><div class="gc-sub">${src ? 'local · read from manifest' : 'nothing was read — choose an export folder first'}</div></div></div>
+        <div class="gc-head"><div class="gc-ico" style="background:var(--ok-soft);color:var(--ok);border-color:#c1e1c6;">${icon(src ? 'check' : 'alert', 14, 3)}</div><div class="grow"><div class="gc-t">${src ? `Detected ${esc(activeExportLabel())}` : 'No export detected'}</div><div class="gc-sub">${src ? 'local · read from manifest' : 'nothing was read — choose an export folder first'}</div></div></div>
         <div class="gc-body">
           <div class="col gap-6" style="font-size:12px;">
             <div class="setup-row"><span class="k">Export</span><span class="vv">${esc(src && src.path ? src.path : 'local path')}</span></div>
