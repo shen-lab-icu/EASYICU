@@ -205,3 +205,74 @@ def test_the_shell_opens_the_hosted_project_and_conversation_through_their_owner
 
     summary = provider.split("function renderBindingSummary(options)", 1)[1]
     assert summary.index("hosted.summaryHtml(") < summary.index("data-gpi-connect-open")
+
+
+_SETTINGS_SCRIPT = r"""
+global.window = {
+  EU_LANG: 'zh', localStorage: { getItem: () => null, setItem() {} },
+  sessionStorage: { getItem: () => null, removeItem() {} },
+  EU_CAPABILITIES: { deployment: { hosted: process.argv[3] === 'hosted' } },
+  EU_SETTINGS: {
+    language: 'zh', ai_enabled: true, export_dir: '/home/zhuhb/exports',
+    support_contact: '信息科 <王老师>', about: { version: '9.0', python: '3.11', config_path: '/home/zhuhb/easyicu/settings.json' },
+  },
+};
+global.t = (en, zh) => zh;
+global.icon = () => '';
+global.document = { getElementById: () => null };
+require(process.argv[1]);
+require(process.argv[2]);
+const page = window.SCREENS.settings;
+const html = page.render();
+const rail = page.rail();
+process.stdout.write(JSON.stringify({
+  hosted: html.includes('data-settings-hosted'),
+  contact: html.includes('信息科 &lt;王老师&gt;'),
+  language: html.includes('id="set-language"') && html.includes('data-setting="language"'),
+  diagnostics: html.includes('data-settings-diagnostics'),
+  adminControls: /data-setting="(ai_enabled|data_mode)"|id="set-(workspace|privacy|data-mode|capabilities)"|data-ext-manager/.test(html),
+  paths: html.includes('/home/zhuhb'),
+  reset: page.actionHtml.includes('data-settings-reset'),
+  railTargets: (rail.match(/data-settings-jump="([^"]+)"/g) || []).length,
+}));
+"""
+
+
+def _settings(mode: str) -> dict:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    completed = run_node(
+        node,
+        _SETTINGS_SCRIPT,
+        str(STATIC / "js" / "screens-guided-pi-hosted.js"),
+        str(STATIC / "js" / "screens-settings.js"),
+        mode,
+        check=True,
+    )
+    return json.loads(completed.stdout)
+
+
+@pytest.mark.requires_node
+def test_hosted_settings_keep_the_clinicians_display_and_the_administrator_contact() -> None:
+    hosted = _settings("hosted")
+    assert hosted == {
+        "hosted": True, "contact": True, "language": True, "diagnostics": True,
+        "adminControls": False, "paths": False, "reset": False, "railTargets": 2,
+    }
+
+    local = _settings("local")
+    assert local["hosted"] is False
+    assert local["adminControls"] is True
+    assert local["reset"] is True
+    assert local["railTargets"] == 7
+
+
+def test_a_hosted_skill_catalogue_offers_no_install() -> None:
+    skills = _read("js/screens-skills.js")
+    # The only upload entry sits in the menu a hosted instance leaves out.
+    assert "const createMenu = hostedOwner && hostedOwner.active() ? '' : `" in skills
+    assert "<h1>${tr('Skills', '技能')}</h1></div>${createMenu}</div>" in skills
+    assert skills.count("data-sk-upload aria-label") == 1
+    menu = skills.split("const createMenu = ", 1)[1].split("</details>`;", 1)[0]
+    assert "data-sk-upload aria-label" in menu

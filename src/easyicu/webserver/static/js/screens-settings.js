@@ -469,11 +469,85 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  // A hosted instance (screens-guided-pi-hosted.js) is one clinician's
+  // EasyICU on the hospital server: the administrator owns the model, data
+  // paths, capabilities and privacy switches, so the page keeps only the
+  // clinician's own display settings and the way to reach the administrator.
+  function hostedInstance() {
+    const owner = window.EasyICU?.guidedPi?.optional('hosted');
+    return Boolean(owner && owner.active());
+  }
+  function hostedContact() {
+    const owner = window.EasyICU?.guidedPi?.optional('hosted');
+    return owner ? owner.supportContact() : '';
+  }
+
+  function languageSection() {
+    return `
+      <div class="sec-stack" id="set-language"><div class="lbl">${T('Language', '语言')}</div><h2>${T('Language & display', '语言与显示')}</h2></div>
+      <div class="card pad">
+        ${row(T('Interface language', '界面语言'), T('EasyICU is fully bilingual; labels fit both scripts.', 'EasyICU 支持完整双语界面；标签会适配中英文显示。'),
+          segBound('language', [['en', 'English'], ['zh', '中文', 'cn']], S0().language || 'en'))}
+        ${row(T('Density', '界面密度'), T('Comfortable adds breathing room; compact maximises rows on screen.', '舒适模式增加留白；紧凑模式在屏幕中显示更多行。'),
+          segBound('density', [['comfortable', T('Comfortable', '舒适')], ['compact', T('Compact', '紧凑')]], S0().density || 'comfortable'))}
+        ${row(T('Reduce motion', '减少动画'), T('Disable shimmer and progress animations.', '关闭闪烁和进度动画。'), sw(!!S0().reduce_motion, '', 'reduce_motion'))}
+      </div>
+
+`;
+  }
+
+  function aboutSection(hosted) {
+    return `
+      <div class="sec-stack" id="set-about"><div class="lbl">${T('About', '关于')}</div><h2>${T('Environment', '环境')}</h2></div>
+      <div class="card pad">
+        <div class="setup-row"><span class="k">${T('Version', '版本')}</span><span class="vv mono">EasyICU ${(S0().about || {}).version || '—'}</span></div>
+        ${hosted ? `<div class="setup-row" data-settings-support-contact><span class="k">${T('Administrator', '管理员')}</span><span class="vv">${h(hostedContact() || T('Ask the person who gave you this link', '请联系给你这个链接的人'))}</span></div>` : `
+        <div class="setup-row"><span class="k">Python</span><span class="vv mono">${(S0().about || {}).python || '—'}</span></div>
+        <div class="setup-row"><span class="k">${T('Databases detected', '已检测数据库')}</span><span class="vv mono">MIMIC-IV · eICU · AUMC · HiRID · MIMIC-III · SICdb</span></div>
+        <div class="setup-row"><span class="k">${T('Settings file', '设置文件')}</span><span class="vv mono">${h((S0().about || {}).config_path || '—')}</span></div>`}
+        <div class="set-about-actions row gap-8 mt-16">
+          ${hosted ? '' : `<button class="btn sm" data-settings-doc="release">${icon('file', 13)} ${T('Release notes', '版本说明')}</button>
+          <button class="btn sm" data-settings-doc="docs">${icon('help', 13)} ${T('Documentation', '文档')}</button>`}
+          <button class="btn sm" data-settings-diagnostics>${icon('download', 13)} ${T('Export diagnostics', '导出诊断')}</button>
+        </div>
+      </div>
+`;
+  }
+
+  function hostedRail() {
+    return `
+      <div class="rail-sep"></div>
+      <div class="rail-block">
+        <div class="rail-head"><span class="t">${T('Settings', '设置')}</span></div>
+        <div class="set-nav col gap-6" style="font-size:12.5px;">
+          ${[
+            [T('Language', '语言'), 'globe', 'set-language'],
+            [T('About', '关于'), 'help', 'set-about'],
+          ].map(([label, ic, target]) =>
+            `<button type="button" class="nav-item set-nav-btn" data-settings-jump="${target}" style="height:30px;"><span class="ico">${icon(ic, 15)}</span>${label}</button>`).join('')}
+        </div>
+      </div>`;
+  }
+
+  function hostedRender() {
+    return `
+      <div class="settings-page" data-settings-hosted>
+      <div class="page-head" style="margin-bottom:18px;">
+        <h1 style="margin-top:6px;">${T('Settings', '设置')}</h1>
+        <p class="lead">${T('The administrator sets up the model and the data. Here you adjust your own display.', '模型和数据由管理员统一配置。这里只调整你自己的界面。')}</p>
+      </div>
+      ${settingsNotice ? `<div class="note ok mt-12" data-settings-notice><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${T('Settings updated', '设置已更新')}</div><div class="d">${h(settingsNotice)}</div></div></div>` : ''}
+      ${languageSection()}
+      ${aboutSection(true)}
+      </div>`;
+  }
+
   S.settings = {
     section: 'settings', nav: 'settings',
     get crumbs() { return [T('Home', '首页'), T('Settings', '设置')]; },
-    get actionHtml() { return `<button class="btn" data-settings-reset>${icon('refresh', 13)} ${T('Reset to defaults', '恢复默认设置')}</button>`; },
+    get actionHtml() { return hostedInstance() ? '' : `<button class="btn" data-settings-reset>${icon('refresh', 13)} ${T('Reset to defaults', '恢复默认设置')}</button>`; },
     rail() {
+      if (hostedInstance()) return hostedRail();
       return `
       <div class="rail-sep"></div>
       <div class="rail-block">
@@ -497,6 +571,7 @@
       </div>`;
     },
     render() {
+      if (hostedInstance()) return hostedRender();
       try {
         const requestedTab = window.sessionStorage.getItem('easyicu.settings.openCapabilityTab');
         if (requestedTab && capabilityTabs().some(([id]) => id === requestedTab)) {
@@ -539,27 +614,9 @@
           `<button class="btn sm" data-settings-open="guided">${icon('spark', 12)} ${T('Open Guided Copilot', '打开研究引导')}</button>`)}
       </div>
 
-      <div class="sec-stack" id="set-language"><div class="lbl">${T('Language', '语言')}</div><h2>${T('Language & display', '语言与显示')}</h2></div>
-      <div class="card pad">
-        ${row(T('Interface language', '界面语言'), T('EasyICU is fully bilingual; labels fit both scripts.', 'EasyICU 支持完整双语界面；标签会适配中英文显示。'),
-          segBound('language', [['en', 'English'], ['zh', '中文', 'cn']], S0().language || 'en'))}
-        ${row(T('Density', '界面密度'), T('Comfortable adds breathing room; compact maximises rows on screen.', '舒适模式增加留白；紧凑模式在屏幕中显示更多行。'),
-          segBound('density', [['comfortable', T('Comfortable', '舒适')], ['compact', T('Compact', '紧凑')]], S0().density || 'comfortable'))}
-        ${row(T('Reduce motion', '减少动画'), T('Disable shimmer and progress animations.', '关闭闪烁和进度动画。'), sw(!!S0().reduce_motion, '', 'reduce_motion'))}
-      </div>
+      ${languageSection()}
 
-      <div class="sec-stack" id="set-about"><div class="lbl">${T('About', '关于')}</div><h2>${T('Environment', '环境')}</h2></div>
-      <div class="card pad">
-        <div class="setup-row"><span class="k">${T('Version', '版本')}</span><span class="vv mono">EasyICU ${(S0().about || {}).version || '—'}</span></div>
-        <div class="setup-row"><span class="k">Python</span><span class="vv mono">${(S0().about || {}).python || '—'}</span></div>
-        <div class="setup-row"><span class="k">${T('Databases detected', '已检测数据库')}</span><span class="vv mono">MIMIC-IV · eICU · AUMC · HiRID · MIMIC-III · SICdb</span></div>
-        <div class="setup-row"><span class="k">${T('Settings file', '设置文件')}</span><span class="vv mono">${h((S0().about || {}).config_path || '—')}</span></div>
-        <div class="set-about-actions row gap-8 mt-16">
-          <button class="btn sm" data-settings-doc="release">${icon('file', 13)} ${T('Release notes', '版本说明')}</button>
-          <button class="btn sm" data-settings-doc="docs">${icon('help', 13)} ${T('Documentation', '文档')}</button>
-          <button class="btn sm" data-settings-diagnostics>${icon('download', 13)} ${T('Export diagnostics', '导出诊断')}</button>
-        </div>
-      </div>
+      ${aboutSection(false)}
       </div>`;
     },
     afterRender(root) {
