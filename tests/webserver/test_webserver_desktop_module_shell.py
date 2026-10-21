@@ -22,7 +22,7 @@ def test_data_and_skills_share_the_same_persistent_desktop_shell() -> None:
     extraction = _read("js", "screens-extraction.js")
     skills = _read("js", "screens-skills.js")
 
-    assert "js/desktop-module-shell.js?v=20261021-account1" in index
+    assert "js/desktop-module-shell.js?v=20261022-help1" in index
     assert index.index("js/desktop-module-shell.js?") < index.index(
         "js/screens-extraction.js?"
     )
@@ -66,7 +66,7 @@ def test_skills_use_the_research_workspace_palette() -> None:
     index = _read("index.html")
     css = _read("css", "skills-hub.css")
 
-    assert "css/skills-hub.css?v=20260922-phone3" in index
+    assert "css/skills-hub.css?v=20261022-help1" in index
     for token in (
         "--sk-canvas:#f7f6f2",
         "--sk-surface:#fbfaf7",
@@ -90,7 +90,7 @@ def test_desktop_modules_share_rail_geometry_and_route_motion() -> None:
     app = _read("js", "app.js")
 
     assert "css/workspace-canvas.css?v=20260921-fit1" in index
-    assert "js/app.js?v=20261021-hosted1" in index
+    assert "js/app.js?v=20261022-help1" in index
     assert "--workspace-global-rail-width: 59px" in canvas
     assert "--workspace-project-rail-width: clamp(330px, 15vw, 380px)" in canvas
     assert "var(--workspace-global-rail-width,59px)" in skills
@@ -108,7 +108,7 @@ def test_visualization_routes_stay_inside_the_data_workspace_shell() -> None:
     shell = _read("js", "desktop-module-shell.js")
     app = _read("js", "app.js")
 
-    for route in ("extraction", "patient", "cohort", "crossdb"):
+    for route in ("extraction", "patient", "cohort", "crossdb", "dictionary"):
         assert f"['{route}'," in shell
     assert "function dataNav(active, actions)" in shell
     assert "function renderData(options)" in shell
@@ -119,6 +119,22 @@ def test_visualization_routes_stay_inside_the_data_workspace_shell() -> None:
     assert "app.querySelector('.eudata-main')" in app
     assert "sharedSettingsRoute" in app
     assert "active: 'settings'" in app
+
+
+def test_hosted_get_started_sits_in_the_module_shell_under_help() -> None:
+    shell = _read("js", "desktop-module-shell.js")
+    app = _read("js", "app.js")
+    css = _read("css", "skills-hub.css")
+
+    # Only a hosted instance renders Get Started in this shell, so only it
+    # shows the rail item; a local install keeps its full-page tutorial.
+    assert "${hostedInstance() ? navItem(moduleActive, 'tutorial', 'help', 'Help', '帮助') : ''}" in shell
+    assert "const sharedHelpRoute = moduleShell && route === 'tutorial' && hostedInstance();" in app
+    assert "active: 'tutorial'" in app
+    assert "aside: scr.contextAside ? scr.contextAside() : ''" in app
+    assert "active === 'tutorial' ? tr('Help', '帮助')" in shell
+    assert "</nav>${options.aside || ''}`" in shell
+    assert ".euh-context-contact{" in css
 
 
 def test_data_shell_keeps_source_controls_and_extraction_actions_visible() -> None:

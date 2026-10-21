@@ -39,6 +39,7 @@
       ${navItem(moduleActive, 'skills', 'layers', 'Skills', '技能')}
       ${navItem(moduleActive, 'extraction', 'grid', 'Data', '数据')}
       <div class="euh-rail-spacer"></div>
+      ${hostedInstance() ? navItem(moduleActive, 'tutorial', 'help', 'Help', '帮助') : ''}
       ${navItem(moduleActive, 'settings', 'gear', 'Settings', '设置')}
       <button type="button" class="euh-rail-item" data-lang-toggle title="${tr('Switch language', '切换语言')}" aria-label="${tr('Switch language', '切换语言')}">${icon('globe', 18)}<span>${window.EU_LANG === 'zh' ? 'EN' : '中'}</span></button>
     </nav>`;
@@ -49,6 +50,7 @@
     ['patient', 'patient', 'Patient review', '患者审阅'],
     ['cohort', 'cohort', 'Cohort statistics', '队列统计'],
     ['crossdb', 'benchmark', 'Cross-database', '跨库对比'],
+    ['dictionary', 'list', 'Data dictionary', '数据字典'],
   ]);
 
   function isDataRoute(route) {
@@ -70,6 +72,9 @@
       <button type="button" class="active" data-sk-mode="skills">${icon('layers', 15)}<span>${tr('Skills', '技能')}</span></button>
       <button type="button" data-sk-mode="methods">${icon('list', 15)}<span>${tr('Method library', '方法库')}</span></button>
     </nav>`;
+    if (active === 'tutorial') return `<nav class="euh-context-nav" aria-label="${tr('Help sections', '帮助分区')}">
+      <button type="button" class="active" data-nav="tutorial" aria-current="page">${icon('help', 15)}<span>${tr('Get started', '快速上手')}</span></button>
+    </nav>${options.aside || ''}`;
     if (active === 'settings') return `<nav class="euh-context-nav" aria-label="${tr('Settings sections', '设置分区')}">
       ${[
         ['set-capabilities', 'layers', 'Capabilities', '能力'], ['set-workspace', 'folder', 'Workspace', '工作区'],
@@ -88,7 +93,8 @@
     const context = workspaceContext();
     const projectTitle = text(context.projectTitle || context.projectId) || (hostedInstance() ? tr('Research workspace', '研究工作区') : tr('Local research workspace', '本地研究工作区'));
     const sessionTitle = text(context.sessionTitle) || tr('Open the research conversation', '打开研究对话');
-    const sectionTitle = isDataRoute(active) ? tr('Data', '数据') : active === 'skills' ? tr('Skills', '技能') : tr('Settings', '设置');
+    const sectionTitle = isDataRoute(active) ? tr('Data', '数据') : active === 'skills' ? tr('Skills', '技能')
+      : active === 'tutorial' ? tr('Help', '帮助') : tr('Settings', '设置');
     return `<aside class="euh-context" aria-label="${tr('Project context', '项目上下文')}">
       <header><span>${tr('PROJECT', '项目')}</span><button type="button" data-nav="guided" title="${tr('Back to research', '返回研究工作区')}">${icon('chevron', 13)}</button></header>
       <button type="button" class="euh-context-project" data-nav="guided"><strong>${projectTitle}</strong><small>${sessionTitle}</small></button>

@@ -107,6 +107,12 @@
   S.tutorial = {
     section: 'tutorial', nav: 'tutorial',
     crumbs: ['Home', 'Get Started'],
+    // The module shell's Help aside on a hosted instance (app.js).
+    contextAside() {
+      const hosted = hostedOwner();
+      const contact = hosted && hosted.supportContact();
+      return contact ? `<div class="euh-context-contact"><span>${t('Administrator', '管理员')}</span><strong>${esc(contact)}</strong></div>` : '';
+    },
     actionHtml() {
       if (hostedOwner()) return `<button class="btn primary" data-nav="guided" type="button">${t('Start a research conversation', '开始研究对话')}</button>`;
       return `<button class="btn primary" data-help-startdemo type="button">${icon('play', 13)} ${t('Start demo', '开始演示')}</button>`;

@@ -390,6 +390,9 @@
     const moduleShell = window.EU_DESKTOP_MODULE_SHELL;
     const sharedDataRoute = moduleShell && moduleShell.isDataRoute(route) && route !== 'extraction';
     const sharedSettingsRoute = moduleShell && route === 'settings';
+    // A hosted Get Started page sits in the module shell under Help; its call
+    // to action is in the page, and the administrator's contact in the aside.
+    const sharedHelpRoute = moduleShell && route === 'tutorial' && hostedInstance();
     if (sharedDataRoute) {
       app.innerHTML = moduleShell.renderData({
         active: route,
@@ -406,6 +409,16 @@
         innerClass: 'euh-settings-main-inner',
         label: t('Settings', '设置'),
         content: `<div class="euh-settings-actions">${actionHtmlOf(scr)}</div>${scr.render()}`,
+      });
+    } else if (sharedHelpRoute) {
+      app.innerHTML = moduleShell.render({
+        active: 'tutorial',
+        shellClass: 'euh-help-shell',
+        mainClass: 'euh-settings-main',
+        innerClass: 'euh-settings-main-inner',
+        label: t('Get started', '快速上手'),
+        aside: scr.contextAside ? scr.contextAside() : '',
+        content: scr.render(),
       });
     } else if (scr.full) {
       app.innerHTML = scr.render();
