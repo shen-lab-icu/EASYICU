@@ -2760,6 +2760,11 @@ def _source_feature_distributions(
     return out
 
 
+def can_join_comparison(modules: Any) -> bool:
+    """Whether an export holds the modules the compatibility gate lines up."""
+    return _REQUIRED_CORE_MODULES <= {str(module) for module in modules or []}
+
+
 def precompute_feature_distributions(path: str) -> int:
     """Summarize one export's features before anyone asks for a comparison.
 
