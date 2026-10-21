@@ -275,11 +275,14 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
             result = export_runner(job)
             out_path = str((result or {}).get("out_dir") or "")
             if out_path and result.get("manifest") and not result.get("cancelled_at"):
+                exported = [row.get("module") for row in result.get("files") or [] if isinstance(row, dict)]
                 registry = source_store.register_source(
                     out_path,
                     label=body.get("label"),
                     active=True,
-                    crossdb=True,
+                    # An export the comparison gate cannot line up (no demographics
+                    # or outcome) is registered but not selected for comparison.
+                    crossdb=crossdb_review.can_join_comparison(exported),
                 )
                 result["registered_source"] = {
                     "ok": bool(registry.get("ok")),
