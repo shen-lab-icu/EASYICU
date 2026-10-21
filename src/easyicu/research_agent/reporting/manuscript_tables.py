@@ -150,7 +150,8 @@ def _group_columns(plan, spec, source, printed: _PrintedCounts):
     for group in groups:
         recorded_denominators.append(_same([r for r in source if r["group"] == group], "denominator_n"))
         denominators.append(_count(recorded_denominators[-1]))
-    group_labels = [plan.display_labels.get(f"{spec.group_by}={group}", group) for group in groups]
+    # A level code read back as a number (2.0) is named as the level "2".
+    group_labels = [_level_text(plan, spec.group_by, group) for group in groups]
     printed.extend(("N", column, value) for column, value in zip(group_labels, recorded_denominators))
     columns = ("Characteristic", *group_labels, "SMD")
     if spec.p_values_required:
@@ -362,9 +363,9 @@ def _table_one_tables(
         if len(spec.group_levels) == 2:
             notes.append(f"SMD reference: {spec.group_levels[0]}; comparison: {spec.group_levels[1]}.")
         for level in spec.group_levels:
-            label = plan.display_labels.get(f"{spec.group_by}={level}")
+            label = _level_label(plan, spec.group_by, str(level))
             if label:
-                notes.append(f"Group {level}: {label}.")
+                notes.append(f"Group {_level_code(str(level))}: {label}.")
         if not spec.p_values_required:
             notes.append("No inferential P values were planned or added by this reader.")
         tables.append((ManuscriptTable(
@@ -407,17 +408,30 @@ def _source_rows(run_dir: Path, record: EvidenceRecord) -> list[dict[str, str]]:
     return rows
 
 
-def _level_text(plan: AnalysisPlan, name: str, level: str) -> str:
-    """A recorded level by the plan's name for it; an integral number reads as one."""
+def _level_code(level: str) -> str:
+    """A recorded level as its code: an integral number (``2.0``) reads as ``2``."""
 
-    text = level
     try:
         number = Decimal(level)
         if number.is_finite() and number == number.to_integral_value():
-            text = str(int(number))
+            return str(int(number))
     except InvalidOperation:
         pass
-    return plan.display_labels.get(f"{name}={text}") or text
+    return level
+
+
+def _level_label(plan: AnalysisPlan, name: str, level: str) -> str | None:
+    """The plan's name for a recorded level of ``name``, as recorded or as
+    its code, if it names one."""
+
+    labels = plan.display_labels
+    return labels.get(f"{name}={level}") or labels.get(f"{name}={_level_code(level)}")
+
+
+def _level_text(plan: AnalysisPlan, name: str, level: str) -> str:
+    """A recorded level by the plan's name for it; an integral number reads as one."""
+
+    return _level_label(plan, name, level) or _level_code(level)
 
 
 def _grouped_summary(plan: AnalysisPlan, body: GroupedSummaryLayout, rows, printed: _PrintedCounts):

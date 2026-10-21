@@ -2,9 +2,10 @@
 
 The column a grouping forms holds codes.  A reader names each code by the
 study's own words for its group, held in the run's grouping record, and by
-the rule the host forms it with, written from the record's derivation.  A
-level the record gives no words is its code alone, and a record that cannot
-be read is reported, never shown as no grouping.
+the rule the host forms it with, written from the record's derivation; a
+reader of an English page by the English name the run's figures show
+(``reader_name``).  A level the record gives no words is its code alone, and
+a record that cannot be read is reported, never shown as no grouping.
 """
 
 from __future__ import annotations
@@ -173,6 +174,7 @@ def test_each_code_is_named_by_the_studys_words_and_the_hosts_rule(
                 "code": 1,
                 "group": "g1",
                 "label": "low",
+                "reader_name": "low",
                 "rule": f"{glucose}: minimum < 70 mg/dL",
                 "unmeasured": False,
             },
@@ -180,6 +182,7 @@ def test_each_code_is_named_by_the_studys_words_and_the_hosts_rule(
                 "code": 2,
                 "group": "g2",
                 "label": "high only",
+                "reader_name": "high only",
                 "rule": f"{glucose}: maximum > 180 mg/dL, without minimum < 70 mg/dL",
                 "unmeasured": False,
             },
@@ -187,6 +190,7 @@ def test_each_code_is_named_by_the_studys_words_and_the_hosts_rule(
                 "code": 3,
                 "group": "g3",
                 "label": "in range",
+                "reader_name": "in range",
                 "rule": f"{glucose}: neither minimum < 70 mg/dL nor maximum > 180 mg/dL",
                 "unmeasured": False,
             },
@@ -194,6 +198,7 @@ def test_each_code_is_named_by_the_studys_words_and_the_hosts_rule(
                 "code": 4,
                 "group": "gU",
                 "label": "not measured",
+                "reader_name": "not measured",
                 "rule": f"{glucose}: no value recorded",
                 "unmeasured": True,
             },
@@ -215,6 +220,30 @@ def test_each_code_is_named_by_the_studys_words_and_the_hosts_rule(
         2,
         3,
     )
+    # Words that state a traced threshold ("18.5") are no figure's name: each
+    # level goes by its rule, its signs in words.
+    assert [row["reader_name"] for row in ordinal["levels"]] == [
+        "Value below 18.5",
+        "Neither value below 18.5 nor value at least 30",
+        "Value at least 30, without value below 18.5",
+    ]
+
+
+def test_levels_in_another_language_go_by_the_figures_names(tmp_path: Path) -> None:
+    glucose = _glucose()
+    for group, words in zip(glucose["groups"], ("低血糖", "仅高血糖", "血糖正常")):
+        group["label"] = words
+    glucose["unmeasured"]["label"] = "未测血糖"
+    _write(tmp_path, _record(glucose))
+
+    (row,) = recorded_exposure_group_labels(tmp_path)
+
+    assert [(level["label"], level["reader_name"]) for level in row["levels"]] == [
+        ("低血糖", "Minimum below 70 mg/dL"),
+        ("仅高血糖", "Maximum above 180 mg/dL, without minimum below 70 mg/dL"),
+        ("血糖正常", "Neither minimum below 70 mg/dL nor maximum above 180 mg/dL"),
+        ("未测血糖", "No value recorded"),
+    ]
 
 
 def test_a_level_without_words_is_its_code_alone(tmp_path: Path) -> None:
@@ -231,6 +260,11 @@ def test_a_level_without_words_is_its_code_alone(tmp_path: Path) -> None:
         None,
         "in range",
         "not measured",
+    ]
+    # Without the study's words for every level, each goes by its rule.
+    assert [level["reader_name"] for level in row["levels"]][1:3] == [
+        "Maximum above 180 mg/dL, without minimum below 70 mg/dL",
+        "Neither minimum below 70 mg/dL nor maximum above 180 mg/dL",
     ]
 
 

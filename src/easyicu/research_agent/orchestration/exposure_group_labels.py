@@ -8,6 +8,12 @@ derivation by the grouping contract (``grouping_rule_texts``), never by a
 model.  A level without a label is shown as its code alone: nothing here
 gives a code a meaning the record does not.
 
+Each level also carries its English reader name (``reader_name``): the name
+its figures and tables show, written by the plan's own naming owner
+(``planning.exposure_group_reader_names``) from the same words and
+derivations, so a reader that shows an English page names a level as the
+run's figures do.  ``None`` when the level can be named neither way.
+
 Labels and rules are read from the run's grouping record with its digest.
 The caller supplies the reviewed/current plan for contrast direction; without
 one, only explicit study choices are marked. A default is never a study choice.
@@ -28,6 +34,7 @@ from ..contracts.exposure_group_rules import (
     read_grouping_rules,
 )
 from ..planning.exposure_group_compile import planned_exposure_contrasts
+from ..planning.exposure_group_reader_names import grouping_level_reader_names
 from ..schema import AnalysisPlan
 from .exposure_grouping_phase import (
     EXPOSURE_GROUPINGS_FILENAME,
@@ -67,10 +74,25 @@ def exposure_group_label_rows(
     pairs = planned_exposure_contrasts(
         plan or {}, variables=[item.get("variable") for item in applied],
     )
-    return [
+    rows = [
         _row(item, record_sha256=record_sha256, pair=pairs.get(item.get("variable")))
         for item in applied
     ]
+    names = grouping_level_reader_names([
+        {
+            "variable": row["variable"],
+            "levels": [
+                {**level, "label": level["label"] or ""} for level in row["levels"]
+            ],
+            "parameters": item.get("derivation"),
+        }
+        for row, item in zip(rows, applied)
+    ])
+    for row in rows:
+        named = names[row["variable"]]
+        for level in row["levels"]:
+            level["reader_name"] = named.get(level["code"])
+    return rows
 
 
 def recorded_exposure_group_labels(

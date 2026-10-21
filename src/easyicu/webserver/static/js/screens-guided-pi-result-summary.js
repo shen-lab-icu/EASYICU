@@ -35,7 +35,9 @@
   }
 
   // A grouped exposure's levels are codes; the run's grouping record names
-  // them where the plan registers no label (screens-agent-exposure-levels.js).
+  // them in the page's language (screens-agent-exposure-levels.js), before
+  // any label the plan registers for its English figures and manuscript.
+  // Any other variable's levels go by the plan's labels.
   function groupLevels(context) {
     const owner = window.AGENT_EXPOSURE_LEVELS;
     return owner ? owner.reader(context, window.t || (en => en)) : null;
@@ -98,8 +100,9 @@
     const levelLabel = (exposure, level) => {
       const key = `${exposure}=${JSON.stringify(level)}`;
       const numeric = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(level) ? `${exposure}=${JSON.stringify(Number(level))}` : '';
-      return typeof labels[key] === 'string' ? labels[key] : (numeric && typeof labels[numeric] === 'string' ? labels[numeric]
-        : (levels && levels.levelName(exposure, level)) || level);
+      const grouped = levels && levels.has(exposure) ? levels.levelName(exposure, level) : '';
+      return grouped || (typeof labels[key] === 'string' ? labels[key]
+        : (numeric && typeof labels[numeric] === 'string' ? labels[numeric] : level));
     };
     return fitted
       .sort((a, b) => Number(isTrue(b.record.is_primary_contrast)) - Number(isTrue(a.record.is_primary_contrast)))
@@ -147,10 +150,10 @@
             || (typeof level === 'number' && typeof raw === 'string'
               && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(raw) && Number(raw) === level));
         const key = matches.length === 1 ? `${spec.exposure}=${JSON.stringify(matches[0])}` : '';
+        const grouped = levels && spec && levels.has(spec.exposure) ? levels.levelName(spec.exposure, raw) : '';
         return {
         level: String(item.record.exposure_level == null ? '' : item.record.exposure_level),
-        label: key && typeof labels[key] === 'string' ? labels[key]
-          : (levels && spec && levels.levelName(spec.exposure, raw)) || String(raw == null ? '' : raw),
+        label: grouped || (key && typeof labels[key] === 'string' ? labels[key] : String(raw == null ? '' : raw)),
         n: finite(item.record.n_rows),
         sharePct: finite(item.record.exposure_pct),
         events: finite(item.record.outcome_events),

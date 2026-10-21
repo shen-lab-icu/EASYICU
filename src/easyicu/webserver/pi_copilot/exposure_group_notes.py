@@ -9,6 +9,11 @@ own label for each code and an English rule it writes from the record
 read).  The plan card and the result readers then name the levels in the
 study's words instead of their codes.
 
+Each level also carries the English name its figures and tables show
+(``reader_name``, written by the plan's naming owner; empty when the row
+carries none), so a reader on an English page names a level as the figures
+do and a reader on a Chinese page by the study's label.
+
 This owner keeps a record only when every row is well formed and within the
 groupings' caps, and adds the grouped concept's names from the concept
 dictionary.  It writes no label: a grouping whose record carries none is
@@ -45,6 +50,7 @@ def _level(row: Any, *, labelled: bool) -> Optional[Dict[str, Any]]:
         "code": row["code"],
         "group": _text(row.get("group"), 16),
         "label": _text(row.get("label"), 80) if labelled else "",
+        "reader_name": _text(row.get("reader_name"), 240) if labelled else "",
         "rule": _text(row.get("rule"), 240),
         "unmeasured": row.get("unmeasured") is True,
     }

@@ -6,6 +6,7 @@ import json
 from typing import Mapping
 
 from ..planning.exposure_group_compile import planned_exposure_contrasts
+from ..planning.exposure_group_reader_names import writer_level_labels
 from ..contracts.exposure_group_rules import EXPOSURE_GROUP_CONTRASTS_KEY
 from ..schema import AnalysisPlan, ResearchContext
 
@@ -53,8 +54,16 @@ def reader_display_label_instruction(
     labels: Mapping[str, str], *, plan: AnalysisPlan | None = None,
     context: ResearchContext | None = None,
 ) -> str:
-    """Render the closed reader-label policy plus its authorized mapping."""
+    """Render the closed reader-label policy plus its authorized mapping.
 
+    With the context, a grouped level whose name states its rule's
+    thresholds is shown by the study's words for it instead
+    (``writer_level_labels``): a threshold in prose needs a provenance the
+    Writer's sentence does not carry.
+    """
+
+    if context is not None:
+        labels = writer_level_labels(context, labels)
     return (
         "READER-FACING LABEL RULE:\n"
         "- The mapping below is Planner-authorized presentation metadata. "
