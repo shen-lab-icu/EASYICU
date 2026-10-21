@@ -771,8 +771,10 @@ def _validate_agent_project_seed_for_run(
     project_seed_dir: str, export_path: str
 ) -> Dict[str, Any]:
     """Fail closed when an Idea-derived Agent seed is not ready to run."""
+    from easyicu.webserver.hosted import require_path
 
     seed_path = Path(project_seed_dir).expanduser() / "project_seed.json"
+    require_path(seed_path, instance_owned=True)
     try:
         seed = json.loads(seed_path.read_text(encoding="utf-8"))
     except FileNotFoundError:

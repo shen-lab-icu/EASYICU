@@ -653,7 +653,9 @@ def _find_session_by_project_dir(project_dir: Path) -> Dict[str, Any] | None:
 
 
 def _session_file(project_dir: Path) -> Path:
-    return project_dir / "guided_copilot_session.json"
+    path = project_dir / "guided_copilot_session.json"
+    require_path(path, instance_owned=True)
+    return path
 
 
 def _read_project_session(project_dir: Path) -> Dict[str, Any] | None:
@@ -1010,6 +1012,7 @@ def open_guided_project(body: Dict[str, Any]) -> Dict[str, Any]:
     title = _clean_text(payload.get("title"), "Guided project", max_len=90)
     draft_id = _clean_text(payload.get("draft_id"), max_len=80)
     draft_path = project_dir / "guided_draft.json"
+    require_path(draft_path, instance_owned=True)
     try:
         draft = json.loads(draft_path.read_text(encoding="utf-8"))
         if isinstance(draft, dict):
@@ -1591,6 +1594,7 @@ def write_project_notes(project_id: str, text: Any) -> Dict[str, Any]:
 
 
 def _trash_guided_project_folder(project_dir_value: Any, draft_id: str) -> None:
+    require_path(project_dir_value, instance_owned=True)
     raw_path = Path(str(project_dir_value or "")).expanduser()
     if not draft_id:
         raise GuidedProjectTrashError(

@@ -1,0 +1,1647 @@
+[
+  {
+    "method": "MOUNT",
+    "route": "/",
+    "fields": [
+      "path:asset"
+    ],
+    "reaches": "ContentHashedStaticFiles -> packaged static asset",
+    "protection": "owner check: Starlette StaticFiles directory containment; follow_symlink=False"
+  },
+  {
+    "method": "POST",
+    "route": "/api/agent-runs/artifact",
+    "fields": [
+      "body:project_dir",
+      "body:run_ref",
+      "body:artifact",
+      "body:name"
+    ],
+    "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
+    "protection": "field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
+    "guarded_fields": [
+      "body:project_dir"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/agent-runs/codex-auth/cancel",
+    "fields": [],
+    "reaches": "codex_account_sessions -> fixed Codex authentication subprocess",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "POST",
+    "route": "/api/agent-runs/codex-auth/login",
+    "fields": [],
+    "reaches": "codex_account_sessions -> fixed Codex authentication subprocess",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "POST",
+    "route": "/api/agent-runs/codex-auth/logout",
+    "fields": [],
+    "reaches": "codex_account_sessions -> fixed Codex authentication subprocess",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "GET",
+    "route": "/api/agent-runs/codex-auth/status",
+    "fields": [],
+    "reaches": "provider enum or browser-session cookie selects server-owned status; no client pathname",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/agent-runs/download-artifact",
+    "fields": [
+      "body:project_dir",
+      "body:run_ref",
+      "body:artifact",
+      "body:name"
+    ],
+    "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
+    "protection": "field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
+    "guarded_fields": [
+      "body:project_dir"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/agent-runs/download-bundle",
+    "fields": [
+      "body:project_dir",
+      "body:run_ref"
+    ],
+    "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
+    "protection": "field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
+    "guarded_fields": [
+      "body:project_dir"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/agent-runs/history",
+    "fields": [
+      "body:project_root",
+      "body:project_seed_dir",
+      "body:project_seed_path",
+      "body:study_id"
+    ],
+    "reaches": "agent_runs.list_run_history -> study directory -> RunDirectory -> whitelisted artifacts",
+    "protection": "field guard + owner check (this patch) at root, study and run",
+    "guarded_fields": [
+      "body:project_root",
+      "body:project_seed_dir",
+      "body:project_seed_path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/agent-runs/provider-config",
+    "fields": [
+      "body:base_url",
+      "body:provider",
+      "body:model"
+    ],
+    "reaches": "provider_adapter private configuration -> future provider network calls",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "GET",
+    "route": "/api/agent-runs/provider-status",
+    "fields": [],
+    "reaches": "provider enum or browser-session cookie selects server-owned status; no client pathname",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/agent-runs/review",
+    "fields": [
+      "body:project_dir",
+      "body:run_ref"
+    ],
+    "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
+    "protection": "field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
+    "guarded_fields": [
+      "body:project_dir"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/agent-runs/science-workbench",
+    "fields": [
+      "body:project_dir"
+    ],
+    "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
+    "protection": "field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
+    "guarded_fields": [
+      "body:project_dir"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/agent-runs/signoff",
+    "fields": [
+      "body:project_dir",
+      "body:run_ref"
+    ],
+    "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
+    "protection": "field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
+    "guarded_fields": [
+      "body:project_dir"
+    ]
+  },
+  {
+    "method": "GET",
+    "route": "/api/capabilities",
+    "fields": [],
+    "reaches": "fixed capability probes including administrator-enabled localhost Zotero API",
+    "protection": "owner check: fixed server-configured endpoints; no client URL"
+  },
+  {
+    "method": "POST",
+    "route": "/api/capabilities/audit-events",
+    "fields": [],
+    "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "GET",
+    "route": "/api/capabilities/method-skills/{skill_id}/package",
+    "fields": [
+      "path:skill_id"
+    ],
+    "reaches": "capabilities -> registered built-in method package",
+    "protection": "owner check: exact catalog lookup, packaged resource only"
+  },
+  {
+    "method": "POST",
+    "route": "/api/capabilities/tool-check",
+    "fields": [],
+    "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/capabilities/zotero/import",
+    "fields": [],
+    "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/capabilities/zotero/search",
+    "fields": [
+      "body:query"
+    ],
+    "reaches": "capabilities.search_zotero -> URL-encoded query at fixed localhost Zotero API",
+    "protection": "owner check: administrator-controlled connector, fixed endpoint"
+  },
+  {
+    "method": "POST",
+    "route": "/api/capabilities/zotero/source",
+    "fields": [
+      "body:item_key",
+      "body:key"
+    ],
+    "reaches": "capabilities.zotero_source -> quoted item key appended to fixed localhost Zotero API; item metadata URLs are not fetched",
+    "protection": "owner check: administrator-controlled connector, fixed origin (see network notes)"
+  },
+  {
+    "method": "POST",
+    "route": "/api/capabilities/zotero/test",
+    "fields": [],
+    "reaches": "fixed capability probes including administrator-enabled localhost Zotero API",
+    "protection": "owner check: fixed server-configured endpoints; no client URL"
+  },
+  {
+    "method": "GET",
+    "route": "/api/catalog",
+    "fields": [],
+    "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "GET",
+    "route": "/api/catalog/lineage/{concept_id}",
+    "fields": [],
+    "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/cohort-review/summary",
+    "fields": [
+      "body:source_path",
+      "body:path"
+    ],
+    "reaches": "sources.resolve_registered_export -> dataio.describe_export_source -> prepared_frames / cohort and crossdb readers",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:source_path",
+      "body:path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/action",
+    "fields": [
+      "body:session_id",
+      "body:context.selected_source.path"
+    ],
+    "reaches": "copilot_sessions: generated hash/slug project; context path is stored metadata/UI handoff only",
+    "protection": "owner check: generated instance paths, fixed registry session lookup; nested path field guard",
+    "guarded_fields": [
+      "body:context.selected_source.path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/message",
+    "fields": [
+      "body:session_id",
+      "body:context.selected_source.path"
+    ],
+    "reaches": "copilot_sessions: generated hash/slug project; context path is stored metadata/UI handoff only",
+    "protection": "owner check: generated instance paths, fixed registry session lookup; nested path field guard",
+    "guarded_fields": [
+      "body:context.selected_source.path"
+    ]
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/literature/sources/{pmid}",
+    "fields": [
+      "path:pmid"
+    ],
+    "reaches": "mining.review_literature_source -> fixed NCBI/PMC URLs",
+    "protection": "owner check: numeric PMID, connector gate, fixed origins"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/projects/initialize",
+    "fields": [
+      "query/body:project_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/data-package-review",
+    "fields": [
+      "path:project_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/projects/{project_id}/data-package-review/prepare",
+    "fields": [
+      "path:project_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/data-workbench-snapshot",
+    "fields": [
+      "path:project_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/projects/{project_id}/data-workbench-snapshot/prepare",
+    "fields": [
+      "path:project_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/runs/{run_id}/artifacts/{artifact_name}",
+    "fields": [
+      "path:project_id",
+      "path:run_id",
+      "path:artifact_name"
+    ],
+    "reaches": "Pi service -> bound run history -> allowlisted artifact/evidence/document/step owner",
+    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/runs/{run_id}/artifacts/{artifact_name}/download",
+    "fields": [
+      "path:project_id",
+      "path:run_id",
+      "path:artifact_name"
+    ],
+    "reaches": "Pi service -> bound run history -> allowlisted artifact/evidence/document/step owner",
+    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/runs/{run_id}/documents/{document_name}",
+    "fields": [
+      "path:project_id",
+      "path:run_id",
+      "path:document_name"
+    ],
+    "reaches": "Pi service -> bound run history -> allowlisted artifact/evidence/document/step owner",
+    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/runs/{run_id}/evidence/{evidence_id}",
+    "fields": [
+      "path:project_id",
+      "path:run_id",
+      "path:evidence_id"
+    ],
+    "reaches": "Pi service -> bound run history -> allowlisted artifact/evidence/document/step owner",
+    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/runs/{run_id}/steps/{step_id}",
+    "fields": [
+      "path:project_id",
+      "path:run_id",
+      "path:step_id"
+    ],
+    "reaches": "Pi service -> bound run history -> allowlisted artifact/evidence/document/step owner",
+    "protection": "owner check: project binding, typed IDs, scoped run directory and digest/relative artifact checks"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/workflow",
+    "fields": [
+      "path:project_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/workspace/file",
+    "fields": [
+      "path:project_id",
+      "query:file"
+    ],
+    "reaches": "ProjectWorkspace._candidate -> isolated hashed project file; preview requires checked digest",
+    "protection": "owner check: relative-file contract, root identity and symlink containment"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/workspace/preview",
+    "fields": [
+      "path:project_id",
+      "query:file"
+    ],
+    "reaches": "ProjectWorkspace._candidate -> isolated hashed project file; preview requires checked digest",
+    "protection": "owner check: relative-file contract, root identity and symlink containment"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/provider-config",
+    "fields": [
+      "body:base_url",
+      "body:model"
+    ],
+    "reaches": "provider connection network requests / fixed Codex auth process",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/provider-config/models",
+    "fields": [
+      "body:base_url",
+      "body:model"
+    ],
+    "reaches": "provider connection network requests / fixed Codex auth process",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/research-provider/api/models",
+    "fields": [],
+    "reaches": "configured provider/gateway status and models; fixed server-selected endpoints/argv",
+    "protection": "owner check: server configuration, no client pathname/URL"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/research-provider/codex/cancel",
+    "fields": [],
+    "reaches": "provider connection network requests / fixed Codex auth process",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/research-provider/codex/login",
+    "fields": [],
+    "reaches": "provider connection network requests / fixed Codex auth process",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/research-provider/codex/logout",
+    "fields": [],
+    "reaches": "provider connection network requests / fixed Codex auth process",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/research-provider/codex/models",
+    "fields": [],
+    "reaches": "configured provider/gateway status and models; fixed server-selected endpoints/argv",
+    "protection": "owner check: server configuration, no client pathname/URL"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/research-provider/codex/status",
+    "fields": [],
+    "reaches": "configured provider/gateway status and models; fixed server-selected endpoints/argv",
+    "protection": "owner check: server configuration, no client pathname/URL"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/research-provider/model",
+    "fields": [],
+    "reaches": "provider connection network requests / fixed Codex auth process",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/resource-status",
+    "fields": [],
+    "reaches": "configured provider/gateway status and models; fixed server-selected endpoints/argv",
+    "protection": "owner check: server configuration, no client pathname/URL"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/session-maintenance",
+    "fields": [
+      "body:quarantine_id"
+    ],
+    "reaches": "SessionStorageMaintenance.restore -> timestamp-ID quarantine directory + manifest-bound basenames",
+    "protection": "owner check: strict quarantine ID, manifest require_path (this patch), regular-file checks before restore"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/sessions",
+    "fields": [
+      "query/body:project_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions",
+    "fields": [
+      "query/body:project_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/sessions/{session_id}",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/abort",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/agent-plan-configuration",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/child-jobs/{job_id}/archive",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/cohort-eligibility-selection",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/data-source-authorization",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id",
+      "body:source_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/delete-empty",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/host-actions",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/message",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id",
+      "body:message",
+      "body:idea_source"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/plan-decision-selection",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/population-acceptance",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/population-preparation",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/presentation",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/rebind",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/regenerate",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id",
+      "body:message",
+      "body:idea_source"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/sessions/{session_id}/registered-source-offer",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/rename",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/target-trial-approval",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/thinking-level",
+    "fields": [
+      "query/body:project_id",
+      "path:session_id"
+    ],
+    "reaches": "Pi service project/session binding -> hashed instance workspace and stored study source; message goes to fixed gateway stdin and host-granted tools (see notes)",
+    "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants"
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/status",
+    "fields": [],
+    "reaches": "configured provider/gateway status and models; fixed server-selected endpoints/argv",
+    "protection": "owner check: server configuration, no client pathname/URL"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/sessions",
+    "fields": [
+      "body:session_id",
+      "body:context.selected_source.path"
+    ],
+    "reaches": "copilot_sessions: generated hash/slug project; context path is stored metadata/UI handoff only",
+    "protection": "owner check: generated instance paths, fixed registry session lookup; nested path field guard",
+    "guarded_fields": [
+      "body:context.selected_source.path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/sessions/list",
+    "fields": [],
+    "reaches": "fixed instance registry listing only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/study-intent",
+    "fields": [
+      "body:question",
+      "body:llm_provider"
+    ],
+    "reaches": "study_intent -> opt-in configured provider request",
+    "protection": "owner check: provider allowlist and canonical opt-in; no client URL or argv"
+  },
+  {
+    "method": "POST",
+    "route": "/api/crossdb-review/demo-distribution",
+    "fields": [],
+    "reaches": "seeded synthetic aggregates only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/crossdb-review/raw-distribution",
+    "fields": [
+      "body:data_root",
+      "body:root"
+    ],
+    "reaches": "crossdb_review -> normalized root -> find_database_path -> raw database loader",
+    "protection": "field guard + owner check (this patch): explicit root, bounded parent expansion, resolved database",
+    "guarded_fields": [
+      "body:data_root",
+      "body:root"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/crossdb-review/raw-root-scan",
+    "fields": [
+      "body:data_root",
+      "body:root"
+    ],
+    "reaches": "crossdb_review -> normalized root -> find_database_path -> raw database loader",
+    "protection": "field guard + owner check (this patch): explicit root, bounded parent expansion, resolved database",
+    "guarded_fields": [
+      "body:data_root",
+      "body:root"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/crossdb-review/summary",
+    "fields": [
+      "body:paths[]",
+      "body:source_paths[]"
+    ],
+    "reaches": "sources.resolve_registered_export -> dataio.describe_export_source -> prepared_frames / cohort and crossdb readers",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:paths[]",
+      "body:source_paths[]"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/data/scan",
+    "fields": [
+      "body:path"
+    ],
+    "reaches": "dataio.list_dir/create_dir/scan_path/summarize_export_workspace",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:path"
+    ]
+  },
+  {
+    "method": "GET",
+    "route": "/api/demo-sources",
+    "fields": [],
+    "reaches": "fixed catalog and instance readiness only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "GET",
+    "route": "/api/extensions",
+    "fields": [],
+    "reaches": "fixed instance extension registry only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/extensions/mcp/install",
+    "fields": [
+      "body:url"
+    ],
+    "reaches": "ExtensionRegistry / MCP HTTP transport",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "POST",
+    "route": "/api/extensions/mcp/test",
+    "fields": [
+      "body:url"
+    ],
+    "reaches": "ExtensionRegistry / MCP HTTP transport",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "POST",
+    "route": "/api/extensions/remove",
+    "fields": [
+      "body:name",
+      "body:skill_md"
+    ],
+    "reaches": "ExtensionRegistry / MCP HTTP transport",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "POST",
+    "route": "/api/extensions/skills/install",
+    "fields": [
+      "body:name",
+      "body:skill_md"
+    ],
+    "reaches": "ExtensionRegistry / MCP HTTP transport",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "GET",
+    "route": "/api/extensions/skills/{name}",
+    "fields": [
+      "path:name"
+    ],
+    "reaches": "ExtensionRegistry.current_skill -> registered skill.md under instance extension root",
+    "protection": "owner check: validated extension name + registry-selected digest-checked package"
+  },
+  {
+    "method": "POST",
+    "route": "/api/extensions/state",
+    "fields": [
+      "body:name",
+      "body:skill_md"
+    ],
+    "reaches": "ExtensionRegistry / MCP HTTP transport",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "POST",
+    "route": "/api/extraction/filter-options",
+    "fields": [
+      "body:source_path",
+      "body:path"
+    ],
+    "reaches": "sources.resolve_registered_export -> dataio.describe_export_source -> bounded prepared-frame readers",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:source_path",
+      "body:path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/extraction/filter-preview",
+    "fields": [
+      "body:source_path",
+      "body:path"
+    ],
+    "reaches": "sources.resolve_registered_export -> dataio.describe_export_source -> bounded prepared-frame readers",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:source_path",
+      "body:path"
+    ]
+  },
+  {
+    "method": "GET",
+    "route": "/api/fs/list",
+    "fields": [
+      "query:path"
+    ],
+    "reaches": "dataio.list_dir/create_dir/scan_path/summarize_export_workspace",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "query:path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/fs/mkdir",
+    "fields": [
+      "body:path"
+    ],
+    "reaches": "dataio.list_dir/create_dir/scan_path/summarize_export_workspace",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/guided/action",
+    "fields": [
+      "body:session_id",
+      "body:context.selected_source.path",
+      "body:context.extraction.export_dir"
+    ],
+    "reaches": "server session lookup -> bounded context metadata + _persist_session fixed file; actions project UI handoffs",
+    "protection": "field guard + owner check: saved project and session file",
+    "guarded_fields": [
+      "body:context.selected_source.path",
+      "body:context.extraction.export_dir"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/guided/drafts",
+    "fields": [
+      "body:parent_dir",
+      "body:folder_slug"
+    ],
+    "reaches": "guided_sessions._project_dir_for -> generated guided folder and fixed metadata files",
+    "protection": "field guard + owner check: _safe_project_parent_dir; sanitized folder slug",
+    "guarded_fields": [
+      "body:parent_dir"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/guided/drafts/list",
+    "fields": [],
+    "reaches": "generated IDs / fixed instance registry; no request-selected pathname",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "DELETE",
+    "route": "/api/guided/drafts/remove",
+    "fields": [
+      "body:project_dir",
+      "body:draft_id",
+      "body:id"
+    ],
+    "reaches": "saved draft path -> optional send2trash",
+    "protection": "field guard + owner check; saved trash coordinate rechecked (this patch), exact draft confirmation",
+    "guarded_fields": [
+      "body:project_dir"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/guided/drafts/remove",
+    "fields": [
+      "body:project_dir",
+      "body:draft_id",
+      "body:id"
+    ],
+    "reaches": "saved draft path -> optional send2trash",
+    "protection": "field guard + owner check; saved trash coordinate rechecked (this patch), exact draft confirmation",
+    "guarded_fields": [
+      "body:project_dir"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/guided/message",
+    "fields": [
+      "body:session_id",
+      "body:context.selected_source.path",
+      "body:context.extraction.export_dir"
+    ],
+    "reaches": "server session lookup -> bounded context metadata + _persist_session fixed file; actions project UI handoffs",
+    "protection": "field guard + owner check: saved project and session file",
+    "guarded_fields": [
+      "body:context.selected_source.path",
+      "body:context.extraction.export_dir"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/guided/project/open",
+    "fields": [
+      "body:project_dir"
+    ],
+    "reaches": "guided_sessions._safe_project_dir -> draft/session metadata",
+    "protection": "field guard + owner check; metadata child paths rechecked (this patch)",
+    "guarded_fields": [
+      "body:project_dir"
+    ]
+  },
+  {
+    "method": "GET",
+    "route": "/api/guided/projects/{project_id}/notes",
+    "fields": [
+      "path:project_id"
+    ],
+    "reaches": "guided_sessions._draft_project_dir -> project_notes.md",
+    "protection": "owner check: saved project and notes require_path"
+  },
+  {
+    "method": "POST",
+    "route": "/api/guided/projects/{project_id}/notes",
+    "fields": [
+      "path:project_id"
+    ],
+    "reaches": "guided_sessions._draft_project_dir -> project_notes.md",
+    "protection": "owner check: saved project and notes require_path"
+  },
+  {
+    "method": "POST",
+    "route": "/api/guided/session",
+    "fields": [],
+    "reaches": "generated IDs / fixed instance registry; no request-selected pathname",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/guided/sessions/list",
+    "fields": [],
+    "reaches": "generated IDs / fixed instance registry; no request-selected pathname",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "GET",
+    "route": "/api/health",
+    "fields": [],
+    "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/agent-projects",
+    "fields": [],
+    "reaches": "generated/slugged IDs under instance Idea state; registered active export read via dataio",
+    "protection": "owner check: generated instance state + dataio; run-directory recheck (this patch)"
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/bounded-feasibility",
+    "fields": [
+      "body:run_id",
+      "body:idea_id"
+    ],
+    "reaches": "mining._run_dir -> fixed Idea JSON receipts; active registry export via dataio; prior-art may query fixed NCBI",
+    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in"
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/create-agent-project",
+    "fields": [
+      "body:run_id",
+      "body:idea_id"
+    ],
+    "reaches": "mining._run_dir -> fixed Idea JSON receipts; active registry export via dataio; prior-art may query fixed NCBI",
+    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in"
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/discover",
+    "fields": [
+      "body:topic",
+      "body:journal",
+      "body:databases",
+      "body:queries"
+    ],
+    "reaches": "mining discovery -> URL-encoded query on fixed NCBI endpoints",
+    "protection": "owner check: PubMed connector + network opt-in; fixed service origins"
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/handoff",
+    "fields": [
+      "body:run_id",
+      "body:idea_id"
+    ],
+    "reaches": "mining._run_dir -> fixed Idea JSON receipts; active registry export via dataio; prior-art may query fixed NCBI",
+    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in"
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/history",
+    "fields": [],
+    "reaches": "generated/slugged IDs under instance Idea state; registered active export read via dataio",
+    "protection": "owner check: generated instance state + dataio; run-directory recheck (this patch)"
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/ingest-pdf",
+    "fields": [],
+    "reaches": "base64 bytes parsed in memory; filename/name/source_file_name are metadata, never opened",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/literature-folder",
+    "fields": [
+      "body:path",
+      "body:folder"
+    ],
+    "reaches": "mining.scan_literature_folder -> recursive PDF metadata/excerpt read",
+    "protection": "field guard + owner check; PDF symlinks skipped",
+    "guarded_fields": [
+      "body:path",
+      "body:folder"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/mine",
+    "fields": [],
+    "reaches": "generated/slugged IDs under instance Idea state; registered active export read via dataio",
+    "protection": "owner check: generated instance state + dataio; run-directory recheck (this patch)"
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/plan",
+    "fields": [
+      "body:run_id",
+      "body:idea_id"
+    ],
+    "reaches": "mining._run_dir -> fixed Idea JSON receipts; active registry export via dataio; prior-art may query fixed NCBI",
+    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in"
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/prior-art",
+    "fields": [
+      "body:run_id",
+      "body:idea_id"
+    ],
+    "reaches": "mining._run_dir -> fixed Idea JSON receipts; active registry export via dataio; prior-art may query fixed NCBI",
+    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in"
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/resolve-source",
+    "fields": [
+      "body:url"
+    ],
+    "reaches": "mining.resolve_source -> _fetch_url_metadata / Crossref DOI metadata",
+    "protection": "owner check: connector opt-in; HTTP(S), public pinned IPs, every redirect revalidated"
+  },
+  {
+    "method": "POST",
+    "route": "/api/ideas/run",
+    "fields": [
+      "body:run_id",
+      "body:idea_id"
+    ],
+    "reaches": "mining._run_dir -> fixed Idea JSON receipts; active registry export via dataio; prior-art may query fixed NCBI",
+    "protection": "owner check: slugged IDs + require_path on run and children (this patch); dataio source check; connector opt-in"
+  },
+  {
+    "method": "POST",
+    "route": "/api/jobs/agent-run",
+    "fields": [
+      "body:path",
+      "body:project_root",
+      "body:project_seed_dir",
+      "body:project_seed_path",
+      "body:study_context_id"
+    ],
+    "reaches": "dataio export -> seed JSON -> RunDirectory / research_run_submission -> DockerRunner mounts of host-bound data and output",
+    "protection": "field guard + owner check: dataio, RunDirectory, seed file (this patch); provider opt-in and reviewed host grants",
+    "guarded_fields": [
+      "body:path",
+      "body:project_root",
+      "body:project_seed_dir",
+      "body:project_seed_path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/jobs/agent-run-review",
+    "fields": [
+      "body:run_id",
+      "body:study_context_id"
+    ],
+    "reaches": "pending-review registry -> digest-bound continuation -> fixed runner/provider execution",
+    "protection": "owner check: server pending-review binding + source/run owners; no client pathname"
+  },
+  {
+    "method": "POST",
+    "route": "/api/jobs/convert",
+    "fields": [
+      "body:path"
+    ],
+    "reaches": "dataio.make_convert_runner -> DataConverter (database is a schema selector)",
+    "protection": "field guard + owner check before submission and execution",
+    "guarded_fields": [
+      "body:path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/jobs/crossdb-raw-distribution",
+    "fields": [
+      "body:data_root",
+      "body:root"
+    ],
+    "reaches": "crossdb_review.make_crossdb_raw_distribution_runner -> raw root resolution + loader",
+    "protection": "field guard + owner check (this patch) before submission and execution",
+    "guarded_fields": [
+      "body:data_root",
+      "body:root"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/jobs/crossdb-summary",
+    "fields": [
+      "body:paths[]",
+      "body:source_paths[]"
+    ],
+    "reaches": "crossdb_review.make_crossdb_review_summary_runner -> leased registered sources -> dataio",
+    "protection": "field guard + owner check",
+    "guarded_fields": [
+      "body:paths[]",
+      "body:source_paths[]"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/jobs/demo-source-prepare",
+    "fields": [
+      "body:source_id"
+    ],
+    "reaches": "demo_sources.get_source -> fixed PhysioNet URL -> download/conversion under instance demo state",
+    "protection": "owner check: exact catalog ID, no URLs/paths accepted, bounded archive extraction"
+  },
+  {
+    "method": "POST",
+    "route": "/api/jobs/extract",
+    "fields": [
+      "body:path",
+      "body:out_dir",
+      "body:registered_export_path"
+    ],
+    "reaches": "dataio.make_export_runner -> load_concepts + generated export files; module and format names are allowlisted/sanitized",
+    "protection": "field guard + owner check before submission and execution",
+    "guarded_fields": [
+      "body:path",
+      "body:out_dir",
+      "body:registered_export_path"
+    ]
+  },
+  {
+    "method": "GET",
+    "route": "/api/jobs/{job_id}",
+    "fields": [],
+    "reaches": "job_id selects in-memory JobManager state only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/jobs/{job_id}/cancel",
+    "fields": [],
+    "reaches": "job_id selects in-memory JobManager state only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "GET",
+    "route": "/api/jobs/{job_id}/events",
+    "fields": [],
+    "reaches": "job_id selects in-memory JobManager state only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/jobs/{job_id}/open-output",
+    "fields": [
+      "path:job_id",
+      "body:file"
+    ],
+    "reaches": "job result output -> fixed OS opener argv",
+    "protection": "refused route: unavailable_when_hosted (503)"
+  },
+  {
+    "method": "POST",
+    "route": "/api/page-guide/action",
+    "fields": [
+      "body:session_id",
+      "body:context.selected_source.path"
+    ],
+    "reaches": "copilot_sessions: generated hash/slug project; context path is stored metadata/UI handoff only",
+    "protection": "owner check: generated instance paths, fixed registry session lookup; nested path field guard",
+    "guarded_fields": [
+      "body:context.selected_source.path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/page-guide/message",
+    "fields": [
+      "body:session_id",
+      "body:context.selected_source.path"
+    ],
+    "reaches": "copilot_sessions: generated hash/slug project; context path is stored metadata/UI handoff only",
+    "protection": "owner check: generated instance paths, fixed registry session lookup; nested path field guard",
+    "guarded_fields": [
+      "body:context.selected_source.path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/page-guide/sessions",
+    "fields": [
+      "body:session_id",
+      "body:context.selected_source.path"
+    ],
+    "reaches": "copilot_sessions: generated hash/slug project; context path is stored metadata/UI handoff only",
+    "protection": "owner check: generated instance paths, fixed registry session lookup; nested path field guard",
+    "guarded_fields": [
+      "body:context.selected_source.path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/page-guide/sessions/list",
+    "fields": [],
+    "reaches": "fixed instance registry listing only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/patient-review/drilldown",
+    "fields": [
+      "body:source_path",
+      "body:path"
+    ],
+    "reaches": "sources.resolve_registered_export -> dataio.describe_export_source -> prepared_frames / cohort and crossdb readers",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:source_path",
+      "body:path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/patient-review/entities",
+    "fields": [
+      "body:source_path",
+      "body:path"
+    ],
+    "reaches": "sources.resolve_registered_export -> dataio.describe_export_source -> prepared_frames / cohort and crossdb readers",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:source_path",
+      "body:path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/patient-review/entity",
+    "fields": [
+      "body:source_path",
+      "body:path"
+    ],
+    "reaches": "sources.resolve_registered_export -> dataio.describe_export_source -> prepared_frames / cohort and crossdb readers",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:source_path",
+      "body:path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/patient-review/feature",
+    "fields": [
+      "body:source_path",
+      "body:path"
+    ],
+    "reaches": "sources.resolve_registered_export -> dataio.describe_export_source -> prepared_frames / cohort and crossdb readers",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:source_path",
+      "body:path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/patient-review/sources",
+    "fields": [],
+    "reaches": "sources.load_registry -> dataio.describe_export_source for administrator/instance-scoped candidates",
+    "protection": "owner check: path_allowed and require_path; no client path input"
+  },
+  {
+    "method": "POST",
+    "route": "/api/patient-review/table-preview",
+    "fields": [
+      "body:source_path",
+      "body:path"
+    ],
+    "reaches": "sources.resolve_registered_export -> dataio.describe_export_source -> prepared_frames / cohort and crossdb readers",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:source_path",
+      "body:path"
+    ]
+  },
+  {
+    "method": "GET",
+    "route": "/api/settings",
+    "fields": [],
+    "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/settings",
+    "fields": [
+      "body:export_dir"
+    ],
+    "reaches": "settings.update_settings -> export destination used by later jobs",
+    "protection": "refused non-display settings when hosted"
+  },
+  {
+    "method": "POST",
+    "route": "/api/settings/reset",
+    "fields": [],
+    "reaches": "settings reset",
+    "protection": "refused route: unavailable_when_hosted"
+  },
+  {
+    "method": "GET",
+    "route": "/api/study-contexts",
+    "fields": [],
+    "reaches": "context IDs select entries in fixed instance metadata registry; no dynamic pathname",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/study-contexts",
+    "fields": [
+      "body:data_source.path"
+    ],
+    "reaches": "study_contexts.normalize_path -> persisted source coordinate; later source intake through dataio",
+    "protection": "field guard; exact data_source schema; execution owner source checks",
+    "guarded_fields": [
+      "body:data_source.path"
+    ]
+  },
+  {
+    "method": "GET",
+    "route": "/api/study-contexts/active",
+    "fields": [],
+    "reaches": "context IDs select entries in fixed instance metadata registry; no dynamic pathname",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/study-contexts/handoff",
+    "fields": [],
+    "reaches": "context IDs select entries in fixed instance metadata registry; no dynamic pathname",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "GET",
+    "route": "/api/study-contexts/{context_id}",
+    "fields": [],
+    "reaches": "context IDs select entries in fixed instance metadata registry; no dynamic pathname",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "POST",
+    "route": "/api/workspace/summary",
+    "fields": [
+      "body:path"
+    ],
+    "reaches": "dataio.list_dir/create_dir/scan_path/summarize_export_workspace",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/workspaces/crossdb-summary",
+    "fields": [
+      "body:paths[]"
+    ],
+    "reaches": "source registry / dataio export summaries",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:paths[]"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/workspaces/download",
+    "fields": [
+      "body:source_id"
+    ],
+    "reaches": "export_download.prepare_registered_export_bundle -> registry-resolved export and manifest files",
+    "protection": "owner check: require_path plus manifest-relative containment"
+  },
+  {
+    "method": "POST",
+    "route": "/api/workspaces/register",
+    "fields": [
+      "body:path"
+    ],
+    "reaches": "source registry / dataio export summaries",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:path"
+    ]
+  },
+  {
+    "method": "GET",
+    "route": "/api/workspaces/registry",
+    "fields": [],
+    "reaches": "sources.load_registry -> dataio.describe_export_source for administrator/instance-scoped candidates",
+    "protection": "owner check: path_allowed and require_path; no client path input"
+  },
+  {
+    "method": "POST",
+    "route": "/api/workspaces/registry",
+    "fields": [
+      "body:sources[].path",
+      "body:active_path",
+      "body:crossdb_paths[]"
+    ],
+    "reaches": "sources.save_registry -> describe_export_source; removed_paths only removes registry metadata",
+    "protection": "field guard + owner check: dataio.require_path",
+    "guarded_fields": [
+      "body:sources[].path",
+      "body:active_path",
+      "body:crossdb_paths[]"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/workspaces/remove",
+    "fields": [
+      "body:path"
+    ],
+    "reaches": "source registry / dataio export summaries",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:path"
+    ]
+  },
+  {
+    "method": "POST",
+    "route": "/api/workspaces/rename",
+    "fields": [
+      "body:path"
+    ],
+    "reaches": "source registry / dataio export summaries",
+    "protection": "field guard + owner check: dataio.require_path; export children rechecked",
+    "guarded_fields": [
+      "body:path"
+    ]
+  },
+  {
+    "method": "GET",
+    "route": "/docs",
+    "fields": [],
+    "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "HEAD",
+    "route": "/docs",
+    "fields": [],
+    "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "GET",
+    "route": "/docs/oauth2-redirect",
+    "fields": [],
+    "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "HEAD",
+    "route": "/docs/oauth2-redirect",
+    "fields": [],
+    "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "GET",
+    "route": "/favicon.ico",
+    "fields": [],
+    "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "GET",
+    "route": "/openapi.json",
+    "fields": [],
+    "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "HEAD",
+    "route": "/openapi.json",
+    "fields": [],
+    "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "GET",
+    "route": "/redoc",
+    "fields": [],
+    "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
+    "protection": "no path inputs"
+  },
+  {
+    "method": "HEAD",
+    "route": "/redoc",
+    "fields": [],
+    "reaches": "FastAPI-generated schema/documentation only; no server-side request path or URL fetch",
+    "protection": "no path inputs"
+  }
+]
