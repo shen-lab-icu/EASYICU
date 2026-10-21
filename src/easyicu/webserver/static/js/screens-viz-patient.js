@@ -464,7 +464,7 @@
 
   function loadRealPatient(done, entityRef) {
     if (!(window.EU_API && window.EU_API.loadPatientReviewDrilldown)) {
-      vizErr = 'Patient Review API is unavailable.';
+      vizErr = t('Patient Review API is unavailable.', '患者审阅接口不可用，请刷新页面后重试。');
       done && done(false);
       return;
     }
@@ -472,7 +472,7 @@
     if (!active) {
       window.EU_PATIENT_DRILLDOWN = null;
       window.EU_VIZ_WORKSPACE = null;
-      vizErr = 'No registered export is active. Add an EasyICU export folder or run Data Extraction first.';
+      vizErr = t('No registered export is active. Add an EasyICU export folder or run Data Extraction first.', '还没有可用的数据包。请先在「数据提取」里提取数据，或登记一个 EasyICU 导出文件夹。');
       done && done(false);
       return;
     }
@@ -1238,7 +1238,7 @@
           </div>
         </div>
 
-        <div style="border-top:1px solid var(--hair);padding-top:16px;">
+        <div style="border-top:1px solid var(--hair);padding-top:16px;" data-datamode-switch>
           <div class="eyebrow" style="margin-bottom:10px;">${t('Data source', '数据源')}</div>
           <div class="radio-row">
             <label class="radio ${realMode ? 'on' : ''}" role="button" tabindex="0" data-datamode="real"><span class="mk"></span> ${t('Previously exported data', '此前导出的数据')}</label>

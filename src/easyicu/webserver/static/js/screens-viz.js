@@ -297,11 +297,11 @@
   }
   function sourceModeSelector(realMode) {
     return `
-      <div class="eyebrow" style="margin-bottom:10px;">${t('Data source', '数据源')}</div>
+      <div data-datamode-switch><div class="eyebrow" style="margin-bottom:10px;">${t('Data source', '数据源')}</div>
       <div class="radio-row">
         <label class="radio ${realMode ? 'on' : ''}" role="button" tabindex="0" data-datamode="real"><span class="mk"></span> ${t('Previously exported data', '此前导出的数据')}</label>
         <label class="radio ${realMode ? '' : 'on'}" role="button" tabindex="0" data-datamode="demo"><span class="mk"></span> ${t('Demo data', '演示数据')}</label>
-      </div>`;
+      </div></div>`;
   }
   function setSourceAddFeedback(container, message, kind) {
     const box = container && container.querySelector('[data-src-add-feedback]');

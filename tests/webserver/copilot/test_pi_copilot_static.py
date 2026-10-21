@@ -145,14 +145,14 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-confirmation.js?v=20261021-decision-records1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261021-decision-records1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261021-turn-layout1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261021-prepared-continuation1" in index
-    assert "js/screens-guided-pi.js?v=20261021-help1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261021-readable1" in index
+    assert "js/screens-guided-pi.js?v=20261021-readable1" in index
     assert "js/screens-guided.js?v=20261021-hosted1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20261021-decision-records1" in index
+    assert "js/api.js?v=20261021-hosted1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -478,7 +478,7 @@ def test_refresh_hides_intermediate_provider_project_and_activation_panels() -> 
     assert "piOwner.setProjectDiscoveryLoading(false)" in guided
     assert "正在恢复当前研究" in guided
     assert "return bindProjectToPi(result, row);" in guided
-    assert "state.startupPromise = Promise.resolve(loadStatus())" in shell
+    assert "state.startupPromise = capabilitiesReady.then(() => loadStatus())" in shell
     assert "return state.startupPromise || Promise.resolve();" in shell
     assert "window.EU_GUIDED_STARTUP" in startup
     assert "data-guided-startup-shield" in startup
@@ -2449,6 +2449,13 @@ def test_existing_project_study_setup_stays_in_bound_pi_conversation() -> None:
     assert "data-gpi-project-workflow-loading" in aside_owner
     assert "Loading project progress…" in aside_owner
     assert "if (!workflow)" in aside_owner
+    # Before the first conversation initializes the project there is no
+    # progress to read; the panel says so rather than loading forever.
+    assert "data-gpi-project-workflow-not-started" in aside_owner
+    assert (
+        "projectNotStarted: () => Boolean(state.projectInitialization"
+        " && state.projectInitialization.required)," in owner
+    )
     session_panel = owner[
         owner.index("function sessionPanel()") : owner.index("function demoPanel()")
     ]
@@ -6518,7 +6525,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261021-turn-layout1" in index
-    assert "screens-guided-pi.js?v=20261021-help1" in index
+    assert "screens-guided-pi.js?v=20261021-readable1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

@@ -218,7 +218,13 @@
       head.innerHTML = `<div class="at">${host.demoMode() ? tr('Workflow demo', '流程演示') : tr('Research workspace', '研究工作区')}</div>`;
       if (!workflow) {
         const error = host.workflowError && host.workflowError();
-        body.innerHTML = section('progress', tr('To-dos', '待办'), `<div class="gd-pipeline-summary" data-gpi-project-workflow-loading role="status" aria-live="polite"><div class="gd-pipeline-value">${esc(error || tr('Loading project progress…', '正在读取项目进度…'))}</div></div>`)
+        // A project is initialized by its first conversation; until then the
+        // server has no progress to read, so the panel says what fills it.
+        const notStarted = !error && typeof host.projectNotStarted === 'function' && host.projectNotStarted();
+        const progress = notStarted
+          ? `<div class="gd-pipeline-summary" data-gpi-project-workflow-not-started><div class="gd-pipeline-value">${tr('The research steps appear here once the first conversation starts.', '开始第一次对话后，研究步骤会列在这里。')}</div></div>`
+          : `<div class="gd-pipeline-summary" data-gpi-project-workflow-loading role="status" aria-live="polite"><div class="gd-pipeline-value">${esc(error || tr('Loading project progress…', '正在读取项目进度…'))}</div></div>`;
+        body.innerHTML = section('progress', tr('To-dos', '待办'), progress)
           + section('results', tr('Results', '成果'), emptyResults)
           + section('notes', tr('Notes', '笔记'), notesPanel())
           + (!panelKeys.some(key => visiblePanels[key]) ? `<p class="gpi-aside-empty gpi-panels-empty">${tr('Choose panels from Layout above.', '可从顶部「布局」重新显示面板。')}</p>` : '');

@@ -574,7 +574,7 @@
           </div>
           <div class="ex-connect-actions">
             <button class="ex-linkbtn" data-ex-manual>${icon('sliders', 13)} ${t('Advanced: choose manually', '高级:手动选择')} <span class="chev">${icon('chevdown', 13)}</span></button>
-            <button class="ex-linkbtn" data-ex-sample title="${t('Switches to Demo mode', '切换到演示模式')}">${icon('play', 13)} ${t('Explore a sample study (switches to Demo)', '体验示例研究（切换到演示模式）')}</button>
+            <button class="ex-linkbtn" data-ex-sample data-datamode-switch title="${t('Switches to Demo mode', '切换到演示模式')}">${icon('play', 13)} ${t('Explore a sample study (switches to Demo)', '体验示例研究（切换到演示模式）')}</button>
           </div>
           <div class="adv-body mt-12" ${exManualSourceOpen ? '' : 'hidden'} data-ex-manual-body>
             <div class="pf-hint" style="font-size:11px;color:var(--ink-4);margin-bottom:10px;">${t('Use this only if automatic detection is wrong:', '仅在自动识别不正确时使用:')}</div>
@@ -715,6 +715,11 @@
   function convertingState() {
     const done = !!convResult && !convErr;
     const err = !!convErr;
+    // A raw converter error (a Python exception, or text in another language)
+    // reads as a plain sentence; the original stays folded below it.
+    const errRaw = err ? String(convErr) : '';
+    const errTechnical = err && (/Traceback|Error\b|Exception|errno|\.py\b|HTTP \d{3}/.test(errRaw)
+      || (t('', 'zh') === 'zh' && !/[\u3400-\u9fff]/.test(errRaw)));
     const p = convProg || {};
     const cur = p.current || 0, tot = p.total || 0;
     const pct = tot ? Math.round((cur / tot) * 100) : (done ? 100 : 0);
@@ -741,7 +746,8 @@
       body = `
         <div class="note mt-4" style="padding:11px 13px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);">
           <div class="ico" style="color:var(--bad,#c0392b);">${icon('alert', 15)}</div>
-          <div class="body"><div class="d mono" style="font-size:11.5px;margin:0;">${escHtml(convErr)}</div></div>
+          <div class="body">${errTechnical ? `<div class="d" style="margin:0;">${t('The files were not converted. Common causes: a file did not finish downloading or is damaged, it is not this database\'s original file, or the disk is full. You can retry.', '文件没有转换成功。常见原因：文件没下载完整或已损坏、不是该数据库的原始文件，或磁盘空间不足。可以重试。')} ${hostedServer() ? t('If it keeps failing, send the technical details to the administrator.', '如果反复失败，请把技术细节发给管理员。') : ''}</div>
+            <details class="ex-conv-detail mt-4"><summary class="d">${t('Technical details', '技术细节')}</summary><div class="d mono" style="font-size:11.5px;margin:4px 0 0;white-space:pre-wrap;word-break:break-word;">${escHtml(errRaw)}</div></details>` : `<div class="d mono" style="font-size:11.5px;margin:0;">${escHtml(convErr)}</div>`}</div>
         </div>
         <div class="row gap-8 mt-16">
           <button class="btn primary" data-ex-startconv>${icon('refresh', 14)} ${t('Retry conversion', '重试转换')}</button>
@@ -1825,7 +1831,7 @@
           <p>${setupStepSubtitle()}</p></div>
           <div class="eudata-head-actions">
             <button type="button" class="eudata-dictionary-link" data-nav="dictionary">${t('Data dictionary', '数据字典')}</button>
-            <div class="mode-seg ${demo ? 'demo-active' : ''} ${window.EU_HASWORK ? 'consequential' : ''}" role="group" aria-label="${t('Data mode', '数据模式')}">
+            <div class="mode-seg ${demo ? 'demo-active' : ''} ${window.EU_HASWORK ? 'consequential' : ''}" data-datamode-switch role="group" aria-label="${t('Data mode', '数据模式')}">
               <button type="button" class="${demo ? 'on' : ''}" data-datamode="demo" aria-pressed="${demo}">${icon('flask', 12)} ${t('Demo', '演示')}</button>
               <button type="button" class="${demo ? '' : 'on'}" data-datamode="real" aria-pressed="${!demo}">${icon('db', 12)} ${t('Real', '真实')}</button>
             </div>

@@ -98,12 +98,13 @@
   }
   function restoreConfiguredResearchProvider() {
     const runtime = state.runtime || {};
-    const config = runtime.configuration || {};
-    if (
+    const config = runtime.configuration || {}, hosted = MODULES.optional('hosted');
+    // A hosted instance has only the administrator's API connection.
+    if ((hosted && hosted.active()) || (
       config.connection_verified === true
       && config.credential_present === true
       && (config.api_transport || runtime.api_transport) === 'openai-completions'
-    ) {
+    )) {
       state.researchProvider = 'api';
     }
   }
@@ -319,6 +320,7 @@
     workflow: () => state.workflow,
     latestRun: () => state.latestRun,
     workflowError: () => state.workflowError,
+    projectNotStarted: () => Boolean(state.projectInitialization && state.projectInitialization.required),
     resultsHtml: (query, options) => RUN_OUTCOME.renderShelf(state.latestRun, state.workflow, query, options),
     resourceButton,
     reviewActionHtml: () => RUN_OUTCOME.renderReviewAction(state.latestRun, state.workflow),
@@ -1353,7 +1355,7 @@
           finishActivity('error', null, 'failed');
           state.error = /^pi_model_/.test(String(row.error || ''))
             ? modelErrorText(row.error, completedAction)
-            : String(row.error || tr('Copilot message failed.', '研究助手消息失败。'));
+            : (row.error ? ERROR_TEXT.jobErrorText(row.error) : tr('Copilot message failed.', '研究助手消息失败。'));
         } else if (row.status === 'cancelled') {
           finishActivity('cancelled', null, 'cancelled');
           state.error = tr('Copilot message stopped.', '研究助手消息已停止。');
@@ -1775,8 +1777,8 @@
     const capabilitiesReady = api().loadCapabilities
       ? Promise.resolve(api().loadCapabilities()).catch(() => null)
       : Promise.resolve(null);
-    state.startupPromise = Promise.resolve(loadStatus()).then(async () => {
-      await capabilitiesReady;
+    // Capabilities first: the status read needs to know a hosted instance.
+    state.startupPromise = capabilitiesReady.then(() => loadStatus()).then(async () => {
       if (state.host) render(true);
       openHostedConversation();
       const hubIntent = STUDY_WORKSPACE.hasHubIntent(), previousSessionId = state.session && state.session.session_id;

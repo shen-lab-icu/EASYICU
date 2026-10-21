@@ -304,11 +304,15 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.doesNotMatch(exportCohort, /research_pipeline_export_cohort_mismatch/);
   assert.match(live({ code: 'research_pipeline_export_cohort_invalid' }), /Check the study’s cohort/);
 
-  // Fallback branch: raw transport text verbatim.
-  assert.equal(live({ message: 'Failed to fetch' }), 'Failed to fetch');
-  assert.equal(live({ message: 'boom' }), 'boom');
-  assert.equal(live({ code: 'custom_code' }), 'custom_code');
-  assert.equal(live('raw-oops'), 'raw-oops');
+  // Fallback branch: a server sentence in the reader's language stays as it
+  // is; a code, a transport string or a bare word becomes a plain sentence
+  // with the original in brackets for the administrator.
+  assert.equal(live({ message: 'The selected folder is empty.' }), 'The selected folder is empty.');
+  assert.equal(live({ message: 'Failed to fetch' }), 'EasyICU could not reach its server. Check the network, then try again.');
+  assert.equal(live({ message: 'boom' }), 'This step did not complete (boom). If it keeps happening, contact the administrator.');
+  assert.equal(live({ code: 'custom_code' }), 'This step did not complete (custom_code). If it keeps happening, contact the administrator.');
+  assert.equal(live('raw-oops'), 'This step did not complete (raw-oops). If it keeps happening, contact the administrator.');
+  assert.equal(live({ message: '/api/x -> HTTP 503', status: 503 }), 'The EasyICU server hit an error on this step (HTTP 503). Try again shortly; if it keeps happening, contact the administrator.');
 
   // Harness keeps the legacy alias for the same owner.
   let harnessPath = path.join(dir, '..', '..', '..', 'tests', 'js', 'guided_pi_module_harness.cjs');

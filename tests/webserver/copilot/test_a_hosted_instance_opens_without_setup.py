@@ -283,3 +283,17 @@ def test_a_hosted_skill_catalogue_offers_no_install() -> None:
     assert skills.count("data-sk-upload aria-label") == 1
     menu = skills.split("const createMenu = ", 1)[1].split("</details>`;", 1)[0]
     assert "data-sk-upload aria-label" in menu
+    # Skill state is the administrator's: a hosted detail shows it, no toggle.
+    assert "const stateOnly = method || Boolean(window.EasyICU?.guidedPi?.optional('hosted')?.active());" in skills
+    assert '<div class="eusk-detail-actions">${stateOnly' in skills
+    assert skills.count("data-sk-toggle=") == 1
+
+
+def test_a_hosted_instance_uses_only_the_administrators_api_connection() -> None:
+    shell = _read("js/screens-guided-pi.js")
+    restore = shell.split("function restoreConfiguredResearchProvider() {", 1)[1].split("\n  }\n", 1)[0]
+    # The ChatGPT/Codex account choice is never the hosted connection, and the
+    # status read that decides it waits for the deployment facts.
+    assert "if ((hosted && hosted.active()) || (" in restore
+    assert "state.researchProvider = 'api';" in restore
+    assert "state.startupPromise = capabilitiesReady.then(() => loadStatus())" in shell
