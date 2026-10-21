@@ -209,7 +209,7 @@ const runFilesApi = {
   loadAgentRunHistory: async () => ({ ok: true, runs: [savedRun], count: 1 }),
   loadAgentRunReview: async () => ({ ok: true, run_id: RUN, run_ref: REF, study_id: 's', engine: 'easyicu.research_agent.pipeline',
     readiness: { signable: false, non_human_failures: [] }, signed: false,
-    artifacts: [{ name: 'result_tables.json', sha256: 'b'.repeat(64) }, { name: 'figure_gallery.json', sha256: 'c'.repeat(64) }] }),
+    artifacts: [{ name: 'result_tables.json', sha256: 'b'.repeat(64), size_bytes: 48213 }, { name: 'figure_gallery.json', sha256: 'c'.repeat(64), size_bytes: 3355443 }] }),
 };
 (async () => {
   const runFiles = modules.require('runFiles').create({ api: () => runFilesApi, changed() {}, resourceButton: resources.button,
@@ -217,7 +217,10 @@ const runFilesApi = {
   await runFiles.sync();
   await runFiles.open(REF);
   const filesHtml = runFiles.render({ savedRuns: [savedRun] });
-  assert.match(filesHtml, /<table class="gpi-run-file-list"><thead><tr><th scope="col">文件<\/th><th scope="col">内容<\/th>/);
+  assert.match(filesHtml, /<table class="gpi-run-file-list"><thead><tr><th scope="col">文件<\/th><th scope="col">内容<\/th><th scope="col">大小<\/th>/);
+  // Each file shows the host's stat size; a file without one shows none.
+  assert.match(filesHtml, /<td class="gpi-run-file-size">47 KB<\/td>/);
+  assert.match(filesHtml, /<td class="gpi-run-file-size">3\.2 MB<\/td>/);
   assert.equal(count(filesHtml, '<tr class="gpi-run-file">'), 2);
   assert.ok(!visible(filesHtml).includes(RUN), 'the run id stays in the run record');
   assert.doesNotMatch(filesHtml, /\/Users\/|\/Volumes\/|project_dir/);

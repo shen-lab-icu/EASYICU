@@ -108,6 +108,21 @@ const stepPayloads = {
     assert.equal(plans[2].execution, 'generated');
     assert.equal(activity.stepLabel(baseline), tr('Build the baseline characteristics table by exposure group', '生成基线特征表（按暴露分组）'));
     assert.equal(activity.stepLabel(plans[2]), tr('Summarize the outcome distribution', '汇总结局分布'));
+    // With the run's reader names on its trace events, a grouped step names
+    // its grouping and its outcome; without them it stays generic.
+    const GROUP = { zh: '血糖分组', en: 'Glucose groups' }, OUTCOME = { zh: '院内死亡', en: 'In-hospital mortality' };
+    const named = { status: 'running', steps: [] };
+    [
+      event(60, 'step', 'Step 1/2 started: outcome_by_group.', { step_id: 'outcome_by_group', current_step: 1, total_steps: 2, group_variable_label: GROUP, outcome_label: OUTCOME }),
+      event(61, 'coder', '', { step_id: 'outcome_by_group', action: 'standard_executor', executor: 'exposure_outcome_distribution', group_variable_label: GROUP, outcome_label: OUTCOME }),
+      event(62, 'step', 'Step 2/2 started: table_by_group.', { step_id: 'table_by_group', current_step: 2, total_steps: 2 }),
+      event(63, 'coder', '', { step_id: 'table_by_group', action: 'standard_executor', executor: 'grouped_table_one', group_variable_label: { zh: '血糖分组' } }),
+    ].forEach(row => activity.notePipelineEvent(named, row));
+    const [outcomeStep, tableStep] = named.steps.filter(row => row.step === 'plan_step');
+    assert.equal(activity.stepLabel(outcomeStep), tr('Summarize the in-hospital mortality by Glucose groups', '汇总按血糖分组的院内死亡'));
+    // One language recorded serves both.
+    assert.equal(activity.stepLabel(tableStep), tr('Build the baseline characteristics table by 血糖分组', '生成基线特征表（按血糖分组）'));
+    assert.equal(activity.stepLabel({ ...outcomeStep, outcomeLabel: undefined }), tr('Summarize the outcomes by exposure group', '汇总各组的结局'));
     const validations = rows.filter(row => row.action === 'plan_validation');
     assert.deepEqual(validations.map(row => [row.current, row.status, row.endedAt - row.startedAt]),
       [[1, 'error', 4000], [2, 'complete', 4000]]);

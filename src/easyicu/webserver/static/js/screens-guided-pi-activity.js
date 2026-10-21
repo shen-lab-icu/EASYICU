@@ -390,11 +390,39 @@
       const action = EXECUTOR_ACTIONS[String(key || '')];
       return action ? tr(action[1], action[2]) : '';
     }
+    /* With the run's own reader names (the trace's group_variable_label and
+       outcome_label, launch-b2) a grouped step names its grouping and its
+       outcome: 「汇总按血糖分组的院内死亡」. Without them the title stays
+       generic; nothing is inferred from a column code. */
+    const QUALIFIED_NOUNS = {
+      grouped_table_one: (g) => g && [`baseline characteristics table by ${g.en}`, `基线特征表（按${g.zh}）`],
+      exposure_outcome_distribution: (g, o) => g && o && [`${o.en} by ${g.en}`, `按${g.zh}的${o.zh}`],
+      exposure_outcome_distribution_figure: (g, o) => g && o && [`${o.en} distribution by ${g.en}`, `按${g.zh}的${o.zh}分布图`],
+      continuous_outcome_summary: (g, o) => g && o && [`${o.en} by ${g.en}`, `按${g.zh}的${o.zh}`],
+      grouped_descriptive_distribution: (g) => g && [`distribution by ${g.en}`, `按${g.zh}的分布`],
+    };
+    function readerLabel(value) {
+      if (!value || typeof value !== 'object') return null;
+      const clean = item => (typeof item === 'string' ? item.replace(/\s+/g, ' ').trim().slice(0, 80) : '');
+      const zh = clean(value.zh), en = clean(value.en);
+      return zh || en ? { zh: zh || en, en: en || zh } : null;
+    }
+    function readerLabels(event) {
+      const group = readerLabel(event && event.group_variable_label);
+      const outcome = readerLabel(event && event.outcome_label);
+      return { ...(group ? { groupLabel: group } : {}), ...(outcome ? { outcomeLabel: outcome } : {}) };
+    }
+    function qualifiedNoun(key, row) {
+      const build = QUALIFIED_NOUNS[key];
+      const words = build ? build(row && row.groupLabel, row && row.outcomeLabel) : null;
+      return words ? tr(words[0], words[1]) : '';
+    }
     function planStepTitle(row) {
-      const action = EXECUTOR_ACTIONS[String(row && row.executor || '')];
-      if (action) return verbPhrase(action[0], tr(action[1], action[2]));
+      const executor = String(row && row.executor || '');
+      const action = EXECUTOR_ACTIONS[executor];
+      if (action) return verbPhrase(action[0], qualifiedNoun(executor, row) || tr(action[1], action[2]));
       const id = String(row && row.stepId || '').replace(/^\d+_/, '').toLowerCase();
-      if (STEP_ACTIONS[id]) return tr(...STEP_ACTIONS[id]);
+      if (STEP_ACTIONS[id]) return qualifiedNoun(id, row) ? verbPhrase('summarize', qualifiedNoun(id, row)) : tr(...STEP_ACTIONS[id]);
       const verb = LAST_TOKEN_VERBS[id.split(/[_.-]+/).pop()];
       const noun = planStepName(id);
       return verb && noun !== tr('Analysis step', '分析步骤') ? verbPhrase(verb, noun) : '';
@@ -423,7 +451,7 @@
           : event.status === 'complete' || (match && /^complete/i.test(match[3])) ? 'complete'
             : match && /^failed/i.test(match[3]) ? 'failed' : 'started';
       const facts = { index: Number(event.current_step || (match && match[1])) || null,
-        total: Number(event.total_steps || (match && match[2])) || null, phase, stepId, ...(reused ? { reused: true } : {}) };
+        total: Number(event.total_steps || (match && match[2])) || null, phase, stepId, ...(reused ? { reused: true } : {}), ...readerLabels(event) };
       // The run the step belongs to addresses its detail; never a path.
       if (RUN_ID.test(String(event.run_id || ''))) facts.runId = String(event.run_id);
       return facts;
@@ -448,6 +476,8 @@
         ...(facts.reused ? { reused: true } : {}),
         ...(facts.phase === 'skipped' ? { skipped: true } : {}),
         ...(opts.durationKnown === false ? { durationKnown: false } : {}),
+        ...(facts.groupLabel ? { groupLabel: facts.groupLabel } : {}),
+        ...(facts.outcomeLabel ? { outcomeLabel: facts.outcomeLabel } : {}),
       };
     }
     function pipelineTime(value) {
@@ -668,6 +698,7 @@
         ...(execution ? { execution } : {}),
         ...(action === 'standard_executor' && /^[a-z][a-z0-9_]{0,79}$/.test(String(event.executor || '')) ? { executor: String(event.executor) } : {}),
         ...(RUN_ID.test(String(event.run_id || '')) ? { runId: String(event.run_id) } : {}),
+        ...readerLabels(event),
       };
       const text = /^Running standard executor script/i.test(label) || (action === 'run' && event.run_kind === 'standard')
         ? tr('Ran the standard executor script; no model call.', '运行标准执行脚本，不调用模型。')
@@ -689,6 +720,8 @@
       if (facts.execution) row.execution = facts.execution;
       if (facts.executor) row.executor = facts.executor;
       if (facts.runId && !row.runId) row.runId = facts.runId;
+      if (facts.groupLabel) row.groupLabel = facts.groupLabel;
+      if (facts.outcomeLabel) row.outcomeLabel = facts.outcomeLabel;
       return true;
     }
 
