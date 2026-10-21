@@ -20,7 +20,7 @@
       authorizeDataSource, sendText, continueAfterDataSourceConfirmation,
       governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
       togglePresentationPin, configureProvider, rememberSession, recordHostAction,
-      HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL,
+      HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP,
     } = options;
 
     // Outside presses, Escape, and opening another menu are handled for every
@@ -126,6 +126,7 @@
       if (!state.host) return;
       state.host.addEventListener('click', event => {
         if (CONNECT && CONNECT.handleClick(event)) return;
+        if (HELP && HELP.handleClick(event)) return;
         if (PROVIDER_CONTROL && PROVIDER_CONTROL.handleClick(event)) return;
         if (RUN_FILES && RUN_FILES.handleClick(event)) return;
         const filePill = event.target.closest('[data-gpi-file]');

@@ -77,6 +77,10 @@ const outcome = modules.require('runOutcome').create({
   assert.match(card, /在 MIMIC-IV 的 94,458 个 ICU 入住记录中，「记录Sepsis-3脓毒症诊断」有 31,596 个（33\.45%）。/);
   assert.match(card, /院内死亡状态：「记录Sepsis-3脓毒症诊断」组 15\.74%（4,974\/31,596），「未记录Sepsis-3脓毒症诊断」组 10\.14%（6,376\/62,862）；总体 12\.02%。/);
   assert.match(card, /这是未调整的描述性比较，不能说明因果/);
+  // Every answer reads in one order: the finding, the data it rests on, how
+  // to read it.
+  const answerText = card.match(/<div class="gpi-run-answer-text">([\s\S]*?)<\/div>/)[1];
+  assert.match(answerText, /<\/p><p class="gpi-run-answer-data"><span>数据<\/span>MIMIC-IV · 94,458 个 ICU 入住记录<\/p><p class="gpi-run-answer-caveat"><span>需要注意<\/span>这是未调整/);
   assert.match(card, /<img src="data:image\/png;base64,AAAA"/);
   assert.match(card, /打开全部 2 张图/);
   assert.match(card, /4 张表：分组比例与结局、基线特征、队列流程，另有 1 张数据质量审计表/);

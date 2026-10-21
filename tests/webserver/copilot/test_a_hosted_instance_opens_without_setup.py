@@ -59,6 +59,11 @@ out.opens = {
   demo: hosted.opensConversation({ ...base, demoMode: true }, true),
   noProject: hosted.opensConversation({ ...base, project: null }, true),
 };
+let started = 0;
+hosted.openConversation(base, true, () => { started += 1; });
+hosted.openConversation({ ...base, session: { session_id: 's' } }, true, () => { started += 1; });
+hosted.openConversation(base, false, () => { started += 1; });
+out.started = started;
 const missing = hosted.missingModelHtml({ tr, esc });
 out.missing = { contactEscaped: missing.includes('信息科 &lt;王老师&gt;  8123'), ask: missing.includes('请联系管理员'), raw: missing.includes('<王老师>') };
 const readySummary = hosted.summaryHtml({ tr, esc, connectionReady: true });
@@ -151,6 +156,7 @@ def test_a_hosted_clinician_is_never_asked_to_connect_a_model_or_choose_a_folder
         "ready": True, "modelMissing": False, "hasSession": False,
         "loading": False, "demo": False, "noProject": False,
     }
+    assert out["started"] == 1
     # The administrator contact is shown escaped, control characters removed.
     assert out["missing"] == {"contactEscaped": True, "ask": True, "raw": False}
     assert out["summary"] == {
@@ -187,7 +193,7 @@ def test_the_shell_opens_the_hosted_project_and_conversation_through_their_owner
     screen = _read("js/screens-guided-pi.js")
     provider = _read("js/screens-guided-pi-provider.js")
 
-    hosted_tag = index.index("js/screens-guided-pi-hosted.js?v=20261021-hosted1")
+    hosted_tag = index.index("js/screens-guided-pi-hosted.js?v=20261021-help1")
     assert hosted_tag < index.index("js/screens-guided-pi-connect.js") < index.index("js/screens-guided-pi.js")
 
     landing = shell.split("async function openHostedLandingProject(piOwner)", 1)[1].split("function createLocalGuidedDraft", 1)[0]
@@ -198,9 +204,10 @@ def test_the_shell_opens_the_hosted_project_and_conversation_through_their_owner
     assert "parent_dir" not in landing
     assert ".then(() => openHostedLandingProject(piOwner)).finally(() => {" in shell
 
-    opener = screen.split("function openHostedConversation()", 1)[1].split("function unmount()", 1)[0]
-    assert "hosted.opensConversation(state, connectionReady())" in opener
-    assert "void createSession()" in opener
+    assert (
+        "const openHostedConversation = () => { const hosted = MODULES.optional('hosted'); "
+        "if (hosted) hosted.openConversation(state, connectionReady(), createSession); };"
+    ) in screen
     assert screen.count("openHostedConversation();") == 2
 
     summary = provider.split("function renderBindingSummary(options)", 1)[1]

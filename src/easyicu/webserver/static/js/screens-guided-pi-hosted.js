@@ -59,6 +59,11 @@
       && Boolean(state.project && state.project.id);
   }
 
+  // Starts that conversation through the screen's own createSession().
+  function openConversation(state, connectionReady, createSession) {
+    if (opensConversation(state, connectionReady) && typeof createSession === 'function') void createSession();
+  }
+
   function contactLine(tr, esc) {
     const contact = supportContact();
     return contact
@@ -93,6 +98,7 @@
     supportContact,
     landingProject,
     opensConversation,
+    openConversation,
     missingModelHtml,
     summaryHtml,
   });

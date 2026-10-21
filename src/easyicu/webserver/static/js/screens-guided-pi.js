@@ -246,6 +246,8 @@
     startCodexLogin, openAuthorizationPopup, cancelCodexLogin, logoutCodex,
     configureProvider, finishProviderSetup,
   } = PROVIDER_CONTROL;
+  // 遇到问题: a reference the administrator can look up (ids only).
+  const HELP = MODULES.require('help').create({ tr, esc, context: () => ({ projectId: projectId(), sessionId: state.session && state.session.session_id, runId: state.latestRun && state.latestRun.run_id, jobId: state.childJobId || state.jobId }) });
   const CONNECT = MODULES.require('connect').create({ state, tr, esc, render, connectionReady, connectionConfigured, finishProviderSetup,
     body: () => MODULES.require('provider').renderConnectionBody(setupOptions()) });
   const RUN_OUTCOME = MODULES.require('runOutcome').create({
@@ -455,7 +457,7 @@
     authorizeDataSource, sendText, continueAfterDataSourceConfirmation,
     governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
     togglePresentationPin, configureProvider, rememberSession, recordHostAction,
-    HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL,
+    HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP,
   });
   const dismissHeaderOverflow = EVENTS.dismissHeaderOverflow;
   const wire = EVENTS.wire;
@@ -623,7 +625,7 @@
     assistantTextHtml, sessionIsStale, agentMode, accessModeLabel,
     projectTitle: () => displayProjectTitle(state.project && state.project.title, projectId()), navigationSessionTitle,
     workflowConfirmationHtml, hostJobs: HOST_JOBS, followUps: MODULES.require('followUps'),
-    effortMenu: EFFORT_MENU, workflowConfirmation, runFailureText,
+    effortMenu: EFFORT_MENU, workflowConfirmation, runFailureText, help: HELP,
   });
   const { messageHtml, workflowHtml, sessionPanel, demoPanel } = SESSION_VIEW;
   function openDemo() {
@@ -1794,12 +1796,8 @@
     });
     return state.startupPromise;
   }
-  // A hosted clinician lands in a conversation, not on the empty project page
-  // (screens-guided-pi-hosted.js decides when; createSession() does the work).
-  function openHostedConversation() {
-    const hosted = MODULES.optional('hosted');
-    if (hosted && hosted.opensConversation(state, connectionReady())) void createSession();
-  }
+  // A hosted clinician lands in a conversation (screens-guided-pi-hosted.js).
+  const openHostedConversation = () => { const hosted = MODULES.optional('hosted'); if (hosted) hosted.openConversation(state, connectionReady(), createSession); };
   function unmount() {
     RUN_FILES.reset();
     document.removeEventListener('click', dismissHeaderOverflow, true);
