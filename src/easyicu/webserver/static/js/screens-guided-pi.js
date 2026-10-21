@@ -1322,6 +1322,7 @@
           if (projectId() !== next.id) return;
           state.projectLoading = false;
           render();
+          openHostedConversation();
         });
     }
     state.projectLoading = false;
@@ -1775,6 +1776,7 @@
     state.startupPromise = Promise.resolve(loadStatus()).then(async () => {
       await capabilitiesReady;
       if (state.host) render(true);
+      openHostedConversation();
       const hubIntent = STUDY_WORKSPACE.hasHubIntent(), previousSessionId = state.session && state.session.session_id;
       if (hubIntent && projectId() && state.session && !state.creating) await createSession();
       if (hubIntent && previousSessionId && state.session && state.session.session_id === previousSessionId) return;
@@ -1791,6 +1793,12 @@
       state.startupPromise = null;
     });
     return state.startupPromise;
+  }
+  // A hosted clinician lands in a conversation, not on the empty project page
+  // (screens-guided-pi-hosted.js decides when; createSession() does the work).
+  function openHostedConversation() {
+    const hosted = MODULES.optional('hosted');
+    if (hosted && hosted.opensConversation(state, connectionReady())) void createSession();
   }
   function unmount() {
     RUN_FILES.reset();

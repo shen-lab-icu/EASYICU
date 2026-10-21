@@ -9,6 +9,13 @@
   const selectedProjectIds = new Set();
   let folderCreation = { busy: false, error: null };
 
+  // The hosted-instance owner (screens-guided-pi-hosted.js), when it is
+  // loaded and the server reports a hosted instance.
+  function hostedOwner() {
+    const owner = window.EasyICU?.guidedPi?.optional('hosted');
+    return owner && owner.active() ? owner : null;
+  }
+
   function defaultParentDir(ctx) {
     return String(ctx.guidedDrafts?.data?.default_parent_dir || '').trim();
   }
@@ -305,6 +312,15 @@
     const { t, icon } = helpers(ctx);
     const host = document.getElementById('gdFolderControls');
     if (!host) return;
+    const hosted = hostedOwner();
+    if (hosted) {
+      // Hosted: one action, a new project in the clinician's own study folder.
+      host.innerHTML = `
+        <div class="gd-folder-picker">
+          <button class="gd-newbtn" type="button" data-folder-choice="new">${icon('plus', 14)} <span>${t('New research project', '新建研究项目')}</span></button>
+        </div>`;
+      return;
+    }
     host.innerHTML = `
       <div class="gd-folder-picker ${ctx.guidedFolderMenuOpen ? 'open' : ''}">
         <button class="gd-newbtn" type="button" data-newstudy data-folder-menu-toggle aria-haspopup="menu" aria-expanded="${ctx.guidedFolderMenuOpen ? 'true' : 'false'}" title="${t('Choose or create a local study folder', '选择或创建本地研究文件夹')}">
@@ -427,6 +443,11 @@
     const busy = folderCreation.busy;
     const error = folderCreateError(ctx);
     const mode = ctx.guidedFolderDialogMode === 'open' ? 'open' : 'new';
+    const hosted = hostedOwner();
+    if (hosted) {
+      host.innerHTML = hostedProjectDialog(ctx, title, busy, error);
+      return;
+    }
     const openForReview = ctx.pendingGuidedGoal && ctx.pendingGuidedGoal.goal === 'review_data';
     const openActions = openForReview ? `
       <button class="btn primary sm" data-reviewexportfolder>${icon('eye', 13)} ${t('Review extracted data', '审阅已提取数据')}</button>
@@ -474,6 +495,30 @@
             ${error ? `<div class="gds-status error" data-folder-create-error role="alert"><span>${esc(error.message)}${error.detail ? `<small class="gds-status-detail">${esc(error.detail)}</small>` : ''}</span></div>` : ''}
             <div class="row gap-8"><button class="btn primary sm" data-createdraft ${busy ? 'disabled' : ''} aria-busy="${busy}">${icon(busy ? 'refresh' : 'folder', 13)} ${busy ? t('Creating study folder…', '正在创建研究文件夹…') : t('Create study folder', '创建研究文件夹')}</button><button class="btn sm" data-folder-dialog-close>${t('Cancel', '取消')}</button></div>
           </div>`}
+      </section>`;
+  }
+
+  // A hosted instance keeps every project in the clinician's own study
+  // folder on the server (screens-guided-pi-hosted.js): the dialog asks for a
+  // name only, with no server folder, path or existing-folder choice.
+  function hostedProjectDialog(ctx, title, busy, error) {
+    const { t, icon, esc, attr } = helpers(ctx);
+    return `
+      <div class="gd-folder-backdrop" data-folder-dialog-close></div>
+      <section class="gd-folder-dialog gd-folder-dialog-hosted" data-folder-dialog data-draft-setup data-hosted-project-dialog role="dialog" aria-modal="true" aria-label="${t('New research project', '新建研究项目')}">
+        <div class="gd-folder-dialog-head">
+          <span class="gds-ico">${icon('folder', 15)}</span>
+          <div>
+            <strong>${t('New research project', '新建研究项目')}</strong>
+            <span>${t('Each project keeps its own conversations, plans and results.', '每个项目单独保存自己的对话、计划和结果。')}</span>
+          </div>
+          <button class="gd-folder-close" type="button" data-folder-dialog-close aria-label="${t('Close', '关闭')}">×</button>
+        </div>
+        <div class="gds-choice">
+          <label class="gds-field"><span>${t('Project name', '项目名称')}</span><input data-draft-title value="${attr(title)}" autocomplete="off" /></label>
+          ${error ? `<div class="gds-status error" data-folder-create-error role="alert"><span>${esc(error.message)}</span></div>` : ''}
+          <div class="row gap-8"><button class="btn primary sm" data-createdraft ${busy ? 'disabled' : ''} aria-busy="${busy}">${icon(busy ? 'refresh' : 'plus', 13)} ${busy ? t('Creating…', '正在新建…') : t('Create project', '新建项目')}</button><button class="btn sm" data-folder-dialog-close>${t('Cancel', '取消')}</button></div>
+        </div>
       </section>`;
   }
 

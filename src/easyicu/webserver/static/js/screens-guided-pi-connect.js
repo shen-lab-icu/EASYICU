@@ -39,9 +39,17 @@
     state.connectionDeferred = readDeferred();
     state.connectPrompt = null;
 
+    // The administrator connects the model of a hosted instance
+    // (screens-guided-pi-hosted.js), so its clinicians never see this choice.
+    function hosted() {
+      const owner = window.EasyICU.guidedPi.optional('hosted');
+      return owner && owner.active() ? owner : null;
+    }
+
     // The full connection page shows on first entry, until the researcher
     // chooses to explore first, and whenever they open connection settings.
     function pageRequired() {
+      if (hosted()) return false;
       return state.showSetup || (!connectionReady() && !state.connectionDeferred);
     }
 
@@ -86,6 +94,8 @@
     function dialogHtml() {
       const pending = state.connectPrompt;
       if (!pending) return '';
+      const hostedOwner = hosted();
+      if (hostedOwner) return hostedDialogHtml(hostedOwner);
       const manual = pending.reason === 'manual';
       const [reasonEn, reasonZh] = REASONS[pending.reason];
       const ready = connectionConfigured();
@@ -106,6 +116,22 @@
                 ? `<button class="btn primary" type="button" data-gpi-connect-continue ${busy ? 'disabled' : ''}>${manual ? tr('Done', '完成') : tr('Continue', '继续')}</button>`
                 : `<button class="gpi-link" type="button" data-gpi-connect-dismiss ${busy ? 'disabled' : ''}>${tr('Not now', '暂不连接')}</button>`}
             </div>
+          </section>
+        </div>`;
+    }
+
+    // A step that needs the model on a hosted instance whose administrator
+    // has not set one up: say so, and whom to ask. Nothing to connect here.
+    function hostedDialogHtml(hostedOwner) {
+      return `
+        <div class="gpi-connect-backdrop" data-gpi-connect-backdrop>
+          <section class="gpi-provider-shell gpi-connect-dialog" role="dialog" aria-modal="true" aria-labelledby="gpi-connect-title" data-gpi-connect-dialog tabindex="-1">
+            <header class="gpi-connect-head">
+              <div><h2 id="gpi-connect-title">${tr('Model not set up yet', '模型尚未配置')}</h2></div>
+              <button class="gpi-connect-close" type="button" data-gpi-connect-dismiss aria-label="${tr('Close', '关闭')}">×</button>
+            </header>
+            ${hostedOwner.missingModelHtml({ tr, esc })}
+            <div class="gpi-setup-actions"><button class="btn primary" type="button" data-gpi-connect-dismiss>${tr('OK', '知道了')}</button></div>
           </section>
         </div>`;
     }
