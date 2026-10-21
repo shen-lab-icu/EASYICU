@@ -203,6 +203,9 @@ const stepPayloads = {
     // A host action shows its typed inputs.
     sourceView.openOperation(button(literatureOp), 'project_1', '', () => {});
     assert.ok(html.includes(tr('Records found', '检索到的记录')) && html.includes('sepsis glucose mortality'));
+    // An operation's two blocks read Input and Output (输入 / 输出).
+    assert.ok(html.includes(`<strong>${tr('Input', '输入')}</strong></div>\n        <dl class="gpi-operation-facts">`));
+    assert.ok(html.includes(`<strong>${tr('Output', '输出')}</strong></div>`));
     sourceView.close();
   }
   process.stdout.write('step detail contracts passed\n');

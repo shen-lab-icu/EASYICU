@@ -1,0 +1,62 @@
+/* Owner: the agent-turn layout of the Guided Copilot conversation.
+   Markup owners: screens-guided-pi-activity.js (opening sentence, trace
+   window, host lines, a failed row's cause), screens-guided-pi-run-outcome.js
+   (run notes, answer actions), screens-guided-pi-run-stop.js (a stopped run),
+   screens-guided-pi-header.js (running chip), screens-guided-pi-session-view.js
+   (the note above the composer) and screens-guided-pi-step-detail.js (step
+   facts, status chip, error box). Loaded after guided-pi-skin.css. */
+
+/* One host sentence before a job's trace. */
+.gpi-turn-opening{max-width:865px;margin:0 0 8px;color:var(--skin-ink,#2a2622);font-size:15px;line-height:24px}
+
+/* The trace list: a window of about 320px that scrolls; 展开全部 lifts it. */
+.gpi-workspace .gpi-activity-body.is-clipped>ol{max-height:320px}
+.gpi-trace-live{position:relative;margin:8px 0 0}
+.gpi-trace-window>ol{display:grid;gap:8px;margin:0;padding:0 4px 0 0;list-style:none}
+/* While running, the window keeps the newest row in view. */
+.gpi-trace-live.is-clipped>.gpi-trace-window{display:flex;flex-direction:column-reverse;max-height:320px;overflow-y:auto}
+.gpi-trace-live.is-expanded>.gpi-trace-window{max-height:none;overflow:visible}
+
+/* A host line between rows: muted text, no box. */
+.gpi-activity li.gpi-trace-note,.gpi-activity-running li.gpi-trace-note,.gpi-workspace .gpi-activity li.gpi-trace-note{
+  padding:0 0 0 12px;border:0;background:transparent;color:var(--skin-muted,#6b645c);font-size:13px;line-height:21px
+}
+
+/* A failed row is red and says why in one line. */
+.gpi-activity li.error .gpi-activity-step-copy>strong,.gpi-activity-running li.error .gpi-activity-step-copy>strong{color:#9b3933}
+.gpi-activity-step-cause{display:block;max-width:100%;overflow:hidden;color:#9b3933;font-size:12px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
+
+/* 过程说明 and the answer's action row. */
+.gpi-run-notes{margin:14px 0 0}
+.gpi-run-notes h4{margin:0 0 4px;color:var(--skin-ink,#2a2622);font-size:13px;font-weight:600;line-height:20px}
+.gpi-run-notes p{margin:0;color:var(--skin-muted,#6b645c);font-size:13px;line-height:21px}
+.gpi-answer-actions{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:12px 0 0}
+.gpi-answer-action{display:inline-flex;align-items:center;gap:4px;min-height:28px;padding:3px 8px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--skin-muted,#6b645c);font:500 12px/18px var(--skin-font,inherit);cursor:pointer}
+.gpi-answer-action:hover,.gpi-answer-action:focus-visible{border-color:var(--skin-border,#deded8);color:var(--skin-ink,#2a2622)}
+.gpi-answer-action[data-copied="true"]{color:#2d6a4f}
+
+/* A stopped run: its cause, then the action that works. */
+.gpi-run-stop{margin:0 0 10px;padding:10px 12px;border-left:3px solid #9b3933;border-radius:6px;background:rgba(155,57,51,.06)}
+.gpi-run-stop p{margin:0;color:var(--skin-ink,#2a2622);font-size:14px;line-height:22px;overflow-wrap:anywhere}
+
+/* The top bar while a server job runs (desktop; narrower bars keep the
+   status for assistive technology, guided-pi-header.css). */
+@media(min-width:1181px){
+  .gpi-head-title .gpi-live.is-running{display:inline-flex;align-items:center;flex:0 0 auto;padding:1px 8px;border-radius:999px;background:rgba(42,38,34,.06);color:var(--skin-ink,#2a2622);font:500 12px/18px var(--skin-font,inherit);font-variant-numeric:tabular-nums;white-space:nowrap}
+}
+
+/* The note above the composer. */
+.gpi-compose-server-note{max-width:865px;margin:0 auto 6px;padding:0 4px;color:var(--skin-muted,#6b645c);font-size:12px;line-height:18px}
+
+/* Step detail: receipt facts above the code, the status chip, the error box. */
+.gpi-step-facts{margin:0 0 4px}
+.gpi-status-chip{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;background:rgba(42,38,34,.06);font-weight:500}
+.gpi-status-chip.status-error,.gpi-status-chip.status-failed,.gpi-status-chip.status-cancelled{background:#fbf0ee;color:#8b3934}
+.gpi-step-error{margin:0;border:1px solid rgba(155,57,51,.35);border-radius:6px;overflow:hidden}
+.gpi-step-error .gpi-step-note{border-bottom:0}
+
+/* Only the running row animates; reduced motion stills every spinner. */
+@media (prefers-reduced-motion:reduce){
+  .gpi-running-spinner{animation:none}
+  .gpi-trace-expand .ic{transition:none}
+}

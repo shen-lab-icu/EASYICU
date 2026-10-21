@@ -249,7 +249,7 @@
   const CONNECT = MODULES.require('connect').create({ state, tr, esc, render, connectionReady, connectionConfigured, finishProviderSetup,
     body: () => MODULES.require('provider').renderConnectionBody(setupOptions()) });
   const RUN_OUTCOME = MODULES.require('runOutcome').create({
-    tr, esc, iconHtml, resourceButton, api, projectId, host: () => state.host,
+    tr, esc, iconHtml, resourceButton, api, projectId, host: () => state.host, session: () => state.session,
     canPreview: () => Boolean(state.session) && !state.busy && !state.childJobId && !sessionIsStale(),
     preview: () => MODULES.optional('preview'),
     workflowContext: previewWorkflowContext,
@@ -623,7 +623,7 @@
     assistantTextHtml, sessionIsStale, agentMode, accessModeLabel,
     projectTitle: () => displayProjectTitle(state.project && state.project.title, projectId()), navigationSessionTitle,
     workflowConfirmationHtml, hostJobs: HOST_JOBS, followUps: MODULES.require('followUps'),
-    effortMenu: EFFORT_MENU,
+    effortMenu: EFFORT_MENU, workflowConfirmation, runFailureText,
   });
   const { messageHtml, workflowHtml, sessionPanel, demoPanel } = SESSION_VIEW;
   function openDemo() {

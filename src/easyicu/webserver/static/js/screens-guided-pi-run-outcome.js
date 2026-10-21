@@ -8,7 +8,7 @@
   function create(deps) {
     const {
       tr, esc, iconHtml, resourceButton, api, projectId, host, canPreview,
-      preview, workflowContext, errorText, recordHostAction, onError,
+      preview, workflowContext, errorText, recordHostAction, onError, session,
     } = deps;
     const labels = {
       'result_tables.json': ['View result tables', '查看结果表'],
@@ -250,18 +250,20 @@
           : tr('Download safe review copy', '下载脱敏审阅副本');
         return url ? `<a class="gpi-result-download" href="${esc(url)}" download="${esc(name)}" aria-label="${esc(title + ' ' + row.artifact)}" title="${title}">${iconHtml('download', 14)}</a>` : '';
       };
+      const contracts = window.EU_GUIDED_CONTRACTS || {};
+      const when = latestRun.updated_at && typeof contracts.fmtRunTime === 'function' ? String(contracts.fmtRunTime(latestRun.updated_at) || '') : '';
       const fileRow = row => `<div class="gpi-study-file" data-gpi-result-file="${esc(row.artifact)}" data-gpi-result-title="${esc(title(row))}"${needle && !matches(row) ? ' hidden' : ''}><span aria-hidden="true">${iconHtml(resourceIcon(row), 15)}</span>${resourceButton(row, title(row))}<small class="gpi-study-file-name">${esc(row.artifact)}</small>${size(row.size) ? `<small>${esc(size(row.size))}</small>` : ''}${download(row)}</div>`;
       const readerFiles = files.filter(row => READER_FILES.has(row.artifact));
       const auditFiles = files.filter(row => !READER_FILES.has(row.artifact));
       return `<section class="gpi-study-results" aria-label="${esc(tr('Current study results', '当前研究成果'))}">
-        <div class="gpi-study-results-heading"><span>${tr('Current run', '本次运行')} · ${files.length} ${tr('files', '个文件')}</span></div>
+        <div class="gpi-study-results-heading"><span>${tr('Current run', '本次运行')}${when ? ` · <time>${esc(when)}</time>` : ''} · ${files.length} ${tr('files', '个文件')}</span></div>
         <div class="gpi-study-results-primary">${rows.slice(0, 3).map(row => resourceButton(row, row.label)).join('')}</div>
         <div class="gpi-results-toolbar" role="group" aria-label="${tr('Result file display', '成果文件显示方式')}">
           <button type="button" data-gpi-results-view="list" aria-pressed="${view === 'list'}" title="${tr('Compact list', '简洁列表')}">${iconHtml('rows', 14)}<span>${tr('List', '列表')}</span></button>
           <button type="button" data-gpi-results-view="details" aria-pressed="${view === 'details'}" title="${tr('File details', '文件详情')}">${iconHtml('layers', 14)}<span>${tr('Details', '详情')}</span></button>
           <label><span class="shell-sr-only">${tr('Sort files', '文件排序')}</span><select data-gpi-results-sort><option value="recommended"${sort === 'recommended' ? ' selected' : ''}>${tr('Recommended', '推荐')}</option><option value="name"${sort === 'name' ? ' selected' : ''}>${tr('Name', '名称')}</option><option value="size"${sort === 'size' ? ' selected' : ''}>${tr('Size', '大小')}</option></select></label>
         </div>
-        <label class="gpi-results-search"><span class="shell-sr-only">${tr('Filter result files', '筛选成果文件')}</span><input type="search" data-gpi-results-search placeholder="${tr('Filter files…', '搜索文件…')}" value="${esc(query)}"></label>
+        ${files.length > 5 ? `<label class="gpi-results-search"><span class="shell-sr-only">${tr('Filter result files', '筛选成果文件')}</span><input type="search" data-gpi-results-search placeholder="${tr('Filter files…', '搜索文件…')}" value="${esc(query)}"></label>` : ''}
         <div class="gpi-study-results-links" data-gpi-results-list data-view="${view}">${readerFiles.map(fileRow).join('')}${auditFiles.length ? `<details class="gpi-study-results-audit"${needle && auditFiles.some(matches) ? ' open' : ''}><summary>${tr('Audit and provenance files', '审计与溯源文件')} · ${auditFiles.length}</summary>${auditFiles.map(fileRow).join('')}</details>` : ''}</div>
         <p class="gpi-aside-empty" data-gpi-results-empty${filtered.length ? ' hidden' : ''}>${tr('No matching files', '没有匹配的文件')}</p>
         <small>${esc(tr('Files from the current run · publication review pending', '当前运行文件 · 投稿审阅尚未完成'))}</small>
@@ -293,17 +295,49 @@
       };
       const rows = collection(latestRun, workflow).filter(row => descriptions[row.artifact]);
       const note = row => (ANSWER && ANSWER.fileNote(latestRun, row.artifact)) || descriptions[row.artifact];
-      return rows.length ? `<table class="gpi-deliverables"><caption>${tr('Results from this run', '本次研究产物')}</caption><thead><tr><th>${tr('Result', '成果')}</th><th>${tr('Contents', '内容')}</th></tr></thead><tbody>${rows.map(row => `<tr><td>${resourceButton(row, row.label)}</td><td>${esc(note(row))}</td></tr>`).join('')}</tbody></table>` : '';
+      return rows.length ? `<table class="gpi-deliverables"><caption>${tr('Results from this run', '本次研究产物')}</caption><thead><tr><th>${tr('File', '文件')}</th><th>${tr('Contents', '内容')}</th></tr></thead><tbody>${rows.map(row => `<tr><td>${resourceButton(row, row.label)}</td><td>${esc(note(row))}</td></tr>`).join('')}</tbody></table>` : '';
     }
 
-    function renderReviewAction(latestRun, workflow) {
+    // The review the workflow offers for this run now, or null.
+    function reviewOffer(latestRun, workflow) {
       const stage = (workflow && workflow.stages || []).find(row => row.id === workflow.current_stage);
-      if (!stage || !['ready', 'review_required'].includes(stage.status)) return '';
+      if (!stage || !['ready', 'review_required'].includes(stage.status)) return null;
       const name = stage.id === 'interpretation' ? 'full_analysis_report.json'
         : stage.id === 'manuscript' ? 'article_report.json' : '';
       const resource = collection(latestRun, workflow).find(row => row.artifact === name);
-      return resource ? resourceButton(resource, stage.id === 'interpretation'
+      return resource ? { resource, stage: stage.id } : null;
+    }
+    function renderReviewAction(latestRun, workflow) {
+      const offer = reviewOffer(latestRun, workflow);
+      return offer ? resourceButton(offer.resource, offer.stage === 'interpretation'
         ? tr('Review results', '审阅研究结果') : tr('Review manuscript', '审阅稿件')) : '';
+    }
+
+    /* 过程说明: one paragraph from this run's receipts (screens-guided-pi-
+       job-narration.js counts them). Every agent-run job of this run adds
+       its progress: the planning job's corrections, the analysis job's
+       repairs and continuations. */
+    function processNotes(latestRun) {
+      const narration = window.EasyICU.guidedPi.optional('jobNarration');
+      const current = typeof session === 'function' ? session() : null;
+      if (!narration || !latestRun || !latestRun.run_id) return '';
+      const jobs = (Array.isArray(current && current.archived_child_jobs) ? current.archived_child_jobs : [])
+        .filter(job => job && job.kind === 'agent-run' && job.run_id === latestRun.run_id);
+      const text = narration.processNotes({ progress: jobs.flatMap(job => Array.isArray(job.progress) ? job.progress : []) }, latestRun, tr);
+      return text ? `<section class="gpi-run-notes" aria-label="${esc(tr('Notes on the run', '过程说明'))}"><h4>${esc(tr('Notes on the run', '过程说明'))}</h4><p>${esc(text)}</p></section>` : '';
+    }
+
+    /* The answer's action row: copy its text, the review the workflow offers
+       for this run (only then), and the run record's count, which opens the
+       right rail's record. No rating: EasyICU keeps no feedback ledger. */
+    function answerActions(latestRun, workflow) {
+      const offer = reviewOffer(latestRun, workflow);
+      const runs = Array.isArray(workflow && workflow.runs) ? workflow.runs.length : 0;
+      return `<div class="gpi-answer-actions" role="group" aria-label="${esc(tr('Answer actions', '回答操作'))}">
+        <button type="button" class="gpi-answer-action" data-gpi-run-answer-copy>${iconHtml('copy', 13)}<span>${esc(tr('Copy', '复制'))}</span></button>
+        ${offer ? resourceButton(offer.resource, tr('Review', '审查'), { className: 'gpi-answer-action' }) : ''}
+        ${runs ? `<button type="button" class="gpi-answer-action" data-gpi-open-run-record>${iconHtml('list', 13)}<span>${esc(tr(`Run record ${runs}`, `运行记录 ${runs}`))}</span></button>` : ''}
+      </div>`;
     }
 
     function followUps(latestRun, workflow) {
@@ -332,7 +366,7 @@
       const visible = suggestions.map((prompt, index) => ({ prompt, index }))
         .filter(row => !dismissedFollowUps.has(`${runId}:${row.prompt}`));
       if (!visible.length) return '';
-      return `<details class="gpi-followups" open><summary class="gpi-followups-head">${iconHtml('help', 14)}<span>${tr('Follow-up questions', '继续追问')}</span></summary><div class="gpi-followups-list">${visible.map(({ prompt, index }) => `<div class="gpi-followup-row"><button type="button" class="gpi-followup-prompt" data-gpi-followup="${index}"><span aria-hidden="true">↳</span>${esc(prompt)}</button><div class="gpi-followup-actions"><button type="button" class="gpi-icon-action" data-gpi-followup-new="${index}" title="${esc(tr('Ask in a new conversation', '在新对话中追问'))}" aria-label="${esc(tr('Ask in a new conversation', '在新对话中追问'))}">${iconHtml('arrow', 13)}</button><button type="button" class="gpi-icon-action" data-gpi-followup-dismiss="${index}" title="${esc(tr('Dismiss suggestion', '关闭建议'))}" aria-label="${esc(tr('Dismiss suggestion', '关闭建议'))}">${iconHtml('close', 13)}</button></div></div>`).join('')}</div></details>`;
+      return `<details class="gpi-followups" open><summary class="gpi-followups-head">${iconHtml('help', 14)}<span>${tr('Follow-up questions', '后续问题')}</span></summary><div class="gpi-followups-list">${visible.map(({ prompt, index }) => `<div class="gpi-followup-row"><button type="button" class="gpi-followup-prompt" data-gpi-followup="${index}"><span aria-hidden="true">↳</span>${esc(prompt)}</button><div class="gpi-followup-actions"><button type="button" class="gpi-icon-action" data-gpi-followup-new="${index}" title="${esc(tr('Ask in a new conversation', '在新对话中追问'))}" aria-label="${esc(tr('Ask in a new conversation', '在新对话中追问'))}">${iconHtml('arrow', 13)}</button><button type="button" class="gpi-icon-action" data-gpi-followup-dismiss="${index}" title="${esc(tr('Dismiss suggestion', '关闭建议'))}" aria-label="${esc(tr('Dismiss suggestion', '关闭建议'))}">${iconHtml('close', 13)}</button></div></div>`).join('')}</div></details>`;
     }
 
     function dismissFollowUp(index, latestRun, workflow) {
@@ -544,6 +578,8 @@
           ${renderDeliverables(latestRun, workflow)}
           ${figureNote}
           <div class="gpi-run-outcome-actions gpi-run-outcome-primary">${primaryActions.join('')}</div>
+          ${processNotes(latestRun)}
+          ${answerActions(latestRun, workflow)}
           ${renderFollowUps(latestRun, workflow)}
           <details class="gpi-response-review" open><summary>${tr('Scientific review', '科学审阅')}</summary>${renderReviewSummary(latestRun)}</details>
         </div>

@@ -707,6 +707,11 @@ def _trace_facts(event: Mapping[str, Any]) -> Dict[str, Any]:
         value = event.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100_000:
             facts[key] = value
+    # The research context's own counts: a large database holds millions of stays.
+    for key in ("stay_count", "variable_count"):
+        value = event.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 10_000_000:
+            facts[key] = value
     for key in ("source_label", "source_database"):
         text = _visible_fact_text(event.get(key), 160)
         if text:

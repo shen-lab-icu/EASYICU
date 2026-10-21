@@ -82,6 +82,21 @@ const upsert = (target, row) => {
     for (const event of events) child.handleChildJobEvent('execution', '', event);
     const live = messages.find(row => row.childJobId === 'execution');
     assert.equal(live.steps.filter(row => row.step === 'plan_step').length, 8);
+    // The code that started a watched job keys its opening sentence; its stop
+    // code gives the failed row a cause.
+    const coded = [];
+    const codedChild = window.EU_GUIDED_PI_CHILDJOB.create({ tr, activity, upsertActivityStep: upsert, render() {},
+      messages: () => coded, session: () => null, childJobId: () => 'coded', loadWorkflow: async () => {},
+      childSource: () => null, setChildSource() {}, setChildJobId() {}, archiveChildJob: async () => null,
+      refreshSession: async () => null, sessionIsStale: () => false, rebind: async () => {},
+    });
+    codedChild.handleChildJobEvent('coded', 'easyicu_review_submitted', events[1]);
+    const codedRow = coded.find(row => row.childJobId === 'coded');
+    assert.equal(codedRow.jobCode, 'easyicu_review_submitted');
+    codedChild.handleChildJobEvent('coded', 'easyicu_full_run_submitted', { type: 'end', status: 'failed',
+      error: 'research_pipeline_execution_failed: ' + privateText, timestamp: at(90) });
+    assert.equal(codedRow.jobCode, 'easyicu_review_submitted', 'a later guess never replaces the job’s code');
+    assert.equal(codedRow.failureCode, 'research_pipeline_execution_failed');
     const job = { present: true, job_id: 'execution', kind: 'agent-run', status: 'done',
       created_at_epoch: Date.parse(at(0)) / 1000, finished_at_epoch: Date.parse(at(85)) / 1000, progress: events };
     child.hydrateProjectedJob(job);

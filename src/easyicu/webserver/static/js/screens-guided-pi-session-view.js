@@ -11,8 +11,11 @@
       publicAssistantText, assistantTextHtml, sessionIsStale, agentMode,
       accessModeLabel, projectTitle, navigationSessionTitle,
       workflowConfirmationHtml, hostJobs: HOST_JOBS, followUps: FOLLOW_UPS,
-      effortMenu: EFFORT_MENU,
+      effortMenu: EFFORT_MENU, workflowConfirmation, runFailureText,
     } = deps;
+    // A stopped run's block (owner: screens-guided-pi-run-stop.js).
+    const stopOwner = MODULES.optional('runStop');
+    const RUN_STOP = stopOwner ? stopOwner.create({ tr, runFailureText }) : null;
 
     function messageHtml(row, options) {
       if (row.childJobHandoff) return '';
@@ -20,16 +23,15 @@
         const records = MODULES.optional('decisionRecords');
         return records ? records.render(row, { tr, esc }) : '';
       }
+      const stopHtml = RUN_STOP ? RUN_STOP.render(row) : '';
+      if (row.role === 'activity' && stopHtml) return ACTIVITY.render(row, options && options.trace) + stopHtml + RUN_FILES.render(row);
       if (row.role === 'activity') return ACTIVITY.render(row, options && options.trace) + RUN_FILES.render(row);
       if (row.role === 'host_notice') return HOST_JOBS && typeof HOST_JOBS.renderNotice === 'function' ? HOST_JOBS.renderNotice(row) : '';
       if (row.role === 'saved_run') {
-        // A saved run with no message of its own says what became of it.
-        const runs = Array.isArray(row.savedRuns) ? row.savedRuns : [];
-        const failed = runs.length && runs.every(run => String(run && run.run_status || '').toLowerCase() === 'failed');
-        const note = failed
-          ? tr('This run did not complete. Its files are kept below as history; the run list on the right shows why it stopped.', '这次运行没有完成，文件作为历史保留在下方；右侧运行记录写明了停止原因。')
-          : tr('Saved run synchronized from this research project.', '已从本研究同步保存的运行记录。');
-        return `<article class="gpi-message assistant gpi-saved-run"><div class="gpi-message-body"><p>${note}</p>${RUN_FILES.render(row)}</div></article>`;
+        // A saved run with no message of its own says what became of it: a
+        // stopped run its cause and the action that works.
+        const note = stopHtml || `<p>${tr('Saved run synchronized from this research project.', '已从本研究同步保存的运行记录。')}</p>`;
+        return `<article class="gpi-message assistant gpi-saved-run"><div class="gpi-message-body">${note}${RUN_FILES.render(row)}</div></article>`;
       }
       // The demo's record of a host control that was pressed, not typed.
       if (row.role === 'demo_action') {
@@ -112,7 +114,7 @@
         <div class="gpi-message-body">
           ${messageSkillHtml}${contentHtml}
           ${messageResourcesHtml}
-          ${RUN_FILES.render(row)}
+          ${stopHtml}${RUN_FILES.render(row)}
           ${historicalDataConsentHtml}
           ${nextStepHtml}
           ${messageActions.actionsHtml}
@@ -276,6 +278,9 @@
         projectTitle: projectTitle(),
         sessionTitle: navigationSessionTitle(session),
         busy: interactionLocked,
+        // The top bar's 运行中 · elapsed, while a server job runs.
+        runningSince: activeChild && Number.isFinite(Number(activeChild.startedAt)) ? Number(activeChild.startedAt) : null,
+        runningElapsed: activeChild && ACTIVITY.durationText ? ACTIVITY.durationText(activeChild.startedAt) : '',
         workspace,
         pinned: Boolean(session.pinned_for_presentation),
         layout: ASIDE.layoutOptions(),
@@ -307,6 +312,9 @@
             ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send aria-label="${tr('Send', '发送')}" title="${tr('Send', '发送')}" ${interactionLocked || stale ? 'disabled' : ''}>${iconHtml('arrow', 15)}</button>`}</div>
           </div>`)}
       </div>`;
+      // A research job runs in the server process and outlives the page
+      // (jobs.py JobManager.submit; the workflow re-watches it on return).
+      const serverNoteHtml = `<p class="gpi-compose-server-note">${esc(tr('EasyICU runs on the server; you can switch conversations or close the page and come back to the progress.', 'EasyICU 在服务器上运行，可以切换对话或关闭页面，回来后继续显示进度。'))}</p>`;
       const emptyResearchHtml = STARTERS && typeof STARTERS.render === 'function'
         ? STARTERS.render({ tr, disabled: interactionLocked || stale,
           composer: `<div class="gpi-compose gpi-entry-compose">${composerCardHtml}</div>` })
@@ -330,7 +338,7 @@
             ${showProjectContinuationCards && !dataConsentRequired ? continuationCardsHtml() : ''}
           </div>
           ${state.error ? `<div class="gpi-error" role="alert"><span>${esc(state.error)}</span><button type="button" class="gpi-error-close" data-gpi-dismiss-error aria-label="${tr('Dismiss', '关闭提示')}">×</button></div>` : ''}
-          ${emptyResearch ? '' : `<div class="gpi-compose">${composerCardHtml}</div>`}
+          ${emptyResearch ? '' : `${activeChild ? serverNoteHtml : ''}<div class="gpi-compose">${composerCardHtml}</div>`}
       </div>`;
     }
 

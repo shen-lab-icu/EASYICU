@@ -31,7 +31,7 @@
     const iconHtml = options && typeof options.iconHtml === 'function' ? options.iconHtml : () => '';
     const disabled = options && options.disabled ? ' disabled' : '';
     return `<details class="gpi-followups gpi-model-followups" open>
-      <summary class="gpi-followups-head">${iconHtml('help', 14)}<span>${esc(tr('Follow-up questions', '继续追问'))}</span></summary>
+      <summary class="gpi-followups-head">${iconHtml('help', 14)}<span>${esc(tr('Follow-up questions', '后续问题'))}</span></summary>
       <div class="gpi-followups-list">${rows.map(question => `<div class="gpi-followup-row"><button type="button" class="gpi-followup-prompt" data-gpi-model-followup="${esc(question)}"${disabled}><span aria-hidden="true">↳</span>${esc(question)}</button></div>`).join('')}</div>
     </details>`;
   }
