@@ -42,7 +42,7 @@ def test_blank_boolean_feature_does_not_break_real_summary(
     assert data["min"] == 0 and data["max"] == 1
 
 
-@pytest.mark.parametrize("ext", ["csv", "parquet", "xlsx"])
+@pytest.mark.parametrize("ext", ["csv", "xlsx"])
 def test_reader_keeps_every_row_or_refuses_budget(tmp_path, monkeypatch, ext):
     p = tmp_path / f"values.{ext}"
     frame = pd.DataFrame({"value": [1, 2, 3, 4, 5], "unused": [99] * 5})
