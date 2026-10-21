@@ -98,6 +98,10 @@ def demo_sources_catalog() -> dict[str, Any]:
 def make_prepare_runner(source_id: str):
     """Return an idempotent runner using the five explicit owner operations."""
 
+    from easyicu.webserver import hosted
+
+    if hosted.is_hosted():
+        hosted.unavailable()
     source = get_source(source_id)
     paths = _source_paths(source)
     operations = _prepare.PrepareOperations(

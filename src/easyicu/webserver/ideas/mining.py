@@ -1957,6 +1957,7 @@ def create_agent_project(body: Dict[str, Any]) -> Dict[str, Any]:
         ) from exc
     seed = _agent_project_seed(handoff, canonical_packet)
     project_dir = _AGENT_PROJECTS_ROOT / str(seed["study_id"])
+    hosted.require_instance_path(project_dir / "project_seed.json")
     project_dir.mkdir(parents=True, exist_ok=True)
     (project_dir / "project_seed.json").write_text(
         json.dumps(seed, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -6154,13 +6155,13 @@ def _pubmed_esummary(ids: List[str]) -> List[Dict[str, Any]]:
 
 def _run_dir(run_id: str) -> Path:
     path = _RUN_ROOT / _slug(run_id, fallback="idea_run")
-    hosted.require_path(path, instance_owned=True)
+    hosted.require_instance_path(path)
     if hosted.is_hosted() and path.is_dir():
         # All receipts are immediate children of this metadata-only run. A
         # valid run ID must not let a pre-existing link redirect their reads
         # or writes outside the instance, even when the directory is allowed.
         for child in path.iterdir():
-            hosted.require_path(child, instance_owned=True)
+            hosted.require_instance_path(child)
     return path
 
 

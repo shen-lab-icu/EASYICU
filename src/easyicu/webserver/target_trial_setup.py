@@ -446,7 +446,9 @@ def _compile(
     except ResearchPipelineRunError as exc:
         return _launch_refused(exc)
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="easyicu-target-trial-") as scratch:
+    from easyicu.webserver.hosted import instance_scratch_dir
+
+    with tempfile.TemporaryDirectory(prefix="easyicu-target-trial-", dir=instance_scratch_dir()) as scratch:
         try:
             acquisition = acquire_target_trial_universe(
                 prepared,

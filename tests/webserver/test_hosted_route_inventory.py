@@ -49,15 +49,23 @@ def test_every_route_and_mount_has_a_reviewed_boundary():
             assert not row["fields"], row
 
 
+def test_every_route_has_a_reviewed_write_destination():
+    # Coverage equality above rejects new routes; even a route without path
+    # arguments must declare its downstream writes before it can be reviewed.
+    for row in INVENTORY:
+        assert row.get("writes") in {"none", "instance home", "refused on hosted"}, row
+        assert row.get("write_owner"), row
+
+
 GUARDED_FIELDS = [
-    (row["method"], row["route"], field)
+    (row["method"], row["route"], field, row.get("guarded_errors", {}).get(field, "path_outside_data_roots"))
     for row in INVENTORY
     for field in row.get("guarded_fields", [])
 ]
 
 
-@pytest.mark.parametrize("method,route,field", GUARDED_FIELDS)
-def test_inventory_path_fields_are_refused_before_dispatch(tmp_path, monkeypatch, method, route, field):
+@pytest.mark.parametrize("method,route,field,error", GUARDED_FIELDS)
+def test_inventory_path_fields_are_refused_before_dispatch(tmp_path, monkeypatch, method, route, field, error):
     root = tmp_path / "permitted"
     root.mkdir()
     outside = str(tmp_path / "outside")
@@ -74,5 +82,5 @@ def test_inventory_path_fields_are_refused_before_dispatch(tmp_path, monkeypatch
 
     response = TestClient(app).request(method, route, **{"params" if location == "query" else "json": value})
     assert response.status_code == 403, response.text
-    assert response.json()["detail"]["error"] == "path_outside_data_roots"
+    assert response.json()["detail"]["error"] == error
     assert calls == []

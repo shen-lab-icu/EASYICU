@@ -407,8 +407,14 @@ def build_prepare_runner(
     operations: PrepareOperations,
 ):
     """Build an idempotent background runner from explicit owner operations."""
+    from easyicu.webserver import hosted
+
+    if hosted.is_hosted():
+        hosted.unavailable()
 
     def runner(job: Any) -> dict[str, Any]:
+        if hosted.is_hosted():
+            hosted.unavailable()
         job.emit(
             {
                 "type": "start",

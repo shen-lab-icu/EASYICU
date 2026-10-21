@@ -204,7 +204,9 @@ def _rehearse_grouped_continuation(
 ) -> None:
     # This is the same builder, reviewed requirements and grouping restore the
     # pipeline uses, on the same materialization, with no Provider or approval.
-    with tempfile.TemporaryDirectory(prefix="easyicu-grouped-resume-") as directory:
+    from easyicu.webserver.hosted import instance_scratch_dir
+
+    with tempfile.TemporaryDirectory(prefix="easyicu-grouped-resume-", dir=instance_scratch_dir()) as directory:
         temporary_root = Path(directory).resolve()
         target = temporary_root / "cohort.parquet"
         stage_materialized_cohort_authority(

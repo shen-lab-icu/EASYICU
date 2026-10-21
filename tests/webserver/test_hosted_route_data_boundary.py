@@ -36,9 +36,9 @@ def boundary(tmp_path, monkeypatch):
     return root, home, outside
 
 
-def refused(response):
+def refused(response, code="path_outside_data_roots"):
     assert response.status_code == 403, response.text
-    assert response.json()["detail"]["error"] == "path_outside_data_roots"
+    assert response.json()["detail"]["error"] == code
 
 
 @pytest.mark.parametrize("route", ["/api/crossdb-review/raw-distribution", "/api/jobs/crossdb-raw-distribution"])
@@ -181,7 +181,10 @@ def test_raw_directory_helpers_refuse_before_scanning(boundary, monkeypatch, own
 
 def test_instance_owned_run_directories_remain_available(boundary):
     root, home, _ = boundary
-    for directory in (root, home):
+    with pytest.raises(HTTPException) as error:
+        RunDirectory.resolve(root)
+    assert error.value.detail["error"] == "hosted_data_read_only"
+    for directory in (home,):
         assert RunDirectory.resolve(directory).path == directory
         assert RunDirectory.create(directory, "synthetic", "job").path == directory / "synthetic" / "run_job"
         assert agent_runs.list_run_history(project_root=str(directory))["runs"] == []
@@ -197,7 +200,7 @@ def test_opaque_run_ref_rechecks_the_resolved_directory(boundary, monkeypatch, r
     monkeypatch.setattr(agent_runs, "_read_safe_artifact_bytes", lambda p, name: reads.append(p) or (None, None, "synthetic"))
     response = TestClient(app).post(f"/api/agent-runs/{route}", json={"run_ref": "opaque", "artifact": "quality_gate.json"})
     if hosted:
-        refused(response)
+        refused(response, "hosted_data_read_only")
         assert reads == []
     else:
         assert response.status_code == 400
@@ -232,7 +235,7 @@ def test_run_history_rechecks_each_directory_before_listing(boundary, monkeypatc
     if hosted:
         with pytest.raises(HTTPException) as error:
             agent_runs.list_run_history(project_root=str(root))
-        assert error.value.detail["error"] == "path_outside_data_roots"
+        assert error.value.detail["error"] == "hosted_data_read_only"
         assert listings == reads == []
     else:
         assert agent_runs.list_run_history(project_root=str(root))["ok"]
@@ -247,7 +250,7 @@ def test_run_creation_checks_the_final_directory(boundary, monkeypatch, hosted):
     if hosted:
         with pytest.raises(HTTPException) as error:
             RunDirectory.create(home, "synthetic", "job")
-        assert error.value.detail["error"] == "path_outside_data_roots"
+        assert error.value.detail["error"] == "hosted_data_read_only"
     else:
         assert RunDirectory.create(home, "synthetic", "job").path == home / "synthetic" / "run_job"
 
@@ -271,7 +274,7 @@ def test_agent_seed_checks_the_child_file(boundary, monkeypatch, hosted):
     if hosted:
         with pytest.raises(HTTPException) as error:
             agent_routes._validate_agent_project_seed_for_run(str(home), "synthetic")
-        assert error.value.detail["error"] == "path_outside_data_roots"
+        assert error.value.detail["error"] == "hosted_data_read_only"
         assert reads == []
     else:
         assert agent_routes._validate_agent_project_seed_for_run(str(home), "synthetic")["ok"]
@@ -299,7 +302,7 @@ def test_guided_project_checks_the_file_it_opens(boundary, monkeypatch, filename
     monkeypatch.setattr(Path, "read_text", read)
     response = TestClient(app).post("/api/guided/project/open", json={"project_dir": str(project)})
     if hosted:
-        refused(response)
+        refused(response, "hosted_data_read_only")
         assert reads == []
     else:
         assert response.status_code == 200
@@ -316,7 +319,7 @@ def test_guided_trash_rechecks_the_saved_coordinate(boundary, monkeypatch, hoste
     monkeypatch.setattr(guided_sessions, "_send2trash", moved.append)
     response = TestClient(app).post("/api/guided/drafts/remove", json={"draft_id": "synthetic", "trash_confirmation": "synthetic", "trash_project_folder": True})
     if hosted:
-        refused(response)
+        refused(response, "hosted_data_read_only")
         assert moved == []
     else:
         assert response.status_code == 200
@@ -355,7 +358,7 @@ def test_idea_run_id_cannot_read_outside_state(boundary, monkeypatch, kind, host
     monkeypatch.setattr(Path, "iterdir", listed)
     response = TestClient(app).post("/api/ideas/run", json={"run_id": "synthetic"})
     if hosted:
-        refused(response)
+        refused(response, "hosted_data_read_only")
         assert reads == listings == []
     else:
         assert response.status_code == 400  # The synthetic empty record is absent.
@@ -391,7 +394,7 @@ def test_quarantine_id_checks_the_manifest_before_restoring(boundary, monkeypatc
     monkeypatch.setattr(Path, "read_text", read)
     response = TestClient(app).post("/api/copilot/pi/session-maintenance", json={"action": "restore", "confirm": True, "quarantine_id": batch})
     if hosted:
-        refused(response)
+        refused(response, "hosted_data_read_only")
         assert reads == []
     else:
         assert response.status_code == 200

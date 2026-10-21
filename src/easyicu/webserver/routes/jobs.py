@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 
 from easyicu.webserver import crossdb_review
 from easyicu.webserver import dataio
+from easyicu.webserver import hosted
 from easyicu.webserver import jobs as job_store
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import sources as source_store
@@ -192,7 +193,7 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
     if not path or not database:
         raise HTTPException(status_code=400, detail="path and database are required")
     settings = settings_store.load_settings()
-    out_dir = body.get("out_dir") or settings.get("export_dir")
+    out_dir = body.get("out_dir") or (None if hosted.is_hosted() else settings.get("export_dir"))
     export_runner = dataio.make_export_runner(
         data_path=path,
         database=database,
