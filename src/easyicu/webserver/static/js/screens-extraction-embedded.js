@@ -114,8 +114,8 @@
       const lead = head.querySelector('p');
       if (title) title.textContent = t('Bind data source', '绑定数据来源');
       if (lead) lead.textContent = t(
-        'Choose and confirm the local data for this study. EasyICU keeps your question and will propose the complete plan next; selecting data does not start analysis.',
-        '选择并确认本次研究使用的本地数据。EasyICU 会保留你已提出的问题，接着拟定完整计划；选择数据不会开始分析。'
+        'Choose and confirm the data for this study. EasyICU keeps your question and will propose the complete plan next; selecting data does not start analysis.',
+        '选择并确认本次研究使用的数据。EasyICU 会保留你已提出的问题，接着拟定完整计划；选择数据不会开始分析。'
       );
       const dictionary = head.querySelector('.eudata-dictionary-link');
       if (dictionary) dictionary.remove();
@@ -129,9 +129,9 @@
       // data-source choice; offer the switch here rather than the wizard.
       if (typeof owner.isReal === 'function' && !owner.isReal()) {
         workspace.innerHTML = `<div class="note info gpi-source-binding-mode"><div class="ico">${icon('db', 14)}</div><div class="body">
-          <div class="t">${t('This conversation needs local data', '这项研究需要本机数据')}</div>
-          <div class="d">${t('Switch to real data to choose the local ICU folder. Nothing is uploaded and no patient rows are returned.', '切换到真实数据后即可选择本机 ICU 文件夹；不会上传，也不会返回患者行。')}</div>
-          <button class="btn sm primary mt-16" type="button" data-gpi-extraction-real>${icon('db', 12)} ${t('Use real local data', '使用本地真实数据')}</button>
+          <div class="t">${t('This conversation needs real data', '这项研究需要真实数据')}</div>
+          <div class="d">${t('Switch to real data to choose the ICU data folder. No patient rows are returned to the conversation.', '切换到真实数据后即可选择 ICU 数据文件夹；对话里不会返回患者行。')}</div>
+          <button class="btn sm primary mt-16" type="button" data-gpi-extraction-real>${icon('db', 12)} ${t('Use real data', '使用真实数据')}</button>
         </div></div>`;
       }
       return;
@@ -170,13 +170,13 @@
     const syncReceiptMessage = options.syncReceipt ? t(
       'StudyContext revision ' + Number(options.syncReceipt.study_revision || 0)
         + ' now contains this ' + (options.syncReceipt.receipt_kind === 'extraction_result' ? 'extraction result' : 'extraction setup')
-        + '. The next Copilot turn reads that typed state; the local folder path is not sent as model-authored text.',
+        + '. The next Copilot turn reads that typed state; the folder path is not sent as model-authored text.',
       'StudyContext 第 ' + Number(options.syncReceipt.study_revision || 0)
         + ' 版已保存本次' + (options.syncReceipt.receipt_kind === 'extraction_result' ? '抽取结果' : '抽取配置')
-        + '。下一轮 Copilot 会读取这份结构化状态；本机文件夹路径不会作为模型文字发送。'
+        + '。下一轮 Copilot 会读取这份结构化状态；文件夹路径不会作为模型文字发送。'
     ) : '';
     const extractionActions = sourceBinding ? '' : `
-      ${owner.isReal() ? '' : `<button class="btn sm" type="button" data-gpi-extraction-real>${icon('db', 12)} ${t('Use real local data', '使用本地真实数据')}</button>`}
+      ${owner.isReal() ? '' : `<button class="btn sm" type="button" data-gpi-extraction-real>${icon('db', 12)} ${t('Use real data', '使用真实数据')}</button>`}
       ${sourceId ? `<button class="btn sm" type="button" data-gpi-extraction-download>${icon('download', 12)} ${t('Download data package', '下载数据包')}</button>` : ''}
       <button class="btn sm primary" type="button" data-gpi-extraction-sync>${icon(options.syncReceipt ? 'check' : 'agent', 12)} ${options.syncReceipt ? t('Synced to Copilot', '已同步到 Copilot') : syncLabel}</button>`;
     host.innerHTML = `<div class="gpi-extraction-embed" data-gpi-extraction-embed>

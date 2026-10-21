@@ -186,7 +186,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20260921-route-sub1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20260921-owner-split1" in index_html
-    assert "js/screens-extraction.js?v=20261020-folder-hint1" in index_html
+    assert "js/screens-extraction.js?v=20261021-where1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261021-turn-layout1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
@@ -3463,7 +3463,7 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
     output_css = _static_css("extraction-output.css")
 
     assert "css/extraction-output.css?v=20260824-local-open1" in index_html
-    assert "js/screens-extraction-embedded.js?v=20260921-eudata-binding1" in index_html
+    assert "js/screens-extraction-embedded.js?v=20261021-where1" in index_html
     assert "js/screens-guided-pi-starters.js?" in index_html
     assert "js/screens-guided-pi-header.js?" in index_html
     assert "js/screens-guided-pi.js?" in index_html

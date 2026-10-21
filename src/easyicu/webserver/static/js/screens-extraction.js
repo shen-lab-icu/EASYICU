@@ -10,6 +10,9 @@
 
   /* ================= DATA EXTRACTION (simplified) ================= */
   function dataMode() { return window.EU_DATA || 'demo'; }  // global Demo/Real (topbar)
+  // A hosted instance runs on the hospital server (screens-guided-pi-hosted.js).
+  function hostedServer() { const owner = window.EasyICU?.guidedPi?.optional('hosted'); return Boolean(owner && owner.active()); }
+  function runsWhere() { return hostedServer() ? t('on the server', '在服务器上') : t('on your machine', '在本机'); }
   const DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30;
   const MAX_OBSERVATION_WINDOW_HOURS = 24 * 30;
   let exView = 'home';          // home | running | done
@@ -549,14 +552,14 @@
       <div class="cfg ex-connect-card">
         <div class="cfg-head">
           <div class="cfg-ico">${icon('folder', 17)}</div>
-          <div class="grow"><div class="cfg-h">${t('Connect your data', '连接你的数据')}</div><div class="cfg-sub">${t('local-only · nothing is uploaded', '仅本地 · 不上传任何数据')}</div></div>
+          <div class="grow"><div class="cfg-h">${t('Connect your data', '连接你的数据')}</div><div class="cfg-sub">${hostedServer() ? t('processed on the server only', '数据只在服务器上处理') : t('local-only · nothing is uploaded', '仅本地 · 不上传任何数据')}</div></div>
         </div>
         <div class="cfg-body">
           ${copilotPrefillSummary()}
-          <label class="ex-connect-label" for="exPathInput">${t('Data folder on this machine', '本机上的数据文件夹')}</label>
+          <label class="ex-connect-label" for="exPathInput">${t('Data folder', '数据文件夹')}</label>
           <div class="path-field editable ex-connect-path">
             <span class="pf-ico">${icon('folder', 14)}</span>
-            <input class="pf-input" id="exPathInput" type="text" spellcheck="false" autocomplete="off" value="${escHtml(exPath)}" placeholder="${t('Paste or browse to a local ICU folder', '粘贴或浏览选择本机 ICU 文件夹')}" aria-label="${t('Data folder path', '数据文件夹路径')}" />
+            <input class="pf-input" id="exPathInput" type="text" spellcheck="false" autocomplete="off" value="${escHtml(exPath)}" placeholder="${t('Paste or browse to an ICU data folder', '粘贴或浏览选择 ICU 数据文件夹')}" aria-label="${t('Data folder path', '数据文件夹路径')}" />
             <button class="btn sm ghost ex-connect-browse" data-ex-browse>${icon('folder', 13)} ${t('Browse…', '浏览…')}</button>
           </div>
           <div class="ex-connect-primary">
@@ -637,9 +640,9 @@
           `当前研究要求 ${String(exDatabaseMismatch && exDatabaseMismatch.expected || '').toUpperCase()}，但所选文件夹被识别为 ${String(exDatabaseMismatch && exDatabaseMismatch.actual || '未知').toUpperCase()}。请选择匹配的数据库目录；EasyICU 不会使用其他数据库继续。`
         )
       : exScanError === 'no_path'
-      ? t('Choose or paste a local folder path first.', '请先选择或粘贴本机文件夹路径。')
+      ? t('Choose or paste a folder path first.', '请先选择或粘贴文件夹路径。')
       : exScanError === 'not_a_directory'
-      ? t('That path is not a folder on this machine.', '该路径不是本机上的文件夹。')
+      ? t('That path is not a folder EasyICU can open.', '该路径不是 EasyICU 能打开的文件夹。')
       : exScanError === 'permission_denied'
       ? t('Permission denied reading that folder.', '没有读取该文件夹的权限。')
       : exScanError === 'unrecognized_folder'
@@ -690,7 +693,7 @@
       : `<button class="btn primary" data-ex-startconv>${icon('refresh', 14)} ${t('Convert raw files', '转换原始文件')}${d.size ? ` · ${escHtml(d.size)}` : ''}${d.est ? ` · ${escHtml(d.est)}` : ''}</button>`;
     const note = d.ready
       ? `<div class="note ok mt-16" style="padding:10px 12px;"><div class="ico">${icon('check', 14, 2.6)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Detected', '已识别')}: ${sourceLabel}</div><div class="d" style="font-size:11px;margin:0;">${d.source === 'module' ? t('This looks like an existing EasyICU export. Register it as a reusable local source.', '这看起来是已有 EasyICU 导出。可以注册为可复用的本地来源。') : t('Already analysis-ready — no conversion needed. You can extract straight away.', '已是可分析格式 —— 无需转换,可直接抽取。')}</div></div></div>`
-      : `<div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t('One-time conversion to Parquet. Runs on your machine; results are cached so a re-run is instant.', '一次性转换为 Parquet。在本机运行;结果会缓存,再次运行会很快。')}</div></div></div>`;
+      : `<div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t(`One-time conversion to Parquet. Runs ${runsWhere()}; results are cached so a re-run is instant.`, `一次性转换为 Parquet，${runsWhere()}运行；结果会缓存，再次运行会很快。`)}</div></div></div>`;
     return `
       <div class="cfg" style="max-width:680px;">
         ${okHead}
@@ -762,7 +765,7 @@
         <div style="font-size:12px;color:var(--ink-3);min-height:18px;">${line}</div>
         ${done
           ? `${partialNote}<div class="row gap-8 mt-16"><button class="btn primary" data-ex-convdone ${partial ? 'disabled' : ''}>${icon('arrow', 14)} ${t('Continue to extraction', '继续抽取')}</button>${partial ? `<button class="btn ghost" data-ex-startconv>${icon('refresh', 13)} ${t('Re-run conversion', '重新转换')}</button>` : ''}</div>`
-          : `<div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Runs entirely on your machine. Already-converted tables are skipped, so a re-run is fast.', '全程在本机运行。已转换的表会跳过,再次运行很快。')}</div></div></div>`}`;
+          : `<div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t(`Runs entirely ${runsWhere()}. Already-converted tables are skipped, so a re-run is fast.`, `全程${runsWhere()}运行。已转换的表会跳过，再次运行很快。`)}</div></div></div>`}`;
     }
     return `
       <div class="cfg" style="max-width:680px;">

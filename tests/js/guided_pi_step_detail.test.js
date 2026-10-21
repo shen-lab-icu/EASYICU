@@ -179,7 +179,7 @@ const stepPayloads = {
     assert.doesNotMatch(html, /svg\+xml|escape\.csv/, 'only PNG data and valid names render');
     assert.ok(html.includes('data-gpi-step-evidence="3"'), 'the table opens in the evidence preview');
     assert.ok(html.includes(tr('Baseline table built for 3 groups.', '已生成 3 组的基线特征表。')));
-    assert.ok(html.includes(tr('The run log stays in the local run record and is not shown here.', '运行日志保存在本机运行记录中，不在这里显示。')));
+    assert.ok(html.includes(tr('The run log stays in the run record and is not shown here.', '运行日志保存在运行记录中，不在这里显示。')));
     assert.ok(html.includes(tr('1 more file(s) are not listed', '另有 1 个文件未列出')));
     assert.doesNotMatch(html, /parquet|\/Users|\/private|run\.log/);
     listener({ target: { closest: selector => (selector === '[data-gpi-step-evidence]' ? { dataset: { gpiStepEvidence: '3' } } : null) } });
