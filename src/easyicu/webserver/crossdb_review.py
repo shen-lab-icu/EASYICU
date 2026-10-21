@@ -2760,6 +2760,19 @@ def _source_feature_distributions(
     return out
 
 
+def precompute_feature_distributions(path: str) -> int:
+    """Summarize one export's features before anyone asks for a comparison.
+
+    Parquet summaries are kept per unchanged file (crossdb_parquet), so a
+    later comparison of this export reads them instead of scanning every row.
+    Returns how many features were summarized; an invalid export has none.
+    """
+    desc = dataio.describe_export_source(str(path))
+    if not desc.get("ok"):
+        return 0
+    return sum(item["feature_count"] for item in _source_feature_distributions(desc).values())
+
+
 def _feature_distribution_payload(
     sources: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:

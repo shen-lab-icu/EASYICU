@@ -146,6 +146,8 @@ def test_start_uses_shared_checkout_image_and_socket_and_records_identity(toolin
     assert cmd[cmd.index("--uds") + 1] == str(instance / "run/web.sock")
     assert "--proxy-headers" in cmd
     assert kwargs["env"]["EASYICU_RUNNER_IMAGE"] == "easyicu-runner:synthetic"
+    # The started instance summarizes its prepared data once (hosted_warmup.py).
+    assert kwargs["env"]["EASYICU_HOSTED_WARMUP"] == "1"
     assert Path(kwargs["cwd"]) == Path(__file__).resolve().parents[2]
     assert "EASYICU_PI_API_KEY" not in kwargs["env"]
     record = json.loads((instance / "run/instance.pid.json").read_text())
