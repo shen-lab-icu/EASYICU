@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from easyicu.research_agent.literature_concepts import (
@@ -6,6 +9,129 @@ from easyicu.research_agent.literature_concepts import (
     literature_concept_phrase,
 )
 from easyicu.webserver.ideas import direct_evidence_search
+
+
+_REVIEWED_IDENTITIES = [
+    ("fluid_balance", "fluid balance", "net fluid balance"),
+    ("infection_icd", "infection", "infections"),
+    ("vent_breath_seq", "ventilator breath type", "spontaneous breathing"),
+    ("vent_mode", "mechanical ventilation mode", "ventilation mode"),
+]
+
+# All dictionary concepts must remain searchable. Any future exception must
+# be reviewed here with its reason code; a previously clinical query must not
+# be added to this allowlist merely to make a regression pass.
+_REVIEWED_DICTIONARY_REFUSALS: dict[str, str] = {}
+
+
+@pytest.fixture(scope="module")
+def dictionary_descriptions():
+    dictionary_path = (
+        Path(__file__).resolve().parents[3] / "src/easyicu/data/concept-dict.json"
+    )
+    entries = json.loads(dictionary_path.read_text(encoding="utf-8"))
+    assert entries
+    return {name: entry.get("description", "") for name, entry in entries.items()}
+
+
+def _dictionary_context(concept, descriptions, *, database, role):
+    from easyicu.research_agent.schema import (
+        CohortDescriptor, ConceptDescriptor, ResearchContext,
+    )
+
+    # Keep both variables distinct, including when sweeping death and map.
+    counterpart = "death" if role == "exposure" else "map"
+    if counterpart == concept:
+        counterpart = "map" if concept == "death" else "death"
+    exposure, outcome = (
+        (concept, counterpart) if role == "exposure" else (counterpart, concept)
+    )
+    return ResearchContext(
+        research_question="Association between two measured variables in ICU stays.",
+        cohort=CohortDescriptor(cohort_name="synthetic", database=database, n_stays=80),
+        variables=[
+            ConceptDescriptor(
+                name=name, source_concept=name, dtype="float64",
+                description=descriptions[name],
+            )
+            for name in (exposure, outcome)
+        ],
+        primary_exposure=exposure, target_outcome=outcome,
+    )
+
+
+@pytest.mark.parametrize(("concept", "phrase", "alternative"), _REVIEWED_IDENTITIES)
+def test_implementation_descriptions_have_reviewed_clinical_identities(
+    concept, phrase, alternative,
+):
+    identity = literature_concept_identity(concept)
+    assert identity is not None
+    assert identity.concept_id == concept
+    assert identity.canonical_phrase == phrase
+    assert identity.retrieval_alternatives == ((phrase,), (alternative,))
+    assert identity.screening_role_term == phrase
+    assert identity.screening_required_terms == ()
+    assert literature_concept_identity(f"{concept}_first") == identity
+    assert literature_concept_phrase(concept) == phrase
+    assert direct_evidence_search.concept_phrase(concept) == phrase
+
+
+@pytest.mark.parametrize("database", ["miiv", "eicu"])
+@pytest.mark.parametrize("role", ["exposure", "outcome"])
+@pytest.mark.parametrize(("concept", "phrase", "alternative"), _REVIEWED_IDENTITIES)
+def test_implementation_notes_do_not_refuse_reviewed_clinical_queries(
+    concept, phrase, alternative, database, role, dictionary_descriptions,
+):
+    from easyicu.research_agent.literature import (
+        _protocol_search_term,
+        _variable_focus_terms,
+        build_pubmed_protocol_queries_for_context,
+    )
+
+    context = _dictionary_context(
+        concept, dictionary_descriptions, database=database, role=role,
+    )
+    queries = build_pubmed_protocol_queries_for_context(context)
+
+    assert _protocol_search_term(context, concept) == phrase
+    assert f'"{phrase}"[Title/Abstract]' in queries[0]
+    assert f'"{alternative}"[Title/Abstract]' in queries[0]
+    assert {phrase, alternative} <= set(_variable_focus_terms(context, concept))
+    assert all(concept not in query for query in queries)
+    if concept == "infection_icd":
+        # The eICU proxy matches diagnosis text; its id does not license an
+        # ICD-based definition or a sepsis substitution in the literature.
+        assert all("icd" not in query.lower() and "sepsis" not in query.lower()
+                   for query in queries)
+
+
+@pytest.mark.parametrize("database", ["miiv", "eicu"])
+@pytest.mark.parametrize("role", ["exposure", "outcome"])
+def test_every_dictionary_concept_keeps_a_clinical_protocol_query(
+    database, role, dictionary_descriptions,
+):
+    from easyicu.research_agent.literature import (
+        LiteratureSearchTermError,
+        build_pubmed_protocol_queries_for_context,
+    )
+
+    refused = {}
+    for concept in sorted(dictionary_descriptions):
+        context = _dictionary_context(
+            concept, dictionary_descriptions, database=database, role=role,
+        )
+        try:
+            queries = build_pubmed_protocol_queries_for_context(context)
+        except LiteratureSearchTermError as exc:
+            refusal = exc.refusal
+            assert refusal.reason_code and refusal.reason_code.strip(), concept
+            assert refusal.variable == concept
+            refused[concept] = refusal.reason_code
+        else:
+            assert queries and all(query.strip() for query in queries), concept
+    # The empty allowlist is stronger than preserving only the old clinical
+    # queries (including fluid balance): no dictionary concept may be refused.
+    assert refused == _REVIEWED_DICTIONARY_REFUSALS
 
 
 def test_materialized_concepts_share_one_literature_phrase_owner() -> None:
