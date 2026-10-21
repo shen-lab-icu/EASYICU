@@ -110,7 +110,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-analysis-report.js?v=20261010-exposure-labels1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-source-view.js?v=20261021-turn-layout1" in index
-    assert "js/screens-guided-pi-preview.js?v=20261010-source-gate1" in index
+    assert "js/screens-guided-pi-preview.js?v=20261021-where1" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20261021-turn-layout1" in index
@@ -127,9 +127,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-study-workspace.js?v=20261021-decision-records1" in index
     assert "js/screens-guided-pi-events.js?v=20261021-help1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20261021-decision-records1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20261021-where1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261021-help1" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261021-where1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -502,7 +502,7 @@ def test_new_research_conversation_keeps_chat_open_until_data_is_needed() -> Non
     assert "Local data selection is open" in owner
     assert "No data selected" not in owner
     assert "Keep chatting; choose data" not in owner
-    assert "Paths remain in the EasyICU host UI" in owner
+    assert "Paths stay in the EasyICU interface" in owner
     assert "data-gpi-data-source-action" in owner
     assert "data-gpi-data-demo" not in owner
     assert "data-gpi-data-planning" not in owner

@@ -308,7 +308,8 @@ test('P2-12 document and web opens invalidate older artifact responses', async (
 
 test('P1-1 conversion filenames are escaped at the live progress renderer', () => {
   const c = context({ convResult: null, convErr: null, convProg: { current: 1, total: 2, file: '<img src=x onerror="bad()">.csv' },
-    exPath: '/synthetic', icon: () => '', t: en => en, pathDisplay: x => x, preparedDestinationHint: () => 'prepared' });
+    exPath: '/synthetic', icon: () => '', t: en => en, pathDisplay: x => x, preparedDestinationHint: () => 'prepared',
+    runsWhere: () => 'on your machine' });
   c.escHtml = c.esc;
   vm.runInContext(section('screens-extraction.js', '  function convertingState()', '  function startConvert()'), c);
   const html = c.convertingState();

@@ -148,7 +148,7 @@
           : ctx.tr('Prepare it and use it here', '准备并用于本次会话');
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
         <strong>${ctx.tr('Your question names this data', '你的问题指定了这份数据')}</strong>
-        <p>${ctx.esc(named.label)}${named.prepared ? ctx.esc(ctx.tr(' · already prepared on this computer', ' · 本机已准备')) : ''}</p>
+        <p>${ctx.esc(named.label)}${named.prepared ? ctx.esc(ctx.tr(' · already prepared', ' · 已准备好')) : ''}</p>
         <div class="gpi-data-consent-actions">
           <button class="btn primary" type="button" data-gpi-named-demo="${ctx.esc(named.id)}" ${named.pending ? 'disabled' : ''}>${verb}</button>
           <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
@@ -224,7 +224,7 @@
           <button class="btn primary" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Return to local folder selection', '返回本地目录选择')}</button>
           <button class="btn" type="button" data-gpi-data-source-action="cancel_local_selection">${ctx.tr('Leave local selection', '放弃本地选择')}</button>
         </div>
-        <small>${ctx.tr('Paths remain in the EasyICU host UI and are never sent to the model.', '目录路径只保留在 EasyICU 本机界面，不会发送给模型。')}</small>
+        <small>${ctx.tr('Paths stay in the EasyICU interface and are never sent to the model.', '目录路径只保留在 EasyICU 界面，不会发送给模型。')}</small>
       </div>
     </section>`;
   }

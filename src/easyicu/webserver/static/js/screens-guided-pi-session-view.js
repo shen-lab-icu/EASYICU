@@ -42,6 +42,9 @@
         const files = Number(row.data_file_count);
         const supports = Number(row.support_file_count);
         const isResult = row.receipt_kind === 'extraction_result';
+        // A hosted instance shows no server path (screens-guided-pi-hosted.js).
+        const hostedOwner = MODULES.optional('hosted');
+        const showPath = Boolean(row.output_dir) && !(hostedOwner && hostedOwner.active());
         return `<article class="gpi-message assistant gpi-workflow-receipt" role="status">
           <div class="gpi-message-body">
             <div class="gpi-workflow-receipt-head">${iconHtml('check', 15)}<div><strong>${isResult ? tr('Extraction result synchronized', '抽取结果已同步') : tr('Extraction setup saved', '抽取配置已保存')}</strong><span>${tr('This is EasyICU state, not a model reply.', '这是 EasyICU 本地状态，不是模型回复。')}</span></div></div>
@@ -54,9 +57,11 @@
               <span>${tr('Format', '格式')}<b>${esc(String(row.export_format || '—').toUpperCase())}</b></span>
               <span>StudyContext<b>${esc(row.study_context_id || '—')} · rev ${Number(row.study_revision || 0)}</b></span>
             </div>
-            ${row.output_dir ? `<div class="gpi-workflow-receipt-path"><span>${tr('Local output folder', '本机输出文件夹')}</span><code>${esc(row.output_dir)}</code></div>` : ''}
+            ${showPath ? `<div class="gpi-workflow-receipt-path"><span>${tr('Output folder', '输出文件夹')}</span><code>${esc(row.output_dir)}</code></div>` : ''}
             <p>${isResult
-              ? tr('Copilot now reads this completed local extraction result. The absolute local path is shown only in this host UI and is not inserted as model-authored text.', 'Copilot 现在可以读取这次已完成的本地抽取结果。本机绝对路径只显示在当前宿主界面，不会被伪装成模型生成的文字。')
+              ? (showPath
+                ? tr('Copilot now reads this completed extraction result. The folder path is shown only here and is never inserted as model-authored text.', 'Copilot 现在可以读取这次已完成的抽取结果。文件夹路径只显示在这里，不会被当作模型生成的文字。')
+                : tr('Copilot now reads this completed extraction result.', 'Copilot 现在可以读取这次已完成的抽取结果。'))
               : tr('Copilot now reads this database, cohort, feature-module, time-window, and export-format setup from the saved StudyContext. No extraction has been claimed yet.', 'Copilot 现在会从已保存的 StudyContext 读取数据库、队列、特征模块、时间窗和导出格式；此时尚未声称已经完成抽取。')}</p>
           </div>
         </article>`;

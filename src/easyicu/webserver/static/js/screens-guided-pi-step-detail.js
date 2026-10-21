@@ -209,7 +209,7 @@
       parts.push(note(tr(`${hidden} more file(s) are not listed: patient-level data, unsupported formats or over the list limit.`,
         `另有 ${hidden} 个文件未列出：患者级数据、不支持的格式或超出列表上限。`)));
     }
-    parts.push(note(tr('The run log stays in the local run record and is not shown here.', '运行日志保存在本机运行记录中，不在这里显示。')));
+    parts.push(note(tr('The run log stays in the run record and is not shown here.', '运行日志保存在运行记录中，不在这里显示。')));
     return `<section class="gpi-source-block is-output">${head}${parts.join('')}</section>`;
   }
 
