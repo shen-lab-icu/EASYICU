@@ -24,7 +24,10 @@
   function zhOf(k) { const d = C().dict[k]; return d ? d[1] : k; }
   function unitOf(k) { const d = C().dict[k]; return d && d[2] ? d[2] : '—'; }
   function descOf(k) { const d = C().desc[k]; return d ? (window.EU_LANG === 'zh' ? d[1] : d[0]) : ''; }
-  function groupNameOf(key) { const g = C().groups.find(g => g[0] === key); return g ? (window.EU_LANG === 'zh' ? g[2] : g[1]) : key; }
+  // Catalog group names start with a picker emoji ("⭐ SOFA-2 Scores"); the
+  // dictionary names a group by its words, as review_labels.plain_label does.
+  function plainName(name) { const text = String(name || '').replace(/^[^\p{L}\p{N}]+/u, ''); return text || String(name || ''); }
+  function groupNameOf(key) { const g = C().groups.find(g => g[0] === key); return g ? plainName(window.EU_LANG === 'zh' ? g[2] : g[1]) : key; }
 
   function supportedDbCount() { return (C().supportedDbs || []).length || 6; }
 
@@ -172,7 +175,7 @@
     const chip = (key, label, n) => `<button class="dict-chip ${dictCat === key ? 'on' : ''}" data-dict-cat="${key}">${label}${n != null ? ` <span class="dch-n">${n}</span>` : ''}</button>`;
     return `<div class="dict-chips">
       ${chip('all', L('All', '全部'), cat.totalConcepts)}
-      ${cat.groups.map(g => chip(g[0], window.EU_LANG === 'zh' ? g[2] : g[1], cat.groupConcepts[g[0]].length)).join('')}
+      ${cat.groups.map(g => chip(g[0], groupNameOf(g[0]), cat.groupConcepts[g[0]].length)).join('')}
     </div>`;
   }
 
@@ -208,9 +211,9 @@
       const rows = matchedRows();
       return `
       <div class="page-head" style="margin-bottom:16px;">
-        <div class="eyebrow">${t('Data dictionary · 数据字典', '数据字典 · Data dictionary')}</div>
+        <div class="eyebrow">${t('Data', '数据')}</div>
         <h1 style="margin-top:6px;">${t('Data dictionary', '数据字典')}</h1>
-        <p class="lead">${t(cat.totalConcepts + ' concepts across ' + cat.groups.length + ' feature groups — abbreviations, full names, units, and database coverage from the EasyICU concept dictionary.', cat.totalConcepts + ' 个概念,分属 ' + cat.groups.length + ' 个特征分组 —— 缩写、全称、单位,以及 EasyICU 字典中的数据库覆盖。')}</p>
+        <p class="lead">${t(cat.totalConcepts + ' concepts across ' + cat.groups.length + ' feature groups — abbreviations, full names, units, and database coverage from the EasyICU concept dictionary.', cat.totalConcepts + ' 个概念，分属 ' + cat.groups.length + ' 个特征分组：缩写、全称、单位，以及 EasyICU 字典中的数据库覆盖。')}</p>
       </div>
 
       <div class="dict-catalog-note">
