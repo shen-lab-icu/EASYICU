@@ -63,6 +63,7 @@
   }
 
   function hostedInstance() { return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true; }
+  const HOSTED_SETTINGS = new Set(['set-language', 'set-account', 'set-about']);
   function moduleNavigation(active, options) {
     if (isDataRoute(active)) return dataNav(active, options.actions || '');
     if (active === 'skills') return `<nav class="euh-context-nav" aria-label="${tr('Skill sections', '技能分区')}">
@@ -74,10 +75,11 @@
         ['set-capabilities', 'layers', 'Capabilities', '能力'], ['set-workspace', 'folder', 'Workspace', '工作区'],
         ['set-data-mode', 'flask', 'Data mode', '数据模式'], ['set-privacy', 'shield', 'Privacy', '隐私'],
         ['set-research-agent', 'agent', 'Research Agent', '研究代理'], ['set-language', 'globe', 'Language', '语言'],
-        ['set-about', 'help', 'About', '关于'],
-      // A hosted settings page holds only the clinician's display and About
-      // (screens-settings.js hostedRender); the other sections are the administrator's.
-      ].filter(([id]) => !hostedInstance() || id === 'set-language' || id === 'set-about').map(([id, iconName, en, zh], index) => `<button type="button" class="${index === 0 ? 'active' : ''}" data-settings-jump="${id}">${icon(iconName, 15)}<span>${tr(en, zh)}</span></button>`).join('')}
+        ['set-account', 'lock', 'Account', '账号'], ['set-about', 'help', 'About', '关于'],
+      // A hosted settings page holds only the clinician's display, sign-out and
+      // About (screens-settings.js hostedRender); the other sections are the
+      // administrator's, and a local build has no sign-in.
+      ].filter(([id]) => (hostedInstance() ? HOSTED_SETTINGS.has(id) : id !== 'set-account')).map(([id, iconName, en, zh], index) => `<button type="button" class="${index === 0 ? 'active' : ''}" data-settings-jump="${id}">${icon(iconName, 15)}<span>${tr(en, zh)}</span></button>`).join('')}
     </nav>`;
     return '';
   }

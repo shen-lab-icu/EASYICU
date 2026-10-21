@@ -5,7 +5,9 @@ ended with 401 and the code ``login_required``. The page does not leave at
 once: one notice says the sign-in expired and links to /login, so a question
 the clinician is still typing can be copied first. Any other refusal keeps
 its own message and shows no notice, and the conversation's error owner
-names the expiry in plain words.
+names the expiry in plain words. The hosted settings page offers sign-out
+(a plain form POST to the gateway's /logout) for shared computers; a local
+build has no sign-in and no such section.
 """
 
 from __future__ import annotations
@@ -133,3 +135,55 @@ def test_the_session_owner_loads_before_the_transport_and_has_its_style() -> Non
 
     assert index.index("js/hosted-session.js?v=") < index.index("js/api.js?v=")
     assert ".eu-session-expired{" in _read("css/shell.css")
+
+
+_SETTINGS = r"""
+const hosted = process.argv[3] === 'hosted';
+global.window = {
+  EU_LANG: 'zh', t: (en, zh) => zh,
+  EU_HTML: { esc: value => String(value) },
+  EU_SETTINGS: { language: 'zh', about: { version: '1.0.0' } },
+  EU_CAPABILITIES: { deployment: { hosted } },
+  EasyICU: { guidedPi: { optional: name => (name === 'hosted' ? { active: () => hosted, supportContact: () => '信息科' } : null) } },
+  SCREENS: {},
+};
+global.t = window.t;
+global.icon = () => '';
+global.document = { readyState: 'complete', addEventListener() {}, querySelector() { return null; } };
+require(process.argv[1]);
+require(process.argv[2]);
+const page = window.SCREENS.settings;
+process.stdout.write(JSON.stringify({ body: page.render(), rail: page.rail() }));
+"""
+
+
+def _settings(deployment: str) -> dict:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    result = run_node(
+        node, _SETTINGS, str(STATIC / "js" / "hosted-session.js"), str(STATIC / "js" / "screens-settings.js"),
+        deployment, check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    return json.loads(result.stdout)
+
+
+@pytest.mark.requires_node
+def test_the_hosted_settings_page_offers_sign_out_for_shared_computers() -> None:
+    page = _settings("hosted")
+    body = page["body"]
+
+    assert '<form class="hosted-logout" method="post" action="/logout"><button class="btn sm" type="submit">退出登录</button></form>' in body
+    assert "在多人共用的电脑上，用完请退出登录。" in body
+    assert body.index('id="set-language"') < body.index('id="set-account"') < body.index('id="set-about"')
+    assert 'data-settings-jump="set-account"' in page["rail"]
+
+
+@pytest.mark.requires_node
+def test_a_local_build_has_no_sign_out() -> None:
+    page = _settings("local")
+
+    assert 'id="set-account"' not in page["body"]
+    assert "/logout" not in page["body"]
+    assert "set-account" not in page["rail"]

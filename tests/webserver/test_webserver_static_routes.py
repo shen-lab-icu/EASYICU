@@ -1129,7 +1129,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "css/tweaks.css?v=20260625-stage96" in index_html
     assert "css/settings.css?v=20260921-anchor-room1" in index_html
     assert "js/screens-settings-extensions.js?v=20260812-extension-manager1" in index_html
-    assert "js/screens-settings.js?v=20261021-hosted1" in index_html
+    assert "js/screens-settings.js?v=20261021-account1" in index_html
     assert ".settings-cap-panel" in settings_css
     assert ".settings-cap-tabs" in settings_css
     assert ".settings-cap-tile" in settings_css
