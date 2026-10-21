@@ -122,6 +122,7 @@ class DiagnosticEnvelope:
         authority: RepairPromptAuthority,
         *,
         attempt: int,
+        hosted: bool = False,
     ) -> "DiagnosticEnvelope":
         """Project validated authority without accepting any runtime log."""
 
@@ -133,6 +134,8 @@ class DiagnosticEnvelope:
         ticket = authority_payload["typed_ticket"]
         codes = _closed_codes(ticket)
         codes.update(authority_payload["route_codes"])
+        if hosted:
+            codes.add("raw_diagnostics_unavailable_when_hosted")
         payload = {
             "schema_version": _SCHEMA,
             "failure_kind": (

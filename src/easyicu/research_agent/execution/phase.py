@@ -1326,7 +1326,7 @@ def run_execute_phase(
     # returns is still executed + evidence-bound by the instrumented runtime.
     from ..agents.agentic_coder import AgenticCoderAgent, maybe_wrap_coder
 
-    coder = maybe_wrap_coder(coder)
+    coder = maybe_wrap_coder(coder, run_dir=run_dir)
     coder_provider_identity_sha256 = (
         canonical_sha256(
             {

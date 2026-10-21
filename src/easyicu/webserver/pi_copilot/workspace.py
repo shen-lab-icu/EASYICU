@@ -52,6 +52,10 @@ TEXT_SUFFIXES = frozenset(
         ".yml",
     }
 )
+HOSTED_READ_SUFFIXES = TEXT_SUFFIXES - {".csv", ".json", ".yaml", ".yml"}
+_DATA_DIRECTORIES = frozenset(
+    {"data", "dataset", "datasets", "export", "exports", "run", "runs", "output", "outputs", "raw", "prepared"}
+)
 PREVIEW_SUFFIXES = frozenset({".html", ".htm"})
 WORKSPACE_ARTIFACT_AUTHORITY: Mapping[str, Any] = MappingProxyType(
     {
@@ -92,7 +96,7 @@ def project_workspace_id(project_id: str) -> str:
     return hashlib.sha256(clean.encode("utf-8")).hexdigest()[:32]
 
 
-def _relative_file(value: Any) -> PurePosixPath:
+def _relative_file(value: Any, *, model_read: bool = False) -> PurePosixPath:
     text = str(value or "").strip().replace("\\", "/")
     if not text or len(text) > MAX_RELATIVE_FILE_CHARS or "\x00" in text:
         raise PiCopilotError(
@@ -105,6 +109,22 @@ def _relative_file(value: Any) -> PurePosixPath:
             "pi_workspace_path_escape",
             "Project files must stay inside the isolated Pi workspace.",
         )
+    if model_read and os.environ.get("EASYICU_HOSTED") == "1":
+        data_directory = any(
+            part.casefold() in _DATA_DIRECTORIES
+            or any(part.casefold().startswith(name + separator)
+                   for name in _DATA_DIRECTORIES for separator in ("_", "-"))
+            for part in relative.parts[:-1]
+        )
+        if data_directory or relative.suffix.lower() not in HOSTED_READ_SUFFIXES:
+            raise PiCopilotError(
+                "tabular_read_unavailable_when_hosted",
+                "Hosted model workspace reads exclude data files and data directories.",
+                status_code=403,
+                details={"cause_code": (
+                    "workspace_data_directory" if data_directory else "workspace_data_file"
+                )},
+            )
     if relative.suffix.lower() not in TEXT_SUFFIXES:
         raise PiCopilotError(
             "pi_workspace_file_type_unsupported",
@@ -400,9 +420,12 @@ class ProjectWorkspace:
         start_line: int = 1,
         end_line: Optional[int] = None,
     ) -> Dict[str, Any]:
+        hosted = os.environ.get("EASYICU_HOSTED") == "1"
+        if hosted:
+            _relative_file(relative_file, model_read=True)
         with self._project_lock(project_id):
             candidate, relative, text, raw = self._read_complete_file(
-                project_id, relative_file
+                project_id, relative_file, model_read=hosted,
             )
             lines = text.splitlines()
             first = max(1, int(start_line or 1))
@@ -440,8 +463,16 @@ class ProjectWorkspace:
         self,
         project_id: str,
         relative_file: Any,
+        *,
+        model_read: bool = False,
     ) -> tuple[Path, str, str, bytes]:
         candidate, relative = self._candidate(project_id, relative_file)
+        if model_read:
+            # An in-project directory alias must not conceal an export/run.
+            candidate = candidate.resolve()
+            _relative_file(
+                candidate.relative_to(self.project_root(project_id)), model_read=True,
+            )
         if not candidate.is_file():
             raise PiCopilotError(
                 "pi_workspace_file_not_found",

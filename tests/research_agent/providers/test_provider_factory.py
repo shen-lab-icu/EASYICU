@@ -1343,3 +1343,12 @@ def test_unmanaged_provider_graph_child_is_rejected_before_any_call(
 
     assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
     assert custom.calls == 0
+
+
+@pytest.mark.parametrize("hosted", [False, True])
+def test_hosted_attested_loopback_transport_is_external(monkeypatch, hosted):
+    from easyicu.research_agent.providers.factory import provider_transport_destination
+
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
+    client, _ = _constructed_local_openai(monkeypatch)
+    assert provider_transport_destination(client) == ("external" if hosted else "local")
