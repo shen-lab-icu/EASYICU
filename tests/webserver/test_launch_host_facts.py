@@ -265,4 +265,5 @@ def test_capabilities_expose_only_the_explicit_hosted_instance_flag(monkeypatch,
     monkeypatch.setattr(sources, "load_registry", lambda: {"sources": []})
     monkeypatch.setattr(capabilities, "zotero_status", lambda *a: {})
     body = TestClient(app).get("/api/capabilities").json()
-    assert body["deployment"] == {"hosted": hosted}
+    assert body["deployment"]["hosted"] is hosted
+    assert isinstance(body["deployment"]["provider_provisioned"], bool)

@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Mapping
 from easyicu.webserver import state_paths
 from easyicu.webserver import dataio
 from easyicu.webserver import settings as settings_store
+from easyicu.webserver.hosted import path_allowed
 
 _CONFIG_DIR = state_paths.state_root()
 _CONFIG_PATH = _CONFIG_DIR / "webserver_sources.json"
@@ -249,6 +250,8 @@ def _autodiscovery_bases() -> List[Path]:
         if not raw:
             continue
         base = Path(str(raw)).expanduser()
+        if not path_allowed(base, instance_owned=True):
+            continue
         try:
             base = base.resolve()
         except OSError:
@@ -278,6 +281,8 @@ def _autodiscovered_paths() -> List[str]:
         except OSError:
             continue
         for child in children:
+            if not path_allowed(child, instance_owned=True):
+                continue
             try:
                 if child.is_dir() and dataio.describe_export_source(str(child)).get(
                     "ok"
@@ -298,6 +303,8 @@ def load_registry() -> Dict[str, Any]:
     by_path: Dict[str, Dict[str, Any]] = {}
     for item in stored:
         if not isinstance(item, dict) or not item.get("path"):
+            continue
+        if not path_allowed(item["path"], instance_owned=True):
             continue
         if _norm_path(str(item.get("path"))) in removed_paths:
             continue

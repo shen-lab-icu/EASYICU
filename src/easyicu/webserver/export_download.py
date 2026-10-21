@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from easyicu.webserver import sources, state_paths
+from easyicu.webserver.hosted import require_path
 
 
 MAX_EXPORT_DOWNLOAD_BYTES = 512 * 1024 * 1024
@@ -139,7 +140,9 @@ def prepare_registered_export_bundle(
     current = registry if registry is not None else sources.load_registry()
     source = _source_for_id(source_id, current)
     root = Path(str(source.get("path") or ""))
+    require_path(root, instance_owned=True)
     manifest_path = root / "_manifest.json"
+    require_path(manifest_path, instance_owned=True)
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:

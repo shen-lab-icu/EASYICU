@@ -12,7 +12,7 @@ import ipaddress
 from urllib.parse import urlsplit
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers
@@ -28,7 +28,9 @@ from easyicu.webserver.host_security import (
     require_private_unix_socket_directory,
     resolve_allowed_hosts,
     trusts_proxy,
+    public_origin,
 )
+from easyicu.webserver import hosted
 from easyicu.webserver.deployment_lease import (
     acquire_single_process_lease,
     release_single_process_lease,
@@ -112,7 +114,7 @@ def _package_version() -> str:
         return "0+unknown"
 
 
-app = FastAPI(title="EasyICU", version=_package_version())
+app = FastAPI(title="EasyICU", version=_package_version(), dependencies=[Depends(hosted.guard_request)])
 app.add_middleware(GZipMiddleware, minimum_size=500)
 install_desktop_session(app)
 
@@ -122,6 +124,9 @@ def _refuse_a_shared_unix_socket() -> None:
     # First, before the lease or any service starts: uvicorn binds the socket
     # only after startup, so a refusal here never opens it.
     socket_path = configured_unix_socket()
+    if hosted.is_hosted() and not socket_path:
+        raise RuntimeError("Hosted EasyICU requires its private Unix socket.")
+    public_origin()  # Validate administrator configuration before accepting requests.
     if socket_path:
         require_private_unix_socket_directory(socket_path)
 
@@ -156,6 +161,12 @@ def _is_proxied_request(request: Request) -> bool:
 
 
 def _is_local_web_client(request: Request) -> bool:
+    if hosted.is_hosted() and trusts_proxy():
+        # Uvicorn replaces client with X-Forwarded-For on a trusted UDS peer.
+        # The listener coordinate still proves which private socket accepted it.
+        socket_scope = {**request.scope, "client": None}
+        if is_local_unix_socket_peer(socket_scope):
+            return True
     if request.client is None:
         # A Unix-socket peer has no address. Only the private socket this
         # server was configured for counts (host_security).
@@ -207,13 +218,17 @@ async def local_clients_only(request: Request, call_next):
         if origin:
             try:
                 source = urlsplit(origin)
-                target = urlsplit(str(request.base_url))
+                target = public_origin() or urlsplit(str(request.base_url))
                 source_port = source.port or (443 if source.scheme == "https" else 80)
                 target_port = target.port or (443 if target.scheme == "https" else 80)
                 cross_site = cross_site or (
                     source.scheme, source.hostname, source_port
                 ) != (target.scheme, target.hostname, target_port)
                 cross_site = cross_site or bool(source.username or source.password)
+                if hosted.is_hosted():
+                    cross_site = cross_site or bool(
+                        source.path not in {"", "/"} or source.query or source.fragment
+                    )
             except ValueError:
                 cross_site = True
         if cross_site:

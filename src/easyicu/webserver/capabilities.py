@@ -675,6 +675,9 @@ def audit_events(limit: int = 20) -> Dict[str, Any]:
 
 
 def capability_status() -> Dict[str, Any]:
+    from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
+
+    provider_status = PiProviderConfigStore().public_status()
     settings = capability_settings()
     skills_master_enabled = bool(settings["science_skills_enabled"])
     publication_skills = [
@@ -698,7 +701,10 @@ def capability_status() -> Dict[str, Any]:
     return {
         "ok": True,
         "registered_sources": sources.registered_source_counts(),
-        "deployment": {"hosted": os.environ.get("EASYICU_HOSTED") == "1"},
+        "deployment": {
+            "hosted": os.environ.get("EASYICU_HOSTED") == "1",
+            "provider_provisioned": bool(provider_status.get("connection_verified")),
+        },
         "settings": settings,
         "capabilities": {
             "science_skills": {

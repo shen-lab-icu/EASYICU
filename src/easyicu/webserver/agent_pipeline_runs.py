@@ -305,6 +305,12 @@ class _WebHumanReviewGate:
 def server_reviewer_identity() -> str:
     """Return the host-authenticated identity used by the local Web service."""
 
+    from easyicu.webserver.hosted import is_hosted
+
+    if is_hosted():
+        configured = os.environ.get("EASYICU_USER_DISPLAY_NAME", "").strip()
+        if configured:
+            return configured
     return "easyicu_local_web_operator"
 
 
