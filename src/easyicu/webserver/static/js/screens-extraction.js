@@ -13,6 +13,7 @@
   // A hosted instance runs on the hospital server (screens-guided-pi-hosted.js).
   function hostedServer() { const owner = window.EasyICU?.guidedPi?.optional('hosted'); return Boolean(owner && owner.active()); }
   function runsWhere() { return hostedServer() ? t('on the server', '在服务器上') : t('on your machine', '在本机'); }
+  function hostedCopy(key, local, arg) { return hostedServer() ? window.EU_EXTRACTION_HOSTED.text(key, arg) : local; }  // screens-extraction-hosted.js
   const DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30;
   const MAX_OBSERVATION_WINDOW_HOURS = 24 * 30;
   let exView = 'home';          // home | running | done
@@ -268,14 +269,14 @@
     return Promise.resolve(null);
   }
   function exportDestinationLabel() {
-    return currentExportDir() || t('No export destination selected', '尚未选择导出目录');
+    return hostedCopy('workspace', currentExportDir() || t('No export destination selected', '尚未选择导出目录'));
   }
   function exportDestinationHint() {
-    if (currentExportDir()) {
-      return t(
+    if (currentExportDir() || hostedServer()) {
+      return hostedCopy('destinationHint', t(
         'Each extraction creates a timestamped folder inside the selected destination.',
         '每次抽取都会在所选目录下创建带时间戳的文件夹。'
-      );
+      ));
     }
     return t(
       'Choose an export destination before extraction starts.',
@@ -286,7 +287,7 @@
     return t('Choose an export destination before extracting.', '请先选择导出目录再开始抽取。');
   }
   function currentExportDir() {
-    return exExportDir || (window.EU_SETTINGS && window.EU_SETTINGS.export_dir) || '';
+    return hostedServer() ? '' : (exExportDir || (window.EU_SETTINGS && window.EU_SETTINGS.export_dir) || '');
   }
   // Consume the Copilot handoff config into real form state — the handoff was
   // previously take()n and discarded, leaving the classic form blank despite
@@ -407,7 +408,7 @@
     const outDir = currentExportDir();
     // A real extraction writes files, so it needs a destination; the demo path
     // is a pure in-browser mock (below) and must not be blocked on one.
-    if (real && !outDir) {
+    if (real && !outDir && !hostedServer()) {
       exAdvExport = true;
       exCustomOpen = true;
       repaint();
@@ -444,7 +445,7 @@
         include_feature_definitions: exIncludeDefinitions,
         cohort: runMode === 'recommended' ? recommendedCohortContract() : cohortContract(),
       };
-      payload.out_dir = outDir;
+      if (!hostedServer()) payload.out_dir = outDir;  // hosted: the server writes in the clinician's workspace
       if (Object.keys(conceptSelection).length) payload.concepts = conceptSelection;
       const ticket = continuity.prepare({
         kind: 'extract',
@@ -539,8 +540,8 @@
   function connectFolderHint() {
     const name = EXPECTED_DATABASE_LABELS[exExpectedDatabase];
     return name
-      ? t(`Choose the ${name} data folder; EasyICU then identifies its layout automatically. No patient rows are uploaded or returned.`, `选择 ${name} 数据文件夹后，EasyICU 会自动判断目录结构。不上传，也不返回患者行。`)
-      : t('Choose the ICU data folder; EasyICU then identifies its database and layout automatically. No patient rows are uploaded or returned.', '选择 ICU 数据文件夹后，EasyICU 会自动判断数据库和目录结构。不上传，也不返回患者行。');
+      ? hostedCopy('folderHintNamed', t(`Choose the ${name} data folder; EasyICU then identifies its layout automatically. No patient rows are uploaded or returned.`, `选择 ${name} 数据文件夹后，EasyICU 会自动判断目录结构。不上传，也不返回患者行。`), name)
+      : hostedCopy('folderHint', t('Choose the ICU data folder; EasyICU then identifies its database and layout automatically. No patient rows are uploaded or returned.', '选择 ICU 数据文件夹后，EasyICU 会自动判断数据库和目录结构。不上传，也不返回患者行。'));
   }
   function connectState() {
     const opt = (src, ico, tEn, tZh, dEn, dZh) => `
@@ -559,7 +560,7 @@
           <label class="ex-connect-label" for="exPathInput">${t('Data folder', '数据文件夹')}</label>
           <div class="path-field editable ex-connect-path">
             <span class="pf-ico">${icon('folder', 14)}</span>
-            <input class="pf-input" id="exPathInput" type="text" spellcheck="false" autocomplete="off" value="${escHtml(exPath)}" placeholder="${t('Paste or browse to an ICU data folder', '粘贴或浏览选择 ICU 数据文件夹')}" aria-label="${t('Data folder path', '数据文件夹路径')}" />
+            <input class="pf-input" id="exPathInput" type="text" spellcheck="false" autocomplete="off" value="${escHtml(exPath)}" placeholder="${hostedCopy('placeholder', t('Paste or browse to an ICU data folder', '粘贴或浏览选择 ICU 数据文件夹'))}" aria-label="${t('Data folder path', '数据文件夹路径')}" />
             <button class="btn sm ghost ex-connect-browse" data-ex-browse>${icon('folder', 13)} ${t('Browse…', '浏览…')}</button>
           </div>
           <div class="ex-connect-primary">
@@ -690,10 +691,10 @@
       : t('Prepared ICU data path', '已转换 ICU 数据路径');
     const cta = d.ready
       ? `<button class="btn primary" data-ex-usedata>${icon('arrow', 14)} ${d.source === 'module' ? t('Use this export', '使用这个导出') : t('Continue with prepared data', '继续使用已转换数据')}</button>`
-      : `<button class="btn primary" data-ex-startconv>${icon('refresh', 14)} ${t('Convert raw files', '转换原始文件')}${d.size ? ` · ${escHtml(d.size)}` : ''}${d.est ? ` · ${escHtml(d.est)}` : ''}</button>`;
+      : hostedServer() ? '' : `<button class="btn primary" data-ex-startconv>${icon('refresh', 14)} ${t('Convert raw files', '转换原始文件')}${d.size ? ` · ${escHtml(d.size)}` : ''}${d.est ? ` · ${escHtml(d.est)}` : ''}</button>`;
     const note = d.ready
-      ? `<div class="note ok mt-16" style="padding:10px 12px;"><div class="ico">${icon('check', 14, 2.6)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Detected', '已识别')}: ${sourceLabel}</div><div class="d" style="font-size:11px;margin:0;">${d.source === 'module' ? t('This looks like an existing EasyICU export. Register it as a reusable local source.', '这看起来是已有 EasyICU 导出。可以注册为可复用的本地来源。') : t('Already analysis-ready — no conversion needed. You can extract straight away.', '已是可分析格式 —— 无需转换,可直接抽取。')}</div></div></div>`
-      : `<div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t(`One-time conversion to Parquet. Runs ${runsWhere()}; results are cached so a re-run is instant.`, `一次性转换为 Parquet，${runsWhere()}运行；结果会缓存，再次运行会很快。`)}</div></div></div>`;
+      ? `<div class="note ok mt-16" style="padding:10px 12px;"><div class="ico">${icon('check', 14, 2.6)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Detected', '已识别')}: ${sourceLabel}</div><div class="d" style="font-size:11px;margin:0;">${d.source === 'module' ? hostedCopy('exportNote', t('This looks like an existing EasyICU export. Register it as a reusable local source.', '这看起来是已有 EasyICU 导出。可以注册为可复用的本地来源。')) : t('Already analysis-ready — no conversion needed. You can extract straight away.', '已是可分析格式 —— 无需转换,可直接抽取。')}</div></div></div>`
+      : `<div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${hostedCopy('rawNote', t(`One-time conversion to Parquet. Runs ${runsWhere()}; results are cached so a re-run is instant.`, `一次性转换为 Parquet，${runsWhere()}运行；结果会缓存，再次运行会很快。`))}</div></div></div>`;
     return `
       <div class="cfg" style="max-width:680px;">
         ${okHead}
@@ -878,7 +879,7 @@
   /* ---- the express recommended card ---- */
   function expressCard() {
     // Demo runs a local mock and needs no destination — only real extraction does.
-    const exportReady = dataMode() === 'demo' || !!currentExportDir();
+    const exportReady = dataMode() === 'demo' || hostedServer() || !!currentExportDir();
     const cohortLead = t('all ICU stays', '全部 ICU 住院');
     return `
     <div class="express">
@@ -900,7 +901,7 @@
         <div class="express-cta">
           <button class="btn primary lg" data-ex-run="recommended" ${exportReady ? '' : 'disabled'}>${icon('play', 16)} ${t('Run recommended extraction', '运行推荐抽取')}</button>
           ${exportReady ? '' : `<button class="btn sm ex-express-setdest" data-ex-express-setdest style="margin-top:8px;">${icon('folder', 13)} ${t('Choose export folder', '选择导出目录')}</button>`}
-          <div class="note-line" style="${exportReady ? '' : 'color:var(--warn,#a66a00);'}">${icon(exportReady ? 'shield' : 'alert', 12)} ${exportReady ? (dataMode() === 'demo' ? t('reproducible · no tokens', '可复现 · 不消耗 token') : t('local-only · nothing uploaded', '仅本地 · 不上传')) : exportDestinationRequiredMessage()}</div>
+          <div class="note-line" style="${exportReady ? '' : 'color:var(--warn,#a66a00);'}">${icon(exportReady ? 'shield' : 'alert', 12)} ${exportReady ? (dataMode() === 'demo' ? t('reproducible · no tokens', '可复现 · 不消耗 token') : hostedCopy('readyNote', t('local-only · nothing uploaded', '仅本地 · 不上传'))) : exportDestinationRequiredMessage()}</div>
         </div>
       </div>
     </div>`;
@@ -1450,23 +1451,23 @@
     const exportOpen = stepMode || exAdvExport;
     const fmtSeg = `<div class="seg" data-ex-fmt><button class="${exFormat === 'parquet' ? 'active' : ''}" data-val="parquet">Parquet</button><button class="${exFormat === 'csv' ? 'active' : ''}" data-val="csv">CSV</button><button class="${exFormat === 'excel' ? 'active' : ''}" data-val="excel">Excel</button></div>`;
     const destination = currentExportDir();
-    const hintTone = destination ? 'var(--ink-4)' : 'var(--warn,#a66a00)';
+    const hintTone = destination || hostedServer() ? 'var(--ink-4)' : 'var(--warn,#a66a00)';
     return `
     <div class="cfg ex-collapsible ${exportOpen ? 'open' : ''} ${stepMode ? 'ex-step-panel' : ''}" data-ex-export-panel>
       ${stepMode ? '' : `<div class="cfg-head">
         <div class="cfg-ico">${icon('download', 17)}</div>
-        <div class="grow"><div class="cfg-h">${t('Export settings', '导出设置')}</div><div class="cfg-sub">${exFormat.toUpperCase()} · ${exIncludeDefinitions ? t('definition manifest included', '包含定义清单') : t('definition manifest off', '不含定义清单')} · ${destination ? escHtml(destination) : (dataMode() === 'demo' ? t('preview only in demo', '演示模式无需写入目录') : t('choose a local folder', '请选择本地目录'))}</div></div>
+        <div class="grow"><div class="cfg-h">${t('Export settings', '导出设置')}</div><div class="cfg-sub">${exFormat.toUpperCase()} · ${exIncludeDefinitions ? t('definition manifest included', '包含定义清单') : t('definition manifest off', '不含定义清单')} · ${hostedServer() ? hostedCopy('savedSub') : destination ? escHtml(destination) : (dataMode() === 'demo' ? t('preview only in demo', '演示模式无需写入目录') : t('choose a local folder', '请选择本地目录'))}</div></div>
         <span class="pill"><span class="dot"></span>${exFormat.toUpperCase()}</span>
         <button class="ex-section-toggle" data-ex-adve aria-expanded="${exAdvExport ? 'true' : 'false'}">${exAdvExport ? t('Collapse', '收起') : t('Edit', '修改')} <span class="chev">${icon('chevdown', 13)}</span></button>
       </div>`}
       <div class="cfg-body ex-advanced-body" ${exportOpen ? '' : 'hidden'}>
         ${advRow(t('Format', '格式'), fmtSeg)}
         <div class="ex-export-destination">
-          <div class="path-field ex-export-path"><span class="pf-ico">${icon('folder', 14)}</span><span class="pf-path ${destination ? '' : 'muted'}">${escHtml(exportDestinationLabel())}</span></div>
-          <button class="btn sm ghost ex-export-browse" data-ex-export-browse>${icon('folder', 13)} ${t('Browse...', '浏览...')}</button>
-          <button class="btn sm ghost ex-export-create" data-ex-export-create>${icon('plus', 13)} ${t('New folder', '新建目录')}</button>
+          <div class="path-field ex-export-path"><span class="pf-ico">${icon('folder', 14)}</span><span class="pf-path ${destination || hostedServer() ? '' : 'muted'}">${escHtml(exportDestinationLabel())}</span></div>
+          ${hostedServer() ? '' : `<button class="btn sm ghost ex-export-browse" data-ex-export-browse>${icon('folder', 13)} ${t('Browse...', '浏览...')}</button>
+          <button class="btn sm ghost ex-export-create" data-ex-export-create>${icon('plus', 13)} ${t('New folder', '新建目录')}</button>`}
         </div>
-        <div class="note-line mt-8" style="font-size:11px;color:${hintTone};">${icon(destination ? 'shield' : 'alert', 11)} ${exportDestinationHint()}</div>
+        <div class="note-line mt-8" style="font-size:11px;color:${hintTone};">${icon(destination || hostedServer() ? 'shield' : 'alert', 11)} ${exportDestinationHint()}</div>
         <div class="ex-definition-option">
           <div>
             <div class="def-title">${t('Feature definition manifest', '特征定义清单')}</div>
@@ -1478,7 +1479,7 @@
                 <span>${t('module file', '模块文件')}</span><b>demographics.parquet</b>
                 <span>${t('unit', '单位')}</span><b>years</b>
                 <span>${t('callback', '回调')}</span><b>easyicu.api.load_concepts</b>
-                <span>${t('project path', '项目路径')}</span><b>${t('your local EasyICU repo path', '本机 EasyICU 项目路径')}</b>
+                <span>${t('project path', '项目路径')}</span><b>${hostedCopy('definitionPath', t('your local EasyICU repo path', '本机 EasyICU 项目路径'))}</b>
               </div>
               <div class="def-example-note">${t('Raw table/column lineage is included only when the catalog declares it; otherwise the manifest says not_declared_in_current_catalog instead of guessing.', '只有 catalog 明确声明原始表/列来源时才写入 raw table/column；否则清单会写 not_declared_in_current_catalog，不会猜。')}</div>
             </details>
@@ -1496,10 +1497,10 @@
   function summaryRail(options) {
     const showBack = !!(options && options.showBack);
     const support = cohortExportSupport();
-    const exportReady = dataMode() === 'demo' || !!currentExportDir();
+    const exportReady = dataMode() === 'demo' || hostedServer() || !!currentExportDir();
     const extractDisabled = !selMods().length || !support.ok || !exportReady;
     const runMode = recommendedSelectionActive() ? 'recommended' : 'custom';
-    const summaryMessage = !exportReady ? exportDestinationRequiredMessage() : (support.ok ? (dataMode() === 'demo' ? t('Reproducible demo preview; no folder required', '可复现的演示预览，无需选择目录') : t('local-only · reproducible manifest', '仅本地 · 可复现清单')) : support.message);
+    const summaryMessage = !exportReady ? exportDestinationRequiredMessage() : (support.ok ? (dataMode() === 'demo' ? t('Reproducible demo preview; no folder required', '可复现的演示预览，无需选择目录') : hostedCopy('dockLine', t('local-only · reproducible manifest', '仅本地 · 可复现清单'))) : support.message);
     return `
     <div class="ex-action-dock">
       <div class="ex-action-summary">
@@ -1704,9 +1705,9 @@
     const r = exportCancelled || {};
     const files = Array.isArray(r.files) ? r.files : [];
     const tot = (exportRunModules || modKeys()).length;
-    const where = r.out_dir ? `<span class="mono" style="font-size:11px;word-break:break-all;">${escHtml(r.out_dir)}</span>` : '';
+    const where = hostedServer() ? escHtml(hostedCopy('workspace')) : r.out_dir ? `<span class="mono" style="font-size:11px;word-break:break-all;">${escHtml(r.out_dir)}</span>` : '';
     const partial = files.length
-      ? t(`${files.length} of ${tot} module files were already written to`, `${files.length}/${tot} 个模块文件已写入`) + ' ' + where + t(' — keep them or delete the folder.', ' —— 可保留，也可删除该文件夹。')
+      ? t(`${files.length} of ${tot} module files were already written to`, `${files.length}/${tot} 个模块文件已写入`) + ' ' + where + hostedCopy('cancelTail', t(' — keep them or delete the folder.', ' —— 可保留，也可删除该文件夹。'))
       : t('No module files had been written yet.', '尚未写入任何模块文件。');
     return `
     <div class="card pad" style="max-width:680px;margin:0 auto;">
@@ -1735,7 +1736,7 @@
     <div class="card pad" style="max-width:680px;margin:0 auto;">
       <div class="load-strip">
         ${err ? `<span style="color:var(--bad,#c0392b);">${icon('alert', 18)}</span>` : `<span class="spin accent"></span>`}
-        <div class="grow"><div style="font-weight:600;font-size:13px;">${err ? t('Extraction failed', '抽取失败') : exportCancelRequested ? t('Stopping extraction…', '正在停止抽取…') : t('Extracting feature modules…', '正在抽取特征模块…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('local-only · writing to a timestamped export folder', '仅本地 · 写入带时间戳的导出文件夹')}</div></div>
+        <div class="grow"><div style="font-weight:600;font-size:13px;">${err ? t('Extraction failed', '抽取失败') : exportCancelRequested ? t('Stopping extraction…', '正在停止抽取…') : t('Extracting feature modules…', '正在抽取特征模块…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${hostedCopy('running', t('local-only · writing to a timestamped export folder', '仅本地 · 写入带时间戳的导出文件夹'))}</div></div>
         ${tot ? `<span class="mono" style="font-size:11px;color:var(--ink-3);">${cur}/${tot}</span>` : ''}
       </div>
       ${err
@@ -1753,11 +1754,11 @@
     // Live result from the export job; fall back to a descriptive summary offline.
     const files = (r && r.files) ? r.files
       : (exportRunModules || modKeys()).map(k => ({ file: k + '.' + EX_EXT[exFormat], module: k, rows: null }));
-    const outDir = (r && r.out_dir) || t('timestamped export folder', '带时间戳导出文件夹');
+    const outDir = hostedServer() ? hostedCopy('workspace') : ((r && r.out_dir) || t('timestamped export folder', '带时间戳导出文件夹'));
     const totalRows = r ? r.total_rows : null;
     const supportFiles = extractionSupportFiles(r);
     const fileList = files.concat(supportFiles);
-    const canOpen = Boolean(r && exportJobId);
+    const canOpen = Boolean(r && exportJobId) && !hostedServer();  // the server has no desktop to open a folder on
     const dataFileCount = r ? Number(r.file_count || files.length) : files.length;
     const supportFileCount = supportFiles.length;
     return `
@@ -1765,7 +1766,7 @@
         <div class="glyph">${icon('check', 26, 2.6)}</div>
         <div class="st-t">${t('Extraction complete', '抽取完成')}</div>
         <div class="st-d">${r
-          ? `${dataFileCount} ${t('data files', '个数据文件')} + ${supportFileCount} ${t('supporting files', '个配套文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''}. ${t('Written to', '写入')} ${canOpen ? `<button type="button" class="ex-output-path" data-ex-open-output title="${t('Open this folder in Finder', '在 Finder 中打开此文件夹')}"><span class="mono">${escHtml(outDir)}</span>${icon('folder', 12)}</button>` : `<span class="mono">${escHtml(outDir)}</span>`}. ${cohortScaleNote() ? `${t('Cohort', '队列')}: ${escHtml(cohortScaleNote())}. ` : ''}${t('Everything stayed on your machine.', '全部留在你的机器上。')}`
+          ? `${dataFileCount} ${t('data files', '个数据文件')} + ${supportFileCount} ${t('supporting files', '个配套文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''}. ${t('Written to', '写入')} ${canOpen ? `<button type="button" class="ex-output-path" data-ex-open-output title="${t('Open this folder in Finder', '在 Finder 中打开此文件夹')}"><span class="mono">${escHtml(outDir)}</span>${icon('folder', 12)}</button>` : `<span class="${hostedServer() ? '' : 'mono'}">${escHtml(outDir)}</span>`}. ${cohortScaleNote() ? `${t('Cohort', '队列')}: ${escHtml(cohortScaleNote())}. ` : ''}${hostedCopy('doneTail', t('Everything stayed on your machine.', '全部留在你的机器上。'))}`
           : t('Seeded demo preview — no files were written to disk. The ledger below shows what a real run would produce; switch to Real to write an actual export.', '演示种子预览 —— 没有向磁盘写入任何文件。下方清单展示真实运行会产出什么；切换到真实模式才会写出实际导出。')}</div>
         ${exOutputNotice ? `<div class="ex-output-feedback ok" role="status">${icon('check', 13)} ${escHtml(exOutputNotice)}</div>` : ''}
         ${exOutputError ? `<div class="ex-output-feedback bad" role="alert">${icon('alert', 13)} ${escHtml(exOutputError)}</div>` : ''}

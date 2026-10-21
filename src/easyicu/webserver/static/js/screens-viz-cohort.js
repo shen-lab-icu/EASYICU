@@ -346,11 +346,11 @@
       const loaded = cohortLoaded();
       const head = `${guidedNote}
       <div class="row gap-8" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px;white-space:nowrap;flex-wrap:wrap;row-gap:2px;">
-        <span>${view.text('Workspace')}</span> ${icon('chevron', 11)} <span>${loaded ? (realMode ? view.text('Local export') : (officialDemo ? t('Official demo', '官方演示') : view.text('Demo cohort'))) : view.text('Not configured')}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">${view.text('Cohort statistics')}</span>
+        <span>${view.text('Workspace')}</span> ${icon('chevron', 11)} <span>${loaded ? (realMode ? view.text('Local export') : (officialDemo ? t('Official demo', '官方演示') : view.text('Demo cohort'))) : view.text('No data loaded')}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">${view.text('Cohort statistics')}</span>
       </div>
       <div class="page-head" style="margin-bottom:16px;">
         <h1 style="margin-top:0;">${t('Cohort Statistics', '队列统计')}</h1>
-        <p class="lead">${loaded ? (review ? (realMode ? t('Local export cohort · real exported module tables · local-only summary', '本地导出队列 · 真实导出模块表 · 仅本地汇总') : t('Official deidentified demo cohort · source-backed aggregate review', '官方去标识化演示队列 · 有来源支撑的聚合审阅')) : t('Synthetic fallback contrast · UI rehearsal only', '合成兜底对照 · 仅用于界面演练')) : t('Choose one official demo or one registered export before viewing group contrasts, coverage, survival curves, and SOFA reclassification.', '选择一个官方演示或一个已注册导出，再查看组间对照、覆盖率、生存曲线和 SOFA 重分层。')}</p>
+        <p class="lead">${loaded ? (review ? (realMode ? (hostedServer() ? t('Prepared data · exported module tables · summaries only', '已准备的数据 · 导出模块表 · 只显示汇总结果') : t('Local export cohort · real exported module tables · local-only summary', '本地导出队列 · 真实导出模块表 · 仅本地汇总')) : t('Official deidentified demo cohort · source-backed aggregate review', '官方去标识化演示队列 · 有来源支撑的聚合审阅')) : t('Synthetic fallback contrast · UI rehearsal only', '合成兜底对照 · 仅用于界面演练')) : (hostedServer() ? t('Choose one of the datasets the administrator prepared to view group contrasts, coverage, survival curves and SOFA reclassification.', '选择管理员准备的一份数据，查看组间对照、覆盖率、生存曲线和 SOFA 重分层。') : t('Choose one official demo or one registered export before viewing group contrasts, coverage, survival curves, and SOFA reclassification.', '选择一个官方演示或一个已注册导出，再查看组间对照、覆盖率、生存曲线和 SOFA 重分层。'))}</p>
         <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Key terms', '关键术语')}: ${window.gloss('cohort', t('cohort', '队列'))} · ${window.gloss('denominator', t('denominator', '分母'))} · ${window.gloss('SOFA')} · ${window.gloss('Sepsis-3')}</div>
       </div>`;
       if (state.view !== 'loading' && !loaded) {
@@ -377,8 +377,8 @@
             ${realMode ? `<div class="card sunken pad mt-16">
               <div class="eyebrow">${hostedServer() ? t('Prepared data', '已准备的数据') : t('Local export', '本地导出')}</div>
               <div class="panel-title mt-4">${t('Load one exported cohort snapshot', '加载一个已导出的队列快照')}</div>
-              <div class="panel-sub mt-4">${t('This is the same active export contract used by Patient Review.', '这里使用与患者审阅相同的 active 导出契约。')}</div>
-              ${!registryActivePath() ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('No active export selected', '尚未选择 active 导出')}</div><div class="d">${cohortMissingExportMessage()}</div></div></div>` : ''}
+              <div class="panel-sub mt-4">${t('Patient Review uses the same current data.', '患者审阅使用的也是这份当前数据。')}</div>
+              ${!registryActivePath() ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('No current data selected', '尚未选择当前数据')}</div><div class="d">${cohortMissingExportMessage()}</div></div></div>` : ''}
               ${sourceRegistryBlock('single')}
               <button class="btn primary mt-16" data-cohort-run ${!registryActivePath() ? 'aria-disabled="true"' : ''}>${icon('folder', 14)} ${hostedServer() ? t('Load this data', '加载这份数据') : t('Load local export', '加载本地导出')}</button>
             </div>` : `<div class="card sunken pad mt-16">${officialDemoSources}</div>`}

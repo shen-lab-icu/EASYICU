@@ -55,6 +55,11 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-evidence-preview.js",
     ],
     "extraction_job_continuity.test.js": ["screens-extraction-job-continuity.js"],
+    "extraction_hosted_workspace.test.js": [
+        "screens-extraction.js",
+        "screens-extraction-hosted.js",
+        "html-escape.js",
+    ],
     "extraction_study_roundtrip.test.js": ["screens-extraction-study-context.js"],
     "guided_gate_state.test.js": ["screens-guided-contracts.js"],
     "guided_classic_exit.test.js": [],
