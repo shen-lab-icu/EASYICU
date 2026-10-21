@@ -97,6 +97,13 @@ _IDENTITIES = {
         screening_role_term="lactate",
         screening_required_terms=(),
     ),
+    "fluid_balance": LiteratureConceptIdentity(
+        concept_id="fluid_balance",
+        canonical_phrase="fluid balance",
+        retrieval_alternatives=(("fluid balance",), ("net fluid balance",)),
+        screening_role_term="fluid balance",
+        screening_required_terms=(),
+    ),
     "fluid_balance_cumulative": LiteratureConceptIdentity(
         concept_id="fluid_balance_cumulative",
         canonical_phrase="cumulative fluid balance",
@@ -106,6 +113,31 @@ _IDENTITIES = {
             ("fluid overload",),
         ),
         screening_role_term="fluid balance",
+        screening_required_terms=(),
+    ),
+    # Despite its historical id, the eICU definition matches diagnosis text
+    # (diagnosis.diagnosisstring), not ICD codes. Retrieval does not redefine it.
+    "infection_icd": LiteratureConceptIdentity(
+        concept_id="infection_icd",
+        canonical_phrase="infection",
+        retrieval_alternatives=(("infection",), ("infections",)),
+        screening_role_term="infection",
+        screening_required_terms=(),
+    ),
+    # Breath initiation/sequencing and breath-control mode are distinct axes.
+    # Spontaneous breathing broadens retrieval, not direct-comparator screening.
+    "vent_breath_seq": LiteratureConceptIdentity(
+        concept_id="vent_breath_seq",
+        canonical_phrase="ventilator breath type",
+        retrieval_alternatives=(("ventilator breath type",), ("spontaneous breathing",)),
+        screening_role_term="ventilator breath type",
+        screening_required_terms=(),
+    ),
+    "vent_mode": LiteratureConceptIdentity(
+        concept_id="vent_mode",
+        canonical_phrase="mechanical ventilation mode",
+        retrieval_alternatives=(("mechanical ventilation mode",), ("ventilation mode",)),
+        screening_role_term="mechanical ventilation mode",
         screening_required_terms=(),
     ),
     "aki": LiteratureConceptIdentity(
