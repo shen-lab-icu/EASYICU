@@ -45,6 +45,19 @@ for (const language of ['zh', 'en']) {
   );
   assert.ok(unavailable.includes(language === 'zh' ? '无法核验' : 'could not be verified'));
   assert.equal(modules.questionRequirements.notesHtml({}, helpers), '');
+  // A plan grouping another concept than the exposure read disagrees with it.
+  const sex = { ...reading, concept: 'sex', column: 'sex', category: '', label_en: 'Sex', label_zh: '性别', evidence: '性别' };
+  const ageGroups = { status: 'shown', groupings: [{ variable: 'age_group_x1', concept: 'age', concept_label_en: 'Age', concept_label_zh: '年龄' }] };
+  const disagree = modules.questionRequirements.notesHtml(
+    { coordinate_readings: { status: 'shown', items: [sex] }, exposure_groups: ageGroups }, helpers,
+  );
+  assert.ok(disagree.includes(language === 'zh'
+    ? '这份计划按「年龄」分组比较，但 EasyICU 从题面读到的暴露是「性别」，两者不一致。'
+    : 'This plan groups by Age, but the exposure EasyICU read from the question is Sex.'));
+  const agree = modules.questionRequirements.notesHtml(
+    { coordinate_readings: { status: 'shown', items: [{ ...sex, concept: 'age', label_zh: '年龄', label_en: 'Age' }] }, exposure_groups: ageGroups }, helpers,
+  );
+  assert.equal(agree.includes('不一致') || agree.includes('disagree'), false);
 
   const workflow = { study_setup_receipt: { configuration: {
     study_family_reading: family,

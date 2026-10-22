@@ -65,7 +65,22 @@
       '计划自动选择暴露与结局的来源记录无法核验，请直接核对完整计划中的指标。',
     ));
     else if (readings && readings.status === 'shown') {
-      (Array.isArray(readings.items) ? readings.items : []).slice(0, 2)
+      // The exposure the plan is built on is the coordinate the host read;
+      // a grouping of another concept compares something else (hosted pilot:
+      // "65 岁…请调整性别" read sex while the plan grouped age). Say so first.
+      const items = Array.isArray(readings.items) ? readings.items : [];
+      const exposure = items.find(row => row && row.role === 'exposure' && row.basis === 'keyword' && row.concept);
+      const groups = summary.exposure_groups && summary.exposure_groups.status === 'shown'
+        && Array.isArray(summary.exposure_groups.groupings) ? summary.exposure_groups.groupings.filter(Boolean) : [];
+      if (exposure && groups.length && !groups.some(group => group.concept === exposure.concept)) {
+        const grouped = clip(tr(groups[0].concept_label_en, groups[0].concept_label_zh) || groups[0].concept_label_en || groups[0].concept, 80);
+        const read = clip(tr(exposure.label_en, exposure.label_zh) || exposure.label_en || exposure.concept, 80);
+        lines.push(tr(
+          `This plan groups by ${grouped}, but the exposure EasyICU read from the question is ${read}. They disagree: before approving, say in the conversation which one the study compares.`,
+          `这份计划按「${grouped}」分组比较，但 EasyICU 从题面读到的暴露是「${read}」，两者不一致。批准前请在对话里说明要比较的是哪一个。`,
+        ));
+      }
+      items.slice(0, 2)
         .filter(row => row && row.basis === 'keyword' && ['exposure', 'outcome'].includes(row.role))
         .forEach(row => {
           const role = row.role === 'exposure' ? tr('Exposure', '暴露') : tr('Outcome', '结局');
