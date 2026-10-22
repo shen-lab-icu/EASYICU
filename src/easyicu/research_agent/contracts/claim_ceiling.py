@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 DescriptiveLimitation = Literal[
     "post_baseline_exposure_opportunity_unresolved",
     "counts_only_design",
+    "descriptive_study_design",
 ]
 
 BOUND_TYPED_COHORT_ANALYSIS_SET = "bound_typed_cohort"
@@ -23,8 +24,10 @@ class DescriptiveClaimContract(BaseModel):
 
     This is not a text label.  Scientific review accepts the ceiling only for a
     closed descriptive method/product shape with an explicit limitation:
-    unresolved post-baseline exposure opportunity, or a counts-only design
-    that permits no uncertainty interval or inferential test.
+    unresolved post-baseline exposure opportunity, a counts-only design
+    that permits no uncertainty interval or inferential test, or a
+    descriptive study design whose unadjusted group risks and their intervals
+    describe the cohort without an adjusted or causal comparison.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

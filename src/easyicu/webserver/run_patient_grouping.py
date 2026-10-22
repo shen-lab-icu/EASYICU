@@ -35,6 +35,7 @@ from easyicu.research_agent.contracts.patient_grouping_need import (
 from easyicu.research_agent.planning.dependence_authority import (
     context_patient_group_authority,
 )
+from easyicu.research_agent.research_context.typed import parse_research_context_json
 from easyicu.research_agent.schema import ResearchContext
 from easyicu.webserver.research_launch_scientific import (
     declared_longitudinal_design,
@@ -168,8 +169,9 @@ def runtime_patient_dependence(
 
 
 def _planned_context(path: Path) -> Optional[ResearchContext]:
+    # A prepared run seals a versioned typed context; read it by its version.
     try:
-        return ResearchContext.model_validate_json(path.read_bytes())
+        return parse_research_context_json(path.read_bytes())
     except (OSError, ValueError):
         return None
 

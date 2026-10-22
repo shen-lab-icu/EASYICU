@@ -14,7 +14,7 @@ before any analysis.
 The compiler now states the design's own limitation on that step,
 ``counts_only_design``; the verdict and the gate read it unchanged.  An
 exposure measured after baseline keeps its own limitation, and a design
-that is not counts-only compiles as before.
+that is not counts-only states its descriptive design instead.
 """
 
 from __future__ import annotations
@@ -143,8 +143,10 @@ def test_without_the_limitation_the_gate_refuses_the_primary_distribution() -> N
     ],
     ids=["no_design", "clustered"],
 )
-def test_a_design_that_is_not_counts_only_compiles_as_before(design) -> None:
-    assert _distribution(_compile(_study(design))).descriptive_claim is None
+def test_a_design_that_is_not_counts_only_states_the_descriptive_design(design) -> None:
+    assert _distribution(_compile(_study(design))).descriptive_claim == (
+        DescriptiveClaimContract(unresolved_limitations=("descriptive_study_design",))
+    )
 
 
 @pytest.mark.parametrize("role", ["secondary", "auxiliary"])

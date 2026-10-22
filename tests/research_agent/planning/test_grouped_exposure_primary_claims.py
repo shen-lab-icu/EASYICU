@@ -121,7 +121,11 @@ def test_a_baseline_step_does_not_borrow_the_primary_exposures_window(grouping):
     plan = _compile(context, exposure=grouping)
 
     assert post_baseline_exposure(context) == (True, "icu_admission[0,24]h")
-    assert all(step.descriptive_claim is None for step in plan.steps[1:])
+    distribution, summary = plan.steps[1:]
+    assert distribution.descriptive_claim.unresolved_limitations == (
+        "descriptive_study_design",
+    )
+    assert summary.descriptive_claim is None
 
 
 @pytest.mark.parametrize(
@@ -141,12 +145,8 @@ def test_the_default_classifier_keeps_the_context_primary_semantics(primary, exp
     assert post_baseline_exposure(context, "") == (False, None)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Backlog: baseline primary distributions with intervals have no descriptive claim",
-)
 @pytest.mark.parametrize("grouping", ["baseline_group", "unwindowed_group"])
-def test_baseline_primary_distribution_with_intervals_is_not_yet_reportable(grouping):
+def test_baseline_primary_distribution_with_intervals_is_reportable(grouping):
     context = _study(grouping)
     plan = _compile(context, exposure=grouping)
     step = plan.steps[1]
@@ -158,9 +158,6 @@ def test_baseline_primary_distribution_with_intervals_is_not_yet_reportable(grou
         context=context, plan=plan, require_reportable_capability=True,
     )
     blockers = _BLOCKERS & {finding.code for finding in review.findings}
-    print({
-        "grouping": grouping, "descriptive_claim": step.descriptive_claim,
-        "capability_id": assessment.capability_id, "issue": assessment.issue_code,
-        "blockers": sorted(blockers),
-    })
+    assert step.descriptive_claim.unresolved_limitations == ("descriptive_study_design",)
+    assert assessment.capability_id == "descriptive_exposure_outcome_distribution_v1"
     assert assessment.claim_ceiling == "reportable" and not blockers
