@@ -195,6 +195,21 @@
         <small>${ctx.tr('Choosing a source does not approve analysis.', '选择数据源不等于批准分析。')}</small>
       </div></section>`;
     }
+    const hosted = window.EasyICU.guidedPi.optional('hosted');
+    if (database && offer && offer.state === 'ready' && hosted && hosted.active()) {
+      // On a hospital server the administrator prepares every source and
+      // there is no folder to choose: a database the server holds no export
+      // of cannot be used here, so say so instead of opening a selection
+      // that cannot offer it.
+      const contact = hosted.supportContact();
+      return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
+        <strong>${ctx.esc(ctx.tr(`This server has no ${database.label} data`, `这台服务器上还没有 ${database.label} 数据`))}</strong>
+        <p>${ctx.esc(ctx.tr(`This conversation cannot use ${database.label}. Ask the question of a database this server holds, or ask ${contact || 'the administrator'} to add ${database.label} data.`, `本次会话无法使用 ${database.label}。可以把问题改到这台服务器上已有的数据库，或请${contact || '管理员'}添加 ${database.label} 数据。`))}</p>
+        <div class="gpi-data-consent-actions">
+          <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
+        </div>
+      </div></section>`;
+    }
     if (database) {
       // The question already names this database: open its source selection
       // directly instead of asking which database to use.
