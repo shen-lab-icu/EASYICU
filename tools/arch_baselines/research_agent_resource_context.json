@@ -1,8 +1,6 @@
 {
   "baseline_change_summary": {
-    "source_digest_changes": [
-      "src/easyicu/research_agent/planning/analysis_types.py"
-    ],
+    "source_digest_changes": [],
     "summary_changes": {}
   },
   "baseline_history": [
@@ -769,9 +767,14 @@
         "src/easyicu/research_agent/planning/analysis_types.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Table 1 reads a dictionary factor as a category (pilot1 round 2 A4)",
+      "source_digest_changes": [],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Chinese subtype-discovery cue: analysis_types.py source digest changed (patients clustered into or split into subtypes read as discovery); context envelope unchanged",
+  "baseline_reason": "Table 1 reads a dictionary factor as a category (pilot1 round 2 A4)",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"

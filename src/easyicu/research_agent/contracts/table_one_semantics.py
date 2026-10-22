@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Sequence
 
-from ..research_context.typed import declared_domain_for_variable
+from ..research_context.typed import declared_domain_for_variable, declares_factor_values
 from ..schema import ResearchContext, TableOneSpec, VariableRole
 
 
@@ -15,6 +15,11 @@ def table_one_variable_kind(variable: Any, levels: Sequence[Any]) -> str:
     dtype = str(variable.dtype or "").lower()
     declared, _basis = declared_domain_for_variable(variable)
     if levels and (bool(declared) or len(levels) == 2 or dtype.startswith(("object", "str", "string", "category", "bool"))):
+        return "categorical"
+    # A dictionary factor is a category before its levels are known: a
+    # row-free plan then has no closed levels for it (pilot1 10-22: eICU's
+    # coded ICU unit type was read as continuous and refused count_percent).
+    if declares_factor_values(variable):
         return "categorical"
     return "continuous"
 
