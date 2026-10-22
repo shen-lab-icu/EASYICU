@@ -657,6 +657,10 @@ _OMISSION_REASONS = {
         "a first-ICU-stay restriction changes the analysis unit and needs the "
         "researcher's explicit choice"
     ),
+    "study_execution_source_required": (
+        "exact data columns are bound once a data source is confirmed; the "
+        "saved question keeps the choice for the candidate plan"
+    ),
     "study_primary_outcome_confirmation_required": "the turn names it only as candidate intent",
     "study_primary_exposure_confirmation_required": "the turn names it only as candidate intent",
     "study_analysis_goal_confirmation_required": "the turn names it only as candidate intent",
@@ -1701,6 +1705,19 @@ def update_study_context(
     if effective_modules is None:
         effective_modules = (current or {}).get("modules") or []
     execution = patch.get("execution_concepts")
+    if execution is not None and not str(effective_source.get("path") or "").strip():
+        # Exact columns are bound against a source's catalog. Before one is
+        # confirmed, the rest of the setup is still the researcher's stated
+        # study: save it and leave the columns to the planner, which reads
+        # them from the saved question once a source is bound. Refusing the
+        # whole update lost the question with them (hosted pilot: "请调整性别"
+        # synchronized ``sex`` into these columns on a new project, nothing
+        # was saved, and no plan could be generated after the source was).
+        patch.pop("execution_concepts", None)
+        _record_unconfirmed_omission(
+            "", "execution_concepts", code="study_execution_source_required",
+        )
+        execution = None
     if execution is not None:
         try:
             normalized_execution = study_contexts.normalize_execution_concepts(
@@ -1720,14 +1737,6 @@ def update_study_context(
                 },
             )
         source_path = str(effective_source.get("path") or "").strip()
-        if not source_path:
-            return _result(
-                context,
-                status="blocked",
-                code="study_execution_source_required",
-                summary="Bind a validated data source before saving executable concept identifiers.",
-                owner="easyicu.webserver.study_contexts",
-            )
         from easyicu.research_agent.acquisition.catalog import build_available_catalog
 
         catalog = build_available_catalog(Path(source_path).expanduser())
