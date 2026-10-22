@@ -54,10 +54,7 @@
     const selectedOrdinal = Number(selected && selected.ordinal || page.selected_ordinal || 0);
     const total = Number(page.total_entities || drill && drill.summary && drill.summary.entities || options.length);
     const title = opts && opts.title || h.t('Case navigator', '病例导航');
-    const detail = opts && opts.detail || h.t(
-      'Switch one pseudonymous entity without rebuilding cohort quality or table summaries.',
-      '切换病例时，不会重新计算队列质量或表格摘要。',
-    );
+    const detail = opts && opts.detail || '';
     const pageNumber = Number(page.page || 1);
     const pageCount = Number(page.page_count || 1);
     const hasPaging = !drill.demo && pageCount > 1;
@@ -69,7 +66,7 @@
         <div>
           <div class="eyebrow">${h.esc(title)}</div>
           <div class="pt-entity-current">${h.esc(h.t('Selected', '当前'))}: ${h.esc(selected && (h.entityLabel(selected.label) || selected.ref) || '—')}${selectedOrdinal && total ? ` · ${h.fmtInt(selectedOrdinal)} / ${h.fmtInt(total)}` : ''}</div>
-          <div class="pt-entity-detail">${h.esc(detail)}</div>
+          ${detail ? `<div class="pt-entity-detail">${h.esc(detail)}</div>` : ''}
           ${status ? `<div class="pt-entity-status ${state.error ? 'bad' : ''}" role="status" aria-live="polite">${h.esc(status)}</div>` : ''}
         </div>
         <div class="pt-entity-browser">

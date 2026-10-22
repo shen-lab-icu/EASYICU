@@ -1625,6 +1625,17 @@ def _trajectory_review_payload(
         selected_signals,
         quality_metrics,
     )
+    # Traces are numbered by their position in the comparison set; a case
+    # loaded from a later navigator page joins that set, so name each trace by
+    # the case's own ordinal, the number its navigator chip shows.
+    ordinal_by_ref = {
+        row.get("ref"): row.get("ordinal") for row in entities if row.get("ordinal")
+    }
+    for trace in comparison_payload.get("traces") or []:
+        ordinal = ordinal_by_ref.get(trace.get("ref"))
+        if ordinal:
+            trace["label"] = f"Entity {ordinal}"
+            trace["ordinal"] = ordinal
     comparison_features = comparison_payload.get("features") or []
     has_multi_traces = bool(comparison_payload.get("traces"))
     return {

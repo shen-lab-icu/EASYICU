@@ -14,7 +14,7 @@
   let workspaceSamplingNote;
   let cohortCharts;
   let cohortReview;
-  const { demoCatalogModules, demoRowsForModule, catalogConceptLabel, catalogModuleText } = window.VIZ_DEMO;
+  const { demoCatalogModules, demoRowsForModule, catalogModuleText } = window.VIZ_DEMO;
 
   /* In-page panels (aligned with cohort_redesign.py _SUBTABS): Group contrast,
      Coverage audit, Cohort profile, SOFA reclassification. Demo-only panels use
@@ -74,16 +74,6 @@
       'Demo cohort': '演示队列',
       'No data loaded': '未加载数据',
       'Cohort statistics': '队列统计',
-      'Agent preflight': 'Agent 预检',
-      'Analysis readiness': '分析准备情况',
-      'current session': '本次会话',
-      'Input package': '载入的数据',
-      'Backend evidence checks': '数据核对',
-      'Draft review': '草稿审阅',
-      'demo concept set': '演示概念集',
-      'manifest parsed · denominators previewed · aggregate payload returned': '数据文件已读取 · 分母已核对 · 汇总结果已生成',
-      'coverage + denominators ready': '覆盖率和分母已就绪',
-      'locked · requires reviewer sign-off': '未开放 · 需审阅人确认',
       'Analysis table': '分析表',
       'Real cohort aggregate': '真实队列聚合',
       'Local export group contrast': '本地导出分组对照',
@@ -111,12 +101,10 @@
       'Summary': '摘要',
       'Overview': '概览',
       'Descriptive profile': '描述性画像',
-      'Aggregate-only group characteristics': '仅聚合的分组特征',
+      'Aggregate-only group characteristics': '分组基线特征',
       'Metric': '指标',
       'Status': '状态',
       'descriptive': '描述性',
-      'Fail-closed': '保守拦截',
-      'Blocked cohort functions': '已拦截的队列功能',
       'row_level_filters': '行级筛选',
       'inferential_statistics': '推断统计',
       'matched_cohort': '匹配队列',
@@ -126,6 +114,8 @@
       'blocked': '已拦截',
       'supported': '已支持',
       'Age Groups': '年龄分组',
+      'Age <65 vs >=65': '年龄 <65 vs ≥65',
+      '>=65': '≥65',
       'Female vs Male': '女性 vs 男性',
       'Short vs Long Stay': '短住院 vs 长住院',
       'Survived vs Deceased': '存活 vs 死亡',
@@ -201,7 +191,6 @@
       'Entities': '实体数',
       'Coverage': '覆盖率',
       'Coverage / rate': '覆盖率 / 发生率',
-      'coverage': '覆盖率',
       'event rate': '发生率',
       'exposure rate': '暴露率',
       'Event rate': '发生率',
@@ -257,7 +246,7 @@
       'Files loaded': '已加载文件',
       'Rows reviewed': '已审阅行数',
       'Outcome groups': '结局分组',
-      'Table one': 'Table One',
+      'Table one': '基线特征表 (Table 1)',
       'Baseline characteristics comparison': '基线特征对照',
       'Characteristic': '特征',
       'Overall': '总体',
@@ -317,13 +306,23 @@
     }
     return t(raw, raw);
   }
-  // A Table One row for an added feature names it by its catalog name on a Chinese page.
+  // A Chinese page names an export column by its catalog concept; a SOFA-2
+  // evidence flag or a timestamp column by its base concept plus what it records.
+  function cohortFeatureName(column) {
+    if (window.EU_LANG !== 'zh' || !column) return '';
+    const dict = (window.EU_CATALOG || {}).dict || {};
+    const id = String(column).toLowerCase();
+    // A SOFA-2 component export may drop the score prefix (cardio_available).
+    const zhOf = key => (dict[key] && dict[key][1]) || (dict[`sofa2_${key}`] && dict[`sofa2_${key}`][1]) || '';
+    if (zhOf(id)) return zhOf(id);
+    const flag = id.match(/^(.+)_(observed|available|time)$/);
+    if (!flag || !zhOf(flag[1])) return '';
+    return `${zhOf(flag[1])}${{ observed: ' 已观测', available: ' 可用', time: '时间' }[flag[2]]}`;
+  }
   function cohortMetricText(row) {
     const metric = String((row && row.metric) || '');
-    const dict = (window.EU_CATALOG || {}).dict || {};
-    const hit = row && row.column ? (dict[row.column] || dict[String(row.column).toLowerCase()]) : null;
-    const name = window.EU_LANG === 'zh' && hit && hit[1];
-    if (!name || !row.feature_id) return cohortText(metric);
+    const name = row && row.feature_id ? cohortFeatureName(row.column) : '';
+    if (!name) return cohortText(metric);
     if (/^Median /.test(metric)) return `${name} 中位数`;
     if (/ available %$/.test(metric)) return `${name} 有记录比例 %`;
     return / %$/.test(metric) ? `${name} %` : name;
@@ -354,6 +353,11 @@
       'ICU-specific event column is not present in the registered export.': '当前注册导出没有 ICU 专用死亡事件列。',
       'ICU mortality event rate is available, but KM/log-rank needs ICU-specific time columns.': 'ICU 死亡事件率可用，但 KM 生存曲线和 log-rank 检验需要 ICU 专用时间列。',
       'Unavailable for this export': '此导出不可用',
+      'Fewer than two cohort entities have both an observed event flag and a valid survival time.': '有事件标志且生存时间有效的患者不足 2 例，无法计算。',
+      'Log-rank requires observed events in at least one timed risk set.': '没有观察到事件，无法做 log-rank 检验。',
+      'Paired SOFA-1/SOFA-2 reclassification requires both score modules in the registered export.': '这份数据没有同时包含 SOFA-1 和 SOFA-2 评分，无法做重分层。',
+      'SOFA-1 and SOFA-2 modules are present, but no paired aggregate scores exist for the current cohort.': '有 SOFA-1 和 SOFA-2 模块，但当前队列没有可配对的评分。',
+      'module_not_in_current_export': '当前数据没有这个模块',
       'Unavailable': '不可用',
     };
     if (/^No event column found for (.+)\.$/.test(raw)) {
@@ -504,13 +508,13 @@
       return `
         <button class="chip ${on ? 'solid' : ''} ${locked ? 'disabled' : ''}" type="button" ${attr}>
           ${on ? icon('check', 11) : icon('plus', 11)}
-          <span>${esc(catalogConceptLabel(feature.column, feature.label || feature.column || feature.id))}</span>
+          <span>${esc(cohortFeatureName(feature.column) || feature.label || feature.column || feature.id)}</span>
           <span style="opacity:.72;">${esc(catalogModuleText(module.module, module.label))}</span>
         </button>`;
     })).join('');
     const selectedChips = selectedRows.map(feature => `
       <button class="chip solid" type="button" data-cohort-feature-toggle="${esc(feature.id)}" title="${esc(t('Remove feature', '移除特征'))}">
-        ${icon('check', 11)} ${esc(catalogConceptLabel(feature.column, feature.label || feature.column || feature.id))}
+        ${icon('check', 11)} ${esc(cohortFeatureName(feature.column) || feature.label || feature.column || feature.id)}
         <span style="opacity:.72;">${esc(feature.module ? catalogModuleText(feature.module) : '')}</span>
       </button>`).join('');
     return `
@@ -564,8 +568,7 @@
             </tr>`).join('')}
           </tbody>
         </table>
-      </div></details>
-      <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Fail-closed scope')}</div><div class="d">${t('Coverage is aggregate-only. Row-level filtering, subgroup missingness, and eligibility waterfalls remain blocked until a bounded cohort-builder backend exists.', '覆盖率只是汇总结果。按行筛选、亚组缺失率和纳排流程图暂未开放。')}</div></div></div>`;
+      </div></details>`;
   }
 
   function cohortCoverageForest(review) {
@@ -584,7 +587,7 @@
     return `<section class="cohort-coverage-forest" data-cohort-coverage-forest>
       <div class="cohort-forest-head"><div><b>${t('Module coverage with 95% Wilson intervals', '模块覆盖率与 95% Wilson 区间')}</b><span>${t('Presence-rate modules remain labelled as event or exposure rates, not missingness.', '事件或暴露模块仍按发生率标记，不解释为缺失率。')}</span></div><strong>N = ${fmtInt(total)}</strong></div>
       <div class="cohort-forest-axis"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
-      <div class="cohort-forest-rows">${rows.map(row => { const value = Math.max(0, Math.min(100, Number(row.coverage_pct))); const [lo, hi] = interval(row); return `<div class="cohort-forest-row"><div><b title="${esc(row.module)}">${esc(catalogModuleText(row.module))}</b><span>${esc(cohortText(row.metric_kind === 'event_rate' ? 'event rate' : row.metric_kind === 'exposure_rate' ? 'exposure rate' : 'coverage'))}</span></div><div class="cohort-forest-track"><i class="ci" style="left:${lo.toFixed(2)}%;width:${Math.max(.8, hi-lo).toFixed(2)}%"></i><i class="point" style="left:${value.toFixed(2)}%"></i></div><strong>${fmtPct(value)} <small>${fmtInt(row.covered_entities)}/${fmtInt(total)}</small></strong></div>`; }).join('')}</div>
+      <div class="cohort-forest-rows">${rows.map(row => { const value = Math.max(0, Math.min(100, Number(row.coverage_pct))); const [lo, hi] = interval(row); return `<div class="cohort-forest-row"><div><b title="${esc(row.module)}">${esc(catalogModuleText(row.module))}</b>${row.metric_kind === 'event_rate' || row.metric_kind === 'exposure_rate' ? `<span>${esc(cohortText(row.metric_kind === 'event_rate' ? 'event rate' : 'exposure rate'))}</span>` : ''}</div><div class="cohort-forest-track"><i class="ci" style="left:${lo.toFixed(2)}%;width:${Math.max(.8, hi-lo).toFixed(2)}%"></i><i class="point" style="left:${value.toFixed(2)}%"></i></div><strong>${fmtPct(value)} <small>${fmtInt(row.covered_entities)}/${fmtInt(total)}</small></strong></div>`; }).join('')}</div>
     </section>`;
   }
 
@@ -1104,8 +1107,7 @@
           <div class="setup-row"><span class="k">${cohortText('Database')}</span><span class="vv">${esc((review.source || {}).database || cohortText('unknown'))}</span></div>
           <div class="setup-row"><span class="k">${cohortText('Scope')}</span><span class="vv">${cohortText('aggregate-only payload')}</span></div>
         </div>
-      </div>
-      <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Real registered export aggregate. Row-level filters, generic Table One p-values, matched cohorts, and paired SOFA reclassification remain blocked; timed survival outcomes are handled in the KM module.', '真实注册导出聚合。行级筛选、通用 Table One p 值、匹配队列和配对 SOFA 重分层仍保持拦截；有事件时间的生存结局由 KM 模块处理。')}</p>`;
+      </div>`;
     }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && ws.summary) {
@@ -1184,7 +1186,6 @@
       const s = review.summary || {};
       const source = review.source || {};
       const supported = (review.groups || {}).supported || [];
-      const blocked = (review.groups || {}).blocked || [];
       const active = supported.find(row => row.id === state.compare) || supported[0] || {};
       const activeGroups = active.groups || [];
       const activeProfile = active.profile || {};
@@ -1226,7 +1227,7 @@
         ${activeGroups.map((g, i) => `<div class="stat ${i === 0 ? 'accent' : ''}"><div class="label">${esc(cohortText(g.label))}</div><div class="val">${fmtInt(g.count)}</div><div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${fmtPct(g.pct)}</div></div>`).join('')}
       </div>
 
-      <div class="sec-stack"><div class="lbl">Table One</div><h2>${cohortText('Aggregate-only group characteristics')}</h2></div>
+      <div class="sec-stack"><div class="lbl">${cohortText('Table one')}</div><h2>${cohortText('Aggregate-only group characteristics')}</h2></div>
       <div class="table-wrap table-scroll cohort-table-one" data-cohort-table-one>
         <table class="eu-table">
           <thead><tr><th>${cohortText('Metric')}</th>${profileColumns.map(col => `<th class="num">${esc(cohortText(col))}</th>`).join('')}<th>${cohortText('Status')}</th></tr></thead>
@@ -1239,12 +1240,7 @@
           </tbody>
         </table>
       </div>
-
-      <div class="sec-stack"><div class="lbl">${cohortText('Fail-closed')}</div><h2>${cohortText('Blocked cohort functions')}</h2></div>
-      <div class="cols-3">
-        ${blocked.map(item => `<div class="stat"><div class="label">${esc(cohortText(item.id))}</div><div class="val" style="font-size:13px;line-height:1.35;font-family:var(--font-body);font-weight:600;">${esc(cohortText(item.status))}</div><div style="font-size:11px;color:var(--ink-4);margin-top:6px;">${esc(cohortReason(item.reason))}</div></div>`).join('')}
-      </div>
-      <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('No row-level filters, generic Table One p-values, SMDs, matched cohort, or paired SOFA reclassification are exposed here. Use the Survival curves tab for audited KM/log-rank when timed outcomes exist.', '这里不开放行级筛选、通用 Table One p 值、SMD、匹配队列或配对 SOFA 重分层。若有事件时间，请在「生存曲线」页查看 KM 生存曲线和 log-rank 检验。')}</p>`;
+`;
     }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && ws.cohort) {
