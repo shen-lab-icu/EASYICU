@@ -324,6 +324,35 @@ def test_the_launch_records_the_family_before_it_plans(tmp_path, monkeypatch) ->
     assert len(writes) == 1
 
 
+def test_the_launch_records_a_stated_prediction_model_its_population_needs(
+    tmp_path, monkeypatch
+) -> None:
+    """pilot1 round 2 (10-22), P1: a question that states a prediction model
+    stopped before planning for the ICU stay its population reads, asking the
+    researcher to declare what the question already says.  The launch records
+    the planner's reading of a family whose preparation reads the design; it
+    records no host reading of words, and no other planner-read family."""
+
+    _grouping(monkeypatch, None)
+    writes = _launch_writes(monkeypatch)
+    study = {"id": "study-launch", "revision": 5, **_bound(tmp_path), "analysis_design": {}}
+    question = "用年龄、性别、入 ICU 24 小时内最高乳酸、最高肌酐和最低平均动脉压，在 eICU 中建立预测院内死亡的模型。"
+
+    launched = record_unset_family_design(study, question=question)
+
+    (write,) = writes
+    assert write["analysis_design"] == {
+        "analysis_family": "prediction_model",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "model_based",
+    }
+    assert STUDY_FAMILY_READING_FIELD not in write
+    assert launched["analysis_design"] == write["analysis_design"]
+    survival = "在 MIMIC-IV 中，用 Cox 回归分析入 ICU 首日最高乳酸与 28 天生存的关系。"
+    assert record_unset_family_design(study, question=survival) is study
+    assert len(writes) == 1
+
+
 def test_a_new_run_records_the_family_in_its_own_preparation(tmp_path, monkeypatch) -> None:
     # The launch's own preparation records the design before anything else
     # reads the study, whatever stops the launch later.

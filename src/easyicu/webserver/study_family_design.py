@@ -48,6 +48,7 @@ from easyicu.webserver.design_variance_basis import (
 )
 from easyicu.webserver.study_family_reading import (
     StudyFamilyReading,
+    planner_stated_family,
     study_family_reading,
 )
 
@@ -193,6 +194,12 @@ def family_reading_conflict(question: Any, design: Any) -> Optional[Dict[str, An
     return reading.record(design_family=family)
 
 
+#: Families whose launch preparation reads the study's recorded design: a
+#: prediction study's population is the stays still in the ICU after its
+#: prediction time (``primary_cohort.cohort_required_concepts``).
+_PREPARED_FROM_DESIGN = frozenset({"prediction_model"})
+
+
 def record_unset_family_design(
     study: Mapping[str, Any], *, question: str
 ) -> Mapping[str, Any]:
@@ -208,15 +215,23 @@ def record_unset_family_design(
     if _design_family(study.get("analysis_design")):
         return study
     decision = question_family_design(question, study)
-    if decision is None:
-        return study
+    if decision is not None:
+        patch: Dict[str, Any] = {
+            "analysis_design": dict(decision.design),
+            STUDY_FAMILY_READING_FIELD: decision.reading.record(),
+        }
+    else:
+        # A family whose launch preparation reads the recorded design is
+        # recorded as the planner reads it in the question (pilot1 10-22: a
+        # stated prediction model stopped for the ICU stay its population
+        # reads, asking the researcher to declare what the question says).
+        family = planner_stated_family(question)
+        if family not in _PREPARED_FROM_DESIGN:
+            return study
+        patch = {"analysis_design": family_design_for(study, family)}
     try:
         saved = study_contexts.upsert_context(
-            {
-                "id": str(study.get("id") or ""),
-                "analysis_design": dict(decision.design),
-                STUDY_FAMILY_READING_FIELD: decision.reading.record(),
-            },
+            {"id": str(study.get("id") or ""), **patch},
             active=True,
             expected_revision=int(study.get("revision") or 0),
             require_revision=True,

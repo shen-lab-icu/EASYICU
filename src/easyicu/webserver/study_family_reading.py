@@ -63,6 +63,7 @@ __all__ = [
     "StudyFamilyReading",
     "family_reading_rests_on",
     "normalize_study_family_reading",
+    "planner_stated_family",
     "study_family_reading",
 ]
 
@@ -202,16 +203,27 @@ _SELF_STATED_FAMILIES = frozenset({
 })
 
 
-def _planner_reads_a_stated_design(text: str) -> bool:
+def planner_stated_family(question: Any) -> Optional[str]:
+    """The family the planner's own routing reads in ``question`` when it is
+    one a question states by its design or method words, else ``None``."""
+
     from easyicu.research_agent.planning.analysis_types import infer_analysis_type
     from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 
+    text = str(question or "")
+    if not text.strip():
+        return None
     context = ResearchContext(
         research_question=text,
         cohort=CohortDescriptor(cohort_name="study", database="miiv", n_stays=0),
         variables=[],
     )
-    return infer_analysis_type(context).key in _SELF_STATED_FAMILIES
+    family = infer_analysis_type(context).key
+    return family if family in _SELF_STATED_FAMILIES else None
+
+
+def _planner_reads_a_stated_design(text: str) -> bool:
+    return planner_stated_family(text) is not None
 
 
 def study_family_reading(question: Any) -> Optional[StudyFamilyReading]:
