@@ -132,6 +132,25 @@ const outcome = modules.require('runOutcome').create({
   });
   assert.ok(ageGroups.followUps.length);
   assert.ok(ageGroups.followUps.every(text => !text.includes('年龄、') && !text.includes('调整年龄') && !text.includes('按年龄分层')), ageGroups.followUps.join('\n'));
+  // Sex groups read in Chinese, and the outcome a table one lists is never a
+  // covariate to adjust for (pilot1 D1: 「Male」 and 「在调整院内死亡后…」).
+  const savedSexTables = payloads['result_tables.json'];
+  payloads['result_tables.json'] = { tables: savedSexTables.tables.map(item => (item.name === 'step__exposure_outcome_distribution.csv'
+    ? { ...item, rows: [['exposure_level', 'Female', '92303', '200682', '45.99', '8372', '92303', '9.07'],
+      ['exposure_level', 'Male', '108379', '200682', '54.01', '9608', '108379', '8.87'],
+      ['overall', '', '200682', '200682', '100.0', '17980', '200682', '8.96']] }
+    : item)) };
+  const sexGroups = await reread({ ...plan,
+    display_labels: { death: '院内死亡' },
+    steps: plan.steps.map(step => (step.table_one_spec
+      ? { ...step, table_one_spec: { group_by: 'sex' }, inputs: ['sex', 'age', 'death', 'artifact:analysis_cohort'] }
+      : step.exposure_outcome_distribution_spec
+        ? { ...step, exposure_outcome_distribution_spec: { exposure: 'sex', outcome: 'death', exposure_levels: ['Female', 'Male'] } }
+        : step)),
+  });
+  payloads['result_tables.json'] = savedSexTables;
+  assert.match(sexGroups.html, /「男性」组 8\.87%（9,608\/108,379），「女性」组 9\.07%/);
+  assert.ok(sexGroups.followUps.every(text => !text.includes('调整院内死亡')), sexGroups.followUps.join('\n'));
   // A Chinese reader reads what each typed step did in Chinese; the family
   // templates write the plan's own step words in English.
   const englishSteps = await reread({ ...plan,
