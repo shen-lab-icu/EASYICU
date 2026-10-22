@@ -483,16 +483,22 @@
   function cohortRealFeaturePicker(review) {
     const catalog = (review && review.feature_catalog) || {};
     const selection = (review && review.feature_selection) || {};
-    const modules = (catalog.modules || []).filter(module => module && module.feature_count);
-    if (!modules.length) return '';
     const selectedRows = selection.selected || [];
     const selectedIds = new Set(selectedRows.map(row => row && row.id).filter(Boolean));
+    // Bookkeeping columns (receipts, observed/available flags) are not offered; a selected one stays removable.
+    const offered = feature => feature.audience !== 'internal' || selectedIds.has(feature.id);
+    const modules = (catalog.modules || [])
+      .map(module => module && { ...module, features: (module.features || []).filter(offered) })
+      .filter(module => module && module.features.length)
+      .map(module => ({ ...module, feature_count: module.features.length }));
+    if (!modules.length) return '';
+    const offeredTotal = modules.reduce((n, module) => n + module.feature_count, 0);
     const defaultIds = selection.default_ids || [];
     const maxSelected = selection.max_selected_features || catalog.max_selected_features || 48;
     if (state.featureModule !== 'all' && !modules.some(module => module.module === state.featureModule)) state.featureModule = 'all';
     const visibleModules = state.featureModule === 'all' ? modules : modules.filter(module => module.module === state.featureModule);
     const moduleChips = [
-      `<button class="chip ${state.featureModule === 'all' ? 'solid' : ''}" type="button" data-cohort-feature-module="all">${t('All modules', '全部模块')} <span class="mono">${fmtInt(catalog.total_features)}</span></button>`,
+      `<button class="chip ${state.featureModule === 'all' ? 'solid' : ''}" type="button" data-cohort-feature-module="all">${t('All modules', '全部模块')} <span class="mono">${fmtInt(offeredTotal)}</span></button>`,
       ...modules.map(module => `<button class="chip ${state.featureModule === module.module ? 'solid' : ''}" type="button" data-cohort-feature-module="${esc(module.module)}">${esc(catalogModuleText(module.module, module.label))} <span class="mono">${fmtInt(module.feature_count)}</span></button>`),
     ].join('');
     const atMax = selectedIds.size >= maxSelected;
@@ -518,7 +524,7 @@
       <div class="card pad mt-14" data-cohort-feature-picker>
         <div class="row wrap gap-8" style="align-items:center;">
           <span class="pill ok"><span class="dot"></span>${t('Full export feature catalog', '全量导出特征目录')}</span>
-          <span style="font-size:12px;color:var(--ink-3);">${fmtInt(selection.module_count || catalog.total_modules)} ${t('modules', '个模块')} · ${fmtInt(selection.available_count || catalog.total_features)} ${t('available comparison features', '个可比较特征')} · ${fmtInt(selection.selected_count || selectedIds.size)} ${t('selected', '个已选择')}</span>
+          <span style="font-size:12px;color:var(--ink-3);">${fmtInt(modules.length)} ${t('modules', '个模块')} · ${fmtInt(offeredTotal)} ${t('available comparison features', '个可比较特征')} · ${fmtInt(selection.selected_count || selectedIds.size)} ${t('selected', '个已选择')}</span>
           <span class="grow"></span>
           <button class="btn sm" type="button" data-cohort-feature-default>${icon('sliders', 12)} ${t('Restore default features', '恢复默认特征')}</button>
           <button class="btn sm ghost" type="button" data-cohort-feature-clear>${icon('close', 12)} ${t('Clear added features', '清空已选特征')}</button>
