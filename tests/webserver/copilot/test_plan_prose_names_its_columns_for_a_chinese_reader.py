@@ -79,6 +79,50 @@ def test_an_english_page_names_only_the_groups():
 def test_every_plan_step_reader_uses_the_owner_after_it_loads():
     index = (STATIC / "index.html").read_text(encoding="utf-8")
     owner = index.index("js/screens-agent-plan-prose.js?")
-    for reader in ("screens-agent-render.js", "screens-guided-pi-analysis-report.js", "screens-guided-pi-run-answer.js"):
+    for reader in (
+        "screens-agent-render.js", "screens-guided-pi-analysis-report.js",
+        "screens-guided-pi-run-answer.js", "screens-guided-pi-confirmation.js",
+    ):
         assert owner < index.index(f"js/{reader}?")
         assert "AGENT_PLAN_PROSE" in (STATIC / "js" / reader).read_text(encoding="utf-8")
+
+
+def test_the_plan_summary_names_the_columns_its_items_quote():
+    # pilot1 round 3 (10-22): the conversation's six-item summary read
+    # 「推荐将hgb定义为…并按sex分层」 and 「采用age和adm作为…调整集合」.
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js unavailable")
+    catalog = {**CATALOG, "hgb": ["Hemoglobin", "血红蛋白", "g/dL"], "age": ["Age", "年龄", "years"],
+               "adm": ["Admission Type", "入院类型", ""]}
+    preview = {
+        "items": [
+            {"key": "exposure_and_timing", "text": "推荐将hgb定义为入ICU后24小时内可用测量的最低值，并按sex分层。"},
+            {"key": "adjustment_and_model", "text": "推荐采用age和adm作为调整集合。"},
+        ],
+        "design": {"estimand": "估计 hgb 与 death 的关联。", "required_variables": ["hgb", "sex", "death"]},
+    }
+    script = f"""
+global.window = global;
+window.EU_LANG = 'zh';
+window.EU_CATALOG = {{ dict: {json.dumps(catalog)} }};
+require({json.dumps(str(STATIC / "js/screens-agent-plan-prose.js"))});
+require({json.dumps(str(STATIC / "js/screens-guided-pi-modules.js"))});
+require({json.dumps(str(STATIC / "js/screens-guided-pi-confirmation.js"))});
+const workflow = {{ next_action_code: 'operator_plan_approval_required', plan_conversation_preview: {json.dumps(preview, ensure_ascii=False)} }};
+const host = {{
+  tr: (en, zh) => zh || en, esc: value => String(value), iconHtml: () => '',
+  resourceButton: resource => `<button>${{resource.label}}</button>`, sessionIsStale: () => false,
+  workflow: () => workflow, busy: () => false,
+  session: () => ({{ archived_child_jobs: [], binding: {{ run_id: 'run-test' }} }}),
+}};
+process.stdout.write(window.EasyICU.guidedPi.require('confirmation').create(host).workflowConfirmationHtml());
+"""
+    result = run_node(node, script)
+    assert result.returncode == 0, result.stderr
+    rendered = result.stdout
+
+    assert "推荐将血红蛋白定义为入ICU后24小时内可用测量的最低值，并按性别分层。" in rendered
+    assert "推荐采用年龄和入院类型作为调整集合。" in rendered
+    assert "估计血红蛋白与院内死亡的关联。" in rendered
+    assert "需要的变量：血红蛋白、性别、院内死亡" in rendered
