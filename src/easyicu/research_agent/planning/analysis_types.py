@@ -1150,13 +1150,22 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
         )
         is not None
     )
-    # 聚成/聚为 name clustering itself, so profiles that 聚成 groups ask for
-    # discovery even without an action verb such as 识别.
+    # 聚成/聚为 name clustering itself, so profiles -- or the patients
+    # themselves ("把脓毒症患者聚类成不同亚型", pilot1 10-22) -- that 聚成
+    # groups ask for discovery even without an action verb such as 识别.
+    # Patients split 分为 subtypes are discovered too; split into groups by a
+    # measured value ("分为高乳酸组和低乳酸组") they are an exposure.
     chinese_clustered_into_groups = (
         re.search(
-            r"(?:轨迹|特征|指标|模式|曲线)[^，。；;]{0,12}"
+            r"(?:轨迹|特征|指标|模式|曲线|患者|病人)[^，。；;]{0,12}"
             r"(?:聚成|聚为|聚类为|聚类成|聚合为|聚合成)[^，。；;]{0,8}"
             r"(?:亚表型|亚型|表型|内型|类别|类|群|组)",
+            normalised,
+        )
+        is not None
+        or re.search(
+            r"(?:患者|病人)[^，。；;]{0,12}(?:分成|分为|划分为|划分成)[^，。；;]{0,8}"
+            r"(?:亚表型|亚型|表型|内型)",
             normalised,
         )
         is not None

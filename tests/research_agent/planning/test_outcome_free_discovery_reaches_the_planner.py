@@ -75,6 +75,9 @@ def _blueprint(context: ResearchContext) -> HypothesisBlueprint:
         "Do temperature curves in the first 72 hours define distinct endotypes?",
         "成人脓毒症患者入科后前48小时的器官功能轨迹能否聚成可重复的亚型？",
         "心脏术后患者的乳酸曲线是否聚为不同的类别？",
+        # pilot1 fixed set R3 (10-22): the patients themselves are clustered.
+        "在 eICU 中，用入 ICU 首日的化验和生命体征把脓毒症患者聚类成不同亚型。",
+        "能否根据首日生命体征把 ARDS 患者分为几种亚表型？",
     ],
 )
 def test_ordinary_discovery_wording_chooses_the_clustering_family(question):
@@ -100,7 +103,9 @@ def test_ordinary_discovery_wording_chooses_the_clustering_family(question):
         "Use GEE to account for clustering among patients within hospitals when "
         "estimating the mortality association.",
         "患者分为高乳酸组和低乳酸组，比较死亡率。",
+        "按年龄把患者分为 65 岁及以上和 65 岁以下两组，比较院内死亡。",
         "不进行轨迹聚成亚型的分析，只描述各指标分布。",
+        "用按医院聚类的稳健标准误估计乳酸与死亡的关联。",
     ],
 )
 def test_groups_the_question_does_not_ask_to_discover_stay_out(question):
