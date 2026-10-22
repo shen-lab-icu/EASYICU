@@ -67,6 +67,16 @@
       const trial = window.EasyICU.guidedPi.optional('targetTrial');
       const trialConfirmation = trial ? trial.confirmation(workflow, tr) : null;
       if (trialConfirmation) return trialConfirmation;
+      // A family v1 does not offer on the bound database: the plan step says
+      // so instead of offering a plan (host: study_family_scope).
+      if (code === 'study_family_database_out_of_scope' && typeof host.studyFamilyGapText === 'function') {
+        const gap = host.studyFamilyGapText(workflow.study_family_gap);
+        return {
+          code, grants: [], nonApprovable: true,
+          title: gap.refusal, note: gap.instead,
+          editLabel: tr('Revise in the conversation', '在对话里修改'),
+        };
+      }
       const archivedJobs = Array.isArray(host.session() && host.session().archived_child_jobs)
         ? host.session().archived_child_jobs : [];
       const latestFailedAgentJob = archivedJobs.slice().reverse().find(job => (
