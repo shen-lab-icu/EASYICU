@@ -34,6 +34,28 @@
     return helpers && helpers.icon ? helpers.icon(name, size) : '';
   }
 
+  /* Display names come from the route owner (catalog names in the page
+     language); without it the payload's own label is shown unchanged. */
+  function hConcept(helpers, feature, fallback) {
+    return helpers && helpers.conceptLabel ? helpers.conceptLabel(feature, fallback) : fallback;
+  }
+
+  function hUnit(helpers, unit) {
+    return helpers && helpers.unitText ? helpers.unitText(unit) : unit;
+  }
+
+  function hEntity(helpers, label) {
+    return helpers && helpers.entityLabel ? helpers.entityLabel(label) : label;
+  }
+
+  function hValue(helpers, value) {
+    return helpers && helpers.valueText ? helpers.valueText(value) : value;
+  }
+
+  function hostedServer() {
+    return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true;
+  }
+
   function overviewText(value, helpers) {
     const map = {
       'Age / sex': hT(helpers, 'Age / sex', '年龄 / 性别'),
@@ -197,12 +219,12 @@
     return `<section class="pt-distribution-latest mt-16" data-patient-distribution-latest>
       <div class="pt-distribution-head">
         <div><div class="eyebrow">${hEsc(helpers, hT(helpers, 'Distribution · latest value', '分布—末值图'))}</div><h2>${hEsc(helpers, hT(helpers, 'Within-patient value distributions', '单患者多变量分布与末值'))}</h2><p>${hEsc(helpers, hT(helpers, 'Each row summarizes the bounded observed values for one signal. The diamond is the latest recorded value; this view intentionally contains no second time trajectory.', '每行汇总一个信号的观测值；菱形标记最后一次记录值。这张图不重复显示时间轨迹。'))}</p></div>
-        <span class="pill ok">${hEsc(helpers, (source && (source.selected_label || source.selected_ref)) || hT(helpers, 'selected entity', '已选实体'))}</span>
+        <span class="pill ok">${hEsc(helpers, hEntity(helpers, source && (source.selected_label || source.selected_ref)) || hT(helpers, 'selected entity', '所选病例'))}</span>
       </div>
       <div class="pt-distribution-rows">
         ${rows.map(row => {
-          const label = row.signal.name || row.signal.label || row.signal.feature;
-          const unit = row.signal.unit || '';
+          const label = hConcept(helpers, row.signal.feature, row.signal.name || row.signal.label || row.signal.feature);
+          const unit = hUnit(helpers, row.signal.unit || '');
           return `<div class="pt-distribution-row" data-patient-distribution-feature="${hEsc(helpers, row.signal.feature || label)}">
             <div class="pt-distribution-name"><b>${hEsc(helpers, label)}</b><span>${hEsc(helpers, row.signal.feature || '')} · n=${hFmtInt(helpers, row.values.length)}</span></div>
             <div class="pt-boxplot" aria-label="${hEsc(helpers, `${label}: ${row.minimum} to ${row.maximum}`)}"><i class="whisker"></i><i class="box" style="left:${row.pct(row.q1).toFixed(2)}%;width:${Math.max(1.5, row.pct(row.q3) - row.pct(row.q1)).toFixed(2)}%"></i><i class="median" style="left:${row.pct(row.median).toFixed(2)}%"></i><i class="latest" style="left:${row.pct(row.latest).toFixed(2)}%"></i></div>
@@ -222,21 +244,21 @@
         <div class="pt-overview-head">
           <div>
             <div class="eyebrow">${hEsc(helpers, overviewText('Case review', helpers))}</div>
-            <h2>${hEsc(helpers, hT(helpers, 'Clinical case overview', '病例画像工作台'))} · ${hEsc(helpers, (selected && selected.label) || hT(helpers, 'Selected entity', '已选实体'))}</h2>
-            <p>${hEsc(helpers, hT(helpers, 'Snapshot-level clinical interpretation for one pseudonymous entity. Use Time Series only when you need trajectories.', '面向单个去标识实体的临床画像；需要看轨迹时再进入时间序列页。'))}</p>
+            <h2>${hEsc(helpers, hT(helpers, 'Clinical case overview', '病例画像工作台'))} · ${hEsc(helpers, hEntity(helpers, selected && selected.label) || hT(helpers, 'Selected entity', '所选病例'))}</h2>
+            <p>${hEsc(helpers, hT(helpers, 'Snapshot-level clinical interpretation for one pseudonymous entity. Use Time Series only when you need trajectories.', '单个匿名病例的临床概况；需要看变化趋势时再进入时间序列页。'))}</p>
           </div>
-          <span class="pill ${drill && drill.demo ? 'demo' : 'ok'}">${drill && drill.demo ? hT(helpers, 'demo workspace', '演示工作区') : hT(helpers, 'local export', '本地导出')}</span>
+          <span class="pill ${drill && drill.demo ? 'demo' : 'ok'}">${drill && drill.demo ? hT(helpers, 'demo workspace', '演示工作区') : (hostedServer() ? hT(helpers, 'prepared data', '已准备的数据') : hT(helpers, 'local export', '本地导出'))}</span>
         </div>
         <div class="pt-overview-stat-grid">
           ${(summaryCards || []).map(card => `
             <div class="pt-overview-stat ${toneClass(card && card.tone)}">
               <span>${hEsc(helpers, overviewText(card && card.label, helpers))}</span>
-              <b>${hEsc(helpers, card && card.value == null ? '—' : card.value)}</b>
+              <b>${hEsc(helpers, card && card.value == null ? '—' : hValue(helpers, card.value))}</b>
             </div>`).join('')}
         </div>
         <div class="pt-overview-availability">
           <div>
-            <span>${hEsc(helpers, hT(helpers, 'Signals available for this entity', '该实体可用信号'))}</span>
+            <span>${hEsc(helpers, hT(helpers, 'Signals available for this entity', '该病例可用指标'))}</span>
             <b>${hFmtInt(helpers, totalSignals)}</b>
           </div>
           <div>
@@ -244,8 +266,8 @@
             <b>${hFmtInt(helpers, activeSections.length)}</b>
           </div>
           <div>
-            <span>${hEsc(helpers, hT(helpers, 'Source-row policy', '源行策略'))}</span>
-            <b>${hEsc(helpers, hT(helpers, 'bounded summary only', '仅汇总'))}</b>
+            <span>${hEsc(helpers, hT(helpers, 'Source-row policy', '原始记录行'))}</span>
+            <b>${hEsc(helpers, hT(helpers, 'bounded summary only', '不显示，只显示汇总'))}</b>
           </div>
         </div>
       </section>`;
@@ -270,11 +292,11 @@
       <div class="pt-missing-scatter"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${hEsc(helpers, hT(helpers, 'Missingness by record count', '缺失率与记录量散点图'))}">
         ${[0,25,50,75,100].map(tick => `<line x1="${x(tick)}" x2="${x(tick)}" y1="${top}" y2="${height-bottom}" class="grid"></line><text x="${x(tick)}" y="${height-25}" class="axis" text-anchor="middle">${tick}%</text>`).join('')}
         ${Array.from({length:Math.floor(maxLog)+1},(_,tick)=>`<line x1="${left}" x2="${width-right}" y1="${y(10 ** tick)}" y2="${y(10 ** tick)}" class="grid"></line><text x="${left-12}" y="${y(10 ** tick)+4}" class="axis" text-anchor="end">10${tick ? `<tspan baseline-shift="super" font-size="12">${tick}</tspan>` : ''}</text>`).join('')}
-        ${rows.map(row => { const show = labelled.includes(row); const label = row.name || row.feature; return `<g><circle cx="${x(row.missing).toFixed(1)}" cy="${y(row.records).toFixed(1)}" r="${show ? 6 : 4}" class="${row.missing >= 30 ? 'bad' : row.missing >= 10 ? 'warn' : 'ok'}"><title>${hEsc(helpers, `${label}: ${row.missing}% missing, ${row.records} records`)}</title></circle>${show ? `<text x="${(x(row.missing)+8).toFixed(1)}" y="${(y(row.records)-7).toFixed(1)}" class="point-label">${hEsc(helpers, label)}</text>` : ''}</g>`; }).join('')}
+        ${rows.map(row => { const show = labelled.includes(row); const label = hConcept(helpers, row.feature, row.name || row.feature); return `<g><circle cx="${x(row.missing).toFixed(1)}" cy="${y(row.records).toFixed(1)}" r="${show ? 6 : 4}" class="${row.missing >= 30 ? 'bad' : row.missing >= 10 ? 'warn' : 'ok'}"><title>${hEsc(helpers, `${label}: ${row.missing}% missing, ${row.records} records`)}</title></circle>${show ? `<text x="${(x(row.missing)+8).toFixed(1)}" y="${(y(row.records)-7).toFixed(1)}" class="point-label">${hEsc(helpers, label)}</text>` : ''}</g>`; }).join('')}
         <text x="${(left+width-right)/2}" y="${height-5}" class="axis-title" text-anchor="middle">${hEsc(helpers, hT(helpers, 'Missing values (%)', '缺失率 (%)'))}</text><text x="16" y="${(top+height-bottom)/2}" class="axis-title" text-anchor="middle" transform="rotate(-90 16 ${(top+height-bottom)/2})">${hEsc(helpers, hT(helpers, 'Records (log scale)', '记录数（对数尺度）'))}</text>
       </svg></div>
-      <div class="pt-cleaning-receipt" data-patient-cleaning-receipt><div><span>${hEsc(helpers, hT(helpers, 'Cleaning receipt', '清洗回执'))}</span><b>${hFmtInt(helpers, summary.total_records || 0)} ${hEsc(helpers, hT(helpers, 'records audited', '条记录已审计'))}</b></div><div><span>${hEsc(helpers, hT(helpers, 'Post-cleaning duplicate-time rate', '清洗后重复时间戳率'))}</span><b>${hFmtPct(helpers, summary.weighted_duplicate_time_pct || 0)}</b></div><div><span>${hEsc(helpers, hT(helpers, 'Post-rule out-of-range rate', '规则处理后越界率'))}</span><b>${hFmtPct(helpers, summary.weighted_out_of_physio_pct || 0)}</b></div></div>
-      <p class="pt-missingness-note">${hEsc(helpers, hT(helpers, 'The receipt verifies the configured post-cleaning state; it does not re-label resolved duplicates or out-of-range source values as new problems.', '回执核验的是清洗后的状态，不会把已经解决的重复时间戳或越界源值重新包装成“新问题”。'))}</p>
+      <div class="pt-cleaning-receipt" data-patient-cleaning-receipt><div><span>${hEsc(helpers, hT(helpers, 'Cleaning receipt', '清洗结果'))}</span><b>${hFmtInt(helpers, summary.total_records || 0)} ${hEsc(helpers, hT(helpers, 'records audited', '条记录已核查'))}</b></div><div><span>${hEsc(helpers, hT(helpers, 'Post-cleaning duplicate-time rate', '清洗后重复时间戳率'))}</span><b>${hFmtPct(helpers, summary.weighted_duplicate_time_pct || 0)}</b></div><div><span>${hEsc(helpers, hT(helpers, 'Post-rule out-of-range rate', '规则处理后越界率'))}</span><b>${hFmtPct(helpers, summary.weighted_out_of_physio_pct || 0)}</b></div></div>
+      <p class="pt-missingness-note">${hEsc(helpers, hT(helpers, 'The receipt verifies the configured post-cleaning state; it does not re-label resolved duplicates or out-of-range source values as new problems.', '以上数字反映清洗后的数据；已经处理过的重复时间和超范围原始值不会再被算作新问题。'))}</p>
     </section>`;
   }
 

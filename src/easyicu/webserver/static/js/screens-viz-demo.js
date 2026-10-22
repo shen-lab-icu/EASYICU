@@ -18,9 +18,39 @@
   // Catalog metadata accessors — read-only lookups over the global
   // window.EU_CATALOG; shared by the demo generators and the main viz
   // screens (rebound there). Pure: only depend on EU_CATALOG + t.
+  // Catalog group names start with a picker emoji ("⭐ SOFA-2 Scores"); a review
+  // heading names a module by its words, as review_labels.plain_label does.
+  function plainCatalogName(name) {
+    const raw = String(name == null ? '' : name);
+    return raw.replace(/^[^\p{L}\p{N}]+/u, '').trim() || raw;
+  }
   function catalogModuleLabel(key) {
     const hit = ((window.EU_CATALOG || {}).groups || []).find(row => row[0] === key);
-    return hit ? t(hit[1], hit[2] || hit[1]) : key;
+    return hit ? plainCatalogName(t(hit[1], hit[2] || hit[1])) : key;
+  }
+  // Review-screen display names in the page language. A Chinese page names a
+  // catalog concept by its catalog Chinese name; an English page keeps the
+  // caller's existing label. Unknown ids fall back to that label.
+  function catalogConceptLabel(key, fallback) {
+    const dict = (window.EU_CATALOG || {}).dict || {};
+    const id = String(key == null ? '' : key);
+    const hit = dict[id] || dict[id.toLowerCase()];
+    if (window.EU_LANG === 'zh' && hit && hit[1]) return hit[1];
+    if (fallback != null && fallback !== '') return fallback;
+    return hit ? hit[0] : id;
+  }
+  // Catalog units that are English words; measurement units (mmHg, mg/dL) stay as they are.
+  const UNIT_WORDS_ZH = {
+    points: '分', days: '天', hours: '小时', years: '岁', sec: '秒', count: '次',
+    boolean: '是/否', category: '分类', state: '状态', ratio: '比值', fraction: '比例', datetime: '日期时间',
+  };
+  function catalogUnitText(unit) {
+    const raw = String(unit == null ? '' : unit);
+    return (window.EU_LANG === 'zh' && UNIT_WORDS_ZH[raw]) || raw;
+  }
+  function catalogModuleText(key, fallback) {
+    const known = ((window.EU_CATALOG || {}).groups || []).some(row => row[0] === key);
+    return known ? catalogModuleLabel(key) : plainCatalogName(fallback || key || '');
   }
   function catalogFeatureMeta(key) {
     const hit = ((window.EU_CATALOG || {}).dict || {})[key];
@@ -609,7 +639,7 @@
   }
 
   window.VIZ_DEMO = {
-    catalogModuleLabel, catalogFeatureMeta,
+    catalogModuleLabel, catalogFeatureMeta, catalogConceptLabel, catalogModuleText, catalogUnitText,
     DEMO_ENTITY_COUNT, DEMO_DURATION_HOURS, DEMO_CHART_HOURS, DEMO_CLINICAL_LANES, DEMO_THRESHOLDS,
     demoCatalogModules, demoIsTimeIndexed, demoFeatureModule, demoCoverageForFeature,
     demoRowsForModule, demoReviewStatus, demoQualityStatus, demoRateTone,

@@ -2229,8 +2229,8 @@ def test_native_patient_time_series_uses_module_grouped_single_feature_charts() 
     assert (
         index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
         < index_html.index("js/screens-viz-echarts.js?v=20261022-winfont1")
-        < index_html.index("js/screens-viz-patient-charts.js?v=20260830-viz-final1")
-        < index_html.index("js/screens-viz-patient-series.js?v=20261022-plain3")
+        < index_html.index("js/screens-viz-patient-charts.js?v=20261022-zhlabels1")
+        < index_html.index("js/screens-viz-patient-series.js?v=20261022-zhlabels1")
     )
     assert ".pt-module-card" in patient_css
     assert ".pt-matrix-details .table-scroll" in patient_css
@@ -2270,7 +2270,7 @@ def test_native_patient_feature_catalog_has_a_dedicated_owner() -> None:
     assert "window.EU_PATIENT_FEATURES" not in series_js
 
     feature_owner = index_html.index(
-        "js/screens-viz-patient-features.js?v=20260727-patient-demo2"
+        "js/screens-viz-patient-features.js?v=20261022-zhlabels1"
     )
     assert index_html.index("js/screens-viz-demo.js?") < feature_owner
     assert feature_owner < index_html.index("js/screens-viz-patient-series.js?")
@@ -2769,7 +2769,8 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "loadPatientReviewEntity" in patient_navigation_js
     assert "loadPatientReviewEntity" not in viz_js
     assert "Pseudonymous entity" in patient_domain_js
-    assert "伪匿名实体" in patient_domain_js
+    assert "匿名编号" in patient_domain_js
+    assert "伪匿名实体" not in patient_domain_js
     assert "display_column_labels" in patient_domain_js
     assert "label_i18n" in patient_domain_js
     assert "patientModuleLabel" in patient_domain_js
@@ -2873,23 +2874,23 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "css/patient-tables.css?v=20260830-viz-final1" in index_html
     assert "css/patient.css?v=20260830-viz-final1" in index_html
     assert "css/patient-series.css?v=20261022-legacy1" in index_html
-    assert "js/screens-viz-demo.js?v=20260727-patient-demo2" in index_html
+    assert "js/screens-viz-demo.js?v=20261022-zhlabels1" in index_html
     assert "js/screens-viz-demo-drilldown.js?v=20260727-owner-split" in index_html
-    assert "js/screens-viz-patient-features.js?v=20260727-patient-demo2" in index_html
-    assert "js/screens-viz-patient-charts.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz-patient-series.js?v=20261022-plain3" in index_html
+    assert "js/screens-viz-patient-features.js?v=20261022-zhlabels1" in index_html
+    assert "js/screens-viz-patient-charts.js?v=20261022-zhlabels1" in index_html
+    assert "js/screens-viz-patient-series.js?v=20261022-zhlabels1" in index_html
     assert (
         "js/screens-viz-patient-demo-sources.js?v=20261022-plain3"
         in index_html
     )
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
     assert (
-        "js/screens-viz-patient-navigation.js?v=20260710-bounded-pages"
+        "js/screens-viz-patient-navigation.js?v=20261022-zhlabels1"
         in index_html
     )
-    assert "js/screens-viz-patient-tables.js?v=20261022-plain3" in index_html
-    assert "js/screens-viz-patient-overview.js?v=20261022-plain3" in index_html
-    assert "js/screens-viz-patient.js?v=20261022-plain3" in index_html
+    assert "js/screens-viz-patient-tables.js?v=20261022-zhlabels1" in index_html
+    assert "js/screens-viz-patient-overview.js?v=20261022-zhlabels1" in index_html
+    assert "js/screens-viz-patient.js?v=20261022-zhlabels1" in index_html
     assert index_html.index("js/screens-viz-patient-navigation.js?") < index_html.index(
         "js/screens-viz.js?"
     )
@@ -3053,8 +3054,8 @@ def test_native_cohort_real_page_is_backend_backed_and_bilingual() -> None:
     assert "function reloadStaleRealCohortIfNeeded" in cohort_js
     assert "function cohortText" in cohort_view_js
     assert "function cohortReason" in cohort_view_js
-    assert "'Backend evidence checks': '后端证据检查'" in cohort_view_js
-    assert "'Draft review': '草稿核验'" in cohort_view_js
+    assert "'Backend evidence checks': '数据核对'" in cohort_view_js
+    assert "'Draft review': '草稿审阅'" in cohort_view_js
     assert "'Local export cohort review ready': '本地导出队列审阅已就绪'" in cohort_view_js
     assert "'Fail-closed': '保守拦截'" in cohort_view_js
     assert "'Blocked cohort functions': '已拦截的队列功能'" in cohort_view_js
@@ -3091,7 +3092,8 @@ def test_native_cohort_real_page_is_backend_backed_and_bilingual() -> None:
         "manifest parsed · denominators previewed · aggregate payload returned"
         in cohort_js
     )
-    assert "聚合载荷已就绪；打开研究对话做证据绑定草稿核验。" in cohort_js
+    assert "汇总结果已就绪；可在研究对话中核对证据并审阅草稿。" in cohort_js
+    assert "聚合载荷" not in cohort_js
     assert "Draft gate" not in cohort_js
     assert "Evidence checks" not in cohort_js
     assert "locked · needs reviewer sign-off" not in cohort_js
@@ -3529,7 +3531,7 @@ def test_review_routes_share_echarts_theme_without_cross_route_owner_leaks() -> 
 
     vendor = index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
     shared = index_html.index("js/screens-viz-echarts.js?v=20261022-winfont1")
-    patient = index_html.index("js/screens-viz-patient-charts.js?v=20260830-viz-final1")
+    patient = index_html.index("js/screens-viz-patient-charts.js?v=20261022-zhlabels1")
     cohort = index_html.index("js/screens-viz-cohort-charts.js?v=20261022-winfont1")
     crossdb = index_html.index("js/screens-viz-crossdb-charts.js?v=20260830-viz-final1")
     assert vendor < shared < patient < cohort < crossdb

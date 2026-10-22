@@ -151,16 +151,15 @@
         <div class="ico">${icon('db', 14)}</div>
         <div class="body">
           <div class="t">${t('Current export is already loaded', '当前导出已加载')}</div>
-          <div class="d">${t('Cohort Review is using the active EasyICU export. KM/log-rank will run here when the Outcome module has both an event flag and a time-to-event or censoring-time column; otherwise continue from this same export in an audited local Agent analysis. No re-import is required.', '队列审阅正在使用当前 active 的 EasyICU 导出。只要 Outcome/结局模块同时有事件标志和事件时间或删失时间列，KM/log-rank 就会直接在这里运行；否则也应从同一个导出进入本地 Agent 审计分析，不需要重新导入。')}</div>
+          <div class="d">${t('Cohort Review is using the active EasyICU export. KM/log-rank will run here when the Outcome module has both an event flag and a time-to-event or censoring-time column; otherwise continue from this same export in an audited local Agent analysis. No re-import is required.', '队列统计正在使用当前数据。只要结局模块同时有事件标志和事件时间（或删失时间）列，KM 生存曲线和 log-rank 检验就会直接在这里计算；否则请在研究对话中基于同一份数据继续分析，不需要重新导入。')}</div>
           <div class="d mono" style="margin-top:4px;">${esc(reason)}</div>
         </div>
       </div>
       <div class="card pad mt-12" data-survival-current-export>
-        <div class="sec-stack" style="margin-bottom:10px;"><div class="lbl">${t('Loaded source', '已加载来源')}</div><h2>${t('KM uses the current export snapshot', 'KM 复用当前导出快照')}</h2></div>
+        <div class="sec-stack" style="margin-bottom:10px;"><div class="lbl">${t('Loaded source', '已加载来源')}</div><h2>${t('KM uses the current export snapshot', 'KM 曲线使用当前数据')}</h2></div>
         <div class="setup-row"><span class="k">${cohortText('Source')}</span><span class="vv">${esc(source.label || cohortText('Local export'))}</span></div>
-        <div class="setup-row"><span class="k">${cohortText('Path hash')}</span><span class="vv mono">${esc(source.path_hash || '')}</span></div>
-        <div class="setup-row"><span class="k">${cohortText('Cohort size')}</span><span class="vv">${fmtInt(summary.cohort_size)} ${t('entities', '个实体')}</span></div>
-        <div class="setup-row"><span class="k">${cohortText('Outcome')}</span><span class="vv">${t('Outcome module is registered in this export; blocked rows below explain any missing event/time pair.', '此导出已注册 Outcome/结局模块；下方拦截行会说明缺少的事件/时间组合。')}</span></div>
+        <div class="setup-row"><span class="k">${cohortText('Cohort size')}</span><span class="vv">${fmtInt(summary.cohort_size)} ${t('entities', '例')}</span></div>
+        <div class="setup-row"><span class="k">${cohortText('Outcome')}</span><span class="vv">${t('Outcome module is registered in this export; blocked rows below explain any missing event/time pair.', '这份数据包含结局模块；如缺少事件列或时间列，会在下方说明。')}</span></div>
       </div>`;
   }
 

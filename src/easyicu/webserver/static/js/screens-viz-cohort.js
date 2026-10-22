@@ -386,7 +386,7 @@
           <div class="empty mt-16" data-cohort-empty-preview="true">
             <div class="glyph">${icon('cohort', 22)}</div>
             <div class="t">${t('Cohort review awaits setup', '队列审阅等待配置')}</div>
-            <div class="d">${t('After setup, this page will show group contrast, KM/log-rank, coverage audit, cohort profile, and SOFA reclassification.', '配置后，这里会显示组间对照、KM/log-rank、生存风险表、覆盖审计、队列画像和 SOFA 重分层。')}</div>
+            <div class="d">${t('After setup, this page will show group contrast, KM/log-rank, coverage audit, cohort profile, and SOFA reclassification.', '配置后，这里会显示组间对照、KM 生存曲线与 log-rank 检验、覆盖审计、队列画像和 SOFA 重分层。')}</div>
           </div>`;
       }
       if (state.view === 'loading') {
@@ -405,7 +405,7 @@
       const preflightItems = [
         [
           view.text('Input package'),
-          ws ? `${fmtInt(ws.summary && ws.summary.stays)} ${t('entities', '个实体')} · ${fmtInt(ws.summary && ws.summary.modules)} ${t('modules', '个模块')}` : `10 ${t('stays', '次住院')} · ${fmtInt(demoScope.selectedModuleCount)} / ${fmtInt(demoScope.totalModuleCount)} ${t('modules', '个模块')} · ${fmtInt(demoScope.selectedFeatureCount)} / ${fmtInt(demoScope.totalFeatureCount)} ${t('features', '个特征')}`,
+          ws ? `${fmtInt(ws.summary && ws.summary.stays)} ${t('entities', '例')} · ${fmtInt(ws.summary && ws.summary.modules)} ${t('modules', '个模块')}` : `10 ${t('stays', '次住院')} · ${fmtInt(demoScope.selectedModuleCount)} / ${fmtInt(demoScope.totalModuleCount)} ${t('modules', '个模块')} · ${fmtInt(demoScope.selectedFeatureCount)} / ${fmtInt(demoScope.totalFeatureCount)} ${t('features', '个特征')}`,
           'ok',
           null,
         ],
@@ -435,7 +435,7 @@
                 <span class="dot-${s}"></span>${tt}${nav ? `<span style="margin-left:auto;color:var(--ink-4);">${icon('arrow', 12)}</span>` : ''}
               </div>
               <div style="font-size:12.5px;color:var(--ink-2);margin-top:6px;">${d}</div>
-              ${nav ? `<div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${review ? t('Aggregate payload is ready; open Copilot conversation for evidence-bound draft review.', '聚合载荷已就绪；打开研究对话做证据绑定草稿核验。') : t('Demo review is local-only; use Guided Copilot after choosing a real export.', '演示审阅仅限本地预览；选择真实导出后再使用研究引导。')}</div>` : ''}
+              ${nav ? `<div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${review ? t('Aggregate payload is ready; open Copilot conversation for evidence-bound draft review.', '汇总结果已就绪；可在研究对话中核对证据并审阅草稿。') : t('Demo review is local-only; use Guided Copilot after choosing a real export.', '演示审阅仅限本地预览；选择真实导出后再使用研究引导。')}</div>` : ''}
             </div>`).join('')}
         </div>
       </div>

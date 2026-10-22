@@ -40,6 +40,16 @@
   }
 
 
+  // Fallback axis and legend words in the page language; payload labels win.
+  function zh(en, zhText) {
+    return window.EU_LANG === 'zh' ? zhText : en;
+  }
+
+  function entityText(label) {
+    const owner = window.EU_PATIENT_FEATURES;
+    return owner && typeof owner.entityLabel === 'function' ? owner.entityLabel(label) : label;
+  }
+
   function finite(value) {
     if (value == null || (typeof value === 'string' && !value.trim())) return null;
     const number = Number(value);
@@ -109,9 +119,9 @@
     if (pairs.length < 2) return null;
     let label = meta.label;
     if (!label) {
-      if (meta.kind === 'relative_hours') label = 'ICU hour';
-      else if (meta.kind === 'relative_minutes') label = 'ICU hour';
-      else label = 'Recorded offset';
+      if (meta.kind === 'relative_hours') label = zh('ICU hour', 'ICU 入科后小时');
+      else if (meta.kind === 'relative_minutes') label = zh('ICU hour', 'ICU 入科后小时');
+      else label = zh('Recorded offset', '源记录偏移');
     }
     return {
       kind: 'value',
@@ -134,7 +144,7 @@
       const first = parsed[0][0];
       return {
         kind: 'value',
-        label: 'Hours since first observed point',
+        label: zh('Hours since first observed point', '距首次观测的小时数'),
         pairs: parsed.map(([stamp, value]) => [(stamp - first) / 3600000, value]),
         tooltip: value => `${formatNumber(value, 1)} h`,
       };
@@ -142,7 +152,7 @@
     const meta = normalizedAxisMeta(axisMeta);
     return {
       kind: 'time',
-      label: meta.label || 'Recorded time',
+      label: meta.label || zh('Recorded time', '源记录时间'),
       pairs: parsed,
       tooltip: value => {
         const date = new Date(Number(value));
@@ -161,7 +171,7 @@
     if (rows.length < 2) return null;
     return {
       kind: 'category',
-      label: 'Recorded order',
+      label: zh('Recorded order', '记录顺序'),
       categories: rows.map(row => row[0]),
       pairs: rows.map(row => row[1]),
       tooltip: value => text(value),
@@ -212,7 +222,7 @@
     const midpoint = median(values);
     if (midpoint != null) {
       rows.push({
-        name: 'Median',
+        name: zh('Median', '中位数'),
         yAxis: midpoint,
         lineStyle: { color: '#94a3b8', type: 'dashed', width: 1 },
       });
@@ -250,7 +260,7 @@
       const lines = [axis.tooltip(rawX)];
       rows.forEach(row => {
         const value = Array.isArray(row.value) ? row.value[1] : row.value;
-        lines.push(`${text(row.seriesName, 'Value')}: ${formatNumber(value, 2)}${unit ? ` ${text(unit)}` : ''}`);
+        lines.push(`${text(row.seriesName, zh('Value', '数值'))}: ${formatNumber(value, 2)}${unit ? ` ${text(unit)}` : ''}`);
       });
       return lines.join('\n');
     };
@@ -322,7 +332,7 @@
         if (!axis) return null;
         return {
           axis,
-          label: text(trace.label || trace.ref, `Entity ${index + 1}`),
+          label: text(entityText(trace.label || trace.ref), zh(`Entity ${index + 1}`, `病例 ${index + 1}`)),
           color: colors.series[index % colors.series.length],
         };
       })
