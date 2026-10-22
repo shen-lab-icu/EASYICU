@@ -123,6 +123,10 @@
       if (error.code === 'pi_session_local_selection_not_started') {
         return tr('The local folder selection has already ended. Refresh this conversation.', '本地目录选择已经结束，请刷新这段对话。');
       }
+      // The Web memory admission (pi_copilot/resource_lifecycle.py): nothing was sent.
+      if (error.code === 'pi_web_memory_pressure') {
+        return tr('EasyICU is busy finishing other work and did not send this message. Wait a minute, then send it again.', 'EasyICU 正忙于处理其他任务，这条消息没有发送。请稍等一分钟再发送。');
+      }
       if (error.code === 'study_job_running') {
         return tr('Another task of this study is running or starting. Wait for it to finish, then choose again.', '本研究的另一个任务正在运行或准备中，请等它结束后再选择。');
       }
