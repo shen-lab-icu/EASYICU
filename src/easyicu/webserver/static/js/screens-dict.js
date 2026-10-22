@@ -13,6 +13,8 @@
   let dictLineage = null;
   let dictLineageLoading = false;
   let dictLineageError = '';
+  let dictShowInternal = false;
+  const DATABASE_NAMES = { miiv: 'MIMIC-IV', eicu: 'eICU-CRD', mimic: 'MIMIC-III', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sic: 'SICdb' };
 
   function L(en, zh) { return t(en, zh); }
   function html(v) {
@@ -28,6 +30,17 @@
   // dictionary names a group by its words, as review_labels.plain_label does.
   function plainName(name) { const text = String(name || '').replace(/^[^\p{L}\p{N}]+/u, ''); return text || String(name || ''); }
   function groupNameOf(key) { const g = C().groups.find(g => g[0] === key); return g ? plainName(window.EU_LANG === 'zh' ? g[2] : g[1]) : key; }
+
+  function hostedServer() { return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true; }
+  // A hosted instance counts coverage over the databases it actually has.
+  function instanceDbs() { const dbs = C().instanceDatabases || []; return hostedServer() && dbs.length ? dbs : null; }
+  function dbName(key) { const base = String(key || '').replace(/_demo$/, ''); return DATABASE_NAMES[base] || key; }
+  // Bookkeeping concepts (receipts, evidence flags, helper series) stay out of
+  // the list until asked for; the catalog's audience field decides.
+  function isInternal(k) { const meta = (C().conceptCoverage || {})[k]; return !!(meta && meta.audience === 'internal'); }
+  function listed(k) { return !!C().dict[k] && (dictShowInternal || !isInternal(k)); }
+  function listedIn(gk) { return (C().groupConcepts[gk] || []).filter(listed); }
+  function internalCount() { return Object.keys(C().dict || {}).filter(isInternal).length; }
 
   function supportedDbCount() { return (C().supportedDbs || []).length || 6; }
 
@@ -71,6 +84,12 @@
   }
 
   function covBadge(k) {
+    const inst = instanceDbs();
+    if (inst) {
+      const covered = ((C().conceptCoverage || {})[k] || {}).instance_databases_covered || [];
+      const cls = covered.length === inst.length ? 'hi' : covered.length ? 'mid' : 'lo';
+      return `<span class="cov-badge ${cls}"><span class="cov-n">${covered.length ? covered.map(dbName).join(' · ') : L('Not in this instance', '本实例无')}</span></span>`;
+    }
     const meta = coverageOf(k);
     if (meta.kind === 'derived') {
       return `<span class="cov-badge derived" title="${L('Derived or rule-based output. It is not a separate raw database mapping count.', '派生或规则输出,不是单独的原始数据库映射数量。')}">${L('derived', '派生')}</span>`;
@@ -93,7 +112,7 @@
     const rows = [];
     groupsToScan.forEach(gk => {
       (cat.groupConcepts[gk] || []).forEach(k => {
-        if (!cat.dict[k]) return;
+        if (!listed(k)) return;
         if (q) {
           const hay = `${k} ${nameOf(k)} ${zhOf(k)} ${descOf(k)}`.toLowerCase();
           if (!hay.includes(q)) return;
@@ -105,11 +124,13 @@
   }
 
   function resultsHtml(rows) {
-    return `<div class="dict-resultline">${t(rows.length + ' concept' + (rows.length === 1 ? '' : 's'), rows.length + ' 个概念')}${dictCat !== 'all' ? ` · ${groupNameOf(dictCat)}` : ''}${dictSearch ? ` · "${dictSearch.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}"` : ''}</div>${tableHtml(rows)}`;
+    const hidden = internalCount();
+    const toggle = hidden ? `<button type="button" class="btn sm ghost" data-dict-internal>${dictShowInternal ? L('Hide internal fields', '隐藏内部字段') : L(`Show internal fields (${hidden})`, `显示内部字段（${hidden}）`)}</button>` : '';
+    return `<div class="dict-resultline row" style="justify-content:space-between;align-items:center;"><span>${t(rows.length + ' concept' + (rows.length === 1 ? '' : 's'), rows.length + ' 个概念')}${dictCat !== 'all' ? ` · ${groupNameOf(dictCat)}` : ''}${dictSearch ? ` · "${dictSearch.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}"` : ''}</span>${toggle}</div>${tableHtml(rows)}`;
   }
   function tableHtml(rows) {
     if (!rows.length) return `<div class="dict-empty">${icon('search', 22)}<div>${L('No matching concepts.', '未找到匹配的概念。')}</div></div>`;
-    const coverageLabel = L('Database coverage', '数据库覆盖');
+    const coverageLabel = instanceDbs() ? L('Databases here', '本实例数据库') : L('Database coverage', '数据库覆盖');
     const head = `
       <div class="dict-row dict-head">
         <span class="dc-code">${L('Code', '代码')}</span>
@@ -174,8 +195,8 @@
     const cat = C();
     const chip = (key, label, n) => `<button class="dict-chip ${dictCat === key ? 'on' : ''}" data-dict-cat="${key}">${label}${n != null ? ` <span class="dch-n">${n}</span>` : ''}</button>`;
     return `<div class="dict-chips">
-      ${chip('all', L('All', '全部'), cat.totalConcepts)}
-      ${cat.groups.map(g => chip(g[0], groupNameOf(g[0]), cat.groupConcepts[g[0]].length)).join('')}
+      ${chip('all', L('All', '全部'), Object.keys(cat.dict || {}).filter(listed).length)}
+      ${cat.groups.filter(g => listedIn(g[0]).length).map(g => chip(g[0], groupNameOf(g[0]), listedIn(g[0]).length)).join('')}
     </div>`;
   }
 
@@ -185,6 +206,18 @@
     actionHtml: '',
     rail() {
       const cat = C();
+      const inst = instanceDbs();
+      if (inst) {
+        return `
+      <div class="rail-sep"></div>
+      <div class="rail-block">
+        <div class="rail-head"><span class="t">${t('Catalog', '目录')}</span></div>
+        <div class="col gap-6" style="font-size:12px;">
+          <div class="setup-row"><span class="k">${t('Concepts', '概念')}</span><span class="vv">${Object.keys(cat.dict || {}).filter(listed).length}</span></div>
+          <div class="setup-row"><span class="k">${t('Databases', '数据库')}</span><span class="vv">${inst.map(dbName).join(' · ')}</span></div>
+        </div>
+      </div>`;
+      }
       const summary = cat.coverageSummary || fallbackCoverageSummary();
       const dbs = summary.supportedDatabases || supportedDbCount();
       return `
@@ -213,13 +246,13 @@
       <div class="page-head" style="margin-bottom:16px;">
         <div class="eyebrow">${t('Data', '数据')}</div>
         <h1 style="margin-top:6px;">${t('Data dictionary', '数据字典')}</h1>
-        <p class="lead">${t(cat.totalConcepts + ' concepts across ' + cat.groups.length + ' feature groups — abbreviations, full names, units, and database coverage from the EasyICU concept dictionary.', cat.totalConcepts + ' 个概念，分属 ' + cat.groups.length + ' 个特征分组：缩写、全称、单位，以及 EasyICU 字典中的数据库覆盖。')}</p>
+        ${instanceDbs() ? '' : `<p class="lead">${t(cat.totalConcepts + ' concepts across ' + cat.groups.length + ' feature groups — abbreviations, full names, units, and database coverage from the EasyICU concept dictionary.', cat.totalConcepts + ' 个概念，分属 ' + cat.groups.length + ' 个特征分组：缩写、全称、单位，以及 EasyICU 字典中的数据库覆盖。')}</p>`}
       </div>
 
-      <div class="dict-catalog-note">
+      ${instanceDbs() ? '' : `<div class="dict-catalog-note">
         ${icon('help', 14)}
         <span>${t('This column counts how many supported ICU databases have a dictionary mapping for each feature. It does not depend on the data currently selected.', '这一列统计字典中每个特征覆盖了多少个支持的 ICU 数据库，与当前选择的数据无关。')}</span>
-      </div>
+      </div>`}
 
       <div class="dict-search">
         <span class="ds-ico">${icon('search', 16)}</span>
@@ -267,6 +300,7 @@
         dictCat = b.dataset.dictCat; window.__euRender();
       }));
       root.addEventListener('click', async event => {
+        if (event.target.closest('[data-dict-internal]')) { dictShowInternal = !dictShowInternal; window.__euRender(); return; }
         const dbButton = event.target.closest('[data-dict-lineage-db]');
         if (dbButton) { dictSelectedDb = dbButton.dataset.dictLineageDb; paintLineage(); return; }
         const conceptButton = event.target.closest('[data-dict-concept]');

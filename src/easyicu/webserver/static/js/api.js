@@ -160,6 +160,7 @@
     cat.desc = real.desc;
     cat.totalConcepts = real.totalConcepts;
     cat.supportedDbs = real.supportedDbs;
+    cat.instanceDatabases = real.instance_databases || [];
     cat.__live = true;
     return cat;
   }

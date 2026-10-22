@@ -226,6 +226,7 @@ CONTRACTS: dict[str, list[str]] = {
         "product-labels.js",
         "screens-agent-study-context.js",
     ],
+    "dictionary_hosted_instance.test.js": ["screens-dict.js"],
     "review_echarts_owners.test.js": [
         "screens-viz-echarts.js",
         "screens-viz-crossdb-charts.js",
