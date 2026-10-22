@@ -59,6 +59,12 @@ _AGENT_COMPILED_RUNTIME_FINDINGS = frozenset(
         "TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED",
     }
 )
+#: Runtime findings the reviewer records for the reader without asking any
+#: owner to execute something: complete-case refits that keep exactly the
+#: primary model's rows restate its estimate, and are documented, not counted
+#: as robustness (research_agent/planning/scientific_review.py).  Nothing
+#: closes them, so they never make a reviewed plan uncompilable.
+_DOCUMENTED_RUNTIME_FINDINGS = frozenset({"COMPLETE_CASE_SENSITIVITY_REPEATS_PRIMARY"})
 #: The reviewer hands this finding to the host only for a plan with no
 #: estimator that could carry patient dependence; its closure is a population
 #: of one first ICU stay per patient, not a plan coordinate.
@@ -1017,6 +1023,7 @@ def compile_agent_plan_configuration(
                 for value in runtime_finding_codes
                 if str(value or "").strip()
             }
+            - _DOCUMENTED_RUNTIME_FINDINGS
         )
     )
     if not codes:
