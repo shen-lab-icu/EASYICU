@@ -134,6 +134,16 @@
       return specs.length === 1 ? specs[0] : null;
     }
 
+    // The exposure the primary model estimates, as its requirement names it.
+    function primaryModelExposure(plan) {
+      const steps = Array.isArray(plan && plan.steps) ? plan.steps : [];
+      const sources = steps.filter(step => step && step.planned_analysis_role === 'primary')
+        .flatMap(step => (Array.isArray(step.model_requirements) ? step.model_requirements : []))
+        .filter(row => row && row.analysis_role === 'primary' && row.exposure_source)
+        .map(row => String(row.exposure_source));
+      return sources.length === 1 ? sources[0] : '';
+    }
+
     function baselineCovariates(plan, exposure) {
       const steps = Array.isArray(plan && plan.steps) ? plan.steps : [];
       const baseline = steps.find(step => step && step.table_one_spec && Array.isArray(step.inputs));
@@ -246,6 +256,9 @@
       const exposureLabel = !spec ? '' : grouped ? levels.variableName(spec.exposure)
         : shortLabel(readerLabel(labels, spec.exposure)) || (levels ? levels.variableName(spec.exposure) : '');
       const outcomeLabel = shortLabel((spec && readerLabel(labels, spec.outcome)) || summary.outcomeLabel || '');
+      const modelled = primaryModelExposure(plan);
+      const modelledLabel = !modelled ? '' : levels && levels.has(modelled) ? levels.variableName(modelled)
+        : shortLabel(readerLabel(labels, modelled)) || conceptName(modelled);
       const groups = (Array.isArray(summary.exposureLevels) ? summary.exposureLevels : [])
         .filter(row => row && row.label && finite(row.n) != null);
       const figures = mainFigure(payload('figure_gallery.json'));
@@ -268,6 +281,7 @@
         total: total && total.display_value != null ? String(total.display_value) : '',
         overallRisk: overallRisk && overallRisk.display_value != null ? String(overallRisk.display_value) : '',
         estimate: primaryEstimate(summary, claims),
+        estimateExposure: modelledLabel,
         prediction: PREDICTION_TYPES.has(String(plan.analysis_type || ''))
           ? predictionPerformance(payload('result_tables.json').prediction_performance) : null,
         covariates: baselineCovariates(plan, spec && spec.exposure),
@@ -400,7 +414,11 @@
       if (view.estimate) {
         const interval = view.estimate.low && view.estimate.high
           ? tr(` (95% CI ${view.estimate.low}–${view.estimate.high})`, `（95% CI ${view.estimate.low}–${view.estimate.high}）`) : '';
-        const contrast = view.estimate.label ? tr(` for ${view.estimate.label}`, `（${view.estimate.label}）`) : '';
+        // An estimate always says what it compares: without the typed
+        // contrast, the primary model's exposure, so an answer that modelled
+        // another factor than the question's is visible as such.
+        const named = view.estimate.label || view.estimateExposure || view.exposureLabel;
+        const contrast = named ? tr(` for ${named}`, `（${named}）`) : '';
         sentences.push(tr(
           `Primary estimate${contrast}: ${view.estimate.measure} ${view.estimate.value}${interval}.`,
           `主要估计${contrast}：${view.estimate.measure} ${view.estimate.value}${interval}。`,
