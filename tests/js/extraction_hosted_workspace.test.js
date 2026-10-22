@@ -58,10 +58,13 @@ function extractor(hosted, values = {}) {
 
 test('a hosted extraction request carries no output folder; a local one carries the chosen folder', () => {
   for (const hosted of [true, false]) {
-    const { c, posted } = extractor(hosted);
+    const { c, posted } = extractor(hosted, { exFormat: 'excel' });
     c.runExtract('recommended');
     assert.equal(posted.length, 1);
     assert.equal(posted[0].url, '/api/jobs/extract');
+    // Patient-level files stay on the server (no download), so a hosted run
+    // is written in the analysis format whatever format was remembered.
+    assert.equal(posted[0].body.format, hosted ? 'parquet' : 'excel');
     if (hosted) assert.equal(Object.prototype.hasOwnProperty.call(posted[0].body, 'out_dir'), false);
     else assert.equal(posted[0].body.out_dir, '/Users/me/exports');
     // A hosted export is listed under a name the clinician recognises.
@@ -131,7 +134,32 @@ test('a hosted result names the workspace, shows no server path and opens nothin
     const done = c.doneState();
     assert.equal(done.includes(SERVER_PATH), !hosted);
     assert.equal(done.includes('data-ex-open-output'), !hosted);
-    assert.equal(done.includes('数据始终留在医院服务器上'), hosted);
+    assert.equal(done.includes('不能下载；可以在患者审阅、队列统计和研究对话中使用'), hosted);
     assert.equal(done.includes('全部留在你的机器上'), !hosted);
+  }
+});
+
+test('a hosted folder is named by its folder name, never its server path', () => {
+  for (const hosted of [true, false]) {
+    const c = page(hosted);
+    vm.runInContext(section('  function pathDisplay(path) {', '  function pathNeedsFolderChoice('), c);
+    assert.equal(c.pathDisplay('/home/clinic/data/eicu-crd-2.0/'), hosted ? 'eicu-crd-2.0' : '/home/clinic/data/eicu-crd-2.0/');
+  }
+});
+
+test('a finished extraction the job registered is re-read, not registered again', async () => {
+  // Registering it again dropped the job's label ('我的抽取 · …' became 'EICU')
+  // and its comparison choice (pilot1, 2026-10-22).
+  for (const byJob of [true, false]) {
+    const calls = [];
+    const c = page(true, { backgroundRepaint() {}, localStorage: { setItem() {} } });
+    c.window.EU_API = {
+      hydrateWorkspaceRegistry: () => { calls.push('read'); return Promise.resolve({ sources: [] }); },
+      registerWorkspaceSource: (p, o) => { calls.push(['register', p, o]); return Promise.resolve({ sources: [] }); },
+    };
+    vm.runInContext(section('  function rememberExportPath(', '  function exportDestinationLabel() {'), c);
+    await c.rememberExportPath(SERVER_PATH, null, byJob);
+    // The options object comes from the page's realm: compare its JSON.
+    assert.equal(JSON.stringify(calls), JSON.stringify(byJob ? ['read'] : [['register', SERVER_PATH, { active: true, crossdb: true }]]));
   }
 });

@@ -18,7 +18,16 @@
     dockLine: () => t('saved in your workspace · reproducible manifest', '保存在你的工作区 · 可复现清单'),
     running: () => t('on the server · writing a new folder in your workspace', '在服务器上 · 写入你工作区中的新文件夹'),
     cancelTail: () => t('. The next extraction writes a new folder.', '。下次抽取会另建新文件夹。'),
-    doneTail: () => t('The data never left the hospital server.', '数据始终留在医院服务器上。'),
+    // Patient-level files stay on the server (user decision 2026-10-22): no
+    // download, so the page says where they are and what uses them.
+    doneTail: () => t(
+      'The files stay in your workspace on the hospital server and cannot be downloaded; use them in Patient Review, Cohort Statistics and the research conversation, whose tables and figures you can download.',
+      '这些文件保存在医院服务器上你的工作区，不能下载；可以在患者审阅、队列统计和研究对话中使用，研究对话生成的汇总表格和图可以下载。'
+    ),
+    format: () => t(
+      'Saved on the server in the analysis format (Parquet); patient-level files are not downloadable.',
+      '按分析格式（Parquet）保存在服务器上；患者级文件不提供下载。'
+    ),
     exportNote: () => t(
       'This is an EasyICU export the administrator prepared. You can review it in Patient Review and Cohort Statistics.',
       '这是管理员准备好的 EasyICU 导出，可以直接在患者审阅和队列统计中查看。'

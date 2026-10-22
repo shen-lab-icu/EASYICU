@@ -186,7 +186,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261022-help1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261022-label1" in index_html
+    assert "js/screens-extraction.js?v=20261022-keep1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261021-named-steps1" in index_html
     assert "js/screens-help.js?v=20261022-help1" in index_html
@@ -1434,7 +1434,7 @@ def test_native_extraction_prefers_parquet_export_by_default() -> None:
     assert "if (outDir) payload.out_dir = outDir" not in extraction_js
     # A hosted export omits out_dir (tests/js/extraction_hosted_workspace.test.js).
     assert "if (hostedServer()) payload.label = window.EU_EXTRACTION_HOSTED.exportLabel(database); else payload.out_dir = outDir;" in extraction_js
-    assert "rememberExportPath(exportResult.out_dir)" in extraction_js
+    assert "rememberExportPath(exportResult.out_dir, null, registeredByJob)" in extraction_js
     assert "window.EU_PATIENT_SOURCES = null;" in extraction_js
     assert "~/easyicu/exports/${dataMode()}" not in extraction_js
     assert "Default export root from Settings" not in extraction_js
