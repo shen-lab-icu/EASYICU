@@ -1052,12 +1052,51 @@ def _bound_source_column(export_path: Optional[str]):
     return column
 
 
+def _stated_exposure_concept(
+    text: Optional[str], catalog_by_id: Mapping[str, Any]
+) -> Optional[str]:
+    """The concept the study's exposure field names, read like the question."""
+
+    from easyicu.webserver.study_intent import KEYWORD_PROVENANCE, deterministic_intent
+
+    value = _clean_text(text, 160)
+    if not value:
+        return None
+    if value in catalog_by_id:
+        return value
+    slots = deterministic_intent(value).get("slots")
+    slot = slots.get("exposure") if isinstance(slots, Mapping) else None
+    slot = slot if isinstance(slot, Mapping) else {}
+    if str(slot.get("provenance") or "") != KEYWORD_PROVENANCE:
+        return None
+    concept = _clean_text(slot.get("value"), 160)
+    return concept if concept in catalog_by_id else None
+
+
+def _study_exposure_reading(
+    question_exposure: Optional[str],
+    stated_exposure: Optional[str],
+    *,
+    excluded: set[Any],
+) -> Optional[str]:
+    """The exposure both readings allow, or ``None`` when they disagree."""
+
+    readings = {
+        concept
+        for concept in (question_exposure, stated_exposure)
+        if concept and concept not in excluded
+    }
+    return next(iter(readings)) if len(readings) == 1 else None
+
+
 def _metadata_only_planning_coordinates(
     *,
     question: str,
     database: str,
     export_path: Optional[str] = None,
     configured_outcome: Optional[str] = None,
+    stated_exposure: Optional[str] = None,
+    declared_covariates: Sequence[str] = (),
 ) -> Dict[str, Any]:
     """Project only concepts the researcher explicitly named into planning.
 
@@ -1076,6 +1115,16 @@ def _metadata_only_planning_coordinates(
     ``configured_outcome`` is the StudyContext's typed outcome concept, which
     the researcher confirmed; it takes precedence over a question-named one,
     and its binary endpoint follows the same concept-owner rule.
+
+    The exposure is a concept neither the study's declared covariates
+    (``declared_covariates``) nor its outcome: the keyword reader names the
+    first concept a question mentions, and "以年龄、性别为协变量，分析…乳酸与
+    院内死亡的关联" mentions a covariate first (pilot1 round 2, 10-22: age was
+    sealed as the exposure, and the plan's model could not both adjust for
+    it and estimate it).  The study's exposure field (``stated_exposure``,
+    the conversation's reading of which words name it) is read through the
+    same reader; when it and the question name different concepts, neither
+    is projected and the planner reads the question.
 
     A prediction study names predictors, and a descriptive study names
     measurements, without assigning either a primary exposure. The existing
@@ -1127,7 +1176,15 @@ def _metadata_only_planning_coordinates(
         else family.get("value") == "description"
         and family.get("provenance") == KEYWORD_PROVENANCE
     )
-    named_exposure = None if prediction or descriptive else named_concept("exposure")
+    named_exposure = (
+        None
+        if prediction or descriptive
+        else _study_exposure_reading(
+            named_concept("exposure"),
+            _stated_exposure_concept(stated_exposure, catalog_by_id),
+            excluded={*declared_covariates, target_outcome, configured_outcome},
+        )
+    )
     named_measurement = named_concept("exposure") if descriptive else None
     primary_exposure = _observability_preserving_exposure(named_exposure, export_path)
     source_column = _bound_source_column(export_path)

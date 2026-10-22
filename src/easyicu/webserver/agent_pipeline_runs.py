@@ -5165,6 +5165,8 @@ def _load_candidate_plan_materialization_authority(
         database=database,
         export_path=export_path,
         configured_outcome=_target_outcome(study),
+        stated_exposure=_clean_text(study.get("primary_exposure"), 300),
+        declared_covariates=_configured_covariates(study),
     )
     primary_exposure = _clean_text(identity.get("primary_exposure"), 160)
     target_outcome = _clean_text(identity.get("target_outcome"), 160)

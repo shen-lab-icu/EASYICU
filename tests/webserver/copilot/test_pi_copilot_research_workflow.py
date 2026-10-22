@@ -2255,6 +2255,11 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         change.planner_context() if change is not None else None
     )
 
+    # The study's exposure field names lactate and the keyword reader names
+    # Sepsis-3 in this question: readings that disagree project no exposure,
+    # and Sepsis-3 is then a question-named concept with the columns its name
+    # can denote.
+    withheld = outcome_configured and not named_operation
     assert captured == {
         "cohort_rows": 0,
         "cohort_columns": [
@@ -2264,6 +2269,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             "lact",
             "sep3",
             "death",
+            *(["sep3_sofa2", "susp_inf"] if withheld else []),
             *(["los_icu"] if multiple_outcomes else []),
         ],
         "planning_authority": {
@@ -2294,7 +2300,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         "cohort_authority_path": None,
         "id_columns": ["patient_stay_id"],
         "target_outcome": "death",
-        "primary_exposure": "lact_max" if named_operation else "sep3",
+        "primary_exposure": "lact_max" if named_operation else None if withheld else "sep3",
         "outcome_columns": ("death", "los_icu") if multiple_outcomes else ("death",),
         "endpoint": {
             "name": "death",
@@ -2310,14 +2316,16 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
     assert result["provider"]["model"] == "metadata-only-test"
     from easyicu.webserver.planning_coordinate_readings import PLANNING_COORDINATE_READINGS_FILENAME
     record = json.loads((Path(result["project_dir"]) / PLANNING_COORDINATE_READINGS_FILENAME).read_text())
+    exposure_row = {} if withheld else {"exposure": captured["primary_exposure"]}
     assert {row["role"]: row["column"] for row in record["readings"]} == {
-        "outcome": captured["target_outcome"], "exposure": captured["primary_exposure"],
+        "outcome": captured["target_outcome"], **exposure_row,
     }
     assert {row["role"]: row["basis"] for row in record["readings"]} == {
-        "outcome": "configured" if outcome_configured else "keyword", "exposure": "keyword",
+        "outcome": "configured" if outcome_configured else "keyword",
+        **({} if withheld else {"exposure": "keyword"}),
     }
     assert {row["role"]: bool(row["evidence"]) for row in record["readings"]} == {
-        "outcome": not outcome_configured, "exposure": True,
+        "outcome": not outcome_configured, **({} if withheld else {"exposure": True}),
     }
 
 

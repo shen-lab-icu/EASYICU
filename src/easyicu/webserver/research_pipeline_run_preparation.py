@@ -261,11 +261,14 @@ def _prepare_scientific_launch(
     )
     configured_target = _target_outcome(study)
     configured_primary_exposure = _primary_exposure(study)
+    covariates = _configured_covariates(study)
     planning_coordinates = _metadata_only_planning_coordinates(
         question=question,
         database=database,
         export_path=request.export_path,
         configured_outcome=configured_target,
+        stated_exposure=_clean_text(study.get("primary_exposure"), 300),
+        declared_covariates=covariates,
     )
     target = configured_target or planning_coordinates.get("target_outcome")
     primary_exposure = configured_primary_exposure or planning_coordinates.get(
@@ -275,7 +278,6 @@ def _prepare_scientific_launch(
         study,
         configured_primary_exposure,
     )
-    covariates = _configured_covariates(study)
     covariate_selection = _configured_covariate_selection(study)
     sensitivity_specs = _configured_sensitivity_specs(study)
     window = _cohort_window(materialization_study)
