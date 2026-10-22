@@ -118,6 +118,7 @@ from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
 
 from .adjustment_authority import (
     AdjustmentSetAuthority,
+    baseline_static_grouping,
     host_outer_feature_window_end_hours,
     owner_declared_baseline_static,
     primary_landmark_hours,
@@ -509,11 +510,15 @@ def post_baseline_exposure(
     window = str(getattr(descriptor, "analysis_window", "") or "").strip()
     if window:
         return window_extends_after_anchor(window), window
-    if descriptor is not None and owner_declared_baseline_static(descriptor):
+    if descriptor is not None and (
+        owner_declared_baseline_static(descriptor)
+        or baseline_static_grouping(descriptor, context)
+    ):
         # The outer window bounds *measurement* opportunity inside the stay.
         # It cannot move an owner-declared baseline attribute (age, sex,
-        # admission type) after time zero, and the host already relies on that
-        # same declaration for baseline covariate timing.  A concept whose own
+        # admission type) after time zero, nor a grouping formed only from
+        # them (age groups), and the host already relies on that same
+        # declaration for baseline covariate timing.  A concept whose own
         # window is post-baseline was returned above, so this never overrides
         # physical window evidence.
         return False, None

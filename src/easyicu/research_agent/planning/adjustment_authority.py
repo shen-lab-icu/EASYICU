@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Optional, Sequence
 
 from ..authority.declared_levels import observed_levels_for
+from ..contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORMS
 from ..research_context.materialization_window import bound_feature_window_end_hours
 from ..research_context.stay_events import (
     column_kind,
@@ -140,6 +141,26 @@ def owner_declared_baseline_static(variable: Any) -> bool:
 
     role = str(getattr(getattr(variable, "role", None), "value", None) or getattr(variable, "role", "") or "")
     return role == "demographic"
+
+
+def baseline_static_grouping(variable: Any, context: Any) -> bool:
+    """Whether a study's grouping column holds only baseline attributes.
+
+    The host forms a grouping column (an exposure-group transform) from the
+    concepts it names.  One with no window of its own, formed only from
+    columns the owner declares baseline attributes (age groups), holds
+    nothing observed after time zero.  A source the context does not carry
+    proves nothing.
+    """
+
+    if str(getattr(variable, "unit_normalization", "") or "") not in EXPOSURE_GROUP_TRANSFORMS:
+        return False
+    if str(getattr(variable, "analysis_window", "") or "").strip():
+        return False
+    sources = [str(name) for name in getattr(variable, "derived_from_concepts", None) or ()]
+    return bool(sources) and all(
+        owner_declared_baseline_static(context.variable(name)) for name in sources
+    )
 
 
 def host_window_bound_roles(
