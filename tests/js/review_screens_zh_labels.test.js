@@ -211,9 +211,10 @@ const review = {
   quality: { modules_ok: 2 },
   feature_catalog: {
     total_modules: 2,
-    total_features: 3,
+    total_features: 4,
     modules: [
       { module: 'blood_gas', label: 'Blood Gas Analysis', feature_count: 1, features: [{ id: 'blood_gas:lact', module: 'blood_gas', column: 'lact', label: 'Lact' }] },
+      { module: 'sofa2_score', label: 'SOFA-2', feature_count: 1, features: [{ id: 'sofa2_score:sofa2_cardio_observed', module: 'sofa2_score', column: 'sofa2_cardio_observed', label: 'Sofa2 Cardio Observed', audience: 'internal' }] },
       { module: 'vitals', label: 'Vital Signs', feature_count: 2, features: [
         { id: 'vitals:hr', module: 'vitals', column: 'hr', label: 'HR' },
         { id: 'vitals:map', module: 'vitals', column: 'map', label: 'Map' },
@@ -263,6 +264,9 @@ for (const word of ['Analysis readiness', '分析准备情况', 'manifest', 'pay
 }
 // An empty "unknown" group is no column or card; every row is descriptive, so no status column;
 // the conversation has its current name; no sublines that repeat the tabs.
+// A bookkeeping column is not offered in the feature picker, and its module chip goes with it.
+assert(!cohortZh.includes('SOFA-2心血管评分 已观测') && !cohortZh.includes('Sofa2 Cardio Observed'), 'internal features are not offered');
+assert(!/data-cohort-feature-module="sofa2_score"/.test(context.EU_VIZ_COHORT.panels.profile ? context.SCREENS.cohort.render() : ''), 'a module with only internal features has no chip');
 assert(!/未知\s+0\b/.test(cohortZh) && !/死亡\s+未知/.test(cohortZh), 'an empty unknown group is neither a card nor a column');
 for (const word of ['Table 1', '研究引导', '当前导出已加载', '分析前审阅模块覆盖率', '为保证大型本地导出']) {
   assert(!cohortZh.includes(word), `Chinese Cohort Statistics should not show "${word}"`);

@@ -20,6 +20,7 @@ from easyicu.webserver import dataio
 from easyicu.webserver import entity_ids as entity_id_contract
 from easyicu.webserver import sources as source_store
 from easyicu.webserver import review_labels
+from easyicu.webserver import catalog_metadata
 from easyicu.webserver import prepared_frames
 
 _READ_MODULES = (
@@ -1003,6 +1004,7 @@ def _feature_catalog(
             if _is_compare_feature_column(str(column))
         ]
         coverage_row = coverage_by_module.get(module) or {}
+        definitions = catalog_metadata.catalog_definitions()
         feature_rows = [
             {
                 "id": _feature_id(module, column),
@@ -1010,6 +1012,10 @@ def _feature_catalog(
                 "column": column,
                 "label": _feature_label(column),
                 "kind": _feature_kind_hint(column),
+                # Display only: the picker hides bookkeeping columns.
+                "audience": catalog_metadata.concept_audience(
+                    column, definitions.get(column) or {}
+                ),
                 "rows": int(item.get("rows") or 0),
                 "coverage_pct": coverage_row.get("coverage_pct"),
                 "quality_status": coverage_row.get("quality_status"),
