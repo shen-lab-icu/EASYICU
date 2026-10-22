@@ -5,7 +5,8 @@ project (pilot1, 10-22) the first update named "请调整性别"; the host
 synchronized ``sex`` into the executable columns, and with no source bound it
 refused the whole update.  The question, outcome and exposure were lost, and
 after the researcher confirmed the source no plan could be generated.  Now the
-columns are left for the planner, named as not saved with their reason, and
+columns are left for the planner, the receipt names the deferral (no reply
+lists it as an unsaved setting: pilot1 showed the raw field name), and
 everything else is saved.  With a source bound the columns are still checked.
 """
 
@@ -86,10 +87,10 @@ def test_the_question_is_saved_and_the_columns_wait_for_the_source(monkeypatch):
     assert saved["outcome"] == "院内死亡"
     assert saved["covariates"] == ["sex"]
     assert not saved.get("execution_concepts")
-    assert ("execution_concepts", "study_execution_source_required") in [
-        (item["field"], item["code"]) for item in result["details"]["unconfirmed_omissions"]
-    ]
-    assert "execution_concepts (study_execution_source_required" in result["summary"]
+    # The deferral is the receipt's, not a setting the researcher is told of.
+    assert result["details"]["deferred_until_source"] == ["execution_concepts"]
+    assert "execution_concepts" not in result["details"]["omitted_unconfirmed_fields"]
+    assert "execution_concepts" not in result["summary"]
 
 
 def test_proposed_columns_also_wait_for_the_source(monkeypatch):
@@ -101,4 +102,4 @@ def test_proposed_columns_also_wait_for_the_source(monkeypatch):
 
     assert result["status"] == "ok"
     assert not writes[0].get("execution_concepts")
-    assert "execution_concepts" in result["details"]["omitted_unconfirmed_fields"]
+    assert result["details"]["deferred_until_source"] == ["execution_concepts"]
