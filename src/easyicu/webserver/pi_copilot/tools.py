@@ -755,6 +755,9 @@ def _list_data_sources(
                 )
             ),
             "database_selection_deferred": ambiguous_mimic_request,
+            # A hospital server's administrator prepares every source: there
+            # is no local folder for the researcher to choose.
+            "local_folder_selection_available": not is_hosted(),
             "selection_policy": {
                 "database_family_selected_before_source_mode": True,
                 "mimic_database_choices": ["mimic", "miiv"],
