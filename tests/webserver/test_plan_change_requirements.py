@@ -221,6 +221,29 @@ def test_a_source_that_prepared_its_data_binds_by_its_context_version(source, tm
     assert [variable.name for variable in table.variables] == ["age"]
 
 
+def test_a_grouped_column_requires_the_measurement_its_groups_are_formed_from(source):
+    """A grouped column is formed again in the next run; its measured concept is what the source must hold.
+
+    Hosted pilot: the lactate-group plan's fresh plan stopped at once with
+    plan_change_required_concepts_unavailable, requiring ``lact_group_x1``
+    from the planning catalog.
+    """
+    grouped = ConceptDescriptor(
+        name="lact_group_x1", source_concept="lact_group_x1", derived_from_concepts=["lact"],
+        unit_normalization="exposure_group_ordinal", role="other", dtype="int64",
+        is_ordinal=True, ordinal_levels=[1, 2], valid_range=(1.0, 2.0), unit="category",
+    )
+    context = _context().model_copy(update={"variables": [*_context().variables, grouped]})
+    f = source(names=("age",), context=context, group="lact_group_x1")
+
+    bound = bind(f).source_requirements
+
+    assert "lact" in bound.planning_concepts
+    assert "lact_group_x1" not in bound.planning_concepts
+    [table] = bound.baseline.tables
+    assert table.group_by.name == "lact_group_x1"
+
+
 def test_inherited_requirements_survive_even_an_incomplete_source_candidate(source):
     previous = source()
     inherited = bind(previous).baseline_requirements()

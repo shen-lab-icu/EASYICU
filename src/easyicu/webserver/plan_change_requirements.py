@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from easyicu.research_agent.canonical_json import canonical_sha256
+from easyicu.research_agent.contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORMS
 from easyicu.research_agent.contracts.frozen_payload import thaw_payload
 from easyicu.research_agent.orchestration.human_review_checkpoint import (
     HumanReviewCheckpoint, _MAX_CHECKPOINT_BYTES,
@@ -181,6 +182,14 @@ def bind_plan_change_requirements(
                         if coordinate is None:
                             continue
                         descriptor = variables.get(coordinate.name)
+                        if descriptor is not None and coordinate.source_concept in {
+                            None, descriptor.source_concept,
+                        } and str(descriptor.unit_normalization or "") in EXPOSURE_GROUP_TRANSFORMS:
+                            # A grouped column is formed again from the
+                            # measurement its groups are read from; the source
+                            # holds that measurement, never the column itself.
+                            concepts.update(descriptor.derived_from_concepts or ())
+                            continue
                         source = coordinate.source_concept or (
                             descriptor.source_concept if descriptor is not None else None
                         ) or coordinate.name
