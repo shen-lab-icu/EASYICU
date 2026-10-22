@@ -43,6 +43,9 @@ process.stdout.write(JSON.stringify(text(Object.assign(new Error(reason), { stat
          "这个位置不在管理员准备的数据范围内。"),
         ("unavailable_when_hosted", "This action is managed by the instance administrator.",
          "这项操作由管理员负责，请联系管理员。"),
+        # The Web memory admission refused a message (pi_copilot/resource_lifecycle.py).
+        ("pi_web_memory_pressure", "EasyICU is under memory pressure; retry after current work finishes.",
+         "EasyICU 正忙于处理其他任务，这条消息没有发送。请稍等一分钟再发送。"),
     ],
 )
 def test_a_hosted_refusal_reads_in_the_page_language(code: str, reason: str, sentence: str) -> None:

@@ -305,6 +305,13 @@ def _repair_private_home(home: Path) -> None:
                 path.chmod(0o600)
 
 
+#: Web process-tree memory admission for a hosted instance, in MiB.
+HOSTED_MEMORY_ADMISSION = {
+    "EASYICU_WEB_SOFT_RSS_MB": "16384",
+    "EASYICU_WEB_EMERGENCY_RSS_MB": "32768",
+}
+
+
 def start_instance(instance: Path) -> None:
     from easyicu.webserver.host_security import require_private_unix_socket_directory
 
@@ -319,6 +326,10 @@ def start_instance(instance: Path) -> None:
         "PATH", "HOME", "LANG", "TMPDIR", "SYSTEMROOT", "SSL_CERT_FILE",
         "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "DOCKER_HOST", "DOCKER_CONFIG",
     } or key.startswith("LC_")}
+    # A shared server is not a 16 GB laptop: the Web memory admission
+    # (pi_copilot/resource_lifecycle.py) refused a clinician's message while
+    # the startup summaries ran.  instance.env may set other bounds.
+    inherited.update(HOSTED_MEMORY_ADMISSION)
     inherited.update(env)
     inherited["PYTHONPATH"] = str(checkout / "src")
     # Summarize the prepared data once after startup (webserver/hosted_warmup.py).

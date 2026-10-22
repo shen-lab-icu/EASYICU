@@ -152,6 +152,21 @@ def test_start_uses_shared_checkout_image_and_socket_and_records_identity(toolin
     assert "EASYICU_PI_API_KEY" not in kwargs["env"]
     record = json.loads((instance / "run/instance.pid.json").read_text())
     assert record["pid"] == 12345 and record["create_time"] == 42.0
+    # Sized for a shared server, not the laptop default the warm-up crossed.
+    assert kwargs["env"]["EASYICU_WEB_SOFT_RSS_MB"] == "16384"
+    assert kwargs["env"]["EASYICU_WEB_EMERGENCY_RSS_MB"] == "32768"
+
+
+def test_an_instance_env_sets_its_own_memory_admission(tooling, tmp_path, monkeypatch):
+    users, instance = create(tooling, tmp_path)
+    with (instance / "instance.env").open("a", encoding="utf-8") as handle:
+        handle.write('EASYICU_WEB_EMERGENCY_RSS_MB="65536"\n')
+    calls = []
+    monkeypatch.setattr(tooling.subprocess, "Popen", lambda cmd, **kw: calls.append((cmd, kw)) or SimpleNamespace(pid=12345, poll=lambda: None))
+    monkeypatch.setattr(tooling.psutil, "Process", lambda pid: SimpleNamespace(create_time=lambda: 42.0))
+    assert tooling.main(["--users-root", str(users), "start", "doctor"]) == 0
+    env = calls[0][1]["env"]
+    assert (env["EASYICU_WEB_SOFT_RSS_MB"], env["EASYICU_WEB_EMERGENCY_RSS_MB"]) == ("16384", "65536")
 
 
 def test_started_process_creates_private_files_and_directories(tooling, tmp_path, monkeypatch):
