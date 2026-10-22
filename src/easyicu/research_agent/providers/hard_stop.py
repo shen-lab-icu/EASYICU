@@ -170,6 +170,16 @@ class HardStopClient:
         return getattr(self._inner, name)
 
 
+def run_recovery_probe(client: HardStopClient) -> None:
+    """Deliver the bounded recovery prompt through its registered wrapper."""
+
+    client.complete(
+        [LLMMessage(role="user", content="Reply OK.")],
+        max_tokens=16,
+        temperature=0,
+    )
+
+
 def hard_stop_role_resolver(llm: Any, task: TaskProviderHardStop):
     """Return a role resolver whose calls share one task/batch ledger."""
 
@@ -186,4 +196,4 @@ def hard_stop_role_resolver(llm: Any, task: TaskProviderHardStop):
     return resolver
 
 
-__all__ = ["HardStopClient", "hard_stop_role_resolver"]
+__all__ = ["HardStopClient", "hard_stop_role_resolver", "run_recovery_probe"]

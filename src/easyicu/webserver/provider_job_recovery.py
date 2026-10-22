@@ -18,8 +18,7 @@ from typing import Any, Callable, Mapping
 
 from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopError
 from easyicu.research_agent.providers.clients import safe_provider_http_status_code, transient_transport_failure
-from easyicu.research_agent.providers.hard_stop import HardStopClient
-from easyicu.research_agent.providers.protocol import LLMMessage
+from easyicu.research_agent.providers.hard_stop import HardStopClient, run_recovery_probe
 from easyicu.research_agent.reporting.writer_only_migration import WriterOnlyMigrationError
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 
@@ -176,7 +175,7 @@ class ProviderJobRecovery:
                 wait -= seconds
             self.remaining()
             try:
-                probe.complete([LLMMessage(role="user", content="Reply OK.")], max_tokens=16, temperature=0)
+                run_recovery_probe(probe)
                 self.remaining()
                 return
             except Exception as exc:
