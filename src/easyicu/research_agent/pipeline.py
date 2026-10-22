@@ -217,9 +217,11 @@ from .orchestration.instance_lifecycle import (
 from .orchestration.exposure_grouping_phase import (
     bound_context_on,
     register_exposure_groupings_record,
+    RunTrajectory,
     restore_exposure_grouping_phase,
     resumed_cohort_is_the_sources_copy,
     run_exposure_grouping_phase,
+    trajectory_takes_no_grouping,
 )
 from .orchestration.plan_provider_clients import plan_provider_clients
 from .orchestration.human_review_checkpoint import (
@@ -3145,8 +3147,13 @@ class ResearchAgentPipeline:
         run_environment_identity: Dict[str, Any],
         resume_from_step_id: Optional[str],
         emit_progress: Callable[..., None],
+        run_trajectory: Optional[RunTrajectory] = None,
     ) -> PlanPhaseResult:
-        """Build context, attach memory, and emit an execution plan."""
+        """Build context, attach memory, and emit an execution plan.
+
+        ``run_trajectory`` holds ``trajectory_binding`` and how the run staged
+        it, so a grouping that restages the cohort stages it again there.
+        """
         # The Planner is refused a trajectory design unless the host can see a
         # trajectory, and ResearchContext only ever shows the wide fixed-window
         # representation.  Answering here, from the same predicate the execution
@@ -3267,9 +3274,15 @@ class ResearchAgentPipeline:
                     capability_review_pending=(
                         self._capability_runtime.stops_before_provider_calls()
                     ),
-                    trajectory_staged=trajectory_binding is not None,
+                    trajectory_staged=trajectory_takes_no_grouping(
+                        run_trajectory or RunTrajectory(binding=trajectory_binding),
+                        suite_authority=self._config.trajectory_scientific_runtime_authority,
+                    ),
                     emit_progress=functools.partial(emit_progress, run_id=run_id),
                     candidate=self._config.bound_exposure_groupings,
+                    restage_trajectory=(
+                        run_trajectory.on_grouped_cohort if run_trajectory else None
+                    ),
                 )
                 context = grouping.context
             context_path.write_text(
@@ -4767,7 +4780,7 @@ class ResearchAgentPipeline:
                 run_id=run_id,
                 path=str(cohort_path),
             )
-            staged_trajectory_binding: Optional[StagedTrajectoryBinding] = None
+            run_trajectory = RunTrajectory(binding=None)
             if selected_trajectory_path is not None:
                 trajectory_identity = run_scientific_identity.get("trajectory")
                 if not isinstance(trajectory_identity, Mapping):
@@ -4781,28 +4794,33 @@ class ResearchAgentPipeline:
                     raise MaterializedTrajectoryError(
                         "trajectory scientific identity is missing"
                     )
-                staged_trajectory_binding = self._materialise_trajectory(
+                # A grouping restages the cohort in place; the same staging
+                # then binds the trajectory to the grouped cohort.
+                run_trajectory.restage = functools.partial(
+                    self._materialise_trajectory,
                     source_path=selected_trajectory_path,
-                    target_path=run_dir / "cohort_trajectory.parquet",
                     source_cohort_path=(
                         Path(cohort).expanduser().resolve()
                         if verified_source_trajectory is not None
                         and isinstance(cohort, (str, Path))
                         else None
                     ),
-                    target_cohort_path=cohort_path,
                     source_authority=verified_source_trajectory,
                     expected_sha256=str(trajectory_identity.get("sha256") or ""),
                     expected_size=int(trajectory_identity.get("size_bytes") or -1),
+                )
+                run_trajectory.binding = run_trajectory.restage(
+                    target_path=run_dir / "cohort_trajectory.parquet",
+                    target_cohort_path=cohort_path,
                 )
                 _emit_progress(
                     "cohort",
                     "Trajectory staged with exact input authority.",
                     run_id=run_id,
-                    path=str(staged_trajectory_binding.path),
+                    path=str(run_trajectory.binding.path),
                 )
         else:
-            staged_trajectory_binding = resume_trajectory_binding
+            run_trajectory = RunTrajectory(binding=resume_trajectory_binding)
             _emit_progress(
                 "cohort",
                 "Verified immutable staged cohort for resume.",
@@ -4888,7 +4906,7 @@ class ResearchAgentPipeline:
                 run_scientific_identity=run_scientific_identity,
                 self=self,
                 skill_obj=skill_obj,
-                staged_trajectory_binding=staged_trajectory_binding,
+                run_trajectory=run_trajectory,
                 target_outcome=target_outcome,
                 time_columns=time_columns,
                 time_windows=time_windows,
@@ -4926,7 +4944,7 @@ class ResearchAgentPipeline:
                 run_id=run_id,
                 self=self,
                 skill_obj=skill_obj,
-                staged_trajectory_binding=staged_trajectory_binding,
+                staged_trajectory_binding=run_trajectory.binding,
                 stop_after_step_id=stop_after_step_id,
             )
 
@@ -5064,7 +5082,7 @@ class ResearchAgentPipeline:
                 run_id=run_id,
                 run_dir=run_dir,
                 cohort_path=cohort_path,
-                trajectory_binding=staged_trajectory_binding,
+                trajectory_binding=run_trajectory.binding,
                 runtime_capabilities=runtime_capabilities,
                 runtime_bundle=self._validated_runtime_bundle,
                 run_environment_identity=run_environment_identity,
@@ -6859,7 +6877,7 @@ def _pipeline_run___plan_invoker(
     run_scientific_identity: Any,
     self: Any,
     skill_obj: Any,
-    staged_trajectory_binding: Any,
+    run_trajectory: Any,
     target_outcome: Any,
     time_columns: Any,
     time_windows: Any,
@@ -6891,11 +6909,12 @@ def _pipeline_run___plan_invoker(
         experiment_spec_path=experiment_spec_path,
         resume_state=resume_state,
         resume_context_evidence_path=resume_context_evidence_path,
-        trajectory_binding=staged_trajectory_binding,
+        trajectory_binding=run_trajectory.binding,
         run_scientific_identity=run_scientific_identity,
         run_environment_identity=run_environment_identity,
         resume_from_step_id=resume_from_step_id,
         emit_progress=_emit_progress,
+        run_trajectory=run_trajectory,
     )
 
 
