@@ -12,7 +12,9 @@ const ZERO_USAGE = Object.freeze({
 // the language requirement, then the current-turn owner receipts.
 export const OWNER_CONTEXT_MARKER = "\n\n[EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1]\n";
 const HOST_SECTION_PREFIX = "\n\n[EASYICU_";
-const HOST_TRANSITION_MARKER = "[EASYICU_HOST_TRANSITION_V1]";
+// main.mjs writes this line into the data-source confirmation transition, the
+// one host transition whose reply only acknowledges what was saved.
+export const DATA_SOURCE_CONFIRMED_MARKER = "[EASYICU_DATA_SOURCE_CONFIRMED_V1]";
 const DEMO_WORD = "(?:demo|演示|示例)";
 
 function latestStudyContextUpdate(context) {
@@ -144,12 +146,20 @@ function blockedByFamilyGap(workflow) {
     && Boolean(workflow.study_family_gap && typeof workflow.study_family_gap === "object");
 }
 
-// The workflow of a host transition turn: the transition is the context's last
-// message, and its owner receipts carry the workflow.
-function hostTransitionWorkflow(context) {
+// After the data-source click the next step is a host card either way: the
+// plan card, or the refusal card.  The model's acknowledgement only restated
+// it, with internal words ("host 将显示下一步操作").
+function sourceConfirmationCardFollows(workflow) {
+  return blockedByFamilyGap(workflow)
+    || workflow?.next_action_code === "provider_ready_to_generate_plan";
+}
+
+// The workflow of the data-source confirmation transition: the transition is
+// the context's last message, and its owner receipts carry the workflow.
+function sourceConfirmationWorkflow(context) {
   const messages = Array.isArray(context?.messages) ? context.messages : [];
   const last = messages.at(-1);
-  if (last?.role !== "user" || !messageText(last).includes(HOST_TRANSITION_MARKER)) return null;
+  if (last?.role !== "user" || !messageText(last).includes(DATA_SOURCE_CONFIRMED_MARKER)) return null;
   const projected = ownerContextReceipts(context).find(
     (receipt) => receipt?.code === "easyicu_research_workflow_projected",
   );
@@ -478,9 +488,9 @@ export function hostPostToolFinalization(model, context, language) {
   if (literatureSearch) {
     return toolCallStream(model, "easyicu_search_literature", literatureSearch);
   }
-  const transition = hostTransitionWorkflow(context);
-  if (blockedByFamilyGap(transition)) {
-    return completedStream(finalizedMessage(model, confirmedSourceText(transition, language)));
+  const confirmed = sourceConfirmationWorkflow(context);
+  if (sourceConfirmationCardFollows(confirmed)) {
+    return completedStream(finalizedMessage(model, confirmedSourceText(confirmed, language)));
   }
   const update = latestStudyContextUpdate(context);
   const withheld = [withheldDesignText(update, language), unsavedFieldsText(update, language)]
