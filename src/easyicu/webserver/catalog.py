@@ -5,10 +5,9 @@ The frontend (``static/js/screens-dict.js`` and friends) reads a global
 
     { groups, groupConcepts, dict, cov, desc, totalConcepts }
 
-All of that data already exists, hand-curated for the UI, in
-``easyicu.concept_catalog``. This module is the single source of
-truth for the migration's first read-only endpoint — it just reshapes
-those dicts; it does not recompute anything.
+Labels and legacy database counts come from ``easyicu.concept_catalog``.
+Display audience and declared instance support use cached dictionary metadata;
+active-export coverage shares the same source-registry snapshot.
 """
 
 from __future__ import annotations
@@ -22,6 +21,14 @@ from typing import Any, Dict, Optional
 
 from easyicu.concept import catalog as cc
 from easyicu.webserver import entity_ids as entity_id_contract
+from easyicu.webserver.catalog_metadata import (
+    catalog_definitions,
+    concept_audience,
+    concept_databases,
+)
+
+# Load packaged facts during startup, before the first page request.
+catalog_definitions()
 
 _ACTIVE_COVERAGE_FULL_READ_ROW_LIMIT = 1_000_000
 #: Formats pandas reads too slowly to scan on every catalog request (a
@@ -105,7 +112,9 @@ def _coverage_metadata(
     return metadata, summary
 
 
-def _active_export_coverage(concept_dict: Dict[str, Any]) -> Dict[str, Any]:
+def _active_export_coverage(
+    concept_dict: Dict[str, Any], registry: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Summarise concept coverage in the active registered export.
 
     The Data Dictionary should not imply that static catalog mapping counts are
@@ -124,7 +133,8 @@ def _active_export_coverage(concept_dict: Dict[str, Any]) -> Dict[str, Any]:
             "summary": {},
         }
 
-    registry = sources.load_registry()
+    if registry is None:
+        registry = sources.load_registry()
     active_path = registry.get("active_path")
     if not active_path:
         return {
@@ -404,6 +414,9 @@ def _coverage_band(meta: Dict[str, Any]) -> str:
 
 
 def build_catalog() -> Dict[str, Any]:
+    """Keep legacy labels/counts and enrich each ``conceptCoverage`` entry."""
+    from easyicu.webserver import sources
+
     # groups: ordered [key, name_en, name_zh] mirroring the curated order.
     groups = [
         [gk, *cc.CONCEPT_GROUP_NAMES.get(gk, (gk, gk))]
@@ -418,7 +431,20 @@ def build_catalog() -> Dict[str, Any]:
     desc = {k: list(v) for k, v in cc.CONCEPT_DESCRIPTIONS.items()}
     cov = dict(cc.CONCEPT_DB_COVERAGE)
     concept_coverage, coverage_summary = _coverage_metadata(concept_dict)
-    active_export_coverage = _active_export_coverage(concept_dict)
+    registry = sources.load_registry()
+    instance_databases = sorted({
+        source["database"]
+        for source in registry.get("sources") or []
+        if source.get("ok") and source.get("database")
+    })
+    definitions = catalog_definitions()
+    for key, coverage in concept_coverage.items():
+        coverage["audience"] = concept_audience(key, definitions.get(key, {}))
+        supported = concept_databases(key, definitions)
+        coverage["instance_databases_covered"] = [
+            database for database in instance_databases if database in supported
+        ]
+    active_export_coverage = _active_export_coverage(concept_dict, registry)
 
     return {
         "groups": groups,
@@ -430,6 +456,7 @@ def build_catalog() -> Dict[str, Any]:
         "coverageSummary": coverage_summary,
         "activeExportCoverage": active_export_coverage,
         "supportedDbs": list(cc.SUPPORTED_DB_KEYS),
+        "instance_databases": instance_databases,
         "totalConcepts": len(concept_dict),
     }
 
