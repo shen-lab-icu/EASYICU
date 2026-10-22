@@ -906,7 +906,7 @@ def _window_plan(exposure_source: str, *, design_id: str) -> dict:
 
 
 def test_no_exposure_earns_the_landmark_choice_by_its_name() -> None:
-    """The exposure the old decision path special-cased is judged by the design."""
+    """The exposure the old decision path special-cased is judged by the design and its window."""
 
     plan = _window_plan("lact_max", design_id="adjusted_association")
     study = _study()
@@ -968,17 +968,85 @@ def test_a_selected_design_named_a_landmark_is_compiled_as_one(design_id: str) -
     assert context["timing_profile"] == "fixed_24h_landmark"
 
 
+def _justified_window_plan(exposure_source: str, *, design_id: str) -> dict:
+    plan = _window_plan(exposure_source, design_id=design_id)
+    plan["steps"][0]["model_requirements"][0].update(
+        {
+            "covariate_rationales": {
+                "age": "Baseline age precedes the exposure window.",
+                "sex": "Baseline sex precedes the exposure window.",
+            },
+            "covariate_temporal_roles": {"age": "baseline_static", "sex": "baseline_static"},
+        }
+    )
+    return plan
+
+
 @pytest.mark.parametrize(
-    "design_id", ["adjusted_association", "landmarks_association", "naive_admission_start_association"],
+    "design_id", ["adjusted_association", "adjusted_linear_k_association", "naive_admission_start_association"],
 )
-def test_a_selected_design_not_named_a_landmark_is_not_compiled_as_one(design_id: str) -> None:
-    plan = _window_plan("lact_max", design_id=design_id)
+def test_a_design_read_over_the_window_is_closed_by_the_landmark_whatever_its_name(
+    design_id: str,
+) -> None:
+    # pilot1 round 3 (10-22), H1: a first-day maximum's design was named
+    # ``adjusted_linear_k_association``; the review routed its timing gap to
+    # the host, the host refused a design not named a landmark, and the card
+    # offered no way on.
+    plan = _justified_window_plan("k_max", design_id=design_id)
+
+    context = plan_decision_context(
+        plan, "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED", _windowed_study()
+    )
+    compiled = compile_agent_plan_configuration(
+        study=_windowed_study(),
+        agent_plan=plan,
+        runtime_finding_codes=("POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",),
+        patient_cluster_available=True,
+    )
+
+    assert context["timing_profile"] == "fixed_24h_landmark"
+    timing = [spec for spec in compiled.patch["sensitivity_specs"] if spec["axis"] == "timing"]
+    assert [spec["spec_id"] for spec in timing] == ["agent_plan_landmark_24h"]
+    assert compiled.patch["execution_concepts"]["primary_exposure_aggregation"] == "max"
+
+
+def test_a_study_clustered_by_patient_keeps_its_design_through_the_compile() -> None:
+    study = _windowed_study()
+    study["analysis_design"] = {
+        "analysis_family": "association_study",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "cluster_robust",
+        "cluster_unit": "patient",
+    }
+
+    compiled = compile_agent_plan_configuration(
+        study=study,
+        agent_plan=_justified_window_plan("k_max", design_id="adjusted_association"),
+        runtime_finding_codes=("POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",),
+        patient_cluster_available=True,
+    )
+
+    assert compiled.patch["analysis_design"] == study["analysis_design"]
+
+
+@pytest.mark.parametrize("method", ["time_varying_exposure_model", "signed_target_trial_suite"])
+def test_a_design_closing_its_own_timing_is_not_given_the_landmark(method: str) -> None:
+    plan = _justified_window_plan("lact_max", design_id="landmark_adjusted_association")
+    plan["steps"][0]["method"] = method
 
     context = plan_decision_context(
         plan, "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED", _windowed_study()
     )
 
-    assert context["timing_profile"] != "fixed_24h_landmark"
+    assert context["timing_profile"] == "unspecified_post_baseline"
+    with pytest.raises(PlanDecisionError) as raised:
+        compile_agent_plan_configuration(
+            study=_windowed_study(),
+            agent_plan=plan,
+            runtime_finding_codes=("POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",),
+            patient_cluster_available=True,
+        )
+    assert raised.value.code == "agent_plan_landmark_not_compilable"
 
 
 def test_the_landmark_choice_keeps_the_plans_own_window_operation() -> None:

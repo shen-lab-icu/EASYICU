@@ -73,3 +73,59 @@ def test_readings_that_disagree_project_no_exposure() -> None:
 )
 def test_a_question_whose_exposure_comes_first_is_unchanged(study: dict) -> None:
     assert _exposure(_EXPOSURE_FIRST, **study) == "lact"
+
+
+# pilot1 round 3 (10-22), H2: the question named its stratifier first, the
+# launch projected it as the exposure and the plan modelled sex.
+_STRATIFIED_FIRST = "在 eICU 中按性别分层，比较入 ICU 24 小时内最低白细胞计数与院内死亡的关系。"
+
+
+def test_the_stated_exposure_decides_among_the_concepts_the_question_names() -> None:
+    assert _exposure(_STRATIFIED_FIRST) is None
+    assert _exposure(_STRATIFIED_FIRST, stated_exposure="入 ICU 24 小时内最低白细胞计数") == "wbc"
+    # A field naming a concept the question does not name decides nothing.
+    assert _exposure(_STRATIFIED_FIRST, stated_exposure="入 ICU 首日最高血肌酐") is None
+
+
+def test_the_conversation_states_the_exposure_in_the_questions_words() -> None:
+    from pathlib import Path
+
+    main = (
+        Path(__file__).resolve().parents[2]
+        / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app" / "src" / "main.mjs"
+    ).read_text(encoding="utf-8")
+
+    assert "also pass primary_exposure and outcome in the question's own words" in main
+    assert "stratifies, groups, compares within or adjusts by is not its exposure" in main
+
+
+def test_an_analyte_named_by_the_dictionary_decides_too() -> None:
+    # 「血钾」 is named only by the dictionary ("钾"); a stratifier named first
+    # is still not the exposure once the field names potassium.
+    question = "在 eICU 中按性别分层，比较入 ICU 首日最高血钾与院内死亡的关系。"
+
+    assert _exposure(question, stated_exposure="入 ICU 首日最高血钾") == "k"
+    assert _exposure(_A1, stated_exposure="最高血糖", declared_covariates=("age", "sex")) is None
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        _STRATIFIED_FIRST,
+        # round 3 (10-22), H3: an adjustment named first was projected.
+        "考虑年龄影响后，eICU 患者入 ICU 首日最高白细胞计数与院内死亡有没有关系？",
+    ],
+)
+def test_a_demographic_named_before_a_measurement_is_not_projected_by_order(question: str) -> None:
+    assert _exposure(question) is None
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "在 eICU 中，入 ICU 后 24 小时内最高乳酸与院内死亡的关联有多强？",
+        "在 eICU 中，年龄与院内死亡有关吗？",
+    ],
+)
+def test_a_question_naming_one_concept_projects_it(question: str) -> None:
+    assert _exposure(question) is not None

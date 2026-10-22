@@ -212,5 +212,8 @@ def population_spec_contract(concept_ids: Sequence[str]) -> str:
         "drop one. A restriction that the exposure itself defines, such as "
         "where the exposure starts relative to time zero or the exclusion of "
         "stays already exposed, belongs to the design's exposure definition, "
-        "not to population_spec."
+        "not to population_spec. Nor is having the analysis variables "
+        "recorded, such as an analysis cohort of the stays with the exposure, "
+        "covariates or outcome available: that is the plan's missing-data "
+        "handling, not a population restriction."
     )

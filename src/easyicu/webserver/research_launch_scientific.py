@@ -1073,20 +1073,60 @@ def _stated_exposure_concept(
     return concept if concept in catalog_by_id else None
 
 
+def _stated_catalog_concept(
+    text: Optional[str], catalog_by_id: Mapping[str, Any]
+) -> tuple[str, ...]:
+    """The one source concept the exposure field names by the dictionary's names, if one."""
+
+    from easyicu.webserver.study_intent import catalog_named_concepts
+
+    value = _clean_text(text, 160)
+    named = [concept for concept in catalog_named_concepts(value) if concept in catalog_by_id] if value else []
+    return (named[0],) if len(named) == 1 else ()
+
+
 def _study_exposure_reading(
     question_exposure: Optional[str],
     stated_exposure: Optional[str],
     *,
     excluded: set[Any],
+    named: frozenset[str] = frozenset(),
+    stated_names: tuple[str, ...] = (),
+    demographic: frozenset[str] = frozenset(),
 ) -> Optional[str]:
-    """The exposure both readings allow, or ``None`` when they disagree."""
+    """The exposure both readings allow, or ``None`` when they disagree.
 
+    The question's reading is the first concept it names; the study's
+    exposure field says which named concept is the exposure.  When the
+    question names the field's concept too, the field decides: on pilot1
+    (10-22) a question stratified by sex before naming its measurement
+    (「按性别分层后比较…」) projected sex, and the plan modelled it.
+    ``stated_names`` is the one concept the field names by the dictionary's
+    own names (「血钾」), which decides only among the question's concepts.
+    A demographic the question names before a clinical measurement is
+    projected only when the field says so: an adjustment named first
+    (「考虑年龄影响后，…」) projected age.  Otherwise none is, and the planner
+    reads the question.
+    """
+
+    for concept in (stated_exposure, *stated_names):
+        if concept and concept not in excluded and concept in named:
+            return concept
     readings = {
         concept
         for concept in (question_exposure, stated_exposure)
         if concept and concept not in excluded
     }
-    return next(iter(readings)) if len(readings) == 1 else None
+    if len(readings) != 1:
+        return None
+    reading = next(iter(readings))
+    if (
+        reading != stated_exposure
+        and reading in demographic
+        and any(concept not in demographic for concept in named - excluded - {reading})
+    ):
+        return None
+    return reading
 
 
 def _metadata_only_planning_coordinates(
@@ -1141,6 +1181,7 @@ def _metadata_only_planning_coordinates(
     from easyicu.research_agent.contracts.endpoint import EndpointSpec
     from easyicu.webserver.study_intent import (
         KEYWORD_PROVENANCE,
+        catalog_named_concepts,
         deterministic_intent,
         explicit_exposure_aggregation,
         named_study_concepts,
@@ -1183,6 +1224,17 @@ def _metadata_only_planning_coordinates(
             named_concept("exposure"),
             _stated_exposure_concept(stated_exposure, catalog_by_id),
             excluded={*declared_covariates, target_outcome, configured_outcome},
+            named=frozenset(
+                (
+                    *(concept for denoted, _words in named_study_concepts(question) for concept in denoted),
+                    *catalog_named_concepts(question),
+                )
+            ) - {named_concept("population")},
+            stated_names=_stated_catalog_concept(stated_exposure, catalog_by_id),
+            demographic=frozenset(
+                concept for concept, item in catalog_by_id.items()
+                if getattr(item, "category", None) == "demographics"
+            ),
         )
     )
     named_measurement = named_concept("exposure") if descriptive else None
