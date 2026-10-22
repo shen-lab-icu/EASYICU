@@ -332,6 +332,12 @@ def test_prepared_source_confirmation_survives_unrelated_clause_negation(
         ("What is the in-hospital mortality of ventilated patients", "implement_scientific_question"),
         ("脓毒症有哪些值得做的研究方向？", "clarify_research_entry"),
         ("乳酸是什么？", "clarify_research_entry"),
+        # A request that states its design (pilot1 round 2b, 10-22: R3, H7).
+        ("在 eICU 中，用入 ICU 首日的化验和生命体征把脓毒症患者聚类成不同亚型。", "implement_scientific_question"),
+        ("在 eICU 中，画出高乳酸和低乳酸患者的 Kaplan-Meier 生存曲线并比较。", "implement_scientific_question"),
+        ("用 MIMIC-IV 建一个预测院内死亡的模型。", "implement_scientific_question"),
+        ("脓毒症 乳酸", "clarify_research_entry"),
+        ("我对脓毒症的乳酸感兴趣", "clarify_research_entry"),
     ],
 )
 def test_first_turn_research_entry_intent_routes_natural_questions(

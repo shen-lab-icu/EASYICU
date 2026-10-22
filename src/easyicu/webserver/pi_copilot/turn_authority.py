@@ -264,8 +264,9 @@ def infer_research_entry_intent(message: str) -> str:
     Explicit starter wording wins.  A natural scientific question that already
     names a relationship, comparison, effect, or prediction is sufficient
     implementation intent; the researcher must not have to add workflow
-    instructions merely to reach the planning owner.  A topic fragment without
-    an estimand-shaped relation remains ambiguous.
+    instructions merely to reach the planning owner, and neither must a
+    request that states its design.  A topic fragment without an
+    estimand-shaped relation or a stated design remains ambiguous.
     """
 
     text = _normalize(message)
@@ -319,6 +320,15 @@ def infer_research_entry_intent(message: str) -> str:
         )
         and not re.search(r"方向|选题|想法|题目|课题|idea|topic", text)
     ):
+        return "implement_scientific_question"
+    # A request that states its design -- a survival curve, a clustering into
+    # subtypes, a prediction model -- is a study to implement however it is
+    # phrased (「…画出 Kaplan-Meier 生存曲线并比较。」 and 「…聚类成不同亚型。」
+    # were asked whether they wanted to explore a direction).  The planner's
+    # own family routing reads the design, so the two cannot disagree.
+    from easyicu.webserver.study_family_reading import planner_stated_family
+
+    if planner_stated_family(message):
         return "implement_scientific_question"
     return "clarify_research_entry"
 
