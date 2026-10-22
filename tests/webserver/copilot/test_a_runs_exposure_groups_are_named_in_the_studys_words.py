@@ -30,7 +30,7 @@ from typing import Any, Mapping
 
 import pytest
 
-from easyicu.webserver import agent_pipeline_runs
+from easyicu.webserver import agent_pipeline_runs, agent_runs
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.pi_copilot.exposure_group_notes import (
     UNREADABLE_REASON,
@@ -244,6 +244,20 @@ def test_the_run_context_carries_the_groupings_its_readers_name(
     assert _project(tmp_path, monkeypatch, [_grouping()])["exposure_groups"] == SHOWN
     assert _project(tmp_path, monkeypatch, None)["exposure_groups"] == UNREADABLE
     assert "exposure_groups" not in _project(tmp_path, monkeypatch, [])
+
+
+def test_the_browser_is_shown_the_groupings_of_the_run_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On the hosted pilot the browser's copy of run_context.json lost the
+    # groupings, and the run answer named the groups by their rules.
+    def shown(recorded: Any) -> dict[str, Any]:
+        context = _project(tmp_path, monkeypatch, recorded)
+        return agent_runs._public_review_payloads({"run_context.json": context})["run_context.json"]
+
+    assert shown([_grouping()])["exposure_groups"] == SHOWN
+    assert shown(None)["exposure_groups"] == UNREADABLE
+    assert "exposure_groups" not in shown([])
 
 
 def test_the_run_context_names_its_source_as_readers_know_the_database(

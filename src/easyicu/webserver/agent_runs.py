@@ -1557,6 +1557,10 @@ def _public_review_payloads(
             "source": row.get("source"),
             "context_binding": row.get("context_binding"),
         }
+        # The run's groupings, as the host projected them for its readers
+        # (pi_copilot/exposure_group_notes): labels and codes, never a path.
+        if row.get("exposure_groups") is not None:
+            public["run_context.json"]["exposure_groups"] = row["exposure_groups"]
     if "cohort_summary.json" in payloads:
         row = payloads["cohort_summary.json"]
         public["cohort_summary.json"] = {
