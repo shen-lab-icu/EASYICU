@@ -220,6 +220,7 @@ from .orchestration.exposure_grouping_phase import (
     restore_exposure_grouping_phase,
     resumed_cohort_is_the_sources_copy,
     run_exposure_grouping_phase,
+    trajectory_suite_staged,
 )
 from .orchestration.plan_provider_clients import plan_provider_clients
 from .orchestration.human_review_checkpoint import (
@@ -3267,7 +3268,10 @@ class ResearchAgentPipeline:
                     capability_review_pending=(
                         self._capability_runtime.stops_before_provider_calls()
                     ),
-                    trajectory_staged=trajectory_binding is not None,
+                    trajectory_staged=trajectory_suite_staged(
+                        trajectory_binding,
+                        self._config.trajectory_scientific_runtime_authority,
+                    ),
                     emit_progress=functools.partial(emit_progress, run_id=run_id),
                     candidate=self._config.bound_exposure_groupings,
                 )
