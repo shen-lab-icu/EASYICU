@@ -4017,6 +4017,12 @@ class PiCopilotService:
                 first_stay = None
         try:
             plan_review_progress.validate_choice_source(context, row)
+            # The reviewed run's grouping rows: a grouped exposure prepares
+            # the measured column its groups are formed from.
+            from easyicu.webserver import agent_pipeline_runs
+
+            pending = agent_pipeline_runs.pending_review(bound_run_id)
+            groups = pending.get("exposure_group_labels") if isinstance(pending, Mapping) else None
             compiled = plan_decisions.compile_agent_plan_configuration(
                 study=context,
                 agent_plan=agent_plan,
@@ -4024,6 +4030,7 @@ class PiCopilotService:
                 patient_cluster_available=grouping is not None,
                 first_stay_coordinate_available=first_stay is not None,
                 review_facts=facts if isinstance(facts, Mapping) else None,
+                exposure_groups=groups if isinstance(groups, list) else None,
             )
             updated = study_contexts.upsert_context(
                 {"id": context_id, **compiled.patch},
