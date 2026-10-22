@@ -15,6 +15,11 @@ names each anchor the selected design can list, that is each anchor among the
 run's allowed variables, and the outline prompt states the same rule with the
 same anchors before the Planner writes its selection
 (:func:`question_anchor_rule_text`).
+
+The six ``reviewable_plan`` items are what the researcher reads before
+approving, "in the research question's language".  A Planner told only that
+wrote them in English for a question asked in Chinese, so the outline prompt
+names the language (:func:`reviewable_plan_language_rule`).
 """
 
 from __future__ import annotations
@@ -25,11 +30,13 @@ from .design_selection import (
     ResearchDesignSelectionError,
     validate_research_design_selection,
 )
+from .family_spec.plan_language import plan_language
 from .progressive_contract import ProgressivePlanCompileError, ProgressivePlanOutline
 
 __all__ = [
     "listable_question_anchors",
     "question_anchor_rule_text",
+    "reviewable_plan_language_rule",
     "validate_outline_design_selection",
 ]
 
@@ -63,6 +70,18 @@ def question_anchor_rule_text(
     return (
         f"\nThe selected design must list {named} among its required_variables: "
         "the design owner refuses a selection that binds no question anchor."
+    )
+
+
+def reviewable_plan_language_rule(research_question: str) -> str:
+    """The language the six reviewable_plan items are written in; empty for English."""
+
+    if plan_language(research_question) != "zh":
+        return ""
+    return (
+        "\nThe research question is written in Chinese: write the selected "
+        "design's six reviewable_plan items in Simplified Chinese (简体中文); "
+        "variable names may stay as written."
     )
 
 
