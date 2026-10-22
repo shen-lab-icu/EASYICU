@@ -793,6 +793,7 @@ def _outline_step(
     citations: list[str],
     action: str | None = None,
     population_scope: str | None = None,
+    population_scope_change_reason: str | None = None,
 ) -> ProgressiveOutlineStep:
     kwargs = dict(
         step_id=step_id,
@@ -806,6 +807,8 @@ def _outline_step(
     )
     if population_scope is not None:
         kwargs["population_scope"] = population_scope
+    if population_scope_change_reason is not None:
+        kwargs["population_scope_change_reason"] = population_scope_change_reason
     return ProgressiveOutlineStep(**kwargs)
 
 
@@ -829,12 +832,18 @@ def build_landmark_categorical_skeleton(
     spec: FamilyPlanSpec,
     *,
     bind_outline: Callable[[ProgressivePlanOutline], ProgressivePlanOutline] | None = None,
+    source_absolute_risk_scope: str | None = None,
 ) -> FamilySkeletonDraft:
     """Project outline, foundation, and step materializations from typed facts.
 
     ``bind_outline`` lets the caller apply the host's ordinary outline binders
     (runtime action edges, required method sources, direct comparator) before
     the step materializations seal each outline step's digest.
+
+    ``source_absolute_risk_scope`` is the absolute-risk population a revision's
+    source plan bound.  This design reads absolute risk in its primary model's
+    population; where the source read another, the template declares the
+    change for complete-plan review rather than drifting from it unexplained.
     """
 
     if spec.request_sha256 != request.request_sha256:
@@ -843,6 +852,13 @@ def build_landmark_categorical_skeleton(
             "the spec does not bind this request",
             path="request_sha256",
         )
+    risk_scope_change_reason = (
+        None
+        if source_absolute_risk_scope in (None, "primary_model")
+        else "This landmark design reports absolute risk in its primary model's "
+        "population (stays alive and observed at the landmark, with the model's "
+        f"complete cases), not in the source plan's {source_absolute_risk_scope} population."
+    )
     exposure = request.primary_exposure
     outcome = request.outcome
     identity = request.identity_column
@@ -1090,6 +1106,7 @@ def build_landmark_categorical_skeleton(
             objective=objectives["absolute_risk_context"], depends_on=["adjusted_association"],
             variable_names=absolute_variables, citations=absolute_keys,
             population_scope="primary_model",
+            population_scope_change_reason=risk_scope_change_reason,
         ),
         _outline_step(
             step_id="robustness_replay", role="sensitivity", module_id="robustness_replay",
@@ -1295,6 +1312,7 @@ def build_landmark_categorical_skeleton(
             raw_inputs=list(dict.fromkeys([exposure, outcome, *([secondary] if secondary else [])])),
             product_inputs=[_ref("adjusted_association", "table:adjusted_association_estimates")],
             primary_exposure=exposure, outcome=outcome, population_scope="primary_model",
+            population_scope_change_reason=risk_scope_change_reason,
             literature_bindings=bindings(
                 "absolute_risk_context", "absolute_risk_context", "absolute-risk context"
             ),
