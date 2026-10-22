@@ -13,15 +13,26 @@ those dicts; it does not recompute anything.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import threading
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from easyicu.concept import catalog as cc
 from easyicu.webserver import entity_ids as entity_id_contract
 
 _ACTIVE_COVERAGE_FULL_READ_ROW_LIMIT = 1_000_000
+#: Formats pandas reads too slowly to scan on every catalog request (a
+#: 270k-row Excel extraction took 26-96 s and held every page at its pre-data
+#: render); their coverage is the export schema, as for a large export.
+_SCHEMA_ONLY_SUFFIXES = (".xlsx",)
+#: Row-read coverage of recent exports, keyed by path, file sizes/mtimes and
+#: the concept keys: the catalog is fetched on every page load.
+_ROW_COVERAGE_CACHE: Dict[tuple, Dict[str, Any]] = {}
+_ROW_COVERAGE_CACHE_LIMIT = 4
+_ROW_COVERAGE_CACHE_LOCK = threading.Lock()
 
 
 def _coverage_metadata(
@@ -135,7 +146,9 @@ def _active_export_coverage(concept_dict: Dict[str, Any]) -> Dict[str, Any]:
 
     files = [f for f in desc.get("files", []) if f.get("file")]
     total_rows = int((desc.get("summary") or {}).get("total_rows") or 0)
-    if total_rows > _ACTIVE_COVERAGE_FULL_READ_ROW_LIMIT:
+    if total_rows > _ACTIVE_COVERAGE_FULL_READ_ROW_LIMIT or any(
+        str(f["file"]).lower().endswith(_SCHEMA_ONLY_SUFFIXES) for f in files
+    ):
         return _active_export_schema_coverage(desc, concept_dict)
 
     path = Path(str(active_path)).expanduser()
@@ -143,6 +156,43 @@ def _active_export_coverage(concept_dict: Dict[str, Any]) -> Dict[str, Any]:
         path = path.resolve()
     except OSError:
         pass
+    key = _row_coverage_cache_key(path, files, concept_dict)
+    if key is not None:
+        with _ROW_COVERAGE_CACHE_LOCK:
+            cached = _ROW_COVERAGE_CACHE.get(key)
+        if cached is not None:
+            return copy.deepcopy(cached)
+    result = _active_export_row_coverage(dataio, desc, path, files, concept_dict)
+    if key is not None:
+        with _ROW_COVERAGE_CACHE_LOCK:
+            _ROW_COVERAGE_CACHE[key] = copy.deepcopy(result)
+            while len(_ROW_COVERAGE_CACHE) > _ROW_COVERAGE_CACHE_LIMIT:
+                _ROW_COVERAGE_CACHE.pop(next(iter(_ROW_COVERAGE_CACHE)))
+    return result
+
+
+def _row_coverage_cache_key(
+    path: Path, files: list[Dict[str, Any]], concept_dict: Dict[str, Any]
+) -> Optional[tuple]:
+    """Identity of the files a row-read coverage pass reads, or ``None``."""
+    try:
+        stats = tuple(
+            (str(f["file"]), st.st_size, st.st_mtime_ns)
+            for f in files
+            for st in [(path / str(f["file"])).stat()]
+        )
+    except OSError:
+        return None
+    return str(path), stats, tuple(sorted(concept_dict))
+
+
+def _active_export_row_coverage(
+    dataio: Any,
+    desc: Dict[str, Any],
+    path: Path,
+    files: list[Dict[str, Any]],
+    concept_dict: Dict[str, Any],
+) -> Dict[str, Any]:
     stay_ids = dataio._fast_stay_ids(path, files)
     denominator = len(stay_ids) if stay_ids is not None else None
     concept_keys = set(concept_dict)

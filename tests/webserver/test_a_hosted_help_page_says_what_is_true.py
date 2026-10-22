@@ -270,6 +270,22 @@ def test_the_first_render_knows_a_hosted_instance_from_its_mark(mark: str, expec
     assert json.loads(result.stdout) == expected
 
 
+@pytest.mark.requires_node
+@pytest.mark.parametrize(("mark", "expected"), [("hosted", "real"), ("local", "demo"), ("none", "demo")])
+def test_a_hosted_first_render_is_on_prepared_data_not_the_remembered_demo(mark: str, expected: str) -> None:
+    # Pilot 10-22: /api/catalog took 96 s on an Excel extraction, and a
+    # hosted Patient Review opened meanwhile offered demo and synthetic data.
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    seed = _SEED.replace("{ EU_LANG: 'zh' }", "{ EU_LANG: 'zh', EU_DATA: 'demo' }").replace(
+        "JSON.stringify(window.EU_CAPABILITIES || null)", "JSON.stringify(window.EU_DATA)"
+    )
+    result = run_node(node, seed, str(STATIC / "js" / "api.js"), mark, check=False)
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert json.loads(result.stdout) == expected
+
+
 def test_a_hosted_index_speaks_the_language_its_administrator_set(monkeypatch, isolated_settings) -> None:
     monkeypatch.setenv("EASYICU_HOSTED", "1")
     settings.update_settings({"language": "en"})

@@ -11,10 +11,13 @@
   window.EU_API = window.EU_API || {};
 
   // A hosted instance marks its index (app.py). Until /api/capabilities
-  // answers, the first render then already shows the hosted page.
+  // answers, the first render then already shows the hosted page, on the
+  // administrator's prepared data: a hosted instance has no demo mode, and a
+  // slow hydration must not show the demo and synthetic choices meanwhile.
   const deploymentMark = document.querySelector('meta[name="easyicu-deployment"]');
   if (deploymentMark && deploymentMark.getAttribute('content') === 'hosted') {
     window.EU_CAPABILITIES = { deployment: { hosted: true } };
+    window.EU_DATA = 'real';
   }
 
   async function getJSON(path) {
