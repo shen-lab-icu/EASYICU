@@ -13,6 +13,8 @@ Synthetic contexts and generic wording only.
 """
 from __future__ import annotations
 
+import pytest
+
 from easyicu.research_agent.planning.question_requirements import (
     QuestionRequirement,
     judge_question_requirements,
@@ -36,20 +38,31 @@ def _subgroup(*concepts: str) -> QuestionRequirement:
     )
 
 
+#: The concept dictionary relates a measurement to the grouping read from it.
+_RELATED = {"exposure_score": frozenset({"exposure_score", "exposure_flag"})}
+
+
 def _judge(requirement: QuestionRequirement, plan=None):
     plan = plan or descriptive_plan(descriptive_context())
     (judged,) = judge_question_requirements(
         [requirement],
         plan=plan,
         family_template=True,
-        relatives=lambda column: frozenset({column}),
+        relatives=lambda column: _RELATED.get(column, frozenset({column})),
         check_gap=lambda gap: ("unverifiable", "no typed evidence"),
     )
     return judged
 
 
-def test_the_grouping_the_primary_step_reports_by_level_answers_the_subgroup() -> None:
-    judged = _judge(_subgroup("exposure_flag"))
+@pytest.mark.parametrize(
+    "concepts",
+    [("exposure_flag",), ("exposure_score", "exposure_flag"), ("exposure_score",)],
+    ids=["the-grouping", "measurement-and-grouping", "the-measurement"],
+)
+def test_the_grouping_the_primary_step_reports_by_level_answers_the_subgroup(
+    concepts: tuple[str, ...],
+) -> None:
+    judged = _judge(_subgroup(*concepts))
 
     assert (judged.disposition, judged.reason_code, judged.owner_step_ids) == (
         "covered",
@@ -61,7 +74,11 @@ def test_the_grouping_the_primary_step_reports_by_level_answers_the_subgroup() -
 
 
 def test_a_subgroup_the_plan_does_not_report_by_level_stays_a_gap() -> None:
-    for requirement in (_subgroup("age_years"), _subgroup("exposure_flag", "sex_code")):
+    for requirement in (
+        _subgroup("age_years"),
+        _subgroup("exposure_flag", "sex_code"),
+        _subgroup("exposure_score", "sex_code"),
+    ):
         judged = _judge(requirement)
 
         assert (judged.disposition, judged.reason_code) == (
