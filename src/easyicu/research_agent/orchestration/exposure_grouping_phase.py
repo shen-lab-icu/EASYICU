@@ -235,7 +235,8 @@ def run_exposure_grouping_phase(
     restages in place; ``planner`` is the Planner's client, wrapped as every
     Planner call is; ``rebuild_context`` builds the context on the restaged
     cohort, bound as the first one was, with a ``primary_exposure`` builder
-    keyword when a sole grouping fills an undeclared exposure.
+    keyword when a sole grouping fills an undeclared exposure, or when one
+    applied grouping is formed from the declared exposure's own column.
     ``capability_review_pending`` says
     the run stops for a capability review before any Provider call.
     ``candidate`` is the accepted candidate plan's groupings
@@ -289,6 +290,14 @@ def run_exposure_grouping_phase(
     compiled = compile_exposure_groupings(stated, context)
     primary_exposure_binding = None
     context_overrides = {}
+    # A declared exposure that is the very column one applied grouping forms
+    # its groups from is studied as those groups: the study compares them.
+    formed_from_declared = [
+        item
+        for item in compiled.applied
+        if context.primary_exposure
+        and context.primary_exposure in item.source_columns.values()
+    ]
     if not context.primary_exposure:
         if len(compiled.applied) == 1:
             variable = str(compiled.applied[0].variable)
@@ -300,6 +309,14 @@ def run_exposure_grouping_phase(
             primary_exposure_binding = {
                 "variable": None, "basis": "ambiguous_multiple_groupings",
             }
+    elif len(formed_from_declared) == 1:
+        variable = str(formed_from_declared[0].variable)
+        context_overrides["primary_exposure"] = variable
+        primary_exposure_binding = {
+            "variable": variable,
+            "basis": "declared_exposure_grouped",
+            "declared": str(context.primary_exposure),
+        }
     record_path = write_json_artifact(
         Path(run_dir) / EXPOSURE_GROUPINGS_FILENAME,
         {
