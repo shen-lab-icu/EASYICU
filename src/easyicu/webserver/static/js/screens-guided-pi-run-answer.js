@@ -108,6 +108,25 @@
       return Array.isArray(row) ? tr(String(row[0] || base), String(row[1] || row[0] || base)) : '';
     }
 
+    // A step of a typed kind, read in Chinese from its typed fields; any other
+    // step, and every step on an English page, keeps the plan's own words
+    // (the family templates write them in English).
+    function stepReadingZh(step, nameOf) {
+      if (step.cohort_definition_spec) return '核对全部分析记录：来源分母、记录数与队列流程。';
+      if (step.table_one_spec) {
+        const group = step.table_one_spec.group_by ? nameOf(step.table_one_spec.group_by) : '';
+        return group ? `按${group}描述各组的基线特征。` : '描述分析记录的基线特征。';
+      }
+      const distribution = step.exposure_outcome_distribution_spec;
+      if (distribution) {
+        const exposure = nameOf(distribution.exposure);
+        const outcome = nameOf(distribution.outcome);
+        return exposure && outcome ? `按${exposure}计算每组${outcome}的比例，并给出分母。` : '';
+      }
+      if (step.measurement_audit_spec) return '核对分析变量的测量覆盖与缺失情况。';
+      return '';
+    }
+
     function primarySpec(plan) {
       const steps = Array.isArray(plan && plan.steps) ? plan.steps : [];
       const specs = steps.filter(step => step && step.planned_analysis_role === 'primary'
@@ -254,7 +273,11 @@
         covariates: baselineCovariates(plan, spec && spec.exposure),
         steps: (Array.isArray(plan.steps) ? plan.steps : [])
           .filter(step => step && step.method !== 'visualization' && String(step.intent || '').trim())
-          .map(step => (levels ? levels.inText(String(step.intent).trim()) : String(step.intent).trim())).slice(0, 8),
+          .map(step => {
+            const own = levels ? levels.inText(String(step.intent).trim()) : String(step.intent).trim();
+            return tr(own, stepReadingZh(step, variable => (levels && levels.has(variable)
+              ? levels.variableName(variable) : shortLabel(readerLabel(labels, variable)))) || own);
+          }).slice(0, 8),
         groupsUnreadable: summary.groupsUnreadable === true,
         figure: figures.figure,
         figureTotal: figures.total,
