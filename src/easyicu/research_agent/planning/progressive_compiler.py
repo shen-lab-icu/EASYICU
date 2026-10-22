@@ -1157,8 +1157,14 @@ def _compile_binary_association_sensitivity_capability(
             step_index=step_index,
             path="outputs",
         )
+    # A step states a functional-form check by its form, whatever its id is
+    # called: a step id is a name, and the repair this refusal carries names
+    # the exact method a step without one needs.
     if (
-        "functional_form" in str(step.step_id or "").casefold()
+        (
+            "functional_form" in str(step.step_id or "").casefold()
+            or step.functional_form_spec is not None
+        )
         and str(step.custom_method or "").strip().casefold()
         not in FUNCTIONAL_FORM_EXECUTABLE_METHODS
     ):

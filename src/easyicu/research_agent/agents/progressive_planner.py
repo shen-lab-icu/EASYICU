@@ -3346,9 +3346,11 @@ class ProgressivePlannerAgent:
                     )
                 )
             blocks.append(_custom_analysis_step_shape(outline_step))
-            if (
-                outline_step.planned_analysis_role == "sensitivity"
-                and "functional_form" in outline_step.step_id.casefold()
+            if outline_step.planned_analysis_role == "sensitivity" and (
+                "functional_form" in outline_step.step_id.casefold()
+                # The spline action states a nonlinear-versus-linear check
+                # whatever the step is called.
+                or outline_step.scientific_action_id == "association.rcs_spline"
             ):
                 blocks.append(
                     "Functional-form sensitivity method contract (binding): "
