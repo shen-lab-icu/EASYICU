@@ -338,6 +338,10 @@ def test_prepared_source_confirmation_survives_unrelated_clause_negation(
         ("用 MIMIC-IV 建一个预测院内死亡的模型。", "implement_scientific_question"),
         ("脓毒症 乳酸", "clarify_research_entry"),
         ("我对脓毒症的乳酸感兴趣", "clarify_research_entry"),
+        # A request about a named database that names what it studies.
+        ("描述 eICU 中脓毒症患者的基本特征。", "implement_scientific_question"),
+        ("我想用 eICU 做点研究", "clarify_research_entry"),
+        ("我想在 eICU 里找一些乳酸相关的研究方向", "clarify_research_entry"),
     ],
 )
 def test_first_turn_research_entry_intent_routes_natural_questions(
