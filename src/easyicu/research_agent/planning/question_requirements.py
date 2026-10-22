@@ -22,7 +22,9 @@ What the host can verify, it verifies:
   probability the host offers; without one a benchmark is a capability gap
   there, whatever the Planner claims;
 * a subgroup is answered only by a subgroup-capable step (``SUBGROUP_ACTIONS``)
-  that reads its concept, with the same rule for a family template;
+  that reads its concept, with the same rule for a family template, or by an
+  analysis step that reports the outcome in each level of that very grouping
+  (its exposure-outcome distribution's exposure);
 * a requirement of any other kind (an estimand, another analysis) is
   unanswered when no analysis step reads one of its concepts.
 
@@ -600,6 +602,20 @@ def _judge(
             return JudgedRequirement(
                 item, "covered", "typed_plan_owner_present", owners
             )
+        if item.kind == "subgroup":
+            # "Describe the outcome by age group": the subgroup is the grouping
+            # an analysis step reports the outcome in, level by level.
+            owners = tuple(
+                step.step_id
+                for step in analysing
+                if step.exposure_outcome_distribution_spec is not None
+                and list(item.concepts)
+                == [step.exposure_outcome_distribution_spec.exposure]
+            )
+            if owners:
+                return JudgedRequirement(
+                    item, "covered", "typed_plan_owner_present", owners
+                )
         if family_template:
             element, detail = _TEMPLATE_GAPS[item.kind]
             return JudgedRequirement(
