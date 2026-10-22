@@ -69,7 +69,8 @@
       if (trialConfirmation) return trialConfirmation;
       // A family v1 does not offer on the bound database: the plan step says
       // so instead of offering a plan (host: study_family_scope).
-      if (code === 'study_family_database_out_of_scope' && typeof host.studyFamilyGapText === 'function') {
+      if ((code === 'study_family_database_out_of_scope' || code === 'study_family_reading_disagreement')
+        && typeof host.studyFamilyGapText === 'function') {
         const gap = host.studyFamilyGapText(workflow.study_family_gap);
         return {
           code, grants: [], nonApprovable: true,

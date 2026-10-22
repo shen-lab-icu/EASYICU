@@ -6,11 +6,13 @@ and the host card stated the refusal and what the study could do instead.
 The model's reply to the data-source transition restated it in its own words
 and leaked the gap's codes: 「`survival` 分析族目前仅支持 `miiv` 数据库」,
 then 「等待主界面提供针对该能力限制的后续选项」; on a plan the source made ready
-it wrote 「host 将显示下一步操作」.  After the data-source click a host card
-follows either way, so the host now finalizes that reply itself, saying only
-which data the study uses.  Another host transition -- the plan-generation
-click, which must call the run tool -- a source confirmation followed by no
-card, and an ordinary researcher turn are still answered by the model.
+it wrote 「host 将显示下一步操作」, and above a card refusing causal analysis on
+eICU 「当前将进入目标试验模拟的正式计划审阅」.  The transition asks only for an
+acknowledgement, so once the study has its question the host writes it,
+saying which data the study uses.  Another host transition -- the
+plan-generation click, which must call the run tool -- a source confirmed
+before any question, which the model asks for, and an ordinary researcher
+turn are still answered by the model.
 """
 
 from __future__ import annotations
@@ -40,10 +42,11 @@ SOURCE = {"source_id": "src_synthetic", "label": "eICU-CRD", "database": "eicu"}
 
 def _workflow(
     *, gap: bool = True, source: Optional[dict] = None, code: str = "provider_ready_to_generate_plan",
+    question: str = QUESTION,
 ) -> dict[str, Any]:
     return {
         "next_action_code": "study_family_database_out_of_scope" if gap else code,
-        "study_setup_receipt": {"configuration": {"data_source": source or SOURCE}},
+        "study_setup_receipt": {"configuration": {"data_source": source or SOURCE, "question": question}},
         "study_family_gap": GAP if gap else None,
     }
 
@@ -111,11 +114,21 @@ def _update(workflow: dict[str, Any]) -> str:
     ]"""
 
 
-@pytest.mark.parametrize("gap", [True, False], ids=["refusal-card", "plan-card"])
-def test_the_source_transition_says_only_which_data_the_study_uses(gap: bool) -> None:
-    assert _finalized(_transition(_workflow(gap=gap))) == "已确认使用 eICU-CRD 数据。"
-    assert _finalized(_transition(_workflow(gap=gap)), "en") == "The study now uses the eICU-CRD data."
-    unlabeled = _workflow(gap=gap, source={"database": "eicu"})
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        {"gap": True},
+        {"gap": False},
+        # A causal study on eICU: its card refuses, and the model had written
+        # 「当前将进入目标试验模拟的正式计划审阅」 above it (round 3, R2).
+        {"gap": False, "code": "target_trial_review"},
+    ],
+    ids=["refusal-card", "plan-card", "target-trial-card"],
+)
+def test_the_source_transition_says_only_which_data_the_study_uses(workflow: dict) -> None:
+    assert _finalized(_transition(_workflow(**workflow))) == "已确认使用 eICU-CRD 数据。"
+    assert _finalized(_transition(_workflow(**workflow)), "en") == "The study now uses the eICU-CRD data."
+    unlabeled = _workflow(**workflow, source={"database": "eicu"})
     assert _finalized(_transition(unlabeled)) == "已确认数据来源。"
 
 
@@ -131,7 +144,8 @@ def test_a_question_saved_onto_a_bound_source_says_only_that_it_is_saved() -> No
             lambda: _transition(_workflow(gap=False), tail=_PLAN_GENERATION), id="plan-generation",
         ),
         pytest.param(
-            lambda: _transition(_workflow(gap=False, code="study_setup_incomplete")), id="no-card",
+            lambda: _transition(_workflow(gap=False, code="study_setup_incomplete", question="")),
+            id="no-question-yet",
         ),
         pytest.param(lambda: _transition(_workflow(), tail=""), id="researcher-turn"),
     ],

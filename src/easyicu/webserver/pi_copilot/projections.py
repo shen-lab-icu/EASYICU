@@ -190,11 +190,16 @@ def project_study_context(
     from easyicu.webserver.causal_trial_reading import normalize_causal_trial_reading
     from easyicu.webserver.study_family_reading import normalize_study_family_reading
     from easyicu.webserver.design_variance_basis import normalize_design_variance_basis
+    from easyicu.webserver.question_family_check import (
+        QUESTION_FAMILY_CHECK_FIELD,
+        normalize_question_family_check,
+    )
 
     readings = {}
     for field, normalize in (
         ("causal_trial_reading", normalize_causal_trial_reading),
         ("study_family_reading", normalize_study_family_reading),
+        (QUESTION_FAMILY_CHECK_FIELD, normalize_question_family_check),
         ("design_variance_basis", normalize_design_variance_basis),
     ):
         try:
@@ -412,6 +417,7 @@ def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
             "execution_concepts",
             "analysis_design",
             "study_family_reading",
+            "question_family_check",
             "causal_trial_reading",
             "design_variance_basis",
             "sensitivity_specs",

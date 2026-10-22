@@ -7,11 +7,15 @@ causal cell has its own owner (``target_trial_setup.target_trial_database_gap``,
 applied by ``causal_trial_design``).  This owner refuses the other two at the
 research launch, before any model is called (:func:`stop_family_out_of_scope`).
 
-The family is the one the study records, else the family its question
-states (``study_family_reading``; the launch records its design first),
-else the one the planner's own family routing reads in the question -- the
-inference the plan itself would use -- so the refusal and the plan cannot
-disagree.  A question that states a description or an association is planned
+The family is the one the study records, else the one the conversation
+stated for the question and the host's check settled (``question_family_check``),
+else the family its question states (``study_family_reading``; the launch
+records its design first), else the one the planner's own family routing
+reads in the question -- the inference the plan itself would use -- so the
+refusal and the plan cannot disagree.  While the conversation's reading and
+the host's differ, nothing is refused and nothing is planned: the gap is
+``study_family_reading_disagreement`` on every database, and the researcher
+chooses.  A question that states a description or an association is planned
 on that design, so a question that only mentions survival words is not
 refused.  The workflow asks the same question of the bound source
 (:func:`bound_study_family_gap`), so the conversation says it before offering
@@ -41,6 +45,18 @@ _OUT_OF_SCOPE: Dict[str, frozenset[str]] = {
 _ALL_FAMILIES_DATABASES = ("miiv",)
 
 
+def _reading_disagreement(study: Mapping[str, Any], question: str) -> Optional[Dict[str, Any]]:
+    from easyicu.webserver.question_family_check import (
+        QUESTION_FAMILY_CHECK_FIELD,
+        open_disagreement,
+    )
+
+    design = study.get("analysis_design")
+    if isinstance(design, Mapping) and str(design.get("analysis_family") or "").strip():
+        return None
+    return open_disagreement(study.get(QUESTION_FAMILY_CHECK_FIELD), question)
+
+
 def _study_family(study: Mapping[str, Any], question: str, database: str) -> Optional[str]:
     from easyicu.research_agent.planning.analysis_types import (
         canonical_analysis_family,
@@ -59,6 +75,14 @@ def _study_family(study: Mapping[str, Any], question: str, database: str) -> Opt
     text = str(question or "").strip()
     if not text:
         return None
+    from easyicu.webserver.question_family_check import (
+        QUESTION_FAMILY_CHECK_FIELD,
+        settled_question_family,
+    )
+
+    settled = settled_question_family(study.get(QUESTION_FAMILY_CHECK_FIELD), text)
+    if settled is not None:
+        return settled
     # The family alone: the design's variance needs the source's patient
     # grouping, which a polled workflow does not read.
     from easyicu.webserver.study_family_reading import study_family_reading
@@ -77,8 +101,19 @@ def _study_family(study: Mapping[str, Any], question: str, database: str) -> Opt
 def study_family_database_gap(
     study: Mapping[str, Any], *, question: str, database: str
 ) -> Optional[Dict[str, Any]]:
-    """Why v1 does not offer the study's family on ``database``, or ``None``."""
+    """Why v1 does not offer the study's family on ``database``, or ``None``.
 
+    While the study's two readings of its question differ, the gap is that
+    disagreement, with both families, on any database.
+    """
+
+    disagreement = _reading_disagreement(study, question)
+    if disagreement is not None:
+        return {
+            **disagreement,
+            "database": database,
+            "choices": _choices(disagreement),
+        }
     excluded = _OUT_OF_SCOPE.get(str(database or "").strip().lower())
     if not excluded:
         return None
@@ -91,6 +126,17 @@ def study_family_database_gap(
         "database": database,
         "supported_databases": list(_ALL_FAMILIES_DATABASES),
     }
+
+
+def _choices(disagreement: Mapping[str, Any]) -> list[Dict[str, str]]:
+    from easyicu.webserver.question_family_check import family_choice_texts
+
+    zh = family_choice_texts(disagreement, "zh")
+    en = family_choice_texts(disagreement, "en")
+    return [
+        {"family": family, "zh": text_zh, "en": text_en}
+        for (family, text_zh), (_family, text_en) in zip(zh, en)
+    ]
 
 
 def bound_study_family_gap(study: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
@@ -121,6 +167,14 @@ def stop_family_out_of_scope(
     gap = study_family_database_gap(study, question=question, database=database)
     if gap is None:
         return
+    if gap["code"] != STUDY_FAMILY_DATABASE_OUT_OF_SCOPE:
+        raise ResearchPipelineRunError(
+            gap["code"],
+            f"The question reads as {gap['model_family']} or as {gap['host_family']}; "
+            "the researcher chooses before planning, so no model was called and no "
+            "analysis was run.",
+            details={STUDY_FAMILY_GAP_FIELD: gap},
+        )
     raise ResearchPipelineRunError(
         gap["code"],
         f"This version does not offer {gap['family']} studies on {database}, so "

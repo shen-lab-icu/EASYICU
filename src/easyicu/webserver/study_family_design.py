@@ -59,6 +59,7 @@ __all__ = [
     "descriptive_variance",
     "family_design_for",
     "family_reading_conflict",
+    "checked_family_design",
     "question_family_design",
     "record_unset_family_design",
 ]
@@ -194,6 +195,49 @@ def family_reading_conflict(question: Any, design: Any) -> Optional[Dict[str, An
     return reading.record(design_family=family)
 
 
+#: Families whose design the host records from the conversation's checked
+#: reading alone: their design is the family, unit and variance.
+_CHECKED_DESIGN_FAMILIES = frozenset(
+    {"association_study", "descriptive_epidemiology", "prediction_model"}
+)
+
+
+@dataclass(frozen=True)
+class CheckedFamily:
+    """What the conversation's checked reading says of the study's family."""
+
+    #: The researcher is asked to choose: nothing is recorded or planned.
+    disagreement: bool
+    #: The settled family, when the host's own words do not read it.
+    family: Optional[str]
+    #: Its design, when the host records one for that family.
+    design: Optional[Dict[str, str]]
+
+
+def checked_family_design(study: Mapping[str, Any], question: Any) -> CheckedFamily:
+    """The study's family as the conversation's checked reading settles it.
+
+    ``family`` is set only where it decides beside the host's words: the
+    host's words read no family, or the researcher chose another one.
+    """
+
+    from easyicu.webserver.question_family_check import (
+        QUESTION_FAMILY_CHECK_FIELD,
+        open_disagreement,
+        settled_question_family,
+    )
+
+    check = study.get(QUESTION_FAMILY_CHECK_FIELD)
+    if open_disagreement(check, question) is not None:
+        return CheckedFamily(disagreement=True, family=None, design=None)
+    settled = settled_question_family(check, question)
+    reading = study_family_reading(question)
+    if settled is None or (reading is not None and reading.family == settled):
+        return CheckedFamily(disagreement=False, family=None, design=None)
+    design = family_design_for(study, settled) if settled in _CHECKED_DESIGN_FAMILIES else None
+    return CheckedFamily(disagreement=False, family=settled, design=design)
+
+
 #: Families whose launch preparation reads the study's recorded design: a
 #: prediction study's population is the stays still in the ICU after its
 #: prediction time (``primary_cohort.cohort_required_concepts``).
@@ -214,9 +258,18 @@ def record_unset_family_design(
 
     if _design_family(study.get("analysis_design")):
         return study
-    decision = question_family_design(question, study)
-    if decision is not None:
-        patch: Dict[str, Any] = {
+    checked = checked_family_design(study, question)
+    if checked.disagreement:
+        # The researcher chooses first; the launch's scope check says so.
+        return study
+    decision = None if checked.family else question_family_design(question, study)
+    patch: Dict[str, Any]
+    if checked.design is not None:
+        patch = {"analysis_design": dict(checked.design)}
+    elif checked.family:
+        return study
+    elif decision is not None:
+        patch = {
             "analysis_design": dict(decision.design),
             STUDY_FAMILY_READING_FIELD: decision.reading.record(),
         }

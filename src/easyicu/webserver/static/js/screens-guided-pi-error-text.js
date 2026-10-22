@@ -180,6 +180,10 @@
           `这道目标试验题所用治疗尚未登记为可模拟治疗${names.length ? `：${names.join('、')}` : ''}，分析没有开始。${classes.length ? `当前登记的治疗类别：${classes.join('、')}。` : ''}如需修改研究设计，请在对话中说明。`,
         );
       }
+      if (error.code === 'study_family_reading_disagreement') {
+        const gap = studyFamilyGapText(error.details && error.details.study_family_gap);
+        return tr(`${gap.refusal}; no analysis started.`, `${gap.refusal}，分析没有开始。`);
+      }
       if (error.code === 'study_family_database_out_of_scope') {
         const gap = studyFamilyGapText(error.details && error.details.study_family_gap);
         return tr(
@@ -494,8 +498,28 @@
     // Why v1 does not offer a study family on a database (host:
     // study_family_scope): the refusal, and what to ask instead.  The gap is
     // codes only; a name it does not know reads generically.
+    const STUDY_FAMILY_NAMES = {
+      descriptive_epidemiology: ['a descriptive study', '描述性研究'],
+      association_study: ['an association study', '关联研究'],
+      prediction_model: ['a prediction model', '预测模型'],
+      survival: ['a survival analysis (time to event)', '生存分析（时间到事件）'],
+      causal_inference: ['a causal effect estimate', '因果效应估计'],
+      trajectory_clustering: ['subtype or trajectory clustering', '亚型或轨迹聚类'],
+    };
+
     function studyFamilyGapText(gap) {
       const value = gap || {};
+      // The question reads as two families; the researcher chooses in the
+      // conversation (host: question_family_check).
+      if (value.code === 'study_family_reading_disagreement') {
+        const name = key => STUDY_FAMILY_NAMES[key] || ['another study type', '另一种研究'];
+        const first = name(value.model_family);
+        const second = name(value.host_family);
+        return {
+          refusal: tr(`Choose the study type first: ${first[0]} or ${second[0]}`, `请先选研究类型：${first[1]}，或${second[1]}`),
+          instead: '',
+        };
+      }
       const family = {
         survival: ['survival (time-to-event) analysis', '生存分析（时间到事件）'],
         trajectory_clustering: ['subtype or trajectory clustering', '亚型或轨迹聚类分析'],

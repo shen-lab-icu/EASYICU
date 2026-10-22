@@ -905,6 +905,7 @@ def _question_family_design(
 
     from easyicu.webserver.study_family_design import (
         STUDY_FAMILY_READING_FIELD,
+        checked_family_design,
         family_reading_conflict,
         question_family_design,
     )
@@ -913,6 +914,10 @@ def _question_family_design(
         (current or {}).get("analysis_design")
     )
     study = {**dict(current or {}), **patch}
+    checked = checked_family_design(study, study.get("question"))
+    if checked.disagreement:
+        # The researcher chooses between the two readings before any design.
+        return {}
     if "analysis_design" in params or (
         isinstance(design, Mapping) and str(design.get("analysis_family") or "").strip()
     ):
@@ -922,12 +927,58 @@ def _question_family_design(
         if (current or {}).get(STUDY_FAMILY_READING_FIELD) != conflict:
             patch[STUDY_FAMILY_READING_FIELD] = conflict
         return {STUDY_FAMILY_READING_FIELD: conflict}
+    if checked.family is not None:
+        # The conversation's checked reading decides where the host's words
+        # read no family, or the researcher chose another one.
+        if checked.design is not None:
+            patch["analysis_design"] = dict(checked.design)
+        return {}
     decision = question_family_design(study.get("question"), study)
     if decision is None:
         return {}
     patch["analysis_design"] = dict(decision.design)
     patch[STUDY_FAMILY_READING_FIELD] = decision.reading.record()
     return {STUDY_FAMILY_READING_FIELD: decision.reading.record()}
+
+
+def _question_family_check(
+    params: Mapping[str, Any],
+    patch: Dict[str, Any],
+    current: Optional[Mapping[str, Any]],
+    user_message: str,
+) -> Dict[str, Any]:
+    """Check the family the conversation states for the question, or record a choice.
+
+    A researcher who sends one of the two readings the host offered chooses
+    it, whatever the turn states.  Otherwise a statement the turn makes
+    (``question_family``) is checked against the host's own reading of the
+    question (``question_family_check``); one that does not rest on the
+    question's words is not recorded, and the receipt says so.  Returns the
+    receipt fields.
+    """
+
+    from easyicu.webserver.question_family_check import (
+        QUESTION_FAMILY_CHECK_FIELD,
+        check_question_family,
+        researcher_choice,
+    )
+
+    question = patch.get("question", (current or {}).get("question"))
+    chosen = researcher_choice(
+        (current or {}).get(QUESTION_FAMILY_CHECK_FIELD), question, user_message
+    )
+    if chosen is not None:
+        patch[QUESTION_FAMILY_CHECK_FIELD] = chosen
+        return {QUESTION_FAMILY_CHECK_FIELD: chosen}
+    if "question_family" not in params:
+        return {}
+    try:
+        record = check_question_family(params.get("question_family"), question)
+    except ValueError as exc:
+        return {"question_family_unread": str(exc)}
+    if (current or {}).get(QUESTION_FAMILY_CHECK_FIELD) != record:
+        patch[QUESTION_FAMILY_CHECK_FIELD] = record
+    return {QUESTION_FAMILY_CHECK_FIELD: record}
 
 
 def _question_design_variance(
@@ -1980,6 +2031,9 @@ def update_study_context(
             )
         patch["question"], wording_receipt = resolved
         patch["question_wording"] = wording_receipt
+    check_receipt = _question_family_check(
+        params, patch, current, str(context.user_message or "")
+    )
     causal_receipt = _question_causal_design(params, patch, current)
     family_receipt = (
         {} if causal_receipt else _question_family_design(params, patch, current)
@@ -2156,6 +2210,12 @@ def update_study_context(
             "the setup is saved. Tell the researcher which design was not saved "
             "and why; the candidate plan proposes it for their review."
         )
+    if "question_family_unread" in check_receipt:
+        summary += (
+            " question_family was not recorded: "
+            + check_receipt["question_family_unread"]
+            + ". State it again with words copied exactly from the saved question."
+        )
     summary += _causal_receipt_text(causal_receipt)
     summary += _family_receipt_text(family_receipt)
     summary += _variance_receipt_text(variance_receipt)
@@ -2189,6 +2249,7 @@ def update_study_context(
             **({"analysis_design_recovery": analysis_design_recovery}
                if analysis_design_recovery is not None else {}),
             **({"unsaved_design": unsaved_design} if unsaved_design is not None else {}),
+            **check_receipt,
             **causal_receipt,
             **family_receipt,
             **variance_receipt,

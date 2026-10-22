@@ -146,12 +146,51 @@ function blockedByFamilyGap(workflow) {
     && Boolean(workflow.study_family_gap && typeof workflow.study_family_gap === "object");
 }
 
-// After the data-source click the next step is a host card either way: the
-// plan card, or the refusal card.  The model's acknowledgement only restated
-// it, with internal words ("host 将显示下一步操作").
+// The question reads as two families -- the conversation's and the host's --
+// and the researcher chooses (workflow.study_family_gap.choices, written by
+// webserver/question_family_check.py).
+const FAMILY_DISAGREEMENT = "study_family_reading_disagreement";
+
+function familyChoices(workflow) {
+  const gap = workflow?.study_family_gap;
+  if (workflow?.next_action_code !== FAMILY_DISAGREEMENT || gap?.code !== FAMILY_DISAGREEMENT) return null;
+  const choices = Array.isArray(gap.choices) ? gap.choices : [];
+  const words = boundedLabel(workflow?.study_setup_receipt?.configuration?.question_family_check?.words);
+  const valid = choices.filter((item) => item && typeof item === "object"
+    && boundedLabel(item.family) && boundedLabel(item.zh) && boundedLabel(item.en));
+  return valid.length === 2 && words ? { choices: valid, words } : null;
+}
+
+function familyChoiceText(lead, choices, language) {
+  const zh = language === "zh";
+  const ask = zh ? "这个问题可以按两种研究来做，请选一种：" : "This question can be studied in two ways; choose one:";
+  const heading = zh ? "**下一步：**" : "**Next step:**";
+  const bullets = choices.map((item) => `- ${boundedLabel(zh ? item.zh : item.en)}`).join("\n");
+  return `${lead}${zh ? "" : " "}${ask}\n\n${heading}\n${bullets}`;
+}
+
+// The researcher sent one of the offered readings: the host records it
+// through the study's owner itself, so no model reinterprets the choice.
+function familyChoiceCall(context) {
+  const projected = ownerContextReceipts(context).find(
+    (receipt) => receipt?.code === "easyicu_research_workflow_projected",
+  );
+  const offered = familyChoices(projected?.details?.workflow);
+  if (!offered) return null;
+  const sent = researcherText(context).trim().replace(/[。.]$/, "");
+  const chosen = offered.choices.find((item) => sent === boundedLabel(item.zh) || sent === boundedLabel(item.en));
+  return chosen ? { question_family: { family: boundedLabel(chosen.family), words: offered.words } } : null;
+}
+
+// After the data-source click the transition asks the model only to
+// acknowledge the source and stop for the host's next action (a plan card or
+// a refusal card); its acknowledgements restated or contradicted the card
+// ("host 将显示下一步操作"; 「将进入目标试验模拟的正式计划审阅」 above a card
+// refusing causal analysis on eICU).  The host writes it whenever the study
+// has its question; with none, the model asks for one.
 function sourceConfirmationCardFollows(workflow) {
-  return blockedByFamilyGap(workflow)
-    || workflow?.next_action_code === "provider_ready_to_generate_plan";
+  const question = workflow?.study_setup_receipt?.configuration?.question;
+  return Boolean(workflow) && typeof question === "string" && Boolean(question.trim());
 }
 
 // The workflow of the data-source confirmation transition: the transition is
@@ -489,8 +528,19 @@ export function hostPostToolFinalization(model, context, language) {
     return toolCallStream(model, "easyicu_search_literature", literatureSearch);
   }
   const confirmed = sourceConfirmationWorkflow(context);
+  const confirmedChoices = familyChoices(confirmed);
+  if (confirmedChoices) {
+    return completedStream(finalizedMessage(
+      model, familyChoiceText(confirmedSourceText(confirmed, language), confirmedChoices.choices, language),
+    ));
+  }
   if (sourceConfirmationCardFollows(confirmed)) {
     return completedStream(finalizedMessage(model, confirmedSourceText(confirmed, language)));
+  }
+  const choice = !latestStudyContextUpdate(context) && context?.messages?.at(-1)?.role === "user"
+    ? familyChoiceCall(context) : null;
+  if (choice) {
+    return toolCallStream(model, "easyicu_update_study_context", choice);
   }
   const update = latestStudyContextUpdate(context);
   const withheld = [withheldDesignText(update, language), unsavedFieldsText(update, language)]
@@ -505,13 +555,20 @@ export function hostPostToolFinalization(model, context, language) {
       ),
     ));
   }
-  if (blockedByFamilyGap(update?.receipt?.details?.workflow)) {
+  const chose = update?.receipt?.details?.question_family_check?.status === "researcher_chose";
+  const recorded = chose ? (language === "zh" ? "已按你的选择记录。" : "Your choice is recorded. ") : "";
+  const updateChoices = familyChoices(update?.receipt?.details?.workflow);
+  if (updateChoices) {
     const saved = language === "zh" ? "研究问题已保存。" : "The research question is saved.";
+    return completedStream(finalizedMessage(model, familyChoiceText(saved, updateChoices.choices, language)));
+  }
+  if (blockedByFamilyGap(update?.receipt?.details?.workflow)) {
+    const saved = chose ? recorded.trim() : (language === "zh" ? "研究问题已保存。" : "The research question is saved.");
     return completedStream(finalizedMessage(model, withWithheldDesign(saved, withheld)));
   }
   if (!studyUpdateIsReadyForPlanning(update)) return null;
   const text = language === "zh"
-    ? "研究问题和数据源已就绪，可以生成候选研究计划，供你审阅。尚未开始数据提取或分析。"
-    : "The research question and data source are ready for a candidate research plan for your review. Data extraction and analysis have not started.";
+    ? `${recorded}研究问题和数据源已就绪，可以生成候选研究计划，供你审阅。尚未开始数据提取或分析。`
+    : `${recorded}The research question and data source are ready for a candidate research plan for your review. Data extraction and analysis have not started.`;
   return completedStream(finalizedMessage(model, withWithheldDesign(text, withheld)));
 }
