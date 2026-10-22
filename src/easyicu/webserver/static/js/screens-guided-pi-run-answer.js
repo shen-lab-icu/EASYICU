@@ -328,8 +328,10 @@
           .filter(step => step && step.method !== 'visualization' && String(step.intent || '').trim())
           .map(step => {
             const own = levels ? levels.inText(String(step.intent).trim()) : String(step.intent).trim();
+            const prose = window.AGENT_PLAN_PROSE;
             return tr(own, stepReadingZh(step, variable => (levels && levels.has(variable)
-              ? levels.variableName(variable) : shortLabel(readerLabel(labels, variable)))) || own);
+              ? levels.variableName(variable) : shortLabel(readerLabel(labels, variable))))
+              || (prose ? prose.namedZh(String(step.intent).trim(), { labels, levels }) : own));
           }).slice(0, 8),
         groupsUnreadable: summary.groupsUnreadable === true,
         figure: figures.figure,
