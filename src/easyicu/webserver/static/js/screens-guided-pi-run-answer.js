@@ -16,6 +16,7 @@
   // baseline characteristic a follow-up question could adjust for.
   const NON_COVARIATE = /^artifact:|^table:|(?:^|_)(?:id|n|measured|time)$/;
   const AGGREGATE_SUFFIX = /_(?:first|last|min|max|mean|median)$/;
+  const GROUPED_COLUMN = /^(.+)_group_[a-z0-9]+$/;
   const CJK = /[\u3400-\u9fff]/;
   // Reader names for the result-table kinds a file note mentions, in the
   // order a reader meets them; audits are counted rather than named.
@@ -119,9 +120,14 @@
       const baseline = steps.find(step => step && step.table_one_spec && Array.isArray(step.inputs));
       if (!baseline) return [];
       // Every form of the grouping concept (its _min, _n, _first_time...) is
-      // the exposure itself, not a covariate.
+      // the exposure itself, not a covariate; so is the measured value a
+      // grouped column (`<concept>_group_<id>`) forms its groups from.
       const grouping = [exposure, baseline.table_one_spec.group_by]
-        .map(value => String(value || '').replace(AGGREGATE_SUFFIX, '')).filter(Boolean);
+        .map(value => String(value || '').replace(AGGREGATE_SUFFIX, '')).filter(Boolean)
+        .flatMap(value => {
+          const grouped = GROUPED_COLUMN.exec(value);
+          return grouped ? [value, grouped[1]] : [value];
+        });
       const seen = new Set();
       return baseline.inputs.map(String)
         .filter(name => name && !NON_COVARIATE.test(name)
