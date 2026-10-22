@@ -295,6 +295,44 @@ def test_grouping_never_replaces_a_callers_exposure(tmp_path, declared, count):
     assert built[-1]["primary_exposure"] == declared
 
 
+def test_a_declared_exposure_its_groups_are_formed_from_is_studied_as_the_groups(tmp_path):
+    # On the hosted pilot a study declared maximum lactate and asked to compare
+    # stays at or above 2 mmol/L with those below, adjusted for age and sex.
+    # The Planner modelled the groups the question compares, and the plan was
+    # refused for not modelling the declared column
+    # (progressive_primary_result_invalid).
+    phase, built = _binding_phase(tmp_path, declared="lact_max")
+
+    assert phase.context.primary_exposure == "lact_group_x1"
+    assert built[-1]["primary_exposure"] == "lact_group_x1"
+    assert json.loads(phase.record_path.read_text())["primary_exposure_binding"] == {
+        "variable": "lact_group_x1", "basis": "declared_exposure_grouped", "declared": "lact_max",
+    }
+
+
+def test_two_groupings_of_the_declared_exposure_keep_it(tmp_path):
+    phase, built = _binding_phase(tmp_path, declared="lact_max", count=2)
+
+    assert phase.context.primary_exposure == "lact_max"
+    assert built[-1]["primary_exposure"] == "lact_max"
+    assert json.loads(phase.record_path.read_text())["primary_exposure_binding"] is None
+
+
+def test_an_accepted_grouping_of_the_declared_exposure_rebuilds_the_same_exposure(tmp_path):
+    planned, _ = _binding_phase(tmp_path / "candidate", declared="lact_max")
+    record = json.loads(planned.record_path.read_text())
+    candidate = candidate_exposure_groupings(
+        record, record_sha256=_sha256(planned.record_path)
+    )
+
+    accepted, built = _binding_phase(
+        tmp_path / "accepted", declared="lact_max", candidate=candidate.model_dump(mode="json")
+    )
+
+    assert accepted.context.primary_exposure == "lact_group_x1"
+    assert built[-1]["primary_exposure"] == "lact_group_x1"
+
+
 def test_multiple_groupings_record_ambiguity_without_binding_an_exposure(tmp_path):
     phase, built = _binding_phase(tmp_path, count=2)
 
