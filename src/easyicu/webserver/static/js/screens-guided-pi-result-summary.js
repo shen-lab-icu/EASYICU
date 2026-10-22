@@ -126,6 +126,27 @@
       });
   }
 
+  // A continuous exposure's curve contrasts: the adjusted odds ratio at one
+  // exposure value against a reference value, as the spline producer writes
+  // them.  Which row is the run's answer is bound by its evidence claim, not
+  // chosen here, so every row is offered with the table it came from.
+  const CURVE_CONTRAST_COLUMNS = ['exposure', 'exposure_value', 'reference_exposure_value', 'adjusted_odds_ratio', 'ci_low', 'ci_high'];
+
+  function curveContrasts(records) {
+    return records.filter(item => CURVE_CONTRAST_COLUMNS.every(header => item.headers.includes(header)))
+      .map(item => ({
+        evidenceId: String(item.table && item.table.evidence_id || ''),
+        exposure: String(item.record.exposure || ''),
+        value: finite(item.record.exposure_value),
+        reference: finite(item.record.reference_exposure_value),
+        ratio: finite(item.record.adjusted_odds_ratio),
+        low: finite(item.record.ci_low),
+        high: finite(item.record.ci_high),
+      }))
+      .filter(row => row.evidenceId && row.exposure && [row.value, row.reference, row.ratio, row.low, row.high]
+        .every(number => number != null));
+  }
+
   function summarize(payload, plan, context) {
     const records = rows(payload);
     const levels = groupLevels(context);
@@ -200,6 +221,7 @@
       ].filter(Boolean),
       exposureLevels,
       estimates: estimates(records, plan, levels),
+      curveContrasts: curveContrasts(records),
       // The groups are shown by their codes because their record cannot be read.
       groupsUnreadable: !!(levels && levels.unreadable),
       outcomeLabel: spec && typeof labels[spec.outcome] === 'string' ? labels[spec.outcome] : '',

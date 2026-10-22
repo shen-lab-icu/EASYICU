@@ -181,7 +181,7 @@
     // marks primary, else the evidence-bound primary_or claim. Any other
     // estimate (a covariate's, a sensitivity analysis') is not this run's
     // answer, so without a primary one the answer names none.
-    function primaryEstimate(summary, claims) {
+    function primaryEstimate(summary, claims, labels) {
       const typed = Array.isArray(summary && summary.estimates)
         ? summary.estimates.find(row => row && row.primary === true) : null;
       if (typed && typed.display && typed.display.value) {
@@ -195,10 +195,40 @@
       if (!effect || effect.display_value == null) return null;
       const low = find([/^primary_or_ci\[0\]$/, /^primary_or_ci_low$/]);
       const high = find([/^primary_or_ci\[1\]$/, /^primary_or_ci_high$/]);
+      if (!low && !high) {
+        const curve = curveContrast(summary, effect, labels);
+        if (curve) return curve;
+      }
       return {
         measure: 'OR', label: '', value: String(effect.display_value),
         low: low && low.display_value != null ? String(low.display_value) : '',
         high: high && high.display_value != null ? String(high.display_value) : '',
+      };
+    }
+
+    // A continuous exposure's primary odds ratio compares two of its values.
+    // The claim names the contrast table it was read from (its related
+    // evidence) and its exact value; exactly one row of that table carrying
+    // that value supplies the two values and the interval, shown to the
+    // claim's own precision.  Anything less names no contrast.
+    function curveContrast(summary, effect, labels) {
+      const value = finite(effect.canonical_value);
+      const related = new Set((Array.isArray(effect.related_artifacts) ? effect.related_artifacts : [])
+        .map(row => String(row && row.evidence_id || '')).filter(Boolean));
+      if (value == null || !related.size) return null;
+      const rows = (Array.isArray(summary && summary.curveContrasts) ? summary.curveContrasts : [])
+        .filter(row => related.has(row.evidenceId)
+          && Math.abs(row.ratio - value) <= 1e-9 * Math.max(1, Math.abs(value)));
+      if (rows.length !== 1) return null;
+      const [row] = rows;
+      const decimals = (String(effect.display_value).split('.')[1] || '').length;
+      const point = number => String(Number(number.toPrecision(4)));
+      const name = tr(shortLabel(readerLabel(labels, row.exposure)) || conceptName(row.exposure),
+        conceptName(row.exposure) || shortLabel(readerLabel(labels, row.exposure)));
+      return {
+        measure: 'OR', value: String(effect.display_value),
+        label: `${name ? `${name} ` : ''}${point(row.value)} vs ${point(row.reference)}`,
+        low: row.low.toFixed(decimals), high: row.high.toFixed(decimals),
       };
     }
 
@@ -280,7 +310,7 @@
         groups,
         total: total && total.display_value != null ? String(total.display_value) : '',
         overallRisk: overallRisk && overallRisk.display_value != null ? String(overallRisk.display_value) : '',
-        estimate: primaryEstimate(summary, claims),
+        estimate: primaryEstimate(summary, claims, labels),
         estimateExposure: modelledLabel,
         prediction: PREDICTION_TYPES.has(String(plan.analysis_type || ''))
           ? predictionPerformance(payload('result_tables.json').prediction_performance) : null,
