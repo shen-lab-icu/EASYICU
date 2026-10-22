@@ -248,6 +248,22 @@ const outcome = modules.require('runOutcome').create({
   assert.doesNotMatch(association.html, /AUROC|内部验证的模型表现/);
   payloads['result_tables.json'] = savedTables;
 
+  // An estimate says what it compares. Hosted pilot: an age-group question
+  // read sex as its exposure, and the card's bare "OR 0.975" read as the
+  // age effect; the primary model's own exposure now names it.
+  const savedClaims = payloads['manuscript_provenance.json'];
+  payloads['manuscript_provenance.json'] = { claims: [
+    { source_field: 'primary_or', display_value: '0.975' },
+    { source_field: 'primary_or_ci_low', display_value: '0.946' },
+    { source_field: 'primary_or_ci_high', display_value: '1.006' },
+  ] };
+  const modelledSex = await reread({ ...plan, steps: plan.steps.concat([{
+    step_id: 'primary_adjusted_association', method: 'adjusted_association_models', planned_analysis_role: 'primary',
+    intent: 'Fit the primary model.', model_requirements: [{ analysis_role: 'primary', exposure_source: 'sex', covariates: [] }],
+  }]).map(step => (step.step_id === 'exposure_outcome_distribution' ? { ...step, planned_analysis_role: 'secondary' } : step)) });
+  assert.match(modelledSex.html, /主要估计（性别）：OR 0\.975（95% CI 0\.946–1\.006）。/);
+  payloads['manuscript_provenance.json'] = savedClaims;
+
   // Traces: one named row per approved plan step, with how it ran.
   const activity = modules.require('activity').create({
     tr, esc, iconHtml: () => '', resourceName: () => '', resourceKey: () => '', resourceButton: () => '',
