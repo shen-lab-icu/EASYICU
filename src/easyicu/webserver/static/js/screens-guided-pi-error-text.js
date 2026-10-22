@@ -280,7 +280,7 @@
       if (completedAction) {
         return tr(
           'An EasyICU tool action completed, but the model service could not finish the explanation. Review the completed receipt above; do not repeat the action automatically.',
-          'EasyICU 工具操作已完成，但模型服务未能生成最终说明。请以上方已完成的 receipt 为准，不要自动重复执行该操作。'
+          'EasyICU 工具操作已完成，但模型服务未能生成最终说明。请以上方已完成的记录为准，不要自动重复执行该操作。'
         );
       }
       if (value === 'pi_shell_token_budget_exhausted' || value === 'pi_shell_session_provider_call_budget_exhausted') {
@@ -512,8 +512,8 @@
           '规划在允许的尝试次数内未能生成有效计划，分析没有开始。',
         ),
         research_pipeline_planner_provider_unavailable: tr(
-          'The model service was unavailable while planning. Check the connection and generate the plan again.',
-          '规划期间模型服务不可用。请检查连接后重新生成计划。',
+          'The model service was unavailable while planning, and no analysis started. Generate the plan again in a moment.',
+          '规划期间模型服务暂时不可用，没有开始任何分析。请稍后重新生成计划。',
         ),
         research_pipeline_planner_efficiency_budget_exhausted: tr(
           'The Planner reached its efficiency budget; a validated checkpoint was saved.',
