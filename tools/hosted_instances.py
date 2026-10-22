@@ -10,6 +10,7 @@ Run from the shared checkout (no server is started by create/provision):
   python tools/hosted_instances.py list-sources doctor
   python tools/hosted_instances.py set-public-origin doctor https://clinic.example
   python tools/hosted_instances.py set-public-origin doctor --clear
+  python tools/hosted_instances.py set-runner-image doctor easyicu-runner:rebuilt
   python tools/hosted_instances.py start doctor
   python tools/hosted_instances.py status doctor
   python tools/hosted_instances.py list
@@ -259,9 +260,28 @@ def set_public_origin(instance: Path, origin: str, *, clear: bool = False) -> No
         raise ValueError("stop the instance before changing its public origin")
     if not clear:
         _validate_public_origin(origin)
+    _replace_env_line(instance, "EASYICU_PUBLIC_ORIGIN", "" if clear else origin)
+    print(f"Public origin updated. Next step: python tools/hosted_instances.py start {instance.name}")
+
+
+_IMAGE_REFERENCE = re.compile(r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]+)?(?:@sha256:[0-9a-f]{64})?")
+
+
+def set_runner_image(instance: Path, image: str) -> None:
+    """Change only the runner-image line of a stopped instance: after a kernel rebuild."""
+    instance_environment(instance)
+    if _recorded_process(instance) is not None:
+        raise ValueError("stop the instance before changing its runner image")
+    if len(image) > 256 or not _IMAGE_REFERENCE.fullmatch(image):
+        raise ValueError("runner image must be one image reference")
+    _replace_env_line(instance, "EASYICU_RUNNER_IMAGE", image)
+    print(f"Runner image updated. Next step: python tools/hosted_instances.py start {instance.name}")
+
+
+def _replace_env_line(instance: Path, key: str, value: str) -> None:
     path = instance / "instance.env"
-    prefix = b"EASYICU_PUBLIC_ORIGIN="
-    replacement = prefix + json.dumps("" if clear else origin).encode("utf-8")
+    prefix = f"{key}=".encode("utf-8")
+    replacement = prefix + json.dumps(value, ensure_ascii=False).encode("utf-8")
     lines = path.read_bytes().splitlines(keepends=True)
     found = False
     for index, line in enumerate(lines):
@@ -285,7 +305,6 @@ def set_public_origin(instance: Path, origin: str, *, clear: bool = False) -> No
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
-    print(f"Public origin updated. Next step: python tools/hosted_instances.py start {instance.name}")
 
 
 def _repair_private_home(home: Path) -> None:
@@ -370,10 +389,12 @@ def main(argv=None) -> int:
     create.add_argument("--runner-image", required=True)
     create.add_argument("--checkout", type=Path, default=CHECKOUT)
     create.add_argument("--public-origin", default="")
-    for name in ("start", "stop", "status", "provision-model", "add-source", "list-sources", "set-public-origin"):
+    for name in ("start", "stop", "status", "provision-model", "add-source", "list-sources", "set-public-origin",
+                 "set-runner-image"):
         help_text = {"add-source": "Register a prepared export in this instance's data roots",
                      "list-sources": "List source labels, databases, counts and active flags",
-                     "set-public-origin": "Set or clear the HTTPS origin of a stopped instance"}.get(name)
+                     "set-public-origin": "Set or clear the HTTPS origin of a stopped instance",
+                     "set-runner-image": "Set the runner image of a stopped instance"}.get(name)
         command = commands.add_parser(name, help=help_text)
         command.add_argument("name")
         if name == "provision-model":
@@ -385,6 +406,8 @@ def main(argv=None) -> int:
         elif name == "set-public-origin":
             command.add_argument("origin", nargs="?", help="HTTPS origin matching the login gateway")
             command.add_argument("--clear", action="store_true", help="Clear the public origin")
+        elif name == "set-runner-image":
+            command.add_argument("image", help="Image whose execution kernel matches this checkout")
     commands.add_parser("list")
     args = parser.parse_args(argv)
     try:
@@ -410,6 +433,8 @@ def main(argv=None) -> int:
                 if args.clear == (args.origin is not None):
                     raise ValueError("supply either an HTTPS origin or --clear")
                 set_public_origin(instance, args.origin or "", clear=args.clear)
+            elif args.command == "set-runner-image":
+                set_runner_image(instance, args.image)
             else:
                 instance_environment(instance)
                 print(f"{instance.name}: {'running' if _recorded_process(instance) else 'stopped'}")
