@@ -261,6 +261,12 @@ def _prepare_scientific_launch(
     )
     configured_target = _target_outcome(study)
     configured_primary_exposure = _primary_exposure(study)
+    # The exposure's concept selection is judged before the covariates: a
+    # concept the researcher must choose explicitly is the first thing to say.
+    _validate_primary_concept_selection(
+        study,
+        configured_primary_exposure,
+    )
     covariates = _configured_covariates(study)
     planning_coordinates = _metadata_only_planning_coordinates(
         question=question,
@@ -273,10 +279,6 @@ def _prepare_scientific_launch(
     target = configured_target or planning_coordinates.get("target_outcome")
     primary_exposure = configured_primary_exposure or planning_coordinates.get(
         "primary_exposure"
-    )
-    _validate_primary_concept_selection(
-        study,
-        configured_primary_exposure,
     )
     covariate_selection = _configured_covariate_selection(study)
     sensitivity_specs = _configured_sensitivity_specs(study)
