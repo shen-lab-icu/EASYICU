@@ -2518,7 +2518,9 @@ class PiCopilotService:
                 ):
                     event = {
                         **event,
-                        "delta": sanitize_user_visible_text(event["delta"]),
+                        "delta": sanitize_user_visible_text(
+                            event["delta"], fragment=True
+                        ),
                     }
                 job.emit({"type": "pi_event", "event": event})
                 projected = project_pi_replay_event(event)

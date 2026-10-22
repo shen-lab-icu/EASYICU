@@ -96,8 +96,14 @@ _INTERNAL_TOKEN_SPAN = re.compile(
 _CJK_RANGE: Final = "\u3000-\u9fff\uf900-\ufaff\uff00-\uffef"
 
 
-def _collapse(text: str) -> str:
-    """Close the hole a deletion leaves without disturbing the rest."""
+def _collapse(text: str, *, fragment: bool = False) -> str:
+    """Close the hole a deletion leaves without disturbing the rest.
+
+    A ``fragment`` is one streamed delta of a longer reply: its edges are not
+    the text's, so a separator or a space there is the reply's own (pilot1
+    10-22: "数据源已确认，" lost its comma on every live screen, and an
+    English delta its trailing space).
+    """
 
     # A removed token between two CJK characters leaves a gap Chinese does not
     # use; between Latin words it leaves a doubled space.
@@ -111,6 +117,10 @@ def _collapse(text: str) -> str:
     text = re.sub(r"(?<=[(（])[ \t]+", "", text)
     # An emptied parenthetical or a stranded separator reads as a typo.
     text = re.sub(r"[（(]\s*[）)]", "", text)
+    if fragment:
+        text = re.sub(r"(?<=\n)([ \t]*)[,，;；]\s*", r"\1", text)
+        text = re.sub(r"[,，;；](?=\s*[。.])", "", text)
+        return re.sub(r"[ \t]+(?=\n)", "", text)
     text = re.sub(r"(?:^|(?<=\n))([ \t]*)[,，;；]\s*", r"\1", text)
     text = re.sub(r"[,，;；](?=\s*[。.]|\s*$)", "", text)
     text = re.sub(r"[ \t]+$", "", text, flags=re.M)
@@ -132,8 +142,10 @@ def _drop_id_announcement(match: "re.Match[str]") -> str:
     return f"{leading_space}{noun}"
 
 
-def sanitize_user_visible_text(value: str) -> str:
+def sanitize_user_visible_text(value: str, *, fragment: bool = False) -> str:
     """Remove machine-facing identifiers from one user-facing string.
+
+    ``fragment`` marks one streamed delta of a reply (see :func:`_collapse`).
 
     Deleting the identifier rather than substituting a label is deliberate: in
     both product languages these tokens sit in modifier position, so the
@@ -153,7 +165,7 @@ def sanitize_user_visible_text(value: str) -> str:
         _INTERNAL_TOKEN_SPAN,
     ):
         text = pattern.sub("", text)
-    return _collapse(text)
+    return _collapse(text, fragment=fragment)
 
 
 def project_user_turn_text(value: str) -> str:
