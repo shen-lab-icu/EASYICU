@@ -120,6 +120,18 @@ const outcome = modules.require('runOutcome').create({
   assert.match(englishPlan.html, /院内死亡：「Sepsis-3 sepsis classification」组 15\.74%（4,974\/31,596），「No Sepsis-3 sepsis classification」组 10\.14%/);
   assert.equal(englishPlan.followUps[0], '在调整年龄、性别、入院类型、Charlson 合并症指数后，Sepsis-3 sepsis status based on suspected infection与院内死亡的关联还成立吗？');
   assert.doesNotMatch(englishPlan.html + englishPlan.followUps.join('\n'), /In-hospital mortality|Sepsis-3诊断/);
+  // A grouped exposure is formed from a measured value; adjusting for that
+  // value, or stratifying by it, is not a next question about its groups.
+  const ageGroups = await reread({ ...plan,
+    display_labels: { death: '院内死亡', age_group_x1: '年龄组', 'age_group_x1=1': '65岁以下', 'age_group_x1=2': '65岁及以上' },
+    steps: plan.steps.map(step => (step.table_one_spec
+      ? { ...step, table_one_spec: { group_by: 'age_group_x1' }, inputs: ['age_group_x1', 'age', 'sex', 'artifact:analysis_cohort'] }
+      : step.exposure_outcome_distribution_spec
+        ? { ...step, exposure_outcome_distribution_spec: { exposure: 'age_group_x1', outcome: 'death', exposure_levels: [1, 2] } }
+        : step)),
+  });
+  assert.ok(ageGroups.followUps.length);
+  assert.ok(ageGroups.followUps.every(text => !text.includes('年龄、') && !text.includes('调整年龄') && !text.includes('按年龄分层')), ageGroups.followUps.join('\n'));
   // An English reader keeps the registered label.
   global.EU_LANG = 'en';
   const englishReader = modules.require('runOutcome').create({
