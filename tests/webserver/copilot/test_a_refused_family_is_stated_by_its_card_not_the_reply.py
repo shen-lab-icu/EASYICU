@@ -5,10 +5,12 @@ question, the plan step was blocked with ``study_family_database_out_of_scope``
 and the host card stated the refusal and what the study could do instead.
 The model's reply to the data-source transition restated it in its own words
 and leaked the gap's codes: 「`survival` 分析族目前仅支持 `miiv` 数据库」,
-then 「等待主界面提供针对该能力限制的后续选项」.  The host now finalizes that
-reply itself, saying only what was saved; the card stays the one statement of
-the refusal.  A transition the plan step does not block, and an ordinary
-researcher turn, are still answered by the model.
+then 「等待主界面提供针对该能力限制的后续选项」; on a plan the source made ready
+it wrote 「host 将显示下一步操作」.  After the data-source click a host card
+follows either way, so the host now finalizes that reply itself, saying only
+which data the study uses.  Another host transition -- the plan-generation
+click, which must call the run tool -- a source confirmation followed by no
+card, and an ordinary researcher turn are still answered by the model.
 """
 
 from __future__ import annotations
@@ -36,11 +38,11 @@ GAP = {
 SOURCE = {"source_id": "src_synthetic", "label": "eICU-CRD", "database": "eicu"}
 
 
-def _workflow(*, gap: bool = True, source: Optional[dict] = None) -> dict[str, Any]:
+def _workflow(
+    *, gap: bool = True, source: Optional[dict] = None, code: str = "provider_ready_to_generate_plan",
+) -> dict[str, Any]:
     return {
-        "next_action_code": (
-            "study_family_database_out_of_scope" if gap else "provider_ready_to_generate_plan"
-        ),
+        "next_action_code": "study_family_database_out_of_scope" if gap else code,
         "study_setup_receipt": {"configuration": {"data_source": source or SOURCE}},
         "study_family_gap": GAP if gap else None,
     }
@@ -74,14 +76,20 @@ def _finalized(messages_js: str, language: str = "zh") -> Optional[str]:
     return json.loads(completed.stdout)
 
 
-def _transition(workflow: dict[str, Any], *, marker: bool = True) -> str:
-    # The prompt main.mjs builds for advance_after_data_source_confirmation.
+_SOURCE_CONFIRMED = (
+    "\\n\\n[EASYICU_HOST_TRANSITION_V1]\\n" + "[EASYICU_DATA_SOURCE_CONFIRMED_V1]"
+    + "\\nThe host has confirmed the study data source."
+)
+_PLAN_GENERATION = (
+    "\\n\\n[EASYICU_HOST_TRANSITION_V1]\\nThe user activated the host-owned "
+    "provider_ready_to_generate_plan control. Call easyicu_run exactly once."
+)
+
+
+def _transition(workflow: dict[str, Any], *, tail: str = _SOURCE_CONFIRMED) -> str:
+    # The prompts main.mjs builds for a host transition.
     head = "EasyICU 已确认所选数据来源，请在当前对话中继续。"
     receipts = json.dumps(_owner_receipts(workflow), ensure_ascii=False)
-    tail = (
-        "\\n\\n[EASYICU_HOST_TRANSITION_V1]\\nThe host has confirmed the study data source."
-        if marker else ""
-    )
     return f"""[
       {{ role: 'user', content: [{{ type: 'text', text: {json.dumps(QUESTION)} }}] }},
       {{ role: 'assistant', content: [{{ type: 'text', text: '研究问题已保存。' }}] }},
@@ -103,10 +111,11 @@ def _update(workflow: dict[str, Any]) -> str:
     ]"""
 
 
-def test_the_source_transition_says_only_which_data_the_study_uses() -> None:
-    assert _finalized(_transition(_workflow())) == "已确认使用 eICU-CRD 数据。"
-    assert _finalized(_transition(_workflow()), "en") == "The study now uses the eICU-CRD data."
-    unlabeled = _workflow(source={"database": "eicu"})
+@pytest.mark.parametrize("gap", [True, False], ids=["refusal-card", "plan-card"])
+def test_the_source_transition_says_only_which_data_the_study_uses(gap: bool) -> None:
+    assert _finalized(_transition(_workflow(gap=gap))) == "已确认使用 eICU-CRD 数据。"
+    assert _finalized(_transition(_workflow(gap=gap)), "en") == "The study now uses the eICU-CRD data."
+    unlabeled = _workflow(gap=gap, source={"database": "eicu"})
     assert _finalized(_transition(unlabeled)) == "已确认数据来源。"
 
 
@@ -118,8 +127,13 @@ def test_a_question_saved_onto_a_bound_source_says_only_that_it_is_saved() -> No
 @pytest.mark.parametrize(
     "messages",
     [
-        pytest.param(lambda: _transition(_workflow(gap=False)), id="transition-plan-offered"),
-        pytest.param(lambda: _transition(_workflow(), marker=False), id="researcher-turn"),
+        pytest.param(
+            lambda: _transition(_workflow(gap=False), tail=_PLAN_GENERATION), id="plan-generation",
+        ),
+        pytest.param(
+            lambda: _transition(_workflow(gap=False, code="study_setup_incomplete")), id="no-card",
+        ),
+        pytest.param(lambda: _transition(_workflow(), tail=""), id="researcher-turn"),
     ],
 )
 def test_other_turns_are_answered_by_the_model(messages) -> None:
