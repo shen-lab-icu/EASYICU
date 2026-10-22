@@ -136,6 +136,7 @@ from ..planning.outline_action_rules import (
 )
 from ..planning.outline_design_selection import (
     question_anchor_rule_text,
+    reviewable_plan_language_rule,
     validate_outline_design_selection,
 )
 from ..planning.progressive_module_ids import (
@@ -1582,7 +1583,8 @@ class ProgressivePlannerAgent:
             )
             + question_anchor_rule_text(
                 (context.primary_exposure, context.target_outcome), variables
-            ),
+            )
+            + reviewable_plan_language_rule(context.research_question),
             "Adjustment-set authority (host compiled; preserve exact roster):\n"
             + json.dumps(
                 adjustment_authority.prompt_projection(),
