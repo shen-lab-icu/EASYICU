@@ -356,17 +356,17 @@
         : (language === 'zh' ? '查看数据准备确认' : 'Review data-preparation confirmation');
       return `<section class="gpi-next-step is-resolved" data-gpi-next-resolved-source aria-label="${heading}"><strong>${heading}</strong><p>${esc(detail)}</p><div class="gpi-next-actions"><button type="button" data-gpi-data-source-continue ${disabled ? 'disabled' : ''}><span>${action}</span><b aria-hidden="true">→</b></button></div></section>`;
     }
+    // No choice, no question and no note: nothing is offered.  The generic
+    // "你可以继续补充要求…" line sat as a heading with no control above every
+    // host card (a refusal, the plan card) and only repeated the composer.
+    if (!step.choices.length && !step.asking && !step.prompt) return '';
     const fallback = step.choices.length
       ? (language === 'zh'
         ? '请选择一个选项；EasyICU 会直接执行对应操作或继续对话。'
         : 'Choose an option; EasyICU will perform the action or continue the conversation.')
-      : (step.asking
-        ? (language === 'zh'
-          ? '请在下方输入框回答这个问题。'
-          : 'Answer this question in the composer below.')
-        : (language === 'zh'
-          ? '你可以继续补充要求，或让 EasyICU 进入下一项受治理步骤。'
-          : 'Add a requirement or ask EasyICU to enter the next governed step.'));
+      : (language === 'zh'
+        ? '请在下方输入框回答这个问题。'
+        : 'Answer this question in the composer below.');
     const prompt = step.prompt || fallback;
     const choices = includeLocalDemoChoice(step.choices, language);
     const customLabel = language === 'zh' ? '其他，我自己输入' : "Something else — I'll type it";

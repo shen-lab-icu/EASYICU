@@ -88,7 +88,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
     assert "js/screens-guided-pi-literature.js?v=20261022-plain3" in index
     assert "js/screens-guided-pi-markdown.js?v=20260921-turn-traces3" in index
-    assert "js/screens-guided-pi-next-actions.js?v=20261020-named-source1" in index
+    assert "js/screens-guided-pi-next-actions.js?v=20261022-nofiller1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2" in index
     assert "js/screens-guided-pi-starters.js?v=20261021-entry-examples1" in index
