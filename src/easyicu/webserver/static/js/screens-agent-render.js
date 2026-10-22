@@ -1094,9 +1094,7 @@
       const outputs = Array.isArray(step && step.expected_outputs) ? step.expected_outputs : [];
       const shown = outputs.slice(0, 4);
       const hidden = outputs.length - shown.length;
-      const prose = window.AGENT_PLAN_PROSE;
-      const note = prose ? prose.namedZh(agentPlanStepIntent(step), { labels, levels })
-        : (levels ? levels.inText(agentPlanStepIntent(step)) : agentPlanStepIntent(step));
+      const note = (window.AGENT_PLAN_PROSE || { namedZh: (text, o) => (o.levels ? o.levels.inText(text) : text) }).namedZh(agentPlanStepIntent(step), { labels, levels });
       const title = agentPlanStepTitle(step, labels);
       const source = agentPlanStepStatedSource(step);
       return `<li><span>${index + 1}</span><div><strong>${esc(title)}</strong>${note && note !== title ? `<p>${esc(note)}</p>` : ''}${source ? `<details class="ag-plan-step-source"><summary><small>${esc(t('Plan wording', '计划原文'))}</small></summary>${esc(source)}</details>` : ''}${outputs.length ? `<div class="ag-plan-step-outputs"><small>${esc(t('Planned output', '计划产物'))}</small>${shown.map(value => `<span>${esc(agentPlanOutputLabel(value))}</span>`).join('')}${hidden > 0 ? `<span class="is-more">+${hidden}</span>` : ''}</div>` : ''}</div></li>`;
