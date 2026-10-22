@@ -836,6 +836,14 @@ _CONDITION_CONCEPTS = frozenset().union(
     *(family for _pattern, _label, family in _POPULATION_PATTERNS)
 ) | frozenset({"sep3_sofa2", "circ_failure"})
 _SETTING_BEFORE = re.compile(r"\b(?:in|among|amongst)\s+$", re.IGNORECASE)
+# A concept named after an adjustment cue in the same clause ("请调整年龄和性别",
+# "adjusted for age and sex") is a covariate the study adjusts for, never the
+# factor it studies; the clause ends at sentence or list punctuation.
+_ADJUSTMENT_CLAUSE = re.compile(
+    r"(?:调整|校正|矫正|控制|adjust(?:ed|ing|ment)?\s+(?:for|by)|"
+    r"controll?(?:ed|ing)\s+for|accounting\s+for)[^。！？；;!?，,.]*$",
+    re.IGNORECASE,
+)
 _SETTING_AFTER = re.compile(
     r"\s*(?:-?related\s+|的\s*)?"
     r"(?:(?:\d{1,3}|[一二三四五六七八九十百]+)\s*(?:-?days?\s+|天|日)\s*)?"
@@ -869,6 +877,8 @@ def _exposure_candidates_in_text_order(
             if re.match(r"\s*(?:patients?\b|cohort\b|患者|人群|病人)", after, re.IGNORECASE):
                 continue
             if re.search(r"\bpatients?\s+with\s*$", before, re.IGNORECASE):
+                continue
+            if _ADJUSTMENT_CLAUSE.search(text[max(0, match.start() - 60):match.start()]):
                 continue
             if concept in _CONDITION_CONCEPTS and (
                 _SETTING_BEFORE.search(text[:match.start()]) or _SETTING_AFTER.match(after)
