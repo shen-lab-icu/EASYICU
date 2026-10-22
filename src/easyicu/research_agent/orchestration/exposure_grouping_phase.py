@@ -30,9 +30,13 @@ compare groups the data do not hold, and a group is never dropped or merged
 to make it compare others.  An input planned on metadata alone holds no
 row, so no group is empty there.  The Planner is not asked
 when no Provider call may be made yet (a capability review or a failed data
-gate stops the run first), when a trajectory is staged (a grouped exposure
-is no signed suite's input), or when the input holds no value a grouping
-can read.
+gate stops the run first), when a signed trajectory suite is staged (a
+grouped exposure is no suite's input), or when the input holds no value a
+grouping can read.  A trajectory staged for a windowed concept is bound to
+the run's copy of its cohort; a grouping restages that cohort in place, so
+the trajectory is staged again from its source on the grouped cohort
+(:class:`RunTrajectory`), and the context, the review checkpoint and the
+execution read that binding.
 
 A run that follows an accepted candidate plan
 (``PipelineConfig.bound_exposure_groupings``) is not asked either: the
@@ -72,6 +76,11 @@ from ..contracts.exposure_group_rules import (
 )
 from ..gates.preplan import preplan_data_findings
 from ..intake import materialized_metadata
+from ..intake.materialized_trajectory import (
+    MaterializedTrajectoryError,
+    StagedTrajectoryBinding,
+    materialized_trajectory_provenance_path,
+)
 from ..intake.materialized_metadata import (
     EXPOSURE_GROUP_STAGE_PRODUCER,
     MaterializedCohortAuthority,
@@ -152,6 +161,59 @@ class PlanningRunGroupings:
     concepts: tuple[str, ...]
 
 
+@dataclass
+class RunTrajectory:
+    """The run's staged trajectory, staged again when a grouping restages its cohort.
+
+    ``restage`` stages the run's trajectory from its source onto a cohort
+    descending from the same source universe (``target_path``,
+    ``target_cohort_path``); a run that cannot stage it again, or that runs a
+    signed trajectory suite, forms no exposure grouping
+    (:func:`trajectory_takes_no_grouping`).
+    """
+
+    binding: Optional[StagedTrajectoryBinding]
+    restage: Optional[Callable[..., StagedTrajectoryBinding]] = None
+
+    def on_grouped_cohort(self, cohort_path: Path) -> Optional[StagedTrajectoryBinding]:
+        """Bind the trajectory to the cohort a grouping restaged in place."""
+
+        binding = self.binding
+        if binding is None or binding.authority_ref is None:
+            # An untyped trajectory is bound to its bytes, not to a cohort.
+            return binding
+        if self.restage is None:
+            raise MaterializedTrajectoryError(
+                "the run's trajectory cannot be staged on its grouped cohort"
+            )
+        target = Path(binding.path)
+        # The staged copy and its selector name the cohort the grouping
+        # replaced; the source and its authority stay where the run read them.
+        for stale in (target, materialized_trajectory_provenance_path(target)):
+            stale.unlink(missing_ok=True)
+        self.binding = self.restage(
+            target_path=target, target_cohort_path=Path(cohort_path)
+        )
+        return self.binding
+
+
+def trajectory_takes_no_grouping(
+    trajectory: Optional[RunTrajectory], *, suite_authority: Optional[Any]
+) -> bool:
+    """Whether a staged trajectory leaves the study no exposure to group.
+
+    A signed trajectory suite carries its reviewed runtime authority and takes
+    no grouped exposure; a trajectory the run cannot stage again on a grouped
+    cohort would lose its cohort binding.
+    """
+
+    if trajectory is None or trajectory.binding is None:
+        return False
+    return suite_authority is not None or (
+        trajectory.binding.authority_ref is not None and trajectory.restage is None
+    )
+
+
 def run_exposure_grouping_phase(
     *,
     context: ResearchContext,
@@ -163,6 +225,9 @@ def run_exposure_grouping_phase(
     trajectory_staged: bool,
     emit_progress: Callable[..., None],
     candidate: Optional[Mapping[str, Any]] = None,
+    restage_trajectory: Optional[
+        Callable[[Path], Optional[StagedTrajectoryBinding]]
+    ] = None,
 ) -> ExposureGroupingPhase:
     """Ask for the study's groupings and stage the ones the host applies.
 
@@ -175,6 +240,9 @@ def run_exposure_grouping_phase(
     the run stops for a capability review before any Provider call.
     ``candidate`` is the accepted candidate plan's groupings
     (:class:`CandidateExposureGroupings`); with it, nothing is asked.
+    ``trajectory_staged`` says a staged trajectory takes no grouping
+    (:func:`trajectory_takes_no_grouping`); ``restage_trajectory`` stages
+    any other on the grouped cohort (:meth:`RunTrajectory.on_grouped_cohort`).
     """
 
     def not_asked(reason: str) -> ExposureGroupingPhase:
@@ -271,7 +339,7 @@ def run_exposure_grouping_phase(
     grouped = _stage_groupings(
         context=context, applied=compiled.applied, cohort_path=cohort_path,
         record_path=record_path, rebuild_context=rebuild_context,
-        context_overrides=context_overrides,
+        context_overrides=context_overrides, restage_trajectory=restage_trajectory,
     )
     emit_progress(
         "context",
@@ -286,6 +354,9 @@ def _stage_groupings(
     *, context: ResearchContext, applied: Sequence[CompiledGrouping],
     cohort_path: Path, record_path: Path,
     rebuild_context: Callable[..., ResearchContext], context_overrides: Mapping[str, Any],
+    restage_trajectory: Optional[
+        Callable[[Path], Optional[StagedTrajectoryBinding]]
+    ] = None,
 ) -> ResearchContext:
     """Fresh planning and checkpoint restoration use identical staging rules."""
 
@@ -303,6 +374,11 @@ def _stage_groupings(
             groupings_record_sha256=sha256_of_file(record_path),
             producer_implementation_sha256=_grouping_implementation_sha256(),
         )
+        if restage_trajectory is not None:
+            context_overrides = {
+                **context_overrides,
+                "trajectory_binding": restage_trajectory(Path(cohort_path)),
+            }
     grouped = rebuild_context(Path(cohort_path), **context_overrides)
     unbound = [
         str(item.variable)
@@ -681,12 +757,18 @@ def bound_context_on(
     cohort_path: Path,
     *,
     primary_exposure: Optional[str] = None,
+    trajectory_binding: Optional[StagedTrajectoryBinding] = None,
 ) -> ResearchContext:
-    """The plan phase's context on ``cohort_path``, built and bound as it was first."""
+    """The plan phase's context on ``cohort_path``, built and bound as it was first.
+
+    ``trajectory_binding`` is the trajectory staged again on that cohort.
+    """
 
     kwargs = {**context_kwargs, "cohort": cohort_path}
     if primary_exposure is not None:
         kwargs["primary_exposure"] = primary_exposure
+    if trajectory_binding is not None:
+        kwargs["trajectory_binding"] = trajectory_binding
     return bind_reviewed_requirements(builder(**kwargs), config)
 
 
