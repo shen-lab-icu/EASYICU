@@ -2,7 +2,8 @@
 
 Starting a plan from the conversation changes the study's active job, so the
 session's binding reads as stale until the turn or the background job ends,
-when the page rebinds by itself.  On the hosted pilot the page showed
+when the page rebinds by itself.  Data preparation runs as a study job with no
+running activity row; the study's active job counts as running too.  On the hosted pilot the page showed
 「权威状态已变化 … 重新绑定当前状态」 for the whole of plan generation, an
 internal state a clinician cannot act on.  The banner now waits until nothing
 of this conversation is running; a change found at rest still asks.
@@ -44,6 +45,7 @@ const state = {
   messages: [{ id: 'user-1', role: 'user', text: 'q', complete: true }],
   workflowReceipts: INPUT.job ? [job] : [], busy: INPUT.busy, projectLoading: false,
   draft: '', regenerating: false, planStarting: null,
+  workflow: { active_job: INPUT.studyJob ? { present: true, run_id: 'run-1' } : { present: false } },
 };
 const view = registry.sessionView.create({
   state, modules: stub({ optional: () => null }), dataConsent: stub({ requiresConfirmation: () => false }),
@@ -78,7 +80,9 @@ def _shown(**payload: Any) -> dict:
 
 
 @pytest.mark.parametrize(
-    "running", [{"busy": True, "job": False}, {"busy": False, "job": True}], ids=["turn", "job"]
+    "running",
+    [{"busy": True, "job": False}, {"busy": False, "job": True}, {"busy": False, "job": False, "studyJob": True}],
+    ids=["turn", "job", "study-job"],
 )
 def test_while_its_own_turn_or_job_runs_the_page_asks_no_rebind(running: dict) -> None:
     shown = _shown(**running)

@@ -208,6 +208,10 @@
         : fullTimeline;
       const activeChild = timeline.slice().reverse().find(row => row.role === 'activity' && row.childJobId && row.status === 'running');
       const interactionLocked = state.busy || Boolean(activeChild) || state.projectLoading;
+      // A study job (data preparation, a plan) moves the binding as a turn
+      // does and is rebound when it ends; it shows no activity row while it runs.
+      const studyJob = state.workflow && state.workflow.active_job;
+      const studyJobRunning = Boolean(studyJob && studyJob.present);
       // The latest reply keeps its suggestions and choices even when a
       // finished host receipt (a review click, a plan job) was recorded
       // after it; only a reply or a still-running turn supersedes it.
@@ -337,7 +341,7 @@
           ${!workspace && DATA_CONSENT && typeof DATA_CONSENT.renderSelectedSource === 'function'
             ? DATA_CONSENT.renderSelectedSource(session, { tr, esc, icon: iconHtml }) : ''}
           </div>
-          ${stale && !interactionLocked ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
+          ${stale && !interactionLocked && !studyJobRunning ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
           <div class="gpi-log${messages ? '' : ' gpi-log-start'}" data-gpi-log>
             ${RUN_FILES.notice()}
             ${conversation || (resultsView ? '' : workspace
