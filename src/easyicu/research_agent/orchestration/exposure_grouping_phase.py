@@ -152,6 +152,20 @@ class PlanningRunGroupings:
     concepts: tuple[str, ...]
 
 
+def trajectory_suite_staged(
+    trajectory_binding: Optional[Any], trajectory_suite_authority: Optional[Any]
+) -> bool:
+    """Whether the run's staged trajectory is a signed trajectory suite's input.
+
+    A suite carries its reviewed runtime authority, and a grouped exposure is
+    no suite's input.  A trajectory staged without one serves a windowed
+    cohort criterion ("sepsis in the first 24 h"); the study may still group
+    a measured value.
+    """
+
+    return trajectory_binding is not None and trajectory_suite_authority is not None
+
+
 def run_exposure_grouping_phase(
     *,
     context: ResearchContext,

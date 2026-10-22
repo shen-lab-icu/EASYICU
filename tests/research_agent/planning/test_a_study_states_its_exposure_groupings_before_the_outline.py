@@ -41,6 +41,7 @@ from easyicu.research_agent.orchestration.exposure_grouping_phase import (
     EXPOSURE_GROUPINGS_FILENAME,
     resumed_cohort_is_the_sources_copy,
     run_exposure_grouping_phase,
+    trajectory_suite_staged,
 )
 from easyicu.research_agent.planning.exposure_group_compile import grouping_sources
 from easyicu.research_agent.planning.progressive_contract import (
@@ -528,3 +529,13 @@ def test_a_host_planning_no_groupings_keeps_archived_config_digests(
     assert "enable_exposure_grouping" not in off.canonical_payload()
     assert on.canonical_payload()["enable_exposure_grouping"] is True
     assert on.canonical_digest() != off.canonical_digest()
+
+
+def test_only_a_trajectory_suite_keeps_a_study_from_grouping_its_exposure() -> None:
+    # "Sepsis in the first 24 h, by age group": the trajectory staged for the
+    # windowed criterion carries no suite authority, so age is still grouped.
+    staged, suite = object(), {"schema_version": "suite"}
+
+    assert trajectory_suite_staged(staged, suite) is True
+    assert trajectory_suite_staged(staged, None) is False
+    assert trajectory_suite_staged(None, suite) is False
