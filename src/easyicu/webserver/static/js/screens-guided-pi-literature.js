@@ -295,7 +295,7 @@
     );
     return tr(
       'It was returned by the bounded Idea Mining search and still requires relevance and design screening.',
-      '它来自本轮有界 Idea Mining 检索，仍需核对相关性和研究设计。'
+      '它来自本轮文献检索，仍需核对相关性和研究设计。'
     );
   }
   function fullTextEvidence(row) {
@@ -303,7 +303,7 @@
     const spans = Array.isArray(fullText.evidence_spans) ? fullText.evidence_spans : [];
     if (fullText.status === 'reviewed' && spans.length) {
       return `<section class="gpi-lit-evidence-block"><header><h5>${esc(tr('Full-text supplement', '正文补充'))}</h5><span>${esc(tr('PMC reviewed on demand', '已按需审阅 PMC 正文'))}</span></header>
-        <p class="gpi-lit-evidence-note">${esc(tr('These bounded passages supplement the abstract. They still require human appraisal in context.', '这些有界片段用于补充摘要，仍需结合上下文进行人工审阅。'))}</p>
+        <p class="gpi-lit-evidence-note">${esc(tr('These bounded passages supplement the abstract. They still require human appraisal in context.', '这些全文片段用于补充摘要，仍需结合上下文人工审阅。'))}</p>
         ${spans.map(span => `<div class="gpi-lit-evidence-span"><strong>${esc(span.label || span.section || tr('Article body', '正文'))}</strong><p>${esc(span.excerpt || '')}</p></div>`).join('')}
         ${safeUrl(fullText.url) ? `<a href="${esc(safeUrl(fullText.url))}" target="_blank" rel="noopener noreferrer">${esc(tr('Open PMC full text', '打开 PMC 正文'))}<span aria-hidden="true">↗</span></a>` : ''}</section>`;
     }
@@ -448,7 +448,7 @@
         ${fullTextEvidence(row)}
         ${safeUrl(row.source_url) ? `<a href="${esc(safeUrl(row.source_url))}" target="_blank" rel="noopener noreferrer">${esc(tr('Open source record', '打开来源页面'))}<span aria-hidden="true">↗</span></a>` : ''}
       </article>
-      <div class="gpi-lit-boundary" role="note"><strong>${esc(tr('Evidence boundary', '证据边界'))}</strong><span>${esc(tr('Abstract and bounded full-text passages help appraisal; they do not automatically establish novelty, causality, data feasibility, or publication authority.', '摘要和有界正文片段用于辅助审阅；它们不会自动证明创新性、因果关系、数据可行性或发表权限。'))}</span></div>
+      <div class="gpi-lit-boundary" role="note"><strong>${esc(tr('Evidence boundary', '证据边界'))}</strong><span>${esc(tr('Abstract and bounded full-text passages help appraisal; they do not automatically establish novelty, causality, data feasibility, or publication authority.', '摘要和全文片段用于辅助审阅；它们本身不能证明创新性、因果关系、数据可行性或可以发表。'))}</span></div>
     </div>`;
   }
 

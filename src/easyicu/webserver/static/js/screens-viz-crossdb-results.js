@@ -172,7 +172,7 @@
       <div class="ico">${h.icon('alert', 15)}</div>
       <div class="body">
         <div class="t">${h.t('This is a quick core run, not the full clinical catalog', '当前是快速核心运行，不是完整临床目录')}</div>
-        <div class="d">${h.t('This result computed', '本次结果仅计算')} ${h.fmtInt(scope.modules.length)} / ${h.fmtInt(scope.totalModules)} ${h.t('modules and', '个模块、')} ${h.fmtInt(scope.counts.all)} / ${h.fmtInt(scope.totalFeatures)} ${h.t('feature profiles. Choose the explicit full-catalog scope to compare every mapped concept with bounded sampling.', '个特征剖面。选择显式的完整目录范围后，才会以有界抽样比较全部映射概念。')}</div>
+        <div class="d">${h.t('This result computed', '本次结果仅计算')} ${h.fmtInt(scope.modules.length)} / ${h.fmtInt(scope.totalModules)} ${h.t('modules and', '个模块、')} ${h.fmtInt(scope.counts.all)} / ${h.fmtInt(scope.totalFeatures)} ${h.t('feature profiles. Choose the explicit full-catalog scope to compare every mapped concept with bounded sampling.', '个特征剖面。选择「完整目录」范围后，才会抽样比较全部已映射的概念。')}</div>
         <div class="mt-10"><button class="btn sm primary" type="button" data-crossdb-expand-scope>${h.icon('layers', 12)} ${h.t('Set up full-catalog comparison', '设置完整目录对比')}</button></div>
       </div>
     </div>`;

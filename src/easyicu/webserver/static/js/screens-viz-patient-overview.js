@@ -196,7 +196,7 @@
     if (!rows.length) return '';
     return `<section class="pt-distribution-latest mt-16" data-patient-distribution-latest>
       <div class="pt-distribution-head">
-        <div><div class="eyebrow">${hEsc(helpers, hT(helpers, 'Distribution · latest value', '分布—末值图'))}</div><h2>${hEsc(helpers, hT(helpers, 'Within-patient value distributions', '单患者多变量分布与末值'))}</h2><p>${hEsc(helpers, hT(helpers, 'Each row summarizes the bounded observed values for one signal. The diamond is the latest recorded value; this view intentionally contains no second time trajectory.', '每行汇总一个信号的有界观测值；菱形标记最后一次记录值。本图刻意不重复时间轨迹。'))}</p></div>
+        <div><div class="eyebrow">${hEsc(helpers, hT(helpers, 'Distribution · latest value', '分布—末值图'))}</div><h2>${hEsc(helpers, hT(helpers, 'Within-patient value distributions', '单患者多变量分布与末值'))}</h2><p>${hEsc(helpers, hT(helpers, 'Each row summarizes the bounded observed values for one signal. The diamond is the latest recorded value; this view intentionally contains no second time trajectory.', '每行汇总一个信号的观测值；菱形标记最后一次记录值。这张图不重复显示时间轨迹。'))}</p></div>
         <span class="pill ok">${hEsc(helpers, (source && (source.selected_label || source.selected_ref)) || hT(helpers, 'selected entity', '已选实体'))}</span>
       </div>
       <div class="pt-distribution-rows">
@@ -245,7 +245,7 @@
           </div>
           <div>
             <span>${hEsc(helpers, hT(helpers, 'Source-row policy', '源行策略'))}</span>
-            <b>${hEsc(helpers, hT(helpers, 'bounded summary only', '仅有界摘要'))}</b>
+            <b>${hEsc(helpers, hT(helpers, 'bounded summary only', '仅汇总'))}</b>
           </div>
         </div>
       </section>`;
@@ -299,7 +299,7 @@
         <div class="empty mt-16">
           <div class="glyph">${hIcon(helpers, 'grid', 22)}</div>
           <div class="t">${hEsc(helpers, hT(helpers, 'No module signals available', '暂无模块信号'))}</div>
-          <div class="d">${hEsc(helpers, hT(helpers, 'The active export has no bounded patient-level values for this entity.', '当前导出没有这个实体的有界患者层面数值。'))}</div>
+          <div class="d">${hEsc(helpers, hT(helpers, 'The active export has no bounded patient-level values for this entity.', '当前数据里没有这位患者的数值记录。'))}</div>
         </div>`;
     }
     return `

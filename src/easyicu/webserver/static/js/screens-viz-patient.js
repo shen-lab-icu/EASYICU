@@ -205,7 +205,7 @@
     const sourceBadge = (drill && drill.demo) ? t('demo', '演示') : t('real', '真实');
     if (!signals.length) {
       return `
-        <div class="empty mt-16"><div class="glyph">${icon('rows', 22)}</div><div class="t">${t('No feature matrix values', '暂无特征矩阵值')}</div><div class="d">${t('This lane has no bounded numeric time-window values.', '这个分组没有有界的数值型时间窗口数据。')}</div></div>`;
+        <div class="empty mt-16"><div class="glyph">${icon('rows', 22)}</div><div class="t">${t('No feature matrix values', '暂无特征矩阵值')}</div><div class="d">${t('This lane has no bounded numeric time-window values.', '这个分组没有可显示的数值型时间数据。')}</div></div>`;
     }
     return `
       <div class="card pad mt-16" data-patient-feature-matrix="${esc((lane || {}).lane || 'signals')}">
@@ -312,8 +312,8 @@
       'Per-module entity coverage': t('Per-module entity coverage', '模块实体覆盖'),
       'Per-module review metrics': t('Per-module review metrics', '逐模块审阅指标'),
       'Top concept quality issues': t('Top concept quality issues', '主要特征质量问题'),
-      'Local export bounded review': t('Local export bounded review', '本地导出有界审阅'),
-      'Catalog demo bounded review': t('Catalog demo bounded review', '目录演示有界审阅'),
+      'Local export bounded review': t('Local export bounded review', '真实数据审阅'),
+      'Catalog demo bounded review': t('Catalog demo bounded review', '演示数据审阅'),
     };
     return map[String(value || '')] || value;
   }
@@ -329,7 +329,7 @@
         <div class="pt-qc-panel-head">
           <div>
             <div class="eyebrow">${esc(patientQualityText(panel && panel.label || panel && panel.id || 'Panel'))}</div>
-            <div class="pt-qc-panel-sub">${t('Top bounded feature-level flags for the active review scope.', '当前审阅范围内最高的有界特征级质量标记。')}</div>
+            <div class="pt-qc-panel-sub">${t('Top bounded feature-level flags for the active review scope.', '当前审阅范围内质量标记最多的特征。')}</div>
           </div>
           <span class="pill ${rows.length ? 'warn' : 'ok'}">${fmtInt(rows.length)} ${t('rows', '行')}</span>
         </div>
@@ -353,7 +353,7 @@
             <div class="eyebrow">${t('QC workbook', '质控工作簿')}</div>
             <h2>${t('Missingness, physiologic range, and temporal integrity', '缺失率、生理范围和时间完整性')}</h2>
           </div>
-          <span class="pill ok">${t('bounded review', '有界审阅')}</span>
+          <span class="pill ok">${t('bounded review', '抽样审阅')}</span>
         </div>
         <div class="pt-qc-panels">
           ${panels.map(patientQualityPanel).join('')}
@@ -602,7 +602,7 @@
       ${workspaceSamplingNote(s)}
       <div class="note ok mt-16">
         <div class="ico">${icon('rows', 16)}</div>
-        <div class="body"><span class="t">${t('Table preview', '表格预览')}</span> <span class="d" style="display:inline;">— ${drill.demo ? t('Seeded demo rows for UI preview.', '演示行仅用于界面预览。') : t('Capped local rows from the active export; identifiers are replaced by pseudonymous entity tokens.', '来自当前本地导出的有界行预览；标识符已替换为去标识化实体 token。')}</span></div>
+        <div class="body"><span class="t">${t('Table preview', '表格预览')}</span> <span class="d" style="display:inline;">— ${drill.demo ? t('Seeded demo rows for UI preview.', '演示行仅用于界面预览。') : t('Capped local rows from the active export; identifiers are replaced by pseudonymous entity tokens.', '当前数据的部分行预览（有行数上限）；身份标识已替换为匿名编号。')}</span></div>
       </div>
       ${patientEligibilityFlow(drill.eligibility_flow)}
       ${reviewModules.length ? `
@@ -621,7 +621,7 @@
       <div class="patient-table-frame mt-12">
         <div class="patient-id-note">${drill.demo ? t('Synthetic entity tokens are UI-only references.', '合成实体 token 仅用于界面引用。') : t('Entity tokens are local pseudonymous references. Direct clinical identifiers stay on disk.', '实体 token 是本地伪匿名引用；直接临床标识符保留在磁盘上。')}</div>
         <div class="patient-table-scroll" data-patient-table-preview style="--pt-cols:${Math.max(6, previewColumns.length)};">
-        <table class="eu-table patient-preview-table" aria-label="${esc(`${patientModuleLabel(activeModule)} ${t('bounded table preview', '有界表格预览')}`)}">
+        <table class="eu-table patient-preview-table" aria-label="${esc(`${patientModuleLabel(activeModule)} ${t('bounded table preview', '表格预览（部分行）')}`)}">
           <thead><tr>${previewColumns.map(c => `<th${c === 'entity' ? ' class="patient-entity-col"' : ' class="num"'}>${esc(patientColumnLabel(c, activePreview))}</th>`).join('')}</tr></thead>
           <tbody>
             ${previewRows.length ? previewRows.map(r => `<tr>${previewColumns.map(c => `<td class="${c === 'entity' ? 'key mono patient-entity-token' : 'num'}">${esc(fmtCell(r[c]))}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${Math.max(1, previewColumns.length)}" class="muted">${esc(activePreview && activePreview.reason ? activePreview.reason : t('No preview rows available for this module.', '这个模块没有可预览行。'))}</td></tr>`}
@@ -820,7 +820,7 @@
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">Signal arrays are capped at ${fmtInt((drill.privacy || {}).max_points_per_signal)} points for browser review.</p>`;
     }
     if (drill) {
-      return `<div class="empty mt-16"><div class="glyph">${icon('viz', 22)}</div><div class="t">${t('No bounded signals in this export', '该导出没有可用的有界信号')}</div><div class="d">${t('The active export did not include supported vitals columns for the selected entity.', '当前导出中，所选实体没有受支持的生命体征列。')}</div></div>`;
+      return `<div class="empty mt-16"><div class="glyph">${icon('viz', 22)}</div><div class="t">${t('No bounded signals in this export', '这份数据没有可显示的信号')}</div><div class="d">${t('The active export did not include supported vitals columns for the selected entity.', '当前导出中，所选实体没有受支持的生命体征列。')}</div></div>`;
     }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && Array.isArray(ws.series) && ws.series.length) {
@@ -958,7 +958,7 @@
       const boundedTitle = drill.demo ? patientQualityText('Catalog demo bounded review') : patientQualityText('Local export bounded review');
       const boundedDetail = drill.demo
         ? t('Coverage and quality indicators describe the clinically constrained synthetic fallback only. Load an official demo or local export for source-backed denominators.', '覆盖率和质量指标只描述临床约束合成兜底。请加载官方演示数据或本地导出，以获得有来源支撑的分母。')
-        : t('Shown coverage, missingness, physiologic-range flags and duplicate timestamp rates are computed over the bounded local review sample. Modules without computed entity coverage remain inventory-only; formal claims stay locked to the evidence-bound agent path.', '此处显示的覆盖率、缺失率、生理范围标记和重复时间戳率基于本地有界审阅样本计算。未计算实体覆盖率的模块仅显示文件清单信息；正式结论仍锁定在证据绑定的 Agent 路径。');
+        : t('Shown coverage, missingness, physiologic-range flags and duplicate timestamp rates are computed over the bounded local review sample. Modules without computed entity coverage remain inventory-only; formal claims stay locked to the evidence-bound agent path.', '这里的覆盖率、缺失率、生理范围标记和重复时间戳比例按审阅样本计算；没有计算覆盖率的模块只显示文件清单。正式结论要在研究对话里经过分析和证据核对才能得出。');
       return `
       <div class="note ok mt-16">
         <div class="ico">${icon('shield', 16)}</div>
@@ -990,7 +990,7 @@
       ${qualityAudit}
       <div class="card pad mt-16">
         <div class="eyebrow" style="margin-bottom:6px;">${patientQualityText('Per-module review metrics')}</div>
-        <div class="panel-sub" style="margin-bottom:10px;">${t('Computed entity coverage uses the bounded review denominator. Inventory-only modules show row counts and are not painted as 0% coverage.', '已计算的实体覆盖率使用有界审阅分母。仅有文件清单的模块显示行数，不会被渲染成 0% 覆盖率。')}</div>
+        <div class="panel-sub" style="margin-bottom:10px;">${t('Computed entity coverage uses the bounded review denominator. Inventory-only modules show row counts and are not painted as 0% coverage.', '覆盖率以审阅样本为分母。只有文件清单的模块显示行数，不会显示成 0% 覆盖率。')}</div>
         ${drill.quality.map(q => {
           const hasCoverage = q.coverage_pct != null && Number.isFinite(Number(q.coverage_pct));
           const coverage = hasCoverage ? Math.max(0, Math.min(100, Number(q.coverage_pct))) : null;
@@ -1169,7 +1169,7 @@
           : (ws ? t('Local export workspace ready', '本地导出工作区已就绪') : t('Demo review workspace ready', '演示审阅工作区已就绪'));
         const boundedReview = drill && s && s.review_scope === 'browser_bounded_entity_sample';
         const entityStats = boundedReview
-          ? `${t('full cohort', '完整队列')} ${fmtInt(s.entities)} ${t('entities', '个实体')} · ${t('bounded browser review', '浏览器有界审阅')} ${fmtInt(s.review_entities)} ${t('entities', '个实体')}`
+          ? `${t('full cohort', '完整队列')} ${fmtInt(s.entities)} ${t('entities', '个实体')} · ${t('bounded browser review', '本页审阅')} ${fmtInt(s.review_entities)} ${t('entities', '个实体')}`
           : `${fmtInt(s && (s.entities != null ? s.entities : s.stays))} ${drill ? t('entities', '个实体') : t('stays', '次住院')}`;
         const loadedFeatureCount = drill && drill.data_tables && drill.data_tables.loaded_summary
           ? drill.data_tables.loaded_summary.review_features
