@@ -2890,7 +2890,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     )
     assert "js/screens-viz-patient-tables.js?v=20261022-zhlabels1" in index_html
     assert "js/screens-viz-patient-overview.js?v=20261022-zhlabels1" in index_html
-    assert "js/screens-viz-patient.js?v=20261022-zhlabels1" in index_html
+    assert "js/screens-viz-patient.js?v=20261022-noexport1" in index_html
     assert index_html.index("js/screens-viz-patient-navigation.js?") < index_html.index(
         "js/screens-viz.js?"
     )

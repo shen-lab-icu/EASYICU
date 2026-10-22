@@ -1225,13 +1225,14 @@
           </div>
           <button class="btn sm" data-patient-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
         </div>` : '';
+        // Hosted: patient-level rows are not downloadable (user decision 2026-10-22), so no Export.
         return `
         ${patientHeading}
         <div class="loaded-bar">
           <span class="pill ok"><span class="dot"></span>${t('Loaded', '已加载')}</span>
           <div class="grow"><span style="font-weight:600;font-size:13px;">${readyTitle}</span> <span class="mono" style="font-size:11px;color:var(--ink-4);">${readyStats}</span></div>
           <button class="btn sm" data-viz-reset>${icon('sliders', 13)} ${t('Edit setup', '编辑设置')}</button>
-          <button class="btn sm" data-patient-export>${icon('download', 13)} ${t('Export', '导出')}</button>
+          ${hostedServer() ? '' : `<button class="btn sm" data-patient-export>${icon('download', 13)} ${t('Export', '导出')}</button>`}
         </div>
         ${guidedNote}
         ${demoLoadedNote}

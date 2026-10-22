@@ -96,3 +96,13 @@ def test_only_an_export_with_the_core_modules_joins_the_comparison(tmp_path, mon
 ])
 def test_the_gate_core_decides_who_joins(modules, joins):
     assert crossdb_review.can_join_comparison(modules) is joins
+
+
+@pytest.mark.parametrize("hosted", [True, False])
+def test_a_hosted_extraction_is_added_to_the_comparison_by_hand(monkeypatch, hosted):
+    # pilot1 10-22: a clinician's 2,000-stay extraction joined the default
+    # comparison by itself, which then exceeded its budget for every check.
+    monkeypatch.setattr(crossdb_review.hosted, "is_hosted", lambda: hosted)
+    core = ["demographics", "outcome", "vitals"]
+    assert crossdb_review.selects_finished_extraction(core) is (not hosted)
+    assert crossdb_review.selects_finished_extraction(["vitals"]) is False
