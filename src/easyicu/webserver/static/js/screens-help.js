@@ -47,6 +47,8 @@
     ];
     const questions = [
       [t('Where is the data?', '数据在哪里？'), t('The research data is kept on the hospital server, prepared and managed by the administrator, and the analysis runs there too.', '研究数据保存在医院服务器上，由管理员准备和管理；分析也在服务器上运行。')],
+      // Patient-level rows stay on the server (user decision 2026-10-22).
+      [t('Can I download the data?', '可以下载数据吗？'), t('The tables, figures and written results of the research conversation can be downloaded. Patient-level data, including your extractions, stays on the hospital server and cannot be downloaded.', '研究对话里的表格、图和文字结果可以下载；患者级数据（包括你抽取的数据）只保存在医院服务器上，不能下载。')],
       [t('Which databases are ready?', '这里有哪些数据？'), databases.length
         ? t(`Ready on this server: ${databases.join(', ')}. For another database, contact the administrator.`, `这台服务器上已准备好：${databases.join('、')}。需要其他数据库，请联系管理员。`)
         : t('No database is ready on this server yet. Please contact the administrator.', '这台服务器上还没有准备好的数据库，请联系管理员。')],

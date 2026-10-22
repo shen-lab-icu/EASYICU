@@ -78,6 +78,8 @@ def test_the_hosted_page_names_the_server_the_prepared_data_and_the_administrato
     assert "由管理员配置的模型" in body
     assert "患者的逐行记录不会发给模型" in body
     assert "不能替代对个体患者的临床判断" in body
+    # Patient-level rows stay on the server (user decision 2026-10-22).
+    assert "患者级数据（包括你抽取的数据）只保存在医院服务器上，不能下载" in body
     assert "复制问题编号发给管理员（信息科 &lt;王老师&gt; 8123）" in body
     # The local install's promises are not made on the server.
     for local_claim in ("local-first", "你的机器", "本机", "本地导出", "开始演示"):
