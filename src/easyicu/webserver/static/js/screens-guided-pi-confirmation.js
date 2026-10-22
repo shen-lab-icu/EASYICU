@@ -502,6 +502,9 @@
       };
       if (code === 'plan_scientific_changes_required') return {
         code, grants: ['provider_run', 'literature'],
+        // A revision is refused while the review holds a blocker no plan can
+        // close (plan_revision_owner_resolution_required): the card offers
+        // none rather than a click that silently fails.
         nonApprovable: !(
           workflow.plan_review_summary
           && workflow.plan_review_summary.remediation_buckets
@@ -511,6 +514,10 @@
           workflow.plan_review_summary
           && Array.isArray(workflow.plan_review_summary.authorization_questions)
           && workflow.plan_review_summary.authorization_questions.length
+        ) || Boolean(
+          workflow.plan_review_summary
+          && Array.isArray(workflow.plan_review_summary.automatic_revision_blockers)
+          && workflow.plan_review_summary.automatic_revision_blockers.length
         ),
         message: tr(
           'Keep the current candidate plan as immutable review evidence. Let EasyICU apply the Planner-owned review findings and generate a revised candidate plan before any extraction or analysis.',
