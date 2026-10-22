@@ -23,6 +23,12 @@ card show the researcher why the host reads the question as it does.
 * ``proportion``: the question asks how common something is ("what proportion",
   "prevalence of", "how common", "比例是多少", "多大比例", "患病率", "发生率").
   Comparing groups ("differ between", "有何不同") stays descriptive.
+* ``adjustment``: the question asks for a comparison adjusted for something
+  ("请调整性别", "adjusted for age and sex", "控制年龄后").  A description
+  adjusts for nothing, so an adjusted comparison is an association study --
+  unless the question also asks for a prediction or a causal estimate, which
+  the planner's own routing reads, or for a proportion, which may be a
+  standardized rate.
 
 A relationship makes the question an association study, whatever proportions
 it also asks for (Table 1 reports them).  A proportion alone makes it
@@ -62,7 +68,19 @@ QUESTION_WORDING = "question_wording"
 #: The families a question's words may state, by the planner's family keys.
 FAMILY_READING_FAMILIES = ("association_study", "descriptive_epidemiology")
 #: The cues a reading rests on.
-FAMILY_READING_ELEMENTS = ("relationship", "proportion")
+FAMILY_READING_ELEMENTS = ("relationship", "proportion", "adjustment")
+# "不调整"/"未校正"/"无需控制" and "without adjusting for" decline it.
+_ADJUSTMENT_REQUEST = re.compile(
+    r"(?<![不未无非需])(?:调整|校正|矫正|控制)(?:了|后)?[^。！？；;!?，,]{1,40}"
+    r"|\badjust(?:ed|ing)?\s+for\b|\bafter\s+adjust(?:ment|ing)\s+for\b"
+    r"|\bcontroll?(?:ed|ing)\s+for\b",
+    re.IGNORECASE,
+)
+# A prediction or a causal estimate also adjusts; the planner's routing reads it.
+_OTHER_ADJUSTED_FAMILY = re.compile(
+    r"预测|因果|倾向评分|目标试验|\bpredict\w*|\bcausal\w*|\bpropensity\b|\btarget\s+trial\b",
+    re.IGNORECASE,
+)
 _MAX_EVIDENCE_CHARS = 300
 
 
@@ -184,6 +202,20 @@ def study_family_reading(question: Any) -> Optional[StudyFamilyReading]:
         return StudyFamilyReading(
             family="association_study",
             elements=tuple(sorted(elements, key=lambda item: item.start)),
+        )
+    adjustment = next(
+        (
+            match for match in _ADJUSTMENT_REQUEST.finditer(text)
+            if not re.search(r"\b(?:without|not|no|un)\s*$", text[max(0, match.start() - 12):match.start()], re.IGNORECASE)
+        ),
+        None,
+    )
+    # An adjusted proportion ("校正年龄后的死亡比例") may be a standardized
+    # rate, which states no family; an adjusted comparison does.
+    if adjustment is not None and proportion is None and not _OTHER_ADJUSTED_FAMILY.search(text):
+        return StudyFamilyReading(
+            family="association_study",
+            elements=(_evidence("adjustment", text, adjustment),),
         )
     if proportion is not None and not INFERENTIAL_ESTIMATE.search(text):
         return StudyFamilyReading(
