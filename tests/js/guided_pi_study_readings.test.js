@@ -114,6 +114,24 @@ for (const language of ['zh', 'en']) {
   assert.equal(refusalHtml.includes('data-gpi-confirm-action'), false);
   assert.ok(refusalHtml.includes('data-gpi-confirm-edit'));
   assert.ok(refusalHtml.includes(language === 'zh' ? '在对话里修改' : 'Revise in the conversation'));
+  // A question read as two families asks the researcher to choose: no plan,
+  // no approval, both readings named.
+  const twoWays = { next_action_code: 'study_family_reading_disagreement', study_family_gap: {
+    code: 'study_family_reading_disagreement', model_family: 'association_study', host_family: 'survival', database: 'eicu',
+  } };
+  const choiceCard = modules.confirmation.create({ ...helpers,
+    iconHtml: () => '', resourceButton: () => '', studyFamilyGapText: errors.studyFamilyGapText,
+    sessionIsStale: () => false, busy: () => false,
+    session: () => ({ binding: {} }), workflow: () => twoWays,
+  }).workflowConfirmation();
+  assert.equal(choiceCard.grants.length, 0);
+  assert.equal(choiceCard.nonApprovable, true);
+  assert.equal(choiceCard.title, language === 'zh'
+    ? '请先选研究类型：关联研究，或生存分析（时间到事件）'
+    : 'Choose the study type first: an association study or a survival analysis (time to event)');
+  assert.equal(choiceCard.note, '');
+  assert.ok(errors.errorText({ code: 'study_family_reading_disagreement', details: { study_family_gap: twoWays.study_family_gap } })
+    .includes(language === 'zh' ? '分析没有开始' : 'no analysis started'));
   assert.ok(errors.errorText({ code: 'target_trial_treatment_not_registered', details: {
     causal_trial_gap: { treatment_concepts: [{ label_en: 'Albumin', label_zh: '白蛋白' }],
       supported_classes: [{ label_en: 'Vasopressors', label_zh: '升压药' }] },

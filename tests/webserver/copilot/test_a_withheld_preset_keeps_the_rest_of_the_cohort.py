@@ -342,6 +342,8 @@ def test_the_reply_folds_the_withheld_modules_into_their_slot(monkeypatch):
 
 _MAIN = APP_DIR / "src" / "main.mjs"
 _ACTIONS = {"bind_active_export", "bind_source_id"}
+#: Statements the host checks and stores under another field.
+_CHECKED_AS = {"question_family": "question_family_check"}
 
 
 def _object_keys(source: str, opener: str) -> set[str]:
@@ -410,7 +412,11 @@ def test_the_receipt_projects_every_field_the_tool_accepts():
     }
     assert set(nested["analysis_design"]) == schemas["analysis_design"]
     study = {"id": "study-every-field", "revision": 3}
-    for key in schemas["tool"] - _ACTIONS:
+    study["question_family_check"] = {
+        "model_family": "association_study", "words": "related",
+        "host_family": None, "status": "model_only",
+    }
+    for key in schemas["tool"] - _ACTIONS - set(_CHECKED_AS):
         if key in nested:
             study[key] = nested[key]
         elif key == "sensitivity_specs":
@@ -424,7 +430,8 @@ def test_the_receipt_projects_every_field_the_tool_accepts():
 
     projected = project_study_context(study)
 
-    assert schemas["tool"] - _ACTIONS <= set(projected)
+    assert schemas["tool"] - _ACTIONS - set(_CHECKED_AS) <= set(projected)
+    assert set(_CHECKED_AS.values()) <= set(projected)
     for name in _NESTED:
         assert schemas[name] <= set(projected[name]), name
     assert schemas["sensitivity_spec"] <= set(projected["sensitivity_specs"][0])

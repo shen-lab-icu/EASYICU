@@ -26,6 +26,10 @@ from easyicu.webserver.design_variance_basis import (
     design_variance_basis_is_stale,
     normalize_design_variance_basis,
 )
+from easyicu.webserver.question_family_check import (
+    QUESTION_FAMILY_CHECK_FIELD,
+    normalize_question_family_check,
+)
 from easyicu.webserver.study_family_reading import (
     family_reading_rests_on,
     normalize_study_family_reading,
@@ -96,6 +100,7 @@ _CONTEXT_FIELDS = {
     "target_trial_design",
     "causal_trial_reading",
     "study_family_reading",
+    QUESTION_FAMILY_CHECK_FIELD,
     "question_wording",
     "design_variance_basis",
     "sensitivity_specs",
@@ -1367,6 +1372,7 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "target_trial_design": {},
         "causal_trial_reading": None,
         "study_family_reading": None,
+        QUESTION_FAMILY_CHECK_FIELD: None,
         "question_wording": None,
         "design_variance_basis": None,
         "sensitivity_specs": [],
@@ -1533,6 +1539,28 @@ def _sanitize_patch(
                 {
                     "error": "study_family_reading_invalid",
                     "field": "study_family_reading",
+                    "reason": str(exc),
+                }
+            ) from exc
+    if QUESTION_FAMILY_CHECK_FIELD in raw:
+        # The host checks the conversation's statement (``question_family_check``),
+        # a family reading like the one above.
+        if not allow_study_family_reading:
+            raise StudyContextError(
+                {
+                    "error": "question_family_check_server_owned",
+                    "field": QUESTION_FAMILY_CHECK_FIELD,
+                }
+            )
+        try:
+            patch[QUESTION_FAMILY_CHECK_FIELD] = normalize_question_family_check(
+                raw.get(QUESTION_FAMILY_CHECK_FIELD)
+            )
+        except ValueError as exc:
+            raise StudyContextError(
+                {
+                    "error": "question_family_check_invalid",
+                    "field": QUESTION_FAMILY_CHECK_FIELD,
                     "reason": str(exc),
                 }
             ) from exc
@@ -2318,6 +2346,9 @@ def upsert_context(
                 context["causal_trial_reading"] = None
             if _stale_study_family_reading(context):
                 context["study_family_reading"] = None
+            check = context.get(QUESTION_FAMILY_CHECK_FIELD)
+            if check and str(check.get("words") or "") not in str(context.get("question") or ""):
+                context[QUESTION_FAMILY_CHECK_FIELD] = None
             wording = context.get("question_wording")
             if wording and wording.get("question_sha256") != question_sha256(str(context.get("question") or "")):
                 context["question_wording"] = None
