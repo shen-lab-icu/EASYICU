@@ -30,8 +30,11 @@ card show the researcher why the host reads the question as it does.
   the planner's own routing reads, or for a proportion, which may be a
   standardized rate.
 
-A relationship makes the question an association study, whatever proportions
-it also asks for (Table 1 reports them).  A proportion alone makes it
+A question that states another design in its own words -- survival
+("用 Cox 回归"), prediction, a causal estimate or subtype discovery, as the
+planner's own routing reads it -- is read as neither, whatever relationship
+or proportion it also names.  Otherwise a relationship makes the question an
+association study, whatever proportions it also asks for (Table 1 reports them).  A proportion alone makes it
 descriptive, unless the question asks for an adjusted, causal or predictive
 estimate.  A question about the data themselves (missingness, completeness,
 data quality) is read as neither, and so is any other: the host then records
@@ -187,12 +190,43 @@ def _evidence(element: str, text: str, match: re.Match[str]) -> StudyFamilyEvide
     )
 
 
+#: Families a question states by its design or method words ("用 Cox 回归",
+#: "预测", "因果", "聚类成亚型").  The planner's own routing reads them, and a
+#: relationship, an adjustment or a proportion in the same question does not
+#: make it an association study or a description: recording one would plan
+#: another analysis than the one asked for (pilot1 10-22: "用 Cox 回归分析…
+#: 与 28 天生存的关系" was recorded as an association study).
+_SELF_STATED_FAMILIES = frozenset({
+    "survival", "prediction_model", "dynamic_prediction", "causal_inference",
+    "trajectory_clustering",
+})
+
+
+def _planner_reads_a_stated_design(text: str) -> bool:
+    from easyicu.research_agent.planning.analysis_types import infer_analysis_type
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+
+    context = ResearchContext(
+        research_question=text,
+        cohort=CohortDescriptor(cohort_name="study", database="miiv", n_stays=0),
+        variables=[],
+    )
+    return infer_analysis_type(context).key in _SELF_STATED_FAMILIES
+
+
 def study_family_reading(question: Any) -> Optional[StudyFamilyReading]:
     """The analysis family ``question`` asks for in its own words, or ``None``."""
 
     text = str(question or "")
     if not text.strip() or data_quality_question(text):
         return None
+    reading = _reading(text)
+    if reading is not None and _planner_reads_a_stated_design(text):
+        return None
+    return reading
+
+
+def _reading(text: str) -> Optional[StudyFamilyReading]:
     relationship = RELATIONSHIP_QUESTION.search(mask_non_association_phrases(text))
     proportion = PROPORTION_QUESTION.search(text)
     if relationship is not None:

@@ -302,3 +302,21 @@ def test_data_predicates_and_clinical_lookalikes_agree(
     reading = study_family_reading(question)
     assert (reading.family if reading else None) == host_family
     assert _planner(question) == (family, "keyword")
+
+
+# A question that states its design in its own words (pilot1 10-22: a Cox
+# question with 「关系」 was recorded as an association study) is left to the
+# planner, which reads the stated family; the host records nothing.
+_STATED_DESIGNS = [
+    ("在 eICU 中，用 Cox 回归分析入 ICU 首日最高乳酸与 28 天生存的关系。", "survival"),
+    ("高乳酸与低乳酸患者的生存时间有差别吗？请调整年龄。", "survival"),
+    ("用首日生命体征预测院内死亡，并分析各指标与死亡的关系。", "prediction_model"),
+    ("早期使用去甲肾上腺素与院内死亡的因果关系。", "causal_inference"),
+    ("把脓毒症患者聚类成不同亚型，比较各亚型的院内死亡比例。", "trajectory_clustering"),
+]
+
+
+@pytest.mark.parametrize(("question", "family"), _STATED_DESIGNS)
+def test_a_design_the_question_states_is_the_planners_to_read(question: str, family: str) -> None:
+    assert study_family_reading(question) is None
+    assert _planner(question)[0] == family
