@@ -473,13 +473,17 @@ def _fixed_24h_landmark_candidate(
     0-24 h exposure.  Require both the selected landmark design and the
     StudyContext's sealed 24-hour window before offering the executable
     landmark choice; no exposure earns the choice by its name.
+
+    The design id is the Planner's own slug: the family template names it
+    ``landmark_adjusted_association``, a progressive plan names it in its own
+    words (pilot1 round 2, 10-22, A6: ``landmark_age_adjusted_association``,
+    refused as not a landmark, so the card offered no way on).  A selected
+    design whose id names a landmark is one.
     """
 
     selected = _selected_design(plan)
     _timing_coordinates(plan)
-    if str(selected.get("design_id") or "").strip() != (
-        "landmark_adjusted_association"
-    ):
+    if "landmark" not in str(selected.get("design_id") or "").strip().split("_"):
         return False
     window = study.get("time_window") if isinstance(study, Mapping) else None
     if not isinstance(window, Mapping):
