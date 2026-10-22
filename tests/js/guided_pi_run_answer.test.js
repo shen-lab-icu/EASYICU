@@ -262,6 +262,26 @@ const outcome = modules.require('runOutcome').create({
     intent: 'Fit the primary model.', model_requirements: [{ analysis_role: 'primary', exposure_source: 'sex', covariates: [] }],
   }]).map(step => (step.step_id === 'exposure_outcome_distribution' ? { ...step, planned_analysis_role: 'secondary' } : step)) });
   assert.match(modelledSex.html, /主要估计（性别）：OR 0\.975（95% CI 0\.946–1\.006）。/);
+
+  // A continuous exposure's odds ratio compares two of its values (hosted
+  // pilot: a lactate spline's "OR 2.692" said neither which values nor its
+  // interval). The claim's own contrast table row supplies both.
+  const savedRcs = payloads['result_tables.json'];
+  payloads['result_tables.json'] = { tables: savedRcs.tables.concat([table('rcs',
+    ['exposure', 'exposure_value', 'reference_exposure_value', 'adjusted_odds_ratio', 'ci_low', 'ci_high'],
+    [['lact_max', '0.800000011920929', '1.7999999523162842', '0.5756868649441349', '0.547', '0.6058'],
+      ['lact_max', '5.199999809265137', '1.7999999523162842', '2.6915941270503776', '2.5828360667857684', '2.804931771681422']])]) };
+  const rcsClaim = { source_field: 'primary_or', display_value: '2.692', canonical_value: 2.6915941270503776,
+    related_artifacts: [{ evidence_id: 'rcs' }] };
+  const rcsPlan = { ...plan, display_labels: { ...plan.display_labels, lact_max: '24 小时最高乳酸（mmol/L）' } };
+  payloads['manuscript_provenance.json'] = { claims: [rcsClaim] };
+  assert.match((await reread(rcsPlan)).html, /主要估计（24 小时最高乳酸 5\.2 vs 1\.8）：OR 2\.692（95% CI 2\.583–2\.805）。/);
+  // A claim that names another table, or no table, names no contrast.
+  payloads['manuscript_provenance.json'] = { claims: [{ ...rcsClaim, related_artifacts: [{ evidence_id: 'other' }] }] };
+  const unbound = (await reread(rcsPlan)).html;
+  assert.match(unbound, /：OR 2\.692。/);
+  assert.doesNotMatch(unbound, /5\.2 vs 1\.8|2\.583/);
+  payloads['result_tables.json'] = savedRcs;
   payloads['manuscript_provenance.json'] = savedClaims;
 
   // Traces: one named row per approved plan step, with how it ran.
