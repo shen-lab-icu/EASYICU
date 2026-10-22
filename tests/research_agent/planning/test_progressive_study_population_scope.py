@@ -102,6 +102,20 @@ def test_any_other_root_shape_is_refused(updates) -> None:
         _root(**updates)
 
 
+def test_a_step_named_after_absolute_risk_is_told_its_own_module() -> None:
+    """Hosted pilot: a distribution step named ``absolute_risk_context`` kept a
+    population scope through three retries, told only that the scope "belongs
+    to absolute_risk_context"."""
+
+    with pytest.raises(ValidationError) as caught:
+        _root(step_id="absolute_risk_context", population_scope="analysis_cohort")
+
+    message = str(caught.value)
+    assert "module_id='absolute_risk_context'" in message
+    assert "not to module_id='cohort_definition'" in message
+    assert "set population_scope=null" in message
+
+
 @pytest.mark.parametrize("module_id", ["table_one", "adjusted_association", "absolute_risk_context"])
 def test_the_scope_belongs_to_the_root_and_its_distribution_only(module_id) -> None:
     with pytest.raises(ValidationError, match="study-cohort population"):
