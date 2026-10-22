@@ -1078,6 +1078,34 @@ def _dictionary_declared_levels(source_concept: Optional[str]) -> Optional[List[
     return levels
 
 
+_CONCEPT_FACTOR_CACHE: Dict[str, bool] = {}
+
+
+def declares_factor_values(variable: ConceptDescriptor) -> bool:
+    """Whether the column holds a dictionary factor concept's own values.
+
+    A ``fct_cncpt`` is a category whatever its storage type, including one
+    whose levels the dictionary does not list (eICU's ``icu_unit_type``):
+    numeric codes of a unit type are not a quantity to summarize.
+    """
+
+    concept = getattr(variable, "source_concept", None)
+    transform = getattr(variable, "unit_normalization", None)
+    if not concept or (transform and not _transform_preserves_concept_values(transform)):
+        return False
+    if concept not in _CONCEPT_FACTOR_CACHE:
+        try:  # local import, as _dictionary_declared_levels
+            from ...concept.loader import load_dictionary
+
+            definition = load_dictionary().get(concept)
+            _CONCEPT_FACTOR_CACHE[concept] = (
+                getattr(definition, "class_name", None) == "fct_cncpt"
+            )
+        except Exception:
+            _CONCEPT_FACTOR_CACHE[concept] = False
+    return _CONCEPT_FACTOR_CACHE[concept]
+
+
 #: Representation transforms whose column still holds the SOURCE CONCEPT'S OWN
 #: VALUES, and is therefore described by that concept's declared levels.
 #:

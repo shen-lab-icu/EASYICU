@@ -1363,6 +1363,15 @@ def _compile_table_one(
         variable = variables[item.name]
         levels = closed_planning_levels_for(name=item.name, variables=dict(variables))
         kind = _table_one_variable_kind(variable, levels)
+        if kind == "categorical" and len(levels) < 2:
+            raise _fail(
+                "progressive_table_one_levels_unavailable",
+                f"categorical variable {item.name!r} has no closed levels before "
+                "extraction; leave it out of table_one_variables",
+                step=step,
+                step_index=step_index,
+                path=f"table_one_variables[{index}]",
+            )
         if kind == "continuous" and item.summary == "count_percent":
             raise _fail(
                 "progressive_table_one_summary_incompatible",
@@ -2529,6 +2538,8 @@ def _compile_phenotype_comparison_spec(
         for item in step.phenotyping_comparison_variables:
             levels = closed_planning_levels_for(name=item.name, variables=variables)
             kind = _table_one_variable_kind(variables[item.name], levels)
+            if kind == "categorical" and len(levels) < 2:
+                raise ValueError("phenotype_comparison_levels_unavailable")
             if (kind == "categorical" and item.summary != "count_percent") or (kind == "continuous" and item.summary == "count_percent"):
                 raise ValueError("phenotype_comparison_summary_incompatible")
             rows.append(TableOneVariableSpec(
