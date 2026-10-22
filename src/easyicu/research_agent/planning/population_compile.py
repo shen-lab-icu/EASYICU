@@ -1183,8 +1183,25 @@ def _is_number(value: Any) -> bool:
     )
 
 
+#: Time units a question, and so the Planner, may spell another way, Chinese
+#: included ("65 岁", "48 小时"): every spelling compares as one unit.  "分"
+#: is left out: it also means a score's points.
+_UNIT_SPELLINGS: Mapping[str, str] = MappingProxyType(
+    {
+        **{spelling: "hours" for spelling in (*_HOUR_UNITS, "小时", "时")},
+        **{spelling: "days" for spelling in (*_DAY_UNITS, "天", "日")},
+        **{spelling: "years" for spelling in (*_YEAR_UNITS, "岁", "周岁", "年")},
+        **{
+            spelling: "minutes"
+            for spelling in ("min", "mins", "minute", "minutes", "分钟")
+        },
+    }
+)
+
+
 def _unit_key(unit: Any) -> str:
-    return "".join(str(unit or "").split()).casefold()
+    key = "".join(str(unit or "").split()).casefold()
+    return _UNIT_SPELLINGS.get(key, key)
 
 
 __all__ = [

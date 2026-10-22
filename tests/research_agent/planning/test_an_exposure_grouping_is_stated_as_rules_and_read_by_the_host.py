@@ -505,3 +505,45 @@ def test_a_once_per_stay_rule_is_not_read_from_a_windowed_summary() -> None:
         "requires_extraction",
         "exposure_group_source_column_unavailable",
     )
+
+
+_AGE = ConceptDescriptor(
+    name="age",
+    role=VariableRole.DEMOGRAPHIC,
+    dtype="float64",
+    unit="years",
+    source_concept="age",
+    unit_normalization="stay_level_unique_value",
+    valid_range=[0, 120],
+)
+
+
+def _age_groups(unit: str) -> dict:
+    return {
+        "id": "x1",
+        "concept": "age",
+        "window": None,
+        "scale": "ordinal",
+        "groups": [
+            _group("g1", "under 65", _rule("value", "<", 65, unit)),
+            _group("g2", "65 or older", _rule("value", ">=", 65, unit)),
+        ],
+        "unmeasured": {"handling": "exclude"},
+        "quote": "age under 65 or 65 and older",
+        "source": "question",
+    }
+
+
+@pytest.mark.parametrize("unit", ["years", "year", "yrs", "岁", "周岁"])
+def test_a_threshold_in_another_spelling_of_the_recorded_unit_is_read(unit: str) -> None:
+    # A Chinese question says "65 岁"; the Planner may keep that spelling.
+    (age,) = _compiled(_context(_AGE), _age_groups(unit))
+
+    assert (age.disposition, age.variable) == ("applied", "age_group_x1")
+
+
+@pytest.mark.parametrize("unit", ["days", "天", "小时", "mg/dL"])
+def test_a_threshold_in_another_unit_is_still_not_applied(unit: str) -> None:
+    (age,) = _compiled(_context(_AGE), _age_groups(unit))
+
+    assert (age.disposition, age.reason) == ("not_applied", "exposure_group_unit_mismatch")
