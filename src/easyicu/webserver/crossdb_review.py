@@ -2765,6 +2765,16 @@ def can_join_comparison(modules: Any) -> bool:
     return _REQUIRED_CORE_MODULES <= {str(module) for module in modules or []}
 
 
+def selects_finished_extraction(modules: Any) -> bool:
+    """Whether a finished extraction joins the comparison selection by itself.
+
+    On a hosted instance the comparison is the administrator's prepared data;
+    a clinician adds an own extraction by hand. Auto-added, a 2,000-stay
+    extraction pushed pilot1's default comparison over its budget (10-22).
+    """
+    return not hosted.is_hosted() and can_join_comparison(modules)
+
+
 def precompute_feature_distributions(path: str) -> int:
     """Summarize one export's features before anyone asks for a comparison.
 

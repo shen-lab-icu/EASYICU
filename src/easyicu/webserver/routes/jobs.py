@@ -280,9 +280,9 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
                     out_path,
                     label=body.get("label"),
                     active=True,
-                    # An export the comparison gate cannot line up (no demographics
-                    # or outcome) is registered but not selected for comparison.
-                    crossdb=crossdb_review.can_join_comparison(exported),
+                    # Registered, but selected for comparison only when the gate can
+                    # line it up and the instance is not hosted (crossdb_review owns it).
+                    crossdb=crossdb_review.selects_finished_extraction(exported),
                 )
                 result["registered_source"] = {
                     "ok": bool(registry.get("ok")),
