@@ -339,6 +339,17 @@ def build_descriptive_skeleton(
     exposure = request.primary_exposure
     outcome = request.outcome
     identity = request.identity_column
+    # Known missing values are complete-case with their count reported;
+    # otherwise a missing value stops the step.
+    missing_policies = (
+        request.distribution_missing_policies.model_dump()
+        if request.distribution_missing_policies is not None
+        else {
+            "denominator_policy": "all_declared_rows",
+            "missing_exposure_policy": "fail_closed",
+            "missing_outcome_policy": "fail_closed",
+        }
+    )
     baseline = [str(value).strip() for value in spec.baseline_variables]
     # An accepted baseline roster keeps its rows beside the Planner's choice.
     retained_baseline = accepted_baseline_additions(request, [exposure, *baseline])
@@ -470,9 +481,7 @@ def build_descriptive_skeleton(
             event_level_index=request.event_level_index,
             reference_exposure_level_index=request.reference_level_index,
             comparison_exposure_level_index=request.primary_contrast_level_index,
-            denominator_policy="all_declared_rows",
-            missing_exposure_policy="fail_closed",
-            missing_outcome_policy="fail_closed",
+            **missing_policies,
             confidence_level=0.95,
             literature_bindings=_bindings(
                 bound["exposure_outcome_distribution"], comparator_applications=spec.applications

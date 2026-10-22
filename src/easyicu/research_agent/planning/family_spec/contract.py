@@ -620,6 +620,33 @@ class StudyPopulationOccurrence(BaseModel):
         return self
 
 
+class DistributionMissingPolicies(BaseModel):
+    """The primary distribution's missing-value policies, from known missingness.
+
+    Sealed when the exposure or the outcome has known missing observations:
+    those rows leave the denominator and their count travels in the table,
+    as for :class:`StudyPopulationOccurrence`.  Without it a missing value
+    stops the step.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    denominator_policy: Literal["all_declared_rows", "observed_outcome_rows"]
+    missing_exposure_policy: Literal["fail_closed", "exclude_from_denominator"]
+    missing_outcome_policy: Literal["fail_closed", "exclude_from_denominator"]
+
+    @model_validator(mode="after")
+    def _denominator_follows_outcome_policy(self) -> "DistributionMissingPolicies":
+        if (self.missing_outcome_policy == "exclude_from_denominator") != (
+            self.denominator_policy == "observed_outcome_rows"
+        ):
+            raise ValueError(
+                "rows without an observed outcome leave the denominator exactly "
+                "when it counts observed-outcome rows"
+            )
+        return self
+
+
 class FamilySpecRequest(BaseModel):
     """Sealed host authority for one family-spec planning attempt."""
 
@@ -757,6 +784,11 @@ class FamilySpecRequest(BaseModel):
     #: Omitted from the digest when absent, so requests sealed before it
     #: existed keep their identity.
     study_population_occurrence: Optional[StudyPopulationOccurrence] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    #: Omitted from the digest when absent, so requests sealed before it
+    #: existed, and requests without known missing values, keep their identity.
+    distribution_missing_policies: Optional[DistributionMissingPolicies] = Field(
         default=None, exclude_if=lambda value: value is None
     )
     #: The cohort concepts a population the study states may read.  Offered
@@ -1930,6 +1962,7 @@ def spec_from_mapping(payload: Mapping[str, Any]) -> FamilyPlanSpec:
 __all__ = [
     "AcceptedBaselineRow",
     "AcceptedFeatureGroup",
+    "DistributionMissingPolicies",
     "FAMILY_SPEC_REQUEST_SCHEMA_VERSION",
     "FAMILY_SPEC_SCHEMA_VERSION",
     "DESCRIPTIVE_FAMILY_ID",
