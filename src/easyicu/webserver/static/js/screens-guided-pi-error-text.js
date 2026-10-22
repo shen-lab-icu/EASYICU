@@ -503,9 +503,12 @@
           'The candidate plan did not pass its compile check: one step referenced a variable level or model term that the current data definition cannot resolve. Regenerating the plan lets the Planner re-derive it; narrowing the exposure levels or covariates in the question also helps.',
           '候选计划未通过编译校验：某一步引用了当前数据定义无法解析的变量水平或模型项。重新生成计划会让 Planner 重新推导；也可以在问题里收窄分组水平或协变量。',
         ),
+        // Only follow-up outcomes have this stop (outcome_availability:
+        // mortality at a fixed horizon, follow-up days, ICU- or
+        // ventilator-free days, ICU readmission).
         research_pipeline_required_concept_structurally_unavailable: tr(
-          'A variable the question requires has no supported source in this database. Change the variable or the database before planning.',
-          '问题里要求的某个变量在该数据库没有受支持的来源。请更换变量或数据库后再规划。',
+          'The outcome the question asks for (such as death within 28 or 90 days, ICU-free days or ICU readmission) is not recorded in this database: it needs follow-up this database does not have. No analysis was run. Ask about in-hospital death instead, or use a database that records this outcome.',
+          '问题要求的结局（如 28 天或 90 天死亡、无 ICU 天数、再入 ICU）在这个数据库里没有记录：它需要该库没有的随访信息。没有运行分析。可以改问院内死亡，或改用记录了这个结局的数据库。',
         ),
         research_pipeline_required_concept_without_values: tr(
           'A variable the study requires is listed by its data source, but the source holds no value of it, so planning stopped before any model was called. Change the variable, or use a source that records it, then generate the plan again.',
