@@ -860,7 +860,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     # the renderer at call time, so it must be defined before it.
     vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261020-prepared-grouping2")
     assert fixtures_pos < vocab_pos < render_pos
-    assert "js/screens-agent-render.js?v=20261020-prepared-grouping2" in index_html
+    assert "js/screens-agent-render.js?v=20261022-prose1" in index_html
     assert "js/screens-agent-question-requirements.js?v=20261010-exposure-labels1" in index_html
     assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html
 
