@@ -132,6 +132,28 @@ const outcome = modules.require('runOutcome').create({
   });
   assert.ok(ageGroups.followUps.length);
   assert.ok(ageGroups.followUps.every(text => !text.includes('年龄、') && !text.includes('调整年龄') && !text.includes('按年龄分层')), ageGroups.followUps.join('\n'));
+  // A Chinese reader reads what each typed step did in Chinese; the family
+  // templates write the plan's own step words in English.
+  const englishSteps = await reread({ ...plan,
+    display_labels: { death: '院内死亡', age_group_x1: '年龄组' },
+    steps: [
+      { step_id: 'cohort_accounting', method: 'cohort_definition_and_attrition', cohort_definition_spec: { kind: 'x' },
+        intent: 'Account for every input analysis row: the source denominator, row count, and cohort flow.' },
+      { step_id: 'baseline_context', method: 'table_one', table_one_spec: { group_by: 'age_group_x1' },
+        intent: 'Describe baseline characteristics of the analysis rows by age group.', inputs: ['age_group_x1', 'sex'] },
+      { step_id: 'exposure_outcome_distribution', method: 'descriptive', planned_analysis_role: 'primary',
+        intent: 'Describe the distribution of age group levels and the proportion with death within each level.',
+        exposure_outcome_distribution_spec: { exposure: 'age_group_x1', outcome: 'death', exposure_levels: [1, 2] } },
+      { step_id: 'measurement_audit', method: 'missing_data', measurement_audit_spec: { kind: 'x' },
+        intent: 'Audit measurement coverage, missingness, and process.' },
+      { step_id: 'model', method: 'Logistic regression', intent: 'Fit the prespecified model.' },
+    ],
+  });
+  for (const reading of ['核对全部分析记录：来源分母、记录数与队列流程。', '按年龄组描述各组的基线特征。',
+    '按年龄组计算每组院内死亡的比例，并给出分母。', '核对分析变量的测量覆盖与缺失情况。', 'Fit the prespecified model.']) {
+    assert.ok(englishSteps.html.includes(`<li>${reading}</li>`), reading);
+  }
+  assert.doesNotMatch(englishSteps.html, /Account for every input|Describe the distribution/);
   // An English reader keeps the registered label.
   global.EU_LANG = 'en';
   const englishReader = modules.require('runOutcome').create({
