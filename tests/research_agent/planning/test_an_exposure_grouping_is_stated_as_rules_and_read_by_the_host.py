@@ -287,6 +287,48 @@ def test_an_otherwise_group_takes_its_place_on_the_scale() -> None:
     assert (bmi.reference, bmi.contrast) == ("g2", "g1")
 
 
+def test_an_otherwise_group_labelled_otherwise_is_named_by_its_values() -> None:
+    # pilot1 round 2 (10-22), A6: 「≥4 mmol/L 与 <2 mmol/L 的患者相比」 was
+    # grouped with its middle group labelled with the rule's keyword, and the
+    # Chinese plan card read 「<2 mmol/L / otherwise / ≥4 mmol/L」.
+    lactate = _glucose(
+        concept="lact",
+        scale="ordinal",
+        groups=[
+            _group("g1", "<2 mmol/L", _rule("max", "<", 2, "mmol/L")),
+            _group("g3", "≥4 mmol/L", _rule("max", ">=", 4, "mmol/L")),
+            _group("g2", "otherwise", "otherwise"),
+        ],
+        unmeasured={"handling": "exclude"},
+        reference="g1",
+        contrast="g3",
+    )
+
+    (grouping,) = _read(lactate).groupings
+
+    assert [(group.id, group.label) for group in grouping.groups] == [
+        ("g1", "<2 mmol/L"), ("g3", "≥4 mmol/L"), ("g2", "≥2, <4 mmol/L"),
+    ]
+    assert grouping.groups[-1].rule == "otherwise"
+    (bmi,) = _read(_coarse_bmi(groups=[
+        _group("g1", "under 18.5", _rule("value", "<", 18.5)),
+        _group("g2", "Otherwise", "otherwise"),
+    ], reference="g1", contrast="g2")).groupings
+    assert bmi.groups[-1].label == "≥18.5"
+
+
+def test_a_named_otherwise_group_and_a_grouping_of_two_summaries_keep_their_labels() -> None:
+    (glucose,) = _read(_glucose()).groupings
+    assert glucose.groups[-1].label == "normoglycaemia"
+
+    (mixed,) = _read(_glucose(groups=[
+        _group("g1", "hypoglycaemia", _rule("min", "<", 70, "mg/dL")),
+        _group("g2", "hyperglycaemia only", _rule("max", ">", 180, "mg/dL")),
+        _group("g3", "otherwise", "otherwise"),
+    ])).groupings
+    assert mixed.groups[-1].label == "otherwise"
+
+
 def test_a_grouping_already_numbered_along_its_scale_is_read_as_stated() -> None:
     for spec in (_coarse_bmi(), _fine_bmi()):
         (bmi,) = _read(spec).groupings
