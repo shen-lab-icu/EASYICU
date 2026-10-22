@@ -604,13 +604,18 @@ def _judge(
             )
         if item.kind == "subgroup":
             # "Describe the outcome by age group": the subgroup is the grouping
-            # an analysis step reports the outcome in, level by level.
+            # an analysis step reports the outcome in, level by level, and
+            # every concept it names denotes that grouping ("age" and its
+            # "age_group_x1" alike).
             owners = tuple(
                 step.step_id
                 for step in analysing
-                if step.exposure_outcome_distribution_spec is not None
-                and list(item.concepts)
-                == [step.exposure_outcome_distribution_spec.exposure]
+                if denoted
+                and step.exposure_outcome_distribution_spec is not None
+                and all(
+                    step.exposure_outcome_distribution_spec.exposure in columns
+                    for columns in denoted
+                )
             )
             if owners:
                 return JudgedRequirement(
