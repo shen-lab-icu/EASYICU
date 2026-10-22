@@ -135,7 +135,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "css/guided-pi-target-trial.css?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-target-trial-copy.js?v=20261009-target-trial1" in index
-    assert "js/screens-guided-pi-target-trial.js?v=20261014-trial-readings1" in index
+    assert "js/screens-guided-pi-target-trial.js?v=20261022-scope1" in index
     # The card owner reads its wording, and the confirmation owner the card.
     assert (
         index.index("js/screens-guided-pi-target-trial-copy.js")
@@ -145,7 +145,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-confirmation.js?v=20261022-revise1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261021-decision-records1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261021-turn-layout1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261022-plain5" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261022-plain6" in index
     assert "js/screens-guided-pi.js?v=20261021-readable2" in index
     assert "js/screens-guided.js?v=20261022-legacy1" in index
     assert (

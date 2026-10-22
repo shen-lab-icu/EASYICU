@@ -55,6 +55,7 @@ from easyicu.webserver.target_trial_setup import (
     TARGET_TRIAL_COMPILE_SUBMITTED,
     TARGET_TRIAL_SETUP_REFUSALS,
     latest_target_trial_compile,
+    target_trial_database_gap,
     target_trial_family_declared,
 )
 
@@ -165,7 +166,12 @@ def target_trial_card(
         return None
     study_id = str(study.get("id") or "")
     section = _section(study)
-    if section is None and latest is None:
+    # A database v1 emulates no trial in is said before any trial is stated:
+    # the compile would refuse it with the same code only after the
+    # researcher wrote one (hosted pilot: an eICU causal question asked for
+    # the trial first).
+    gap = target_trial_database_gap(study)
+    if section is None and latest is None and gap is None:
         return None
     kept = _kept(study_id, section) if section is not None else None
     stale = _stale(section, latest)
@@ -173,6 +179,8 @@ def target_trial_card(
     approvable = bool(kept is not None and kept.approvable and not stale)
     if latest is not None and latest.get("status") == "running":
         state = "compiling"
+    elif gap is not None:
+        state, approvable = "stopped", False
     elif section is None or kept is None or stale:
         state = "stopped"
     elif section.approval is not None:
@@ -183,7 +191,9 @@ def target_trial_card(
         "schema_version": TARGET_TRIAL_CARD_SCHEMA_VERSION,
         "state": state,
         "reason_code": (
-            "target_trial_record_missing"
+            gap["code"]
+            if gap is not None
+            else "target_trial_record_missing"
             if section is not None and kept is None
             else None
         ),
@@ -254,6 +264,8 @@ def target_trial_next_action(
 
     if not target_trial_family_declared(study):
         return None
+    if target_trial_database_gap(study) is not None:
+        return "target_trial_review"
     current = _approved_and_current(study, latest)
     if current is not None:
         return TARGET_TRIAL_PLAN_READY if current else "target_trial_review"
