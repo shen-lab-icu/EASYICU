@@ -91,6 +91,62 @@ def test_prepared_offer_and_launch_share_the_actual_restore_verdict(grouped_sour
     ) is False
 
 
+def _declared_source(source, tmp_path, *, earlier_rule, monkeypatch):
+    """A source whose study declared the lactate maximum its groups are formed from."""
+    from functools import partial
+
+    shutil.copytree(_catalog(tmp_path / "input", "lact", "age").parent, source.run, dirs_exist_ok=True)
+    cohort = source.run / "cohort.parquet"
+    if earlier_rule:
+        # Before 10-22 a declared exposure was never bound to its groups.
+        with monkeypatch.context() as patch:
+            patch.setattr(grouping, "_primary_exposure_binding", lambda declared, applied: None)
+            phase = grouping.run_exposure_grouping_phase(
+                context=_context(cohort, primary_exposure="lact_max"), cohort_path=cohort,
+                run_dir=source.run, planner=ScriptedMockLLMClient([_ANSWER]),
+                rebuild_context=partial(_context, primary_exposure="lact_max"),
+                capability_review_pending=False, trajectory_staged=False,
+                emit_progress=lambda *_args, **_kwargs: None,
+            )
+    else:
+        phase = grouping.run_exposure_grouping_phase(
+            context=_context(cohort, primary_exposure="lact_max"), cohort_path=cohort,
+            run_dir=source.run, planner=ScriptedMockLLMClient([_ANSWER]),
+            rebuild_context=partial(_context, primary_exposure="lact_max"),
+            capability_review_pending=False, trajectory_staged=False,
+            emit_progress=lambda *_args, **_kwargs: None,
+        )
+    (source.run / "research_context.json").write_text(phase.context.model_dump_json())
+    evidence = EvidenceStore(root=source.run)
+    for name in ("research_context", "exposure_groupings"):
+        evidence.register_file(
+            kind="log", description=name, source_path=source.run / f"{name}.json",
+            evidence_id=name, producer="pipeline", generation_mode="system",
+        )
+    return phase
+
+
+def test_a_source_that_bound_its_exposure_by_an_earlier_rule_is_planned_anew(source, tmp_path, monkeypatch):
+    # On the hosted pilot "generate a fresh plan" continued a failed planning
+    # run whose record kept the declared lactate maximum beside its groups,
+    # and failed again in ten seconds on the same exposure mismatch.
+    phase = _declared_source(source, tmp_path, earlier_rule=True, monkeypatch=monkeypatch)
+    assert phase.context.primary_exposure == "lact_max"
+
+    with pytest.raises(owner.ResearchPipelineRunError) as refused:
+        source.scope()
+    assert refused.value.code == owner.DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED
+
+
+def test_a_source_that_bound_its_declared_exposure_to_its_groups_continues(source, tmp_path, monkeypatch):
+    phase = _declared_source(source, tmp_path, earlier_rule=False, monkeypatch=monkeypatch)
+    assert phase.context.primary_exposure == "lact_group_x1"
+
+    assert source.scope().budget_mode == "planner_canary"
+    restored = grouping.load_resume_exposure_groupings(source.run)
+    assert restored.context.primary_exposure == "lact_group_x1"
+
+
 def test_prepared_input_belongs_to_the_same_package(grouped_source):
     from easyicu.webserver.research_prepared_resume import verify_prepared_grouped_continuation
 
