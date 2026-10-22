@@ -146,7 +146,7 @@
     const scope = (source && source.scope) || {};
     if (scope.patients) return `${scope.patients} ${hT(helpers, 'patients', '名患者')}`;
     if (scope.icu_stays) return `${scope.icu_stays} ${hT(helpers, 'ICU stays', '次 ICU 住院')}`;
-    return hT(helpers, 'bounded public cohort', '有界公开队列');
+    return hT(helpers, 'bounded public cohort', '公开演示队列');
   }
 
   function activeJobFor(source) {

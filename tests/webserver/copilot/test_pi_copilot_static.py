@@ -86,7 +86,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-source-view.css?v=20261022-winfont1" in index
     assert "css/guided-pi-literature.css?v=20260902-type-scale2" in index
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
-    assert "js/screens-guided-pi-literature.js?v=20261017-planning-evidence1" in index
+    assert "js/screens-guided-pi-literature.js?v=20261022-plain3" in index
     assert "js/screens-guided-pi-markdown.js?v=20260921-turn-traces3" in index
     assert "js/screens-guided-pi-next-actions.js?v=20261020-named-source1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20261021-turn-layout1" in index
@@ -98,13 +98,13 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
     assert "css/guided-pi-workspace.css?v=20261021-entry-examples1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
-    assert "js/screens-guided-pi-demo.js?v=20261009-review-fix1" in index
+    assert "js/screens-guided-pi-demo.js?v=20261022-plain3" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
-        "js/screens-guided-pi-evidence-preview.js?v=20260919-canvas1" in index
+        "js/screens-guided-pi-evidence-preview.js?v=20261022-plain3" in index
     )
     assert (
-        "js/screens-guided-pi-technical-report.js?v=20260904-empty-gallery1"
+        "js/screens-guided-pi-technical-report.js?v=20261022-plain3"
         in index
     )
     assert "js/screens-guided-pi-analysis-report.js?v=20261010-exposure-labels1" in index

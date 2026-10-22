@@ -95,7 +95,7 @@
   function statusHtml(helpers) {
     const h = Object.assign({ t: en => en, esc: value => String(value == null ? '' : value), icon: () => '' }, helpers || {});
     if (state.loading) {
-      return `<div class="note info mt-10" data-patient-table-loading role="status" aria-live="polite"><div class="ico"><span class="spin"></span></div><div class="body"><div class="t">${h.t('Loading one bounded module page…', '正在加载一个有界模块页…')}</div><div class="d">${h.t('The cohort review and other modules stay in place.', '队列审阅和其他模块保持不变。')}</div></div></div>`;
+      return `<div class="note info mt-10" data-patient-table-loading role="status" aria-live="polite"><div class="ico"><span class="spin"></span></div><div class="body"><div class="t">${h.t('Loading one bounded module page…', '正在加载这个模块的一页数据…')}</div><div class="d">${h.t('The cohort review and other modules stay in place.', '队列审阅和其他模块保持不变。')}</div></div></div>`;
     }
     if (state.error) {
       return `<div class="note warn mt-10" data-patient-table-error role="alert"><div class="ico">${h.icon('alert', 14)}</div><div class="body"><div class="t">${h.t('Module page was not replaced', '模块页未被替换')}</div><div class="d">${h.esc(state.error)}</div></div></div>`;

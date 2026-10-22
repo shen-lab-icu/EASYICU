@@ -77,7 +77,7 @@
     const scope = source && source.scope || {};
     if (scope.patients) return text(`${scope.patients} patients`, `${scope.patients} 名患者`);
     if (scope.icu_stays) return text(`${scope.icu_stays} ICU stays`, `${scope.icu_stays} 次 ICU 住院`);
-    return text('bounded public cohort', '有界公开队列');
+    return text('bounded public cohort', '公开演示队列');
   }
 
   function compactOfficialPair(sourceOwner, pairReady) {

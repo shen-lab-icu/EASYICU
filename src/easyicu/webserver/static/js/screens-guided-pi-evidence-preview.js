@@ -212,14 +212,14 @@
   function tableView(payload) {
     const headers = Array.isArray(payload.headers) ? payload.headers.slice(0, 24) : [];
     const rows = Array.isArray(payload.rows) ? payload.rows.slice(0, 100) : [];
-    return `<div class="gpi-evidence-table-wrap" tabindex="0"><table class="gpi-evidence-table"><thead><tr>${headers.map(value => `<th>${esc(text(value, 160))}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${headers.map((_, index) => `<td>${esc(text(Array.isArray(row) ? row[index] : '', 1000))}</td>`).join('')}</tr>`).join('')}</tbody></table>${payload.rows_truncated || payload.columns_truncated ? `<p>${esc(tr('Preview is bounded; additional rows or columns are not shown.', '预览有界；其余行或列未展示。'))}</p>` : ''}</div>`;
+    return `<div class="gpi-evidence-table-wrap" tabindex="0"><table class="gpi-evidence-table"><thead><tr>${headers.map(value => `<th>${esc(text(value, 160))}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${headers.map((_, index) => `<td>${esc(text(Array.isArray(row) ? row[index] : '', 1000))}</td>`).join('')}</tr>`).join('')}</tbody></table>${payload.rows_truncated || payload.columns_truncated ? `<p>${esc(tr('Preview is bounded; additional rows or columns are not shown.', '只预览了一部分；其余行或列未展示。'))}</p>` : ''}</div>`;
   }
   function metadataView(payload) {
     const reasons = {
       patient_level_rows_withheld: tr('Patient-level cohort rows are withheld. File identity and digest remain visible.', '患者级队列行已隐藏；文件身份与摘要仍可核对。'),
       direct_identifier_columns_withheld: tr('This table contains direct identifier columns, so row preview is blocked.', '该表含直接标识符列，因此禁止预览数据行。'),
       non_result_table_rows_withheld: tr('Only result-owned aggregate tables can expose rows in this view.', '此处只允许预览分析结果所属的聚合表。'),
-      preview_size_limit: tr('The file exceeds the bounded preview size.', '文件超过有界预览大小。'),
+      preview_size_limit: tr('The file exceeds the bounded preview size.', '文件太大，无法预览。'),
       evidence_preview_host_path_detected: tr('The text contains a host path and was withheld.', '文本包含主机路径，已隐藏。'),
       evidence_preview_encoding_unsupported: tr('The text encoding is not supported for safe preview.', '文本编码不符合安全预览要求。'),
       unsupported_evidence_type: tr('This registered evidence type has no browser renderer yet.', '该已登记证据类型暂没有浏览器渲染器。'),

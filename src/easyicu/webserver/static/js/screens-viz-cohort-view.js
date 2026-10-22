@@ -222,7 +222,7 @@
       'Min': '最小值',
       'Max': '最大值',
       'registered export aggregate': '注册导出聚合',
-      'bounded column read': '有界列读取',
+      'bounded column read': '按列读取',
       'SOFA-2 severity bins': 'SOFA-2 严重度分箱',
       'SOFA-1 to SOFA-2 movement': 'SOFA-1 到 SOFA-2 变化',
       'Worst-ICU severity transition matrix': 'ICU 最严重 SOFA 转移矩阵',
@@ -332,7 +332,7 @@
       'Current export is loaded, but the cohort is above the interactive KM preview limit; continue with an audited local analysis job on this same export.': '当前导出已加载，但队列超过交互式 KM 预览上限；请在同一个导出上继续运行本地审计分析任务。',
       'Outcome module is not present in the registered export.': '注册导出中没有结局模块。',
       'Fewer than two cohort entities have valid survival time values.': '有效生存时间值少于两个队列实体。',
-      'Demo threshold uses SOFA ≥ 6. Real custom thresholds remain fail-closed until a bounded cohort-builder backend is available.': '演示阈值使用 SOFA ≥ 6。真实自定义阈值会在有界队列构建后端可用前保持保守拦截。',
+      'Demo threshold uses SOFA ≥ 6. Real custom thresholds remain fail-closed until a bounded cohort-builder backend is available.': '演示阈值使用 SOFA ≥ 6。真实数据的自定义阈值暂未开放。',
       'This export does not expose an outcome with both event and time-to-event columns.': '此导出没有同时包含事件列和事件时间列的结局。',
       'ICU mortality is unavailable because this export does not include ICU-specific event and time columns.': 'ICU 死亡不可用，因为当前导出没有 ICU 专用死亡事件列和 ICU 时间列。',
       'ICU mortality is unavailable because this export does not include an ICU-specific event column.': 'ICU 死亡不可用，因为当前导出没有 ICU 专用死亡事件列。',
@@ -550,7 +550,7 @@
           </tbody>
         </table>
       </div></details>
-      <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Fail-closed scope')}</div><div class="d">${t('Coverage is aggregate-only. Row-level filtering, subgroup missingness, and eligibility waterfalls remain blocked until a bounded cohort-builder backend exists.', '覆盖率是仅聚合结果。行级筛选、亚组缺失率和纳排瀑布图会在有界队列构建后端就绪前保持拦截。')}</div></div></div>`;
+      <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Fail-closed scope')}</div><div class="d">${t('Coverage is aggregate-only. Row-level filtering, subgroup missingness, and eligibility waterfalls remain blocked until a bounded cohort-builder backend exists.', '覆盖率只是汇总结果。按行筛选、亚组缺失率和纳排流程图暂未开放。')}</div></div></div>`;
   }
 
   function cohortCoverageForest(review) {
@@ -798,7 +798,7 @@
           </div>
           ${cohortSofaHeatmap(reclass)}
         </div>
-        <div class="note ok mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Paired aggregate ready')}</div><div class="d">${t('Worst-ICU SOFA-1/SOFA-2 movement is computed from bounded per-entity score aggregates only. No paired patient rows or inferential statistics are returned.', 'ICU 最严重 SOFA-1/SOFA-2 变化只由有界实体级评分聚合计算；不返回配对患者行或推断统计。')}</div></div></div>
+        <div class="note ok mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Paired aggregate ready')}</div><div class="d">${t('Worst-ICU SOFA-1/SOFA-2 movement is computed from bounded per-entity score aggregates only. No paired patient rows or inferential statistics are returned.', 'ICU 期间最严重的 SOFA-1 / SOFA-2 变化只用每位患者的评分汇总计算；不返回逐个患者的配对数据，也不做统计检验。')}</div></div></div>
       ` : `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t">${cohortText('Paired reclassification blocked')}</div><div class="d">${esc(cohortReason(reclass.reason || 'Paired SOFA-1/SOFA-2 reclassification is not available for this export.'))}</div></div></div>`}`;
   }
 

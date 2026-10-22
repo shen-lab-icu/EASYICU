@@ -2135,7 +2135,7 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
 
     assert "js/screens-viz-crossdb-setup.js?v=20261022-copy1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz-crossdb-results.js?v=20261022-copy1" in index_html
+    assert "js/screens-viz-crossdb-results.js?v=20261022-plain3" in index_html
     assert "js/screens-viz.js?v=20261022-copy1" in index_html
     assert "css/crossdb.css?v=20261022-progress1" in index_html
     for selector in (
@@ -2230,7 +2230,7 @@ def test_native_patient_time_series_uses_module_grouped_single_feature_charts() 
         index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
         < index_html.index("js/screens-viz-echarts.js?v=20261022-winfont1")
         < index_html.index("js/screens-viz-patient-charts.js?v=20260830-viz-final1")
-        < index_html.index("js/screens-viz-patient-series.js?v=20260830-viz-final1")
+        < index_html.index("js/screens-viz-patient-series.js?v=20261022-plain3")
     )
     assert ".pt-module-card" in patient_css
     assert ".pt-matrix-details .table-scroll" in patient_css
@@ -2755,7 +2755,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "route: 'crossdb'" in viz_js
     assert "skeletonWorkspace(window.EU_DATA)" in patient_domain_js
     assert "full cohort', '完整队列'" in patient_domain_js
-    assert "bounded browser review', '浏览器有界审阅'" in patient_domain_js
+    assert "bounded browser review', '本页审阅'" in patient_domain_js
     assert "data-patient-export" in patient_domain_js
     assert "bounded_patient_review_drilldown" in patient_domain_js
     assert "data-pt-table-module" in patient_domain_js
@@ -2877,9 +2877,9 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "js/screens-viz-demo-drilldown.js?v=20260727-owner-split" in index_html
     assert "js/screens-viz-patient-features.js?v=20260727-patient-demo2" in index_html
     assert "js/screens-viz-patient-charts.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz-patient-series.js?v=20260830-viz-final1" in index_html
+    assert "js/screens-viz-patient-series.js?v=20261022-plain3" in index_html
     assert (
-        "js/screens-viz-patient-demo-sources.js?v=20260728-shared-source1"
+        "js/screens-viz-patient-demo-sources.js?v=20261022-plain3"
         in index_html
     )
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
@@ -2887,9 +2887,9 @@ def test_native_patient_source_radios_are_real_controls() -> None:
         "js/screens-viz-patient-navigation.js?v=20260710-bounded-pages"
         in index_html
     )
-    assert "js/screens-viz-patient-tables.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz-patient-overview.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz-patient.js?v=20261021-hosted1" in index_html
+    assert "js/screens-viz-patient-tables.js?v=20261022-plain3" in index_html
+    assert "js/screens-viz-patient-overview.js?v=20261022-plain3" in index_html
+    assert "js/screens-viz-patient.js?v=20261022-plain3" in index_html
     assert index_html.index("js/screens-viz-patient-navigation.js?") < index_html.index(
         "js/screens-viz.js?"
     )
@@ -2900,7 +2900,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
         "js/screens-viz.js?"
     )
     assert "js/screens-viz.js?v=20261022-copy1" in index_html
-    assert "bounded browser review', '浏览器有界审阅" in patient_domain_js
+    assert "bounded browser review', '本页审阅" in patient_domain_js
     assert "function buildPatientDrilldown" in demo_drilldown_js
     assert "function demoTablePreviewRowContext" in demo_drilldown_js
     assert "const timepointsPerEntity = 12" in demo_drilldown_js
@@ -3288,7 +3288,7 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert ".crossdb-offline-fallback" in crossdb_css
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
     assert "js/screens-viz-crossdb-setup.js?v=20261022-copy1" in index_html
-    assert "js/screens-viz-crossdb-source.js?v=20261022-copy1" in index_html
+    assert "js/screens-viz-crossdb-source.js?v=20261022-plain3" in index_html
 
 
 def test_native_webapp_foreground_interrupt_returns_shell_status(monkeypatch) -> None:

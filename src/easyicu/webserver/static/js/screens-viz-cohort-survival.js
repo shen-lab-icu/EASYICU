@@ -73,7 +73,7 @@
         ${cohortSurvivalEffect(curve)}
         ${cohortRiskTable(curve)}
       </div>
-      <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Not manuscript-ready by itself')}</div><div class="d">${t('KM/log-rank is computed from bounded cohort aggregates and marked exploratory. Any claim still needs the evidence-bound Agent check and human review.', 'KM/log-rank 由有界队列聚合计算，标记为探索性。任何稿件声明仍需要证据绑定 Agent 检查和人工审阅。')}</div></div></div>
+      <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Not manuscript-ready by itself')}</div><div class="d">${t('KM/log-rank is computed from bounded cohort aggregates and marked exploratory. Any claim still needs the evidence-bound Agent check and human review.', 'KM 曲线和 log-rank 检验由队列汇总计算，属于探索性结果。要写进论文的结论，仍需在研究对话中核对证据并经人工审阅。')}</div></div></div>
       ${cohortSurvivalBlockedList(blockedOutcomes)}`;
   }
 

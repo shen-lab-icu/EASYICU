@@ -284,7 +284,7 @@
                     `Module data loaded. No multi-point numeric trajectory exists for this entity; expand the feature list to review ${loadedNonTrajectory} values, categories, or missingness findings.`,
                     `本模块已加载。该患者没有可绘制的多时点数值轨迹；展开特征清单可查看 ${loadedNonTrajectory} 个单点值、分类值或缺失结论。`,
                   )
-                  : hT(helpers, 'No bounded numeric trajectory is available for this module in the active payload; catalog metadata remains reviewable.', '当前载荷中该模块没有可用的有界数值轨迹；目录元数据仍可审阅。')}
+                  : hT(helpers, 'No bounded numeric trajectory is available for this module in the active payload; catalog metadata remains reviewable.', '这个模块在当前数据里没有可显示的数值轨迹；仍可查看它的目录信息。')}
             </div>`}
           <details class="pt-feature-inventory">
             <summary>
@@ -336,7 +336,7 @@
     return `
       <div class="sec-stack mt-16">
         <div class="lbl">${hT(helpers, 'Time series and feature catalog by module', '按模块分组的时间序列与特征目录')}</div>
-        <div class="pt-catalog-scope mono">${hFmtInt(helpers, totalCatalogFeatures)} ${hT(helpers, 'features across', '个特征，分布于')} ${hFmtInt(helpers, usable.length)} ${hT(helpers, 'modules', '个模块')} · ${hFmtInt(helpers, totalObservedFeatures)} ${hT(helpers, 'observed in export', '个在导出中有观测')} · ${hFmtInt(helpers, totalTrajectories)} ${hT(helpers, 'bounded trajectories loaded', '条已加载的有界轨迹')}</div>
+        <div class="pt-catalog-scope mono">${hFmtInt(helpers, totalCatalogFeatures)} ${hT(helpers, 'features across', '个特征，分布于')} ${hFmtInt(helpers, usable.length)} ${hT(helpers, 'modules', '个模块')} · ${hFmtInt(helpers, totalObservedFeatures)} ${hT(helpers, 'observed in export', '个在导出中有观测')} · ${hFmtInt(helpers, totalTrajectories)} ${hT(helpers, 'bounded trajectories loaded', '条已加载的轨迹')}</div>
       </div>
       <div class="pt-vsm-legend">
         <span><i style="background:var(--accent);"></i>${hT(helpers, 'Patient trajectory', '患者轨迹')}</span>
@@ -354,7 +354,7 @@
         </div>
       </div>
       <div class="pt-module-stack">${cards}</div>
-      <div class="pt-vsm-axis">${hT(helpers, 'Source-recorded time spacing · bounded payload', '按源记录时间间隔展示 · 有界载荷')}</div>`;
+      <div class="pt-vsm-axis">${hT(helpers, 'Source-recorded time spacing · bounded payload', '按原始记录的时间间隔展示 · 部分数据')}</div>`;
   }
 
   function flattenSignals(lanes) {
@@ -415,7 +415,7 @@
           <div>
             <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Module overview', '模块总览'))}</div>
             <h2>${hEsc(helpers, hT(helpers, `Complete feature catalog grouped by clinical module (${hFmtInt(helpers, totalCatalogFeatures)} features)`, `${hFmtInt(helpers, totalCatalogFeatures)} 个特征，按临床模块组织`))}</h2>
-            <p>${hEsc(helpers, hT(helpers, 'Every catalog concept remains discoverable. Features with bounded observations receive a chart; metadata-only concepts stay explicit instead of receiving fabricated demo values.', '所有目录概念均可查找；有有界观测的特征显示图表，仅有元数据的概念保持明确标识，不会为了演示而伪造数值。'))}</p>
+            <p>${hEsc(helpers, hT(helpers, 'Every catalog concept remains discoverable. Features with bounded observations receive a chart; metadata-only concepts stay explicit instead of receiving fabricated demo values.', '所有目录概念都可以查找；有观测值的特征显示图表，只有目录信息的概念会明确标出，不会为演示编造数值。'))}</p>
           </div>
           <span class="pill ok">${hEsc(helpers, hT(helpers, 'single entity', '单实体'))}</span>
         </div>
@@ -560,7 +560,7 @@
       <p class="pt-multi-note">${hEsc(helpers, hT(
         helpers,
         'Numeric ICU offsets retain their source spacing; dated traces align to hours since each entity’s first observed point. Hover for exact bounded values, or drag the navigator to zoom.',
-        '数值型 ICU 偏移保留源时间间隔；日期型轨迹按各实体首个观测点后的小时数对齐。悬停查看有界精确值，拖动导航条可缩放。',
+        '数值型时间按原始间隔显示；日期型时间按每位患者第一次观测后的小时数对齐。鼠标悬停可看精确值，拖动下方导航条可缩放。',
       ))}</p>`;
   }
 
@@ -570,7 +570,7 @@
         <div class="pt-series-panel" data-patient-series-panel="compare">
           <div class="state empty">
             <div class="t">${hEsc(helpers, hT(helpers, 'No multi-patient comparison payload', '没有多患者对比载荷'))}</div>
-            <div class="d">${hEsc(helpers, hT(helpers, 'Load a real export or a bounded demo payload with feature coverage to compare one feature across entities.', '加载真实导出或带特征覆盖的有界演示载荷后，才能比较同一特征在多个实体中的表现。'))}</div>
+            <div class="d">${hEsc(helpers, hT(helpers, 'Load a real export or a bounded demo payload with feature coverage to compare one feature across entities.', '加载真实数据或带特征覆盖的演示数据后，才能比较同一特征在多位患者中的表现。'))}</div>
           </div>
         </div>`;
     }
@@ -630,7 +630,7 @@
               <strong>${hEsc(helpers, comparison.label || comparison.feature || hT(helpers, 'Selected feature', '已选特征'))}</strong>
               ${comparison.unit ? `<span class="mono">${hEsc(helpers, comparison.unit)}</span>` : ''}
             </div>
-            <span class="pill">${hEsc(helpers, hT(helpers, 'bounded trace payload', '有界轨迹载荷'))}</span>
+            <span class="pill">${hEsc(helpers, hT(helpers, 'bounded trace payload', '部分轨迹数据'))}</span>
           </div>
           ${renderTrajectorySummary(traces, comparison, helpers)}
         </div>`;
@@ -641,7 +641,7 @@
           <div>
             <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Cross-patient comparison', '跨患者对比'))}</div>
             <h2>${hEsc(helpers, hT(helpers, 'No comparable multi-entity trajectories', '暂无可对比的多患者轨迹'))}</h2>
-            <p>${hEsc(helpers, hT(helpers, 'The active bounded payload does not contain one time-indexed feature observed in at least two entities. Aggregate coverage is shown only as a fallback audit.', '当前有界载荷里没有至少两个实体同时观测到的同一时序特征；下面的聚合覆盖只作为 fallback 审计。'))}</p>
+            <p>${hEsc(helpers, hT(helpers, 'The active bounded payload does not contain one time-indexed feature observed in at least two entities. Aggregate coverage is shown only as a fallback audit.', '当前数据里没有同一个时序特征同时出现在至少两位患者身上；下面的汇总覆盖情况仅供参考。'))}</p>
           </div>
           <span class="pill warn">${hEsc(helpers, hT(helpers, 'fallback audit', 'fallback 审计'))}</span>
         </div>

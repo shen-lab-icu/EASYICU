@@ -182,7 +182,7 @@
       'execution_receipt.json': demoArtifact(
         'execution_receipt.json',
         tr('Execution, provenance, and privacy receipt', '执行、来源与隐私回执'),
-        tr('One exact reviewed plan completed and produced a bounded, inspectable browser projection.', '一份精确审阅计划完成执行，并生成有界、可审阅的浏览器投影。'),
+        tr('One exact reviewed plan completed and produced a bounded, inspectable browser projection.', '一份审阅过的计划执行完成，并在页面上生成可审阅的结果。'),
         [
           { label: tr('Execution', '执行'), value: '6 / 6 steps' },
           { label: tr('Registered evidence', '已登记证据'), value: '125 records' },
