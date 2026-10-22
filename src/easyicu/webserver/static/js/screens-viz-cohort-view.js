@@ -246,7 +246,7 @@
       'Files loaded': '已加载文件',
       'Rows reviewed': '已审阅行数',
       'Outcome groups': '结局分组',
-      'Table one': '基线特征表 (Table 1)',
+      'Table one': '基线特征表',
       'Baseline characteristics comparison': '基线特征对照',
       'Characteristic': '特征',
       'Overall': '总体',
@@ -426,9 +426,7 @@
   function cohortRealModuleSummary(review) {
     const rows = (review && review.coverage) || [];
     if (!rows.length) return '';
-    const exactRows = rows.filter(row => row.coverage_basis === 'unique_entity_intersection');
     const metadataRows = rows.filter(row => row.coverage_basis === 'metadata_row_count_only');
-    const okish = rows.filter(row => ['ok', 'neutral'].includes(row.quality_status)).length;
     const chips = rows.map(row => {
       const cls = row.quality_status === 'ok' || row.quality_status === 'neutral' ? 'solid' : (row.quality_status === 'unknown' ? 'demo' : '');
       const label = row.coverage_basis === 'metadata_row_count_only'
@@ -439,8 +437,7 @@
     return `
       <div class="card pad mt-14" data-cohort-real-modules>
         <div class="row wrap gap-8" style="align-items:center;">
-          <span class="pill ok"><span class="dot"></span>${t('Current export loaded', '当前导出已加载')}</span>
-          <span style="font-size:12px;color:var(--ink-3);">${fmtInt(rows.length)} ${t('modules', '个模块')} · ${fmtInt(okish)} ${t('ready or event modules', '个已就绪/事件模块')} · ${fmtInt(exactRows.length)} ${t('exact coverage scans', '个精确覆盖扫描')}</span>
+          <span style="font-size:12px;color:var(--ink-3);">${fmtInt(rows.length)} ${t('modules', '个模块')}</span>
           <span class="grow"></span>
           <button class="btn sm" type="button" data-cohgo="coverage">${icon('shield', 12)} ${t('Open coverage audit', '打开覆盖审计')}</button>
         </div>
@@ -526,11 +523,10 @@
           <button class="btn sm" type="button" data-cohort-feature-default>${icon('sliders', 12)} ${t('Restore default features', '恢复默认特征')}</button>
           <button class="btn sm ghost" type="button" data-cohort-feature-clear>${icon('close', 12)} ${t('Clear added features', '清空已选特征')}</button>
         </div>
-        <div style="font-size:11.5px;color:var(--ink-4);margin-top:8px;">${t('Default starts with key ICU variables, but every feature present in the loaded modules can be added to the descriptive group table. Values remain aggregate-only; no patient rows are returned.', '默认先选关键 ICU 变量，但已加载模块中的每个特征都可以加入描述性分组表。这里只返回聚合结果，不返回患者行。')}</div>
         <div class="row wrap gap-6" style="margin-top:10px;">${moduleChips}</div>
         ${selectedChips ? `<div class="row wrap gap-6" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--hair);"><span style="font-size:11px;color:var(--ink-4);padding-top:4px;">${t('Selected', '已选择')}</span>${selectedChips}</div>` : ''}
         <div class="row wrap gap-6" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--hair);max-height:180px;overflow:auto;">${featureButtons}</div>
-        <div style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Interactive comparison is capped to keep large local exports responsive.', '为保证大型本地导出交互流畅，单次交互比较会限制选中特征数量。')} ${fmtInt(selectedIds.size)} / ${fmtInt(maxSelected)}</div>
+        <div style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Selected', '已选')} ${fmtInt(selectedIds.size)} / ${fmtInt(maxSelected)}</div>
       </div>`;
   }
 
@@ -1191,51 +1187,41 @@
       const activeProfile = active.profile || {};
       const profileColumns = activeProfile.columns || [];
       const profileRows = activeProfile.rows || [];
+      // An "unknown" group with no stays is not shown, as a card or a column.
+      const emptyGroup = g => !Number(g.count) && /unknown/i.test(String(g.id || g.label || ''));
+      const shownGroups = activeGroups.filter(g => !emptyGroup(g));
+      const hiddenLabels = new Set(activeGroups.filter(emptyGroup).map(g => String(g.label)));
+      const shownCols = profileColumns.map((col, i) => [col, i]).filter(([col]) => !hiddenLabels.has(String(col)));
       const radio = (row) => `<label class="radio ${active.id === row.id ? 'on' : ''}" role="button" tabindex="0" data-cohort-comp="${esc(row.id)}"><span class="mk"></span> ${esc(cohortText(row.label || row.id))}</label>`;
       return `
       ${workspaceSamplingNote(s)}
-      <div class="coh-jump">
-        <button class="cj-card" data-cohgo="coverage">
-          <span class="cj-ico">${icon('shield', 16)}</span>
-          <span class="cj-tx"><span class="cj-t">${cohortText('Coverage audit')}</span><span class="cj-d">${t('Review module coverage before analysis', '分析前审阅模块覆盖率')}</span></span>
-          <span class="cj-go">${icon('arrow', 13)}</span>
-        </button>
-        <button class="cj-card" data-cohgo="snapshot">
-          <span class="cj-ico">${icon('cohort', 16)}</span>
-          <span class="cj-tx"><span class="cj-t">${cohortText('Cohort profile')}</span><span class="cj-d">${t('Inspect real registered export aggregates', '查看后端计算的本地导出聚合')}</span></span>
-          <span class="cj-go">${icon('arrow', 13)}</span>
-        </button>
-      </div>
-      <div class="sec-stack"><div class="lbl">${cohortText('Analysis table')}</div><h2>${cohortText('Real cohort aggregate')}</h2></div>
       <div class="stat-grid">
         <div class="stat accent"><div class="label">${cohortText('Cohort size')}</div><div class="val">${fmtInt(s.cohort_size)}</div></div>
         <div class="stat accent"><div class="label">${cohortText('Mortality')}</div><div class="val">${fmtPct(s.mortality_pct)}</div></div>
         <div class="stat accent"><div class="label">${cohortText('Median age')}</div><div class="val">${fmtNum(s.age && s.age.median, 1)}</div></div>
         <div class="stat accent"><div class="label">${cohortText('Median SOFA-2')}</div><div class="val">${fmtNum(s.sofa2 && s.sofa2.median, 1)}</div></div>
       </div>
-      <div class="note mt-12"><div class="ico">${icon('folder', 14)}</div><div class="body"><div class="t">${cohortText('Local export cohort review ready')}</div><div class="d">${cohortText('Source')} ${esc(source.label || cohortText('Local export'))} · ${esc(source.database || cohortText('unknown'))} · ${cohortText('aggregate-only payload')}.</div></div></div>
       ${cohortRealModuleSummary(review)}
       ${cohortRealFeaturePicker(review)}
 
-      <div class="sec-stack"><div class="lbl">${cohortText('Comparison')}</div><h2>${cohortText('Select descriptive split')}</h2></div>
+      <div class="sec-stack"><h2>${cohortText('Select descriptive split')}</h2></div>
       <div class="radio-row">
         ${supported.map(row => radio(row)).join('')}
       </div>
 
-      <div class="sec-stack"><div class="lbl">${cohortText('Summary')}</div><h2>${esc(cohortText(active.label || 'Descriptive split'))} ${cohortText('Overview')}</h2></div>
+      <div class="sec-stack"><h2>${esc(cohortText(active.label || 'Descriptive split'))}</h2></div>
       <div class="cols-3">
-        ${activeGroups.map((g, i) => `<div class="stat ${i === 0 ? 'accent' : ''}"><div class="label">${esc(cohortText(g.label))}</div><div class="val">${fmtInt(g.count)}</div><div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${fmtPct(g.pct)}</div></div>`).join('')}
+        ${shownGroups.map((g, i) => `<div class="stat ${i === 0 ? 'accent' : ''}"><div class="label">${esc(cohortText(g.label))}</div><div class="val">${fmtInt(g.count)}</div><div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${fmtPct(g.pct)}</div></div>`).join('')}
       </div>
 
-      <div class="sec-stack"><div class="lbl">${cohortText('Table one')}</div><h2>${cohortText('Aggregate-only group characteristics')}</h2></div>
+      <div class="sec-stack"><h2>${cohortText('Table one')}</h2></div>
       <div class="table-wrap table-scroll cohort-table-one" data-cohort-table-one>
         <table class="eu-table">
-          <thead><tr><th>${cohortText('Metric')}</th>${profileColumns.map(col => `<th class="num">${esc(cohortText(col))}</th>`).join('')}<th>${cohortText('Status')}</th></tr></thead>
+          <thead><tr><th>${cohortText('Metric')}</th>${shownCols.map(([col]) => `<th class="num">${esc(cohortText(col))}</th>`).join('')}</tr></thead>
           <tbody>
             ${profileRows.map(row => `<tr>
               <td class="key">${esc(cohortMetricText(row))}${row.unit ? ` <span class="mono" style="color:var(--ink-4);font-weight:500;">${esc(cohortText(row.unit))}</span>` : ''}</td>
-              ${(row.values || []).map(value => `<td class="num">${cohortProfileValue(row, value)}</td>`).join('')}
-              <td><span class="pill ok" style="height:20px;">${cohortText('descriptive')}</span></td>
+              ${shownCols.map(([, i]) => `<td class="num">${cohortProfileValue(row, (row.values || [])[i])}</td>`).join('')}
             </tr>`).join('')}
           </tbody>
         </table>
@@ -1248,18 +1234,6 @@
       const c = ws.cohort || {};
       const chars = c.characteristics || [];
       return `
-      <div class="coh-jump">
-        <button class="cj-card" data-cohgo="coverage">
-          <span class="cj-ico">${icon('shield', 16)}</span>
-          <span class="cj-tx"><span class="cj-t">${t('Coverage audit', '覆盖审计')}</span><span class="cj-d">${t('Review module coverage before analysis', '分析前审阅模块覆盖率')}</span></span>
-          <span class="cj-go">${icon('arrow', 13)}</span>
-        </button>
-        <button class="cj-card" data-cohgo="snapshot">
-          <span class="cj-ico">${icon('cohort', 16)}</span>
-          <span class="cj-tx"><span class="cj-t">${t('Cohort profile', '队列画像')}</span><span class="cj-d">${t('Inspect the local export snapshot', '查看本地导出摘要')}</span></span>
-          <span class="cj-go">${icon('arrow', 13)}</span>
-        </button>
-      </div>
       <div class="sec-stack"><div class="lbl">${cohortText('Analysis table')}</div><h2>${cohortText('Local export group contrast')}</h2></div>
       <div class="stat-grid">
         <div class="stat accent"><div class="label">${cohortText('Total stays')}</div><div class="val">${fmtInt(s.stays)}</div></div>

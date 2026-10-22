@@ -194,7 +194,8 @@ def test_hosted_review_names_the_prepared_data_without_paths_or_registration() -
     assert "${hosted ? '' : `<div class=\"d mono\" style=\"margin-top:4px;\">path_hash=" in patient
     assert "hostedServer() ? t('Load this data', '加载这份数据')" in patient
     cohort = (STATIC / "js" / "screens-viz-cohort.js").read_text(encoding="utf-8")
-    assert "hostedServer() ? t('Prepared data', '已准备的数据') : t('Local export', '本地导出')" in cohort
+    # Hosted: one source list and its button; no eyebrow, card title or subline around them.
+    assert "${hostedServer() ? '' : `<div class=\"eyebrow\">${t('Local export', '本地导出')}</div>" in cohort
     assert "hostedServer() ? t('Load this data', '加载这份数据') : t('Load local export', '加载本地导出')" in cohort
     # A full database's first summary takes minutes; the wait says so.
     assert "${realMode ? `<div class=\"note-line mt-8\" data-cohort-first-load>${t('The first load of a full database can take two to three minutes; opening it again is quick.', '第一次打开一份完整数据可能需要 2–3 分钟；之后再打开会很快。')}</div>` : ''}" in cohort

@@ -350,8 +350,7 @@
       </div>
       <div class="page-head" style="margin-bottom:16px;">
         <h1 style="margin-top:0;">${t('Cohort Statistics', '队列统计')}</h1>
-        <p class="lead">${loaded ? (review ? (realMode ? (hostedServer() ? t('Prepared data · exported module tables · summaries only', '已准备的数据 · 导出模块表 · 只显示汇总结果') : t('Local export cohort · real exported module tables · local-only summary', '本地导出队列 · 真实导出模块表 · 仅本地汇总')) : t('Official deidentified demo cohort · source-backed aggregate review', '官方去标识化演示队列 · 有来源支撑的聚合审阅')) : t('Synthetic fallback contrast · UI rehearsal only', '合成兜底对照 · 仅用于界面演练')) : (hostedServer() ? t('Choose one of the datasets the administrator prepared to view group contrasts, coverage, survival curves and SOFA reclassification.', '选择管理员准备的一份数据，查看组间对照、覆盖率、生存曲线和 SOFA 重分层。') : t('Choose one official demo or one registered export before viewing group contrasts, coverage, survival curves, and SOFA reclassification.', '选择一个官方演示或一个已注册导出，再查看组间对照、覆盖率、生存曲线和 SOFA 重分层。'))}</p>
-        <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Key terms', '关键术语')}: ${window.gloss('cohort', t('cohort', '队列'))} · ${window.gloss('denominator', t('denominator', '分母'))} · ${window.gloss('SOFA')} · ${window.gloss('Sepsis-3')}</div>
+        ${loaded && review && realMode ? '' : `<p class="lead">${loaded ? (review ? t('Official deidentified demo cohort · source-backed aggregate review', '官方去标识化演示队列 · 有来源支撑的聚合审阅') : t('Synthetic fallback contrast · UI rehearsal only', '合成兜底对照 · 仅用于界面演练')) : (hostedServer() ? t('Choose one of the datasets the administrator prepared to view group contrasts, coverage, survival curves and SOFA reclassification.', '选择管理员准备的一份数据，查看组间对照、覆盖率、生存曲线和 SOFA 重分层。') : t('Choose one official demo or one registered export before viewing group contrasts, coverage, survival curves, and SOFA reclassification.', '选择一个官方演示或一个已注册导出，再查看组间对照、覆盖率、生存曲线和 SOFA 重分层。'))}</p>`}
       </div>`;
       if (state.view !== 'loading' && !loaded) {
         const demoSourceOwner = window.EU_OFFICIAL_DEMO_SOURCES || window.EU_PATIENT_DEMO_SOURCES;
@@ -362,7 +361,7 @@
           )
           : `<div class="note warn"><div class="body"><div class="d">${t('Official demo-source controls are unavailable.', '官方演示数据源控件暂不可用。')}</div></div></div>`;
         return head + `<div class="card pad" data-cohort-config-required="true">
-            <div class="panel-head">
+            ${hostedServer() ? '' : `<div class="panel-head">
               <div>
                 <div class="eyebrow">${t('Cohort Statistics', '队列统计')}</div>
                 <div class="panel-title" style="font-size:17px;">${t('Choose one cohort data source', '选择一个队列数据源')}</div>
@@ -372,28 +371,28 @@
             </div>
             <div style="border-top:1px solid var(--hair);padding-top:16px;">
               ${sourceModeSelector(realMode)}
-            </div>
+            </div>`}
             ${state.error ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(state.error)}</div></div></div>` : ''}
-            ${realMode ? `<div class="card sunken pad mt-16">
-              <div class="eyebrow">${hostedServer() ? t('Prepared data', '已准备的数据') : t('Local export', '本地导出')}</div>
+            ${realMode ? `<div class="${hostedServer() ? '' : 'card sunken pad mt-16'}">
+              ${hostedServer() ? '' : `<div class="eyebrow">${t('Local export', '本地导出')}</div>
               <div class="panel-title mt-4">${t('Load one exported cohort snapshot', '加载一个已导出的队列快照')}</div>
-              <div class="panel-sub mt-4">${t('Patient Review uses the same current data.', '患者审阅使用的也是这份当前数据。')}</div>
+              <div class="panel-sub mt-4">${t('Patient Review uses the same current data.', '患者审阅使用的也是这份当前数据。')}</div>`}
               ${!registryActivePath() ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('No current data selected', '尚未选择当前数据')}</div><div class="d">${cohortMissingExportMessage()}</div></div></div>` : ''}
               ${sourceRegistryBlock('single')}
               <button class="btn primary mt-16" data-cohort-run ${!registryActivePath() ? 'aria-disabled="true"' : ''}>${icon('folder', 14)} ${hostedServer() ? t('Load this data', '加载这份数据') : t('Load local export', '加载本地导出')}</button>
             </div>` : `<div class="card sunken pad mt-16">${officialDemoSources}</div>`}
           </div>
-          <div class="empty mt-16" data-cohort-empty-preview="true">
+          ${hostedServer() ? '' : `<div class="empty mt-16" data-cohort-empty-preview="true">
             <div class="glyph">${icon('cohort', 22)}</div>
             <div class="t">${t('Cohort review awaits setup', '队列审阅等待配置')}</div>
             <div class="d">${t('After setup, this page will show group contrast, KM/log-rank, coverage audit, cohort profile, and SOFA reclassification.', '配置后，这里会显示组间对照、KM 生存曲线与 log-rank 检验、覆盖审计、队列画像和 SOFA 重分层。')}</div>
-          </div>`;
+          </div>`}`;
       }
       if (state.view === 'loading') {
         return head + `<div class="card pad">
           <div class="load-strip">
             <span class="spin accent"></span>
-            <div class="grow"><div style="font-weight:600;font-size:12.75px;">${t('Recomputing cohort statistics…', '正在重新计算队列统计…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('reproducible · no outbound calls', '可复现 · 无外部调用')}</div></div>
+            <div class="grow"><div style="font-weight:600;font-size:12.75px;">${t('Recomputing cohort statistics…', '正在重新计算队列统计…')}</div>${hostedServer() ? '' : `<div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('reproducible · no outbound calls', '可复现 · 无外部调用')}</div>`}</div>
           </div>
           ${realMode ? `<div class="note-line mt-8" data-cohort-first-load>${t('The first load of a full database can take two to three minutes; opening it again is quick.', '第一次打开一份完整数据可能需要 2–3 分钟；之后再打开会很快。')}</div>` : ''}
           <div class="indet mt-12"></div>
@@ -406,9 +405,9 @@
       <div id="cohbody">${view.panelBody()}</div>
       <div class="nextbar accent mt-16">
         <div class="nb-ico">${icon('arrow', 16)}</div>
-        <div class="grow"><div class="nb-t">${t('Compared the groups — what’s next?', '对比完组间差异 —— 下一步？')}</div><div class="nb-d">${t('Ask Guided Copilot to assemble an auditable analysis and review-ready draft, or benchmark the cohort across databases.', '让「研究引导」组装可审计分析与待核验草稿，或跨数据库对比队列。')}</div></div>
+        <div class="grow"><div class="nb-t">${t('Next step', '下一步')}</div></div>
         <button class="btn" data-nav="crossdb">${icon('benchmark', 13)} ${t('Cross-database comparison', '跨库对比')}</button>
-        <button class="btn primary" data-study-handoff data-study-source="cohort" data-study-target="guided">${icon('agent', 13)} ${t('Continue in Guided Copilot','在研究引导中继续')}</button>
+        <button class="btn primary" data-study-handoff data-study-source="cohort" data-study-target="guided">${icon('agent', 13)} ${t('Continue in Guided Copilot', '在研究对话中继续')}</button>
       </div>`;
     },
   };
