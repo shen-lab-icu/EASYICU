@@ -11,9 +11,10 @@ which column a summary is read from and derives the group column
 The groups are matched in the order they are listed: a stay belongs to the
 first group whose rule it meets, and ``otherwise`` takes every measured stay
 no earlier group took.  Listing order is a priority, not a scale.  An ordinal
-grouping numbers its groups along its scale, ``g1`` lowest, and its level
-codes follow its scale; a nominal grouping's codes follow the order its
-groups are stated (:func:`grouping_levels`).  A stay with no
+grouping's groups are numbered along its scale, ``g1`` lowest -- the owner
+renumbers stated ids that do not follow it, and the reference and contrast
+follow their groups -- and its level codes follow its scale; a nominal
+grouping's codes follow the order its groups are stated (:func:`grouping_levels`).  A stay with no
 measurement of the concept in the window meets no rule and is never
 ``otherwise``: ``unmeasured`` says whether such stays form their own group,
 which is not a level of any scale, or leave the study.  So an ordinal
@@ -132,6 +133,11 @@ class ExposureGroupSpec(BaseModel):
     #: The words the grouping is stated in, verbatim.
     quote: str = Field(min_length=2, max_length=160)
     source: CriterionSource
+
+    @model_validator(mode="before")
+    @classmethod
+    def _ordinal_ids_along_the_scale(cls, data: Any) -> Any:
+        return _renumbered_along_the_scale(data)
 
     @field_validator("concept")
     @classmethod
@@ -292,10 +298,24 @@ def _numbered_along_the_scale(spec: ExposureGroupSpec) -> None:
             "an ordinal grouping reads one summary, so that its groups lie along "
             "one scale: group a mixture of summaries as nominal"
         )
-    summary = next(iter(summaries))
+    intervals = _intervals_along(spec.groups, next(iter(summaries)))
+    ordered = sorted(intervals)
+    for below, above in zip(ordered, ordered[1:]):
+        if intervals[below][1] > intervals[above][0]:
+            raise ValueError(
+                f"an ordinal grouping numbers its groups along its scale, g1 "
+                f"lowest, but {below} holds values above {above}'s: renumber them"
+            )
+
+
+def _intervals_along(
+    groups: Sequence[ExposureGroup], summary: str
+) -> dict[str, tuple[float, float]]:
+    """Each group's interval of ``summary``: its rule without the earlier groups'."""
+
     intervals: dict[str, tuple[float, float]] = {}
     earlier: list[GroupRule] = []
-    for group in spec.groups:
+    for group in groups:
         rules = list(earlier)
         if isinstance(group.rule, GroupRule):
             rules.append(group.rule)
@@ -305,13 +325,50 @@ def _numbered_along_the_scale(spec: ExposureGroupSpec) -> None:
             low.get(summary, (-math.inf, True))[0],
             high.get(summary, (math.inf, True))[0],
         )
-    ordered = sorted(intervals)
-    for below, above in zip(ordered, ordered[1:]):
-        if intervals[below][1] > intervals[above][0]:
-            raise ValueError(
-                f"an ordinal grouping numbers its groups along its scale, g1 "
-                f"lowest, but {below} holds values above {above}'s: renumber them"
-            )
+    return intervals
+
+
+def _renumbered_along_the_scale(data: Any) -> Any:
+    """A stated ordinal grouping with its ids numbered along its scale.
+
+    The ids only name the groups: a group holds the values its rule takes in
+    the order the groups are listed, under its label.  So the owner numbers
+    an ordinal grouping's groups itself -- the stated ids, lowest to the group
+    holding the lowest values -- and the reference and contrast follow the
+    groups they name.  The rules, their order and the labels are unchanged.
+    A grouping the owner cannot read this way is returned as stated, and
+    validation refuses it with its reason.
+    """
+
+    if not isinstance(data, Mapping) or data.get("scale") != "ordinal":
+        return data
+    stated = data.get("groups")
+    if not isinstance(stated, list):
+        return data
+    try:
+        groups = [ExposureGroup.model_validate(item) for item in stated]
+    except ValidationError:
+        return data
+    ids = [group.id for group in groups]
+    summaries = {
+        group.rule.summary for group in groups if isinstance(group.rule, GroupRule)
+    }
+    if len(ids) != len(set(ids)) or len(summaries) != 1:
+        return data
+    intervals = _intervals_along(groups, next(iter(summaries)))
+    along = sorted(groups, key=lambda group: intervals[group.id])
+    named = dict(zip((group.id for group in along), sorted(ids)))
+    if all(old == new for old, new in named.items()):
+        return data
+    return {
+        **data,
+        "groups": [{**group.model_dump(), "id": named[group.id]} for group in groups],
+        **{
+            key: named.get(data[key], data[key])
+            for key in ("reference", "contrast")
+            if isinstance(data.get(key), str)
+        },
+    }
 
 
 class ExposureGroupings(BaseModel):

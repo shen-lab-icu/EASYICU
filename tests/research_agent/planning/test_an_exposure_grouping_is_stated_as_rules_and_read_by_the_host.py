@@ -238,17 +238,93 @@ def test_touching_bounds_of_one_summary_leave_one_value() -> None:
     )
 
 
-def test_an_ordinal_grouping_numbers_its_groups_along_its_scale() -> None:
-    misnumbered = _coarse_bmi(
+def test_an_ordinal_grouping_is_numbered_along_its_scale_by_the_owner() -> None:
+    # pilot1 round 2 (10-22), A5: 「BMI≥30 的肥胖患者与 BMI 18.5–29.9 的患者
+    # 相比」.  The Planner listed its groups in matching order and numbered
+    # them in that order, so g2 (30 or more) held values above g3's; three
+    # attempts met the same refusal and planning stopped.  The ids only name
+    # the groups, so the owner numbers them along the scale; every group keeps
+    # its rule, its place in the matching order and its label, and the
+    # reference and contrast keep the groups they named.
+    stated = _coarse_bmi(
         groups=[
-            _group("g2", "under 18.5", _rule("value", "<", 18.5)),
-            _group("g1", "18.5 or more", "otherwise"),
+            _group("g1", "under 18.5", _rule("value", "<", 18.5)),
+            _group("g2", "obese", _rule("value", ">=", 30)),
+            _group("g3", "18.5 to 29.9", _rule("value", ">=", 18.5)),
         ],
-        reference=None,
-        contrast=None,
+        reference="g3",
+        contrast="g2",
     )
 
-    assert "g1 lowest" in _refusal(misnumbered)
+    (bmi,) = _read(stated).groupings
+
+    assert [(group.id, group.label) for group in bmi.groups] == [
+        ("g1", "under 18.5"), ("g3", "obese"), ("g2", "18.5 to 29.9"),
+    ]
+    assert [group.rule.model_dump(exclude_none=True) for group in bmi.groups] == [
+        _rule("value", "<", 18.5), _rule("value", ">=", 30), _rule("value", ">=", 18.5),
+    ]
+    assert (bmi.reference, bmi.contrast) == ("g2", "g3")
+    assert grouping_levels(bmi) == ("g1", "g2", "g3")
+    assert grouping_labels(bmi) == {"g1": "under 18.5", "g2": "18.5 to 29.9", "g3": "obese"}
+
+
+def test_an_otherwise_group_takes_its_place_on_the_scale() -> None:
+    (bmi,) = _read(
+        _coarse_bmi(
+            groups=[
+                _group("g2", "under 18.5", _rule("value", "<", 18.5)),
+                _group("g1", "18.5 or more", "otherwise"),
+            ],
+            reference="g1",
+            contrast="g2",
+        )
+    ).groupings
+
+    assert [(group.id, group.label) for group in bmi.groups] == [
+        ("g1", "under 18.5"), ("g2", "18.5 or more"),
+    ]
+    assert (bmi.reference, bmi.contrast) == ("g2", "g1")
+
+
+def test_a_grouping_already_numbered_along_its_scale_is_read_as_stated() -> None:
+    for spec in (_coarse_bmi(), _fine_bmi()):
+        (bmi,) = _read(spec).groupings
+
+        assert bmi.model_dump(mode="json") == {**spec, "groups": [
+            {**group, "rule": group["rule"] if group["rule"] == "otherwise"
+             else {"unit": None, **group["rule"]}}
+            for group in spec["groups"]
+        ]}
+
+
+def test_a_nominal_grouping_is_never_renumbered() -> None:
+    stated = [
+        _group("g2", "hyperglycaemia only", _rule("max", ">", 180, "mg/dL")),
+        _group("g1", "hypoglycaemia", _rule("min", "<", 70, "mg/dL")),
+        _group("g3", "normoglycaemia", "otherwise"),
+    ]
+    (glucose,) = _read(_glucose(groups=stated)).groupings
+
+    assert [group.id for group in glucose.groups] == ["g2", "g1", "g3"]
+
+
+def test_two_groupings_that_differ_only_in_numbering_state_the_same_groups() -> None:
+    misnumbered = _coarse_bmi(
+        id="x3",
+        groups=[
+            _group("g1", "under 18.5", _rule("value", "<", 18.5)),
+            _group("g2", "30 or more", _rule("value", ">=", 30)),
+            _group("g4", "25 to 29.9", _rule("value", ">=", 25)),
+            _group("g3", "18.5 to 24.9", "otherwise"),
+        ],
+        reference="g3",
+        contrast="g2",
+    )
+
+    assert "two exposure groupings state the same groups" in _refusal(
+        _coarse_bmi(), misnumbered
+    )
 
 
 def test_an_ordinal_grouping_reads_one_summary() -> None:
