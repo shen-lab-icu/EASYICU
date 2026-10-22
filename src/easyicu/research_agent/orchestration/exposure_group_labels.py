@@ -181,6 +181,9 @@ def _row(
         ),
         "levels": levels,
         **chosen,
+        # The measured column each summary its rules read is taken from: what
+        # a study prepares to form these groups again.
+        "source_columns": dict(rules.source_columns),
         "groupings_record_sha256": record_sha256,
     }
 

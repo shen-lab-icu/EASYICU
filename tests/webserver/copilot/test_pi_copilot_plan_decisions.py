@@ -498,6 +498,49 @@ def test_a_documented_runtime_finding_leaves_the_plan_compilable() -> None:
     assert raised.value.code == "agent_plan_runtime_finding_required"
 
 
+def test_a_grouped_exposure_prepares_the_measurement_its_groups_are_formed_from() -> None:
+    # On the hosted pilot the lactate-group plan's settings named the grouped
+    # column as the concept to prepare; the next plan stopped at once with
+    # plan_change_required_concepts_unavailable.
+    plan = _aki_landmark_plan()
+    requirement = plan["steps"][0]["model_requirements"][0]
+    requirement.update(
+        {
+            "exposure_source": "aki_stage_group_x1",
+            "covariate_rationales": {
+                "age": "Baseline age precedes the exposure window.",
+                "sex": "Baseline sex precedes the exposure window.",
+            },
+            "covariate_temporal_roles": {"age": "baseline_static", "sex": "baseline_static"},
+        }
+    )
+    compiled = compile_agent_plan_configuration(
+        study=_aki_study(),
+        agent_plan=plan,
+        runtime_finding_codes=("POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",),
+        patient_cluster_available=True,
+        exposure_groups=[
+            {"variable": "aki_stage_group_x1", "source_columns": {"max": "aki_stage_max"}},
+        ],
+    )
+
+    assert compiled.patch["execution_concepts"]["primary_exposure"] == "aki_stage"
+    assert compiled.patch["execution_concepts"]["primary_exposure_aggregation"] == "max"
+    # A grouping read from two measured columns has no single exposure.
+    with pytest.raises(PlanDecisionError) as raised:
+        compile_agent_plan_configuration(
+            study=_aki_study(),
+            agent_plan=plan,
+            runtime_finding_codes=("POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",),
+            patient_cluster_available=True,
+            exposure_groups=[{
+                "variable": "aki_stage_group_x1",
+                "source_columns": {"max": "aki_stage_max", "min": "aki_stage_min"},
+            }],
+        )
+    assert raised.value.code == "agent_plan_grouped_exposure_source_unresolved"
+
+
 def test_landmark_choice_fails_closed_without_one_selected_design() -> None:
     plan = _plan()
     plan["design_selection"]["candidates"] = []

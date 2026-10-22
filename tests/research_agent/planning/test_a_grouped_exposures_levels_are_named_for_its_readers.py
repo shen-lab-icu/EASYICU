@@ -206,6 +206,8 @@ def test_each_code_is_named_by_the_studys_words_and_the_hosts_rule(
         # Without a compiled plan, an unstated choice is not marked.
         "reference": None,
         "contrast": None,
+        # The measured columns the rules read, which a study prepares.
+        "source_columns": {"max": "glu_max", "min": "glu_min"},
         "groupings_record_sha256": digest,
     }
     # An ordinal grouping's codes follow its scale; each rule follows the

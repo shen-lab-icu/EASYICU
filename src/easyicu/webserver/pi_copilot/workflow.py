@@ -1278,8 +1278,13 @@ def _enrich_plan_review(
     *,
     study: Mapping[str, Any],
     review: Mapping[str, Any],
+    exposure_groups: Any = None,
 ) -> ResearchWorkflowSnapshot:
-    """Attach conversational Plan review fields after workflow compilation."""
+    """Attach conversational Plan review fields after workflow compilation.
+
+    ``exposure_groups`` are the reviewed run's grouping rows, from which the
+    host compiler reads the measured column a grouped exposure is formed from.
+    """
 
     payloads = review.get("artifact_payloads")
     payloads = payloads if isinstance(payloads, Mapping) else {}
@@ -1369,6 +1374,7 @@ def _enrich_plan_review(
             agent_plan=agent_plan,
             runtime_finding_codes=runtime_codes,
             review_facts=_scientific_review_facts(review),
+            exposure_groups=exposure_groups if isinstance(exposure_groups, list) else None,
         )
     ):
         # The plan has already made a typed scientific selection and the
@@ -1589,7 +1595,13 @@ def build_project_workflow_projection(
             }
         )
     if latest_run:
-        snapshot = _enrich_plan_review(snapshot, study=study, review=review)
+        snapshot = _enrich_plan_review(
+            snapshot, study=study, review=review,
+            exposure_groups=(
+                plan_review_authority.get("exposure_group_labels")
+                if isinstance(plan_review_authority, Mapping) else None
+            ),
+        )
     host_decisions = host_decision_offers(
         snapshot,
         study=study,

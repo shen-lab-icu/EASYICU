@@ -150,6 +150,33 @@ def _source_coordinate(materialized: Any, *, field: str) -> tuple[str, str | Non
     return concept, None
 
 
+def _grouping_source_column(
+    materialized: Any, exposure_groups: Sequence[Mapping[str, Any]] | None,
+) -> Any:
+    """The measured column a grouped exposure's groups are formed from.
+
+    A grouped variable (``<concept>_group_<id>``) is no source concept: the
+    study prepares the measurement its rules read, and the run forms the
+    groups again from the question that states them.  A grouping read from
+    more than one measured column has no single exposure to prepare.
+    """
+
+    rows = [
+        row for row in (exposure_groups or ())
+        if isinstance(row, Mapping) and row.get("variable") == materialized
+    ]
+    if not rows:
+        return materialized
+    columns = rows[0].get("source_columns")
+    if not isinstance(columns, Mapping) or len(columns) != 1:
+        raise PlanDecisionError(
+            "agent_plan_grouped_exposure_source_unresolved",
+            "The grouped exposure is not formed from exactly one measured column.",
+            details={"variable": str(materialized)},
+        )
+    return str(next(iter(columns.values())))
+
+
 def _agent_primary_source_coordinate(
     materialized: Any, *, fixed_window: bool, study: Mapping[str, Any],
 ) -> tuple[str, str | None]:
@@ -1004,6 +1031,7 @@ def compile_agent_plan_configuration(
     patient_cluster_available: bool,
     first_stay_coordinate_available: bool | None = None,
     review_facts: Mapping[str, Any] | None = None,
+    exposure_groups: Sequence[Mapping[str, Any]] | None = None,
 ) -> CompiledAgentPlanConfiguration:
     """Compile structured Agent decisions into executable study coordinates.
 
@@ -1013,7 +1041,9 @@ def compile_agent_plan_configuration(
     Unsupported or incomplete coordinates fail closed instead of being guessed
     from prose or repaired with a more detailed prompt.  ``review_facts`` are
     the same review's facts; the trajectory route compiles the coordinates
-    they publish.
+    they publish.  ``exposure_groups`` are the reviewed run's grouping rows
+    (``recorded_exposure_group_labels``): a plan that models a grouped
+    exposure prepares the measured column its groups are formed from.
     """
 
     codes = tuple(
@@ -1169,7 +1199,8 @@ def compile_agent_plan_configuration(
         and _fixed_24h_landmark_candidate(agent_plan, landmark_study)
     )
     exposure, aggregation = _agent_primary_source_coordinate(
-        coordinates["exposure_materialized"], fixed_window=fixed_window, study=study,
+        _grouping_source_column(coordinates["exposure_materialized"], exposure_groups),
+        fixed_window=fixed_window, study=study,
     )
     outcome, _outcome_aggregation = _source_coordinate(
         coordinates["outcome_materialized"], field="outcome"
@@ -1295,6 +1326,7 @@ def agent_plan_configuration_available(
     agent_plan: Mapping[str, Any],
     runtime_finding_codes: Sequence[str],
     review_facts: Mapping[str, Any] | None = None,
+    exposure_groups: Sequence[Mapping[str, Any]] | None = None,
 ) -> bool:
     """Return structural availability; the mutation path rechecks source facts."""
 
@@ -1304,6 +1336,7 @@ def agent_plan_configuration_available(
             agent_plan=agent_plan,
             runtime_finding_codes=runtime_finding_codes,
             review_facts=review_facts,
+            exposure_groups=exposure_groups,
             patient_cluster_available=True,
             first_stay_coordinate_available=(
                 True
