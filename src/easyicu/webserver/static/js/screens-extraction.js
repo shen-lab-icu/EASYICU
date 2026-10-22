@@ -1424,7 +1424,7 @@
   }
   function setupStepSubtitle() {
     if (exSetupStep === 'cohort') return t('Set the cohort and observation window. Your feature selection is already saved.', '设置队列与观察窗口；上一页的特征选择已经保留。');
-    if (exSetupStep === 'export') return t('Choose the output format and review the extraction before it starts.', '选择导出格式，并在开始前核对本次抽取。');
+    if (exSetupStep === 'export') return hostedServer() ? t('Review the extraction before it starts.', '开始前核对本次抽取。') : t('Choose the output format and review the extraction before it starts.', '选择导出格式，并在开始前核对本次抽取。');
     return t('Choose the modules and features to extract. Cohort settings come next.', '先选择要提取的模块与特征；确认后再设置队列。');
   }
   function moveToSetupStep(next) {

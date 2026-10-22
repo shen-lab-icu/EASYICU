@@ -1245,8 +1245,8 @@
 
       <div class="empty mt-16">
         <div class="glyph">${icon('viz', 22)}</div>
-        <div class="t">${t('Preview workspace awaits data', '预览工作区等待数据')}</div>
-        <div class="d">${t('Generate demo data or load exported files above; the review tabs will appear here as a compact multi-view workspace.', '在上方生成演示数据或加载导出文件；审阅标签页会作为紧凑的多视图工作区出现在这里。')}</div>
+        <div class="t">${hostedServer() ? t('Load data above to review patients here', '加载上方数据后在这里审阅患者') : t('Preview workspace awaits data', '预览工作区等待数据')}</div>
+        ${hostedServer() ? '' : `<div class="d">${t('Generate demo data or load exported files above; the review tabs will appear here as a compact multi-view workspace.', '在上方生成演示数据或加载导出文件；审阅标签页会作为紧凑的多视图工作区出现在这里。')}</div>`}
       </div>`;
     },
     afterRender(root) {

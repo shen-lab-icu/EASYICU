@@ -109,6 +109,19 @@ _COHORT_PROGRESS_MESSAGES = {
     "cohort_selected": "Cohort selected",
     "ready": "Cohort resolved",
 }
+_COHORT_PROGRESS_MESSAGES_ZH = {
+    "normalizing": "准备队列条件",
+    "all_icu_ids": "列出 ICU 住院",
+    "all_icu_selected": "已确定 ICU 住院总数",
+    "demographics_filter": "按人口学和住院条件筛选",
+    "demographics_selected": "已确定基础队列",
+    "concept_prefilter": "按临床指标预筛",
+    "concept_prefilter_selected": "临床指标预筛完成",
+    "icd_filter": "按 ICD 诊断筛选",
+    "icd_selected": "ICD 诊断筛选完成",
+    "cohort_selected": "已确定队列",
+    "ready": "队列已就绪",
+}
 
 
 def _safe_dir(path: Path) -> bool:
@@ -2475,6 +2488,7 @@ def make_export_runner(
                     "message": _COHORT_PROGRESS_MESSAGES.get(
                         stage, stage.replace("_", " ")
                     ),
+                    "message_zh": _COHORT_PROGRESS_MESSAGES_ZH.get(stage),
                     **extra,
                 }
             )
@@ -2526,7 +2540,8 @@ def make_export_runner(
                 "total": cohort_progress_total,
                 "module": "cohort",
                 "stage": "ready",
-                "message": "Cohort resolved",
+                "message": _COHORT_PROGRESS_MESSAGES["ready"],
+                "message_zh": _COHORT_PROGRESS_MESSAGES_ZH["ready"],
                 "cohort_size": cohort_size,
             }
         )

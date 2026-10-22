@@ -186,7 +186,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261022-help1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261022-keep1" in index_html
+    assert "js/screens-extraction.js?v=20261022-copy2" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261021-named-steps1" in index_html
     assert "js/screens-help.js?v=20261022-download1" in index_html
@@ -2890,7 +2890,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     )
     assert "js/screens-viz-patient-tables.js?v=20261022-zhlabels1" in index_html
     assert "js/screens-viz-patient-overview.js?v=20261022-zhlabels1" in index_html
-    assert "js/screens-viz-patient.js?v=20261022-lean1" in index_html
+    assert "js/screens-viz-patient.js?v=20261022-copy2" in index_html
     assert index_html.index("js/screens-viz-patient-navigation.js?") < index_html.index(
         "js/screens-viz.js?"
     )
