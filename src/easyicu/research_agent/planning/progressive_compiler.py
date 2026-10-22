@@ -2282,9 +2282,15 @@ def _compile_inputs(
                         step=step, step_index=step_index, path="population_scope") from exc
         primary_product = "table:adjusted_association_estimates"
         if step.population_scope == "analysis_cohort" and primary_product in inputs:
+            # Name the repair: the scope is outline-sealed, so the one thing a
+            # step can change is the product it binds; following the primary
+            # step in depends_on does not require reading its result.
             raise _fail(
                 "progressive_population_scope_conflict",
-                "analysis_cohort scope cannot also bind a primary-model population",
+                "analysis_cohort scope cannot also bind a primary-model population: "
+                f"remove {primary_product} from product_inputs (the outline-sealed "
+                "population_scope='analysis_cohort' reads the broader cohort, and "
+                "depending on the primary step does not require binding its result)",
                 step=step, step_index=step_index, path="population_scope",
             )
         if step.population_scope == "primary_model":
