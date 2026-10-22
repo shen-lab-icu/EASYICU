@@ -2251,23 +2251,26 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
     """
     kwargs = dict(load_kwargs)
     concepts = list(kwargs["concepts"])
-    coherent_sofa1 = (
-        module_name == "sofa1_score"
-        and {"sofa", *_SOFA1_COMPONENT_NAMES}.issubset(concepts)
-    )
-    if coherent_sofa1:
-        kwargs["concepts"] = [c for c in concepts if c not in _SOFA1_COMPONENT_NAMES]
+    score, components = {
+        "sofa1_score": ("sofa", _SOFA1_COMPONENT_NAMES),
+        "sofa2_score": ("sofa2", SOFA2_COMPONENT_NAMES),
+    }.get(module_name, ("", ()))
+    coherent_sofa = {score, *components}.issubset(concepts)
+    if coherent_sofa:
+        kwargs["concepts"] = [c for c in concepts if c not in components]
         kwargs["keep_components"] = True
         # The R-style display projection retains only requested concept names,
         # discarding the callback's companion organs. Native publication owns
         # identifier/schema normalization and can retain the full typed frame.
         kwargs["r_compatible"] = False
     result = load_concepts_fn(**kwargs)
-    if coherent_sofa1 and isinstance(result, pd.DataFrame) and not result.empty:
-        missing = {"sofa", *_SOFA1_COMPONENT_NAMES}.difference(result.columns)
+    if coherent_sofa and isinstance(result, pd.DataFrame) and not result.empty:
+        missing = {score, *components}.difference(result.columns)
         if missing:
-            raise ValueError(f"SOFA-1 aggregate callback omitted rolled components: {sorted(missing)}")
-        result.attrs[_SOFA1_TIME_BASIS_KEY.decode()] = _SOFA1_TIME_BASIS.decode()
+            label = "SOFA-1" if score == "sofa" else "SOFA-2"
+            raise ValueError(f"{label} aggregate callback omitted rolled components: {sorted(missing)}")
+        if score == "sofa":
+            result.attrs[_SOFA1_TIME_BASIS_KEY.decode()] = _SOFA1_TIME_BASIS.decode()
     return result
 
 
