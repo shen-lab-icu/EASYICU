@@ -12,6 +12,7 @@ const ZERO_USAGE = Object.freeze({
 // the language requirement, then the current-turn owner receipts.
 export const OWNER_CONTEXT_MARKER = "\n\n[EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1]\n";
 const HOST_SECTION_PREFIX = "\n\n[EASYICU_";
+const HOST_TRANSITION_MARKER = "[EASYICU_HOST_TRANSITION_V1]";
 const DEMO_WORD = "(?:demo|演示|示例)";
 
 function latestStudyContextUpdate(context) {
@@ -131,6 +132,34 @@ function studyUpdateIsReadyForPlanning(update) {
   // Those are execution requirements, not reasons to reopen initial setup.
   // Read the returned workflow, never infer readiness from the model's args.
   return workflow?.next_action_code === "provider_ready_to_generate_plan";
+}
+
+// The plan step is blocked for a study family v1 does not offer on the bound
+// database (workflow.study_family_gap).  The host card under the reply states
+// the refusal and what the study can do instead, so the reply says only what
+// was saved: a model's paraphrase restated the card and leaked the gap's codes
+// ("survival 分析族目前仅支持 miiv").
+function blockedByFamilyGap(workflow) {
+  return workflow?.next_action_code === "study_family_database_out_of_scope"
+    && Boolean(workflow.study_family_gap && typeof workflow.study_family_gap === "object");
+}
+
+// The workflow of a host transition turn: the transition is the context's last
+// message, and its owner receipts carry the workflow.
+function hostTransitionWorkflow(context) {
+  const messages = Array.isArray(context?.messages) ? context.messages : [];
+  const last = messages.at(-1);
+  if (last?.role !== "user" || !messageText(last).includes(HOST_TRANSITION_MARKER)) return null;
+  const projected = ownerContextReceipts(context).find(
+    (receipt) => receipt?.code === "easyicu_research_workflow_projected",
+  );
+  return projected?.details?.workflow ?? null;
+}
+
+function confirmedSourceText(workflow, language) {
+  const label = boundedLabel(workflow?.study_setup_receipt?.configuration?.data_source?.label);
+  if (language === "zh") return label ? `已确认使用 ${label} 数据。` : "已确认数据来源。";
+  return label ? `The study now uses the ${label} data.` : "The data source is confirmed.";
 }
 
 // The design the update owner withheld while saving the rest
@@ -449,6 +478,10 @@ export function hostPostToolFinalization(model, context, language) {
   if (literatureSearch) {
     return toolCallStream(model, "easyicu_search_literature", literatureSearch);
   }
+  const transition = hostTransitionWorkflow(context);
+  if (blockedByFamilyGap(transition)) {
+    return completedStream(finalizedMessage(model, confirmedSourceText(transition, language)));
+  }
   const update = latestStudyContextUpdate(context);
   const withheld = [withheldDesignText(update, language), unsavedFieldsText(update, language)]
     .filter(Boolean)
@@ -461,6 +494,10 @@ export function hostPostToolFinalization(model, context, language) {
         withheld,
       ),
     ));
+  }
+  if (blockedByFamilyGap(update?.receipt?.details?.workflow)) {
+    const saved = language === "zh" ? "研究问题已保存。" : "The research question is saved.";
+    return completedStream(finalizedMessage(model, withWithheldDesign(saved, withheld)));
   }
   if (!studyUpdateIsReadyForPlanning(update)) return null;
   const text = language === "zh"
