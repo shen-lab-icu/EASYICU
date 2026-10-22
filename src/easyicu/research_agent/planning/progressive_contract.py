@@ -960,7 +960,14 @@ class ProgressiveSkeletonStep(BaseModel):
                     "host study-population product"
                 )
         elif (self.population_scope is not None or self.population_scope_change_reason is not None) and self.module_id != "absolute_risk_context":
-            raise ValueError("population_scope belongs only to absolute_risk_context")
+            # A step named after absolute risk is not that module: name the
+            # module the scope belongs to and this step's own, so a retry
+            # cannot read the rule as being about its step_id.
+            raise ValueError(
+                "population_scope belongs only to module_id='absolute_risk_context', "
+                f"not to module_id={self.module_id!r} (whatever its step_id): set "
+                "population_scope=null and population_scope_change_reason=null"
+            )
         if self.module_id == "exposure_outcome_distribution":
             required = (
                 self.primary_exposure,
