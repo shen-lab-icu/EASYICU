@@ -454,6 +454,50 @@ def test_agent_plan_runtime_projection_rejects_unowned_runtime_findings() -> Non
     assert raised.value.code == "agent_plan_runtime_finding_unsupported"
 
 
+def test_a_documented_runtime_finding_leaves_the_plan_compilable() -> None:
+    # On the hosted pilot a lactate-group association plan carried the
+    # reviewer's minor note that its complete-case refits restate the primary
+    # estimate.  No owner executes anything for it, but it made the plan
+    # uncompilable: no configuration card was offered, and the revision the
+    # page offered instead was refused (plan_revision_owner_resolution_required).
+    plan = _aki_landmark_plan()
+    plan["steps"][0]["model_requirements"][0].update(
+        {
+            "covariate_rationales": {
+                "age": "Baseline age precedes the exposure window.",
+                "sex": "Baseline sex precedes the exposure window.",
+            },
+            "covariate_temporal_roles": {"age": "baseline_static", "sex": "baseline_static"},
+        }
+    )
+    with_note = compile_agent_plan_configuration(
+        study=_aki_study(),
+        agent_plan=plan,
+        runtime_finding_codes=(
+            "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+            "COMPLETE_CASE_SENSITIVITY_REPEATS_PRIMARY",
+        ),
+        patient_cluster_available=True,
+    )
+    without = compile_agent_plan_configuration(
+        study=_aki_study(),
+        agent_plan=plan,
+        runtime_finding_codes=("POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",),
+        patient_cluster_available=True,
+    )
+
+    assert with_note == without
+    # The note alone leaves this compiler nothing to close.
+    with pytest.raises(PlanDecisionError) as raised:
+        compile_agent_plan_configuration(
+            study=_aki_study(),
+            agent_plan=plan,
+            runtime_finding_codes=("COMPLETE_CASE_SENSITIVITY_REPEATS_PRIMARY",),
+            patient_cluster_available=True,
+        )
+    assert raised.value.code == "agent_plan_runtime_finding_required"
+
+
 def test_landmark_choice_fails_closed_without_one_selected_design() -> None:
     plan = _plan()
     plan["design_selection"]["candidates"] = []
