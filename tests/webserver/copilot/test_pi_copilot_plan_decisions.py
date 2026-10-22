@@ -952,6 +952,35 @@ def test_any_fixed_window_exposure_gets_the_same_landmark_choice() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "design_id",
+    ["landmark_adjusted_association", "landmark_age_adjusted_association", "lactate_landmark_24h"],
+)
+def test_a_selected_design_named_a_landmark_is_compiled_as_one(design_id: str) -> None:
+    # pilot1 round 2 (10-22), A6: a progressive plan named its landmark in its
+    # own words and was refused as not one; the card then offered no way on.
+    plan = _window_plan("lact_max", design_id=design_id)
+
+    context = plan_decision_context(
+        plan, "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED", _windowed_study()
+    )
+
+    assert context["timing_profile"] == "fixed_24h_landmark"
+
+
+@pytest.mark.parametrize(
+    "design_id", ["adjusted_association", "landmarks_association", "naive_admission_start_association"],
+)
+def test_a_selected_design_not_named_a_landmark_is_not_compiled_as_one(design_id: str) -> None:
+    plan = _window_plan("lact_max", design_id=design_id)
+
+    context = plan_decision_context(
+        plan, "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED", _windowed_study()
+    )
+
+    assert context["timing_profile"] != "fixed_24h_landmark"
+
+
 def test_the_landmark_choice_keeps_the_plans_own_window_operation() -> None:
     plan = _window_plan("map_mean", design_id="landmark_adjusted_association")
 
