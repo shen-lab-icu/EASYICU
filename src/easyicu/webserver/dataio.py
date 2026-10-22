@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import heapq
 import json
 import os
 import re
@@ -95,6 +96,7 @@ DEFAULT_OBSERVATION_WINDOW_HOURS = (
     primary_cohort.DEFAULT_OBSERVATION_WINDOW_HOURS
 )
 _WORKSPACE_SAMPLE_LIMIT = 500
+_EXPORT_COHORT_SAMPLE_SEED = 42
 
 _COHORT_PROGRESS_MESSAGES = {
     "normalizing": "Preparing cohort contract",
@@ -1797,6 +1799,39 @@ def _match_concept_derived_cohort_ids(
     return set(base_ids) & matched
 
 
+def _sample_export_cohort_ids(
+    eligible_ids: Sequence[Any],
+    max_patients: int,
+    *,
+    seed: int = _EXPORT_COHORT_SAMPLE_SEED,
+) -> Tuple[List[Any], Dict[str, Any]]:
+    """Cap by a stable hash rank, returning IDs and aggregate sampling fields.
+
+    The rank excludes the cap so increasing it keeps every previously sampled
+    stay.  A heap holds only the chosen ranks; discovery supplies IDs only.
+    Preserve the original order and metadata when the cap does not cut stays.
+    """
+    if max_patients <= 0 or len(eligible_ids) <= max_patients:
+        return list(eligible_ids), {}
+
+    sampled = heapq.nsmallest(
+        max_patients,
+        eligible_ids,
+        key=lambda stay_id: (
+            hashlib.sha256(f"{seed}:{stay_id}".encode("utf-8")).digest(),
+            str(stay_id),
+        ),
+    )
+    return sorted(sampled), {
+        "sampling": {
+            "method": "seeded_hash",
+            "seed": seed,
+            "eligible": len(eligible_ids),
+            "selected": len(sampled),
+        }
+    }
+
+
 def _resolve_export_cohort(
     data_path: str,
     database: str,
@@ -1836,11 +1871,14 @@ def _resolve_export_cohort(
         ids_list, id_col = api.get_all_patient_ids(
             str(data_path),
             database=_database_for_patient_filter(database),
-            max_patients=max_n or None,
+            max_patients=None,
             listing=listing,
         )
+        uncapped = len(ids_list)
+        ids_list, sampling = _sample_export_cohort_ids(ids_list, max_n)
         emit(
-            "all_icu_selected", selected=len(ids_list), max_patients_applied=bool(max_n)
+            "all_icu_selected", selected=len(ids_list), max_patients_applied=bool(max_n),
+            **sampling,
         )
         return {
             "patient_ids": {id_col: list(ids_list)} if ids_list else None,
@@ -1852,27 +1890,31 @@ def _resolve_export_cohort(
                 "count_unit": "icu_stay",
                 "selected": len(ids_list),
                 "max_patients_applied": bool(max_n),
+                **sampling,
                 "applied_filters": [],
-                # Below its cap (or without one) the export holds every ICU
-                # stay of the source; a full cap leaves the source's count
-                # unknown, and may have cut stays.
+                # Discovery now counts the eligible stays before sampling.
+                # Keep the historical report unchanged for nonbinding caps,
+                # including the case where the cap equals the source count.
                 **(
                     {
-                        "source_total": len(ids_list),
-                        "selected_before_cap": len(ids_list),
+                        "source_total": uncapped,
+                        "selected_before_cap": uncapped,
                     }
-                    if not max_n or len(ids_list) < max_n
+                    if not max_n or len(ids_list) < max_n or sampling
                     else {}
                 ),
                 **(
                     {
-                        # The first stays in the order the discovery read
-                        # them: the stay table's file order, or the loader's
-                        # ID order when the source has no such table.
                         "cap": {
                             "max_patients": max_n,
-                            "rule": listing.get("order") or "unrecorded",
-                            "cut": None if len(ids_list) >= max_n else False,
+                            "rule": (
+                                "seeded_random_sample" if sampling
+                                else listing.get("order") or "unrecorded"
+                            ),
+                            "cut": (
+                                True if sampling
+                                else None if len(ids_list) >= max_n else False
+                            ),
                         }
                     }
                     if max_n
@@ -1987,13 +2029,13 @@ def _resolve_export_cohort(
 
     ids = sorted(selected, key=lambda value: str(value))
     uncapped = len(ids)
-    if max_n and len(ids) > max_n:
-        ids = ids[:max_n]
+    ids, sampling = _sample_export_cohort_ids(ids, max_n)
     emit(
         "cohort_selected",
         selected=len(ids),
         selected_before_cap=uncapped,
         max_patients_applied=bool(max_n and uncapped > max_n),
+        **sampling,
     )
 
     return {
@@ -2016,11 +2058,14 @@ def _resolve_export_cohort(
             "concept_matches": concept_matches,
             "selected_before_icd": before_icd,
             "max_patients_applied": bool(max_n and uncapped > max_n),
+            **sampling,
             **(
                 {
                     "cap": {
                         "max_patients": max_n,
-                        "rule": "identifier_text_order",
+                        "rule": (
+                            "seeded_random_sample" if sampling else "identifier_text_order"
+                        ),
                         "cut": uncapped > max_n,
                     }
                 }

@@ -1527,6 +1527,7 @@
     if (!rep || dataMode() !== 'real') return '';
     const sel = Number(rep.selected || 0);
     const before = Number(rep.selected_before_cap || 0);
+    if (rep.sampling && before > sel) return t(`random sample of ${sel.toLocaleString()} from ${before.toLocaleString()} matched stays`, `从 ${before.toLocaleString()} 条匹配住院中随机抽取 ${sel.toLocaleString()} 条`);
     if (rep.max_patients_applied && before > sel) {
       return t(`sampled ${sel.toLocaleString()} of ${before.toLocaleString()} matched stays (sample cap)`, `已从 ${before.toLocaleString()} 条匹配住院中采样 ${sel.toLocaleString()} 条（采样上限）`);
     }

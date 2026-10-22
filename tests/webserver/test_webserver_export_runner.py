@@ -137,6 +137,74 @@ def _patch_export_api(
     monkeypatch.setattr(api_module, "load_concepts", fake_load_concepts)
 
 
+@pytest.mark.parametrize("filtered", [False, True], ids=["all_icu", "filtered"])
+def test_a_capped_export_persists_the_shared_sample_and_aggregate_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filtered: bool
+) -> None:
+    import easyicu.api as api_module
+    import easyicu.patient_filter as patient_filter_module
+
+    eligible = list(range(20, 0, -1))
+    listing_caps = []
+
+    def list_ids(path, database=None, max_patients=None, listing=None):
+        listing_caps.append(max_patients)
+        if listing is not None:
+            listing["order"] = "source_file_order"
+        return eligible[:max_patients] if max_patients else eligible, "stay_id"
+
+    class FakeFilter:
+        def __init__(self, **kwargs):
+            self._last_original_count = len(eligible)
+
+        def filter(self, **kwargs):
+            return pd.DataFrame({"patient_id": eligible})
+
+    loaded: list[dict[str, object]] = []
+    _patch_export_api(monkeypatch, loaded)
+    monkeypatch.setattr(api_module, "get_all_patient_ids", list_ids)
+    monkeypatch.setattr(patient_filter_module, "PatientFilter", FakeFilter)
+    job = _ExportJob()
+    out = tmp_path / "out"
+    runner = dataio.make_export_runner(
+        data_path=str(tmp_path),
+        database="miiv",
+        modules=["demographics", "vitals"],
+        concepts={"demographics": ["age"], "vitals": ["hr"]},
+        out_dir=str(out),
+        max_patients=5,
+        cohort={"age_min": 18} if filtered else None,
+    )
+
+    result = runner(job)
+    manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+
+    assert result["file_count"] == len(loaded) == 2
+    assert listing_caps == ([] if filtered else [None])
+    for call in loaded:
+        assert call["kwargs"]["patient_ids"] == {"stay_id": [1, 6, 11, 13, 20]}
+    report = manifest["cohort_report"]
+    assert manifest["max_patients"] == 5
+    assert report["source_total"] == report["selected_before_cap"] == 20
+    assert report["selected"] == 5
+    assert report["sampling"] == {
+        "method": "seeded_hash", "seed": 42, "eligible": 20, "selected": 5,
+    }
+    selection_event = next(
+        event for event in job.events if "max_patients_applied" in event
+    )
+    assert selection_event["sampling"] == report["sampling"]
+    assert selection_event["max_patients_applied"] is True
+    assert next(event for event in job.events if event["type"] == "start")[
+        "cohort"
+    ] == report
+    assert "patient_ids" not in json.dumps(report)
+    assert all(
+        "patient_ids" not in event and "stay_id" not in event
+        for event in job.events
+    )
+
+
 def test_export_runner_applies_native_cohort_contract_to_patient_ids(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
