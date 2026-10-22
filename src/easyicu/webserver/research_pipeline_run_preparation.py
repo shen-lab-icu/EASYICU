@@ -33,6 +33,7 @@ from easyicu.webserver.landmark_survival_runtime_projection import (
     survival_exposure_onset_column,
 )
 from easyicu.webserver.causal_trial_design import stop_unset_causal_design
+from easyicu.webserver.study_family_scope import stop_family_out_of_scope
 from easyicu.webserver.study_family_design import record_unset_family_design
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 from easyicu.webserver.plan_change_request import PlanChangeRequest
@@ -246,6 +247,9 @@ def _prepare_scientific_launch(
         # that family, not on the planner's keyword routing
         # (``study_family_design``).
         study = dict(record_unset_family_design(study, question=question))
+        # A family v1 does not offer on the bound database is refused here,
+        # on the family the plan would use (``study_family_scope``).
+        stop_family_out_of_scope(study, question=question, database=database)
         # A resumed run continues on the package its sealed plan bound; a new
         # plan or run analyzes the bound export's rows as the study's own.
         _require_export_holds_study_cohort(study, request.export_path)

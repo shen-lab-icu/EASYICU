@@ -1,0 +1,100 @@
+"""Which analysis families v1 offers on the study's bound database.
+
+Product scope U1 (user decision 2026-10-09, ``docs/EASYICU_PRODUCT_AGREEMENT.md``):
+on eICU-CRD the survival, causal-simulation and subtyping/trajectory cells
+are out of scope, and the correct behaviour is to say why and refuse.  The
+causal cell has its own owner (``target_trial_setup.target_trial_database_gap``,
+applied by ``causal_trial_design``).  This owner refuses the other two at the
+research launch, before any model is called (:func:`stop_family_out_of_scope`).
+
+The family is the one the study records, else the one the planner's own
+family routing reads in the question -- the inference the plan itself would
+use -- so the refusal and the plan cannot disagree.  A study whose question
+states a description or an association records that design first
+(``study_family_design``) and is planned on it, so a question that only
+mentions survival words is not refused.  The gap is codes only: the family,
+the database and the databases v1 offers that family on.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, Mapping, Optional
+
+__all__ = [
+    "STUDY_FAMILY_DATABASE_OUT_OF_SCOPE",
+    "STUDY_FAMILY_GAP_FIELD",
+    "stop_family_out_of_scope",
+    "study_family_database_gap",
+]
+
+STUDY_FAMILY_DATABASE_OUT_OF_SCOPE = "study_family_database_out_of_scope"
+STUDY_FAMILY_GAP_FIELD = "study_family_gap"
+#: Families v1 does not offer on a database; the causal cell is target_trial_setup's.
+_OUT_OF_SCOPE: Dict[str, frozenset[str]] = {
+    "eicu": frozenset({"survival", "trajectory_clustering"}),
+}
+#: Where v1 offers every study family.
+_ALL_FAMILIES_DATABASES = ("miiv",)
+
+
+def _study_family(study: Mapping[str, Any], question: str, database: str) -> Optional[str]:
+    from easyicu.research_agent.planning.analysis_types import (
+        canonical_analysis_family,
+        infer_analysis_type,
+    )
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+
+    design = study.get("analysis_design")
+    recorded = (
+        canonical_analysis_family(str(design.get("analysis_family") or "") or None)
+        if isinstance(design, Mapping)
+        else None
+    )
+    if recorded:
+        return recorded
+    text = str(question or "").strip()
+    if not text:
+        return None
+    context = ResearchContext(
+        research_question=text,
+        cohort=CohortDescriptor(cohort_name="study", database=database, n_stays=0),
+        variables=[],
+    )
+    return infer_analysis_type(context).key
+
+
+def study_family_database_gap(
+    study: Mapping[str, Any], *, question: str, database: str
+) -> Optional[Dict[str, Any]]:
+    """Why v1 does not offer the study's family on ``database``, or ``None``."""
+
+    excluded = _OUT_OF_SCOPE.get(str(database or "").strip().lower())
+    if not excluded:
+        return None
+    family = _study_family(study, question, database)
+    if family not in excluded:
+        return None
+    return {
+        "code": STUDY_FAMILY_DATABASE_OUT_OF_SCOPE,
+        "family": family,
+        "database": database,
+        "supported_databases": list(_ALL_FAMILIES_DATABASES),
+    }
+
+
+def stop_family_out_of_scope(
+    study: Mapping[str, Any], *, question: str, database: str
+) -> None:
+    """Stop a launch whose study family v1 does not offer on its database."""
+
+    from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+
+    gap = study_family_database_gap(study, question=question, database=database)
+    if gap is None:
+        return
+    raise ResearchPipelineRunError(
+        gap["code"],
+        f"This version does not offer {gap['family']} studies on {database}, so "
+        "planning stopped before any model was called and no analysis was run.",
+        details={STUDY_FAMILY_GAP_FIELD: gap},
+    )

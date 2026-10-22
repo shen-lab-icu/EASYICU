@@ -88,6 +88,13 @@ for (const language of ['zh', 'en']) {
   assert.ok(errors.errorText({ code: 'study_causal_trial_design_unset' })
     .includes(language === 'zh' ? '目标试验' : 'target-trial'));
   assert.ok(errors.errorText({ code: 'target_trial_database_out_of_scope' }).includes('MIMIC-IV'));
+  // A family v1 does not offer on eICU names the family, the database and where to ask.
+  const scope = errors.errorText({ code: 'study_family_database_out_of_scope', details: { study_family_gap: {
+    code: 'study_family_database_out_of_scope', family: 'trajectory_clustering', database: 'eicu', supported_databases: ['miiv'],
+  } } });
+  assert.ok(scope.includes('eICU') && scope.includes('MIMIC-IV'));
+  assert.ok(scope.includes(language === 'zh' ? '亚型或轨迹聚类分析' : 'subtype or trajectory clustering'));
+  assert.ok(errors.errorText({ code: 'study_family_database_out_of_scope' }).includes(language === 'zh' ? '这类研究' : 'this kind of study'));
   assert.ok(errors.errorText({ code: 'target_trial_treatment_not_registered', details: {
     causal_trial_gap: { treatment_concepts: [{ label_en: 'Albumin', label_zh: '白蛋白' }],
       supported_classes: [{ label_en: 'Vasopressors', label_zh: '升压药' }] },

@@ -180,6 +180,22 @@
           `这道目标试验题所用治疗尚未登记为可模拟治疗${names.length ? `：${names.join('、')}` : ''}，分析没有开始。${classes.length ? `当前登记的治疗类别：${classes.join('、')}。` : ''}如需修改研究设计，请在对话中说明。`,
         );
       }
+      if (error.code === 'study_family_database_out_of_scope') {
+        // The gap is codes only; a name it does not know reads generically.
+        const gap = error.details && error.details.study_family_gap || {};
+        const family = {
+          survival: ['survival (time-to-event) analysis', '生存分析（时间到事件）'],
+          trajectory_clustering: ['subtype or trajectory clustering', '亚型或轨迹聚类分析'],
+        }[gap.family] || ['this kind of study', '这类研究'];
+        const databases = { eicu: 'eICU', miiv: 'MIMIC-IV' };
+        const database = databases[gap.database] || tr('this database', '这个数据库');
+        const offered = (Array.isArray(gap.supported_databases) ? gap.supported_databases : ['miiv'])
+          .map(key => databases[key]).filter(Boolean).join(tr(' or ', '或'));
+        return tr(
+          `This version does not offer ${family[0]} on ${database}, so no analysis started. Ask it on ${offered || 'MIMIC-IV'}, or ask with another study design.`,
+          `本版本在 ${database} 上不支持${family[1]}，分析没有开始。可以改用 ${offered || 'MIMIC-IV'} 数据，或换一种研究设计后再问。`,
+        );
+      }
       if (error.code === 'target_trial_database_out_of_scope') {
         return tr('Target-trial emulation is currently supported only for MIMIC-IV. This study’s source is outside that scope, so analysis did not start. Revise the study in the conversation if appropriate.', '当前目标试验模拟只支持 MIMIC-IV。本研究的数据源不在该范围内，分析没有开始；如需修改研究，请在对话中说明。');
       }
