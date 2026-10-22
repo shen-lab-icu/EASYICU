@@ -101,6 +101,7 @@ const drilldown = {
     modes: [],
     multi_entity_comparison: {
       feature: 'hr', label: 'Heart Rate', unit: 'bpm', module: 'vitals', module_label: 'Vital Signs',
+      time_axis: { kind: 'relative_hours', label_en: 'ICU hour', label_zh: 'ICU 入科后小时', unit: 'hour' },
       traces: [
         { ref: 'r1', label: 'Entity 1', values: [80, 90], times: [0, 1] },
         { ref: 'r2', label: 'Entity 2', values: [70, 75], times: [0, 1] },
@@ -134,6 +135,10 @@ const drilldown = {
     panels: [{ id: 'missingness', label: 'Missingness', rows: [{ feature: 'hr', name: 'Heart Rate', value: 10, records: 30 }] }],
   },
   privacy: { max_points_per_signal: 24 },
+  blocked_features: [
+    { id: 'raw_identifier_table', reason: 'Patient Review returns aggregates and one pseudonymous entity only.' },
+    { id: 'arbitrary_entity_search', reason: 'Search by direct clinical identifiers is not exposed in the native API.' },
+  ],
 };
 
 context.EU_VIZ_PATIENT.init({ t: context.t, esc, icon: () => '', fmtInt: String, fmtNum: v => String(v), fmtPct: v => `${v}%` });
@@ -173,13 +178,14 @@ for (const concept of ['hr', 'map', 'sofa2', 'sofa2_resp', 'lact']) {
   assert(zhText.includes(zhName), `Chinese Patient Review should name ${concept} "${zhName}"`);
 }
 for (const word of ['Entity 1', 'Female', 'Deceased', 'Negative', 'blood_gas', 'chemistry',
-  'Bounded local table previews', 'Local concept scope', 'token', 'payload', '伪匿名', '载荷', '清洗回执', '回执核验', '本地', 'points']) {
+  'Bounded local table previews', 'Local concept scope', 'token', 'payload', '伪匿名', '载荷', '清洗回执', '回执核验', '本地', 'points',
+  'raw_identifier_table', 'arbitrary_entity_search', 'pseudonymous entity only', ' ready', 'unknown', '三种审阅视图', '时间序列工作区']) {
   assert(!zhText.includes(word), `Chinese hosted Patient Review still shows "${word}"`);
 }
 assert(!EMOJI.test(zhText), 'module headings must not carry the catalog picker emoji');
 // Patient-level rows are not downloadable on a hosted instance (user decision 2026-10-22).
 assert(!zh.page.includes('data-patient-export'), 'a hosted Patient Review offers no patient-level Export');
-for (const word of ['病例 1', '病例 2', '女', '死亡', '阴性', '5.6 天', '血气分析', '本次核查的特征', '匿名编号']) {
+for (const word of ['病例 1（当前）', '病例 2', '女', '死亡', '阴性', '5.6 天', '血气分析', '本次核查的特征', '匿名编号', 'ICU 入科后小时 (h)']) {
   assert(zhText.includes(word), `Chinese Patient Review should show "${word}"`);
 }
 
@@ -225,6 +231,8 @@ const review = {
         rows: [
           { metric: 'N', kind: 'count', values: [80, 20] },
           { metric: 'Median HR', feature_id: 'vitals:hr', column: 'hr', kind: 'numeric', values: [80, 90] },
+          { metric: 'Sofa2 Cardio Available %', feature_id: 'sofa2_score:sofa2_cardio_available', column: 'sofa2_cardio_available', kind: 'percent', values: [90, 95] },
+          { metric: 'Death Time available %', feature_id: 'outcome:death_time', column: 'death_time', kind: 'percent', values: [0, 100] },
         ],
       },
     }],
@@ -249,18 +257,18 @@ function renderCohort() {
 
 context.EU_LANG = 'zh';
 const cohortZh = renderCohort();
-for (const word of ['Analysis readiness', 'manifest', 'payload', '载荷', '路径哈希', '410efec930fa', '草稿核验',
-  'Blood Gas Analysis', 'Vital Signs', 'blood_gas', 'vitals', 'Heart Rate', 'KM/log-rank']) {
+for (const word of ['Analysis readiness', '分析准备情况', 'manifest', 'payload', '载荷', '路径哈希', '410efec930fa', '草稿核验',
+  'Blood Gas Analysis', 'Vital Signs', 'blood_gas', 'vitals', 'Heart Rate', 'KM/log-rank', 'Table One', 'Cardio', 'Death Time', 'coverage']) {
   assert(!cohortZh.includes(word), `Chinese Cohort Statistics still shows "${word}"`);
 }
 assert(!/\bHR\b/.test(cohortZh), 'Chinese Cohort Statistics should not name heart rate by its column code');
-for (const word of ['分析准备情况', '血气分析', '生命体征', '心率', '心率 中位数', '乳酸', '汇总结果已生成']) {
+for (const word of ['基线特征表 (Table 1)', '血气分析', '生命体征', '心率', '心率 中位数', '乳酸', ' 可用 %', '院内死亡时间 有记录比例 %']) {
   assert(cohortZh.includes(word), `Chinese Cohort Statistics should show "${word}"`);
 }
 
 context.EU_LANG = 'en';
 const cohortEn = renderCohort();
-for (const word of ['Analysis readiness', 'Median HR', 'HR']) {
+for (const word of ['Median HR', 'HR', 'Sofa2 Cardio Available %']) {
   assert(cohortEn.includes(word), `English Cohort Statistics should keep "${word}"`);
 }
 

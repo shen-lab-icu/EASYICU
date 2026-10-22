@@ -451,7 +451,7 @@
       ? chartSummary(label, values, unit)
       : `${label}. Bounded pseudonymous entity comparison.`;
     const currentHtml = current == null ? '' : `
-      <span class="pt-echart-current">${esc(spec.latestLabel || 'Latest')}:
+      <span class="pt-echart-current">${esc(spec.latestLabel || zh('Latest', '末值'))}:
         <b>${esc(formatNumber(current, 2))}${unit ? ` ${esc(unit)}` : ''}</b>
       </span>`;
     return `

@@ -276,3 +276,38 @@ def test_drilldown_bootstrap_reads_only_one_table_preview(
     )
     assert labs["review_status"] == "inventory_only"
     assert labs["preview_status"] == "available_on_demand"
+
+
+def test_comparison_traces_name_each_case_by_its_own_ordinal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A case opened from a later navigator page joins the comparison set; its
+    trace must carry that case's ordinal, not its position in the set."""
+
+    def fake_comparison(_frames, _path, _ids, _signals, _quality):
+        return {
+            "traces": [
+                {"ref": "ent_a", "label": "Entity 1", "values": [1, 2]},
+                {"ref": "ent_m", "label": "Entity 2", "values": [3, 4]},
+            ],
+            "features": [],
+        }
+
+    monkeypatch.setattr(
+        patient_drilldown, "_multi_entity_comparison_payload", fake_comparison
+    )
+    review = patient_drilldown._trajectory_review_payload(
+        [],
+        {"ref": "ent_m", "ordinal": 13},
+        [{"ref": "ent_a", "ordinal": 1}, {"ref": "ent_m", "ordinal": 13}],
+        {},
+        [],
+        Path("export"),
+        ["a", "m"],
+    )
+
+    traces = review["multi_entity_comparison"]["traces"]
+    assert [(row["label"], row["ordinal"]) for row in traces] == [
+        ("Entity 1", 1),
+        ("Entity 13", 13),
+    ]

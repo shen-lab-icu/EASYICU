@@ -2229,8 +2229,8 @@ def test_native_patient_time_series_uses_module_grouped_single_feature_charts() 
     assert (
         index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
         < index_html.index("js/screens-viz-echarts.js?v=20261022-winfont1")
-        < index_html.index("js/screens-viz-patient-charts.js?v=20261022-zhlabels1")
-        < index_html.index("js/screens-viz-patient-series.js?v=20261022-zhlabels1")
+        < index_html.index("js/screens-viz-patient-charts.js?v=20261022-lean1")
+        < index_html.index("js/screens-viz-patient-series.js?v=20261022-lean1")
     )
     assert ".pt-module-card" in patient_css
     assert ".pt-matrix-details .table-scroll" in patient_css
@@ -2877,20 +2877,20 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "js/screens-viz-demo.js?v=20261022-zhlabels1" in index_html
     assert "js/screens-viz-demo-drilldown.js?v=20260727-owner-split" in index_html
     assert "js/screens-viz-patient-features.js?v=20261022-zhlabels1" in index_html
-    assert "js/screens-viz-patient-charts.js?v=20261022-zhlabels1" in index_html
-    assert "js/screens-viz-patient-series.js?v=20261022-zhlabels1" in index_html
+    assert "js/screens-viz-patient-charts.js?v=20261022-lean1" in index_html
+    assert "js/screens-viz-patient-series.js?v=20261022-lean1" in index_html
     assert (
         "js/screens-viz-patient-demo-sources.js?v=20261022-plain3"
         in index_html
     )
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
     assert (
-        "js/screens-viz-patient-navigation.js?v=20261022-zhlabels1"
+        "js/screens-viz-patient-navigation.js?v=20261022-lean1"
         in index_html
     )
     assert "js/screens-viz-patient-tables.js?v=20261022-zhlabels1" in index_html
     assert "js/screens-viz-patient-overview.js?v=20261022-zhlabels1" in index_html
-    assert "js/screens-viz-patient.js?v=20261022-noexport1" in index_html
+    assert "js/screens-viz-patient.js?v=20261022-lean1" in index_html
     assert index_html.index("js/screens-viz-patient-navigation.js?") < index_html.index(
         "js/screens-viz.js?"
     )
@@ -3054,11 +3054,12 @@ def test_native_cohort_real_page_is_backend_backed_and_bilingual() -> None:
     assert "function reloadStaleRealCohortIfNeeded" in cohort_js
     assert "function cohortText" in cohort_view_js
     assert "function cohortReason" in cohort_view_js
-    assert "'Backend evidence checks': '数据核对'" in cohort_view_js
-    assert "'Draft review': '草稿审阅'" in cohort_view_js
+    # The readiness strip restated static status; the next bar owns the handoff.
+    assert "Backend evidence checks" not in cohort_view_js
+    assert "Analysis readiness" not in cohort_js
     assert "'Local export cohort review ready': '本地导出队列审阅已就绪'" in cohort_view_js
-    assert "'Fail-closed': '保守拦截'" in cohort_view_js
-    assert "'Blocked cohort functions': '已拦截的队列功能'" in cohort_view_js
+    # Guardrail descriptions are not actions; the page no longer lists them.
+    assert "Blocked cohort functions" not in cohort_view_js
     assert "function cohortSurvivalSourceHint" in cohort_survival_js
     assert "data-survival-source-hint" in cohort_survival_js
     assert "Current export is already loaded" in cohort_survival_js
@@ -3088,11 +3089,7 @@ def test_native_cohort_real_page_is_backend_backed_and_bilingual() -> None:
         "loadRealCohort(ok => { state.view = ok ? 'loaded' : 'idle'; repaintScreen('cohort'); });"
         in cohort_js
     )
-    assert (
-        "manifest parsed · denominators previewed · aggregate payload returned"
-        in cohort_js
-    )
-    assert "汇总结果已就绪；可在研究对话中核对证据并审阅草稿。" in cohort_js
+    assert "manifest parsed" not in cohort_js
     assert "聚合载荷" not in cohort_js
     assert "Draft gate" not in cohort_js
     assert "Evidence checks" not in cohort_js
@@ -3531,7 +3528,7 @@ def test_review_routes_share_echarts_theme_without_cross_route_owner_leaks() -> 
 
     vendor = index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
     shared = index_html.index("js/screens-viz-echarts.js?v=20261022-winfont1")
-    patient = index_html.index("js/screens-viz-patient-charts.js?v=20261022-zhlabels1")
+    patient = index_html.index("js/screens-viz-patient-charts.js?v=20261022-lean1")
     cohort = index_html.index("js/screens-viz-cohort-charts.js?v=20261022-winfont1")
     crossdb = index_html.index("js/screens-viz-crossdb-charts.js?v=20260830-viz-final1")
     assert vendor < shared < patient < cohort < crossdb

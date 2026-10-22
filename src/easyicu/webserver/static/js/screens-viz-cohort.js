@@ -401,45 +401,7 @@
           <div class="sk-table mt-16">${[0,1,2,3,4].map(() => `<div class="sk-trow">${[60,40,40,40,30].map(w => `<div class="sk sk-line" style="width:${w}%"></div>`).join('')}</div>`).join('')}</div>
         </div>`;
       }
-      const demoScope = view.demoCatalogScope();
-      const preflightItems = [
-        [
-          view.text('Input package'),
-          ws ? `${fmtInt(ws.summary && ws.summary.stays)} ${t('entities', '例')} · ${fmtInt(ws.summary && ws.summary.modules)} ${t('modules', '个模块')}` : `10 ${t('stays', '次住院')} · ${fmtInt(demoScope.selectedModuleCount)} / ${fmtInt(demoScope.totalModuleCount)} ${t('modules', '个模块')} · ${fmtInt(demoScope.selectedFeatureCount)} / ${fmtInt(demoScope.totalFeatureCount)} ${t('features', '个特征')}`,
-          'ok',
-          null,
-        ],
-        [
-          view.text('Backend evidence checks'),
-          review ? view.text('manifest parsed · denominators previewed · aggregate payload returned') : view.text('coverage + denominators ready'),
-          'ok',
-          null,
-        ],
-        [
-          view.text('Draft review'),
-          view.text('locked · requires reviewer sign-off'),
-          'warn',
-          'agent',
-        ],
-      ];
       return head + `
-      <div class="card" style="padding:0;overflow:hidden;">
-        <div class="row" style="justify-content:space-between;padding:11px 16px;border-bottom:1px solid var(--hair);">
-          <span style="font-weight:600;font-size:12.5px;">${view.text('Analysis readiness')}</span>
-          <span class="mono" style="font-size:11px;color:var(--ink-4);">${view.text('current session')}</span>
-        </div>
-        <div class="preflight">
-          ${preflightItems.map(([tt, d, s, nav]) => `
-            <div class="pf-cell" ${nav ? `data-study-handoff data-study-source="cohort" data-study-target="${nav}" role="button" tabindex="0" style="cursor:pointer;"` : ''}>
-              <div class="eyebrow" style="display:flex;align-items:center;gap:6px;">
-                <span class="dot-${s}"></span>${tt}${nav ? `<span style="margin-left:auto;color:var(--ink-4);">${icon('arrow', 12)}</span>` : ''}
-              </div>
-              <div style="font-size:12.5px;color:var(--ink-2);margin-top:6px;">${d}</div>
-              ${nav ? `<div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${review ? t('Aggregate payload is ready; open Copilot conversation for evidence-bound draft review.', '汇总结果已就绪；可在研究对话中核对证据并审阅草稿。') : t('Demo review is local-only; use Guided Copilot after choosing a real export.', '演示审阅仅限本地预览；选择真实导出后再使用研究引导。')}</div>` : ''}
-            </div>`).join('')}
-        </div>
-      </div>
-
       ${view.tabs()}
       <div id="cohbody">${view.panelBody()}</div>
       <div class="nextbar accent mt-16">

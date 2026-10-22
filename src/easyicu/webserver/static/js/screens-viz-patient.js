@@ -394,25 +394,6 @@
     };
     return mapped[label] || label;
   }
-  function patientSeriesDetail(value) {
-    let detail = String(value || '');
-    const legacyAggregateDetail = ['time windows x features', 'single entity', ['aggregate', 'comparison'].join(' ')].join(' / ');
-    detail = detail.replace(legacyAggregateDetail, 'module overview / trajectory gallery / cross-patient comparison');
-    detail = detail.replace(
-      'clinical lanes / single entity / multi-entity same-feature traces',
-      'module overview / trajectory gallery / cross-patient comparison',
-    );
-    detail = detail.replace('catalog lane signals', 'catalog signals');
-    detail = detail.replace('matrix groups available', 'modules available');
-    if (window.EU_LANG === 'zh') {
-      detail = detail.replace('module overview / trajectory gallery / cross-patient comparison', '模块总览 / 轨迹画廊 / 跨患者对比');
-      detail = detail.replace('catalog signals', '目录信号');
-      detail = detail.replace('modules available', '个模块可用');
-      detail = detail.replace('selected-entity signals', '个所选病例信号');
-      detail = detail.replace('pseudonymous options exposed', '个可选病例');
-    }
-    return detail;
-  }
 
   function patientWorkspaceFromDrilldown(payload) {
     const s = payload && payload.summary ? payload.summary : {};
@@ -697,7 +678,6 @@
             <div class="setup-row"><span class="k">${t('Review features', '审阅特征')}</span><span class="vv">${fmtInt(activeModule.review_features != null ? activeModule.review_features : activeModule.feature_count)}</span></div>
             <div class="setup-row"><span class="k">${t('Share', '占比')}</span><span class="vv">${fmtPct(activeModule.share_pct)}</span></div>
             <div class="setup-row"><span class="k">${t('Coverage', '覆盖率')}</span><span class="vv">${fmtPct(activeModule.coverage_pct)}</span></div>
-            <div class="setup-row"><span class="k">${t('Status', '状态')}</span><span class="vv">${esc(activeModule.status || 'ready')}</span></div>
           </div>
           <div class="row wrap gap-6 mt-12">
             ${previewFeatures.slice(0, 6).map(f => `<span class="chip">${esc(patientFeatureLabel(f))}${f.unit ? ` · ${esc(catalogUnitText(f.unit))}` : ''}</span>`).join('') || `<span class="chip">${t('metadata only', '仅元数据')}</span>`}
@@ -815,24 +795,8 @@
     const readyLanes = lanes.filter(lane => (lane.signals || []).length || (lane.features || []).length);
     if (drill && readyLanes.length) {
       return `
-      ${patientEntityNavigator(drill, drill.selected, {
-        detail: t('All three views use the same selected entity; switch between module coverage, loaded charts, and cross-patient comparison.', '三个视图共用当前患者：分别查看模块覆盖、已加载轨迹和跨患者同特征对比。'),
-      })}
+      ${patientEntityNavigator(drill, drill.selected)}
       ${patientTimeSeriesWorkbench(drill, review, readyLanes)}
-      <div class="note ok mt-16">
-        <div class="ico">${icon('rows', 16)}</div>
-        <div class="body"><span class="t">${t('Three distinct review views', '三种审阅视图')}</span> <span class="d" style="display:inline;">— ${t('Module overview shows all catalog features and loading states; trajectory gallery shows loaded charts for the current entity; cross-patient comparison aligns the same feature across entities.', '模块总览展示全部特征及加载状态；轨迹画廊展示当前患者已加载图表；跨患者对比查看同一特征在不同患者中的表现。')}</span></div>
-      </div>
-      <div class="grid cards-4 mt-16">
-        ${(review.contract || []).map(row => `
-          <div class="stat ${row.status === 'ready' ? 'ok' : row.status === 'warn' ? 'warn' : 'accent'}">
-            <div class="label">${esc(row.index || '')} · ${esc(patientSeriesLabel(row.label))}</div>
-            <div class="val" style="font-size:13px;">${esc(patientSeriesDetail(row.detail))}</div>
-          </div>`).join('')}
-      </div>
-      <div class="row wrap gap-6 mt-16">
-        ${(review.modes || []).map(mode => `<span class="chip ${mode.status === 'ready' ? 'solid' : ''}">${esc(patientSeriesLabel(mode.label || mode.id))} · ${esc(mode.status || 'available')}</span>`).join('')}
-      </div>
       ${patientMatrixAudit(drill, readyLanes)}`;
     }
     if (drill && signals.length) {
@@ -980,12 +944,8 @@
       const boundedTitle = drill.demo ? patientQualityText('Catalog demo bounded review') : patientQualityText('Local export bounded review');
       const boundedDetail = drill.demo
         ? t('Coverage and quality indicators describe the clinically constrained synthetic fallback only. Load an official demo or local export for source-backed denominators.', '覆盖率和质量指标只描述临床约束合成兜底。请加载官方演示数据或本地导出，以获得有来源支撑的分母。')
-        : t('Shown coverage, missingness, physiologic-range flags and duplicate timestamp rates are computed over the bounded local review sample. Modules without computed entity coverage remain inventory-only; formal claims stay locked to the evidence-bound agent path.', '这里的覆盖率、缺失率、生理范围标记和重复时间戳比例按审阅样本计算；没有计算覆盖率的模块只显示文件清单。正式结论要在研究对话里经过分析和证据核对才能得出。');
+        : t('Shown coverage, missingness, physiologic-range flags and duplicate timestamp rates are computed over the bounded local review sample. Modules without computed entity coverage remain inventory-only; formal claims stay locked to the evidence-bound agent path.', '这里的覆盖率、缺失率、生理范围标记和重复时间比例按本页审阅样本计算；没有计算覆盖率的模块只显示行数。');
       return `
-      <div class="note ok mt-16">
-        <div class="ico">${icon('shield', 16)}</div>
-        <div class="body"><span class="t">${patientQualityText('Quality dashboard')}</span> <span class="d" style="display:inline;">— ${t('QC workbook semantics: computed module coverage within the stated review scope, missingness, physiologic range, temporal integrity, and action-oriented issues.', '在本次审阅范围内，按模块统计覆盖率、缺失率、超出生理范围的数值和重复记录时间，并列出需要处理的问题。')}</span></div>
-      </div>
       ${(review.summary_cards || []).length ? `
       <div class="st-stats mt-16">
         ${(review.summary_cards || []).map(card => `<div class="stat ${card.tone || 'accent'}"><div class="label">${esc(patientQualityText(card.label))}</div><div class="val">${card.unit === '%' ? fmtPct(card.value) : esc(card.value == null ? '—' : fmtInt(card.value))}</div></div>`).join('')}
@@ -1044,11 +1004,7 @@
         <div class="ico">${icon('shield', 16)}</div>
         <div class="body"><div class="t">${boundedTitle}</div><div class="d">${boundedDetail}</div></div>
       </div>
-      ${(drill.blocked_features || []).map(item => `
-        <div class="note warn mt-12">
-          <div class="ico">${icon('lock', 14)}</div>
-          <div class="body"><span class="t">${esc(item.id)}</span> <span class="d" style="display:inline;">— ${esc(item.reason || 'blocked')}</span></div>
-        </div>`).join('')}`;
+`;
     }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && Array.isArray(ws.quality)) {

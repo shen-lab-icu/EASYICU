@@ -100,3 +100,31 @@ def test_the_label_derivation_lives_in_exactly_one_module() -> None:
         if re.search(r'module\.replace\("_", " "\)\.title\(\)', source):
             offenders.append(f"{rel} derives a label from the identifier")
     assert offenders == [], "\n".join(offenders)
+
+
+def test_default_table_one_fallback_skips_scoring_receipts_and_timestamps() -> None:
+    """With none of the default variables present, Table 1 starts from clinical
+    columns, not SOFA-2 evidence flags or timestamps (still selectable by hand)."""
+    columns = [
+        ("outcome", "death_time"),
+        ("sofa2_score", "sofa2_cardio_available"),
+        ("sofa2_score", "sofa2_cardio_observed"),
+        ("sofa2_score", "sofa2_cns_delirium_tx_ascertainment"),
+        ("sofa2_score", "sofa2_cns_proxy_sensitivity"),
+        ("sofa2_score", "sofa2"),
+        ("outcome", "death"),
+    ]
+    catalog = {
+        "features_by_id": {
+            f"{module}:{column}": {"module": module, "column": column}
+            for module, column in columns
+        }
+    }
+
+    assert cohort_review._selected_feature_ids(catalog, None) == [
+        "sofa2_score:sofa2",
+        "outcome:death",
+    ]
+    assert cohort_review._selected_feature_ids(
+        catalog, ("sofa2_score:sofa2_cardio_available",)
+    ) == ["sofa2_score:sofa2_cardio_available"]

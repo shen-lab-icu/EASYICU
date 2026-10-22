@@ -1131,10 +1131,31 @@ def _selected_feature_ids(
             break
     if out or requested_feature_ids is not None:
         return out
-    return [
+    # No default variable is in this export: fall back to its first clinical
+    # columns. Scoring receipts (SOFA-2 ``*_observed`` / ``*_available``
+    # evidence flags, ascertainment states) and timestamps are not Table 1
+    # variables; they stay selectable in the picker but are not defaults.
+    candidates = [
         feature_id
-        for feature_id in list(features_by_id)[: min(8, _MAX_COMPARE_FEATURES)]
+        for feature_id, feature in features_by_id.items()
+        if _is_default_table_one_column(str(feature.get("column") or ""))
     ]
+    return candidates[: min(8, _MAX_COMPARE_FEATURES)]
+
+
+_RECEIPT_COLUMN_SUFFIXES = (
+    "_observed",
+    "_available",
+    "_ascertainment",
+    "_proxy_sensitivity",
+    "_time",
+    "_datetime",
+    "_offset",
+)
+
+
+def _is_default_table_one_column(column: str) -> bool:
+    return not column.strip().lower().endswith(_RECEIPT_COLUMN_SUFFIXES)
 
 
 def _selected_feature_profiles(

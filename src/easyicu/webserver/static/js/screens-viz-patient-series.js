@@ -364,14 +364,14 @@
           : ''}
       </div>
       <div class="pt-feature-toolbar">
-        <span>${hT(helpers, 'All catalog features are grouped below. Expand the lists to inspect every feature and its honest loading state.', '全部目录特征已按模块分组。展开清单即可查看每个特征及其真实加载状态。')}</span>
+        <span></span>
         <div>
           <button class="btn sm" type="button" data-patient-inventory-toggle="open">${hT(helpers, 'Expand all feature lists', '展开全部特征清单')}</button>
           <button class="btn sm" type="button" data-patient-inventory-toggle="close">${hT(helpers, 'Collapse all', '全部收起')}</button>
         </div>
       </div>
       <div class="pt-module-stack">${cards}</div>
-      <div class="pt-vsm-axis">${hT(helpers, 'Source-recorded time spacing · bounded payload', '按原始记录的时间间隔展示 · 部分数据')}</div>`;
+`;
   }
 
   function flattenSignals(lanes) {
@@ -407,16 +407,15 @@
 
   function renderModeBar(mode, helpers) {
     const modes = [
-      ['lanes', hT(helpers, 'Module overview', '模块总览'), hT(helpers, 'All modules, features, and loading states', '全部模块、特征与加载状态')],
-      ['single', hT(helpers, 'Trajectory gallery', '轨迹画廊'), hT(helpers, 'Loaded charts for the current entity', '当前患者已加载的逐项图表')],
-      ['compare', hT(helpers, 'Cross-patient comparison', '跨患者对比'), hT(helpers, 'The same feature across entities', '同一特征跨患者比较')],
+      ['lanes', hT(helpers, 'Module overview', '模块总览')],
+      ['single', hT(helpers, 'Trajectory gallery', '轨迹画廊')],
+      ['compare', hT(helpers, 'Cross-patient comparison', '跨患者对比')],
     ];
     return `
       <div class="pt-series-modebar" data-patient-series-modebar>
-        ${modes.map(([id, title, sub]) => `
+        ${modes.map(([id, title]) => `
           <button class="pt-series-mode ${mode === id ? 'active' : ''}" data-patient-series-mode="${id}" type="button">
             <span class="pt-series-mode-title">${hEsc(helpers, title)}</span>
-            <span>${hEsc(helpers, sub)}</span>
           </button>`).join('')}
       </div>`;
   }
@@ -430,9 +429,7 @@
       <div class="pt-series-panel" data-patient-series-panel="lanes">
         <div class="pt-series-panel-head">
           <div>
-            <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Module overview', '模块总览'))}</div>
             <h2>${hEsc(helpers, hT(helpers, `Complete feature catalog grouped by clinical module (${hFmtInt(helpers, totalCatalogFeatures)} features)`, `${hFmtInt(helpers, totalCatalogFeatures)} 个特征，按临床模块组织`))}</h2>
-            <p>${hEsc(helpers, hT(helpers, 'Every catalog concept remains discoverable. Features with bounded observations receive a chart; metadata-only concepts stay explicit instead of receiving fabricated demo values.', '所有目录概念都可以查找；有观测值的特征显示图表，只有目录信息的概念会明确标出，不会为演示编造数值。'))}</p>
           </div>
           <span class="pill ok">${hEsc(helpers, hT(helpers, 'single entity', '单个病例'))}</span>
         </div>
@@ -452,7 +449,6 @@
           <div>
             <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Current-patient trajectory gallery', '当前患者轨迹画廊'))}</div>
             <h2>${hEsc(helpers, hEntity(helpers, selected && (selected.label || selected.entity_ref)) || hT(helpers, 'Selected entity', '所选病例'))}</h2>
-            <p>${hEsc(helpers, hT(helpers, 'Five source-backed signals share one elapsed-time window. Each keeps its own clinical value scale and its original, unequal sampling intervals; no interpolation is added.', '5 个来源可追溯的信号共享同一时间窗；每行保留自己的临床数值尺度与真实不等间隔采样，不做插值。'))}</p>
           </div>
           <span class="pill">${hFmtInt(helpers, signals.length)} ${hEsc(helpers, hT(helpers, 'features shown', '个特征展示'))}</span>
         </div>
@@ -469,12 +465,31 @@
       </div>`;
   }
 
-  function renderTrajectorySummary(traces, comparison, helpers) {
+  // The x axis is the payload's own time coordinate: ICU-relative hours (minute
+  // offsets are drawn in hours by the chart owner), or the recorded time.
+  function traceTimeAxis(trace, comparison) {
+    return (trace && trace.time_axis) || (comparison && comparison.time_axis) || {};
+  }
+
+  function timeAxisTitle(axis, helpers) {
+    const label = hT(helpers, axis.label_en || axis.label || '', axis.label_zh || axis.label_en || axis.label || '');
+    const hours = axis.kind === 'relative_hours' || axis.kind === 'relative_minutes';
+    return label ? `${label}${hours ? ' (h)' : ''}` : '';
+  }
+
+  function renderTrajectorySummary(traces, comparison, helpers, selected) {
     const prepared = traces.map((trace, index) => {
       const samples = numericSamples(trace);
-      return { trace, index, values: samples.values, times: samples.times.map(Number) };
+      const axis = traceTimeAxis(trace, comparison);
+      // Minute offsets are rescaled here so every row shares one hour domain.
+      const minutes = axis.kind === 'relative_minutes';
+      const times = minutes ? samples.times.map(value => Number(value) / 60) : samples.times;
+      const timeAxis = minutes ? Object.assign({}, axis, { kind: 'relative_hours' }) : axis;
+      return { trace, index, values: samples.values, times, timeAxis };
     }).filter(row => row.values.length >= 2);
-    const allTimes = prepared.flatMap(row => row.times.filter(Number.isFinite));
+    const axisTitle = timeAxisTitle(traceTimeAxis(prepared[0] && prepared[0].trace, comparison), helpers);
+    const selectedRef = selected && selected.ref;
+    const allTimes = prepared.flatMap(row => row.times.map(Number).filter(Number.isFinite));
     const allValues = prepared.flatMap(row => row.values);
     const xDomain = allTimes.length ? [Math.min(...allTimes), Math.max(...allTimes)] : null;
     const yDomain = allValues.length ? [Math.min(...allValues), Math.max(...allValues)] : null;
@@ -485,12 +500,15 @@
         const start = row.values[0];
         const latest = row.values[row.values.length - 1];
         const delta = latest - start;
-        const label = hEntity(helpers, row.trace.label || row.trace.ref) || `${hT(helpers, 'Entity', '病例')} ${row.index + 1}`;
+        const name = hEntity(helpers, row.trace.label || row.trace.ref) || `${hT(helpers, 'Entity', '病例')} ${row.index + 1}`;
+        const label = selectedRef && row.trace.ref === selectedRef ? `${name}${hT(helpers, ' (current)', '（当前）')}` : name;
         const fallback = helpers.axisSpark ? helpers.axisSpark(row.values, 640, 116, colour(row.index), { unit, label, xLabels: null }) : '';
         const chart = owner && owner.signalSlot ? owner.signalSlot({
           color: colour(row.index),
           feature: comparison && comparison.feature,
           label,
+          latestLabel: hT(helpers, 'Latest', '末值'),
+          timeAxis: row.timeAxis,
           times: row.times,
           values: row.values,
           unit,
@@ -504,7 +522,7 @@
           <div class="pt-trajectory-delta"><span>${hEsc(helpers, hT(helpers, 'start → last', '起点 → 末值'))}</span><b>${hFmtNum(helpers, start, 1)} → ${hFmtNum(helpers, latest, 1)}${unit ? ` ${hEsc(helpers, unit)}` : ''}</b><em class="${delta > 0 ? 'up' : delta < 0 ? 'down' : ''}">Δ ${delta > 0 ? '+' : ''}${hFmtNum(helpers, delta, 1)}</em></div>
         </article>`;
       }).join('')}
-      <p class="pt-multi-note">${hEsc(helpers, hT(helpers, 'All rows use the same time and value domains for direct comparison. Points remain at their recorded ICU offsets; gaps are not synthesized.', '所有行使用相同的时间域与数值域，便于直接比较；点保留原始 ICU 时间偏移，不补造缺口。'))}</p>
+      ${axisTitle ? `<div class="pt-vsm-axis" data-patient-trajectory-axis>${hEsc(helpers, axisTitle)}</div>` : ''}
     </div>`;
   }
 
@@ -624,7 +642,7 @@
       </div>`;
   }
 
-  function renderCompare(review, helpers) {
+  function renderCompare(review, helpers, selected) {
     const comparison = ((review || {}).multi_entity_comparison || {});
     const traces = (comparison.traces || []).filter(trace => traceValues(trace).length >= 2);
     const rows = (comparison.features || [])
@@ -635,9 +653,7 @@
         <div class="pt-series-panel" data-patient-series-panel="compare">
           <div class="pt-series-panel-head">
             <div>
-              <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Cross-patient comparison', '跨患者对比'))}</div>
               <h2>${hEsc(helpers, hT(helpers, 'Trajectory summary across pseudonymous entities', '跨患者同特征轨迹摘要'))}</h2>
-              <p>${hEsc(helpers, hT(helpers, 'One row per entity shows the actual sampling pattern, start, last value and change. Shared axes make the rows comparable without stacking every line.', '每位患者一行，展示真实采样、起点、末值与变化；共享坐标便于比较，同时避免所有线堆在一张图里。'))}</p>
             </div>
             <span class="pill ok">${hFmtInt(helpers, traces.length)} ${hEsc(helpers, hT(helpers, 'entities', '例'))}</span>
           </div>
@@ -647,16 +663,14 @@
               <strong>${hEsc(helpers, hConcept(helpers, comparison.feature, comparison.label || comparison.feature) || hT(helpers, 'Selected feature', '已选特征'))}</strong>
               ${comparison.unit ? `<span class="mono">${hEsc(helpers, hUnit(helpers, comparison.unit))}</span>` : ''}
             </div>
-            <span class="pill">${hEsc(helpers, hT(helpers, 'bounded trace payload', '部分轨迹数据'))}</span>
           </div>
-          ${renderTrajectorySummary(traces, comparison, helpers)}
+          ${renderTrajectorySummary(traces, comparison, helpers, selected)}
         </div>`;
     }
     return `
       <div class="pt-series-panel" data-patient-series-panel="compare">
         <div class="pt-series-panel-head">
           <div>
-            <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Cross-patient comparison', '跨患者对比'))}</div>
             <h2>${hEsc(helpers, hT(helpers, 'No comparable multi-entity trajectories', '暂无可对比的多患者轨迹'))}</h2>
             <p>${hEsc(helpers, hT(helpers, 'The active bounded payload does not contain one time-indexed feature observed in at least two entities. Aggregate coverage is shown only as a fallback audit.', '当前数据里没有同一个时序特征同时出现在至少两位患者身上；下面的汇总覆盖情况仅供参考。'))}</p>
           </div>
@@ -675,15 +689,13 @@
     const body = mode === 'single'
       ? renderSinglePatient(lanes, payload.selected || {}, helpers)
       : mode === 'compare'
-        ? renderCompare(review, helpers)
+        ? renderCompare(review, helpers, payload.selected)
         : renderClinicalLanes(lanes, helpers);
     return `
       <section class="pt-series-workbench" data-patient-series-workbench>
         <div class="pt-series-workbench-head">
           <div>
-            <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Time-series workspace', '时间序列工作区'))}</div>
             <h2>${hEsc(helpers, hT(helpers, 'Clinical trajectory review', '临床轨迹审阅'))}</h2>
-            <p>${hEsc(helpers, hT(helpers, 'Use the module overview to load source-backed features, then inspect loaded charts or compare the same feature across patients.', '先在模块总览加载来源可追溯的特征，再查看轨迹画廊或进行跨患者同特征对比。'))}</p>
           </div>
         </div>
         ${renderModeBar(mode, helpers)}
