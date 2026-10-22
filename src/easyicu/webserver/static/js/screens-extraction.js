@@ -245,28 +245,25 @@
   function escHtml(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
-  function rememberExportPath(path, opts) {
+  function rememberExportPath(path, opts, registeredByJob) {
     if (!path) return Promise.resolve(null);
     try { localStorage.setItem('easyicu_last_export_dir', path); } catch (e) {}
     window.EU_LAST_EXPORT = Object.assign({}, window.EU_LAST_EXPORT || {}, { out_dir: path });
-    if (window.EU_API && window.EU_API.registerWorkspaceSource) {
-      return window.EU_API.registerWorkspaceSource(path, opts || { active: true, crossdb: true })
-        .then(registry => {
-          window.EU_WORKSPACE_REGISTRY = registry;
-          window.EU_VIZ_WORKSPACE = null;
-          window.EU_CROSSDB_WORKSPACE = null;
-          window.EU_PATIENT_DRILLDOWN = null;
-          window.EU_PATIENT_SOURCES = null;
-          window.EU_COHORT_REVIEW = null;
-          backgroundRepaint();
-          return registry;
-        })
-        .catch(err => {
-          console.warn('[EasyICU] source registry update failed:', err);
-          throw err;
-        });
-    }
-    return Promise.resolve(null);
+    const api = window.EU_API || {};
+    // The extract job registers its own export (label, comparison choice): re-read the list, never re-register.
+    const update = registeredByJob && api.hydrateWorkspaceRegistry ? api.hydrateWorkspaceRegistry()
+      : (api.registerWorkspaceSource ? api.registerWorkspaceSource(path, opts || { active: true, crossdb: true }) : null);
+    if (!update) return Promise.resolve(null);
+    return update.then(registry => {
+      window.EU_WORKSPACE_REGISTRY = registry;
+      window.EU_VIZ_WORKSPACE = window.EU_CROSSDB_WORKSPACE = window.EU_PATIENT_DRILLDOWN = window.EU_COHORT_REVIEW = null;
+      window.EU_PATIENT_SOURCES = null;
+      backgroundRepaint();
+      return registry;
+    }).catch(err => {
+      console.warn('[EasyICU] source registry update failed:', err);
+      throw err;
+    });
   }
   function exportDestinationLabel() {
     return hostedCopy('workspace', currentExportDir() || t('No export destination selected', '尚未选择导出目录'));
@@ -369,7 +366,7 @@
     return t('local prepared-data folder', '本地预处理数据文件夹');
   }
   function pathDisplay(path) {
-    return path ? path : t('No folder selected', '尚未选择文件夹');
+    return path ? (hostedServer() ? String(path).replace(/\/+$/, '').split('/').pop() : path) : t('No folder selected', '尚未选择文件夹');  // hosted: no server path
   }
   function pathNeedsFolderChoice(path) {
     const raw = String(path || '').trim();
@@ -441,7 +438,7 @@
     if (real && exPath && window.EU_API && window.EU_API.postJSON && window.EventSource && continuity) {
       const payload = {
         path: exPath, database: database, modules: modules,
-        format: exFormat, merge: exMerge === 'merged', max_patients: exMaxPatients,
+        format: hostedServer() ? 'parquet' : exFormat, merge: exMerge === 'merged', max_patients: exMaxPatients,
         include_feature_definitions: exIncludeDefinitions,
         cohort: runMode === 'recommended' ? recommendedCohortContract() : cohortContract(),
       };
@@ -1062,7 +1059,8 @@
             exportResult = message.result && typeof message.result === 'object' ? message.result : {};
             window.EU_LAST_EXPORT = exportResult;
             exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true;
-            if (exportResult.out_dir) rememberExportPath(exportResult.out_dir).catch(() => {
+            const registeredByJob = Boolean(exportResult.registered_source && exportResult.registered_source.ok);
+            if (exportResult.out_dir) rememberExportPath(exportResult.out_dir, null, registeredByJob).catch(() => {
               // Extraction itself succeeded; only the reusable-source
               // registration failed (rememberExportPath already logged the
               // cause). Keep that visible on the done card instead of
@@ -1449,7 +1447,7 @@
   function exportCfg(options) {
     const stepMode = !!(options && options.stepMode);
     const exportOpen = stepMode || exAdvExport;
-    const fmtSeg = `<div class="seg" data-ex-fmt><button class="${exFormat === 'parquet' ? 'active' : ''}" data-val="parquet">Parquet</button><button class="${exFormat === 'csv' ? 'active' : ''}" data-val="csv">CSV</button><button class="${exFormat === 'excel' ? 'active' : ''}" data-val="excel">Excel</button></div>`;
+    const fmtSeg = hostedServer() ? `<span>${hostedCopy('format')}</span>` : `<div class="seg" data-ex-fmt><button class="${exFormat === 'parquet' ? 'active' : ''}" data-val="parquet">Parquet</button><button class="${exFormat === 'csv' ? 'active' : ''}" data-val="csv">CSV</button><button class="${exFormat === 'excel' ? 'active' : ''}" data-val="excel">Excel</button></div>`;
     const destination = currentExportDir();
     const hintTone = destination || hostedServer() ? 'var(--ink-4)' : 'var(--warn,#a66a00)';
     return `
