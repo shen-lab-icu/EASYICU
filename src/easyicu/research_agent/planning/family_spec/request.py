@@ -104,6 +104,7 @@ from .contract import (
     SealedSuiteCoordinates,
     SealedTrajectoryCoordinates,
     SensitivityAxisBinding,
+    DistributionMissingPolicies,
     StudyPopulationOccurrence,
     prediction_risk_set_predicates,
     sealed_cohort_predicate,
@@ -2099,6 +2100,32 @@ def _build_descriptive_request(
             if str(value or "").strip()
         },
         variable_roster=roster,
+        distribution_missing_policies=_distribution_missing_policies(
+            context, exposure=exposure, outcome=outcome
+        ),
+    )
+
+
+def _distribution_missing_policies(
+    context: ResearchContext, *, exposure: str, outcome: str
+) -> Optional[DistributionMissingPolicies]:
+    """Complete-case on a variable with known missing values; ``None`` without any.
+
+    Prepared data recorded stays with no age: the template's fail-closed
+    distribution then stopped data preparation for every grouped study.
+    """
+
+    def known_missing(name: str) -> bool:
+        missingness = getattr(context.variable(name), "missingness", None)
+        return bool(getattr(missingness, "n_missing", 0))
+
+    exposure_missing, outcome_missing = known_missing(exposure), known_missing(outcome)
+    if not (exposure_missing or outcome_missing):
+        return None
+    return DistributionMissingPolicies(
+        denominator_policy="observed_outcome_rows" if outcome_missing else "all_declared_rows",
+        missing_exposure_policy="exclude_from_denominator" if exposure_missing else "fail_closed",
+        missing_outcome_policy="exclude_from_denominator" if outcome_missing else "fail_closed",
     )
 
 
