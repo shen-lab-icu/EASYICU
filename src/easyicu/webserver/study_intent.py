@@ -50,6 +50,7 @@ __all__ = [
     "ANALYSIS_FAMILIES",
     "OUTCOME_TYPES",
     "StudyIntentError",
+    "catalog_named_concepts",
     "extract_study_intent",
     "deterministic_intent",
     "explicit_outcome_concepts",
@@ -1078,7 +1079,7 @@ def explicit_exposure_aggregation(
     for begin, finish in sorted(spans):
         for operation, expression in _MEASUREMENT_OPERATIONS:
             before = re.search(
-                rf"(?:{expression})\s*(?:(?:serum|blood|plasma)\s+|血清|血浆)?$",
+                rf"(?:{expression})\s*(?:(?:serum|blood|plasma)\s+|血清|血浆|血)?$",
                 text[:begin], re.IGNORECASE,
             )
             after = re.match(
@@ -1099,6 +1100,26 @@ def explicit_exposure_aggregation(
     return ExplicitExposureAggregation(
         concept_id=concept_id, aggregation=operation, evidence=evidence,
     )
+
+
+def catalog_named_concepts(text: str) -> Tuple[str, ...]:
+    """Each concept ``text`` names by the concept dictionary's own names, in text order.
+
+    The study readers name what a sentence studies from their own phrases;
+    this reads only the dictionary's names ("钾" for potassium, as in
+    「血钾」), each as a whole phrase and not negated.  It checks a statement
+    against a sentence; it reads no role.
+    """
+
+    clean = _clean_question(text)
+    lowered = clean.lower()
+    found: List[str] = []
+    for concept, start, end in sorted(_catalog_name_readings(clean), key=lambda row: row[1]):
+        resolved = _resolved_reading(clean, concept, start, end)
+        if resolved is None or _negated(lowered, resolved[1]) or resolved[0] in found:
+            continue
+        found.append(resolved[0])
+    return tuple(found)
 
 
 # --------------------------------------------------------------------------

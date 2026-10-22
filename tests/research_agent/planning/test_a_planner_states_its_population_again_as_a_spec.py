@@ -408,6 +408,13 @@ def test_the_spec_rules_name_no_case() -> None:
         "starts relative to time zero or the exclusion of stays already exposed, "
         "belongs to the design's exposure definition, not to population_spec."
     ) in text
+    # pilot1 round 3 (10-22), H3: 「具有首日最高血糖、年龄及院内死亡信息的分析队列」
+    # was written as an untyped inclusion the researcher had to accept.
+    assert (
+        "Nor is having the analysis variables recorded, such as an analysis cohort "
+        "of the stays with the exposure, covariates or outcome available: that is "
+        "the plan's missing-data handling, not a population restriction."
+    ) in text
     for word in ("sepsis", "shock", "sofa", "lactate", "ventilat", "mimic", "eicu"):
         assert word not in text.casefold()
     assert "zz_alpha" not in text

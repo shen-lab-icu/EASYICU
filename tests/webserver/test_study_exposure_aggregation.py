@@ -23,6 +23,12 @@ from easyicu.webserver import study_intent
         # The analyte's own name is read whole: "total" is part of it.
         ("The highest total bilirubin in the first 24 hours and 90-day mortality", "bili", "max"),
         ("前24小时最高总胆红素与90天死亡", "bili", "max"),
+        # 「血」 before an analyte is the blood it is measured in, as "blood"
+        # and 「血清」 are (pilot1 round 3, 10-22: a first-day maximum of 「血钾」
+        # was planned on the window median).
+        ("首日最高血钾与院内死亡", "k", "max"),
+        ("入 ICU 后 24 小时最低血钠与死亡", "na", "min"),
+        ("Highest blood potassium on day one and mortality", "k", "max"),
     ],
 )
 def test_explicit_measurement_operation_has_exact_text_provenance(

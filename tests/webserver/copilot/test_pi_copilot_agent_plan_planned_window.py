@@ -128,14 +128,13 @@ def test_a_declared_longer_window_still_refuses_the_landmark() -> None:
 
 def test_the_window_is_declared_only_with_the_agents_landmark() -> None:
     study = _study()
+    # A plan that closes its timing with an estimator of its own is not given
+    # the landmark; a design's name decides nothing (pilot1 round 3, H1).
+    own_timing = _plan("crude_whole_stay_comparison")
+    own_timing["steps"][0]["method"] = "time_varying_exposure_model"
 
     with pytest.raises(PlanDecisionError) as raised:
-        _compile(
-            study,
-            _plan("crude_whole_stay_comparison"),
-            (_TIMING,),
-            grouping=True,
-        )
+        _compile(study, own_timing, (_TIMING,), grouping=True)
     assert raised.value.code == "agent_plan_landmark_not_compilable"
     assert raised.value.details["time_window_hours"] == 24.0
 

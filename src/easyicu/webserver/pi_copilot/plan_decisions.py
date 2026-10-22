@@ -463,27 +463,46 @@ def _timing_coordinates(plan: Mapping[str, Any]) -> Dict[str, str]:
     }
 
 
+#: Estimators that close a temporal design by themselves; a plan that selects
+#: one is not given the host's landmark on its window.
+_OWN_TEMPORAL_ESTIMATORS = frozenset(
+    {"time_varying_exposure_model", "signed_target_trial_suite"}
+)
+
+
+def _selects_own_temporal_estimator(plan: Mapping[str, Any]) -> bool:
+    steps = plan.get("steps")
+    if not isinstance(steps, Sequence) or isinstance(steps, (str, bytes)):
+        return False
+    return any(
+        str(step.get("method") or "").strip().casefold().split("(", 1)[0].strip()
+        in _OWN_TEMPORAL_ESTIMATORS
+        for step in steps
+        if isinstance(step, Mapping)
+    )
+
+
 def _fixed_24h_landmark_candidate(
     plan: Mapping[str, Any],
     study: Mapping[str, Any] | None = None,
 ) -> bool:
-    """Recognize a typed fixed-window landmark design without naming a concept.
+    """Recognize a fixed-window design the 24-hour landmark closes.
 
-    The Research Agent's selected-design contract is shared by every fixed
-    0-24 h exposure.  Require both the selected landmark design and the
-    StudyContext's sealed 24-hour window before offering the executable
-    landmark choice; no exposure earns the choice by its name.
-
-    The design id is the Planner's own slug: the family template names it
-    ``landmark_adjusted_association``, a progressive plan names it in its own
-    words (pilot1 round 2, 10-22, A6: ``landmark_age_adjusted_association``,
-    refused as not a landmark, so the card offered no way on).  A selected
-    design whose id names a landmark is one.
+    The landmark is the host's closure of an exposure read over ICU hours
+    0-24: it is offered when the StudyContext's window is 24 hours and the
+    selected design does not close its timing with an estimator of its own
+    (a time-varying exposure model, a target trial).  No exposure earns the
+    choice by its name, and neither does a design: the design id is the
+    Planner's own slug.  pilot1 (10-22) planned a landmark as
+    ``landmark_age_adjusted_association`` and a first-day maximum's design
+    as ``adjusted_linear_k_association``.  The review routes the timing gap
+    of any selected design to this host closure, so a slug test refused
+    both and the card offered no way on.
     """
 
-    selected = _selected_design(plan)
+    _selected_design(plan)
     _timing_coordinates(plan)
-    if "landmark" not in str(selected.get("design_id") or "").strip().split("_"):
+    if _selects_own_temporal_estimator(plan):
         return False
     window = study.get("time_window") if isinstance(study, Mapping) else None
     if not isinstance(window, Mapping):
@@ -1280,6 +1299,17 @@ def compile_agent_plan_configuration(
         "analysis_unit": "icu_stay",
         "variance_estimator": "model_based",
     }
+    current_design = study.get("analysis_design")
+    if (
+        not first_stay_restricted
+        and isinstance(current_design, Mapping)
+        and all(current_design.get(key) == value for key, value in _PATIENT_CLUSTERED_DESIGN.items())
+    ):
+        # A study already clustered by patient, as the researcher's landmark
+        # choice keeps it: the review raised no repeated-stay finding because
+        # the plan was made on that design (pilot1 round 3, 10-22: compiling
+        # it model-based reopened the finding for one more planning round).
+        analysis_design.update(_PATIENT_CLUSTERED_DESIGN)
     if first_stay_restricted:
         confirmations.update(
             {
@@ -1588,8 +1618,9 @@ def compile_plan_decision(
         if not fixed_24h_landmark:
             raise PlanDecisionError(
                 "plan_decision_option_not_applicable",
-                "A 24-hour landmark requires a selected landmark association "
-                "design and a StudyContext-bound 24-hour exposure window.",
+                "A 24-hour landmark requires a design read over a "
+                "StudyContext-bound 24-hour exposure window that does not "
+                "close its timing with an estimator of its own.",
                 details={
                     "decision_code": code,
                     "option_id": option,
