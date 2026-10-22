@@ -112,7 +112,10 @@
       const reason = stopReason(card);
       return {
         ...base, nonApprovable: true,
-        title: tr('The target trial was not compiled', '目标试验没有编成'),
+        // Before any trial is stated, a database v1 emulates no trial in.
+        title: reason === 'target_trial_database_out_of_scope'
+          ? tr('This database does not support causal analysis in this version', '这个数据库在本版本中不支持因果分析')
+          : tr('The target trial was not compiled', '目标试验没有编成'),
         note: copyLine(reason, tr, latest.detail) || copyLine('target_trial_review', tr),
       };
     }
