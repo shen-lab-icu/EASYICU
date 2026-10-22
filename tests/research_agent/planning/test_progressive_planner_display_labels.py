@@ -332,3 +332,33 @@ def test_foundation_rejects_mechanically_humanized_reader_label() -> None:
     assert caught.value.reason_code == (
         "progressive_required_reader_display_labels_missing"
     )
+
+
+def test_the_variables_own_sealed_description_is_a_reader_label() -> None:
+    # pilot1 (10-22): the dictionary describes icu_unit_type as "ICU unit
+    # type"; the Planner copied it as told and was refused on every attempt.
+    context = _context()
+    variables = [
+        variable.model_copy(update={"description": "Exposure flag"})
+        if variable.name == "exposure_flag" else variable
+        for variable in context.variables
+    ]
+    context = context.model_copy(update={"variables": variables})
+    foundation = ProgressivePlanFoundation.model_validate(
+        {
+            "cohort": _payload()["cohort"],
+            "display_labels": [
+                {"key": "exposure_flag", "value": "Exposure flag"},
+                {"key": "outcome_flag", "value": "Clinical outcome"},
+            ],
+            "robustness_intents": [],
+            "know_how_decisions": [],
+        }
+    )
+
+    validate_progressive_foundation(
+        foundation,
+        context=context,
+        analysis_type="descriptive_epidemiology",
+        required_reader_display_label_keys=("exposure_flag", "outcome_flag"),
+    )

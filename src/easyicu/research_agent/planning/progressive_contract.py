@@ -402,6 +402,27 @@ class ProgressiveModelTermIntent(BaseModel):
         exclude_if=lambda value: value is None,
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _references_no_choice_states(cls, data: Any) -> Any:
+        """A binary term's reference is its first level; a linear term has none.
+
+        Neither is a choice: a binary term compares its other level with its
+        first unless the Planner names another, and a continuous or
+        ordinal-linear term has no reference at all.  pilot1 planning (10-22)
+        spent repair rounds on writing them.  A categorical term's reference
+        stays the Planner's to state.
+        """
+
+        if not isinstance(data, Mapping):
+            return data
+        coding = data.get("coding")
+        if coding == "binary" and data.get("reference_level_index") is None:
+            return {**data, "reference_level_index": 0}
+        if coding in {"continuous", "ordinal_linear"} and data.get("reference_level_index") is not None:
+            return {**data, "reference_level_index": None}
+        return data
+
     @model_validator(mode="after")
     def _reference_matches_coding(self) -> "ProgressiveModelTermIntent":
         treatment = self.coding in {"binary", "categorical"}
@@ -969,21 +990,21 @@ class ProgressiveSkeletonStep(BaseModel):
                 "population_scope=null and population_scope_change_reason=null"
             )
         if self.module_id == "exposure_outcome_distribution":
-            required = (
-                self.primary_exposure,
-                self.outcome,
-                self.event_level_index,
-                self.reference_exposure_level_index,
-                self.comparison_exposure_level_index,
-                self.denominator_policy,
-                self.missing_exposure_policy,
-                self.missing_outcome_policy,
-                self.confidence_level,
-            )
-            if any(value is None for value in required):
+            # The host owns the confidence level's default and a binary
+            # exposure's contrast levels; the step states the science only.
+            required = {
+                "primary_exposure": self.primary_exposure,
+                "outcome": self.outcome,
+                "event_level_index": self.event_level_index,
+                "denominator_policy": self.denominator_policy,
+                "missing_exposure_policy": self.missing_exposure_policy,
+                "missing_outcome_policy": self.missing_outcome_policy,
+            }
+            missing = [name for name, value in required.items() if value is None]
+            if missing:
                 raise ValueError(
-                    "exposure_outcome_distribution requires variables, level "
-                    "indices, denominator/missingness policies, and confidence"
+                    "exposure_outcome_distribution requires "
+                    + ", ".join(missing)
                 )
         if self.repeated_unit_interval_method is not None or self.patient_weighted_interval_assumptions is not None:
             if self.module_id != "exposure_outcome_distribution":

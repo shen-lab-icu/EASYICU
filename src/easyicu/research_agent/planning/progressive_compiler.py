@@ -331,6 +331,23 @@ def required_reader_display_label_keys(
     return keys
 
 
+def _sealed_description(context: ResearchContext, key: str, value: str) -> bool:
+    """Whether ``value`` is the variable's own sealed description.
+
+    The Planner is told to take a reader label from the sealed concept
+    metadata.  Where the dictionary's own description reads like the key
+    ("ICU unit type" for ``icu_unit_type``), copying it is that, not a
+    mechanical humanization: pilot1 (10-22) refused it on every attempt and
+    planning stopped.
+    """
+
+    descriptor = context.variable(key)
+    description = getattr(descriptor, "description", None) if descriptor is not None else None
+    return bool(description) and " ".join(str(description).casefold().split()) == " ".join(
+        value.casefold().split()
+    )
+
+
 def _is_mechanical_identifier_label(key: str, value: str) -> bool:
     """Reject underscore replacement masquerading as reader-facing copy."""
 
@@ -692,7 +709,10 @@ def validate_progressive_foundation(
         if not key:
             continue
         value = labels.get(key, "")
-        if not value or _is_mechanical_identifier_label(key, value):
+        if not value or (
+            _is_mechanical_identifier_label(key, value)
+            and not _sealed_description(context, key, value)
+        ):
             raise _fail(
                 "progressive_required_reader_display_labels_missing",
                 "the selected design requires a Planner-authored reader label "
@@ -1473,6 +1493,9 @@ def _level_at(
     return levels[index]
 
 
+_DEFAULT_DISTRIBUTION_CONFIDENCE = 0.95
+
+
 def _compile_distribution(
     *,
     variables: Mapping[str, Any],
@@ -1530,43 +1553,58 @@ def _compile_distribution(
             "confidence_level": None,
         }
     else:
-        reference = _level_at(
-            exposure_levels,
-            step.reference_exposure_level_index,
-            label="reference_exposure_level_index",
-            step=step,
-            step_index=step_index,
-        )
-        comparison = _level_at(
-            exposure_levels,
-            step.comparison_exposure_level_index,
-            label="comparison_exposure_level_index",
-            step=step,
-            step_index=step_index,
-        )
-        if step.reference_exposure_level_index == step.comparison_exposure_level_index:
-            raise _fail(
-                "progressive_distribution_contrast_not_distinct",
-                "risk-difference comparison and reference levels must differ",
+        # On the study population the exposure-level contrast would be a
+        # crude comparison beside the plan's own primary estimate; the step
+        # reports how often the exposure occurs and the outcome by level.
+        contrast = None
+        if not study_population:
+            reference_index = step.reference_exposure_level_index
+            comparison_index = step.comparison_exposure_level_index
+            if (
+                reference_index is None
+                and comparison_index is None
+                and len(exposure_levels) == 2
+            ):
+                # A binary exposure's contrast has no choice: the second level
+                # against the first, as a binary model term's reference.
+                reference_index, comparison_index = 0, 1
+            reference = _level_at(
+                exposure_levels,
+                reference_index,
+                label="reference_exposure_level_index",
                 step=step,
                 step_index=step_index,
-                path="comparison_exposure_level_index",
+            )
+            comparison = _level_at(
+                exposure_levels,
+                comparison_index,
+                label="comparison_exposure_level_index",
+                step=step,
+                step_index=step_index,
+            )
+            if reference_index == comparison_index:
+                raise _fail(
+                    "progressive_distribution_contrast_not_distinct",
+                    "risk-difference comparison and reference levels must differ",
+                    step=step,
+                    step_index=step_index,
+                    path="comparison_exposure_level_index",
+                )
+            contrast = ExposureOutcomeRiskDifferenceContrast(
+                reference_exposure_level=reference,
+                comparison_exposure_level=comparison,
             )
         inference_options = {
             "schema_version": "easyicu.exposure_outcome_distribution/2",
             "interval_method": "wilson",
             "repeated_unit_interval_method": step.repeated_unit_interval_method or "patient_cluster_robust_wald",
             "patient_weighted_interval_assumptions": step.patient_weighted_interval_assumptions,
-            # On the study population the exposure-level contrast would be a
-            # crude comparison beside the plan's own primary estimate; the step
-            # reports how often the exposure occurs and the outcome by level.
-            "risk_difference_contrast": None
-            if study_population
-            else ExposureOutcomeRiskDifferenceContrast(
-                reference_exposure_level=reference,
-                comparison_exposure_level=comparison,
+            "risk_difference_contrast": contrast,
+            "confidence_level": (
+                _DEFAULT_DISTRIBUTION_CONFIDENCE
+                if step.confidence_level is None
+                else step.confidence_level
             ),
-            "confidence_level": step.confidence_level,
         }
     # Both ceilings share the same typed denominator/missingness owner and
     # targeted repair lane. A counts-only plan must not bypass that lane by
@@ -2797,6 +2835,12 @@ def _compile_one_step(
         ):
             kwargs["descriptive_claim"] = DescriptiveClaimContract(
                 unresolved_limitations=("counts_only_design",)
+            )
+        elif step.planned_analysis_role == "primary" and interval_decision is not None:
+            # A descriptive study's own primary result: unadjusted group risks
+            # with the intervals its variance design grants.
+            kwargs["descriptive_claim"] = DescriptiveClaimContract(
+                unresolved_limitations=("descriptive_study_design",)
             )
         kwargs["inputs"] = list(dict.fromkeys([*inputs, spec.exposure, spec.outcome]))
     elif step.module_id == "continuous_outcome_summary":
