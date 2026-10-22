@@ -210,8 +210,12 @@ class PiProviderConfigStore:
             self._write_receipt(config, verification)
         return config, self.public_status(environ=config.as_environment())
 
-    def _require_stored_config(self) -> PiProviderConfig:
-        stored = self.resolved_config()
+    def _require_stored_config(
+        self,
+        *,
+        environ: Optional[Mapping[str, str]] = None,
+    ) -> PiProviderConfig:
+        stored = self.resolved_config(environ=environ)
         if stored is None:
             raise PiCopilotError(
                 "pi_provider_connection_not_configured",
@@ -236,6 +240,7 @@ class PiProviderConfigStore:
         model: str,
         *,
         verifier: Optional[Verifier] = None,
+        environ: Optional[Mapping[str, str]] = None,
     ) -> tuple[PiProviderConfig, Dict[str, Any]]:
         """Re-verify the stored connection on one different model.
 
@@ -244,9 +249,11 @@ class PiProviderConfigStore:
         through the UI.  Delegating to ``verify_and_save`` keeps the endpoint
         security check, the catalog membership rule and the verification
         receipt on exactly the same path a first-time connection takes.
+        An administrator tool passes ``environ={}`` so its own shell cannot
+        override the instance's stored connection.
         """
 
-        stored = self._require_stored_config()
+        stored = self._require_stored_config(environ=environ)
         return self.verify_and_save(
             provider=stored.provider,
             api_key=stored.api_key,

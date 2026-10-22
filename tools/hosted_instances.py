@@ -11,6 +11,7 @@ Run from the shared checkout (no server is started by create/provision):
   python tools/hosted_instances.py set-public-origin doctor https://clinic.example
   python tools/hosted_instances.py set-public-origin doctor --clear
   python tools/hosted_instances.py set-runner-image doctor easyicu-runner:rebuilt
+  python tools/hosted_instances.py set-model doctor deepseek-reasoner
   python tools/hosted_instances.py start doctor
   python tools/hosted_instances.py status doctor
   python tools/hosted_instances.py list
@@ -168,6 +169,25 @@ def provision_model(instance: Path, key_file: Path, *, verifier=None) -> None:
     store.verify_and_save(provider="deepseek", api_key=key, base_url="https://api.deepseek.com/v1",
                           model="deepseek-chat", api_transport="openai-completions", verifier=verifier)
     _update_instance_settings(state, {"ai_enabled": True})
+
+
+def set_model(instance: Path, model: str, *, verifier=None) -> None:
+    """Move a stopped instance to another model on its stored connection.
+
+    The credential stays in the instance's private file: the provider owner
+    re-verifies the same connection with one bounded inference on the new
+    model and saves only after it answers, so a refused model changes nothing.
+    """
+    from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
+
+    env = instance_environment(instance)
+    if _recorded_process(instance) is not None:
+        raise ValueError("stop the instance before changing its model")
+    state = Path(env["EASYICU_HOME"]) / ".easyicu"
+    store = PiProviderConfigStore(config_path=state / "pi-provider.env",
+                                  receipt_path=state / "pi-provider-verification.json")
+    store.switch_model(model, verifier=verifier, environ={})
+    print(f"Model verified and saved. Next step: python tools/hosted_instances.py start {instance.name}")
 
 
 def _source_metadata(command: str, path: str | None = None, *, label: str | None = None,
@@ -390,11 +410,13 @@ def main(argv=None) -> int:
     create.add_argument("--checkout", type=Path, default=CHECKOUT)
     create.add_argument("--public-origin", default="")
     for name in ("start", "stop", "status", "provision-model", "add-source", "list-sources", "set-public-origin",
-                 "set-runner-image"):
+                 "set-runner-image", "set-model"):
         help_text = {"add-source": "Register a prepared export in this instance's data roots",
                      "list-sources": "List source labels, databases, counts and active flags",
                      "set-public-origin": "Set or clear the HTTPS origin of a stopped instance",
-                     "set-runner-image": "Set the runner image of a stopped instance"}.get(name)
+                     "set-runner-image": "Set the runner image of a stopped instance",
+                     "set-model": "Verify and switch a stopped instance to another model on its stored connection",
+                     }.get(name)
         command = commands.add_parser(name, help=help_text)
         command.add_argument("name")
         if name == "provision-model":
@@ -408,6 +430,8 @@ def main(argv=None) -> int:
             command.add_argument("--clear", action="store_true", help="Clear the public origin")
         elif name == "set-runner-image":
             command.add_argument("image", help="Image whose execution kernel matches this checkout")
+        elif name == "set-model":
+            command.add_argument("model", help="A model the stored connection reports")
     commands.add_parser("list")
     args = parser.parse_args(argv)
     try:
@@ -435,6 +459,8 @@ def main(argv=None) -> int:
                 set_public_origin(instance, args.origin or "", clear=args.clear)
             elif args.command == "set-runner-image":
                 set_runner_image(instance, args.image)
+            elif args.command == "set-model":
+                set_model(instance, args.model)
             else:
                 instance_environment(instance)
                 print(f"{instance.name}: {'running' if _recorded_process(instance) else 'stopped'}")
