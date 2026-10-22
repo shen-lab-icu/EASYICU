@@ -59,6 +59,17 @@ test('plan evidence keeps the reviewed run when a later child fails before plann
   for (const resource of card.reviewResources) assert.equal(resource.run_id, 'reviewed-plan');
 });
 
+test('a revision the launcher refuses for a non-plan blocker is not offered', () => {
+  // Hosted pilot: the lactate-group association card offered a revision that
+  // the launcher refused (plan_revision_owner_resolution_required), silently.
+  const buckets = { agent_plan_revision: ['CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED'] };
+  assert.equal(confirmation({ run_id: 'p', remediation_buckets: buckets }).nonApprovable, false);
+  assert.equal(confirmation({
+    run_id: 'p', remediation_buckets: buckets,
+    automatic_revision_blockers: ['POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED'],
+  }).nonApprovable, true);
+});
+
 test('missing plan authority never falls back to the latest session run', () => {
   const card = confirmation({ remediation_buckets: {} });
   for (const resource of card.reviewResources) assert.equal(resource.run_id, '');
