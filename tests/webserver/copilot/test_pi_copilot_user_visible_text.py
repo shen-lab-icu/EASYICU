@@ -147,3 +147,20 @@ def test_reasoning_summaries_stay_out_of_the_browser_projection() -> None:
     assert projected[0]["content"][0] == {"type": "thinking"}
     assert projected[0]["content"][1]["text"] == "运行已失败。"
     assert [block["type"] for block in projected[1]["content"]] == ["text"]
+
+
+def test_a_streamed_reply_keeps_the_punctuation_and_spaces_at_its_delta_edges() -> None:
+    """pilot1 10-22: each live delta was cleaned as if it were a whole reply,
+    so "数据源已确认，" lost its comma on every live screen (the reloaded
+    transcript kept it) and an English delta lost its trailing space."""
+
+    zh = ["数据源已确认，", "当前研究已具备条件", "，供你后续审核。"]
+    en = ["The research ", "plan is ready", ", and analysis has not started."]
+
+    for deltas in (zh, en):
+        live = "".join(sanitize_user_visible_text(delta, fragment=True) for delta in deltas)
+        assert live == "".join(deltas) == sanitize_user_visible_text("".join(deltas))
+    # A delta still loses an internal token it carries whole.
+    assert sanitize_user_visible_text("未获得可用的 `provider_run` 授权，", fragment=True) == (
+        "未获得可用的授权，"
+    )
