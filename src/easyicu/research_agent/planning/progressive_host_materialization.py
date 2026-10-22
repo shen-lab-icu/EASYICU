@@ -369,6 +369,30 @@ def _cohort_row_identity(
     return proven
 
 
+def _outline_grouping(
+    context: ResearchContext,
+    raw_inputs: Sequence[str],
+    variables: Mapping[str, object],
+) -> str | None:
+    """The one grouping a distribution step's own roster names, or ``None``.
+
+    A study may state no exposure ("mortality in men and women"): the Planner
+    then names the grouping in the outline step's roster beside the outcome.
+    Only an unambiguous roster is completed here -- exactly one closed-domain
+    variable other than the outcome and the identifiers; anything else stays
+    model judgment.
+    """
+
+    candidates = [
+        name
+        for name in raw_inputs
+        if name != context.target_outcome
+        and name not in context.cohort.id_columns
+        and len(closed_planning_levels_for(name=name, variables=dict(variables))) >= 2
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def host_materialize_progressive_step(
     *,
     context: ResearchContext,
@@ -446,7 +470,8 @@ def host_materialize_progressive_step(
             table_one_variables=rows,
         )
     elif module == "exposure_outcome_distribution":
-        exposure, outcome = context.primary_exposure, context.target_outcome
+        outcome = context.target_outcome
+        exposure = context.primary_exposure or _outline_grouping(context, raw, variables)
         if not exposure or not outcome or exposure not in raw or outcome not in raw:
             return None
         exposure_levels = closed_planning_levels_for(name=exposure, variables=variables)
