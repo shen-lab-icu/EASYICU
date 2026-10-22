@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from easyicu.research_agent.authority.provider_hard_stop import (
+    ProviderHardStopError,
     ProviderHardStopExceeded,
     ProviderHardStopLedger,
     ProviderHardStopLimits,
@@ -38,19 +39,21 @@ def recovery(tmp_path, monkeypatch):
     job = Job("outage", "agent-run")
     state = owner.ProviderJobRecovery(job)
     probes = []
+    requests = []
 
     class Provider:
         name = "synthetic"
 
         def complete_with_usage(self, messages, **kwargs):
             probes.append(clock.now)
+            requests.append((messages, kwargs))
             if clock.now < clock.recover_at:
                 raise http_failure()
             return "OK", {"prompt_tokens": 8, "completion_tokens": 1, "total_tokens": 9}
 
     clock.recover_at = 1300.0
     state.bind(wrapper_dir=tmp_path, task=task, client=Provider())
-    return SimpleNamespace(owner=owner, state=state, clock=clock, task=task, job=job, probes=probes, root=tmp_path)
+    return SimpleNamespace(owner=owner, state=state, clock=clock, task=task, job=job, probes=probes, requests=requests, root=tmp_path)
 
 
 def test_outage_longer_than_two_requests_resumes_once_from_checkpoint(recovery):
@@ -75,6 +78,9 @@ def test_outage_longer_than_two_requests_resumes_once_from_checkpoint(recovery):
     assert event["actor"] == "system" and event["cause_code"] == "provider_http_error"
     assert event["checkpoint"]["sha256"] == "b" * 64 and event["at"]
     assert r.probes[0] >= 120 and r.clock.now >= 1300
+    for messages, kwargs in r.requests:
+        assert [(message.role, message.content) for message in messages] == [("user", "Reply OK.")]
+        assert kwargs == {"max_tokens": 16, "temperature": 0}
     calls = r.task.ledger.snapshot()["tasks"][0]["calls"]
     assert len(calls) == len(r.probes)
     assert all(call["role"] == "provider_recovery_probe" for call in calls)
@@ -279,6 +285,30 @@ def test_non_transient_probe_is_sanitized_and_never_resumes(recovery):
     assert stopped.value.code == "research_pipeline_provider_recovery_probe_failed"
     assert "private provider" not in str(stopped.value)
     assert not r.state.resumes
+
+
+@pytest.mark.parametrize("stop_kind", ["provider_hard_stop", "pipeline_run"])
+def test_typed_probe_stop_is_preserved_without_retry_or_resume(recovery, stop_kind):
+    r = recovery
+    error = (
+        ProviderHardStopError("synthetic hard stop")
+        if stop_kind == "provider_hard_stop"
+        else r.owner.ResearchPipelineRunError("research_pipeline_cancelled", "synthetic cancellation")
+    )
+    probes = []
+
+    def stop(messages, **kwargs):
+        probes.append(r.clock.now)
+        raise error
+
+    r.state.client = SimpleNamespace(complete_with_usage=stop)
+    with pytest.raises(type(error)) as stopped:
+        r.state.run(lambda job: (_ for _ in ()).throw(http_failure()),
+                    lambda exc: r.owner.CheckpointContinuation(checkpoint={}, run=lambda job: pytest.fail("stopped")))
+    assert stopped.value is error
+    assert probes == [r.owner.PROBE_INTERVAL_SECONDS]
+    assert not r.state.resumes
+    assert not any(event.get("step") == "provider_auto_resume" for event in r.job.events)
 
 
 def test_approval_operation_runs_once_and_recovery_uses_the_existing_launch(recovery, monkeypatch):
