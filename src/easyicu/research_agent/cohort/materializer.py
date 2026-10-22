@@ -927,6 +927,73 @@ def _normalize_legacy_export_categorical(
     return normalized, receipt
 
 
+def _missing_outside_declared_source_factor(
+    frame: pd.DataFrame,
+    *,
+    concept: str,
+    database: str,
+    package: Optional[ExportPackage],
+) -> tuple[pd.DataFrame, Optional[Dict[str, Any]]]:
+    """Read a passed-through source value outside a factor's levels as missing.
+
+    A factor concept declares its levels (``sex`` is ``Female``/``Male``).
+    When the database's source maps nothing -- its raw values are meant to be
+    the concept's values, as eICU's ``patient.gender`` is for ``sex`` -- a raw
+    value outside those levels (eICU's ``Other``, ``Unknown``) is not a value
+    of the concept, and the concept owner's factor reading leaves it missing.
+    Kept as its own level, it enters models as a level the codebook does not
+    have; a level of a few stays then has no events and no estimate.
+
+    Typed exports only, and only a source without a value callback: a source
+    whose declared map leaves a value unmapped has a mapping defect, which is
+    a clinical decision this does not make.  The receipt records each value
+    read as missing and its count.
+    """
+
+    if (
+        package is None
+        or package.column_metadata_sha256 is None
+        or frame.empty
+        or concept not in frame.columns
+    ):
+        return frame, None
+
+    from ...config import load_src_cfg
+    from ...resources import load_dictionary
+
+    definition = load_dictionary().get(concept)
+    levels = getattr(definition, "levels", None)
+    if (
+        definition is None
+        or getattr(definition, "class_name", None) != "fct_cncpt"
+        or not isinstance(levels, (list, tuple))
+        or not levels
+    ):
+        return frame, None
+    values = frame[concept]
+    outside = values.notna() & ~values.isin(levels)
+    if not bool(outside.any()):
+        return frame, None
+    sources = definition.for_data_source(load_src_cfg(database))
+    if not sources or any(getattr(source, "callback", None) for source in sources):
+        return frame, None
+    counts = {
+        str(key): int(value)
+        for key, value in values.loc[outside].value_counts(dropna=False).items()
+    }
+    read = frame.copy()
+    read[concept] = read[concept].where(~outside)
+    receipt = {
+        "policy": "source_value_outside_declared_factor_levels_missing",
+        "concept": concept,
+        "database": database,
+        "declared_levels": list(levels),
+        "values_read_as_missing": counts,
+        "rows_read_as_missing": int(outside.sum()),
+    }
+    return read, receipt
+
+
 def _export_authority_provenance(
     package: Optional[ExportPackage],
 ) -> Optional[Dict[str, Any]]:
@@ -1598,6 +1665,7 @@ def _materialize_cohort_from_resolved_source(
         raise MaterializedMetadataError("unsupported source bounds violation policy")
     bounds_violation_counts: dict[str, int] = {}
     legacy_export_domain_normalizations: dict[str, Dict[str, Any]] = {}
+    source_factor_values_read_as_missing: dict[str, Dict[str, Any]] = {}
 
     unavailable: List[str] = []
 
@@ -1619,6 +1687,14 @@ def _materialize_cohort_from_resolved_source(
         )
         if normalization_receipt is not None:
             legacy_export_domain_normalizations[concept] = normalization_receipt
+        loaded, factor_receipt = _missing_outside_declared_source_factor(
+            loaded,
+            concept=concept,
+            database=database,
+            package=export_package,
+        )
+        if factor_receipt is not None:
+            source_factor_values_read_as_missing[concept] = factor_receipt
         if loaded.empty or concept not in loaded.columns:
             return loaded
         loaded = loaded.copy()
@@ -2125,6 +2201,9 @@ def _materialize_cohort_from_resolved_source(
         "legacy_export_domain_normalizations": (
             legacy_export_domain_normalizations
         ),
+        "source_factor_values_read_as_missing": (
+            source_factor_values_read_as_missing
+        ),
         "outcome_event_time_sources": outcome_event_time_sources,
         "stay_level_concepts": stay_level_sources,
         "columns": list(cohort.columns),
@@ -2215,6 +2294,7 @@ def _build_trajectory_long_from_resolved_source(
         raise MaterializedMetadataError("unsupported source bounds violation policy")
     bounds_violation_counts: dict[str, int] = {}
     legacy_export_domain_normalizations: dict[str, Dict[str, Any]] = {}
+    source_factor_values_read_as_missing: dict[str, Dict[str, Any]] = {}
     unavailable: List[str] = []
     available_unobserved: List[str] = []
     receipt_aware: List[str] = []
@@ -2239,6 +2319,14 @@ def _build_trajectory_long_from_resolved_source(
         )
         if normalization_receipt is not None:
             legacy_export_domain_normalizations[concept] = normalization_receipt
+        df, factor_receipt = _missing_outside_declared_source_factor(
+            df,
+            concept=concept,
+            database=database,
+            package=export_package,
+        )
+        if factor_receipt is not None:
+            source_factor_values_read_as_missing[concept] = factor_receipt
         if metadata_collector.enabled and not df.empty:
             df = df.copy()
             if TIME_COL in df.columns:
@@ -2435,6 +2523,9 @@ def _build_trajectory_long_from_resolved_source(
         "source_bounds_exclusions": dict(sorted(bounds_violation_counts.items())),
         "legacy_export_domain_normalizations": (
             legacy_export_domain_normalizations
+        ),
+        "source_factor_values_read_as_missing": (
+            source_factor_values_read_as_missing
         ),
         "n_rows": int(len(long_df)),
         "n_stays": int(long_df[ID_COL].nunique()) if len(long_df) else 0,
