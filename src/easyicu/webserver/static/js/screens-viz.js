@@ -253,7 +253,7 @@
     return `
       <div class="src-registry" data-src-mode="${multi ? 'multi' : 'single'}">
         <div class="src-head">
-          <div><div class="eyebrow">${title}</div><div class="src-sub">${multi ? t('Choose at least two exports to compare.', '请选择至少两份数据进行对比。') : hosted ? t('The data in use is shared by Patient Review, Cohort Statistics and the research conversation.', '当前使用的数据会被患者审阅、队列统计和研究对话共用。') : t('This active export is shared by Patient, Cohort, Agent, and Copilot.', '这个 active 导出会被患者审阅、队列统计、Agent 和 Copilot 共用。')}</div></div>
+          <div><div class="eyebrow">${title}</div>${multi || !hosted ? `<div class="src-sub">${multi ? t('Choose at least two exports to compare.', '请选择至少两份数据进行对比。') : t('This active export is shared by Patient, Cohort, Agent, and Copilot.', '这个 active 导出会被患者审阅、队列统计、Agent 和 Copilot 共用。')}</div>` : ''}</div>
           <button class="btn sm ghost" data-src-refresh>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
         </div>
         <div class="src-list">

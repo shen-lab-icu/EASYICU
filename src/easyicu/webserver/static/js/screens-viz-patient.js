@@ -1196,9 +1196,9 @@
         <div id="ptbody">${patientTabBody()}</div>
         <div class="nextbar accent mt-16">
           <div class="nb-ico">${icon('arrow', 16)}</div>
-          <div class="grow"><div class="nb-t">${t('Reviewed the data — what\u2019s next?', '\u6570\u636e\u5df2\u5ba1\u9605 \u2014\u2014 \u4e0b\u4e00\u6b65\uff1f')}</div><div class="nb-d">${t('Compare groups in Cohort Statistics, or ask Guided Copilot to assemble an auditable analysis and review-ready draft.', '\u5728\u300c\u961f\u5217\u7edf\u8ba1\u300d\u505a\u7ec4\u95f4\u5bf9\u6bd4\uff0c\u6216\u8ba9\u300c\u7814\u7a76\u5f15\u5bfc\u300d\u7ec4\u88c5\u53ef\u5ba1\u8ba1\u5206\u6790\u4e0e\u5f85\u6838\u9a8c\u8349\u7a3f\u3002')}</div></div>
+          <div class="grow"><div class="nb-t">${t('Next step', '下一步')}</div></div>
           <button class="btn" data-nav="cohort">${icon('cohort', 13)} ${t('Cohort Statistics', '\u961f\u5217\u7edf\u8ba1')}</button>
-          <button class="btn primary" data-study-handoff data-study-source="patient" data-study-target="guided">${icon('agent', 13)} ${t('Continue in Guided Copilot','\u5728\u7814\u7a76\u5f15\u5bfc\u4e2d\u7ee7\u7eed')}</button>
+          <button class="btn primary" data-study-handoff data-study-source="patient" data-study-target="guided">${icon('agent', 13)} ${t('Continue in Guided Copilot', '在研究对话中继续')}</button>
         </div>`;
       }
       /* idle */
@@ -1210,7 +1210,7 @@
       ${patientHeading}
       ${guidedNote}
       <div class="card pad">
-        <div class="panel-head">
+        ${hostedServer() ? '' : `<div class="panel-head">
           <div>
             <div class="eyebrow">${t('Patient Review', '患者审阅')}</div>
             <!-- h2, not div: this is the section title under the route's h1.
@@ -1219,7 +1219,7 @@
             <h2 class="panel-title" style="margin-top:4px;margin-bottom:0;font-size:17px;">${t('Load a review workspace', '加载审阅工作区')}</h2>
             <div class="panel-sub">${realMode ? (hostedServer() ? t('Load the data the administrator prepared on the server.', '加载管理员在服务器上准备好的数据。') : t('Load a local EasyICU export folder. Nothing is uploaded.', '加载本地 EasyICU 导出文件夹，不上传任何数据。')) : t('Choose an official deidentified ICU demo, or use the offline synthetic fallback for interaction rehearsal only.', '选择官方去标识化 ICU 演示数据，或仅在离线界面演练时使用合成兜底。')}</div>
           </div>
-        </div>
+        </div>`}
 
         <div style="border-top:1px solid var(--hair);padding-top:16px;" data-datamode-switch>
           <div class="eyebrow" style="margin-bottom:10px;">${t('Data source', '数据源')}</div>
@@ -1230,12 +1230,12 @@
         </div>
 
         ${realMode ? `
-        <div class="card sunken pad mt-16">
-          <div class="eyebrow" style="margin-bottom:4px;">${hostedServer() ? t('Prepared data', '已准备的数据') : t('Local export', '本地导出')}</div>
+        <div class="${hostedServer() ? '' : 'card sunken pad mt-16'}">
+          ${hostedServer() ? '' : `<div class="eyebrow" style="margin-bottom:4px;">${t('Local export', '本地导出')}</div>
           <div style="font-weight:600;font-size:14px;">${t('Load exported EasyICU tables', '加载已导出的 EasyICU 数据表')}</div>
-          <div class="panel-sub" style="margin-top:2px;">${hostedServer() ? t('Pick one of the prepared datasets.', '从已准备的数据中选择一份。') : t('Pick a registered local export, or add one by path.', '选择已注册的本地导出，或按路径添加一个。')}</div>
+          <div class="panel-sub" style="margin-top:2px;">${t('Pick a registered local export, or add one by path.', '选择已注册的本地导出，或按路径添加一个。')}</div>`}
           ${vizErr ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(vizErr)}</div></div></div>` : ''}
-          ${patientSourceReadyCard()}
+          ${hostedServer() ? '' : patientSourceReadyCard()}
           ${sourceRegistryBlock('single')}
           ${hostedServer() ? '' : `<p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">${t('Use Data Extraction first to create or refresh this folder. The last successful export is remembered locally.', '请先用数据抽取创建或刷新该文件夹。上次成功的导出会被本地记住。')}</p>`}
           <button class="btn primary block lg mt-16" data-gen>${icon('folder', 14)} ${hostedServer() ? t('Load this data', '加载这份数据') : t('Load local export', '加载本地导出')}</button>

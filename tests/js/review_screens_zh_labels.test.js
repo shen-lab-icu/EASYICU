@@ -225,14 +225,14 @@ const review = {
     supported: [{
       id: 'outcome',
       label: 'Survived vs Deceased',
-      groups: [{ label: 'Survived', count: 80, pct: 80 }, { label: 'Deceased', count: 20, pct: 20 }],
+      groups: [{ label: 'Survived', count: 80, pct: 80 }, { label: 'Deceased', count: 20, pct: 20 }, { label: 'Unknown', count: 0, pct: 0 }],
       profile: {
-        columns: ['Survived', 'Deceased'],
+        columns: ['Survived', 'Deceased', 'Unknown'],
         rows: [
-          { metric: 'N', kind: 'count', values: [80, 20] },
-          { metric: 'Median HR', feature_id: 'vitals:hr', column: 'hr', kind: 'numeric', values: [80, 90] },
-          { metric: 'Sofa2 Cardio Available %', feature_id: 'sofa2_score:sofa2_cardio_available', column: 'sofa2_cardio_available', kind: 'percent', values: [90, 95] },
-          { metric: 'Death Time available %', feature_id: 'outcome:death_time', column: 'death_time', kind: 'percent', values: [0, 100] },
+          { metric: 'N', kind: 'count', values: [80, 20, 0] },
+          { metric: 'Median HR', feature_id: 'vitals:hr', column: 'hr', kind: 'numeric', values: [80, 90, null] },
+          { metric: 'Sofa2 Cardio Available %', feature_id: 'sofa2_score:sofa2_cardio_available', column: 'sofa2_cardio_available', kind: 'percent', values: [90, 95, null] },
+          { metric: 'Death Time available %', feature_id: 'outcome:death_time', column: 'death_time', kind: 'percent', values: [0, 100, null] },
         ],
       },
     }],
@@ -261,8 +261,16 @@ for (const word of ['Analysis readiness', '分析准备情况', 'manifest', 'pay
   'Blood Gas Analysis', 'Vital Signs', 'blood_gas', 'vitals', 'Heart Rate', 'KM/log-rank', 'Table One', 'Cardio', 'Death Time', 'coverage']) {
   assert(!cohortZh.includes(word), `Chinese Cohort Statistics still shows "${word}"`);
 }
+// An empty "unknown" group is no column or card; every row is descriptive, so no status column;
+// the conversation has its current name; no sublines that repeat the tabs.
+assert(!/未知\s+0\b/.test(cohortZh) && !/死亡\s+未知/.test(cohortZh), 'an empty unknown group is neither a card nor a column');
+for (const word of ['Table 1', '研究引导', '当前导出已加载', '分析前审阅模块覆盖率', '为保证大型本地导出']) {
+  assert(!cohortZh.includes(word), `Chinese Cohort Statistics should not show "${word}"`);
+}
+assert.strictEqual(cohortZh.split('描述性').length - 1, 1, 'only the split chooser says 描述性 (no per-row status pill)');
+assert(cohortZh.includes('在研究对话中继续'), 'the next step names the research conversation');
 assert(!/\bHR\b/.test(cohortZh), 'Chinese Cohort Statistics should not name heart rate by its column code');
-for (const word of ['基线特征表 (Table 1)', '血气分析', '生命体征', '心率', '心率 中位数', '乳酸', ' 可用 %', '院内死亡时间 有记录比例 %']) {
+for (const word of ['基线特征表', '血气分析', '生命体征', '心率', '心率 中位数', '乳酸', ' 可用 %', '院内死亡时间 有记录比例 %']) {
   assert(cohortZh.includes(word), `Chinese Cohort Statistics should show "${word}"`);
 }
 
