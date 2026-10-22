@@ -327,6 +327,8 @@
         ? STARTERS.render({ tr, disabled: interactionLocked || stale,
           composer: `<div class="gpi-compose gpi-entry-compose">${composerCardHtml}</div>` })
         : `<div class="gpi-empty"><strong>${tr('Start with the research question', '先描述研究问题')}</strong></div>`;
+      // A turn or job of this conversation moves its own study binding and
+      // rebinds when it ends; only a change found at rest asks for a rebind.
       return `
         <div class="gpi-panel${emptyResearch ? ' gpi-empty-session' : ''}${resultsView ? ' gpi-results-session' : ''}">
           ${HEADER.render(headerOptions)}
@@ -335,7 +337,7 @@
           ${!workspace && DATA_CONSENT && typeof DATA_CONSENT.renderSelectedSource === 'function'
             ? DATA_CONSENT.renderSelectedSource(session, { tr, esc, icon: iconHtml }) : ''}
           </div>
-          ${stale ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
+          ${stale && !interactionLocked ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
           <div class="gpi-log${messages ? '' : ' gpi-log-start'}" data-gpi-log>
             ${RUN_FILES.notice()}
             ${conversation || (resultsView ? '' : workspace
