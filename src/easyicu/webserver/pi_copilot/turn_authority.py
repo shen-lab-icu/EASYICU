@@ -6,6 +6,7 @@ import re
 import unicodedata
 
 __all__ = [
+    "database_named_in",
     "explicitly_confirms_easyicu_registered_source",
     "infer_explicit_turn_actions",
     "infer_idea_mining_followup_intent",
@@ -258,6 +259,35 @@ def infer_explicit_turn_actions(message: str) -> frozenset[str]:
     )
 
 
+def database_named_in(message: str) -> str | None:
+    """The database key the researcher's words name, else ``None``."""
+
+    text = str(message or "").casefold()
+    for database, pattern in (
+        ("miiv", r"\bmimic[\s_-]*(?:iv|4)\b"),
+        ("mimic", r"\bmimic[\s_-]*(?:iii|3)\b"),
+        ("eicu", r"\beicu\b"),
+        ("aumc", r"\b(?:amsterdamumcdb|aumc)\b"),
+        ("hirid", r"\bhirid\b"),
+        ("sic", r"\b(?:sicdb|sic)\b"),
+    ):
+        if re.search(pattern, text):
+            return database
+    return None
+
+
+def _names_what_it_studies(message: str) -> bool:
+    """Whether the words name a population, an exposure or an outcome."""
+
+    from easyicu.webserver.study_intent import deterministic_intent
+
+    slots = deterministic_intent(message).get("slots")
+    return isinstance(slots, dict) and any(
+        isinstance(slots.get(name), dict) and slots[name].get("value")
+        for name in ("population", "exposure", "outcome")
+    )
+
+
 def infer_research_entry_intent(message: str) -> str:
     """Classify only an unscoped first turn in a blank research project.
 
@@ -329,6 +359,16 @@ def infer_research_entry_intent(message: str) -> str:
     from easyicu.webserver.study_family_reading import planner_stated_family
 
     if planner_stated_family(message):
+        return "implement_scientific_question"
+    # So is a request about a named database's data that names what it
+    # studies (「请描述 eICU 不同 ICU 类型患者入 ICU 首日最高乳酸的分布。」);
+    # one naming only the database (「我想用 eICU 做点研究」) or asking for
+    # directions is still unclear.
+    if (
+        database_named_in(text)
+        and not re.search(r"方向|选题|想法|题目|课题|idea|topic", text)
+        and _names_what_it_studies(message)
+    ):
         return "implement_scientific_question"
     return "clarify_research_entry"
 

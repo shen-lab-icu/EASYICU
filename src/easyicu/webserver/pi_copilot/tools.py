@@ -74,7 +74,7 @@ from .run_authority import (
 )
 from .source_recommendation import registered_source_choice, registered_sources_for_database
 from .study_context_update import update_study_context
-from .turn_authority import infer_explicit_turn_actions
+from .turn_authority import database_named_in, infer_explicit_turn_actions
 from .tool_catalog import (
     ALLOWED_TOOLS,
     CONTROL_TOOLS,
@@ -562,20 +562,6 @@ def _workspace_status(
     )
 
 
-def _database_named_in_message(message: str) -> Optional[str]:
-    for database, pattern in (
-        ("miiv", r"\bmimic[\s_-]*(?:iv|4)\b"),
-        ("mimic", r"\bmimic[\s_-]*(?:iii|3)\b"),
-        ("eicu", r"\beicu\b"),
-        ("aumc", r"\b(?:amsterdamumcdb|aumc)\b"),
-        ("hirid", r"\bhirid\b"),
-        ("sic", r"\b(?:sicdb|sic)\b"),
-    ):
-        if re.search(pattern, message):
-            return database
-    return None
-
-
 def _registered_source_alternatives_requested(message: str) -> bool:
     """Return whether the user explicitly asked to inspect non-default exports."""
 
@@ -601,7 +587,7 @@ def _list_data_sources(
 
     requested_database = str(params.get("database") or "").strip()
     user_message = str(context.user_message or "").casefold()
-    explicit_database = _database_named_in_message(user_message)
+    explicit_database = database_named_in(user_message)
     if explicit_database:
         # The current user's exact database wording is stronger authority than
         # a model-generated tool argument. Recover the request deterministically
