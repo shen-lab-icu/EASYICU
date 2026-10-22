@@ -789,6 +789,18 @@ def build_research_workflow_snapshot(
         and has_outputs
         and (gate_status == "analysis_only" or executed_analysis_validated)
     )
+    # A question or setup changed after an analysis leaves that run as
+    # history: it answered the earlier configuration, so the next governed
+    # action is a fresh plan, as for a superseded plan review.
+    analysis_superseded = bool(
+        (analysis_complete or analysis_outputs_available)
+        and len(planned_scientific_digest) == 64
+        and planned_scientific_digest != current_scientific_digest
+        and not pipeline_running
+    )
+    if analysis_superseded:
+        analysis_complete = analysis_outputs_available = False
+        plan_regeneration_required = True
     # A completed, validated full run is a stronger downstream receipt than
     # legacy blank setup slots. The approved Agent plan owns the exact study
     # design used for execution, so an older StudyContext must not pull the
@@ -878,6 +890,8 @@ def build_research_workflow_snapshot(
         if failed_execution_retry_available
         else "failed_pipeline_requires_fresh_plan"
         if failed_pipeline_regeneration_required
+        else "plan_configuration_superseded"
+        if analysis_superseded
         else plan_review_reason_code
     )
     # A new plan or run analyzes the bound export's rows as the study's own,
