@@ -256,7 +256,7 @@
       ),
       raw_distribution_load_failed: h.t(
         'The bounded raw-database comparison could not be completed. Check the source folders and retry.',
-        '有界原始库对比未能完成。请检查源目录后重试。'
+        '原始库对比没有完成。请检查数据目录后重试。'
       ),
       loaded_fewer_than_requested_raw_databases: h.t(
         'Not every selected database produced readable aggregate data. Open Advanced settings to review the database selection.',
@@ -557,18 +557,18 @@
     const error = getError(config);
     return `
       <div class="card pad">
-        <div class="eyebrow">${h.t('Step 1 · Source method', '第 1 步 · 来源方式')}</div>
+        <div class="eyebrow">${h.t('Step 1 · Data source', '第 1 步 · 数据来源')}</div>
         <div class="panel-title">${h.t('How should EasyICU build this comparison?', '选择跨库对比的数据来源')}</div>
-        <div class="panel-sub mt-4">${h.t('Choose one path. Controls for the other path stay hidden.', '一次只选择一种路径，未选择路径的控件不会展开。')}</div>
+        <div class="panel-sub mt-4">${h.t('Choose one of the two.', '两种方式选一种。')}</div>
         <div class="crossdb-method-grid mt-14" role="group" aria-label="${h.esc(h.t('Cross-database source method', '跨库数据来源方式'))}">
           <button class="crossdb-method-card ${state.sourceMethod === 'registered' ? 'selected' : ''}" type="button" data-crossdb-source-method="registered" aria-pressed="${state.sourceMethod === 'registered' ? 'true' : 'false'}">
             <span class="crossdb-method-icon">${h.icon('table', 16)}</span>
-            <span><b>${h.t('Prepared EasyICU exports', '已准备的 EasyICU 导出')}</b><small>${h.t('Compare two or more bounded aggregate exports.', '比较两个或更多有界聚合导出。')}</small></span>
+            <span><b>${h.t('Prepared EasyICU exports', '已准备的 EasyICU 导出')}</b><small>${h.t('Compare two or more prepared exports; every record is summarized.', '对比两份或更多已准备好的数据，每条记录都参与汇总。')}</small></span>
             <span class="pill ${state.sourceMethod === 'registered' ? 'ok' : 'dashed'}">${state.sourceMethod === 'registered' ? h.t('Selected', '已选择') : h.t('Choose', '选择')}</span>
           </button>
           <button class="crossdb-method-card ${state.sourceMethod === 'raw' ? 'selected' : ''}" type="button" data-crossdb-source-method="raw" aria-pressed="${state.sourceMethod === 'raw' ? 'true' : 'false'}">
             <span class="crossdb-method-icon">${h.icon('folder', 16)}</span>
-            <span><b>${h.t('Raw ICU database folder', '原始 ICU 数据库目录')}</b><small>${hostedServer() ? h.t('Check a data folder on the server, then run bounded sampling.', '检查服务器上的数据目录后执行有界抽样。') : h.t('Check a local parent folder, then run bounded sampling.', '检查本地父目录后执行有界抽样。')}</small></span>
+            <span><b>${h.t('Raw ICU database folder', '原始 ICU 数据库目录')}</b><small>${hostedServer() ? h.t('Read raw databases on the server and compare a sample.', '直接读取服务器上的原始数据库，按抽样快速对比。') : h.t('Read raw databases on this computer and compare a sample.', '直接读取这台电脑上的原始数据库，按抽样快速对比。')}</small></span>
             <span class="pill ${state.sourceMethod === 'raw' ? 'ok' : 'dashed'}">${state.sourceMethod === 'raw' ? h.t('Selected', '已选择') : h.t('Choose', '选择')}</span>
           </button>
         </div>
@@ -578,7 +578,7 @@
       <section class="crossdb-path-panel" data-crossdb-source-path="registered">
         <div class="crossdb-step-head">
           <span class="crossdb-step-number">2</span>
-          <div><b>${h.t('Select at least two exports', '选择至少两个导出')}</b><small>${h.t('Only aggregate summaries are compared; raw tables are not scanned.', '仅比较聚合摘要，不扫描原始数据库表。')}</small></div>
+          <div><b>${h.t('Select at least two exports', '选择至少两份数据')}</b><small>${h.t('Only summarized distributions are compared; raw databases are not read.', '只对比汇总后的分布，不读取原始数据库。')}</small></div>
         </div>
         ${sourceChoiceHtml || `<div class="note info"><div class="body"><div class="d">${h.t('No registered export source owner is available.', '当前没有可用的已注册导出来源。')}</div></div></div>`}
       </section>` : `
@@ -589,7 +589,7 @@
             <div class="panel-title">${fullScope ? h.t('Complete raw-database comparison', '完整原始库对比') : h.t('Quick raw-database comparison', '快速原始库对比')}</div>
             <div class="panel-sub mt-4">${h.t('Choose one parent folder. EasyICU detects its databases, checks the folder, and starts the comparison in one action.', '只需选择一个父目录；EasyICU 会自动识别数据库、检查目录并直接开始对比。')}</div>
           </div>
-          <span class="pill ok"><span class="dot"></span>${h.term('local only')}</span>
+          <span class="pill ok"><span class="dot"></span>${hostedServer() ? h.t('On the hospital server', '在医院服务器上') : h.term('local only')}</span>
         </div>
         <div class="path-field editable mt-14">
           <span class="pf-ico">${h.icon('folder', 14)}</span>
@@ -602,7 +602,7 @@
           <span class="pill">${h.esc(sampleSummary(currentProfile, config))}</span>
         </div>
         <div class="gate-strip crossdb-run-strip mt-14">
-          <span>${h.t('Only bounded aggregate distributions are produced; no patient rows leave this computer.', '只生成有界聚合分布，不会把患者行传出本机。')}</span>
+          <span>${(hostedServer() ? h.t('Only summarized distributions are produced; patient rows stay on the hospital server.', '只生成汇总分布；患者的逐行记录留在医院服务器上。') : h.t('Only summarized distributions are produced; patient rows stay on this computer.', '只生成汇总分布；患者的逐行记录不会离开这台电脑。'))}</span>
           <div class="grow"></div>
           <button class="btn primary" data-crossdb-run-raw ${canLaunch ? '' : 'aria-disabled="true"'}>${h.icon('play', 13)} ${state.rawRootScanning ? h.t('Checking folder…', '正在检查目录…') : fullScope ? h.t('Start complete comparison', '开始完整对比') : h.t('Start quick comparison', '开始快速对比')}</button>
         </div>

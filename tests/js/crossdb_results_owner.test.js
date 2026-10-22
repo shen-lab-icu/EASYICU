@@ -132,7 +132,7 @@ assert.match(initial, /Cross-database consistency workspace/);
 assert.match(initial, /Comparable feature profiles/);
 // Registered exports are summarized over every record: no "bounded" claim.
 assert.match(initial, /every record was summarized/);
-assert.doesNotMatch(initial, /bounded comparison/);
+assert.doesNotMatch(initial, /sampled comparison/);
 assert.doesNotMatch(initial, /data-crossdb-export/);
 assert.doesNotMatch(initial, /xdb-density-features/);
 
@@ -209,7 +209,7 @@ const partialPayload = {
 const partial = owner.render(partialPayload, config);
 assert.match(partial, /data-crossdb-partial-scope/);
 // A raw-root comparison samples, and says so.
-assert.match(partial, /in this bounded comparison/);
+assert.match(partial, /in this sampled comparison/);
 assert.match(partial, /1 \/ 19/);
 assert.match(partial, /2 \/ 281/);
 assert.match(partial, /data-crossdb-expand-scope/);

@@ -2133,10 +2133,10 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "padding-right: 168px" in crossdb_css
     assert "scroll-margin-bottom: 84px" in crossdb_css
 
-    assert "js/screens-viz-crossdb-setup.js?v=20261022-gate1" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261022-copy1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz-crossdb-results.js?v=20261022-full1" in index_html
-    assert "js/screens-viz.js?v=20261022-crossdb1" in index_html
+    assert "js/screens-viz-crossdb-results.js?v=20261022-copy1" in index_html
+    assert "js/screens-viz.js?v=20261022-copy1" in index_html
     assert "css/crossdb.css?v=20261022-progress1" in index_html
     for selector in (
         ".crossdb-method-grid",
@@ -2183,7 +2183,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20261022-crossdb1" in index_html
+    assert "js/screens-viz.js?v=20261022-copy1" in index_html
 
 
 def test_native_cohort_groups_render_table_one_without_legacy_bars() -> None:
@@ -2747,7 +2747,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "loadPatientSources" in patient_domain_js
     assert "Ready to load local export" in patient_domain_js
     assert "No registered export is active" in patient_domain_js
-    assert "Reading bounded Patient Review from local export" in viz_js
+    assert "Reading patient data" in viz_js
     assert "const wsMatchesActive = ws" in viz_js
     assert "const patientSource = active === 'patient' ? patientReview.activeSourceMeta() : null" in viz_js
     assert "route: 'patient'" in patient_domain_js
@@ -2899,7 +2899,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20261022-crossdb1" in index_html
+    assert "js/screens-viz.js?v=20261022-copy1" in index_html
     assert "bounded browser review', '浏览器有界审阅" in patient_domain_js
     assert "function buildPatientDrilldown" in demo_drilldown_js
     assert "function demoTablePreviewRowContext" in demo_drilldown_js
@@ -3110,7 +3110,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz.js?v=20261022-crossdb1" in index_html
+    assert "js/screens-viz.js?v=20261022-copy1" in index_html
     assert "view: 'idle'," in cohort_js
     assert "featureScope: 'recommended'," in cohort_js
     assert 'data-cohort-config-required="true"' in cohort_js
@@ -3287,8 +3287,8 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert ".official-demo-sources" in shared_css
     assert ".crossdb-offline-fallback" in crossdb_css
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
-    assert "js/screens-viz-crossdb-setup.js?v=20261022-gate1" in index_html
-    assert "js/screens-viz-crossdb-source.js?v=20260920-fast-demo-status" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261022-copy1" in index_html
+    assert "js/screens-viz-crossdb-source.js?v=20261022-copy1" in index_html
 
 
 def test_native_webapp_foreground_interrupt_returns_shell_status(monkeypatch) -> None:

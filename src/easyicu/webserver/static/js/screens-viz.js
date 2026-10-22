@@ -10,7 +10,7 @@
   function workspaceSamplingNote(summary) {
     const s = summary || {};
     if (!(Number(s.sampled_stays) < Number(s.total_stays))) return '';
-    return `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t">${t('Bounded analysis snapshot', '有界分析快照')}</div><div class="d">${t('Displayed aggregate metrics use', '当前展示的聚合指标使用')} ${fmtInt(s.sampled_stays)} / ${fmtInt(s.total_stays)} ${t('stays; the full denominator remains visible.', '次住院；完整分母仍明确展示。')} <span class="mono">${esc(s.snapshot_basis || '')}</span></div></div></div>`;
+    return `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t">${t('Sampled snapshot', '这是抽样汇总')}</div><div class="d">${t('Displayed aggregate metrics use', '当前展示的聚合指标使用')} ${fmtInt(s.sampled_stays)} / ${fmtInt(s.total_stays)} ${t('stays; the full denominator remains visible.', '次住院；完整分母仍明确展示。')} <span class="mono">${esc(s.snapshot_basis || '')}</span></div></div></div>`;
   }
 
   function vizRail(active) {
@@ -253,7 +253,7 @@
     return `
       <div class="src-registry" data-src-mode="${multi ? 'multi' : 'single'}">
         <div class="src-head">
-          <div><div class="eyebrow">${title}</div><div class="src-sub">${multi ? t('Choose at least two exports for Cross-DB preview.', '请选择至少两个导出用于跨库预览。') : hosted ? t('The data in use is shared by Patient Review, Cohort Statistics and the research conversation.', '当前使用的数据会被患者审阅、队列统计和研究对话共用。') : t('This active export is shared by Patient, Cohort, Agent, and Copilot.', '这个 active 导出会被患者审阅、队列统计、Agent 和 Copilot 共用。')}</div></div>
+          <div><div class="eyebrow">${title}</div><div class="src-sub">${multi ? t('Choose at least two exports to compare.', '请选择至少两份数据进行对比。') : hosted ? t('The data in use is shared by Patient Review, Cohort Statistics and the research conversation.', '当前使用的数据会被患者审阅、队列统计和研究对话共用。') : t('This active export is shared by Patient, Cohort, Agent, and Copilot.', '这个 active 导出会被患者审阅、队列统计、Agent 和 Copilot 共用。')}</div></div>
           <button class="btn sm ghost" data-src-refresh>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
         </div>
         <div class="src-list">
@@ -1169,10 +1169,12 @@
   function skeletonWorkspace(mode) {
     const real = mode === 'real';
     const title = real
-      ? t('Reading bounded Patient Review from local export…', '正在从本地导出读取有界患者审阅…')
+      ? t('Reading patient data…', '正在读取患者数据…')
       : t('Generating demo review workspace…', '正在生成演示审阅工作区…');
     const detail = real
-      ? t('local-only · bounded browser payload · no outbound calls', '仅本地 · 有界浏览器载荷 · 无外部调用')
+      ? (hostedServer()
+        ? t('read on the hospital server · no outside services', '在医院服务器上读取 · 不调用外部服务')
+        : t('read on this computer · no outside services', '在这台电脑上读取 · 不调用外部服务'))
       : t('reproducible · no outbound calls', '可复现 · 无外部调用');
     return `
       <div class="load-strip">
