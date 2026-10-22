@@ -214,6 +214,33 @@ def trajectory_takes_no_grouping(
     )
 
 
+def _primary_exposure_binding(
+    declared: Optional[str], applied: Sequence[Any]
+) -> Optional[dict[str, Any]]:
+    """The exposure the applied groupings bind, given the declared one.
+
+    A sole grouping fills an undeclared exposure; several leave it ambiguous.
+    A declared exposure that is the very column one applied grouping forms its
+    groups from is studied as those groups: the study compares them.  Any
+    other declared exposure is kept.
+    """
+
+    if not declared:
+        if len(applied) == 1:
+            return {"variable": str(applied[0].variable), "basis": "sole_applied_grouping"}
+        if len(applied) > 1:
+            return {"variable": None, "basis": "ambiguous_multiple_groupings"}
+        return None
+    formed = [item for item in applied if declared in item.source_columns.values()]
+    if len(formed) == 1:
+        return {
+            "variable": str(formed[0].variable),
+            "basis": "declared_exposure_grouped",
+            "declared": str(declared),
+        }
+    return None
+
+
 def run_exposure_grouping_phase(
     *,
     context: ResearchContext,
@@ -288,35 +315,14 @@ def run_exposure_grouping_phase(
             },
         }
     compiled = compile_exposure_groupings(stated, context)
-    primary_exposure_binding = None
-    context_overrides = {}
-    # A declared exposure that is the very column one applied grouping forms
-    # its groups from is studied as those groups: the study compares them.
-    formed_from_declared = [
-        item
-        for item in compiled.applied
-        if context.primary_exposure
-        and context.primary_exposure in item.source_columns.values()
-    ]
-    if not context.primary_exposure:
-        if len(compiled.applied) == 1:
-            variable = str(compiled.applied[0].variable)
-            context_overrides["primary_exposure"] = variable
-            primary_exposure_binding = {
-                "variable": variable, "basis": "sole_applied_grouping",
-            }
-        elif len(compiled.applied) > 1:
-            primary_exposure_binding = {
-                "variable": None, "basis": "ambiguous_multiple_groupings",
-            }
-    elif len(formed_from_declared) == 1:
-        variable = str(formed_from_declared[0].variable)
-        context_overrides["primary_exposure"] = variable
-        primary_exposure_binding = {
-            "variable": variable,
-            "basis": "declared_exposure_grouped",
-            "declared": str(context.primary_exposure),
-        }
+    primary_exposure_binding = _primary_exposure_binding(
+        context.primary_exposure, compiled.applied
+    )
+    context_overrides = (
+        {"primary_exposure": primary_exposure_binding["variable"]}
+        if primary_exposure_binding and primary_exposure_binding["variable"]
+        else {}
+    )
     record_path = write_json_artifact(
         Path(run_dir) / EXPOSURE_GROUPINGS_FILENAME,
         {
@@ -488,6 +494,20 @@ def load_resume_exposure_groupings(run_dir: Path) -> Optional[ResumeExposureGrou
             raise ValueError("the source grouping columns, labels or rules changed")
         if any(context.variable(str(item.variable)) is None for item in compiled.applied):
             raise ValueError("the source context lacks a staged grouping column")
+        # The exposure its groupings bind is read by the current rule: a
+        # source that bound it by an earlier one is planned anew, never resumed
+        # on the exposure that rule left (a run's sealed context names the bound
+        # exposure; its declared one is in the binding, or is that exposure).
+        binding = record.get("primary_exposure_binding") or {}
+        declared = (
+            binding.get("declared") if binding.get("basis") == "declared_exposure_grouped"
+            else None if binding.get("variable") or binding.get("basis") == "ambiguous_multiple_groupings"
+            else context.primary_exposure
+        )
+        if _primary_exposure_binding(declared, compiled.applied) != (
+            record.get("primary_exposure_binding")
+        ):
+            raise ValueError("the source grouping bound its exposure by an earlier rule")
         return ResumeExposureGroupings(raw=raw, context=context, materialized_authority_raw=authority_raw)
     except (OSError, KeyError, TypeError, EvidenceAuthorityIntegrityError) as exc:
         raise ValueError("the source grouping authority cannot be verified") from exc
