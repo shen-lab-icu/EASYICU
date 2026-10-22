@@ -300,3 +300,29 @@ def test_the_conversation_rule_lists_exports_it_cannot_choose_between() -> None:
         "EasyICU already has those exports"
     ) in rule
     assert "never say the database is unregistered or ask for a local directory" in rule
+
+
+HIRID = {"database": "hirid", "label": "HiRID", "reference_release": "1.1.1"}
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_a_hosted_server_without_the_database_offers_no_local_folder(language: str) -> None:
+    """pilot1 10-22 (R4): the reply told a hospital researcher to choose a
+    local HiRID folder beside the card saying the server has none."""
+
+    text = _first_reply(
+        "在 HiRID 数据库中，入 ICU 24 小时内最高乳酸与 ICU 死亡有关吗？", language,
+        selected_database=HIRID, recommended_source=None, registered_source_choices=[],
+        local_folder_selection_available=False,
+    )
+
+    assert text == (
+        "研究问题已保存。这台服务器上还没有 HiRID v1.1.1 数据。"
+        if language == "zh"
+        else "The research question is saved. This server has no HiRID v1.1.1 data."
+    )
+    local = _first_reply(
+        "在 HiRID 数据库中，入 ICU 24 小时内最高乳酸与 ICU 死亡有关吗？", "zh",
+        selected_database=HIRID, recommended_source=None, registered_source_choices=[],
+    )
+    assert "数据目录" in local

@@ -399,6 +399,13 @@ function namedDatabaseText(language, catalog, text) {
       ? `研究问题已保存。你的问题指定了 ${label}，EasyICU 中已登记 ${choices.length} 份 ${label} 数据导出，无法自动判断用哪一份。确认数据源不等于批准分析。\n\n**下一步：**选择其中一份：\n${lines.join("\n")}`
       : `The research question is saved. Your question names ${label}, and EasyICU has ${choices.length} registered ${label} data exports it cannot choose between. Confirming a source does not approve analysis.\n\n**Next step:** choose one of them:\n${lines.join("\n")}`;
   }
+  // A hospital server has no folder to choose; its data-source card says
+  // what can be done instead.
+  if (catalog?.local_folder_selection_available === false) {
+    return zh
+      ? `研究问题已保存。这台服务器上还没有 ${label} 数据。`
+      : `The research question is saved. This server has no ${label} data.`;
+  }
   return zh
     ? `研究问题已保存。你的问题指定了 ${label}，但 EasyICU 里还没有登记这份数据。\n\n**下一步：**在下方数据源卡片选择本机的 ${label} 数据目录；EasyICU 登记后会拟定研究计划。`
     : `The research question is saved. Your question names ${label}, but EasyICU has no registered copy of it yet.\n\n**Next step:** Choose your local ${label} folder in the data-source card below; EasyICU registers it and then proposes the research plan.`;
