@@ -37,6 +37,7 @@
       esc: value => String(value == null ? '' : value),
       fmtInt: value => Number(value || 0).toLocaleString(),
       icon: () => '',
+      entityLabel: label => label,
     }, value || {});
   }
 
@@ -55,31 +56,31 @@
     const title = opts && opts.title || h.t('Case navigator', '病例导航');
     const detail = opts && opts.detail || h.t(
       'Switch one pseudonymous entity without rebuilding cohort quality or table summaries.',
-      '切换一个伪匿名实体时，不会重新计算队列质量或表格摘要。',
+      '切换病例时，不会重新计算队列质量或表格摘要。',
     );
     const pageNumber = Number(page.page || 1);
     const pageCount = Number(page.page_count || 1);
     const hasPaging = !drill.demo && pageCount > 1;
     const status = state.loading
-      ? h.t('Loading entity…', '正在加载实体…')
+      ? h.t('Loading entity…', '正在加载病例…')
       : (state.error || '');
     return `
       <div class="pt-entity-nav mt-16" data-patient-entity-navigator>
         <div>
           <div class="eyebrow">${h.esc(title)}</div>
-          <div class="pt-entity-current">${h.esc(h.t('Selected', '当前'))}: ${h.esc(selected && (selected.label || selected.ref) || '—')}${selectedOrdinal && total ? ` · ${h.fmtInt(selectedOrdinal)} / ${h.fmtInt(total)}` : ''}</div>
+          <div class="pt-entity-current">${h.esc(h.t('Selected', '当前'))}: ${h.esc(selected && (h.entityLabel(selected.label) || selected.ref) || '—')}${selectedOrdinal && total ? ` · ${h.fmtInt(selectedOrdinal)} / ${h.fmtInt(total)}` : ''}</div>
           <div class="pt-entity-detail">${h.esc(detail)}</div>
           ${status ? `<div class="pt-entity-status ${state.error ? 'bad' : ''}" role="status" aria-live="polite">${h.esc(status)}</div>` : ''}
         </div>
         <div class="pt-entity-browser">
-          ${hasPaging ? `<div class="pt-entity-pager" role="group" aria-label="${h.esc(h.t('Entity page controls', '实体分页控件'))}">
+          ${hasPaging ? `<div class="pt-entity-pager" role="group" aria-label="${h.esc(h.t('Entity page controls', '病例翻页'))}">
             <button type="button" class="btn sm" data-patient-entity-page-prev ${page.has_previous && !state.loading ? '' : 'disabled'}>${h.icon('arrow-left', 12)} ${h.t('Previous group', '上一组')}</button>
             <span class="mono">${h.fmtInt(page.row_start)}-${h.fmtInt(page.row_end)} / ${h.fmtInt(total)} · ${h.t('page', '第')} ${h.fmtInt(pageNumber)} / ${h.fmtInt(pageCount)}</span>
             <button type="button" class="btn sm" data-patient-entity-page-next ${page.has_next && !state.loading ? '' : 'disabled'}>${h.t('Next group', '下一组')} ${h.icon('arrow', 12)}</button>
             <button type="button" class="btn sm" data-patient-entity-page-random ${state.loading ? 'disabled' : ''}>${h.icon('refresh', 12)} ${h.t('Random group', '随机一组')}</button>
           </div>` : ''}
-          <div class="pt-entity-chiprow" role="group" aria-label="${h.esc(h.t('Entities on this page', '本页实体'))}">
-            ${options.map(item => `<button type="button" class="chip ${item.ref === selectedRef ? 'solid' : ''}" data-patient-entity="${h.esc(item.ref)}" data-patient-ordinal="${h.esc(item.ordinal || '')}" aria-pressed="${item.ref === selectedRef ? 'true' : 'false'}" ${state.loading ? 'disabled' : ''}>${h.esc(item.label || item.ref)}</button>`).join('')}
+          <div class="pt-entity-chiprow" role="group" aria-label="${h.esc(h.t('Entities on this page', '本页病例'))}">
+            ${options.map(item => `<button type="button" class="chip ${item.ref === selectedRef ? 'solid' : ''}" data-patient-entity="${h.esc(item.ref)}" data-patient-ordinal="${h.esc(item.ordinal || '')}" aria-pressed="${item.ref === selectedRef ? 'true' : 'false'}" ${state.loading ? 'disabled' : ''}>${h.esc(h.entityLabel(item.label) || item.ref)}</button>`).join('')}
           </div>
         </div>
       </div>`;

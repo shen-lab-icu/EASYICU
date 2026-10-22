@@ -128,6 +128,13 @@
     return Number.isFinite(numeric) ? numeric.toLocaleString() : '0';
   }
 
+  // Module rows carry catalog names in both languages; the bare id is the fallback.
+  function moduleName(row) {
+    const names = (row && row.label_i18n) || {};
+    const name = window.EU_LANG === 'zh' ? (names.zh || names.en) : (names.en || names.zh);
+    return String(name || (row && row.label) || (row && row.module) || '');
+  }
+
   function enhanceTableDashboard(root, config) {
     const picker = root && root.querySelector('[data-pt-table-picker]');
     const drill = config && typeof config.drill === 'function' ? config.drill() : null;
@@ -137,7 +144,7 @@
     if (!picker || !modules.length || root.querySelector('[data-pt-table-dashboard]')) return;
     const rows = modules
       .filter(row => row && row.module)
-      .map(row => ({ module: String(row.module), rows: Math.max(0, Number(row.rows || row.records || 0)) }))
+      .map(row => ({ module: String(row.module), name: moduleName(row), rows: Math.max(0, Number(row.rows || row.records || 0)) }))
       .sort((a, b) => b.rows - a.rows);
     const total = rows.reduce((sum, row) => sum + row.rows, 0) || 1;
     let cumulative = 0;
@@ -150,7 +157,7 @@
           <b>${window.EU_LANG === 'zh' ? '搜索原始数据表' : 'Search source tables'}</b>
           <span>${window.EU_LANG === 'zh' ? '按模块名筛选，下面保留原始字段和真实记录。' : 'Filter by module; raw columns and source-backed records remain below.'}</span>
         </div>
-        <label><span aria-hidden="true">⌕</span><input type="search" data-pt-table-search value="${String(state.query).replace(/"/g, '&quot;')}" placeholder="${window.EU_LANG === 'zh' ? '搜索模块，例如 vitals' : 'Search modules, e.g. vitals'}"></label>
+        <label><span aria-hidden="true">⌕</span><input type="search" data-pt-table-search value="${String(state.query).replace(/"/g, '&quot;')}" placeholder="${window.EU_LANG === 'zh' ? '搜索模块，例如 生命体征' : 'Search modules, e.g. vitals'}"></label>
       </div>
       <div class="pt-pareto" data-pt-module-pareto>
         <div class="pt-pareto-head"><div><b>${window.EU_LANG === 'zh' ? '模块观测规模' : 'Module observation volume'}</b><span>${window.EU_LANG === 'zh' ? '柱长为记录数，右侧为累计记录贡献' : 'Bars show records; right labels show cumulative contribution'}</span></div><strong>${numberLabel(total)} ${window.EU_LANG === 'zh' ? '条记录' : 'records'}</strong></div>
@@ -159,7 +166,7 @@
             cumulative += row.rows;
             const share = row.rows / total * 100;
             const cumulativePct = cumulative / total * 100;
-            return `<button type="button" data-pt-pareto-module="${row.module.replace(/"/g, '&quot;')}"><span class="pt-pareto-name">${row.module}</span><span class="pt-pareto-track"><i style="width:${Math.max(1, share).toFixed(1)}%"></i></span><b>${numberLabel(row.rows)}</b><em>${cumulativePct.toFixed(1)}%</em></button>`;
+            return `<button type="button" data-pt-pareto-module="${row.module.replace(/"/g, '&quot;')}"><span class="pt-pareto-name" title="${row.module.replace(/"/g, '&quot;')}">${row.name.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])}</span><span class="pt-pareto-track"><i style="width:${Math.max(1, share).toFixed(1)}%"></i></span><b>${numberLabel(row.rows)}</b><em>${cumulativePct.toFixed(1)}%</em></button>`;
           }).join('')}
         </div>
       </div>`;

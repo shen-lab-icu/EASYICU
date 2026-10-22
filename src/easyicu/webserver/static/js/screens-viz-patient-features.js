@@ -6,6 +6,8 @@
    Public contract:
      window.EU_PATIENT_FEATURES.signalKey(signal) -> string
      window.EU_PATIENT_FEATURES.catalogLanes(lanes) -> lane[]
+     window.EU_PATIENT_FEATURES.entityLabel(label) -> display string
+     window.EU_PATIENT_FEATURES.clinicalValueText(value) -> display string
 
    The owner reads the immutable catalog view exposed by VIZ_DEMO.
    Rendering remains in screens-viz-patient-series.js and route state
@@ -119,9 +121,37 @@
     return catalogLanes.concat(uncatalogued);
   }
 
+  /* Display-only Chinese for the words the drilldown payload sends in English:
+     "Entity 3" is a page-local case number, and sex, outcome and Sepsis-3
+     results are clinical values. The payload and its export keep the
+     original values; only the visible text changes. */
+  const CLINICAL_VALUE_ZH = {
+    female: '女', f: '女', male: '男', m: '男',
+    deceased: '死亡', died: '死亡', dead: '死亡', alive: '存活', survived: '存活',
+    positive: '阳性', negative: '阴性', unknown: '未知',
+  };
+  function zhPage() { return window.EU_LANG === 'zh'; }
+  function entityLabel(label) {
+    const raw = String(label == null ? '' : label);
+    const match = zhPage() && raw.match(/^Entity (\d+)$/);
+    return match ? `病例 ${match[1]}` : raw;
+  }
+  function clinicalValueText(value) {
+    const raw = String(value == null ? '' : value);
+    if (!zhPage()) return raw;
+    return raw.split(' / ').map(part => {
+      const word = CLINICAL_VALUE_ZH[part.trim().toLowerCase()];
+      if (word) return word;
+      const days = part.match(/^(-?[\d.,]+) d$/);
+      return days ? `${days[1]} 天` : part;
+    }).join(' / ');
+  }
+
   window.EU_PATIENT_FEATURES = Object.freeze({
     signalKey,
     signalAvailability,
     catalogLanes,
+    entityLabel,
+    clinicalValueText,
   });
 })();

@@ -72,6 +72,23 @@
     return helpers && helpers.fmtNum ? helpers.fmtNum(value, digits) : Number(value).toFixed(digits);
   }
 
+  // Catalog names and case numbers in the page language, supplied by the route owner.
+  function hConcept(helpers, feature, fallback) {
+    return helpers && helpers.conceptLabel ? helpers.conceptLabel(feature, fallback) : fallback;
+  }
+
+  function hModule(helpers, module, fallback) {
+    return helpers && helpers.moduleText && module ? helpers.moduleText(module, fallback) : (fallback || module || '');
+  }
+
+  function hUnit(helpers, unit) {
+    return helpers && helpers.unitText ? helpers.unitText(unit) : unit;
+  }
+
+  function hEntity(helpers, label) {
+    return helpers && helpers.entityLabel ? helpers.entityLabel(label) : label;
+  }
+
   function signalLabel(sig, helpers) {
     if (helpers && helpers.signalLabel) return helpers.signalLabel(sig);
     return (sig && (sig.label || sig.name || sig.feature || sig.key)) || '';
@@ -140,7 +157,7 @@
     if (values.length < 2 || !helpers || !helpers.axisSpark) return '';
     const label = signalLabel(sig, helpers);
     const color = colour(index);
-    const unit = sig && sig.unit ? sig.unit : '';
+    const unit = sig && sig.unit ? hUnit(helpers, sig.unit) : '';
     const fallbackChart = helpers.axisSpark(values, 360, 132, color, {
       unit,
       label,
@@ -183,7 +200,7 @@
       observed_categorical: ['observed', hT(helpers, 'observed category', '分类观测')],
       observed_static: ['observed', hT(helpers, 'observed value', '单点观测')],
       observed_numeric_static: ['observed', hT(helpers, 'observed value', '单点观测')],
-      selected_entity_unavailable: ['unavailable', hT(helpers, 'no value for this entity', '该实体无观测')],
+      selected_entity_unavailable: ['unavailable', hT(helpers, 'no value for this entity', '该病例无观测')],
       all_null: ['unavailable', hT(helpers, 'no observations in sample', '样本中无观测')],
       structurally_unavailable: ['unsupported', hT(helpers, 'unsupported for source', '该数据源不支持')],
       not_materialized: ['metadata-only', hT(helpers, 'not materialized', '未物化')],
@@ -207,7 +224,7 @@
     const observation = feature && feature.observation;
     if (!observation || observation.current == null) return '';
     const value = String(observation.current);
-    const unit = feature && feature.unit ? ` ${feature.unit}` : '';
+    const unit = feature && feature.unit ? ` ${hUnit(helpers, feature.unit)}` : '';
     return hT(helpers, `value: ${value}${unit}`, `值：${value}${unit}`);
   }
 
@@ -295,7 +312,7 @@
               ${item.features.map(feature => {
                 const key = (feature && (feature.feature || feature.key)) || '';
                 const label = (feature && (feature.name || feature.label)) || key;
-                const unit = feature && feature.unit ? feature.unit : '';
+                const unit = feature && feature.unit ? hUnit(helpers, feature.unit) : '';
                 const hasTrajectory = Boolean(feature && feature.trajectory);
                 const availability = featureAvailability(feature, helpers);
                 const canLoad = Boolean(feature && feature.loadable && !hasTrajectory && !feature.lazy_loaded);
@@ -417,7 +434,7 @@
             <h2>${hEsc(helpers, hT(helpers, `Complete feature catalog grouped by clinical module (${hFmtInt(helpers, totalCatalogFeatures)} features)`, `${hFmtInt(helpers, totalCatalogFeatures)} 个特征，按临床模块组织`))}</h2>
             <p>${hEsc(helpers, hT(helpers, 'Every catalog concept remains discoverable. Features with bounded observations receive a chart; metadata-only concepts stay explicit instead of receiving fabricated demo values.', '所有目录概念都可以查找；有观测值的特征显示图表，只有目录信息的概念会明确标出，不会为演示编造数值。'))}</p>
           </div>
-          <span class="pill ok">${hEsc(helpers, hT(helpers, 'single entity', '单实体'))}</span>
+          <span class="pill ok">${hEsc(helpers, hT(helpers, 'single entity', '单个病例'))}</span>
         </div>
         ${renderModulePanels(lanes, helpers)}
       </div>`;
@@ -434,7 +451,7 @@
         <div class="pt-series-panel-head">
           <div>
             <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Current-patient trajectory gallery', '当前患者轨迹画廊'))}</div>
-            <h2>${hEsc(helpers, selected && (selected.label || selected.entity_ref) || hT(helpers, 'Selected entity', '已选实体'))}</h2>
+            <h2>${hEsc(helpers, hEntity(helpers, selected && (selected.label || selected.entity_ref)) || hT(helpers, 'Selected entity', '所选病例'))}</h2>
             <p>${hEsc(helpers, hT(helpers, 'Five source-backed signals share one elapsed-time window. Each keeps its own clinical value scale and its original, unequal sampling intervals; no interpolation is added.', '5 个来源可追溯的信号共享同一时间窗；每行保留自己的临床数值尺度与真实不等间隔采样，不做插值。'))}</p>
           </div>
           <span class="pill">${hFmtInt(helpers, signals.length)} ${hEsc(helpers, hT(helpers, 'features shown', '个特征展示'))}</span>
@@ -461,14 +478,14 @@
     const allValues = prepared.flatMap(row => row.values);
     const xDomain = allTimes.length ? [Math.min(...allTimes), Math.max(...allTimes)] : null;
     const yDomain = allValues.length ? [Math.min(...allValues), Math.max(...allValues)] : null;
-    const unit = comparison && comparison.unit ? comparison.unit : '';
+    const unit = comparison && comparison.unit ? hUnit(helpers, comparison.unit) : '';
     const owner = window.EU_PATIENT_CHARTS;
     return `<div class="pt-trajectory-summary" data-patient-trajectory-summary>
       ${prepared.map(row => {
         const start = row.values[0];
         const latest = row.values[row.values.length - 1];
         const delta = latest - start;
-        const label = row.trace.label || row.trace.ref || `${hT(helpers, 'Entity', '实体')} ${row.index + 1}`;
+        const label = hEntity(helpers, row.trace.label || row.trace.ref) || `${hT(helpers, 'Entity', '病例')} ${row.index + 1}`;
         const fallback = helpers.axisSpark ? helpers.axisSpark(row.values, 640, 116, colour(row.index), { unit, label, xLabels: null }) : '';
         const chart = owner && owner.signalSlot ? owner.signalSlot({
           color: colour(row.index),
@@ -522,8 +539,8 @@
     const x = i => left + (maxPoints <= 1 ? 0 : (i / (maxPoints - 1)) * plotW);
     const y = value => top + (1 - ((value - min) / span)) * plotH;
     const yTicks = [max, min + span * 0.5, min];
-    const unit = comparison && comparison.unit ? comparison.unit : '';
-    const label = comparison && (comparison.label || comparison.feature) || hT(helpers, 'Selected feature', '已选特征');
+    const unit = comparison && comparison.unit ? hUnit(helpers, comparison.unit) : '';
+    const label = comparison && hConcept(helpers, comparison.feature, comparison.label || comparison.feature) || hT(helpers, 'Selected feature', '已选特征');
     const timeLabels = signalTimeLabels(series.map(row => row.trace), helpers, null);
     const fallbackChart = `
       <div class="pt-multi-chart" role="img" aria-label="${hEsc(helpers, label)}">
@@ -569,7 +586,7 @@
       return `
         <div class="pt-series-panel" data-patient-series-panel="compare">
           <div class="state empty">
-            <div class="t">${hEsc(helpers, hT(helpers, 'No multi-patient comparison payload', '没有多患者对比载荷'))}</div>
+            <div class="t">${hEsc(helpers, hT(helpers, 'No multi-patient comparison payload', '暂无多患者对比数据'))}</div>
             <div class="d">${hEsc(helpers, hT(helpers, 'Load a real export or a bounded demo payload with feature coverage to compare one feature across entities.', '加载真实数据或带特征覆盖的演示数据后，才能比较同一特征在多位患者中的表现。'))}</div>
           </div>
         </div>`;
@@ -594,8 +611,8 @@
               const coverage = Number(row.coverage_pct);
               const width = Math.max(2, Math.min(100, Number.isFinite(coverage) ? coverage : (records / maxRecords) * 100));
               return `<tr>
-                <td class="key">${hEsc(helpers, row.label || row.name || row.feature)}</td>
-                <td>${hEsc(helpers, row.module || '')}</td>
+                <td class="key">${hEsc(helpers, hConcept(helpers, row.feature, row.label || row.name || row.feature))}</td>
+                <td>${hEsc(helpers, hModule(helpers, row.module, row.module || ''))}</td>
                 <td class="num">${hFmtInt(helpers, row.entities)}</td>
                 <td class="num">${hFmtInt(helpers, records)}</td>
                 <td class="num">${Number.isFinite(coverage) ? (helpers.fmtPct ? helpers.fmtPct(coverage) : `${coverage}%`) : '—'}</td>
@@ -620,15 +637,15 @@
             <div>
               <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Cross-patient comparison', '跨患者对比'))}</div>
               <h2>${hEsc(helpers, hT(helpers, 'Trajectory summary across pseudonymous entities', '跨患者同特征轨迹摘要'))}</h2>
-              <p>${hEsc(helpers, hT(helpers, 'One row per entity shows the actual sampling pattern, start, last value and change. Shared axes make the rows comparable without stacking every line.', '每个实体一行，展示真实采样、起点、末值与变化；共享坐标便于比较，同时避免所有线堆在一张图里。'))}</p>
+              <p>${hEsc(helpers, hT(helpers, 'One row per entity shows the actual sampling pattern, start, last value and change. Shared axes make the rows comparable without stacking every line.', '每位患者一行，展示真实采样、起点、末值与变化；共享坐标便于比较，同时避免所有线堆在一张图里。'))}</p>
             </div>
-            <span class="pill ok">${hFmtInt(helpers, traces.length)} ${hEsc(helpers, hT(helpers, 'entities', '个实体'))}</span>
+            <span class="pill ok">${hFmtInt(helpers, traces.length)} ${hEsc(helpers, hT(helpers, 'entities', '例'))}</span>
           </div>
           <div class="pt-compare-feature">
             <div>
-              <div class="eyebrow">${hEsc(helpers, comparison.module_label || comparison.module || hT(helpers, 'Module', '模块'))}</div>
-              <strong>${hEsc(helpers, comparison.label || comparison.feature || hT(helpers, 'Selected feature', '已选特征'))}</strong>
-              ${comparison.unit ? `<span class="mono">${hEsc(helpers, comparison.unit)}</span>` : ''}
+              <div class="eyebrow">${hEsc(helpers, hModule(helpers, comparison.module, comparison.module_label) || hT(helpers, 'Module', '模块'))}</div>
+              <strong>${hEsc(helpers, hConcept(helpers, comparison.feature, comparison.label || comparison.feature) || hT(helpers, 'Selected feature', '已选特征'))}</strong>
+              ${comparison.unit ? `<span class="mono">${hEsc(helpers, hUnit(helpers, comparison.unit))}</span>` : ''}
             </div>
             <span class="pill">${hEsc(helpers, hT(helpers, 'bounded trace payload', '部分轨迹数据'))}</span>
           </div>
@@ -643,7 +660,7 @@
             <h2>${hEsc(helpers, hT(helpers, 'No comparable multi-entity trajectories', '暂无可对比的多患者轨迹'))}</h2>
             <p>${hEsc(helpers, hT(helpers, 'The active bounded payload does not contain one time-indexed feature observed in at least two entities. Aggregate coverage is shown only as a fallback audit.', '当前数据里没有同一个时序特征同时出现在至少两位患者身上；下面的汇总覆盖情况仅供参考。'))}</p>
           </div>
-          <span class="pill warn">${hEsc(helpers, hT(helpers, 'fallback audit', 'fallback 审计'))}</span>
+          <span class="pill warn">${hEsc(helpers, hT(helpers, 'fallback audit', '仅供参考'))}</span>
         </div>
         ${renderAggregateFallback(rows, helpers)}
       </div>`;
