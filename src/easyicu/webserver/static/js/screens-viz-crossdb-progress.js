@@ -200,7 +200,7 @@
       finalizing: t('Checking that the datasets can be compared…', '正在检查各份数据能否对比…'),
     })[p.phase] : '';
     const detail = state.cancelRequested
-      ? t('Cancellation requested. EasyICU will stop after the current bounded read returns.', '已请求取消。当前有界读取返回后，EasyICU 将立即停止。')
+      ? t('Cancellation requested. EasyICU will stop after the current bounded read returns.', '已请求取消，当前这一步读完后就会停止。')
       : summaryStep ? summaryStep
       : currentDatabase
         ? `${currentDatabase}${chunkTotal ? ` · ${t('chunk', '分块')} ${chunkCurrent || 1}/${chunkTotal}` : ''}`

@@ -220,7 +220,7 @@
         return `<article class="xdb-source-summary" style="--xdb-source-color:${palette(index)}">
           <div><span class="xdb-source-dot"></span><b>${h.esc(source.label || source.database || `${h.t('Source', '来源')} ${index + 1}`)}</b></div>
           <strong>${records == null ? '—' : h.fmtInt(records)}</strong>
-          <span>${sampled ? h.t('records in this bounded comparison', '条记录纳入本次有界对比') : h.t('records, every one summarized', '条记录，全部参与汇总')}</span>
+          <span>${sampled ? h.t('records in this sampled comparison', '条记录纳入本次抽样对比') : h.t('records, every one summarized', '条记录，全部参与汇总')}</span>
         </article>`;
       }).join('')}
     </div>`;
@@ -263,7 +263,7 @@
         ${partialScopeNotice(payload, config)}
         ${threeScaleComparison(payload, config)}
         <div class="viz-cap"><b>${h.t('What this shows', '这组数字是什么')}</b><span>${payload.source_type === 'raw_database_root'
-          ? h.t('Per-source record volume in this bounded comparison. It is a size reference, not an outcome result.', '本次有界对比中各来源的记录规模；它只是样本量参照，不是结局结果。')
+          ? h.t('Per-source record volume in this sampled comparison. It is a size reference, not an outcome result.', '本次抽样对比中各来源的记录规模；它只是样本量参照，不是结局结果。')
           : h.t('Per-source record volume; every record was summarized. It is a size reference, not an outcome result.', '各来源的记录规模，所有记录都参与了汇总；它只是样本量参照，不是结局结果。')}</span></div>
         <div class="note info mt-16">
           <div class="ico">${h.icon('benchmark', 16)}</div>

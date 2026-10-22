@@ -180,7 +180,7 @@
         <button class="btn sm" type="button" data-crossdb-cancel>${text('Cancel', '取消')}</button>
       </div>
       <div class="indet mt-12"></div>
-      <div class="panel-sub mt-8">${text('EasyICU is reading bounded summaries from the selected exports. Raw ICU folders are not scanned.', 'EasyICU 正在读取所选导出的有界摘要；不会扫描原始 ICU 文件夹。')}</div>
+      <div class="panel-sub mt-8">${text('Reading summaries of the selected exports; raw databases are not read.', '正在读取所选数据的汇总；不会读取原始数据库。')}</div>
     </div>`;
   }
 

@@ -200,7 +200,7 @@ def test_hosted_review_names_the_prepared_data_without_paths_or_registration() -
     assert "if (hosted && Object.prototype.hasOwnProperty.call(HOSTED_TEXT, raw)) return t(...HOSTED_TEXT[raw]);" in cohort_view
     assert "'Local export': ['Prepared data', '已准备的数据']," in cohort_view
     crossdb = (STATIC / "js" / "screens-viz-crossdb-setup.js").read_text(encoding="utf-8")
-    assert "hostedServer() ? h.t('Check a data folder on the server, then run bounded sampling.'" in crossdb
+    assert "hostedServer() ? h.t('Read raw databases on the server and compare a sample.'" in crossdb
     projects = (STATIC / "js" / "screens-guided-projects.js").read_text(encoding="utf-8")
     # The project list names the hospital server, and a hosted project's row
     # does not call the administrator's prepared data "local".
