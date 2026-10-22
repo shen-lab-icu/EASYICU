@@ -326,6 +326,12 @@ def test_prepared_source_confirmation_survives_unrelated_clause_negation(
             "implement_scientific_question",
         ),
         ("我想研究成人 ICU 的液体平衡", "clarify_research_entry"),
+        # A whole question is answered, whatever words name its relation.
+        ("在 eICU 全部 ICU 入住中，男性和女性的院内死亡率分别是多少？", "implement_scientific_question"),
+        ("在 HiRID 数据库中，入 ICU 24 小时内最高乳酸与 ICU 死亡有关吗？", "implement_scientific_question"),
+        ("What is the in-hospital mortality of ventilated patients", "implement_scientific_question"),
+        ("脓毒症有哪些值得做的研究方向？", "clarify_research_entry"),
+        ("乳酸是什么？", "clarify_research_entry"),
     ],
 )
 def test_first_turn_research_entry_intent_routes_natural_questions(
