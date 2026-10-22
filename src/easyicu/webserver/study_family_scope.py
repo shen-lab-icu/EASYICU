@@ -7,13 +7,16 @@ causal cell has its own owner (``target_trial_setup.target_trial_database_gap``,
 applied by ``causal_trial_design``).  This owner refuses the other two at the
 research launch, before any model is called (:func:`stop_family_out_of_scope`).
 
-The family is the one the study records, else the one the planner's own
-family routing reads in the question -- the inference the plan itself would
-use -- so the refusal and the plan cannot disagree.  A study whose question
-states a description or an association records that design first
-(``study_family_design``) and is planned on it, so a question that only
-mentions survival words is not refused.  The gap is codes only: the family,
-the database and the databases v1 offers that family on.
+The family is the one the study records, else the family its question
+states (``study_family_reading``; the launch records its design first),
+else the one the planner's own family routing reads in the question -- the
+inference the plan itself would use -- so the refusal and the plan cannot
+disagree.  A question that states a description or an association is planned
+on that design, so a question that only mentions survival words is not
+refused.  The workflow asks the same question of the bound source
+(:func:`bound_study_family_gap`), so the conversation says it before offering
+a plan.  The gap is codes only: the family, the database and the databases v1
+offers that family on.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from typing import Any, Dict, Mapping, Optional
 __all__ = [
     "STUDY_FAMILY_DATABASE_OUT_OF_SCOPE",
     "STUDY_FAMILY_GAP_FIELD",
+    "bound_study_family_gap",
     "stop_family_out_of_scope",
     "study_family_database_gap",
 ]
@@ -55,6 +59,13 @@ def _study_family(study: Mapping[str, Any], question: str, database: str) -> Opt
     text = str(question or "").strip()
     if not text:
         return None
+    # The family alone: the design's variance needs the source's patient
+    # grouping, which a polled workflow does not read.
+    from easyicu.webserver.study_family_reading import study_family_reading
+
+    stated = study_family_reading(text)
+    if stated is not None:
+        return canonical_analysis_family(stated.family) or stated.family
     context = ResearchContext(
         research_question=text,
         cohort=CohortDescriptor(cohort_name="study", database=database, n_stays=0),
@@ -80,6 +91,24 @@ def study_family_database_gap(
         "database": database,
         "supported_databases": list(_ALL_FAMILIES_DATABASES),
     }
+
+
+def bound_study_family_gap(study: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The gap of the study's own question on its bound source, or ``None``."""
+
+    from easyicu.databases import normalize_database_key
+
+    source = study.get("data_source")
+    raw = str(source.get("database") or "").strip() if isinstance(source, Mapping) else ""
+    if not raw:
+        return None
+    try:
+        database = normalize_database_key(raw)
+    except KeyError:
+        return None
+    return study_family_database_gap(
+        study, question=str(study.get("question") or ""), database=database
+    )
 
 
 def stop_family_out_of_scope(

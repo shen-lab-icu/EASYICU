@@ -45,6 +45,7 @@ from easyicu.webserver.target_trial_setup import (
     target_trial_family_declared,
 )
 from easyicu.webserver.planning_coordinate_readings import project_coordinate_readings
+from easyicu.webserver.study_family_scope import bound_study_family_gap
 
 from . import cohort_eligibility, plan_decisions, plan_review_progress
 from .contracts import (
@@ -142,6 +143,9 @@ class ResearchWorkflowSnapshot(BaseModel):
     #: A causal study's latest target trial compile job: its id, status,
     #: reason, record digest and detail (``target_trial_setup``).
     target_trial_compile: Optional[Mapping[str, Any]] = None
+    #: Why v1 does not offer the study's family on its bound database, codes
+    #: only (``study_family_scope``); the plan step names it instead of a plan.
+    study_family_gap: Optional[Mapping[str, Any]] = None
 
 
 class ProjectWorkflowProjection(BaseModel):
@@ -915,6 +919,14 @@ def build_research_workflow_snapshot(
         else plan_generation_ready
     )
     export_cohort_blocks_plan = bool(export_cohort_reason_code and fresh_plan_offered)
+    # The launch also refuses a study family v1 does not offer on the bound
+    # database (``study_family_scope``): a fresh plan is not offered, and the
+    # plan step names the gap.
+    family_gap = (
+        bound_study_family_gap(study_row)
+        if fresh_plan_offered and not export_cohort_blocks_plan
+        else None
+    )
     legacy_full_scaffold = bool(full_run and not pipeline_run and has_plan)
 
     stages = [
@@ -975,7 +987,7 @@ def build_research_workflow_snapshot(
                 else "running"
                 if planning_running
                 else "blocked"
-                if export_cohort_blocks_plan
+                if export_cohort_blocks_plan or family_gap is not None
                 else "ready"
                 if plan_regeneration_required
                 else "complete"
@@ -994,6 +1006,8 @@ def build_research_workflow_snapshot(
                 if planning_running
                 else export_cohort_reason_code
                 if export_cohort_blocks_plan
+                else family_gap["code"]
+                if family_gap is not None
                 else plan_regeneration_reason_code
                 if plan_regeneration_required
                 else "agent_plan_ready"
@@ -1204,6 +1218,7 @@ def build_research_workflow_snapshot(
         target_trial_compile=(
             dict(target_trial_compile) if target_trial_compile is not None else None
         ),
+        study_family_gap=family_gap,
     )
 
 

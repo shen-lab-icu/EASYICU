@@ -181,19 +181,10 @@
         );
       }
       if (error.code === 'study_family_database_out_of_scope') {
-        // The gap is codes only; a name it does not know reads generically.
-        const gap = error.details && error.details.study_family_gap || {};
-        const family = {
-          survival: ['survival (time-to-event) analysis', '生存分析（时间到事件）'],
-          trajectory_clustering: ['subtype or trajectory clustering', '亚型或轨迹聚类分析'],
-        }[gap.family] || ['this kind of study', '这类研究'];
-        const databases = { eicu: 'eICU', miiv: 'MIMIC-IV' };
-        const database = databases[gap.database] || tr('this database', '这个数据库');
-        const offered = (Array.isArray(gap.supported_databases) ? gap.supported_databases : ['miiv'])
-          .map(key => databases[key]).filter(Boolean).join(tr(' or ', '或'));
+        const gap = studyFamilyGapText(error.details && error.details.study_family_gap);
         return tr(
-          `This version does not offer ${family[0]} on ${database}, so no analysis started. Ask it on ${offered || 'MIMIC-IV'}, or ask with another study design.`,
-          `本版本在 ${database} 上不支持${family[1]}，分析没有开始。可以改用 ${offered || 'MIMIC-IV'} 数据，或换一种研究设计后再问。`,
+          `${gap.refusal}, so no analysis started. ${gap.instead}`,
+          `${gap.refusal}，分析没有开始。${gap.instead}`,
         );
       }
       if (error.code === 'target_trial_database_out_of_scope') {
@@ -500,6 +491,25 @@
       );
     }
 
+    // Why v1 does not offer a study family on a database (host:
+    // study_family_scope): the refusal, and what to ask instead.  The gap is
+    // codes only; a name it does not know reads generically.
+    function studyFamilyGapText(gap) {
+      const value = gap || {};
+      const family = {
+        survival: ['survival (time-to-event) analysis', '生存分析（时间到事件）'],
+        trajectory_clustering: ['subtype or trajectory clustering', '亚型或轨迹聚类分析'],
+      }[value.family] || ['this kind of study', '这类研究'];
+      const databases = { eicu: 'eICU', miiv: 'MIMIC-IV' };
+      const database = databases[value.database] || tr('this database', '这个数据库');
+      const offered = (Array.isArray(value.supported_databases) ? value.supported_databases : ['miiv'])
+        .map(key => databases[key]).filter(Boolean).join(tr(' or ', '或')) || 'MIMIC-IV';
+      return {
+        refusal: tr(`This version does not offer ${family[0]} on ${database}`, `本版本在 ${database} 上不支持${family[1]}`),
+        instead: tr(`Ask it on ${offered}, or ask with another study design.`, `可以改用 ${offered} 数据，或换一种研究设计后再问。`),
+      };
+    }
+
     function runFailureText(code, detail) {
       const value = String(code || '').trim();
       if (!value) return '';
@@ -663,7 +673,7 @@
       return withDetail(tr(`The run stopped before finishing (code: ${value}).`, `运行在完成前停止（代码：${value}）。`));
     }
 
-    return Object.freeze({ errorText, jobErrorText, modelErrorText, providerPreset, option, runFailureText });
+    return Object.freeze({ errorText, jobErrorText, modelErrorText, providerPreset, option, runFailureText, studyFamilyGapText });
   }
 
   window.EasyICU.guidedPi.declare('errorText', { create });

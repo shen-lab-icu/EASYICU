@@ -222,7 +222,7 @@
   const ERROR_TEXT = MODULES.require('errorText').create({
     tr, staticPreview: isStaticPreview,
   });
-  const { errorText, modelErrorText, providerPreset, option, runFailureText } = ERROR_TEXT;
+  const { errorText, modelErrorText, providerPreset, option, runFailureText, studyFamilyGapText } = ERROR_TEXT;
   const RESOURCE_OWNER = MODULES.require('resources').create({ esc });
   const resourceName = RESOURCE_OWNER.name;
   const resourceKey = RESOURCE_OWNER.key;
@@ -265,7 +265,7 @@
     publicText: publicAssistantText,
   });
   const CONFIRMATION = MODULES.require('confirmation').create({
-    tr, esc, iconHtml, resourceButton, sessionIsStale, runFailureText,
+    tr, esc, iconHtml, resourceButton, sessionIsStale, runFailureText, studyFamilyGapText,
     workflow: () => state.workflow,
     session: () => state.session,
     busy: () => state.busy || Boolean(state.childJobId),

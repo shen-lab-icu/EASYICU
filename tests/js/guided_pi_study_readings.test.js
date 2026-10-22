@@ -95,6 +95,25 @@ for (const language of ['zh', 'en']) {
   assert.ok(scope.includes('eICU') && scope.includes('MIMIC-IV'));
   assert.ok(scope.includes(language === 'zh' ? '亚型或轨迹聚类分析' : 'subtype or trajectory clustering'));
   assert.ok(errors.errorText({ code: 'study_family_database_out_of_scope' }).includes(language === 'zh' ? '这类研究' : 'this kind of study'));
+  // The plan step says the same refusal before any plan is offered: a card
+  // with the refusal and what to ask instead, no approval, and the edit route.
+  const gapWorkflow = { next_action_code: 'study_family_database_out_of_scope', study_family_gap: {
+    code: 'study_family_database_out_of_scope', family: 'survival', database: 'eicu', supported_databases: ['miiv'],
+  } };
+  const refusalCard = modules.confirmation.create({ ...helpers,
+    iconHtml: () => '', resourceButton: () => '', studyFamilyGapText: errors.studyFamilyGapText,
+    sessionIsStale: () => false, busy: () => false,
+    session: () => ({ binding: {} }), workflow: () => gapWorkflow,
+  });
+  const refusal = refusalCard.workflowConfirmation();
+  assert.equal(refusal.grants.length, 0);
+  assert.equal(refusal.nonApprovable, true);
+  assert.equal(refusal.title, language === 'zh' ? '本版本在 eICU 上不支持生存分析（时间到事件）' : 'This version does not offer survival (time-to-event) analysis on eICU');
+  assert.ok(refusal.note.includes('MIMIC-IV'));
+  const refusalHtml = refusalCard.workflowConfirmationHtml();
+  assert.equal(refusalHtml.includes('data-gpi-confirm-action'), false);
+  assert.ok(refusalHtml.includes('data-gpi-confirm-edit'));
+  assert.ok(refusalHtml.includes(language === 'zh' ? '在对话里修改' : 'Revise in the conversation'));
   assert.ok(errors.errorText({ code: 'target_trial_treatment_not_registered', details: {
     causal_trial_gap: { treatment_concepts: [{ label_en: 'Albumin', label_zh: '白蛋白' }],
       supported_classes: [{ label_en: 'Vasopressors', label_zh: '升压药' }] },
