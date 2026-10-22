@@ -144,14 +144,18 @@
       return sources.length === 1 ? sources[0] : '';
     }
 
-    function baselineCovariates(plan, exposure) {
+    // The levels the concept dictionary declares for sex, by their Chinese names.
+    const SEX_LEVELS_ZH = { sex: { Female: '女性', Male: '男性' } };
+
+    function baselineCovariates(plan, exposure, outcome) {
       const steps = Array.isArray(plan && plan.steps) ? plan.steps : [];
       const baseline = steps.find(step => step && step.table_one_spec && Array.isArray(step.inputs));
       if (!baseline) return [];
       // Every form of the grouping concept (its _min, _n, _first_time...) is
       // the exposure itself, not a covariate; so is the measured value a
       // grouped column (`<concept>_group_<id>`) forms its groups from.
-      const grouping = [exposure, baseline.table_one_spec.group_by]
+      // The outcome is what the groups are compared on, never adjusted for.
+      const grouping = [exposure, baseline.table_one_spec.group_by, outcome]
         .map(value => String(value || '').replace(AGGREGATE_SUFFIX, '')).filter(Boolean)
         .flatMap(value => {
           const grouped = GROUPED_COLUMN.exec(value);
@@ -289,8 +293,13 @@
       const modelled = primaryModelExposure(plan);
       const modelledLabel = !modelled ? '' : levels && levels.has(modelled) ? levels.variableName(modelled)
         : shortLabel(readerLabel(labels, modelled)) || conceptName(modelled);
+      // A dictionary level whose Chinese name is fixed (sex: Female/Male)
+      // reads in Chinese on a Chinese page; any other label stays as given.
+      const levelName = (exposure, label) => tr(label,
+        (SEX_LEVELS_ZH[String(exposure || '')] || {})[label] || label);
       const groups = (Array.isArray(summary.exposureLevels) ? summary.exposureLevels : [])
-        .filter(row => row && row.label && finite(row.n) != null);
+        .filter(row => row && row.label && finite(row.n) != null)
+        .map(row => ({ ...row, label: levelName(spec && spec.exposure, row.label) }));
       const figures = mainFigure(payload('figure_gallery.json'));
       const tables = Array.isArray(payload('result_tables.json').tables) ? payload('result_tables.json').tables : [];
       const total = claim('n_total');
@@ -314,7 +323,7 @@
         estimateExposure: modelledLabel,
         prediction: PREDICTION_TYPES.has(String(plan.analysis_type || ''))
           ? predictionPerformance(payload('result_tables.json').prediction_performance) : null,
-        covariates: baselineCovariates(plan, spec && spec.exposure),
+        covariates: baselineCovariates(plan, spec && spec.exposure, spec && spec.outcome),
         steps: (Array.isArray(plan.steps) ? plan.steps : [])
           .filter(step => step && step.method !== 'visualization' && String(step.intent || '').trim())
           .map(step => {
