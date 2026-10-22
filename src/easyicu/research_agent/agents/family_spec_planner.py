@@ -865,6 +865,27 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
 
 
 
+def _source_absolute_risk_scope(context: ResearchContext) -> str | None:
+    """The absolute-risk population a revision's source plan bound, if any.
+
+    The outline check reads the same binding (``validate_population_choice``).
+    """
+
+    from ..planning.population_requirements import context_population_requirements
+
+    required = context_population_requirements(context)
+    if required is None:
+        return None
+    return next(
+        (
+            population.population_scope
+            for population in required.populations
+            if population.output_product == "table:absolute_risk_context"
+        ),
+        None,
+    )
+
+
 def run_family_spec_attempt(
     *,
     llm: Any,
@@ -1055,7 +1076,13 @@ def run_family_spec_attempt(
         SOURCE_FEASIBILITY_FAMILY_ID: build_source_feasibility_skeleton,
     }.get(request.family_id, build_landmark_association_skeleton)
     try:
-        draft = builder(request, spec, bind_outline=bind_outline)
+        if builder is build_landmark_association_skeleton:
+            draft = builder(
+                request, spec, bind_outline=bind_outline,
+                source_absolute_risk_scope=_source_absolute_risk_scope(article_context),
+            )
+        else:
+            draft = builder(request, spec, bind_outline=bind_outline)
     except FamilySpecError as exc:
         raise ProgressivePlanCompileError(
             f"progressive_{exc.reason_code}", str(exc), path=exc.path or "family_spec",
