@@ -657,10 +657,6 @@ _OMISSION_REASONS = {
         "a first-ICU-stay restriction changes the analysis unit and needs the "
         "researcher's explicit choice"
     ),
-    "study_execution_source_required": (
-        "exact data columns are bound once a data source is confirmed; the "
-        "saved question keeps the choice for the candidate plan"
-    ),
     "study_primary_outcome_confirmation_required": "the turn names it only as candidate intent",
     "study_primary_exposure_confirmation_required": "the turn names it only as candidate intent",
     "study_analysis_goal_confirmation_required": "the turn names it only as candidate intent",
@@ -1118,6 +1114,7 @@ def update_study_context(
             for spec in patch["sensitivity_specs"]
         ]
     omitted_unconfirmed_fields: list[str] = []
+    deferred_until_source: list[str] = []
     analysis_design_recovery: Optional[Dict[str, Any]] = None
     unconfirmed_omissions: list[Dict[str, str]] = []
     unconfirmed_gated = _unconfirmed_gated_slots(
@@ -1713,10 +1710,10 @@ def update_study_context(
         # whole update lost the question with them (hosted pilot: "请调整性别"
         # synchronized ``sex`` into these columns on a new project, nothing
         # was saved, and no plan could be generated after the source was).
+        # Not a choice the researcher is asked for: the receipt names the
+        # deferral, and no reply lists it as an unsaved setting.
         patch.pop("execution_concepts", None)
-        _record_unconfirmed_omission(
-            "", "execution_concepts", code="study_execution_source_required",
-        )
+        deferred_until_source.append("execution_concepts")
         execution = None
     if execution is not None:
         try:
@@ -2188,6 +2185,7 @@ def update_study_context(
             "host_rebind_after_turn": True,
             "omitted_unconfirmed_fields": omitted_unconfirmed_fields,
             "unconfirmed_omissions": unconfirmed_omissions,
+            **({"deferred_until_source": deferred_until_source} if deferred_until_source else {}),
             **({"analysis_design_recovery": analysis_design_recovery}
                if analysis_design_recovery is not None else {}),
             **({"unsaved_design": unsaved_design} if unsaved_design is not None else {}),
