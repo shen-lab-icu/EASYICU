@@ -306,6 +306,20 @@ def infer_research_entry_intent(message: str) -> str:
         text,
     ):
         return "implement_scientific_question"
+    # A whole question asks for an answer, whatever words name its relation
+    # ("男性和女性的院内死亡率分别是多少？", "…与 ICU 死亡有关吗？" were asked
+    # whether they wanted to explore a direction).  Only a fragment, or a
+    # question that asks for directions itself, is still unclear.
+    if (
+        len(text) >= 10
+        and re.search(
+            r"[？?]\s*$|多少|吗|如何|怎样|怎么样|是否|哪些|有多|有没有|能不能|会不会|"
+            r"\b(?:what|how|whether|which|does|do|is|are)\b",
+            text,
+        )
+        and not re.search(r"方向|选题|想法|题目|课题|idea|topic", text)
+    ):
+        return "implement_scientific_question"
     return "clarify_research_entry"
 
 
