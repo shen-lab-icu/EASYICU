@@ -137,7 +137,7 @@ class ExposureGroupSpec(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _ordinal_ids_along_the_scale(cls, data: Any) -> Any:
-        return _renumbered_along_the_scale(data)
+        return _otherwise_named_by_its_values(_renumbered_along_the_scale(data))
 
     @field_validator("concept")
     @classmethod
@@ -368,6 +368,64 @@ def _renumbered_along_the_scale(data: Any) -> Any:
             for key in ("reference", "contrast")
             if isinstance(data.get(key), str)
         },
+    }
+
+
+def _interval_label(rules: Sequence[GroupRule], summary: str) -> str:
+    low, high = _bounds(rules)
+    parts = []
+    if summary in low:
+        value, closed = low[summary]
+        parts.append(f"{'≥' if closed else '>'}{value:g}")
+    if summary in high:
+        value, closed = high[summary]
+        parts.append(f"{'≤' if closed else '<'}{value:g}")
+    units = {rule.unit for rule in rules if rule.unit}
+    unit = f" {next(iter(units))}" if len(units) == 1 else ""
+    return f"{', '.join(parts)}{unit}" if parts else ""
+
+
+def _otherwise_named_by_its_values(data: Any) -> Any:
+    """A stated grouping whose ``otherwise`` group is labelled by its values.
+
+    The label is what the reader sees; ``otherwise`` is the rule's keyword,
+    not a name (pilot1 round 2, 10-22, A6: 「<2 mmol/L / otherwise / ≥4
+    mmol/L」 on a Chinese plan card).  When the groups read one summary, the
+    owner names that group by the values it holds, the earlier groups' rules
+    negated: 「≥2, <4 mmol/L」.  Its rule, place and id are unchanged.
+    """
+
+    if not isinstance(data, Mapping):
+        return data
+    stated = data.get("groups")
+    if not isinstance(stated, list):
+        return data
+    try:
+        groups = [ExposureGroup.model_validate(item) for item in stated]
+    except ValidationError:
+        return data
+    rules = [group.rule for group in groups if isinstance(group.rule, GroupRule)]
+    summaries = {rule.summary for rule in rules}
+    last = groups[-1] if groups else None
+    if (
+        last is None
+        or last.rule != "otherwise"
+        or last.label.strip().casefold() != "otherwise"
+        or len(summaries) != 1
+    ):
+        return data
+    label = _interval_label(
+        [_negated(rule) for rule in rules],
+        next(iter(summaries)),
+    )
+    if not label or label.casefold() in {group.label.strip().casefold() for group in groups}:
+        return data
+    return {
+        **data,
+        "groups": [
+            *(group.model_dump() for group in groups[:-1]),
+            {**last.model_dump(), "label": label},
+        ],
     }
 
 
