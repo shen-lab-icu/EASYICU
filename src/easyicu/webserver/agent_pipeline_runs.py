@@ -3328,12 +3328,31 @@ _TABLE_PREVIEW_PRIORITY_COLUMNS = (
 )
 
 
+#: The adjusted-association producer's typed estimate table, as the browser's
+#: result summary identifies it, and the columns that name its primary
+#: contrast.  Bounded to the first twelve columns, the preview had dropped
+#: ``is_primary_contrast``, ``reference_level`` and ``contrast`` (they come
+#: last), so every answer card fell back to a bare "OR x" (pilot1 A2).
+_ESTIMATE_TABLE_COLUMNS = (
+    "fit_status", "estimate", "ci_low", "ci_high", "effect_scale", "is_primary_contrast",
+)
+_ESTIMATE_PREVIEW_COLUMNS = (
+    *_ESTIMATE_TABLE_COLUMNS, "exposure", "exposure_level", "reference_level", "contrast",
+    "analysis_role", "n",
+)
+
+
 def _table_preview_indices(headers: List[str]) -> List[int]:
     """Keep review-critical aggregate columns when a wide table is bounded."""
 
+    priority = (
+        _ESTIMATE_PREVIEW_COLUMNS
+        if all(name in headers for name in _ESTIMATE_TABLE_COLUMNS)
+        else _TABLE_PREVIEW_PRIORITY_COLUMNS
+    )
     selected = [
         headers.index(name)
-        for name in _TABLE_PREVIEW_PRIORITY_COLUMNS
+        for name in priority
         if name in headers
     ][:_MAX_TABLE_COLUMNS]
     for index in range(len(headers)):
@@ -3543,6 +3562,15 @@ def _failed_closed_detail(axes: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
                 writer_stop(axes.get("writer_stop")) if axis in _DRAFT_AXES else None
             )
             if writer is None:
+                if (
+                    axis == "evidence_complete"
+                    and axes.get("missing_evidence_count") == 0
+                    and (axes.get("evidence_error_count") or 0) > 0
+                ):
+                    # Every evidence error is a manuscript check (readiness
+                    # ``_MANUSCRIPT_ERROR_VALIDATORS``) and no claim lacks
+                    # its evidence: the analysis stands, the draft does not.
+                    return {"reason_code": "manuscript_checks_not_passed"}
                 return {"reason_code": f"{axis}_not_satisfied"}
             exhausted = writer.pop("transport_retry_exhausted", None)
             return {**writer, "cause_code": exhausted} if exhausted else writer

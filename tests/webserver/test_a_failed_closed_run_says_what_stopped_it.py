@@ -88,6 +88,16 @@ def _stopped(cause: str = "interval_without_event"):
             {"reason_code": "analysis_validated_not_satisfied"},
         ),
         ({**_PASSED, "evidence_complete": False}, {"reason_code": "evidence_complete_not_satisfied"}),
+        # Only manuscript checks failed and no claim lacks its evidence
+        # (pilot1 fixed-set A2: a thin Results section).
+        (
+            {**_PASSED, "evidence_complete": False, "missing_evidence_count": 0, "evidence_error_count": 3},
+            {"reason_code": "manuscript_checks_not_passed"},
+        ),
+        (
+            {**_PASSED, "evidence_complete": False, "missing_evidence_count": 2, "evidence_error_count": 3},
+            {"reason_code": "evidence_complete_not_satisfied"},
+        ),
         ({**_PASSED, "numeric_verified": False}, {"reason_code": "numeric_verified_not_satisfied"}),
         (_PASSED, None),
         # A run without a draft: the Writer's stop names it.

@@ -282,6 +282,13 @@ const outcome = modules.require('runOutcome').create({
   assert.match(unbound, /：OR 2\.692。/);
   assert.doesNotMatch(unbound, /5\.2 vs 1\.8|2\.583/);
   payloads['result_tables.json'] = savedRcs;
+  // Another producer names the interval primary_ci_low/high (pilot1 A2).
+  payloads['manuscript_provenance.json'] = { claims: [
+    { source_field: 'primary_or', display_value: '2.014' },
+    { source_field: 'primary_ci_low', display_value: '1.950' },
+    { source_field: 'primary_ci_high', display_value: '2.081' },
+  ] };
+  assert.match((await reread(plan)).html, /OR 2\.014（95% CI 1\.950–2\.081）。/);
   payloads['manuscript_provenance.json'] = savedClaims;
 
   // Traces: one named row per approved plan step, with how it ran.

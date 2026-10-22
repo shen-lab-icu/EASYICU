@@ -193,8 +193,8 @@
       const find = patterns => claims.find(row => patterns.some(pattern => pattern.test(String(row && row.source_field || '')))) || null;
       const effect = find([/^primary_or$/]);
       if (!effect || effect.display_value == null) return null;
-      const low = find([/^primary_or_ci\[0\]$/, /^primary_or_ci_low$/]);
-      const high = find([/^primary_or_ci\[1\]$/, /^primary_or_ci_high$/]);
+      const low = find([/^primary_or_ci\[0\]$/, /^primary_or_ci_low$/, /^primary_ci_low$/]);
+      const high = find([/^primary_or_ci\[1\]$/, /^primary_or_ci_high$/, /^primary_ci_high$/]);
       if (!low && !high) {
         const curve = curveContrast(summary, effect, labels);
         if (curve) return curve;
