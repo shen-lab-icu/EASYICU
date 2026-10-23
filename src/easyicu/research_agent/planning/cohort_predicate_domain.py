@@ -32,13 +32,23 @@ size only, never by its values.
 from __future__ import annotations
 
 import json
+import math
 import numbers
 from dataclasses import dataclass
-from typing import Any, Iterable, Literal, Sequence
+from fractions import Fraction
+from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from ..authority.declared_levels import closed_planning_levels_for, observed_levels_for
 from ..cohort.schema import ConceptPredicate, predicate_accepts_closed_level
-from ..schema import ResearchContext
+from ..contracts.exposure_group_rules import (
+    EXPOSURE_GROUP_LABELS_KEY,
+    UNMEASURED_GROUP_ID,
+    ExposureGroupRuleError,
+    read_grouping_rules,
+)
+from ..research_context.materialization_window import context_column_windows, window_anchor
+from ..research_context.stay_events import column_kind, stay_outcome_columns
+from ..schema import AnalysisPlan, ResearchContext
 from .cohort_eligibility import predicate_context_column
 
 _VALUE_FREE_OPS = frozenset({"missing", "not_missing"})
@@ -169,7 +179,156 @@ def _value_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False) if isinstance(value, str) else f"{value}"
 
 
+@dataclass(frozen=True)
+class PredicateEmptiesExposureLevel:
+    """A population predicate and the declared level it makes impossible."""
+
+    side: str
+    index: int
+    predicate: ConceptPredicate
+    grouping: str
+    level: Any
+
+    def message(self) -> str:
+        return (
+            f"The cohort {self.side}[{self.index}] "
+            f"{json.dumps(self.predicate.to_dict(), ensure_ascii=False, sort_keys=True)} "
+            f"empties declared level {self.level!r} of grouping {self.grouping!r} "
+            "by its typed rule alone."
+        )
+
+
+def population_emptied_exposure_levels(
+    context: ResearchContext, plan: AnalysisPlan,
+) -> tuple[PredicateEmptiesExposureLevel, ...]:
+    """Prove empty levels without rows, question text or observed frequencies.
+
+    Derived groups read their sealed scalar rules, including first-match
+    priority. Categorical products declare their literal levels. Only the
+    same materialized value, summary and window can establish a contradiction;
+    unknown semantics provide no proof. Each reported predicate suffices alone.
+    """
+
+    if plan.cohort is None:
+        return ()
+    variables = {variable.name: variable for variable in context.variables}
+    windows = context_column_windows(context)
+    outcomes = stay_outcome_columns(context)
+    groupings = context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY) or ()
+    targets: dict[str, list[Any]] = {}
+    from ..authority.table_one_binding import table_one_execution_spec
+
+    for step in plan.steps:
+        table = table_one_execution_spec(step)
+        if table is not None and table.group_by:
+            targets.setdefault(table.group_by, []).extend(table.group_levels)
+        distribution = step.exposure_outcome_distribution_spec
+        if distribution is not None:
+            targets.setdefault(distribution.exposure, []).extend(distribution.exposure_levels)
+    found: list[PredicateEmptiesExposureLevel] = []
+    for side, predicates in (("inclusion", plan.cohort.inclusion),
+                             ("exclusion", plan.cohort.exclusion)):
+        for index, predicate in enumerate(predicates):
+            column = predicate_context_column(variables, predicate.concept_id, predicate.aggregation)
+
+            def record(grouping: str, level: Any) -> None:
+                item = PredicateEmptiesExposureLevel(side, index, predicate, grouping, level)
+                if item not in found:
+                    found.append(item)
+
+            # Literal levels come from product contracts, not patient rows.
+            variable = variables.get(column)
+            kind = column_kind(variable, column=column, concept=predicate.concept_id, outcomes=outcomes)
+            window = windows.get(column)
+            same_value = (
+                predicate.aggregation in {"first", "last", "min", "max"}
+                if kind in {"admission", "stay_level"}
+                else column.endswith(f"_{predicate.aggregation}") and window is not None
+                and window.is_window(predicate.time_window.anchor,
+                                     predicate.time_window.start_offset_hours,
+                                     predicate.time_window.end_offset_hours)
+            )
+            if same_value:
+                for level in targets.get(column, ()):
+                    accepted = predicate_accepts_closed_level(predicate, level)
+                    if accepted is not None and accepted == (side == "exclusion"):
+                        record(column, level)
+
+            for grouping in groupings:
+                if not isinstance(grouping, Mapping) or not isinstance(grouping.get("parameters"), Mapping):
+                    continue
+                parameters = grouping["parameters"]
+                try:
+                    rules = read_grouping_rules(parameters)
+                except ExposureGroupRuleError:
+                    continue  # An unreadable declaration proves no empty level.
+                if predicate.concept_id != rules.concept:
+                    continue
+                summary = "value" if parameters["window"] is None else predicate.aggregation
+                if rules.source_columns.get(summary) != column:
+                    continue
+                if summary == "value":
+                    if predicate.aggregation != "first":
+                        continue
+                else:
+                    stated = predicate.time_window
+                    if (window_anchor(stated.anchor) != "icu_admission"
+                            or stated.start_offset_hours != parameters["window"]["start_hours"]
+                            or stated.end_offset_hours != parameters["window"]["end_hours"]):
+                        continue
+                earlier = []
+                for group, rule in rules.groups:
+                    # Other summaries are unconstrained: an empty intersection
+                    # still proves emptiness without assuming min == first == max.
+                    constraints = [*earlier]
+                    if rule is not None and rule.summary == summary:
+                        constraints.append((rule.op, rule.value))
+                    if _scalar_intersection_empty(constraints, predicate, side):
+                        record(str(grouping["variable"]), group)
+                    if rule is not None and rule.summary == summary:
+                        earlier.append((_NEGATED_OP[rule.op], rule.value))
+                if rules.unmeasured == "own_group" and set(rules.read_columns) == {column}:
+                    accepted = predicate_accepts_closed_level(predicate, float("nan"))
+                    if accepted is not None and accepted == (side == "exclusion"):
+                        record(str(grouping["variable"]), UNMEASURED_GROUP_ID)
+    return tuple(found)
+
+
+_NEGATED_OP = {"<": ">=", "<=": ">", ">": "<=", ">=": "<"}
+
+
+def _scalar_intersection_empty(
+    constraints: Sequence[tuple[str, float]], predicate: ConceptPredicate, side: str,
+) -> bool:
+    """Exact satisfiability of scalar threshold/equality/set comparisons.
+
+    Truth is constant between adjacent thresholds. Check each endpoint and
+    one point in each open interval; rational arithmetic keeps even adjacent
+    floating-point endpoints distinct. These are symbolic witnesses, not data.
+    """
+
+    values = predicate.value if isinstance(predicate.value, list) else [predicate.value]
+    if predicate.op in _VALUE_FREE_OPS:
+        values = []
+    if any(not isinstance(value, numbers.Real) or not math.isfinite(value) for value in values):
+        return False
+    cuts = sorted({Fraction(value) for _, value in constraints} | {Fraction(value) for value in values})
+    witnesses = ([cuts[0] - 1, *cuts, cuts[-1] + 1,
+                  *((left + right) / 2 for left, right in zip(cuts, cuts[1:]))]
+                 if cuts else [Fraction(0)])
+    for value in witnesses:
+        if not all({"<": value < bound, "<=": value <= bound,
+                    ">": value > bound, ">=": value >= bound}[op]
+                   for op, bound in constraints):
+            continue
+        accepted = predicate_accepts_closed_level(predicate, value)
+        if accepted is None or accepted == (side == "inclusion"):
+            return False
+    return True
+
+
 __all__ = [
     "PredicateOutsideColumnDomain",
     "cohort_predicates_outside_column_domain",
+    "population_emptied_exposure_levels",
 ]

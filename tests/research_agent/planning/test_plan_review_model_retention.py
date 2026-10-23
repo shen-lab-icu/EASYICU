@@ -176,7 +176,7 @@ def test_a_kept_unmeasured_state_needs_a_complete_case_refit_beside_it() -> None
 def test_the_review_version_moves_and_archived_reviews_stay_readable() -> None:
     review = _review(None)
     assert review.schema_version == CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
-    assert CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION.endswith("/16")
+    assert CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION.endswith("/17")
 
     archived = review.model_dump(mode="json")
     archived["schema_version"] = "easyicu.plan_scientific_review/13"

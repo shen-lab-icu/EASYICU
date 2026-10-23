@@ -33,6 +33,7 @@ from .budget_epoch import (
     select_budget_epoch,
 )
 from .provider_budget_runtime import monotonic_step_llm_repair_history
+from .failure_classification import runtime_failure_codes
 
 FailureClass = Literal[
     "code",
@@ -88,7 +89,7 @@ def _failure_class(record: Mapping[str, Any]) -> FailureClass:
         "provider_call_budget_receipt_invalid"
     ):
         return "ledger_invalid"
-    if recorded_executor_stop(record) is not None:
+    if recorded_executor_stop(record) is not None or runtime_failure_codes(record):
         return "typed_stop"
     failure = str(record.get("runtime_failure_class") or "")
     if record.get("timed_out") is True or failure == "execution_timeout":
@@ -184,6 +185,7 @@ def load_failed_step_retry_basis(
         epoch.records, epoch_latest, limit=limit, counter_field=epoch.counter_field
     )
     stop = recorded_executor_stop(latest)
+    runtime_stop = runtime_failure_codes(latest).get("reason_code")
     return FailedStepRetryBasis(
         step_id=step_id,
         status=str(latest.get("status") or ""),
@@ -198,9 +200,9 @@ def load_failed_step_retry_basis(
         identity=checkpoint_capsule_identity(root, step_id),
         used_identities=epoch.used_identities,
         budget_epoch=epoch.epoch,
-        stop_reason_code=stop[0] if stop else None,
+        stop_reason_code=stop[0] if stop else runtime_stop,
         stop_repeats_on_unchanged_retry=bool(
-            stop and EXECUTOR_STOP_REASONS[stop[0]].repeats_on_unchanged_retry
+            runtime_stop or (stop and EXECUTOR_STOP_REASONS[stop[0]].repeats_on_unchanged_retry)
         ),
     )
 

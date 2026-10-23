@@ -112,7 +112,10 @@ from .cohort_eligibility import (
     cohort_predicates_after_time_zero,
     eligibility_after_time_zero,
 )
-from .cohort_predicate_domain import cohort_predicates_outside_column_domain
+from .cohort_predicate_domain import (
+    cohort_predicates_outside_column_domain,
+    population_emptied_exposure_levels,
+)
 from .figure_strategy import ArticleFigureStrategy
 from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
 
@@ -193,7 +196,7 @@ class PlanScientificFinding(BaseModel):
     )
 
 
-CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/16"
+CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/17"
 
 
 class PlanScientificReview(BaseModel):
@@ -201,9 +204,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # Archived reviews remain readable, but cannot substitute for a /16
-    # execution review. /16 shares the host's descriptive interval decision
-    # and binds a disclosed source ceiling into the approved review.
+    # Archived reviews remain readable, but cannot substitute for a /17
+    # execution review, which also checks population/exposure-level overlap.
     schema_version: Literal[
         "easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11",
         "easyicu.plan_scientific_review/12",
@@ -211,6 +213,7 @@ class PlanScientificReview(BaseModel):
         "easyicu.plan_scientific_review/14",
         "easyicu.plan_scientific_review/15",
         "easyicu.plan_scientific_review/16",
+        "easyicu.plan_scientific_review/17",
     ] = (
         CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
     )
@@ -2124,7 +2127,7 @@ def render_agent_plan_revision_contract(review: PlanScientificReview) -> str:
         f"- source_plan_sha256: {review.plan_sha256}",
         f"- source_context_sha256: {review.context_sha256}",
         "- scope: generate a fresh plan; never mutate or resume the reviewed plan.",
-        "- preserve the exact research question, cohort, exposure, all typed "
+        "- preserve the exact research question, study-stated eligibility, exposure, all typed "
         "outcomes, time window, and user-authorized covariate authority.",
         "- do not claim that this revision closes study-authority, external-"
         "evidence, or independent-review findings.",
@@ -3249,6 +3252,29 @@ def cohort_predicate_domain_findings(
     ]
 
 
+def population_exposure_level_findings(
+    context: ResearchContext, plan: AnalysisPlan,
+) -> list[PlanScientificFinding]:
+    return [
+        PlanScientificFinding(
+            code="POPULATION_EMPTIES_EXPOSURE_LEVEL",
+            severity="blocker",
+            dimension="icu_clinical_design",
+            message=item.message(),
+            evidence_refs=["analysis_plan.json.cohort", "research_context.json.cohort.provenance"],
+            remediation=(
+                item.message() + " Repair the population predicate while preserving every "
+                "declared exposure level: comparing or describing these levels keeps the "
+                "population unrestricted on this concept by the grouping rule itself. "
+                "Retain independently stated eligibility that leaves every level possible; "
+                "do not drop a level or silently change the question."
+            ),
+            remediation_route="agent_plan_revision",
+        )
+        for item in population_emptied_exposure_levels(context, plan)
+    ]
+
+
 def outcome_selection_findings(
     context: ResearchContext,
     plan: AnalysisPlan,
@@ -3613,6 +3639,7 @@ def build_plan_scientific_review(
         cohort_predicate_findings(context, plan, trajectory_representation, runtime_authority)
     )
     findings.extend(cohort_predicate_domain_findings(context, plan))
+    findings.extend(population_exposure_level_findings(context, plan))
     findings.extend(
         outcome_selection_findings(context, plan, trajectory_representation, runtime_authority)
     )

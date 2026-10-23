@@ -411,6 +411,10 @@
       const missing = Array.isArray(detail && detail.missing) ? detail.missing.map(String).filter(Boolean) : [];
       const list = missing.length ? missing.join(', ') : '';
       const detailCopy = {
+        declared_exposure_level_empty: tr(
+          'A declared group has no analysable stays, so the run stopped; generate a new plan that checks eligibility and preserves every group.',
+          '计划中的一个分组没有可分析的住院，因此运行已停止，请重新生成计划，检查入组条件并保留所有分组。',
+        ),
         landmark_spline_binary_sensitivity_unsupported: tr(
           'A sensitivity analysis in the plan reused the continuous exposure result for a two-group comparison, which needs its own grouped model, so EasyICU stopped before any analysis ran. Generate the plan again.',
           '计划里有一项敏感性分析沿用了连续暴露的结果做两组比较，这需要单独按分组建模，因此在分析前停止。请重新生成计划。',
