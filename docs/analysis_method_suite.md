@@ -66,7 +66,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | Ordinal dose-response (OR per +1 stage, per-stage forest, monotonicity) | primary | LLM-coded ⚠️ | agent-declared ordered trend + dose_response.csv; deterministic forest | — |
 | Adjusted association (logistic / linear) | primary | deterministic ✅ | host-bound adjusted effect + typed model/coefficient contract + deterministic forest | `adjusted_association_estimates` |
 | Multiple adjustment sets (crude / minimal / full) | standard_supporting | LLM-coded ⚠️ | nested-model effect table | — |
-| Effect modification / interaction + subgroup forest | standard_supporting | LLM-coded ⚠️ | interaction test + subgroup forest | — |
+| Effect modification / interaction + subgroup forest | standard_supporting | deterministic ✅ | interaction test + subgroup forest | `baseline_association` |
 | Missing-data audit + complete-case vs imputation sensitivity | standard_supporting | deterministic ✅ | missingness_summary.csv + sensitivity contrast | `missing_data` |
 | Multiple-testing correction (FDR / Bonferroni) | standard_supporting | deterministic ✅ | adjusted p-value table | `multiple_testing` |
 | Restricted cubic spline dose-response (continuous exposure) | standard_supporting | LLM-coded ⚠️ | spline_dose_response.csv (x, log_or, ci) + spline panel | — |

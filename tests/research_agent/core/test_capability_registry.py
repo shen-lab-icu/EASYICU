@@ -178,6 +178,7 @@ def test_only_typed_host_validated_primary_capabilities_default_to_reportable():
     }
 
     assert reportable == {
+        "association_baseline_adjusted_v1",
         "descriptive_measurement_v1",
         "survival_time_to_event_v1",
         "association_adjusted_v1",
@@ -223,6 +224,7 @@ def test_partition_helpers_are_consistent():
         "Descriptive / empirical measurement summary",
         "Association — source-bound time-updated Cox",
         "Association — exact single-model adjusted",
+        "Association — digest-bound baseline model",
         "Association — digest-bound categorical landmark",
         "Association — digest-bound landmark spline",
         "Descriptive — typed exposure/outcome absolute risks",

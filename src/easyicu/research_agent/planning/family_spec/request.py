@@ -78,6 +78,7 @@ from ..question_requirements import (
 )
 from ..progressive_compiler import cohort_identity_columns, compile_cohort_predicate
 from .contract import (
+    BASELINE_ASSOCIATION_FAMILY_ID,
     DESCRIPTIVE_FAMILY_ID,
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
     LANDMARK_CATEGORICAL_FAMILY_ID,
@@ -1006,6 +1007,11 @@ def family_template_id_for_context(
         return PREDICTION_FAMILY_ID if not trajectory_context_is_bound(context) else None
     if not exposure or context.variable(exposure) is None:
         return None
+    if headline == "association_study":
+        from ..association_scope import baseline_association_context
+
+        if baseline_association_context(context):
+            return BASELINE_ASSOCIATION_FAMILY_ID
     kind = _exposure_kind(context, exposure)
     if kind is None:
         return None
@@ -1646,6 +1652,16 @@ def _family_spec_request(
             "the sealed context does not fit a host-templated family",
             path="family_id",
         )
+    if family_id == BASELINE_ASSOCIATION_FAMILY_ID:
+        return _build_baseline_request(
+            context,
+            variable_roster=variable_roster,
+            allowed_literature_citation_keys=allowed_literature_citation_keys,
+            direct_comparator_literature_keys=direct_comparator_literature_keys,
+            comparison_literature_keys=comparison_literature_keys,
+            comparator_titles=comparator_titles,
+            required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
+        )
     if family_id == SOURCE_FEASIBILITY_FAMILY_ID:
         sealed_feasibility = sealed_feasibility_coordinates(planning_contract_context)
         assert sealed_feasibility is not None
@@ -2009,6 +2025,80 @@ def _binary_level_label_keys(context: ResearchContext, exposure: str) -> list[st
     if sorted(levels) != ["0", "1"]:
         return []
     return [f"{exposure}=0", f"{exposure}=1"]
+
+
+def _build_baseline_request(
+    context: ResearchContext,
+    *,
+    variable_roster: Sequence[str],
+    allowed_literature_citation_keys: Sequence[str],
+    direct_comparator_literature_keys: Sequence[str],
+    comparison_literature_keys: Sequence[str],
+    comparator_titles: Mapping[str, str] | None,
+    required_primary_cohort_selection_mode: str | None,
+) -> FamilySpecRequest:
+    """The minimal association's roster is exactly what the study states.
+
+    Resolve stated concepts using the adjustment owner. An unavailable or
+    ambiguous reading stays a refusal; availability never authorizes extra
+    covariates. The ordinary compiler and requirement coverage still check it.
+    """
+    from dataclasses import replace
+
+    from ..adjustment_authority import (
+        context_stated_adjustments, context_stated_variables,
+        host_proven_temporal_roles, stated_adjustment_columns,
+    )
+
+    roster = list(dict.fromkeys(variable_roster))
+    exposure, outcome = str(context.primary_exposure), str(context.target_outcome)
+    adjustment = AdjustmentSetAuthority.from_context(context)
+    stated = context_stated_adjustments(context)
+    columns = []
+    for item in stated:
+        matched = [name for name in stated_adjustment_columns(context, item) if name in roster]
+        if item.source_status != "available" or len(matched) != 1:
+            raise FamilySpecError("family_spec_stated_adjustment_unavailable",
+                                  f"The stated adjustment {item.variable!r} needs one bound value column.",
+                                  path="adjustment_set")
+        columns.extend(matched)
+    if adjustment.selection != "exact":
+        adjustment = replace(adjustment, selection="exact", covariates=tuple(dict.fromkeys(columns)),
+                             temporal_roles=tuple(host_proven_temporal_roles(context).items()))
+    subgroups = []
+    relatives = concept_relatives(context)
+    for item in context_stated_variables(context, "stated_subgroups"):
+        matched = [name for name in roster if item.concept and name in relatives(item.concept)
+                   and _levels(context, name)]
+        if item.source_status != "available" or len(matched) != 1:
+            raise FamilySpecError("family_spec_subgroup_unavailable",
+                                  "A subgroup requires one bound closed-level variable.", path="subgroup_columns")
+        subgroups.extend(matched)
+    candidates = _candidates(context, variable_roster=roster, adjustment=adjustment)
+    levels = _levels(context, exposure)
+    reference, contrast = _stated_contrast(context, exposure, levels, reference=0,
+                                          contrast=max(0, len(levels) - 1))
+    return FamilySpecRequest(
+        family_id=BASELINE_ASSOCIATION_FAMILY_ID,
+        research_question=context.research_question, cohort_name=context.cohort.cohort_name,
+        **_typed_cohort_fields(context, required_primary_cohort_selection_mode),
+        identity_column=context.cohort.id_columns[0],
+        cluster_unit="patient" if context_dependence_authority(context) is not None else None,
+        primary_exposure=exposure, exposure_kind="categorical" if levels else "continuous",
+        exposure_levels=levels, reference_level_index=reference, primary_contrast_level_index=contrast,
+        exposure_is_ordered=False, outcome=outcome, outcome_levels=_levels(context, outcome),
+        event_level_index=1, adjustment_selection="exact",
+        exact_roster=list(adjustment.operational_covariates),
+        exact_rationales=adjustment.operational_rationales,
+        exact_temporal_roles=adjustment.operational_temporal_roles,
+        adjustment_candidates=candidates, subgroup_columns=list(dict.fromkeys(subgroups)),
+        required_reader_label_keys=list(dict.fromkeys([exposure, outcome, *adjustment.operational_covariates, *subgroups])),
+        variable_roster=roster,
+        allowed_literature_citation_keys=list(allowed_literature_citation_keys),
+        direct_comparator_literature_keys=list(direct_comparator_literature_keys),
+        comparison_literature_keys=list(comparison_literature_keys),
+        comparator_titles=dict(comparator_titles or {}),
+    )
 
 
 def _build_descriptive_request(

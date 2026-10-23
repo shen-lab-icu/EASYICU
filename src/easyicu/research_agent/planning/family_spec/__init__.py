@@ -32,6 +32,7 @@ Boundaries
 from __future__ import annotations
 
 from .contract import (
+    BASELINE_ASSOCIATION_FAMILY_ID,
     DESCRIPTIVE_FAMILY_ID,
     FAMILY_SPEC_SCHEMA_VERSION,
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
@@ -74,6 +75,7 @@ from .landmark_categorical_template import (
     keeps_unmeasured_covariate_rows,
 )
 from .continuous_survival_template import build_landmark_continuous_survival_skeleton
+from .baseline_association_template import build_baseline_association_skeleton
 from .descriptive_template import build_descriptive_skeleton
 from .feasibility_template import build_source_feasibility_skeleton
 from .phenotyping_template import build_phenotyping_skeleton
@@ -82,6 +84,8 @@ from .survival_template import build_landmark_survival_skeleton
 from .trajectory_template import build_fixed_window_trajectory_skeleton
 
 __all__ = [
+    "BASELINE_ASSOCIATION_FAMILY_ID",
+    "build_baseline_association_skeleton",
     "DESCRIPTIVE_FAMILY_ID",
     "FAMILY_SPEC_SCHEMA_VERSION",
     "FIXED_WINDOW_TRAJECTORY_FAMILY_ID",

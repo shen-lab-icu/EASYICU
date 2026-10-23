@@ -305,6 +305,14 @@ def build_article_analysis_contract(
     required_roles: Set[str] = set()
     recommended_roles: Set[str] = set()
     display_modules = list(resolved_brief.display_modules)
+    if source_analysis_type == "association_study":
+        from ..planning.association_scope import baseline_association_context
+
+        if baseline_association_context(context):
+            # The baseline family answers one stated model. It promises no
+            # generic robustness grid; explicit sensitivity requests remain
+            # obligations of the sensitivity/requirement owners.
+            display_modules = [module for module in display_modules if module.role != "robustness"]
     if source_analysis_type == "data_quality_audit":
         # A measurement-completeness question is intentionally narrower than
         # descriptive epidemiology. Reusing the descriptive playbook must not

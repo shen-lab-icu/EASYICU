@@ -327,9 +327,12 @@ def test_a_policy_that_names_no_declared_covariate_is_refused(overrides) -> None
 
 
 def test_the_planner_can_neither_see_nor_write_the_policy() -> None:
-    assert PlannedModelRequirement.HOST_OWNED_FIELDS == {"baseline_missing_handling"}
+    assert PlannedModelRequirement.HOST_OWNED_FIELDS == {
+        "baseline_missing_handling", "effect_modifiers",
+    }
     transport = json.dumps(_planner_transport_schema())
     assert "baseline_missing_handling" not in transport
+    assert "effect_modifiers" not in transport
 
     step = {
         "step_id": "primary",

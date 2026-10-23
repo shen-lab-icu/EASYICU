@@ -21,6 +21,8 @@ from typing import Any, Callable, Mapping, Optional, Sequence, get_args
 
 from ..canonical_json import canonical_sha256
 from ..planning.family_spec import (
+    BASELINE_ASSOCIATION_FAMILY_ID,
+    build_baseline_association_skeleton,
     FamilySpecError,
     build_family_spec_request,
     DESCRIPTIVE_FAMILY_ID,
@@ -1067,6 +1069,7 @@ def run_family_spec_attempt(
     attempt.family_template = True
 
     builder = {
+        BASELINE_ASSOCIATION_FAMILY_ID: build_baseline_association_skeleton,
         DESCRIPTIVE_FAMILY_ID: build_descriptive_skeleton,
         PHENOTYPING_FAMILY_ID: build_phenotyping_skeleton,
         PREDICTION_FAMILY_ID: build_prediction_skeleton,
@@ -1250,7 +1253,7 @@ def _stated_subgroups_need_outline(
         item for item in context_stated_variables(context, "stated_subgroups")
         if item.concept and item.source_status == "available"
     ]
-    if not subgroups or family_id == PREDICTION_FAMILY_ID or _template_sealed_for_run(
+    if not subgroups or family_id in {PREDICTION_FAMILY_ID, BASELINE_ASSOCIATION_FAMILY_ID} or _template_sealed_for_run(
         family_id, planning_contract_context,
     ):
         return False

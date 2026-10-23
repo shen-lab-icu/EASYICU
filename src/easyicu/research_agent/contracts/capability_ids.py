@@ -35,6 +35,7 @@ CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID: "causal_emulation",
     "association_ordinal_trend_v1": "association",
     "association_adjusted_v1": "association",
+    "association_baseline_adjusted_v1": "association",
     LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID: "association",
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID: "association",
     TIME_VARYING_EXPOSURE_CAPABILITY: "association",

@@ -416,6 +416,7 @@ def _coefficient_rows(
     effect_scale: str,
     exposure_contrast_columns: Sequence[str] = (),
     availability_columns: Optional[Mapping[str, str]] = None,
+    effect_modifiers: Sequence[str] = (),
 ) -> list[Dict[str, Any]]:
     """Label each fitted coefficient by the role the plan gave its source.
 
@@ -460,6 +461,8 @@ def _coefficient_rows(
             source = exposure
         elif source in adjustment_set:
             role = "adjustment"
+        elif source in effect_modifiers:
+            role = "effect_modifier"
         else:
             raise AdjustedAssociationError(
                 f"fitted design term {term.term!r} came from {source!r}, which "

@@ -113,6 +113,9 @@ _EDIT_CODES = frozenset(
         # A population predicate emptied a declared group; an unchanged retry
         # repeats it, so the plan is generated again.
         "declared_exposure_level_empty",
+        "web_baseline_association_incomplete",
+        "family_spec_stated_adjustment_unavailable",
+        "family_spec_subgroup_unavailable",
         "plan_revision_source_plan_mismatch",
         "accepted_baseline_resume_materialization_mismatch",
         "accepted_baseline_source_unresolved",

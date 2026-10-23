@@ -37,6 +37,7 @@ from __future__ import annotations
 import pytest
 
 from easyicu.research_agent.planning.analysis_types import infer_analysis_type
+from easyicu.research_agent.planning.family_spec import family_template_id_for_context
 from easyicu.research_agent.reporting.article_contract import (
     build_article_analysis_contract,
 )
@@ -135,12 +136,20 @@ def test_the_shown_contract_no_longer_demands_a_curve_for_a_binary_outcome() -> 
     list rendered into the planning prompt and used to reject the plan.
     """
 
-    contract = build_article_analysis_contract(_binary_mortality_context())
+    context = _binary_mortality_context()
+    contract = build_article_analysis_contract(context)
 
     assert contract.source_analysis_type == "association_study"
     assert "survival_effect" not in contract.required_roles
     assert "temporal_absolute_risk" not in contract.required_roles
-    assert {"primary_estimand", "robustness"} <= set(contract.required_roles)
+    assert "primary_estimand" in contract.required_roles
+    # No owner declares a post-baseline exposure window or typed sensitivity
+    # here. The minimal family now owns this context; a prose guardrail does
+    # not add a sensitivity obligation to its seven-step default.
+    assert family_template_id_for_context(
+        context, analysis_types=(contract.source_analysis_type,),
+    ) == "baseline_adjusted_association"
+    assert "robustness" not in contract.required_roles
 
 
 @pytest.mark.parametrize(

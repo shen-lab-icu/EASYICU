@@ -950,7 +950,7 @@ class PrimaryModelContractValidator:
         "penalized",
         "fit_method",
     )
-    _TERM_ROLES = {"intercept", "exposure", "availability", "adjustment"}
+    _TERM_ROLES = {"intercept", "exposure", "availability", "adjustment", "effect_modifier"}
     _EXPOSURE_ROLES = {"primary", "secondary"}
     _ANALYSIS_ROLES = {"primary", "secondary", "sensitivity"}
     _ANALYSIS_SETS = {"source_aware", "complete_case"}
@@ -1198,6 +1198,11 @@ class PrimaryModelContractValidator:
                     "reported": reported.get(field),
                 }
             handling = requirement.get("baseline_missing_handling")
+            if (requirement.get("effect_modifiers") or []) != (contract.get("effect_modifiers") or []):
+                mismatches["effect_modifiers"] = {
+                    "expected": requirement.get("effect_modifiers") or [],
+                    "reported": contract.get("effect_modifiers") or [],
+                }
             if isinstance(handling, Mapping):
                 # A declared unmeasured category is part of the model: a fit
                 # that dropped those rows, or kept different ones, is another.
@@ -2554,6 +2559,13 @@ class PrimaryModelContractValidator:
                 metadata = self._model_metadata(contract, metadata_by_id)
                 fit_status = self._normalise(contract.get("fit_status"))
                 rows = coefficient_rows[coefficient_rows["_model_id"].eq(model_id)]
+                requirement = requirements_by_id.get(str(contract.get("requirement_id") or ""), {})
+                modifiers = {term["name"] for term in requirement.get("effect_modifiers") or ()}
+                modifier_sources = set(rows.loc[rows["_term_role"].eq("effect_modifier"), "_source"])
+                expected_modifier_sources = modifiers - set(requirement.get("covariates") or ())
+                if modifier_sources != expected_modifier_sources:
+                    issues.append({"model_id": model_id, "issue": "effect_modifier_source_mismatch",
+                                   "expected": sorted(expected_modifier_sources), "reported": sorted(modifier_sources)})
                 if fit_status != "fitted":
                     finite_fields = self._finite_nonfitted_result_fields(rows)
                     if finite_fields:
@@ -2764,6 +2776,10 @@ class PrimaryModelContractValidator:
                 if coefficient_rows is not None
                 else candidate_covariates
             )
+            requirement = requirements_by_id.get(str(contract.get("requirement_id") or ""), {})
+            model_covariates = list(dict.fromkeys([
+                *model_covariates, *(term["name"] for term in requirement.get("effect_modifiers") or ()),
+            ]))
             fit_status = self._normalise(contract.get("fit_status"))
             converged = self._as_bool(contract.get("converged"))
             separation = self._as_bool(contract.get("separation_detected"))

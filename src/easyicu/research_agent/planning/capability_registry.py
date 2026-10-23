@@ -442,6 +442,20 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
     ),
     ScientificCapability(
         family="association",
+        label="Association — digest-bound baseline model",
+        primary_analysis="deterministic", primary_estimand="Signed baseline logistic association and within-model stratum contrasts",
+        primary_runner="adjusted_association_estimates", primary_runner_module="execution.runners.baseline_association_executor",
+        figure="deterministic", figure_renderer="base_association_skill",
+        capability_id="association_baseline_adjusted_v1", result_contract="BaselineAssociationRuntimeAuthority",
+        data_contract=("signed baseline exposure and binary outcome", "exact adjustment and subgroup rosters"),
+        required_diagnostics=("model covariance and coefficient table", "separation and convergence", "primary population count cross-check"),
+        fail_closed="Reject digest, roster, coding, rank, convergence, separation and population-count drift.",
+        scientific_validation="reportable",
+        scientific_validator_owner="execution.runners.baseline_association_executor",
+        scientific_validator_contract="easyicu.baseline_association_runtime_receipt/1",
+    ),
+    ScientificCapability(
+        family="association",
         label="Association — digest-bound categorical landmark",
         primary_analysis="deterministic",
         primary_estimand=(
@@ -1637,6 +1651,14 @@ def resolve_primary_capability(
             **({} if claimed else {"failure_reason": "scientific_capability_step_incompatible",
                                    "detail": "Time-varying execution requires its signed owner contract."}))
 
+    if declared == "association_baseline_adjusted_v1":
+        from ..contracts.association_execution import baseline_association_execution_verdict
+
+        verdict = baseline_association_execution_verdict(primary)
+        claimed = verdict.claimed
+        return _verdict_for(get_capability_by_id(declared), analysis_family=canonical,
+                            owner_claimed=claimed, owner_reason="The signed baseline owner validates the exact model and subgroup contract.",
+                            **({} if claimed else {"failure_reason": "primary_capability_owner_mismatch", "detail": verdict.reason}))
     if declared == LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID:
         landmark_capability = get_capability_by_id(declared)
         verdict = landmark_categorical_association_execution_verdict(primary)

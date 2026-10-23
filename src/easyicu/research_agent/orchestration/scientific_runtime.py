@@ -48,6 +48,11 @@ class _RuntimePlanCompilerSpec:
 
 
 _CURRENT_CASE_PLAN_COMPILERS: Mapping[str, _RuntimePlanCompilerSpec] = {
+    "baseline_adjusted_association": _RuntimePlanCompilerSpec(
+        message="Bound the baseline association and primary-population risk to the reviewed model.",
+        reason_code="baseline_association_host_compiled",
+        governed_steps=(("primary_step_id", "governed_primary_step"),),
+    ),
     "time_varying_exposure_association": _RuntimePlanCompilerSpec(
         message=(
             "Compiled the explicit time-updated analysis-only plan; incompatible "

@@ -336,7 +336,7 @@ class PlannedModelRequirement(BaseModel):
     #: unmeasured rows is decided from measured missingness, never by a
     #: Planner.  The Planner transport does not offer them, and a Planner
     #: payload that sets one is refused (``agents/plan_payload.py``).
-    HOST_OWNED_FIELDS: ClassVar[frozenset[str]] = frozenset({"baseline_missing_handling"})
+    HOST_OWNED_FIELDS: ClassVar[frozenset[str]] = frozenset({"baseline_missing_handling", "effect_modifiers"})
 
     requirement_id: str
     outcome: str
@@ -379,6 +379,10 @@ class PlannedModelRequirement(BaseModel):
             "without this field remain readable but cannot authorize a "
             "deterministic host fit."
         ),
+    )
+    effect_modifiers: List[ModelTermSpec] = Field(
+        default_factory=list, exclude_if=lambda value: not value,
+        description="Host-bound subgroup main effects and exposure interactions in this same model.",
     )
     exposure_levels: Optional[List[str]] = Field(
         default=None,
@@ -593,6 +597,18 @@ class PlannedModelRequirement(BaseModel):
 
         handling = self.baseline_missing_handling
         return tuple(handling.covariates) if handling is not None else ()
+
+    @model_validator(mode="after")
+    def _closed_effect_modifiers(self) -> "PlannedModelRequirement":
+        names = [term.name for term in self.effect_modifiers]
+        terms = {term.name: term for term in self.model_terms or ()}
+        if (len(names) != len(set(names)) or {self.exposure_source, self.outcome} & set(names)
+            or any(term.role != "covariate" or term.transform != "treatment_contrast" for term in self.effect_modifiers)
+            or any(term.name in terms and terms[term.name] != term for term in self.effect_modifiers)):
+            raise ValueError("effect modifiers require distinct, consistent categorical main effects")
+        if self.effect_modifiers and (self.outcome_type != "binary" or self.baseline_missing_handling is not None):
+            raise ValueError("effect modifiers require the complete-case binary model owner")
+        return self
 
     @model_validator(mode="after")
     def _missing_handling_names_declared_covariates(self) -> "PlannedModelRequirement":
