@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from easyicu.research_agent.gates.publication_disclosure import SMALL_CELL_BELOW
 from easyicu.webserver import sources
 from easyicu.webserver.pi_copilot import tools
 from easyicu.webserver.pi_copilot.contracts import (
@@ -298,7 +299,12 @@ def test_a_cross_database_demo_summary_names_the_demo_and_its_count():
     assert source["stays"] == 12
 
 
-def test_the_planning_context_records_the_demo_database_and_its_stay_count():
+@pytest.mark.parametrize(("stays", "outbound_stays"), [
+    (2, "suppressed"),
+    (SMALL_CELL_BELOW - 1, "suppressed"),
+    (SMALL_CELL_BELOW, SMALL_CELL_BELOW),
+])
+def test_the_planning_context_records_the_demo_database_and_its_stay_count(stays, outbound_stays):
     import pandas as pd
 
     from easyicu.research_agent.research_context.builder import build_research_context
@@ -306,13 +312,15 @@ def test_the_planning_context_records_the_demo_database_and_its_stay_count():
 
     context = build_research_context(
         research_question="Describe the recorded ICU stays.",
-        cohort=pd.DataFrame({"patientunitstayid": [1, 2], "signal": [4.0, 6.0]}),
+        cohort=pd.DataFrame({"patientunitstayid": range(1, stays + 1), "signal": [4.0] * stays}),
         cohort_name="synthetic_demo", database="eicu_demo", id_columns=["patientunitstayid"],
     )
     assert context.cohort.database == "eicu_demo"
     payload = outbound_safe_context_payload(context)
     assert payload["cohort"]["database"] == "eicu_demo"
-    assert payload["cohort"]["n_stays"] == 2
+    assert payload["cohort"]["n_stays"] == outbound_stays
+    # The host retains the exact count after the model-facing projection.
+    assert context.cohort.n_stays == stays
 
 
 @pytest.mark.parametrize("stays", [-1, True, "12", 1.5])
