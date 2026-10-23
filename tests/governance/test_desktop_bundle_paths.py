@@ -228,7 +228,7 @@ def test_staging_shortens_pi_without_mutating_installed_wheel_and_checks_imports
         subprocess.run(command, **kwargs, check=True, timeout=15)
 
     if broken_pi:
-        with pytest.raises(subprocess.CalledProcessError):
+        with pytest.raises(common.StagedPiImportError, match="desktop_pi_import_failed: @earendil-works/pi-coding-agent"):
             common.prepare_bundle(desktop_root=desktop, build_root=tmp_path / "build", run=run, windows=True)
         assert (tmp_path / "build/longest-paths.json").is_file()
         return

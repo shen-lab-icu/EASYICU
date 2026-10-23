@@ -19,6 +19,7 @@ _OPTIONAL_NODE_DIRS = frozenset({
     "doc", "docs", "documentation", "test", "tests", "__tests__", "example", "examples",
 })
 _NODE_BUILD_SUFFIXES = (".d.ts", ".d.mts", ".d.cts", ".map")
+_NODE_SOURCE_SUFFIXES = (".ts", ".mts", ".cts")
 
 
 def _runtime_targets(value, *, skip_types=False):
@@ -40,8 +41,9 @@ def _node_package_root(path: Path) -> bool:
     )
 
 
-def _referenced_node_dirs(manifests: list[Path]) -> set[Path]:
+def _node_runtime_references(manifests: list[Path]) -> tuple[set[Path], set[Path]]:
     protected = set()
+    typescript = set()
     for manifest in manifests:
         package = json.loads(manifest.read_text(encoding="utf-8"))
         for field in ("main", "exports", "bin"):
@@ -57,12 +59,14 @@ def _referenced_node_dirs(manifests: list[Path]) -> set[Path]:
                     for entry in resolved:
                         if not entry.exists():
                             continue
+                        if entry.name.lower().endswith(_NODE_SOURCE_SUFFIXES):
+                            typescript.add(manifest.parent)
                         for ancestor in (entry, *entry.parents):
                             if ancestor == manifest.parent:
                                 break
                             if ancestor.name.lower() in _OPTIONAL_NODE_DIRS:
                                 protected.add(ancestor)
-    return protected
+    return protected, typescript
 
 
 def prune_node_modules(staged_root: Path) -> dict[str, int]:
@@ -70,14 +74,17 @@ def prune_node_modules(staged_root: Path) -> dict[str, int]:
 
     Runtime-referenced docs/tests/examples directories stay intact: their entry
     may import siblings or load assets. Type declarations and maps never execute.
+    Keep source siblings when a package actually exposes TypeScript at runtime.
     The installed wheel and checkout are deliberately outside this owner.
     """
     paths = [path for path in staged_root.rglob("*")
              if "node_modules" in path.relative_to(staged_root).parts]
-    protected = _referenced_node_dirs([
+    manifests = [
         path for path in paths if path.name == "package.json" and path.is_file()
         and _node_package_root(path.parent)
-    ])
+    ]
+    packages = {path.parent for path in manifests}
+    protected, typescript = _node_runtime_references(manifests)
     removed_dirs = {
         path for path in paths if path.is_dir() and not path.is_symlink()
         # A dependency can itself be named "docs" or "test". Package roots
@@ -92,13 +99,156 @@ def prune_node_modules(staged_root: Path) -> dict[str, int]:
     for path in sorted(paths, key=lambda p: len(p.parts), reverse=True):
         in_removed_dir = any(parent in removed_dirs for parent in (path, *path.parents))
         if path.is_symlink() or path.is_file():
-            if in_removed_dir or path.name.lower().endswith(_NODE_BUILD_SUFFIXES):
+            owner = next((parent for parent in path.parents if parent in packages), None)
+            unused_source = path.name.lower().endswith(_NODE_SOURCE_SUFFIXES) and owner not in typescript
+            if in_removed_dir or path.name.lower().endswith(_NODE_BUILD_SUFFIXES) or unused_source:
                 counts["files"] += 1
                 counts["bytes"] += path.lstat().st_size
                 path.unlink()
         elif in_removed_dir:
             path.rmdir()
     return counts
+
+
+def _node_package_digest(package: Path) -> str:
+    """Compare duplicate payloads too: a matching version alone is insufficient."""
+    digest = hashlib.sha256()
+    for root, dirs, files in os.walk(package, followlinks=False):
+        dirs[:] = sorted(name for name in dirs if name != "node_modules")
+        for name in sorted(files):
+            path = Path(root) / name
+            digest.update(path.relative_to(package).as_posix().encode("utf-8") + b"\0")
+            if path.is_symlink():
+                digest.update(os.readlink(path).encode("utf-8"))
+            else:
+                with path.open("rb") as handle:
+                    digest.update(hashlib.file_digest(handle, "sha256").digest())
+    return digest.hexdigest()
+
+
+def hoist_node_modules(staged_root: Path) -> dict[str, int]:
+    """Flatten only staged packages, without npm, lock edits or package renames.
+
+    Existing top-level copies may replace byte-identical, same-version leaves.
+    Private dependencies, version conflicts and bin shims stay in place. A move
+    into an empty slot must preserve declared dependency and peer versions.
+    Import smoke additionally exercises the resulting lazy-provider contexts.
+    """
+    packages = {
+        path.parent: json.loads(path.read_text(encoding="utf-8"))
+        for path in staged_root.rglob("package.json")
+        if _node_package_root(path.parent) and not path.parent.is_symlink()
+    }
+    counts = {"moved": 0, "deduplicated": 0}
+
+    def package_at(owner, name, *, skip=None):
+        for parent in (owner, *owner.parents):
+            if not parent.is_relative_to(staged_root):
+                break
+            candidate = parent / "node_modules" / name
+            if candidate != skip and candidate in packages:
+                return candidate
+        return None
+
+    def resolved(owner, name):
+        package = packages.get(package_at(owner, name), {})
+        return package.get("name"), package.get("version")
+
+    changed = True
+    while changed:
+        changed = False
+        for source in sorted(packages, key=lambda path: (-len(path.parts), path.as_posix())):
+            manifest = packages[source]
+            modules = source.parent.parent if source.parent.name.startswith("@") else source.parent
+            target = staged_root / "node_modules" / source.relative_to(modules)
+            if source == target or not manifest.get("version") or manifest.get("bin"):
+                continue
+            intervening = package_at(modules.parent, source.relative_to(modules), skip=source)
+            if intervening is not None and intervening != target:
+                continue
+            duplicate = target in packages
+            if duplicate:
+                if ((manifest.get("name"), manifest["version"]) !=
+                        (packages[target].get("name"), packages[target].get("version"))):
+                    continue
+                if any(path.is_relative_to(source / "node_modules") for path in packages):
+                    continue
+                if _node_package_digest(source) != _node_package_digest(target):
+                    continue
+            elif target.exists():
+                continue
+            dependencies = set(manifest.get("peerDependencies", {}))
+            if not duplicate:
+                dependencies |= set(manifest.get("dependencies", {})) | set(manifest.get("optionalDependencies", {}))
+            if any(resolved(source, name) != resolved(target, name) for name in dependencies):
+                continue
+            if duplicate:
+                shutil.rmtree(source)
+                del packages[source]
+                counts["deduplicated"] += 1
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(source), target)
+                for old in [path for path in packages if path.is_relative_to(source)]:
+                    packages[target / old.relative_to(source)] = packages.pop(old)
+                counts["moved"] += 1
+            changed = True
+    return counts
+
+
+class StagedPiImportError(RuntimeError):
+    """The bundled Node cannot import a staged Pi entry or lazy adapter."""
+
+    code = "desktop_pi_import_failed"
+
+
+def check_staged_pi(staged_root: Path, node: Path, *, run) -> None:
+    # Resolve from both actual importers using ESM conditions. The agent may
+    # retain a private pi-ai version. pi-ai's compiled providers/ modules are
+    # loaded lazily, so importing its public index alone cannot validate them.
+    script = r"""
+import { readdirSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+let specifier = '@earendil-works/pi-coding-agent';
+try {
+    const gateway = pathToFileURL(resolve('src/main.mjs')).href;
+    const agent = import.meta.resolve(specifier, gateway);
+    await import(agent);
+    specifier = 'typebox';
+    await import(import.meta.resolve(specifier, gateway));
+    const checked = new Set();
+    for (const parent of [gateway, agent]) {
+        specifier = '@earendil-works/pi-ai';
+        const entry = import.meta.resolve(specifier, parent);
+        if (checked.has(entry)) continue;
+        checked.add(entry);
+        await import(entry);
+        const providers = new URL('./providers/', entry);
+        specifier = providers.href + 'openai-completions.js';
+        const adapters = readdirSync(providers).filter(name => /\.(?:js|mjs|cjs)$/.test(name)).sort();
+        if (!adapters.includes('openai-completions.js')) throw new Error('Missing OpenAI completions adapter');
+        for (const name of adapters) {
+            specifier = new URL(name, providers).href;
+            await import(specifier);
+        }
+    }
+} catch (error) {
+    console.error(`desktop_pi_import_failed: ${specifier}: ${error.stack || error}`);
+    process.exit(1);
+}
+process.exit(0);
+"""
+    try:
+        run([str(node), "--experimental-import-meta-resolve", "--input-type=module", "-e", script],
+            cwd=staged_root, capture_output=True)
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr or str(error)
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", errors="replace")
+        if StagedPiImportError.code not in detail:
+            detail = f"{StagedPiImportError.code}: {detail}"
+        raise StagedPiImportError(detail.strip()) from error
 
 
 class BundlePathBudgetError(RuntimeError):
@@ -156,10 +306,13 @@ def check_bundle_paths(desktop_root: Path, report_file: Path, *, windows=False) 
 def bundle_plan(*, windows=False) -> list[str]:
     return [
         "Stage Pi at short install resource p/; prune staged node_modules only: "
-        "*.d.ts/*.d.mts/*.d.cts, dist-types/, *.map and unreferenced docs/tests/examples",
+        "*.d.ts/*.d.mts/*.d.cts, dist-types/, *.map and unreferenced docs/tests/examples; "
+        "prune *.ts/*.mts/*.cts when package runtime entries do not use TypeScript",
+        "Hoist staged Pi dependencies; deduplicate only identical copies with matching versions; retain conflicts",
         f"{'Fail' if windows else 'Warn'} on installed relative paths over {BUNDLE_PATH_BUDGET} "
         "characters; reserve 100 for install root; write longest-paths.json (10 longest)",
-        "Check gateway syntax and import the staged Pi agent, Pi AI and typebox entries with bundled Node",
+        "Check gateway syntax and import the staged Pi agent, Pi AI, typebox and lazy provider adapters "
+        "(including openai-completions) from gateway and agent contexts with bundled Node",
     ]
 
 
@@ -174,13 +327,12 @@ def prepare_bundle(*, desktop_root, build_root, run, windows=False) -> dict:
     pruned = prune_node_modules(resources)
     short_pruned = prune_node_modules(short)
     pruned = {key: pruned[key] + short_pruned[key] for key in pruned}
+    hoisted = hoist_node_modules(short)
     report = check_bundle_paths(desktop_root, build_root / "longest-paths.json", windows=windows)
     bundled_node = resources / ("node.exe" if windows else "node")
     run([str(bundled_node), "--check", "src/main.mjs"], cwd=short)
-    run([str(bundled_node), "--input-type=module", "-e",
-         "await import('@earendil-works/pi-coding-agent'); "
-         "await import('@earendil-works/pi-ai'); await import('typebox'); process.exit(0);"], cwd=short)
-    return {"node_modules_pruned": pruned, "bundle_paths": report}
+    check_staged_pi(short, bundled_node, run=run)
+    return {"node_modules_pruned": pruned, "node_modules_hoisted": hoisted, "bundle_paths": report}
 
 
 def select_python(target: str) -> str:

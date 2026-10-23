@@ -31,12 +31,12 @@ LOCK_COMMAND = (
 )
 
 
-def _run(command: list[str], *, cwd: Path = REPO_ROOT) -> None:
+def _run(command: list[str], *, cwd: Path = REPO_ROOT, capture_output: bool = False) -> None:
     # A caller's source PYTHONPATH must not override the installed wheel.
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     environment.pop("PYTHONHOME", None)
-    subprocess.run(command, cwd=cwd, env=environment, check=True)
+    subprocess.run(command, cwd=cwd, env=environment, check=True, capture_output=capture_output)
 
 
 def _require_lock() -> None:
