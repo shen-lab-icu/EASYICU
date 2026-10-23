@@ -170,7 +170,7 @@ def build_plan_requirement_coverage(
     )
 
 
-def stated_adjustment_coverage(context, plan) -> PlanRequirementCoverage:
+def stated_adjustment_coverage(context, plan, *, runtime_authority=None) -> PlanRequirementCoverage:
     """Only primary fitted covariate terms cover the question's required subset.
 
     A value appearing in Table 1, inputs, robustness or an exposure term is
@@ -184,21 +184,35 @@ def stated_adjustment_coverage(context, plan) -> PlanRequirementCoverage:
     )
 
     primary = [
-        (step.step_id, requirement)
+        (step.step_id, set(requirement.covariates or ()).intersection(
+            term.name for term in requirement.model_terms or () if term.role == "covariate"
+        ))
         for step in plan.steps if step.planned_analysis_role == "primary"
         for requirement in step.model_requirements
         if requirement.analysis_role == "primary"
     ]
+    # The signed spline family replaces the draft model requirement with its
+    # digest-bound execution contract. Inputs or a proposal alone cannot prove
+    # adjustment: let that owner validate the primary before reading its roster.
+    from ..authority.current_case_scientific_runtime import (
+        CurrentCaseScientificAuthorityError, LandmarkSplineRuntimeAuthority,
+    )
+
+    if isinstance(runtime_authority, LandmarkSplineRuntimeAuthority):
+        try:
+            signed = runtime_authority.governed_step(plan)
+        except CurrentCaseScientificAuthorityError:
+            pass
+        else:
+            if (runtime_authority.exposure_column == context.primary_exposure
+                and runtime_authority.outcome_column == context.target_outcome):
+                primary.append((signed.step_id, set(runtime_authority.required_adjustment_columns)))
     records = []
     for adjustment in context_stated_adjustments(context):
         identity = adjustment.concept or adjustment.variable
         columns = set(stated_adjustment_columns(context, adjustment))
         owners = [
-            step_id for step_id, requirement in primary
-            if columns.intersection(requirement.covariates or ())
-            and columns.intersection(
-                term.name for term in requirement.model_terms or () if term.role == "covariate"
-            )
+            step_id for step_id, covariates in primary if columns.intersection(covariates)
         ]
         unavailable = adjustment.source_status == "unavailable"
         # Without a concept no column can be checked; the review shows it.

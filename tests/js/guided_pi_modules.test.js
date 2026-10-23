@@ -133,6 +133,25 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.match(planStop, /no analysis was run/);
   assert.doesNotMatch(planStop, /variable level or model term/);
   assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code: 'progressive_step_invalid' }), /候选计划没有通过 EasyICU 的检查/);
+  // Each adjustment refusal reaches a planning stop under its progressive_ code.
+  const adjustmentStops = {
+    progressive_family_spec_stated_adjustment_unavailable: [
+      'The question asks to adjust for a variable that the extracted data does not provide, so planning stopped and no analysis was run. Choose data that includes it, or remove it from the adjustment variables, then generate the plan again.',
+      '问题要求调整的某个变量在提取的数据里没有对应的列，因此规划已停止，没有运行分析。请选择包含该变量的数据，或把它从调整变量中去掉，然后重新生成计划。',
+    ],
+    progressive_family_spec_exact_roster_mismatch: [
+      "The plan's adjustment variables differ from the ones named in the question, so planning stopped and no analysis was run. Generate the plan again.",
+      '计划中的调整变量与问题里写明的不一致，因此规划已停止，没有运行分析。请重新生成计划。',
+    ],
+    progressive_family_spec_covariate_timing_unproven: [
+      'An adjustment variable is not known by the landmark time, so it cannot be used to adjust this analysis. Planning stopped and no analysis was run. Give that variable a time window that ends before the landmark, or remove it, then generate the plan again.',
+      '有一个调整变量在 landmark 时间点之前还无法确定，不能用于这项分析的调整。规划已停止，没有运行分析。请为该变量设定在 landmark 之前结束的时间窗，或将其去掉，然后重新生成计划。',
+    ],
+  };
+  for (const [code, [en, zh]] of Object.entries(adjustmentStops)) {
+    assert.equal(runFailure('research_pipeline_progressive_compile_failed', { code }), en);
+    assert.equal(runFailureZh('research_pipeline_progressive_compile_failed', { code }), zh);
+  }
   ['progressive_unknown_variable', 'progressive_model_levels_unavailable'].forEach(code => {
     assert.match(runFailure('research_pipeline_progressive_compile_failed', { code }), /variable level or model term/);
   });

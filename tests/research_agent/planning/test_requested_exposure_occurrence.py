@@ -286,6 +286,9 @@ BINARY_LABELS = {**LABELS, BINARY: "Early injury in the first 24 h"}
 
 def _binary_context():
     base = _context(exact=False)
+    constraints = json.loads(base.user_preferences.data_constraints)
+    constraints["stated_adjustments"] = [item for item in constraints["stated_adjustments"] if item["concept"] in {"age", "sex"}]
+    base.user_preferences.data_constraints = json.dumps(constraints)
     flag = ConceptDescriptor(
         name=BINARY,
         description="early injury status",

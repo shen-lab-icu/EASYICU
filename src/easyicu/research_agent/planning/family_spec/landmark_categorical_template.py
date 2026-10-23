@@ -1035,6 +1035,11 @@ def build_landmark_categorical_skeleton(
     # An accepted baseline roster keeps its other rows beside the model roster.
     retained_baseline = accepted_baseline_additions(request, table_one_variables)
     table_one_variables += [row.columns[0] for row in retained_baseline]
+    # As in the minimal baseline family, an unadjusted categorical model can
+    # describe the requested outcome without inventing adjustment variables.
+    outcome_only_table = not continuous_exposure and not terms and not retained_baseline
+    if outcome_only_table:
+        table_one_variables.append(outcome)
     audit_variables = [
         exposure,
         *alternates,
@@ -1349,6 +1354,7 @@ def build_landmark_categorical_skeleton(
             raw_inputs=list(dict.fromkeys(table_one_variables)),
             table_one_group_by=table_one_group, table_one_mode="descriptive_smd_only",
             table_one_variables=[
+                *([ProgressiveTableOneVariable(name=outcome, summary="count_percent")] if outcome_only_table else []),
                 *(
                     [ProgressiveTableOneVariable(name=exposure, summary="median_iqr")]
                     if continuous_exposure

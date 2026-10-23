@@ -83,10 +83,11 @@ def test_the_planner_repairs_an_empty_roster_on_its_next_answer():
     assert {"age", "sex"} <= set(table_one.inputs)
 
 
-def test_a_landmark_association_family_refuses_an_empty_planner_roster_only():
-    selectable = _landmark_request(_landmark_context(exact=False))
-    assert selectable.adjustment_selection == "planner_selectable"
-    assert _refusal(_landmark_spec(selectable), selectable).reason_code == EMPTY_ROSTER
+def test_a_landmark_association_keeps_the_question_roster_when_the_spec_omits_it():
+    stated = _landmark_request(_landmark_context(exact=False))
+    assert stated.adjustment_selection == "exact"
+    assert stated.exact_roster == ["age", "sex", "severity_score_24h"]
+    validate_family_plan_spec(spec_from_mapping(_landmark_spec(stated)), stated)
 
     # An exact user-reviewed roster is the host's, so the spec may leave it empty.
     exact = _landmark_request(_landmark_context(exact=True))

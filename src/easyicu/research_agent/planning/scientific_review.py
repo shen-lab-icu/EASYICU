@@ -4827,7 +4827,7 @@ def build_plan_scientific_review(
             remediation_route="agent_plan_revision" if record.status == "missing" else "runtime_capability",
         ))
 
-    adjustment_coverage = stated_adjustment_coverage(context, plan)
+    adjustment_coverage = stated_adjustment_coverage(context, plan, runtime_authority=runtime_authority)
     for record in adjustment_coverage.records:
         if record.status == "covered":
             continue

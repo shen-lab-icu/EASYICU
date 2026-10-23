@@ -334,6 +334,10 @@ def _context(*, exact: bool = True) -> ResearchContext:
                 "variance_estimator": "cluster_robust",
             },
             "cohort": {"age_min": 18, "exclude_readmissions": False},
+            "stated_adjustments": [] if exact else [
+                {"variable": name, "concept": name, "words": f"adjust for {name}", "source_status": "available"}
+                for name in ("age", "sex", "severity_score_24h")
+            ],
         }
     )
     exact_fields = (
