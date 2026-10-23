@@ -1424,7 +1424,14 @@ def _metadata_only_planning_coordinates(
         capability = catalog_by_id.get(str(concept or ""))
         if capability is not None and column:
             slot = slots.get(slot_name) or {}
-            fragment = _clean_text(slot.get("evidence"), 160)
+            # The slot's words quote the concept the keyword reader named; when
+            # the stated exposure decided another one, they quote the wrong
+            # concept, and the stated words are the reading's own.
+            fragment = (
+                _clean_text(slot.get("evidence"), 160)
+                if named_concept(slot_name) == concept
+                else _clean_text(stated_exposure, 160) if role == "exposure" else ""
+            )
             match = (
                 re.search(r"\s+".join(re.escape(part) for part in fragment.split()), question, re.IGNORECASE)
                 if fragment and basis == "keyword" else None
