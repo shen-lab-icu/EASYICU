@@ -74,6 +74,19 @@ def test_association_keeps_its_keyword_exposure(question):
                for row in result["coordinate_readings"])
 
 
+def test_an_exposure_the_stated_words_decided_quotes_those_words():
+    """The keyword reader's exposure slot named a demographic; the stated
+    exposure decided the measurement, so the slot's words are not its basis."""
+
+    question = "在合成库中，以性别为协变量，入 ICU 首日最高血钾与院内死亡是否相关？"
+    rows = research_launch_scientific._metadata_only_planning_coordinates(
+        question=question, database="eicu", stated_exposure="入 ICU 首日最高血钾",
+    )["coordinate_readings"]
+    exposure = next(row for row in rows if row["role"] == "exposure")
+    assert exposure["concept"] == "k"
+    assert exposure["evidence"] == "入 ICU 首日最高血钾"
+
+
 def test_keyword_receipt_quotes_the_original_case_and_spacing():
     question = "Is LACTATE associated with HOSPITAL   DEATH?"
     rows = research_launch_scientific._metadata_only_planning_coordinates(
