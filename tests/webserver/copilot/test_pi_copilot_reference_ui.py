@@ -168,7 +168,8 @@ def test_planning_progress_and_run_failures_read_as_progress_and_reasons() -> No
         "research_pipeline_required_concept_structurally_unavailable",
     ):
         assert f"{code}: tr(" in error_text
-    assert "reason: failureReason" in confirmation
+    # A stopped run says its cause once (run-stop block); a job-only failure on the card.
+    assert "reason: failedRun ? '' : failureReason" in confirmation
     assert 'class="gpi-confirmation-reason"' in confirmation
     assert ".gpi-confirmation-reason{" in pi_css
 
@@ -586,7 +587,7 @@ def test_workflow_to_dos_read_as_a_checklist_with_the_current_decision() -> None
         runningSpinner: running.includes('gpi-running-spinner') && running.includes('正在生成研究计划'),
         runningStage: running.includes('<div class="si-s">候选计划 2/4 已通过校验 (planning)</div>') && !withDecision.includes('si-s'),
         fallbackReason: fallback.includes('科学计划审阅要求先形成新的研究/计划版本') && !fallback.includes('gpi-running-spinner'),
-        failureCause: fallback.includes('<div class="si-s gpi-run-failure" title="run_20260921T173133_b0b3a6">分析计划未通过校验，需要重新生成。</div>') && !running.includes('gpi-run-failure'),
+        failureCause: fallback.includes('<div class="si-s gpi-run-failure" title="分析计划未通过校验，需要重新生成。">分析计划未通过校验，需要重新生成。</div>') && !running.includes('gpi-run-failure'),
         noComputePanel: !fallback.includes('data-gpi-aside-section="compute"') && !fallback.includes('gpi-run-status'),
       }}));
     """
