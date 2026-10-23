@@ -1207,12 +1207,13 @@ def question_requirements_shape(concepts: Sequence[str]) -> str:
         + '], "coverage": "plan"|"capability_gap"|"definition_only", "gap": null or '
         '{"requirement": <one of '
         + ", ".join(get_args(CapabilityGapRequirement))
-        + '>, "concept": "<the variable to group by thresholds>" or null, "element": <one '
+        + '>, "concept": "<the threshold variable or stated adjustment>" or null, "element": <one '
         "of "
         + ", ".join(get_args(CapabilityGapElement))
         + '>, "detail": "<why this plan cannot, 8-300 characters>"}, "note": null or "<at '
         'most 300 characters>"}. "gap" is set exactly when coverage is capability_gap, and '
-        "its concept only for levels_from_thresholds_unavailable; kind definition goes with "
+        "its concept only for levels_from_thresholds_unavailable or a stated adjustment's "
+        "design_element_unsupported; kind definition goes with "
         "coverage definition_only and a note saying which element it defines; a benchmark "
         "or subgroup answered by the plan names its concept"
     )

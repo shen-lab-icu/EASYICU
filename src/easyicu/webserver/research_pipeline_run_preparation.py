@@ -275,6 +275,7 @@ def _prepare_scientific_launch(
         configured_outcome=configured_target,
         stated_exposure=_clean_text(study.get("primary_exposure"), 300),
         declared_covariates=covariates,
+        stated_adjustments=study.get("stated_adjustments") or (),
     )
     target = configured_target or planning_coordinates.get("target_outcome")
     primary_exposure = configured_primary_exposure or planning_coordinates.get(

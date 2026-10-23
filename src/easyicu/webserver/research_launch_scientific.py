@@ -1081,6 +1081,124 @@ def _stated_catalog_concept(
     return (named[0],) if len(named) == 1 else ()
 
 
+def _stated_reading(item: Mapping[str, Any]) -> dict[str, Any]:
+    """A saved reading as the conversation stated it, for a recheck."""
+
+    reading = {"variable": item["variable"], "words": item["words"]}
+    if item.get("concept"):
+        reading["concept"] = item["concept"]
+    return reading
+
+
+def _checked_stated_adjustment(
+    item: Any,
+    *,
+    question: str,
+    question_concepts: set[str],
+    available: set[str],
+    source_bound: bool,
+    recheck: bool = False,
+) -> dict[str, Any]:
+    """Ground one structured adjustment reading, or say why it is not one.
+
+    A save refuses a looked-up identifier the bound source does not offer, so
+    the conversation looks it up again; a launch rechecking a saved reading
+    keeps it as an unavailable requirement instead of dropping it.
+    """
+
+    from easyicu.concept_output_sources import resolve_composite_concept_output
+    from easyicu.webserver.study_intent import catalog_named_concepts
+
+    if not isinstance(item, Mapping) or not {"variable", "words"} <= set(item) or not (
+        set(item) <= {"variable", "words", "concept"}
+    ):
+        raise ValueError("an adjustment states variable, words and optionally concept")
+    variable, words, stated = item["variable"], item["words"], item.get("concept")
+    if (not isinstance(variable, str) or not isinstance(words, str)
+            or not variable.strip() or not words.strip()
+            or words not in question or variable not in words):
+        raise ValueError("an adjustment must quote the question's own variable and words")
+    if stated is not None and (not isinstance(stated, str) or not stated.strip()):
+        raise ValueError("an adjustment's concept is an exact source identifier")
+    named = catalog_named_concepts(variable)
+    if len(named) > 1 or (named and named[0] not in question_concepts):
+        raise ValueError("an adjustment must name one non-negated question concept")
+
+    def output(concept: str) -> str:
+        return resolve_composite_concept_output(concept, available) or concept
+
+    # The dictionary's reading of the words, else the identifier the
+    # conversation looked up for them (easyicu_list_source_concepts): many
+    # scores and treatments have no dictionary name in every language.
+    concept = output(named[0]) if named else None
+    if stated is not None:
+        stated = output(stated.strip())
+        if concept is not None and stated != concept:
+            raise ValueError(
+                f"the dictionary reads {variable!r} as {concept!r}, not {stated!r}"
+            )
+        if source_bound and not recheck and stated not in available:
+            raise ValueError(
+                f"{stated!r} is not a concept the bound source offers; look it up "
+                "with easyicu_list_source_concepts"
+            )
+        concept = stated
+    elif concept is None and variable in available:
+        concept = output(variable)  # the question wrote the source's identifier
+    if not source_bound:
+        status = "unbound"
+    elif concept is None:
+        status = "unresolved"
+    else:
+        status = "available" if concept in available else "unavailable"
+    return {"variable": variable, "words": words, "concept": concept, "source_status": status}
+
+
+def checked_stated_adjustments(
+    statements: Any,
+    *,
+    question: str,
+    source: Mapping[str, Any],
+    rejected: Optional[list[dict[str, str]]] = None,
+    recheck: bool = False,
+) -> list[dict[str, Any]]:
+    """Ground structured adjustment readings in words and source metadata only.
+
+    Missing source concepts remain visible requirements, and a reading whose
+    concept nothing resolves stays ``unresolved``, never ``unavailable``. No
+    keyword reader decides whether the quoted clause asks for adjustment.  With
+    ``rejected`` a reading that fails is recorded there with its reason and the
+    others are kept; without it the first failure raises.
+    """
+
+    from easyicu.research_agent.acquisition.catalog import build_available_catalog
+    from easyicu.research_agent.planning.adjustment_authority import normalize_stated_adjustments
+    from easyicu.webserver.study_intent import catalog_named_concepts
+
+    if not isinstance(statements, list) or len(statements) > 16:
+        raise ValueError("stated_adjustments must be a list of at most 16 readings")
+    path = str(source.get("path") or "").strip()
+    available = (
+        {item.concept_id for item in build_available_catalog(Path(path)).concepts}
+        if path else set()
+    )
+    question_concepts = set(catalog_named_concepts(question))
+    records = []
+    for item in statements:
+        try:
+            records.append(_checked_stated_adjustment(
+                item, question=question, question_concepts=question_concepts,
+                available=available, source_bound=bool(path), recheck=recheck,
+            ))
+        except ValueError as exc:
+            if rejected is None:
+                raise
+            variable = item.get("variable") if isinstance(item, Mapping) else None
+            rejected.append({"variable": str(variable or "")[:160], "reason": str(exc)})
+    unique = {(record["variable"], record["words"]): record for record in records}
+    return normalize_stated_adjustments(list(unique.values()))
+
+
 def _study_exposure_reading(
     question_exposure: Optional[str],
     stated_exposure: Optional[str],
@@ -1133,6 +1251,7 @@ def _metadata_only_planning_coordinates(
     configured_outcome: Optional[str] = None,
     stated_exposure: Optional[str] = None,
     declared_covariates: Sequence[str] = (),
+    stated_adjustments: Sequence[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
     """Project only concepts the researcher explicitly named into planning.
 
@@ -1190,6 +1309,14 @@ def _metadata_only_planning_coordinates(
     slots = raw_slots if isinstance(raw_slots, Mapping) else {}
     catalog = build_database_capability_catalog(database)
     catalog_by_id = {item.concept_id: item for item in catalog.concepts}
+    required_adjustments = checked_stated_adjustments(
+        [_stated_reading(item) for item in stated_adjustments],
+        question=question, source={"path": export_path}, recheck=True,
+    ) if stated_adjustments else []
+    required_adjustment_concepts = [
+        item["concept"] for item in required_adjustments if item["source_status"] == "available"
+    ]
+    declared_covariates = (*declared_covariates, *required_adjustment_concepts)
 
     def named_concept(slot_name: str) -> Optional[str]:
         raw = slots.get(slot_name)
@@ -1312,6 +1439,7 @@ def _metadata_only_planning_coordinates(
         "primary_exposure": source_column(primary_exposure),
         "coordinate_readings": coordinate_readings,
         "question_named_concepts": named_concepts,
+        "required_adjustment_concepts": required_adjustment_concepts,
         # A substance the question names as given or as measured: the plan
         # reads it in that form (planning.question_substance_forms).
         "question_substance_forms": [

@@ -2034,6 +2034,44 @@ def update_study_context(
     check_receipt = _question_family_check(
         params, patch, current, str(context.user_message or "")
     )
+    adjustments_unread: list[dict[str, str]] = []
+    if "stated_adjustments" in params or (current or {}).get("stated_adjustments"):
+        from easyicu.webserver.research_launch_scientific import (
+            _stated_reading,
+            checked_stated_adjustments,
+        )
+
+        question = str(patch.get("question", (current or {}).get("question")) or "")
+        # A later plan compile or an empty model response cannot remove a
+        # requirement whose words the study still retains. A new question can.
+        retained = [
+            _stated_reading(item)
+            for item in (current or {}).get("stated_adjustments") or ()
+            if item["words"] in question
+        ]
+        proposed = params.get("stated_adjustments", [])
+        if not isinstance(proposed, list):
+            proposed = []
+            adjustments_unread.append(
+                {"variable": "", "reason": "stated_adjustments must be a list"}
+            )
+        stated_pairs = {(item.get("variable"), item.get("words")) for item in proposed
+                        if isinstance(item, Mapping)}
+        statements = [
+            *(item for item in retained
+              if (item["variable"], item["words"]) not in stated_pairs),
+            *proposed,
+        ]
+        try:
+            # A reading that fails is not recorded and the conversation is
+            # told why; the rest of the setup, the question included, is saved.
+            patch["stated_adjustments"] = checked_stated_adjustments(
+                statements, question=question, source=effective_source,
+                rejected=adjustments_unread,
+            )
+        except (ValueError, OSError) as exc:
+            adjustments_unread.append({"variable": "", "reason": str(exc)})
+            patch.pop("stated_adjustments", None)
     causal_receipt = _question_causal_design(params, patch, current)
     family_receipt = (
         {} if causal_receipt else _question_family_design(params, patch, current)
@@ -2216,6 +2254,17 @@ def update_study_context(
             + check_receipt["question_family_unread"]
             + ". State it again with words copied exactly from the saved question."
         )
+    if adjustments_unread:
+        summary += (
+            " stated_adjustments not recorded: "
+            + "; ".join(
+                f"{item['variable'] or 'the list'} ({item['reason']})"
+                for item in adjustments_unread
+            )
+            + ". State each again with variable and words copied exactly from the "
+            "saved question, and concept set to the identifier "
+            "easyicu_list_source_concepts returns for it."
+        )
     summary += _causal_receipt_text(causal_receipt)
     summary += _family_receipt_text(family_receipt)
     summary += _variance_receipt_text(variance_receipt)
@@ -2250,6 +2299,7 @@ def update_study_context(
                if analysis_design_recovery is not None else {}),
             **({"unsaved_design": unsaved_design} if unsaved_design is not None else {}),
             **check_receipt,
+            **({"stated_adjustments_unread": adjustments_unread} if adjustments_unread else {}),
             **causal_receipt,
             **family_receipt,
             **variance_receipt,

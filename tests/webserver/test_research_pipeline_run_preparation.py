@@ -299,6 +299,24 @@ def test_candidate_plan_binds_question_operation_without_mutating_study() -> Non
     assert "execution_concepts" not in study
 
 
+def test_candidate_preparation_keeps_a_stated_adjustment_in_its_required_roster(monkeypatch):
+    from types import SimpleNamespace
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.acquisition.catalog.build_available_catalog",
+        lambda _path: SimpleNamespace(concepts=[SimpleNamespace(concept_id="age")]),
+    )
+    study = {
+        "id": "study-1", "question": "调整年龄后估计指标与结局的关系。",
+        "data_source": {"database": "miiv"},
+        "stated_adjustments": [{"variable": "年龄", "words": "调整年龄", "concept": "age", "source_status": "unbound"}],
+    }
+    result = preparation._prepare_scientific_launch(replace(_request(), study_context=study))
+    assert result.metadata_planning_coordinates["required_adjustment_concepts"] == ["age"]
+    assert result.covariate_selection == "planner_selectable"
+
+
 def test_preparation_compiles_three_frozen_states_in_authority_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

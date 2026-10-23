@@ -287,8 +287,9 @@ def outline_shape_contract(
         "Then set capability_gap to levels_from_thresholds_unavailable, "
         "longitudinal_representation_unavailable, multiple_sources_required, "
         "estimand_unsupported or design_element_unsupported; set "
-        "capability_gap_concept to the sealed variable to group by thresholds "
-        "(otherwise null); say why in rationale; draft no steps; and do not "
+        "capability_gap_concept to the sealed variable to group by thresholds, or "
+        "for design_element_unsupported to the stated adjustment the source lacks "
+        "or measures after time zero (otherwise null); say why in rationale; draft no steps; and do not "
         "change the analysis type, population or exposure to work around it. "
         "The host checks the claim against the study before planning stops."
     )

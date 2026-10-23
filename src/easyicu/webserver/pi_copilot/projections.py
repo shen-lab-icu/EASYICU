@@ -195,12 +195,15 @@ def project_study_context(
         normalize_question_family_check,
     )
 
+    from easyicu.research_agent.planning.adjustment_authority import normalize_stated_adjustments
+
     readings = {}
     for field, normalize in (
         ("causal_trial_reading", normalize_causal_trial_reading),
         ("study_family_reading", normalize_study_family_reading),
         (QUESTION_FAMILY_CHECK_FIELD, normalize_question_family_check),
         ("design_variance_basis", normalize_design_variance_basis),
+        ("stated_adjustments", normalize_stated_adjustments),
     ):
         try:
             value = normalize(context.get(field))
@@ -418,6 +421,7 @@ def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
             "analysis_design",
             "study_family_reading",
             "question_family_check",
+            "stated_adjustments",
             "causal_trial_reading",
             "design_variance_basis",
             "sensitivity_specs",

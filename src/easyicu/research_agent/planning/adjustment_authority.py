@@ -8,6 +8,11 @@ the user-facing study configuration.  This module compiles that small public
 contract and validates Planner output.  It does not select covariates, inspect
 rows, or infer an adjustment set from available demographic columns.
 
+The host's structured question reading is a separate required subset in
+``data_constraints.stated_adjustments``. It does not close the Planner's
+remaining choices or claim baseline timing; requirement coverage checks the
+primary model and capability-gap validation checks any declared inability.
+
 The validator is intentionally called both while structured Planner retry is
 available and again at the execution boundary.  A stored/resumed plan must not
 be able to bypass the same scientific authority that constrained a fresh plan.
@@ -15,9 +20,12 @@ be able to bypass the same scientific authority that constrained a fresh plan.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Optional, Sequence
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from ..authority.declared_levels import observed_levels_for
 from ..contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORMS
@@ -46,6 +54,75 @@ _MODEL_TERM_DYNAMIC_ROLES = frozenset(
 #: model-term roles and ``other``.
 WINDOW_DESCRIPTION_ROLES = frozenset({*_MODEL_TERM_DYNAMIC_ROLES, "other"})
 HostTemporalRole = Literal["baseline_static", "at_or_before_time_zero"]
+
+
+class StatedAdjustment(BaseModel):
+    """A conversation reading grounded by the host, independent of exact rosters.
+
+    The model assigns the adjustment role; the host checks the quote, variable
+    identity and source availability. Availability never proves baseline timing.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    variable: str = Field(min_length=1, max_length=160)
+    words: str = Field(min_length=1, max_length=240)
+    concept: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    #: ``unresolved``: the source is bound but neither the dictionary nor the
+    #: conversation's lookup names a concept for the words.
+    source_status: Literal["available", "unavailable", "unbound", "unresolved"]
+
+
+def normalize_stated_adjustments(value: Any) -> list[dict[str, Any]]:
+    """Validate host receipts without deriving an adjustment role from keywords."""
+
+    items = TypeAdapter(list[StatedAdjustment]).validate_python([] if value is None else value)
+    if len(items) > 16 or len({(item.variable, item.words) for item in items}) != len(items):
+        raise ValueError("stated adjustments must be distinct and contain at most 16 entries")
+    return [item.model_dump(mode="json") for item in items]
+
+
+def context_stated_adjustments(context: Any) -> tuple[StatedAdjustment, ...]:
+    """Read the host's required subset from the existing data-constraints channel."""
+
+    raw = getattr(getattr(context, "user_preferences", None), "data_constraints", None)
+    try:
+        constraints = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        return ()  # Legacy free-form constraints carry no structured requirements.
+    if not isinstance(constraints, Mapping):
+        return ()
+    return tuple(StatedAdjustment.model_validate(item) for item in
+                 normalize_stated_adjustments(constraints.get("stated_adjustments")))
+
+
+def stated_adjustment_columns(context: Any, adjustment: StatedAdjustment) -> tuple[str, ...]:
+    """Value columns for a required concept, never measurement/time companions."""
+
+    if adjustment.concept is None:
+        return ()
+    return tuple(
+        variable.name for variable in context.variables
+        if _matches_declared_covariate(adjustment.concept, variable.name)
+        and str(getattr(variable.role, "value", variable.role)) not in _MODEL_TERM_INELIGIBLE_ROLES
+    )
+
+
+def stated_adjustment_after_time_zero(context: Any, adjustment: StatedAdjustment) -> bool:
+    """Only an owner-declared window after a typed landmark proves this gap."""
+
+    landmark = primary_landmark_hours(context)
+    columns = stated_adjustment_columns(context, adjustment)
+    if landmark is None or not columns:
+        return False
+    variables = {item.name: item for item in context.variables}
+    ends = [
+        None if owner_declared_baseline_static(variables[name]) else
+        _analysis_window_end_hours(variables[name].analysis_window)
+        for name in columns
+    ]
+    return all(end is not None and end > landmark for end in ends)
+
 # ``first_24h``, ``0-24h``, ``0_24h``, ``24h``: the trailing hour bound of a
 # named window is the only fact this owner reads from a window label.
 _WINDOW_END_HOURS = re.compile(r"(?:^|[^0-9])(\d+(?:\.\d+)?)\s*h(?:ours?)?\s*$", re.IGNORECASE)

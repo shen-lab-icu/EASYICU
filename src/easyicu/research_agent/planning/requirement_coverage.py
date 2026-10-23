@@ -6,6 +6,9 @@ owner (``planning.question_requirements``) whether an analysis the question
 asks for is.  This module records that decision as a stable row and binds it
 to the exact context and plan.  It does not infer requirements from prose or
 grant execution/reporting authority.
+
+The structured adjustment reading is a required subset independent of exact
+rosters. Its coverage is checked here against primary fitted covariate terms.
 """
 
 from __future__ import annotations
@@ -158,6 +161,69 @@ def build_plan_requirement_coverage(
         plan_sha256=plan_sha256,
         records=tuple(records),
         complete=all(record.status == "covered" for record in records),
+    )
+
+
+def stated_adjustment_coverage(context, plan) -> PlanRequirementCoverage:
+    """Only primary fitted covariate terms cover the question's required subset.
+
+    A value appearing in Table 1, inputs, robustness or an exposure term is
+    not adjustment. Every primary model must keep it; added covariates remain
+    governed by the existing rationale and temporal-authority owners.
+    """
+
+    from ..canonical_json import canonical_sha256
+    from .adjustment_authority import (
+        context_stated_adjustments, stated_adjustment_columns,
+    )
+
+    primary = [
+        (step.step_id, requirement)
+        for step in plan.steps if step.planned_analysis_role == "primary"
+        for requirement in step.model_requirements
+        if requirement.analysis_role == "primary"
+    ]
+    records = []
+    for adjustment in context_stated_adjustments(context):
+        identity = adjustment.concept or adjustment.variable
+        columns = set(stated_adjustment_columns(context, adjustment))
+        owners = [
+            step_id for step_id, requirement in primary
+            if columns.intersection(requirement.covariates or ())
+            and columns.intersection(
+                term.name for term in requirement.model_terms or () if term.role == "covariate"
+            )
+        ]
+        unavailable = adjustment.source_status == "unavailable"
+        # Without a concept no column can be checked; the review shows it.
+        unresolved = adjustment.concept is None
+        covered = (
+            bool(primary) and len(owners) == len(primary)
+            and not unavailable and not unresolved
+        )
+        if unavailable:
+            status, reason = "unsupported", "source_concept_unavailable"
+        elif unresolved:
+            status, reason = "unsupported", "stated_adjustment_concept_unresolved"
+        elif covered:
+            status, reason = "covered", "typed_primary_adjustment_present"
+        else:
+            status, reason = "missing", "typed_primary_adjustment_missing"
+        records.append(PlanRequirementCoverageRecord(
+            requirement_id=f"stated_adjustment:{identity}", kind="covariate",
+            concept_identity=identity,
+            source_ref="research_context.json.user_preferences.data_constraints.stated_adjustments",
+            status=status,
+            owner_step_ids=tuple(dict.fromkeys(owners)) if covered else (),
+            reason_code=reason,
+        ))
+    # Several clauses may state the same concept; it remains one requirement.
+    unique = {record.requirement_id: record for record in records}
+    return PlanRequirementCoverage(
+        context_sha256=canonical_sha256(context.model_dump(mode="json")),
+        plan_sha256=canonical_sha256(plan.model_dump(mode="json")),
+        records=tuple(unique.values()),
+        complete=all(record.status == "covered" for record in unique.values()),
     )
 
 
