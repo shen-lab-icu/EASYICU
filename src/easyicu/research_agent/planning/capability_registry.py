@@ -74,6 +74,7 @@ from ..contracts.cohort_summary import (
     DESCRIPTIVE_SUMMARY_ANALYSIS_KIND,
     declared_summary_columns,
     is_primary_descriptive_summary_step,
+    primary_descriptive_summary_scope,
 )
 from .study_design_playbook import StudyDesignFamily
 
@@ -745,12 +746,12 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         family="descriptive",
         label="Descriptive / empirical measurement summary",
         primary_analysis="deterministic",
-        primary_estimand="Observed numeric measurement summaries and empirical stay frequencies, without inference",
+        primary_estimand="Observed numeric measurement summaries and empirical stay frequencies, optionally within typed categories, without inference",
         primary_runner=DESCRIPTIVE_SUMMARY_ANALYSIS_KIND,
         primary_runner_module="execution.runners.cohort_summary_executor",
         figure="deterministic",
         figure_renderer="base_association_skill",
-        data_contract=("one typed cohort", "primary descriptive summary action", "numeric measured variables"),
+        data_contract=("one typed cohort", "primary descriptive summary action", "one numeric measurement with optional typed categorical grouping"),
         fail_closed=(
             "Only the exact primary summary contract selects this validator. "
             "Every emitted statistic and frequency must reconcile with the bound "
@@ -1951,14 +1952,16 @@ def assess_scientific_capability(
     # requiring those association coordinates would silently misclassify it.
     if capability.capability_id == "descriptive_measurement_v1" and verdict.owner_claimed:
         primary = next(step for step in plan.steps if step.planned_analysis_role == "primary")
-        descriptors = [context.variable(name) for name in declared_summary_columns(primary)]
-        measured = [item for item in descriptors if item is not None and item.role.value not in {"id", "index"}]
-        input_contract_resolved = bool(
-            all(item is not None for item in descriptors)
-            and len(measured) == 1
-            and any(token in str(measured[0].dtype).lower() for token in ("float", "int", "double", "numeric"))
-            and not getattr(measured[0].observed_domain, "levels", None)
-        )
+        try:
+            primary_descriptive_summary_scope(
+                declared_columns=declared_summary_columns(primary),
+                variables={variable.name: variable for variable in variables},
+                grouping=exposure, planning_context=context,
+            )
+        except ValueError:
+            input_contract_resolved = False
+        else:
+            input_contract_resolved = True
     elif capability.capability_id == SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID:
         input_contract_resolved = not source_feasibility_plan_contract_errors(plan)
     elif capability.capability_id == SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID:

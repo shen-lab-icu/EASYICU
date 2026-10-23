@@ -133,10 +133,13 @@ def _binding_mode(binding: Any) -> str | None:
         column_names = set(columns) if isinstance(columns, list) else set()
         count_columns = column_names & DESCRIPTIVE_DISTRIBUTION_COUNT_COLUMNS
         if (
-            column_names == {
+            column_names in ({
                 "variable", "value", "count", "denominator", "cohort_n",
                 "proportion", "cumulative_proportion",
-            }
+            }, {
+                "variable", "value", "count", "denominator", "cohort_n",
+                "proportion", "cumulative_proportion", "group_variable", "group", "row_role",
+            })
             and isinstance(consumption, Mapping)
             and consumption.get("mode") == "all_rows"
         ):
@@ -417,29 +420,49 @@ def run_descriptive_result_figure(
     fig, ax = plt.subplots(figsize=(7.2, 3.6))
 
     if mode == "distribution_table_empirical":
-        frame = pd.read_csv(path)
-        if len(frame.columns) != 7 or frame["variable"].nunique() > 1:
+        frame = pd.read_csv(path, converters={"group": str, "group_variable": str})
+        grouped = "group_variable" in frame.columns
+        if len(frame.columns) != (10 if grouped else 7) or frame["variable"].nunique() > 1:
             raise ValueError("empirical distribution must describe one measurement")
         if not frame.empty:
-            numeric = frame.drop(columns="variable").apply(pd.to_numeric, errors="raise")
-            if not all(math.isfinite(float(value)) for value in numeric.to_numpy().flat):
-                raise ValueError("empirical distribution contains nonfinite values")
-            count = numeric["count"]
-            denominator = numeric["denominator"]
-            if not (
-                count.gt(0).all() and count.eq(count.round()).all()
-                and denominator.eq(count.sum()).all()
-                and numeric["cohort_n"].ge(denominator).all()
-                and numeric["value"].diff().dropna().gt(0).all()
-                and all(math.isclose(a, b, rel_tol=1e-12) for a, b in zip(
-                    numeric["proportion"], count / denominator,
-                ))
-                and all(math.isclose(a, b, rel_tol=1e-12) for a, b in zip(
-                    numeric["cumulative_proportion"], count.cumsum() / denominator,
-                ))
+            if grouped and (
+                frame["group_variable"].nunique() != 1
+                or frame[["group_variable", "group", "row_role"]].isna().any().any()
+                or not set(frame["row_role"]) <= {"overall", "exposure_level", "missing_group"}
             ):
-                raise ValueError("empirical distribution frequencies do not reconcile")
-            ax.step(numeric["value"], numeric["cumulative_proportion"], where="post")
+                raise ValueError("empirical distribution grouping is not closed")
+            partitions = (
+                frame.groupby(["group", "row_role"], sort=False)
+                if grouped else [((None, None), frame)]
+            )
+            for (group, role), partition in partitions:
+                numeric = partition[[
+                    "value", "count", "denominator", "cohort_n", "proportion", "cumulative_proportion",
+                ]].apply(pd.to_numeric, errors="raise")
+                if not all(math.isfinite(float(value)) for value in numeric.to_numpy().flat):
+                    raise ValueError("empirical distribution contains nonfinite values")
+                count = numeric["count"]
+                denominator = numeric["denominator"]
+                if not (
+                    count.gt(0).all() and count.eq(count.round()).all()
+                    and denominator.eq(count.sum()).all()
+                    and numeric["cohort_n"].ge(denominator).all()
+                    and numeric["value"].diff().dropna().gt(0).all()
+                    and all(math.isclose(a, b, rel_tol=1e-12) for a, b in zip(
+                        numeric["proportion"], count / denominator,
+                    ))
+                    and all(math.isclose(a, b, rel_tol=1e-12) for a, b in zip(
+                        numeric["cumulative_proportion"], count.cumsum() / denominator,
+                    ))
+                ):
+                    raise ValueError("empirical distribution frequencies do not reconcile")
+                label = (
+                    scoped_label_lookup(str(partition["group_variable"].iloc[0]), group, display_labels)
+                    if role == "exposure_level" else None
+                )
+                ax.step(numeric["value"], numeric["cumulative_proportion"], where="post", label=label or group)
+            if grouped:
+                ax.legend()
             variable = str(frame["variable"].iloc[0])
             ax.set_xlabel((display_labels or {}).get(variable, variable))
         else:
