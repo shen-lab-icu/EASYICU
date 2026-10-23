@@ -26,6 +26,7 @@ from ..contracts.association_execution import (
     ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT,
 )
 from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
+from ..contracts.cohort_summary_products import auxiliary_summary_product
 from ..contracts.claim_ceiling import DescriptiveClaimContract
 from ..contracts.model_terms import AdjustmentProposal, ModelTermSpec, level_spelling
 from ..contracts.functional_form import RCS_LINEAR_SENSITIVITY_METHODS
@@ -869,9 +870,9 @@ def _is_ungrouped_baseline_summary(step: ProgressiveSkeletonStep) -> bool:
     contract permits one auxiliary custom step to own baseline context until
     post-extraction re-planning.  Product identity, role, and module shape are
     the authority for that closed exception; ``custom_method`` is descriptive
-    model prose and must not become a hidden allowlist.  Project the historical
-    ``artifact:baseline_context`` spelling onto the registered cohort-summary
-    table instead of sending synonymous method labels back to the model.
+    model prose and must not become a hidden allowlist. Historical baseline
+    aliases receive a step-local summary table instead of sharing the primary
+    descriptive action's registered product.
     """
 
     return (
@@ -887,6 +888,7 @@ def _is_ungrouped_baseline_summary(step: ProgressiveSkeletonStep) -> bool:
             "artifact:baseline_context_summary",
             "table:baseline_table",
             "table:cohort_summary",
+            auxiliary_summary_product(step.step_id),
             # A custom step owns no Table 1 spec (module_id='table_one' does),
             # so this spelling can only mean the ungrouped summary.
             "table:table_one",
@@ -896,7 +898,10 @@ def _is_ungrouped_baseline_summary(step: ProgressiveSkeletonStep) -> bool:
 
 def _canonical_outputs(step: ProgressiveSkeletonStep) -> list[tuple[str, str]]:
     if _is_ungrouped_baseline_summary(step):
-        return [("table:cohort_summary", "custom")]
+        product = step.outputs[0].product_id
+        if product != "table:cohort_summary":
+            product = auxiliary_summary_product(step.step_id)
+        return [(product, "custom")]
     if is_study_population_root(step):
         # The study population is the host's republished run cohort, not the
         # primary cohort: merging the module's standard outputs would give the
@@ -2229,6 +2234,20 @@ def _compile_inputs(
     ):
         inputs.append("artifact:analysis_cohort")
     refs = list(step.product_inputs)
+    for index, reference in enumerate(refs):
+        source = next(
+            (candidate for candidate in skeleton.steps[:step_index]
+             if candidate.step_id == reference.producer_step_id),
+            None,
+        )
+        if (
+            source is not None
+            and _is_ungrouped_baseline_summary(source)
+            and reference.product_id == source.outputs[0].product_id
+        ):
+            refs[index] = reference.model_copy(update={
+                "product_id": _canonical_outputs(source)[0][0],
+            })
     _require_study_population_binding(
         skeleton=skeleton, step=step, step_index=step_index, refs=refs, producers=producers
     )
@@ -2930,8 +2949,19 @@ def _preflight_step_findings(
 
     findings: list[ProgressivePlanCompileError] = []
     producers: dict[str, str] = {}
+    declared_producers: dict[str, str] = {}
     outputs_by_step: dict[str, tuple[str, ...]] = {}
     for index, step in enumerate(skeleton.steps):
+        # Aliases may compile to step-local defaults, but two explicit claims
+        # on the same declared product remain a genuine ownership conflict.
+        for product in dict.fromkeys(item.product_id for item in step.outputs):
+            prior = declared_producers.setdefault(product, step.step_id)
+            if prior != step.step_id:
+                findings.append(_fail(
+                    "progressive_product_has_multiple_owners",
+                    f"product {product!r} is already produced by {prior!r}",
+                    step=step, step_index=index, path="outputs",
+                ))
         if step.scientific_action_id is not None:
             try:
                 scientific_action_for_id(

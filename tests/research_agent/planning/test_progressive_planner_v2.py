@@ -846,7 +846,7 @@ def test_metadata_only_descriptive_fallback_survives_family_module_gate() -> Non
 
     baseline = plan.steps[1]
     assert baseline.method == "descriptive_cohort_summary"
-    assert baseline.expected_outputs == ["table:cohort_summary"]
+    assert baseline.expected_outputs == ["table:cohort_summary_02_table_one"]
 
 
 def test_compiler_projects_provisional_ungrouped_baseline_to_reportable_table() -> None:
@@ -882,7 +882,7 @@ def test_compiler_projects_provisional_ungrouped_baseline_to_reportable_table() 
 
     compiled_baseline = plan.steps[1]
     assert compiled_baseline.method == "descriptive_cohort_summary"
-    assert compiled_baseline.expected_outputs == ["table:cohort_summary"]
+    assert compiled_baseline.expected_outputs == ["table:cohort_summary_02_table_one"]
     findings = validate_plan_against_article_contract(
         plan=plan,
         contract=build_article_analysis_contract(
@@ -994,7 +994,7 @@ def test_compiler_normalizes_real_provider_ungrouped_baseline_aliases(product: s
     )
 
     assert plan.steps[1].method == "descriptive_cohort_summary"
-    assert plan.steps[1].expected_outputs == ["table:cohort_summary"]
+    assert plan.steps[1].expected_outputs == ["table:cohort_summary_02_table_one"]
 
 
 def test_host_materializes_only_mechanical_outline_coordinates() -> None:

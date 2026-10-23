@@ -1,8 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/agents/planner.py",
-      "src/easyicu/research_agent/research_context/outbound.py"
+      "src/easyicu/research_agent/reporting/article_contract.py"
     ],
     "summary_changes": {}
   },
@@ -790,9 +789,16 @@
         "src/easyicu/research_agent/research_context/outbound.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Credit closed step-scoped auxiliary cohort summaries as baseline content; refresh only the article-contract source digest, preserving all resource selections and prompt byte budgets.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/reporting/article_contract.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Bind the Planner provider-clearance guard and shared outbound small-cell projector after the credentialed-data egress policy merge. Only these two source digests change; all nine fixture payloads, prompt byte summaries, selections, limits and zero provider/data-read counts remain unchanged. Preserve the existing baseline history from 1bd6d3767.",
+  "baseline_reason": "Credit closed step-scoped auxiliary cohort summaries as baseline content; refresh only the article-contract source digest, preserving all resource selections and prompt byte budgets.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -817,7 +823,7 @@
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
-    "src/easyicu/research_agent/reporting/article_contract.py": "1f93c0e0c5f599349bf10d3e15d15325b851011b2f7c503be8737946624571cf",
+    "src/easyicu/research_agent/reporting/article_contract.py": "53db7793ec10128d04216ef45a23281b942d7382a8f462347e900da84e406102",
     "src/easyicu/research_agent/research_context/outbound.py": "c578ef462f5f0d1cd33400e639d70d481914fb78248d614ee485f0c471360c68",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "037224b99bddde4ef37cf2119fc708ca33a932b274e932ba6cb902e689f8bd75",

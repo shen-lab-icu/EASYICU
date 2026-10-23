@@ -35,6 +35,7 @@ from ..authority.planned_role import (
 )
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from ..contracts.declared_product import typed_product
+from ..contracts.cohort_summary_products import is_descriptive_summary_product_step
 from ..contracts.source_feasibility_validation import (
     context_declares_source_feasibility_scope,
 )
@@ -657,6 +658,11 @@ def roles_covered_by_plan(
         # more precise run-specific name.
         if step.measurement_audit_spec is not None:
             typed_roles_by_step.setdefault(step.step_id, set()).add("data_quality")
+        if (
+            step.planned_analysis_role == "auxiliary"
+            and is_descriptive_summary_product_step(step)
+        ):
+            typed_roles_by_step.setdefault(step.step_id, set()).add("baseline_context")
         sealed_method = str(step.method or "").strip().casefold().split(" with ", 1)[0]
         sealed_roles = _SEALED_HOST_SUITE_ROLES.get(sealed_method)
         if sealed_roles:

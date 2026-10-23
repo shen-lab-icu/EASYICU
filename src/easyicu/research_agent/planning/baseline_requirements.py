@@ -14,7 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from easyicu.concept_output_sources import resolve_composite_concept_output
 
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, TableOneSpec
-from ..contracts.cohort_summary import declared_summary_columns, is_descriptive_cohort_summary_step
+from ..contracts.cohort_summary import declared_summary_columns
+from ..contracts.cohort_summary_products import (
+    auxiliary_summary_product,
+    is_descriptive_summary_product_step,
+)
 
 
 _PROVENANCE_KEY = "accepted_baseline_requirements"
@@ -80,15 +84,19 @@ def candidate_baseline_requirements(
         if step.get("table_one_spec") is None:
             # Only the closed executable owner declares this roster. Neither
             # a baseline label nor arbitrary custom inputs create authority.
-            if not set(step.get("expected_outputs") or ()).intersection({"table:baseline_table", "table:cohort_summary"}):
+            baseline_products = {
+                "table:baseline_table", "table:cohort_summary",
+                auxiliary_summary_product(str(step.get("step_id") or "")),
+            }
+            if not set(step.get("expected_outputs") or ()).intersection(baseline_products):
                 continue
             parsed = AnalysisStep.model_validate(step)
-            if is_descriptive_cohort_summary_step(parsed):
+            if is_descriptive_summary_product_step(parsed):
                 tables.append(BaselineTableRequirement(
                     source_step_id=parsed.step_id, group_by=None,
                     variables=tuple(coordinate(name) for name in declared_summary_columns(parsed)),
                 ))
-            elif set(parsed.expected_outputs).intersection({"table:baseline_table", "table:cohort_summary"}):
+            elif set(parsed.expected_outputs).intersection(baseline_products):
                 raise ValueError("accepted baseline lacks a closed descriptive or Table One owner")
             continue
         spec = TableOneSpec.model_validate(step["table_one_spec"])
@@ -220,7 +228,7 @@ def baseline_requirement_coverage(
     ]
     rosters.extend(
         (step.step_id, set(), set(declared_summary_columns(step)))
-        for step in plan.steps if is_descriptive_cohort_summary_step(step)
+        for step in plan.steps if is_descriptive_summary_product_step(step)
     )
     rosters.extend(signed_rosters)
     return _baseline_roster_coverage(context, rosters)
