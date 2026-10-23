@@ -1226,6 +1226,42 @@ checked_stated_adjustments = checked_stated_variables
 checked_stated_subgroups = checked_stated_variables
 
 
+def checked_exposure_concept(
+    exposure: Any, concept: Any, *, question: str,
+    source: Mapping[str, Any], database: Optional[str] = None,
+) -> str:
+    """Check an exposure's quoted words and looked-up identity against its catalog.
+
+    Unlike a retained adjustment requirement, an exposure cannot acquire a
+    planning coordinate from an unavailable or unbound, unchecked identifier.
+    This check is repeated at launch, including after a source changes.
+    """
+    from easyicu.research_agent.acquisition.catalog import (
+        build_available_catalog, build_database_capability_catalog,
+    )
+    from easyicu.webserver.study_intent import catalog_named_concepts
+
+    path = str(source.get("path") or "").strip()
+    if not path and not database:
+        raise ValueError("尚未指定数据库，无法核验分组或暴露的概念；请先指定数据库并查找概念。")
+    if not isinstance(concept, str) or not concept.strip():
+        raise ValueError("请保存查找返回的分组或暴露概念标识。")
+    catalog = (
+        build_available_catalog(Path(path)) if path
+        else build_database_capability_catalog(database)
+    )
+    available = {item.concept_id for item in catalog.concepts}
+    record = _checked_stated_variable(
+        {"variable": exposure, "words": exposure, "concept": concept},
+        question=question, question_concepts=set(catalog_named_concepts(question)),
+        available=available if path else set(), source_bound=bool(path),
+        database_concepts=frozenset(available),
+    )
+    if record["concept"] not in available:
+        raise ValueError("该数据库或数据源没有这个分组或暴露概念；请用 easyicu_list_source_concepts 重新查找。")
+    return str(record["concept"])
+
+
 def _study_exposure_reading(
     question_exposure: Optional[str],
     stated_exposure: Optional[str],
@@ -1277,6 +1313,7 @@ def _metadata_only_planning_coordinates(
     export_path: Optional[str] = None,
     configured_outcome: Optional[str] = None,
     stated_exposure: Optional[str] = None,
+    stated_exposure_concept: Optional[str] = None,
     declared_covariates: Sequence[str] = (),
     stated_adjustments: Sequence[Mapping[str, Any]] = (),
     stated_subgroups: Sequence[Mapping[str, Any]] = (),
@@ -1311,7 +1348,9 @@ def _metadata_only_planning_coordinates(
 
     A prediction study names predictors without a primary exposure. A
     descriptive study can name a categorical grouping as its exposure; a lone
-    continuous measurement does not become an exposure. The existing
+    continuous measurement does not become an exposure. A checked, stated
+    grouping can disambiguate the descriptive reader's measurement slot;
+    other families retain the conflict rule. The existing
     host family reading takes precedence over the keyword family hint.
     Every concept the question names besides its outcome and
     the exposure projected here is returned as ``question_named_concepts``:
@@ -1380,10 +1419,35 @@ def _metadata_only_planning_coordinates(
         concept for concepts, _ in named_study_concepts(question) for concept in concepts
     ) | frozenset(catalog_named_concepts(question))
     question_concepts -= {named_concept("population")}
+    from easyicu.concept.loader import load_dictionary
+    from easyicu.webserver.pi_copilot.turn_authority import database_named_in
+
+    def is_grouping(concept: str) -> bool:
+        item = catalog_by_id.get(concept)
+        definition = load_dictionary().get(concept)
+        return item is not None and (
+            item.column_role == "event_status"
+            or (definition is not None and definition.class_name == "fct_cncpt"
+                and definition.target == "id_tbl")
+        )
+
+    checked_grouping = None
+    if descriptive and stated_exposure_concept:
+        try:
+            checked = checked_exposure_concept(
+                stated_exposure, stated_exposure_concept, question=question,
+                source={"path": export_path}, database=database_named_in(question),
+            )
+        except (KeyError, OSError, ValueError):
+            checked = None
+        if (checked and is_grouping(checked) and checked not in {
+            *declared_covariates, *required_subgroup_concepts, target_outcome, configured_outcome,
+        }):
+            checked_grouping = checked
     named_exposure = (
         None
         if prediction
-        else _study_exposure_reading(
+        else checked_grouping or _study_exposure_reading(
             named_concept("exposure"),
             _stated_exposure_concept(stated_exposure, catalog_by_id),
             excluded={*declared_covariates, *required_subgroup_concepts, target_outcome, configured_outcome},
@@ -1396,20 +1460,13 @@ def _metadata_only_planning_coordinates(
         )
     )
     if descriptive and named_exposure:
-        from easyicu.concept.loader import load_dictionary
-
-        definition = load_dictionary().get(named_exposure)
         # Describing one factor's frequencies does not compare an outcome
         # across its levels. Keep that concept in the measurement reading.
         if not (target_outcome or configured_outcome or question_concepts - {
             named_exposure, *declared_covariates, *required_subgroup_concepts,
         }):
             named_exposure = None
-        elif not (
-            catalog_by_id[named_exposure].column_role == "event_status"
-            or (definition is not None and definition.class_name == "fct_cncpt"
-                and definition.target == "id_tbl")
-        ):
+        elif not is_grouping(named_exposure):
             named_exposure = None
     named_measurement = named_concept("exposure") if descriptive and not named_exposure else None
     primary_exposure = _observability_preserving_exposure(named_exposure, export_path)
@@ -1439,7 +1496,7 @@ def _metadata_only_planning_coordinates(
                     item, column=source_column(name),
                     aggregation=operation.aggregation if operation is not None else None,
                 )
-                if proposed is not None and proposed.kind == "continuous":
+                if proposed is not None and (proposed.kind == "continuous" or checked_grouping):
                     quantities.append(name)
         if len(quantities) == 1:
             target_outcome = quantities[0]
@@ -1452,10 +1509,22 @@ def _metadata_only_planning_coordinates(
         target_outcome
         and target_catalog is not None
     ):
+        column = source_column(target_outcome)
+        definition = load_dictionary().get(target_outcome)
+        if (checked_grouping and outcome_operation is not None and definition is not None
+                and definition.target != "id_tbl"):
+            from easyicu.research_agent.cohort.materializer import summary_column_name
+
+            # The materializer's one naming of a window summary; a summary it
+            # does not materialize binds no endpoint.
+            try:
+                column = summary_column_name(column, outcome_operation.aggregation)
+            except ValueError:
+                column = None
         endpoint = catalog_endpoint(
-            target_catalog, column=source_column(target_outcome),
+            target_catalog, column=column,
             aggregation=outcome_operation.aggregation if outcome_operation is not None else None,
-        )
+        ) if column else None
     # The concept projected as the exposure is sealed as the exposure, which
     # accounts for it; a question that names nothing else keeps its identity.
     named_concepts = [
@@ -1476,9 +1545,11 @@ def _metadata_only_planning_coordinates(
     ]
     coordinate_readings = []
     for role, concept, column, basis, slot_name in (
-        ("outcome", target_outcome, source_column(target_outcome),
-         "configured" if configured_catalog is not None else "keyword", "outcome"),
-        ("exposure", named_exposure, source_column(primary_exposure), "keyword", "exposure"),
+        ("outcome", target_outcome, endpoint.name if endpoint is not None else source_column(target_outcome),
+         "configured" if configured_catalog is not None else "keyword",
+         "exposure" if target_outcome == named_concept("exposure") else "outcome"),
+        ("exposure", named_exposure, source_column(primary_exposure),
+         "configured" if checked_grouping == named_exposure else "keyword", "exposure"),
         ("measurement", named_measurement, source_column(named_measurement), "keyword", "exposure"),
     ):
         capability = catalog_by_id.get(str(concept or ""))
@@ -1492,6 +1563,12 @@ def _metadata_only_planning_coordinates(
                 if named_concept(slot_name) == concept
                 else _clean_text(stated_exposure, 160) if role == "exposure" else ""
             )
+            if not fragment and role == "outcome" and checked_grouping:
+                fragment = (
+                    outcome_operation.evidence if outcome_operation is not None else
+                    next((phrase for concepts, phrase in named_study_concepts(question)
+                          if concept in concepts), "")
+                )
             match = (
                 re.search(r"\s+".join(re.escape(part) for part in fragment.split()), question, re.IGNORECASE)
                 if fragment and basis == "keyword" else None

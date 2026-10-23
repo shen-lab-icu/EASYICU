@@ -88,6 +88,7 @@ _CONTEXT_FIELDS = {
     "modules",
     "outcome",
     "primary_exposure",
+    "primary_exposure_concept",
     "covariates",
     "covariate_selection",
     "covariate_authority",
@@ -331,6 +332,7 @@ _SCIENTIFIC_CONFIGURATION_FIELDS = (
     "target_trial_design",
     "stated_adjustments",
     "stated_subgroups",
+    "primary_exposure_concept",
 )
 
 
@@ -1424,6 +1426,15 @@ def _sanitize_patch(
     for field, max_length in _TEXT_LIMITS.items():
         if field in raw:
             patch[field] = _text(raw.get(field), field=field, max_length=max_length)
+    if "primary_exposure_concept" in raw:
+        if not allow_question_wording:
+            raise StudyContextError({
+                "error": "study_primary_exposure_concept_server_owned", "field": "primary_exposure_concept",
+            })
+        patch["primary_exposure_concept"] = (
+            _identifier(raw["primary_exposure_concept"], field="primary_exposure_concept")
+            if raw["primary_exposure_concept"] is not None else None
+        )
     if "data_source" in raw:
         patch["data_source"] = _data_source(raw.get("data_source"))
     if "crossdb_selection" in raw:
@@ -2363,6 +2374,14 @@ def upsert_context(
                 patch["literature_authority"] = {}
         if patch or current is None:
             context.update(patch)
+            if context.get("primary_exposure_concept") and (
+                not context.get("primary_exposure")
+                or context["primary_exposure"] not in str(context.get("question") or "")
+                or (current is not None and "primary_exposure" in patch
+                    and patch["primary_exposure"] != current.get("primary_exposure")
+                    and "primary_exposure_concept" not in patch)
+            ):
+                context["primary_exposure_concept"] = None
             if _stale_causal_trial_reading(context):
                 context["causal_trial_reading"] = None
             if _stale_study_family_reading(context):
@@ -2737,6 +2756,7 @@ def build_agent_context_binding(
                 "modules",
                 "outcome",
                 "primary_exposure",
+                "primary_exposure_concept",
                 "covariates",
                 "covariate_selection",
                 "covariate_authority",
@@ -2789,7 +2809,7 @@ def _scientific_fields_sha256(
     # Likewise a study that states no target trial.
     if not sanitized.get("target_trial_design"):
         sanitized.pop("target_trial_design", None)
-    for field in ("stated_adjustments", "stated_subgroups"):
+    for field in ("stated_adjustments", "stated_subgroups", "primary_exposure_concept"):
         if not sanitized.get(field):
             sanitized.pop(field, None)
     encoded = json.dumps(
@@ -3012,6 +3032,7 @@ def restore_turn_configuration_snapshot(
         "modules": [],
         "outcome": "",
         "primary_exposure": "",
+        "primary_exposure_concept": None,
         "covariates": [],
         "covariate_selection": "planner_selectable",
         "covariate_authority": None,

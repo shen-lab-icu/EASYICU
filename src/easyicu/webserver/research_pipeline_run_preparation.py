@@ -274,6 +274,7 @@ def _prepare_scientific_launch(
         export_path=request.export_path,
         configured_outcome=configured_target,
         stated_exposure=_clean_text(study.get("primary_exposure"), 300),
+        stated_exposure_concept=study.get("primary_exposure_concept"),
         declared_covariates=covariates,
         stated_adjustments=study.get("stated_adjustments") or (),
         stated_subgroups=study.get("stated_subgroups") or (),
@@ -349,6 +350,10 @@ def _prepare_scientific_launch(
         if metadata_only_planning
         else ()
     )
+    planning_endpoint = planning_coordinates.get("endpoint")
+    if (metadata_only_planning and planning_endpoint is not None
+            and planning_endpoint.name != target):
+        metadata_operationalized_columns = (*metadata_operationalized_columns, planning_endpoint.name)
 
     # A run of a study whose trial is approved reads what the trial reads,
     # as the compile for its card did (``prepare_target_trial_launch``).
