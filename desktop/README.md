@@ -102,17 +102,26 @@ venv and receipt are in `desktop/.build/windows/`; override with
 The shared build owner stages Pi at the short `p/` resource path and prunes only
 staged `node_modules`: TypeScript declarations, `dist-types/`, source maps, and
 docs/tests/examples directories without runtime `main`/`exports`/`bin` entries.
-Runtime-referenced directories and their assets remain. The wheel and source
-checkout's dependency trees stay intact. Bundled Node then checks the gateway's
-syntax and imports the Pi agent, Pi AI and typebox entries without a provider call.
+It also drops `*.ts`/`*.mts`/`*.cts` sources from packages whose runtime entries
+do not use TypeScript. Runtime-referenced directories and source siblings remain.
+The staged Pi tree is then hoisted: duplicate leaves must match in version and
+payload, and moves into empty slots preserve dependency and peer versions.
+Conflicts, private dependencies and packages with bin shims stay in place.
+The wheel and source checkout's dependency trees stay intact. Bundled Node
+checks the gateway's syntax and imports the Pi agent, Pi AI, typebox and the
+compiled provider adapters, including the lazy OpenAI completions adapter.
+It resolves Pi AI from both the gateway and agent using ESM import conditions;
+`desktop_pi_import_failed` identifies a failing entry or adapter specifier.
+This smoke does not make a provider call.
 
 Before Tauri packaging, the build measures paths relative to the installation
 root using Tauri's resource destinations. Windows fails with
 `desktop_bundle_path_budget_exceeded` above **160 UTF-16 characters**, reserving
 100 characters of MAX_PATH for the installation root. macOS reports the same
 overflow as a warning. `longest-paths.json` records the ten longest paths before
-the check can fail, and `build-inputs.json` records pruned file counts/bytes and
-the path report. Both drivers expose the pruning and check plan with `--dry-run`.
+the check can fail, and `build-inputs.json` records pruned file counts/bytes,
+hoisted/deduplicated package counts and the path report. Both drivers expose
+the staging and check plan with `--dry-run`.
 Keep staging/cache paths short as build tools can also impose path limits.
 
 Both platform drivers share the wheel installation, locked Pi installation,

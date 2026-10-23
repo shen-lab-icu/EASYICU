@@ -27,8 +27,8 @@ PYTHON_LOCK = DESKTOP_ROOT / "requirements-macos-arm64-py311.lock"
 MIN_NODE = (22, 19, 0)
 
 
-def _run(command: list[str], *, cwd: Path = REPO_ROOT) -> None:
-    subprocess.run(command, cwd=cwd, check=True)
+def _run(command: list[str], *, cwd: Path = REPO_ROOT, capture_output: bool = False) -> None:
+    subprocess.run(command, cwd=cwd, check=True, capture_output=capture_output)
 
 
 def _select_python() -> str:
