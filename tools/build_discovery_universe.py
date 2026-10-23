@@ -82,7 +82,8 @@ def normalize_measurement_companions(
 
 def main() -> None:
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect()
+    from easyicu.runtime import duckdb_spill
+    con = duckdb_spill.connect()
     base = file_for("age")
     con.execute(
         f"CREATE TABLE u AS SELECT DISTINCT stay_id FROM "

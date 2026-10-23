@@ -87,17 +87,16 @@ def build_bucket_cache(
         )
 
     temporary.mkdir(parents=True)
-    spill = data_path / f".duckdb_bucket_spill_{table}"
     source_glob = source / "*.parquet"
     target_glob = temporary / "bucket_id=*" / "*.parquet"
     started = time.time()
-    con = duckdb.connect()
+    from easyicu.runtime import duckdb_spill
+    con = duckdb_spill.connect()
     try:
         con.execute(f"SET memory_limit={_sql_string(memory_limit)}")
         con.execute(f"SET threads={int(threads)}")
         con.execute("SET preserve_insertion_order=false")
         con.execute(f"SET partitioned_write_max_open_files={int(bucket_count)}")
-        con.execute(f"SET temp_directory={_sql_string(spill)}")
 
         source_relation = (
             f"read_parquet({_sql_string(source_glob)}, union_by_name=true)"
@@ -202,7 +201,6 @@ def build_bucket_cache(
         raise
     finally:
         con.close()
-        shutil.rmtree(spill, ignore_errors=True)
 
 
 def main() -> int:

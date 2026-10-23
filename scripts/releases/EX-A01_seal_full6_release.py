@@ -718,15 +718,11 @@ def validate_release(run_root: Path) -> dict[str, Any]:
     total_rows = 0
     total_bytes = 0
 
-    with tempfile.TemporaryDirectory(prefix="easyicu-release-seal-") as temp_dir:
-        connection = duckdb.connect(
-            ":memory:",
-            config={
-                "threads": "1",
-                "memory_limit": "1GB",
-                "temp_directory": temp_dir,
-            },
-        )
+    from easyicu.runtime import duckdb_spill
+
+    with duckdb_spill.connection(
+        ":memory:", config={"threads": "1", "memory_limit": "1GB"}
+    ) as connection:
         try:
             for database in DATABASES:
                 database_root = export_root / database

@@ -20,6 +20,7 @@ drives ``DataConverter.convert_all(progress_callback=...)`` directly.
 
 from __future__ import annotations
 
+from easyicu.runtime import duckdb_spill
 import csv
 import hashlib
 import heapq
@@ -3841,7 +3842,6 @@ def _read_export_frame_duckdb(
     source: str,
     entity_column: str = "stay_id",
 ) -> Any:
-    import duckdb
 
     projection = ", ".join(
         f'"{column.replace(chr(34), chr(34) * 2)}"' for column in columns
@@ -3855,7 +3855,7 @@ def _read_export_frame_duckdb(
         escaped_entity = entity_column.replace('"', '""')
         query += f' WHERE CAST("{escaped_entity}" AS VARCHAR) IN (SELECT UNNEST(?))'
         params.append(sorted(stay_ids))
-    connection = duckdb.connect(database=":memory:")
+    connection = duckdb_spill.connect(database=":memory:")
     try:
         return connection.execute(query, params).fetch_df()
     finally:

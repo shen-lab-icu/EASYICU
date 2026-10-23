@@ -135,8 +135,6 @@ def test_compare_reports_all_metrics_and_module_row_deltas(tmp_path) -> None:
 
 
 def test_duckdb_memory_limit_and_threads_are_effective(tmp_path, monkeypatch) -> None:
-    from easyicu.io import export_plausibility as owner
-
     observed = []
     connect = duckdb.connect
 
@@ -149,7 +147,7 @@ def test_duckdb_memory_limit_and_threads_are_effective(tmp_path, monkeypatch) ->
         )
         return connection
 
-    monkeypatch.setattr(owner.duckdb, "connect", spy)
+    monkeypatch.setattr(duckdb, "connect", spy)
     root = screening_export(tmp_path / "resources")
     default = report(root)
     custom = report(root, memory_limit="128MB", threads=1)

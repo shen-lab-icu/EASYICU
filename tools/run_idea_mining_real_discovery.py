@@ -107,14 +107,14 @@ def build_full_wide_cohort(export_dir: Path, output_path: Path) -> dict:
     hr, sofa2, sep3, ...), so the feasibility probe resolves them directly.
     This exposes ~150 concepts instead of a single cohort's 18.
     """
-    import duckdb
     import pyarrow.parquet as pq
 
     files = sorted(export_dir.glob("*.parquet"))
     if not files:
         raise SystemExit(f"no parquet files under export dir: {export_dir}")
 
-    con = duckdb.connect()
+    from easyicu.runtime import duckdb_spill
+    con = duckdb_spill.connect()
     # Base cohort: every stay_id seen anywhere (anchor on demographics/outcome).
     base_files = [
         f for f in files if "demographic" in f.name or "outcome" in f.name

@@ -5,10 +5,8 @@ limited to one thread / 512 MB and uses an isolated temporary spill directory.
 """
 import argparse
 import json
-import tempfile
 from pathlib import Path
 
-import duckdb
 import pandas as pd
 import pyarrow.parquet as pq
 
@@ -23,12 +21,10 @@ def main():
     output = Path(args.output)
     if output.exists():
         raise ValueError('aggregate receipt must be fresh')
-    with tempfile.TemporaryDirectory(prefix='easyicu_ventilator_oracle_') as spill:
-        with duckdb.connect() as con:
-            con.execute("SET memory_limit='512MB'")
-            con.execute('SET threads=1')
-            con.execute('SET temp_directory=?', [spill])
-            verify(args, output, con)
+    from easyicu.runtime import duckdb_spill
+
+    with duckdb_spill.connection(config={"memory_limit": "512MB", "threads": 1}) as con:
+        verify(args, output, con)
 
 
 def verify(args, output, con):

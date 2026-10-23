@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from easyicu.runtime import duckdb_spill
 import enum
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -340,7 +341,7 @@ def _get_duckdb_connection():
     import duckdb
     con = getattr(_duckdb_local, 'con', None)
     if con is None:
-        con = duckdb.connect()
+        con = duckdb_spill.connect()
         con.execute("SET timezone='UTC'")
         con.execute("SET enable_progress_bar = false")
         con.execute("SET enable_progress_bar_print = false")
@@ -359,20 +360,6 @@ def _get_duckdb_connection():
         else:
             _duck_gb = _default_duckdb_memory_limit_gb()
             con.execute(f"SET memory_limit = '{_duck_gb:.1f}GB'")
-        # 磁盘溢出目录：**纯 opt-in**，默认不动 DuckDB 原生行为（普通用户数据在
-        # 本地盘，默认 spill 就够用，无需额外设置）。只有当用户显式设了
-        # EASYICU_DUCKDB_TEMP_DIR（例如数据放在慢速外置/USB 盘、想把 spill 落到
-        # 内部 SSD）时才覆盖。EASYICU_DUCKDB_MAX_TEMP_SIZE 可选限制溢出上限。
-        _spill_dir = os.environ.get('EASYICU_DUCKDB_TEMP_DIR')
-        if _spill_dir:
-            try:
-                os.makedirs(_spill_dir, exist_ok=True)
-                con.execute(f"SET temp_directory = '{_spill_dir}'")
-                _max_temp = os.environ.get('EASYICU_DUCKDB_MAX_TEMP_SIZE')
-                if _max_temp:
-                    con.execute(f"SET max_temp_directory_size = '{_max_temp}'")
-            except Exception:
-                pass
         _duckdb_local.con = con
     return con
 

@@ -34,7 +34,6 @@ import math
 import os
 import shutil
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -1322,12 +1321,12 @@ def _validate_publication_only_database_semantics(
     as a typed all-null column. Such schema completion is accepted only when
     every source column retains its type and multiset of values, the added
     column is declared unavailable in the candidate manifest, and it contains
-    no non-null value. DuckDB is bounded to one thread and 1 GiB with spill
-    beside the candidate.
+    no non-null value. DuckDB is bounded to one thread and 1 GiB with private
+    spill storage managed by the runtime owner.
     """
 
     try:
-        import duckdb
+        import duckdb  # noqa: F401 - retain the release dependency check
     except ImportError as exc:  # pragma: no cover - release dependency
         raise ModuleRefreshError(
             "duckdb is required for publication-only semantic validation"
@@ -1348,19 +1347,11 @@ def _validate_publication_only_database_semantics(
         for entry in raw_unavailable
         if isinstance(entry, Mapping)
     }
-    audit_parent = candidate_database_root.parents[1]
-    with tempfile.TemporaryDirectory(
-        prefix=f".semantic-audit-{candidate_database_root.name}-",
-        dir=audit_parent,
-    ) as spill_dir:
-        connection = duckdb.connect(
-            ":memory:",
-            config={
-                "threads": "1",
-                "memory_limit": "1GB",
-                "temp_directory": spill_dir,
-            },
-        )
+    from easyicu.runtime import duckdb_spill
+
+    with duckdb_spill.connection(
+        ":memory:", config={"threads": "1", "memory_limit": "1GB"}
+    ) as connection:
         try:
             for module in modules:
                 source_path = source_database_root / f"{module}.parquet"

@@ -7,12 +7,12 @@ existing kind-inference sample (at most 5,000 values) cross into Python.
 
 from __future__ import annotations
 
+from easyicu.runtime import duckdb_spill
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
-import duckdb
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -78,10 +78,9 @@ def _quoted(column: str) -> str:
 
 @contextmanager
 def _connection():
-    with duckdb.connect(
+    with duckdb_spill.connection(
         config={"threads": THREADS, "memory_limit": MEMORY_LIMIT}
     ) as conn:
-        conn.execute("SET temp_directory = ''")
         # Cap the dense integer hash table at 2^20 slots. Sparse identifiers
         # retain DuckDB's regular hash aggregate; both paths are exact.
         conn.execute("SET perfect_ht_threshold = 20")

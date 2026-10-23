@@ -26,6 +26,7 @@ easyicu 高层API - 提供简单易用的接口，同时支持高级自定义
     >>> vitals = load_vitals(patient_ids=[123, 456])
 """
 
+from easyicu.runtime import duckdb_spill
 from typing import Dict, List, Optional, Union, cast
 from pathlib import Path
 import os
@@ -426,7 +427,7 @@ def _query_patient_ids_fast(
         return None
 
     try:
-        import duckdb
+        import duckdb  # noqa: F401 - preserve the optional dependency check
     except ImportError:
         return None
 
@@ -443,7 +444,7 @@ def _query_patient_ids_fast(
         f"ORDER BY {order_expr}{limit_clause}{offset_clause}"
     )
 
-    conn = duckdb.connect()
+    conn = duckdb_spill.connect()
     try:
         conn.execute("SET timezone='UTC'")
         conn.execute("SET enable_progress_bar = false")
@@ -468,7 +469,7 @@ def _count_patient_ids_fast(
         return None
 
     try:
-        import duckdb
+        import duckdb  # noqa: F401 - preserve the optional dependency check
     except ImportError:
         return None
 
@@ -478,7 +479,7 @@ def _count_patient_ids_fast(
         f'WHERE "{id_col}" IS NOT NULL'
     )
 
-    conn = duckdb.connect()
+    conn = duckdb_spill.connect()
     try:
         conn.execute("SET timezone='UTC'")
         conn.execute("SET enable_progress_bar = false")
