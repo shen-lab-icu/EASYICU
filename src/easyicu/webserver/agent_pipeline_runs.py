@@ -678,6 +678,12 @@ _TARGET_TRIAL_CONFIRMATION_OWNER = "easyicu.planning.target_trial_confirmation_v
 #: whose remedy is the researcher's.  Any other stop is described by what is
 #: true of it.
 _PLANNING_STOP_SENTENCES = {
+    "progressive_exposure_window_required": (
+        "The exposure is a measurement with no time window, so EasyICU cannot tell "
+        "whether it was already known at ICU admission or measured later. Planning "
+        "stopped and no analysis was run. State the window in the question, for "
+        "example the first 24 hours after admission, then generate the plan again."
+    ),
     "tte_trial_not_confirmed": (
         "This study has no confirmed target trial, so planning stopped before "
         "any model was called and no analysis was run. Set up the target trial "

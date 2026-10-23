@@ -9,6 +9,7 @@ import pytest
 from easyicu.research_agent.contracts.endpoint import EndpointSpec
 from easyicu.research_agent.contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORM_ID
 from easyicu.research_agent.planning.family_spec import family_template_id_for_context
+from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
 from easyicu.research_agent.planning.scientific_review import build_plan_scientific_review
 from easyicu.research_agent.schema import (
     AnalysisPlan, AnalysisStep, CohortDescriptor, ConceptDescriptor, ResearchContext,
@@ -185,14 +186,22 @@ def test_a_typed_grouping_of_baseline_attributes_stays_baseline():
     assert post_baseline_landmark_configuration(study=_study(), context=context) is None
 
 
+@pytest.mark.parametrize("hours", [25, 48])
+def test_an_outer_window_the_landmark_cannot_close_is_not_selected(hours):
+    context = _context(window={"role": "outer_observation_window", "anchor": "icu_admission", "hours": hours})
+    assert post_baseline_landmark_configuration(study=_study(), context=context) is None
+
+
 @pytest.mark.parametrize("window", [
-    {"hours": 25}, {"hours": 48}, {"hours": 0}, {"hours": -1}, {"hours": "24"},
+    {"hours": 0}, {"hours": -1}, {"hours": "24"},
     {"hours": True}, {"hours": 24, "anchor": "hospital_admission"},
     {"hours": 24, "anchor": ""}, {"hours": 24, "role": "exposure_definition"},
 ])
-def test_an_outer_window_the_landmark_cannot_close_is_not_selected(window):
+def test_an_unreadable_outer_window_requires_an_exposure_window(window):
     context = _context(window={"role": "outer_observation_window", "anchor": "icu_admission", **window})
-    assert post_baseline_landmark_configuration(study=_study(), context=context) is None
+    with pytest.raises(ProgressivePlanCompileError) as stopped:
+        post_baseline_landmark_configuration(study=_study(), context=context)
+    assert stopped.value.reason_code == "progressive_exposure_window_required"
 
 
 @pytest.mark.parametrize("window, selected", [

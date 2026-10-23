@@ -132,11 +132,11 @@ def continuous_survival_context(**update) -> ResearchContext:
             ConceptDescriptor(name="stay_id", role=VariableRole.ID, dtype="int64"),
             ConceptDescriptor(name="bili_max", description="Highest total bilirubin in the first 24 h",
                               role=VariableRole.LAB, dtype="float64", unit="mg/dL",
-                              source_concept="bili"),
+                              source_concept="bili", analysis_window="icu_admission[0,24]h"),
             # Another summary of the same measurement: never a confounder.
             ConceptDescriptor(name="bili_mean", description="Mean total bilirubin in the first 24 h",
                               role=VariableRole.LAB, dtype="float64", unit="mg/dL",
-                              source_concept="bili"),
+                              source_concept="bili", analysis_window="icu_admission[0,24]h"),
             ConceptDescriptor(name="mort_90d", description="Death by day 90 from ICU admission",
                               role=VariableRole.OUTCOME, dtype="float64", observed_domain=BINARY),
             ConceptDescriptor(name="followup_days_90d", description="90-day event or censoring time",
