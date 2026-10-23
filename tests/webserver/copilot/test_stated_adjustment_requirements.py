@@ -50,6 +50,8 @@ def test_the_wording_rule_and_save_tool_request_adjustment_words():
     assert "variable: Type.String(" in main
     assert "concept: Type.Optional(Type.String(" in main
     assert "easyicu_list_source_concepts" in rule
+    assert "before a source is bound" in rule and "first call easyicu_list_source_concepts without source_id" in rule
+    assert "then save those readings with the returned concept identifiers" in rule
 
 
 def test_a_name_nothing_resolves_is_unresolved_not_unavailable(monkeypatch):
