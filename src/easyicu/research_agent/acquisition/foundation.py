@@ -627,6 +627,7 @@ def acquire_universe_for_question(
         # A design that times an event past the cohort window (a treatment
         # start inside a grace period) names the window its onset is read over.
         event_onset_windows=event_onset_windows,
+        **({"last_value_concepts": [target_outcome]} if target_outcome_aggregation == "last" else {}),
         **identity_kwargs,
     )
     try:
@@ -683,9 +684,21 @@ def acquire_universe_for_question(
     if target_outcome and target_outcome_aggregation:
         # This is the materializer's explicit projection vocabulary, selected
         # by the reviewed question; it is not inferred from a suffix or dtype.
-        selected_column = f"{target_outcome}_{target_outcome_aggregation}"
-        if selected_column in materialized_columns:
-            analysis_columns[target_outcome] = selected_column
+        from ..cohort.materializer import summary_column_name
+
+        try:
+            selected_column = summary_column_name(target_outcome, target_outcome_aggregation)
+        except ValueError as exc:
+            raise MaterializedMetadataError(
+                "The requested summary statistic is not one the host materializes "
+                "(max, min, mean, first, last). [windowed_summary_statistic_unsupported]"
+            ) from exc
+        if selected_column not in materialized_columns:
+            raise MaterializedMetadataError(
+                "The summary column is not in the prepared data: " + selected_column
+                + " [windowed_summary_column_unavailable]"
+            )
+        analysis_columns[target_outcome] = selected_column
     target_column = analysis_columns.get(str(target_outcome or ""))
     if (
         target_catalog is not None

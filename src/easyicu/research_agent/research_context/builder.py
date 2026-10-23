@@ -890,6 +890,67 @@ def _apply_legacy_materialization_window(
 # ---------------------------------------------------------------------------
 
 
+def _apply_planned_continuous_summary(context: ResearchContext) -> ResearchContext:
+    """Project a selected host summary onto a row-free planning descriptor.
+
+    A zero-row catalog has no materialized sidecar yet. Its selected endpoint
+    still needs the same concept/representation/window projection the
+    materializer will seal; physical data always use their verified sidecar.
+    """
+
+    from easyicu.concept.loader import load_dictionary
+    from easyicu.concept.metadata_projection import (
+        ColumnProjectionSpec, ConceptColumnRole, project_concept_column_metadata,
+    )
+    from easyicu.concept.metadata_sidecar import ColumnMetadataBinding, DerivationWindow
+    from ..cohort.materializer import summary_column_name
+    from .materialization_window import host_materialization_window_hours
+    from .temporal_semantics import TimeWindowSemanticParser
+
+    endpoint = context.endpoint
+    if endpoint is None or endpoint.kind != "continuous" or endpoint.name != context.target_outcome:
+        return context
+    column = context.target_outcome
+    if not column or "_" not in column:
+        return context
+    concept, statistic = column.rsplit("_", 1)
+    definition = load_dictionary().get(concept)
+    if definition is None or definition.target == "id_tbl":
+        return context
+    summary_column_name(concept, statistic)  # Validate the producer's vocabulary.
+    hours = host_materialization_window_hours(context)
+    if hours is None:
+        stated = {
+            constraint.end_hours for constraint in TimeWindowSemanticParser().parse(context.research_question)
+            if constraint.relation in {"first_window", "within_after"}
+            and constraint.anchor_event == "icu_admission" and constraint.start_hours == 0.0
+        }
+        if len(stated) == 1:
+            hours = next(iter(stated))
+    if hours is None:
+        raise ValueError(
+            "A windowed summary outcome needs a time window anchored at ICU admission, "
+            "and neither the host materialization window nor the question gives one. "
+            "[windowed_summary_window_required]"
+        )
+    binding = ColumnMetadataBinding(
+        metadata=project_concept_column_metadata(
+            definition, spec=ColumnProjectionSpec(
+                column_name=column, source_concept=concept,
+                role=ConceptColumnRole.NUMERIC_AGGREGATE, aggregation=statistic,
+            ), source_database=context.cohort.database,
+        ),
+        derivation_window=DerivationWindow(origin="icu_admission", start_hours=0.0, end_hours=hours),
+        representation_transform=f"window_numeric_{statistic}",
+    )
+    projected = descriptor_physical_updates(canonical_column_binding(column, binding))
+    variables = [
+        variable.model_copy(update=projected) if variable.name == column else variable
+        for variable in context.variables
+    ]
+    return context.model_copy(update={"variables": compile_wide_representation_semantics(variables)})
+
+
 def build_research_context(
     *,
     research_question: str,
@@ -1230,6 +1291,8 @@ def build_research_context(
         notes=notes,
     )
     if verified_cohort is None:
+        if planning_catalog_provenance:
+            return _apply_planned_continuous_summary(base_context)
         return base_context
     return ResearchContextV3.model_validate(
         {

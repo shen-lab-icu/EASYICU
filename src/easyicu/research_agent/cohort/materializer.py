@@ -470,7 +470,7 @@ def summary_column_name(concept: str, summary: str) -> str:
     reads them under the same ones.
     """
 
-    if summary not in EVENT_SUMMARIES:
+    if summary not in (*EVENT_SUMMARIES, "last"):
         raise ValueError(f"the host materializes no {summary!r} summary")
     return f"{concept}_{summary}"
 
@@ -1071,6 +1071,7 @@ def _summarize_timeseries_with_representation(
     *,
     source_role: Optional[ConceptColumnRole] = None,
     onset_window: Optional[Window] = None,
+    include_last: bool = False,
 ) -> tuple[pd.DataFrame, bool]:
     """Return the summary plus whether values were encoded as event presence.
 
@@ -1094,7 +1095,14 @@ def _summarize_timeseries_with_representation(
             )
     if w.empty or concept not in w.columns:
         if onset_rows is None:
-            return pd.DataFrame(columns=[ID_COL]), False
+            # An unmeasured window still publishes its typed quantities. The
+            # left join retains every denominator stay with missing values.
+            summaries = (*EVENT_SUMMARIES, "last") if include_last else EVENT_SUMMARIES
+            return pd.DataFrame(columns=[
+                ID_COL, *(summary_column_name(concept, stat) for stat in summaries),
+                f"{concept}_n", f"{concept}_measured",
+                f"{concept}_first_time", f"{concept}_last_time",
+            ]), False
         return _event_onset_column(onset_rows, concept), True
     # Observation bounds are taken from RAW non-null values before the
     # presence-coercion below. They deliberately do not claim clinical onset,
@@ -1174,6 +1182,10 @@ def _summarize_timeseries_with_representation(
     )
     first.columns = [ID_COL, summary_column_name(concept, "first")]
     out = out.merge(first, on=ID_COL, how="left")
+    if include_last:
+        # Reuse the same ordered, non-null reduction that owns CTAS last.
+        last = _predicate_column(w, concept, window, "last", source_role=source_role)
+        out = out.merge(last.rename(columns={concept: summary_column_name(concept, "last")}), on=ID_COL, how="left")
     out[f"{concept}_measured"] = (out[f"{concept}_n"].fillna(0) > 0).astype(int)
     if not timing.empty:
         out = out.merge(timing, on=ID_COL, how="left")
@@ -1548,6 +1560,7 @@ def materialize_cohort(
     positive_only_event_concepts: Sequence[str] = (),
     host_derivations: Sequence[str] = (),
     event_onset_windows: Optional[Mapping[str, Window]] = None,
+    last_value_concepts: Sequence[str] = (),
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Build a per-stay analysis cohort from the EasyICU data layer.
 
@@ -1572,6 +1585,7 @@ def materialize_cohort(
         positive_only_event_concepts=positive_only_event_concepts,
         host_derivations=host_derivations,
         event_onset_windows=event_onset_windows,
+        last_value_concepts=last_value_concepts,
     )
     return cohort, provenance
 
@@ -1591,6 +1605,7 @@ def _materialize_cohort_with_metadata(
     positive_only_event_concepts: Sequence[str],
     host_derivations: Sequence[str] = (),
     event_onset_windows: Optional[Mapping[str, Window]] = None,
+    last_value_concepts: Sequence[str] = (),
 ) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
     t0 = time.time()
     source_mode, root = _resolve_source(data_path, prefer_existing)
@@ -1609,6 +1624,7 @@ def _materialize_cohort_with_metadata(
         positive_only_event_concepts=positive_only_event_concepts,
         host_derivations=host_derivations,
         event_onset_windows=event_onset_windows,
+        last_value_concepts=last_value_concepts,
     )
     if source_mode == "export" and is_export_package(root):
         with open_export_package(root) as export_package:
@@ -1640,6 +1656,7 @@ def _materialize_cohort_from_resolved_source(
     host_derivations: Sequence[str] = (),
     verify_source_package: bool = True,
     event_onset_windows: Optional[Mapping[str, Window]] = None,
+    last_value_concepts: Sequence[str] = (),
 ) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
     """Materialize from one already-resolved, explicitly owned source."""
 
@@ -1805,6 +1822,11 @@ def _materialize_cohort_from_resolved_source(
             )
         }
     feature_set = [c for c in dict.fromkeys(feature_concepts) if c not in static_set]
+    if not set(last_value_concepts) <= set(feature_set):
+        raise MaterializedMetadataError(
+            "A last-value summary was requested for a concept that is not among the extracted "
+            "time-varying features. [windowed_summary_last_concept_unavailable]"
+        )
     declared_positive_only = tuple(positive_only_event_concepts)
     if len(declared_positive_only) != len(set(declared_positive_only)) or any(
         not isinstance(concept, str)
@@ -1919,6 +1941,7 @@ def _materialize_cohort_from_resolved_source(
                 cohort_window,
                 source_role=source_role,
                 onset_window=onset_window,
+                include_last=c in last_value_concepts,
             )
             frames.append(summary)
             onset_column = f"{c}_onset_time"
@@ -2180,6 +2203,7 @@ def _materialize_cohort_from_resolved_source(
         "dense_status_outcomes_preserving_unknown": sorted(dense_status_outcomes),
         "declared_positive_only_event_concepts": list(declared_positive_only),
         "host_derivations": list(resolved_host_derivations),
+        **({"last_value_concepts": list(last_value_concepts)} if last_value_concepts else {}),
         **(
             {
                 "event_onset_windows": {
@@ -2557,6 +2581,7 @@ def _materialize_with_open_export_package(
         host_derivations=materialize_args.get("host_derivations", ()),
         verify_source_package=False,
         event_onset_windows=materialize_args.get("event_onset_windows"),
+        last_value_concepts=materialize_args.get("last_value_concepts", ()),
     )
 
 
@@ -2772,6 +2797,7 @@ def materialize_to_parquet(
             ],
             host_derivations=materialize_args.get("host_derivations", ()),
             event_onset_windows=materialize_args.get("event_onset_windows"),
+            last_value_concepts=materialize_args.get("last_value_concepts", ()),
         )
     else:
         cohort, provenance, metadata_collector = _materialize_with_open_export_package(
@@ -2866,6 +2892,8 @@ def materialize_to_parquet(
     }
     if first_icu_stay_restriction is not None:
         producer_parameters["first_icu_stay_restriction"] = first_icu_stay_restriction
+    if materialize_args["last_value_concepts"]:
+        producer_parameters["last_value_concepts"] = list(materialize_args["last_value_concepts"])
     trajectory_concepts_resolved: Optional[List[str]] = None
     _trajectory_long_once: List[Any] = []
 

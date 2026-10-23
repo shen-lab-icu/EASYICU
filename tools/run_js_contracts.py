@@ -26,6 +26,7 @@ TESTS = ROOT / "tests" / "js"
 JS = ROOT / "src" / "easyicu" / "webserver" / "static" / "js"
 
 CONTRACTS: dict[str, list[str]] = {
+    "windowed_summary_copy.test.js": ["screens-guided-pi-error-text.js"],
     "audit_regressions_20260915.test.js": [],
     "agent_render_security.test.js": ["screens-agent-render.js"],
     "composer_keyboard.test.js": ["composer-keyboard.js"],

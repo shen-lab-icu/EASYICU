@@ -1331,7 +1331,7 @@ class MaterializedColumnMetadataCollector:
             start_hours=window[0],
             end_hours=window[1],
         )
-        for aggregation in ("max", "min", "mean", "first"):
+        for aggregation in ("max", "min", "mean", "first", "last"):
             column = f"{concept}_{aggregation}"
             if column not in names:
                 continue

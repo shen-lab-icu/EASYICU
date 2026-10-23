@@ -63,6 +63,24 @@ def _scientific() -> PreparedScientificLaunch:
     )
 
 
+def test_a_requested_summary_cannot_read_a_different_materialization_window(monkeypatch, tmp_path):
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    request = replace(_request(), export_path=str(tmp_path))
+    monkeypatch.setattr(preparation, "_metadata_only_planning_coordinates", lambda **kwargs: {
+        "target_outcome_window": {"anchor": "icu_admission", "start_hours": 0.0, "end_hours": 24.0},
+    })
+    monkeypatch.setattr(preparation, "_cohort_window", lambda study: (0.0, 12.0))
+    with pytest.raises(preparation.ResearchPipelineRunError) as error:
+        preparation._prepare_scientific_launch(request)
+    assert error.value.code == "windowed_summary_materialization_window_mismatch"
+    assert str(error.value) == (
+        "The prepared data covers a different time window from the one the question states, "
+        "so the summary would not match the question. No analysis was run. Prepare the data "
+        "again for the stated window."
+    )
+
+
 def test_full_launch_materializes_planner_proposed_exposure_and_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

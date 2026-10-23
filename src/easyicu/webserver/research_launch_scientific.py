@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
@@ -20,7 +21,10 @@ from easyicu.research_agent.planning.target_trial_spec import TargetTrialSpec
 from easyicu.research_agent.research_context.export_selection import SelectionBasis
 from easyicu.webserver import dataio, primary_cohort, source_identity_authority
 from easyicu.webserver import study_contexts as study_context_owner
-from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.research_pipeline_run_errors import (
+    ResearchPipelineRunError,
+    WINDOWED_SUMMARY_STOP_MESSAGES,
+)
 from easyicu.webserver.study_intent import explicit_outcome_concepts
 from easyicu.webserver.study_scientific_configuration import (
     ScientificConfiguration,
@@ -35,6 +39,7 @@ _MATERIALIZED_FEATURE_SUFFIXES = tuple(
             "_onset_time",
             "_measured",
             "_first",
+            "_last",
             "_mean",
             "_max",
             "_min",
@@ -1306,6 +1311,51 @@ def _study_exposure_reading(
     return reading
 
 
+def _descriptive_window_summary(
+    *, question: str, concept: Any, column: str, operation: Any,
+) -> tuple[Any, Dict[str, Any]]:
+    """Bind a named measurement reduction; a host default is never a request.
+
+    Concept metadata establishes the quantity space, the intent reader owns
+    the operation, the shared time parser owns the span, and the materializer
+    owns the output name.
+    The physical window is checked against this request at launch.
+    """
+
+    from easyicu.research_agent.acquisition.catalog import catalog_endpoint
+    from easyicu.research_agent.cohort.materializer import summary_column_name
+    from easyicu.research_agent.research_context.temporal_semantics import TimeWindowSemanticParser
+
+    def stop(reason: str) -> None:
+        raise ResearchPipelineRunError(
+            reason, WINDOWED_SUMMARY_STOP_MESSAGES[reason], details={"concept": concept.concept_id},
+        )
+
+    if operation is None:
+        stop("windowed_summary_statistic_unresolved")
+    try:
+        output = summary_column_name(column, operation.aggregation)
+    except ValueError:
+        stop("windowed_summary_statistic_unsupported")
+    windows = {
+        (constraint.anchor_event, constraint.start_hours, constraint.end_hours)
+        for constraint in TimeWindowSemanticParser().parse(question)
+        if constraint.relation in {"first_window", "within_after"}
+    }
+    if not windows:
+        stop("windowed_summary_window_required")
+    if len(windows) != 1:
+        stop("windowed_summary_window_unresolved")
+    anchor, start, hours = next(iter(windows))
+    if (anchor != "icu_admission" or start != 0.0 or hours is None
+            or not math.isfinite(hours) or hours <= 0):
+        stop("windowed_summary_window_unsupported")
+    endpoint = catalog_endpoint(concept, column=output, aggregation=operation.aggregation)
+    if endpoint is None or endpoint.kind != "continuous":
+        stop("windowed_summary_concept_not_continuous")
+    return endpoint, {"anchor": "icu_admission", "start_hours": 0.0, "end_hours": float(hours)}
+
+
 def _metadata_only_planning_coordinates(
     *,
     question: str,
@@ -1483,7 +1533,7 @@ def _metadata_only_planning_coordinates(
     configured_catalog = catalog_by_id.get(configured) if configured else None
     if configured_catalog is not None:
         target_outcome = configured
-    if descriptive and named_exposure and not target_outcome:
+    if descriptive and not target_outcome:
         # A grouped descriptive question may name a measurement instead of an
         # event in the intent reader. Only one owner-defined named quantity
         # can fill this otherwise empty slot; no convenient column is chosen.
@@ -1496,7 +1546,14 @@ def _metadata_only_planning_coordinates(
                     item, column=source_column(name),
                     aggregation=operation.aggregation if operation is not None else None,
                 )
-                if proposed is not None and (proposed.kind == "continuous" or checked_grouping):
+                definition = load_dictionary().get(name)
+                requested_measurement = (
+                    definition is not None and definition.target != "id_tbl"
+                    and (name == named_measurement or operation is not None
+                         or (slots.get("time_window_hours") or {}).get("provenance") == "keyword")
+                )
+                if ((proposed is not None and (proposed.kind == "continuous" or checked_grouping))
+                        or requested_measurement):
                     quantities.append(name)
         if len(quantities) == 1:
             target_outcome = quantities[0]
@@ -1505,26 +1562,29 @@ def _metadata_only_planning_coordinates(
         explicit_exposure_aggregation(question, concept_id=target_outcome)
         if target_outcome else None
     )
+    outcome_window = None
     if (
         target_outcome
         and target_catalog is not None
     ):
         column = source_column(target_outcome)
         definition = load_dictionary().get(target_outcome)
-        if (checked_grouping and outcome_operation is not None and definition is not None
-                and definition.target != "id_tbl"):
-            from easyicu.research_agent.cohort.materializer import summary_column_name
-
-            # The materializer's one naming of a window summary; a summary it
-            # does not materialize binds no endpoint.
-            try:
-                column = summary_column_name(column, outcome_operation.aggregation)
-            except ValueError:
-                column = None
-        endpoint = catalog_endpoint(
-            target_catalog, column=column,
-            aggregation=outcome_operation.aggregation if outcome_operation is not None else None,
-        ) if column else None
+        if descriptive and definition is not None and definition.target == "id_tbl":
+            # A stay attribute is already one quantity per episode. "Mean"
+            # there summarizes stays, not a second temporal reduction.
+            outcome_operation = None
+        if (descriptive and definition is not None and definition.target != "id_tbl"
+                and target_catalog.column_role != "event_status"
+                and (definition.units or outcome_operation is not None)):
+            endpoint, outcome_window = _descriptive_window_summary(
+                question=question, concept=target_catalog, column=column, operation=outcome_operation,
+            )
+            named_measurement = None
+        else:
+            endpoint = catalog_endpoint(
+                target_catalog, column=column,
+                aggregation=outcome_operation.aggregation if outcome_operation is not None else None,
+            ) if column else None
     # The concept projected as the exposure is sealed as the exposure, which
     # accounts for it; a question that names nothing else keeps its identity.
     named_concepts = [
@@ -1603,6 +1663,7 @@ def _metadata_only_planning_coordinates(
         "target_outcome_aggregation": (
             outcome_operation.aggregation if outcome_operation is not None else None
         ),
+        "target_outcome_window": outcome_window,
         "endpoint": endpoint,
         "source": "question_keywords_plus_database_capability",
         "execution_authorized": False,

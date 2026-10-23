@@ -30,6 +30,7 @@ _MEAN_TRANSFORMS = frozenset({"window_numeric_mean"})
 _MEASUREMENT_TRANSFORMS = frozenset({"window_nonnull_count", "window_measurement_status"})
 _PRECOMPUTED_NUMERIC_TRANSFORMS = {
     "window_numeric_first": "first non-null value",
+    "window_numeric_last": "last non-null value",
     "window_numeric_max": "maximum value",
     "window_numeric_mean": "arithmetic mean",
     "window_numeric_min": "minimum value",

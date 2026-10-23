@@ -39,6 +39,7 @@ from easyicu.webserver.research_launch_resume import (
     _development_resume_launch_scope,
 )
 from easyicu.webserver.research_plan_revision import load_prepared_plan_revision
+from easyicu.webserver.research_pipeline_run_errors import WINDOWED_SUMMARY_STOP_MESSAGES
 from easyicu.webserver.target_trial_card import target_trial_plans_on_data
 from easyicu.webserver.target_trial_setup import latest_target_trial_compile
 
@@ -52,6 +53,7 @@ _DECLINED_SEED_REFUSALS = frozenset(
 )
 
 _NEXT_STEP_SUMMARIES = {
+    **WINDOWED_SUMMARY_STOP_MESSAGES,
     "research_pipeline_manifest_required": (
         "The bound directory is a converted ICU database, not a prepared "
         "EasyICU export package, so the Research Agent has nothing "
