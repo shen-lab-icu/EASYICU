@@ -1131,6 +1131,47 @@ def _assert_shared_schema(
     
     return id_columns or [], index_column, converted_tables
 
+def _concat_component_frames(frames: list[pd.DataFrame], key_cols: list[str]) -> pd.DataFrame:
+    """Outer-align components using a shared integer code map for their keys.
+
+    Integer row codes retain first-seen union order and last-duplicate values.
+    Reindexing by those codes preserves pandas' missing-value dtype promotion,
+    without rebuilding/unioning tuple-valued MultiIndexes for every component.
+    All metadata is local to this merge; no mutable input indices are cached.
+    """
+    keys = pd.concat([frame[key_cols] for frame in frames], ignore_index=True)
+    codes = keys.groupby(key_cols, sort=False, dropna=False, observed=True).ngroup().to_numpy()
+    retained = np.empty(len(keys), dtype=bool)
+    offset = 0
+    for frame in frames:
+        end = offset + len(frame)
+        retained[offset:end] = ~pd.Index(codes[offset:end]).duplicated(keep="last")
+        offset = end
+    # Deduplicate each input before deciding union order: the retained last
+    # occurrence may appear later than other keys in that component.
+    positions = np.flatnonzero(retained)
+    first = ~pd.Index(codes[positions]).duplicated(keep="first")
+    union_positions = positions[first]
+    # One index roundtrip retains the old key dtype/NA normalization. It never
+    # creates tuple objects for unions or hashes an index for alignment.
+    spine = keys.iloc[union_positions].set_index(key_cols).index.to_frame(index=False)
+    target = pd.Index(codes[union_positions])
+    del keys, positions, first, union_positions
+    aligned = [spine]
+    offset = 0
+    for frame in frames:
+        end = offset + len(frame)
+        row_codes = codes[offset:end]
+        keep = retained[offset:end]
+        offset = end
+        values = frame.drop(columns=key_cols).iloc[np.flatnonzero(keep)]
+        values.index = pd.Index(row_codes[keep])
+        values = values.reindex(target)
+        values.index = spine.index
+        aligned.append(values)
+    return pd.concat(aligned, axis=1, copy=False)
+
+
 def _merge_tables(
     tables: Dict[str, ICUTable],
     *,
@@ -1290,15 +1331,10 @@ def _merge_tables(
             if any(pd.api.types.is_float_dtype(k) for k in kinds) \
                and any(pd.api.types.is_integer_dtype(k) for k in kinds):
                 _id_target_dtypes[kc] = 'Int64'
-        indexed_frames = []
+        component_frames = []
         for name, (frame, _) in standardized_tables.items():
             if frame.empty:
                 continue
-            # 如果同一 key 出现多行，先去重再走 concat fast path。
-            # AUMC vasopressors 这类回调在 batch 场景下可能会暴露重复 key，
-            # 直接 set_index 会触发 pandas InvalidIndexError。
-            if frame.duplicated(subset=key_cols).any():
-                frame = frame.drop_duplicates(subset=key_cols, keep='last')
             if _id_target_dtypes:
                 cast_map = {k: v for k, v in _id_target_dtypes.items() if k in frame.columns}
                 if cast_map:
@@ -1316,7 +1352,6 @@ def _merge_tables(
                                     name,
                                     exc_info=True,
                                 )
-            indexed = frame.set_index(key_cols, drop=True)
             # Keep the value and its explicitly authorised owner sidecars.
             selected = [
                 column
@@ -1324,17 +1359,14 @@ def _merge_tables(
                     name,
                     *(sidecar_columns or {}).get(name, ()),
                 ]
-                if column in indexed.columns
+                if column in frame.columns
             ]
             if selected:
-                indexed = indexed[selected]
-            indexed_frames.append(indexed)
+                frame = frame[key_cols + selected]
+            component_frames.append(frame)
         
-        if indexed_frames:
-            if len(indexed_frames) == 1:
-                merged = indexed_frames[0].reset_index()
-            else:
-                merged = pd.concat(indexed_frames, axis=1, join="outer", sort=False, copy=False).reset_index()
+        if component_frames:
+            merged = _concat_component_frames(component_frames, key_cols)
         else:
             merged = None
     else:
@@ -7252,6 +7284,53 @@ def _callback_urine_mlkgph(
         value_column="urine_mlkgph",
     )
 
+@dataclass
+class _UrineAssessmentCacheEntry:
+    urine: weakref.ReferenceType
+    weight: weakref.ReferenceType
+    data: pd.DataFrame
+
+
+def _shared_urine_assessment(urine_tbl, weight_tbl, ctx, source_is_rate):
+    """Share all three receipts within the resolver's byte-bounded request cache.
+
+    Weak input references prevent object-ID reuse from returning stale evidence
+    and do not keep source frames alive after the resolver evicts them. The
+    existing data-cache cleanup releases the assessment at the request boundary.
+    """
+    urine = urine_tbl.data
+    weight = weight_tbl.data if weight_tbl else pd.DataFrame()
+    interval = ctx.interval or pd.Timedelta(hours=1)
+
+    def compute():
+        return assess_urine_windows(
+            urine, weight, id_columns=urine_tbl.id_columns,
+            time_column=urine_tbl.index_column, interval=interval,
+            source_is_rate=source_is_rate,
+        )
+
+    resolver = ctx.resolver
+    if not hasattr(resolver, "_bounded_cache_store"):
+        return compute()
+    key = (
+        "urine_assessment", id(urine), id(weight), tuple(urine_tbl.id_columns),
+        urine_tbl.index_column, pd.Timedelta(interval), source_is_rate,
+    )
+    with resolver._cache_lock:
+        entry = resolver._concept_data_cache.get(key)
+        if (
+            isinstance(entry, _UrineAssessmentCacheEntry)
+            and entry.urine() is urine and entry.weight() is weight
+        ):
+            resolver._cache_touch("data", key)
+            return entry.data
+        data = compute()
+        resolver._bounded_cache_store(
+            "data", key, _UrineAssessmentCacheEntry(weakref.ref(urine), weakref.ref(weight), data),
+        )
+        return data
+
+
 def _callback_uo_window(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -7344,11 +7423,7 @@ def _callback_uo_window(
     )
     
     if not result_df.empty and window_hours in (6, 12, 24):
-        assessment = assess_urine_windows(
-            urine_tbl.data, weight_tbl.data if weight_tbl else pd.DataFrame(),
-            id_columns=urine_tbl.id_columns, time_column=urine_tbl.index_column,
-            interval=ctx.interval or pd.Timedelta(hours=1), source_is_rate=source_is_rate,
-        )
+        assessment = _shared_urine_assessment(urine_tbl, weight_tbl, ctx, source_is_rate)
         keys = list(urine_tbl.id_columns) + [urine_tbl.index_column]
         result_df = result_df.merge(
             assessment[keys + urine_evidence_columns(output_col)],

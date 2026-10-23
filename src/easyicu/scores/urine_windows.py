@@ -19,6 +19,8 @@ from collections.abc import Sequence
 import numpy as np
 import pandas as pd
 
+from easyicu.io.ts_utils import _grouped_row_batches
+
 from easyicu.urine_weight_linkage import (
     resolve_keyed_unique_weights,
     resolve_unkeyed_single_entity_weight,
@@ -108,53 +110,84 @@ def assess_urine_windows(
     for window in WINDOWS:
         covered_by_window[window] = np.zeros(row_count, dtype=float)
         rate_by_window[window] = np.full(row_count, np.nan, dtype=float)
-        reason_by_window[window] = np.full(
-            row_count, "insufficient_window", dtype=object
-        )
+        # Scalar assignment shares the immutable Python string. np.full with
+        # a Unicode scalar converts/allocates a Python string for every cell.
+        reason_by_window[window] = np.empty(row_count, dtype=object)
+        reason_by_window[window].fill("insufficient_window")
     oliguria_gt6h = np.zeros(row_count, dtype=bool)
     oliguria_duration_h = np.full(row_count, np.nan, dtype=float)
     oliguria_rate = np.full(row_count, np.nan, dtype=float)
 
-    for positions in data.groupby(ids, sort=False, observed=True).indices.values():
-        pos = np.asarray(positions)
-        ends = times[pos]
-        starts = np.r_[ends[0], ends[:-1]] if source_is_rate else ends - width
+    amounts_all = data.urine.to_numpy(dtype=float)
+    weights_all = data.weight.to_numpy(dtype=float)
+    group_codes = data.groupby(ids, sort=False, observed=True).ngroup().to_numpy()
+    window_widths = np.asarray(WINDOWS)[:, None]
+    for batch, edges in _grouped_row_batches(group_codes):
+        ends = times[batch]
+        if source_is_rate:
+            starts = np.r_[ends[0], ends[:-1]]
+            starts[edges[:-1]] = ends[edges[:-1]]
+        else:
+            starts = ends - width
         lengths = ends - starts
-        amounts = data.urine.to_numpy(dtype=float)[pos]
-        weights = data.weight.to_numpy(dtype=float)[pos]
+        amounts = amounts_all[batch]
+        weights = weights_all[batch]
         valid = np.isfinite(amounts) & np.isfinite(ends) & (lengths > 0)
         if not source_is_rate and len(ends) > 1:
             # Overlapping nonidentical volume bins have no unambiguous volume
             # allocation. Do not round them into manufactured grid continuity.
-            valid[1:] &= starts[1:] >= ends[:-1] - 1e-9
+            nonoverlap = np.r_[True, starts[1:] >= ends[:-1] - 1e-9]
+            nonoverlap[edges[:-1]] = True
+            valid &= nonoverlap
         rates = amounts if source_is_rate else amounts / width
         observed_lengths = np.where(valid, lengths, 0.0)
         volumes = np.where(valid, rates * lengths, 0.0)
-        cumulative_h = np.r_[0.0, np.cumsum(observed_lengths)]
-        cumulative_v = np.r_[0.0, np.cumsum(volumes)]
+        cumulative_h = np.empty(len(ends), dtype=float)
+        cumulative_v = np.empty(len(ends), dtype=float)
+        cumulative_end_h = np.empty(len(ends), dtype=float)
+        cumulative_end_v = np.empty(len(ends), dtype=float)
+        left_by_window = np.empty((len(WINDOWS), len(ends)), dtype=np.int64)
+        candidate = np.empty(len(ends), dtype=np.int64)
+        for begin, end in zip(edges[:-1], edges[1:]):
+            # Preserve the original per-stay cumsum, including its operation
+            # order and signed zeros; subtracting a global prefix would change
+            # floating-point bytes. The exclusive prefix starts at zero.
+            np.cumsum(observed_lengths[begin:end], out=cumulative_end_h[begin:end])
+            np.cumsum(volumes[begin:end], out=cumulative_end_v[begin:end])
+            cumulative_h[begin] = cumulative_v[begin] = 0.0
+            cumulative_h[begin + 1:end] = cumulative_end_h[begin:end - 1]
+            cumulative_v[begin + 1:end] = cumulative_end_v[begin:end - 1]
+            clock = ends[begin:end]
+            left_by_window[:, begin:end] = np.searchsorted(
+                clock, clock[None, :] - window_widths, side="right",
+            ) + begin
+            candidate[begin:end] = np.searchsorted(
+                starts[begin:end], clock - 6.0 - 1e-9, side="left",
+            ) + begin - 1
+        offsets = np.arange(len(ends))
+        weight_ok = np.isfinite(weights) & (weights > 0)
 
-        for window in WINDOWS:
+        for window, window_left in zip(WINDOWS, left_by_window):
             left_edges = ends - window
-            left = np.searchsorted(ends, left_edges, side="right")
-            left = np.minimum(left, np.arange(len(ends)))
+            left = window_left
+            left = np.minimum(left, offsets)
             partial = np.maximum(0.0, left_edges - starts[left])
             partial = np.minimum(partial, lengths[left])
             partial = np.where(valid[left], partial, 0.0)
-            covered = cumulative_h[1:] - cumulative_h[left] - partial
+            covered = cumulative_end_h - cumulative_h[left] - partial
             volume = (
-                cumulative_v[1:]
+                cumulative_end_v
                 - cumulative_v[left]
                 - partial * np.where(valid[left], rates[left], 0.0)
             )
             full = covered >= window - 1e-9
             whole_volume_bins = source_is_rate | (partial < 1e-9)
-            weight_ok = np.isfinite(weights) & (weights > 0)
             assessable = full & whole_volume_bins & weight_ok
-            covered_by_window[window][pos] = np.maximum(0.0, covered)
-            rate_by_window[window][pos[assessable]] = (
+            covered_by_window[window][batch] = np.maximum(0.0, covered)
+            rate_by_window[window][batch][assessable] = (
                 volume[assessable] / window / weights[assessable]
             )
-            reason = np.full(len(pos), "insufficient_window", dtype=object)
+            reason = reason_by_window[window][batch]
             reason[full & ~whole_volume_bins] = "partial_volume_bin"
             reason[~weight_ok] = "missing_weight"
             reason[assessable] = (
@@ -162,38 +195,34 @@ def assess_urine_windows(
                 if source_is_rate
                 else "complete_estimated_bins"
             )
-            reason_by_window[window][pos] = reason
 
         # Find the closest complete segment start strictly before t-6. Reset
         # continuity at every invalid segment or genuine gap, per patient.
-        candidate = np.searchsorted(starts, ends - 6.0 - 1e-9, side="left") - 1
         safe = np.maximum(candidate, 0)
         break_before = ~valid
-        if len(pos) > 1:
+        if len(ends) > 1:
             break_before[1:] |= (~valid[:-1]) | (starts[1:] > ends[:-1] + 1e-9)
+        break_before[edges[:-1]] = True
         block_start = np.maximum.accumulate(
-            np.where(break_before, np.arange(len(pos)), 0)
+            np.where(break_before, offsets, 0),
         )
         duration = ends - starts[safe]
-        covered = cumulative_h[1:] - cumulative_h[safe]
-        volume = cumulative_v[1:] - cumulative_v[safe]
+        covered = cumulative_end_h - cumulative_h[safe]
+        volume = cumulative_end_v - cumulative_v[safe]
         assessable = (candidate >= block_start) & valid & (duration > 6.0 + 1e-9)
         assessable &= covered >= duration - 1e-9
         assessable &= np.isfinite(weights) & (weights > 0)
-        rate = np.full(len(pos), np.nan)
+        rate = np.full(len(ends), np.nan)
         rate[assessable] = (
             volume[assessable] / duration[assessable] / weights[assessable]
         )
-        oliguria_duration_h[pos] = np.where(
-            assessable, duration, np.nan
-        )
-        oliguria_rate[pos] = rate
-        oliguria_gt6h[pos] = assessable & (rate < 0.3)
+        oliguria_duration_h[batch] = np.where(assessable, duration, np.nan)
+        oliguria_rate[batch] = rate
+        oliguria_gt6h[batch] = assessable & (rate < 0.3)
 
     # Assign each result column once. Repeated ``DataFrame.loc`` writes per
     # patient make pandas rebuild indexers hundreds of thousands of times on a
-    # full ICU cohort even though ``pos`` is already a positional integer
-    # array. The NumPy buffers above preserve the same row order and dtypes.
+    # full ICU cohort. The NumPy buffers preserve the same row order/dtypes.
     for window in WINDOWS:
         name = f"uo_{window}h"
         out[f"{name}_covered_h"] = covered_by_window[window]

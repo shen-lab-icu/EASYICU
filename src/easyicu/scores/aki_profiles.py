@@ -529,6 +529,10 @@ def build_renal_aki_bundle(
         validate="one_to_one",
         sort=False,
     )
+    # These full-cohort evidence frames have been consumed. Keeping them in
+    # local variables through the native merge and final sort doubles the
+    # live working set even though only ``result`` is used from here onward.
+    del reference, quality
 
     native_profile = default_source_native_profile(normalized_database)
     if normalized_database in {"aumc", "sic"}:
@@ -586,6 +590,7 @@ def build_renal_aki_bundle(
             validate="one_to_one",
             sort=False,
         )
+        del native
         for column in (
             "aki_source_native_profile",
             "aki_source_native_status",
@@ -646,10 +651,8 @@ def build_renal_aki_bundle(
         resolved_time,
         *[column for column in RENAL_AKI_BUNDLE_OUTPUTS if column in result],
     ]
-    return (
-        result[keep]
-        .sort_values([resolved_id, resolved_time], kind="stable")
-        .reset_index(drop=True)
+    return result[keep].sort_values(
+        [resolved_id, resolved_time], kind="stable", ignore_index=True,
     )
 
 
@@ -1385,9 +1388,11 @@ def _event_stage_at_exact_rows(
         rrt_df[value_col].fillna(False).astype(bool), [source_id, source_time]
     ]
     active_keys = set(map(tuple, active.to_numpy()))
-    for index, row in result[[id_col, time_col]].iterrows():
-        if (row[id_col], row[time_col]) in active_keys:
-            stage.loc[index] = 3
+    # Preserve the joint key coercion of the old row reader (e.g. numeric
+    # ID/time columns), while probing the complete spine in compiled pandas.
+    keys = result[[id_col, time_col]].to_numpy()
+    index = pd.MultiIndex.from_arrays([keys[:, 0], keys[:, 1]])
+    stage.loc[index.isin(active_keys)] = 3
     return stage
 
 
@@ -1401,15 +1406,26 @@ def _rolling_stage_max(
     time_unit: Optional[str],
 ) -> pd.Series:
     output = pd.Series(pd.NA, index=frame.index, dtype="Int64")
-    for _, index in frame.groupby(id_col, sort=False).groups.items():
-        group = frame.loc[index].sort_values(time_col)
-        numeric_time = _time_hours(group[time_col], time_col, time_unit).to_numpy()
-        stages = group[stage_col].fillna(0).to_numpy(int)
-        maxima = [
-            stages[(numeric_time >= current - hours) & (numeric_time <= current)].max()
-            for current in numeric_time
-        ]
-        output.loc[group.index] = pd.array(maxima, dtype="Int64")
+    if frame.empty:
+        return output
+    from ..io.ts_utils import _grouped_window_bounds
+
+    ordered = frame.loc[frame[id_col].notna(), [id_col, time_col, stage_col]].sort_values([id_col, time_col])
+    unit = resolve_time_unit(ordered[time_col], time_col, time_unit)
+    times = (
+        ordered[time_col].to_numpy(dtype="datetime64[ns]").view("int64")
+        if unit == "datetime" else _time_hours(ordered[time_col], time_col, unit).to_numpy()
+    )
+    stages = ordered[stage_col].fillna(0).to_numpy(int)
+    groups = ordered.groupby(id_col, sort=False).ngroup().to_numpy()
+    if unit == "datetime" and len(ordered):
+        starts = np.r_[0, np.flatnonzero(groups[1:] != groups[:-1]) + 1]
+        times = (times - times[starts][groups]) / 3.6e12
+    # Unlike component slides, stage smoothing includes every equal-time peer,
+    # including later rows. Keep that owner-specific upper bound explicit.
+    bounds = _grouped_window_bounds(times, groups, hours, include_future_peers=True)
+    maxima = pd.Series(stages).rolling(bounds, min_periods=1).max().to_numpy(dtype=int)
+    output.loc[ordered.index] = pd.array(maxima, dtype="Int64")
     return output
 
 

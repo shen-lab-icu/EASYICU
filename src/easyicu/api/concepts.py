@@ -1167,6 +1167,10 @@ def load_concepts(
 
     Returns:
         DataFrame 或 dict of DataFrames
+        Standard columns retain their existing order. Special outputs from
+        the current renal bundle are appended in lexical order, followed by
+        explicitly requested legacy renal outputs in lexical order. Dict
+        projections use the same order within each bundle.
 
     Examples:
         >>> # 最简单的用法 - 自动检测所有参数
@@ -1923,7 +1927,7 @@ def load_concepts(
                 if df is not None:
                     _pre[name] = df
 
-        special_dict: Dict[str, pd.DataFrame] = {}
+        special_dict: Dict[Union[str, tuple[str, ...]], pd.DataFrame] = {}
         if _need_kdigo:
             try:
                 current_requested = _need_kdigo & _KDIGO_BUNDLE_OUTPUTS
@@ -1971,8 +1975,19 @@ def load_concepts(
                         )
                         if c in aki_df.columns
                     ]
-                    for c in requested_outputs:
-                        if c in aki_df.columns:
+                    # Sets have process-dependent iteration order. Publish each
+                    # current/legacy renal bundle in lexical order for both the
+                    # wide merge and independent dictionary projections.
+                    columns = sorted(c for c in requested_outputs if c in aki_df.columns)
+                    if merge and columns:
+                        # The bundle already has one shared key spine. Keep it
+                        # wide: copying the keys for every output and repeatedly
+                        # outer-merging the growing frame costs gigabytes at
+                        # full-cohort scale. Dict callers still receive the
+                        # historical independent per-concept projections.
+                        special_dict[tuple(columns)] = aki_df[id_time + columns]
+                    else:
+                        for c in columns:
                             special_dict[c] = aki_df[id_time + [c]].copy()
             except Exception as e:
                 logger.warning(f"renal AKI bundle loading failed: {e}")
@@ -2133,8 +2148,9 @@ def load_concepts(
                         result = pd.DataFrame()
                 if isinstance(result, pd.DataFrame):
                     for name, sdf in special_dict.items():
+                        value_columns = (name,) if isinstance(name, str) else name
                         join_cols = [
-                            c for c in sdf.columns if c in result.columns and c != name
+                            c for c in sdf.columns if c in result.columns and c not in value_columns
                         ]
                         if join_cols:
                             try:
