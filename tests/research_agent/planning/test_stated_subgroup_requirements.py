@@ -111,7 +111,7 @@ def test_a_family_with_neither_route_has_a_definite_capability_stop():
 def test_a_descriptive_plan_answers_a_subgroup_with_its_result_in_each_level(concept, status):
     """"Describe the outcome in each group" is a descriptive answer, not a stop."""
 
-    from easyicu.research_agent.planning.question_requirements import stated_subgroup_coverage
+    from easyicu.research_agent.planning.requirement_coverage import stated_subgroup_coverage
     from .descriptive_interval_fixtures import descriptive_context, descriptive_plan
 
     plan = descriptive_plan(descriptive_context())
@@ -122,7 +122,7 @@ def test_a_descriptive_plan_answers_a_subgroup_with_its_result_in_each_level(con
 
 def test_a_static_prediction_plan_has_no_route_to_a_subgroup_owner():
     from easyicu.research_agent.contracts.prediction_execution import PREDICTION_PRIMARY_ACTION
-    from easyicu.research_agent.planning.question_requirements import stated_subgroup_coverage
+    from easyicu.research_agent.planning.requirement_coverage import stated_subgroup_coverage
 
     plan = _grouped_only()
     primary = plan.steps[0].model_copy(update={"scientific_action_id": PREDICTION_PRIMARY_ACTION})

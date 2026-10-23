@@ -66,7 +66,7 @@ def check_capability_gap(
             stated_adjustment_columns,
         )
         from .analysis_types import infer_analysis_type
-        from .question_requirements import family_describes_by_group, subgroup_actions_for_family
+        from .requirement_coverage import family_describes_by_group, subgroup_actions_for_family
 
         adjustment = next((item for item in context_stated_adjustments(context)
                            if (item.concept or item.variable) == gap.concept), None)
