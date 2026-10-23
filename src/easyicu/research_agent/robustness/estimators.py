@@ -104,6 +104,9 @@ class EstimatorResult:
     variance_estimator: Literal["model_based", "cluster_robust"] = "model_based"
     #: Distinct groups among the exact complete rows used by a clustered fit.
     cluster_count: Optional[int] = None
+    # The covariance of the one fitted model, for prespecified linear
+    # contrasts (including stratum estimates); never fit separate strata.
+    coefficient_covariance: tuple[tuple[float, ...], ...] = ()
 
 
 class _UncodeableDesign(Exception):
@@ -644,6 +647,7 @@ def fit_estimator(
             separation_detected=separated,
             variance_estimator=variance_estimator,
             cluster_count=cluster_count,
+            coefficient_covariance=tuple(tuple(float(v) for v in row) for row in result.cov_params().to_numpy()),
         )
     except Exception as exc:
         return EstimatorResult(

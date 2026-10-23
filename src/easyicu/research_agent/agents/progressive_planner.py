@@ -3962,6 +3962,12 @@ class ProgressivePlannerAgent:
         the Planner-private outline binders and acceptance callables.
         """
 
+        from ..planning.family_spec import BASELINE_ASSOCIATION_FAMILY_ID, family_template_id_for_context
+
+        if family_template_id_for_context(context, analysis_types=analysis_types) == BASELINE_ASSOCIATION_FAMILY_ID:
+            # The minimal family promises no additional functional-form steps.
+            # Progressive v2 and other templates keep their existing obligations.
+            required_functional_form_targets = ()
         context_required_method_layers = required_method_layers_for_context(context)
 
         def bind_outline(outline: ProgressivePlanOutline) -> ProgressivePlanOutline:

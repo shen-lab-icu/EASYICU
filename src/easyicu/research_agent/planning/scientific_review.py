@@ -87,14 +87,12 @@ from ..research_context.concept_population import (
     ConceptCohortWindowError,
     concept_cohort_window,
 )
-from ..research_context.materialization_window import host_materialization_window_hours
 from ..research_context.minimum_stay import minimum_icu_stay_hours
 from ..research_context.stay_events import whole_stay_event_columns
 from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
     study_time_origin_alignment,
     trajectory_window_statements,
-    window_extends_after_anchor,
 )
 from ..research_context.typed import declared_domain_for_variable
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
@@ -104,6 +102,7 @@ from ..trajectory.runtime_validation import (
     signed_trajectory_plan_claimed,
     signed_trajectory_plan_contract_errors,
 )
+from .association_scope import post_baseline_exposure
 from .cohort_contract import CohortDefinition
 from .cohort_eligibility import (
     CriterionOnOutcome,
@@ -121,9 +120,7 @@ from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
 
 from .adjustment_authority import (
     AdjustmentSetAuthority,
-    baseline_static_grouping,
     host_outer_feature_window_end_hours,
-    owner_declared_baseline_static,
     primary_landmark_hours,
 )
 from .analysis_types import (
@@ -494,54 +491,6 @@ def model_covariate_plan_authority(
         temporal_roles.update(plan.adjustment_proposal.covariate_temporal_roles)
     return rationales, temporal_roles
 
-
-def post_baseline_exposure(
-    context: ResearchContext, exposure: Optional[str] = None,
-) -> tuple[bool, Optional[str]]:
-    """Classify post-zero exposure opportunity from owner-issued coordinates.
-
-    When no exposure is supplied, classify the context's primary exposure.
-    A concept's clinical definition window remains the first authority.  The
-    Web host may also bind an exact physical feature-materialization window in
-    ``data_constraints`` before a concrete wide-column descriptor exists (for
-    example while candidate planning is metadata-only).  That outer window is
-    *not* promoted to a clinical-definition anchor; it only establishes that
-    a primary feature can be observed after ICU admission, so association
-    plans must close early-event/exposure opportunity.  The window is read by
-    ``host_materialization_window_hours``, as the cohort-predicate rule reads
-    it.
-    """
-
-    exposure = str(
-        (context.primary_exposure if exposure is None else exposure) or ""
-    ).strip()
-    if not exposure:
-        return False, None
-    descriptor = context.variable(exposure)
-    window = str(getattr(descriptor, "analysis_window", "") or "").strip()
-    if window:
-        return window_extends_after_anchor(window), window
-    if descriptor is not None and (
-        owner_declared_baseline_static(descriptor)
-        or baseline_static_grouping(descriptor, context)
-    ):
-        # The outer window bounds *measurement* opportunity inside the stay.
-        # It cannot move an owner-declared baseline attribute (age, sex,
-        # admission type) after time zero, nor a grouping formed only from
-        # them (age groups), and the host already relies on that same
-        # declaration for baseline covariate timing.  A concept whose own
-        # window is post-baseline was returned above, so this never overrides
-        # physical window evidence.
-        return False, None
-
-    # This detects a risk in the host-declared physical window; it grants no
-    # execution authority. An absent confirmation cannot hide that risk.
-    hours = host_materialization_window_hours(context)
-    if hours is None:
-        return False, None
-    # This label deliberately names the physical coordinate, rather than
-    # implying a phenotype definition or a follow-up horizon.
-    return True, f"outer_materialization:icu_admission[0,{hours:g}]h"
 
 
 def patient_identity_available(context: ResearchContext) -> bool:

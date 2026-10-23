@@ -26,6 +26,7 @@ from ...contracts.primary_cohort import (
 )
 from ...contracts.prediction_execution import MAX_BENCHMARK_COMPARATORS
 from ..adjustment_authority import HostTemporalRole
+from ..association_scope import MAX_ASSOCIATION_EXPOSURE_LEVELS
 from ..benchmark_comparator import ComparatorKind
 from ..design_selection import ResearchDesignCandidate
 from ..literature_design_authority import (
@@ -51,6 +52,7 @@ FAMILY_SPEC_SCHEMA_VERSION = "easyicu.family_plan_spec/1"
 FAMILY_SPEC_REQUEST_SCHEMA_VERSION = "easyicu.family_spec_request/1"
 LANDMARK_CATEGORICAL_FAMILY_ID = "landmark_categorical_association"
 LANDMARK_SPLINE_FAMILY_ID = "landmark_spline_association"
+BASELINE_ASSOCIATION_FAMILY_ID = "baseline_adjusted_association"
 DESCRIPTIVE_FAMILY_ID = "descriptive_exposure_outcome"
 PHENOTYPING_FAMILY_ID = "cross_sectional_phenotyping"
 PREDICTION_FAMILY_ID = "static_prediction_model"
@@ -66,6 +68,7 @@ LANDMARK_FAMILY_IDS = frozenset({LANDMARK_CATEGORICAL_FAMILY_ID, LANDMARK_SPLINE
 POPULATION_FAMILY_IDS = frozenset(
     {
         *LANDMARK_FAMILY_IDS,
+        BASELINE_ASSOCIATION_FAMILY_ID,
         DESCRIPTIVE_FAMILY_ID,
         PHENOTYPING_FAMILY_ID,
         PREDICTION_FAMILY_ID,
@@ -87,6 +90,7 @@ SEALED_SUITE_FAMILY_IDS = frozenset(
     }
 )
 FamilyId = Literal[
+    "baseline_adjusted_association",
     "landmark_categorical_association",
     "landmark_spline_association",
     "descriptive_exposure_outcome",
@@ -101,7 +105,7 @@ ExposureKind = Literal["categorical", "continuous", "none"]
 #: The most levels one categorical exposure may carry in a request.  The
 #: router reads the same bound, so it never offers a template an exposure
 #: this contract refuses.
-MAX_EXPOSURE_LEVELS = 24
+MAX_EXPOSURE_LEVELS = MAX_ASSOCIATION_EXPOSURE_LEVELS
 
 _RATIONALE_MIN = 16
 _RATIONALE_MAX = 500
@@ -719,6 +723,8 @@ class FamilySpecRequest(BaseModel):
     primary_contrast_level_index: int = Field(ge=0)
     exposure_is_ordered: bool
     exposure_companion_columns: list[str] = Field(default_factory=list)
+    # Host-bound subgroup columns; the Planner cannot add an analysis step.
+    subgroup_columns: list[str] = Field(default_factory=list, exclude_if=lambda value: not value)
     #: Empty for the sealed feasibility family, which analyses no outcome, and
     #: for a trajectory suite whose study has none: its classes are discovered
     #: without an outcome, which is only ever described by frozen class.
@@ -888,6 +894,8 @@ class FamilySpecRequest(BaseModel):
         landmark-or-window value it had before the suite was read here.
         """
 
+        if self.family_id == BASELINE_ASSOCIATION_FAMILY_ID:
+            return 0.0
         suite = self.survival_suite
         return (
             self.landmark_hours
@@ -964,6 +972,11 @@ class FamilySpecRequest(BaseModel):
                 raise ValueError("landmark families plan an association study")
             if any(value is None for value in landmark_fields):
                 raise ValueError("a landmark family needs its typed landmark coordinates")
+        elif self.family_id == BASELINE_ASSOCIATION_FAMILY_ID:
+            if self.analysis_type != "association_study" or self.exposure_kind == "none":
+                raise ValueError("a baseline association needs an exposure and association study")
+            if any(value is not None for value in landmark_fields):
+                raise ValueError("a baseline association carries no landmark coordinates")
         elif self.family_id == DESCRIPTIVE_FAMILY_ID:
             if self.analysis_type != "descriptive_epidemiology":
                 raise ValueError("the descriptive family plans a descriptive study")
@@ -1133,6 +1146,7 @@ class FamilySpecRequest(BaseModel):
             raise ValueError("sealed suite coordinates belong to the landmark survival family")
         if self.exposure_kind == "categorical":
             if self.family_id not in {
+                BASELINE_ASSOCIATION_FAMILY_ID,
                 LANDMARK_CATEGORICAL_FAMILY_ID,
                 DESCRIPTIVE_FAMILY_ID,
                 PHENOTYPING_FAMILY_ID,
@@ -1151,6 +1165,7 @@ class FamilySpecRequest(BaseModel):
                 raise ValueError("companion columns are a continuous-exposure coordinate")
         elif self.exposure_kind == "continuous":
             if self.family_id not in {
+                BASELINE_ASSOCIATION_FAMILY_ID,
                 LANDMARK_SPLINE_FAMILY_ID,
                 LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID,
             }:
@@ -1300,6 +1315,8 @@ def table_one_group_column(request: "FamilySpecRequest") -> Optional[str]:
     when the plan is bound, so a template table would not reach the plan.
     """
 
+    if request.family_id == BASELINE_ASSOCIATION_FAMILY_ID:
+        return request.primary_exposure if request.exposure_kind == "categorical" else request.outcome
     if request.family_id in LANDMARK_FAMILY_IDS:
         # A continuous exposure has no levels to group by: the baseline table
         # is grouped by the binary outcome and describes the exposure instead.
@@ -1453,7 +1470,7 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
             "the descriptive family fits no adjusted model; propose baseline_variables instead",
             path="adjustment_set",
         )
-    if request.family_id in LANDMARK_FAMILY_IDS and spec.baseline_variables:
+    if request.family_id in {*LANDMARK_FAMILY_IDS, BASELINE_ASSOCIATION_FAMILY_ID} and spec.baseline_variables:
         raise FamilySpecError(
             "family_spec_baseline_variables_not_applicable",
             "landmark families describe the adjustment roster in Table 1; baseline_variables "

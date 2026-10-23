@@ -158,13 +158,13 @@ def capability_gap_confirmation_facts(
 def threshold_grouping_expressible(context: ResearchContext, concept: str) -> bool:
     """Whether a typed exposure grouping could group ``concept`` by thresholds.
 
-    The named hook for ExposureGroupSpec.  Until that owner lands nothing can,
-    so a thresholds claim stands on the variable's closed levels alone; then
-    the claim holds only when the spec cannot group this concept either.
+    Read the grouping compiler's source menu, including units and physical
+    windows. Availability of a numeric dtype alone proves no grouping source.
     """
 
-    del context, concept
-    return False
+    from .exposure_group_compile import grouping_sources
+
+    return any(source.concept == concept for source in grouping_sources(context))
 
 
 #: A stated reading no source concept was matched to proves no gap: the host

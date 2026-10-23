@@ -1,6 +1,8 @@
 {
   "baseline_change_summary": {
-    "source_digest_changes": [],
+    "source_digest_changes": [
+      "src/easyicu/research_agent/reporting/article_contract.py"
+    ],
     "summary_changes": {}
   },
   "baseline_history": [
@@ -772,9 +774,16 @@
       "reason": "Table 1 reads a dictionary factor as a category (pilot1 round 2 A4)",
       "source_digest_changes": [],
       "summary_changes": {}
+    },
+    {
+      "reason": "The baseline association family omits the generic robustness display while typed sensitivity requirements retain their existing review gate; refresh the article-contract source digest.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/reporting/article_contract.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Table 1 reads a dictionary factor as a category (pilot1 round 2 A4)",
+  "baseline_reason": "The baseline association family omits the generic robustness display while typed sensitivity requirements retain their existing review gate; refresh the article-contract source digest.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -799,7 +808,7 @@
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
-    "src/easyicu/research_agent/reporting/article_contract.py": "79253c08e4d959edcca599b59f758f9b650ea9829a477dd3a7c34ce4c7e57c5b",
+    "src/easyicu/research_agent/reporting/article_contract.py": "1f93c0e0c5f599349bf10d3e15d15325b851011b2f7c503be8737946624571cf",
     "src/easyicu/research_agent/research_context/outbound.py": "1019a35f2bf4ed055c4c274fbe29bf8b6cffcbe601fe3c0fa2096c54bb68efd6",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "037224b99bddde4ef37cf2119fc708ca33a932b274e932ba6cb902e689f8bd75",
@@ -982,15 +991,15 @@
       "know_how_prompt_bytes": 3791,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15041,
+        "approx_input_tokens": 15045,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47301,
+            "bytes": 47315,
             "included": true,
             "required": true,
-            "sha256": "4dd63406abfe6cbb228ac8e6cc47eed90f9e30756840e1ccaf96972924f5f71b"
+            "sha256": "3bc9ee9326b626dcb947df20317699dc01bb34d49fbe9043c3325fc80e955dc1"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1001,27 +1010,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60164,
+        "total_bytes": 60178,
         "truncated_strings": false,
-        "user_bytes": 51720
+        "user_bytes": 51734
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13937,
+        "approx_input_tokens": 13940,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47301,
+            "bytes": 47315,
             "included": true,
             "required": true,
-            "sha256": "4dd63406abfe6cbb228ac8e6cc47eed90f9e30756840e1ccaf96972924f5f71b"
+            "sha256": "3bc9ee9326b626dcb947df20317699dc01bb34d49fbe9043c3325fc80e955dc1"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 55745,
+        "total_bytes": 55759,
         "truncated_strings": false,
-        "user_bytes": 47301
+        "user_bytes": 47315
       },
       "planning_contract_bytes": 7541,
       "planning_contract_sha256": "50e21b7661aafd128d44ec79f5ee5b0828e92a427a3c6c505273ad900529caa3",

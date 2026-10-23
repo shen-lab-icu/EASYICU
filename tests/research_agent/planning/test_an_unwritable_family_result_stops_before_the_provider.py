@@ -279,6 +279,9 @@ def _plan_from_outline(family: str, outline: dict, *, strategy="progressive_v2",
     context = _outline_context().model_copy(
         update={"research_question": OUTLINE_QUESTIONS[family]}
     )
+    # Keep this fixture on the outline path. A baseline exposure now has a
+    # closed host template that never asks the provider to select a family.
+    context.variable("exposure_flag").analysis_window = "first_24h"
     responses = [outline, _foundation_payload(), *_materialization_payloads()]
     llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
     try:

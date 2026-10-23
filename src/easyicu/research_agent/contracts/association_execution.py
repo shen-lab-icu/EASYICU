@@ -225,6 +225,7 @@ def _association_execution_verdict(
     step: Any,
     *,
     allowed_methods: Sequence[str],
+    allow_effect_modifiers: bool = False,
 ) -> OwnershipVerdict:
     """Own only a single, completely declared adjusted-association model.
 
@@ -302,6 +303,11 @@ def _association_execution_verdict(
             ),
         )
     requirement = requirements[0]
+    if (getattr(requirement, "effect_modifiers", ()) or getattr(step, "scientific_action_id", None) == "association.effect_modification" or getattr(step, "scientific_capability", None) == "association_baseline_adjusted_v1") and not allow_effect_modifiers:
+        return OwnershipVerdict.wrong_shape(
+            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+            reason="effect modifiers require the signed interaction owner",
+        )
     if requirement.covariates is None:
         return OwnershipVerdict.incomplete_declaration(
             ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
@@ -358,6 +364,19 @@ def association_execution_verdict(step: Any) -> OwnershipVerdict:
     return _association_execution_verdict(
         step,
         allowed_methods=(PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,),
+    )
+
+
+def baseline_association_execution_verdict(step: Any) -> OwnershipVerdict:
+    """Structural boundary; the signed authority additionally checks its digest."""
+    requirements = tuple(getattr(step, "model_requirements", ()) or ())
+    modifiers = requirements[0].effect_modifiers if len(requirements) == 1 else ()
+    expected = "association.effect_modification" if modifiers else "association.adjusted_association"
+    if (getattr(step, "scientific_action_id", None) != expected
+        or not any(str(ref).startswith("scientific_runtime_contract:") for ref in step.icu_rule_refs)):
+        return OwnershipVerdict.wrong_shape(ADJUSTED_ASSOCIATION_ANALYSIS_KIND, reason="baseline subgroup action or signed reference is absent")
+    return _association_execution_verdict(
+        step, allowed_methods=("adjusted_association_models",), allow_effect_modifiers=True,
     )
 
 

@@ -322,8 +322,27 @@ def _missingness_reason(context: StepExecutorContext) -> str:
 
 
 def _build_registry() -> StepExecutorRegistry:
+    from ...authority.baseline_association_runtime import BaselineAssociationRuntimeAuthority
+    from .baseline_association_executor import baseline_executor_owns_step, baseline_executor_code
+
     registry = StepExecutorRegistry()
     routes = (
+        StepExecutor(
+            key="baseline_association",
+            applicable=lambda c: isinstance(c.current_case_scientific_runtime_authority, BaselineAssociationRuntimeAuthority),
+            owns=lambda c: baseline_executor_owns_step(c.step, plan=c.plan, authority=c.current_case_scientific_runtime_authority),
+            render=lambda c: baseline_executor_code(c.step, plan=c.plan, authority=c.current_case_scientific_runtime_authority,
+                                                    runtime_projection_sha256=c.scientific_runtime_projection_sha256,
+                                                    plausibility_scope=c.plausibility_scope),
+            analysis_kind=lambda c: {
+                "cohort_definition": "host_bound_analysis_cohort",
+                "adjusted_association": ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+                "absolute_risk_context": "absolute_risk_context",
+            }[c.step.step_id],
+            selection_reason="signed_baseline_association_contract_preflight",
+            progress_message="Running the signed baseline association owner",
+            consumed_input_keys=lambda c: tuple(key for key in c.step.inputs if ":" in key),
+        ),
         StepExecutor(
             key=HOST_BOUND_COHORT_ANALYSIS_KIND,
             owns=lambda c: host_bound_cohort_executor_owns_step(c.step),

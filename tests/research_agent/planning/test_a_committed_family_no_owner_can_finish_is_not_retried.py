@@ -101,6 +101,10 @@ def _with_unregistered_citation(outline: dict) -> dict:
 
 def _plan(family: str, first, *, strategy: str = "progressive_v2", **kwargs):
     context = _context().model_copy(update={"research_question": QUESTIONS[family]})
+    # A post-baseline exposure without a landmark still needs an outline.
+    # Baseline associations now use the closed family spec instead, so they
+    # cannot exercise this test's mixed-family outline refusal.
+    context.variable("exposure_flag").analysis_window = "first_24h"
     responses = [
         first if isinstance(first, str) else json.dumps(first),
         json.dumps(_outline_for(family)),

@@ -67,7 +67,7 @@ from .family_spec_fixtures import (
     _run,
 )
 
-def test_template_matches_the_landmark_categorical_family_only() -> None:
+def test_template_distinguishes_baseline_and_landmark_categorical_families() -> None:
     context = _context()
     assert (
         family_template_id_for_context(context, analysis_types=("association_study",))
@@ -80,7 +80,7 @@ def test_template_matches_the_landmark_categorical_family_only() -> None:
             )
         }
     )
-    assert family_template_id_for_context(no_landmark, analysis_types=("association_study",)) is None
+    assert family_template_id_for_context(no_landmark, analysis_types=("association_study",)) == "baseline_adjusted_association"
     # A descriptive headline routes the same closed-level exposure to the
     # descriptive family; an unsupported headline routes nowhere.
     assert (

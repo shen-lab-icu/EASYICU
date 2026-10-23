@@ -281,7 +281,9 @@ def compile_web_scientific_runtime_projection(
         landmark_coordinates["sensitivity_specs"], strategy="landmark"
     )
     if landmark is None:
-        return None
+        from .baseline_association_runtime_projection import compile_baseline_association_runtime_projection
+
+        return compile_baseline_association_runtime_projection(exposure_groupings=exposure_groupings, **landmark_coordinates)
     exposure_kind, _levels = primary_exposure_kind(
         universe_path=landmark_coordinates["universe_path"],
         primary_exposure=landmark_coordinates.get("primary_exposure"),
