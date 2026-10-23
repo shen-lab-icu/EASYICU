@@ -886,6 +886,9 @@ def _is_ungrouped_baseline_summary(step: ProgressiveSkeletonStep) -> bool:
             "artifact:baseline_context_summary",
             "table:baseline_table",
             "table:cohort_summary",
+            # A custom step owns no Table 1 spec (module_id='table_one' does),
+            # so this spelling can only mean the ungrouped summary.
+            "table:table_one",
         }
     )
 
