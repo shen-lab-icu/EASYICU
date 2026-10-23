@@ -101,12 +101,9 @@ def bind_offered_registered_source(
         raise PiCopilotError(
             "pi_data_source_not_registered", "Choose a validated registered EasyICU export.", status_code=409,
         )
-    try:
-        profile = get_database_profile(str(source.get("database") or ""))
-        source_database = profile.key
-    except KeyError:
-        source_database = None
-    if source_database != offer["database"]:
+    # The request and the registered row must name the very same profile key;
+    # aliases and demo parents cannot substitute for that exact identity.
+    if source.get("database") != database:
         raise PiCopilotError(
             "pi_data_source_database_mismatch", "Choose an export of the exact requested database.",
             status_code=409,

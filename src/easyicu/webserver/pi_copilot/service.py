@@ -1973,7 +1973,7 @@ class PiCopilotService:
 
         if clean_action == "use_registered_source":
             context = bind_offered_registered_source(
-                record, context, database=expected_database, source_id=source_id,
+                record, context, database=clean_database, source_id=source_id,
                 stale=self._stale_details(record),
             )
 

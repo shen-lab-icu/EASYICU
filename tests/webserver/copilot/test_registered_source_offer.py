@@ -13,7 +13,9 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
+from easyicu.databases.profiles import iter_database_profiles
 from easyicu.webserver import research_run_submission, sources, study_contexts
 from easyicu.webserver.app import app
 from easyicu.webserver.pi_copilot import source_recommendation, study_context_update
@@ -217,6 +219,7 @@ def test_use_binds_through_the_tool_owner_and_confirms_once(host, monkeypatch) -
     ("not_offered", "pi_data_source_not_offered"),
     ("missing_id", "pi_source_id_required"),
     ("missing_database", "pi_database_not_supported"),
+    ("unknown_database", "pi_database_not_supported"),
     ("demo_database", "pi_data_source_database_mismatch"),
     ("workspace", "pi_session_data_source_authorization_not_required"),
     ("confirmed", "pi_session_data_source_authorization_not_pending"),
@@ -230,7 +233,8 @@ def test_each_refusal_leaves_both_stores_byte_identical(host, monkeypatch, case,
     service, registry = host
     source_id = {"unknown": "src_missing", "invalid": "src_invalid", "other_family": "src_other",
                  "not_offered": "src_small", "missing_id": ""}.get(case, "src_best")
-    database = {"missing_database": "", "demo_database": "eicu_demo"}.get(case, "eicu")
+    database = {"missing_database": "", "unknown_database": "unknown_database",
+                "demo_database": "eicu_demo"}.get(case, "eicu")
     record = service._get_record(SESSION)
     if case == "workspace":
         record.agent_mode = "workspace"
@@ -291,6 +295,78 @@ def test_full_export_offer_excludes_a_more_complete_demo_and_exact_demo_can_be_s
     assert selected["stays"] == 80
 
 
+@pytest.mark.parametrize("database", [profile.key for profile in iter_database_profiles()])
+def test_authorization_request_accepts_every_registered_profile_key(database) -> None:
+    request = routes.PiDataSourceAuthorizationRequest(
+        project_id=PROJECT, action="use_registered_source", database=database, source_id="src_demo",
+    )
+    assert request.database == database
+
+
+@pytest.mark.parametrize("database", ["unknown_database", "eICU", " eicu"])
+def test_authorization_request_rejects_non_profile_keys_without_binding(host, database) -> None:
+    service, _ = host
+    before = _bytes(service)
+    with pytest.raises(ValidationError) as caught:
+        routes.PiDataSourceAuthorizationRequest(
+            project_id=PROJECT, action="use_registered_source", database=database, source_id="src_best",
+        )
+    assert caught.value.errors()[0]["loc"] == ("database",)
+    assert _bytes(service) == before
+
+
+@pytest.mark.parametrize("hosted", [False, True])
+def test_demo_authorization_request_binds_through_the_route_owner(host, monkeypatch, hosted) -> None:
+    service, registry = host
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
+    registry["sources"].append(_row("src_demo", "eicu_demo", stays=12))
+    request = routes.PiDataSourceAuthorizationRequest(
+        project_id=PROJECT, action="use_registered_source", database="eicu_demo", source_id="src_demo",
+    )
+    result = routes.post_pi_copilot_data_source_authorization(SESSION, request)
+    authorization = result["session"]["data_source_authorization"]
+    assert authorization["status"] == "confirmed"
+    assert authorization["source"]["database"] == "eicu_demo"
+    assert authorization["source"]["stays"] == 12
+    saved = study_contexts.get_context("study-offer")["data_source"]
+    assert saved["database"] == "eicu_demo"
+    assert saved["path"] == "/synthetic/private/src_demo"
+    assert service._get_record(SESSION).data_source_authorization.source.database == "eicu_demo"
+
+
+@pytest.mark.parametrize("hosted", [False, True])
+@pytest.mark.parametrize(("database", "source_id"), [("eicu", "src_demo"), ("eicu_demo", "src_best")])
+def test_request_database_must_match_the_registered_source_exactly(
+    host, monkeypatch, hosted, database, source_id,
+) -> None:
+    from fastapi import HTTPException
+
+    service, registry = host
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
+    registry["sources"].append(_row("src_demo", "eicu_demo"))
+    request = routes.PiDataSourceAuthorizationRequest(
+        project_id=PROJECT, action="use_registered_source", database=database, source_id=source_id,
+    )
+    before = _bytes(service)
+    with pytest.raises(HTTPException) as caught:
+        routes.post_pi_copilot_data_source_authorization(SESSION, request)
+    assert caught.value.status_code == 409
+    assert caught.value.detail["error"] == "pi_data_source_database_mismatch"
+    assert _bytes(service) == before
+
+
+@pytest.mark.parametrize("alias_owner", ["request", "registry"])
+def test_registered_binding_never_substitutes_a_database_alias_for_the_exact_id(host, alias_owner) -> None:
+    service, registry = host
+    if alias_owner == "registry":
+        registry["sources"][0]["database"] = "eICU"
+    before = _bytes(service)
+    with pytest.raises(PiCopilotError) as caught:
+        _use(service, database="eICU" if alias_owner == "request" else "eicu")
+    assert caught.value.code == "pi_data_source_database_mismatch"
+    assert _bytes(service) == before
+
+
 def test_workspace_session_cannot_read_a_research_offer(host) -> None:
     service, _ = host
     record = service._get_record(SESSION)
@@ -303,26 +379,39 @@ def test_workspace_session_cannot_read_a_research_offer(host) -> None:
     assert _bytes(service) == before
 
 
-def test_offer_and_authorization_routes_keep_typed_errors_and_project_scope(host) -> None:
-    service, _ = host
+@pytest.mark.parametrize("hosted", [False, True])
+@pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
+def test_offer_and_authorization_routes_keep_typed_errors_and_project_scope(host, monkeypatch, hosted, database) -> None:
+    service, registry = host
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
+    registry["sources"][0]["database"] = database
     client = TestClient(app)
     url = f"/api/copilot/pi/sessions/{SESSION}/registered-source-offer"
-    response = client.get(url, params={"project_id": PROJECT, "database": "eicu"})
+    response = client.get(url, params={"project_id": PROJECT, "database": database})
     assert response.status_code == 200
-    assert response.json() == _offer(service)
+    assert response.json() == _offer(service, database)
     before = _bytes(service)
-    mismatch = client.get(url, params={"project_id": "another-project", "database": "eicu"})
+    mismatch = client.get(url, params={"project_id": "another-project", "database": database})
     assert mismatch.status_code == 409
     assert mismatch.json()["detail"]["error"] == "pi_session_project_mismatch"
     invalid = client.post(f"/api/copilot/pi/sessions/{SESSION}/data-source-authorization", json={
-        "project_id": PROJECT, "action": "use_registered_source", "database": "eicu", "source_id": "missing"})
+        "project_id": PROJECT, "action": "use_registered_source", "database": database, "source_id": "missing"})
     assert invalid.status_code == 409
     assert invalid.json()["detail"]["error"] == "pi_data_source_not_registered"
+    unknown = client.post(f"/api/copilot/pi/sessions/{SESSION}/data-source-authorization", json={
+        "project_id": PROJECT, "action": "use_registered_source", "database": "unknown_database", "source_id": "src_best"})
+    assert unknown.status_code == 422
+    assert unknown.json()["detail"][0]["loc"] == ["body", "database"]
+    wrong_database = client.post(f"/api/copilot/pi/sessions/{SESSION}/data-source-authorization", json={
+        "project_id": PROJECT, "action": "use_registered_source", "database": database, "source_id": "src_other"})
+    assert wrong_database.status_code == 409
+    assert wrong_database.json()["detail"]["error"] == "pi_data_source_database_mismatch"
     assert _bytes(service) == before
     used = client.post(f"/api/copilot/pi/sessions/{SESSION}/data-source-authorization", json={
-        "project_id": PROJECT, "action": "use_registered_source", "database": "eicu", "source_id": "src_best"})
+        "project_id": PROJECT, "action": "use_registered_source", "database": database, "source_id": "src_best"})
     assert used.status_code == 200
     assert used.json()["session"]["data_source_authorization"]["confirmation_mode"] == "select_registered_source"
+    assert used.json()["session"]["data_source_authorization"]["source"]["database"] == database
 
 
 def test_one_step_choice_and_study_required_consent_have_the_same_downstream_state(host, monkeypatch) -> None:
