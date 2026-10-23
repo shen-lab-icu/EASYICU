@@ -32,12 +32,14 @@ from ..reporting.administrative_authority import ManuscriptAdministrativeAuthori
 
 from ._support import (
     _NATURE_WRITING_GUIDE,
+    _enforce_reporting_prompt_budget,
+    ReportingPromptBudgetError as ReportingPromptBudgetError,
+    require_context_clearance,
     _SYSTEM_GUIDE,
     _WRITER_GUIDE,
     _format_context,
     _strip_code_fence,
 )
-from .coder import _coder_prompt_payload_bytes
 from . import writer_display_labels as _writer_display
 
 # ---------------------------------------------------------------------------
@@ -122,36 +124,6 @@ def _project_writer_literature_digest(
     if str(section_name).strip().casefold() == "results":
         return ""
     return str(literature_digest or "")
-
-
-class ReportingPromptBudgetError(RuntimeError):
-    """A lossless Analyzer/Writer request exceeds its transport envelope."""
-
-    def __init__(self, *, role: str, actual_bytes: int, limit_bytes: int) -> None:
-        self.role = str(role)
-        self.actual_bytes = int(actual_bytes)
-        self.limit_bytes = int(limit_bytes)
-        super().__init__(
-            f"{self.role} prompt transport budget exceeded: "
-            f"{self.actual_bytes} > {self.limit_bytes} bytes. "
-            "No evidence digest or binding scientific coordinate was truncated; "
-            "reduce the role-scoped projection or split the evidence digest."
-        )
-
-
-def _enforce_reporting_prompt_budget(
-    messages: Sequence[LLMMessage],
-    *,
-    role: str,
-    limit_bytes: int,
-) -> None:
-    actual_bytes = _coder_prompt_payload_bytes(messages)
-    if actual_bytes > int(limit_bytes):
-        raise ReportingPromptBudgetError(
-            role=role,
-            actual_bytes=actual_bytes,
-            limit_bytes=limit_bytes,
-        )
 
 
 class AnalyzerAgent:
@@ -266,6 +238,11 @@ class WriterAgent:
         analysis_plan: AnalysisPlan | None = None,
         repair_feedback: str = "",
     ) -> str:
+        require_context_clearance(context, self.llm)
+        from ..research_context.outbound import project_outbound_count_text
+
+        evidence_digest = project_outbound_count_text(evidence_digest or "")
+        repair_feedback = project_outbound_count_text(repair_feedback)
         lang_inst = _writer_display.writer_language_instruction(language or self.language)
         evidence_list = ", ".join(str(eid) for eid in evidence_ids) or "(none)"
         reporting_context = scoped_reporting_context(context)

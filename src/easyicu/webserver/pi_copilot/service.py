@@ -538,6 +538,8 @@ class PiCopilotService:
                     # ``_note_research_job`` owns this field; a record read
                     # before its last note must not erase it.
                     record.latest_research_job = row.latest_research_job
+                    if row.credentialed_data_in_history:
+                        record.credentialed_data_in_history = True
             rows.insert(0, record)
             overflow = max(0, len(rows) - MAX_SESSIONS)
             evicted: list[PiSessionRecord] = []
@@ -563,6 +565,12 @@ class PiCopilotService:
         for retired in evicted:
             self._retire_record(retired)
         return record
+
+    def _note_credentialed_history(self, session_id: str) -> None:
+        record = self._get_record(session_id)
+        if record.credentialed_data_in_history is not True:
+            record.credentialed_data_in_history = True
+            self._save_record(record)
 
     def _conversation_gateway_for_binding(
         self,
@@ -669,7 +677,7 @@ class PiCopilotService:
                 run_type="full",
                 llm_provider=selected_provider,
                 external_llm_opt_in=bool(external_llm_opt_in),
-                ai_enabled=bool(current_settings.get("ai_enabled")),
+                ai_enabled=bool(current_settings.get("copilot_enabled", False) or current_settings.get("ai_enabled")),
                 language=str(current_settings.get("language") or "en"),
             )
         except provider_gate.ProviderGateError as exc:
@@ -711,7 +719,7 @@ class PiCopilotService:
             "provider_connection_verified"
         ):
             blockers.append("provider_connection_unverified")
-        if not current_settings.get("ai_enabled"):
+        if not (current_settings.get("copilot_enabled", False) or current_settings.get("ai_enabled")):
             blockers.append("easyicu_ai_opt_in_disabled")
         runtime_blockers = {
             "node_available",
@@ -723,7 +731,7 @@ class PiCopilotService:
             "base_url_configured",
         }
         shell_ready = not runtime_blockers.intersection(blockers) and bool(
-            current_settings.get("ai_enabled")
+            current_settings.get("copilot_enabled", False) or current_settings.get("ai_enabled")
         )
         if not blockers:
             runtime_state = "ready"
@@ -763,6 +771,8 @@ class PiCopilotService:
         model: str,
         api_transport: str,
         enable_ai: bool,
+        data_handling: str = "unspecified",
+        inference_location: str = "unspecified",
     ) -> Dict[str, Any]:
         """Verify and persist first-use Pi credentials before chat unlocks."""
 
@@ -788,13 +798,15 @@ class PiCopilotService:
             )
         # The explicit request is the canonical opt-in for this verification
         # call. Persist that choice before any network access.
-        settings.update_settings({"ai_enabled": True})
+        settings.update_settings({"copilot_enabled": True})
         config, configuration = self.provider_store.verify_and_save(
             provider=provider,
             api_key=api_key,
             base_url=base_url,
             model=model,
             api_transport=api_transport,
+            data_handling=data_handling,
+            inference_location=inference_location,
         )
         apply_config(config)
         payload = self.runtime_status()
@@ -824,7 +836,7 @@ class PiCopilotService:
             )
         # The explicit request records the same canonical opt-in as a save,
         # before any credential can leave the host.
-        settings.update_settings({"ai_enabled": True})
+        settings.update_settings({"copilot_enabled": True})
         stored = self.provider_store.resolved_config()
         reuse_credential = not api_key.strip()
         if reuse_credential and stored is None:
@@ -920,10 +932,10 @@ class PiCopilotService:
     def verified_api_research_provider_binding(self) -> ResearchProviderBinding:
         """Compile the verified Pi API config into a secret-free run binding."""
 
-        self.provider_store.research_agent_environment(
-            external_llm_opt_in=True,
-        )
+        # Binding names a connection; only the run start path can authorize use.
         status = self.provider_store.public_status()
+        if not status.get("connection_verified") or not status.get("inference_verified"):
+            raise PiCopilotError("pi_provider_research_configuration_unverified", "Verify the provider connection first.")
         return ResearchProviderBinding(
             provider="openai",
             credential_source="pi_verified",
@@ -1595,7 +1607,8 @@ class PiCopilotService:
                 agent_mode=resolved_mode,
                 language=resolved_language,
                 thinking_level=resolved_thinking,
-                external_llm_opt_in=True,
+                external_llm_opt_in=external_llm_opt_in,
+                credentialed_data_in_history=False,
                 extension_activation=extension_activation,
                 research_provider=selected_model_connection,
                 binding=binding,
@@ -2293,6 +2306,17 @@ class PiCopilotService:
         self._save_record(record)
         return record
 
+    def _data_handling_for_session(self, record: PiSessionRecord) -> str:
+        if record.research_provider.authentication_mode == "chatgpt_account":
+            return "unspecified"
+        from easyicu.research_agent.providers.client_trust import DataHandling
+
+        # Read the running gateway's configuration, which apply_provider_config
+        # updates atomically, rather than a possibly different saved endpoint.
+        return DataHandling(getattr(self.gateway, "environ", {}).get(
+            "EASYICU_PI_DATA_HANDLING", "unspecified",
+        )).value
+
     def send_message(
         self,
         session_id: str,
@@ -2311,6 +2335,12 @@ class PiCopilotService:
             external_llm_opt_in=record.external_llm_opt_in,
             provider=record.research_provider.provider,
         )
+        from .tools import require_copilot_data_clearance
+
+        require_copilot_data_clearance(ToolExecutionContext(
+            session=record, data_handling=self._data_handling_for_session(record),
+            note_credentialed_history=lambda: self._note_credentialed_history(record.session_id),
+        ))
         text = str(message or "").strip()
         if not text:
             raise PiCopilotError(
@@ -2612,6 +2642,7 @@ class PiCopilotService:
                     params["user_entry_id"] = str(regenerate_user_entry_id)
                     if regeneration_intent:
                         params["intent"] = str(regeneration_intent)
+                require_copilot_data_clearance(active_tool_context)
                 state = conversation_gateway.request(
                     method,
                     params,
@@ -2740,6 +2771,8 @@ class PiCopilotService:
                 )
             tool_context = ToolExecutionContext(
                 session=record.model_copy(deep=True),
+                data_handling=self._data_handling_for_session(record),
+                note_credentialed_history=lambda: self._note_credentialed_history(record.session_id),
                 user_message=text,
                 idea_source=idea_source,
                 allowed_actions=requested_actions,

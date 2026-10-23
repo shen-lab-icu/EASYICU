@@ -135,7 +135,8 @@ def _update(monkeypatch, current: dict[str, Any], proposal: dict[str, Any], mess
         "easyicu_update_study_context",
         proposal,
         ToolExecutionContext(
-            session=session, user_message=message, allowed_actions={"configure"}
+            session=session, user_message=message, allowed_actions={"configure"},
+            data_handling="on_device",
         ),
     )
     return result, writes

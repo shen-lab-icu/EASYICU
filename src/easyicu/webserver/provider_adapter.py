@@ -522,6 +522,8 @@ def build_research_agent_provider_client(
         key_name: credentials["api_key"],
         base_name: base_url,
         "EASYICU_ALLOW_EXTERNAL_LLM": "1",
+        "EASYICU_PROVIDER_DATA_HANDLING": (environ or {}).get("EASYICU_PROVIDER_DATA_HANDLING", "unspecified"),
+        "EASYICU_PROVIDER_INFERENCE_LOCATION": (environ or {}).get("EASYICU_PROVIDER_INFERENCE_LOCATION", "unspecified"),
     }
     try:
         from easyicu.research_agent.providers import build_provider_client

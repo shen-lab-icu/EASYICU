@@ -461,8 +461,9 @@ def test_hosted_workspace_permitted_text_is_projected(tmp_path, monkeypatch, suf
     ("stay_id=123456789", "pi_projection_blocked"),
     ("x" * 2001, "pi_projection_too_large"),
 ])
-def test_hosted_workspace_text_keeps_projection_refusal_cause(tmp_path, monkeypatch, text, code):
-    monkeypatch.setenv("EASYICU_HOSTED", "1")
+@pytest.mark.parametrize("hosted", [False, True])
+def test_workspace_text_keeps_projection_refusal_cause(tmp_path, monkeypatch, text, code, hosted):
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
     _, read = _workspace_read_tool(tmp_path, "notes/plan.md", text)
     with pytest.raises(PiCopilotError) as raised:
         read()
@@ -470,17 +471,12 @@ def test_hosted_workspace_text_keeps_projection_refusal_cause(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("relative", _HOSTED_DATA_FILES)
-def test_non_hosted_workspace_read_contract_is_unchanged(tmp_path, monkeypatch, relative):
-    from easyicu.webserver.pi_copilot.workspace import TEXT_SUFFIXES
-
+def test_desktop_workspace_reads_follow_the_data_policy(tmp_path, monkeypatch, relative):
     monkeypatch.setenv("EASYICU_HOSTED", "0")
     _, read = _workspace_read_tool(tmp_path, relative, "stay_id=123456789")
-    if Path(relative).suffix.lower() in TEXT_SUFFIXES:
-        assert read()["details"]["text"] == "stay_id=123456789"
-    else:
-        with pytest.raises(PiCopilotError) as raised:
-            read()
-        assert raised.value.code == "pi_workspace_file_type_unsupported"
+    with pytest.raises(PiCopilotError) as raised:
+        read()
+    assert raised.value.code == "tabular_read_unavailable_when_hosted"
 
 
 @pytest.mark.parametrize("hosted", [False, True])
@@ -489,9 +485,6 @@ def test_workspace_directory_alias_cannot_bypass_hosted_data_policy(tmp_path, mo
     workspace, _ = _workspace_read_tool(tmp_path, "exports/table.md", "x,y\n1,2")
     root = workspace.project_root("synthetic-project")
     (root / "notes").symlink_to(root / "exports", target_is_directory=True)
-    if not hosted:
-        assert workspace.read_file("synthetic-project", "notes/table.md")["text"] == "x,y\n1,2"
-        return
 
     def forbidden(*args, **kwargs):
         raise AssertionError("aliased hosted data bytes were read")

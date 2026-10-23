@@ -154,6 +154,12 @@ class AgenticCoderAgent:
         step: AnalysisStep,
         **authority_hooks: Any,
     ) -> str:
+        from ..providers.client_trust import source_requires_clearance, ProviderConfigurationError
+
+        if context is not None and source_requires_clearance(context.cohort.database):
+            raise ProviderConfigurationError(
+                "agentic_coder_credentialed_source_forbidden", self.backend,
+            )
         self.last_delegation_used = False
         provider_budget = authority_hooks.pop("provider_budget", None)
         fallback_kwargs = dict(authority_hooks)
@@ -215,6 +221,12 @@ class AgenticCoderAgent:
         return self._enforce_compatibility(context, step, script)
 
     def _delegate(self, context: ResearchContext, step: AnalysisStep) -> str:
+        from ..providers.client_trust import source_requires_clearance, ProviderConfigurationError
+
+        if source_requires_clearance(context.cohort.database):
+            raise ProviderConfigurationError(
+                "agentic_coder_credentialed_source_forbidden", self.backend,
+            )
         prompt = self._build_prompt(context, step)
         with tempfile.TemporaryDirectory(prefix="easyicu-agentic-coder-") as workdir:
             env = build_provider_subprocess_env(

@@ -7,6 +7,15 @@
   const S = (window.SCREENS = window.SCREENS || {});
   const { esc } = window.EU_HTML;
 
+  S.llmEgressDisclosure = Object.freeze({
+    noticeKey: 'physionet_llm_data_handling_declaration',
+    sent: Object.freeze([
+      'user_messages', 'analysis_plans_and_code', 'schema_and_concept_metadata',
+      'aggregate_statistics_with_small_cell_suppression', 'structured_diagnostics',
+      'project_artifacts_after_privacy_projection',
+    ]),
+  });
+
   /* ---------------- GET STARTED on a hosted instance ----------------
      A clinician reaches EasyICU on the hospital server: the administrator
      prepared the data and the model, and the conversation is the way in.
@@ -52,9 +61,7 @@
       [t('Which databases are ready?', '这里有哪些数据？'), databases.length
         ? t(`Ready on this server: ${databases.join(', ')}. For another database, contact the administrator.`, `这台服务器上已准备好：${databases.join('、')}。需要其他数据库，请联系管理员。`)
         : t('No database is ready on this server yet. Please contact the administrator.', '这台服务器上还没有准备好的数据库，请联系管理员。')],
-      // The data boundary holds on a hosted instance: launch-b4 closes the
-      // raw-diagnostic, workspace data-read and agentic-coder paths there.
-      [t('Does it use an AI model?', '会用到 AI 模型吗？'), t('Yes. The research conversation runs on a model the administrator set up. Your messages, the analysis plan and summary statistics are sent to it so that it can understand the question and write the explanations. Patient-level rows are never sent to the model.', '会。研究对话由管理员配置的模型支持；你的消息、分析计划和汇总统计结果会发给它，用来理解问题和撰写说明。患者的逐行记录不会发给模型。')],
+      [t('Does it use an AI model?', '会用到 AI 模型吗？'), t('Yes. The research conversation runs on a model the administrator set up. It receives your messages, the analysis plan and its code, variable names, error details, and summary statistics in which very small counts are hidden. Patient-level rows are never sent. For credentialed databases such as MIMIC-IV and eICU, a model is used only when the administrator has declared that it runs on this server or that its service keeps no data, as the PhysioNet data use agreement requires.', '会。研究对话由管理员配置的模型支持。发给模型的有：你的消息、分析计划及其代码、变量名称、错误详情，以及隐藏了极小计数的汇总统计。患者的逐行记录不会发给模型。对于 MIMIC-IV、eICU 等需授权的数据库，只有在管理员声明该模型运行在本服务器上、或其服务不保留数据时才会使用，这是 PhysioNet 数据使用协议的要求。')],
       [t('Can the results guide a patient\'s treatment?', '结果可以用于临床诊疗吗？'), t('No. EasyICU results are for research. They do not replace clinical judgement for an individual patient.', '不能。EasyICU 的结果用于科研，不能替代对个体患者的临床判断。')],
       [t('Do I need to set up a model or an API key?', '需要自己配置模型或 API key 吗？'), t('No. The administrator sets up the model for everyone.', '不需要，模型由管理员统一配置。')],
       [t('What if something goes wrong?', '遇到问题怎么办？'), t(`At the top of the research conversation, open “Having a problem?” and copy the problem reference for the administrator${contact ? ` (${contact})` : ''}. It holds only the codes of the project, conversation and run, never patient information.`, `在研究对话顶部点「遇到问题」，复制问题编号发给管理员${contact ? `（${contact}）` : ''}。编号只包含项目、对话和运行的代号，不含患者信息。`)],

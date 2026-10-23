@@ -133,9 +133,9 @@ def test_hosted_loopback_repair_withholds_stdout_and_stderr(ra, monkeypatch, hos
         repair_authority=_authority(), current_repair_authority=_authority(),
     )
     prompt = json.dumps(calls)
-    assert ("SYNTHETIC_ROW_SENTINEL" in prompt) is not hosted
-    assert ("SYNTHETIC_ERROR_SENTINEL" in prompt) is not hosted
-    assert ("easyicu.diagnostic_envelope/1" in prompt) is hosted
+    assert "SYNTHETIC_ROW_SENTINEL" not in prompt
+    assert "SYNTHETIC_ERROR_SENTINEL" not in prompt
+    assert "easyicu.diagnostic_envelope/1" in prompt
     if hosted:
         assert "raw_diagnostics_unavailable_when_hosted" in prompt
         assert RepairReason.UNBOUND_LOCAL.value in prompt
@@ -521,7 +521,7 @@ def test_step_summary_projection_rejects_numeric_phi_and_unknown_structure():
 
     assert projected == {
         "status": "ok",
-        "n": 10,
+        "n": "suppressed",
         "mortality_fraction": 0.2,
     }
 
@@ -657,7 +657,7 @@ def test_replanner_probe_projection_rejects_all_identifier_suffixes(ra):
     )
 
     prompt = _all_prompt_text(capture)
-    assert '"n_rows": 10' in prompt
+    assert '"n_rows": "suppressed"' in prompt
     assert '"n_columns": 2' in prompt
     for forbidden in (
         "patient_id",

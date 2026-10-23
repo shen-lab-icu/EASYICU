@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from ..providers.client_trust import require_context_clearance as require_context_clearance
 from ..providers.protocol import LLMClient, LLMMessage
 from ..repairs.patch import (
     looks_like_executable_python,
@@ -515,3 +516,37 @@ def _empty_df_placeholder():
     import pandas as pd
 
     return pd.DataFrame()
+
+
+def _coder_prompt_payload_bytes(messages: Sequence[LLMMessage]) -> int:
+    return sum(len(str(message.content or "").encode("utf-8")) for message in messages)
+
+
+class ReportingPromptBudgetError(RuntimeError):
+    """A lossless Analyzer/Writer request exceeds its transport envelope."""
+
+    def __init__(self, *, role: str, actual_bytes: int, limit_bytes: int) -> None:
+        self.role = str(role)
+        self.actual_bytes = int(actual_bytes)
+        self.limit_bytes = int(limit_bytes)
+        super().__init__(
+            f"{self.role} prompt transport budget exceeded: "
+            f"{self.actual_bytes} > {self.limit_bytes} bytes. "
+            "No evidence digest or binding scientific coordinate was truncated; "
+            "reduce the role-scoped projection or split the evidence digest."
+        )
+
+
+def _enforce_reporting_prompt_budget(
+    messages: Sequence[LLMMessage],
+    *,
+    role: str,
+    limit_bytes: int,
+) -> None:
+    actual_bytes = _coder_prompt_payload_bytes(messages)
+    if actual_bytes > int(limit_bytes):
+        raise ReportingPromptBudgetError(
+            role=role,
+            actual_bytes=actual_bytes,
+            limit_bytes=limit_bytes,
+        )

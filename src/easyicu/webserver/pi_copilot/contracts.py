@@ -303,6 +303,9 @@ class PiSessionRecord(BaseModel):
     language: Literal["en", "zh"] = "en"
     thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"
     external_llm_opt_in: bool = False
+    # Host-only provenance survives source/provider changes. None marks legacy
+    # transcripts whose source history was not recorded.
+    credentialed_data_in_history: Optional[bool] = None
     # Installed extensions are frozen when the Pi AgentSession is created.
     # Later registry edits affect only new sessions; old sessions retain this
     # path-free descriptor and load exact Skill objects by content digest.
@@ -481,8 +484,14 @@ class ToolExecutionContext:
         workspace_root: Optional[Path] = None,
         workspace: Optional["ProjectWorkspace"] = None,
         extension_registry: Optional["ExtensionRegistry"] = None,
+        data_handling: str = "unspecified",
+        note_credentialed_history: Optional[Callable[[], None]] = None,
     ) -> None:
         self.session = session
+        from easyicu.research_agent.providers.client_trust import DataHandling
+
+        self.data_handling = DataHandling(data_handling)
+        self.note_credentialed_history = note_credentialed_history
         # Host-captured text from the current user turn.  Tools may use this
         # bounded, PHI-screened value as user-intent authority; the model
         # cannot supply or rewrite it through tool arguments.

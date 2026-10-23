@@ -212,7 +212,8 @@ def test_structured_inputs_produce_level_risk_source_states_and_continuous_summa
         ]
     )
     assert '"reportable_descriptive_results"' in digest
-    assert '"outcome_event_n": 2' in digest
+    assert '"outcome_event_n": "suppressed"' in digest
+    assert '"outcome_event_n": 2' not in digest
 
     # Live Writer records are reconstructed from registered scalars. Prose
     # metadata such as schema/owner/interpretation strings is intentionally
@@ -245,7 +246,8 @@ def test_structured_inputs_produce_level_risk_source_states_and_continuous_summa
         evidence=writer_store,
     )
     assert '"reportable_descriptive_results"' in canonical_digest
-    assert '"outcome_event_n": 2' in canonical_digest
+    assert '"outcome_event_n": "suppressed"' in canonical_digest
+    assert '"outcome_event_n": 2' not in canonical_digest
     assert "## EXECUTED METHOD BOUNDARY" in canonical_digest
     assert '"deterministic_standard_analysis": "absolute_risk_context"' in canonical_digest
 

@@ -133,7 +133,7 @@ def test_tool_and_offer_use_the_same_recommendation_owner(host, monkeypatch) -> 
     monkeypatch.setattr(source_recommendation, "recommend_registered_export", recommend)
     offer = _offer(service)
     tool = tool_module.execute_tool("easyicu_list_data_sources", {"database": "eicu"},
-        ToolExecutionContext(session=service._get_record(SESSION), user_message="Use eICU for this study"))
+        ToolExecutionContext(data_handling="zero_retention_declared", session=service._get_record(SESSION), user_message="Use eICU for this study"))
     assert offer["recommended"]["source_id"] == "src_small"
     assert tool["details"]["recommended_source"]["source_id"] == "src_small"
     assert calls == [["src_best", "src_small"], ["src_best", "src_small"]]
@@ -143,7 +143,7 @@ def test_tied_tool_and_offer_choices_match(host) -> None:
     service, registry = host
     registry["sources"].append(_row("src_tied"))
     tool = tool_module.execute_tool("easyicu_list_data_sources", {"database": "eicu"},
-        ToolExecutionContext(session=service._get_record(SESSION)))
+        ToolExecutionContext(data_handling="zero_retention_declared", session=service._get_record(SESSION)))
     assert _offer(service)["choices"] == tool["details"]["registered_source_choices"]
 
 
@@ -438,7 +438,7 @@ def test_one_step_choice_and_study_required_consent_have_the_same_downstream_sta
     submissions = []
     monkeypatch.setattr(agent, "submit_agent_run", lambda request: submissions.append(request) or {"job_id": "job-test"})
     for session_id in (SESSION, "pi_reuse"):
-        result = tool_module.execute_tool("easyicu_run", {"run_type": "preflight"}, ToolExecutionContext(
+        result = tool_module.execute_tool("easyicu_run", {"run_type": "preflight"}, ToolExecutionContext(data_handling="zero_retention_declared",
             session=service._get_record(session_id), allowed_actions={"run"}))
         assert result["status"] == "ok"
     assert submissions[0] == submissions[1]
@@ -464,7 +464,7 @@ def test_choice_permits_candidate_planning_without_approving_execution(host, mon
             study_context_revision=record.binding.study_revision, budget_mode="planner_canary", planner_start_mode="auto")
 
     monkeypatch.setattr(research_run_submission, "submit_research_run", submit)
-    result = tool_module.execute_tool("easyicu_run", {"run_type": "full"}, ToolExecutionContext(
+    result = tool_module.execute_tool("easyicu_run", {"run_type": "full"}, ToolExecutionContext(data_handling="zero_retention_declared",
         session=record, user_message="Generate the analysis plan", allowed_actions={"provider_run"}))
     assert result["status"] == "ok", result
     assert len(submitted) == 1

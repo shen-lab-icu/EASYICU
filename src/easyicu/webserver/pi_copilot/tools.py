@@ -109,6 +109,8 @@ def _result(
     owner: str,
     details: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    from easyicu.research_agent.research_context.outbound import project_outbound_counts
+
     payload = PiToolResult(
         status=status,
         code=code,
@@ -117,7 +119,7 @@ def _result(
         details=bounded_json_projection(details or {}),
         authority=context.session.binding.model_dump(mode="json"),
     ).model_dump(mode="json")
-    return ensure_safe_projection(payload)
+    return ensure_safe_projection(project_outbound_counts(payload))
 
 
 def _workspace_result(
@@ -130,7 +132,7 @@ def _workspace_result(
 ) -> Dict[str, Any]:
     """Return bounded project artifacts without applying patient projections.
 
-    Hosted file reads apply ensure_safe_projection before this envelope.
+    File reads apply ensure_safe_projection before this envelope.
     Workspace text is either model-authored or explicitly placed in the
     isolated project artifact directory.  It never reads EasyICU source-data
     paths.  Keep the JSON-line envelope bounded while preserving useful code.
@@ -644,6 +646,9 @@ def _list_data_sources(
             for row in choices
             if str(row.get("source_id") or "") == recommended_source_id
         ]
+    require_copilot_data_clearance(context, {
+        "source_ids": [str(row.get("source_id") or "") for row in visible_choices],
+    })
     if recommended_source is not None:
         recommended_source = {
             key: recommended_source.get(key)
@@ -883,6 +888,7 @@ def _list_source_concepts(
             summary="The selected registered source is not currently readable.",
             owner="easyicu.webserver.sources",
         )
+    require_copilot_data_clearance(context, {"source_id": source["id"]})
     return _list_concept_catalog(context, params, source=source)
 
 
@@ -1312,7 +1318,7 @@ def _review_cohort(
             else "easyicu_cohort_review_ready"
         ),
         summary=(
-            f"Prepared a path-free conversational Data Workbench view for {cohort_size or 0} ICU stays"
+            "Prepared a path-free conversational Data Workbench view"
             + (f" and {len(feature_ids)} selected features." if feature_ids else ".")
         ),
         owner="easyicu.webserver.cohort_review",
@@ -1493,7 +1499,7 @@ def _preview_icd_cohort(
         context,
         status="ok",
         code="easyicu_icd_cohort_preview_ready",
-        summary=f"The requested ICD filter selects {cohort_size} ICU stays in the current source.",
+        summary="Prepared the requested ICD cohort preview with protected aggregate counts.",
         owner="easyicu.webserver.dataio",
         details={
             "source_id": str(source.get("id") or "")[:80],
@@ -3883,8 +3889,9 @@ def _run(
     # the conservative default remains the deterministic local preflight.
     # D-P1-1: a client-supplied provider_run without backend text inference
     # is not a grant (chit-chat must stay preflight/fail-closed).
-    provider_run_granted = "provider_run" in context.allowed_actions and (
-        _privileged_action_inferred(context, "provider_run")
+    provider_action = "report_revision" if report_source_run_id else "provider_run"
+    provider_run_granted = provider_action in context.allowed_actions and (
+        _privileged_action_inferred(context, provider_action)
     )
     local_run_granted = "run" in context.allowed_actions
     literature_search_authorized = context.grant.was_provided("literature")
@@ -3923,12 +3930,16 @@ def _run(
     # or model underneath an already-open research conversation.
     research_provider = context.session.research_provider
     provider = research_provider.provider if run_type == "full" else "mock"
-    if run_type == "full" and not context.session.external_llm_opt_in:
+    if run_type == "full" and not provider_run_granted:
         return _result(
             context,
             status="blocked",
-            code="external_llm_opt_in_required",
-            summary="A full provider analysis requires the session's explicit external-model authorization.",
+            code=(
+                "pi_action_authorization_required"
+                if report_source_run_id or context.grant.was_provided(provider_action)
+                else "external_llm_opt_in_required"
+            ),
+            summary="This provider run requires its explicit one-use action grant.",
             owner="easyicu.webserver.provider_gate",
         )
     if not study or not study.get("id"):
@@ -4035,7 +4046,7 @@ def _run(
             study_context_id=str(study["id"]),
             provider=provider,
             credential_source=research_provider.credential_source,
-            external_llm_opt_in=context.session.external_llm_opt_in,
+            external_llm_opt_in=provider_run_granted,
             intent=effective_run_intent,
             planner_start_mode=planner_start_mode,
             plan_revision_source_run_id=str(plan_revision_source_run_id),
@@ -4673,9 +4684,8 @@ def _read_project_file(
         start_line=int(params.get("start_line") or 1),
         end_line=(int(params["end_line"]) if params.get("end_line") else None),
     )
-    if is_hosted():
-        # Retain the projection owner's reason and cause on refusal.
-        ensure_safe_projection(payload)
+    # Retain the projection owner's reason and cause on refusal on desktop too.
+    ensure_safe_projection(payload)
     return _workspace_result(
         context,
         status="ok",
@@ -4881,11 +4891,60 @@ def execute_tool(
     # tuple, which meant 42 tools carried the same contract in three files in
     # two languages with nothing checking that they agreed.
     _require_catalog_args(tool_name, arguments)
+    require_copilot_data_clearance(context)
     if tool_name in DATA_SOURCE_REQUIRED_TOOLS:
         confirmation_block = _data_source_confirmation_block(context)
         if confirmation_block is not None:
             return confirmation_block
-    return handler(context, arguments)
+    # Concept lookup owns its conditional confirmation gate: a static database
+    # catalog needs no source, whereas a selected export is checked there.
+    if tool_name != "easyicu_list_source_concepts":
+        require_copilot_data_clearance(context, arguments)
+    result = handler(context, arguments)
+    require_copilot_data_clearance(context)
+    return result
+
+
+def require_copilot_data_clearance(
+    context: ToolExecutionContext, arguments: Mapping[str, Any] | None = None,
+) -> None:
+    """Gate host-bound sources, including a source selected during this turn."""
+    from easyicu.research_agent.providers.client_trust import (
+        ProviderConfigurationError, credentialed_source, require_data_handling,
+    )
+    from easyicu.webserver.demo_source_storage import egress_source_database
+    from easyicu.webserver.stop_next_actions import project_stop_next_actions
+
+    study = _bound_context(context.session.binding) or {}
+    source = study.get("data_source") or {}
+    databases = {
+        egress_source_database(str(source.get("path") or ""), str(source.get("database") or ""))
+        if source.get("path") else ""
+    }
+    arguments = arguments or {}
+    source_ids = {str(arguments.get("source_id") or "")}
+    source_ids.update(str(item) for item in arguments.get("source_ids", []) or [])
+    if source_ids - {""}:
+        for registered in sources.load_registry().get("sources", []):
+            if str(registered.get("id") or "") in source_ids:
+                databases.add(egress_source_database(str(registered.get("path") or ""), str(registered.get("database") or "")))
+    has_history = context.session.credentialed_data_in_history
+    if has_history or (has_history is None and context.session.pi_session_file):
+        databases.add("miiv")  # Unknown legacy history retains the strict default.
+    try:
+        for database in databases:
+            require_data_handling(database, context.data_handling)
+    except ProviderConfigurationError as exc:
+        raise PiCopilotError(
+            exc.issue, "Open provider settings and declare data handling before using credentialed data.",
+            status_code=403, details={"next_actions": project_stop_next_actions({
+                "status": "blocked", "reason": exc.issue,
+            })},
+        ) from exc
+    if any(credentialed_source(database) for database in databases):
+        context.session.credentialed_data_in_history = True
+        if context.note_credentialed_history:
+            context.note_credentialed_history()
 
 
 __all__ = [

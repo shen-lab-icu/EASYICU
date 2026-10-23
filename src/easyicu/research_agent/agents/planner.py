@@ -1520,6 +1520,9 @@ class PlannerAgent:
         planning_contract_context: str = "",
         progress_callback: Optional[Callable[[Any], None]] = None,
     ) -> AnalysisPlan:
+        from ..providers.client_trust import require_context_clearance
+
+        require_context_clearance(context, self.llm)
         if bool(allowed_know_how_decisions) != bool(know_how_context):
             raise ValueError(
                 "Planner know-how decision authority and structured context must "

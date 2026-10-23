@@ -14,12 +14,73 @@ from ..authority.table_one_binding import (
     table_one_private_code_label_map,
 )
 from ..schema import AnalysisStep, ResearchContext
+from ..gates.publication_disclosure import is_subject_count_name, small_cell_value
 from ..concept_availability import variable_source_unavailability
 from ..planning.adjustment_authority import AdjustmentSetAuthority
 from .prompt_variables import (
     compact_fixed_window_trajectory_prompt,
     project_observed_domain,
 )
+
+SUPPRESSED_COUNT = "suppressed"
+_METADATA_COUNTS = frozenset({
+    "n_unique", "n_columns", "source_count", "module_count", "file_count",
+    "returned_count", "artifact_count", "table_count",
+    "withheld_claim_count", "withheld_review_claim_count",
+    "group_variable_count", "plan_step_count", "query_count", "variable_count", "figure_count",
+})
+_METADATA_COUNT_PATHS = frozenset({
+    ("study_literature_authority", "result_count"),
+    ("screening", "retrieval_candidate_count"),
+})
+
+
+def project_outbound_counts(value: Any, *, key: str = "", parent: str = "") -> Any:
+    """Project aggregate counts for model egress, never mutate the local evidence.
+
+    All model-facing counts from 1 through SMALL_CELL_BELOW - 1 use the
+    ``suppressed`` token. Zero and counts at or above the publication owner's
+    threshold remain exact. Measurements, units, windows and method settings
+    retain their semantics. Apply this after each owner's allow-list projection.
+    """
+    if isinstance(value, Mapping):
+        return {
+            name: project_outbound_counts(
+                item, key="count" if key in {"counts", "icd_counts"} else str(name), parent=key,
+            )
+            for name, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [project_outbound_counts(item, key=key, parent=parent) for item in value]
+    if (parent, key) in _METADATA_COUNT_PATHS:
+        return value
+    # Numeric evidence stores address leaves with dotted/indexed field paths.
+    key = re.sub(r"\[\d+\]", "", key).rsplit(".", 1)[-1].removeprefix("statistic:")
+    count_field = (
+        is_subject_count_name(key)
+        or "_n_" in key
+        or key in {"cohort_size", "matched_rows", "total_rows", "rows", "stays", "patients",
+                   "source_total", "selected_before_icd"}
+    )
+    if count_field and key not in _METADATA_COUNTS and small_cell_value(value) is not None:
+        return SUPPRESSED_COUNT
+    return value
+
+
+def project_outbound_count_text(text: str) -> str:
+    """Protect count assignments in already-curated Writer digest text."""
+    pattern = re.compile(
+        r'(?<![A-Za-z0-9_.:])(?P<prefix>"?(?P<key>[A-Za-z_][A-Za-z0-9_.:]*)"?\s*[:=]\s*)'
+        r'(?P<quote>"?)(?P<number>\d+(?:\.\d+)?)(?P=quote)(?![\d.eE])'
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        if project_outbound_counts(match["number"], key=match["key"]) == SUPPRESSED_COUNT:
+            return match["prefix"] + json.dumps(SUPPRESSED_COUNT)
+        return match[0]
+
+    return pattern.sub(replace, text)
+
 
 _CTAS_DEFAULT_BY_ICU_AGGREGATION_RULE = {
     "any": "any",
@@ -334,7 +395,7 @@ def outbound_safe_context_payload(
         payload["study_preferences"]["covariates"] = list(
             preferences.covariates
         )
-    return payload
+    return project_outbound_counts(payload)
 
 
 def format_outbound_safe_context(
@@ -481,12 +542,12 @@ _SAFE_PROBE_SCALAR_KEYS = frozenset(
 def project_outbound_probe(value: Mapping[str, Any]) -> dict[str, Any]:
     """Project the exact registered probe scalars; suffixes grant no authority."""
 
-    return {
+    return project_outbound_counts({
         str(key): item
         for key, item in value.items()
         if str(key) in _SAFE_PROBE_SCALAR_KEYS
         and (isinstance(item, (str, int, float, bool)) or item is None)
-    }
+    })
 
 
 def outbound_safe_script(step: Optional[AnalysisStep], script_text: str) -> str:
@@ -651,12 +712,12 @@ def _safe_summary_value(value: Any, *, key: str = "") -> Any:
 def project_outbound_step_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
     """Project only the registered host-owned aggregate-summary schema."""
 
-    return _compact(
+    return project_outbound_counts(_compact(
         {
             str(key): _safe_summary_value(value, key=str(key))
             for key, value in summary.items()
         }
-    )
+    ))
 
 
 def _project_process_manifest(parsed: Mapping[str, Any]) -> dict[str, Any]:

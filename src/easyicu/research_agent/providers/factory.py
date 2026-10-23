@@ -31,6 +31,7 @@ from .transport_retry import TransportRetrySchedule
 # layers which only inspect a client do not depend on client construction.
 from .client_trust import (  # noqa: F401  (re-exported for existing callers)
     ALLOW_EXTERNAL_LLM_ENV,
+    provider_policy_fields,
     EXTERNAL_LLM_NOT_AUTHORIZED,
     INVALID_OPENAI_BASE_URL_OVERRIDE,
     INVALID_PROVIDER_BASE_URL_OVERRIDE,
@@ -353,6 +354,7 @@ def authorize_provider_client(
     if destination == "external" and not _external_llm_allowed(env):
         raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
     authorization = ProviderAuthorization.create(
+        **provider_policy_fields(env),
         provider=str(provider),
         model=str(model),
         base_url=str(base_url),
@@ -457,6 +459,7 @@ def provider_authorization_for_configuration(
             or "cli-default"
         )
         authorization = ProviderAuthorization.create(
+            **provider_policy_fields(env),
             provider=cli_profile.provider_identity,
             model=selected_model,
             base_url=cli_profile.endpoint_identity,
@@ -472,6 +475,8 @@ def provider_authorization_for_configuration(
                     "model": authorization.model,
                     "base_url": authorization.base_url,
                     "destination": authorization.destination,
+                    "data_handling": authorization.data_handling.value,
+                    "inference_location": authorization.inference_location.value,
                     "authorization_mode": authorization.authorization_mode,
                     "authorization_sha256": authorization.authorization_sha256,
                     "transport_policy": _configured_cli_transport_policy(
@@ -525,6 +530,7 @@ def provider_authorization_for_configuration(
             api_key=api_key,
         )
     authorization = ProviderAuthorization.create(
+        **provider_policy_fields(env),
         provider=normalized,
         model=model,
         base_url=base_url,
@@ -540,6 +546,8 @@ def provider_authorization_for_configuration(
                 "model": authorization.model,
                 "base_url": authorization.base_url,
                 "destination": authorization.destination,
+                "data_handling": authorization.data_handling.value,
+                "inference_location": authorization.inference_location.value,
                 "authorization_mode": authorization.authorization_mode,
                 "authorization_sha256": authorization.authorization_sha256,
                 "transport_policy": transport_policy,
@@ -671,6 +679,7 @@ def build_provider_client(
         return _attach_provider_authorization(
             client,
             ProviderAuthorization.create(
+                **provider_policy_fields(env),
                 provider=normalized_provider,
                 model=model,
                 base_url=base_url,
@@ -731,6 +740,7 @@ def build_provider_client(
         return _attach_provider_authorization(
             client,
             ProviderAuthorization.create(
+                **provider_policy_fields(env),
                 provider=normalized_provider,
                 model=model,
                 base_url=str(kwargs["base_url"]),
@@ -840,6 +850,7 @@ def build_provider_client(
         return _attach_provider_authorization(
             client,
             ProviderAuthorization.create(
+                **provider_policy_fields(env),
                 provider=normalized_provider,
                 model=model,
                 base_url=resolved_url,

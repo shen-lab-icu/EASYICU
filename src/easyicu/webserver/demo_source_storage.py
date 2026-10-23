@@ -18,6 +18,7 @@ import tempfile
 import time
 import uuid
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Callable, Iterator
@@ -31,6 +32,7 @@ from easyicu.webserver.export_producer_identity import native_export_producer_id
 from easyicu.webserver.demo_source_contracts import (
     CACHE_ENV,
     MARKER_SCHEMA,
+    SOURCES,
     DemoSourceError,
     DemoSourcePaths,
     DemoSourceSpec,
@@ -210,6 +212,36 @@ def export_ready(paths: DemoSourcePaths, source: DemoSourceSpec) -> bool:
         marker is not None
         and marker.get("producer_identity") == native_export_producer_identity()
     )
+
+
+def _verified_public_demo(export_path: str) -> DemoSourceSpec | None:
+    """Identify an app-owned pinned public export using metadata, never labels."""
+    if not export_path:
+        return None
+    candidate = Path(export_path).expanduser().absolute()
+    for source in SOURCES:
+        paths = source_paths(source)
+        if candidate != paths.export or not source.archive_sha256:
+            continue
+        marker = read_marker(paths.prepared_marker, source)
+        if export_ready(paths, source) and marker and marker.get("archive_sha256") == source.archive_sha256:
+            return source
+    return None
+
+
+def egress_source_database(export_path: str, database: str) -> str:
+    source = _verified_public_demo(export_path)
+    return source.id if source and source.database == database else database
+
+
+@contextmanager
+def public_demo_egress_scope(export_path: str):
+    """Recheck public provenance inside the job thread and reset at job exit."""
+    from easyicu.research_agent.providers.client_trust import public_demo_source_scope
+
+    source = _verified_public_demo(export_path)
+    with public_demo_source_scope(source.database if source else ""):
+        yield
 
 
 def superseded_exports(paths: DemoSourcePaths) -> list[Path]:

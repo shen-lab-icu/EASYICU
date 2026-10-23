@@ -4420,7 +4420,7 @@ def test_result_interpretation_card_exposes_validated_analysis_tables_as_analysi
 def test_interpretation_and_manuscript_tools_bound_large_agent_drafts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="pi-result-review")
     )
     manuscript = {
@@ -4527,7 +4527,7 @@ def test_interpretation_and_manuscript_tools_bound_large_agent_drafts(
 def test_validation_projects_analysis_status_and_owner_operational_mapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="pi-validation-mapping")
     )
     review = {
@@ -4599,7 +4599,7 @@ def test_validation_projects_analysis_status_and_owner_operational_mapping(
 
 
 def test_idea_tool_never_accepts_a_host_path_from_the_model() -> None:
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="pi-idea"),
         allowed_actions={"idea"},
     )
@@ -4655,7 +4655,7 @@ def test_pi_idea_mining_uses_metadata_only_owner_mode(
         }
 
     monkeypatch.setattr(tool_module.idea_mining, "mine_ideas", mine)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="pi-idea-metadata-only"),
         allowed_actions={"idea"},
     )
@@ -4699,7 +4699,7 @@ def test_pi_idea_mining_reuses_host_parsed_pdf_source(
         }
 
     monkeypatch.setattr(tool_module.idea_mining, "mine_ideas", mine)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="pi-idea-pdf"),
         allowed_actions={"idea"},
         idea_source={
@@ -4785,7 +4785,7 @@ def test_literature_search_binds_exact_receipt_to_real_study_context(
             ],
         },
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-bound-generic-literature",
             binding=AuthorityBinding(
@@ -4886,7 +4886,7 @@ def test_generic_literature_authority_returns_compact_rebind_receipt(
             ],
         },
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-compact-generic-literature",
             binding=AuthorityBinding(
@@ -4983,7 +4983,7 @@ def test_literature_search_binds_prior_art_to_an_accepted_idea(
     result = tool_module.execute_tool(
         "easyicu_search_literature",
         {},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-bound-literature"),
             allowed_actions={"literature"},
         ),
@@ -5089,7 +5089,7 @@ def test_literature_search_can_review_a_mined_candidate_before_handoff(
             "run_id": "idea-run-liberation",
             "idea_id": "idea-liberation",
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-candidate-literature"),
             allowed_actions={"literature"},
         ),
@@ -5171,7 +5171,7 @@ def test_prepare_idea_handoff_returns_one_reopenable_plan_preview(
                 "time_window": "ICU hours 0-24; durability 48 hours",
             },
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-idea-plan-preview"),
             allowed_actions={"idea"},
         ),
@@ -5268,7 +5268,7 @@ def test_adjudicate_idea_literature_persists_confirmed_definition(
             "rationale": "The endpoint and time zero differ from direct comparators.",
             "plan_fields": plan_fields,
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-adjudication"),
             allowed_actions={"idea"},
         ),
@@ -5345,7 +5345,7 @@ def test_assess_idea_feasibility_uses_bound_source_and_returns_no_path(
                 "covariates": [],
             },
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-feasibility"),
             allowed_actions={"idea"},
         ),
@@ -5384,7 +5384,7 @@ def test_prepare_idea_handoff_blocks_zero_result_literature_receipt(
             "run_id": "idea-run-zero-results",
             "idea_id": "idea-zero-results",
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-zero-result-handoff"),
             allowed_actions={"idea"},
         ),
@@ -5470,7 +5470,7 @@ def test_accept_idea_handoff_binds_digest_and_projects_study_fields(
         return {**current, **body, "revision": 10}
 
     monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-idea-accept",
             binding=AuthorityBinding(
@@ -5577,7 +5577,7 @@ def test_accept_idea_handoff_does_not_turn_every_mentioned_feature_into_a_covari
     result = tool_module.execute_tool(
         "easyicu_accept_idea_handoff",
         {"run_id": "idea-run", "idea_id": "idea-sepsis"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-adjustment"),
             allowed_actions={"idea"},
         ),
@@ -5622,7 +5622,7 @@ def test_accept_idea_handoff_requires_digest_bound_concept_modules(
             },
         },
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="pi-idea-incomplete"),
         allowed_actions={"idea"},
     )
@@ -5687,7 +5687,7 @@ def test_accept_idea_handoff_clears_comparator_when_predictor_changes(
         return {**current, **body, "revision": 3}
 
     monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-new-predictor",
             binding=AuthorityBinding(
@@ -5725,7 +5725,7 @@ def test_accept_idea_handoff_fails_closed_without_canonical_digest(
         "create_handoff",
         lambda body: {"idea_id": "idea-lactate", "canonical_handoff_sha256": "bad"},
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="pi-idea-invalid"),
         allowed_actions={"idea"},
     )
@@ -5798,7 +5798,7 @@ def test_extraction_uses_bound_study_source_and_returns_no_path(
         }
 
     monkeypatch.setattr(jobs_route, "jobs_extract", submit)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-extract",
             binding=AuthorityBinding(
@@ -5853,7 +5853,7 @@ def test_extraction_reuses_project_bound_registered_export_even_when_not_global_
             },
         ),
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="pi-extract-reuse"),
         allowed_actions={"extract"},
     )
@@ -5947,7 +5947,7 @@ def test_extraction_rebuilds_registered_export_when_requested_contract_differs(
     result = tool_module.execute_tool(
         "easyicu_start_extraction",
         {},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-extract-contract-mismatch"),
             allowed_actions={"extract"},
         ),
@@ -5992,7 +5992,7 @@ def test_data_package_tool_returns_digest_bound_path_free_review(
             "privacy": {"host_paths_returned": False},
         },
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-data-package",
             binding=AuthorityBinding(
@@ -6018,7 +6018,7 @@ def test_data_package_tool_returns_digest_bound_path_free_review(
 
 
 def test_full_run_cannot_use_mock_as_scientific_output() -> None:
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-full",
             external_llm_opt_in=True,
@@ -6061,7 +6061,7 @@ def test_full_run_reports_setup_owner_before_provider_authorization(
         "submit_research_run",
         reject,
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared", allowed_actions={"provider_run"},
         session=PiSessionRecord(
             session_id="pi-incomplete-plan",
             external_llm_opt_in=True,
@@ -6108,7 +6108,7 @@ def test_full_run_requires_server_receipted_eligibility_before_provider_authoriz
         )
 
     monkeypatch.setattr(research_run_submission, "submit_research_run", reject)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared", allowed_actions={"provider_run"},
         session=PiSessionRecord(
             session_id="pi-unconfirmed-eligibility",
             external_llm_opt_in=True,
@@ -6177,7 +6177,7 @@ def test_planner_owned_design_choices_do_not_block_plan_generation(
             ],
         },
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-planner-owned",
             external_llm_opt_in=True,
@@ -6216,7 +6216,7 @@ def test_full_run_uses_verified_pi_provider_and_prepared_source_authority(
             submitted, request, job_id="agent-job-full", **kwargs
         ),
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-full-owner",
             external_llm_opt_in=True,
@@ -6284,7 +6284,7 @@ def test_superseded_plan_replan_starts_a_fresh_candidate_plan(
         return {"status": "ok", "code": "candidate_plan_submitted"}
 
     monkeypatch.setattr(tool_module, "_run", replacement_run)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-superseded-plan",
             external_llm_opt_in=True,
@@ -6333,7 +6333,7 @@ def test_copilot_cannot_approve_candidate_plan_or_start_package_bound_run(
         return {"status": "ok", "code": "package_bound_run_submitted"}
 
     monkeypatch.setattr(tool_module, "_run", replacement_run)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-upgrade-canary",
             external_llm_opt_in=True,
@@ -6390,7 +6390,7 @@ def test_failed_package_bound_run_retry_does_not_return_to_preview_canary(
             submitted, request, job_id="agent-job-package-retry", **kwargs
         ),
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-package-retry",
             external_llm_opt_in=True,
@@ -6429,7 +6429,7 @@ def _run_submission_rejection(
         raise research_run_submission.ResearchRunSubmissionError(detail)
 
     monkeypatch.setattr(research_run_submission, "submit_research_run", submit)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-run-rejection",
             external_llm_opt_in=True,
@@ -6577,7 +6577,7 @@ def test_full_run_uses_the_codex_account_frozen_into_the_session(
         account_environment,
     )
     monkeypatch.setattr(research_run_submission, "submit_research_run", submit)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-codex-owner",
             external_llm_opt_in=True,
@@ -8233,7 +8233,7 @@ def test_model_tool_cannot_write_human_plan_approval_receipt(
             "EASYICU_CODEX_ACCOUNT_SESSION_SHA256": binding,
         },
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-review",
             external_llm_opt_in=True,

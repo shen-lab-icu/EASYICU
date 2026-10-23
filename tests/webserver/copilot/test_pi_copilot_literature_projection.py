@@ -283,7 +283,7 @@ def test_literature_search_tool_uses_separate_one_turn_network_grant(
             ],
         },
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="pi-literature"),
         allowed_actions={"literature"},
     )
@@ -331,7 +331,7 @@ def test_direct_study_literature_search_requires_typed_exposure_and_outcome(
         return {}
 
     monkeypatch.setattr(tool_module.idea_mining, "discover_literature", discover)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="pi-incomplete-literature"),
         allowed_actions={"literature"},
     )
@@ -370,7 +370,7 @@ def test_blocked_literature_routes_an_unplanned_study_to_the_planner(
         "discover_literature",
         lambda body: pytest.fail("literature must not run before a plan"),
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="pi-literature-routes-to-plan"),
         allowed_actions={"literature"},
     )
@@ -428,7 +428,7 @@ def test_literature_search_compiles_query_from_typed_execution_concepts(
     result = tool_module.execute_tool(
         "easyicu_search_literature",
         {},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-typed-literature-query"),
             allowed_actions={"literature"},
         ),
@@ -485,7 +485,7 @@ def test_bound_literature_projection_stays_bounded_with_long_abstracts(
     result = tool_module.execute_tool(
         "easyicu_search_literature",
         {},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-bounded-literature"),
             allowed_actions={"literature"},
         ),

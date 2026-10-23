@@ -62,7 +62,7 @@ def _listing(
     result = tool_module.execute_tool(
         "easyicu_list_data_sources",
         {"database": "miiv"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-several-exports"),
             user_message="用 MIMIC-IV 研究乳酸与院内死亡",
         ),

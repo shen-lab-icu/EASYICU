@@ -34,6 +34,8 @@ def resolve_provider_gate(
     external_llm_opt_in: bool,
     ai_enabled: bool,
     language: str = "en",
+    database: str = "",
+    data_handling: str = "unspecified",
 ) -> Dict[str, Any]:
     """Resolve provider policy without loading credentials or clients."""
     resolved_run_type = str(run_type or "preflight").strip().lower()
@@ -43,6 +45,19 @@ def resolve_provider_gate(
         return provider
     if not provider["external"]:
         return provider
+
+    from easyicu.research_agent.providers.client_trust import (
+        ProviderConfigurationError, require_data_handling,
+    )
+    from .stop_next_actions import project_stop_next_actions
+
+    try:
+        require_data_handling(database, data_handling)
+    except ProviderConfigurationError as exc:
+        raise ProviderGateError({
+            **provider, "error": exc.issue, "blocked_by": "provider_data_handling",
+            "next_actions": project_stop_next_actions({"status": "blocked", "reason": exc.issue}),
+        }) from exc
 
     try:
         check_external_llm_opt_in(
