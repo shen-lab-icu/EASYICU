@@ -749,6 +749,11 @@ def _executed_method_boundary_rows(
             ):
                 if key in receipt:
                     row[key] = receipt[key]
+            covariates = receipt["adjustment_columns"]
+            row["adjustment_statement"] = (
+                "Model adjusted for " + ", ".join(covariates) + "." if covariates
+                else "Model fitted without adjustment covariates."
+            )
             for block, keys in (
                 ("functional_form_comparison", ("comparison", "method", "target_column", "information_criteria_basis")),
                 ("adjusted_absolute_risk", ("method", "interval")),
@@ -992,7 +997,9 @@ def _render_writer_evidence_digest(
             "A planned or cited method absent from this block was not executed. "
             "Where a row carries executed_method_design, describe that step's "
             "time grid, eligibility rule and model from it; a run-context time "
-            "window does not describe it.",
+            "window does not describe it. "
+            "State each adjustment_statement in the report's methods, using the reader labels "
+            "for its covariates; an empty adjustment set must be described as without adjustment covariates.",
         ]
     )
     if method_rows:

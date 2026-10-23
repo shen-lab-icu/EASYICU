@@ -14,19 +14,17 @@ Synthetic contexts only.
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from easyicu.research_agent.planning.adjustment_authority import (
     host_proven_temporal_roles,
 )
+from easyicu.research_agent.planning.family_spec import FamilySpecError
+from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
 from tests.research_agent.planning.family_spec_fixtures import (
-    PLANNER_ROSTER,
     _context,
     _request,
     _run,
-    _spec_payload,
 )
 
 COVARIATE = "severity_score_24h"
@@ -90,21 +88,12 @@ def test_another_anchor_proves_nothing_at_a_later_landmark_either() -> None:
 
 
 def test_a_free_text_event_window_is_not_a_selectable_covariate() -> None:
-    assert not _request(_with_window("sepsis_onset_0_24h")).candidate(COVARIATE).selectable
+    with pytest.raises(FamilySpecError, match="family_spec_covariate_timing_unproven"):
+        _request(_with_window("sepsis_onset_0_24h"))
 
 
 def test_the_planner_cannot_adjust_for_an_event_window_measurement() -> None:
     context = _with_window("event_onset[0,72]h")
-    request = _request(context)
-    assert not request.candidate(COVARIATE).selectable
-
-    without = [item for item in PLANNER_ROSTER if item["name"] != COVARIATE]
-    llm, outcome = _run(context, [
-        json.dumps(_spec_payload(request, adjustment_set=PLANNER_ROSTER)),
-        json.dumps(_spec_payload(request, adjustment_set=without)),
-    ])
-
-    # The first spec names it and is refused; the retry compiles without it.
-    assert len(llm.calls) == 2
-    primary = next(step for step in outcome.output.steps if step.step_id == "adjusted_association")
-    assert primary.model_requirements[0].covariates == ["age", "sex"]
+    # A stated variable cannot be dropped on retry: stop before a provider call.
+    with pytest.raises(ProgressivePlanCompileError, match="family_spec_covariate_timing_unproven"):
+        _run(context, [])

@@ -1785,7 +1785,7 @@ def _family_spec_request(
     assert landmark is not None
     preferences = context.user_preferences
     specs = list(preferences.sensitivity_specs) if preferences is not None else []
-    adjustment = AdjustmentSetAuthority.from_context(context)
+    adjustment = _association_adjustment(context, roster)
     for column in (timing.event_time_variable, timing.observation_duration_variable):
         if column not in variables:
             raise FamilySpecError(
@@ -2027,6 +2027,84 @@ def _binary_level_label_keys(context: ResearchContext, exposure: str) -> list[st
     return [f"{exposure}=0", f"{exposure}=1"]
 
 
+def _association_adjustment(
+    context: ResearchContext, roster: Sequence[str],
+) -> AdjustmentSetAuthority:
+    """Bind baseline and landmark associations to the same exact stated roster.
+
+    Resolve stated concepts using the adjustment owner. An unavailable or
+    ambiguous reading stays a refusal; availability never authorizes extra
+    covariates. A question receipt grants no measurement-time authority.
+    """
+    from dataclasses import replace
+
+    from ..adjustment_authority import (
+        context_stated_adjustments,
+        host_proven_temporal_roles, stated_adjustment_columns,
+    )
+
+    available = set(_structurally_available_roster(context, roster))
+    adjustment = AdjustmentSetAuthority.from_context(context)
+    stated = context_stated_adjustments(context)
+    columns = []
+    for item in stated:
+        matched = [name for name in stated_adjustment_columns(context, item) if name in available]
+        if item.source_status != "available" or len(matched) != 1:
+            raise FamilySpecError("family_spec_stated_adjustment_unavailable",
+                                  f"The question asks to adjust for {item.variable!r}, but the extracted data has no single column for it.",
+                                  path="adjustment_set")
+        columns.extend(matched)
+    timed = host_proven_temporal_roles(context)
+    if adjustment.selection != "exact":
+        adjustment = replace(adjustment, selection="exact", covariates=tuple(dict.fromkeys(columns)),
+                             temporal_roles=tuple((name, timed[name]) for name in dict.fromkeys(columns) if name in timed))
+    elif stated and set(columns) != set(adjustment.operational_covariates):
+        raise FamilySpecError("family_spec_exact_roster_mismatch",
+                              "The plan's adjustment variables differ from the ones the question names.",
+                              path="adjustment_set")
+    if primary_landmark_hours(context) is not None:
+        _require_landmark_adjustment_timing(context, adjustment)
+    return adjustment
+
+
+def _require_landmark_adjustment_timing(
+    context: ResearchContext, adjustment: AdjustmentSetAuthority,
+) -> None:
+    """A stated covariate must already be known when the landmark model starts."""
+    from ...research_context.materialization_window import context_column_windows
+    from ..adjustment_authority import host_proven_temporal_roles
+    from ..association_scope import post_baseline_exposure
+    from ..progressive_contract import ProgressivePlanCompileError
+
+    landmark = primary_landmark_hours(context)
+    timed = host_proven_temporal_roles(context)
+    windows = context_column_windows(context)
+    for name in adjustment.operational_covariates:
+        try:
+            post_baseline_exposure(context, name)
+        except ProgressivePlanCompileError as exc:
+            raise FamilySpecError("family_spec_covariate_timing_unproven", str(exc),
+                                  path="adjustment_set") from exc
+        variable = context.variable(name)
+        window = windows.get(name)
+        role = timed.get(name)
+        # An exact, user-reviewed static attribute remains authoritative when
+        # no measurement window exists. An untimed lab/vital was refused above.
+        if role is None and window is None:
+            role = adjustment.operational_temporal_roles.get(name)
+        known = role in {"baseline_static", "at_or_before_time_zero"}
+        if window is not None and window.start_hours is not None:
+            known = (window.anchor == "icu_admission" and landmark is not None
+                     and window.end_hours is not None
+                     and 0 <= window.start_hours <= window.end_hours <= landmark)
+        elif window is not None and role == "baseline_static":
+            known = False  # A conflicting/unknown measurement window is not static.
+        if variable is None or not known:
+            raise FamilySpecError("family_spec_covariate_timing_unproven",
+                                  f"The adjustment variable {name!r} is not known by the landmark time.",
+                                  path="adjustment_set")
+
+
 def _build_baseline_request(
     context: ResearchContext,
     *,
@@ -2037,34 +2115,11 @@ def _build_baseline_request(
     comparator_titles: Mapping[str, str] | None,
     required_primary_cohort_selection_mode: str | None,
 ) -> FamilySpecRequest:
-    """The minimal association's roster is exactly what the study states.
-
-    Resolve stated concepts using the adjustment owner. An unavailable or
-    ambiguous reading stays a refusal; availability never authorizes extra
-    covariates. The ordinary compiler and requirement coverage still check it.
-    """
-    from dataclasses import replace
-
-    from ..adjustment_authority import (
-        context_stated_adjustments, context_stated_variables,
-        host_proven_temporal_roles, stated_adjustment_columns,
-    )
+    from ..adjustment_authority import context_stated_variables
 
     roster = list(dict.fromkeys(variable_roster))
     exposure, outcome = str(context.primary_exposure), str(context.target_outcome)
-    adjustment = AdjustmentSetAuthority.from_context(context)
-    stated = context_stated_adjustments(context)
-    columns = []
-    for item in stated:
-        matched = [name for name in stated_adjustment_columns(context, item) if name in roster]
-        if item.source_status != "available" or len(matched) != 1:
-            raise FamilySpecError("family_spec_stated_adjustment_unavailable",
-                                  f"The stated adjustment {item.variable!r} needs one bound value column.",
-                                  path="adjustment_set")
-        columns.extend(matched)
-    if adjustment.selection != "exact":
-        adjustment = replace(adjustment, selection="exact", covariates=tuple(dict.fromkeys(columns)),
-                             temporal_roles=tuple(host_proven_temporal_roles(context).items()))
+    adjustment = _association_adjustment(context, roster)
     subgroups = []
     relatives = concept_relatives(context)
     for item in context_stated_variables(context, "stated_subgroups"):

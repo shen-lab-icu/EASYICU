@@ -350,7 +350,7 @@ def run_landmark_spline_association(
     additional_parameters = int(fit.df_model - linear_fit.df_model)
     if additional_parameters <= 0:
         raise ValueError("signed spline model does not extend the linear model")
-    if sealed.schema_version.endswith("/4"):
+    if sealed.dependence is not None:
         from .nested_model_comparison import cluster_robust_nested_wald
 
         comparison = cluster_robust_nested_wald(fit=fit, restricted_design=linear_design)
@@ -606,10 +606,10 @@ def run_landmark_spline_association(
     receipt = {
         "schema_version": (
             "easyicu.landmark_spline_runtime_receipt/4"
-            if sealed.schema_version.endswith("/4")
+            if sealed.dependence is not None
             else (
                 "easyicu.landmark_spline_runtime_receipt/2"
-                if sealed.schema_version.endswith("/2")
+                if not sealed.schema_version.endswith("/1")
                 else "easyicu.landmark_spline_runtime_receipt/1"
             )
         ),
@@ -641,7 +641,7 @@ def run_landmark_spline_association(
             "interval": "delta_method_logit_scale_95_percent_confidence_interval",
             "grid_rows": len(absolute_risk_rows),
         }
-    if sealed.schema_version.endswith("/4"):
+    if sealed.dependence is not None:
         assert sealed.dependence is not None
         receipt["variance_estimator"] = sealed.dependence.variance_estimator
         receipt["cluster_unit"] = sealed.dependence.cluster_unit

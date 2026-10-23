@@ -129,7 +129,8 @@ class LandmarkSplineRuntimeReceipt(BaseModel):
     population_rule: str = Field(min_length=1)
     spline_knot_quantiles: tuple[float, float, float]
     observed_knots: tuple[float, float, float]
-    adjustment_columns: tuple[str, ...] = Field(min_length=1)
+    # Required even for an explicitly unadjusted model; omission is not [].
+    adjustment_columns: tuple[str, ...]
     primary_population_n: int = Field(ge=30)
     complete_case_n: int = Field(ge=30)
     events: int = Field(ge=1)

@@ -115,8 +115,9 @@ def test_request_exposes_candidates_with_the_host_timing_verdict() -> None:
     assert by_name["age"].selectable and by_name["age"].host_temporal_role == "baseline_static"
     assert by_name["severity_score_24h"].selectable
     assert by_name["severity_score_24h"].host_temporal_role == "at_or_before_time_zero"
-    assert not by_name["comorbidity_index"].selectable
-    assert "exact user-reviewed roster" in by_name["comorbidity_index"].boundary
+    assert request.adjustment_selection == "exact"
+    assert request.exact_roster == ["age", "sex", "severity_score_24h"]
+    assert "comorbidity_index" not in by_name
     assert request.secondary_continuous_outcome == "los_icu"
     assert [item.execution_variables[0] for item in request.alternate_exposures] == [
         "injury_stage_alt_a",
@@ -296,7 +297,7 @@ def test_landmark_family_figure_and_report_steps_are_host_owned() -> None:
     assert report_owner.analysis_kind == "evidence_bound_scientific_reporting"
 
 
-def test_planner_selected_roster_uses_host_timing_not_the_rationale() -> None:
+def test_question_roster_uses_host_timing_not_the_rationale() -> None:
     context = _context(exact=False)
     request = _request(context)
     llm, result = _run(context, [json.dumps(_spec_payload(request, adjustment_set=PLANNER_ROSTER))])
@@ -321,25 +322,18 @@ def test_planner_selected_roster_uses_host_timing_not_the_rationale() -> None:
 
 def test_unproven_covariate_is_refused_even_with_a_rationale() -> None:
     context = _context(exact=False)
-    request = _request(context)
-    bad = [
-        *PLANNER_ROSTER[:2],
-        {
-            "name": "comorbidity_index",
-            "coding": "continuous",
-            "reference_level_index": None,
-            "clinical_rationale": "Chronic comorbidity is recorded before admission and predicts death.",
-        },
-    ]
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints["stated_adjustments"].append({
+        "variable": "comorbidity_index", "concept": "comorbidity_index",
+        "words": "adjust for chronic comorbidity", "source_status": "available",
+    })
+    context.user_preferences.data_constraints = json.dumps(constraints)
+    context.user_preferences.covariate_rationales = {
+        "comorbidity_index": "Chronic comorbidity is recorded before admission and predicts death.",
+    }
     with pytest.raises(FamilySpecError) as caught:
-        parse_family_plan_spec(
-            json.dumps(_spec_payload(request, adjustment_set=bad)), request
-        )
+        _request(context)
     assert caught.value.reason_code == "family_spec_covariate_timing_unproven"
-    # The retry loop feeds the refusal back to the provider; a provider that
-    # keeps answering the same way fails closed with the same reason code.
-    with pytest.raises(Exception, match="family_spec_covariate_timing_unproven"):
-        _run(context, [json.dumps(_spec_payload(request, adjustment_set=bad))] * 3)
 
 
 def test_exact_roster_cannot_be_edited_by_the_spec() -> None:
@@ -379,7 +373,7 @@ def test_strict_schema_is_closed_and_run_bound() -> None:
     assert set(names) == {"age", "sex", "severity_score_24h"}
     assert schema["properties"]["request_sha256"]["enum"] == [request.request_sha256]
     prompt = family_spec_user_prompt(request, variable_descriptions={"age": "patient age"})
-    assert '"selectable": false' in prompt and "comorbidity_index" in prompt
+    assert '"exact_roster"' in prompt and "severity_score_24h" in prompt
     assert request.request_sha256 in prompt
 
 
@@ -404,7 +398,7 @@ def test_route_without_strict_schema_gets_the_written_shape_on_the_first_request
         '"schema_version": "easyicu.family_plan_spec/1"',
         f'"family_id": "{request.family_id}"',
         f'"request_sha256": "{request.request_sha256}"',
-        '"name" (one of ["age", "sex", "severity_score_24h"])',
+        '"name" (exactly ["age", "sex", "severity_score_24h"] in this order',
         "null for continuous coding",
         '["comparator_alpha_2020_1"]',
         # The rerun's first answer labelled icu_unit_type "ICU unit type" and
@@ -724,7 +718,7 @@ def test_template_failure_keeps_the_compiler_reason_code() -> None:
     assert caught.value.reason_code == "family_spec_reader_label_missing"
 
 
-def test_planner_selected_roster_seals_into_the_plan_bound_runtime_contract() -> None:
+def test_question_roster_seals_into_the_plan_bound_runtime_contract() -> None:
     """End to end: Planner spec → host plan → sealed runtime authority.
 
     The Web projection for a ``planner_selectable`` landmark study seals only
@@ -857,7 +851,11 @@ def _spline_context() -> ResearchContext:
     }
     variables = [item for item in base.variables if item.name in keep] + lactate
     specs = [spec for spec in base.user_preferences.sensitivity_specs if spec.axis != "exposure_definition"]
-    preferences = base.user_preferences.model_copy(update={"sensitivity_specs": specs})
+    constraints = json.loads(base.user_preferences.data_constraints)
+    constraints["stated_adjustments"] = [item for item in constraints["stated_adjustments"] if item["concept"] in {"age", "sex"}]
+    preferences = base.user_preferences.model_copy(update={
+        "sensitivity_specs": specs, "data_constraints": json.dumps(constraints),
+    })
     return base.model_copy(
         update={
             "research_question": (
@@ -911,7 +909,7 @@ def test_spline_family_request_routes_companions_to_the_audit_and_labels_only_th
     assert request.exposure_companion_columns == ["lactate_min", "lactate_n", "lactate_measured"]
     selectable = {item.name for item in request.selectable_candidates}
     # Companion aggregates of the exposure are audit context, never covariates.
-    assert selectable == {"age", "sex", "severity_score_24h"}
+    assert selectable == {"age", "sex"}
     assert "lactate_min" not in {item.name for item in request.adjustment_candidates}
     assert "lactate_min" not in request.required_reader_label_keys
     assert request.alternate_exposures == []
@@ -1561,8 +1559,21 @@ def test_a_landmark_roster_is_named_in_the_estimand_only_while_it_fits() -> None
     from easyicu.research_agent.planning.family_spec.contract import design_field_max_length
 
     context = _with_routine_measurements(_spline_context(), 8)
-    request = _request(context)
     labs = [f"lab_{i:02d}_max" for i in range(8)]
+    context.user_preferences.covariate_selection = "exact"
+    context.user_preferences.covariates = ["age", "sex", *labs]
+    context.user_preferences.covariate_temporal_roles = {
+        "age": "baseline_static", "sex": "baseline_static",
+        **{name: "at_or_before_time_zero" for name in labs},
+    }
+    context.user_preferences.covariate_rationales = {
+        name: "The study declares this covariate, known at the landmark, as an adjustment variable."
+        for name in context.user_preferences.covariates
+    }
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints.pop("stated_adjustments")
+    context.user_preferences.data_constraints = json.dumps(constraints)
+    request = _request(context)
     assert set(labs) <= {item.name for item in request.selectable_candidates}
 
     _llm, result = _run(context, [json.dumps(_landmark_roster_payload(request, labs))])
@@ -1579,8 +1590,21 @@ def test_a_landmark_roster_the_design_cannot_name_is_refused_in_the_spec() -> No
     """The design bound is checked while the Planner can still answer, never truncated after."""
 
     context = _with_routine_measurements(_spline_context(), 24)
-    request = _request(context)
     labs = [f"lab_{i:02d}_max" for i in range(20)]
+    context.user_preferences.covariate_selection = "exact"
+    context.user_preferences.covariates = ["age", "sex", *labs]
+    context.user_preferences.covariate_temporal_roles = {
+        "age": "baseline_static", "sex": "baseline_static",
+        **{name: "at_or_before_time_zero" for name in labs},
+    }
+    context.user_preferences.covariate_rationales = {
+        name: "The study declares this covariate, known at the landmark, as an adjustment variable."
+        for name in context.user_preferences.covariates
+    }
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints.pop("stated_adjustments")
+    context.user_preferences.data_constraints = json.dumps(constraints)
+    request = _request(context)
 
     with pytest.raises(FamilySpecError) as caught:
         parse_family_plan_spec(json.dumps(_landmark_roster_payload(request, labs)), request)

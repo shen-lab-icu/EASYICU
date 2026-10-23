@@ -9,7 +9,9 @@ from easyicu.research_agent.audits.envelope_consumers import (
 )
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.contracts.result_envelope import normalize_step_result_shadow
-from easyicu.research_agent.reporting.writer_evidence import _executed_method_boundary_rows
+from easyicu.research_agent.reporting.writer_evidence import (
+    _executed_method_boundary_rows, _render_writer_evidence_digest,
+)
 from ..execution.test_step_result_envelope import (
     _UPSTREAM_STEP, _commit_upstream_sidecar, _modern_upstream_record, _register_upstream_table,
 )
@@ -59,10 +61,12 @@ def _receipt(clustered):
 
 @pytest.mark.parametrize("clustered", [False, True])
 @pytest.mark.parametrize("corrupt_receipt", [False, True])
-def test_sealed_method_receipt_survives_projection_and_rejects_drift(tmp_path, clustered, corrupt_receipt):
+@pytest.mark.parametrize("covariates", [["age", "severity_index"], []])
+def test_sealed_method_receipt_survives_projection_and_rejects_drift(tmp_path, clustered, corrupt_receipt, covariates):
     table = tmp_path / "exposure_outcome_summary.csv"
     table.write_text("group,n\n0,40\n1,60\n")
     receipt = _receipt(clustered)
+    receipt["adjustment_columns"] = covariates
     if corrupt_receipt:
         del receipt["adjustment_columns"]
     summary = {"status": "ok", "analysis_family": "association",
@@ -82,7 +86,14 @@ def test_sealed_method_receipt_survives_projection_and_rejects_drift(tmp_path, c
         return
     projected = consumer.authoritative_writer_records([record], evidence_store=store)
     (method,) = _executed_method_boundary_rows(projected, evidence=store)
-    assert method["adjustment_columns"] == ["age", "severity_index"]
+    assert method["adjustment_columns"] == covariates
+    assert method["adjustment_statement"] == (
+        "Model adjusted for age, severity_index." if covariates
+        else "Model fitted without adjustment covariates."
+    )
+    digest = _render_writer_evidence_digest(projected, run_dir=store.root, evidence=store)
+    assert method["adjustment_statement"] in digest
+    assert "State each adjustment_statement in the report's methods" in digest
     assert method["landmark_hours"] == 24
     assert method["population_rule"] == receipt["population_rule"]
     assert method["population_flow"] == receipt["population_flow"]

@@ -684,6 +684,20 @@ _PLANNING_STOP_SENTENCES = {
         "stopped and no analysis was run. State the window in the question, for "
         "example the first 24 hours after admission, then generate the plan again."
     ),
+    "progressive_family_spec_stated_adjustment_unavailable": (
+        "The question asks to adjust for a variable that the extracted data does not provide, "
+        "so planning stopped and no analysis was run. Choose data that includes it, or remove "
+        "it from the adjustment variables, then generate the plan again."
+    ),
+    "progressive_family_spec_exact_roster_mismatch": (
+        "The plan's adjustment variables differ from the ones named in the question, "
+        "so planning stopped and no analysis was run. Generate the plan again."
+    ),
+    "progressive_family_spec_covariate_timing_unproven": (
+        "An adjustment variable is not known by the landmark time, so it cannot be used to "
+        "adjust this analysis. Planning stopped and no analysis was run. Give that variable "
+        "a time window that ends before the landmark, or remove it, then generate the plan again."
+    ),
     "tte_trial_not_confirmed": (
         "This study has no confirmed target trial, so planning stopped before "
         "any model was called and no analysis was run. Set up the target trial "

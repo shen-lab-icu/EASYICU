@@ -54,7 +54,7 @@ LABEL_SELECTION = "and for every variable you select"
 def _requests():
     return {
         "proposed_survival": survival_request(survival_context()),
-        "landmark_planner": _landmark_request(_landmark_context(exact=False)),
+        "landmark_stated": _landmark_request(_landmark_context(exact=False)),
         "landmark_exact": _landmark_request(_landmark_context(exact=True)),
         "descriptive": _landmark_request(_descriptive_context(), cohort_mode="all_input_rows"),
     }
@@ -70,16 +70,16 @@ def _refuses_an_empty_roster(request) -> bool:
     return False
 
 
-@pytest.mark.parametrize("case", ["proposed_survival", "landmark_planner", "landmark_exact", "descriptive"])
+@pytest.mark.parametrize("case", ["proposed_survival", "landmark_stated", "landmark_exact", "descriptive"])
 def test_the_shape_demands_a_roster_exactly_where_the_contract_refuses_none(case):
     request = _requests()[case]
     shape = family_spec_response_shape(request)
-    planner_roster = case in {"proposed_survival", "landmark_planner"}
+    planner_roster = case == "proposed_survival"
 
     assert planner_selects_adjustment(request) is planner_roster
     assert (AT_LEAST_ONE in shape) is planner_roster is _refuses_an_empty_roster(request)
     assert (NO_MODEL in shape) is (case == "descriptive")
-    assert (LABEL_SELECTION in shape) is (case != "landmark_exact")
+    assert (LABEL_SELECTION in shape) is (case not in {"landmark_stated", "landmark_exact"})
 
 
 def test_a_proposed_suite_shape_offers_its_candidates_by_their_field_names():
