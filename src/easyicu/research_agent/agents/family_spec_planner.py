@@ -1206,6 +1206,8 @@ def family_spec_fallback_reason(
     )
     if family_id is None:
         return "no_family_template_for_context"
+    if _stated_subgroups_need_outline(context, family_id, planning_contract_context):
+        return "family_template_stated_subgroup_requires_outline"
     try:
         request = build_family_spec_request(
             context, analysis_types=analysis_types,
@@ -1224,6 +1226,39 @@ def family_spec_fallback_reason(
     if set(context.cohort.requested_outcome_columns or ()) - set(request.covered_outcome_columns):
         return "family_template_requested_outcomes_not_supported"
     return None
+
+
+def _stated_subgroups_need_outline(
+    context: ResearchContext, family_id: str, planning_contract_context: str,
+) -> bool:
+    """Whether a stated subgroup needs a step this family template never drafts.
+
+    The descriptive template reports its outcome in each level of the study's
+    exposure, which answers a subgroup that is that exposure.  No template
+    drafts a subgroup estimate.  Progressive planning can add the family's
+    subgroup owner while the accepted-baseline gate keeps the original Table 1
+    grouping and rows, so it plans instead, except where only the template
+    plans the primary (a static prediction): scientific review then stops on
+    the subgroup no route can answer.
+    """
+
+    from ..planning.adjustment_authority import context_stated_variables
+    from ..planning.question_requirements import concept_relatives
+
+    # A reading without an available concept is a review finding either way.
+    subgroups = [
+        item for item in context_stated_variables(context, "stated_subgroups")
+        if item.concept and item.source_status == "available"
+    ]
+    if not subgroups or family_id == PREDICTION_FAMILY_ID or _template_sealed_for_run(
+        family_id, planning_contract_context,
+    ):
+        return False
+    exposure = str(context.primary_exposure or "").strip()
+    relatives = concept_relatives(context)
+    return not (family_id == DESCRIPTIVE_FAMILY_ID and exposure and all(
+        exposure in relatives(item.concept) for item in subgroups
+    ))
 
 
 def _template_sealed_for_run(family_id: str, planning_contract_context: str) -> bool:

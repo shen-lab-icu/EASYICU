@@ -103,6 +103,7 @@ _CONTEXT_FIELDS = {
     QUESTION_FAMILY_CHECK_FIELD,
     "question_wording",
     "stated_adjustments",
+    "stated_subgroups",
     "design_variance_basis",
     "sensitivity_specs",
     "time_window",
@@ -329,6 +330,7 @@ _SCIENTIFIC_CONFIGURATION_FIELDS = (
     "literature_authority",
     "target_trial_design",
     "stated_adjustments",
+    "stated_subgroups",
 )
 
 
@@ -1577,18 +1579,22 @@ def _sanitize_patch(
             raise StudyContextError({
                 "error": "study_question_wording_invalid", "field": "question_wording",
             }) from exc
-    if "stated_adjustments" in raw:
-        from easyicu.research_agent.planning.adjustment_authority import normalize_stated_adjustments
+    from easyicu.research_agent.planning.adjustment_authority import (
+        STATED_VARIABLE_FIELDS, normalize_stated_variables,
+    )
 
+    for field in STATED_VARIABLE_FIELDS:
+        if field not in raw:
+            continue
         if not allow_question_wording:
             raise StudyContextError({
-                "error": "study_stated_adjustments_server_owned", "field": "stated_adjustments",
+                "error": f"study_{field}_server_owned", "field": field,
             })
         try:
-            patch["stated_adjustments"] = normalize_stated_adjustments(raw["stated_adjustments"])
+            patch[field] = normalize_stated_variables(raw[field])
         except ValueError as exc:
             raise StudyContextError({
-                "error": "study_stated_adjustments_invalid", "field": "stated_adjustments",
+                "error": f"study_{field}_invalid", "field": field,
             }) from exc
     if "design_variance_basis" in raw:
         # The host records it with the design (``study_family_design``).
@@ -2367,11 +2373,12 @@ def upsert_context(
             wording = context.get("question_wording")
             if wording and wording.get("question_sha256") != question_sha256(str(context.get("question") or "")):
                 context["question_wording"] = None
-            if context.get("stated_adjustments"):
-                context["stated_adjustments"] = [
-                    item for item in context["stated_adjustments"]
-                    if item["words"] in str(context.get("question") or "")
-                ]
+            for field in ("stated_adjustments", "stated_subgroups"):
+                if context.get(field):
+                    context[field] = [
+                        item for item in context[field]
+                        if item["words"] in str(context.get("question") or "")
+                    ]
             if design_variance_basis_is_stale(context):
                 context["design_variance_basis"] = None
             _validate_covariate_decision_contract(context)
@@ -2782,8 +2789,9 @@ def _scientific_fields_sha256(
     # Likewise a study that states no target trial.
     if not sanitized.get("target_trial_design"):
         sanitized.pop("target_trial_design", None)
-    if not sanitized.get("stated_adjustments"):
-        sanitized.pop("stated_adjustments", None)
+    for field in ("stated_adjustments", "stated_subgroups"):
+        if not sanitized.get(field):
+            sanitized.pop(field, None)
     encoded = json.dumps(
         sanitized,
         ensure_ascii=False,
@@ -2996,6 +3004,7 @@ def restore_turn_configuration_snapshot(
     defaults: Dict[str, Any] = {
         "question": "",
         "stated_adjustments": [],
+        "stated_subgroups": [],
         "purpose": "",
         "data_source": restored_source,
         "crossdb_selection": {},

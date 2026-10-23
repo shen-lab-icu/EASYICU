@@ -2035,51 +2035,57 @@ def update_study_context(
     check_receipt = _question_family_check(
         params, patch, current, str(context.user_message or "")
     )
-    adjustments_unread: list[dict[str, str]] = []
-    if "stated_adjustments" in params or (current or {}).get("stated_adjustments"):
-        from easyicu.webserver.research_launch_scientific import (
-            _stated_reading,
-            checked_stated_adjustments,
-        )
+    from easyicu.research_agent.planning.adjustment_authority import STATED_VARIABLE_FIELDS
 
-        question = str(patch.get("question", (current or {}).get("question")) or "")
-        # A later plan compile or an empty model response cannot remove a
-        # requirement whose words the study still retains. A new question can.
-        retained = [
-            _stated_reading(item)
-            for item in (current or {}).get("stated_adjustments") or ()
-            if item["words"] in question
-        ]
-        proposed = params.get("stated_adjustments", [])
-        if not isinstance(proposed, list):
-            proposed = []
-            adjustments_unread.append(
-                {"variable": "", "reason": "stated_adjustments must be a list"}
+    stated_unread: dict[str, list[dict[str, str]]] = {}
+    for field in STATED_VARIABLE_FIELDS:
+        unread: list[dict[str, str]] = []
+        stated_unread[field] = unread
+        if field in params or (current or {}).get(field):
+            from easyicu.webserver.research_launch_scientific import (
+                _stated_reading,
+                checked_stated_variables,
             )
-        stated_pairs = {(item.get("variable"), item.get("words")) for item in proposed
-                        if isinstance(item, Mapping)}
-        # Before a source is bound, the database the question names checks a
-        # looked-up identifier, while the conversation can still correct it.
-        database = str(effective_source.get("database") or "").strip() or database_named_in(question)
-        try:
-            # A new reading that fails is not recorded and the conversation is
-            # told why; the rest of the setup, the question included, is saved.
-            # A saved reading is rechecked as a launch rechecks it: a source
-            # bound since keeps it as an unavailable requirement, never drops
-            # it where no one reads the receipt.
-            kept = checked_stated_adjustments(
-                [item for item in retained
-                 if (item["variable"], item["words"]) not in stated_pairs],
-                question=question, source=effective_source,
-                rejected=adjustments_unread, recheck=True, database=database,
-            )
-            patch["stated_adjustments"] = [*kept, *checked_stated_adjustments(
-                proposed, question=question, source=effective_source,
-                rejected=adjustments_unread, database=database,
-            )]
-        except (ValueError, OSError) as exc:
-            adjustments_unread.append({"variable": "", "reason": str(exc)})
-            patch.pop("stated_adjustments", None)
+
+            question = str(patch.get("question", (current or {}).get("question")) or "")
+            # A later plan compile or an empty model response cannot remove a
+            # requirement whose words the study still retains. A new question can.
+            retained = [
+                _stated_reading(item)
+                for item in (current or {}).get(field) or ()
+                if item["words"] in question
+            ]
+            proposed = params.get(field, [])
+            if not isinstance(proposed, list):
+                proposed = []
+                unread.append(
+                    {"variable": "", "reason": f"{field} must be a list"}
+                )
+            # Before a source is bound, the database the question names checks a
+            # looked-up identifier, while the conversation can still correct it.
+            database = str(effective_source.get("database") or "").strip() or database_named_in(question)
+            try:
+                # A new reading that fails is not recorded and the conversation is
+                # told why; the rest of the setup, the question included, is saved.
+                # A saved reading is rechecked as a launch rechecks it: a source
+                # bound since keeps it as an unavailable requirement, never drops
+                # it where no one reads the receipt.
+                kept = checked_stated_variables(
+                    retained, question=question, source=effective_source,
+                    rejected=unread, recheck=True, database=database,
+                )
+                added = checked_stated_variables(
+                    proposed, question=question, source=effective_source,
+                    rejected=unread, database=database,
+                )
+                # Invalid new readings cannot erase a previously verified one.
+                by_words = {(item["variable"], item["words"]): item for item in (*kept, *added)}
+                from easyicu.research_agent.planning.adjustment_authority import normalize_stated_variables
+
+                patch[field] = normalize_stated_variables(list(by_words.values()))
+            except (ValueError, OSError) as exc:
+                unread.append({"variable": "", "reason": str(exc)})
+                patch.pop(field, None)
     causal_receipt = _question_causal_design(params, patch, current)
     family_receipt = (
         {} if causal_receipt else _question_family_design(params, patch, current)
@@ -2262,17 +2268,18 @@ def update_study_context(
             + check_receipt["question_family_unread"]
             + ". State it again with words copied exactly from the saved question."
         )
-    if adjustments_unread:
-        summary += (
-            " stated_adjustments not recorded: "
-            + "; ".join(
-                f"{item['variable'] or 'the list'} ({item['reason']})"
-                for item in adjustments_unread
+    for field, unread in stated_unread.items():
+        if unread:
+            summary += (
+                f" {field} not recorded: "
+                + "; ".join(
+                    f"{item['variable'] or 'the list'} ({item['reason']})"
+                    for item in unread
+                )
+                + ". State each again with variable and words copied exactly from the "
+                "saved question, and concept set to the identifier "
+                "easyicu_list_source_concepts returns for it."
             )
-            + ". State each again with variable and words copied exactly from the "
-            "saved question, and concept set to the identifier "
-            "easyicu_list_source_concepts returns for it."
-        )
     summary += _causal_receipt_text(causal_receipt)
     summary += _family_receipt_text(family_receipt)
     summary += _variance_receipt_text(variance_receipt)
@@ -2307,7 +2314,7 @@ def update_study_context(
                if analysis_design_recovery is not None else {}),
             **({"unsaved_design": unsaved_design} if unsaved_design is not None else {}),
             **check_receipt,
-            **({"stated_adjustments_unread": adjustments_unread} if adjustments_unread else {}),
+            **{f"{field}_unread": unread for field, unread in stated_unread.items() if unread},
             **causal_receipt,
             **family_receipt,
             **variance_receipt,
