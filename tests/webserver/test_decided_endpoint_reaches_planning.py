@@ -43,7 +43,7 @@ def test_derived_event_outcomes_carry_the_owner_event_role():
     ("question", "configured", "target", "endpoint"),
     [
         (_QUESTION, "mort_90d", "mort_90d", "mort_90d"),
-        (_QUESTION, "los_icu", "los_icu", None),
+        (_QUESTION, "los_icu", "los_icu", "los_icu"),
         ("Do early lactate trajectory classes differ in in-hospital mortality?", "mort_90d", "mort_90d", "mort_90d"),
         ("Do early lactate trajectory classes differ in in-hospital mortality?", None, "death", "death"),
         (_QUESTION, None, None, None),
@@ -57,7 +57,7 @@ def test_a_configured_outcome_becomes_the_planning_endpoint(question, configured
     assert coordinates["target_outcome"] == target
     assert (coordinates["endpoint"].name if coordinates["endpoint"] else None) == endpoint
     if endpoint:
-        assert coordinates["endpoint"].kind == "binary"
+        assert coordinates["endpoint"].kind == ("continuous" if configured == "los_icu" else "binary")
     assert coordinates["execution_authorized"] is False
 
 

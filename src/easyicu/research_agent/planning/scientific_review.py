@@ -316,7 +316,12 @@ def planned_model_outcomes(
                 and spec.outcome not in values
             ):
                 values.append(spec.outcome)
-        if context is not None and is_primary_descriptive_summary_step(step):
+        grouped_continuous_question = bool(
+            context is not None and context.primary_exposure
+            and context.endpoint is not None and context.endpoint.kind == "continuous"
+        )
+        if (context is not None and is_primary_descriptive_summary_step(step)
+                and not grouped_continuous_question):
             for name in step.inputs:
                 descriptor = context.variable(name)
                 if descriptor is not None and descriptor.role.value == "outcome" and name not in values:
@@ -325,9 +330,12 @@ def planned_model_outcomes(
                 and canonical_analysis_family(plan.analysis_type) == "descriptive_epidemiology"
                 and continuous_outcome_summary_verdict(step).claimed):
             grouping, *outcomes = continuous_outcome_columns(step)
+            if grouped_continuous_question and grouping != context.primary_exposure:
+                continue
             try:
                 continuous_summary_columns(grouping=grouping, raw_inputs=[grouping, *outcomes],
-                                           variables={v.name: v for v in context.variables})
+                                           variables={v.name: v for v in context.variables},
+                                           planning_context=context)
             except ValueError:
                 pass  # Invalid metadata cannot manufacture outcome coverage.
             else:

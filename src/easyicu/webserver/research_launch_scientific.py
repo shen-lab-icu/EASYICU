@@ -1286,9 +1286,9 @@ def _metadata_only_planning_coordinates(
     This is proposal context, not executable StudyContext authority.  The
     deterministic intent reader's keyword reading names them, with the words
     it matched, and the database capability catalog proves that the named
-    concepts exist.  A
-    binary endpoint is emitted only when the concept owner declares
-    ``event_status`` semantics; names and dtypes are never used to guess it.
+    concepts exist.  An
+    endpoint is emitted only from the concept owner's event or continuous
+    value definition; names and dtypes are never used to guess it.
     A named exposure is read through its concept owner's selection policy
     against the bound source (``export_path``), and both named coordinates as
     the column that source publishes for them; both callers -- the planning
@@ -1297,7 +1297,7 @@ def _metadata_only_planning_coordinates(
 
     ``configured_outcome`` is the StudyContext's typed outcome concept, which
     the researcher confirmed; it takes precedence over a question-named one,
-    and its binary endpoint follows the same concept-owner rule.
+    and its endpoint follows the same concept-owner rule.
 
     The exposure is a concept neither the study's declared covariates
     (``declared_covariates``) nor its outcome: the keyword reader names the
@@ -1309,8 +1309,9 @@ def _metadata_only_planning_coordinates(
     same reader; when it and the question name different concepts, neither
     is projected and the planner reads the question.
 
-    A prediction study names predictors, and a descriptive study names
-    measurements, without assigning either a primary exposure. The existing
+    A prediction study names predictors without a primary exposure. A
+    descriptive study can name a categorical grouping as its exposure; a lone
+    continuous measurement does not become an exposure. The existing
     host family reading takes precedence over the keyword family hint.
     Every concept the question names besides its outcome and
     the exposure projected here is returned as ``question_named_concepts``:
@@ -1320,8 +1321,8 @@ def _metadata_only_planning_coordinates(
 
     from easyicu.research_agent.acquisition.catalog import (
         build_database_capability_catalog,
+        catalog_endpoint,
     )
-    from easyicu.research_agent.contracts.endpoint import EndpointSpec
     from easyicu.webserver.study_intent import (
         KEYWORD_PROVENANCE,
         catalog_named_concepts,
@@ -1375,19 +1376,18 @@ def _metadata_only_planning_coordinates(
         else family.get("value") == "description"
         and family.get("provenance") == KEYWORD_PROVENANCE
     )
+    question_concepts = frozenset(
+        concept for concepts, _ in named_study_concepts(question) for concept in concepts
+    ) | frozenset(catalog_named_concepts(question))
+    question_concepts -= {named_concept("population")}
     named_exposure = (
         None
-        if prediction or descriptive
+        if prediction
         else _study_exposure_reading(
             named_concept("exposure"),
             _stated_exposure_concept(stated_exposure, catalog_by_id),
             excluded={*declared_covariates, *required_subgroup_concepts, target_outcome, configured_outcome},
-            named=frozenset(
-                (
-                    *(concept for denoted, _words in named_study_concepts(question) for concept in denoted),
-                    *catalog_named_concepts(question),
-                )
-            ) - {named_concept("population")},
+            named=question_concepts,
             stated_names=_stated_catalog_concept(stated_exposure, catalog_by_id),
             demographic=frozenset(
                 concept for concept, item in catalog_by_id.items()
@@ -1395,7 +1395,23 @@ def _metadata_only_planning_coordinates(
             ),
         )
     )
-    named_measurement = named_concept("exposure") if descriptive else None
+    if descriptive and named_exposure:
+        from easyicu.concept.loader import load_dictionary
+
+        definition = load_dictionary().get(named_exposure)
+        # Describing one factor's frequencies does not compare an outcome
+        # across its levels. Keep that concept in the measurement reading.
+        if not (target_outcome or configured_outcome or question_concepts - {
+            named_exposure, *declared_covariates, *required_subgroup_concepts,
+        }):
+            named_exposure = None
+        elif not (
+            catalog_by_id[named_exposure].column_role == "event_status"
+            or (definition is not None and definition.class_name == "fct_cncpt"
+                and definition.target == "id_tbl")
+        ):
+            named_exposure = None
+    named_measurement = named_concept("exposure") if descriptive and not named_exposure else None
     primary_exposure = _observability_preserving_exposure(named_exposure, export_path)
     source_column = _bound_source_column(export_path)
     # A host-derived window reading is already one value per stay; an
@@ -1406,30 +1422,39 @@ def _metadata_only_planning_coordinates(
         else None
     )
     endpoint = None
-    outcome_type = slots.get("outcome_type")
-    outcome_type = outcome_type if isinstance(outcome_type, Mapping) else {}
     configured = _clean_text(configured_outcome, 160)
     configured_catalog = catalog_by_id.get(configured) if configured else None
     if configured_catalog is not None:
         target_outcome = configured
+    if descriptive and named_exposure and not target_outcome:
+        # A grouped descriptive question may name a measurement instead of an
+        # event in the intent reader. Only one owner-defined named quantity
+        # can fill this otherwise empty slot; no convenient column is chosen.
+        quantities = []
+        for name in sorted(question_concepts - {named_exposure, *declared_covariates, *required_subgroup_concepts}):
+            item = catalog_by_id.get(name)
+            operation = explicit_exposure_aggregation(question, concept_id=name)
+            if item is not None:
+                proposed = catalog_endpoint(
+                    item, column=source_column(name),
+                    aggregation=operation.aggregation if operation is not None else None,
+                )
+                if proposed is not None and proposed.kind == "continuous":
+                    quantities.append(name)
+        if len(quantities) == 1:
+            target_outcome = quantities[0]
     target_catalog = catalog_by_id.get(str(target_outcome or ""))
+    outcome_operation = (
+        explicit_exposure_aggregation(question, concept_id=target_outcome)
+        if target_outcome else None
+    )
     if (
         target_outcome
-        and (
-            configured_catalog is not None
-            or (
-                str(outcome_type.get("value") or "") == "binary"
-                and str(outcome_type.get("provenance") or "") == KEYWORD_PROVENANCE
-            )
-        )
         and target_catalog is not None
-        and target_catalog.column_role == "event_status"
     ):
-        endpoint = EndpointSpec(
-            name=source_column(target_outcome),
-            kind="binary",
-            absence_semantics="no_absent_rows",
-            levels=[0, 1],
+        endpoint = catalog_endpoint(
+            target_catalog, column=source_column(target_outcome),
+            aggregation=outcome_operation.aggregation if outcome_operation is not None else None,
         )
     # The concept projected as the exposure is sealed as the exposure, which
     # accounts for it; a question that names nothing else keeps its identity.
@@ -1497,6 +1522,9 @@ def _metadata_only_planning_coordinates(
         ],
         "primary_exposure_aggregation": (
             exposure_operation.aggregation if exposure_operation is not None else None
+        ),
+        "target_outcome_aggregation": (
+            outcome_operation.aggregation if outcome_operation is not None else None
         ),
         "endpoint": endpoint,
         "source": "question_keywords_plus_database_capability",

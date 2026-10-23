@@ -2850,7 +2850,7 @@ def _compile_one_step(
         try:
             columns = continuous_summary_columns(
                 grouping=str(step.primary_exposure or ""), raw_inputs=step.raw_inputs,
-                variables=variables,
+                variables=variables, planning_context=context,
             )
         except ValueError as exc:
             raise _fail("progressive_continuous_outcome_invalid", str(exc),

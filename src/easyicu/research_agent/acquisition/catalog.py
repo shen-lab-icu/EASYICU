@@ -27,9 +27,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Sequence, Union
 
 from easyicu.concept.metadata_sidecar import ColumnMetadataBinding
+
+if TYPE_CHECKING:
+    from ..contracts.endpoint import EndpointSpec
 
 from ..intake.export_package import (
     concepts_without_values,
@@ -132,6 +135,42 @@ class AvailableCatalog:
             if max_per_category > 0 and len(items) > max_per_category:
                 lines.append(f"  … (+{len(items) - max_per_category} more)")
         return "\n".join(lines)
+
+
+def catalog_endpoint(
+    concept: CatalogConcept, *, column: str, aggregation: Optional[str] = None,
+) -> Optional[EndpointSpec]:
+    """Bind an endpoint from the concept owner's definition, never storage dtype.
+
+    A numeric stay attribute already defines one episode value. A measurement
+    additionally needs a selected value-preserving summary of the host's bound
+    observation window. Counts, factor codes and undefined quantities cannot
+    acquire continuous meaning merely by being stored as numbers.
+    """
+    from easyicu.concept.loader import load_dictionary
+    from easyicu.concept.metadata_projection import ConceptColumnRole, is_range_preserving_projection
+    from ..contracts.endpoint import EndpointSpec
+
+    if concept.column_role == "event_status":
+        return EndpointSpec(name=column, kind="binary", absence_semantics="no_absent_rows", levels=[0, 1])
+    definition = load_dictionary().get(concept.concept_id)
+    if (
+        definition is None
+        or concept.column_role not in {"", "value", "numeric_aggregate"}
+        or definition.class_name not in {None, "num_cncpt"}
+        or definition.levels
+        or not definition.description
+        or not definition.units
+        or any(str(unit).lower() in {"boolean", "category"} for unit in definition.units)
+        or not (
+            definition.target == "id_tbl"
+            or (aggregation is not None and is_range_preserving_projection(
+                ConceptColumnRole.NUMERIC_AGGREGATE, aggregation,
+            ))
+        )
+    ):
+        return None
+    return EndpointSpec(name=column, kind="continuous", absence_semantics="absent_row_is_unmeasured")
 
 
 @dataclass

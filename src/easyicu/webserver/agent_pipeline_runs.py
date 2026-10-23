@@ -6559,6 +6559,7 @@ def make_research_pipeline_run_runner(
                     output_dir=wrapper_dir / "pipeline_input",
                     stem="web_research_universe",
                     target_outcome=target,
+                    target_outcome_aggregation=metadata_planning_coordinates.get("target_outcome_aggregation"),
                     primary_exposure_concept=(
                         foundation_profile.get("primary_exposure_source_concept")
                         or primary_exposure
