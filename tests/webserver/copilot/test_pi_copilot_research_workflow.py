@@ -7561,12 +7561,12 @@ def test_provider_bridge_keeps_private_key_out_of_public_metadata(
     assert captured["environment"]["EASYICU_TRUST_LOOPBACK_PROXY_KEY"] == "1"
     assert captured["environment"]["EASYICU_OPENAI_AUTH_HEADER"] == "x-api-key"
     assert captured["request_timeout"] == 480.0
-    assert captured["max_retries"] == 1
+    assert captured["max_retries"] == 2
     assert captured["retryable_http_status_codes"] == (500, 502, 503, 504)
     assert captured["allow_environment_overrides"] is False
     assert private_key not in json.dumps(public)
     assert public["request_timeout_seconds"] == 480.0
-    assert public["transport_max_attempts"] == 2
+    assert public["transport_max_attempts"] == 3
     assert public["retryable_http_status_codes"] == [500, 502, 503, 504]
     assert public["secrets_returned"] is False
 

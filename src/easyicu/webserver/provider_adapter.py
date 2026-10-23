@@ -55,11 +55,13 @@ _DEFAULT_CODEX_APP_SERVER_REASONING_EFFORT = "low"
 _LOOPBACK_RESEARCH_AGENT_REQUEST_TIMEOUT = 480.0
 _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES = (500, 502, 503, 504)
 # A transient 5xx relayed by the local provider proxy (an outbound CONNECT
-# 503 surfaced as HTTP 500) lasts minutes: 1.9 to 3.3 on 2026-09-22, and the
-# two requests E1 sent 5 s apart on 2026-10-09 failed inside one window.  The
-# second request of the reviewed two-request bound therefore waits about
-# three minutes, inside a five-minute window.
-_WEB_RESEARCH_AGENT_RETRY_DELAYS_SECONDS = (180.0,)
+# 503 surfaced as HTTP 500) comes in two shapes: an outage of minutes (1.9 to
+# 3.3 on 2026-09-22; two requests 5 s apart on 2026-10-09 failed inside one)
+# and single refused connections between successful ones (about one in four
+# on 2026-10-23).  The first retry waits about twenty seconds for the second
+# shape, the second about three minutes for the first, inside a five-minute
+# window: at most three requests.
+_WEB_RESEARCH_AGENT_RETRY_DELAYS_SECONDS = (20.0, 180.0)
 _WEB_RESEARCH_AGENT_RETRY_JITTER_FRACTION = 0.2
 _WEB_RESEARCH_AGENT_RETRY_WINDOW_SECONDS = 300.0
 _WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS = 192
@@ -567,8 +569,8 @@ def build_research_agent_provider_client(
             request_timeout=effective_timeout,
             title="EasyICU Web Research Agent",
             environment=provider_environment,
-            # One extra transport attempt, hence two total requests, after the
-            # schedule's wait.  Freeze environment overrides so
+            # One extra transport attempt per scheduled wait, hence three
+            # total requests at most.  Freeze environment overrides so
             # EASYICU_LLM_MAX_RETRIES cannot silently widen the Web job's
             # reviewed bound.  This allowlist is the whole Web retry policy:
             # non-HTTP failures and other status codes fail closed without a
