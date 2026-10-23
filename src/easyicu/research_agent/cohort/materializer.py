@@ -44,6 +44,8 @@ inclusion/exclusion (纳排) deterministically and auditably.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import fsync_directory
+
 from ..canonical_json import sha256_file as _sha256_file
 
 import hashlib
@@ -1470,11 +1472,7 @@ def _atomic_write_parquet(frame: pd.DataFrame, path: Path) -> None:
         with temporary.open("rb") as handle:
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(path.parent)
     finally:
         try:
             temporary.unlink()
@@ -1525,11 +1523,7 @@ def _atomic_write_provenance(
         os.close(fd)
         fd = None
         os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(path.parent)
     finally:
         if fd is not None:
             os.close(fd)

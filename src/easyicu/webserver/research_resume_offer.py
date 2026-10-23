@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from easyicu.runtime.platform_compat import open_nofollow
 from pathlib import Path
 from queue import Full, Queue
 from threading import Event, Lock, Thread
@@ -31,7 +32,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _small_bytes(path: Path) -> bytes:
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    fd = open_nofollow(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
     with os.fdopen(fd, "rb") as handle:
         info = os.fstat(handle.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_size > _MAX_METADATA_BYTES:

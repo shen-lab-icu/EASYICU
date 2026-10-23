@@ -9,13 +9,15 @@ only selector of current step authority.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import is_windows, secure_directory_tree
+from .filesystem import AnchoredDirectory, AuthorityFilesystemError
+
 import ast
 import json
 import os
 import re
 import secrets
 import stat
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, Mapping, Optional
@@ -584,26 +586,6 @@ def _open_store_directory_fd(
         raise
 
 
-def _fallback_store_directory(
-    root: Path,
-    *,
-    parts: tuple[str, ...],
-    create: bool,
-) -> Path:
-    """Non-POSIX fallback; production paths use descriptor-anchored traversal."""
-
-    current = root
-    for part in parts:  # pragma: no cover - POSIX production and CI
-        current = current / part
-        if create:
-            current.mkdir(mode=0o700, exist_ok=True)
-        if current.is_symlink() or not current.is_dir():
-            raise StepAuthorityCapsuleError(
-                f"authority store component is missing or a symbolic link: {part}"
-            )
-    return current
-
-
 def _read_from_directory_fd(parent_fd: int, name: str) -> bytes:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     descriptor: Optional[int] = None
@@ -633,27 +615,13 @@ def _publish_immutable(
     name: str,
     payload: bytes,
 ) -> None:
-    if os.name != "posix":  # pragma: no cover - production and CI use POSIX runners
-        parent = _fallback_store_directory(root, parts=parts, create=True)
-        target = parent / name
-        if target.exists() or target.is_symlink():
-            if target.is_symlink() or target.read_bytes() != payload:
-                raise StepAuthorityCapsuleError(
-                    "existing content-addressed object conflicts with payload"
-                )
-            return
-        descriptor, temporary_name = tempfile.mkstemp(dir=parent, prefix=".capsule.")
+    if is_windows():
         try:
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.link(temporary_name, target)
-        finally:
-            try:
-                os.unlink(temporary_name)
-            except FileNotFoundError:
-                pass
+            with secure_directory_tree(root, parts, create=True) as parent:
+                with AnchoredDirectory.open(parent.path) as directory:
+                    directory.publish_immutable_bytes(name, payload)
+        except (OSError, AuthorityFilesystemError) as exc:
+            raise StepAuthorityCapsuleError("cannot publish immutable authority object") from exc
         return
 
     parent_fd = _open_store_directory_fd(root, parts=parts, create=True)
@@ -706,11 +674,16 @@ def _read_object(
 ) -> bytes:
     parts = _object_parts(kind=kind, digest=digest)
     name = digest if kind == "blobs" else f"{digest}.json"
-    if os.name == "posix":
+    if not is_windows():
         parent_fd = _open_store_directory_fd(root, parts=parts, create=False)
-    else:  # pragma: no cover - production and CI use POSIX runners
-        parent = _fallback_store_directory(root, parts=parts, create=False)
-        payload = (parent / name).read_bytes()
+    else:
+        try:
+            with secure_directory_tree(root, parts, create=False) as parent:
+                descriptor = parent.open(name, os.O_RDONLY)
+                with os.fdopen(descriptor, "rb") as handle:
+                    payload = handle.read()
+        except OSError as exc:
+            raise StepAuthorityCapsuleError("cannot read authority object without links") from exc
         parent_fd = None
     try:
         if parent_fd is not None:

@@ -238,9 +238,9 @@ def data_path_fingerprint(
             files,
             key=lambda item: item.name
             if root.is_file()
-            else str(item.relative_to(root)),
+            else item.relative_to(root).as_posix(),
         ):
-            relative = path.name if root.is_file() else str(path.relative_to(root))
+            relative = path.name if root.is_file() else path.relative_to(root).as_posix()
             receipt = _current_receipt(path, previous.get(relative))
             current_receipts[relative] = receipt
             digest.update(f"{relative}:{receipt['sha256']}\n".encode())

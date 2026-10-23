@@ -183,7 +183,7 @@ def _input_hashes(run_dir: Path) -> dict[str, str]:
         hashes[name] = _sha256(_read_regular(run_dir / name))
     authority = run_dir / "authorities" / "manuscript_administrative_authority.json"
     if authority.exists():
-        hashes[str(authority.relative_to(run_dir))] = _sha256(_read_regular(authority))
+        hashes[authority.relative_to(run_dir).as_posix()] = _sha256(_read_regular(authority))
     return hashes
 
 

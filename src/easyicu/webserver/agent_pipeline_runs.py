@@ -9,6 +9,8 @@ artifacts; it never computes a scientific result itself.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import SecureDirectory
+
 import base64
 import csv
 from dataclasses import replace
@@ -3866,9 +3868,8 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
         "html": _SYSTEM_VALIDATION_DOCUMENT_SPECS["system_validation_report.html"][1],
         "pdf": _SYSTEM_VALIDATION_DOCUMENT_SPECS["system_validation_report.pdf"][1],
     }
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     try:
-        root_descriptor = os.open(root, directory_flags)
+        root_descriptor = SecureDirectory(root)
     except OSError as exc:
         raise ResearchPipelineRunError(
             "system_validation_document_missing",
@@ -3881,7 +3882,7 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
         for key, path in paths.items():
             descriptor = -1
             try:
-                descriptor = os.open(path.name, file_flags, dir_fd=root_descriptor)
+                descriptor = root_descriptor.open(path.name, file_flags)
                 metadata = os.fstat(descriptor)
                 if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limits[key]:
                     raise ResearchPipelineRunError(
@@ -3911,7 +3912,7 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
                 if descriptor >= 0:
                     os.close(descriptor)
     finally:
-        os.close(root_descriptor)
+        root_descriptor.close()
     if not raw["pdf"].startswith(b"%PDF"):
         raise ResearchPipelineRunError(
             "system_validation_pdf_signature_invalid",

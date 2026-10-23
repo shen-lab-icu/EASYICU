@@ -19,12 +19,8 @@ from typing import Dict, Iterator, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-try:  # POSIX file locking (Linux/macOS); degrade to atomic-write-only elsewhere.
-    import fcntl
+from easyicu.runtime.platform_compat import lock_exclusive, unlock_file
 
-    _HAVE_FCNTL = True
-except ImportError:  # pragma: no cover - Windows fallback
-    _HAVE_FCNTL = False
 
 SelectionStatus = Literal["proposed", "accepted", "rejected"]
 
@@ -57,24 +53,15 @@ def _atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> Non
 
 @contextmanager
 def _file_lock(lock_path: Path) -> Iterator[None]:
-    """Exclusive cross-process lock around a read-modify-write cycle.
-
-    Uses ``fcntl.flock`` on a sibling ``.lock`` file so concurrent registry
-    writers (different users/processes sharing the ledger) cannot clobber each
-    other's appends. On platforms without ``fcntl`` this is a no-op and only the
-    atomic write protects against corruption.
-    """
-    if not _HAVE_FCNTL:
-        yield
-        return
+    """Exclusive OS lock around a read-modify-write cycle."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     handle = open(lock_path, "w")
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        lock_exclusive(handle.fileno())
         yield
     finally:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            unlock_file(handle.fileno())
         finally:
             handle.close()
 

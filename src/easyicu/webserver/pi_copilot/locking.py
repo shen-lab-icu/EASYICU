@@ -16,15 +16,7 @@ from pathlib import Path
 
 from .contracts import PiCopilotError
 
-try:  # pragma: no cover - platform branch
-    import fcntl
-except ImportError:  # pragma: no cover - Windows
-    fcntl = None  # type: ignore[assignment]
-
-try:  # pragma: no cover - platform branch
-    import msvcrt
-except ImportError:  # pragma: no cover - POSIX
-    msvcrt = None  # type: ignore[assignment]
+from easyicu.runtime.platform_compat import PlatformCapabilityError, lock_exclusive, open_nofollow, unlock_file
 
 
 @contextlib.contextmanager
@@ -42,7 +34,7 @@ def exclusive_file_lock(
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(lock_path, flags, 0o600)
+        descriptor = open_nofollow(lock_path, flags, 0o600)
     except OSError as exc:
         raise PiCopilotError(
             code,
@@ -62,21 +54,11 @@ def exclusive_file_lock(
         deadline = time.monotonic() + max(0.0, timeout_seconds)
         while not acquired:
             try:
-                if fcntl is not None:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                elif msvcrt is not None:  # pragma: no cover - Windows
-                    if os.fstat(descriptor).st_size == 0:
-                        os.write(descriptor, b"0")
-                    os.lseek(descriptor, 0, os.SEEK_SET)
-                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
-                else:  # pragma: no cover - unsupported platform
-                    raise PiCopilotError(
-                        code,
-                        "No cross-process file-lock backend is available.",
-                        status_code=503,
-                    )
+                lock_exclusive(descriptor, blocking=False)
                 acquired = True
-            except (BlockingIOError, OSError):
+            except PlatformCapabilityError as exc:
+                raise PiCopilotError(code, "No cross-process file-lock backend is available.", status_code=503) from exc
+            except BlockingIOError:
                 if time.monotonic() >= deadline:
                     raise PiCopilotError(
                         code,
@@ -88,11 +70,7 @@ def exclusive_file_lock(
     finally:
         if acquired:
             try:
-                if fcntl is not None:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-                elif msvcrt is not None:  # pragma: no cover - Windows
-                    os.lseek(descriptor, 0, os.SEEK_SET)
-                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                unlock_file(descriptor)
             except OSError:
                 pass
         os.close(descriptor)

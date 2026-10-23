@@ -18,15 +18,8 @@ from easyicu.research_agent.canonical_json import canonical_sha256
 
 from easyicu.webserver import dataio, provider_adapter, state_paths
 
-try:  # pragma: no branch - selected once per platform
-    import fcntl
-except ImportError:  # pragma: no cover - exercised on Windows
-    fcntl = None  # type: ignore[assignment]
+from easyicu.runtime.platform_compat import fsync_directory, lock_exclusive, open_nofollow, unlock_file
 
-try:  # pragma: no branch - selected once per platform
-    import msvcrt
-except ImportError:  # pragma: no cover - unavailable on POSIX
-    msvcrt = None  # type: ignore[assignment]
 
 
 class WebReviewRecoveryError(RuntimeError):
@@ -190,25 +183,14 @@ _MAX_RUN_DIRS_PER_CANDIDATE = 16
 
 
 def _acquire_file_lock(descriptor: int) -> None:
-    if fcntl is not None:
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        return
-    if msvcrt is None:  # pragma: no cover - supported platforms provide one
-        raise WebReviewRecoveryError("No cross-process file lock is available")
-    if os.fstat(descriptor).st_size == 0:
-        os.write(descriptor, b"\0")
-        os.fsync(descriptor)
-    os.lseek(descriptor, 0, os.SEEK_SET)
-    msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+    try:
+        lock_exclusive(descriptor)
+    except OSError as exc:
+        raise WebReviewRecoveryError("No cross-process file lock is available") from exc
 
 
 def _release_file_lock(descriptor: int) -> None:
-    if fcntl is not None:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        return
-    if msvcrt is not None:  # pragma: no branch - paired with acquisition
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+    unlock_file(descriptor)
 
 
 def _chmod_private_fd(descriptor: int) -> None:
@@ -234,7 +216,7 @@ def _locked(path: Path) -> Iterator[None]:
         flags = os.O_CREAT | os.O_RDWR
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
-        descriptor = os.open(lock_path, flags, 0o600)
+        descriptor = open_nofollow(lock_path, flags, 0o600)
         acquired = False
         try:
             _chmod_private_fd(descriptor)
@@ -652,16 +634,9 @@ def _write(path: Path, payload: Mapping[str, Any]) -> None:
         except OSError:
             pass
         try:
-            directory_fd = os.open(path.parent, os.O_RDONLY)
+            fsync_directory(path.parent)
         except OSError:
-            directory_fd = None
-        if directory_fd is not None:
-            try:
-                os.fsync(directory_fd)
-            except OSError:
-                pass
-            finally:
-                os.close(directory_fd)
+            pass
     finally:
         try:
             Path(temp_name).unlink()

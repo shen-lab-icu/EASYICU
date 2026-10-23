@@ -17,14 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..architecture import SystemLayer
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 
-try:
-    import fcntl
-except ImportError:  # Windows
-    fcntl = None
-try:
-    import msvcrt
-except ImportError:  # POSIX
-    msvcrt = None
+from easyicu.runtime.platform_compat import fsync_directory, lock_exclusive, unlock_file
 
 
 STEP_ATTEMPT_HISTORY_REF_SCHEMA = "easyicu.step_attempt_history_ref/1"
@@ -237,24 +230,14 @@ def _checkpoint_write_lock(run_dir: Path):
     lock_path = run_dir / ".manifest.checkpoint.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as handle:
-        if fcntl is not None:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        elif msvcrt is not None:
-            if os.fstat(handle.fileno()).st_size == 0:
-                handle.write(b"\0")
-                handle.flush()
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            raise RunArtifactAuthorityError("OS checkpoint lock is unavailable")
+        try:
+            lock_exclusive(handle.fileno())
+        except OSError as exc:
+            raise RunArtifactAuthorityError("OS checkpoint lock is unavailable") from exc
         try:
             yield
         finally:
-            if fcntl is not None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            else:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            unlock_file(handle.fileno())
 
 
 def _checkpoint_sequence(payload: Mapping[str, Any]) -> Optional[int]:
@@ -313,11 +296,7 @@ def write_run_checkpoint(
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, destination)
-            directory_fd = os.open(run_dir, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            fsync_directory(run_dir)
         finally:
             try:
                 temporary.unlink()

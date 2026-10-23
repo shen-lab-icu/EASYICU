@@ -25,6 +25,8 @@ Row-level formats (parquet and the like) are never named or served.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import open_nofollow
+
 import base64
 import hashlib
 import json
@@ -313,7 +315,7 @@ def trace_action(
 
 def _open_regular(path: Path) -> int:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
+    descriptor = open_nofollow(path, flags)
     if not stat.S_ISREG(os.fstat(descriptor).st_mode):
         os.close(descriptor)
         raise OSError("not a regular file")

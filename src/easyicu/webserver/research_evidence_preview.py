@@ -8,6 +8,8 @@ rehashes the file, and dispatches to a small read-only renderer contract.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import open_nofollow
+
 import csv
 import hashlib
 import json
@@ -73,7 +75,7 @@ def _read_regular_file(path: Path, *, max_bytes: int) -> bytes:
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(path, flags)
+        descriptor = open_nofollow(path, flags)
     except OSError as exc:
         raise EvidencePreviewError(
             "evidence_preview_file_unavailable",
@@ -503,7 +505,7 @@ def _sha256_file(path: Path) -> str:
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(path, flags)
+        descriptor = open_nofollow(path, flags)
     except OSError as exc:
         raise EvidencePreviewError(
             "evidence_preview_file_unavailable",

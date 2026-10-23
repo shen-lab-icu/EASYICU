@@ -25,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .evidence_snapshot import EvidenceAuthorityIntegrityError
@@ -91,8 +91,8 @@ def _canonical_sha256(value: Any) -> str:
 def _tree_sha256(root: Path, paths: Sequence[Path]) -> str:
     return _canonical_sha256(
         {
-            str(path.relative_to(root)): hash_file(path)
-            for path in sorted(paths)
+            path.relative_to(root).as_posix(): hash_file(path)
+            for path in sorted(paths, key=lambda path: PurePosixPath(path.as_posix()).parts)
             if path.is_file()
         }
     )

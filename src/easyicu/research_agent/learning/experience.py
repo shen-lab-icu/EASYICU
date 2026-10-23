@@ -55,9 +55,8 @@ file are serialised by an exclusive ``flock`` held across the whole
 read-modify-write, and the rewrite itself lands through a temp file
 plus ``os.replace``, so a reader never observes a half-written bank.
 The lock is per file, so different workdirs do not block each other.
-On a platform without ``fcntl`` only the in-process lock applies; the
-bank then carries the usual last-writer-wins risk across processes and
-says so in a warning.
+Cross-process locks use the shared host platform owner on POSIX and Windows;
+an unavailable locking backend fails closed.
 """
 
 from __future__ import annotations
@@ -75,10 +74,8 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
-try:  # pragma: no cover - POSIX in production and CI
-    import fcntl
-except ImportError:  # pragma: no cover - Windows
-    fcntl = None  # type: ignore[assignment]
+from easyicu.runtime.platform_compat import lock_exclusive, unlock_file
+
 
 
 class ExperienceBankCorruptError(RuntimeError):
@@ -251,24 +248,18 @@ class ExperienceBank:
         alone loses records whenever two runs share a path.
         """
 
-        if self.path is None or fcntl is None:
-            if fcntl is None:
-                logger.warning(
-                    "experience-bank: fcntl is unavailable on this platform; "
-                    "concurrent processes sharing %s can lose records",
-                    self.path,
-                )
+        if self.path is None:
             yield
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = self.path.with_name(self.path.name + ".lock")
         descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            lock_exclusive(descriptor)
             yield
         finally:
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                unlock_file(descriptor)
             finally:
                 os.close(descriptor)
 

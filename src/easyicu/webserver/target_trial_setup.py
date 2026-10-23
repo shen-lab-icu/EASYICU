@@ -39,8 +39,7 @@ import json
 import math
 import os
 import re
-import resource
-import sys
+from easyicu.runtime.platform_compat import peak_rss_mb
 import tempfile
 import threading
 import time
@@ -371,9 +370,7 @@ def _stopped(code: str, detail: str, **extra: Any) -> dict[str, Any]:
 
 
 def _peak_rss_mb() -> float:
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    # Bytes on macOS, kilobytes on Linux.
-    return round(peak / (1024 * 1024 if sys.platform == "darwin" else 1024), 1)
+    return peak_rss_mb()
 
 
 def _launch_refused(exc: Any) -> dict[str, Any]:

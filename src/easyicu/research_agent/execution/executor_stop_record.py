@@ -10,6 +10,8 @@ parser refuses names no stop.
 from __future__ import annotations
 
 import os
+
+from easyicu.runtime.platform_compat import SecureDirectory
 import stat
 from pathlib import Path
 from typing import Optional
@@ -50,9 +52,7 @@ def read_executor_stop_record(
     """
 
     try:
-        directory = os.open(
-            out_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _NO_FOLLOW
-        )
+        directory = SecureDirectory(out_dir)
     except FileNotFoundError:
         return None, None
     except OSError:
@@ -61,10 +61,9 @@ def read_executor_stop_record(
         try:
             # Non-blocking, so a FIFO at the record's name is refused below
             # instead of holding the host until something writes to it.
-            fd = os.open(
+            fd = directory.open(
                 EXECUTOR_STOP_RECORD_NAME,
                 os.O_RDONLY | _NO_FOLLOW | _NON_BLOCKING,
-                dir_fd=directory,
             )
         except FileNotFoundError:
             return None, None
@@ -80,7 +79,7 @@ def read_executor_stop_record(
         finally:
             os.close(fd)
     finally:
-        os.close(directory)
+        directory.close()
     try:
         return parse_executor_stop_record(payload, expected_owner=expected_owner), None
     except ExecutorStopRecordError as exc:

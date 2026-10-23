@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-import fcntl
+from easyicu.runtime.platform_compat import lock_exclusive, unlock_file
 import hashlib
 import json
 import os
@@ -211,11 +211,11 @@ class ExtensionRegistry:
         self._ensure_root()
         with self._thread_lock:
             with self.lock_path.open("a+b") as handle:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                lock_exclusive(handle.fileno())
                 try:
                     yield
                 finally:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    unlock_file(handle.fileno())
 
     @staticmethod
     def _empty_state() -> Dict[str, Any]:

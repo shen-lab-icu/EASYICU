@@ -19,6 +19,8 @@ live in :mod:`.source`.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import fsync_directory
+
 import json
 import os
 import tempfile
@@ -423,11 +425,7 @@ def _canonicalize_exact_declared_output_registry(
             os.fsync(handle.fileno())
         os.replace(temporary_name, summary_path)
         temporary_name = ""
-        directory_fd = os.open(out_dir, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(out_dir)
     except OSError:
         return False
     finally:

@@ -12,6 +12,8 @@ resume cannot silently select a different development population.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import fsync_directory
+
 from ..canonical_json import sha256_file as _sha256_file
 
 from dataclasses import dataclass
@@ -141,11 +143,7 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(path.parent)
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -163,11 +161,7 @@ def _atomic_write_table(path: Path, table: pa.Table) -> None:
         with temporary.open("rb") as handle:
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -224,11 +218,7 @@ def _filter_trajectory(
                     writer.write_batch(selected)
                     rows += selected.num_rows
         os.replace(temporary, target)
-        directory_fd = os.open(target.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(target.parent)
     finally:
         temporary.unlink(missing_ok=True)
     return rows

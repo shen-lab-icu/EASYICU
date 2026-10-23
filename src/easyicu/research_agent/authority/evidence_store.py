@@ -113,16 +113,13 @@ from .manuscript_method_facts import load_manuscript_method_facts, ManuscriptMet
 from .source_fingerprints import registered_source_fingerprints_match
 from ..schema import EvidenceRecord
 
-try:  # pragma: no cover - available on production POSIX platforms
-    import fcntl
-except ImportError:  # pragma: no cover - non-POSIX fallback
-    fcntl = None  # type: ignore[assignment]
+from easyicu.runtime.platform_compat import SecureDirectory, atomic_replace, lock_exclusive, unlock_file
 
 
 _EVIDENCE_AUTHORITY_PROCESS_LOCK = threading.RLock()
 
 
-def _validated_directory_fd(path: Path, *, expected_root: Path) -> int:
+def _validated_directory_fd(path: Path, *, expected_root: Path) -> SecureDirectory:
     """Open ``path`` without following symlinks and anchor it under root."""
 
     if path.is_symlink():
@@ -132,21 +129,7 @@ def _validated_directory_fd(path: Path, *, expected_root: Path) -> int:
         resolved.relative_to(expected_root.resolve(strict=True))
     except (FileNotFoundError, ValueError) as exc:
         raise ValueError("evidence directory escapes the store root") from exc
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags)
-    try:
-        path_stat = os.stat(path, follow_symlinks=False)
-        fd_stat = os.fstat(fd)
-        if (
-            not stat.S_ISDIR(path_stat.st_mode)
-            or path_stat.st_dev != fd_stat.st_dev
-            or path_stat.st_ino != fd_stat.st_ino
-        ):
-            raise ValueError("evidence directory changed during validation")
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
+    return SecureDirectory(path)
 
 
 def _atomic_write_bytes(
@@ -162,40 +145,32 @@ def _atomic_write_bytes(
     fail the SHA-256 verification / leave the index unreadable. os.replace is
     atomic on POSIX, so a reader sees either the old or the new complete file.
     """
-    if expected_root is not None and os.name == "posix":
+    if expected_root is not None:
         parent_fd = _validated_directory_fd(path.parent, expected_root=expected_root)
         target_name = _path_component(path.name, label="evidence filename")
         tmp_name = f".{target_name}.{secrets.token_hex(8)}.tmp"
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
         fd: Optional[int] = None
         try:
-            fd = os.open(tmp_name, flags, 0o600, dir_fd=parent_fd)
+            fd = parent_fd.open(tmp_name, flags, 0o600)
             with os.fdopen(fd, "wb") as handle:
                 fd = None
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(
-                tmp_name,
-                target_name,
-                src_dir_fd=parent_fd,
-                dst_dir_fd=parent_fd,
-            )
-            os.fsync(parent_fd)
-            current = os.stat(path.parent, follow_symlinks=False)
-            opened = os.fstat(parent_fd)
-            if current.st_dev != opened.st_dev or current.st_ino != opened.st_ino:
-                raise ValueError("evidence directory changed during atomic write")
+            parent_fd.replace(tmp_name, target_name)
+            parent_fd.fsync()
+            parent_fd.assert_still_selected()
         except BaseException:
             if fd is not None:
                 os.close(fd)
             try:
-                os.unlink(tmp_name, dir_fd=parent_fd)
+                parent_fd.unlink(tmp_name)
             except OSError:
                 pass
             raise
         finally:
-            os.close(parent_fd)
+            parent_fd.close()
         return
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -207,7 +182,7 @@ def _atomic_write_bytes(
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_name, path)
+        atomic_replace(tmp_name, path)
     except BaseException:
         try:
             os.unlink(tmp_name)
@@ -236,9 +211,6 @@ def _exclusive_evidence_authority_lock(
     """Serialize generation compare-and-swap across store instances/processes."""
 
     with _EVIDENCE_AUTHORITY_PROCESS_LOCK:
-        if fcntl is None:  # pragma: no cover - production and CI are POSIX
-            yield
-            return
         parent_fd = _validated_directory_fd(
             evidence_dir,
             expected_root=expected_root,
@@ -246,41 +218,32 @@ def _exclusive_evidence_authority_lock(
         descriptor: Optional[int] = None
         try:
             flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(
-                ".evidence_authority.lock",
-                flags,
-                0o600,
-                dir_fd=parent_fd,
-            )
+            descriptor = parent_fd.open(".evidence_authority.lock", flags, 0o600)
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
                 raise EvidenceAuthorityIntegrityError(
                     "evidence authority lock is not a regular file"
                 )
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            lock_exclusive(descriptor)
             yield
         finally:
             if descriptor is not None:
                 try:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    unlock_file(descriptor)
                 finally:
                     os.close(descriptor)
-            os.close(parent_fd)
+            parent_fd.close()
 
 
 def _existing_target_matches(
-    parent_fd: int,
+    parent_fd: SecureDirectory,
     name: str,
     *,
     expected_sha256: str,
 ) -> bool:
     descriptor: Optional[int] = None
     try:
-        descriptor = os.open(
-            name,
-            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-            dir_fd=parent_fd,
-        )
+        descriptor = parent_fd.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             return False
         digest = hashlib.sha256()
@@ -305,36 +268,20 @@ def _atomic_write_once_bytes(
     """Publish an immutable evidence blob; equal retries are idempotent."""
 
     expected_sha256 = sha256_of_bytes(payload)
-    if os.name != "posix":  # pragma: no cover - production/CI use POSIX
-        if target.exists() or target.is_symlink():
-            if target.is_symlink() or sha256_of_file(target) != expected_sha256:
-                raise EvidenceAuthorityIntegrityError(
-                    "existing evidence blob conflicts with immutable payload"
-                )
-            return
-        _atomic_write_bytes(target, payload, expected_root=expected_root)
-        return
-
     parent_fd = _validated_directory_fd(target.parent, expected_root=expected_root)
     target_name = _path_component(target.name, label="evidence filename")
     tmp_name = f".{target_name}.{secrets.token_hex(8)}.tmp"
     descriptor: Optional[int] = None
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(tmp_name, flags, 0o600, dir_fd=parent_fd)
+        descriptor = parent_fd.open(tmp_name, flags, 0o600)
         with os.fdopen(descriptor, "wb") as handle:
             descriptor = None
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
         try:
-            os.link(
-                tmp_name,
-                target_name,
-                src_dir_fd=parent_fd,
-                dst_dir_fd=parent_fd,
-                follow_symlinks=False,
-            )
+            parent_fd.publish(tmp_name, target_name)
         except FileExistsError:
             if not _existing_target_matches(
                 parent_fd,
@@ -344,15 +291,15 @@ def _atomic_write_once_bytes(
                 raise EvidenceAuthorityIntegrityError(
                     "existing evidence blob conflicts with immutable payload"
                 )
-        os.fsync(parent_fd)
+        parent_fd.fsync()
     finally:
         if descriptor is not None:
             os.close(descriptor)
         try:
-            os.unlink(tmp_name, dir_fd=parent_fd)
+            parent_fd.unlink(tmp_name)
         except OSError:
             pass
-        os.close(parent_fd)
+        parent_fd.close()
 
 
 def _atomic_copy_file(
@@ -364,22 +311,13 @@ def _atomic_copy_file(
 ) -> None:
     """Stream-copy and publish an immutable, idempotent evidence blob."""
 
-    if os.name != "posix":  # pragma: no cover - production/CI use POSIX
-        if target.exists() or target.is_symlink():
-            if target.is_symlink() or sha256_of_file(target) != expected_sha256:
-                raise EvidenceAuthorityIntegrityError(
-                    "existing evidence blob conflicts with immutable source"
-                )
-            return
-        _atomic_write_bytes(target, source.read_bytes(), expected_root=expected_root)
-        return
     parent_fd = _validated_directory_fd(target.parent, expected_root=expected_root)
     target_name = _path_component(target.name, label="evidence filename")
     tmp_name = f".{target_name}.{secrets.token_hex(8)}.tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     fd: Optional[int] = None
     try:
-        fd = os.open(tmp_name, flags, 0o600, dir_fd=parent_fd)
+        fd = parent_fd.open(tmp_name, flags, 0o600)
         with source.open("rb") as source_handle, os.fdopen(fd, "wb") as target_handle:
             fd = None
             copied_digest = hashlib.sha256()
@@ -393,13 +331,7 @@ def _atomic_copy_file(
                 "evidence source changed while its immutable snapshot was copied"
             )
         try:
-            os.link(
-                tmp_name,
-                target_name,
-                src_dir_fd=parent_fd,
-                dst_dir_fd=parent_fd,
-                follow_symlinks=False,
-            )
+            parent_fd.publish(tmp_name, target_name)
         except FileExistsError:
             if not _existing_target_matches(
                 parent_fd,
@@ -409,21 +341,18 @@ def _atomic_copy_file(
                 raise EvidenceAuthorityIntegrityError(
                     "existing evidence blob conflicts with immutable source"
                 )
-        os.fsync(parent_fd)
-        current = os.stat(target.parent, follow_symlinks=False)
-        opened = os.fstat(parent_fd)
-        if current.st_dev != opened.st_dev or current.st_ino != opened.st_ino:
-            raise ValueError("evidence directory changed during atomic copy")
+        parent_fd.fsync()
+        parent_fd.assert_still_selected()
     except BaseException:
         if fd is not None:
             os.close(fd)
         raise
     finally:
         try:
-            os.unlink(tmp_name, dir_fd=parent_fd)
+            parent_fd.unlink(tmp_name)
         except OSError:
             pass
-        os.close(parent_fd)
+        parent_fd.close()
 
 
 def _path_component(value: str, *, label: str) -> str:
@@ -1807,7 +1736,7 @@ class EvidenceStore:
                         evidence_id=new_id,
                         kind=kind,  # type: ignore[arg-type]
                         description=description,
-                        relative_path=str(target.relative_to(self.root)),
+                        relative_path=target.relative_to(self.root).as_posix(),
                         sha256=sha256,
                         produced_by_step=produced_by_step,
                         inputs=list(inputs or []),
@@ -1854,7 +1783,7 @@ class EvidenceStore:
             evidence_id=evidence_id,
             kind=kind,  # type: ignore[arg-type]
             description=description,
-            relative_path=str(target.relative_to(self.root)),
+            relative_path=target.relative_to(self.root).as_posix(),
             sha256=sha256,
             produced_by_step=produced_by_step,
             inputs=list(inputs or []),
