@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from ..contracts.executor_stop import executor_stop_codes
+from ..execution.failure_classification import runtime_failure_codes
 from ..planning.figure_step_contract import _output_declares_figure
 
 
@@ -90,6 +91,7 @@ def step_completion_projection(
             failed.append(
                 {"step_id": step_id, "status": status_by_step.get(step_id)}
                 | executor_stop_codes(record)
+                | runtime_failure_codes(record)
             )
         summary = record.get("step_summary")
         summary_status = (

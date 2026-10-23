@@ -110,6 +110,9 @@ _EDIT_CODES = frozenset(
         *PLAN_APPROVAL_STOPS,
         # A revision whose source plan is gone or changed starts from a fresh plan.
         "plan_revision_source_plan_missing",
+        # A population predicate emptied a declared group; an unchanged retry
+        # repeats it, so the plan is generated again.
+        "declared_exposure_level_empty",
         "plan_revision_source_plan_mismatch",
         "accepted_baseline_resume_materialization_mismatch",
         "accepted_baseline_source_unresolved",

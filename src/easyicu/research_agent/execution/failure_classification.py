@@ -43,7 +43,21 @@ class RuntimeFailureClass(str, Enum):
 _EMPTY_CLOSED_COMPARISON_SIGNATURES = (
     "Planner-declared Table 1 groups are absent from",
     "A Planner-declared Table 1 group is empty",
+    "risk_difference_contrast requires at least one analysed row in "
+    "both the declared reference and comparison levels",
 )
+
+DECLARED_EXPOSURE_LEVEL_EMPTY = "declared_exposure_level_empty"
+
+
+def runtime_failure_codes(record: Mapping[str, Any]) -> dict[str, str]:
+    """Project the host-classified empty-level stop from a failed step record."""
+
+    if (record.get("runtime_failure_class") == RuntimeFailureClass.PLAN_DATA_CONTRACT.value
+            and record.get("runtime_failure_reason") == DECLARED_EXPOSURE_LEVEL_EMPTY
+            and record.get("status") == "contract_failed"):
+        return {"reason_code": DECLARED_EXPOSURE_LEVEL_EMPTY}
+    return {}
 
 #: The host's OWN model fitter reporting that the declared model cannot be
 #: estimated on this data. Both halves are required: the typed error the
@@ -219,12 +233,14 @@ def classify_runtime_failure(
                     "step_id": step_id,
                     "failure_class": failure_class.value,
                     "returncode": returncode,
+                    "reason_code": DECLARED_EXPOSURE_LEVEL_EMPTY,
                 },
             ),
             step_updates={
                 "status": "contract_failed",
                 "diagnostic_only": True,
                 "runtime_failure_class": failure_class.value,
+                "runtime_failure_reason": DECLARED_EXPOSURE_LEVEL_EMPTY,
                 "runtime_repair_route": "fail_closed",
                 "llm_repair_used": False,
             },
