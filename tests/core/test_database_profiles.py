@@ -47,6 +47,17 @@ def test_aumc_global_millisecond_clock_is_offset_based() -> None:
     assert is_offset_based("aumc") is True
 
 
+def test_a_demo_without_its_own_release_never_claims_its_parents_release() -> None:
+    packaged = get_packaged_registry()
+    registry = DataSourceRegistry([
+        packaged.get("eicu").model_copy(update={"name": "synthetic"}),
+        packaged.get("eicu_demo").model_copy(update={"name": "synthetic_demo", "extra": {}}),
+    ])
+    demo = get_database_profile("synthetic_demo", registry=registry)
+    assert demo.reference_release is None
+    assert demo.parent_key == "synthetic"
+
+
 def test_packaged_registry_has_six_typed_public_profiles_and_two_demo_profiles() -> (
     None
 ):

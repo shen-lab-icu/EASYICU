@@ -15,8 +15,8 @@ def test_every_packaged_database_reads_as_a_named_database() -> None:
 
 
 def test_demo_exports_read_as_their_profile_name() -> None:
-    assert dataio._database_label("eicu_demo") == "eICU Demo"
-    assert dataio._database_label("mimic_demo") == "MIMIC-III Demo"
+    assert dataio._database_label("eicu_demo") == "eICU Demo v2.0.1"
+    assert dataio._database_label("mimic_demo") == "MIMIC-III Demo v1.4"
     # The surface labels of the full databases are unchanged.
     assert dataio._database_label("eicu") == "eICU-CRD"
     assert dataio._database_label("miiv") == "MIMIC-IV"

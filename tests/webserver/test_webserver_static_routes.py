@@ -186,7 +186,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261022-help1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261022-copy2" in index_html
+    assert "js/screens-extraction.js?v=20261023-demo-identity1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261021-named-steps1" in index_html
     assert "js/screens-help.js?v=20261022-download1" in index_html
@@ -574,7 +574,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert provider_pos < idea_plan_pos < guided_pos
 
     # Progressive extraction + study-design stepper owner file (screens-guided-extract.js)
-    assert "js/screens-guided-extract.js?v=20260831-effect-owner1" in index_html
+    assert "js/screens-guided-extract.js?v=20261023-demo-identity1" in index_html
     extract_pos = index_html.find("screens-guided-extract.js")
     assert extract_pos != -1 and extract_pos < guided_pos
     assert "js/screens-guided-review.js?v=20260831-owner1" in index_html

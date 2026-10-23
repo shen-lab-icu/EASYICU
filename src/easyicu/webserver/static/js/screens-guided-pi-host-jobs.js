@@ -65,6 +65,10 @@
     function requiresConfirmation() {
       return Boolean(host.session() && DATA_CONSENT && DATA_CONSENT.requiresConfirmation(host.session()));
     }
+    function hostedServer() {
+      const hosted = window.EasyICU.guidedPi.optional('hosted');
+      return Boolean(hosted && hosted.active());
+    }
 
     async function announceReady(jobId) {
       const expectedSession = sessionId();
@@ -190,6 +194,7 @@
         path: String(source.path || ''),
         label: String(source.label || ''),
         database: String(source.database || ''),
+        ...(Number.isInteger(source.summary?.stays) && source.summary.stays >= 0 ? { stays: source.summary.stays } : {}),
       };
     }
 
@@ -288,9 +293,17 @@
       if (hits.length !== 1) return null;
       const demo = hits[0];
       const status = demo.status && typeof demo.status === 'object' ? demo.status : {};
+      const database = String(demo.database || '');
+      // Legacy demos sharing a full loader key cannot identify a demo export
+      // through that database's normal offer: it might recommend the full data.
+      const offer = hostedServer() ? (database.endsWith('_demo') ? registeredOffer(database)
+        : { state: 'ready', recommended: null, choices: [] }) : null;
       return {
-        id: String(demo.id || ''), label: [demo.title, demo.version ? `v${demo.version}` : ''].filter(Boolean).join(' '),
-        prepared: status.export_ready === true, pending: offerPending,
+        id: String(demo.id || ''), label: String(demo.reader_label || [demo.title, demo.version ? `v${demo.version}` : ''].filter(Boolean).join(' ')),
+        database, offer,
+        stays: demo.scope?.icu_stays,
+        prepared: offer ? Boolean(offer.recommended || offer.choices.length) : status.export_ready === true,
+        pending: offerPending,
       };
     }
 
@@ -317,20 +330,22 @@
       }
       if (!entry.inflight && Date.now() - entry.loadedAt > OFFER_REFRESH_MS) {
         entry.inflight = true;
-        const before = JSON.stringify([entry.state, entry.recommended, entry.choices]);
+        const before = JSON.stringify([entry.state, entry.recommended, entry.choices, entry.official_demo]);
         caller(sessionId(), project, key).then(payload => {
           entry.state = 'ready';
           entry.recommended = payload && payload.recommended ? payload.recommended : null;
           entry.choices = Array.isArray(payload && payload.choices) ? payload.choices : [];
+          entry.official_demo = payload && payload.official_demo ? payload.official_demo : null;
         }, () => {
           entry.state = 'none'; entry.recommended = null; entry.choices = [];
+          entry.official_demo = null;
         }).finally(() => {
           entry.inflight = false;
           entry.loadedAt = Date.now();
-          if (JSON.stringify([entry.state, entry.recommended, entry.choices]) !== before) host.render();
+          if (JSON.stringify([entry.state, entry.recommended, entry.choices, entry.official_demo]) !== before) host.render();
         });
       }
-      return { state: entry.state, recommended: entry.recommended, choices: entry.choices.slice() };
+      return { state: entry.state, recommended: entry.recommended, choices: entry.choices.slice(), official_demo: entry.official_demo || null };
     }
 
     /* The one full database the opening question names (not a demo), while
@@ -352,7 +367,13 @@
     }
 
     async function useNamedDemo(sourceId) {
-      const offer = namedDemo();
+      if (hostedServer()) {
+        host.setError(host.errorText({ code: 'unavailable_when_hosted', status: 403 }));
+        host.render();
+        return false;
+      }
+      const database = namedDatabase();
+      const offer = namedDemo() || (database && database.offer && database.offer.state === 'ready' ? database.offer.official_demo : null);
       const caller = api().startOfficialDemoSourcePrepare;
       if (!offer || offer.id !== sourceId || offerPending || host.busy() || typeof caller !== 'function') return false;
       offerPending = true;

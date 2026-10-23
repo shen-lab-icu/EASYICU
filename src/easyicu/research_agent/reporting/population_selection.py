@@ -245,9 +245,12 @@ def analyzed_population(
 
 def _database_label(database: Any) -> Optional[str]:
     try:
-        label = get_database_profile(str(database or "")).display_name
+        profile = get_database_profile(str(database or ""))
     except KeyError:
         return None
+    label = profile.display_name
+    if not profile.is_public and profile.reference_release:
+        label = f"{label} v{profile.reference_release}"
     return " ".join(str(label or "").split()) or None
 
 

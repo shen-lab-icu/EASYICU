@@ -92,7 +92,7 @@ _run_prepare_stage = _prepare.run_prepare_stage
 def demo_sources_catalog() -> dict[str, Any]:
     """Return public release metadata plus path-free readiness booleans."""
 
-    return build_catalog(_status_payload)
+    return source_store.demo_catalog_reader_labels(build_catalog(_status_payload))
 
 
 def make_prepare_runner(source_id: str):

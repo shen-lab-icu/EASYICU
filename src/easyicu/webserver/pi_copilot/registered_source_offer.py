@@ -14,7 +14,11 @@ from easyicu.webserver import sources
 
 from . import study_context_update
 from .contracts import PiCopilotError, PiSessionRecord, ToolExecutionContext
-from .source_recommendation import registered_source_choice, registered_sources_for_database
+from .source_recommendation import (
+    official_demos_for_database,
+    registered_source_choice,
+    registered_sources_for_database,
+)
 
 
 def registered_source_offer(
@@ -34,17 +38,14 @@ def registered_source_offer(
         )
     try:
         profile = get_database_profile(str(database or "").strip())
-        if not profile.is_public:
-            raise KeyError(database)
     except KeyError as exc:
         raise PiCopilotError(
-            "pi_database_not_supported", "Choose one exact supported full-database family.",
+            "pi_database_not_supported", "Choose one exact supported database.",
             status_code=422,
         ) from exc
-    _, recommendation = registered_sources_for_database(
-        sources.load_registry() if registry is None else registry, profile.key,
-    )
-    return {
+    registry = sources.load_registry() if registry is None else registry
+    _, recommendation = registered_sources_for_database(registry, profile.key)
+    offer = {
         "database": profile.key,
         "recommended": (registered_source_choice(recommendation.source)
                         if recommendation.source is not None else None),
@@ -52,6 +53,24 @@ def registered_source_offer(
                     for index, row in enumerate(recommendation.choices, start=1)],
         "reason": recommendation.reason,
     }
+    if recommendation.source is None and not recommendation.choices:
+        demos = official_demos_for_database(registry, profile.key)
+        if len(demos) == 1:
+            demo = demos[0]
+            _, demo_exports = registered_sources_for_database(registry, demo["database"])
+            offer["official_demo"] = {
+                "id": demo["source_id"], "database": demo["database"],
+                "label": f"{demo['label']} v{demo['version']}",
+                **({"stays": demo["stays"]} if "stays" in demo else {}),
+                "registered_offer": {
+                    "state": "ready",
+                    "recommended": (registered_source_choice(demo_exports.source)
+                                    if demo_exports.source is not None else None),
+                    "choices": [registered_source_choice(row, choice=index)
+                                for index, row in enumerate(demo_exports.choices, start=1)],
+                },
+            }
+    return offer
 
 
 def bind_offered_registered_source(
@@ -84,12 +103,12 @@ def bind_offered_registered_source(
         )
     try:
         profile = get_database_profile(str(source.get("database") or ""))
-        family = profile.parent_key or profile.key
+        source_database = profile.key
     except KeyError:
-        family = None
-    if family != offer["database"]:
+        source_database = None
+    if source_database != offer["database"]:
         raise PiCopilotError(
-            "pi_data_source_database_mismatch", "Choose an export of the requested database family.",
+            "pi_data_source_database_mismatch", "Choose an export of the exact requested database.",
             status_code=409,
         )
     eligible = ([offer["recommended"]] if offer["recommended"] else offer["choices"])

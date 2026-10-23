@@ -203,6 +203,7 @@
       path: metadataText(source.path, 4096),
       label: metadataText(source.label, 160),
       database: metadataText(source.database, 64),
+      ...(Number.isInteger(source.stays) && source.stays >= 0 ? { stays: source.stays } : {}),
     };
     return clean.path || clean.label || clean.database ? clean : null;
   }

@@ -572,14 +572,14 @@ def normalize_path(value: Any) -> str:
     return str(path)
 
 
-def _data_source(value: Any) -> Optional[Dict[str, str]]:
+def _data_source(value: Any) -> Optional[Dict[str, Any]]:
     if value is None:
         return None
     if not isinstance(value, dict):
         raise StudyContextError(
             {"error": "invalid_study_context_field", "field": "data_source"}
         )
-    unknown = sorted(set(value) - {"path", "label", "database"})
+    unknown = sorted(set(value) - {"path", "label", "database", "stays"})
     if unknown:
         raise StudyContextError(
             {
@@ -588,13 +588,18 @@ def _data_source(value: Any) -> Optional[Dict[str, str]]:
                 "fields": unknown,
             }
         )
-    source = {
+    source: Dict[str, Any] = {
         "path": normalize_path(value.get("path")),
         "label": _text(value.get("label"), field="data_source.label", max_length=160),
         "database": _text(
             value.get("database"), field="data_source.database", max_length=64
         ),
     }
+    if value.get("stays") is not None:
+        stays = value["stays"]
+        if type(stays) is not int or stays < 0:
+            raise StudyContextError({"error": "invalid_study_context_field", "field": "data_source.stays"})
+        source["stays"] = stays
     return source if any(source.values()) else None
 
 

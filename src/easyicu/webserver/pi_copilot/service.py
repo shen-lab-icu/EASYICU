@@ -970,6 +970,8 @@ class PiCopilotService:
                 "reference_release",
             )
         }
+        if source.get("stays") is not None:
+            identity["stays"] = str(source["stays"])
         digest = hashlib.sha256(
             json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
@@ -980,19 +982,23 @@ class PiCopilotService:
                 profile = get_database_profile(database)
             except KeyError:
                 profile = None
+        legacy_official_demo = bool(
+            profile is not None and profile.is_public and sources.is_official_demo_source(source)
+        )
         return PiSessionDataSourceReference(
             source_id=str(source.get("source_id") or source.get("id") or "").strip()
             or None,
             label=str(
-                profile.display_name if profile is not None else source.get("label") or ""
+                profile.display_name if profile is not None and not legacy_official_demo else source.get("label") or ""
             ).strip()[:160]
             or None,
             database=database[:80] or None,
-            reference_release=str(
+            reference_release=None if legacy_official_demo else str(
                 source.get("reference_release")
                 or (profile.reference_release if profile is not None else "")
             ).strip()[:80]
             or None,
+            stays=source.get("stays"),
             identity_sha256=digest,
             study_revision=int(context.get("revision") or 0),
         )
@@ -1938,7 +1944,7 @@ class PiCopilotService:
                     "Choose one exact supported ICU database.",
                     status_code=422,
                 ) from exc
-            if not profile.is_public:
+            if not profile.is_public and clean_action != "use_registered_source":
                 raise PiCopilotError(
                     "pi_database_not_supported",
                     "Local selection requires a supported full-database family.",

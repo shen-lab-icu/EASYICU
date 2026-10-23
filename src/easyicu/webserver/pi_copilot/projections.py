@@ -231,6 +231,7 @@ def project_study_context(
                 "database": source.get("database") or source.get("source_id"),
                 "path_digest": path_digest(source.get("path")),
                 "status": source.get("status"),
+                **({"stays": source["stays"]} if "stays" in source else {}),
             },
             "cohort": projected_cohort,
             "modules": [
@@ -458,6 +459,7 @@ def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
             "database",
             "path_digest",
             "status",
+            "stays",
         }
         and value not in (None, "")
     }

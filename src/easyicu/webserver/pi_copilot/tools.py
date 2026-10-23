@@ -73,7 +73,11 @@ from .run_authority import (
     list_bound_run_history,
     research_pipeline_project_root,
 )
-from .source_recommendation import registered_source_choice, registered_sources_for_database
+from .source_recommendation import (
+    official_demos_for_database,
+    registered_source_choice,
+    registered_sources_for_database,
+)
 from .study_context_update import update_study_context
 from .turn_authority import database_named_in, infer_explicit_turn_actions
 from .tool_catalog import (
@@ -612,11 +616,6 @@ def _list_data_sources(
                 "pi_database_not_supported",
                 "Choose one exact database returned by easyicu_list_data_sources.",
             ) from exc
-        if not selected_profile.is_public:
-            raise PiCopilotError(
-                "pi_database_not_supported",
-                "Choose a full-database family before selecting a source mode.",
-            )
     registry = sources.load_registry()
     choices = []
     if selected_profile is not None:
@@ -677,22 +676,9 @@ def _list_data_sources(
         }
         for profile in iter_database_profiles(public_only=True)
     ]
-    official_demos = []
-    for source_id in demo_sources.allowed_source_ids():
-        source = demo_sources.get_source(source_id)
-        profile = get_database_profile(source.database)
-        demo_projection = (
-            {
-                "source_id": source.id,
-                "label": source.title,
-                "database": profile.parent_key or profile.key,
-                "version": source.version,
-                "scope_summary": source.scope_summary,
-                "research_scope": "demo_only",
-            }
-        )
-        if selected_profile is None or demo_projection["database"] == selected_profile.key:
-            official_demos.append(demo_projection)
+    official_demos = official_demos_for_database(
+        registry, selected_profile.key if selected_profile is not None else None,
+    )
     return _result(
         context,
         status="ok",

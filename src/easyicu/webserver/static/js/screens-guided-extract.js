@@ -582,20 +582,26 @@
     else if (mode === 'none') extractionState.modules = [];
   }
 
+  function scanFailure(code) {
+    const owner = window.EasyICU?.guidedPi?.optional('errorText');
+    return owner ? owner.scanErrorText(code, host.t)
+      : host.t('This folder could not be scanned; choose another folder.', '无法扫描该文件夹，请选择其他文件夹。');
+  }
+
   function scanPath() {
     const current = extractionState;
     if (!current || current.scanning) return;
     const path = String(current.path || '').trim();
     if (!path) {
       current.scan = null;
-      current.scanError = 'Choose or paste a local folder path first.';
+      current.scanError = scanFailure('no_path');
       current.error = null;
       host.renderThread();
       return;
     }
     if (!window.EU_API || !window.EU_API.scanPath) {
       current.scan = null;
-      current.scanError = 'Folder scan API is unavailable.';
+      current.scanError = scanFailure('scan_api_unavailable');
       host.renderThread();
       return;
     }
@@ -614,7 +620,7 @@
         host.setVal({ data: (result.db || 'local ICU') + ' · ' + (result.source || 'source') });
       } else {
         current.scan = result || null;
-        current.scanError = (result && (result.error || result.reason)) || 'Could not recognize this folder.';
+        current.scanError = scanFailure(result && result.error);
       }
       host.renderThread();
       host.scheduleGuidedSlotSave('scan_extraction_folder');
@@ -622,7 +628,7 @@
       if (extractionState !== current) return;
       current.scanning = false;
       current.scan = null;
-      current.scanError = error.message || String(error);
+      current.scanError = scanFailure(error && error.code);
       host.renderThread();
       host.scheduleGuidedSlotSave('scan_extraction_folder_error');
     });

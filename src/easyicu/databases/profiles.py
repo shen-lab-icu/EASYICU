@@ -312,6 +312,11 @@ def _build_declared_profile(
     )
 
 
+# Reader metadata belongs to profiles, outside the sealed extraction registry.
+# A future demo without a known release must not inherit its parent's version.
+_DEMO_REFERENCE_RELEASES = {"eicu_demo": "2.0.1", "mimic_demo": "1.4"}
+
+
 def _build_demo_profile(
     config: DataSourceConfig,
     parent: DatabaseProfile,
@@ -320,7 +325,9 @@ def _build_demo_profile(
     return DatabaseProfile(
         key=config.name,
         display_name=f"{parent.display_name} Demo",
-        reference_release=parent.reference_release,
+        # A demo is a distinct release; its parent's version is vocabulary
+        # inheritance, not evidence of the release these rows came from.
+        reference_release=config.extra.get("reference_release") or _DEMO_REFERENCE_RELEASES.get(config.name),
         aliases=(config.name, config.name.replace("_", "-")),
         display_order=parent.display_order + 1000,
         stay_table=stay_table,
