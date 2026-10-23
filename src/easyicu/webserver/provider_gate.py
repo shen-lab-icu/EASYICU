@@ -52,7 +52,9 @@ def resolve_provider_gate(
     from .stop_next_actions import project_stop_next_actions
 
     try:
-        require_data_handling(database, data_handling)
+        # Provider selection can run before any source has been selected.
+        if database:
+            require_data_handling(database, data_handling)
     except ProviderConfigurationError as exc:
         raise ProviderGateError({
             **provider, "error": exc.issue, "blocked_by": "provider_data_handling",

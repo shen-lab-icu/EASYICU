@@ -57,7 +57,7 @@ def test_writer_probe_false_default_fail_closed(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="writer_probe_default",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -87,7 +87,7 @@ def test_writer_probe_true_forces_writer_phase(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="writer_probe_forced",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         force_writer_probe=True,
     )

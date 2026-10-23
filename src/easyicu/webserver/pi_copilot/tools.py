@@ -4910,30 +4910,32 @@ def require_copilot_data_clearance(
 ) -> None:
     """Gate host-bound sources, including a source selected during this turn."""
     from easyicu.research_agent.providers.client_trust import (
-        ProviderConfigurationError, credentialed_source, require_data_handling,
+        ProviderConfigurationError, require_data_handling, source_requires_clearance,
     )
-    from easyicu.webserver.demo_source_storage import egress_source_database
+    from easyicu.webserver.demo_source_storage import egress_source_database, public_demo_egress_scope
     from easyicu.webserver.stop_next_actions import project_stop_next_actions
 
     study = _bound_context(context.session.binding) or {}
     source = study.get("data_source") or {}
-    databases = {
-        egress_source_database(str(source.get("path") or ""), str(source.get("database") or ""))
-        if source.get("path") else ""
-    }
+    selected_sources = [source] if source.get("path") else []
     arguments = arguments or {}
     source_ids = {str(arguments.get("source_id") or "")}
     source_ids.update(str(item) for item in arguments.get("source_ids", []) or [])
     if source_ids - {""}:
         for registered in sources.load_registry().get("sources", []):
             if str(registered.get("id") or "") in source_ids:
-                databases.add(egress_source_database(str(registered.get("path") or ""), str(registered.get("database") or "")))
+                selected_sources.append(registered)
     has_history = context.session.credentialed_data_in_history
-    if has_history or (has_history is None and context.session.pi_session_file):
-        databases.add("miiv")  # Unknown legacy history retains the strict default.
+    credentialed = bool(has_history or (has_history is None and context.session.pi_session_file))
     try:
-        for database in databases:
-            require_data_handling(database, context.data_handling)
+        if credentialed:
+            require_data_handling("miiv", context.data_handling)  # Unknown legacy history stays strict.
+        for selected in selected_sources:
+            path = str(selected.get("path") or "")
+            with public_demo_egress_scope(path):
+                database = egress_source_database(path, str(selected.get("database") or ""))
+                require_data_handling(database, context.data_handling)
+                credentialed = credentialed or source_requires_clearance(database)
     except ProviderConfigurationError as exc:
         raise PiCopilotError(
             exc.issue, "Open provider settings and declare data handling before using credentialed data.",
@@ -4941,7 +4943,7 @@ def require_copilot_data_clearance(
                 "status": "blocked", "reason": exc.issue,
             })},
         ) from exc
-    if any(credentialed_source(database) for database in databases):
+    if credentialed:
         context.session.credentialed_data_in_history = True
         if context.note_credentialed_history:
             context.note_credentialed_history()
