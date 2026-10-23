@@ -381,7 +381,8 @@ def _sealed_context(authority) -> ResearchContext:
         variables=[
             ConceptDescriptor(name="stay_id", role=VariableRole.ID, dtype="int64"),
             ConceptDescriptor(name="lab_max", description="highest laboratory value by 24 h",
-                              role=VariableRole.LAB, dtype="float64", unit="mmol/L"),
+                              role=VariableRole.LAB, dtype="float64", unit="mmol/L",
+                              analysis_window="icu_admission[0,24]h"),
             ConceptDescriptor(name="mort_28d", description="Death by day 28 from ICU admission",
                               role=VariableRole.OUTCOME, dtype="float64", observed_domain=BINARY),
             ConceptDescriptor(name="followup_days_28d", description="28-day event or censoring time",

@@ -433,6 +433,11 @@ def test_pipeline_persists_time_varying_plan_with_required_cohort_without_provid
         primary_exposure="lact",
         id_columns=["patient_stay_id"],
         user_preferences={
+            # Carry the acquisition's exposure window into planning explicitly.
+            "data_constraints": json.dumps({"materialization_window": {
+                "role": "outer_observation_window", "anchor": "icu_admission",
+                "hours": _spec().exposure_window_hours,
+            }}),
             "covariates": ["age", "sex"],
             "covariate_selection": "exact",
             "covariate_rationales": {"age": "baseline age", "sex": "baseline sex"},

@@ -4,12 +4,13 @@ from typing import Optional
 
 from ..authority.declared_levels import closed_planning_levels_for
 from ..contracts.model_terms import level_spelling
-from ..schema import ResearchContext
+from ..schema import ResearchContext, VariableRole
 from ..research_context.materialization_window import host_materialization_window_hours
 from ..research_context.temporal_semantics import window_extends_after_anchor
 from .adjustment_authority import (
     baseline_static_grouping, owner_declared_baseline_static, primary_landmark_hours,
 )
+from .progressive_contract import ProgressivePlanCompileError
 
 MAX_ASSOCIATION_EXPOSURE_LEVELS = 24
 
@@ -47,7 +48,8 @@ def post_baseline_exposure(
     a primary feature can be observed after ICU admission, so association
     plans must close early-event/exposure opportunity.  The window is read by
     ``host_materialization_window_hours``, as the cohort-predicate rule reads
-    it.
+    it. A lab or vital without either window has unknown timing: stop through
+    the typed planning refusal rather than claiming baseline availability.
     """
 
     exposure = str(
@@ -76,6 +78,14 @@ def post_baseline_exposure(
     # execution authority. An absent confirmation cannot hide that risk.
     hours = host_materialization_window_hours(context)
     if hours is None:
+        if descriptor is not None and descriptor.role in {VariableRole.LAB, VariableRole.VITAL}:
+            raise ProgressivePlanCompileError(
+                "progressive_exposure_window_required",
+                "the exposure is a lab or vital measurement with no analysis window and no "
+                "host materialization window, so its timing relative to time zero is unknown",
+                path=f"variables.{exposure}.analysis_window",
+                concepts=(exposure,), element="exposure_window", question_required=True,
+            )
         return False, None
     # This label deliberately names the physical coordinate, rather than
     # implying a phenotype definition or a follow-up horizon.
