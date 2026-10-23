@@ -52,7 +52,7 @@
     MISSING_CATEGORY_WITHOUT_COMPLETE_CASE_SENSITIVITY: ['未测量类别缺少完整病例敏感性分析', '主模型把协变量未测量的行保留为单独的状态，却没有预先设定的完整病例重拟合覆盖这些协变量。'],
     MODEL_TERM_CODING_CONFLICTS_WITH_DECLARED_DOMAIN: ['变量编码与取值类型冲突', '有分类或有序变量被当作连续变量编码。'],
     NOVELTY_POSITIONING_REVIEW_REQUIRED: ['创新性定位待独立审阅', '已筛到可比研究，但检索与自动筛选不能证明创新性；人群、暴露、时间零点、估计目标、分析路线和临床贡献仍需独立评估。'],
-    OUTCOME_DEFINITION_UNRESOLVED: ['主要结局的定义不完整', '主要结局还没有完整的定义：临床含义或观察时间范围尚未确定。'],
+    OUTCOME_DEFINITION_UNRESOLVED: ['主要结局的定义不完整', '主要结局的含义、观察范围或汇总方式还没有确定，暂时无法分析。'],
     PHENOTYPING_COMPARISON_CONTRACT_INVALID: ['表型比较的设定无效', '聚类后的描述性比较没有绑定到确切的主聚类队列与分配结果。'],
     PHENOTYPING_FIT_ROSTER_INVALID: ['聚类拟合变量清单无效', '需要把用于聚类拟合的变量和仅供阅读的变量分开声明。'],
     PHENOTYPING_OUTCOME_COMPARISON_INCOMPLETE: ['聚类后的结局比较不完整', '没有可执行的步骤覆盖所请求结局的分群比较。'],

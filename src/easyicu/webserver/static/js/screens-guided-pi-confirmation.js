@@ -1091,6 +1091,19 @@
         && item && item.decision_context && Array.isArray(item.decision_context.endpoint_options)
         ? item.decision_context.endpoint_options.filter(row => row && row.concept)
         : [];
+      if (code === 'OUTCOME_DEFINITION_UNRESOLVED' && item && item.decision_context
+          && item.decision_context.endpoint_definition_unavailable) {
+        const finding = window.AGENT_READER_VOCAB && window.AGENT_READER_VOCAB.finding(code);
+        return {
+          cardTitle: finding ? finding.title : tr('The primary outcome is not fully defined', '主要结局的定义不完整'),
+          context: tr(
+            'The outcome this question asks about cannot be analysed until its definition is complete; no other outcome stands in for it.',
+            '所问结局的定义补全前无法分析，不会用其他结局代替。',
+          ),
+          evidenceDetail: localizedDecisionEvidence(item),
+          options: [],
+        };
+      }
       if (endpointOptions.length) return {
         cardTitle: tr('Choose the primary endpoint', '请选择本研究的主要结局'),
         context: localizedAuthorizationQuestion(item),

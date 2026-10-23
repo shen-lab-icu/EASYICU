@@ -182,6 +182,7 @@ from .family_spec_planner import (
     run_family_spec_attempt,
 )
 from .progressive_prompt_contracts import (
+    CONTINUOUS_OUTCOME_SUMMARY_CONTRACT,
     DESIGN_SELECTION_CONTRACT,
     DESCRIPTIVE_SUMMARY_CONTRACT,
     custom_analysis_step_shape as _custom_analysis_step_shape,
@@ -1656,15 +1657,7 @@ class ProgressivePlannerAgent:
                 "role."
             ),
             DESCRIPTIVE_SUMMARY_CONTRACT,
-            (
-                "Continuous secondary outcomes: use continuous_outcome_summary for the "
-                "explicitly requested numeric continuous outcomes grouped by a closed "
-                "scientific exposure. Declare one step with planned_analysis_role=\"secondary\" "
-                "and scientific_action_id=null; variable_names must list that grouping "
-                "and every selected continuous outcome. It reports per-outcome median, "
-                "quartiles, mean, SD, and missingness, without tests or effect estimates. "
-                "It does not replace a requested association model or uncertainty interval."
-            ),
+            CONTINUOUS_OUTCOME_SUMMARY_CONTRACT,
         ]
         baseline = baseline_requirement_projection(contract_context)
         if baseline["tables"]:

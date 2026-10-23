@@ -347,6 +347,7 @@ def acquire_universe_for_question(
     output_dir: Union[str, Path],
     stem: str = "universe",
     target_outcome: Optional[str],
+    target_outcome_aggregation: Optional[str] = None,
     primary_exposure_concept: Optional[str] = None,
     outcome_concepts: Sequence[str],
     required_feature_concepts: Sequence[str] = (),
@@ -675,19 +676,23 @@ def acquire_universe_for_question(
             if output.selectable and output.column in materialized_columns:
                 analysis_columns[output.column] = output.column
 
+    from .catalog import catalog_endpoint
+
     endpoint: Optional[EndpointSpec] = None
     target_catalog = catalog_by_id.get(str(target_outcome or ""))
+    if target_outcome and target_outcome_aggregation:
+        # This is the materializer's explicit projection vocabulary, selected
+        # by the reviewed question; it is not inferred from a suffix or dtype.
+        selected_column = f"{target_outcome}_{target_outcome_aggregation}"
+        if selected_column in materialized_columns:
+            analysis_columns[target_outcome] = selected_column
     target_column = analysis_columns.get(str(target_outcome or ""))
     if (
         target_catalog is not None
-        and target_catalog.column_role == "event_status"
         and target_column is not None
     ):
-        endpoint = EndpointSpec(
-            name=target_column,
-            kind="binary",
-            absence_semantics="no_absent_rows",
-            levels=[0, 1],
+        endpoint = catalog_endpoint(
+            target_catalog, column=target_column, aggregation=target_outcome_aggregation,
         )
     if primary_exposure_concept and primary_exposure_concept not in analysis_columns:
         # Continuous/repeated concepts require a user- or protocol-selected

@@ -537,12 +537,32 @@ def _planned_window_for_agent_landmark(
 _ENDPOINT_DECISION = "OUTCOME_DEFINITION_UNRESOLVED"
 
 
+def _requested_endpoint_coordinates(study: Mapping[str, Any]) -> Dict[str, Any]:
+    from easyicu.webserver.research_launch_scientific import _metadata_only_planning_coordinates
+
+    source = study.get("data_source")
+    database = str(source.get("database") or "").strip() if isinstance(source, Mapping) else ""
+    if not database:
+        return {}
+    configured = ScientificConfiguration.inspect(study).executable_target_outcome()
+    try:
+        coordinates = _metadata_only_planning_coordinates(
+            question=str(study.get("question") or ""), database=database, configured_outcome=configured,
+            stated_exposure=str(study.get("primary_exposure") or ""),
+        )
+    except (KeyError, ValueError):
+        return {}
+    if configured and coordinates.get("target_outcome") != configured:
+        return {"target_outcome": configured, "endpoint": None}
+    return coordinates
+
+
 def endpoint_decision_options(study: Mapping[str, Any]) -> list[Dict[str, str]]:
     """Outcome concepts the study's source can bind as its typed endpoint.
 
-    Planning gives an endpoint contract only to an outcome whose concept owner
-    declares event-status semantics, so only those concepts can close the
-    review's endpoint question; a reader label alone never does.
+    Preserve the requested outcome. An undefined requested quantity cannot be
+    replaced with a menu of unrelated events. With no requested outcome, keep
+    the existing event menu for the researcher's endpoint decision.
     """
 
     from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
@@ -554,6 +574,13 @@ def endpoint_decision_options(study: Mapping[str, Any]) -> list[Dict[str, str]]:
     database = str(source.get("database") or "").strip() if isinstance(source, Mapping) else ""
     if not database:
         return []
+    coordinates = _requested_endpoint_coordinates(study)
+    requested = coordinates.get("target_outcome")
+    if requested:
+        if coordinates.get("endpoint") is None:
+            return []
+        label_en, label_zh = _reader_labels(requested, coordinates.get("target_outcome_aggregation"))
+        return [{"concept": requested, "label_en": label_en, "label_zh": label_zh}]
     try:
         catalog = build_database_capability_catalog(database)
     except (KeyError, ValueError):
@@ -578,6 +605,8 @@ def plan_decision_context(
     code = str(decision_code or "").strip()
     if code == _ENDPOINT_DECISION:
         options = endpoint_decision_options(study or {})
+        if not options and _requested_endpoint_coordinates(study or {}).get("target_outcome"):
+            return {"endpoint_options": [], "endpoint_definition_unavailable": True}
         return {"endpoint_options": options} if options else {}
     if code != "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED":
         return {}

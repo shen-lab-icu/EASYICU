@@ -111,6 +111,15 @@ def test_the_card_decisions_are_found() -> None:
     assert "REPEATED_STAY_METHOD_NOT_DECLARED" not in CARD_DECISIONS
 
 
+def test_an_undefined_requested_endpoint_explains_the_stop_without_replacement_choices():
+    html = _card("OUTCOME_DEFINITION_UNRESOLVED", lang="zh", decision_context={
+        "endpoint_definition_unavailable": True, "endpoint_options": [],
+    })
+    assert "主要结局的定义不完整" in html
+    assert "所问结局的定义补全前无法分析，不会用其他结局代替。" in html
+    assert "请选择本研究的主要结局" not in html
+
+
 @pytest.mark.parametrize("code", CARD_DECISIONS)
 def test_a_decision_card_reads_in_chinese(code: str) -> None:
     title, question, evidence = _shown(_card(code, lang="zh"))

@@ -45,9 +45,9 @@ DESIGN_SELECTION_CONTRACT = (
     "pre-analysis feasibility checks. Propose the preferred choices "
     "before asking the researcher; label them recommended, never "
     "user-confirmed, and state what data checks could trigger revision. "
-    "For a descriptive study, item 2 describes the measured variable "
-    "and timing; items 3 and 4 explain why an outcome/follow-up and "
-    "adjusted model are inapplicable. Keep all six items; a bare N/A "
+    "For a descriptive study, item 2 describes the measurement, timing and "
+    "requested grouping; items 3 and 4 describe the requested endpoint or "
+    "explain why an outcome/follow-up and adjusted model are inapplicable. Keep all six items; a bare N/A "
     "does not explain the design."
 )
 
@@ -57,14 +57,32 @@ DESCRIPTIVE_SUMMARY_CONTRACT = (
     "measurement in required_variables. Use one primary custom_analysis "
     "step bound to descriptive.descriptive_summary for its empirical "
     "distribution and summary table, with population_scope=null. "
-    "This existing coder-generated action owns baseline_context and "
+    "This exact host-executed action owns baseline_context and "
     "descriptive_result, without an exposure, outcome or grouping. "
     "During materialization declare table:cohort_summary for the "
     "summary statistics and table:distribution_summary for the "
     "empirical distribution; keep denominator and measurement_audit steps. "
     "descriptive.descriptive_summary does not apply to continuous_outcome_summary: "
     "that separate grouped-outcome module requires planned_analysis_role=\"secondary\" "
-    "and scientific_action_id=null."
+    "and scientific_action_id=null. For a grouped continuous-outcome question, "
+    "use the typed empirical summary of the outcome as the primary and "
+    "continuous_outcome_summary as the required answering secondary. The "
+    "overall primary alone does not cover the question. If the concept owner "
+    "declares a categorical grouping but its levels are unknown before "
+    "extraction, keep the grouping in this summary; the post-extraction "
+    "replan binds its observed levels before execution."
+)
+
+
+CONTINUOUS_OUTCOME_SUMMARY_CONTRACT = (
+    "Continuous secondary outcomes: use continuous_outcome_summary for the "
+    "explicitly requested numeric continuous outcomes grouped by the declared "
+    "categorical exposure (levels may await extraction in a metadata-only plan). "
+    "Declare one step with planned_analysis_role=\"secondary\" "
+    "and scientific_action_id=null; variable_names must list that grouping "
+    "and every selected continuous outcome. It reports per-outcome median, "
+    "quartiles, mean, SD, and missingness, without tests or effect estimates. "
+    "It does not replace a requested association model or uncertainty interval."
 )
 
 
