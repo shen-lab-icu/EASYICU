@@ -64,6 +64,14 @@ from ..schema import (
 class CurrentCaseScientificAuthorityError(ValueError):
     """The plan drifted from a caller-reviewed current-run contract."""
 
+    def __init__(
+        self, message: str, *, reason_code: Literal[
+            "landmark_spline_binary_sensitivity_unsupported"
+        ] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
 
 def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
     return json.dumps(
@@ -2084,7 +2092,8 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             )
             if inherited_binary_sensitivity and not functional_form:
                 raise CurrentCaseScientificAuthorityError(
-                    "landmark spline cannot reuse its nonlinear exposure result for another sensitivity method"
+                    "landmark spline cannot reuse its nonlinear exposure result for another sensitivity method",
+                    reason_code="landmark_spline_binary_sensitivity_unsupported",
                 )
             signed_robustness_projection = (
                 step.planned_analysis_role == "sensitivity"

@@ -3114,6 +3114,26 @@ class ResearchAgentPipeline:
             cohort_concept_ids=cohort_concept_ids,
         )
 
+    def _plan_run_formed_groups_without_source_spline(
+        self, *, context: ResearchContext, run_dir: Path, cohort_path: Path, run_id: str,
+        emit_progress: Callable[..., None],
+    ) -> None:
+        """Yield a source spline authority to the groups this planning run formed."""
+
+        authorities = self._scientific_runtime_authorities.for_planning_context(
+            context=context, run_dir=run_dir, cohort_path=cohort_path
+        )
+        if authorities is self._scientific_runtime_authorities:
+            return
+        self._scientific_runtime_authorities = authorities
+        # The source projection is no longer this plan's runtime contract.
+        self._scientific_runtime_projection_sha256 = None
+        emit_progress(
+            "context",
+            "The grouped primary exposure is planned without the continuous spline authority.",
+            run_id=run_id,
+        )
+
     def _run_plan_phase(
         self,
         *,
@@ -3289,6 +3309,10 @@ class ResearchAgentPipeline:
                 context.model_dump_json(indent=2),
                 encoding="utf-8",
             )
+        self._plan_run_formed_groups_without_source_spline(
+            context=context, run_dir=run_dir, cohort_path=cohort_path, run_id=run_id,
+            emit_progress=emit_progress,
+        )
         emit_progress(
             "context",
             "Research context built.",
