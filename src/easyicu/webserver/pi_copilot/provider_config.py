@@ -121,10 +121,20 @@ class PiProviderConfig:
         }
 
     def fingerprint(self) -> str:
+        environment = self.as_environment()
+        if (
+            self.data_handling is DataHandling.UNSPECIFIED
+            and self.inference_location is InferenceLocation.UNSPECIFIED
+        ):
+            # An undeclared connection keeps the fingerprint it had before the
+            # declaration keys existed, so its verification receipt stays valid.
+            # Any declaration changes the fingerprint and needs a new verification.
+            environment.pop("EASYICU_PI_DATA_HANDLING")
+            environment.pop("EASYICU_PI_INFERENCE_LOCATION")
         canonical = json.dumps(
             {
                 "schema": "easyicu.pi-provider-config-fingerprint/2",
-                "environment": self.as_environment(),
+                "environment": environment,
                 "openai_auth_header": self.openai_auth_header.value,
                 "verification_contract": "model-catalog+inference-probe/1",
             },
