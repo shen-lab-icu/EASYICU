@@ -28,6 +28,10 @@ entry points (`cli`, `replication_cli`) are reached through
 
 Measured 2026-08-14 at `26bdcdc`.
 
+The `../io/` entry below is relative to `src/easyicu/research_agent`, like
+the other module paths, and records the shared data-IO screening owner.
+It is an administrator tool; it is not selected by the Planner.
+
 ## Status vocabulary
 
 | status | meaning |
@@ -35,6 +39,10 @@ Measured 2026-08-14 at `26bdcdc`.
 | `production_reachable` | A public API reaches the real runtime owner, and the row binds an exact integration test proving that route. |
 | `experimental` | Implemented or tested, but not advertised as a stable product capability and not relied on by the default runtime. |
 | `disabled` | Intentionally unavailable on production paths; retained only for a named compatibility/removal boundary. |
+
+| module | LOC | status | owner | activation precondition | tests | route proof | review |
+| --- | ---: | --- | --- | --- | --- | --- | --- |
+| `../io/export_plausibility.py` | 648 | `production_reachable` | data-io | Administrator `tools/report_export_plausibility.py:main` → `build_report` → DuckDB aggregate-only scans of a native-v2 export, optionally compared with an older export. No patient rows or identifiers are reported; screening never gates CI. | `tests/core/test_export_plausibility.py::test_cli_prints_bilingual_summary_and_json_even_when_checks_fail` | `call:main` | 2026-12-01 |
 
 ## Inventory
 
