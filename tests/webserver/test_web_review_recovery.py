@@ -648,23 +648,23 @@ def test_reconciliation_can_recover_a_pause_after_inline_capacity_is_full(tmp_pa
 def test_windows_lock_fallback_serializes_without_fcntl(
     tmp_path, monkeypatch
 ) -> None:
-    import easyicu.webserver.agent_review_recovery as recovery
+    from easyicu.runtime import platform_compat
 
     calls = []
 
     class _Msvcrt:
-        LK_LOCK = 1
+        LK_NBLCK = 1
         LK_UNLCK = 2
 
         @staticmethod
         def locking(_descriptor, mode, length):
             calls.append((mode, length))
 
-    monkeypatch.setattr(recovery, "fcntl", None)
-    monkeypatch.setattr(recovery, "msvcrt", _Msvcrt)
+    monkeypatch.setattr(platform_compat, "fcntl", None)
+    monkeypatch.setattr(platform_compat, "msvcrt", _Msvcrt)
     put_record(_record(), path=tmp_path / "windows-index.json")
 
-    assert calls == [(_Msvcrt.LK_LOCK, 1), (_Msvcrt.LK_UNLCK, 1)]
+    assert calls == [(_Msvcrt.LK_NBLCK, 1), (_Msvcrt.LK_UNLCK, 1)]
 
 
 def test_recovery_v1_digest_omits_fields_that_did_not_exist() -> None:

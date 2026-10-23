@@ -8,6 +8,8 @@ the acquisition layer only forwards it to the deterministic materializer.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import open_nofollow
+
 import hashlib
 import os
 import re
@@ -107,7 +109,7 @@ def read_digest_bound_parquet(
 
     descriptor: int | None = None
     try:
-        descriptor = os.open(
+        descriptor = open_nofollow(
             path,
             os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
         )

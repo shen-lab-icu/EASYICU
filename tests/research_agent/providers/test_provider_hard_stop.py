@@ -419,7 +419,7 @@ def test_one_attempt_batch_serializes_independently_loaded_processes(tmp_path):
     assert payload["totals"]["provider_attempts"] == 1
 
 
-def test_windows_sidecar_locks_before_initializing_first_byte(
+def test_windows_sidecar_locks_without_initializing_first_byte(
     tmp_path, monkeypatch
 ) -> None:
     from easyicu.research_agent.authority import provider_hard_stop as owner
@@ -427,24 +427,26 @@ def test_windows_sidecar_locks_before_initializing_first_byte(
     events: list[str] = []
 
     class _Msvcrt:
-        LK_LOCK = 1
+        LK_NBLCK = 1
         LK_UNLCK = 2
 
         @staticmethod
         def locking(descriptor, operation, _length):
-            if operation == _Msvcrt.LK_LOCK:
+            if operation == _Msvcrt.LK_NBLCK:
                 assert owner.os.fstat(descriptor).st_size == 0
                 events.append("lock")
             else:
                 events.append("unlock")
 
-    monkeypatch.setattr(owner, "fcntl", None)
-    monkeypatch.setattr(owner, "msvcrt", _Msvcrt)
+    from easyicu.runtime import platform_compat
+
+    monkeypatch.setattr(platform_compat, "fcntl", None)
+    monkeypatch.setattr(platform_compat, "msvcrt", _Msvcrt)
     ledger_path = (tmp_path / "windows-first-create.json").resolve()
 
     with owner._exclusive_ledger_file_lock(ledger_path):
         lock_path = ledger_path.parent / f".{ledger_path.name}.lock"
-        assert lock_path.read_bytes() == b"\0"
+        assert lock_path.read_bytes() == b""
         assert events == ["lock"]
 
     assert events == ["lock", "unlock"]

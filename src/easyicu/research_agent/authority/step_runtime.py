@@ -8,6 +8,8 @@ successful.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import fsync_directory
+
 from dataclasses import dataclass, replace
 from importlib import metadata as importlib_metadata
 import json
@@ -1545,11 +1547,7 @@ def _directory_presence(path: Path, *, label: str) -> bool:
 
 
 def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    fsync_directory(path)
 
 
 def materialize_sealed_run_result(

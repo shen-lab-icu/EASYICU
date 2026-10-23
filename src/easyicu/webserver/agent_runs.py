@@ -11,6 +11,8 @@ binding, artifact privacy scanning, and manuscript locking.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import open_nofollow
+
 import hashlib
 import io
 import json
@@ -1335,7 +1337,7 @@ def _read_safe_artifact_bytes(
         return None, None, "artifact_not_found"
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(path, flags)
+        descriptor = open_nofollow(path, flags)
     except FileNotFoundError:
         return None, None, "artifact_not_found"
     except OSError:

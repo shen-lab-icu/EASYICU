@@ -23,7 +23,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Union
 
 import pandas as pd
@@ -638,9 +638,9 @@ def align_resume_scientific_identity_layout(
 def _tree_sha256(root: Path, *, relative_paths: Optional[Sequence[Path]] = None) -> str:
     digest = hashlib.sha256()
     paths = (
-        sorted(relative_paths, key=lambda path: str(path))
+        sorted(relative_paths, key=lambda path: path.as_posix())
         if relative_paths is not None
-        else sorted(root.rglob("*.py"))
+        else sorted(root.rglob("*.py"), key=lambda path: PurePosixPath(path.as_posix()).parts)
     )
     for path in paths:
         if not path.is_file():
@@ -650,7 +650,7 @@ def _tree_sha256(root: Path, *, relative_paths: Optional[Sequence[Path]] = None)
         except ValueError:
             relative = Path(path.name)
         raw = path.read_bytes()
-        digest.update(str(relative).encode("utf-8"))
+        digest.update(relative.as_posix().encode("utf-8"))
         digest.update(len(raw).to_bytes(8, "big"))
         digest.update(raw)
     return digest.hexdigest()

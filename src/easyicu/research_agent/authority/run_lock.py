@@ -21,12 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, ParamSpec, TypeVar
 
-try:
-    import fcntl
-except ImportError as exc:  # pragma: no cover - EasyICU targets macOS/Linux.
-    raise RuntimeError(
-        "Research-agent run locking requires POSIX fcntl support."
-    ) from exc
+from easyicu.runtime.platform_compat import lock_exclusive, unlock_file
 
 
 P = ParamSpec("P")
@@ -77,7 +72,7 @@ def _lock_path(*, workdir: Path, run_id: str) -> Path:
 
 @dataclass
 class RunExecutionLock:
-    """An acquired non-blocking POSIX flock held by an open file descriptor."""
+    """An acquired non-blocking OS lock held by an open file descriptor."""
 
     run_id: str
     run_dir: Path
@@ -89,7 +84,7 @@ class RunExecutionLock:
         if self._released:
             return
         try:
-            fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+            unlock_file(self._handle.fileno())
         finally:
             self._handle.close()
             self._released = True
@@ -116,7 +111,7 @@ def acquire_run_execution_lock(*, workdir: Path, run_id: str) -> RunExecutionLoc
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = path.open("a+", encoding="utf-8")
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_exclusive(handle.fileno(), blocking=False)
     except BlockingIOError as exc:
         try:
             handle.seek(0)
@@ -161,7 +156,7 @@ def acquire_run_execution_lock(*, workdir: Path, run_id: str) -> RunExecutionLoc
         handle.flush()
         os.fsync(handle.fileno())
     except Exception:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        unlock_file(handle.fileno())
         handle.close()
         raise
     return RunExecutionLock(

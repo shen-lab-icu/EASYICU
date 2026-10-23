@@ -2,9 +2,9 @@
 
 Authority writers must not validate a directory by pathname and then keep
 using that pathname: a concurrent rename can replace the verified directory
-with a symbolic link before the first write.  This module opens every path
-component with ``openat``/``O_NOFOLLOW`` and keeps the final directory
-descriptor alive for the complete transaction.
+with a symbolic link before the first write. The platform owner traverses
+with ``openat``/``O_NOFOLLOW`` on POSIX and pins native directory handles on
+Windows for the complete transaction.
 
 The helpers are deliberately science-neutral.  They publish bytes and files;
 they do not select cohorts, variables, methods, or estimands.
@@ -20,6 +20,9 @@ import secrets
 import stat
 import tempfile
 from typing import BinaryIO, Callable, Optional
+
+
+from easyicu.runtime.platform_compat import SecureDirectory
 
 
 class AuthorityFilesystemError(RuntimeError):
@@ -39,65 +42,22 @@ def _component(name: str) -> str:
     return name
 
 
-def _directory_flags() -> int:
-    return os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-
-
-def _open_directory_tree(path: Path) -> int:
-    """Open an absolute directory one no-follow component at a time."""
-
-    candidate = Path(path).expanduser()
-    candidate = candidate if candidate.is_absolute() else candidate.absolute()
-    if os.name != "posix":  # pragma: no cover - production and CI are POSIX
-        if candidate.is_symlink() or not candidate.is_dir():
-            raise AuthorityFilesystemError(
-                "authority root must be an existing real directory"
-            )
-        try:
-            return os.open(candidate, os.O_RDONLY)
-        except OSError as exc:
-            raise AuthorityFilesystemError("cannot open authority root") from exc
-
-    flags = _directory_flags()
-    try:
-        current_fd = os.open(candidate.anchor or "/", flags)
-    except OSError as exc:
-        raise AuthorityFilesystemError("cannot open authority filesystem root") from exc
-    try:
-        for part in candidate.parts[1:]:
-            try:
-                next_fd = os.open(part, flags, dir_fd=current_fd)
-            except OSError as exc:
-                raise AuthorityFilesystemError(
-                    f"authority directory component is missing or unsafe: {part}"
-                ) from exc
-            info = os.fstat(next_fd)
-            if not stat.S_ISDIR(info.st_mode):
-                os.close(next_fd)
-                raise AuthorityFilesystemError(
-                    f"authority directory component is not a directory: {part}"
-                )
-            os.close(current_fd)
-            current_fd = next_fd
-        return current_fd
-    except BaseException:
-        os.close(current_fd)
-        raise
-
-
 @dataclass(slots=True)
 class AnchoredDirectory:
     """One verified directory held open for a complete authority transaction."""
 
     path: Path
-    fd: int
+    _directory: SecureDirectory
     _closed: bool = False
 
     @classmethod
     def open(cls, path: Path) -> "AnchoredDirectory":
         candidate = Path(path).expanduser()
         candidate = candidate if candidate.is_absolute() else candidate.absolute()
-        return cls(path=candidate, fd=_open_directory_tree(candidate))
+        try:
+            return cls(path=candidate, _directory=SecureDirectory(candidate))
+        except OSError as exc:
+            raise AuthorityFilesystemError("cannot open authority directory without links") from exc
 
     def __enter__(self) -> "AnchoredDirectory":
         return self
@@ -107,31 +67,24 @@ class AnchoredDirectory:
 
     def close(self) -> None:
         if not self._closed:
-            os.close(self.fd)
+            self._directory.close()
             self._closed = True
 
     @property
     def identity(self) -> tuple[int, int]:
         self._require_open()
-        info = os.fstat(self.fd)
-        return int(info.st_dev), int(info.st_ino)
+        return self._directory.identity
 
     def assert_still_selected(self) -> None:
         """Fail if the original pathname no longer selects this directory."""
 
         self._require_open()
-        selected_fd: Optional[int] = None
         try:
-            selected_fd = _open_directory_tree(self.path)
-            selected = os.fstat(selected_fd)
-            held = os.fstat(self.fd)
-            if (selected.st_dev, selected.st_ino) != (held.st_dev, held.st_ino):
-                raise AuthorityFilesystemError(
-                    "authority directory selector changed during publication"
-                )
-        finally:
-            if selected_fd is not None:
-                os.close(selected_fd)
+            self._directory.assert_still_selected()
+        except OSError as exc:
+            raise AuthorityFilesystemError(
+                "authority directory selector changed during publication"
+            ) from exc
 
     def _require_open(self) -> None:
         if self._closed:
@@ -141,7 +94,7 @@ class AnchoredDirectory:
         self._require_open()
         name = _component(name)
         try:
-            return os.stat(name, dir_fd=self.fd, follow_symlinks=False)
+            return self._directory.stat(name)
         except OSError as exc:
             raise AuthorityFilesystemError(
                 f"cannot inspect authority object: {name}"
@@ -151,7 +104,7 @@ class AnchoredDirectory:
         self._require_open()
         name = _component(name)
         try:
-            os.stat(name, dir_fd=self.fd, follow_symlinks=False)
+            self._directory.stat(name)
         except FileNotFoundError:
             return True
         except OSError as exc:
@@ -175,7 +128,7 @@ class AnchoredDirectory:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         descriptor: Optional[int] = None
         try:
-            descriptor = os.open(name, flags, dir_fd=self.fd)
+            descriptor = self._directory.open(name, flags)
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
                 raise AuthorityFilesystemError(
@@ -232,7 +185,7 @@ class AnchoredDirectory:
         for _ in range(32):
             name = f".{stem}.{secrets.token_hex(8)}.tmp"
             try:
-                return name, os.open(name, flags, 0o600, dir_fd=self.fd)
+                return name, self._directory.open(name, flags, 0o600)
             except FileExistsError:
                 continue
             except OSError as exc:
@@ -244,7 +197,7 @@ class AnchoredDirectory:
     def unlink(self, name: str, *, missing_ok: bool = True) -> None:
         self._require_open()
         try:
-            os.unlink(_component(name), dir_fd=self.fd)
+            self._directory.unlink(_component(name))
         except FileNotFoundError:
             if not missing_ok:
                 raise
@@ -266,13 +219,8 @@ class AnchoredDirectory:
         if require_absent:
             self.require_absent(target_name)
         try:
-            os.replace(
-                temporary_name,
-                target_name,
-                src_dir_fd=self.fd,
-                dst_dir_fd=self.fd,
-            )
-            os.fsync(self.fd)
+            self._directory.replace(temporary_name, target_name)
+            self._directory.fsync()
         except OSError as exc:
             raise AuthorityFilesystemError(
                 f"cannot publish authority object: {target_name}"
@@ -311,20 +259,14 @@ class AnchoredDirectory:
                 handle.flush()
                 os.fsync(handle.fileno())
             try:
-                os.link(
-                    temporary_name,
-                    name,
-                    src_dir_fd=self.fd,
-                    dst_dir_fd=self.fd,
-                    follow_symlinks=False,
-                )
+                self._directory.publish(temporary_name, name)
             except FileExistsError:
                 existing = self.read_bytes(name, max_bytes=max(len(payload), 1))
                 if existing != payload:
                     raise AuthorityFilesystemError(
                         "existing immutable authority object conflicts with payload"
                     )
-            os.fsync(self.fd)
+            self._directory.fsync()
         except AuthorityFilesystemError:
             raise
         except OSError as exc:

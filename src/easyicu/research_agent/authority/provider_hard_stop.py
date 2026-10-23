@@ -42,15 +42,8 @@ import time
 from typing import Any, Dict, Iterator, Mapping, Optional, Sequence
 import uuid
 
-try:  # pragma: no branch - selected once per platform
-    import fcntl
-except ImportError:  # pragma: no cover - exercised on Windows
-    fcntl = None  # type: ignore[assignment]
+from easyicu.runtime.platform_compat import descriptor_identity, fsync_directory, lock_exclusive, open_nofollow, unlock_file
 
-try:  # pragma: no branch - selected once per platform
-    import msvcrt
-except ImportError:  # pragma: no cover - unavailable on POSIX
-    msvcrt = None  # type: ignore[assignment]
 
 
 PROVIDER_HARD_STOP_SCHEMA = "easyicu.provider_hard_stop_ledger/1"
@@ -219,14 +212,15 @@ def _exclusive_ledger_file_lock(path: Path) -> Iterator[None]:
     descriptor: Optional[int] = None
     acquired = False
     try:
-        descriptor = os.open(lock_path, flags, 0o600)
+        descriptor = open_nofollow(lock_path, flags, 0o600)
         opened = os.fstat(descriptor)
+        identity = descriptor_identity(descriptor)
         current = lock_path.lstat()
         if (
             not stat.S_ISREG(opened.st_mode)
             or stat.S_ISLNK(current.st_mode)
             or not stat.S_ISREG(current.st_mode)
-            or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+            or identity != (current.st_dev, current.st_ino)
         ):
             raise ProviderHardStopLedgerError(
                 "Provider hard-stop ledger lock must be a stable regular file"
@@ -235,28 +229,13 @@ def _exclusive_ledger_file_lock(path: Path) -> Iterator[None]:
             os.fchmod(descriptor, 0o600)
         except (AttributeError, OSError):  # Windows has no reliable mode bits.
             pass
-        if fcntl is not None:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-        elif msvcrt is not None:  # pragma: no cover - exercised on Windows
-            # Windows permits locking a byte beyond EOF. Lock first, then seed
-            # an empty sidecar so two first-openers cannot race by writing the
-            # byte each other is about to lock.
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
-        else:  # pragma: no cover - supported platforms provide one backend
-            raise ProviderHardStopLedgerError(
-                "No cross-process Provider hard-stop ledger lock is available"
-            )
+        lock_exclusive(descriptor)
         acquired = True
-        if msvcrt is not None and fcntl is None and os.fstat(descriptor).st_size == 0:
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            os.write(descriptor, b"\0")
-            os.fsync(descriptor)
         current = lock_path.lstat()
         if (
             stat.S_ISLNK(current.st_mode)
             or not stat.S_ISREG(current.st_mode)
-            or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+            or identity != (current.st_dev, current.st_ino)
         ):
             raise ProviderHardStopLedgerError(
                 "Provider hard-stop ledger lock changed during acquisition"
@@ -272,11 +251,7 @@ def _exclusive_ledger_file_lock(path: Path) -> Iterator[None]:
         if descriptor is not None:
             if acquired:
                 try:
-                    if fcntl is not None:
-                        fcntl.flock(descriptor, fcntl.LOCK_UN)
-                    elif msvcrt is not None:  # pragma: no cover - Windows
-                        os.lseek(descriptor, 0, os.SEEK_SET)
-                        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                    unlock_file(descriptor)
                 except OSError:
                     pass
             os.close(descriptor)
@@ -307,7 +282,7 @@ def _atomic_write(path: Path, payload: Mapping[str, object]) -> None:
             {signal.SIGINT, signal.SIGTERM},
         )
     try:
-        descriptor = os.open(
+        descriptor = open_nofollow(
             temporary,
             os.O_WRONLY
             | os.O_CREAT
@@ -327,11 +302,7 @@ def _atomic_write(path: Path, payload: Mapping[str, object]) -> None:
         descriptor = None
         os.replace(temporary, path)
         os.chmod(path, 0o600)
-        directory_fd = os.open(parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(parent)
     except Exception as exc:
         raise ProviderHardStopLedgerError(
             f"Could not persist Provider hard-stop ledger: {path}"

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 
@@ -71,14 +71,14 @@ REVISION_FIGURE_RENDERERS = RevisionFigureRenderers(
 
 def _source_fingerprint(root: Path) -> str:
     digest = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
+    for path in sorted(root.rglob("*"), key=lambda item: PurePosixPath(item.as_posix()).parts):
         if path.is_symlink():
             raise WriterOnlyMigrationError(
                 code="WRITER_ONLY_SOURCE_SYMLINK",
                 detail="Source contains a symbolic link.",
             )
         if path.is_file():
-            relative = str(path.relative_to(root)).encode()
+            relative = path.relative_to(root).as_posix().encode()
             digest.update(len(relative).to_bytes(8, "big"))
             digest.update(relative)
             digest.update(hashlib.sha256(path.read_bytes()).digest())

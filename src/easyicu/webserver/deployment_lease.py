@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import fcntl
 import os
 from pathlib import Path
 from typing import IO, Optional
 
+from easyicu.runtime.platform_compat import is_windows, lock_exclusive, unlock_file
 from easyicu.webserver import state_paths
 
 
@@ -29,17 +29,21 @@ def acquire_single_process_lease(path: Optional[Path] = None) -> None:
     selected.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     handle = selected.open("a+", encoding="utf-8")
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_exclusive(handle.fileno(), blocking=False)
     except BlockingIOError as exc:
         handle.close()
         raise UnsupportedWebDeployment(
             "EasyICU Web currently requires exactly one server worker"
         ) from exc
+    except BaseException:
+        handle.close()
+        raise
     handle.seek(0)
     handle.truncate()
     handle.write(str(os.getpid()))
     handle.flush()
-    os.fchmod(handle.fileno(), 0o600)
+    if not is_windows():
+        os.fchmod(handle.fileno(), 0o600)
     _HANDLE = handle
     _DEPTH = 1
 
@@ -51,7 +55,7 @@ def release_single_process_lease() -> None:
     _DEPTH -= 1
     if _DEPTH > 0:
         return
-    fcntl.flock(_HANDLE.fileno(), fcntl.LOCK_UN)
+    unlock_file(_HANDLE.fileno())
     _HANDLE.close()
     _HANDLE = None
     _DEPTH = 0

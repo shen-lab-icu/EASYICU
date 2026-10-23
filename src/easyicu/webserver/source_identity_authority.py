@@ -25,6 +25,7 @@ import json
 import os
 import re
 import stat
+from easyicu.runtime.platform_compat import open_nofollow
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -295,8 +296,8 @@ def _materialize_private_mapping(payload: bytes, *, target: Path) -> str:
             os.chmod(target, 0o600)
             return digest
     temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    descriptor = os.open(
-        temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
+    descriptor = open_nofollow(
+        temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
     )
     try:
         with os.fdopen(descriptor, "wb", closefd=False) as handle:

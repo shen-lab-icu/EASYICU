@@ -7,6 +7,8 @@ discover files: callers must bind the returned reference from their manifest.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import fsync_directory
+
 import hashlib
 import json
 import math
@@ -667,11 +669,7 @@ def write_content_addressed_sidecar(
                 raise MetadataSidecarError(
                     "existing content-addressed sidecar has different bytes"
                 )
-        directory_fd = os.open(root, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(root)
     except OSError as exc:
         raise MetadataSidecarError("cannot publish column metadata sidecar") from exc
     finally:

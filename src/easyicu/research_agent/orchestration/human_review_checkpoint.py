@@ -9,6 +9,8 @@ coordinates needed to prove that reconstruction is the state a human saw.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import chmod_private_fd, fsync_directory
+
 import json
 import os
 import tempfile
@@ -500,18 +502,14 @@ def write_checkpoint(path: Path, checkpoint: HumanReviewCheckpoint) -> Path:
     )
     temporary = Path(temporary_name)
     try:
-        os.fchmod(descriptor, 0o600)
+        chmod_private_fd(descriptor)
         with os.fdopen(descriptor, "wb", closefd=True) as handle:
             handle.write(raw)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, target)
         os.chmod(target, 0o600)
-        directory_fd = os.open(target.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(target.parent)
     finally:
         temporary.unlink(missing_ok=True)
     return target

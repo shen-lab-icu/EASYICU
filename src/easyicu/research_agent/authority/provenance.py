@@ -233,7 +233,7 @@ def hash_sources(
                 continue
             size = int(st.st_size)
             mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
-            rel = str(fp.relative_to(abs_path.parent)) if abs_path.is_dir() else fp.name
+            rel = fp.relative_to(abs_path.parent).as_posix() if abs_path.is_dir() else fp.name
             if size > max_bytes_per_file:
                 bundle.records.append(
                     SourceFileRecord(

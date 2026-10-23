@@ -8,6 +8,8 @@ the mutable concept dictionary.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import open_nofollow
+
 from ..canonical_json import sha256_file as _sha256_file
 
 from dataclasses import dataclass
@@ -181,7 +183,7 @@ def _read_bounded_regular_file(
     try:
         if not getattr(os, "O_NOFOLLOW", 0) and path.is_symlink():
             raise MaterializedMetadataError(f"{label} must not be a symlink")
-        fd = os.open(path, flags)
+        fd = open_nofollow(path, flags)
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             raise MaterializedMetadataError(f"{label} must be a regular file")

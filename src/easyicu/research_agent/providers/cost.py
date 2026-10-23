@@ -27,6 +27,8 @@ output tokens.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import fsync_directory
+
 import hashlib
 import json
 import os
@@ -221,11 +223,7 @@ class CostMeter:
             descriptor = None
             os.replace(temporary, path)
             os.chmod(path, 0o600)
-            directory_fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            fsync_directory(path.parent)
         finally:
             if descriptor is not None:
                 os.close(descriptor)

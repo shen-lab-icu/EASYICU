@@ -7,6 +7,8 @@ invoke Planner or infer missing checkpoint state.
 
 from __future__ import annotations
 
+from easyicu.runtime.platform_compat import chmod_private_fd, fsync_directory
+
 import json
 import os
 import re
@@ -68,18 +70,14 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     )
     temporary = Path(temporary_name)
     try:
-        os.fchmod(descriptor, 0o600)
+        chmod_private_fd(descriptor)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
