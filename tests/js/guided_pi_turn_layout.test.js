@@ -295,6 +295,24 @@ const runFilesApi = {
   assert.ok(!visible(stoppedPanel).includes(RUN));
   const note = 'EasyICU 在服务器上运行，可以切换对话或关闭页面，回来后继续显示进度。';
   assert.doesNotMatch(stoppedPanel, /gpi-compose-server-note/);
+  // The saved gap is the cause of this activity's compile stop. Rendering
+  // both owners must not put the generic compile sentence above the gap.
+  for (const flattened of [false, true]) {
+    for (const steps of [[], [{ id: 'outline', kind: 'pipeline', step: 'planner', status: 'error' }]]) {
+      const gapRun = { ...savedRun, gate_reason: 'research_pipeline_progressive_compile_failed',
+        ...(flattened
+          ? { gate_detail_code: 'progressive_capability_gap', gate_detail_cause_code: 'design_element_unsupported' }
+          : { gate_detail: { reason_code: 'progressive_capability_gap', cause_code: 'design_element_unsupported' } }) };
+      const gapActivity = { id: 'gap', role: 'activity', status: 'error', startedAt: 1, endedAt: 2000,
+        failureCode: 'research_pipeline_progressive_compile_failed', steps, savedRuns: [gapRun] };
+      const panel = conversation([gapActivity], { activity: activityOwner() });
+      const text = visible(panel);
+      assert.equal(count(text, '规划发现这个问题需要'), 1);
+      assert.doesNotMatch(text, /候选计划未通过编译校验|变量水平或模型项|原因：|能力缺口：/);
+      assert.match(panel, /gpi-activity error/, 'the failure trace is retained');
+      assert.equal(count(panel, 'class="gpi-run-stop"'), 1);
+    }
+  }
   const runningPanel = conversation([{ id: 'q', role: 'user', text: '问题', complete: true },
     { id: 'easyicu-job-j1', role: 'activity', childJobId: 'j1', status: 'running', startedAt: 1000, steps: [] }]);
   assert.ok(runningPanel.includes(`<p class="gpi-compose-server-note">${note}</p><div class="gpi-compose">`));

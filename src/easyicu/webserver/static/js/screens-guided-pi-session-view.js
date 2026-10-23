@@ -24,7 +24,11 @@
         return records ? records.render(row, { tr, esc }) : '';
       }
       const stopHtml = RUN_STOP ? RUN_STOP.render(row) : '';
-      if (row.role === 'activity' && stopHtml) return ACTIVITY.render(row, options && options.trace) + stopHtml + RUN_FILES.render(row);
+      if (row.role === 'activity' && stopHtml) {
+        // The run record owns the stop's typed cause. The activity's job code
+        // alone would add a second, sometimes contradictory explanation.
+        return ACTIVITY.render(row, { ...(options && options.trace), failureExplained: true }) + stopHtml + RUN_FILES.render(row);
+      }
       if (row.role === 'activity') return ACTIVITY.render(row, options && options.trace) + RUN_FILES.render(row);
       if (row.role === 'host_notice') return HOST_JOBS && typeof HOST_JOBS.renderNotice === 'function' ? HOST_JOBS.renderNotice(row) : '';
       if (row.role === 'saved_run') {

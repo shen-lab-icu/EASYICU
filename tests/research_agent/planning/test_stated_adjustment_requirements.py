@@ -223,7 +223,7 @@ def test_a_score_value_aggregation_covers_adjustment_but_its_companion_does_not(
         assert review.facts["stated_adjustment_coverage"]["complete"] is covered
 
 
-def test_a_declared_required_adjustment_gap_stops_the_planner_without_a_checkpoint():
+def test_a_declared_required_adjustment_gap_records_the_stopped_outline():
     from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent
     from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
     from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
@@ -242,5 +242,7 @@ def test_a_declared_required_adjustment_gap_stops_the_planner_without_a_checkpoi
     assert caught.value.reason_code == "progressive_capability_gap"
     assert caught.value.details["findings"][0]["concept"] == "age"
     assert caught.value.details["findings"][0]["verification"] == "verified"
-    assert not checkpoints
+    assert len(checkpoints) == 1
+    assert checkpoints[0].prompt_metrics["capability_gap"]["concept"] == "age"
+    assert len(llm.calls) == 1
 

@@ -174,7 +174,7 @@ def test_a_declared_family_gap_is_verified_against_its_owners(family, expected):
 
 
 @pytest.mark.parametrize("family,status", [("association_study", "unavailable")])
-def test_a_declared_subgroup_gap_stops_planning_without_a_checkpoint(family, status):
+def test_a_declared_subgroup_gap_records_the_stopped_outline(family, status):
     from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent
     from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
     from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
@@ -194,7 +194,9 @@ def test_a_declared_subgroup_gap_stops_planning_without_a_checkpoint(family, sta
     assert caught.value.reason_code == "progressive_capability_gap"
     finding, = caught.value.details["findings"]
     assert finding["concept"] == "sex_code" and finding["verification"] == "verified"
-    assert not checkpoints
+    assert len(checkpoints) == 1
+    assert checkpoints[0].prompt_metrics["capability_gap"]["verification"] == "verified"
+    assert len(llm.calls) == 1
 
 
 def test_a_revision_with_an_accepted_subgroup_table_reaches_the_outline_planner():

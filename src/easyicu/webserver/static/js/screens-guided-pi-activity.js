@@ -1139,7 +1139,8 @@
       const expanded = longTrace && traceExpanded(traceKey);
       const bodyClass = `${longTrace ? ' is-clipped' : ''}${expanded ? ' is-expanded' : ''}`;
       const keyAttr = traceKey ? ` data-gpi-trace-key="${esc(traceKey)}"` : '';
-      const causes = failureCauses(visibleSteps, row);
+      const failureExplained = Boolean(options && options.failureExplained);
+      const causes = failureExplained ? new Map() : failureCauses(visibleSteps, row);
       if (running) {
         const title = row.runningTitle || (latest
           ? stepLabel(latest) : tr('EasyICU Copilot is preparing the next action', 'EasyICU 研究助手正在准备下一步'));
@@ -1167,7 +1168,7 @@
       const title = failed ? tr('Execution needs attention', '执行过程需要处理') : kicker;
       // A job that stopped before any step has no row to carry its cause; it
       // is said under the summary, or the stop reads as nothing at all.
-      const unplacedCause = failed && !causes.size && row && row.failureCode
+      const unplacedCause = failed && !failureExplained && !causes.size && row && row.failureCode
         && typeof host.runFailureText === 'function'
         ? String(host.runFailureText(row.failureCode) || '').trim() : '';
       const traceMeta = `${tr(`${rowCount} steps`, `${rowCount} 个步骤`)}${row.durationKnown === false ? '' : ` · ${tr(`total ${durationText(row.startedAt, row.endedAt)}`, `总耗时 ${durationText(row.startedAt, row.endedAt)}`)}`}`;

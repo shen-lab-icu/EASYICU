@@ -174,7 +174,10 @@ from .progressive_payload import (
     progressive_step_materialization_request,
 )
 from .plan_payload import bind_literature_citation_authority
-from ..planning.capability_gap import CapabilityGapCheck, check_capability_gap
+from ..planning.capability_gap import (
+    CapabilityGapCheck, CapabilityGapConfirmation, capability_gap_confirmation_facts,
+    capability_gap_stop, check_capability_gap,
+)
 from .family_spec_planner import (
     FAMILY_SPEC_STRATEGY,
     family_result_stop,
@@ -4532,6 +4535,7 @@ class ProgressivePlannerAgent:
             outline = resume_checkpoint.outline
         else:
             self._attempt.prompt_metrics = current_prompt_metrics
+            gap_confirmation = CapabilityGapConfirmation(progress_callback)
 
             def parse_outline(raw: str) -> ProgressivePlanOutline:
                 parsed = bind_outline(_parse_model(raw, ProgressivePlanOutline))
@@ -4555,8 +4559,9 @@ class ProgressivePlannerAgent:
                             path="capability_gap",
                             cause_code=parsed.capability_gap,
                         )
-                    # A gap the host verified, or cannot check, stops planning
-                    # below; it drafts no steps to validate.
+                    gap_confirmation.check(parsed, gap)
+                    # A verified gap, or an unverifiable gap after its one
+                    # confirmation (if budget remained), stops below.
                     return parsed
                 self._validate_outline_authority(
                     parsed,
@@ -4595,7 +4600,7 @@ class ProgressivePlannerAgent:
                 max_tokens=_MAX_OUTLINE_OUTPUT_TOKENS,
                 temperature=0.2,
                 include_failed_response_on_retry=False,
-                progress_callback=progress_callback,
+                progress_callback=gap_confirmation.on_progress,
                 structured_output=outline_schema,
                 format_reminder=retry_shape_reminder(
                     messages,
@@ -4623,8 +4628,10 @@ class ProgressivePlannerAgent:
                 )
                 + "\nReturn one concise ProgressivePlanOutline only. Do not "
                 "include executable step-detail fields. Never use "
-                "article_requirement_id as module_id.",
+                "article_requirement_id as module_id.\n"
+                + capability_gap_confirmation_facts(context, offered_families=analysis_types),
             )
+            self._attempt.prompt_metrics["capability_gap_confirmation_count"] = int(gap_confirmation.requested)
             self.capture_efficiency_metrics()
         # The outline committed the family; if no owner can write its result
         # contract, stop without a retry that would re-read the question.
@@ -4644,23 +4651,18 @@ class ProgressivePlannerAgent:
         # stop instead of compiling steps that answer another question.
         gap = outline.declared_capability_gap()
         if gap is not None:
-            check = capability_gap_check(outline)
-            raise ProgressivePlanCompileError(
-                "progressive_capability_gap",
-                "the question needs something no offered family can express "
-                f"({gap.requirement}, {check.verification}): {outline.rationale}",
-                path="capability_gap",
-                cause_code=gap.requirement,
-                concepts=(gap.concept,) if gap.concept else (),
-                findings=[
-                    {
-                        "requirement": gap.requirement,
-                        "concept": gap.concept,
-                        "verification": check.verification,
-                        "fact": check.fact,
-                    }
-                ],
+            stop = capability_gap_stop(outline, capability_gap_check(outline))
+            self._attempt.outline = outline
+            self._attempt.prompt_metrics.update(
+                outline_sha256=canonical_sha256(outline.model_dump(mode="json")),
+                capability_gap=stop.easyicu_planning_capability_gap.model_dump(mode="json"),
             )
+            if resume_checkpoint is None:
+                checkpoint_emitter.emit(
+                    stage="outline", outline=outline, foundation=None, materializations=(),
+                    prompt_metrics=self._attempt.prompt_metrics,
+                )
+            raise stop
         self._validate_outline_authority(
             outline,
             analysis_types=analysis_types,

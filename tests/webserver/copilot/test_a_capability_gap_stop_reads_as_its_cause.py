@@ -104,6 +104,8 @@ def test_each_requirement_reads_as_its_own_sentence(cause, en, zh) -> None:
     assert en in english
     assert chinese.startswith("规划发现这个问题需要")
     assert zh in chinese
+    assert chinese.count("。") == 1
+    assert "变量水平或模型项" not in chinese
 
 
 def test_a_cause_without_copy_reads_as_the_stop_itself() -> None:
@@ -177,6 +179,42 @@ def test_a_cause_that_is_not_a_code_never_leaves_the_stop() -> None:
 
     assert "cause_code" not in stop.easyicu_safe_diagnostic
     assert "cause_code" not in agent_pipeline_runs._safe_pipeline_typed_failure(stop)
+
+
+def test_an_untyped_gap_receipt_cannot_copy_free_text_into_diagnostics(tmp_path) -> None:
+    stop = _stop("design_element_unsupported")
+    stop.easyicu_planning_capability_gap = {"rationale": "UNTRUSTED_RESPONSE_SENTINEL"}
+    agent_pipeline_runs._record_pipeline_failure(
+        wrapper_dir=tmp_path, study={"id": "synthetic_study"}, provider={}, exc=stop,
+        code=agent_pipeline_runs._pipeline_failure_code(stop), execution_retry_id=None,
+    )
+    text = (tmp_path / "diagnostics/research_pipeline_failure.json").read_text()
+    assert "capability_gap" not in json.loads(text)
+    assert "UNTRUSTED_RESPONSE_SENTINEL" not in text
+
+
+def test_a_later_transport_failure_does_not_inherit_an_earlier_gap_receipt(tmp_path) -> None:
+    import httpx
+
+    from easyicu.research_agent.planning.capability_gap import CapabilityGapDiagnostic
+
+    stop = _stop("design_element_unsupported")
+    stop.easyicu_planning_capability_gap = CapabilityGapDiagnostic(
+        requirement="design_element_unsupported", concept=None, verification="unverifiable",
+        fact="The host cannot verify this design.", rationale="EARLIER_PLANNING_SENTINEL",
+    )
+    request = httpx.Request("POST", "https://synthetic.invalid")
+    error = httpx.HTTPStatusError("transport unavailable", request=request, response=httpx.Response(503, request=request))
+    error.__cause__ = stop
+    agent_pipeline_runs._record_pipeline_failure(
+        wrapper_dir=tmp_path, study={"id": "synthetic_study"}, provider={}, exc=error,
+        code=agent_pipeline_runs._pipeline_failure_code(error), execution_retry_id=None,
+    )
+    text = (tmp_path / "diagnostics/research_pipeline_failure.json").read_text()
+    diagnostic = json.loads(text)
+    assert diagnostic["typed_failure"]["reason_code"] == "provider_http_error"
+    assert "capability_gap" not in diagnostic
+    assert "EARLIER_PLANNING_SENTINEL" not in text
 
 
 def test_the_run_record_says_planning_found_the_gap() -> None:

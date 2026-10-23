@@ -61,6 +61,64 @@ class _RecordingEvidence:
         return self.records[evidence_id]
 
 
+@pytest.mark.parametrize(("requirement", "concept", "verification", "calls"), [
+    ("levels_from_thresholds_unavailable", "age_years", "verified", 1),
+    ("estimand_unsupported", None, "unverifiable", 1),
+    ("design_element_unsupported", None, "unverifiable", 2),
+])
+def test_a_stopped_gap_persists_planning_evidence_and_private_diagnostics(
+    tmp_path, requirement, concept, verification, calls,
+):
+    from easyicu.webserver import agent_pipeline_runs
+
+    outline = {**_outline_payload(), "steps": [], "capability_gap": requirement,
+               "capability_gap_concept": concept,
+               "rationale": "The synthetic question requires a design beyond the offered families."}
+    responses = ([{**outline, "rationale": "Initial unnamed gap to confirm."}] if calls == 2 else []) + [outline]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    evidence = _RecordingEvidence()
+    cohort_path = tmp_path / "cohort.parquet"
+    cohort_path.write_bytes(b"synthetic fixture, no patient rows")
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        run_progressive_planner(
+            planner=ProgressivePlannerAgent(llm),
+            context=_context().model_copy(update={"notes": "PRIVATE_CONTEXT_SENTINEL"}),
+            run_dir=tmp_path, evidence=evidence, prompt_pack_version="test-v1",
+            resume_checkpoint_path=None, resume_checkpoint_sha256=None, cohort_path=cohort_path,
+            llm_signature="mock:test", planner_kwargs={}, know_how_binding=PlannerKnowHowBinding(),
+            planning_contract_context="", finding_sink=lambda _finding: None,
+        )
+
+    checkpoint_path = tmp_path / "progressive_planner_checkpoint_000.json"
+    checkpoint = ProgressivePlannerCheckpoint.model_validate_json(checkpoint_path.read_bytes())
+    recorded = checkpoint.prompt_metrics["capability_gap"]
+    assert recorded == {
+        "requirement": requirement, "concept": concept, "verification": verification,
+        "fact": caught.value.details["findings"][0]["fact"], "rationale": outline["rationale"],
+    }
+    assert checkpoint.outline.rationale == outline["rationale"]
+    assert checkpoint.outline.steps == []
+    assert checkpoint.foundation is None and not checkpoint.materializations
+    assert len(llm.calls) == calls
+    assert evidence.records["progressive_planner_checkpoint_000"]["inputs"] == ["research_context"]
+    assert evidence.records["progressive_planner_checkpoint_000"]["sha256"] == hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
+    agent_pipeline_runs._record_pipeline_failure(
+        wrapper_dir=tmp_path, study={"id": "synthetic_study"}, provider={}, exc=caught.value,
+        code=agent_pipeline_runs._pipeline_failure_code(caught.value), execution_retry_id=None,
+    )
+    diagnostic_text = (tmp_path / "diagnostics/research_pipeline_failure.json").read_text()
+    diagnostic = json.loads(diagnostic_text)
+    assert diagnostic["capability_gap"] == recorded
+    assert diagnostic["patient_rows_recorded"] is False
+    assert "PRIVATE_CONTEXT_SENTINEL" not in checkpoint_path.read_text() + diagnostic_text
+    gate = json.loads((tmp_path / "quality_gate.json").read_text())["gate"]["detail"]
+    assert gate["reason_code"] == "progressive_capability_gap"
+    assert gate["cause_code"] == requirement
+    assert not {"rationale", "fact", "capability_gap"}.intersection(gate)
+    assert outline["rationale"] not in json.dumps(agent_pipeline_runs._safe_pipeline_typed_failure(caught.value))
+
+
 def test_progressive_compile_failure_persists_for_zero_provider_replay(
     tmp_path: Path,
 ) -> None:
