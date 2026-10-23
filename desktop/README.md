@@ -99,12 +99,23 @@ venv and receipt are in `desktop/.build/windows/`; override with
 `EASYICU_DESKTOP_BUILD_DIR`. The NSIS installer is under
 `desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`, or under
 `CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release/bundle/nsis/` when set.
-The shared build owner stages Pi at the short `p/` resource path and prunes only
+The shared build owner stages `pi-coding-agent` as the root package at the short
+`p/` resource path, so its private dependencies live directly in `p/node_modules/`.
+The gateway and skill remain under `p/src/`, resolved through `packaged_app_dir`.
+Node's package self-reference loads the agent from its root exports. Gateway
+metadata that collides with the agent's metadata lives in `p/gateway/`; the
+runtime owner reads the original gateway metadata and unchanged lock bytes for
+integrity checks and explicit private-runtime installs.
+The owner prunes only
 staged `node_modules`: TypeScript declarations, `dist-types/`, source maps, and
 docs/tests/examples directories without runtime `main`/`exports`/`bin` entries.
 It also drops `*.ts`/`*.mts`/`*.cts` sources from packages whose runtime entries
 do not use TypeScript. Runtime-referenced directories and source siblings remain.
-The staged Pi tree is then hoisted: duplicate leaves must match in version and
+Root staging preserves the agent's private graph, retains required outer
+fallback packages and checks every selected package's declared dependency/peer
+versions before moving files. It discards unused outer copies. A version change
+fails with `desktop_pi_root_stage_failed`. The staged tree is then hoisted:
+duplicate leaves must match in version and
 payload, and moves into empty slots preserve dependency and peer versions.
 Conflicts, private dependencies and packages with bin shims stay in place.
 The wheel and source checkout's dependency trees stay intact. Bundled Node
@@ -120,9 +131,18 @@ root using Tauri's resource destinations. Windows fails with
 100 characters of MAX_PATH for the installation root. macOS reports the same
 overflow as a warning. `longest-paths.json` records the ten longest paths before
 the check can fail, and `build-inputs.json` records pruned file counts/bytes,
-hoisted/deduplicated package counts and the path report. Both drivers expose
+root-staging and hoisted/deduplicated package counts and the path report. Both drivers expose
 the staging and check plan with `--dry-run`.
 Keep staging/cache paths short as build tools can also impose path limits.
+
+The pinned gateway lock explains why the prior hoister retained the deepest
+SDKs: nested/top-level versions differ for `@smithy/core` (3.24.3/3.31.1),
+`@aws-sdk/core` (3.974.11/3.977.6), and `@aws-sdk/nested-clients`
+(3.997.9/3.997.41); those entries declare no peers. For example, nested Smithy
+core depends on `@smithy/types ^4.14.2` and `@aws-crypto/crc32 5.2.0`, while
+the outer copy depends on `@smithy/types ^4.16.1`. Promoting the shrinkwrapped
+agent removes the stable `node_modules/@earendil-works/pi-coding-agent/` prefix
+(45 characters) without substituting newer outer SDK versions or raising the budget.
 
 Both platform drivers share the wheel installation, locked Pi installation,
 Node bundling, freezing, source preservation, and build receipt helpers.

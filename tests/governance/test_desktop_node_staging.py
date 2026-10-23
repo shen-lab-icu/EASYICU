@@ -199,7 +199,9 @@ def test_import_smoke_catches_a_peer_stranded_by_hoisting(tmp_path, monkeypatch)
     })
 
     def broken_hoist(root):
-        shutil.move(str(root / adapter.relative_to(app)), root / "node_modules/provider-sdk")
+        inaccessible = root / "gateway/node_modules/peer"
+        inaccessible.parent.mkdir(parents=True)
+        shutil.move(str(root / "node_modules/peer"), inaccessible)
         return {"moved": 1, "deduplicated": 0}
 
     monkeypatch.setattr(common, "hoist_node_modules", broken_hoist)
@@ -243,7 +245,8 @@ def test_staging_deduplicates_generated_sdk_paths_below_the_unchanged_budget(tmp
         "tauri.windows.conf.json": "{}",
     })
     result = common.prepare_bundle(desktop_root=desktop, build_root=tmp_path / "build", run=run_command, windows=True)
-    assert result["node_modules_hoisted"] == {"moved": 0, "deduplicated": 1}
+    assert result["node_modules_root_staged"]["promoted"] == 1
+    assert result["node_modules_hoisted"] == {"moved": 0, "deduplicated": 0}
     assert result["node_modules_pruned"]["files"] == 20
     assert result["bundle_paths"]["max_length"] == 160
     assert (desktop / "src-tauri/p/node_modules/@synthetic/provider-sdk" / relative).is_file()

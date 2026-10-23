@@ -196,6 +196,112 @@ def hoist_node_modules(staged_root: Path) -> dict[str, int]:
     return counts
 
 
+class StagedPiRootError(RuntimeError):
+    """Promoting Pi would change a declared runtime dependency version."""
+
+    code = "desktop_pi_root_stage_failed"
+
+
+def stage_pi_root(original: Path, staged_root: Path) -> dict[str, int]:
+    """Make the agent the root package; retain its private dependency graph.
+
+    Gateway imports use Node's package self-reference for the agent. Its other
+    direct imports must retain their pinned versions. Fill empty dependency
+    slots from the outer tree only after checking every selected package's
+    dependencies and peers in the proposed layout. All checks precede moves.
+    """
+    packages = {
+        path.parent: json.loads(path.read_text(encoding="utf-8"))
+        for path in original.rglob("package.json") if _node_package_root(path.parent)
+    }
+    agent = original / "node_modules/@earendil-works/pi-coding-agent"
+    if agent not in packages or staged_root.exists():
+        raise StagedPiRootError(f"{StagedPiRootError.code}: missing agent or occupied staging root")
+    outer = {}
+    placements = {source: staged_root / source.relative_to(agent)
+                  for source in packages if source.is_relative_to(agent)}
+
+    def located(owner, name, tree, boundary):
+        own = tree.get(owner, {})
+        if own.get("name") == name and own.get("exports"):
+            return owner
+        for parent in (owner, *owner.parents):
+            if not parent.is_relative_to(boundary):
+                break
+            candidate = parent / "node_modules" / name
+            if candidate in tree:
+                return candidate
+        return None
+
+    def identity(path, name, tree):
+        manifest = tree.get(path)
+        return (manifest.get("name", name), manifest.get("version")) if manifest is not None else None
+
+    gateway = json.loads((original / "package.json").read_text(encoding="utf-8"))
+    while True:
+        proposed = {target: packages[source] for source, target in placements.items()}
+        checks = [(source, target, packages[source]) for source, target in placements.items()]
+        checks.append((original, staged_root, gateway))
+        added = False
+        for source, target, manifest in checks:
+            names = set().union(*(manifest.get(field, {}) for field in (
+                "dependencies", "optionalDependencies", "peerDependencies",
+            )))
+            for name in sorted(names):
+                before_path = located(source, name, packages, original)
+                after_path = located(target, name, proposed, staged_root)
+                before = identity(before_path, name, packages)
+                after = identity(after_path, name, proposed)
+                if before == after:
+                    continue
+                if before_path is not None and after_path is None and not before_path.is_relative_to(agent):
+                    parts = before_path.relative_to(original / "node_modules").parts
+                    top = Path(*parts[:2 if parts[0].startswith("@") else 1])
+                    outer[top] = original / "node_modules" / top
+                    for path in packages:
+                        if path.is_relative_to(outer[top]):
+                            placements[path] = staged_root / path.relative_to(original)
+                    added = True
+                    break
+                raise StagedPiRootError(
+                    f"{StagedPiRootError.code}: {source.relative_to(original)} imports {name}: "
+                    f"{before} would resolve to {after}"
+                )
+            if added:
+                break
+        if not added:
+            break
+    # Preserve third-party metadata and gateway source bytes independently.
+    # Only top-level metadata collisions go under gateway/; no package scope
+    # is introduced around src/main.mjs, which uses the agent self-reference.
+    gateway_files = []
+    for root, dirs, files in os.walk(original):
+        if Path(root) == original:
+            dirs[:] = [name for name in dirs if name != "node_modules"]
+        for name in files:
+            source = Path(root) / name
+            relative = source.relative_to(original)
+            existing = agent / relative
+            if source.parent == original and existing.exists():
+                relative = Path("gateway") / relative
+                existing = agent / relative
+            if existing.is_file() and existing.read_bytes() != source.read_bytes():
+                raise StagedPiRootError(f"{StagedPiRootError.code}: gateway file collision: {relative}")
+            gateway_files.append((source, relative))
+    staged_root.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(agent), staged_root)
+    for relative, source in sorted(outer.items()):
+        target = staged_root / "node_modules" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), target)
+    for source, relative in gateway_files:
+        target = staged_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    shutil.rmtree(original)
+    return {"promoted": 1, "outer_packages_retained": len(outer)}
+
+
 class StagedPiImportError(RuntimeError):
     """The bundled Node cannot import a staged Pi entry or lazy adapter."""
 
@@ -305,7 +411,9 @@ def check_bundle_paths(desktop_root: Path, report_file: Path, *, windows=False) 
 
 def bundle_plan(*, windows=False) -> list[str]:
     return [
-        "Stage Pi at short install resource p/; prune staged node_modules only: "
+        "Stage pi-coding-agent as the root package of short install resource p/; "
+        "preserve declared dependency/peer versions and the gateway/skill resource owner; "
+        "prune staged node_modules only: "
         "*.d.ts/*.d.mts/*.d.cts, dist-types/, *.map and unreferenced docs/tests/examples; "
         "prune *.ts/*.mts/*.cts when package runtime entries do not use TypeScript",
         "Hoist staged Pi dependencies; deduplicate only identical copies with matching versions; retain conflicts",
@@ -322,17 +430,16 @@ def prepare_bundle(*, desktop_root, build_root, run, windows=False) -> dict:
     short = desktop_root / "src-tauri/p"
     if short.exists():
         shutil.rmtree(short)
-    shutil.move(str(original), short)
-    shutil.copy2(original.parent / "tool_catalog.json", short / "tool_catalog.json")
     pruned = prune_node_modules(resources)
-    short_pruned = prune_node_modules(short)
-    pruned = {key: pruned[key] + short_pruned[key] for key in pruned}
+    rooted = stage_pi_root(original, short)
+    shutil.copy2(original.parent / "tool_catalog.json", short / "tool_catalog.json")
     hoisted = hoist_node_modules(short)
     report = check_bundle_paths(desktop_root, build_root / "longest-paths.json", windows=windows)
     bundled_node = resources / ("node.exe" if windows else "node")
     run([str(bundled_node), "--check", "src/main.mjs"], cwd=short)
     check_staged_pi(short, bundled_node, run=run)
-    return {"node_modules_pruned": pruned, "node_modules_hoisted": hoisted, "bundle_paths": report}
+    return {"node_modules_pruned": pruned, "node_modules_root_staged": rooted,
+            "node_modules_hoisted": hoisted, "bundle_paths": report}
 
 
 def select_python(target: str) -> str:
