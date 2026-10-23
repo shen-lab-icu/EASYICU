@@ -44,7 +44,7 @@ def _stop(cause: str | None) -> ProgressivePlanCompileError:
     )
 
 
-def _copy(cause: str, lang: str) -> str:
+def _copy(cause: str, lang: str, missing: tuple[str, ...] = ()) -> str:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is unavailable")
@@ -59,10 +59,10 @@ global.window = {
 require(process.argv[1]);
 const owner = errorText.create({ tr: (en, zh) => (lang === 'zh' ? zh : en), staticPreview: () => false });
 process.stdout.write(owner.runFailureText('research_pipeline_progressive_compile_failed', {
-  code: 'progressive_capability_gap', cause: process.argv[3], missing: [],
+  code: 'progressive_capability_gap', cause: process.argv[3], missing: JSON.parse(process.argv[4]),
 }));
 """
-    result = run_node(node, script, str(ERROR_TEXT), lang, cause, check=False)
+    result = run_node(node, script, str(ERROR_TEXT), lang, cause, json.dumps(list(missing)), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     return result.stdout
 
@@ -115,9 +115,9 @@ def test_a_cause_without_copy_reads_as_the_stop_itself() -> None:
 
 def test_the_copy_names_every_requirement_and_nothing_else() -> None:
     source = ERROR_TEXT.read_text(encoding="utf-8")
-    table = source.split("function capabilityGapCopy(cause) {", 1)[1].split("};", 1)[0]
+    table = source.split("function capabilityGapCopy(cause, list) {", 1)[1].split("};", 1)[0]
 
-    assert set(re.findall(r"^\s+([a-z_]+): tr\(", table, re.M)) == set(REQUIREMENTS)
+    assert set(re.findall(r"^\s+([a-z_]+): (?:list\n\s+\? )?tr\(", table, re.M)) == set(REQUIREMENTS)
 
 
 def test_the_cause_travels_from_the_stop_to_the_run_row() -> None:
@@ -186,3 +186,32 @@ def test_the_run_record_says_planning_found_the_gap() -> None:
 
     assert message.startswith("Planning found that the question needs something")
     assert message.endswith("No analysis was run.")
+
+
+def test_a_design_element_stop_names_its_concept_from_the_stop_to_the_copy(tmp_path) -> None:
+    stop = ProgressivePlanCompileError(
+        "progressive_capability_gap",
+        "the question needs a design element no offered family can express",
+        path="capability_gap",
+        cause_code="design_element_unsupported",
+        concepts=("body_mass_index", "Not A Code!"),
+    )
+    assert agent_pipeline_runs._safe_pipeline_typed_failure(stop)["concepts"] == ["body_mass_index"]
+    agent_pipeline_runs._record_pipeline_failure(
+        wrapper_dir=tmp_path,
+        study={"id": "study_synthetic"},
+        provider={},
+        exc=stop,
+        code=agent_pipeline_runs._pipeline_failure_code(stop),
+        execution_retry_id=None,
+    )
+
+    detail = json.loads((tmp_path / "quality_gate.json").read_text())["gate"]["detail"]
+    assert detail == {
+        "reason_code": "progressive_capability_gap",
+        "cause_code": "design_element_unsupported",
+        "missing_concepts": ["body_mass_index"],
+    }
+    assert gate_detail_projection(detail)["gate_missing_concepts"] == ["body_mass_index"]
+    assert "涉及 body_mass_index 的设计要素" in _copy("design_element_unsupported", "zh", ("body_mass_index",))
+    assert "involving body_mass_index" in _copy("design_element_unsupported", "en", ("body_mass_index",))

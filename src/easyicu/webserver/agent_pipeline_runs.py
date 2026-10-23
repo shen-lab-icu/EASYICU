@@ -973,6 +973,15 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
                 r"[a-z][a-z0-9_]{2,79}", cause_code
             ):
                 projected["cause_code"] = cause_code
+            concepts = raw.get("concepts")
+            if isinstance(concepts, (list, tuple)):
+                safe_concepts = [
+                    concept for concept in concepts[:16]
+                    if isinstance(concept, str)
+                    and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", concept)
+                ]
+                if safe_concepts:
+                    projected["concepts"] = safe_concepts
             metrics = raw.get("metrics")
             if isinstance(metrics, Mapping):
                 # The compiler's own boundary measurement. Keys are canonical
@@ -1184,10 +1193,21 @@ def _write_pipeline_failure_diagnostic(
     return relative
 
 
-def _failure_gate_detail(reason_code: str, cause_code: Optional[str]) -> Dict[str, Any]:
-    """A failed run's typed reason, and its cause when the owner named one."""
+def _failure_gate_detail(
+    reason_code: str, cause_code: Optional[str], concepts: Sequence[str] = (),
+) -> Dict[str, Any]:
+    """A failed run's typed reason, its cause and the concepts the stop names."""
 
-    return {"reason_code": reason_code, **({"cause_code": cause_code} if cause_code else {})}
+    return {
+        "reason_code": reason_code,
+        **({"cause_code": cause_code} if cause_code else {}),
+        **({"missing_concepts": list(concepts)} if concepts else {}),
+    }
+
+
+def _typed_failure_concepts(typed: Mapping[str, Any]) -> tuple[str, ...]:
+    concepts = typed.get("concepts")
+    return tuple(concepts) if isinstance(concepts, list) else ()
 
 
 def _write_pipeline_failure_projection(
@@ -1200,6 +1220,7 @@ def _write_pipeline_failure_projection(
     diagnostic: Optional[str],
     detail_reason_code: Optional[str] = None,
     detail_cause_code: Optional[str] = None,
+    detail_concepts: Sequence[str] = (),
 ) -> bool:
     """Write a fail-closed terminal receipt that Project Monitor can index.
 
@@ -1235,7 +1256,7 @@ def _write_pipeline_failure_projection(
             }
         ],
         **(
-            {"detail": _failure_gate_detail(detail_reason_code, detail_cause_code)}
+            {"detail": _failure_gate_detail(detail_reason_code, detail_cause_code, detail_concepts)}
             if detail_reason_code
             else {}
         ),
@@ -1337,6 +1358,7 @@ def _record_pipeline_failure(
             diagnostic=diagnostic,
             detail_reason_code=reason_code if isinstance(reason_code, str) else None,
             detail_cause_code=cause_code if isinstance(cause_code, str) else None,
+            detail_concepts=_typed_failure_concepts(typed),
         )
     return diagnostic
 
@@ -1393,6 +1415,7 @@ def _record_unresumable_review_failure(
     diagnostic: Optional[str],
     detail_reason_code: Optional[str] = None,
     detail_cause_code: Optional[str] = None,
+    detail_concepts: Sequence[str] = (),
 ) -> bool:
     """Record a paused run whose approved resume failed and cannot resume.
 
@@ -1419,7 +1442,9 @@ def _record_unresumable_review_failure(
     }
     gate.update(status="blocked", reason=code, reportable=False, draft_unlocked=False)
     if detail_reason_code:
-        gate["detail"] = _failure_gate_detail(detail_reason_code, detail_cause_code)
+        gate["detail"] = _failure_gate_detail(
+            detail_reason_code, detail_cause_code, detail_concepts
+        )
     payloads: Dict[str, Dict[str, Any]] = {
         "quality_gate.json": {**quality, "gate": gate},
         "source_run_manifest.json": {
@@ -7719,6 +7744,7 @@ def resume_research_pipeline(
                     if isinstance(typed_failure.get("cause_code"), str)
                     else None
                 ),
+                detail_concepts=_typed_failure_concepts(typed_failure),
             )
         next_step = "resume again" if remains_resumable else "generate a fresh plan"
         raise ResearchPipelineRunError(

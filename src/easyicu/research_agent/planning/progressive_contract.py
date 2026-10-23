@@ -1346,6 +1346,7 @@ class ProgressivePlanCompileError(ValueError):
         findings: Sequence[Mapping[str, Any]] = (),
         metrics: Optional[Mapping[str, Any]] = None,
         cause_code: Optional[str] = None,
+        concepts: Sequence[str] = (),
     ) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code):
             raise ValueError(
@@ -1394,6 +1395,15 @@ class ProgressivePlanCompileError(ValueError):
         if cause_code is not None and re.fullmatch(r"[a-z][a-z0-9_]{2,79}", cause_code):
             self.easyicu_safe_diagnostic["cause_code"] = cause_code
             self.details["cause_code"] = cause_code
+        # The concept ids the stop concerns (the variable a design element
+        # needs), so a reader can name it.  Only identifier-shaped values cross.
+        safe_concepts = [
+            concept for concept in concepts
+            if isinstance(concept, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", concept)
+        ][:16]
+        if safe_concepts:
+            self.easyicu_safe_diagnostic["concepts"] = safe_concepts
+            self.details["concepts"] = safe_concepts
         if findings:
             self.details["findings"] = [dict(item) for item in findings]
         coordinate = f" step={step_id!r}" if step_id else ""
