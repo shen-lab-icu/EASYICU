@@ -66,6 +66,17 @@ def _coverage(concept="signal"):
     return catalog.build_catalog()["conceptCoverage"][concept]
 
 
+@pytest.mark.parametrize("with_full", [False, True])
+def test_demo_instance_coverage_does_not_stand_for_the_full_database(tmp_path, instance, with_full):
+    instance["sources"] = [_source(tmp_path / "demo", database="eicu_demo")]
+    if with_full:
+        instance["sources"].append(_source(tmp_path / "full"))
+    expected = ["eicu", "eicu_demo"] if with_full else ["eicu_demo"]
+    result = catalog.build_catalog()
+    assert result["instance_databases"] == expected
+    assert result["conceptCoverage"]["signal"]["instance_databases_covered"] == expected
+
+
 @pytest.mark.parametrize("availability", [
     "available", "produced_all_null", "structurally_unavailable_placeholder",
 ])

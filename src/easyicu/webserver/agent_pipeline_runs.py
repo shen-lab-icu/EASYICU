@@ -116,6 +116,7 @@ from easyicu.webserver import (
     provider_adapter,
     run_artifact_disclosure,
     run_patient_grouping,
+    sources,
 )
 from easyicu.webserver import execution_retry as execution_retry_policy
 from easyicu.webserver import study_contexts as study_context_owner
@@ -188,7 +189,7 @@ from easyicu.webserver.pi_copilot.contracts import (
 )
 from easyicu.webserver.pi_copilot.extraction_handoff import compile_study_cohort
 from easyicu.webserver.pi_copilot.exposure_group_notes import project_exposure_groups
-from easyicu.webserver.pi_copilot.source_recommendation import database_reader_label
+from easyicu.webserver.pi_copilot.source_recommendation import source_reader_label
 from easyicu.webserver.agent_review_recovery import (
     PendingReviewEntry as _PendingRun,
     PendingReviewRegistry,
@@ -4275,6 +4276,9 @@ def _write_projection(
         failed_closed = _failed_closed_detail(axes)
         if failed_closed is not None:
             gate["detail"] = failed_closed
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    reader_label = source_reader_label(source)
     run_context = {
         "run_id": run_id,
         "study_id": _clean_text(study.get("id"), 160),
@@ -4286,21 +4290,14 @@ def _write_projection(
         "engine": "easyicu.research_agent.pipeline",
         "question": _clean_text(study.get("question"), 1_200),
         "source": {
-            "label": _clean_text((study.get("data_source") or {}).get("label"), 160)
-            if isinstance(study.get("data_source"), Mapping)
-            else "",
-            "database": _clean_text(
-                (study.get("data_source") or {}).get("database"), 64
-            )
-            if isinstance(study.get("data_source"), Mapping)
-            else "",
+            "label": _clean_text(
+                reader_label if sources.is_demo_source(source) else source.get("label"), 160,
+            ),
+            "database": _clean_text(source.get("database"), 64),
             # The database as readers know it ("eICU v2.0"); the registered
             # label above may carry an export id or a commit.
-            "reader_label": database_reader_label(
-                (study.get("data_source") or {}).get("database")
-            )
-            if isinstance(study.get("data_source"), Mapping)
-            else "",
+            "reader_label": reader_label,
+            **({"stays": source["stays"]} if "stays" in source else {}),
         },
         "summary": {
             "selected_concepts": selected_concepts[:64],
@@ -4489,6 +4486,7 @@ def _write_projection(
     )
     source_manifest = {
         "schema_version": "easyicu.web-research-pipeline-projection/1",
+        "source": run_context["source"],
         "engine": "easyicu.research_agent.pipeline",
         "run_id": run_id,
         "status": "human_review_pending" if pending is not None else gate["status"],

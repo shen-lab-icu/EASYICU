@@ -82,9 +82,11 @@ def _database_label(db_key: str) -> str:
     from easyicu.databases.profiles import get_database_profile
 
     try:
-        return get_database_profile(db_key).display_name
+        profile = get_database_profile(db_key)
     except KeyError:
         return "Unknown"
+    return (f"{profile.display_name} v{profile.reference_release}"
+            if profile.reference_release else profile.display_name)
 
 _MODULE_MANIFESTS = ("easyicu_export_manifest.json", "_manifest.json")
 _EXPORT_METADATA_FILES = {
@@ -297,37 +299,23 @@ def _detect_database(path: Path) -> str:
         detect_database_identity,
     )
 
-    detected = detect_database_identity(path, strict=False)
-    manifest_candidates: Set[str] = set()
-    for name in _MODULE_MANIFESTS:
-        manifest_path = path / name
+    if any((path / name).exists() for name in _MODULE_MANIFESTS):
+        from easyicu.research_agent.intake.export_package import inspect_export_layout
+
+        # A validated export names its own database. Shared raw-table schemas
+        # cannot distinguish a demo from its parent; intake also owns native
+        # marker precedence when an older legacy marker remains in the folder.
+        declared = inspect_export_layout(path)["database"]
         try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, OSError, ValueError):
-            continue
-        declared = str(payload.get("database") or "").strip()
-        if not declared:
-            continue
-        try:
-            manifest_candidates.add(detect_database_identity(database=declared))
+            detected = detect_database_identity(database=declared)
         except ValueError as exc:
             raise DatabaseDetectionError(
                 "database_detection_manifest_invalid",
-                f"Unsupported database identity {declared!r} in {manifest_path}.",
+                f"Unsupported database identity {declared!r} in the export manifest.",
                 data_path=path,
             ) from exc
-    candidates = set(manifest_candidates)
-    if detected != "unknown":
-        candidates.add(detected)
-    if len(candidates) > 1:
-        raise DatabaseDetectionError(
-            "database_detection_ambiguous",
-            f"Conflicting database evidence in {path}: {sorted(candidates)}.",
-            data_path=path,
-            candidates=candidates,
-        )
-    if candidates:
-        detected = next(iter(candidates))
+    else:
+        detected = detect_database_identity(path, strict=False)
     return {"mimic": "miii", "sic": "sicdb"}.get(detected, detected)
 
 
@@ -406,16 +394,14 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
 
-    from easyicu.databases.detection import DatabaseDetectionError
-
     try:
         db_key = _detect_database(path)
-    except DatabaseDetectionError as exc:
+    except (ValueError, OSError) as exc:
         return {
             "ok": False,
-            "error": exc.code,
+            "error": getattr(exc, "code", "export_layout_invalid"),
             "path": str(path),
-            "candidates": list(exc.candidates),
+            "candidates": list(getattr(exc, "candidates", ())),
             "ready": False,
             "privacy": {
                 "raw_rows_read": False,

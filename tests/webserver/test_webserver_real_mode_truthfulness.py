@@ -33,7 +33,8 @@ def test_real_conversion_and_scan_fail_closed_without_local_runtime() -> None:
     assert "convResult = { converted: CONV_STEPS.length" not in source
     assert "setInterval(() => {\n        convDone++" not in source
     assert "exScanError = 'scan_api_unavailable'" in source
-    assert "this screen will not guess a real data layout" in source
+    assert "errorOwner.scanErrorText(exScanError, t)" in source
+    assert "scan_api_unavailable:" in _js("screens-guided-pi-error-text.js")
     assert "setTimeout(() => { exReal = 'scanresult'" not in source
 
 

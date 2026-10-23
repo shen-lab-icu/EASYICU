@@ -28,8 +28,11 @@
     const source = current && current.source ? current.source : {};
     const label = String(source.label || '').trim();
     const release = String(source.reference_release || '').trim();
-    if (!release || label.toLowerCase().endsWith(`v${release}`.toLowerCase())) return label;
-    return [label, `v${release}`].filter(Boolean).join(' ');
+    const name = !release || label.toLowerCase().endsWith(`v${release}`.toLowerCase())
+      ? label : [label, `v${release}`].filter(Boolean).join(' ');
+    const stays = source.stays;
+    return Number.isInteger(stays) && stays >= 0
+      ? `${name} · ${stays.toLocaleString('en-US')} ICU stays` : name;
   }
 
   function matchesSourceSelection(session, text) {
@@ -103,12 +106,14 @@
   // One registered export as the researcher compares it: name, date, size.
   function exportFacts(row, ctx) {
     const stays = Number(row.stays);
+    const estimate = typeof row.stays === 'string' && /^>\s*\d+$/.test(row.stays.trim())
+      ? `>${Number(row.stays.replace(/[>\s]/g, '')).toLocaleString('en-US')}` : '';
+    const count = Number.isFinite(stays) && stays > 0 ? stays.toLocaleString('en-US') : estimate;
     const modules = Number(row.module_count);
     return [
       String(row.label || '').trim(),
       row.generated_date ? ctx.tr(`generated ${row.generated_date}`, `${row.generated_date} 生成`) : '',
-      Number.isFinite(stays) && stays > 0
-        ? ctx.tr(`${stays.toLocaleString('en-US')} ICU stays`, `${stays.toLocaleString('en-US')} 例 ICU 住院`) : '',
+      count ? ctx.tr(`${count} ICU stays`, `${count} 例 ICU 住院`) : '',
       Number.isFinite(modules) && modules > 0 ? ctx.tr(`${modules} modules`, `${modules} 个模块`) : '',
     ].filter(Boolean).join(' · ');
   }
@@ -118,15 +123,17 @@
   }
 
   function folderButton(database, ctx, primary) {
+    const hosted = window.EasyICU.guidedPi.optional('hosted');
+    if ((hosted && hosted.active()) || database.key.endsWith('_demo')) {
+      return `<button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>`;
+    }
     return `<button class="btn${primary ? ' primary' : ''}" type="button" data-gpi-data-source-action="begin_local_selection" data-gpi-data-source-database="${ctx.esc(database.key)}">${ctx.tr('Choose a data folder', '选择数据文件夹')}</button>`;
   }
 
   function render(session, ctx) {
     const current = authorization(session);
     if (current.status === 'pending' && current.reason === 'project_source_confirmation_required') {
-      const source = current.source || {};
-      const label = [source.label, source.reference_release ? `v${source.reference_release}` : '']
-        .filter(Boolean).join(' ');
+      const label = sourceLabel(current);
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Confirm data source', '确认数据源')}">
         <span class="gpi-data-consent-icon">${ctx.icon('shield', 16)}</span>
         <div class="gpi-data-consent-body">
@@ -140,15 +147,23 @@
         </div>
       </section>`;
     }
+    const hosted = window.EasyICU.guidedPi.optional('hosted');
+    const hostedServer = Boolean(hosted && hosted.active());
     const named = current.status === 'pending' && ctx.namedDemo && ctx.namedDemo.id ? ctx.namedDemo : null;
-    if (named) {
+    if (named && hostedServer && !named.prepared) {
+      return `<section class="gpi-data-consent"><div class="gpi-data-consent-body">
+        <strong>${ctx.esc(exportFacts(named, ctx))}</strong>
+        <p>${ctx.tr('On this server, the administrator prepares demo data.', '这台服务器上的 Demo 数据由管理员准备。')}</p>
+      </div></section>`;
+    }
+    if (named && !hostedServer) {
       // The question already names this official demo: offer it directly.
       const verb = named.pending ? ctx.tr('Preparing…', '正在准备…')
         : named.prepared ? ctx.tr('Use it for this conversation', '用于本次会话')
           : ctx.tr('Prepare it and use it here', '准备并用于本次会话');
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
         <strong>${ctx.tr('Your question names this data', '你的问题指定了这份数据')}</strong>
-        <p>${ctx.esc(named.label)}${named.prepared ? ctx.esc(ctx.tr(' · already prepared', ' · 已准备好')) : ''}</p>
+        <p>${ctx.esc(exportFacts(named, ctx))}${named.prepared ? ctx.esc(ctx.tr(' · already prepared', ' · 已准备好')) : ''}</p>
         <div class="gpi-data-consent-actions">
           <button class="btn primary" type="button" data-gpi-named-demo="${ctx.esc(named.id)}" ${named.pending ? 'disabled' : ''}>${verb}</button>
           <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
@@ -156,7 +171,9 @@
         <small>${ctx.tr('Official demo data only; EasyICU registers it and confirms it as this conversation’s source, then proposes the plan. Confirming a source does not approve analysis.', '仅官方 Demo 数据；EasyICU 注册后将其确认为本次会话的数据源，再拟定研究计划。确认数据源不等于批准分析。')}</small>
       </div></section>`;
     }
-    const database = current.status === 'pending' && ctx.namedDatabase && ctx.namedDatabase.key ? ctx.namedDatabase : null;
+    const database = named && hostedServer
+      ? { key: named.database, label: named.label, offer: named.offer }
+      : current.status === 'pending' && ctx.namedDatabase && ctx.namedDatabase.key ? ctx.namedDatabase : null;
     const offer = database && database.offer ? database.offer : null;
     if (offer && offer.state === 'loading') {
       // Until the host answers, offer only the folder, and not as the primary
@@ -195,8 +212,24 @@
         <small>${ctx.tr('Choosing a source does not approve analysis.', '选择数据源不等于批准分析。')}</small>
       </div></section>`;
     }
-    const hosted = window.EasyICU.guidedPi.optional('hosted');
-    if (database && offer && offer.state === 'ready' && hosted && hosted.active()) {
+    const demo = offer && offer.state === 'ready' ? offer.official_demo : null;
+    if (database && demo && demo.id && hostedServer) {
+      const demoOffer = demo.registered_offer || { state: 'ready', recommended: null, choices: [] };
+      return render(session, { ...ctx, namedDemo: { ...demo, offer: demoOffer,
+        prepared: Boolean(demoOffer.recommended || demoOffer.choices.length) } });
+    }
+    if (database && demo && demo.id && !hostedServer) {
+      return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
+        <strong>${ctx.esc(ctx.tr(`EasyICU has no ${database.label} export`, `EasyICU 中还没有 ${database.label} 导出`))}</strong>
+        <p>${ctx.tr('An official demo is available separately:', '可单独选择官方 Demo：')}${ctx.esc(exportFacts(demo, ctx))}</p>
+        <div class="gpi-data-consent-actions">
+          <button class="btn primary" type="button" data-gpi-named-demo="${ctx.esc(demo.id)}">${ctx.tr('Prepare this demo and use it here', '准备此 Demo 并用于本次会话')}</button>
+          <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
+        </div>
+        <small>${ctx.tr('Demo data only; results describe the demo. Confirming this source does not approve analysis.', '仅 Demo 数据；结果只代表此 Demo。确认数据源不等于批准分析。')}</small>
+      </div></section>`;
+    }
+    if (database && offer && offer.state === 'ready' && hostedServer) {
       // On a hospital server the administrator prepares every source and
       // there is no folder to choose: a database the server holds no export
       // of cannot be used here, so say so instead of opening a selection

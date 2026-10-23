@@ -17,6 +17,40 @@
 
   const { esc } = window.EU_HTML;
 
+  // Folder scans return codes, including intake's manifest/layout failures.
+  // Both extraction screens use these sentences; unknown codes stay readable.
+  function scanErrorText(code, tr) {
+    const messages = {
+      no_path: ['Choose or paste a folder path first.', '请先选择或粘贴文件夹路径。'],
+      not_a_directory: ['That path is not a folder EasyICU can open.', '该路径不是 EasyICU 能打开的文件夹。'],
+      permission_denied: ['EasyICU does not have permission to read that folder.', 'EasyICU 没有读取该文件夹的权限。'],
+      unrecognized_folder: ['This folder has no supported ICU data layout.', '该文件夹中没有可识别的 ICU 数据结构。'],
+      scan_api_unavailable: ['The folder scanner is unavailable; restart EasyICU and try again.', '文件夹扫描服务暂不可用，请重启 EasyICU 后重试。'],
+      database_mismatch: ['This folder belongs to a different database; choose the database this study uses.', '该文件夹属于其他数据库，请选择本研究使用的数据库文件夹。'],
+      database_detection_ambiguous: ['This folder contains conflicting database identities; choose a folder for one database.', '该文件夹中的数据库标识相互冲突，请选择只包含一个数据库的文件夹。'],
+      database_detection_manifest_invalid: ['The export manifest names an unsupported database.', '导出清单中的数据库不受支持。'],
+      database_detection_schema_unreadable: ['The table headers could not be read; choose a readable data folder.', '无法读取数据表的字段信息，请选择可读取的数据文件夹。'],
+      database_detection_unavailable: ['The database could not be identified from this folder.', '无法从该文件夹识别数据库。'],
+      unavailable_when_hosted: ['The administrator prepares data on this server.', '这台服务器上的数据由管理员准备。'],
+      path_outside_data_roots: ['This folder is outside the data the administrator prepared.', '该文件夹不在管理员准备的数据范围内。'],
+    };
+    const value = String(code || '');
+    let text = messages[value];
+    if (!text && /^(?:export_manifest|manifest_marker)/.test(value)) {
+      text = ['The export manifest is missing or unreadable; choose a complete export.', '导出清单缺失或无法读取，请选择完整的导出文件夹。'];
+    }
+    if (!text && /^manifest_(?:path|file)/.test(value)) {
+      text = ['An export member is missing or points outside the export; choose a complete export.', '导出文件缺失或指向导出目录之外，请选择完整的导出文件夹。'];
+    }
+    if (!text && /^column_metadata_/.test(value)) {
+      text = ['The export column metadata is incomplete or invalid; prepare the export again.', '导出文件的字段元数据不完整或无效，请重新准备导出。'];
+    }
+    if (!text && /^(?:manifest_|file_|export_package|export_layout)/.test(value)) {
+      text = ['The export structure does not match its manifest; choose a complete export.', '导出文件结构与清单不符，请选择完整的导出文件夹。'];
+    }
+    return tr(...(text || ['This folder could not be scanned; choose another folder.', '无法扫描该文件夹，请选择其他文件夹。']));
+  }
+
   function create({ tr, staticPreview }) {
     function errorText(error) {
       if (!error) return '';
@@ -726,5 +760,5 @@
     return Object.freeze({ errorText, jobErrorText, modelErrorText, providerPreset, option, runFailureText, studyFamilyGapText });
   }
 
-  window.EasyICU.guidedPi.declare('errorText', { create });
+  window.EasyICU.guidedPi.declare('errorText', { create, scanErrorText });
 })();

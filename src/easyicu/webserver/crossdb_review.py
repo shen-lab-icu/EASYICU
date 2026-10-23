@@ -14,7 +14,7 @@ import threading
 import time
 from contextvars import copy_context
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from easyicu.concept import catalog as concept_catalog
 from easyicu.concept_output_sources import (
@@ -3093,12 +3093,17 @@ def _is_feature_column(name: str) -> bool:
 
 def _safe_registered_source(source: Dict[str, Any]) -> Dict[str, Any]:
     raw_path = str(source.get("path") or "")
+    demo = source_store.is_demo_source(source)
+    summary = source.get("summary")
+    summary = summary if isinstance(summary, Mapping) else {}
+    label = source_store.source_reader_label(source) if demo else source.get("label")
     return {
         "id": source.get("id"),
-        "label": source.get("label") or Path(raw_path).name or "local",
+        "label": label or Path(raw_path).name or "local",
         "path_hash": _hash(_norm_path(raw_path)),
         "database": source.get("database"),
         "generated": source.get("generated"),
+        **({"stays": summary["stays"]} if demo and "stays" in summary else {}),
     }
 
 

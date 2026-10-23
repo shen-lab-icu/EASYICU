@@ -38,6 +38,7 @@ from .projections import (
 from . import plan_decisions
 from easyicu.webserver.study_question_wording import resolve_question_wording
 from .turn_authority import database_named_in
+from .source_recommendation import source_reader_label
 from .workflow import build_project_workflow_projection
 
 
@@ -1736,11 +1737,17 @@ def update_study_context(
                     details={"field": "data_source"},
                 )
         else:
+            is_demo = sources.is_demo_source(source)
             patch["data_source"] = {
                 "path": selected_path,
-                "label": source.get("label") or "active EasyICU export",
+                "label": (source_reader_label(source) if is_demo
+                          else source.get("label")) or "active EasyICU export",
                 "database": database,
             }
+            summary = source.get("summary")
+            summary = summary if isinstance(summary, Mapping) else {}
+            if is_demo and type(summary.get("stays")) is int and summary["stays"] >= 0:
+                patch["data_source"]["stays"] = summary["stays"]
             confirmations = dict(((current or {}).get("confirmations") or {}))
             confirmations.update(dict(patch.get("confirmations") or {}))
             # A validated registry row is the Data Extraction owner's receipt

@@ -153,6 +153,16 @@ def _store(tmp_path: Path, *evidence_ids: str) -> EvidenceStore:
 # The record -----------------------------------------------------------
 
 
+@pytest.mark.parametrize(("database", "label"), [
+    ("eicu_demo", "eICU Demo v2.0.1"),
+    ("mimic_demo", "MIMIC-III Demo v1.4"),
+])
+def test_a_demo_manuscript_names_its_own_database_release(database, label):
+    population = analyzed_population(plan=_plan(_ALL_ROWS), context=_context(database=database))
+    assert population.source_database_label == label
+    assert f"ICU stays in {label}" in writer_population_block(population)
+
+
 def test_a_plan_keeping_every_row_of_an_uncontracted_export_analyzes_every_icu_stay() -> None:
     population = analyzed_population(plan=_plan(_ALL_ROWS), context=_context())
 

@@ -632,22 +632,9 @@
              ready: d.ready, size: d.size || '', est: d.est || '', missing: [] };
   }
   function scanErrorState() {
-    const msg = exScanError === 'database_mismatch'
-      ? t(
-          `This study expects ${String(exDatabaseMismatch && exDatabaseMismatch.expected || '').toUpperCase()}, but the selected folder was identified as ${String(exDatabaseMismatch && exDatabaseMismatch.actual || 'unknown').toUpperCase()}. Choose the matching database folder; EasyICU will not continue with a different database.`,
-          `当前研究要求 ${String(exDatabaseMismatch && exDatabaseMismatch.expected || '').toUpperCase()}，但所选文件夹被识别为 ${String(exDatabaseMismatch && exDatabaseMismatch.actual || '未知').toUpperCase()}。请选择匹配的数据库目录；EasyICU 不会使用其他数据库继续。`
-        )
-      : exScanError === 'no_path'
-      ? t('Choose or paste a folder path first.', '请先选择或粘贴文件夹路径。')
-      : exScanError === 'not_a_directory'
-      ? t('That path is not a folder EasyICU can open.', '该路径不是 EasyICU 能打开的文件夹。')
-      : exScanError === 'permission_denied'
-      ? t('Permission denied reading that folder.', '没有读取该文件夹的权限。')
-      : exScanError === 'unrecognized_folder'
-      ? t('EasyICU could not identify a supported ICU data layout in that folder.', 'EasyICU 未能在该文件夹中识别出支持的 ICU 数据结构。')
-      : exScanError === 'scan_api_unavailable'
-      ? t('The local folder scan API is unavailable. Restart the EasyICU WebApp; this screen will not guess a real data layout.', '本地文件夹扫描 API 不可用。请重启 EasyICU WebApp；此页面不会猜测真实数据结构。')
-      : t('Could not scan that folder.', '无法扫描该文件夹。') + (exScanError ? ` <span class="mono">${escHtml(exScanError)}</span>` : '');
+    const errorOwner = window.EasyICU?.guidedPi?.optional('errorText');
+    const msg = errorOwner ? errorOwner.scanErrorText(exScanError, t)
+        : t('This folder could not be scanned; choose another folder.', '无法扫描该文件夹，请选择其他文件夹。');
     return `
       <div class="cfg" style="max-width:680px;">
         <div class="cfg-head">
@@ -657,7 +644,7 @@
         <div class="cfg-body">
           <div class="note mt-4" style="padding:11px 13px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);">
             <div class="ico" style="color:var(--bad,#c0392b);">${icon('alert', 15)}</div>
-            <div class="body"><div class="d" style="font-size:11.5px;margin:0;">${msg}</div></div>
+            <div class="body"><div class="d" style="font-size:11.5px;margin:0;">${escHtml(msg)}</div></div>
           </div>
           <div class="row gap-8 mt-16">
             <button class="btn primary" data-ex-browse>${icon('folder', 13)} ${t('Choose another folder', '换一个文件夹')}</button>
@@ -854,7 +841,7 @@
         repaint();
       }).catch(err => {
         if (exReal !== 'scanning') return;
-        exScanError = String(err && err.message || err); exReal = 'scanresult'; repaint();
+        exScanError = String(err && (err.code || err.message) || err); exReal = 'scanresult'; repaint();
       });
     } else {
       exScanError = 'scan_api_unavailable';

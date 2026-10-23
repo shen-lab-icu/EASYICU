@@ -264,6 +264,8 @@ def database_named_in(message: str) -> str | None:
 
     text = str(message or "").casefold()
     for database, pattern in (
+        ("eicu_demo", r"\beicu[\s_-]+demo\b"),
+        ("mimic_demo", r"\bmimic[\s_-]*(?:iii|3)[\s_-]+demo\b"),
         ("miiv", r"\bmimic[\s_-]*(?:iv|4)\b"),
         ("mimic", r"\bmimic[\s_-]*(?:iii|3)\b"),
         ("eicu", r"\beicu\b"),

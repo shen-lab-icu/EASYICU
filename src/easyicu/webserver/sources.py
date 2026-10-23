@@ -369,6 +369,43 @@ def is_official_demo_source(source: Mapping[str, Any]) -> bool:
     )
 
 
+def is_demo_source(source: Mapping[str, Any]) -> bool:
+    """A profiled demo or a legacy official demo with a full loader key."""
+    from easyicu.databases.profiles import get_database_profile
+
+    if is_official_demo_source(source):
+        return True
+    try:
+        return not get_database_profile(str(source.get("database") or "")).is_public
+    except KeyError:
+        return False
+
+
+def source_reader_label(source: Mapping[str, Any]) -> str:
+    """Name the actual source, including legacy official demos' own release."""
+    from easyicu.databases.profiles import get_database_profile
+
+    try:
+        profile = get_database_profile(str(source.get("database") or ""))
+    except KeyError:
+        return ""
+    if profile.is_public and is_official_demo_source(source):
+        return str(source.get("label") or "").strip()
+    if profile.reference_release:
+        return f"{profile.display_name} v{profile.reference_release}"
+    return profile.display_name
+
+
+def demo_catalog_reader_labels(catalog: Dict[str, Any]) -> Dict[str, Any]:
+    """Give catalog demos the same reader labels as registered exports."""
+    for source in catalog["sources"]:
+        source["reader_label"] = source_reader_label({
+            "database": source["database"],
+            "label": f"{source['title']} v{source['version']}",
+        })
+    return catalog
+
+
 def registered_source_counts() -> Dict[str, Dict[str, int]]:
     """Count validated full exports from the conversation's source registry."""
     from easyicu.databases.profiles import get_database_profile, iter_database_profiles

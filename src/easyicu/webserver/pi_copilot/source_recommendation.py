@@ -17,6 +17,7 @@ from typing import Any, Dict, Literal, Mapping, Optional, Sequence
 
 from easyicu.databases.profiles import get_database_profile
 from easyicu.webserver import sources
+from easyicu.webserver.sources import source_reader_label
 
 SelectionReason = Literal[
     "most_complete_local_dataset",
@@ -79,10 +80,12 @@ def generated_date(row: Mapping[str, Any]) -> Optional[str]:
 
 def recommend_registered_export(
     choices: Sequence[Mapping[str, Any]],
+    *, allow_official_demo: bool = False,
 ) -> RegisteredExportRecommendation:
     """Recommend one registered export of ``choices``, or leave them to choose."""
 
-    local = [dict(row) for row in choices if row.get("source_scope") == "registered_export"]
+    local = [dict(row) for row in choices if row.get("source_scope") == "registered_export"
+             or (allow_official_demo and row.get("source_scope") == "official_demo")]
     if not local:
         return RegisteredExportRecommendation()
     complete = [
@@ -123,7 +126,7 @@ def recommend_registered_export(
 
 
 def _registered_source_projection(
-    source: Mapping[str, Any], *, active_path: Any, database_label: str
+    source: Mapping[str, Any], *, active_path: Any
 ) -> Dict[str, Any]:
     """Return one path-free registered-export choice for conversational setup."""
 
@@ -145,7 +148,7 @@ def _registered_source_projection(
         # Registry labels are execution identity and may contain internal run
         # names such as "full6".  Conversational setup gets the canonical
         # database/release label instead; exact source_id remains authoritative.
-        "label": label if source_scope == "official_demo" else database_label,
+        "label": source_reader_label(source) or label,
         "database": str(source.get("database") or "")[:80],
         "source_scope": source_scope,
         "availability": (
@@ -176,9 +179,6 @@ def registered_sources_for_database(
     choices: list[Dict[str, Any]] = []
     if database:
         profile = get_database_profile(database)
-        if not profile.is_public:
-            raise KeyError(database)
-        label = database_reader_label(profile.key)
         for row in registry.get("sources") or []:
             if not isinstance(row, Mapping) or not row.get("ok") or not row.get("id"):
                 continue
@@ -186,14 +186,18 @@ def registered_sources_for_database(
                 row_profile = get_database_profile(str(row.get("database") or ""))
             except KeyError:
                 continue
-            if (row_profile.parent_key or row_profile.key) != profile.key:
+            # Parent profiles own shared vocabulary and scope, never source
+            # identity. Even a larger demo export cannot satisfy its parent.
+            if row_profile.key != profile.key:
                 continue
             choices.append(_registered_source_projection(
-                row, active_path=registry.get("active_path"), database_label=label,
+                row, active_path=registry.get("active_path"),
             ))
             if len(choices) >= 40:
                 break
-    return choices, recommend_registered_export(choices)
+    return choices, recommend_registered_export(
+        choices, allow_official_demo=bool(database) and not profile.is_public,
+    )
 
 
 def registered_source_choice(row: Mapping[str, Any]) -> Dict[str, Any]:
@@ -208,12 +212,53 @@ def registered_source_choice(row: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def official_demos_for_database(
+    registry: Mapping[str, Any], database: Optional[str],
+) -> list[Dict[str, Any]]:
+    """Explicit official-demo preparation choices, with their own identities.
+
+    A full-database request can show its official demo as a separate action;
+    that never makes a registered demo an export of the full database.
+    """
+    from easyicu.webserver import demo_sources
+
+    selected = get_database_profile(database).key if database else None
+    choices = []
+    for source_id in demo_sources.allowed_source_ids():
+        spec = demo_sources.get_source(source_id)
+        profile = get_database_profile(spec.database)
+        if selected and profile.key not in {selected, f"{selected}_demo"}:
+            continue
+        counts = {
+            row["summary"]["stays"]
+            for row in registry.get("sources") or []
+            if isinstance(row, Mapping) and row.get("ok") and row.get("id")
+            and row.get("database") == profile.key
+            and (not profile.is_public or sources.is_official_demo_source(row))
+            and isinstance(row.get("summary"), Mapping)
+            and type(row["summary"].get("stays")) is int
+            and row["summary"]["stays"] >= 0
+        }
+        choices.append({
+            "source_id": spec.id,
+            "label": profile.display_name if not profile.is_public else spec.title,
+            "database": profile.key,
+            "version": spec.version,
+            "scope_summary": spec.scope_summary,
+            "research_scope": "demo_only",
+            "stays": next(iter(counts)) if len(counts) == 1 else spec.icu_stays,
+        })
+    return choices
+
+
 __all__ = [
     "RegisteredExportRecommendation",
     "SelectionReason",
     "database_reader_label",
     "generated_date",
+    "official_demos_for_database",
     "recommend_registered_export",
     "registered_source_choice",
     "registered_sources_for_database",
+    "source_reader_label",
 ]

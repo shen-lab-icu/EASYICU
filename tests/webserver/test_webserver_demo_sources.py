@@ -26,6 +26,13 @@ def _zip(path: Path, entries: dict[str, bytes]) -> None:
             archive.writestr(name, payload)
 
 
+def test_demo_catalog_uses_the_profile_reader_label_and_the_legacy_demos_own_release(monkeypatch):
+    monkeypatch.setattr(demo_sources, "_status_payload", lambda _source: {})
+    rows = {row["id"]: row for row in demo_sources.demo_sources_catalog()["sources"]}
+    assert rows["eicu_demo_v2_0_1"]["reader_label"] == "eICU Demo v2.0.1"
+    assert rows["mimic_iv_demo_v2_2"]["reader_label"] == "MIMIC-IV Clinical Database Demo v2.2"
+
+
 def test_demo_catalog_is_fixed_safe_and_path_free(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

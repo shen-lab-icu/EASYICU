@@ -224,6 +224,7 @@ class PiSessionDataSourceReference(BaseModel):
     label: Optional[str] = Field(default=None, max_length=160)
     database: Optional[str] = Field(default=None, max_length=80)
     reference_release: Optional[str] = Field(default=None, max_length=80)
+    stays: Optional[int] = Field(default=None, ge=0)
     identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     study_revision: int = Field(ge=0)
 

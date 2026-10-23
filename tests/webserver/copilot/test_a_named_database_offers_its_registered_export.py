@@ -48,6 +48,7 @@ def _offer_script(replies: list) -> str:
       const consent = window.EasyICU.guidedPi.require('dataConsent');
       const replies = {json.dumps(replies)};
       const calls = [];
+      const prepared = [];
       let renders = 0;
       let project = 'proj-1';
       const session = {{ session_id: 's1', data_source_authorization: {{ status: 'pending' }} }};
@@ -55,6 +56,7 @@ def _offer_script(replies: list) -> str:
         tr: (en, zh) => zh,
         api: () => ({{
           loadOfficialDemoSources: async () => ({{ sources: [] }}),
+          startOfficialDemoSourcePrepare: async id => {{ prepared.push(id); return {{job_id:'job-demo'}}; }},
           loadPiCopilotRegisteredSourceOffer: async (...args) => {{
             calls.push(args);
             const reply = replies.shift();
@@ -158,6 +160,29 @@ def test_tied_exports_are_listed_and_a_failed_read_falls_back_to_the_folder() ->
     assert out["failed"] is True
     assert out["noProject"] is True
     assert out["calls"] == ["proj-1", "proj-2"]
+
+
+@pytest.mark.requires_node
+@pytest.mark.usefixtures("_load_guided_pi_module_harness")
+def test_a_demo_only_offer_reaches_the_card_and_uses_the_official_preparation_path() -> None:
+    demo = {"id": "eicu_demo_v2_0_1", "database": "eicu_demo", "label": "eICU Demo v2.0.1", "stays": 12}
+    out = _run(_offer_script([{"database": "eicu", "recommended": None, "choices": [], "official_demo": demo}]) + """
+      (async () => {
+        await tick(); card(); await tick();
+        const html = card();
+        const wrong = await owner.useNamedDemo('another-demo');
+        const used = await owner.useNamedDemo('eicu_demo_v2_0_1');
+        owner.stopAll();
+        process.stdout.write(JSON.stringify({html,prepared,wrong,used}));
+      })().catch(err => { console.error(err); process.exitCode = 1; });
+    """)
+    assert "eICU Demo v2.0.1" in out["html"]
+    assert "12 例 ICU 住院" in out["html"]
+    assert 'data-gpi-named-demo="eicu_demo_v2_0_1"' in out["html"]
+    assert "use_registered_source" not in out["html"]
+    assert out["prepared"] == ["eicu_demo_v2_0_1"]
+    assert out["wrong"] is False
+    assert out["used"] is True
 
 
 @pytest.mark.requires_node

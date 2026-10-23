@@ -71,7 +71,7 @@ function bindingOwner(question) {
     workflow: () => ({ missing_setup_fields: ['question'] }), researchQuestion: () => question,
   });
 }
-const demo = { ok: true, id: 'src_demo', path: '/demo/eicu', label: 'eICU demo', database: 'eicu_demo' };
+const demo = { ok: true, id: 'src_demo', path: '/demo/eicu', label: 'eICU Demo v2.0.1', database: 'eicu_demo', summary: { stays: 12 } };
 global.EU_SOURCES = { activeSource: () => demo };
 let receipts = [];
 let onRebind = async () => {};
@@ -138,6 +138,9 @@ const notice = () => {
   row = notice();
   await hostJobs.handleAction('use', row.id);
   assert.equal(saved.get(studyA.id).data_source.path, demo.path);
+  assert.equal(saved.get(studyA.id).data_source.database, 'eicu_demo');
+  assert.equal(saved.get(studyA.id).data_source.label, 'eICU Demo v2.0.1');
+  assert.equal(saved.get(studyA.id).data_source.stays, 12);
   assert.deepEqual(saved.get(studyB.id).data_source, sourceB);
   // Unbound, it says so and writes nothing.
   session = conversation('session-C', '');

@@ -122,10 +122,11 @@ def test_tool_and_offer_use_the_same_recommendation_owner(host, monkeypatch) -> 
     calls = []
     original = source_recommendation.recommend_registered_export
 
-    def recommend(rows):
+    def recommend(rows, *, allow_official_demo=False):
         calls.append([row["source_id"] for row in rows])
         # Changing the shared policy must affect both consumers.
-        return original([row for row in rows if row["source_id"] == "src_small"])
+        return original([row for row in rows if row["source_id"] == "src_small"],
+                        allow_official_demo=allow_official_demo)
 
     monkeypatch.setattr(source_recommendation, "recommend_registered_export", recommend)
     offer = _offer(service)
@@ -216,7 +217,7 @@ def test_use_binds_through_the_tool_owner_and_confirms_once(host, monkeypatch) -
     ("not_offered", "pi_data_source_not_offered"),
     ("missing_id", "pi_source_id_required"),
     ("missing_database", "pi_database_not_supported"),
-    ("demo_database", "pi_database_not_supported"),
+    ("demo_database", "pi_data_source_database_mismatch"),
     ("workspace", "pi_session_data_source_authorization_not_required"),
     ("confirmed", "pi_session_data_source_authorization_not_pending"),
     ("selecting", "pi_session_data_source_authorization_not_pending"),
@@ -267,14 +268,27 @@ def test_offer_requires_pending_research_authorization(host, status) -> None:
     assert _bytes(service) == before
 
 
-@pytest.mark.parametrize("database", ["", "unknown", "eicu_demo"])
-def test_offer_rejects_missing_unknown_or_demo_database(host, database) -> None:
+@pytest.mark.parametrize("database", ["", "unknown"])
+def test_offer_rejects_missing_or_unknown_database(host, database) -> None:
     service, _ = host
     before = _bytes(service)
     with pytest.raises(PiCopilotError) as error:
         _offer(service, database)
     assert error.value.code == "pi_database_not_supported"
     assert _bytes(service) == before
+
+
+def test_full_export_offer_excludes_a_more_complete_demo_and_exact_demo_can_be_selected(host) -> None:
+    service, registry = host
+    registry["sources"].append(_row("src_demo", "eicu_demo", stays=80))
+    assert _offer(service)["recommended"]["source_id"] == "src_best"
+    demo = _offer(service, "eicu_demo")["recommended"]
+    assert demo["source_id"] == "src_demo"
+    assert demo["label"] == "eICU Demo v2.0.1"
+    assert demo["stays"] == 80
+    selected = _use(service, "src_demo", "eicu_demo")["session"]["data_source_authorization"]["source"]
+    assert selected["database"] == "eicu_demo"
+    assert selected["stays"] == 80
 
 
 def test_workspace_session_cannot_read_a_research_offer(host) -> None:
