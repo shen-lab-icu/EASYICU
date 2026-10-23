@@ -37,6 +37,7 @@ from easyicu.webserver.research_evidence_preview import (
 )
 from easyicu.webserver.figure_presentation import verified_presentation_gallery
 from easyicu.webserver.research_input_progress import project_research_input_state
+from easyicu.webserver.stop_next_actions import project_stop_next_actions
 from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.run_record import (
     MAX_ARTIFACT_SIZE_BYTES,
@@ -1493,6 +1494,9 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
         "project_dir": str(review.directory.path),
         "gate_status": gate.status,
         "gate_reason": gate.reason,
+        "next_actions": project_stop_next_actions(
+            gate.to_dict(), pending_reason_codes=pending_reason_codes,
+        ),
         # The blocked data foundation's lower-layer cause (codes and concept
         # ids only), carried so the run record can name what the data lacked.
         "gate_detail": (

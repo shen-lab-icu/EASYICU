@@ -107,6 +107,8 @@ def capability_gap_stop(
         f"({gap.requirement}, {check.verification}): {outline.rationale}",
         path="capability_gap", cause_code=gap.requirement,
         concepts=(gap.concept,) if gap.concept else (),
+        element=gap.requirement,
+        question_required=True,
         findings=[diagnostic.model_dump(mode="json", exclude={"rationale"})],
     )
     stop.easyicu_planning_capability_gap = diagnostic

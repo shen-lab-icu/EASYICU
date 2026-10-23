@@ -74,7 +74,11 @@ class RunGate:
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return thaw_payload(self.payload)
+        from easyicu.webserver.stop_next_actions import project_stop_next_actions
+
+        payload = thaw_payload(self.payload)
+        payload["next_actions"] = project_stop_next_actions(payload)
+        return payload
 
 
 @dataclass(frozen=True)

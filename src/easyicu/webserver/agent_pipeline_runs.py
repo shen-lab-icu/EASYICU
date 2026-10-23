@@ -136,6 +136,9 @@ from easyicu.webserver.prediction_performance_projection import (
 )
 from easyicu.webserver.research_evidence_preview import is_identifier_column
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.stop_next_actions import (
+    project_stop_next_actions, safe_stop_coordinates, source_stop_coordinates,
+)
 from easyicu.webserver.research_input_progress import (
     project_research_input_state,
     research_input_state,
@@ -981,6 +984,7 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
             projected: Dict[str, Any] = {
                 "owner": owner,
                 "reason_code": reason_code,
+                **safe_stop_coordinates(raw),
             }
             step_id = raw.get("step_id")
             if isinstance(step_id, str) and re.fullmatch(
@@ -1235,10 +1239,12 @@ def _write_pipeline_failure_diagnostic(
 
 def _failure_gate_detail(
     reason_code: str, cause_code: Optional[str], concepts: Sequence[str] = (),
+    *, action_coordinates: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """A failed run's typed reason, its cause and the concepts the stop names."""
 
     return {
+        **safe_stop_coordinates(action_coordinates),
         "reason_code": reason_code,
         **({"cause_code": cause_code} if cause_code else {}),
         **({"missing_concepts": list(concepts)} if concepts else {}),
@@ -1261,6 +1267,7 @@ def _write_pipeline_failure_projection(
     detail_reason_code: Optional[str] = None,
     detail_cause_code: Optional[str] = None,
     detail_concepts: Sequence[str] = (),
+    detail_action_coordinates: Mapping[str, Any] | None = None,
 ) -> bool:
     """Write a fail-closed terminal receipt that Project Monitor can index.
 
@@ -1296,11 +1303,18 @@ def _write_pipeline_failure_projection(
             }
         ],
         **(
-            {"detail": _failure_gate_detail(detail_reason_code, detail_cause_code, detail_concepts)}
+            {"detail": _failure_gate_detail(
+                detail_reason_code, detail_cause_code, detail_concepts,
+                action_coordinates=detail_action_coordinates,
+            )}
             if detail_reason_code
             else {}
         ),
     }
+    source = study.get("data_source")
+    gate["next_actions"] = project_stop_next_actions(
+        gate, database=source.get("database") if isinstance(source, Mapping) else None,
+    )
     payloads: Dict[str, Dict[str, Any]] = {
         "run_context.json": {
             "run_id": run_id,
@@ -1389,6 +1403,11 @@ def _record_pipeline_failure(
         typed = _safe_pipeline_typed_failure(exc)
         reason_code = typed.get("reason_code")
         cause_code = typed.get("cause_code")
+        coordinates = safe_stop_coordinates(typed)
+        if isinstance(exc, ResearchPipelineRunError):
+            coordinates.update(source_stop_coordinates(exc.details))
+            if coordinates and reason_code is None:
+                reason_code = code
         _write_pipeline_failure_projection(
             wrapper_dir=wrapper_dir,
             study=study,
@@ -1399,6 +1418,7 @@ def _record_pipeline_failure(
             detail_reason_code=reason_code if isinstance(reason_code, str) else None,
             detail_cause_code=cause_code if isinstance(cause_code, str) else None,
             detail_concepts=_typed_failure_concepts(typed),
+            detail_action_coordinates=coordinates,
         )
     return diagnostic
 
@@ -4451,6 +4471,11 @@ def _write_projection(
             }
             for request in pending.requests
         ]
+    source = study.get("data_source")
+    gate["next_actions"] = project_stop_next_actions(
+        gate, pending_reason_codes=[item["reason_code"] for item in pending_requests],
+        database=source.get("database") if isinstance(source, Mapping) else None,
+    )
     system_validation_applicable = bool(
         run_dir is not None
         and axes.get("execution_complete")

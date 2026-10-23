@@ -46,6 +46,7 @@ from easyicu.webserver.target_trial_setup import (
 )
 from easyicu.webserver.planning_coordinate_readings import project_coordinate_readings
 from easyicu.webserver.study_family_scope import bound_study_family_gap
+from easyicu.webserver.stop_next_actions import STOP_POLICIES, StopNextAction, project_stop_next_actions
 
 from . import cohort_eligibility, plan_decisions, plan_review_progress
 from .contracts import (
@@ -117,6 +118,7 @@ class ResearchWorkflowSnapshot(BaseModel):
     )
     current_stage: str
     next_action_code: str
+    next_actions: List[StopNextAction] = Field(default_factory=list, max_length=17)
     missing_setup_fields: List[str] = Field(default_factory=list, max_length=16)
     planning_prerequisites_missing: List[str] = Field(
         default_factory=list, max_length=8
@@ -217,6 +219,11 @@ def project_run_history(
             "authoritative": run_id == authoritative_run_id,
         }
         entry.update(gate_detail_projection(row.get("gate_detail")))
+        entry["next_actions"] = project_stop_next_actions(
+            {"status": row.get("gate_status"), "reason": row.get("gate_reason"),
+             "detail": row.get("gate_detail"), "next_actions": row.get("next_actions")},
+            pending_reason_codes=pending,
+        )
         projected.append(entry)
     return ensure_safe_projection(projected)
 
@@ -1190,9 +1197,23 @@ def build_research_workflow_snapshot(
         next_action = trial_action
         next_stage = next_stage.model_copy(update={"reason_code": trial_action})
         stages = [next_stage if row.id == "plan" else row for row in stages]
+    stop_gate = {
+        "status": run_row.get("gate_status"), "reason": run_row.get("gate_reason"),
+        "detail": run_row.get("gate_detail"), "next_actions": run_row.get("next_actions"),
+    }
+    if next_action in STOP_POLICIES and next_action != "operator_plan_approval_required":
+        stop_gate.update(status="blocked", reason=next_action)
+    if family_gap is not None:
+        stop_gate["detail"] = family_gap
     return ResearchWorkflowSnapshot(
         current_stage=next_stage.id,
         next_action_code=next_action,
+        next_actions=project_stop_next_actions(
+            stop_gate,
+            pending_reason_codes=run_row.get("pending_review_reason_codes") or (),
+            database=(study_row.get("data_source") or {}).get("database")
+            if isinstance(study_row.get("data_source"), Mapping) else None,
+        ) if job_status != "running" else [],
         planning_prerequisites_missing=planning_prerequisites_missing,
         missing_setup_fields=missing,
         stages=stages,
