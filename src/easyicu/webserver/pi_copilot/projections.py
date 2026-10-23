@@ -712,6 +712,12 @@ def _project_job(
             "evidence_complete": gate_checks.get("evidence_complete") is True,
             "manuscript_ready": gate_checks.get("manuscript_ready") is True,
             "analysis_results_available": analysis_results_available,
+            "limitations": [
+                {"step_id": stable_code(item.get("step_id")),
+                 "message": _bounded_text(item.get("message"), 500)}
+                for item in (gate.get("limitations") or [])[:20]
+                if isinstance(item, Mapping)
+            ],
             "report_only": report_only,
             "report_revision_ready": revision_ready,
             "report_revision_pdf_ready": revision_pdf_ready,

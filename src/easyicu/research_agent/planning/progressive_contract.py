@@ -1315,6 +1315,19 @@ class ProgressiveCompiledStepReceipt(BaseModel):
     immutable_prefix_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class OmittedRenderStep(BaseModel):
+    """Host-recorded omission; not part of any Planner response schema."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    step_id: str
+    expected_outputs: list[str]
+    reason: Literal["unconsumed_optional_render_without_typed_owner"] = (
+        "unconsumed_optional_render_without_typed_owner"
+    )
+    message: str
+
+
 class ProgressivePlanCompileReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -1328,6 +1341,9 @@ class ProgressivePlanCompileReceipt(BaseModel):
     skeleton_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     analysis_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     compiled_steps: list[ProgressiveCompiledStepReceipt]
+    omitted_render_steps: list[OmittedRenderStep] = Field(
+        default_factory=list, exclude_if=lambda value: not value,
+    )
 
 
 class ProgressivePlanCompileError(ValueError):

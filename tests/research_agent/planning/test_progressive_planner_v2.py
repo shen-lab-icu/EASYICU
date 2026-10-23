@@ -1290,7 +1290,7 @@ def test_host_materialization_keeps_one_schema_ledger_entry_per_step(
     plan = attempt.output
     facts = attempt.facts
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 5
     assert facts.prompt_metrics["host_step_materialization_count"] == 4
     assert facts.prompt_metrics["step_materialization_payload_bytes"].count(0) == 4
@@ -1339,7 +1339,7 @@ def test_checkpoint_resume_reuses_host_materialized_null_schema_authority(
         resume_dependency_context=dependency_context,
     )
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(resumed_llm.calls) == 3
 
 
@@ -6233,7 +6233,7 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
     plan = attempt.output
     facts = attempt.facts
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert plan.design_selection is not None
     assert plan.design_selection.selected.design_id == "selected_primary_design"
     assert plan.design_selection.claim_ceiling == "analysis_only"
@@ -6269,6 +6269,8 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
     assert facts.prompt_metrics["step_materialization_count"] == 7
     assert facts.prompt_metrics["full_revision_count"] == 0
     assert facts.compile_receipt is not None
+    assert facts.compile_receipt.omitted_render_steps[0].step_id == "07_figure"
+    assert facts.compile_receipt.omitted_render_steps[0].message in plan.rationale
     assert facts.outline is not None
     assert facts.foundation is not None
     assert len(facts.materializations) == 7
@@ -6290,7 +6292,7 @@ def test_outline_authority_failure_is_retried_before_foundation() -> None:
 
     plan = ProgressivePlannerAgent(llm).run(_context())
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 10
     assert llm.calls[0][1]["structured_output"].name == (
         "easyicu_progressive_plan_outline_v1"
@@ -6320,7 +6322,7 @@ def test_accepted_baseline_omission_is_repaired_in_outline_not_a_whole_new_run()
     llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
     llm.supports_strict_json_schema = True
     plan = ProgressivePlannerAgent(llm).run(context)
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 10
     assert [call[1]["structured_output"].name for call in llm.calls[:3]] == [
         "easyicu_progressive_plan_outline_v1", "easyicu_progressive_plan_outline_v1",
@@ -6346,7 +6348,7 @@ def test_foundation_outline_digest_is_bound_without_spending_a_retry() -> None:
 
     plan = ProgressivePlannerAgent(llm).run(_context())
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 9
     assert llm.calls[1][1]["structured_output"].name == (
         "easyicu_progressive_plan_foundation_v1"
@@ -6368,7 +6370,7 @@ def test_repeated_singleton_outline_is_retried_before_foundation() -> None:
 
     plan = ProgressivePlannerAgent(llm).run(_context())
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 10
     assert "progressive_outline_host_module_repeated" in (llm.calls[1][0][-1].content)
     assert "Host-compiled singleton module ownership" in (llm.calls[0][0][-1].content)
@@ -6523,7 +6525,7 @@ def test_agent_repairs_missing_robustness_intent_before_step_materialization() -
 
     plan = agent.run(_context(), checkpoint_callback=checkpoints.append)
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 10
     assert [item.stage for item in checkpoints[:2]] == ["outline", "foundation"]
     assert "progressive_foundation_robustness_intent_missing" in (
@@ -6655,7 +6657,7 @@ def test_agent_resumes_only_the_unmaterialized_suffix() -> None:
         resume_dependency_context=dependency_context,
     )
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(resumed_llm.calls) == 4
     assert resumed_agent.last_result.facts.resume_validated is True
     assert [item.sequence for item in resumed_checkpoints] == [5, 6, 7, 8]
@@ -6777,7 +6779,7 @@ def test_agent_replays_a_complete_checkpoint_without_provider_calls() -> None:
         resume_dependency_context=dependency_context,
     )
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert replay_llm.calls == []
     assert replay_agent.last_result.facts.resume_validated is True
 
@@ -6800,7 +6802,7 @@ def test_agent_repairs_only_the_current_materialization() -> None:
 
     plan = agent.run(_context())
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 10
     repair_prompt = llm.calls[7][0][-1].content
     assert "HOST COMPILER OBSERVATION FOR THIS CURRENT STEP" in repair_prompt
@@ -6859,7 +6861,7 @@ def test_agent_repairs_two_independent_current_step_findings() -> None:
 
     plan = agent.run(_context())
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 11
     assert "progressive_unknown_variable" in llm.calls[7][0][-1].content
     assert "progressive_model_outcome_is_covariate" in llm.calls[8][0][-1].content
@@ -6945,6 +6947,9 @@ def test_agent_repairs_primary_model_to_the_exact_adjustment_roster() -> None:
 
 def test_agent_repairs_final_plan_dependent_method_layer_locally() -> None:
     payload = _payload()
+    context = _context().model_copy(update={
+        "user_preferences": UserPreferences(must_have_outputs="Required figure"),
+    })
 
     def binding(
         citation_key: str,
@@ -7020,7 +7025,7 @@ def test_agent_repairs_final_plan_dependent_method_layer_locally() -> None:
     agent = ProgressivePlannerAgent(llm)
 
     plan = agent.run(
-        _context(),
+        context,
         allowed_literature_citation_keys=[
             "strobe_2007",
             "record_2015",
@@ -7060,7 +7065,7 @@ def test_agent_repairs_identical_distribution_contrast_locally() -> None:
 
     plan = agent.run(_context())
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 10
     repair_prompt = llm.calls[5][0][-1].content
     assert "HOST COMPILER OBSERVATION FOR THIS CURRENT STEP" in repair_prompt
@@ -7209,7 +7214,7 @@ def test_agent_repairs_current_step_coordinate_drift_without_full_rewrite() -> N
 
     plan = agent.run(_context())
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 10
     assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 1
     assert agent.last_result.facts.prompt_metrics["full_revision_count"] == 0
@@ -7238,7 +7243,7 @@ def test_agent_carries_two_distinct_step_schema_failures_into_final_retry() -> N
 
     plan = ProgressivePlannerAgent(llm).run(_context())
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 11
     final_retry_prompt = llm.calls[8][0][-1].content
     assert "Earlier attempts were rejected" in final_retry_prompt
@@ -7327,7 +7332,7 @@ def test_agent_repairs_duplicate_outline_literature_key_without_diagnostic_crash
         allowed_literature_citation_keys=["strobe_2007", "record_2015"],
     )
 
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 10
     assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 1
     repair_prompt = llm.calls[5][0][-1].content

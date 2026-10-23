@@ -124,6 +124,7 @@ from ..research_context.cohort_granularity import format_patient_count
 from ..robustness.panel import load_robustness_panel, unexecuted_locked_spec_ids
 from ..figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from ..planning.figure_step_contract import _output_declares_figure, _parent_step_id_for_figure_step
+from ..planning.figure_plan_mutation import optional_render_step_ids
 from .review_artifacts import build_review_artifact_payloads
 from .reviewer import derive_reviewer_primary_result_bindings, run_reviewer_round
 from .result_integrity import (
@@ -453,6 +454,7 @@ def execution_gate_status(
     plan: Optional[AnalysisPlan],
     per_step_records: Sequence[Dict[str, Any]],
     run_dir: Optional[Path] = None,
+    context: Optional[ResearchContext] = None,
 ) -> Dict[str, Any]:
     if plan is None:
         return {
@@ -507,7 +509,23 @@ def execution_gate_status(
         status_by_step=status_by_step,
         step_ok=_step_ok,
     )
-    failed_steps = completion["failed_steps"]
+    optional_ids = optional_render_step_ids(plan, context=context)
+    # An invalidated input authority or a still-mutable output directory is
+    # not an isolated presentation failure. Keep those existing stops closed.
+    optional_ids.difference_update(
+        step_id for step_id, record in record_by_step.items()
+        if record.get("input_authority_findings") or record.get("runner_output_safety_reason")
+    )
+    optional_render_failures = [
+        {**item, "message": (
+            f"可选图表步骤 {item['step_id']} 未完成；已验证的分析结果仍可查看，"
+            "该图表不可用于支持结论。"
+        )}
+        for item in completion["failed_steps"] if item["step_id"] in optional_ids
+    ]
+    failed_steps = [
+        item for item in completion["failed_steps"] if item["step_id"] not in optional_ids
+    ]
     scientific_incomplete_steps = completion["scientific_incomplete_steps"]
     execution_complete = not missing_steps and not failed_steps
     return {
@@ -521,6 +539,7 @@ def execution_gate_status(
         ),
         "missing_steps": missing_steps,
         "failed_steps": failed_steps,
+        "optional_render_failures": optional_render_failures,
         "scientific_incomplete_steps": scientific_incomplete_steps,
         "step_completion_states": completion["step_completion_states"],
     }
@@ -920,7 +939,7 @@ _STEP_ID_IN_MESSAGE_PATTERNS = (
     # ValidationFinding site that references a specific step. See
     # ``_step_id_referenced_in_finding`` for the full taxonomy.
     re.compile(r"\bfor step\s+([A-Za-z0-9_./-]+)"),
-    re.compile(r"\bstep\s+([A-Za-z0-9_./-]+)\s+(?:was|failed|skipped|blocked)"),
+    re.compile(r"\bstep\s+([A-Za-z0-9_./-]+)\s+(?:was|failed|timed out|skipped|blocked)", re.I),
 )
 
 
@@ -1764,7 +1783,7 @@ def current_validation_findings(
     The context and plan name the claims exactly as the write phase did.
     """
     if execution is None:
-        execution = execution_gate_status(plan=plan, per_step_records=per_step_records, run_dir=run_dir)
+        execution = execution_gate_status(plan=plan, per_step_records=per_step_records, run_dir=run_dir, context=context)
     missing_evidence_count = _count_missing_evidence_markers(manuscript_text)
     # General supersession rule: if a step eventually succeeded
     # (status="ok" in per_step_records), any earlier ValidationFinding
@@ -1938,7 +1957,7 @@ def _compute_readiness_gates(
     plan_authority_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
     execution = execution_gate_status(
-        plan=plan, per_step_records=per_step_records, run_dir=run_dir
+        plan=plan, per_step_records=per_step_records, run_dir=run_dir, context=context
     )
     manuscript_text = ""
     if manuscript_path.exists():
@@ -1965,11 +1984,19 @@ def _compute_readiness_gates(
         if f.severity == "error"
         and f.validator in _MANUSCRIPT_ERROR_VALIDATORS
     ]
+    optional_failure_ids = {
+        item["step_id"] for item in execution.get("optional_render_failures", [])
+    }
     non_manuscript_errors = [
         f.message
         for f in active_findings
         if f.severity == "error"
         and not _is_cosmetic_visual_error(f)
+        # Use the same step attribution as supersession, including historical
+        # runner/coder terminal messages that predate detail.step_id.
+        # Manuscript evidence/numeric errors above remain blocking, even when
+        # they name this step; run-level and analysis errors stay active too.
+        and _step_id_referenced_in_finding(f) not in optional_failure_ids
         and f.validator
         not in {
             "manuscript_numeric_auditor",
@@ -2892,6 +2919,9 @@ def _render_author_review_note(
     }
     failed_steps = gates.get("failed_steps") or []
     missing_steps = gates.get("missing_steps") or []
+    if gates.get("optional_render_failures"):
+        lines.extend(["## Optional figure limitations", ""])
+        lines.extend(item["message"] for item in gates["optional_render_failures"])
     if failed_steps or missing_steps:
         lines.extend(["## Blocking step issues", ""])
         for item in failed_steps:
@@ -3055,6 +3085,11 @@ def render_report(
                 parts.append("- Supporting step contracts:")
                 parts.extend(f"  - `{path}`" for path in supporting_contracts)
             parts.append("")
+
+    if readiness and readiness.get("optional_render_failures"):
+        parts.extend(["## Optional figure limitations", ""])
+        parts.extend(item["message"] for item in readiness["optional_render_failures"])
+        parts.append("")
 
     if plan:
         parts.append("## Plan")

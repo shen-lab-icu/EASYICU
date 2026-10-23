@@ -555,6 +555,8 @@ def compile_progressive_prefix(
         allowed_literature_citation_keys=allowed_literature_citation_keys,
         allowed_know_how_decisions=allowed_know_how_decisions,
         host_reporting_method_source_keys=reporting_method_source_keys,
+        # Future consumers are only known once the whole outline is compiled.
+        omit_optional_render_steps=False,
     )
     try:
         validate_plan_against_adjustment_authority(plan=plan, context=context)

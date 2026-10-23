@@ -36,6 +36,98 @@ from ..schema import (
 _RENDER_SOURCE_OUTPUT_KINDS = frozenset({"statistic", "table"})
 
 
+def requires_visualization_step(context: ResearchContext) -> bool:
+    """The progressive outline's existing run-bound visualization obligation."""
+    preferences = context.user_preferences
+    if (
+        getattr(preferences, "inferred_analysis_family", None)
+        == "descriptive_epidemiology"
+    ):
+        # This family compiles publication figures from the extracted products.
+        return False
+    return bool(
+        re.search(
+            r"\bfigures?\b",
+            str(getattr(preferences, "must_have_outputs", None) or ""),
+            re.I,
+        )
+    )
+
+
+def optional_render_step_ids(
+    plan: AnalysisPlan,
+    *,
+    context: Optional[ResearchContext] = None,
+    required_visualization_step: bool = False,
+) -> set[str]:
+    """Terminal, auxiliary rendering work with no scientific/output obligation.
+
+    Preserve the progressive outline's visualization obligation and exact
+    requested products. Never interpret a step's intent or its identifier.
+    """
+    if required_visualization_step or (
+        context is not None and requires_visualization_step(context)
+    ):
+        return set()
+    requested = str(
+        getattr(getattr(context, "user_preferences", None), "must_have_outputs", None)
+        or ""
+    )
+    requested_products = {
+        typed_product(token)
+        for token in re.findall(r"\b[a-z]+:[a-z][a-z0-9_]*\b", requested.lower())
+    }
+    optional = set()
+    for step in plan.steps:
+        if not isinstance(step, AnalysisStep):
+            continue  # A legacy/untyped record cannot establish this exemption.
+        outputs = [typed_product(value) for value in step.expected_outputs]
+        inputs = [typed_product(value) for value in step.inputs]
+        if (
+            step.planned_analysis_role != "auxiliary"
+            or step.method not in {"visualization", "host_rendered_visualization"}
+            or step.model_requirements
+            or step.family_primary_result_requirement is not None
+            or step.scientific_action_id is not None
+            or step.scientific_capability is not None
+            or step.sensitivity_spec_ids
+            or any(
+                (
+                    step.table_one_spec,
+                    step.trajectory_stability_spec,
+                    step.exposure_outcome_distribution_spec,
+                    step.cohort_definition_spec,
+                    step.measurement_audit_spec,
+                    step.robustness_replay_spec,
+                    step.functional_form_spec,
+                    step.phenotype_comparison_spec,
+                    step.phenotyping_feature_columns,
+                    step.runtime_outcome_contract,
+                )
+            )
+            or not outputs
+            or any(product is None or product[0] != "figure" for product in outputs)
+            or any(product in requested_products for product in outputs)
+            or not inputs
+            or any(
+                product is None or product[0] not in {"table", "statistic"}
+                for product in inputs
+            )
+        ):
+            continue
+        if any(
+            consumer.step_id != step.step_id
+            and (
+                step.step_id in consumer.inputs
+                or any(typed_product(value) in outputs for value in consumer.inputs)
+            )
+            for consumer in plan.steps
+        ):
+            continue
+        optional.add(step.step_id)
+    return optional
+
+
 def _typed_render_source_outputs(outputs: Sequence[str]) -> List[str]:
     """Return exact finalized parent result products a render child may consume.
 
@@ -882,6 +974,8 @@ def effect_figure_source_authorized(
 
 
 __all__ = [
+    "optional_render_step_ids",
+    "requires_visualization_step",
     "_ensure_publication_figure_step_in_plan",
     "_split_table_and_figure_outputs_in_plan",
     "effect_figure_source_authorized",

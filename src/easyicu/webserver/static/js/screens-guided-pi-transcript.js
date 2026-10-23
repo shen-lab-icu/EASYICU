@@ -158,6 +158,11 @@
       if (job.human_review_pending === true) {
         return { text: tr('The research plan is ready for your review below; analysis has not started.', '研究计划已生成，请在下方审阅；分析尚未开始。'), resources: [] };
       }
+      const limitations = (Array.isArray(job.limitations) ? job.limitations : [])
+        .map(item => String(item && item.message || '')).filter(Boolean).join(' ');
+      if (job.analysis_results_available === true && limitations) {
+        return { text: tr('The validated analysis results are available. ', '已验证的分析结果可以查看。') + limitations, resources: [] };
+      }
       return job.analysis_results_available === true
         ? { text: tr('The research task finished; its results are summarised below.', '科研任务已完成，结果汇总见下方。'), resources: [] }
         : { text: tr(`The research task ended${reason ? `: ${reason}` : ''}.`, `科研任务已结束${reason ? `：${reason}` : ''}。`), resources: [] };
@@ -288,7 +293,11 @@
       }).filter(Boolean).sort((left, right) => right[0] - left[0])[0];
       const actionArtifact = String(turn && turn.action_key || '').split(':').slice(1).join(':');
       let doneCopy = copy.done;
-      if (actionCode === 'execute_plan' && resultsVerified) {
+      const figureLimitations = (Array.isArray(job && job.limitations) ? job.limitations : [])
+        .map(item => String(item && item.message || '')).filter(Boolean).join(' ');
+      if (['execute_plan', 'retry_analysis'].includes(actionCode) && job && job.analysis_results_available && figureLimitations) {
+        doneCopy = tr('The validated analysis results are available. ', '已验证的分析结果可以查看。') + figureLimitations;
+      } else if (actionCode === 'execute_plan' && resultsVerified) {
         const stepText = completedSteps
           ? tr(`${completedSteps[0]}/${completedSteps[1]} approved steps`, `${completedSteps[0]}/${completedSteps[1]} 个批准步骤`)
           : tr('the approved steps', '批准的分析步骤');

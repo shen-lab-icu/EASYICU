@@ -3601,6 +3601,7 @@ def _readiness_axes(run_dir: Path) -> Dict[str, Any]:
             "evidence_error_count",
             "analysis_error_count",
             "failed_steps",
+            "optional_render_failures",
             "missing_steps",
             "analysis_errors",
             "writer_stop",
@@ -3719,6 +3720,7 @@ def _gate_from_axes(axes: Mapping[str, Any], *, pending: bool) -> Dict[str, Any]
         "reportable": False,
         "draft_unlocked": False,
         "checks": checks,
+        "limitations": list(axes.get("optional_render_failures") or []),
     }
 
 

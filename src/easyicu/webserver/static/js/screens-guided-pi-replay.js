@@ -138,6 +138,8 @@
     const errorCode = String(job && job.error_code || '');
     const analysisResultsAvailable = Boolean(job && job.analysis_results_available);
     const analysisValidated = Boolean(job && job.analysis_validated);
+    const figureLimitations = (Array.isArray(job && job.limitations) ? job.limitations : [])
+      .map(item => String(item && item.message || '')).filter(Boolean).join(' ');
     // Only a genuine historical Planner efficiency-budget stop is presented
     // as resumable. Contract/compiler failures are failures, not a normal
     // pause, and must never produce a misleading "continue" affordance.
@@ -244,6 +246,8 @@
             : '',
       terminalLabel: reviewPending
         ? translate('Plan contract passed; analysis is paused for human review', '计划合同已通过；分析已暂停，等待人工审阅')
+        : analysisResultsAvailable && figureLimitations
+          ? translate('The validated analysis results are available. ', '已验证的分析结果可以查看。') + figureLimitations
         : analysisResultsAvailable
           ? analysisValidated
             ? translate('Validated results, figures, and draft are ready to review', '已生成并验证结果、图表和文章草稿，可继续查看')
