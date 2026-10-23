@@ -3,6 +3,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -315,6 +316,10 @@ def test_windows_packaging_and_smoke_workflow_are_opt_in_and_per_user():
     assert (workflow.get("on") or workflow.get(True)) == {"workflow_dispatch": None}
     job = workflow["jobs"]["installer"]
     assert job["runs-on"] == "windows-latest"
+    # GitHub refuses to parse a workflow whose job-level env reads a context
+    # that exists only inside steps (runner, steps, job).
+    job_env = json.dumps(job.get("env", {}))
+    assert not re.search(r"\$\{\{[^}]*\b(runner|steps|job)\.", job_env)
     steps = job["steps"]
     assert any("smoke_windows.ps1" in step.get("run", "") for step in steps)
     artifact = next(step for step in steps if step.get("with", {}).get("name") == "EasyICU-windows-x64")
