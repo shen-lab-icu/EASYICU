@@ -7,6 +7,7 @@ issue it; available variables or mentions in prose never create requirements.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -19,10 +20,12 @@ from ..contracts.cohort_summary_products import (
     auxiliary_summary_product,
     is_descriptive_summary_product_step,
 )
+from .progressive_contract import ProgressivePlanCompileError
 
 
 _PROVENANCE_KEY = "accepted_baseline_requirements"
 _NON_VALUE_ROLES = frozenset({"meta", "time", "id", "index"})
+_LINEAGE_ROLES = frozenset({"id", "index"})
 
 
 class BaselineCoordinate(BaseModel):
@@ -69,6 +72,13 @@ def candidate_baseline_requirements(
     """
 
     concepts, columns = set(selected_concepts), set(catalog_columns)
+    # The accepted cohort owner can name an identity that is renamed during
+    # extraction. Retain its lineage meaning without guessing column aliases.
+    identities = {
+        AnalysisStep.model_validate(step).cohort_definition_spec.identity_column
+        for step in plan.get("steps") or ()
+        if isinstance(step, Mapping) and step.get("cohort_definition_spec") is not None
+    }
 
     def coordinate(name: str) -> BaselineCoordinate:
         if name not in columns:
@@ -91,20 +101,27 @@ def candidate_baseline_requirements(
             if not set(step.get("expected_outputs") or ()).intersection(baseline_products):
                 continue
             parsed = AnalysisStep.model_validate(step)
+            # Primary results have their own scientific action/product contract.
+            # Sharing a summary product never makes them baseline obligations.
+            if parsed.planned_analysis_role != "auxiliary":
+                continue
             if is_descriptive_summary_product_step(parsed):
-                tables.append(BaselineTableRequirement(
-                    source_step_id=parsed.step_id, group_by=None,
-                    variables=tuple(coordinate(name) for name in declared_summary_columns(parsed)),
-                ))
+                variables = tuple(coordinate(name) for name in declared_summary_columns(parsed) if name not in identities)
+                if variables:
+                    tables.append(BaselineTableRequirement(
+                        source_step_id=parsed.step_id, group_by=None, variables=variables,
+                    ))
             elif set(parsed.expected_outputs).intersection(baseline_products):
                 raise ValueError("accepted baseline lacks a closed descriptive or Table One owner")
             continue
         spec = TableOneSpec.model_validate(step["table_one_spec"])
-        tables.append(BaselineTableRequirement(
-            source_step_id=step["step_id"],
-            group_by=coordinate(spec.group_by),
-            variables=tuple(coordinate(variable.name) for variable in spec.variables),
-        ))
+        variables = tuple(coordinate(variable.name) for variable in spec.variables if variable.name not in identities)
+        if variables:
+            tables.append(BaselineTableRequirement(
+                source_step_id=step["step_id"],
+                group_by=coordinate(spec.group_by) if spec.group_by not in identities else None,
+                variables=variables,
+            ))
     if not tables:
         return None
     return AcceptedBaselineRequirements(
@@ -186,26 +203,80 @@ def baseline_requirement_projection(context: ResearchContext) -> dict[str, Any]:
     required = context_baseline_requirements(context)
     if required is None:
         return {"status": "not_bound", "tables": []}
+    lineage = set(context.cohort.id_columns) | {
+        variable.name for variable in context.variables if variable.role.value in _LINEAGE_ROLES
+    }
+    # A source concept with only identity/index outputs is lineage too. An
+    # identity sharing a source with clinical measurements cannot erase them.
+    clinical_sources = {
+        name for variable in context.variables
+        if variable.role.value not in _NON_VALUE_ROLES
+        for name in (variable.name, variable.source_concept)
+    }
+    lineage.update(
+        variable.source_concept for variable in context.variables
+        if variable.role.value in _LINEAGE_ROLES and variable.source_concept is not None
+        and variable.source_concept not in clinical_sources
+    )
+    tables = []
+    for table in required.tables:
+        variables = [variable for variable in table.variables if variable.name not in lineage]
+        if not variables:
+            continue
+        group = table.group_by if table.group_by and table.group_by.name not in lineage else None
+        tables.append({
+            "source_step_id": table.source_step_id,
+            "group_by": {
+                "required": group.name if group else None,
+                "available_columns": _available_columns(group, context) if group else [],
+            },
+            "variables": [
+                {"required": variable.name, "available_columns": _available_columns(variable, context)}
+                for variable in variables
+            ],
+        })
     return {
         "status": "bound",
         "source_plan_sha256": required.source_plan_sha256,
         "scope": "accepted baseline roster; not aggregation, execution or publication approval",
-        "tables": [
-            {
-                "source_step_id": table.source_step_id,
-                "group_by": {
-                    "required": table.group_by.name if table.group_by else None,
-                    "available_columns": _available_columns(table.group_by, context) if table.group_by else [],
-                },
-                "variables": [
-                    {"required": variable.name,
-                     "available_columns": _available_columns(variable, context)}
-                    for variable in table.variables
-                ],
-            }
-            for table in required.tables
-        ],
+        "tables": tables,
     }
+
+
+def validate_baseline_materialization(context: ResearchContext) -> None:
+    """Refuse unavailable accepted coordinates before any provider request.
+
+    A Planner can repair an omitted available row, but cannot materialize a
+    missing clinical coordinate. Keep that host failure outside parse retries.
+    """
+
+    coverage = baseline_outline_coverage(context, ())
+    unavailable = [table for table in coverage["tables"] if table["unavailable_coordinates"]]
+    if unavailable:
+        names = sorted({name for table in unavailable for name in table["unavailable_coordinates"]})
+        raise ProgressivePlanCompileError(
+            "progressive_accepted_baseline_materialization_missing",
+            "Accepted baseline coordinates are unavailable after extraction: " + ", ".join(names),
+            step_id=unavailable[0]["source_step_id"], path="accepted_baseline_requirements",
+            concepts=names, findings=unavailable,
+        )
+
+
+def validate_baseline_outline(context: ResearchContext, steps: Sequence[Mapping[str, Any]]) -> None:
+    """Keep repairable roster omissions inside the outline's local retry."""
+
+    baseline = baseline_outline_coverage(context, steps)
+    if baseline["status"] == "incomplete":
+        raise ProgressivePlanCompileError(
+            "progressive_outline_accepted_baseline_incomplete",
+            "The outline must preserve each accepted baseline roster in one "
+            "table_one step (or an auxiliary summary for an ungrouped roster) "
+            "before foundation or step materialization. Include the required "
+            "grouping and one available clinical-value column per required variable; "
+            "measurement metadata and mentions in an audit or prose do not satisfy "
+            "this requirement. " + json.dumps(baseline, ensure_ascii=False, sort_keys=True),
+            path="steps", findings=(baseline,),
+        )
 
 
 def baseline_requirement_coverage(
@@ -228,7 +299,8 @@ def baseline_requirement_coverage(
     ]
     rosters.extend(
         (step.step_id, set(), set(declared_summary_columns(step)))
-        for step in plan.steps if is_descriptive_summary_product_step(step)
+        for step in plan.steps if step.planned_analysis_role == "auxiliary"
+        and is_descriptive_summary_product_step(step)
     )
     rosters.extend(signed_rosters)
     return _baseline_roster_coverage(context, rosters)
@@ -288,7 +360,7 @@ def _baseline_roster_coverage(
             ],
             "complete": best_step is not None and not missing,
         })
-    if projection["tables"]:
+    if projection["status"] == "bound":
         projection["status"] = (
             "complete" if all(table["complete"] for table in projection["tables"])
             else "incomplete"
