@@ -474,10 +474,11 @@ def exposure_group_contrast(
 class ExposureGroupContrastError(ValueError):
     """A plan disagrees with a stated choice or with another compiled step."""
 
-    def __init__(self, detail: str, *, step_id: str):
+    def __init__(self, detail: str, *, step_id: str,
+                 reason_code: str = "progressive_exposure_group_contrast_mismatch"):
         super().__init__(detail)
         self.step_id = step_id
-        self.reason_code = "progressive_exposure_group_contrast_mismatch"
+        self.reason_code = reason_code
 
 
 def planned_exposure_contrasts(
@@ -517,6 +518,16 @@ def planned_exposure_contrasts(
 
 def validate_exposure_group_contrasts(plan: AnalysisPlan, context: ResearchContext) -> None:
     """Reject a grouped contrast that changes a stated choice or uses missingness."""
+    from .cohort_predicate_domain import population_emptied_exposure_levels
+
+    conflicts = population_emptied_exposure_levels(context, plan)
+    if conflicts:
+        raise ExposureGroupContrastError(
+            " ".join(item.message() for item in conflicts),
+            step_id=next((step.step_id for step in plan.steps
+                          if step.cohort_definition_spec is not None), ""),
+            reason_code="declared_exposure_level_empty",
+        )
     records = context.cohort.provenance.get(EXPOSURE_GROUP_CONTRASTS_KEY) or []
     declared = {item["variable"]: item for item in records}
     pairs = planned_exposure_contrasts(plan, variables=declared)

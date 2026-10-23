@@ -37,12 +37,18 @@ Step layout (mirrors the family's reference workflow):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from ...canonical_json import canonical_sha256
+from ...contracts.exposure_group_rules import EXPOSURE_GROUP_LABELS_KEY
 from ...contracts.model_retention import MISSING_CATEGORY_SHARE_THRESHOLD
 from ...contracts.model_terms import AdjustmentProposal
+from ...schema import ResearchContext
+from ..cohort_contract import ConceptPredicate, cohort_concept_id_scope
+from ..cohort_predicate_domain import cohort_emptied_exposure_levels
+from ..progressive_compiler import planner_cohort_definition, progressive_cohort_concept_ids
 from ..design_selection import ResearchDesignCandidate, ResearchDesignSelection
 from ..method_literature import METHOD_CARDS
 from ..progressive_contract import (
@@ -55,6 +61,8 @@ from ..progressive_contract import (
     ProgressiveOutlineStep,
     ProgressiveOutputIntent,
     ProgressivePlanFoundation,
+    ProgressivePlanCompileError,
+    ProgressivePopulationCriterion,
     ProgressivePlanOutline,
     ProgressivePredicateValue,
     ProgressiveProductRef,
@@ -780,6 +788,109 @@ def _cohort_intent(
         exclusion=stated_exclusion,
         population_criteria=criteria,
     )
+
+
+def reconcile_population_grouping(
+    draft: FamilySkeletonDraft, *, context: ResearchContext, spec: FamilyPlanSpec,
+) -> FamilySkeletonDraft:
+    """Keep every requested grouping level before any population is compiled.
+
+    This changes only predicates proved contradictory by the shared typed
+    rule owner. It never edits the context, spec, or declared grouping. The
+    resulting foundation and population note share a new outline digest.
+    """
+
+    intent = draft.foundation.foundation.cohort
+    if intent.population_spec is not None or not context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY):
+        return draft  # A separately stated spec has its own compile authority.
+    with cohort_concept_id_scope(progressive_cohort_concept_ids(
+        context, [variable.name for variable in context.variables],
+    )):
+        cohort = planner_cohort_definition(intent)
+    conflicts = cohort_emptied_exposure_levels(context, cohort)
+    if not conflicts:
+        return draft
+    requested = [
+        set(reading.concepts) for reading in spec.question_requirements
+        if reading.kind in {"estimand", "subgroup"} and reading.coverage == "plan"
+    ]
+    unresolved = [item for item in conflicts if not any(
+        {item.grouping, item.predicate.concept_id} <= concepts for concepts in requested
+    )]
+    if unresolved:
+        raise ProgressivePlanCompileError(
+            "declared_exposure_level_empty",
+            " ".join(item.message() for item in unresolved), path="cohort",
+        )
+    removed = {(item.side, item.index) for item in conflicts}
+    changed_concepts = {item.predicate.concept_id for item in conflicts}
+    kept = {
+        side: [predicate for index, predicate in enumerate(getattr(intent, side))
+               if (side, index) not in removed]
+        for side in ("inclusion", "exclusion")
+    }
+    # A criterion can conjoin several concepts. Its unambiguous numeric
+    # predicates survive, but its original wording must not claim to apply
+    # after any of its predicates was removed.
+    criteria = [item for item in intent.population_criteria
+                if not changed_concepts.intersection(item.concept_ids)]
+    for side, predicates in kept.items():
+        for predicate in predicates:
+            if predicate.concept_id in changed_concepts:
+                criteria.append(ProgressivePopulationCriterion(
+                    criterion=f"{side}: {predicate.concept_id} {predicate.op} "
+                              f"{predicate.value.materialize()}",
+                    concept_ids=[predicate.concept_id],
+                ))
+    revised = intent.model_copy(update={
+        **kept, "population_criteria": criteria,
+        "selection_mode": "predicate_filtered" if any(kept.values()) else "all_input_rows",
+    })
+    # State the effective population from its predicates, replacing the old
+    # template sentence that claimed every typed setup bound was applied.
+    restrictions = [f"{side}: {_predicate_text(predicate)}"
+                    for side in kept for index, predicate in enumerate(getattr(cohort, side))
+                    if (side, index) not in removed]
+    stated = [item.criterion for item in intent.population_criteria
+              if changed_concepts.intersection(item.concept_ids)]
+    note = (
+        "Population: input stays satisfying " + "; ".join(restrictions) + ". "
+        if restrictions else "Population: all input stays. "
+    )
+    note += "Removed population restriction(s) to preserve the typed grouping estimand: "
+    note += "; ".join(
+        f"{item.side}: {_predicate_text(item.predicate)} would empty "
+        f"{item.grouping} level {item.level}"
+        for item in conflicts
+    ) + "."
+    if stated:
+        note += " Superseded population wording: " + "; ".join(stated) + "."
+    unapplied = [item.criterion for item in criteria if not item.concept_ids]
+    if unapplied:
+        note += " Stated but not applied: " + "; ".join(unapplied) + "."
+    selection = draft.outline.design_selection
+    selected = selection.selected
+    selected = selected.model_copy(update={
+        "reviewable_plan": [note, *(selected.reviewable_plan or [])[1:]],
+    })
+    outline = draft.outline.model_copy(update={
+        "design_selection": selection.model_copy(update={
+            "candidates": [selected if item.disposition == "selected" else item
+                           for item in selection.candidates],
+        }),
+    })
+    foundation = draft.foundation.model_copy(update={
+        "outline_sha256": canonical_sha256(outline.model_dump(mode="json")),
+        "foundation": draft.foundation.foundation.model_copy(update={"cohort": revised}),
+    })
+    return replace(draft, outline=outline, foundation=foundation)
+
+
+def _predicate_text(predicate: ConceptPredicate) -> str:
+    window = predicate.time_window
+    return (f"{predicate.concept_id} {predicate.op} {json.dumps(predicate.value)} "
+            f"({predicate.aggregation}, {window.anchor} "
+            f"[{window.start_offset_hours:g}, {window.end_offset_hours:g}) h)")
 
 
 def _outline_step(
