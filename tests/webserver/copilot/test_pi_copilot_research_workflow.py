@@ -762,6 +762,155 @@ def test_candidate_plan_without_an_exposure_role_binds_materialization_authority
 
 
 @pytest.mark.parametrize(
+    "proposed_outcome, candidate_outcome, accepted",
+    [(None, None, True), ("death", None, False), (None, "death", False)],
+)
+def test_candidate_plan_without_an_outcome_role_binds_materialization_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proposed_outcome: str | None,
+    candidate_outcome: str | None,
+    accepted: bool,
+) -> None:
+    """A measurement's distribution has no outcome coordinate on either side.
+
+    A reviewed candidate describing one measurement was refused at every
+    acceptance because the empty outcome failed the completeness check, and
+    the conversation showed nothing; the two sides must still agree.
+    """
+
+    study = _complete_study()
+    study.update(
+        {
+            "question": "Describe the distribution of first-day maximum lactate.",
+            "primary_exposure": "",
+            "covariates": [],
+            "covariate_selection": "planner_selectable",
+            "execution_concepts": {},
+            "analysis_design": {
+                "analysis_family": "descriptive_epidemiology",
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "model_based",
+            },
+        }
+    )
+    study.pop("outcome", None)
+    source_run_id = "run-distribution-candidate"
+    project_dir = tmp_path / "candidate-wrapper"
+    inner_run = project_dir / "pipeline" / source_run_id
+    inner_run.mkdir(parents=True)
+    capsule_raw = json.dumps(
+        {
+            "scientific_identity": {
+                "question": study["question"],
+                "database": "miiv",
+                "primary_exposure": None,
+                "target_outcome": candidate_outcome,
+                "user_preferences": {},
+            }
+        }
+    ).encode()
+    (inner_run / "run_input_capsule.json").write_bytes(capsule_raw)
+    (inner_run / "human_review_checkpoint.json").write_text(
+        json.dumps(
+            {
+                "state": "pending",
+                "run_input_capsule_sha256": hashlib.sha256(capsule_raw).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    pipeline_input = project_dir / "pipeline_input"
+    pipeline_input.mkdir()
+    catalog = ["death", "lact"]
+    pd.DataFrame(columns=catalog).to_parquet(
+        pipeline_input / "planner_catalog.parquet", index=False
+    )
+    (pipeline_input / "planner_catalog_receipt.json").write_text(
+        json.dumps({"selected_concepts": catalog}), encoding="utf-8"
+    )
+    review = PlanScientificReview(
+        status="analysis_only",
+        approval_allowed=True,
+        top_journal_candidate=False,
+        score=92,
+        dimension_scores={"study_design": 92},
+        findings=[],
+        context_sha256="a" * 64,
+        plan_sha256="b" * 64,
+        literature_sha256="c" * 64,
+        figure_strategy_sha256="d" * 64,
+        generated_at="2026-09-24T00:00:00Z",
+    ).model_dump(mode="json")
+    monkeypatch.setattr(
+        agent_runs,
+        "list_run_history",
+        lambda **_kwargs: {
+            "runs": [
+                {
+                    "run_id": source_run_id,
+                    "project_dir": str(project_dir),
+                    "scientific_configuration_sha256": (
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        agent_runs,
+        "read_run_review",
+        lambda _project_dir: {
+            "ok": True,
+            "artifact_payloads": {
+                "scientific_plan_review.json": review,
+                "agent_plan.json": {
+                    "analysis_type": "descriptive_epidemiology",
+                    "cohort": {"selection_mode": "all_input_rows"},
+                    "steps": [
+                        {
+                            "step_id": "primary_distribution",
+                            "method": "descriptive_distribution",
+                            "planned_analysis_role": "primary",
+                            "inputs": ["lact"],
+                            "expected_outputs": ["table:distribution_summary"],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_metadata_only_planning_coordinates",
+        lambda **_kwargs: {"primary_exposure": None, "target_outcome": proposed_outcome},
+    )
+
+    def load() -> Any:
+        return agent_pipeline_runs._load_candidate_plan_materialization_authority(
+            study=study,
+            project_root=str(tmp_path),
+            source_run_id=source_run_id,
+            database="miiv",
+            covariates=(),
+        )
+
+    if not accepted:
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+            load()
+        assert raised.value.code == "candidate_plan_materialization_authority_invalid"
+        return
+
+    authority = load()
+
+    assert authority is not None
+    assert authority.target_outcome is None
+    assert authority.outcome_concepts == ()
+    assert authority.analysis_inputs is not None
+    assert authority.analysis_inputs.concepts == ("lact",)
+
+
+@pytest.mark.parametrize(
     "configured_operation, prepared_exposure",
     [(True, "lact"), (False, "lact"), (False, "aki_stage_strict")],
 )
