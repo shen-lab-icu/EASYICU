@@ -378,11 +378,22 @@ def _declared_risk_difference(
     assert high is not None
     if standard_error <= 0:
         raise ValueError("risk-difference estimate or uncertainty is invalid")
+    # From the published counts, in the producer's arithmetic: the displayed
+    # rates are each rounded, so their difference can sit one unit in the
+    # sixth decimal from the rounded difference of the risks.
     expected_estimate = round(
-        float(comparison["outcome_rate_pct"]) - float(reference["outcome_rate_pct"]),
+        100.0 * (
+            int(comparison["outcome_events"]) / int(comparison["outcome_denominator"])
+            - int(reference["outcome_events"]) / int(reference["outcome_denominator"])
+        ),
         6,
     )
-    if not _close(estimate, expected_estimate):
+    published_difference = float(comparison["outcome_rate_pct"]) - float(
+        reference["outcome_rate_pct"]
+    )
+    if not _close(estimate, expected_estimate) or abs(
+        expected_estimate - published_difference
+    ) > 2e-6:
         raise ValueError(
             "risk difference is not comparison absolute risk minus reference"
         )
