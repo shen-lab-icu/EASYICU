@@ -51,6 +51,9 @@ OPENROUTER_BASE_URL_OVERRIDE = "openrouter_base_url_override"
 UNSUPPORTED_PROVIDER = "unsupported_provider"
 EXTERNAL_LLM_NOT_AUTHORIZED = "external_llm_not_authorized"
 PROVIDER_NOT_CLEARED = "provider_not_cleared_for_credentialed_data"
+UNKNOWN_SOURCE_DATABASE = "unknown_source_database"
+PUBLIC_DEMO_MANIFEST_INVALID = "public_demo_manifest_invalid"
+PUBLIC_DEMO_MANIFEST_DATABASE_MISMATCH = "public_demo_manifest_database_mismatch"
 PROVIDER_POLICY_NOTICE_KEY = "physionet_llm_data_handling_declaration"
 
 
@@ -74,15 +77,19 @@ def provider_policy_fields(environment: Mapping[str, str]) -> dict[str, Any]:
 
 
 def credentialed_source(source: str) -> bool:
-    """Resolve registry aliases without conflating public demos with parents."""
+    """Exempt only explicit demo profiles; unknown identities fail closed.
+
+    ``is_public`` means visibility in the database catalogue, not public data.
+    The profile owner gives demos a parent and excludes them from that menu.
+    """
     from easyicu.databases.profiles import get_database_profile
 
     key = str(source or "").strip().lower()
     try:
-        key = get_database_profile(key).key
-    except (KeyError, ValueError):
-        pass
-    return key in {"miiv", "mimic", "miii", "eicu", "hirid", "aumc", "sic", "sicdb"}
+        profile = get_database_profile(key)
+    except (KeyError, ValueError) as exc:
+        raise ProviderConfigurationError(UNKNOWN_SOURCE_DATABASE, "configured_provider") from exc
+    return profile.is_public or not profile.parent_key
 
 
 _PUBLIC_DEMO_DATABASE: ContextVar[str] = ContextVar("public_demo_database", default="")
@@ -1021,7 +1028,11 @@ class ProviderConfigurationError(ValueError):
                 f"{ALLOW_EXTERNAL_LLM_ENV}=1 only after approving the exact "
                 "provider endpoint and outbound data policy"
             )
-        elif issue in {PROVIDER_NOT_CLEARED, "agentic_coder_credentialed_source_forbidden"}:
+        elif issue in {
+            PROVIDER_NOT_CLEARED, UNKNOWN_SOURCE_DATABASE,
+            PUBLIC_DEMO_MANIFEST_INVALID, PUBLIC_DEMO_MANIFEST_DATABASE_MISMATCH,
+            "agentic_coder_credentialed_source_forbidden",
+        }:
             message = issue
         else:
             message = f"Unsupported provider: {provider}"

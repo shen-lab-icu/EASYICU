@@ -451,3 +451,51 @@ def test_start_gate_runs_after_authorization_and_handoff(start_gate_launch, with
         assert names.index("authorize") < names.index("handoff")
     else:
         launch.callbacks.authorize.assert_not_called()
+
+
+@pytest.mark.parametrize(("database", "reason"), [
+    ("unregistered_icu", "unknown_source_database"),
+    ("eicu_demo", "public_demo_manifest_invalid"),
+])
+def test_submission_reports_source_proof_refusals_before_enqueuing(start_gate_launch, monkeypatch, database, reason):
+    launch = start_gate_launch
+    study = research_run_submission.context_store.get_context("fixture")
+    study["data_source"]["database"] = database
+    enqueue = Mock()
+    monkeypatch.setattr(research_run_submission, "_submit_job", enqueue)
+    with pytest.raises(research_run_submission.ResearchRunSubmissionError) as caught:
+        launch.submit()
+    assert caught.value.detail["error"] == reason
+    enqueue.assert_not_called()
+    launch.callbacks.authorize.assert_not_called()
+
+
+@pytest.mark.parametrize("source_index", [0, 1])
+def test_submission_keeps_the_pinned_demo_clearance_scope(start_gate_launch, tmp_path, monkeypatch, source_index):
+    from easyicu.research_agent.providers.client_trust import require_data_handling
+    from easyicu.webserver import demo_source_storage as storage
+    from easyicu.webserver.demo_source_contracts import SOURCES
+
+    monkeypatch.setenv("EASYICU_DEMO_CACHE_DIR", str(tmp_path / "demo-cache"))
+    source = SOURCES[source_index]
+    paths = storage.source_paths(source)
+    paths.export.mkdir(parents=True)
+    (paths.export / "_manifest.json").write_text("{}")
+    storage.write_export_marker(paths, source, archive_sha256=source.archive_sha256, export={})
+    study = research_run_submission.context_store.get_context("fixture")
+    study["data_source"] = {"path": str(paths.export), "database": source.database}
+    seen = []
+
+    def resolve(**kwargs):
+        seen.append(kwargs["database"])
+        require_data_handling(kwargs["database"], "unspecified")
+        return {}
+
+    monkeypatch.setattr(research_run_submission.agent_runs, "resolve_agent_provider_config", resolve)
+    launch = start_gate_launch
+    receipt = launch.submit()
+    launch.runner_result.result(timeout=2)
+    assert receipt.job_id == launch.job.id
+    assert seen == [source.database]
+    with pytest.raises(ValueError):
+        require_data_handling("miiv", "unspecified")

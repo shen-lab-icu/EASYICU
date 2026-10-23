@@ -92,3 +92,84 @@ def test_an_unreadable_manifest_member_is_a_typed_scan_failure(tmp_path):
     result = dataio.scan_path(str(root))
     assert result["ok"] is False
     assert result["error"] == "export_layout_invalid"
+
+
+@pytest.mark.parametrize(("defect", "reason"), [
+    ("missing", "public_demo_manifest_invalid"),
+    ("unreadable", "public_demo_manifest_invalid"),
+    ("malformed", "public_demo_manifest_invalid"),
+    ("symlink", "public_demo_manifest_invalid"),
+    ("legacy_only", "public_demo_manifest_invalid"),
+    ("invalid_inventory", "public_demo_manifest_invalid"),
+    ("parent", "public_demo_manifest_database_mismatch"),
+    ("other_demo", "public_demo_manifest_database_mismatch"),
+    ("unknown", "public_demo_manifest_database_mismatch"),
+])
+def test_registered_demo_egress_refuses_unproved_identity(tmp_path, defect, reason):
+    from easyicu.research_agent.providers.client_trust import ProviderConfigurationError
+    from easyicu.webserver.demo_source_storage import egress_source_database
+
+    root, manifest = _native_demo(tmp_path / "registered")
+    marker = root / "_manifest.json"
+    if defect in {"missing", "legacy_only"}:
+        marker.unlink()
+        if defect == "legacy_only":
+            (root / "easyicu_export_manifest.json").write_text(json.dumps(manifest))
+    elif defect == "unreadable":
+        marker.write_bytes(b"\xff")
+    elif defect == "malformed":
+        marker.write_text("{")
+    elif defect == "symlink":
+        target = root / "manifest-copy.json"
+        marker.rename(target)
+        marker.symlink_to(target)
+    else:
+        if defect == "invalid_inventory":
+            manifest["column_metadata"] = None
+        else:
+            manifest["database"] = {
+                "parent": "eicu", "other_demo": "mimic_demo", "unknown": "unregistered_icu",
+            }[defect]
+        marker.write_text(json.dumps(manifest))
+    with pytest.raises(ProviderConfigurationError) as caught:
+        egress_source_database(str(root), "eicu_demo")
+    assert caught.value.reason_code == reason
+
+
+@pytest.mark.parametrize("database", ["eicu_demo", "EICU-DEMO", "eICU Demo"])
+def test_registered_demo_egress_accepts_a_matching_native_identity(tmp_path, database):
+    from easyicu.research_agent.providers.client_trust import require_data_handling
+    from easyicu.webserver.demo_source_storage import egress_source_database
+
+    root, _ = _native_demo(tmp_path / "registered")
+    resolved = egress_source_database(str(root), database)
+    assert resolved == "eicu_demo"
+    require_data_handling(resolved, "unspecified")
+
+
+def test_a_full_database_does_not_need_demo_manifest_proof(tmp_path, monkeypatch):
+    from easyicu.research_agent.intake import export_package
+    from easyicu.webserver.demo_source_storage import egress_source_database
+
+    monkeypatch.setattr(export_package, "inspect_export_layout", lambda _: pytest.fail("full source is already credentialed"))
+    assert egress_source_database(str(tmp_path / "missing"), "eicu") == "eicu"
+
+
+@pytest.mark.parametrize("failure", [ValueError, PermissionError, RuntimeError])
+def test_registered_demo_egress_reuses_the_folder_scanners_reader(tmp_path, monkeypatch, failure):
+    from easyicu.research_agent.intake import export_package
+    from easyicu.research_agent.providers.client_trust import ProviderConfigurationError
+    from easyicu.webserver.demo_source_storage import egress_source_database
+
+    root, _ = _native_demo(tmp_path / "registered")
+    calls = []
+
+    def refuse(path):
+        calls.append(path)
+        raise failure("synthetic unreadable manifest")
+
+    monkeypatch.setattr(export_package, "inspect_export_layout", refuse)
+    with pytest.raises(ProviderConfigurationError) as caught:
+        egress_source_database(str(root), "eicu_demo")
+    assert caught.value.reason_code == "public_demo_manifest_invalid"
+    assert calls == [root]

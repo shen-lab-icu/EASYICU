@@ -7,6 +7,7 @@ import sys
 
 import pytest
 
+from easyicu.databases.profiles import iter_database_profiles
 from easyicu.research_agent.gates.publication_disclosure import SMALL_CELL_BELOW
 from easyicu.research_agent.research_context.outbound import (
     outbound_safe_context_payload,
@@ -15,10 +16,79 @@ from easyicu.research_agent.research_context.outbound import (
 from easyicu.research_agent.reporting.writer_evidence import _summarise_table_one_rows
 
 
+@pytest.mark.parametrize("profile", iter_database_profiles(), ids=lambda profile: profile.key)
+def test_only_profiled_public_demos_are_exempt_from_clearance(profile):
+    from easyicu.research_agent.providers.client_trust import (
+        ProviderConfigurationError, credentialed_source, require_data_handling,
+    )
+
+    is_demo = not profile.is_public and profile.parent_key is not None
+    for name in (profile.key, profile.display_name, *profile.aliases):
+        assert credentialed_source(name) is not is_demo
+        if is_demo:
+            require_data_handling(name, "unspecified")
+        else:
+            with pytest.raises(ProviderConfigurationError) as caught:
+                require_data_handling(name, "unspecified")
+            assert caught.value.reason_code == "provider_not_cleared_for_credentialed_data"
+
+
+@pytest.mark.parametrize("database", ["unregistered_icu", "unregistered_icu_demo", ""])
+def test_an_unknown_profile_has_a_typed_refusal(database):
+    from easyicu.research_agent.providers.client_trust import (
+        ProviderConfigurationError, credentialed_source, require_data_handling, source_requires_clearance,
+    )
+
+    for check in (credentialed_source, source_requires_clearance):
+        with pytest.raises(ProviderConfigurationError) as caught:
+            check(database)
+        assert caught.value.reason_code == "unknown_source_database"
+    for handling in ("unspecified", "on_device", "zero_retention_declared"):
+        with pytest.raises(ProviderConfigurationError) as caught:
+            require_data_handling(database, handling)
+        assert caught.value.reason_code == "unknown_source_database"
+
+
+@pytest.mark.parametrize("is_public,parent", [(True, None), (False, None), (False, ""), (True, "eicu"), (False, "eicu")])
+def test_new_profiles_need_explicit_demo_metadata(monkeypatch, is_public, parent):
+    from easyicu.databases import profiles
+    from easyicu.research_agent.providers.client_trust import credentialed_source
+
+    profile = profiles.get_database_profile("eicu").model_copy(update={
+        "key": "new_fixture_database", "is_public": is_public, "parent_key": parent,
+    })
+    monkeypatch.setattr(profiles, "get_database_profile", lambda _: profile)
+    assert credentialed_source(profile.key) is (is_public or not parent)
+
+
+def test_a_broken_profile_registry_cannot_grant_clearance(monkeypatch):
+    from easyicu.databases import profiles
+    from easyicu.research_agent.providers.client_trust import ProviderConfigurationError, credentialed_source
+
+    def broken(_):
+        raise ValueError("synthetic conflicting profile metadata")
+
+    monkeypatch.setattr(profiles, "get_database_profile", broken)
+    with pytest.raises(ProviderConfigurationError) as caught:
+        credentialed_source("eicu")
+    assert caught.value.reason_code == "unknown_source_database"
+
+
+def test_a_demo_scope_cannot_exempt_an_unregistered_database():
+    from easyicu.research_agent.providers.client_trust import (
+        ProviderConfigurationError, public_demo_source_scope, source_requires_clearance,
+    )
+
+    with public_demo_source_scope("unregistered_icu"):
+        with pytest.raises(ProviderConfigurationError) as caught:
+            source_requires_clearance("unregistered_icu")
+    assert caught.value.reason_code == "unknown_source_database"
+
+
 def _context_and_step(ra):
     return ra.ResearchContext(
         research_question="Describe a synthetic exposure.",
-        cohort=ra.CohortDescriptor(cohort_name="fixture", database="synthetic", n_stays=20, n_patients=20),
+        cohort=ra.CohortDescriptor(cohort_name="fixture", database="eicu_demo", n_stays=20, n_patients=20),
         variables=[ra.ConceptDescriptor(name="exposure", role="lab", dtype="float64"),
                    ra.ConceptDescriptor(name="outcome", role="outcome", dtype="int64")],
         primary_exposure="exposure", target_outcome="outcome",
@@ -186,7 +256,11 @@ def test_clearance_uses_source_and_explicit_declaration(monkeypatch, declaration
     monkeypatch.delenv("EASYICU_HOSTED", raising=False)
     client, calls = _loopback_client(monkeypatch, declaration=declaration)
     assert provider_transport_destination(client) == ("local" if declaration == "on_device" else "external")
-    if declaration == "unspecified" and database in {"miiv", "eicu", "hirid", "aumc", "sic"}:
+    if database == "synthetic":
+        with pytest.raises(ProviderConfigurationError) as error:
+            require_credentialed_data_clearance(client, database)
+        assert error.value.reason_code == "unknown_source_database"
+    elif declaration == "unspecified" and database in {"miiv", "eicu", "hirid", "aumc", "sic"}:
         with pytest.raises(ProviderConfigurationError) as error:
             require_credentialed_data_clearance(client, database)
         assert error.value.reason_code == "provider_not_cleared_for_credentialed_data"
@@ -359,7 +433,8 @@ def test_copilot_and_run_gate_refuse_uncleared_source_with_settings_action(monke
     assert error.value.detail["next_actions"][0]["params"] == {"route": "provider_settings"}
 
 
-def test_pinned_public_demo_is_scoped_without_trusting_a_source_label(tmp_path, monkeypatch):
+@pytest.mark.parametrize("source_index", [0, 1])
+def test_pinned_public_demo_is_scoped_without_trusting_a_source_label(tmp_path, monkeypatch, source_index):
     from easyicu.webserver import demo_source_storage as storage
     from easyicu.webserver.demo_source_contracts import SOURCES
     from easyicu.research_agent.providers.client_trust import (
@@ -367,22 +442,92 @@ def test_pinned_public_demo_is_scoped_without_trusting_a_source_label(tmp_path, 
     )
 
     monkeypatch.setenv("EASYICU_DEMO_CACHE_DIR", str(tmp_path / "demo-cache"))
-    source = SOURCES[0]
+    source = SOURCES[source_index]
     paths = storage.source_paths(source)
     paths.export.mkdir(parents=True)
     (paths.export / "_manifest.json").write_text("{}")
     storage.write_export_marker(paths, source, archive_sha256=source.archive_sha256, export={})
-    assert storage.egress_source_database(str(paths.export), "miiv") == source.id
+    assert storage.egress_source_database(str(paths.export), source.database) == source.database
+    with pytest.raises(ProviderConfigurationError) as caught:
+        storage.egress_source_database(str(paths.export), "mimic_demo")
+    assert caught.value.reason_code == "public_demo_manifest_invalid"
     assert storage.egress_source_database(str(tmp_path / source.title), "miiv") == "miiv"
     with storage.public_demo_egress_scope(str(paths.export)):
-        require_data_handling("miiv", "unspecified")
-        assert not source_requires_clearance("miiv")
+        require_data_handling(source.database, "unspecified")
+        assert not source_requires_clearance(source.database)
         with pytest.raises(ProviderConfigurationError):
             require_data_handling("eicu", "unspecified")
     with pytest.raises(ProviderConfigurationError):
         require_data_handling("miiv", "unspecified")
     storage.write_export_marker(paths, source, archive_sha256="unverified", export={})
     assert storage.egress_source_database(str(paths.export), "miiv") == "miiv"
+
+
+@pytest.mark.parametrize("source_index", [0, 1])
+def test_copilot_keeps_pinned_demo_proof_and_does_not_taint_history(tmp_path, monkeypatch, source_index):
+    from easyicu.webserver import demo_source_storage as storage
+    from easyicu.webserver.demo_source_contracts import SOURCES
+    from easyicu.webserver.pi_copilot import tools
+    from easyicu.webserver.pi_copilot.contracts import PiSessionRecord, ToolExecutionContext
+
+    monkeypatch.setenv("EASYICU_DEMO_CACHE_DIR", str(tmp_path / "demo-cache"))
+    source = SOURCES[source_index]
+    paths = storage.source_paths(source)
+    paths.export.mkdir(parents=True)
+    (paths.export / "_manifest.json").write_text("{}")
+    storage.write_export_marker(paths, source, archive_sha256=source.archive_sha256, export={})
+    monkeypatch.setattr(tools, "_bound_context", lambda _: {"data_source": {
+        "path": str(paths.export), "database": source.database,
+    }})
+    context = ToolExecutionContext(session=PiSessionRecord(session_id="fixture", project_id="fixture"))
+    tools.require_copilot_data_clearance(context)
+    assert context.session.credentialed_data_in_history is not True
+
+
+@pytest.mark.parametrize(("database", "reason"), [
+    ("unregistered_icu", "unknown_source_database"),
+    ("eicu_demo", "public_demo_manifest_invalid"),
+])
+def test_copilot_wraps_source_proof_refusals_as_typed_stops(monkeypatch, database, reason):
+    from easyicu.webserver.pi_copilot import tools
+    from easyicu.webserver.pi_copilot.contracts import PiSessionRecord, ToolExecutionContext, PiCopilotError
+
+    monkeypatch.setattr(tools, "_bound_context", lambda _: {"data_source": {
+        "path": "/synthetic-unused-export", "database": database,
+    }})
+    context = ToolExecutionContext(session=PiSessionRecord(session_id="fixture", project_id="fixture"))
+    with pytest.raises(PiCopilotError) as caught:
+        tools.require_copilot_data_clearance(context)
+    assert caught.value.code == reason
+
+
+def test_no_source_selection_does_not_require_data_clearance(monkeypatch):
+    from easyicu.webserver.provider_gate import resolve_provider_gate
+    from easyicu.webserver.pi_copilot import tools
+    from easyicu.webserver.pi_copilot.contracts import PiSessionRecord, ToolExecutionContext
+
+    monkeypatch.setattr(tools, "_bound_context", lambda _: {})
+    context = ToolExecutionContext(session=PiSessionRecord(session_id="fixture", project_id="fixture"))
+    tools.require_copilot_data_clearance(context)
+    gate = resolve_provider_gate(
+        run_type="full", llm_provider="openai", external_llm_opt_in=True, ai_enabled=True,
+    )
+    assert gate["provider_gate"] == "credential_lookup_allowed"
+
+
+def test_copilot_preserves_unknown_legacy_history_as_credentialed(monkeypatch):
+    from easyicu.webserver.pi_copilot import tools
+    from easyicu.webserver.pi_copilot.contracts import PiSessionRecord, ToolExecutionContext
+
+    monkeypatch.setattr(tools, "_bound_context", lambda _: {})
+    saved = []
+    context = ToolExecutionContext(
+        session=PiSessionRecord(session_id="fixture", pi_session_file="synthetic-unused-session"),
+        data_handling="zero_retention_declared", note_credentialed_history=lambda: saved.append(True),
+    )
+    tools.require_copilot_data_clearance(context)
+    assert context.session.credentialed_data_in_history is True
+    assert saved == [True]
 
 
 def test_copilot_retains_credentialed_history_after_switching_to_demo(monkeypatch):

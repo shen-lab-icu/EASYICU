@@ -1,6 +1,6 @@
 """Demo and full-database source identities never substitute for one another.
 
-All registries are synthetic metadata; no export or patient rows are read.
+Registries and table headers are synthetic; no patient rows are read.
 """
 
 from __future__ import annotations
@@ -242,8 +242,35 @@ def test_a_full_database_card_offers_the_demo_without_a_hosted_prepare_action(ho
     ("Use eICU demo for this study", "eicu_demo"),
     ("Use MIMIC-III demo for this study", "mimic_demo"),
 ])
-def test_an_explicit_demo_name_keeps_the_demo_identity_in_the_listing(monkeypatch, message, database):
+def test_an_explicit_demo_name_keeps_the_demo_identity_in_the_listing(tmp_path, monkeypatch, message, database):
+    import pandas as pd
+    from easyicu.concept.export_metadata import build_export_file_metadata_binding
+    from easyicu.concept.metadata_sidecar import (
+        EXPORT_PHYSICAL_SCOPE, ColumnMetadataSidecar, write_content_addressed_sidecar,
+    )
+    from easyicu.databases.profiles import get_database_profile
+    from easyicu.resources import load_dictionary
+
+    profile = get_database_profile(database)
+    root = tmp_path / database
+    root.mkdir()
+    frame = pd.DataFrame({profile.stay_id_col: [], "age": []})
+    frame.to_parquet(root / "demographics.parquet", index=False)
+    binding = build_export_file_metadata_binding(
+        relative_path="demographics.parquet", module="demographics", frame=frame,
+        concept_ids=["age"], database=database, database_class_prefixes=(database, profile.parent_key),
+        dictionary=load_dictionary(include_sofa2=True),
+    )
+    reference = write_content_addressed_sidecar(root, ColumnMetadataSidecar(
+        source_database=database, source_database_class_prefixes=(database, profile.parent_key),
+        scope=EXPORT_PHYSICAL_SCOPE, files=(binding,),
+    ))
+    (root / "_manifest.json").write_text(json.dumps({
+        "schema_version": "easyicu_native_export_v2", "database": database, "format": "parquet",
+        "column_metadata": reference.to_dict(), "files": [{"file": "demographics.parquet", "rows": 0}],
+    }))
     demo = export(database)
+    demo["path"] = str(root)
     monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [demo]})
     listing = tools.execute_tool(
         "easyicu_list_data_sources", {"database": database},

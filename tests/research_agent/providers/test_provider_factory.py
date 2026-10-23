@@ -772,7 +772,7 @@ def test_unmanaged_custom_planner_is_rejected_before_complete(ra, monkeypatch):
         research_question="Test provider authorization.",
         cohort=ra.CohortDescriptor(
             cohort_name="synthetic",
-            database="synthetic",
+            database="eicu_demo",
             n_stays=10,
             n_patients=10,
         ),

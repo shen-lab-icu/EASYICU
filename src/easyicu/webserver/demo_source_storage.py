@@ -230,8 +230,37 @@ def _verified_public_demo(export_path: str) -> DemoSourceSpec | None:
 
 
 def egress_source_database(export_path: str, database: str) -> str:
+    """Require manifest proof for a registered demo outside pinned storage.
+
+    Pinned exports retain their archive/producer proof, scoped by
+    ``public_demo_egress_scope`` at each clearance check. A release label is
+    never used as an unregistered database identity to bypass clearance.
+    """
+    from easyicu.databases.profiles import get_database_profile
+    from easyicu.research_agent.intake.export_package import (
+        ExportPackageError, NATIVE_MANIFEST, inspect_export_layout,
+    )
+    from easyicu.research_agent.providers.client_trust import (
+        PUBLIC_DEMO_MANIFEST_DATABASE_MISMATCH, PUBLIC_DEMO_MANIFEST_INVALID,
+        ProviderConfigurationError, credentialed_source,
+    )
+
+    if credentialed_source(database):
+        return database
+    profile = get_database_profile(database)
     source = _verified_public_demo(export_path)
-    return source.id if source and source.database == database else database
+    if source and source.database == profile.key:
+        return profile.key
+    try:
+        root = Path(export_path).expanduser()
+        if not (root / NATIVE_MANIFEST).is_file():
+            raise ExportPackageError("public demo requires a native export manifest")
+        declared = inspect_export_layout(root)["database"]
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise ProviderConfigurationError(PUBLIC_DEMO_MANIFEST_INVALID, "configured_provider") from exc
+    if declared != profile.key:
+        raise ProviderConfigurationError(PUBLIC_DEMO_MANIFEST_DATABASE_MISMATCH, "configured_provider")
+    return profile.key
 
 
 @contextmanager
