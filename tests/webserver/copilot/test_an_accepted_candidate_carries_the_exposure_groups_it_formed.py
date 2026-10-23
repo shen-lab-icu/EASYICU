@@ -25,6 +25,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.contracts.exposure_group_rules import planned_group_column
 from easyicu.research_agent.contracts.trajectory_design import (
     load_trajectory_design,
     sealed_trajectory_authority_body,
@@ -39,8 +40,11 @@ from easyicu.research_agent.orchestration.exposure_grouping_phase import (
 )
 from easyicu.research_agent.planning.exposure_group_compile import (
     CandidateExposureGroupings,
+    CompiledGrouping,
+    group_contrast,
 )
 from easyicu.research_agent.planning.exposure_group_spec import (
+    grouping_labels,
     read_stated_exposure_groupings,
 )
 from easyicu.research_agent.orchestration.scientific_runtime import (
@@ -57,6 +61,7 @@ from easyicu.research_agent.trajectory.scientific_runtime_authority import (
     build_trajectory_scientific_runtime_authority,
 )
 from easyicu.webserver import agent_pipeline_runs, agent_runs, provider_adapter
+from easyicu.webserver import scientific_runtime_projection
 from easyicu.webserver import research_pipeline_run_preparation
 from easyicu.webserver import study_contexts as study_context_owner
 from tests.webserver.copilot.research_workflow_fixtures import (
@@ -432,6 +437,10 @@ def _export(root: Path) -> Path:
 
 def _grouped_candidate() -> PlanningRunGroupings:
     stated = read_stated_exposure_groupings(json.loads(_ANSWER))
+    compiled = CompiledGrouping(
+        grouping=stated.groupings[0], disposition="applied", reason=None,
+        detail="Synthetic applied grouping", source_columns={"max": "lact_max"},
+    )
     return PlanningRunGroupings(
         candidate=CandidateExposureGroupings(
             record_sha256="b" * 64,
@@ -440,6 +449,11 @@ def _grouped_candidate() -> PlanningRunGroupings:
         ),
         variables=(_GROUPED,),
         concepts=("lact",),
+        columns=(planned_group_column(
+            compiled.derivation(), variable=_GROUPED,
+            labels=grouping_labels(compiled.grouping), compared=group_contrast(compiled).compared(),
+            groupings_record_sha256="b" * 64,
+        ),),
     )
 
 
@@ -510,6 +524,21 @@ def test_the_run_that_follows_the_candidate_forms_its_groups(
         lambda *_args, **_kwargs: (object(), {"provider": "openai", "model": "test"}),
     )
     captured: dict[str, Any] = {}
+    original_specs = agent_pipeline_runs._runtime_projection_sensitivity_specs
+    original_projection = scientific_runtime_projection.compile_web_scientific_runtime_projection
+
+    def runtime_specs(*args: Any, **kwargs: Any) -> Any:
+        captured["safeguard_groupings"] = kwargs.get("exposure_groupings")
+        return original_specs(*args, **kwargs)
+
+    def runtime_projection(**kwargs: Any) -> Any:
+        captured["projection_groupings"] = kwargs.get("exposure_groupings")
+        return original_projection(**kwargs)
+
+    monkeypatch.setattr(agent_pipeline_runs, "_runtime_projection_sensitivity_specs", runtime_specs)
+    monkeypatch.setattr(
+        scientific_runtime_projection, "compile_web_scientific_runtime_projection", runtime_projection,
+    )
 
     class FakePipeline:
         def run(self, **kwargs: Any) -> Any:
@@ -545,6 +574,8 @@ def test_the_run_that_follows_the_candidate_forms_its_groups(
     assert "lact" in prepared["analysis_inputs"]
     # ... and the run forms the candidate's groups without asking.
     config = captured["config"]
+    assert captured["safeguard_groupings"] is groupings
+    assert captured["projection_groupings"] is groupings
     assert captured["run_arguments"]["primary_exposure"] == primary_exposure
     assert config.enable_exposure_grouping is True
     assert (

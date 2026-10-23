@@ -1,6 +1,7 @@
 """Persist HTTP status without provider bodies, URLs, headers, or messages."""
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -125,6 +126,53 @@ def test_pipeline_failure_keeps_typed_http_status_across_exception_chain(tmp_pat
 def test_untyped_http_wording_does_not_invent_a_status():
     failure = RuntimeError("HTTP status 503")
     assert agent_pipeline_runs._safe_pipeline_typed_failure(failure) == {}
+
+
+@pytest.mark.parametrize("link", [None, "__cause__", "__context__"])
+def test_a_scientific_authority_plan_failure_keeps_its_typed_cause(tmp_path, link):
+    from easyicu.research_agent.authority.current_case_scientific_runtime import (
+        CurrentCaseScientificAuthorityError,
+    )
+
+    private = "private synthetic plan detail"
+    failure = CurrentCaseScientificAuthorityError(private)
+    if link:
+        wrapper = RuntimeError("plan phase failed")
+        setattr(wrapper, link, failure)
+        failure = wrapper
+    relative = agent_pipeline_runs._record_pipeline_failure(
+        wrapper_dir=tmp_path, study={"id": "study_synthetic"}, provider={},
+        exc=failure, code="research_pipeline_execution_failed", execution_retry_id=None,
+    )
+    payload = json.loads((tmp_path / relative).read_text())
+    assert payload["schema_version"] == "easyicu.web-research-pipeline-failure/4"
+    assert payload["typed_failure"] == {
+        "owner": "easyicu.current_case_scientific_authority_v1",
+        "reason_code": "current_case_scientific_authority_invalid",
+        "exception_type": "CurrentCaseScientificAuthorityError",
+    }
+    assert private not in json.dumps(payload)
+    assert agent_pipeline_runs._safe_pipeline_typed_failure(ValueError(private)) == {}
+
+
+def test_a_scientific_authority_refusal_has_its_own_code_and_sentence():
+    from easyicu.research_agent.authority.current_case_scientific_runtime import (
+        CurrentCaseScientificAuthorityError,
+    )
+
+    wrapper = RuntimeError("plan phase failed")
+    wrapper.__cause__ = CurrentCaseScientificAuthorityError("private synthetic detail")
+
+    code = agent_pipeline_runs._pipeline_failure_code(wrapper)
+
+    assert code == "research_pipeline_scientific_authority_refused"
+    error_text = (
+        Path(agent_pipeline_runs.__file__).resolve().parent
+        / "static" / "js" / "screens-guided-pi-error-text.js"
+    ).read_text(encoding="utf-8")
+    assert f"{code}: tr(" in error_text
+    entry = error_text.split(f"{code}: tr(", 1)[1].split("\n        ),", 1)[0]
+    assert "24 小时 landmark" in entry
 
 
 def test_existing_typed_owner_takes_precedence_over_transport_cause():

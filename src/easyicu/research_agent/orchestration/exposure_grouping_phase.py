@@ -71,6 +71,7 @@ from ..authority.runtime_artifacts import verified_run_evidence_path, write_json
 from ..contracts import exposure_group_rules
 from ..contracts.exposure_group_rules import (
     ExposureGroupRuleError,
+    PlannedGroupColumn,
     planned_group_column,
     read_planned_group_columns,
 )
@@ -159,6 +160,8 @@ class PlanningRunGroupings:
     variables: tuple[str, ...]
     #: The concepts the groupings read, which the following run's data hold.
     concepts: tuple[str, ...]
+    #: Verified column declarations, including source columns and comparison.
+    columns: tuple[PlannedGroupColumn, ...]
 
 
 @dataclass
@@ -702,6 +705,7 @@ def planning_run_groupings(
         candidate=candidate,
         variables=tuple(sorted(variables)),
         concepts=tuple(sorted({item.concept for item in candidate.stated.groupings})),
+        columns=_recorded_group_columns(record, record_sha256=record_sha256),
     )
 
 
@@ -711,6 +715,24 @@ def _recorded_columns(
     """Each applied grouping's column as the host declares it from ``record``;
     ``legacy``, as it declared one before columns carried the study's words
     for each level and their derivation parameters."""
+
+    columns = []
+    for column in _recorded_group_columns(record, record_sha256=record_sha256):
+        declared = column.record()
+        if legacy:
+            declared = {
+                key: value
+                for key, value in declared.items()
+                if key not in ("labels", "parameters")
+            }
+        columns.append(json.dumps(declared, sort_keys=True))
+    return sorted(columns)
+
+
+def _recorded_group_columns(
+    record: Mapping[str, Any], *, record_sha256: str
+) -> tuple[PlannedGroupColumn, ...]:
+    """Keep the verified record's column authority for downstream routing."""
 
     columns = []
     for item in record["compiled"]["groupings"]:
@@ -724,15 +746,8 @@ def _recorded_columns(
             )
         except (ExposureGroupRuleError, KeyError, TypeError) as exc:
             raise ValueError(f"the record's grouping is unreadable: {exc}") from exc
-        declared = column.record()
-        if legacy:
-            declared = {
-                key: value
-                for key, value in declared.items()
-                if key not in ("labels", "parameters")
-            }
-        columns.append(json.dumps(declared, sort_keys=True))
-    return sorted(columns)
+        columns.append(column)
+    return tuple(columns)
 
 
 def resumed_cohort_is_the_sources_copy(

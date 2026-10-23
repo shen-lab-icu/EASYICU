@@ -11,6 +11,7 @@ from easyicu.research_agent.acquisition.first_icu_stay import FirstIcuStayBindin
 from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
 from easyicu.research_agent.contracts.trajectory_design import FixedWindowTrajectoryDesign
 from easyicu.research_agent.icu_rules import VariableKind
+from easyicu.research_agent.orchestration.exposure_grouping_phase import PlanningRunGroupings
 from easyicu.research_agent.planning.population_spec import PopulationSpec
 from easyicu.research_agent.planning.target_trial_compile import (
     target_trial_acquisition,
@@ -122,6 +123,7 @@ def _runtime_projection_sensitivity_specs(
     primary_exposure_source: str,
     primary_exposure: str = "",
     universe_path: Optional[Path] = None,
+    exposure_groupings: PlanningRunGroupings | None = None,
 ) -> tuple[Any, ...]:
     """Add only the deterministic runtime's automatic nonlinear safeguard.
 
@@ -133,9 +135,10 @@ def _runtime_projection_sensitivity_specs(
     exposure's kind comes from the projection's own rule, read on the universe
     the projection signs (its schema and published column metadata), so an
     exposure the projection binds as binary never receives the continuous
-    safeguard.  Without a universe only the names are read.  The universe is
-    read only for a landmark design that could receive the safeguard, and a
-    universe that cannot be read keeps the projection's reason code.
+    safeguard. A bound grouping supplies its declared kind before the source
+    is classified. Without a universe only the names and grouping are read.
+    The universe is read only for a landmark design that could receive the
+    safeguard, and an unreadable universe keeps the projection's reason code.
     """
 
     if not primary_exposure_source:
@@ -148,23 +151,16 @@ def _runtime_projection_sensitivity_specs(
         return sensitivity_specs
     from easyicu.webserver.scientific_runtime_projection import (
         WebScientificRuntimeProjectionError,
-        exposure_kind_for_dtype,
         primary_exposure_kind,
     )
 
     try:
-        if universe_path is not None:
-            exposure_kind, _levels = primary_exposure_kind(
-                universe_path=Path(universe_path),
-                primary_exposure=primary_exposure,
-                primary_exposure_source=primary_exposure_source,
-            )
-        else:
-            exposure_kind, _levels = exposure_kind_for_dtype(
-                primary_exposure=primary_exposure,
-                primary_exposure_source=primary_exposure_source,
-                dtype="",
-            )
+        exposure_kind, _levels = primary_exposure_kind(
+            universe_path=Path(universe_path) if universe_path is not None else None,
+            primary_exposure=primary_exposure,
+            primary_exposure_source=primary_exposure_source,
+            exposure_groupings=exposure_groupings,
+        )
     except WebScientificRuntimeProjectionError as exc:
         raise ResearchPipelineRunError(exc.code, str(exc), details=exc.details) from exc
     if exposure_kind != VariableKind.CONTINUOUS:

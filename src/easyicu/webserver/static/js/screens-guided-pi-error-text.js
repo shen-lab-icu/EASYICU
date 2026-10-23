@@ -639,6 +639,10 @@
           'The plan does not map to the prepared data unambiguously, so analysis stopped before it began.',
           '计划与准备好的数据对应关系不唯一，分析在开始前停止。',
         ),
+        research_pipeline_scientific_authority_refused: tr(
+          'The plan does not match the analysis design EasyICU set up for this study (for example its 24-hour landmark, the coding of the exposure, or the set of models), so EasyICU stopped before any analysis ran. Generate the plan again; if it stops here again, keep the run record for review.',
+          '计划与 EasyICU 为这项研究设定的分析设计不一致（例如 24 小时 landmark、暴露的编码方式或模型组合），因此在任何分析运行前停止。请重新生成计划；如果再次停在这里，请保留运行记录供排查。',
+        ),
         research_pipeline_execution_failed: tr(
           'An analysis step failed while running.',
           '有一个分析步骤在运行中失败了。',

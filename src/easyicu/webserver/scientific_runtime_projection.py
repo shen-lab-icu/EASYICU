@@ -13,8 +13,9 @@ the projection seals the executable column domain and the runtime owner seals
 the Planner-selected roster from the reviewed plan at bind time.
 
 Allowed dependencies are the dependency-neutral sensitivity contract, the
-current-case authority builder, the concept owner's declared value domain, a
-parquet *schema* reader, and canonical hashing.  It never reads patient rows,
+current-case authority builder, the concept owner's declared value domain,
+the run's verified grouping declarations, a parquet *schema* reader, and
+canonical hashing.  It never reads patient rows,
 selects a variable, or infers a landmark from prose.  Failures use
 ``WebScientificRuntimeProjectionError`` so the Web runner can attribute the
 blocker to this owner.
@@ -36,8 +37,14 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     build_current_case_scientific_runtime_authority,
 )
 from easyicu.research_agent.contracts.dependence import PlannedDependenceRequirement
+from easyicu.research_agent.contracts.exposure_group_rules import (
+    EXPOSURE_GROUP_ORDINAL_TRANSFORM_ID,
+    PlannedGroupColumn,
+    read_grouping_rules,
+)
 from easyicu.research_agent.contracts.model_terms import level_spelling
 from easyicu.research_agent.icu_rules import VariableKind
+from easyicu.research_agent.orchestration.exposure_grouping_phase import PlanningRunGroupings
 from easyicu.research_agent.research_context.concept_hints import classify_variable
 from easyicu.research_agent.intake.materialized_metadata import (
     MaterializedMetadataError,
@@ -222,7 +229,9 @@ _ROUTED_DESIGN_STRATEGIES = frozenset(
 )
 
 
-def compile_web_scientific_runtime_projection(**coordinates: Any) -> WebScientificRuntimeProjection | None:
+def compile_web_scientific_runtime_projection(
+    *, exposure_groupings: PlanningRunGroupings | None = None, **coordinates: Any
+) -> WebScientificRuntimeProjection | None:
     """Route only explicit typed specifications to their execution owner."""
     from .target_trial_runtime_projection import (
         compile_target_trial_runtime_projection,
@@ -277,6 +286,7 @@ def compile_web_scientific_runtime_projection(**coordinates: Any) -> WebScientif
         universe_path=landmark_coordinates["universe_path"],
         primary_exposure=landmark_coordinates.get("primary_exposure"),
         primary_exposure_source=landmark_coordinates.get("primary_exposure_source"),
+        exposure_groupings=exposure_groupings,
     )
     if exposure_kind in {
         VariableKind.ORDINAL,
@@ -287,6 +297,14 @@ def compile_web_scientific_runtime_projection(**coordinates: Any) -> WebScientif
             landmark_coordinates.get("primary_exposure"),
             landmark_coordinates.get("primary_exposure_source"),
         }
+        grouped = _bound_exposure_group(
+            exposure_groupings,
+            primary_exposure=landmark_coordinates.get("primary_exposure"),
+            primary_exposure_source=landmark_coordinates.get("primary_exposure_source"),
+        )
+        if grouped is not None:
+            exposure_names.add(grouped.variable)
+            exposure_names.update(read_grouping_rules(grouped.parameters).read_columns)
         exposure_splines = [
             spec for spec in landmark_coordinates["sensitivity_specs"]
             if spec.strategy == "restricted_cubic_spline"
@@ -302,7 +320,7 @@ def compile_web_scientific_runtime_projection(**coordinates: Any) -> WebScientif
                 },
             )
         return compile_landmark_categorical_runtime_projection(
-            **landmark_coordinates
+            exposure_groupings=exposure_groupings, **landmark_coordinates
         )
     return compile_landmark_spline_runtime_projection(**landmark_coordinates)
 
@@ -347,17 +365,58 @@ def one_sensitivity_spec(
     return matching[0]
 
 
+def _bound_exposure_group(
+    groupings: PlanningRunGroupings | None,
+    *, primary_exposure: str | None, primary_exposure_source: str | None,
+) -> PlannedGroupColumn | None:
+    """Select a bound declaration; grouping policy stays with its owner.
+
+    An exact grouped column disambiguates several groupings of one concept.
+    Otherwise the source concept must identify exactly one applied grouping.
+    """
+
+    if groupings is None:
+        return None
+    exact = [column for column in groupings.columns if column.variable == primary_exposure]
+    matching = exact or [
+        column for column in groupings.columns
+        if column.concept == (primary_exposure_source or primary_exposure)
+    ]
+    if len(matching) > 1:
+        raise WebScientificRuntimeProjectionError(
+            "web_scientific_runtime_projection_ambiguous",
+            "The landmark exposure source names more than one bound grouping.",
+            details={"grouped_columns": [column.variable for column in matching]},
+        )
+    return matching[0] if matching else None
+
+
 def primary_exposure_kind(
     *,
-    universe_path: Path,
+    universe_path: Path | None,
     primary_exposure: str | None,
     primary_exposure_source: str | None,
+    exposure_groupings: PlanningRunGroupings | None = None,
 ) -> tuple[VariableKind, tuple[str, ...]]:
-    """Classify a physical exposure without reading patient rows."""
+    """Read a bound grouping's declaration, else classify the physical source."""
+
+    grouped = _bound_exposure_group(
+        exposure_groupings, primary_exposure=primary_exposure,
+        primary_exposure_source=primary_exposure_source,
+    )
+    if grouped is not None:
+        kind = (
+            VariableKind.ORDINAL
+            if grouped.transform == EXPOSURE_GROUP_ORDINAL_TRANSFORM_ID
+            else VariableKind.CATEGORICAL
+        )
+        # PlannedGroupColumn declares codes 1..levels in the owner's order,
+        # including the unmeasured level when the grouping keeps one.
+        return kind, tuple(str(code) for code in range(1, grouped.levels + 1))
 
     dtype = ""
     published: tuple[object, ...] | None = None
-    if primary_exposure:
+    if primary_exposure and universe_path is not None:
         try:
             import pyarrow.parquet as pq
 
@@ -788,6 +847,7 @@ def compile_landmark_categorical_runtime_projection(
     universe_path: Path,
     scientific_configuration_sha256: str,
     dependence: PlannedDependenceRequirement | None = None,
+    exposure_groupings: PlanningRunGroupings | None = None,
 ) -> WebScientificRuntimeProjection | None:
     """Compile an ordered/categorical exposure through the verified logit adapter."""
 
@@ -869,7 +929,20 @@ def compile_landmark_categorical_runtime_projection(
         universe_path=universe_path,
         primary_exposure=primary_exposure,
         primary_exposure_source=primary_exposure_source,
+        exposure_groupings=exposure_groupings,
     )
+    grouped = _bound_exposure_group(
+        exposure_groupings, primary_exposure=primary_exposure,
+        primary_exposure_source=primary_exposure_source,
+    )
+    # The acquisition universe contains the sources; only the run's restaged
+    # cohort contains the grouped column that the signed executor will read.
+    source_columns = (str(primary_exposure),)
+    if grouped is not None:
+        # The grouping owner reconstructs complete declarations from the
+        # verified record, including for legacy planning catalogs.
+        source_columns = read_grouping_rules(grouped.parameters).read_columns
+        primary_exposure = grouped.variable
     if exposure_kind not in {
         VariableKind.ORDINAL,
         VariableKind.CATEGORICAL,
@@ -913,7 +986,7 @@ def compile_landmark_categorical_runtime_projection(
         plan_bound_roster=plan_bound_roster,
     )
     required_columns = {
-        str(primary_exposure),
+        *source_columns,
         str(target_outcome),
         str(landmark.event_time_variable),
         str(landmark.observation_duration_variable),
@@ -967,8 +1040,8 @@ def compile_landmark_categorical_runtime_projection(
         "exposure_column": primary_exposure,
         "exposure_kind": exposure_kind.value,
         "exposure_levels": list(levels),
-        "exposure_reference_level": levels[0],
-        "primary_contrast_level": levels[-1],
+        "exposure_reference_level": str(grouped.contrast.reference) if grouped else levels[0],
+        "primary_contrast_level": str(grouped.contrast.contrast) if grouped else levels[-1],
         "outcome_column": target_outcome,
         "event_time_column": landmark.event_time_variable,
         "observation_duration_column": landmark.observation_duration_variable,
@@ -994,6 +1067,7 @@ def compile_landmark_categorical_runtime_projection(
         authority_body["association_model_grid"] = grid
         design_columns = [
             str(primary_exposure),
+            *source_columns,
             str(target_outcome),
             str(landmark.event_time_variable),
             str(landmark.observation_duration_variable),
