@@ -1,11 +1,11 @@
-"""A Web provider retry waits minutes, inside the reviewed two-request bound.
+"""A Web provider retry waits seconds, then minutes, inside the three-request bound.
 
-A transient 5xx that the local provider proxy relays lasts minutes, so the
-Web Research Agent's one retry waits about three minutes (180 s ± 20%) inside
-a five-minute window instead of five seconds.  The two-request bound, the
-status allowlist and the frozen environment are unchanged; the schedule
-joins the public transport metadata and the client's reviewed transport
-policy.
+A transient 5xx that the local provider proxy relays is either one refused
+connection between successful ones or an outage of minutes, so the Web
+Research Agent's first retry waits about twenty seconds and its second about
+three minutes (each ± 20%) inside a five-minute window.  The status allowlist
+and the frozen environment are unchanged; the schedule joins the public
+transport metadata and the client's reviewed transport policy.
 
 Fake provider SDK and credentials; no provider is called.
 """
@@ -21,7 +21,7 @@ import pytest
 from easyicu.research_agent.providers.transport_retry import TransportRetrySchedule
 from easyicu.webserver import provider_adapter
 
-_SCHEDULE = TransportRetrySchedule((180.0,), jitter_fraction=0.2, window_seconds=300.0)
+_SCHEDULE = TransportRetrySchedule((20.0, 180.0), jitter_fraction=0.2, window_seconds=300.0)
 
 
 @pytest.fixture
@@ -42,7 +42,7 @@ def credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_the_web_provider_waits_minutes_before_its_one_retry(
+def test_the_web_provider_waits_seconds_then_minutes_before_its_retries(
     monkeypatch: pytest.MonkeyPatch, credentials: None
 ) -> None:
     captured: dict[str, Any] = {}
@@ -58,12 +58,12 @@ def test_the_web_provider_waits_minutes_before_its_one_retry(
         {"provider": "openai", "external": True},
     )
 
-    assert captured["max_retries"] == 1
+    assert captured["max_retries"] == 2
     assert captured["retryable_http_status_codes"] == (500, 502, 503, 504)
     assert captured["allow_environment_overrides"] is False
     assert captured["retry_schedule"] == _SCHEDULE
-    assert public["transport_max_attempts"] == 2
-    assert public["transport_retry_delays_seconds"] == [180.0]
+    assert public["transport_max_attempts"] == 3
+    assert public["transport_retry_delays_seconds"] == [20.0, 180.0]
     assert public["transport_retry_jitter_fraction"] == 0.2
     assert public["transport_retry_window_seconds"] == 300.0
 
