@@ -56,6 +56,7 @@ from .contracts import (
 from . import cohort_eligibility
 from . import extraction_handoff
 from .literature_tool_projection import compile_literature_tool_projection
+from .install import packaged_app_dir
 from .message_input import prepare_user_message
 from .projections import (
     bounded_json_projection,
@@ -4463,7 +4464,7 @@ def _load_skill(
         if blocked:
             return blocked
         skill_file = (
-            Path(__file__).resolve().with_name("node_app")
+            packaged_app_dir()
             / "src"
             / "skills"
             / "web-prototype"

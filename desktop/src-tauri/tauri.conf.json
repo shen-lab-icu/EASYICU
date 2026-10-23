@@ -34,7 +34,8 @@
     "resources": [
       "resources/backend",
       "resources/node",
-      "resources/NODE_LICENSE"
+      "resources/NODE_LICENSE",
+      "p"
     ],
     "icon": ["icons/icon.icns"],
     "macOS": {

@@ -10,8 +10,177 @@ import shutil
 import stat
 import subprocess
 import sys
+import warnings
 
 MIN_NODE = (22, 19, 0)
+# MAX_PATH (260) minus a 100-character per-user installation root.
+BUNDLE_PATH_BUDGET = 160
+_OPTIONAL_NODE_DIRS = frozenset({
+    "doc", "docs", "documentation", "test", "tests", "__tests__", "example", "examples",
+})
+_NODE_BUILD_SUFFIXES = (".d.ts", ".d.mts", ".d.cts", ".map")
+
+
+def _runtime_targets(value, *, skip_types=False):
+    """Include every runtime condition/array alternative, excluding type exports."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for child in value:
+            yield from _runtime_targets(child, skip_types=skip_types)
+    elif isinstance(value, dict):
+        for key, child in value.items():
+            if not skip_types or (key != "types" and not key.startswith("types@")):
+                yield from _runtime_targets(child, skip_types=skip_types)
+
+
+def _node_package_root(path: Path) -> bool:
+    return path.parent.name == "node_modules" or (
+        path.parent.name.startswith("@") and path.parent.parent.name == "node_modules"
+    )
+
+
+def _referenced_node_dirs(manifests: list[Path]) -> set[Path]:
+    protected = set()
+    for manifest in manifests:
+        package = json.loads(manifest.read_text(encoding="utf-8"))
+        for field in ("main", "exports", "bin"):
+            for target in _runtime_targets(package.get(field), skip_types=(field == "exports")):
+                # Normalize local main/bin paths before checking containment;
+                # never resolve entries outside the package while pruning.
+                relative = Path(os.path.normpath(target))
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise RuntimeError(f"Cannot safely prune non-local Node entry: {manifest}: {target}")
+                matches = list(manifest.parent.glob(str(relative))) if "*" in target else [manifest.parent / relative]
+                for match in matches:
+                    resolved = [match, *(Path(str(match) + suffix) for suffix in (".js", ".json", ".node"))]
+                    for entry in resolved:
+                        if not entry.exists():
+                            continue
+                        for ancestor in (entry, *entry.parents):
+                            if ancestor == manifest.parent:
+                                break
+                            if ancestor.name.lower() in _OPTIONAL_NODE_DIRS:
+                                protected.add(ancestor)
+    return protected
+
+
+def prune_node_modules(staged_root: Path) -> dict[str, int]:
+    """Prune all staged dependency copies, including nested node_modules.
+
+    Runtime-referenced docs/tests/examples directories stay intact: their entry
+    may import siblings or load assets. Type declarations and maps never execute.
+    The installed wheel and checkout are deliberately outside this owner.
+    """
+    paths = [path for path in staged_root.rglob("*")
+             if "node_modules" in path.relative_to(staged_root).parts]
+    protected = _referenced_node_dirs([
+        path for path in paths if path.name == "package.json" and path.is_file()
+        and _node_package_root(path.parent)
+    ])
+    removed_dirs = {
+        path for path in paths if path.is_dir() and not path.is_symlink()
+        # A dependency can itself be named "docs" or "test". Package roots
+        # are executable owners, including packages using Node's default main.
+        and not _node_package_root(path)
+        and (path.name.lower() == "dist-types" or (
+            path.name.lower() in _OPTIONAL_NODE_DIRS
+            and not any(parent in protected for parent in (path, *path.parents))
+        ))
+    }
+    counts = {"files": 0, "bytes": 0}
+    for path in sorted(paths, key=lambda p: len(p.parts), reverse=True):
+        in_removed_dir = any(parent in removed_dirs for parent in (path, *path.parents))
+        if path.is_symlink() or path.is_file():
+            if in_removed_dir or path.name.lower().endswith(_NODE_BUILD_SUFFIXES):
+                counts["files"] += 1
+                counts["bytes"] += path.lstat().st_size
+                path.unlink()
+        elif in_removed_dir:
+            path.rmdir()
+    return counts
+
+
+class BundlePathBudgetError(RuntimeError):
+    """The staged installer payload exceeds the Windows runtime path budget."""
+
+    code = "desktop_bundle_path_budget_exceeded"
+
+    def __init__(self, report: dict):
+        self.report = report
+        longest = "\n".join(f"  {item['length']}: {item['path']}" for item in report["longest_paths"])
+        super().__init__(f"{self.code}: {report['over_budget']} paths exceed "
+                         f"{report['budget']} characters (100 reserved for install root).\n{longest}")
+
+
+def check_bundle_paths(desktop_root: Path, report_file: Path, *, windows=False) -> dict:
+    """Measure Tauri resource destinations relative to the NSIS install root."""
+    tauri = desktop_root / "src-tauri"
+    config = json.loads((tauri / "tauri.conf.json").read_text(encoding="utf-8"))
+    resources = config["bundle"]["resources"]
+    if windows:
+        override = json.loads((tauri / "tauri.windows.conf.json").read_text(encoding="utf-8"))
+        resources = override.get("bundle", {}).get("resources", resources)
+    mapping = resources if isinstance(resources, dict) else {path: path for path in resources}
+    lengths = {}
+    for source, destination in mapping.items():
+        root = tauri / source
+        if not root.exists():
+            raise RuntimeError(f"Missing staged bundle resource: {root}")
+        for path in [root, *root.rglob("*")] if root.is_dir() else [root]:
+            relative = (Path(destination) / path.relative_to(root)).as_posix()
+            # Windows counts UTF-16 code units, including surrogate pairs.
+            lengths[relative] = len(relative.encode("utf-16-le")) // 2
+    if windows:
+        binary = override.get("mainBinaryName", config.get("mainBinaryName", "easyicu-desktop"))
+        for filename in (f"{binary}.exe", "uninstall.exe"):
+            lengths[filename] = len(filename.encode("utf-16-le")) // 2
+    ordered = sorted(lengths.items(), key=lambda item: (-item[1], item[0]))
+    report = {
+        "schema_version": "easyicu.desktop_bundle_paths/1",
+        "budget": BUNDLE_PATH_BUDGET,
+        "max_length": max(lengths.values(), default=0),
+        "over_budget": sum(length > BUNDLE_PATH_BUDGET for length in lengths.values()),
+        "longest_paths": [{"length": length, "path": path} for path, length in ordered[:10]],
+    }
+    report_file.parent.mkdir(parents=True, exist_ok=True)
+    report_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    if report["over_budget"]:
+        error = BundlePathBudgetError(report)
+        if windows:
+            raise error
+        warnings.warn(str(error), RuntimeWarning, stacklevel=2)
+    return report
+
+
+def bundle_plan(*, windows=False) -> list[str]:
+    return [
+        "Stage Pi at short install resource p/; prune staged node_modules only: "
+        "*.d.ts/*.d.mts/*.d.cts, dist-types/, *.map and unreferenced docs/tests/examples",
+        f"{'Fail' if windows else 'Warn'} on installed relative paths over {BUNDLE_PATH_BUDGET} "
+        "characters; reserve 100 for install root; write longest-paths.json (10 longest)",
+        "Check gateway syntax and import the staged Pi agent, Pi AI and typebox entries with bundled Node",
+    ]
+
+
+def prepare_bundle(*, desktop_root, build_root, run, windows=False) -> dict:
+    resources = desktop_root / "src-tauri/resources"
+    original = resources / "backend/_internal/easyicu/webserver/pi_copilot/node_app"
+    short = desktop_root / "src-tauri/p"
+    if short.exists():
+        shutil.rmtree(short)
+    shutil.move(str(original), short)
+    shutil.copy2(original.parent / "tool_catalog.json", short / "tool_catalog.json")
+    pruned = prune_node_modules(resources)
+    short_pruned = prune_node_modules(short)
+    pruned = {key: pruned[key] + short_pruned[key] for key in pruned}
+    report = check_bundle_paths(desktop_root, build_root / "longest-paths.json", windows=windows)
+    bundled_node = resources / ("node.exe" if windows else "node")
+    run([str(bundled_node), "--check", "src/main.mjs"], cwd=short)
+    run([str(bundled_node), "--input-type=module", "-e",
+         "await import('@earendil-works/pi-coding-agent'); "
+         "await import('@earendil-works/pi-ai'); await import('typebox'); process.exit(0);"], cwd=short)
+    return {"node_modules_pruned": pruned, "bundle_paths": report}
 
 
 def select_python(target: str) -> str:
