@@ -22,6 +22,7 @@ from easyicu.webserver import sources as source_store
 from easyicu.webserver import review_labels
 from easyicu.webserver import catalog_metadata
 from easyicu.webserver import prepared_frames
+from easyicu.webserver import cohort_parquet
 
 _READ_MODULES = (
     "demographics",
@@ -267,16 +268,29 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     age_col = _first_column(demo, _AGE_COLUMNS)
     sex_col = _first_column(demo, _SEX_COLUMNS)
     adm_col = _first_column(demo, _ADM_COLUMNS)
-    age_by_entity = _entity_numeric(demo, age_col) if age_col else {}
+    age_by_entity = (
+        _entity_numeric(demo, age_col, normalized_ids=True) if age_col else {}
+    )
+    sex_by_entity = _entity_text(demo, sex_col, normalized_ids=True) if sex_col else {}
     sex_values = list(demo[sex_col]) if sex_col else []
     adm_values = list(demo[adm_col]) if adm_col else []
-    coverage = _coverage_payload(path, desc)
-    quality = _quality_summary(coverage)
-    feature_catalog = _feature_catalog(desc, coverage)
+    # Feature choice depends on schema/audience, not coverage. Reuse the stay
+    # groups computed for selected Parquet features when measuring coverage;
+    # every other file retains the exact cohort-intersection scan.
+    coverage_counts: Dict[str, int] = {}
+    feature_catalog = _feature_catalog(desc, [])
     selected_feature_ids = _selected_feature_ids(feature_catalog, requested_feature_ids)
     selected_feature_profiles = _selected_feature_profiles(
-        path, desc, entity_set, feature_catalog, selected_feature_ids
+        path,
+        desc,
+        entity_set,
+        feature_catalog,
+        selected_feature_ids,
+        coverage_counts=coverage_counts,
     )
+    coverage = _coverage_payload(path, desc, precomputed=(entity_set, coverage_counts))
+    quality = _quality_summary(coverage)
+    feature_catalog = _feature_catalog(desc, coverage)
     mortality = _bool_summary(
         entity_ids, death_by_entity, true_label="deceased", false_label="survived"
     )
@@ -361,7 +375,7 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         outcome=outcome,
         entity_ids=entity_ids,
         age_by_entity=age_by_entity,
-        sex_by_entity=_entity_text(demo, sex_col) if sex_col else {},
+        sex_by_entity=sex_by_entity,
         sofa_by_entity=sofa_by_entity,
         sepsis_by_entity=sepsis_by_entity,
     )
@@ -393,7 +407,7 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         "groups": _group_payload(
             entity_ids=entity_ids,
             age_by_entity=age_by_entity,
-            sex_by_entity=_entity_text(demo, sex_col) if sex_col else {},
+            sex_by_entity=sex_by_entity,
             death_by_entity=death_by_entity,
             los_by_entity=los_by_entity,
             sofa_by_entity=sofa_by_entity,
@@ -797,6 +811,33 @@ def _skip_expensive_whole_module_read(file_meta: Dict[str, Any], file_path: Path
 
 
 def _read_module_frame(path: Path, desc: Dict[str, Any], module: str) -> Any:
+    item = prepared_frames.module_file_meta(desc, module)
+    if item and module != "demographics":
+        file_path = path / str(item.get("file") or "")
+        entity_column = entity_id_contract.resolve_entity_id_column(
+            item.get("columns") or []
+        )
+        if file_path.suffix.lower() == ".parquet" and entity_column:
+            columns = [entity_column] + [
+                column
+                for column in _MODULE_COLUMNS[module]
+                if column in (item.get("columns") or []) and column != entity_column
+            ]
+            flag_columns = set(
+                _DEATH_COLUMNS
+                + _HOSP_DEATH_COLUMNS
+                + _ICU_DEATH_COLUMNS
+                + _MORT28_COLUMNS
+                + _SEPSIS_COLUMNS
+            )
+            return cohort_parquet.module_reductions(
+                file_path,
+                entity_column,
+                columns,
+                numeric_modes=("median", "max") if module == "outcome" else ("max",),
+                flag_columns=flag_columns,
+                normalize=_normalized_stay_id_series,
+            )
     return prepared_frames.read_module_frame(
         path,
         desc,
@@ -807,6 +848,21 @@ def _read_module_frame(path: Path, desc: Dict[str, Any], module: str) -> Any:
 
 
 def _fallback_entity_frame(path: Path, desc: Dict[str, Any]) -> Any:
+    item = next(
+        (
+            entry
+            for entry in desc.get("files") or []
+            if entity_id_contract.resolve_entity_id_column(entry.get("columns") or [])
+        ),
+        None,
+    )
+    if item:
+        file_path = path / str(item.get("file") or "")
+        entity_column = entity_id_contract.resolve_entity_id_column(
+            item.get("columns") or []
+        )
+        if file_path.suffix.lower() == ".parquet":
+            return cohort_parquet.entity_frame(file_path, entity_column)
     return prepared_frames.fallback_entity_frame(path, desc)
 
 
@@ -815,6 +871,8 @@ def _read_selected_columns(path: Path, columns: List[str]) -> Any:
 
 
 def _filter_by_entity(frame: Any, entity_ids: set[str]) -> Any:
+    if isinstance(frame, cohort_parquet.StayReductions):
+        return frame.filter(entity_ids)
     if frame is None or frame.empty or "stay_id" not in frame.columns:
         return frame
     normalized = _normalized_stay_id_series(frame["stay_id"])
@@ -853,19 +911,58 @@ def _normalized_stay_id_series(series: Any) -> Any:
     return normalized.fillna("")
 
 
-def _coverage_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _coverage_payload(
+    path: Path,
+    desc: Dict[str, Any],
+    *,
+    precomputed: Tuple[set[str], Dict[str, int]] | None = None,
+) -> List[Dict[str, Any]]:
     files = desc.get("files") or []
     cohort_ids: set[str] | None = None
     cohort_ids_resolved = False
+    reusable_counts: Dict[str, int] = {}
 
     def resolve_cohort_ids() -> set[str] | None:
         # The cohort id set costs one stay-key column read. Resolve it only
         # when a module is actually scanned so the large-module metadata path
         # keeps its no-scan contract.
-        nonlocal cohort_ids, cohort_ids_resolved
+        nonlocal cohort_ids, cohort_ids_resolved, reusable_counts
         if not cohort_ids_resolved:
-            cohort_ids = dataio._fast_stay_ids(path, files)
+            hit = next(
+                (item for item in files if item.get("module") == "demographics"), None
+            )
+            if hit is None:
+                hit = next(
+                    (
+                        item
+                        for item in files
+                        if entity_id_contract.resolve_entity_id_column(
+                            item.get("columns") or []
+                        )
+                    ),
+                    None,
+                )
+            if hit and Path(str(hit.get("file") or "")).suffix.lower() == ".parquet":
+                try:
+                    file_path = path / str(hit["file"])
+                    entity_column = entity_id_contract.resolve_entity_id_column(
+                        dataio._read_columns(file_path)
+                    )
+                    frame = (
+                        cohort_parquet.entity_frame(file_path, entity_column)
+                        if entity_column
+                        else None
+                    )
+                    cohort_ids = (
+                        set(frame["stay_id"]) - {""} if frame is not None else None
+                    )
+                except Exception:
+                    cohort_ids = None
+            else:
+                cohort_ids = dataio._fast_stay_ids(path, files)
             cohort_ids_resolved = True
+            if precomputed is not None and cohort_ids == precomputed[0]:
+                reusable_counts = precomputed[1]
         return cohort_ids
 
     out: List[Dict[str, Any]] = []
@@ -885,7 +982,10 @@ def _coverage_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
             coverage_basis = "metadata_row_count_only"
             skipped_reason = "unique_stay_scan_skipped_large_module"
         else:
-            covered = _covered_entities(path, item, resolve_cohort_ids())
+            resolved_ids = resolve_cohort_ids()
+            covered = reusable_counts.get(str(file_path))
+            if covered is None:
+                covered = _covered_entities(path, item, resolved_ids)
         # ``covered`` is an intersection with the resolved cohort id set, so
         # that set is the only consistent denominator.
         cohort_size = len(cohort_ids) if cohort_ids else None
@@ -922,25 +1022,12 @@ def _covered_entities(
     file_path = path / file_name
     if file_path.suffix.lower() == ".parquet":
         try:
-            import pandas as pd
-
             entity_column = entity_id_contract.resolve_entity_id_column(
                 item.get("columns") or []
             )
             if not entity_column:
                 return None
-            frame = pd.read_parquet(file_path, columns=[entity_column])
-            frame = entity_id_contract.canonicalize_entity_frame(
-                frame, entity_column
-            )
-            module_ids = {
-                value
-                for value in frame["stay_id"].map(
-                    entity_id_contract.normalize_entity_id
-                ).dropna().astype(str)
-                if value
-            }
-            return len(module_ids & cohort_ids)
+            return cohort_parquet.covered_entities(file_path, entity_column, cohort_ids)
         except Exception:
             return None
     entity_column = entity_id_contract.resolve_entity_id_column(
@@ -953,9 +1040,10 @@ def _covered_entities(
         frame = entity_id_contract.canonicalize_entity_frame(frame, entity_column)
         module_ids = {
             value
-            for value in frame["stay_id"].map(
-                entity_id_contract.normalize_entity_id
-            ).dropna().astype(str)
+            for value in frame["stay_id"]
+            .map(entity_id_contract.normalize_entity_id)
+            .dropna()
+            .astype(str)
             if value
         }
         return len(module_ids & cohort_ids)
@@ -1170,6 +1258,8 @@ def _selected_feature_profiles(
     entity_set: set[str],
     catalog: Dict[str, Any],
     selected_feature_ids: List[str],
+    *,
+    coverage_counts: Dict[str, int] | None = None,
 ) -> List[Dict[str, Any]]:
     features_by_id = catalog.get("features_by_id") or {}
     selected = [
@@ -1223,13 +1313,25 @@ def _selected_feature_profiles(
         if len(columns) <= 1:
             continue
         try:
+            if file_path.suffix.lower() == ".parquet":
+                out.extend(
+                    cohort_parquet.feature_profiles(
+                        file_path,
+                        entity_column,
+                        features,
+                        entity_set,
+                        normalize=_normalized_stay_id_series,
+                        infer_kind=_infer_feature_kind,
+                        death_columns=_DEATH_COLUMNS,
+                        coverage_counts=coverage_counts,
+                    )
+                )
+                continue
             feature_frame = _read_selected_columns(file_path, columns)
             feature_frame = entity_id_contract.canonicalize_entity_frame(
                 feature_frame, entity_column
             )
-            frame = _filter_by_entity(
-                feature_frame, entity_set
-            )
+            frame = _filter_by_entity(feature_frame, entity_set)
         except Exception as exc:
             for feature in features:
                 out.append(
@@ -1310,10 +1412,11 @@ def _selected_feature_distributions(
             "observed_pct": _pct(len(mapping), total),
         }
         if profile.get("kind") == "numeric":
+            rounded = {value: _cohort_num(value) for value in set(mapping.values())}
             values = sorted(
-                value
-                for value in (dataio._num(item) for item in mapping.values())
-                if value is not None
+                _cohort_num(value) if value == 0 else rounded[value]
+                for value in mapping.values()
+                if rounded[value] is not None
             )
             bins: List[Dict[str, Any]] = []
             if values:
@@ -1334,7 +1437,9 @@ def _selected_feature_distributions(
                         }
                         for index, count in enumerate(counts)
                     ]
-            out.append({**common, "summary": _numeric_summary(values), "bins": bins})
+            out.append(
+                {**common, "summary": _sorted_numeric_summary(values), "bins": bins}
+            )
         elif profile.get("kind") == "binary":
             positive = sum(value is True for value in mapping.values())
             negative = sum(value is False for value in mapping.values())
@@ -1344,7 +1449,10 @@ def _selected_feature_distributions(
                     "categories": [
                         {"label": "Positive", "count": positive},
                         {"label": "Negative", "count": negative},
-                        {"label": "Unknown", "count": max(0, total - positive - negative)},
+                        {
+                            "label": "Unknown",
+                            "count": max(0, total - positive - negative),
+                        },
                     ],
                 }
             )
@@ -1470,7 +1578,7 @@ def _quality_summary(coverage: List[Dict[str, Any]]) -> Dict[str, Any]:
         "modules_neutral": counts["neutral"],
         "modules_unknown": counts["unknown"],
         "watchlist_count": counts["warn"] + counts["bad"],
-        "median_coverage_pct": dataio._median(values),
+        "median_coverage_pct": _cohort_median(values),
     }
 
 
@@ -1507,9 +1615,32 @@ def _group_payload(
         ),
     ]
     supported = [row for row in supported if row is not None]
+    groups = {
+        row["id"]: _group_members(
+            row["id"],
+            entity_ids=entity_ids,
+            age_by_entity=age_by_entity,
+            sex_by_entity=sex_by_entity,
+            death_by_entity=death_by_entity,
+            los_by_entity=los_by_entity,
+            sepsis_by_entity=sepsis_by_entity,
+        )
+        for row in supported
+    }
+    medians = cohort_parquet.group_medians(
+        groups,
+        [age_by_entity, sofa_by_entity, los_by_entity]
+        + [
+            feature["mapping"]
+            for feature in selected_features
+            if feature.get("kind") == "numeric"
+        ],
+    )
     for row in supported:
         row["profile"] = _group_profile(
             row.get("id"),
+            groups=groups[row["id"]],
+            medians=medians[row["id"]],
             entity_ids=entity_ids,
             age_by_entity=age_by_entity,
             sex_by_entity=sex_by_entity,
@@ -1554,16 +1685,32 @@ def _group_profile(
     sofa_by_entity: Dict[str, float],
     sepsis_by_entity: Dict[str, bool],
     selected_features: List[Dict[str, Any]],
+    groups: List[Tuple[str, List[str]]] | None = None,
+    medians: Dict[int, List[float | None]] | None = None,
 ) -> Dict[str, Any]:
-    groups = _group_members(
-        str(group_id or ""),
-        entity_ids=entity_ids,
-        age_by_entity=age_by_entity,
-        sex_by_entity=sex_by_entity,
-        death_by_entity=death_by_entity,
-        los_by_entity=los_by_entity,
-        sepsis_by_entity=sepsis_by_entity,
+    groups = (
+        groups
+        if groups is not None
+        else _group_members(
+            str(group_id or ""),
+            entity_ids=entity_ids,
+            age_by_entity=age_by_entity,
+            sex_by_entity=sex_by_entity,
+            death_by_entity=death_by_entity,
+            los_by_entity=los_by_entity,
+            sepsis_by_entity=sepsis_by_entity,
+        )
     )
+    if medians is None:
+        medians = cohort_parquet.group_medians(
+            {"profile": groups},
+            [age_by_entity, sofa_by_entity, los_by_entity]
+            + [
+                feature["mapping"]
+                for feature in selected_features
+                if feature.get("kind") == "numeric"
+            ],
+        )["profile"]
     columns = [label for label, _ in groups]
     member_sets = [members for _, members in groups]
     rows: List[Dict[str, Any]] = [
@@ -1596,21 +1743,21 @@ def _group_profile(
             bool(age_by_entity),
             "Median age",
             "numeric",
-            [_median_for(members, age_by_entity) for members in member_sets],
+            medians[id(age_by_entity)],
             "years",
         ),
         (
             bool(sofa_by_entity),
             "Median SOFA-2",
             "numeric",
-            [_median_for(members, sofa_by_entity) for members in member_sets],
+            medians[id(sofa_by_entity)],
             None,
         ),
         (
             bool(los_by_entity),
             "Median ICU LOS",
             "numeric",
-            [_median_for(members, los_by_entity) for members in member_sets],
+            medians[id(los_by_entity)],
             "days",
         ),
         (
@@ -1628,7 +1775,7 @@ def _group_profile(
         if unit:
             row["unit"] = unit
         rows.append(row)
-    rows.extend(_selected_feature_rows(member_sets, selected_features))
+    rows.extend(_selected_feature_rows(member_sets, selected_features, medians=medians))
     return {
         "status": "descriptive_aggregate_only",
         "columns": columns,
@@ -1638,7 +1785,10 @@ def _group_profile(
 
 
 def _selected_feature_rows(
-    member_sets: List[List[str]], selected_features: List[Dict[str, Any]]
+    member_sets: List[List[str]],
+    selected_features: List[Dict[str, Any]],
+    *,
+    medians: Dict[int, List[float | None]] | None = None,
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for feature in selected_features:
@@ -1684,9 +1834,9 @@ def _selected_feature_rows(
                     "module": module,
                     "column": feature.get("column"),
                     "kind": "numeric",
-                    "values": [
-                        _median_for(members, mapping) for members in member_sets
-                    ],
+                    "values": medians[id(mapping)]
+                    if medians is not None
+                    else [_median_for(members, mapping) for members in member_sets],
                     "status": "selected_feature",
                     "aggregation": feature.get("aggregation"),
                 }
@@ -1778,7 +1928,7 @@ def _group_members(
         ]
     if group_id == "los":
         values = [value for value in los_by_entity.values() if value is not None]
-        threshold = dataio._median(values)
+        threshold = _cohort_median(values)
         if threshold is None:
             return [
                 (
@@ -1866,7 +2016,7 @@ def _median_for(entity_ids: List[str], mapping: Dict[str, float]) -> float | Non
         for entity_id in entity_ids
         if entity_id in mapping and mapping[entity_id] is not None
     ]
-    return dataio._median(values)
+    return _cohort_median(values)
 
 
 def _bool_pct(entity_ids: List[str], mapping: Dict[str, bool]) -> float | None:
@@ -1999,7 +2149,7 @@ def _group_from_los(
     values = [v for v in los_by_entity.values() if v is not None]
     if not values:
         return None
-    threshold = dataio._median(values)
+    threshold = _cohort_median(values)
     if threshold is None:
         return None
     short = sum(
@@ -2036,7 +2186,9 @@ def _group_from_los(
     }
 
 
-def _entity_numeric(frame: Any, column: str) -> Dict[str, float]:
+def _entity_numeric(
+    frame: Any, column: str, *, normalized_ids: bool = False
+) -> Dict[str, float]:
     out: Dict[str, float] = {}
     if (
         frame is None
@@ -2047,7 +2199,11 @@ def _entity_numeric(frame: Any, column: str) -> Dict[str, float]:
         return out
     import pandas as pd
 
-    entity_ids = frame["stay_id"].map(entity_id_contract.normalize_entity_id)
+    entity_ids = (
+        frame["stay_id"]
+        if normalized_ids
+        else frame["stay_id"].map(entity_id_contract.normalize_entity_id)
+    )
     values = pd.to_numeric(frame[column], errors="coerce")
     for entity_id, value in zip(entity_ids, values):
         if entity_id and value is not None:
@@ -2060,7 +2216,9 @@ def _entity_numeric(frame: Any, column: str) -> Dict[str, float]:
     return out
 
 
-def _entity_text(frame: Any, column: str) -> Dict[str, str]:
+def _entity_text(
+    frame: Any, column: str, *, normalized_ids: bool = False
+) -> Dict[str, str]:
     out: Dict[str, str] = {}
     if (
         frame is None
@@ -2069,7 +2227,11 @@ def _entity_text(frame: Any, column: str) -> Dict[str, str]:
         or column not in frame.columns
     ):
         return out
-    entity_ids = frame["stay_id"].map(entity_id_contract.normalize_entity_id)
+    entity_ids = (
+        frame["stay_id"]
+        if normalized_ids
+        else frame["stay_id"].map(entity_id_contract.normalize_entity_id)
+    )
     for entity_id, raw_value in zip(entity_ids, frame[column]):
         value = dataio._clean(raw_value)
         if entity_id and value:
@@ -2077,14 +2239,36 @@ def _entity_text(frame: Any, column: str) -> Dict[str, str]:
     return out
 
 
+def _cohort_num(value: Any) -> float | None:
+    if type(value) in (float, int):
+        return None if value != value else round(float(value), 3)
+    return dataio._num(value)
+
+
+def _cohort_median(values: Iterable[Any]) -> float | None:
+    vals = sorted(
+        value for value in (_cohort_num(item) for item in values) if value is not None
+    )
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    return round(vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2, 2)
+
+
 def _numeric_summary(values: Iterable[Any]) -> Dict[str, Any]:
-    vals = sorted(v for v in (dataio._num(v) for v in values) if v is not None)
+    vals = sorted(v for v in (_cohort_num(v) for v in values) if v is not None)
+    return _sorted_numeric_summary(vals)
+
+
+def _sorted_numeric_summary(vals: List[float]) -> Dict[str, Any]:
     if not vals:
         return {"count": 0, "mean": None, "median": None, "min": None, "max": None}
+    mid = len(vals) // 2
+    median = vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2
     return {
         "count": len(vals),
         "mean": round(sum(vals) / len(vals), 2),
-        "median": dataio._median(vals),
+        "median": round(median, 2),
         "min": vals[0],
         "max": vals[-1],
     }
@@ -2463,7 +2647,7 @@ def _value_bins(values: Iterable[Any], specs: List[tuple]) -> List[Dict[str, Any
     rows mirror ``_sofa_bins`` (``label`` / ``count`` / ``pct``) so the frontend
     renders every distribution chart through one bar renderer.
     """
-    vals = [v for v in (dataio._num(v) for v in values) if v is not None]
+    vals = [v for v in (_cohort_num(v) for v in values) if v is not None]
     total = len(vals)
     out: List[Dict[str, Any]] = []
     for label, predicate in specs:
@@ -2567,28 +2751,16 @@ def _survival_analysis_payload(
     for option in outcomes:
         if option.get("status") != "ready":
             continue
-        event_col = str(option.get("event_column") or "")
-        time_col = str(option.get("time_column") or "")
-        event_by_entity = (
-            dataio._stay_bool(outcome, event_col, missing_false=False)
-            if event_col
-            else {}
-        )
-        time_by_entity = (
-            dataio._stay_numeric(outcome, time_col, "max") if time_col else {}
-        )
-        event_by_entity, time_by_entity = _windowed_survival_vectors(
-            event_by_entity,
-            time_by_entity,
-            horizon_days=dataio._num(option.get("display_horizon_days")),
-            fixed_horizon_event=bool(option.get("fixed_horizon_event")),
+        event_by_entity, time_by_entity = option.pop("_vectors")
+        counts = cohort_parquet.survival_counts(
+            event_by_entity, time_by_entity, group_options
         )
         for group in group_options:
             if group.get("status") != "ready":
                 continue
             curve = _survival_curve_payload(
                 outcome_option=option,
-                group_option=group,
+                group_option={**group, "_time_counts": counts},
                 event_by_entity=event_by_entity,
                 time_by_entity=time_by_entity,
             )
@@ -2693,12 +2865,23 @@ def _survival_outcome_option(
             "expected_event_columns": list(spec["event_candidates"]),
         }
     time_col = _first_column(outcome, spec["time_candidates"])
+    raw_events = dataio._stay_bool(outcome, event_col, missing_false=False)
+    raw_times = dataio._stay_numeric(outcome, time_col, "max") if time_col else {}
+    event_by_entity, time_by_entity = _windowed_survival_vectors(
+        raw_events,
+        raw_times,
+        horizon_days=_cohort_num(spec.get("display_horizon_days")),
+        fixed_horizon_event=bool(spec.get("fixed_horizon_event")),
+    )
     event_summary = _survival_event_summary(
         outcome,
         entity_ids,
         event_col=event_col,
         time_col=time_col,
         spec=spec,
+        events=raw_events,
+        times=raw_times,
+        windowed_events=event_by_entity,
     )
     if not time_col:
         if spec["id"] == "icu_death":
@@ -2717,19 +2900,11 @@ def _survival_outcome_option(
             "expected_time_columns": list(spec["time_candidates"]),
         }
 
-    event_by_entity = dataio._stay_bool(outcome, event_col, missing_false=False)
-    time_by_entity = dataio._stay_numeric(outcome, time_col, "max")
-    event_by_entity, time_by_entity = _windowed_survival_vectors(
-        event_by_entity,
-        time_by_entity,
-        horizon_days=dataio._num(spec.get("display_horizon_days")),
-        fixed_horizon_event=bool(spec.get("fixed_horizon_event")),
-    )
     usable = [
         entity_id
         for entity_id in entity_ids
         if entity_id in event_by_entity
-        and dataio._num(time_by_entity.get(entity_id)) is not None
+        and _cohort_num(time_by_entity.get(entity_id)) is not None
         and float(time_by_entity[entity_id]) >= 0
     ]
     event_count = sum(
@@ -2748,13 +2923,14 @@ def _survival_outcome_option(
     return {
         **base,
         "status": "ready",
+        "_vectors": (event_by_entity, time_by_entity),
         "reason": None,
         "event_column": event_col,
         "time_column": time_col,
         "event_summary": event_summary,
         "usable_entities": len(usable),
         "event_count": event_count,
-        "display_horizon_days": dataio._num(spec.get("display_horizon_days")),
+        "display_horizon_days": _cohort_num(spec.get("display_horizon_days")),
         "window_label": spec.get("window_label"),
     }
 
@@ -2766,23 +2942,21 @@ def _survival_event_summary(
     event_col: str,
     time_col: str | None,
     spec: Dict[str, Any],
+    events: Dict[str, bool],
+    times: Dict[str, float],
+    windowed_events: Dict[str, bool],
 ) -> Dict[str, Any]:
-    event_by_entity = dataio._stay_bool(outcome, event_col, missing_false=False)
+    event_by_entity = events
     excluded_inconsistent = 0
     if time_col and bool(spec.get("fixed_horizon_event")):
-        time_by_entity = dataio._stay_numeric(outcome, time_col, "max")
-        horizon_days = dataio._num(spec.get("display_horizon_days"))
+        time_by_entity = times
+        horizon_days = _cohort_num(spec.get("display_horizon_days"))
         excluded_inconsistent = _fixed_horizon_inconsistency_count(
             event_by_entity,
             time_by_entity,
             horizon_days=horizon_days,
         )
-        event_by_entity, _ = _windowed_survival_vectors(
-            event_by_entity,
-            time_by_entity,
-            horizon_days=horizon_days,
-            fixed_horizon_event=True,
-        )
+        event_by_entity = windowed_events
     denominator_ids = [
         entity_id for entity_id in entity_ids if entity_id in event_by_entity
     ]
@@ -2826,7 +3000,7 @@ def _fixed_horizon_inconsistency_count(
         return 0
     inconsistent = 0
     for entity_id, event in event_by_entity.items():
-        time_value = dataio._num(time_by_entity.get(entity_id))
+        time_value = _cohort_num(time_by_entity.get(entity_id))
         if time_value is None or time_value < 0:
             continue
         if (event is True and time_value > horizon_days) or (
@@ -2848,7 +3022,7 @@ def _windowed_survival_vectors(
     for entity_id, raw_time in time_by_entity.items():
         if entity_id not in event_by_entity:
             continue
-        time_value = dataio._num(raw_time)
+        time_value = _cohort_num(raw_time)
         if time_value is None or time_value < 0:
             continue
         if horizon_days is None or horizon_days <= 0:
@@ -2971,7 +3145,7 @@ def _survival_sofa_group(
     entity_ids: List[str], sofa_by_entity: Dict[str, float]
 ) -> Dict[str, Any] | None:
     values = [value for value in sofa_by_entity.values() if value is not None]
-    threshold = dataio._median(values)
+    threshold = _cohort_median(values)
     if threshold is None:
         return None
     return {
@@ -3009,27 +3183,28 @@ def _survival_curve_payload(
     event_by_entity: Dict[str, bool],
     time_by_entity: Dict[str, float],
 ) -> Dict[str, Any] | None:
+    counts = group_option.get("_time_counts")
+    if counts is None:
+        counts = cohort_parquet.survival_counts(
+            event_by_entity,
+            time_by_entity,
+            [{**group_option, "status": "ready"}],
+        )
     group_records = []
-    for label, members in group_option.get("_members", []):
-        records = []
-        for entity_id in members:
-            if entity_id not in event_by_entity:
-                continue
-            time_value = dataio._num(time_by_entity.get(entity_id))
-            if time_value is None or time_value < 0:
-                continue
-            records.append(
-                (float(time_value), bool(event_by_entity.get(entity_id) is True))
-            )
+    for label, _members in group_option.get("_members", []):
+        records = counts.get(
+            (group_option.get("id"), label), cohort_parquet.TimeCounts({}, {})
+        )
         if records:
             km = _km_group_payload(label, records)
             group_records.append({"label": label, "records": records, "payload": km})
     if len(group_records) < 2:
         return None
 
-    risk_times = _risk_times(
-        [record for row in group_records for record in row["records"]]
-    )
+    all_times: Counter[float] = Counter()
+    for row in group_records:
+        all_times.update(row["records"].total)
+    risk_times = _risk_times(cohort_parquet.TimeCounts(all_times, {}))
     logrank = _logrank_payload(
         group_records[0]["records"],
         group_records[1]["records"],
@@ -3059,8 +3234,8 @@ def _survival_curve_payload(
                     "label": row["label"],
                     "values": [
                         sum(
-                            1
-                            for time_value, _event in row["records"]
+                            count
+                            for time_value, count in row["records"].total.items()
                             if time_value >= t
                         )
                         for t in risk_times
@@ -3072,8 +3247,21 @@ def _survival_curve_payload(
     }
 
 
+def _time_counts(records: Any) -> cohort_parquet.TimeCounts:
+    if isinstance(records, cohort_parquet.TimeCounts):
+        return records
+    total: Counter[float] = Counter()
+    events: Counter[float] = Counter()
+    for time_value, event in records:
+        total[time_value] += 1
+        if event:
+            events[time_value] += 1
+    return cohort_parquet.TimeCounts(total, events)
+
+
 def _km_group_payload(label: str, records: List[Tuple[float, bool]]) -> Dict[str, Any]:
-    events = sum(1 for _time_value, event in records if event)
+    records = _time_counts(records)
+    events = sum(records.events.values())
     points = _km_points(records)
     return {
         "label": label,
@@ -3108,8 +3296,13 @@ def _censor_marks(
     times and counts, never a subject row.
     """
 
+    records = _time_counts(records)
     censor_times = sorted(
-        {_round_time(time_value) for time_value, event in records if not event}
+        {
+            _round_time(time_value)
+            for time_value, count in records.total.items()
+            if count > records.events.get(time_value, 0)
+        }
     )
     if not censor_times or not points:
         return []
@@ -3133,12 +3326,9 @@ def _censor_marks(
 def _km_points(records: List[Tuple[float, bool]]) -> List[Dict[str, Any]]:
     if not records:
         return [{"time": 0, "survival": 100.0, "at_risk": 0, "events": 0}]
-    total_by_time: Counter[float] = Counter()
-    events_by_time: Counter[float] = Counter()
-    for time_value, event in records:
-        total_by_time[time_value] += 1
-        if event:
-            events_by_time[time_value] += 1
+    records = _time_counts(records)
+    total_by_time = records.total
+    events_by_time = records.events
     event_times = sorted(events_by_time)
     max_time = max(total_by_time)
     survival = 1.0
@@ -3175,9 +3365,9 @@ def _km_points(records: List[Tuple[float, bool]]) -> List[Dict[str, Any]]:
 
 def _km_median(points: List[Dict[str, Any]]) -> float | None:
     for point in points:
-        survival = dataio._num(point.get("survival"))
+        survival = _cohort_num(point.get("survival"))
         if survival is not None and survival <= 50:
-            return dataio._num(point.get("time"))
+            return _cohort_num(point.get("time"))
     return None
 
 
@@ -3196,7 +3386,7 @@ def _thin_points(
 def _risk_times(records: List[Tuple[float, bool]]) -> List[float]:
     if not records:
         return [0]
-    max_time = max(time_value for time_value, _event in records)
+    max_time = max(_time_counts(records).total)
     base = [0, 1, 3, 7, 14, 28, 30]
     times = [float(t) for t in base if t <= max_time]
     rounded_max = _round_time(max_time)
@@ -3213,18 +3403,9 @@ def _logrank_payload(
     label_a: str,
     label_b: str,
 ) -> Dict[str, Any]:
-    total_a: Counter[float] = Counter()
-    total_b: Counter[float] = Counter()
-    events_a: Counter[float] = Counter()
-    events_b: Counter[float] = Counter()
-    for time_value, event in records_a:
-        total_a[time_value] += 1
-        if event:
-            events_a[time_value] += 1
-    for time_value, event in records_b:
-        total_b[time_value] += 1
-        if event:
-            events_b[time_value] += 1
+    counts_a, counts_b = _time_counts(records_a), _time_counts(records_b)
+    total_a, total_b = counts_a.total, counts_b.total
+    events_a, events_b = counts_a.events, counts_b.events
     event_times = sorted(set(events_a) | set(events_b))
     risk_a = _risk_count_map(total_a, event_times)
     risk_b = _risk_count_map(total_b, event_times)
@@ -3508,7 +3689,7 @@ def _source_provenance(source: Dict[str, Any], desc: Dict[str, Any]) -> Dict[str
 
 
 def _sex_bucket(value: Any) -> str | None:
-    clean = dataio._clean(value)
+    clean = value if isinstance(value, str) else dataio._clean(value)
     if not clean:
         return None
     text = clean.strip().lower()

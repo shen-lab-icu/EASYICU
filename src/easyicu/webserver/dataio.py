@@ -3986,6 +3986,14 @@ def _truthy(value: Any) -> Optional[bool]:
 
 
 def _stay_bool(frame: Any, column: str, missing_false: bool = False) -> Dict[str, bool]:
+    from easyicu.webserver.cohort_parquet import StayReductions
+
+    if isinstance(frame, StayReductions):
+        flags = dict(frame.flags.get(column, {}))
+        if missing_false and column in frame.columns:
+            for sid in sorted(frame.entities):
+                flags.setdefault(sid, False)
+        return flags
     if (
         frame is None
         or frame.empty
@@ -4005,6 +4013,10 @@ def _stay_bool(frame: Any, column: str, missing_false: bool = False) -> Dict[str
 
 
 def _stay_numeric(frame: Any, column: str, mode: str) -> Dict[str, float]:
+    from easyicu.webserver.cohort_parquet import StayReductions
+
+    if isinstance(frame, StayReductions):
+        return dict(frame.numeric.get((column, mode), {}))
     if (
         frame is None
         or frame.empty
