@@ -53,6 +53,20 @@ function confirmationWithFailureText(workflow, session) {
   }).workflowConfirmation();
 }
 
+// The conversation's run-stop block for the same runs, with the same echo.
+function runStopText(runs) {
+  const context = { window: { EU_HTML: { esc: String } } };
+  vm.createContext(context);
+  for (const name of ['modules', 'run-stop']) {
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname,
+      `../../src/easyicu/webserver/static/js/screens-guided-pi-${name}.js`), 'utf8'), context);
+  }
+  return context.window.EasyICU.guidedPi.require('runStop').create({
+    tr: en => en,
+    runFailureText: (code, detail) => [code, detail && detail.code, detail && detail.cause].filter(Boolean).join(' / '),
+  }).render({ savedRuns: runs });
+}
+
 test('plan evidence keeps the reviewed run when a later child fails before planning', () => {
   const card = confirmation({ run_id: 'reviewed-plan', remediation_buckets: {} });
   assert.equal(card.reviewResources.length, 3);
@@ -128,23 +142,25 @@ test('an unavailable checkpoint offers preparation of the same retained candidat
   assert.match(chinese.workflowConfirmationHtml(), /该检查点无法继续/);
 });
 
-test('the fresh-plan card names the cause its failed run recorded', () => {
+test('the cause a failed run recorded is said once, by its run-stop block', () => {
   // The workflow's action comes from the authoritative failed run; its typed
-  // detail names a cause that the job's bare code would generalize.
+  // detail names a cause that the job's bare code would generalize. The
+  // conversation's run-stop block says it right above the card, so the card
+  // does not repeat it.
   const failedJob = { kind: 'agent-run', status: 'failed', error_code: 'research_pipeline_progressive_compile_failed' };
   const card = workflow => confirmationWithFailureText(workflow, { archived_child_jobs: [failedJob] });
-  const recorded = card({
-    next_action_code: 'failed_pipeline_requires_fresh_plan',
-    runs: [
-      { run_id: 'other', authoritative: false, run_status: 'failed',
-        gate_reason_code: 'research_pipeline_execution_failed' },
-      { run_id: 'failed-plan', authoritative: true, run_status: 'failed', gate_status: 'blocked',
-        gate_reason_code: 'research_pipeline_progressive_compile_failed',
-        gate_detail_code: 'progressive_family_result_contract_unwritable' },
-    ],
-  });
-  assert.equal(recorded.reason, 'research_pipeline_progressive_compile_failed / progressive_family_result_contract_unwritable');
-  // A run awaiting review is not a failure; the job's code is all there is.
+  const failedRuns = [
+    { run_id: 'other', authoritative: false, run_status: 'failed',
+      gate_reason_code: 'research_pipeline_execution_failed' },
+    { run_id: 'failed-plan', run_ref: 'r-failed-plan', authoritative: true, run_status: 'failed', gate_status: 'blocked',
+      gate_reason_code: 'research_pipeline_progressive_compile_failed',
+      gate_detail_code: 'progressive_family_result_contract_unwritable' },
+  ];
+  const recorded = card({ next_action_code: 'failed_pipeline_requires_fresh_plan', runs: failedRuns });
+  assert.equal(recorded.reason, '');
+  assert.match(runStopText(failedRuns), /research_pipeline_progressive_compile_failed \/ progressive_family_result_contract_unwritable/);
+  // A run awaiting review is not a failure and has no run-stop block; the
+  // job's code is all there is, so the card says it.
   const pending = card({
     next_action_code: 'failed_pipeline_requires_fresh_plan',
     runs: [{ run_id: 'paused', authoritative: true, run_status: 'human_review_pending', gate_reason_code: 'human_plan_review_required' }],
@@ -152,18 +168,17 @@ test('the fresh-plan card names the cause its failed run recorded', () => {
   assert.equal(pending.reason, 'research_pipeline_progressive_compile_failed');
 });
 
-test('a failed-closed run is a failure whose recorded cause the card names', () => {
+test('a failed-closed run is a failure whose run-stop block names its cause', () => {
   // A run that did not pass a check after it started records which check and
   // why; the bare gate code alone would name no cause.
   const card = workflow => confirmationWithFailureText(workflow, { archived_child_jobs: [] });
-  const closed = card({
-    next_action_code: 'failed_pipeline_requires_fresh_plan',
-    runs: [{ run_id: 'closed', authoritative: true, run_status: 'blocked', gate_status: 'blocked',
-      gate_reason_code: 'research_agent_pipeline_failed_closed',
-      gate_detail_code: 'continuous_survival_interval_result_not_estimable',
-      gate_detail_cause_code: 'interval_without_event' }],
-  });
-  assert.equal(closed.reason, 'research_agent_pipeline_failed_closed / continuous_survival_interval_result_not_estimable / interval_without_event');
+  const closedRuns = [{ run_id: 'closed', run_ref: 'r-closed', authoritative: true, run_status: 'blocked', gate_status: 'blocked',
+    gate_reason_code: 'research_agent_pipeline_failed_closed',
+    gate_detail_code: 'continuous_survival_interval_result_not_estimable',
+    gate_detail_cause_code: 'interval_without_event' }];
+  const closed = card({ next_action_code: 'failed_pipeline_requires_fresh_plan', runs: closedRuns });
+  assert.equal(closed.reason, '');
+  assert.match(runStopText(closedRuns), /research_agent_pipeline_failed_closed \/ continuous_survival_interval_result_not_estimable \/ interval_without_event/);
   // Another research_agent_pipeline_* gate is not read as a failure.
   const other = card({
     next_action_code: 'failed_pipeline_requires_fresh_plan',
