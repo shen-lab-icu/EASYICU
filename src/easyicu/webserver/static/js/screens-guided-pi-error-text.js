@@ -200,6 +200,9 @@
       if (error.code === 'research_pipeline_execution_runtime_unavailable') {
         return tr('The container runtime that executes analysis code is not running. Start it (Docker Desktop, or "colima start") and run again.', '执行分析代码的容器运行环境未启动。请先启动它（Docker Desktop，或 "colima start"），然后重新运行。');
       }
+      if (error.code === 'research_pipeline_plan_step_needs_sandbox') {
+        return runFailureText(error.code);
+      }
       if (error.code === 'research_pipeline_execution_retry_futile') {
         // A stop the failed step's executor named repeats on the same plan
         // and data; no repair budget was involved.
@@ -693,6 +696,10 @@
         research_pipeline_execution_runtime_unavailable: tr(
           'The container runtime that executes analysis code was not running.',
           '执行分析代码的容器运行环境未启动。',
+        ),
+        research_pipeline_plan_step_needs_sandbox: tr(
+          'One step in this plan needs code written by the model during the run, and the desktop app does not run such code. Remove or change that step, then approve the plan. No analysis has been run.',
+          '计划里有一步要靠模型临时写代码才能完成，桌面版不运行这类代码。请删除或修改这一步，再批准计划。尚未运行任何分析。',
         ),
         research_pipeline_runner_image_mismatch: tr(
           'The analysis runner image did not match this EasyICU version.',

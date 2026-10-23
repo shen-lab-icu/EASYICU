@@ -5,14 +5,14 @@
   "files": {
     "execution/phase.py": {
       "loc": 6159,
-      "sha256": "4458f1b167d2655987925b19c62e39d4b1941b5e3d5e5ec652731f5130b8b37d",
+      "sha256": "b68e22e2bffafc22d9476b8979dbc6c0437e75dff16a30e7942a00ad0e275ea8",
       "intra_package_import_edges": 103,
       "shim_bypass_violations": []
     },
     "execution/phase_support.py": {
-      "loc": 3790,
-      "sha256": "668f40e1dd4b6a2707cc94f44f606f90aefcd06ca1545a7c08b5668b887a4477",
-      "intra_package_import_edges": 59,
+      "loc": 3783,
+      "sha256": "c8f8543e4eb6f717d388dcaf682adc65b478584be4beaab9cf59890bafa26625",
+      "intra_package_import_edges": 61,
       "shim_bypass_violations": []
     },
     "execution/run_coordination.py": {
@@ -22,9 +22,9 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 7391,
-      "sha256": "1ece612de6839f8ed9dbc106df5ad091f32c47c1b2cf53c8d3a1477c230946b0",
-      "intra_package_import_edges": 139,
+      "loc": 7375,
+      "sha256": "022865d33ac54f9b6c9dae214d0418a7ebbf8a5fdbbced25cfd51d78ef85833e",
+      "intra_package_import_edges": 142,
       "shim_bypass_violations": []
     },
     "reporting/publication_bundles.py": {
@@ -310,15 +310,15 @@
       "shim_bypass_violations": []
     },
     "execution/runner.py": {
-      "loc": 3577,
-      "sha256": "0e7c73188cf8ba79727ba327e8462d009dc54717dd153335c8bcf54b0d8e1dc9",
-      "intra_package_import_edges": 10,
+      "loc": 3539,
+      "sha256": "551e65cdb9d1525f373a24cfbec684671ec3568ebf99680673674dd08ab1d80d",
+      "intra_package_import_edges": 12,
       "shim_bypass_violations": []
     },
     "execution/runners/deterministic_robustness.py": {
       "loc": 3222,
-      "sha256": "1e67e1d13035893eeaea62936eae65a4aa3bafb997b072841927be0bd3787b5b",
-      "intra_package_import_edges": 17,
+      "sha256": "759ebe575dfe8904f4fcd5f45bb93083c7006ab71aa5be8da033f6627c63d6e4",
+      "intra_package_import_edges": 18,
       "shim_bypass_violations": []
     },
     "agents/progressive_planner.py": {
@@ -412,7 +412,7 @@
       "callable_closure_captured_names": 1
     }
   },
-  "baseline_reason": "Regenerate exact architecture identities on 1bd6d3767 with the credentialed-data egress changes. Existing architecture and module-graph gates pass against HEAD without increasing a ratchet. Record current committed refactors together with changed egress owners; preserve prior governance history, with no newly accepted LOC growth.",
+  "baseline_reason": "Extract desktop initial-code, runtime diagnostic, nested-replay and run-entry policy owners on 81f8bcc36; all HEAD LOC and closure ratchets remain equal or lower, with no accepted growth.",
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -1285,6 +1285,9 @@
     },
     {
       "reason": "Regenerate exact architecture identities on 1bd6d3767 with the credentialed-data egress changes. Existing architecture and module-graph gates pass against HEAD without increasing a ratchet. Record current committed refactors together with changed egress owners; preserve prior governance history, with no newly accepted LOC growth."
+    },
+    {
+      "reason": "Extract desktop initial-code, runtime diagnostic, nested-replay and run-entry policy owners on 81f8bcc36; all HEAD LOC and closure ratchets remain equal or lower, with no accepted growth."
     }
   ]
 }

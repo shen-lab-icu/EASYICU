@@ -156,7 +156,7 @@ from easyicu.webserver.research_launch_resume import (
     _DevelopmentResumeAcquisition,
     _slug,
 )
-from easyicu.webserver.research_launch_runtime import _submission_profile_ref
+from easyicu.webserver.research_launch_runtime import _submission_profile_ref, recorded_submission_profile_ref
 from easyicu.webserver.study_intent import explicit_outcome_concepts
 from easyicu.webserver.research_launch_scientific import (
     _analysis_requires_longitudinal_trajectory,
@@ -619,11 +619,13 @@ def _pipeline_failure_code(
     chain = _pipeline_exception_chain(exc)
     if any(isinstance(item, ProviderHardStopExceeded) for item in chain):
         return "research_pipeline_provider_budget_exhausted"
+    typed_failure = _safe_pipeline_typed_failure(exc)
+    if typed_failure.get("owner") == "easyicu.execution.host_plan_v1":
+        return "research_pipeline_plan_step_needs_sandbox"
     if any("timeout" in type(item).__name__.casefold() for item in chain):
         return "research_pipeline_provider_timeout"
     if any(type(item).__name__ == "StructuredResponseFailure" for item in chain):
         return "research_pipeline_plan_contract_exhausted"
-    typed_failure = _safe_pipeline_typed_failure(exc)
     if typed_failure.get("owner") == ("easyicu.providers.planner_efficiency_budget_v1"):
         return "research_pipeline_planner_efficiency_budget_exhausted"
     if typed_failure.get(
@@ -889,6 +891,8 @@ _SAFE_RUNNER_UNAVAILABLE_REASONS = frozenset(
         "docker_probe_failed",
         "docker_workspace_unavailable",
         "host_sandbox_missing",
+        "host_runtime_unavailable",
+        "host_runner_refuses_model_code",
         "runner_image_kernel_mismatch",
         "runner_image_lock_mismatch",
     }
@@ -986,6 +990,9 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
         if not isinstance(raw, Mapping):
             continue
         owner = raw.get("owner")
+        if owner == "easyicu.execution.host_plan_v1" and raw.get("reason_code") == "research_pipeline_plan_step_needs_sandbox":
+            coordinates = safe_stop_coordinates({"step_id": raw.get("step_id")})
+            return {"owner": owner, "reason_code": raw["reason_code"], **coordinates}
         if owner == "easyicu.planning.dependence_authority_v1":
             from easyicu.research_agent.planning.dependence_authority import DEPENDENCE_REASON_CODES
 
@@ -4507,6 +4514,10 @@ def _write_projection(
     source_manifest = {
         "schema_version": "easyicu.web-research-pipeline-projection/1",
         "source": run_context["source"],
+        "submission_profile_ref": recorded_submission_profile_ref(
+            manifest=_read_json(run_dir / "manifest.json", {}) if run_dir else None,
+            requests=pending.requests if pending is not None else (),
+        ),
         "engine": "easyicu.research_agent.pipeline",
         "run_id": run_id,
         "status": "human_review_pending" if pending is not None else gate["status"],
@@ -4876,6 +4887,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         "credential_source": credential_source,
         "provider": provider_name,
         "budget_mode": budget_mode,
+        "submission_profile_ref": recorded_submission_profile_ref(requests=pending.requests),
         "research_input_state": (
             project_research_input_state(source_manifest["research_input_state"])
             if isinstance(source_manifest, Mapping) and "research_input_state" in source_manifest
@@ -6026,6 +6038,7 @@ def _validated_execution_retry_config(
             _submission_profile_ref(
                 budget_mode="full_reviewed",
                 live_pubmed=True,
+                runner_kind=current_config.runner_kind,
             )
         )
         live_payload = current_config.recovery_payload()
@@ -6944,6 +6957,7 @@ def make_research_pipeline_run_runner(
             submission_profile_ref = _submission_profile_ref(
                 budget_mode=selected_budget_mode,
                 live_pubmed=live_pubmed_requested,
+                runner_kind=execution.runner_kind,
             )
             submission_profile = get_submission_profile(submission_profile_ref)
             profile_options = submission_profile.pipeline_options()
@@ -7163,7 +7177,7 @@ def make_research_pipeline_run_runner(
                 require_reportable_scientific_capability=not analysis_only_execution,
                 development_diagnostic=analysis_only_execution,
                 required_primary_cohort_selection_mode=required_cohort_mode,
-                enable_pdf_render=True,
+                enable_pdf_render=submission_profile.generate_manuscript is not False,
                 latex_draft_watermark=True,
                 bound_preplan_literature=bound_preplan_literature,
                 bound_plan_revision_contract=(bound_plan_revision_contract or None),
@@ -7545,6 +7559,11 @@ def make_research_pipeline_run_runner(
                 message = (
                     "The container runtime that executes analysis code was not "
                     "available, so no analysis was run. Start it and run again."
+                )
+            elif code == "research_pipeline_plan_step_needs_sandbox":
+                message = (
+                    "This step needs code the desktop app cannot run safely. "
+                    "Remove or change this step before approving the plan. No analysis was run."
                 )
             elif code == "research_pipeline_trajectory_authority_refused":
                 message = (

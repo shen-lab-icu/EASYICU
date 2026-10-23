@@ -4159,8 +4159,8 @@ def _execute_step(
     standard_executor_terminal_findings: List[ValidationFinding] = []
     deterministic_contract_approved_code_digest: Optional[str] = None
     final_concept_gate_approved_code_digest: Optional[str] = None
-    candidate_loop_state = _CandidateLoopState(
-        code=code,
+    candidate_loop_state = _CandidateLoopState.from_initial_code(
+        code, step_record,
         concept_approved_code_digest=concept_approved_code_digest,
         deterministic_contract_approved_code_digest=(
             deterministic_contract_approved_code_digest

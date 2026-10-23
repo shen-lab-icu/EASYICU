@@ -53,6 +53,27 @@ function confirmationWithFailureText(workflow, session) {
   }).workflowConfirmation();
 }
 
+test('the reviewed desktop profile is visible before approval in both languages', () => {
+  for (const name of ['desktop_first_result_dev', 'desktop_first_result_live_pubmed_dev']) {
+    for (const language of ['en', 'zh']) {
+      const owner = confirmationOwner({
+        next_action_code: 'operator_plan_approval_required',
+        plan_review_summary: { run_id: 'desktop', submission_profile_ref: `${name}/20261023` },
+      }, language);
+      const profileLine = language === 'en'
+        ? 'This run produces analysis tables and figures, not a manuscript.'
+        : '本次只生成分析表格和图形，不写论文。';
+      assert.ok(owner.workflowConfirmationHtml().includes(
+        `<p class="gpi-confirmation-profile">${profileLine}</p>`));
+    }
+  }
+  const docker = confirmationOwner({
+    next_action_code: 'operator_plan_approval_required',
+    plan_review_summary: { run_id: 'docker', submission_profile_ref: 'npj_dm/1.0.0' },
+  });
+  assert.doesNotMatch(docker.workflowConfirmationHtml(), /gpi-confirmation-profile/);
+});
+
 // The conversation's run-stop block for the same runs, with the same echo.
 function runStopText(runs) {
   const context = { window: { EU_HTML: { esc: String } } };

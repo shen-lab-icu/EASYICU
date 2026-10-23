@@ -44,6 +44,8 @@ _ADDITIVE_FIELDS = frozenset(
         "bound_population_requirements",
         "bound_target_trial",
         "enable_exposure_grouping",
+        "generate_manuscript",
+        "execution_tier",
     }
 )
 
@@ -305,6 +307,10 @@ class PipelineConfig:
     enable_llm_concept_audit: Optional[bool] = None
     enable_memory: bool = True
     enable_latex: bool = True
+    # None preserves the existing manuscript workflow. Desktop first-result
+    # profiles explicitly disable it, including on durable review recovery.
+    generate_manuscript: Optional[bool] = None
+    execution_tier: Optional[str] = None
     # Interactive hosts can require an explicit, digest-bound operator review
     # of every generated plan even when no scientific validator emitted an
     # error.  The default remains non-interactive for CLI/benchmark callers;
@@ -692,6 +698,13 @@ class PipelineConfig:
         return cls(**kwargs)
 
     def __post_init__(self) -> None:
+        from .profiles import is_paper_facing_profile
+
+        if self.runner_kind == "host":
+            if is_paper_facing_profile(self.submission_profile_name):
+                raise ValueError("host runner cannot be used for a paper-facing profile")
+            if self.runner_network != "none":
+                raise ValueError("host typed executors do not use the network")
         if self.bound_population_requirements is not None:
             from ..planning.population_requirements import PlanPopulationRequirements
 
@@ -1011,12 +1024,14 @@ class PipelineConfig:
             profile = get_submission_profile(
                 f"{self.submission_profile_name}/{self.submission_profile_version}"
             )
-            for coordinate in ("planner_only", "require_human_plan_review"):
+            for coordinate in ("planner_only", "require_human_plan_review", "execution_tier", "generate_manuscript", "enable_latex"):
                 expected = getattr(profile, coordinate)
                 if expected is not None and getattr(self, coordinate) != expected:
                     raise ValueError(
                         f"{coordinate} must match submission profile {profile.ref!r}"
                     )
+            if profile.requires_runner == "host" and self.runner_kind != "host":
+                raise ValueError("desktop profile requires the host runner")
             expected_outline_stop = bool(
                 profile.development_stop_after_planner_outline
             )

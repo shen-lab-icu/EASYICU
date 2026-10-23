@@ -79,6 +79,22 @@ class RuntimeFailureDecision:
     progress_message: str
 
 
+def record_host_code_refusal(
+    *, step_id, step_record, findings, shared_lock,
+    per_step_records, append_terminal, flush_manifest,
+) -> None:
+    """Persist the same terminal refusal before generation or candidate replay."""
+    decision = classify_runtime_failure(
+        run_log="", timed_out=False, step_id=step_id, returncode=126,
+        runner_failure_code=RunnerFailureCode.HOST_RUNNER_REFUSES_MODEL_CODE,
+    )
+    with shared_lock:
+        step_record.update(decision.step_updates)
+        findings.append(decision.finding)
+        append_terminal(per_step_records, step_record)
+        flush_manifest()
+
+
 def classify_runtime_failure(
     *,
     run_log: str,
@@ -98,6 +114,21 @@ def classify_runtime_failure(
     upgrades a failed step.
     """
 
+    if runner_failure_code == RunnerFailureCode.HOST_RUNNER_REFUSES_MODEL_CODE:
+        return RuntimeFailureDecision(
+            finding=ValidationFinding(
+                validator="runtime_code_origin", severity="error",
+                message="The desktop runtime only accepts freshly host-rendered typed executors.",
+                detail={"reason": "host_runner_refuses_model_code", "step_id": step_id},
+            ),
+            step_updates={
+                "status": "blocked_host_code_policy",
+                "runner_failure_code": "host_runner_refuses_model_code",
+                "runtime_failure_class": "host_runner_refuses_model_code",
+                "diagnostic_only": True,
+            },
+            progress_message="Desktop execution refused model or repaired code.",
+        )
     if timed_out:
         failure_class = RuntimeFailureClass.EXECUTION_TIMEOUT
         limit = None if timeout_seconds is None else float(timeout_seconds)

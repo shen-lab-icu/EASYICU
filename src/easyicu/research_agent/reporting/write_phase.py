@@ -3642,6 +3642,17 @@ def run_write_phase(
     force_writer_probe: bool = False,
 ) -> WritePhaseResult:
     """Draft manuscript-facing outputs after analysis is complete."""
+    if getattr(getattr(pipeline, "_config", None), "generate_manuscript", None) is False:
+        # Typed tables/figures and results_report are the desktop deliverable.
+        # Return before figure publication, Writer/Critic, BibTeX or LaTeX.
+        bound_path = run_dir / "manuscript_scaffold_bound.md"
+        bound_path.write_text(
+            render_not_generated(
+                ManuscriptState.paused("desktop_first_result"),
+                "Typed analysis results are available in results_report.md and the step outputs.",
+            ), encoding="utf-8",
+        )
+        return WritePhaseResult(literature=None, bound_path=bound_path)
     context = plan_result.context
     agent_context = plan_result.agent_context
     evidence = plan_result.evidence

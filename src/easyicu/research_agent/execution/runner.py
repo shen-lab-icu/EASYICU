@@ -1,32 +1,10 @@
-"""Run agent-generated Python code in a constrained subprocess.
+"""Bounded Python execution with per-step outputs and scrubbed environments.
 
-The runner is the line between LLM output and real numbers. It must
-be deterministic, isolated, and safely captured.
-
-What it gives you:
-
-* a fresh working directory per step (``STEP_OUT_DIR``);
-* the cohort path injected as ``COHORT_PARQUET``;
-* bounded stdout/stderr tails and the exit code captured into a run log;
-* a hard wall-clock timeout (default 5 min) so a runaway script
-  never blocks the whole pipeline;
-* a curated PYTHONPATH so the script picks up the EasyICU
-  installation but no surprise plugins.
-
-Two runner backends ship in this module:
-
-* :class:`CodeRunner` — macOS ``sandbox-exec`` confinement when available;
-  otherwise fail-closed unless development explicitly opts into unsafe host
-  execution.
-* :class:`DockerRunner` — host-side ``docker run`` with
-  ``--network none`` and read-only cohort mount, so an LLM that emits
-  ``rm -rf /`` or attempts to call ``urllib.request`` cannot escape
-  or exfiltrate anything. Same ``run(step_id=, code=)`` contract
-  as :class:`CodeRunner`, so the pipeline can swap them in via
-  ``runner_kind="docker"``.
-
-Hashes live in :mod:`easyicu.research_agent.authority.evidence_store`, not here
-— these classes only produce the artefacts.
+CodeRunner confines generated code with macOS sandbox-exec; DockerRunner uses
+network-disabled containers with read-only inputs. Both fail closed unless the
+explicit development policy permits degraded execution. The separate HostRunner
+uses these capture/artifact mechanics only for host-rendered typed executors;
+it does not claim to sandbox model code. Evidence hashing belongs to EvidenceStore.
 """
 
 from __future__ import annotations
@@ -77,6 +55,8 @@ from .kernel_identity import (
     runner_image_probe_source,
 )
 from .method_capabilities import set_runtime_capability_snapshot_provider
+from .step_execution import host_runtime_available
+from .runtime_diagnostics import runner_unavailable_remediation as runner_unavailable_remediation
 
 _SAFE_INHERITED_ENV_KEYS = (
     "PATH",
@@ -86,6 +66,8 @@ _SAFE_INHERITED_ENV_KEYS = (
     "TZ",
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
+    "SYSTEMROOT",
+    "WINDIR",
 )
 
 _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SCHEMA = "easyicu.run_artifact_authority_snapshot/1"
@@ -134,6 +116,7 @@ HOST_OWNED_RUNNER_ENV_KEYS = frozenset(
         _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA_ENV,
         _RUN_ARTIFACT_AUTHORITY_ERROR_ENV,
         "EASYICU_RESOLVED_INPUTS_JSON",
+        "EASYICU_HOST_RENDERED_ONLY",
         "HOME",
         "TMPDIR",
         "TMP",
@@ -606,17 +589,15 @@ def _run_capturing_with_descendant_reaping(
     cwd: str,
     env: Mapping[str, str],
     timeout: float,
+    terminate_tree=None,
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` with bounded streamed output and always kill descendants.
 
-    ``subprocess.run(timeout=...)`` sends the timeout kill only to the direct
-    child, so a background process spawned by generated code survives and can
-    keep mutating step outputs after evidence has been collected. On POSIX the
-    child is launched in a new session and, on timeout, the whole process group
-    is signalled before ``TimeoutExpired`` is re-raised with the captured
-    partial output (so the caller's bytes-safe timeout handler is unchanged).
-    Non-POSIX platforms use the same bounded drains but fall back to killing
-    only the direct child because POSIX process groups are unavailable.
+    POSIX children start in a new session, whose process group is terminated
+    before collecting evidence. The host backend supplies ``terminate_tree``
+    for Windows descendants and detached POSIX children. Timeout errors retain
+    captured partial output. Cleanup failures still reap the direct child and
+    close both drains before propagating.
     """
 
     proc = subprocess.Popen(  # noqa: S603 - configured argv, no shell
@@ -646,20 +627,24 @@ def _run_capturing_with_descendant_reaping(
         # This covers normal exit, timeout, KeyboardInterrupt/cancellation, and
         # arbitrary wait/pipe failures. Descendants are dead before evidence is
         # inspected, and the direct child is reaped before returning or raising.
-        _terminate_process_group(proc, process_group_id=process_group_id)
         try:
-            proc.wait(timeout=5.0)
-        except (OSError, subprocess.TimeoutExpired):
+            if terminate_tree is not None:
+                terminate_tree(proc)
+        finally:
+            _terminate_process_group(proc, process_group_id=process_group_id)
             try:
-                proc.kill()
-            except (OSError, ProcessLookupError):
-                pass
-            try:
-                proc.wait(timeout=1.0)
+                proc.wait(timeout=5.0)
             except (OSError, subprocess.TimeoutExpired):
-                pass
-        _finish_capture_drain(proc.stdout, stdout_thread, stdout_stop)
-        _finish_capture_drain(proc.stderr, stderr_thread, stderr_stop)
+                try:
+                    proc.kill()
+                except (OSError, ProcessLookupError):
+                    pass
+                try:
+                    proc.wait(timeout=1.0)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            _finish_capture_drain(proc.stdout, stdout_thread, stdout_stop)
+            _finish_capture_drain(proc.stderr, stderr_thread, stderr_stop)
     stdout = stdout_tail.text()
     stderr = stderr_tail.text()
     if timed_out:
@@ -1367,6 +1352,18 @@ class CodeRunner:
             return [unshare, "-n", "--", *base]
         return base
 
+    def _execution_cwd(self, step_dir: Path) -> Path:
+        return step_dir
+
+    def _matplotlib_config_dir(self, step_dir: Path) -> Path:
+        return step_dir / ".matplotlib"
+
+    def _configure_execution_env(self, env: Dict[str, str]) -> None:
+        """Backend-owned additions after reserved environment validation."""
+
+    def _execute_command(self, cmd, **kwargs):
+        return _run_capturing_with_descendant_reaping(cmd, **kwargs)
+
     def run(
         self,
         *,
@@ -1469,7 +1466,7 @@ class CodeRunner:
         ):
             env[out_alias] = str(out_dir)
         env["MPLBACKEND"] = "Agg"
-        mpl_config_dir = step_dir / ".matplotlib"
+        mpl_config_dir = self._matplotlib_config_dir(step_dir)
         mpl_config_dir.mkdir(parents=True, exist_ok=True)
         env["MPLCONFIGDIR"] = str(mpl_config_dir)
         env["PYTHONIOENCODING"] = "utf-8"
@@ -1490,6 +1487,8 @@ class CodeRunner:
         env.update(self.extra_env)
         if resolved_inputs_path is not None:
             env["EASYICU_RESOLVED_INPUTS_JSON"] = str(resolved_inputs_path)
+        self._configure_execution_env(env)
+        execution_cwd = self._execution_cwd(step_dir)
 
         timed_out = False
         started = time.monotonic()
@@ -1581,9 +1580,9 @@ class CodeRunner:
                 "is not isolated; use DockerRunner for untrusted generated code."
             )
         try:
-            proc = _run_capturing_with_descendant_reaping(
+            proc = self._execute_command(
                 cmd,
-                cwd=str(step_dir),
+                cwd=str(execution_cwd),
                 env=env,
                 timeout=self.timeout_seconds,
             )
@@ -1703,7 +1702,7 @@ class CodeRunner:
                 === step {step_id} ===
                 cmd: {rendered_cmd}
                 original_cmd: {rendered_original_cmd}
-                cwd: {step_dir}
+                cwd: {execution_cwd}
                 cohort: {self.cohort_parquet}
                 network_policy: {self.network_policy}
                 allow_unsafe_host_fallback: {self.allow_unsafe_host_fallback}
@@ -1728,7 +1727,7 @@ class CodeRunner:
         return RunResult(
             step_id=step_id,
             script_path=script_path,
-            cwd=step_dir,
+            cwd=execution_cwd,
             out_dir=out_dir,
             stdout=stdout,
             stderr=stderr,
@@ -3257,49 +3256,13 @@ RUNNER_UNAVAILABLE_REASON_CODES = frozenset(
         "docker_probe_failed",
         "docker_workspace_unavailable",
         "host_sandbox_missing",
+        "host_runtime_unavailable",
+        "host_runner_refuses_model_code",
         "runner_image_kernel_mismatch",
         "runner_image_lock_mismatch",
     }
 )
 
-_RUNNER_UNAVAILABLE_REMEDIATION = {
-    "docker_daemon_unreachable": (
-        "The Docker daemon is not responding. Start Docker (Docker Desktop, "
-        "'colima start', ...) and retry."
-    ),
-    "docker_executable_missing": (
-        "No 'docker' executable was found on PATH or in the standard local "
-        "install locations. Install Docker, or set EASYICU_DOCKER_EXECUTABLE to "
-        "the binary if it lives somewhere non-standard."
-    ),
-    "docker_image_missing": (
-        "The pinned execution image is not present locally. Build or pull it "
-        "with a live Docker daemon and retry."
-    ),
-    "docker_probe_failed": (
-        "The Docker probe failed or returned an invalid response. Check the "
-        "Docker context, permissions and runtime health; image absence was not established."
-    ),
-    "docker_workspace_unavailable": (
-        "The execution workspace is not readable and writable inside Docker. "
-        "Check Docker or Colima file sharing and workspace permissions, then retry."
-    ),
-    "host_sandbox_missing": (
-        "macOS 'sandbox-exec' was not found, so no filesystem-isolating host "
-        "fallback is available."
-    ),
-    "runner_image_kernel_mismatch": (
-        "The execution image was built from different EasyICU execution-kernel "
-        "source than this host is running. Rebuild the image from the current "
-        "commit, verify it with tools/check_agent_runtime.py, point "
-        "EASYICU_RUNNER_IMAGE at it, and restart the service."
-    ),
-    "runner_image_lock_mismatch": (
-        "The execution image's requirements.lock differs from the lock this "
-        "host pins. Rebuild the image from the current commit and restart the "
-        "service."
-    ),
-}
 
 _DOCKER_DAEMON_UNREACHABLE_MARKERS = (
     "cannot connect to the docker daemon",
@@ -3308,13 +3271,6 @@ _DOCKER_DAEMON_UNREACHABLE_MARKERS = (
     "error during connect",
 )
 
-
-def runner_unavailable_remediation(reason_code: str) -> str:
-    """Return the constant, host-neutral remediation for one closed reason."""
-
-    return _RUNNER_UNAVAILABLE_REMEDIATION.get(
-        str(reason_code), "The configured execution backend is not usable."
-    )
 
 
 def _classify_docker_failure(stderr: str, stdout: str) -> str:
@@ -3393,6 +3349,12 @@ def probe_runner_availability(
     runtime_image = image or os.environ.get(
         "EASYICU_RUNNER_IMAGE", DockerRunner.DEFAULT_IMAGE
     )
+    if kind == "host":
+        available = host_runtime_available(probe_timeout_seconds)
+        return RunnerAvailability(
+            kind="host", available=available, image="",
+            reason_code="" if available else "host_runtime_unavailable",
+        )
     if kind != "docker":
         if (
             kind == "subprocess"

@@ -144,6 +144,7 @@ def run_concept_repair_loop(request: ConceptRepairRequest) -> ConceptRepairResul
     provider_budget = runtime.provider_budget
     services = request.services
     code = request.initial_code
+    host_rendered_code = code
 
     worker.concept_repair_attempts = 0
     worker.llm_repair_used = worker.critic_resume_repair_used
@@ -153,6 +154,8 @@ def run_concept_repair_loop(request: ConceptRepairRequest) -> ConceptRepairResul
     max_deterministic_repairs = MAX_DETERMINISTIC_CONCEPT_REPAIRS
 
     while True:
+        if record.get("code_origin") == "host_rendered_executor" and code != host_rendered_code:
+            record["code_origin"] = "repair"
         if not quarantine.draft_active:
             code = reorder_forward_references(code)
             code = host_plausibility_receipt_injected(
@@ -165,6 +168,8 @@ def run_concept_repair_loop(request: ConceptRepairRequest) -> ConceptRepairResul
                     scope=authority.plausibility_scope,
                 ),
             )
+        if record.get("code_origin") == "host_rendered_executor":
+            host_rendered_code = code
         usage_findings = audit.findings_for_code(code, include_llm=False)
         record["usage_findings"] = [finding.model_dump() for finding in usage_findings]
         worker.concept_audit_error_count += sum(

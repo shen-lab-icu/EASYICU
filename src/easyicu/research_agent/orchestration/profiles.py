@@ -92,6 +92,9 @@ class SubmissionProfile:
     require_human_plan_review: Optional[bool] = None
     require_literature_design_authority: Optional[bool] = None
     development_stop_after_planner_outline: Optional[bool] = None
+    execution_tier: Optional[str] = None
+    generate_manuscript: Optional[bool] = None
+    enable_latex: Optional[bool] = None
 
     @property
     def ref(self) -> str:
@@ -169,6 +172,9 @@ class SubmissionProfile:
             options["development_stop_after_planner_outline"] = (
                 self.development_stop_after_planner_outline
             )
+        for name in ("execution_tier", "generate_manuscript", "enable_latex"):
+            if getattr(self, name) is not None:
+                options[name] = getattr(self, name)
         return options
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -210,6 +216,9 @@ class SubmissionProfile:
             "require_human_plan_review",
             "require_literature_design_authority",
             "development_stop_after_planner_outline",
+            "execution_tier",
+            "generate_manuscript",
+            "enable_latex",
         ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
@@ -1159,7 +1168,20 @@ NPJ_DM_2026_07_22_FRAMEWORK_V2_CAPABILITY_DEV = SubmissionProfile(
 )
 
 DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_19.ref
+DESKTOP_FIRST_RESULT = replace(
+    E1_REVIEWED_DEMO_2026_09_22,
+    name="desktop_first_result_dev", version="20261023",
+    locked_at="2026-10-23T00:00:00Z", requires_runner="host",
+    execution_tier="first_result", generate_manuscript=False, enable_latex=False,
+    planner_only=False, require_human_plan_review=True,
+)
+DESKTOP_FIRST_RESULT_LIVE_PUBMED = replace(
+    DESKTOP_FIRST_RESULT,
+    name="desktop_first_result_live_pubmed_dev", enable_pubmed=True,
+)
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
+    DESKTOP_FIRST_RESULT.ref: DESKTOP_FIRST_RESULT,
+    DESKTOP_FIRST_RESULT_LIVE_PUBMED.ref: DESKTOP_FIRST_RESULT_LIVE_PUBMED,
     NPJ_DM_2026_05.ref: NPJ_DM_2026_05,
     NPJ_DM_2026_06.ref: NPJ_DM_2026_06,
     NPJ_DM_2026_07.ref: NPJ_DM_2026_07,

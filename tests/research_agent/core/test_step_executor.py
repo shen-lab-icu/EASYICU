@@ -142,6 +142,7 @@ def test_step_executor_is_a_mechanical_single_call_boundary() -> None:
         "step_id",
         "code",
         "resolved_inputs_path",
+        None,  # Optional provenance is forwarded only to a requesting backend.
     ]
     assert not any(isinstance(node, ast.Try) for node in ast.walk(tree))
 

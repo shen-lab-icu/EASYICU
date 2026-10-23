@@ -58,6 +58,44 @@ def test_unconsumed_untyped_outline_figure_is_omitted_with_a_recorded_note():
     assert note.message in plan.rationale
 
 
+@pytest.mark.parametrize("obligation", ["optional", "consumed", "requested"])
+def test_host_checks_the_final_compiled_plan_without_exempting_rendering(obligation):
+    from easyicu.research_agent.execution.owner_declaration import require_host_rendered_plan
+
+    payload = _payload()
+    # Keep one typed analytical step and its final optional figure.
+    payload["steps"] = [s for s in payload["steps"] if s["step_id"] in {"05_primary", "07_figure"}]
+    payload["steps"][0]["depends_on"] = []
+    payload["steps"][1]["depends_on"] = ["05_primary"]
+    payload["steps"][1]["product_inputs"] = [payload["steps"][1]["product_inputs"][1]]
+    payload["robustness_intents"] = []
+    context = _context()
+    if obligation == "requested":
+        context = context.model_copy(update={
+            "user_preferences": UserPreferences(must_have_outputs="figure:primary_results"),
+        })
+    if obligation == "consumed":
+        consumer = deepcopy(payload["steps"][-1])
+        consumer.update(
+            step_id="08_consumer", depends_on=["07_figure"],
+            module_id="custom_analysis", custom_method="synthetic_figure_audit",
+            product_inputs=[{"producer_step_id": "07_figure", "product_id": "figure:primary_results"}],
+            outputs=[{"product_id": "table:render_audit", "semantic_role": "custom"}],
+        )
+        payload["steps"].append(consumer)
+    plan, receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload), context=context,
+    )
+    if obligation == "optional":
+        assert [note.step_id for note in receipt.omitted_render_steps] == ["07_figure"]
+        require_host_rendered_plan(plan=plan)
+    else:
+        assert "07_figure" in {step.step_id for step in plan.steps}
+        with pytest.raises(ValueError, match="research_pipeline_plan_step_needs_sandbox") as error:
+            require_host_rendered_plan(plan=plan)
+        assert error.value.easyicu_safe_diagnostic["step_id"] == "07_figure"
+
+
 def _run_plan():
     return AnalysisPlan(
         research_question="Describe the synthetic measurement distribution.",

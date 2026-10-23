@@ -171,6 +171,7 @@ class PreparedLaunchExecution:
     runner_image: str
     plan_change_request: Optional[PlanChangeRequest] = None
     development_resume_scope: Optional[_DevelopmentResumeLaunchScope] = None
+    runner_kind: str = "docker"
 
 
 @dataclass(frozen=True)
@@ -718,7 +719,7 @@ def _prepare_launch_execution(
             "The server-owned runner image must be one non-empty reference.",
         )
     _require_profile_dictionaries(budget_mode=budget_mode)
-    _require_execution_runtime(
+    selected_runner_kind = _require_execution_runtime(
         budget_mode=budget_mode,
         runner_image=selected_runner_image,
         project_root=request.project_root,
@@ -764,6 +765,7 @@ def _prepare_launch_execution(
                 160,
             ),
             runner_image=selected_runner_image,
+            runner_kind=selected_runner_kind,
             plan_change_request=bound_change_request,
             development_resume_scope=development_resume_scope,
         ),

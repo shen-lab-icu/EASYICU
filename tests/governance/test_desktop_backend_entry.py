@@ -26,6 +26,7 @@ def test_desktop_backend_environment_isolated_from_real_home(tmp_path, monkeypat
         "EASYICU_HOME",
         "EASYICU_RUNTIME_DIR",
         "EASYICU_DESKTOP_SESSION_TOKEN",
+        "EASYICU_DEPLOYMENT",
         "PYTHONUTF8",
         "PYTHONIOENCODING",
         "EASYICU_VERBOSE",
@@ -46,6 +47,7 @@ def test_desktop_backend_environment_isolated_from_real_home(tmp_path, monkeypat
     assert os.environ.get("HOME") == original_home
     assert os.environ["EASYICU_HOME"] == str((tmp_path / "state").resolve())
     assert os.environ["EASYICU_RUNTIME_DIR"] == str((tmp_path / "runtime").resolve())
+    assert os.environ["EASYICU_DEPLOYMENT"] == "desktop"
     assert os.environ["PATH"].split(os.pathsep)[0] == str(node.parent)
 
 

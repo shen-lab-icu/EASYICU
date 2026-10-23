@@ -110,6 +110,62 @@ def test_a_required_design_gap_offers_plan_edit_without_dropping_it(tmp_path) ->
     assert gate["next_actions"][0]["params"]["requires_plan_approval"] is True
 
 
+def test_a_desktop_plan_without_an_owner_offers_edit_with_its_step(tmp_path):
+    from easyicu.research_agent.execution.owner_declaration import require_host_rendered_plan
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(research_question="Describe synthetic values", steps=[
+        AnalysisStep(step_id="custom", intent="Compute values", method="custom"),
+    ])
+    with pytest.raises(ValueError) as error:
+        require_host_rendered_plan(plan=plan)
+    code = agent_pipeline_runs._pipeline_failure_code(error.value)
+    assert code == "research_pipeline_plan_step_needs_sandbox"
+    agent_pipeline_runs._record_pipeline_failure(
+        wrapper_dir=tmp_path, study={"id": "synthetic_study"}, provider={},
+        exc=error.value, code=code, execution_retry_id=None,
+    )
+    gate = json.loads((tmp_path / "quality_gate.json").read_text())["gate"]
+    assert [action["kind"] for action in gate["next_actions"]] == ["edit_plan"]
+    assert gate["next_actions"][0]["params"]["step_id"] == "custom"
+    assert gate["next_actions"][0]["params"]["requires_plan_approval"] is True
+
+
+@pytest.mark.parametrize("step_id", ["safe_step", "../private/path", "x" * 81, None])
+def test_desktop_plan_stop_projects_only_safe_step_coordinates(step_id):
+    exc = ValueError("untrusted diagnostic text")
+    exc.easyicu_safe_diagnostic = {
+        "owner": "easyicu.execution.host_plan_v1",
+        "reason_code": "research_pipeline_plan_step_needs_sandbox",
+        "step_id": step_id,
+        "message": "must not project",
+    }
+    projected = agent_pipeline_runs._safe_pipeline_typed_failure(exc)
+    assert projected == {
+        "owner": "easyicu.execution.host_plan_v1",
+        "reason_code": "research_pipeline_plan_step_needs_sandbox",
+        **({"step_id": step_id} if step_id == "safe_step" else {}),
+    }
+
+
+@pytest.mark.parametrize("cause", [RuntimeError, TimeoutError])
+def test_an_unevaluated_desktop_owner_is_still_a_plan_stop(monkeypatch, cause):
+    from easyicu.research_agent.execution import owner_declaration
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    def unavailable(*args, **kwargs):
+        raise cause("synthetic ownership check unavailable")
+
+    monkeypatch.setattr(owner_declaration, "resolve_standard_executor", unavailable)
+    plan = AnalysisPlan(research_question="Describe synthetic values", steps=[
+        AnalysisStep(step_id="custom", intent="Compute values", method="custom"),
+    ])
+    with pytest.raises(ValueError) as error:
+        owner_declaration.require_host_rendered_plan(plan=plan)
+    assert agent_pipeline_runs._pipeline_failure_code(error.value) == "research_pipeline_plan_step_needs_sandbox"
+    assert agent_pipeline_runs._safe_pipeline_typed_failure(error.value)["step_id"] == "custom"
+
+
 @pytest.mark.parametrize(
     "reason, kind",
     [

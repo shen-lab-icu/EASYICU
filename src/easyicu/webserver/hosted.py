@@ -11,13 +11,22 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException, Request
 
 
 def is_hosted() -> bool:
     return os.environ.get("EASYICU_HOSTED") == "1"
+
+
+def deployment_kind() -> Literal["hosted", "desktop", "server"]:
+    """Only an explicit desktop declaration enables desktop execution policy."""
+    if is_hosted():
+        return "hosted"
+    if os.environ.get("EASYICU_DEPLOYMENT") == "desktop":
+        return "desktop"
+    return "server"
 
 
 def data_roots() -> tuple[Path, ...]:
