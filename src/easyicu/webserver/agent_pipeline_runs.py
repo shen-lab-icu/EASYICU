@@ -641,6 +641,10 @@ def _pipeline_failure_code(
         # The signed trajectory design refused the plan. Its class carries no
         # reason code; the recorded type and code frames say which check.
         return "research_pipeline_trajectory_authority_refused"
+    if typed_failure.get("owner") == "easyicu.current_case_scientific_authority_v1":
+        # The signed analysis design (a landmark association, a model grid)
+        # refused the plan, as the trajectory design does above.
+        return "research_pipeline_scientific_authority_refused"
     if typed_failure.get("owner") == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER:
         if typed_failure.get("reason_code") in _RUNNER_IMAGE_MISMATCH_REASONS:
             return "research_pipeline_runner_image_mismatch"
@@ -863,6 +867,10 @@ _RUNNER_IMAGE_MISMATCH_REASONS = frozenset(
 def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
     """Project one allowlisted owner diagnostic without exception text."""
 
+    from easyicu.research_agent.authority.current_case_scientific_runtime import (
+        CurrentCaseScientificAuthorityError,
+    )
+
     # ``__context__`` can preserve an earlier Planner compiler finding when a
     # later Provider transport call fails while that finding is being handled.
     # The outer transport error owns the current terminal outcome; do not
@@ -876,6 +884,12 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
         }
 
     for item in _pipeline_exception_chain(exc):
+        if isinstance(item, CurrentCaseScientificAuthorityError):
+            return {
+                "owner": "easyicu.current_case_scientific_authority_v1",
+                "reason_code": "current_case_scientific_authority_invalid",
+                "exception_type": "CurrentCaseScientificAuthorityError",
+            }
         if isinstance(item, ValidationError):
             coordinates: List[Dict[str, Any]] = []
             for error in item.errors(
@@ -6804,11 +6818,16 @@ def make_research_pipeline_run_runner(
                 or primary_exposure
                 or ""
             ).strip()
+            bound_exposure_groupings = (
+                candidate_authority.exposure_groupings
+                if candidate_authority is not None else None
+            )
             runtime_projection_specs = _runtime_projection_sensitivity_specs(
                 sensitivity_specs,
                 primary_exposure_source=runtime_primary_exposure_source,
                 primary_exposure=str(resolved_primary_exposure or ""),
                 universe_path=Path(acquisition.universe_path),
+                exposure_groupings=bound_exposure_groupings,
             )
             runtime_literature_keys = manuscript_citable_keys(runtime_literature)
             runtime_direct_comparator_keys = tuple(
@@ -6823,6 +6842,7 @@ def make_research_pipeline_run_runner(
             )
             try:
                 runtime_projection = compile_web_scientific_runtime_projection(
+                    exposure_groupings=bound_exposure_groupings,
                     study=candidate_planning_study,
                     sensitivity_specs=runtime_projection_specs,
                     primary_exposure=resolved_primary_exposure,
@@ -7363,6 +7383,13 @@ def make_research_pipeline_run_runner(
                     "for this study (its signed steps, their order and methods, "
                     "or the sealed population), so the host refused it and the "
                     "run stopped before producing a governed result."
+                )
+            elif code == "research_pipeline_scientific_authority_refused":
+                message = (
+                    "The plan departed from the analysis design EasyICU signed "
+                    "for this study (for example its landmark, exposure coding "
+                    "or model set), so the host refused it before any analysis "
+                    "ran."
                 )
             elif code == "research_pipeline_runner_image_mismatch":
                 message = (
