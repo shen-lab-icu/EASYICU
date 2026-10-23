@@ -9,8 +9,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, Response
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints, field_validator
 
+from easyicu.databases.profiles import iter_database_profiles
 from easyicu.webserver.pi_copilot import get_pi_copilot_service
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.pi_copilot.contracts import (
@@ -292,8 +293,15 @@ class PiDataSourceAuthorizationRequest(BaseModel):
         "confirm_selected_source",
         "cancel_local_selection",
     ]
-    database: Literal["miiv", "mimic", "eicu", "aumc", "hirid", "sic"] | None = None
+    database: str | None = None
     source_id: ShortText | None = None
+
+    @field_validator("database")
+    @classmethod
+    def _require_database_profile_key(cls, value: str | None) -> str | None:
+        if value is not None and value not in {profile.key for profile in iter_database_profiles()}:
+            raise ValueError("Choose one exact supported database profile key.")
+        return value
 
 
 class PiAbortRequest(BaseModel):

@@ -266,6 +266,11 @@
       const message = String(value.message || '').trim();
       const code = String(value.code || '').trim().slice(0, 80);
       const status = Number(value.status || 0);
+      // Request-validation arrays have no typed code. Reuse the generic
+      // fallback's first sentence without exposing validation internals.
+      if (status === 422 && !code) {
+        return tr('This step did not complete (HTTP 422).', '这一步没有完成（HTTP 422）。');
+      }
       const ask = askAdministrator();
       if (!status && /Failed to fetch|NetworkError|Load failed|ERR_NETWORK/i.test(message)) {
         return tr('EasyICU could not reach its server. Check the network, then try again.', '连不上 EasyICU 服务器。请检查网络后重试。');
