@@ -6,7 +6,8 @@ The frontend (``static/js/screens-dict.js`` and friends) reads a global
     { groups, groupConcepts, dict, cov, desc, totalConcepts }
 
 Labels and legacy database counts come from ``easyicu.concept_catalog``.
-Display audience and declared instance support use cached dictionary metadata;
+Display audience uses cached dictionary metadata. Instance coverage uses native
+export manifests, with declared support as the legacy-source fallback;
 active-export coverage shares the same source-registry snapshot.
 """
 
@@ -40,6 +41,72 @@ _SCHEMA_ONLY_SUFFIXES = (".xlsx",)
 _ROW_COVERAGE_CACHE: Dict[tuple, Dict[str, Any]] = {}
 _ROW_COVERAGE_CACHE_LIMIT = 4
 _ROW_COVERAGE_CACHE_LOCK = threading.Lock()
+# Immutable per-file concept sets; None means no native-v2 manifest. Module
+# existence is checked on use so a removed file cannot keep claiming coverage.
+_INSTANCE_COVERAGE_CACHE: Dict[tuple, Optional[tuple]] = {}
+_INSTANCE_COVERAGE_CACHE_LIMIT = 64
+_INSTANCE_COVERAGE_CACHE_LOCK = threading.Lock()
+
+
+def _registered_source_concepts(source: Dict[str, Any]) -> Optional[frozenset[str]]:
+    """Read native availability through dataio, never module rows or schemas.
+
+    None permits the declared-mapping fallback; an empty set is an authoritative
+    native export with no provided concepts. Cache both by registry entry and
+    manifest size/mtime, including both markers the manifest reader accepts.
+    """
+    from easyicu.webserver import dataio
+
+    if not source.get("path"):
+        return None
+    path = Path(str(source["path"])).expanduser()
+    signatures = []
+    for name in dataio._MODULE_MANIFESTS:
+        try:
+            stat = (path / name).stat()
+            signatures.append((name, stat.st_size, stat.st_mtime_ns))
+        except OSError:
+            signatures.append((name, None, None))
+    key = (json.dumps(source, sort_keys=True), tuple(signatures))
+    with _INSTANCE_COVERAGE_CACHE_LOCK:
+        hit = key in _INSTANCE_COVERAGE_CACHE
+        entries = _INSTANCE_COVERAGE_CACHE.get(key)
+    if not hit:
+        manifest = dataio.read_prepared_export_manifest(str(path))
+        entries = None
+        if manifest and manifest.get("schema_version") == dataio._NATIVE_EXPORT_SCHEMA_V2:
+            provided = []
+            for entry in dataio._manifest_file_entries(manifest):
+                member = Path(str(entry["file"]))
+                if member.is_absolute() or ".." in member.parts:
+                    continue
+                if entry.get("rows") == 0 or entry.get("availability") == "structurally_unavailable":
+                    continue
+                columns = entry.get("columns")
+                if columns is None:
+                    columns = entry.get("physical_schema")
+                if columns is None:
+                    columns = entry.get("column_metadata_columns") or []
+                statuses = entry.get("concept_status") or {}
+                concepts = frozenset(
+                    str(column) for column in columns
+                    if (statuses.get(column) or {}).get("availability") not in {
+                        "produced_all_null", "structurally_unavailable_placeholder",
+                    }
+                )
+                provided.append((str(member), concepts))
+            entries = tuple(provided)
+        with _INSTANCE_COVERAGE_CACHE_LOCK:
+            _INSTANCE_COVERAGE_CACHE[key] = entries
+            while len(_INSTANCE_COVERAGE_CACHE) > _INSTANCE_COVERAGE_CACHE_LIMIT:
+                _INSTANCE_COVERAGE_CACHE.pop(next(iter(_INSTANCE_COVERAGE_CACHE)))
+    if entries is None:
+        return None
+    return frozenset(
+        concept for member, concepts in entries
+        if (path / member).is_file()
+        for concept in concepts
+    )
 
 
 def _coverage_metadata(
@@ -432,18 +499,32 @@ def build_catalog() -> Dict[str, Any]:
     cov = dict(cc.CONCEPT_DB_COVERAGE)
     concept_coverage, coverage_summary = _coverage_metadata(concept_dict)
     registry = sources.load_registry()
-    instance_databases = sorted({
-        source["database"]
+    registered_sources = [
+        source
         for source in registry.get("sources") or []
         if source.get("ok") and source.get("database")
-    })
+    ]
+    instance_databases = sorted({source["database"] for source in registered_sources})
+    native_support: Dict[str, set[str]] = {}
+    fallback_databases = set()
+    for source in registered_sources:
+        concepts = _registered_source_concepts(source)
+        if concepts is None:
+            fallback_databases.add(source["database"])
+        else:
+            for concept in concepts:
+                native_support.setdefault(concept, set()).add(source["database"])
+    # A mixed registry is labelled conservatively: some of its availability
+    # decisions still rely on declarations, including negative decisions.
+    instance_basis = "declared_mapping" if fallback_databases else "export_manifest"
     definitions = catalog_definitions()
     for key, coverage in concept_coverage.items():
         coverage["audience"] = concept_audience(key, definitions.get(key, {}))
-        supported = concept_databases(key, definitions)
-        coverage["instance_databases_covered"] = [
-            database for database in instance_databases if database in supported
-        ]
+        supported = native_support.get(key, set())
+        if fallback_databases:
+            supported = supported | (concept_databases(key, definitions) & fallback_databases)
+        coverage["instance_databases_covered"] = sorted(supported)
+        coverage["instance_coverage_basis"] = instance_basis
     active_export_coverage = _active_export_coverage(concept_dict, registry)
 
     return {
