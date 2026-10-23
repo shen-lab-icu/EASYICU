@@ -128,6 +128,14 @@ for (language of ['zh', 'en']) {
     steps: [{ id: 'p-1', kind: 'pipeline', step: 'runner', status: 'error', startedAt: 1, endedAt: 1000, label: 'Runner stopped' }] });
   assert.match(generic.render(erroredRow('research_pipeline_execution_failed')), /gpi-activity-step-cause/);
   assert.doesNotMatch(generic.render(erroredRow('')), /gpi-activity-step-cause/);
+  // A cause placed on its step is not said again under the summary.
+  assert.doesNotMatch(generic.render(erroredRow('research_pipeline_execution_failed')), /<p class="gpi-activity-note">/);
+  // A job that stopped before any step says its cause under the summary.
+  const stepless = generic.render({ id: 'turn-4', role: 'activity', status: 'error', startedAt: 1, endedAt: 3500,
+    failureCode: 'candidate_plan_materialization_authority_invalid', steps: [] });
+  assert.match(stepless, /<\/details><p class="gpi-activity-note">generic cause<\/p>/);
+  assert.doesNotMatch(generic.render({ id: 'turn-5', role: 'activity', status: 'error', startedAt: 1, endedAt: 2, steps: [] }),
+    /gpi-activity-note/);
 
   // (4) A kind icon only when the row's kind is known.
   const icons = activityOwner().render({ id: 'turn-2', role: 'activity', status: 'complete', startedAt: 0, endedAt: 3000, steps: [

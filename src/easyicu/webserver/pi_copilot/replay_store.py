@@ -189,13 +189,23 @@ class PiConversationReplayStore:
 
         if status not in {"running", "done", "failed", "cancelled"}:
             raise ValueError(f"invalid host action status: {status}")
+        child = str(child_job_id or "").strip()
         with self._lock:
             payload = self._read(session_id, project_id)
+            rows = [row for row in payload["turns"] if isinstance(row, dict)]
+            # The same click recorded again (a backfill, a repeat while its job
+            # runs) is the row that names its job.  The same decision asked
+            # again after its job ended starts another job: that attempt gets
+            # its own row, or the new job would belong to no conversation and
+            # its end could be neither archived nor shown.
             existing = next(
                 (
                     row
-                    for row in payload["turns"]
-                    if isinstance(row, dict) and row.get("job_id") == action_id
+                    for row in rows
+                    if (child and row.get("kind") == "host_action"
+                        and row.get("child_job_id") == child)
+                    or (row.get("job_id") == action_id
+                        and (not child or not row.get("child_job_id")))
                 ),
                 None,
             )
@@ -205,9 +215,14 @@ class PiConversationReplayStore:
                     existing["action_key"] = normalized_key
                     self._write(payload)
                 return dict(existing)
+            turn_id = (
+                f"{action_id}_{child}"
+                if any(row.get("job_id") == action_id for row in rows)
+                else action_id
+            )
             now = utc_now()
             turn = {
-                "job_id": action_id,
+                "job_id": turn_id,
                 "kind": "host_action",
                 "action_code": str(action_code),
                 "action_key": str(action_key or "").strip() or None,
