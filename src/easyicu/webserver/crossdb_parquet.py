@@ -10,21 +10,18 @@ text-aware path. Nothing is sampled and nothing falls back to pandas.
 
 from __future__ import annotations
 
+from easyicu.runtime import duckdb_spill
 from collections import OrderedDict
 from contextlib import contextmanager
 import copy
 import math
 from pathlib import Path
-from tempfile import TemporaryDirectory
 import threading
 import time
 from typing import Any, Callable
 
 import duckdb
 import numpy as np
-
-from easyicu import state_paths
-
 
 # Per job; a hosted server runs one summary per clinician at a time.
 MEMORY_LIMIT = "1GiB"
@@ -63,47 +60,47 @@ def _connection(checkpoint: Callable[[], None] | None, deadline_seconds: float):
         if time.monotonic() >= deadline:
             raise TimeoutError("exact parquet aggregation deadline exceeded")
 
-    root = state_paths.state_root() / "crossdb_aggregate"
-    root.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix="query-", dir=root) as temporary:
-        with duckdb.connect(config={"threads": THREADS}) as conn:
-            conn.execute("SET memory_limit = ?", [MEMORY_LIMIT])
-            conn.execute("SET threads = ?", [THREADS])
-            conn.execute("SET temp_directory = ?", [temporary])
-            conn.execute("SET max_temp_directory_size = ?", [TEMP_LIMIT])
-            conn.execute("SET preserve_insertion_order = false")
+    with duckdb_spill.connection(
+        config={
+            'threads': THREADS,
+            'max_temp_directory_size': TEMP_LIMIT,
+        },
+    ) as conn:
+        conn.execute("SET memory_limit = ?", [MEMORY_LIMIT])
+        conn.execute("SET threads = ?", [THREADS])
+        conn.execute("SET preserve_insertion_order = false")
 
-            def watch() -> None:
-                while not stopped.wait(POLL_SECONDS):
-                    if not interrupted:
-                        try:
-                            check()
-                        except Exception as exc:
-                            interrupted.append(exc)
-                    if interrupted:
-                        # Repeat until closed: interruption can race a query start.
-                        conn.interrupt()
-
-            watcher = threading.Thread(target=watch, daemon=True)
-            watcher.start()
-            try:
-                check()
-                yield conn, check
-                check()
-            except Exception as exc:
-                cause = interrupted[0] if interrupted else exc
-                if isinstance(cause, (TimeoutError, duckdb.OutOfMemoryException)):
-                    raise ParquetAggregationError(
-                        "crossdb_feature_read_budget_exceeded"
-                    ) from cause
+        def watch() -> None:
+            while not stopped.wait(POLL_SECONDS):
+                if not interrupted:
+                    try:
+                        check()
+                    except Exception as exc:
+                        interrupted.append(exc)
                 if interrupted:
-                    raise cause from exc
-                if isinstance(exc, duckdb.Error):
-                    raise ParquetAggregationError("crossdb_feature_read_failed") from exc
-                raise
-            finally:
-                stopped.set()
-                watcher.join()
+                    # Repeat until closed: interruption can race a query start.
+                    conn.interrupt()
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
+        try:
+            check()
+            yield conn, check
+            check()
+        except Exception as exc:
+            cause = interrupted[0] if interrupted else exc
+            if isinstance(cause, (TimeoutError, duckdb.OutOfMemoryException)):
+                raise ParquetAggregationError(
+                    "crossdb_feature_read_budget_exceeded"
+                ) from cause
+            if interrupted:
+                raise cause from exc
+            if isinstance(exc, duckdb.Error):
+                raise ParquetAggregationError("crossdb_feature_read_failed") from exc
+            raise
+        finally:
+            stopped.set()
+            watcher.join()
 
 
 def parquet_feature_distributions(

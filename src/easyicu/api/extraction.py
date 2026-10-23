@@ -7,6 +7,7 @@ entry points.
 
 from __future__ import annotations
 
+from easyicu.runtime import duckdb_spill
 import logging
 
 import os
@@ -5142,53 +5143,41 @@ def _native_export_arrow_row_grain_audit(
     """Audit a canonical temporary Parquet with bounded, spillable DuckDB.
 
     Hashing all keys in Python would itself recreate a multi-gigabyte working
-    set.  DuckDB is given an explicit memory ceiling and a temporary directory
-    beside the output, so its global NULL-equal uniqueness proof can spill to
-    the same user-selected volume as the export.
+    set. DuckDB has an explicit memory ceiling and private spill storage
+    managed by the runtime owner for its global NULL-equal uniqueness proof.
     """
-    import tempfile
-
-    import duckdb
 
     if module == "demographics":
         raise ValueError("Arrow row-grain audit is longitudinal-only")
     memory_mb = _native_export_duckdb_memory_mb()
-    with tempfile.TemporaryDirectory(
-        prefix=f".{module}.native-v2-grain-",
-        dir=path.parent,
-    ) as spill_dir:
-        connection = duckdb.connect(
-            database=":memory:",
-            config={
-                "memory_limit": f"{memory_mb}MB",
-                "threads": "1",
-                "temp_directory": spill_dir,
-            },
-        )
-        try:
-            row = connection.execute(
-                """
-                WITH key_counts AS (
-                    SELECT stay_id, charttime, count(*)::BIGINT AS n
-                    FROM read_parquet(?)
-                    GROUP BY stay_id, charttime
-                )
-                SELECT
-                    coalesce(sum(n), 0)::BIGINT AS source_rows,
-                    coalesce(sum(n) FILTER (WHERE charttime IS NULL), 0)::BIGINT
-                        AS null_charttime_rows,
-                    coalesce(sum(n) FILTER (WHERE n > 1), 0)::BIGINT
-                        AS duplicate_key_rows,
-                    count(*) FILTER (WHERE n > 1)::BIGINT
-                        AS duplicate_key_groups,
-                    coalesce(sum(n - 1) FILTER (WHERE n > 1), 0)::BIGINT
-                        AS duplicate_excess_rows
-                FROM key_counts
-                """,
-                [str(path)],
-            ).fetchone()
-        finally:
-            connection.close()
+    with duckdb_spill.connection(
+        database=':memory:',
+        config={
+            'memory_limit': f'{memory_mb}MB',
+            'threads': '1',
+        },
+    ) as connection:
+        row = connection.execute(
+            """
+            WITH key_counts AS (
+                SELECT stay_id, charttime, count(*)::BIGINT AS n
+                FROM read_parquet(?)
+                GROUP BY stay_id, charttime
+            )
+            SELECT
+                coalesce(sum(n), 0)::BIGINT AS source_rows,
+                coalesce(sum(n) FILTER (WHERE charttime IS NULL), 0)::BIGINT
+                    AS null_charttime_rows,
+                coalesce(sum(n) FILTER (WHERE n > 1), 0)::BIGINT
+                    AS duplicate_key_rows,
+                count(*) FILTER (WHERE n > 1)::BIGINT
+                    AS duplicate_key_groups,
+                coalesce(sum(n - 1) FILTER (WHERE n > 1), 0)::BIGINT
+                    AS duplicate_excess_rows
+            FROM key_counts
+            """,
+            [str(path)],
+        ).fetchone()
     if row is None:
         raise RuntimeError("native export DuckDB row-grain audit returned no result")
     source_rows, null_rows, duplicate_rows, duplicate_groups, duplicate_excess = (
@@ -5230,9 +5219,7 @@ def _native_export_duckdb_consolidate_row_grain(
     and spill beside the output.  A final bounded Arrow pass restores the
     package's canonical schema metadata without materialising the module.
     """
-    import tempfile
 
-    import duckdb
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -5304,113 +5291,105 @@ def _native_export_duckdb_consolidate_row_grain(
     aggregate_sql = ",\n                        ".join(aggregate_expressions)
 
     try:
-        with tempfile.TemporaryDirectory(
-            prefix=f".{module}.native-v2-consolidate-",
-            dir=path.parent,
-        ) as spill_dir:
-            connection = duckdb.connect(
-                database=":memory:",
-                config={
-                    "memory_limit": f"{memory_mb}MB",
-                    "threads": "1",
-                    "temp_directory": spill_dir,
-                    "preserve_insertion_order": "true",
-                },
-            )
-            try:
-                if string_concepts:
-                    conflict_counts = ", ".join(
-                        f"count(DISTINCT s.{quote_identifier(concept)}) "
-                        f"AS {quote_identifier('_conflict_' + concept)}"
-                        for concept in string_concepts
-                    )
-                    conflict_predicate = " OR ".join(
-                        f"{quote_identifier('_conflict_' + concept)} > 1"
-                        for concept in string_concepts
-                    )
-                    conflict_row = None
-                    for conflict_partition in range(conflict_partition_count):
-                        conflict_row = connection.execute(
-                            f"""
-                            WITH conflicts AS (
-                                SELECT
-                                    s.stay_id,
-                                    s.charttime,
-                                    count(*)::BIGINT AS _key_rows,
-                                    {conflict_counts}
-                                FROM read_parquet(?) AS s
-                                WHERE hash(s.stay_id, s.charttime) % ? = ?
-                                GROUP BY s.stay_id, s.charttime
-                            )
-                            SELECT * EXCLUDE (_key_rows)
-                            FROM conflicts
-                            WHERE _key_rows > 1
-                              AND ({conflict_predicate})
-                            LIMIT 1
-                            """,
-                            [
-                                str(path),
-                                conflict_partition_count,
-                                conflict_partition,
-                            ],
-                        ).fetchone()
-                        if conflict_row is not None:
-                            break
-                    if conflict_row is not None:
-                        stay_id, charttime, *counts = conflict_row
-                        conflict_index = next(
-                            index for index, count in enumerate(counts) if count > 1
-                        )
-                        concept = string_concepts[conflict_index]
-                        values = connection.execute(
-                            f"""
-                            SELECT DISTINCT {quote_identifier(concept)}
-                            FROM read_parquet(?)
-                            WHERE stay_id IS NOT DISTINCT FROM ?
-                              AND charttime IS NOT DISTINCT FROM ?
-                              AND {quote_identifier(concept)} IS NOT NULL
-                            ORDER BY {quote_identifier(concept)}
-                            """,
-                            [str(path), stay_id, charttime],
-                        ).fetchall()
-                        raise ValueError(
-                            "native export cannot consolidate conflicting string "
-                            f"concept {concept!r} at key {(stay_id, charttime)!r}: "
-                            f"{[value[0] for value in values]!r}"
-                        )
-
-                connection.execute(
-                    f"""
-                    COPY (
-                        WITH source AS (
-                            SELECT
-                                file_row_number::BIGINT AS _row_order,
-                                {source_columns}
-                            FROM read_parquet(?, file_row_number=true)
-                        ), consolidated AS (
-                            SELECT
-                                min(_row_order)::BIGINT AS _row_order,
-                                stay_id::BIGINT AS stay_id,
-                                charttime::DOUBLE AS charttime,
-                                {aggregate_sql}
-                            FROM source
-                            GROUP BY stay_id, charttime
-                        )
-                        SELECT {output_columns}
-                        FROM consolidated
-                        ORDER BY _row_order
-                    ) TO ? (
-                        FORMAT PARQUET,
-                        COMPRESSION SNAPPY,
-                        ROW_GROUP_SIZE 262144
-                    )
-                    """,
-                    # DuckDB binds COPY's TO placeholder before placeholders
-                    # in its SELECT body, irrespective of textual order.
-                    [str(duckdb_output), str(path)],
+        with duckdb_spill.connection(
+            database=':memory:',
+            config={
+                'memory_limit': f'{memory_mb}MB',
+                'threads': '1',
+                'preserve_insertion_order': 'true',
+            },
+        ) as connection:
+            if string_concepts:
+                conflict_counts = ", ".join(
+                    f"count(DISTINCT s.{quote_identifier(concept)}) "
+                    f"AS {quote_identifier('_conflict_' + concept)}"
+                    for concept in string_concepts
                 )
-            finally:
-                connection.close()
+                conflict_predicate = " OR ".join(
+                    f"{quote_identifier('_conflict_' + concept)} > 1"
+                    for concept in string_concepts
+                )
+                conflict_row = None
+                for conflict_partition in range(conflict_partition_count):
+                    conflict_row = connection.execute(
+                        f"""
+                        WITH conflicts AS (
+                            SELECT
+                                s.stay_id,
+                                s.charttime,
+                                count(*)::BIGINT AS _key_rows,
+                                {conflict_counts}
+                            FROM read_parquet(?) AS s
+                            WHERE hash(s.stay_id, s.charttime) % ? = ?
+                            GROUP BY s.stay_id, s.charttime
+                        )
+                        SELECT * EXCLUDE (_key_rows)
+                        FROM conflicts
+                        WHERE _key_rows > 1
+                          AND ({conflict_predicate})
+                        LIMIT 1
+                        """,
+                        [
+                            str(path),
+                            conflict_partition_count,
+                            conflict_partition,
+                        ],
+                    ).fetchone()
+                    if conflict_row is not None:
+                        break
+                if conflict_row is not None:
+                    stay_id, charttime, *counts = conflict_row
+                    conflict_index = next(
+                        index for index, count in enumerate(counts) if count > 1
+                    )
+                    concept = string_concepts[conflict_index]
+                    values = connection.execute(
+                        f"""
+                        SELECT DISTINCT {quote_identifier(concept)}
+                        FROM read_parquet(?)
+                        WHERE stay_id IS NOT DISTINCT FROM ?
+                          AND charttime IS NOT DISTINCT FROM ?
+                          AND {quote_identifier(concept)} IS NOT NULL
+                        ORDER BY {quote_identifier(concept)}
+                        """,
+                        [str(path), stay_id, charttime],
+                    ).fetchall()
+                    raise ValueError(
+                        "native export cannot consolidate conflicting string "
+                        f"concept {concept!r} at key {(stay_id, charttime)!r}: "
+                        f"{[value[0] for value in values]!r}"
+                    )
+
+            connection.execute(
+                f"""
+                COPY (
+                    WITH source AS (
+                        SELECT
+                            file_row_number::BIGINT AS _row_order,
+                            {source_columns}
+                        FROM read_parquet(?, file_row_number=true)
+                    ), consolidated AS (
+                        SELECT
+                            min(_row_order)::BIGINT AS _row_order,
+                            stay_id::BIGINT AS stay_id,
+                            charttime::DOUBLE AS charttime,
+                            {aggregate_sql}
+                        FROM source
+                        GROUP BY stay_id, charttime
+                    )
+                    SELECT {output_columns}
+                    FROM consolidated
+                    ORDER BY _row_order
+                ) TO ? (
+                    FORMAT PARQUET,
+                    COMPRESSION SNAPPY,
+                    ROW_GROUP_SIZE 262144
+                )
+                """,
+                # DuckDB binds COPY's TO placeholder before placeholders
+                # in its SELECT body, irrespective of textual order.
+                [str(duckdb_output), str(path)],
+            )
 
         # DuckDB deliberately owns the global grouping; Arrow owns the exact
         # package schema and pandas metadata.  This pass is record-batch bounded.
@@ -5503,9 +5482,7 @@ def _enforce_native_export_supp_o2_support(
     if module != "respiratory":
         return None
 
-    import tempfile
 
-    import duckdb
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -5558,96 +5535,88 @@ def _enforce_native_export_supp_o2_support(
     )
 
     try:
-        with tempfile.TemporaryDirectory(
-            prefix=f".{module}.native-v2-supp-support-",
-            dir=path.parent,
-        ) as spill_dir:
-            connection = duckdb.connect(
-                database=":memory:",
-                config={
-                    "memory_limit": f"{memory_mb}MB",
-                    "threads": "1",
-                    "temp_directory": spill_dir,
-                    "preserve_insertion_order": "true",
-                },
-            )
-            try:
-                support_ctes = """
-                    WITH source AS (
-                        SELECT file_row_number::BIGINT AS _row_order, *
-                        FROM read_parquet(?, file_row_number=true)
-                    ), vent_support AS (
-                        SELECT DISTINCT
-                            stay_id,
-                            floor(charttime)::DOUBLE AS charttime,
-                            TRUE AS _vent_support
-                        FROM source
-                        WHERE vent_ind IS TRUE AND charttime IS NOT NULL
-                    ), marked AS (
-                        SELECT
-                            s.*,
-                            (
-                                s.supp_o2 IS TRUE
-                                AND NOT (
-                                    coalesce(s.fio2 > 21.0, FALSE)
-                                    OR coalesce(v._vent_support, FALSE)
-                                )
-                            ) AS _orphan_supp_o2,
-                            (""" + other_value_predicate + """) AS _has_other_value
-                        FROM source AS s
-                        LEFT JOIN vent_support AS v
-                          ON s.stay_id IS NOT DISTINCT FROM v.stay_id
-                         AND floor(s.charttime) IS NOT DISTINCT FROM v.charttime
-                    )
-                """
-                before = connection.execute(
-                    support_ctes
-                    + """
+        with duckdb_spill.connection(
+            database=':memory:',
+            config={
+                'memory_limit': f'{memory_mb}MB',
+                'threads': '1',
+                'preserve_insertion_order': 'true',
+            },
+        ) as connection:
+            support_ctes = """
+                WITH source AS (
+                    SELECT file_row_number::BIGINT AS _row_order, *
+                    FROM read_parquet(?, file_row_number=true)
+                ), vent_support AS (
+                    SELECT DISTINCT
+                        stay_id,
+                        floor(charttime)::DOUBLE AS charttime,
+                        TRUE AS _vent_support
+                    FROM source
+                    WHERE vent_ind IS TRUE AND charttime IS NOT NULL
+                ), marked AS (
                     SELECT
-                        count(*)::BIGINT,
-                        count(*) FILTER (WHERE _orphan_supp_o2)::BIGINT,
-                        count(*) FILTER (
-                            WHERE _orphan_supp_o2 AND NOT _has_other_value
-                        )::BIGINT,
-                        count(*) FILTER (
-                            WHERE _orphan_supp_o2
-                              AND NOT _has_other_value
-                              AND charttime IS NULL
-                        )::BIGINT
-                    FROM marked
-                    """,
-                    [str(path)],
-                ).fetchone()
-                if before is None:  # pragma: no cover - aggregate always returns
-                    raise RuntimeError(
-                        "native supplemental-oxygen support audit returned no row"
-                    )
-                rows_before, orphan_claims, empty_rows, empty_null_time_rows = (
-                    int(value) for value in before
-                )
-                if orphan_claims:
-                    connection.execute(
-                        f"""
-                        COPY (
-                            {support_ctes}
-                            SELECT
-                                {output_columns}
-                            FROM marked AS s
-                            WHERE NOT (
-                                _orphan_supp_o2 AND NOT _has_other_value
+                        s.*,
+                        (
+                            s.supp_o2 IS TRUE
+                            AND NOT (
+                                coalesce(s.fio2 > 21.0, FALSE)
+                                OR coalesce(v._vent_support, FALSE)
                             )
-                            ORDER BY _row_order
-                        ) TO ? (
-                            FORMAT PARQUET,
-                            COMPRESSION SNAPPY,
-                            ROW_GROUP_SIZE 262144
+                        ) AS _orphan_supp_o2,
+                        (""" + other_value_predicate + """) AS _has_other_value
+                    FROM source AS s
+                    LEFT JOIN vent_support AS v
+                      ON s.stay_id IS NOT DISTINCT FROM v.stay_id
+                     AND floor(s.charttime) IS NOT DISTINCT FROM v.charttime
+                )
+            """
+            before = connection.execute(
+                support_ctes
+                + """
+                SELECT
+                    count(*)::BIGINT,
+                    count(*) FILTER (WHERE _orphan_supp_o2)::BIGINT,
+                    count(*) FILTER (
+                        WHERE _orphan_supp_o2 AND NOT _has_other_value
+                    )::BIGINT,
+                    count(*) FILTER (
+                        WHERE _orphan_supp_o2
+                          AND NOT _has_other_value
+                          AND charttime IS NULL
+                    )::BIGINT
+                FROM marked
+                """,
+                [str(path)],
+            ).fetchone()
+            if before is None:  # pragma: no cover - aggregate always returns
+                raise RuntimeError(
+                    "native supplemental-oxygen support audit returned no row"
+                )
+            rows_before, orphan_claims, empty_rows, empty_null_time_rows = (
+                int(value) for value in before
+            )
+            if orphan_claims:
+                connection.execute(
+                    f"""
+                    COPY (
+                        {support_ctes}
+                        SELECT
+                            {output_columns}
+                        FROM marked AS s
+                        WHERE NOT (
+                            _orphan_supp_o2 AND NOT _has_other_value
                         )
-                        """,
-                        # DuckDB binds COPY's destination before the CTE input.
-                        [str(duckdb_output), str(path)],
+                        ORDER BY _row_order
+                    ) TO ? (
+                        FORMAT PARQUET,
+                        COMPRESSION SNAPPY,
+                        ROW_GROUP_SIZE 262144
                     )
-            finally:
-                connection.close()
+                    """,
+                    # DuckDB binds COPY's destination before the CTE input.
+                    [str(duckdb_output), str(path)],
+                )
 
         if orphan_claims:
             source_file = pq.ParquetFile(duckdb_output)
@@ -6988,30 +6957,6 @@ def extract_database(
                 f"module_batch_sizes[{module!r}] must be a positive integer"
             )
     data_path = str(data_path)
-
-    # 磁盘溢写 / 批处理中间文件的默认落点：**输出目录旁的 .easyicu_spill/**，而不是
-    # 系统临时目录（常在快满的系统盘上）。输出目录通常在用户为数据特意选的大盘上，
-    # 这样零配置即安全，调用方无需每次手设 TMPDIR / EASYICU_DUCKDB_TEMP_DIR。放在
-    # 最前，确保后续所有 DuckDB 连接与 fork 出的 worker 子进程都继承此设置。
-    # opt-out：显式把 EASYICU_DUCKDB_TEMP_DIR 指向别处（非 .easyicu_spill）则完全尊重。
-    # 多库循环：每库各自重指向本库输出旁，故用 basename 判定"是否用户自定义"。
-    if output_dir is not None:
-        _cur_spill = os.environ.get("EASYICU_DUCKDB_TEMP_DIR")
-        _user_spill = (
-            _cur_spill is not None
-            and os.path.basename(os.path.normpath(_cur_spill)) != ".easyicu_spill"
-        )
-        if not _user_spill:
-            _spill_root = os.path.join(
-                os.path.abspath(str(output_dir)), ".easyicu_spill"
-            )
-            try:
-                os.makedirs(_spill_root, exist_ok=True)
-                os.environ["EASYICU_DUCKDB_TEMP_DIR"] = _spill_root
-                os.environ["TMPDIR"] = _spill_root
-                tempfile.tempdir = _spill_root
-            except Exception:
-                pass
 
     # 获取患者 ID
     if patient_ids is None:

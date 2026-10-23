@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+from easyicu.runtime import duckdb_spill
 import os
 import re
 import tarfile
@@ -3143,8 +3144,6 @@ class DataConverter:
 
         Returns a summary dict with per-unit row counts and row-group counts.
         """
-        import duckdb
-        import shutil
 
         rg = int(row_group_size or DEFAULT_CLUSTER_ROW_GROUP_SIZE)
         units = self._cluster_units(table_name)
@@ -3155,12 +3154,9 @@ class DataConverter:
             )
         partition_col = (self._get_partitioning_config(table_name) or {}).get("col")
 
-        spill_dir = self.data_path / f".duckdb_spill_{table_name}"
-        spill_dir.mkdir(parents=True, exist_ok=True)
-        con = duckdb.connect()
+        con = duckdb_spill.connect()
         con.execute(f"SET memory_limit={_sql_str(memory_limit)}")
         con.execute("SET preserve_insertion_order=false")
-        con.execute(f"SET temp_directory={_sql_str(spill_dir)}")
 
         per_unit = []
         clustered = 0
@@ -3222,7 +3218,6 @@ class DataConverter:
                     )
         finally:
             con.close()
-            shutil.rmtree(spill_dir, ignore_errors=True)
 
         return {
             "table": table_name,

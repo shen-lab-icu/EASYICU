@@ -8,12 +8,11 @@ approximate quantiles avoid materializing full exports in pandas.
 
 from __future__ import annotations
 
+from easyicu.runtime import duckdb_spill
 import json
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any
 
-import duckdb
 
 from easyicu.concept.catalog import CONCEPT_DICTIONARY, CONCEPT_GROUPS_INTERNAL
 from easyicu.concept.export_metadata import metadata_definition_for_concept
@@ -583,66 +582,64 @@ def build_report(
     """
     if threads < 1:
         raise ValueError("threads must be positive")
-    with TemporaryDirectory(prefix="easyicu-plausibility-") as spill:
-        with duckdb.connect(
-            config={
-                "memory_limit": memory_limit,
-                "threads": threads,
-                "temp_directory": spill,
-                "autoload_known_extensions": False,
-                "autoinstall_known_extensions": False,
-            }
-        ) as connection:
-            effective_memory, effective_threads = _one(
-                connection,
-                "SELECT current_setting('memory_limit'), current_setting('threads')",
+    with duckdb_spill.connection(
+        config={
+            'memory_limit': memory_limit,
+            'threads': threads,
+            'autoload_known_extensions': False,
+            'autoinstall_known_extensions': False,
+        },
+    ) as connection:
+        effective_memory, effective_threads = _one(
+            connection,
+            "SELECT current_setting('memory_limit'), current_setting('threads')",
+        )
+        result = {
+            "schema_version": "easyicu_export_plausibility_v1",
+            "status": "complete",
+            "quantile_method": "DuckDB approx_quantile (approximate, bounded-memory)",
+            "runtime": {
+                "requested_memory_limit": memory_limit,
+                "memory_limit": effective_memory,
+                "threads": effective_threads,
+            },
+            "current": _scan(connection, Path(export_root), rules),
+        }
+        if compare is not None:
+            result["old"] = _scan(connection, Path(compare), rules)
+            current_metrics, old_metrics = (
+                _metrics(result["current"]),
+                _metrics(result["old"]),
             )
-            result = {
-                "schema_version": "easyicu_export_plausibility_v1",
-                "status": "complete",
-                "quantile_method": "DuckDB approx_quantile (approximate, bounded-memory)",
-                "runtime": {
-                    "requested_memory_limit": memory_limit,
-                    "memory_limit": effective_memory,
-                    "threads": effective_threads,
+            result["comparison"] = {
+                "metrics": [
+                    _delta(
+                        metric,
+                        old_metrics.get(metric),
+                        current_metrics.get(metric),
+                        rules,
+                    )
+                    for metric in sorted(
+                        current_metrics.keys() | old_metrics.keys()
+                    )
+                ],
+                "module_rows": {
+                    module: _delta(
+                        f"module_rows.{module}",
+                        result["old"]["module_rows"].get(module),
+                        result["current"]["module_rows"].get(module),
+                        rules,
+                    )
+                    for module in sorted(
+                        result["old"]["module_rows"].keys()
+                        | result["current"]["module_rows"].keys()
+                    )
                 },
-                "current": _scan(connection, Path(export_root), rules),
             }
-            if compare is not None:
-                result["old"] = _scan(connection, Path(compare), rules)
-                current_metrics, old_metrics = (
-                    _metrics(result["current"]),
-                    _metrics(result["old"]),
-                )
-                result["comparison"] = {
-                    "metrics": [
-                        _delta(
-                            metric,
-                            old_metrics.get(metric),
-                            current_metrics.get(metric),
-                            rules,
-                        )
-                        for metric in sorted(
-                            current_metrics.keys() | old_metrics.keys()
-                        )
-                    ],
-                    "module_rows": {
-                        module: _delta(
-                            f"module_rows.{module}",
-                            result["old"]["module_rows"].get(module),
-                            result["current"]["module_rows"].get(module),
-                            rules,
-                        )
-                        for module in sorted(
-                            result["old"]["module_rows"].keys()
-                            | result["current"]["module_rows"].keys()
-                        )
-                    },
-                }
-            result["summary"] = _summary(
-                {
-                    "current": result["current"],
-                    "comparison": result.get("comparison", {}),
-                }
-            )
-            return result
+        result["summary"] = _summary(
+            {
+                "current": result["current"],
+                "comparison": result.get("comparison", {}),
+            }
+        )
+        return result

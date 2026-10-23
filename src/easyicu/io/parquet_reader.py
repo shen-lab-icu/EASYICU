@@ -2,6 +2,7 @@
 高性能 Parquet 读取器 - 纯 Python,无需 R
 比 fst 更快,支持更多优化功能
 """
+from easyicu.runtime import duckdb_spill
 from pathlib import Path
 from typing import Optional, List, Union, Tuple
 import logging
@@ -64,7 +65,7 @@ def _read_parquet_duckdb(
 ) -> pd.DataFrame:
     """Fallback reader for parquet files pyarrow can inspect but not decode."""
     try:
-        import duckdb
+        import duckdb  # noqa: F401 - preserve the optional dependency check
     except Exception as exc:  # pragma: no cover - only hit without duckdb installed
         raise RuntimeError(
             "pyarrow failed to read parquet and duckdb is not available for fallback"
@@ -74,7 +75,8 @@ def _read_parquet_duckdb(
     select_cols = "*" if columns is None else ", ".join(_quote_ident(c) for c in columns)
     query = f"SELECT {select_cols} FROM read_parquet('{path}', union_by_name=true)"
     query += _duckdb_where(filters)
-    return duckdb.connect().execute(query).fetchdf()
+    with duckdb_spill.connection() as connection:
+        return connection.execute(query).fetchdf()
 
 def read_parquet(
     file_path: Union[str, Path],

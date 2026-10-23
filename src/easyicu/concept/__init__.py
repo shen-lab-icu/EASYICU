@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from easyicu.runtime import duckdb_spill
 import copy
 import functools
 import json
@@ -2316,7 +2317,7 @@ class ConceptResolver:
                         _table_path = storage.resolve_loader_from_disk(source.table)
                         if _table_path is not None and isinstance(_table_path, Path):
                             import duckdb as _ddb
-                            _con = _ddb.connect()
+                            _con = duckdb_spill.connect()
                             if _table_path.is_dir():
                                 _glob = _duckdb_path(_table_path / '**' / '*.parquet')
                             else:
@@ -3102,7 +3103,7 @@ class ConceptResolver:
                         # 直接在 DuckDB 中 GROUP BY patientid → MAX(datetime)
                         # 然后与 general 表的 discharge_status 合并
                         import duckdb as _hd_duckdb
-                        _hd_conn = _hd_duckdb.connect()
+                        _hd_conn = duckdb_spill.connect()
                         _hd_conn.execute("SET memory_limit = '2GB'")
                         
                         # 先获取死亡患者ID
@@ -8168,7 +8169,7 @@ class ConceptResolver:
                             read_expr = f"read_parquet('{glob_pattern}')"
 
                     if read_expr:
-                        con = duckdb.connect()
+                        con = duckdb_spill.connect()
                         con.execute("SET memory_limit = '2GB'")
                         try:
                             numeric_target_patients = [

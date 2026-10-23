@@ -46,6 +46,7 @@ missing during the move.
 
 from __future__ import annotations
 
+from easyicu.runtime import duckdb_spill
 import logging
 import operator
 import re
@@ -1284,8 +1285,7 @@ def _apply_callback(
             read_exprs = hirid_observation_read_exprs(data_source.base_path)
             if read_exprs is not None:
                 try:
-                    import duckdb
-                    conn = duckdb.connect()
+                    conn = duckdb_spill.connect()
                     conn.execute("SET memory_limit = '2GB'")
                     # 🚀 perf B1 + B2 (hirid_death secondary callback path):
                     # same union_by_name + inline IN list issue as the primary
@@ -2637,10 +2637,9 @@ def _apply_callback(
                     db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                     if db_name == 'hirid':
                         try:
-                            import duckdb
                             bucket_dir = data_source.base_path / 'observations_bucket'
                             if bucket_dir.exists():
-                                conn = duckdb.connect()
+                                conn = duckdb_spill.connect()
                                 conn.execute("SET memory_limit = '2GB'")
                                 # 显式文件列表，过滤 AppleDouble
                                 _wh_files = enumerate_bucket_parquet_files(bucket_dir)

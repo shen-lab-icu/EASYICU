@@ -65,9 +65,9 @@ _TABLE_SOURCES = {
 
 def make_duckdb_probe(db: Path):
     """Return a distribution_probe(itemids, table) backed by real shards."""
-    import duckdb
 
-    con = duckdb.connect()
+    from easyicu.runtime import duckdb_spill
+    con = duckdb_spill.connect()
     denom_cache: dict[str, int] = {}
 
     def _denominator(table: str, link_col: str, denom_glob: str) -> int:
