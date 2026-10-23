@@ -47,6 +47,7 @@ def test_desktop_webview_has_no_shell_or_filesystem_permission():
 
 def test_desktop_build_is_reproducible_and_source_checkout_independent():
     script = (DESKTOP / "scripts" / "build_macos.py").read_text(encoding="utf-8")
+    script += (DESKTOP / "scripts" / "build_common.py").read_text(encoding="utf-8")
     backend = (DESKTOP / "backend_entry.py").read_text(encoding="utf-8")
 
     assert "--require-hashes" in script

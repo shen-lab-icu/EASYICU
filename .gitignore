@@ -168,7 +168,9 @@ desktop/src-tauri/binaries/
 desktop/src-tauri/gen/
 desktop/src-tauri/resources/backend/
 desktop/src-tauri/resources/node
+desktop/src-tauri/resources/node.exe
 desktop/src-tauri/resources/NODE_LICENSE
+desktop/src-tauri/icons/windows/
 desktop/src-tauri/target/
 src/easyicu/webserver/pi_copilot/node_app/node_modules/
 # Local IDE / Claude Code launch configs (machine-specific paths)

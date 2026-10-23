@@ -10,6 +10,9 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use uuid::Uuid;
 
+#[cfg(windows)]
+mod windows;
+
 const DESKTOP_TOKEN_ENV: &str = "EASYICU_DESKTOP_SESSION_TOKEN";
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -114,9 +117,15 @@ fn log_sidecar_events(
 fn start_backend(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let port = available_loopback_port()?;
     let token = Uuid::new_v4().simple().to_string() + &Uuid::new_v4().simple().to_string();
+    #[cfg(windows)]
+    let app_data = windows::data_root()?;
+    #[cfg(not(windows))]
     let app_data = app.path().app_data_dir()?;
     let state_dir = app_data.join("state");
     let runtime_dir = app_data.join("runtime");
+    #[cfg(windows)]
+    let log_dir = app_data.join("logs");
+    #[cfg(not(windows))]
     let log_dir = app.path().app_log_dir()?;
     fs::create_dir_all(&state_dir)?;
     fs::create_dir_all(&runtime_dir)?;
@@ -141,6 +150,8 @@ fn start_backend(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             node.to_string_lossy().into_owned(),
         ])
         .env(DESKTOP_TOKEN_ENV, &token);
+    #[cfg(windows)]
+    let command = command.env("PYTHONDONTWRITEBYTECODE", "1");
     let (receiver, child) = command.spawn()?;
     app.manage(BackendProcess(Mutex::new(Some(child))));
     log_sidecar_events(receiver, log_dir.join("desktop-backend.log"));
@@ -181,6 +192,18 @@ fn stop_backend(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    if std::env::args_os().any(|arg| arg == "--smoke-test") {
+        match windows::smoke_test() {
+            Ok(()) => std::process::exit(0),
+            Err(error) => {
+                eprintln!("Windows desktop smoke test failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    #[cfg(windows)]
+    windows::configure_webview_data().expect("cannot create the Windows WebView data directory");
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
@@ -192,6 +215,7 @@ pub fn run() {
 
     app.run(|app_handle, event| match event {
         RunEvent::Exit | RunEvent::ExitRequested { .. } => stop_backend(app_handle),
+        #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
             if let Some(window) = app_handle.get_webview_window("main") {
                 let _ = window.show();

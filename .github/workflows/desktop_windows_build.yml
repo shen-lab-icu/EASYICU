@@ -1,0 +1,59 @@
+name: Windows desktop installer (opt-in)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      EASYICU_DESKTOP_BUILD_DIR: ${{ runner.temp }}\easyicu-build
+      CARGO_TARGET_DIR: ${{ runner.temp }}\easyicu-cargo
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.19.0'
+          architecture: x64
+      - name: Select Windows Rust target
+        run: |
+          rustup default stable-x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build installer and receipt
+        run: |
+          python desktop/scripts/build_windows.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install, launch headlessly, check readiness, stop and uninstall
+        run: |
+          $installers = @(Get-ChildItem "$env:CARGO_TARGET_DIR\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe")
+          if ($installers.Count -ne 1) { throw 'Expected exactly one installer' }
+          ./desktop/scripts/smoke_windows.ps1 -Installer $installers[0].FullName -ProfileRoot (Join-Path $env:RUNNER_TEMP 'EasyICU 临床 profile')
+      - name: Retain installer and build receipt after successful smoke test
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: EasyICU-windows-x64
+          if-no-files-found: error
+          path: |
+            ${{ env.CARGO_TARGET_DIR }}/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            ${{ env.EASYICU_DESKTOP_BUILD_DIR }}/build-inputs.json
+      - name: Retain synthetic smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: EasyICU-windows-smoke-diagnostics
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/EasyICU 临床 profile/AppData/Local/EasyICU/logs/desktop-smoke.log
+            ${{ runner.temp }}/EasyICU 临床 profile/AppData/Local/EasyICU/runtime/desktop-smoke-result.json
