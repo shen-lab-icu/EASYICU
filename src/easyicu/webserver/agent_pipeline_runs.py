@@ -715,6 +715,12 @@ _PLANNING_STOP_SENTENCES = {
         "EasyICU method can yet provide, so it stopped before the analysis "
         "steps were drafted. No analysis was run."
     ),
+    "progressive_continuous_outcome_invalid": (
+        "The grouped summary could not be tied to a categorical grouping and a "
+        "numeric measure EasyICU can verify, so planning stopped and no analysis "
+        "was run. State in the question which groups to compare and which "
+        "measure to summarize, then generate the plan again."
+    ),
     "progressive_question_substance_form_substituted": (
         "The question names a substance in one form -- given, or measured as a "
         "level -- and the plan's primary exposure reads it in the other, so the "
@@ -5243,6 +5249,7 @@ def _load_candidate_plan_materialization_authority(
         export_path=export_path,
         configured_outcome=_target_outcome(study),
         stated_exposure=_clean_text(study.get("primary_exposure"), 300),
+        stated_exposure_concept=study.get("primary_exposure_concept"),
         declared_covariates=_configured_covariates(study),
     )
     primary_exposure = _clean_text(identity.get("primary_exposure"), 160)
@@ -5304,15 +5311,25 @@ def _load_candidate_plan_materialization_authority(
     # (``primary_exposure != expected_primary_exposure`` below).  A
     # measurement's distribution has no outcome role either: the candidate
     # and the question's own reading must then both name none
-    # (``target_outcome != proposed_outcome`` below).  Every other coordinate
+    # (``target_outcome != expected_outcome`` below).  Every other coordinate
     # stays mandatory.
     proposed_outcome = _clean_text(proposed.get("target_outcome"), 160)
+    expected_outcome = _clean_text(
+        getattr(proposed.get("endpoint"), "name", None), 160
+    ) or proposed_outcome
+    # The endpoint owner binds an explicitly summarized measurement to its
+    # analysis column. Verify that column, but prepare its source concept.
+    # Every other requested outcome still needs its own selected source.
+    source_outcomes = tuple(dict.fromkeys(
+        proposed_outcome if name == expected_outcome else name
+        for name in requested_outcomes
+    ))
     source_required_concepts = tuple(
         dict.fromkeys(
             (
                 *((configured_primary_exposure,) if configured_primary_exposure else ()),
                 *((proposed_outcome,) if proposed_outcome or target_outcome else ()),
-                *requested_outcomes,
+                *source_outcomes,
                 *covariates,
             )
         )
@@ -5347,10 +5364,10 @@ def _load_candidate_plan_materialization_authority(
         # source coordinate and its declared aggregation.  The text parser's
         # broader proposal is not an authority to rename a prepared column.
         or primary_exposure != expected_primary_exposure
-        or target_outcome != proposed_outcome
+        or target_outcome != expected_outcome
         or (bool(target_outcome) and target_outcome not in requested_outcomes)
         or not set(explicit_outcome_concepts(str(study.get("question") or ""))).issubset(
-            requested_outcomes
+            source_outcomes
         )
         or candidate_covariates != tuple(covariates)
         or not all(source_required_concepts)
@@ -5433,8 +5450,8 @@ def _load_candidate_plan_materialization_authority(
         ) from exc
     return _CandidatePlanMaterializationAuthority(
         primary_exposure=primary_exposure or None,
-        target_outcome=target_outcome or None,
-        outcome_concepts=requested_outcomes,
+        target_outcome=proposed_outcome or None,
+        outcome_concepts=source_outcomes,
         contract=_candidate_plan_contract(review=parsed_review, plan=plan),
         primary_cohort_selection_mode=candidate_cohort.selection_mode,
         primary_exposure_aggregation=aggregation or None,
@@ -6753,8 +6770,17 @@ def make_research_pipeline_run_runner(
                     if isinstance(execution_concepts, Mapping)
                     else {}
                 )
+                # A configured concept still uses its endpoint's requested
+                # analysis column (for example a window maximum).
                 pipeline_target = (
-                    _clean_text(execution_concepts.get("outcome"), 160)
+                    (
+                        getattr(metadata_planning_coordinates.get("endpoint"), "name", None)
+                        if _clean_text(execution_concepts.get("outcome"), 160) in {
+                            "", metadata_planning_coordinates.get("target_outcome"),
+                        }
+                        else None
+                    )
+                    or _clean_text(execution_concepts.get("outcome"), 160)
                     or metadata_planning_coordinates.get("target_outcome")
                     or None
                 )

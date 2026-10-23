@@ -2037,6 +2037,23 @@ def update_study_context(
     )
     from easyicu.research_agent.planning.adjustment_authority import STATED_VARIABLE_FIELDS
 
+    exposure_unread = None
+    if "primary_exposure_concept" in params:
+        from easyicu.webserver.research_launch_scientific import checked_exposure_concept
+
+        question = str(patch.get("question", (current or {}).get("question")) or "")
+        exposure = patch.get("primary_exposure", (current or {}).get("primary_exposure"))
+        try:
+            if params.get("primary_exposure") and exposure != params["primary_exposure"]:
+                raise ValueError("暴露原文尚未保存，不能核验它的概念；请使用问题中的原文。")
+            patch["primary_exposure_concept"] = checked_exposure_concept(
+                exposure, params["primary_exposure_concept"], question=question,
+                source=effective_source,
+                database=str(effective_source.get("database") or "").strip() or database_named_in(question),
+            )
+        except (KeyError, OSError, ValueError) as exc:
+            exposure_unread = str(exc)
+
     stated_unread: dict[str, list[dict[str, str]]] = {}
     for field in STATED_VARIABLE_FIELDS:
         unread: list[dict[str, str]] = []
@@ -2268,6 +2285,8 @@ def update_study_context(
             + check_receipt["question_family_unread"]
             + ". State it again with words copied exactly from the saved question."
         )
+    if exposure_unread:
+        summary += f" primary_exposure_concept not recorded: {exposure_unread}"
     for field, unread in stated_unread.items():
         if unread:
             summary += (
@@ -2324,6 +2343,7 @@ def update_study_context(
                if analysis_design_recovery is not None else {}),
             **({"unsaved_design": unsaved_design} if unsaved_design is not None else {}),
             **check_receipt,
+            **({"primary_exposure_concept_unread": exposure_unread} if exposure_unread else {}),
             **{f"{field}_unread": unread for field, unread in stated_unread.items() if unread},
             **causal_receipt,
             **family_receipt,

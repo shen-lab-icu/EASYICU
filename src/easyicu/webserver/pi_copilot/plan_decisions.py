@@ -549,6 +549,8 @@ def _requested_endpoint_coordinates(study: Mapping[str, Any]) -> Dict[str, Any]:
         coordinates = _metadata_only_planning_coordinates(
             question=str(study.get("question") or ""), database=database, configured_outcome=configured,
             stated_exposure=str(study.get("primary_exposure") or ""),
+            stated_exposure_concept=study.get("primary_exposure_concept"),
+            export_path=source.get("path"),
         )
     except (KeyError, ValueError):
         return {}

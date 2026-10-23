@@ -237,6 +237,8 @@ def project_study_context(
             "primary_exposure": _bounded_text(
                 context.get("primary_exposure"), 160
             ),
+            **({"primary_exposure_concept": _bounded_text(context["primary_exposure_concept"], 128)}
+               if context.get("primary_exposure_concept") else {}),
             "covariates": [
                 _bounded_text(item, 160)
                 for item in (context.get("covariates") or [])
@@ -415,6 +417,7 @@ def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
             "modules",
             "outcome",
             "primary_exposure",
+            "primary_exposure_concept",
             "covariates",
             "covariate_selection",
             "covariate_operationalizations",

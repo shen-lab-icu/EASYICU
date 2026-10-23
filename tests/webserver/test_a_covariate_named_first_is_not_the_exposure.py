@@ -96,7 +96,7 @@ def test_the_conversation_states_the_exposure_in_the_questions_words() -> None:
     ).read_text(encoding="utf-8")
 
     assert "also pass primary_exposure and outcome in the question's own words" in main
-    assert "stratifies, groups, compares within or adjusts by is not its exposure" in main
+    assert "only stratifies by or adjusts for is not its exposure" in main
 
 
 def test_an_analyte_named_by_the_dictionary_decides_too() -> None:
