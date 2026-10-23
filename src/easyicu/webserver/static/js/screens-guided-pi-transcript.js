@@ -281,7 +281,7 @@
       if (!copy) return null;
       const resultsVerified = Boolean(job && job.analysis_results_available
         && job.analysis_validated && job.numeric_verified);
-      const progress = Array.isArray(job && job.progress) ? job.progress : [];
+      const progress = window.EasyICU.guidedPi.jobProgress(job);
       const completedSteps = progress.map(row => {
         const match = /Step\s+(\d+)\/(\d+)\s+complete/i.exec(String(row && row.label || ''));
         return match ? [Number(match[1]), Number(match[2])] : null;
@@ -390,7 +390,7 @@
         id: 'pipeline-submitted', kind: 'pipeline', step: 'submitted',
         label: copy.running, status: 'complete', at: startedAt, owner: 'EasyICU',
       }];
-      const progress = Array.isArray(job && job.progress) ? job.progress : [];
+      const progress = window.EasyICU.guidedPi.jobProgress(job);
       const jobStatus = String(job && job.status || '');
       const failed = hostActionFailed(actionCode, job, jobStatus);
       if (actionCode === 'prepare_analysis_data' && preparedDataAvailable(job, jobStatus)) {

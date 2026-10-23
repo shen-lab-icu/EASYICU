@@ -323,7 +323,7 @@
       if (!narration || !latestRun || !latestRun.run_id) return '';
       const jobs = (Array.isArray(current && current.archived_child_jobs) ? current.archived_child_jobs : [])
         .filter(job => job && job.kind === 'agent-run' && job.run_id === latestRun.run_id);
-      const text = narration.processNotes({ progress: jobs.flatMap(job => Array.isArray(job.progress) ? job.progress : []) }, latestRun, tr);
+      const text = narration.processNotes({ progress: jobs.flatMap(job => window.EasyICU.guidedPi.jobProgress(job)) }, latestRun, tr);
       return text ? `<section class="gpi-run-notes" aria-label="${esc(tr('Notes on the run', '过程说明'))}"><h4>${esc(tr('Notes on the run', '过程说明'))}</h4><p>${esc(text)}</p></section>` : '';
     }
 

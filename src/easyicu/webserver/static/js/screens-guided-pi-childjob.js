@@ -273,7 +273,7 @@
       if (presentation.startedAt != null) activity.startedAt = presentation.startedAt;
       if (presentation.endedAt != null) activity.endedAt = presentation.endedAt;
       if (presentation.title) activity.displayTitle = presentation.title;
-      const progress = Array.isArray(job.progress) ? job.progress : [];
+      const progress = window.EasyICU.guidedPi.jobProgress(job);
       // A replayed snapshot rebuilds the tally from scratch; live events that
       // follow keep counting from here.
       activity.planningProgress = null;

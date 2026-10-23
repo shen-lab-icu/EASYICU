@@ -336,8 +336,10 @@ test('R12 a raw converter error reads as a sentence with the original folded bel
 
 test('P2-6 run-file evidence opens the registered run and digest; display links stay local', async () => {
   const calls = [], registered = {}, c = context({ document: { getElementById: () => null } });
+  vm.runInContext(read('screens-guided-pi-modules.js'), c);
+  const jobProgress = c.window.EasyICU.guidedPi.jobProgress;
   c.window.EasyICU = { guidedPi: { declare: (name, owner) => { registered[name] = owner; },
-    require: name => registered[name], optional: name => registered[name] || null } };
+    require: name => registered[name], optional: name => registered[name] || null, jobProgress } };
   c.window.EU_PRODUCT_LABELS = { projectTitle: (value, fallback) => value || fallback };
   registered.evidencePreview = { kindLabel: () => 'Result' };
   const artifactSha = 'b'.repeat(64), evidenceSha = 'a'.repeat(64);

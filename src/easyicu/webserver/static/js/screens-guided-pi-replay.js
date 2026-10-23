@@ -188,7 +188,7 @@
       };
     }
     const reportOnly = Boolean(job && (job.report_only === true
-      || rows(job.progress).some(event => event.step === 'report_repair')));
+      || window.EasyICU.guidedPi.jobProgress(job).some(event => event.step === 'report_repair')));
     if (reportOnly) {
       const status = String(job.status || '');
       const ready = status === 'done' && job.report_revision_ready === true;

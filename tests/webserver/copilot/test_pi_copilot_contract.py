@@ -303,7 +303,6 @@ def test_project_workflow_projects_active_job_for_session_timeline(
             "current": 1,
             "total": 4,
             "step": "materialize",
-            "reason_code": None,
         }
     ]
     receipt = payload["workflow"]["study_setup_receipt"]

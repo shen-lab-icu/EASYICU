@@ -135,7 +135,7 @@ def test_unregistered_local_path_is_not_forwarded_to_provider() -> None:
     encoded_job = json.dumps(projected_job)
     assert "private.csv" not in encoded_job
     assert "patient_id" not in encoded_job
-    assert projected_job["progress"][0]["reason_code"] is None
+    assert "reason_code" not in projected_job["progress"][0]
 
 
 def test_validation_projection_is_owner_specific_and_value_safe(

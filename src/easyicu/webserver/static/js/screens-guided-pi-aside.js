@@ -141,7 +141,7 @@
       const job = workflow && workflow.active_job && workflow.active_job.present
         ? workflow.active_job : null;
       const running = job && job.status === 'running';
-      const progress = running && Array.isArray(job.progress) ? job.progress.slice(-1)[0] : null;
+      const progress = running ? window.EasyICU.guidedPi.jobProgress(job).slice(-1)[0] : null;
       // The raw lifecycle step ("planning · 1/4") reads like a progress bar
       // but 1/4 is a validation attempt count; show the researcher-facing
       // stage sentence instead.

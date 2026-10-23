@@ -304,7 +304,7 @@
       kind: String(job.kind || '').slice(0, 80),
       status: String(job.status || '').slice(0, 40),
       error_code: String(job.error_code || '').slice(0, 120),
-      progress: (Array.isArray(job.progress) ? job.progress : []).slice(-24).map(row => ({
+      progress: (window.EasyICU.guidedPi.jobProgress(job)).slice(-24).map(row => ({
         step: String((row && row.step) || '').slice(0, 80),
         current: Number((row && row.current) || 0),
         total: Number((row && row.total) || 0),
