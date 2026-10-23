@@ -17,7 +17,7 @@ from easyicu.research_agent.contracts.trajectory_design import (
     normalize_trajectory_design,
 )
 from easyicu.research_agent.research_context.concept_hints import classify_variable
-from easyicu.research_agent.schema import AggregationRule
+from easyicu.research_agent.schema import AggregationRule, EndpointSpec, ResearchContext
 from easyicu.webserver import primary_cohort
 from easyicu.webserver.study_scientific_configuration import ScientificConfiguration
 
@@ -347,8 +347,8 @@ def landmark_timing_specification(
 ) -> Dict[str, Any]:
     """The executable landmark timing sensitivity, with host-owned columns.
 
-    Both routes that close a post-baseline timing gap -- an Agent-selected
-    landmark after review and a landmark the researcher stated in the question
+    All routes that close a post-baseline timing gap -- an Agent-selected
+    landmark before planning or after review, and one stated in the question
     -- compile to this one shape, so neither invents a follow-up column name.
     """
 
@@ -370,9 +370,138 @@ def landmark_timing_specification(
     }
 
 
-#: The one question-stated landmark this owner compiles; it matches the
-#: Agent-selected route (``plan_timing_landmark_24h``) and its runtime owner.
+#: The question-stated and Agent-selected landmark share this runtime owner.
 QUESTION_LANDMARK_HOURS = 24.0
+AGENT_POST_BASELINE_LANDMARK_SPEC_ID = "agent_post_baseline_landmark_24h"
+
+
+def post_baseline_landmark_configuration(
+    *, study: Mapping[str, Any], context: ResearchContext,
+) -> Dict[str, Any] | None:
+    """Close a first-day association's timing before its first plan exists.
+
+    Read the review's classification, then require a window the hospital-death
+    landmark actually closes. No question text or proposed method is evidence
+    for this rule. Every existing timing choice keeps its authority.
+    """
+
+    from easyicu.research_agent.planning.scientific_review import post_baseline_exposure
+    from easyicu.research_agent.research_context.materialization_window import (
+        column_window_from_label,
+        host_materialization_window_hours,
+    )
+    from easyicu.research_agent.research_context.temporal_semantics import normalise_time_anchor
+
+    configuration = ScientificConfiguration.inspect(study)
+    design = study.get("analysis_design")
+    if not isinstance(design, Mapping) or design.get("analysis_family") != "association_study":
+        return None
+    if context.target_outcome != "death" or context.endpoint is None or context.endpoint.kind != "binary":
+        return None
+    if any(
+        str(key).startswith("plan_timing_") and value is True
+        for key, value in (study.get("confirmations") or {}).items()
+    ) or any(spec.axis == "timing" for spec in configuration.sensitivity_specs()):
+        return None
+    preferences = context.user_preferences
+    if preferences is not None and (
+        preferences.landmark_hours is not None
+        or preferences.timing_and_design
+        or any(spec.axis == "timing" for spec in preferences.sensitivity_specs)
+    ):
+        return None
+    if not post_baseline_exposure(context)[0]:
+        return None
+    descriptor = context.variable(str(context.primary_exposure or ""))
+    if descriptor is None:
+        return None
+    definition = descriptor.clinical_definition
+    if definition is not None and definition.definition_time_anchor and (
+        normalise_time_anchor(definition.definition_time_anchor) != "icu_admission"
+    ):
+        return None
+    own_window = column_window_from_label(descriptor.analysis_window)
+    if own_window is not None:
+        if (
+            own_window.anchor != "icu_admission"
+            or own_window.start_hours is None or own_window.start_hours < 0
+            or own_window.end_hours is None
+            or own_window.end_hours <= own_window.start_hours
+        ):
+            return None
+        end = own_window.end_hours
+    else:
+        end = host_materialization_window_hours(context)
+    if end is None or not 0 < end <= QUESTION_LANDMARK_HOURS:
+        return None
+    return {
+        "sensitivity_specs": configuration.replace_sensitivity(
+            axis="timing",
+            replacement=landmark_timing_specification(
+                outcome="death", landmark_hours=QUESTION_LANDMARK_HOURS,
+                spec_id=AGENT_POST_BASELINE_LANDMARK_SPEC_ID,
+            ),
+        ),
+        "confirmations": configuration.merge_confirmations(
+            plan_timing_landmark_24h=True,
+            plan_timing_descriptive_only=False,
+            plan_timing_time_varying=False,
+        ),
+    }
+
+
+def record_post_baseline_landmark(
+    *, study: Mapping[str, Any], materialization_study: Mapping[str, Any],
+    primary_exposure: str | None, target: str | None, endpoint: EndpointSpec | None, database: str,
+) -> Mapping[str, Any]:
+    """Apply the rule once, where launch has resolved all exposure bindings.
+
+    A zero-row context uses the same concept descriptors as planning/review;
+    the outer window is the launch owner's coordinate. Saved setup, plan-card
+    bindings and metadata-only proposals all arrive here. Only the timing is
+    persisted; a metadata-only exposure remains a proposal for plan review.
+    """
+
+    design = study.get("analysis_design")
+    if (
+        not isinstance(design, Mapping) or design.get("analysis_family") != "association_study"
+        or not primary_exposure or target != "death" or endpoint is None
+    ):
+        return study
+    import json
+    import pandas as pd
+
+    from easyicu.research_agent.research_context.builder import build_research_context
+    from easyicu.webserver import study_contexts
+
+    context = build_research_context(
+        research_question="", cohort_name="launch_timing", database=database,
+        cohort=pd.DataFrame({name: pd.Series(dtype="float64") for name in {primary_exposure, target}}),
+        primary_exposure=primary_exposure, target_outcome=target, endpoint=endpoint,
+        user_preferences={"data_constraints": json.dumps({
+            "materialization_window": {
+                **dict(materialization_study.get("time_window") or {}),
+                "role": "outer_observation_window",
+            },
+        })},
+    )
+    patch = post_baseline_landmark_configuration(study=study, context=context)
+    if patch is None:
+        return study
+    if (
+        not study.get("id") or study.get("revision") is None
+        or study_contexts.get_context(str(study["id"])) is None
+    ):
+        # A study this launch was handed but the store does not hold (a
+        # synthesized benchmark or CLI context) gets the timing in memory.
+        return {**dict(study), **patch}
+    # A concurrent researcher edit wins. Propagate the revision conflict so
+    # this launch cannot continue on stale scientific coordinates.
+    return study_contexts.upsert_context(
+        {"id": study["id"], **patch}, active=True,
+        expected_revision=int(study["revision"]), require_revision=True,
+        lifecycle_write=False, _server_agent_landmark_decision=True,
+    )
 
 
 def question_landmark_configuration(
@@ -1850,6 +1979,7 @@ def compile_plan_decision(
 
 
 __all__ = [
+    "AGENT_POST_BASELINE_LANDMARK_SPEC_ID",
     "CompiledAgentPlanConfiguration",
     "CompiledPlanDecision",
     "PlanDecisionError",
@@ -1863,6 +1993,8 @@ __all__ = [
     "plan_decision_context",
     "proposed_adjustment_set",
     "landmark_timing_specification",
+    "post_baseline_landmark_configuration",
     "question_landmark_configuration",
+    "record_post_baseline_landmark",
     "repeated_stays_system_default_route",
 ]

@@ -8,6 +8,7 @@ persisted when the decision was made -- never from the page that clicked:
   the request that starts its job, under the key ``decision_key`` made (a row
   under any other key proves nothing and is not shown);
 * the data choice: the conversation's data-source authorization;
+* an Agent-selected landmark: the receipt saved with the study's timing;
 * an automatic continuation after a provider outage: the job's
   ``provider_recovery.json`` receipt, which records a system action.
 
@@ -30,6 +31,8 @@ _PLAN_APPROVED = "plan_approved"
 _PLAN_REJECTED = "plan_rejected"
 _DATA_CHOSEN = "data_chosen"
 _PROVIDER_RESUMED = "provider_resumed"
+_AGENT_LANDMARK = "post_baseline_landmark_selected"
+AGENT_TIMING_DECISION_FIELD = "agent_timing_decision"
 #: Data-source confirmations the researcher made; ``agent_default_study_required``
 #: is the system's policy and ``legacy_session`` predates the choice.
 _CHOSEN_SOURCE_MODES = frozenset(
@@ -133,17 +136,50 @@ def system_action_records(
     return records
 
 
+def agent_timing_decision_record(study: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Read the host's persisted timing decision without re-dating it on edits."""
+
+    record = study.get(AGENT_TIMING_DECISION_FIELD)
+    if not isinstance(record, Mapping):
+        return None
+    at = _utc(record.get("at"))
+    if record.get("code") != _AGENT_LANDMARK or record.get("actor") != "agent" or at is None:
+        return None
+    return {"code": _AGENT_LANDMARK, "actor": "agent", "at": at}
+
+
+def new_agent_timing_decision_record(
+    study: Mapping[str, Any], *, at: str,
+) -> Optional[Dict[str, Any]]:
+    """The receipt written atomically with the Agent's pre-planning landmark."""
+
+    from .plan_decisions import AGENT_POST_BASELINE_LANDMARK_SPEC_ID
+
+    if not any(
+        spec.get("spec_id") == AGENT_POST_BASELINE_LANDMARK_SPEC_ID
+        and spec.get("axis") == "timing" and spec.get("strategy") == "landmark"
+        for spec in study.get("sensitivity_specs") or ()
+    ):
+        return None
+    return agent_timing_decision_record({
+        AGENT_TIMING_DECISION_FIELD: {"code": _AGENT_LANDMARK, "actor": "agent", "at": at},
+    })
+
+
 def project_decision_records(
     *,
     host_action_turns: Iterable[Mapping[str, Any]],
     data_source_authorization: Mapping[str, Any],
     recovery_receipts: Iterable[Mapping[str, Any]],
+    study: Mapping[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
     """Every decision record of one conversation, oldest first."""
 
     data_choice = data_choice_record(data_source_authorization)
+    timing_choice = agent_timing_decision_record(study or {})
     records = [
         *([data_choice] if data_choice else []),
+        *([timing_choice] if timing_choice else []),
         *user_decision_records(host_action_turns),
         *system_action_records(recovery_receipts),
     ]
@@ -163,8 +199,11 @@ def conversation_job_ids(
 
 
 __all__ = [
+    "AGENT_TIMING_DECISION_FIELD",
+    "agent_timing_decision_record",
     "conversation_job_ids",
     "data_choice_record",
+    "new_agent_timing_decision_record",
     "project_decision_records",
     "system_action_records",
     "user_decision_records",

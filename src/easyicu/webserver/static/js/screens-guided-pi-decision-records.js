@@ -12,6 +12,7 @@
 
   const USER_CODES = new Set(['plan_confirmed', 'plan_approved', 'plan_rejected', 'data_chosen']);
   const SYSTEM_CODES = new Set(['provider_resumed']);
+  const AGENT_CODES = new Set(['post_baseline_landmark_selected']);
 
   function timeMs(value) {
     const parsed = Date.parse(String(value || ''));
@@ -34,7 +35,8 @@
       const code = String(record.code || '');
       const actor = String(record.actor || '');
       const at = timeMs(record.at);
-      const known = actor === 'user' ? USER_CODES.has(code) : actor === 'system' && SYSTEM_CODES.has(code);
+      const known = actor === 'user' ? USER_CODES.has(code)
+        : actor === 'agent' ? AGENT_CODES.has(code) : actor === 'system' && SYSTEM_CODES.has(code);
       if (!known || !at) return [];
       return [{
         ...record,
@@ -75,6 +77,12 @@
         `系统操作：模型服务恢复后，从检查点自动继续（第 ${count} 次）· ${time}`,
       );
     }
+    if (record.code === 'post_baseline_landmark_selected') {
+      return tr(
+        `Agent decision: the exposure is measured during the first ICU day, so the analysis starts at 24 hours among patients alive then · ${time}`,
+        `Agent 决策：暴露在入 ICU 后第一天内测量，因此分析从第 24 小时开始，仅纳入该时点仍存活的患者 · ${time}`,
+      );
+    }
     return '';
   }
 
@@ -100,8 +108,8 @@
   function render(record, ctx) {
     const line = text(record, ctx.tr);
     if (!line) return '';
-    const system = record.actor === 'system';
-    return `<p class="gpi-decision-record${system ? ' is-system' : ''}" role="note" data-gpi-decision-record="${ctx.esc(record.code)}" data-gpi-decision-actor="${system ? 'system' : 'user'}">${ctx.esc(line)}</p>`;
+    const system = record.actor !== 'user';
+    return `<p class="gpi-decision-record${system ? ' is-system' : ''}" role="note" data-gpi-decision-record="${ctx.esc(record.code)}" data-gpi-decision-actor="${ctx.esc(record.actor)}">${ctx.esc(line)}</p>`;
   }
 
   window.EasyICU.guidedPi.declare('decisionRecords', { rows, place, render, text, clock });

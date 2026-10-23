@@ -2414,7 +2414,10 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         "cohort_columns": [
             "stay_id",
             "patient_stay_id",
-            *(["lact_max"] if named_operation else []),
+            # A first-day peak with hospital death gets the Agent-selected
+            # 24-hour landmark before planning; it reads its follow-up columns.
+            *(["lact_max", "death_time_hours", "hospital_followup_time_hours"]
+              if named_operation else []),
             "lact",
             "sep3",
             "death",

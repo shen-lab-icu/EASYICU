@@ -379,6 +379,23 @@ def conversation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     host_action_jobs.clear_started_for_tests()
 
 
+def test_an_agent_timing_decision_survives_a_conversation_reload(conversation: Conversation) -> None:
+    from easyicu.webserver.pi_copilot.plan_decisions import (
+        AGENT_POST_BASELINE_LANDMARK_SPEC_ID, landmark_timing_specification,
+    )
+
+    saved = context_store.upsert_context({
+        "id": conversation.study_id,
+        "sensitivity_specs": [landmark_timing_specification(
+            outcome="death", landmark_hours=24, spec_id=AGENT_POST_BASELINE_LANDMARK_SPEC_ID,
+        )],
+        "confirmations": {"plan_timing_landmark_24h": True},
+    }, _server_agent_landmark_decision=True)
+    expected = [{"code": "post_baseline_landmark_selected", "actor": "agent", "at": saved["updated_at"]}]
+    assert conversation.records() == expected
+    assert conversation.records(conversation.reload()) == expected
+
+
 def test_reload_after_each_decision_shows_the_same_records(conversation: Conversation) -> None:
     prepare = conversation.start("prepare_analysis_data", PREPARE, lambda: {"human_review_pending": True})
     conversation.finish(prepare, "needs_user")

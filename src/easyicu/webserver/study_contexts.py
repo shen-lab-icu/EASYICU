@@ -1890,6 +1890,13 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
         )
         context = _default_context(context_id, created_at)
         context.update(patch)
+        from easyicu.webserver.pi_copilot.decision_records import (
+            AGENT_TIMING_DECISION_FIELD, agent_timing_decision_record,
+        )
+
+        timing_record = agent_timing_decision_record(row)
+        if timing_record is not None:
+            context[AGENT_TIMING_DECISION_FIELD] = timing_record
         revision = row.get("revision", 0)
         if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
             raise StudyContextError({"error": "study_context_store_invalid"})
@@ -2223,6 +2230,7 @@ def upsert_context(
     _server_study_family_reading_write: bool = False,
     _server_question_wording_write: bool = False,
     _server_design_variance_basis_write: bool = False,
+    _server_agent_landmark_decision: bool = False,
 ) -> Dict[str, Any]:
     client_concept_selection_authority: Dict[str, Any] = {}
     if not _server_concept_selection_authority_write and isinstance(raw_context, dict):
@@ -2374,6 +2382,14 @@ def upsert_context(
                 patch["literature_authority"] = {}
         if patch or current is None:
             context.update(patch)
+            if _server_agent_landmark_decision:
+                from easyicu.webserver.pi_copilot.decision_records import (
+                    AGENT_TIMING_DECISION_FIELD, new_agent_timing_decision_record,
+                )
+
+                timing_record = new_agent_timing_decision_record(context, at=timestamp)
+                if timing_record is not None:
+                    context[AGENT_TIMING_DECISION_FIELD] = timing_record
             if context.get("primary_exposure_concept") and (
                 not context.get("primary_exposure")
                 or context["primary_exposure"] not in str(context.get("question") or "")
