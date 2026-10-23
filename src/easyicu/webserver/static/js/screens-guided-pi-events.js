@@ -505,6 +505,7 @@
           state.researchModel = String(event.target.value || '');
           state.error = ''; render(); return;
         }
+        if (PROVIDER_CONTROL && PROVIDER_CONTROL.declaration.handleChange(event)) return;
         if (PROVIDER_CONTROL && PROVIDER_CONTROL.handleChange(event)) return;
       });
       state.host.addEventListener('keydown', event => {
@@ -531,6 +532,7 @@
           if (message) sendText(message, governedNextChoiceGrants(null, message), undefined, true, 'typed');
           return;
         }
+        if (PROVIDER_CONTROL && PROVIDER_CONTROL.declaration.handleSubmit(event)) return;
         const form = event.target.closest('[data-gpi-provider-form]');
         if (!form) return;
         event.preventDefault(); configureProvider(form);

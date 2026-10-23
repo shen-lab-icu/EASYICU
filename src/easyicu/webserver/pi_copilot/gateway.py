@@ -197,6 +197,15 @@ class PiGatewayClient:
             environ=source_environment,
             include_file=self._provider_file_enabled,
         )
+        if not self.account_binding_sha256:
+            config = self.provider_store.resolved_config(
+                environ=source_environment, include_file=self._provider_file_enabled,
+            )
+            if config is not None:
+                for key in ("EASYICU_PI_DATA_HANDLING", "EASYICU_PI_INFERENCE_LOCATION"):
+                    value = config.as_environment()[key]
+                    if value != "unspecified" or key in provider_environment:
+                        provider_environment[key] = value
         source_environment = {
             **source_environment,
             **provider_environment,

@@ -13,6 +13,17 @@
       connectionConfigured, connectionReady, errorText,
     } = options;
 
+    // How the saved API connection handles credentialed data
+    // (screens-guided-pi-provider-declaration.js).
+    const declarationOwner = window.EasyICU.guidedPi.optional('providerDeclaration');
+    const declaration = declarationOwner ? declarationOwner.create({
+      state, api, tr, render, errorText,
+      reloadStatus: async () => {
+        const payload = await api().loadPiCopilotStatus();
+        state.runtime = payload && payload.runtime;
+      },
+    }) : Object.freeze({ load: async () => {}, handleChange: () => false, handleSubmit: () => false });
+
     function stopCodexPoll() {
       if (state.codexPoll) window.clearTimeout(state.codexPoll);
       state.codexPoll = null;
@@ -312,6 +323,8 @@
         state.runtime = payload && payload.runtime;
         forgetCredential(providerForm(state.host));
         state.apiDraft = null; state.modelCatalog = null;
+        // A saved connection carries its own declaration record.
+        await declaration.load(false);
         if (!runtimeReady()) {
           state.error = tr('The model connection was saved, but the Copilot runtime is not ready yet.', '模型连接已保存，但研究助手运行环境尚未就绪。');
           return;
@@ -347,6 +360,7 @@
     }
 
     return Object.freeze({
+      declaration,
       stopCodexPoll,
       loadCodexModels,
       loadCodexResearchStatus,

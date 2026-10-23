@@ -16,9 +16,11 @@ import os
 import stat
 import tempfile
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, Literal, Mapping, Optional
+
+from pydantic import BaseModel, ConfigDict
 
 from easyicu.research_agent.providers.client_trust import (
     DataHandling, InferenceLocation, PROVIDER_POLICY_NOTICE_KEY,
@@ -29,7 +31,7 @@ from easyicu.provider_auth import (
     credential_headers,
     pi_openai_auth_header,
 )
-from easyicu.webserver import state_paths
+from easyicu.webserver import hosted, state_paths
 from easyicu.webserver.provider_url_security import (
     ProviderUrlSecurityError,
     validate_credential_endpoint,
@@ -72,6 +74,78 @@ _CONFIG_KEYS = frozenset(
     }
 )
 _MAX_VERIFICATION_RESPONSE_BYTES = 1024 * 1024
+DECLARATION_NOTICE_VERSION = "1"
+_POLICY_ENV_KEYS = frozenset({"EASYICU_PI_DATA_HANDLING", "EASYICU_PI_INFERENCE_LOCATION"})
+_DECLARATION_MESSAGES = {
+    "settings_only": "The data-handling declaration can be changed only in the model settings.",
+    "admin_required": (
+        "On a shared server, only the administrator can set the data-handling declaration, "
+        "in the server configuration."
+    ),
+    "notice_mismatch": "The declaration notice changed after this page loaded. Read it again, then save.",
+    "value_invalid": "Choose one of the listed options.",
+    "administrator_configuration": (
+        "The administrator set this declaration in the configuration, so it cannot be changed here."
+    ),
+    "connection_required": "Connect a model first, then declare how it handles data.",
+    "connection_changed": (
+        "The model connection changed while this form was open. Check the current connection, then save again."
+    ),
+    "record_unavailable": (
+        "EasyICU could not read the declaration record, so this model is treated as undeclared. "
+        "Check that the EasyICU data folder is readable, then try again."
+    ),
+    "busy": "A conversation turn is running. Change the declaration after it finishes.",
+    "gateway_unavailable": (
+        "EasyICU could not apply the change to the model connection. "
+        "Try again; if it fails again, restart EasyICU."
+    ),
+}
+
+
+def declaration_error(reason: str, status_code: int = 403) -> PiCopilotError:
+    code = f"pi_provider_declaration_{reason}"
+    return PiCopilotError(code, _DECLARATION_MESSAGES[reason], status_code=status_code)
+
+
+class PiProviderConnection(BaseModel):
+    """The exact connection whose notice the settings page displayed."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    provider: str
+    base_url: str
+    model: str
+
+
+class PiProviderDeclarationRecord(BaseModel):
+    """Append-only snapshots; a lapse preserves the original human receipt."""
+
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["easyicu.pi-provider-declaration/1"] = "easyicu.pi-provider-declaration/1"
+    actor: dict[str, str]
+    recorded_at: str
+    connection: PiProviderConnection
+    value: DataHandling
+    notice_key: Literal["physionet_llm_data_handling_declaration"]
+    notice_version: Literal["1"]
+    lapsed_at: str | None = None
+
+
+class PiProviderDeclarationState(BaseModel):
+    """Settings read model; no credentials or model-controlled authority."""
+
+    model_config = ConfigDict(extra="forbid")
+    connection: PiProviderConnection | None
+    value: DataHandling
+    recorded_at: str | None
+    actor: dict[str, str] | None
+    lapsed: bool
+    may_change: bool
+    change_authority: Literal["local_user", "administrator_configuration"]
+    source: Literal["settings_ui", "administrator_configuration", "unspecified"]
+    status_code: str
+    notice_key: str = PROVIDER_POLICY_NOTICE_KEY
+    notice_version: str = DECLARATION_NOTICE_VERSION
 
 Verifier = Callable[
     [str, str, Mapping[str, str], Optional[Mapping[str, Any]], float],
@@ -144,6 +218,9 @@ class PiProviderConfig:
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+    def connection(self) -> PiProviderConnection:
+        return PiProviderConnection(provider=self.provider, base_url=self.base_url, model=self.model)
+
 
 class PiProviderConfigStore:
     """Own the private credential file and matching verification receipt."""
@@ -153,10 +230,118 @@ class PiProviderConfigStore:
         *,
         config_path: Optional[Path] = None,
         receipt_path: Optional[Path] = None,
+        declaration_path: Optional[Path] = None,
     ) -> None:
         self.config_path = Path(config_path or _DEFAULT_CONFIG_PATH)
         self.receipt_path = Path(receipt_path or _DEFAULT_RECEIPT_PATH)
+        self.declaration_path = Path(declaration_path) if declaration_path else (
+            self.receipt_path.with_name(self.receipt_path.stem + "-declarations.jsonl")
+        )
         self._lock = threading.RLock()
+
+    def _declaration_record(self, connection: PiProviderConnection | None) -> PiProviderDeclarationRecord | None:
+        """Persist an observed lapse so returning to an old connection cannot revive it."""
+        with self._lock:
+            record = None
+            try:
+                with self.declaration_path.open(encoding="utf-8") as stream:
+                    if os.fstat(stream.fileno()).st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+                        raise declaration_error("record_unavailable", 409)
+                    for line in stream:
+                        record = PiProviderDeclarationRecord.model_validate_json(line)
+            except FileNotFoundError:
+                return None
+            except (OSError, ValueError) as exc:
+                raise declaration_error("record_unavailable", 409) from exc
+            if record and record.lapsed_at is None and record.connection != connection:
+                record = record.model_copy(update={"lapsed_at": utc_now()})
+                self._append_declaration(record)
+            return record
+
+    def _append_declaration(self, record: PiProviderDeclarationRecord) -> None:
+        try:
+            self.declaration_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+            with os.fdopen(os.open(self.declaration_path, flags, 0o600), "a", encoding="utf-8") as stream:
+                mode = os.fstat(stream.fileno()).st_mode
+                if not stat.S_ISREG(mode) or mode & (stat.S_IRWXG | stat.S_IRWXO):
+                    raise declaration_error("record_unavailable", 409)
+                stream.write(record.model_dump_json() + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+        except OSError as exc:
+            raise declaration_error("record_unavailable", 409) from exc
+
+    def _administrator_policy(self, *, environ=None, include_file=True) -> bool:
+        """Precedence: process policy variables (even unspecified) win as a pair.
+
+        Non-default policy saved by the administrator's legacy config writer
+        also wins. Both are reported as administrator_configuration (lead copy:
+        "set by the administrator's configuration"). Otherwise only the latest
+        matching, unlapsed settings record applies. No endpoint/provider/port
+        heuristics declare on-device inference. UI writes never edit env policy.
+        """
+        source = os.environ if environ is None else environ
+        if _POLICY_ENV_KEYS.intersection(source):
+            return True
+        values = self.environment(environ=environ, include_file=include_file)
+        return any(values.get(key, "unspecified") != "unspecified" for key in _POLICY_ENV_KEYS)
+
+    def declaration_status(self, *, environ=None, include_file=True) -> Dict[str, Any]:
+        with self._lock:
+            config = self._configured_connection(environ=environ, include_file=include_file)
+            connection = config.connection() if config else None
+            record = self._declaration_record(connection)
+            administrator = self._administrator_policy(environ=environ, include_file=include_file)
+            lapsed = bool(record and record.lapsed_at)
+            value = (config.data_handling if config else DataHandling.UNSPECIFIED) if administrator else (
+                record.value if record and not lapsed else DataHandling.UNSPECIFIED
+            )
+            source = "administrator_configuration" if administrator else "settings_ui" if record else "unspecified"
+            reason = "administrator_configuration" if administrator else "admin_required" if hosted.is_hosted() else (
+                "connection_required" if config is None else "lapsed" if lapsed else "recorded" if record else "unspecified"
+            )
+            return PiProviderDeclarationState(
+                connection=connection, value=value, lapsed=lapsed,
+                recorded_at=record.recorded_at if record and not administrator else None,
+                actor=record.actor if record and not administrator else None,
+                may_change=bool(config and not administrator and not hosted.is_hosted()),
+                change_authority="administrator_configuration" if administrator or hosted.is_hosted() else "local_user",
+                source=source, status_code=f"pi_provider_declaration_{reason}",
+            ).model_dump(mode="json")
+
+    def declare_data_handling(
+        self, *, value: str, connection: Mapping[str, str], notice_key: str,
+        notice_version: str, channel: str,
+    ) -> Dict[str, Any]:
+        """Only the settings adapter calls this; never expose it as a Pi tool."""
+        if channel != "settings_ui":
+            raise declaration_error("settings_only")
+        if hosted.is_hosted():
+            # The existing hosted guard grants no browser account admin rights.
+            raise declaration_error("admin_required")
+        if notice_key != PROVIDER_POLICY_NOTICE_KEY or notice_version != DECLARATION_NOTICE_VERSION:
+            raise declaration_error("notice_mismatch", 409)
+        try:
+            declared = DataHandling(value)
+        except ValueError as exc:
+            raise declaration_error("value_invalid", 422) from exc
+        with self._lock:
+            if self._administrator_policy():
+                raise declaration_error("administrator_configuration", 409)
+            config = self._configured_connection()
+            if config is None:
+                raise declaration_error("connection_required", 409)
+            if dict(connection) != config.connection().model_dump():
+                raise declaration_error("connection_changed", 409)
+            # Validate the existing journal before appending, even on a clear.
+            self._declaration_record(config.connection())
+            self._append_declaration(PiProviderDeclarationRecord(
+                actor={"kind": "local_user", "id": "local_user"}, recorded_at=utc_now(),
+                connection=config.connection(), value=declared,
+                notice_key=notice_key, notice_version=notice_version,
+            ))
+            return self.declaration_status()
 
     @staticmethod
     def _clean(value: Any, *, field: str, limit: int) -> str:
@@ -228,6 +413,7 @@ class PiProviderConfigStore:
         data_handling: DataHandling = DataHandling.UNSPECIFIED,
         inference_location: InferenceLocation = InferenceLocation.UNSPECIFIED,
         verifier: Optional[Verifier] = None,
+        environ: Optional[Mapping[str, str]] = None,
     ) -> tuple[PiProviderConfig, Dict[str, Any]]:
         """Verify first, then atomically persist the credential and receipt."""
 
@@ -241,10 +427,16 @@ class PiProviderConfigStore:
             inference_location=inference_location,
         )
         verification = verify_provider_connection(config, transport=verifier)
+        source = os.environ if environ is None else environ
+        policy = {key: source[key] for key in _POLICY_ENV_KEYS if key in source}
         with self._lock:
+            self._declaration_record(config.connection())
             self._write_config(config)
-            self._write_receipt(config, verification)
-        return config, self.public_status(environ=config.as_environment())
+            # Verify the effective policy without copying a human declaration
+            # into administrator configuration. A new choice needs a new receipt.
+            effective = self._require_stored_config(environ=policy)
+            self._write_receipt(effective, verification)
+            return effective, self.public_status(environ=policy)
 
     def _require_stored_config(
         self,
@@ -289,7 +481,11 @@ class PiProviderConfigStore:
         override the instance's stored connection.
         """
 
-        stored = self._require_stored_config(environ=environ)
+        # A human choice belongs to the old model; never persist its effective
+        # value as administrator policy on the replacement connection.
+        stored = self._configured_connection(environ=environ)
+        if stored is None:
+            self._require_stored_config(environ=environ)
         return self.verify_and_save(
             provider=stored.provider,
             api_key=stored.api_key,
@@ -299,6 +495,7 @@ class PiProviderConfigStore:
             data_handling=stored.data_handling,
             inference_location=stored.inference_location,
             verifier=verifier,
+            environ=environ,
         )
 
     def environment(
@@ -314,12 +511,33 @@ class PiProviderConfigStore:
             self._read_config_file() if include_file else ({}, "not_loaded")
         )
         merged = dict(file_values)
+        if _POLICY_ENV_KEYS.intersection(source):
+            # Do not let an inherited inference_location undo an explicit env
+            # clear of data_handling (or the converse).
+            for key in _POLICY_ENV_KEYS:
+                merged.pop(key, None)
         for key, value in source.items():
             if key in _CONFIG_KEYS:
                 merged[key] = str(value)
         return merged
 
     def resolved_config(
+        self,
+        *,
+        environ: Optional[Mapping[str, str]] = None,
+        include_file: bool = True,
+    ) -> Optional[PiProviderConfig]:
+        with self._lock:
+            config = self._configured_connection(environ=environ, include_file=include_file)
+            record = self._declaration_record(config.connection() if config else None)
+            if config and record and not record.lapsed_at and not self._administrator_policy(
+                environ=environ, include_file=include_file,
+            ):
+                config = replace(config, data_handling=record.value,
+                                 inference_location=InferenceLocation.UNSPECIFIED)
+            return config
+
+    def _configured_connection(
         self,
         *,
         environ: Optional[Mapping[str, str]] = None,

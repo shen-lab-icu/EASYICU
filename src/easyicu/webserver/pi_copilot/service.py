@@ -76,6 +76,7 @@ from .project_authority import (
 from .provider_config import (
     PROVIDER_DEFAULT_MODELS,
     PiProviderConfigStore,
+    declaration_error,
     discover_provider_models,
 )
 from .resource_lifecycle import WebMemoryAdmission
@@ -776,6 +777,8 @@ class PiCopilotService:
     ) -> Dict[str, Any]:
         """Verify and persist first-use Pi credentials before chat unlocks."""
 
+        if data_handling != "unspecified" or inference_location != "unspecified":
+            raise declaration_error("settings_only")
         if not enable_ai:
             raise PiCopilotError(
                 "external_llm_opt_in_required",
@@ -816,6 +819,18 @@ class PiCopilotService:
             "configuration": configuration,
             "secrets_returned": False,
         }
+
+    def declare_provider_data_handling(self, **declaration: Any) -> Dict[str, Any]:
+        """Settings-only policy change, serialized with conversation admission."""
+        with self._lock:
+            if self._busy_sessions:
+                raise declaration_error("busy", 409)
+            apply_config = getattr(self.gateway, "apply_provider_config", None)
+            if not callable(apply_config) or getattr(self.gateway, "account_binding_sha256", ""):
+                raise declaration_error("gateway_unavailable", 409)
+            state = self.provider_store.declare_data_handling(**declaration)
+            apply_config(self.provider_store.resolved_config())
+            return state
 
     def discover_provider_models(
         self,
@@ -2311,6 +2326,19 @@ class PiCopilotService:
             return "unspecified"
         from easyicu.research_agent.providers.client_trust import DataHandling
 
+        journal = getattr(self.provider_store, "declaration_path", None)
+        if journal is not None and journal.exists():
+            state = self.provider_store.declaration_status()
+            running = getattr(self.gateway, "environ", {})
+            connection = state["connection"]
+            if not connection or any(
+                running.get(f"EASYICU_PI_{key.upper()}") != value
+                for key, value in connection.items()
+            ):
+                return "unspecified"
+            # Clear/lapse takes effect even if a gateway still holds the last
+            # projected value. A runtime snapshot cannot renew a declaration.
+            return state["value"]
         # Read the running gateway's configuration, which apply_provider_config
         # updates atomically, rather than a possibly different saved endpoint.
         return DataHandling(getattr(self.gateway, "environ", {}).get(

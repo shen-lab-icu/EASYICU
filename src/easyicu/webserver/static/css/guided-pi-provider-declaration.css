@@ -1,0 +1,11 @@
+/* Owner: Guided Pi credentialed-data declaration (js/screens-guided-pi-provider-declaration.js). */
+.gpi-declaration-notice{margin:0 0 12px;color:var(--ink-2);font-size:13.5px;line-height:1.55}
+.gpi-declaration-options{display:grid;gap:7px;margin:0;padding:0;border:0;min-width:0}
+.gpi-declaration-option{display:grid;grid-template-columns:16px minmax(0,1fr);align-items:center;gap:9px;min-width:0;padding:11px 12px;border:1px solid var(--provider-line,var(--line));border-radius:8px;color:var(--ink-2);font-size:14px;cursor:pointer}
+.gpi-declaration-option:hover{border-color:var(--provider-line-strong,var(--line))}
+.gpi-declaration-option:has(input:checked){border-color:var(--provider-accent-border,var(--ink-3));background:var(--provider-accent-soft,var(--paper))}
+.gpi-declaration-option input{margin:0;accent-color:var(--provider-ink,var(--ink))}
+.gpi-declaration-option span{min-width:0;overflow-wrap:anywhere}
+.gpi-declaration-options:disabled .gpi-declaration-option{cursor:default;opacity:.72}
+.gpi-declaration .gpi-config-note:not(.ok):not(.warn){background:var(--provider-accent-soft,var(--paper));color:var(--ink-2)}
+.gpi-declaration-save{margin-top:14px}
