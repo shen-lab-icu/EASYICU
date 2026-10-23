@@ -32,6 +32,7 @@ def test_desktop_bundle_uses_one_private_runtime_and_local_loading_page():
         "resources/backend",
         "resources/node",
         "resources/NODE_LICENSE",
+        "p",
     ]
 
 

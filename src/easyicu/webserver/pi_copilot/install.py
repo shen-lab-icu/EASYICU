@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
@@ -37,6 +38,10 @@ _EXECUTABLE_SUFFIXES = frozenset({".js", ".mjs", ".cjs"})
 
 
 def packaged_app_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        # Tauri ships the staged p directory at p/ under its resource
+        # root; the backend executable remains in resources/backend/.
+        return Path(sys.executable).resolve().parents[2] / "p"
     return Path(__file__).resolve().with_name("node_app")
 
 

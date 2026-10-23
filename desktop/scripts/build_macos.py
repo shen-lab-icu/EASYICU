@@ -138,7 +138,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Prepare the frozen backend and bundled Node runtime without Tauri packaging.",
     )
+    parser.add_argument("--dry-run", action="store_true", help="Print the plan without running tools or writing files.")
     args = parser.parse_args(argv)
+    if args.dry_run:
+        print(json.dumps({"steps": [
+            "Install hash-locked wheel and Pi dependencies; bundle Node and freeze backend",
+            *common.bundle_plan(),
+            *([] if args.backend_only else ["Build Tauri app and signed DMG"]),
+            "Write build-inputs.json with pruning counts/bytes and bundle paths",
+        ]}, indent=2))
+        return 0
     if sys.platform != "darwin" or platform.machine() != "arm64":
         raise RuntimeError("This dependency lock targets macOS Apple Silicon only")
     BUILD_ROOT.mkdir(parents=True, exist_ok=True)
@@ -146,14 +155,18 @@ def main(argv: list[str] | None = None) -> int:
     node = _select_node()
     python = _prepare_python_runtime(_select_python())
     _prepare_node_runtime(node, python)
+    backend = _build_backend(python)
+    bundle_inputs = common.prepare_bundle(
+        desktop_root=DESKTOP_ROOT, build_root=BUILD_ROOT, run=_run,
+    )
     inputs = common.build_inputs(
         repo_root=REPO_ROOT, desktop_root=DESKTOP_ROOT, python=python, node=node,
         lock=PYTHON_LOCK,
     )
+    inputs.update(bundle_inputs)
     (BUILD_ROOT / "build-inputs.json").write_text(
         json.dumps(inputs, indent=2) + "\n", encoding="utf-8"
     )
-    backend = _build_backend(python)
     print(f"Frozen backend: {backend}")
     if not args.backend_only:
         _build_tauri()

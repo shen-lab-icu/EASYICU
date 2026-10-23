@@ -1,6 +1,5 @@
 """Offline contracts for the Windows desktop distribution owner."""
 
-import importlib.util
 import json
 from pathlib import Path
 import re
@@ -10,17 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-DESKTOP = ROOT / "desktop"
-
-
-def load_script(name):
-    spec = importlib.util.spec_from_file_location(
-        name, DESKTOP / "scripts" / f"{name}.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from tests.support.desktop_bundle import DESKTOP, ROOT, load_script
 
 
 def test_windows_dry_run_is_available_without_windows_or_dependencies(tmp_path):
@@ -234,6 +223,8 @@ def test_windows_main_writes_installer_digest_and_kernel_receipt(tmp_path, monke
     monkeypatch.setattr(module, "_prepare_python_runtime", lambda *a: Path("python.exe"))
     monkeypatch.setattr(module.common, "prepare_node_runtime", lambda *a, **k: None)
     monkeypatch.setattr(module.common, "build_backend", lambda *a, **k: Path("backend.exe"))
+    bundle_inputs = {"node_modules_pruned": {"files": 7, "bytes": 31}, "bundle_paths": {"max_length": 160}}
+    monkeypatch.setattr(module.common, "prepare_bundle", lambda **k: bundle_inputs)
     monkeypatch.setattr(module.common, "verify_kernel_identity", lambda *a: {"identity_sha256": "synthetic"})
     monkeypatch.setattr(module.common, "build_inputs", lambda **k: {"lock_sha256": {"synthetic.lock": "digest"}})
     monkeypatch.setenv("EASYICU_HOME", str(tmp_path))
@@ -246,6 +237,7 @@ def test_windows_main_writes_installer_digest_and_kernel_receipt(tmp_path, monke
     assert receipt["execution_kernel_identity"] == {"identity_sha256": "synthetic"}
     assert receipt["installer"] == {"name": installer.name, "sha256": hashlib.sha256(installer.read_bytes()).hexdigest()}
     assert receipt["lock_sha256"] == {"synthetic.lock": "digest"}
+    assert all(receipt[key] == value for key, value in bundle_inputs.items())
     monkeypatch.setattr(module, "_build_tauri", lambda *a: pytest.fail("backend-only built an installer"))
     assert module.main(["--backend-only"]) == 0
     backend_receipt = json.loads((tmp_path / "build-inputs.json").read_text())

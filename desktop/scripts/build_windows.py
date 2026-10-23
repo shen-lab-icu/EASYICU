@@ -110,8 +110,9 @@ def _plan(backend_only: bool) -> dict:
             "Create isolated venv; pip install --require-hashes; install EasyICU wheel; pip check",
             "npm ci --ignore-scripts --omit=dev in the installed Pi package; bundle Node and license",
             "Freeze backend_entry.py as onedir; preserve installed .py sources; compare kernel identities",
+            *common.bundle_plan(windows=True),
             *([] if backend_only else ["Build Tauri NSIS installer with currentUser scope and locked Cargo inputs"]),
-            "Write build-inputs.json with versions, lock hashes, kernel identity and installer digest",
+            "Write build-inputs.json with versions, lock hashes, kernel identity, pruning counts/bytes, paths and installer digest",
         ],
     }
 
@@ -143,10 +144,15 @@ def main(argv: list[str] | None = None) -> int:
         python, build_root=BUILD_ROOT, desktop_root=DESKTOP_ROOT, run=_run, windows=True,
     )
     identity = common.verify_kernel_identity(python, BUILD_ROOT, backend)
+    bundle_inputs = common.prepare_bundle(
+        desktop_root=DESKTOP_ROOT, build_root=BUILD_ROOT, run=_run, windows=True,
+    )
     inputs = common.build_inputs(
         repo_root=REPO_ROOT, desktop_root=DESKTOP_ROOT, python=python, node=node, lock=PYTHON_LOCK,
     )
     inputs.update(target=TARGET, execution_kernel_identity=identity)
+    inputs.update(bundle_inputs)
+    receipt.write_text(json.dumps(inputs, indent=2) + "\n", encoding="utf-8")
     if not args.backend_only:
         installer = _build_tauri(node)
         inputs["installer"] = {"name": installer.name, "sha256": hashlib.sha256(installer.read_bytes()).hexdigest()}

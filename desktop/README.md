@@ -99,7 +99,21 @@ venv and receipt are in `desktop/.build/windows/`; override with
 `EASYICU_DESKTOP_BUILD_DIR`. The NSIS installer is under
 `desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`, or under
 `CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release/bundle/nsis/` when set.
-Short local build/cache paths avoid legacy toolchain path-length limitations.
+The shared build owner stages Pi at the short `p/` resource path and prunes only
+staged `node_modules`: TypeScript declarations, `dist-types/`, source maps, and
+docs/tests/examples directories without runtime `main`/`exports`/`bin` entries.
+Runtime-referenced directories and their assets remain. The wheel and source
+checkout's dependency trees stay intact. Bundled Node then checks the gateway's
+syntax and imports the Pi agent, Pi AI and typebox entries without a provider call.
+
+Before Tauri packaging, the build measures paths relative to the installation
+root using Tauri's resource destinations. Windows fails with
+`desktop_bundle_path_budget_exceeded` above **160 UTF-16 characters**, reserving
+100 characters of MAX_PATH for the installation root. macOS reports the same
+overflow as a warning. `longest-paths.json` records the ten longest paths before
+the check can fail, and `build-inputs.json` records pruned file counts/bytes and
+the path report. Both drivers expose the pruning and check plan with `--dry-run`.
+Keep staging/cache paths short as build tools can also impose path limits.
 
 Both platform drivers share the wheel installation, locked Pi installation,
 Node bundling, freezing, source preservation, and build receipt helpers.
@@ -139,7 +153,8 @@ it launches the bundled loopback backend, waits for the authenticated
 stops/reaps the backend. The smoke process has no Python, Node, Git, or Docker
 on PATH. The workflow then silently uninstalls and checks that tiny synthetic
 state/export sentinels remain. It uploads the installer and receipt only after
-success; synthetic smoke diagnostics are retained on failure. This uses the
+success; synthetic smoke diagnostics, including `longest-paths.json` even if
+the build fails before installation, are retained on failure. This uses the
 runner account with temporary profile/environment paths, not a new Windows
 account. Run it manually after the real lock lands.
 
