@@ -342,8 +342,10 @@ def target_trial_database_gap(study: Mapping[str, Any]) -> Optional[dict[str, An
     it is bound.  The compile refuses a bound database with the same code.
     """
 
+    from easyicu.webserver.study_family_scope import scope_database_key
+
     database = _study_database(study)
-    if not database or database in TARGET_TRIAL_DATABASES:
+    if not database or scope_database_key(database) in TARGET_TRIAL_DATABASES:
         return None
     return {
         "code": TARGET_TRIAL_DATABASE_OUT_OF_SCOPE,
