@@ -461,7 +461,8 @@ def test_revision_allows_removal_and_binding_repair_without_using_step_ids(chang
     from tests.research_agent.planning.scientific_review_fixtures import _context, _plan
 
     typed = _plan().steps[0]
-    previous = _revision_plan(_revision_step()).model_copy(update={"steps": [typed, _revision_step()]})
+    producer = _revision_step(expected_outputs=["cohort:corrected"])
+    previous = _revision_plan(producer).model_copy(update={"steps": [typed, producer]})
     steps = list(previous.steps)
     if change == "remove":
         steps.pop()
@@ -682,7 +683,10 @@ def test_revision_model_permission_repairs_required_bindings_without_adding_opti
             requirement = requirement.model_copy(update={"exposure_source": "other_exposure", "model_terms": [
                 requirement.model_terms[0].model_copy(update={"name": "other_exposure"}), *requirement.model_terms[1:],
             ]})
-        step = _revision_step(primary.method, requirement.analysis_role, inputs=["exposure", "death", "age", "another_outcome", "other_exposure"],
+        inputs = ["exposure", "death", "age", "another_outcome"]
+        if change == "other_exposure":
+            inputs.append("other_exposure")
+        step = _revision_step(primary.method, requirement.analysis_role, inputs=inputs,
                               expected_outputs=primary.expected_outputs, model_requirements=[requirement])
         revised = previous.model_copy(update={"steps": [primary, step]})
         context = context.model_copy(update={"cohort": context.cohort.model_copy(update={"requested_outcome_columns": ["another_outcome"]})})
