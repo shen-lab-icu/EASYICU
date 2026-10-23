@@ -226,6 +226,12 @@ CONTRACTS: dict[str, list[str]] = {
         "product-labels.js",
         "screens-agent-study-context.js",
     ],
+    "provider_transient_retry.test.js": [
+        "../../pi_copilot/node_app/src/main.mjs",
+        "../../pi_copilot/node_app/src/shell-budget.mjs",
+        "../../pi_copilot/node_app/src/event-projection.mjs",
+        "../../pi_copilot/node_app/src/provider-retry.mjs",
+    ],
     "dictionary_hosted_instance.test.js": ["screens-dict.js"],
     "review_echarts_owners.test.js": [
         "screens-viz-echarts.js",

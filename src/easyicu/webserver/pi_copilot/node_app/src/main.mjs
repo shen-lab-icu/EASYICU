@@ -34,6 +34,7 @@ import {
   defaultShellSessionTokenBudget,
   ShellBudgetGuard,
 } from "./shell-budget.mjs";
+import { retryTransientProviderStream } from "./provider-retry.mjs";
 import { DATA_SOURCE_CONFIRMED_MARKER, hostPostToolFinalization } from "./post-tool-finalization.mjs";
 import {
   HotSessionLifecycle,
@@ -1365,16 +1366,18 @@ async function createSession(params) {
       async () => {
         const hostFinalization = hostPostToolFinalization(model, context, record.language);
         if (hostFinalization) return hostFinalization;
-        record.budgetGuard.authorize(context, options);
-        const budgetReceipt = record.budgetGuard.receipt();
-        manager.appendCustomEntry(
-          budgetReceipt.schema_version,
-          budgetReceipt,
-        );
-        return await originalStreamFunction(model, context, {
-          ...options,
-          maxRetries: 0,
-        });
+        return await retryTransientProviderStream(async () => {
+          record.budgetGuard.authorize(context, options);
+          const budgetReceipt = record.budgetGuard.receipt();
+          manager.appendCustomEntry(
+            budgetReceipt.schema_version,
+            budgetReceipt,
+          );
+          return await originalStreamFunction(model, context, {
+            ...options,
+            maxRetries: 0,
+          });
+        }, { signal: options.signal });
       },
     );
     sessions.set(externalId, record);

@@ -298,7 +298,14 @@
           'EasyICU 工具操作已完成，但模型服务未能生成最终说明。请以上方已完成的记录为准，不要自动重复执行该操作。'
         );
       }
-      if (value === 'pi_shell_token_budget_exhausted' || value === 'pi_shell_session_provider_call_budget_exhausted') {
+      if (value === 'pi_shell_message_provider_call_budget_exhausted' || value === 'pi_shell_message_cost_budget_exhausted') {
+        return tr(
+          'This reply reached its model budget before it finished. Send "continue" to carry on; completed EasyICU actions are kept.',
+          '本轮回复已用完单次模型预算，尚未说完。发送“继续”即可接着完成，已完成的 EasyICU 操作会保留。'
+        );
+      }
+      if (value === 'pi_shell_token_budget_exhausted' || value === 'pi_shell_session_provider_call_budget_exhausted'
+          || value === 'pi_shell_session_cost_budget_exhausted') {
         return tr(
           'This conversation reached its bounded safety budget. Start a new conversation in the same research project; the StudyContext, literature, data source, runs, and evidence remain bound to the project.',
           '本会话已达到安全预算。请在同一研究项目中新建后续对话；StudyContext、文献、数据源、运行和证据仍保留在项目中。'

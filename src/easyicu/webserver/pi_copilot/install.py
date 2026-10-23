@@ -27,6 +27,7 @@ RUNTIME_SOURCE_FILES = (
     "src/event-projection.mjs",
     "src/post-tool-finalization.mjs",
     "src/shell-budget.mjs",
+    "src/provider-retry.mjs",
     "src/session-lifecycle.mjs",
     "src/skills/web-prototype/SKILL.md",
 )
