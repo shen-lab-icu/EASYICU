@@ -5,7 +5,7 @@ declares a capability gap and drafts no steps, instead of steps that quietly
 answer another question.  The host checks the claim against the study's typed
 context first: a claim the context contradicts goes back to the Planner as a
 repair; a verified claim, or one the host has no evidence about, stops planning
-with the requirement as its cause and writes no checkpoint.
+with the requirement as its cause and records the stopped outline checkpoint.
 """
 
 from __future__ import annotations
@@ -20,7 +20,10 @@ from easyicu.research_agent.agents.progressive_payload import (
     progressive_outline_structured_output_request,
 )
 from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent
-from easyicu.research_agent.planning.capability_gap import check_capability_gap
+from easyicu.research_agent.canonical_json import canonical_sha256
+from easyicu.research_agent.planning.capability_gap import (
+    capability_gap_confirmation_facts, check_capability_gap,
+)
 from easyicu.research_agent.planning.family_spec.request import (
     SEALED_TRAJECTORY_SUITE_MARKER,
 )
@@ -32,7 +35,10 @@ from easyicu.research_agent.planning.progressive_contract import (
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.providers.structured_retry import StructuredResponseFailure
-from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
+from easyicu.research_agent.schema import (
+    AggregationRule, ConceptDescriptor, EndpointSpec, TemporalConstraint, TimeWindow,
+    UserPreferences, VariableRole,
+)
 from easyicu.research_agent.trajectory.contract import (
     infer_fixed_window_trajectory_metadata,
 )
@@ -41,6 +47,7 @@ from tests.research_agent.planning.progressive_planner_fixtures import (
     _foundation_payload,
     _materialization_payloads,
     _outline_payload,
+    _payload,
 )
 
 
@@ -66,6 +73,186 @@ def _run(responses: list[dict], checkpoints: list | None = None):
         _context(),
         checkpoint_callback=(checkpoints.append if checkpoints is not None else None),
     )
+
+
+def _typed_association():
+    """Synthetic maximum, outer window, endpoint and stated adjustment receipts."""
+    context = _context()
+    exposure = context.variables[0].model_copy(update={
+        "role": VariableRole.LAB, "dtype": "float64", "observed_domain": None,
+        "source_concept": "synthetic_signal", "aggregation_default": AggregationRule.NONE,
+        "allowed_aggregations": [AggregationRule.NONE], "unit_normalization": "window_numeric_max",
+    })
+    return context.model_copy(update={
+        "research_question": (
+            "With recorded sex as a covariate, is the first ICU day's maximum "
+            "synthetic signal associated with in-hospital death?"
+        ),
+        "variables": [exposure, *context.variables[1:]],
+        "time_windows": [TimeWindow(name="outer_window", anchor="icu_admission", start_hours=0, end_hours=24)],
+        "temporal_constraints": [TemporalConstraint(
+            raw_text="first ICU day's maximum synthetic signal", relation="first_window",
+            target_concept="synthetic_signal", aggregation_hint="max",
+            start_hours=0, end_hours=24, executable_repr="synthetic_signal:max:icu_admission:0:24",
+        )],
+        "endpoint": EndpointSpec(name="outcome_flag", kind="binary", levels=[0, 1], absence_semantics="no_absent_rows"),
+        "user_preferences": UserPreferences(
+            inferred_analysis_family="association_study",
+            data_constraints=json.dumps({"stated_adjustments": [{
+                "variable": "recorded sex", "words": "recorded sex as a covariate",
+                "concept": "sex_code", "source_status": "available",
+            }]}),
+        ),
+    })
+
+
+def _typed_association_responses():
+    source = _payload()
+    source["steps"][1].update(
+        table_one_group_by="outcome_flag", raw_inputs=["outcome_flag", "age_years", "sex_code"],
+    )
+    source["steps"][2].update(
+        module_id="absolute_risk_context", reference_exposure_level_index=None,
+        comparison_exposure_level_index=None, event_level_index=None, denominator_policy=None,
+        missing_exposure_policy=None, missing_outcome_policy=None, confidence_level=None,
+        population_scope="analysis_cohort",
+    )
+    source["steps"][4]["model_terms"][0].update(coding="continuous", reference_level_index=None)
+    source["steps"][6]["product_inputs"][0]["product_id"] = "table:absolute_risk_context"
+    source["display_labels"] = [item for item in source["display_labels"] if "=" not in item["key"]]
+    outline = _outline_payload(source)
+    outline["steps"][2]["population_scope"] = "analysis_cohort"
+    parsed = ProgressivePlanOutline.model_validate(outline)
+    foundation = _foundation_payload(source)
+    foundation["outline_sha256"] = canonical_sha256(parsed.model_dump(mode="json"))
+    materializations = _materialization_payloads(source)
+    for step, materialization in zip(parsed.steps, materializations, strict=True):
+        materialization["outline_step_sha256"] = canonical_sha256(step.model_dump(mode="json"))
+    return [outline, foundation, *materializations]
+
+
+def test_the_synthetic_typed_association_compiles_without_a_gap():
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in _typed_association_responses()])
+    llm.supports_strict_json_schema = True
+    assert ProgressivePlannerAgent(llm).run(_typed_association()).steps
+
+
+def test_an_unnamed_design_gap_gets_one_host_facts_confirmation_then_compiles():
+    """HEAD refuses on call one even though all the stated elements are typed."""
+    responses = [_gap_outline("design_element_unsupported"), *_typed_association_responses()]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    checkpoints = []
+
+    plan = ProgressivePlannerAgent(llm).run(_typed_association(), checkpoint_callback=checkpoints.append)
+
+    assert plan.steps
+    assert len(llm.calls) == len(responses)
+    assert all("capability_gap" not in checkpoint.prompt_metrics for checkpoint in checkpoints)
+    primary = next(step for step in plan.steps if step.planned_analysis_role == "primary")
+    assert "sex_code" in primary.model_requirements[0].covariates
+    confirmation = llm.calls[1][0][-1].content
+    for fact in ("association_study", "exposure_flag", "max", "icu_admission", "24",
+                 "outcome_flag", "binary", "sex_code", "available", "offered_families"):
+        assert fact in confirmation
+    assert "otherwise keep the gap" in confirmation
+    assert "what the question asks" in confirmation
+
+
+@pytest.mark.parametrize("needed", ["mediation", "instrumental-variable identification", "competing risks"])
+def test_an_unexpressible_design_kept_after_confirmation_still_stops(needed):
+    outline = _gap_outline("design_element_unsupported")
+    outline["rationale"] = f"The question requires {needed}, which none of the offered families expresses."
+    llm = ScriptedMockLLMClient([json.dumps(outline)] * 2)
+    llm.supports_strict_json_schema = True
+    context = _typed_association().model_copy(update={
+        "research_question": f"Estimate an effect using {needed} for the synthetic exposure and outcome.",
+    })
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent(llm).run(context)
+
+    assert len(llm.calls) == 2
+    assert caught.value.reason_code == "progressive_capability_gap"
+    assert caught.value.path == "capability_gap"
+    assert caught.value.easyicu_safe_diagnostic["cause_code"] == "design_element_unsupported"
+    assert caught.value.details["findings"][0]["verification"] == "unverifiable"
+
+
+@pytest.mark.parametrize("earlier_rejections", [0, 1, 2, 3])
+def test_confirmation_uses_only_the_remaining_outline_retry_budget(earlier_rejections):
+    claim = json.dumps(_gap_outline("design_element_unsupported"))
+    llm = ScriptedMockLLMClient(["{}"] * earlier_rejections + [claim, claim])
+    llm.supports_strict_json_schema = True
+    progress = []
+    checkpoints = []
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent(llm).run(
+            _typed_association(), progress_callback=progress.append, checkpoint_callback=checkpoints.append,
+        )
+
+    assert caught.value.reason_code == "progressive_capability_gap"
+    assert len(llm.calls) == min(earlier_rejections + 2, 4)
+    confirmations = [event for event in progress if event.reason_code == "progressive_capability_gap_confirmation_required"]
+    assert len(confirmations) == (1 if earlier_rejections < 3 else 0)
+    assert checkpoints[0].prompt_metrics.get("capability_gap_confirmation_count", 0) == len(confirmations)
+
+
+def test_a_named_unverifiable_gap_is_not_an_unnamed_design_confirmation():
+    context = _typed_association()
+    context = context.model_copy(update={"user_preferences": context.user_preferences.model_copy(update={
+        "data_constraints": json.dumps({"stated_subgroups": [{
+            "variable": "sex", "words": "within each sex", "concept": "sex_code", "source_status": "unbound",
+        }]}),
+    })})
+    llm = ScriptedMockLLMClient([json.dumps(_gap_outline("design_element_unsupported", "sex_code"))])
+    llm.supports_strict_json_schema = True
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent(llm).run(context)
+    assert len(llm.calls) == 1
+    assert caught.value.details["findings"][0]["verification"] == "unverifiable"
+
+
+def test_confirmation_projects_metadata_and_outer_windows_without_patient_summaries():
+    context = _typed_association()
+    context = context.model_copy(update={
+        "notes": "PRIVATE_NOTES_SENTINEL", "cohort_parquet": "PRIVATE_PATH_SENTINEL",
+        "variables": [context.variables[0].model_copy(update={
+            "observed_domain": {"levels": ["PRIVATE_OBSERVATION_SENTINEL"]},
+            "description": "PRIVATE_DESCRIPTION_SENTINEL", "source_files": ["PRIVATE_SOURCE_SENTINEL"],
+        }), *context.variables[1:]],
+    })
+    text = capability_gap_confirmation_facts(context, offered_families=("association_study", "descriptive_epidemiology"))
+    facts = json.loads(text.split("\n", 1)[1])
+    assert "PRIVATE_" not in text
+    assert facts["family"] == "association_study"
+    assert facts["offered_families"] == ["association_study", "descriptive_epidemiology"]
+    assert facts["exposure"]["column"] == "exposure_flag"
+    assert facts["outcome"]["column"] == "outcome_flag"
+    assert facts["exposure"]["metadata"]["analysis_window"] is None
+    assert facts["exposure"]["metadata"]["unit_normalization"] == "window_numeric_max"
+    assert facts["exposure"]["metadata"]["aggregation_default"] == "none"
+    assert facts["time_windows"] == [{"name": "outer_window", "anchor": "icu_admission", "start_hours": 0.0, "end_hours": 24.0}]
+    assert facts["temporal_constraints"][0]["aggregation_hint"] == "max"
+    assert facts["endpoint"]["kind"] == "binary"
+    assert facts["stated_adjustments"][0]["source_status"] == "available"
+    assert facts["stated_subgroups"] == []
+
+
+def test_long_stated_requirements_are_not_clipped_out_of_confirmation():
+    context = _typed_association()
+    requirements = [{"variable": f"stratum_{index}", "words": "synthetic stratum " + "x" * 200,
+                     "concept": None, "source_status": "unresolved"} for index in range(16)]
+    context = context.model_copy(update={"user_preferences": context.user_preferences.model_copy(update={
+        "data_constraints": json.dumps({"stated_subgroups": requirements}),
+    })})
+    claim = json.dumps(_gap_outline("design_element_unsupported"))
+    llm = ScriptedMockLLMClient([claim, claim])
+    llm.supports_strict_json_schema = True
+    with pytest.raises(ProgressivePlanCompileError):
+        ProgressivePlannerAgent(llm).run(context)
+    confirmation = llm.calls[1][0][-1].content
+    facts = json.loads(confirmation.split("Host facts for capability-gap confirmation:\n", 1)[1])
+    assert facts["stated_subgroups"] == requirements
 
 
 def test_an_outline_drafts_steps_or_declares_a_gap_never_both() -> None:
@@ -171,7 +358,7 @@ def test_a_longitudinal_claim_does_not_hold_for_a_study_with_a_trajectory() -> N
     )
 
 
-def test_a_checked_gap_stops_planning_with_its_cause_and_no_checkpoint() -> None:
+def test_a_checked_gap_stops_planning_with_its_cause_and_outline_checkpoint() -> None:
     checkpoints: list = []
 
     with pytest.raises(ProgressivePlanCompileError) as caught:
@@ -193,7 +380,9 @@ def test_a_checked_gap_stops_planning_with_its_cause_and_no_checkpoint() -> None
         "age_years",
         "verified",
     )
-    assert checkpoints == []
+    assert len(checkpoints) == 1
+    assert checkpoints[0].stage == "outline"
+    assert checkpoints[0].prompt_metrics["capability_gap"]["verification"] == "verified"
 
 
 def test_a_gap_the_host_cannot_check_stops_as_unverifiable() -> None:

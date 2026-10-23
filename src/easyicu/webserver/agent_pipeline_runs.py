@@ -1209,6 +1209,17 @@ def _write_pipeline_failure_diagnostic(
         "patient_rows_recorded": False,
         "secrets_recorded": False,
     }
+    # A stopped outline is validated planning text, already registered by the
+    # checkpoint owner. Preserve its typed receipt in this private diagnostic;
+    # the public gate still uses only _safe_pipeline_typed_failure's codes.
+    from easyicu.research_agent.planning.capability_gap import CapabilityGapDiagnostic
+
+    if payload["typed_failure"].get("reason_code") == "progressive_capability_gap":
+        for item in _pipeline_exception_chain(exc):
+            gap = getattr(item, "easyicu_planning_capability_gap", None)
+            if isinstance(gap, CapabilityGapDiagnostic):
+                payload["capability_gap"] = gap.model_dump(mode="json")
+                break
     relative = "diagnostics/research_pipeline_failure.json"
     if execution_retry_id is not None:
         attempt_digest = hashlib.sha256(execution_retry_id.encode("utf-8")).hexdigest()

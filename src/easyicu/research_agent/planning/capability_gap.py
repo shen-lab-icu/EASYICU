@@ -6,19 +6,26 @@ capability gap instead of drafting steps that quietly answer another question
 the host first checks the claim against the study's typed context: a claim the
 context contradicts goes back to the Planner as a repair. Concrete requirements
 are checked here. The host has no typed evidence for or against an
-unsupported estimand or design element, so those stop as unverifiable, and the
-run record says so.
+unsupported estimand or unnamed design element. An unnamed design gap gets
+one confirmation against typed host facts before it stops as unverifiable.
 """
 
 from __future__ import annotations
 
-from typing import Literal, NamedTuple
+import json
+from dataclasses import dataclass
+from typing import Any, Callable, Literal, NamedTuple, Sequence
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..authority.declared_levels import closed_planning_levels_for
 from ..schema import ResearchContext
 from ..trajectory.plan_contract import trajectory_context_is_bound
 from .family_spec.request import sealed_trajectory_suite_coordinates
-from .progressive_contract import ProgressiveCapabilityGap
+from .progressive_contract import (
+    CapabilityGapRequirement, ProgressiveCapabilityGap, ProgressivePlanCompileError,
+    ProgressivePlanOutline,
+)
 
 CapabilityGapVerification = Literal["verified", "unverified", "unverifiable"]
 
@@ -27,6 +34,123 @@ class CapabilityGapCheck(NamedTuple):
     verification: CapabilityGapVerification
     #: What the context shows, for the Planner's repair or the run record.
     fact: str
+
+
+class CapabilityGapDiagnostic(BaseModel):
+    """Host-owned stopped-outline receipt, for private planning artifacts only.
+
+    This is not part of the Planner's output schema or the browser projection.
+    Rationale is validated planning text, as in an outline checkpoint, never
+    an exception message or a raw provider response.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    requirement: CapabilityGapRequirement
+    concept: str | None = Field(default=None, min_length=1, max_length=128)
+    verification: CapabilityGapVerification
+    fact: str = Field(min_length=1, max_length=2_000)
+    rationale: str = Field(min_length=8, max_length=1_200)
+
+
+@dataclass
+class CapabilityGapConfirmation:
+    """One confirmation, charged to the existing outline retry owner."""
+
+    progress_callback: Callable[[Any], None] | None = None
+    requested: bool = False
+    retry_available: bool = False
+
+    def on_progress(self, event: Any) -> None:
+        # This also accounts for transport resends without creating a second
+        # budget. A gap on the final attempt must remain a definite stop.
+        self.retry_available = event.attempt < event.total_attempts
+        if self.progress_callback is not None:
+            self.progress_callback(event)
+
+    def check(self, outline: ProgressivePlanOutline, check: CapabilityGapCheck) -> None:
+        if (
+            check.verification == "unverifiable"
+            and outline.capability_gap == "design_element_unsupported"
+            and outline.capability_gap_concept is None
+            and not self.requested
+            and self.retry_available
+        ):
+            self.requested = True
+            raise ProgressivePlanCompileError(
+                "progressive_capability_gap_confirmation_required",
+                "Confirm the unnamed design-element gap against the host facts below. "
+                "Availability alone does not prove the whole design is expressible. "
+                "If the needed element is one of these, draft the steps for the original "
+                "question; otherwise keep the gap and name in rationale what the question "
+                "asks that none of the offered families and typed elements expresses. "
+                "Do not drop a requirement or change the question to fit a family.",
+                path="capability_gap", cause_code=outline.capability_gap,
+            )
+
+
+def capability_gap_stop(
+    outline: ProgressivePlanOutline, check: CapabilityGapCheck,
+) -> ProgressivePlanCompileError:
+    """Bind the typed stop to its private, validated planning receipt."""
+
+    gap = outline.declared_capability_gap()
+    if gap is None:
+        raise ValueError("a capability-gap stop requires a declared gap")
+    diagnostic = CapabilityGapDiagnostic(
+        requirement=gap.requirement, concept=gap.concept,
+        verification=check.verification, fact=check.fact, rationale=outline.rationale,
+    )
+    stop = ProgressivePlanCompileError(
+        "progressive_capability_gap",
+        "the question needs something no offered family can express "
+        f"({gap.requirement}, {check.verification}): {outline.rationale}",
+        path="capability_gap", cause_code=gap.requirement,
+        concepts=(gap.concept,) if gap.concept else (),
+        findings=[diagnostic.model_dump(mode="json", exclude={"rationale"})],
+    )
+    stop.easyicu_planning_capability_gap = diagnostic
+    return stop
+
+
+def capability_gap_confirmation_facts(
+    context: ResearchContext, *, offered_families: Sequence[str],
+) -> str:
+    """Project existing context owners, without data rows or guessed semantics.
+
+    Keep the outer materialization windows even when a column has no named
+    analysis_window. They bound its observations without declaring time zero.
+    This goes in the retry reminder, outside the validator-message clipping.
+    """
+
+    from .adjustment_authority import STATED_VARIABLE_FIELDS, context_stated_variables
+    from .analysis_types import infer_analysis_type_with_basis
+
+    def column(name: str | None) -> dict:
+        variable = context.variable(name) if name else None
+        return {
+            "column": name,
+            "metadata": variable.model_dump(mode="json", include={
+                "role", "dtype", "source_concept", "derived_from_concepts",
+                "analysis_window", "analysis_window_role", "aggregation_default",
+                "allowed_aggregations", "unit_normalization", "temporal_resolution",
+            }) if variable else None,
+        }
+
+    family, basis = infer_analysis_type_with_basis(context)
+    facts = {
+        "family": family.key, "family_basis": basis,
+        "offered_families": list(offered_families),
+        "exposure": column(context.primary_exposure),
+        "outcome": column(context.target_outcome),
+        "endpoint": context.endpoint.model_dump(mode="json") if context.endpoint else None,
+        "time_windows": [window.model_dump(mode="json", exclude={"rationale"}) for window in context.time_windows],
+        "temporal_constraints": [item.model_dump(mode="json", exclude={"raw_text", "executable_repr"})
+                                 for item in context.temporal_constraints],
+        **{field: [item.model_dump(mode="json") for item in context_stated_variables(context, field)]
+           for field in STATED_VARIABLE_FIELDS},
+    }
+    return "Host facts for capability-gap confirmation:\n" + json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
 
 
 def threshold_grouping_expressible(context: ResearchContext, concept: str) -> bool:
@@ -151,7 +275,11 @@ def check_capability_gap(
 
 __all__ = [
     "CapabilityGapCheck",
+    "CapabilityGapConfirmation",
+    "CapabilityGapDiagnostic",
     "CapabilityGapVerification",
+    "capability_gap_confirmation_facts",
+    "capability_gap_stop",
     "check_capability_gap",
     "threshold_grouping_expressible",
 ]
