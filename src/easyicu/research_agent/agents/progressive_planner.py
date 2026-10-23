@@ -73,6 +73,7 @@ from ..planning.progressive_compiler import (
     required_reader_display_label_keys,
     validate_progressive_foundation,
 )
+from ..planning.figure_plan_mutation import requires_visualization_step as _requires_visualization_step
 from ..planning.family_spec import sealed_result_families
 from ..planning.dependence_authority import (
     context_counts_only_authority,
@@ -234,7 +235,6 @@ _TYPED_PRODUCT_TOKEN = re.compile(
     r"\b(?:artifact|dataset|model|statistic|table):[a-z][a-z0-9_]*\b"
 )
 _SEPARATE_ANALYSIS_STEP = re.compile(r"\bseparate\s+analysis\s+step\b", re.I)
-_EXPLICIT_FIGURE_OUTPUT = re.compile(r"\bfigures?\b", re.I)
 
 def _sealed_cohort_predicate_binding_rows(
     context: ResearchContext,
@@ -762,23 +762,6 @@ def _required_separate_analysis_products(
             if product not in host_products and product not in required:
                 required.append(product)
     return tuple(required)
-
-
-def _requires_visualization_step(context: ResearchContext) -> bool:
-    """Return whether the run-bound output request explicitly requires a figure."""
-
-    preferences = context.user_preferences
-    if (
-        str(getattr(preferences, "inferred_analysis_family", None) or "")
-        == "descriptive_epidemiology"
-    ):
-        # Descriptive publication figures are intentionally compiled after
-        # extraction from the exact typed result/audit products.  Requiring a
-        # free-standing visualization outline step here would contradict the
-        # family module contract and create a second owner for the same figure.
-        return False
-    text = str(getattr(preferences, "must_have_outputs", None) or "")
-    return bool(_EXPLICIT_FIGURE_OUTPUT.search(text))
 
 
 def _bind_runtime_action_dependencies(
@@ -3390,6 +3373,8 @@ class ProgressivePlannerAgent:
         enforce_article_contract: bool,
         adjustment_proposal: Any = None,
     ) -> tuple[AnalysisPlan, ProgressivePlanCompileReceipt]:
+        from ..execution.owner_declaration import resolve_standard_executor
+
         reporting_source_keys = _article_reporting_source_keys(
             article_context=article_context,
             analysis_type=skeleton.analysis_type,
@@ -3402,6 +3387,8 @@ class ProgressivePlannerAgent:
             allowed_know_how_decisions=allowed_know_how_decisions,
             host_reporting_method_source_keys=reporting_source_keys,
             adjustment_proposal=adjustment_proposal,
+            required_visualization_step=_requires_visualization_step(article_context),
+            resolve_executor=resolve_standard_executor,
         )
         _accept_compiled_plan(
             plan=plan,

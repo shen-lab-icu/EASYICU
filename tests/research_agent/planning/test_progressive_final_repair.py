@@ -60,8 +60,8 @@ def test_final_finding_reaches_suffix_and_preserves_prefix(monkeypatch):
     agent, llm, context, before, accepted = _run(monkeypatch, failures=1)
     checkpoints = []
     plan = agent.run(context, checkpoint_callback=checkpoints.append)
-    assert len(plan.steps) == 7
-    assert accepted == [7, 7]
+    assert len(plan.steps) == 6  # Optional unowned rendering is omitted.
+    assert accepted == [6, 6]
     assert len(llm.calls) == 13  # outline + foundation + 7 initial + 4 suffix
     assert "progressive_primary_result_invalid" in llm.calls[9][0][-1].content
     assert context.model_dump_json() == before
@@ -79,7 +79,7 @@ def test_final_repair_has_a_hard_bound(monkeypatch):
     with pytest.raises(ProgressivePlanCompileError) as caught:
         agent.run(context)
     assert caught.value.reason_code == "progressive_primary_result_invalid"
-    assert accepted == [7, 7, 7]
+    assert accepted == [6, 6, 6]
     assert len(llm.calls) == 17
     assert context.model_dump_json() == before
 
@@ -93,7 +93,7 @@ def test_non_planner_or_binding_failure_does_not_spend_on_suffix(monkeypatch, co
     agent, llm, context, before, accepted = _run(monkeypatch, failures=1, code=code)
     with pytest.raises(ProgressivePlanCompileError):
         agent.run(context)
-    assert accepted == [7]
+    assert accepted == [6]
     assert len(llm.calls) == 9
     assert context.model_dump_json() == before
 

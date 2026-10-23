@@ -274,6 +274,20 @@ assert.match(typed, /gpi-past-decision/);
       created_at_epoch: at('2026-10-21T07:00:00Z') / 1000, finished_at_epoch: at('2026-10-21T07:20:00Z') / 1000, progress: [] }],
   }).find(row => row.role === 'activity' && row.childJobId === 'job-execute');
   assert.equal(failedReplay && failedReplay.failureCode, 'research_pipeline_execution_failed', 'a failed job gives its failed row a cause');
+  const limited = transcript.transcriptMessages({
+    transcript: [],
+    conversation_replay: { turns: [{ job_id: 'host-render', kind: 'host_action', action_code: 'execute_plan',
+      child_job_id: 'job-render', status: 'done', started_at: '2026-10-21T07:00:00Z', ended_at: '2026-10-21T07:20:00Z' }] },
+    archived_child_jobs: [{ job_id: 'job-render', kind: 'agent-run', status: 'done',
+      analysis_results_available: true, analysis_validated: true, numeric_verified: true,
+      limitations: [{ step_id: 'presentation', message: '可选图表 presentation 未完成，不能用于支持结论。' }], progress: [] }],
+  }).find(row => row.role === 'assistant' && row.hostActionCode === 'execute_plan');
+  assert.match(limited.text, /可选图表 presentation 未完成/);
+  assert.doesNotMatch(limited.text, /已在本轮完成.*图件重绘/);
+  const planNote = '已省略可选绘图步骤 presentation：没有标准绘图执行器，且没有必需输出或后续步骤依赖它。';
+  assert.ok(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {
+    research_question: 'Synthetic distribution', steps: [], rationale: planNote,
+  }).includes(planNote));
   process.stdout.write('Decision records, rail state, path-free run files, stale gate and host-action replay passed.\n');
 })().catch(error => {
   console.error(error);

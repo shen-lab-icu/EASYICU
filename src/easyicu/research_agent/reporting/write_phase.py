@@ -3691,6 +3691,7 @@ def run_write_phase(
     execution_gate = execution_gate_status(
         plan=execute_result.plan,
         per_step_records=per_step_records,
+        context=context,
     )
     writer_probe_mode = (
         bool(force_writer_probe) and not execution_gate["execution_complete"]

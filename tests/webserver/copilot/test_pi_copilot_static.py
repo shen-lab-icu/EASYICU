@@ -3565,6 +3565,26 @@ process.stdout.write(JSON.stringify(presentation));
     assert presentation["terminalLabel"] == ""
 
 
+def test_completed_analysis_activity_discloses_its_missing_optional_figure() -> None:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is unavailable")
+    script = r"""
+global.window = {};
+require(process.argv[1]);
+const presentation = window.EU_GUIDED_PI_REPLAY.childJobPresentation({
+  status: 'done', analysis_results_available: true, analysis_validated: true,
+  limitations: [{step_id: 'presentation', message: '可选图表未完成，不能用于支持结论。'}],
+}, (en, zh) => zh || en);
+process.stdout.write(JSON.stringify(presentation));
+"""
+    result = run_node(node, script, str(STATIC / "js" / "screens-guided-pi-replay.js"), check=True)
+    presentation = json.loads(result.stdout)
+    assert presentation["blocked"] is False
+    assert "可选图表未完成" in presentation["terminalLabel"]
+    assert "已生成并验证结果、图表和文章草稿" not in presentation["terminalLabel"]
+
+
 def test_next_step_card_offers_no_generic_continue_button() -> None:
     """"继续对话" only moved the cursor into the composer beneath it.
 

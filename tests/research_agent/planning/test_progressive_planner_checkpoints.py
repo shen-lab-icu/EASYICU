@@ -427,7 +427,7 @@ def test_progressive_orchestrator_resumes_and_imports_validated_chain(
     )
 
     assert result.generation_mode == "llm_progressive_v2_dev_resume"
-    assert len(result.plan.steps) == 7
+    assert len(result.plan.steps) == 6  # Optional unowned rendering is omitted.
     assert result.facts.resume_validated is True
     assert result.facts.complete_for_persistence is True
     assert len(result.facts.materializations) == 7

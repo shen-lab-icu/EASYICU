@@ -9,7 +9,7 @@ unlocked suffix instead of rewriting an already-valid prefix.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from pydantic import ValidationError
 
@@ -101,6 +101,7 @@ from .population_spec import (
     unquoted_criteria,
 )
 from .progressive_contract import (
+    OmittedRenderStep,
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveCompiledStepReceipt,
     ProgressiveCohortIntent,
@@ -3083,12 +3084,19 @@ def compile_progressive_plan(
     allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
     host_reporting_method_source_keys: Sequence[str] = (),
     adjustment_proposal: AdjustmentProposal | None = None,
+    omit_optional_render_steps: bool = True,
+    required_visualization_step: bool = False,
+    resolve_executor: Callable[..., Any] | None = None,
 ) -> tuple[AnalysisPlan, ProgressivePlanCompileReceipt]:
     """Compile and validate one skeleton without weakening final plan gates.
 
     ``adjustment_proposal`` is a family template's reviewed roster for a
     primary owner whose step carries no model requirement.  The host writes
     it; it is never part of the Planner transport.
+
+    The agent adapter supplies execution's owner resolver for final compilation.
+    Prefix compilation has no complete consumer roster and must retain steps.
+    Without a resolver, ownership is unevaluated and no step can be omitted.
     """
 
     canonical_type = canonical_analysis_family(skeleton.analysis_type)
@@ -3396,12 +3404,47 @@ def compile_progressive_plan(
             step=skeleton.steps[index] if index is not None else None, step_index=index,
             path="exposure_group_contrast",
         ) from exc
+    omitted: list[OmittedRenderStep] = []
+    if omit_optional_render_steps and resolve_executor is not None:
+        from .figure_plan_mutation import optional_render_step_ids
+
+        candidates = optional_render_step_ids(
+            plan, context=context, required_visualization_step=required_visualization_step,
+        )
+        # The outline also carries ordering dependencies which may not name
+        # products in AnalysisStep.inputs. Preserve those owners too.
+        depended_on = {parent for step in skeleton.steps for parent in step.depends_on}
+        for step in plan.steps:
+            if step.step_id not in candidates or step.step_id in depended_on or step.figure_panels:
+                continue
+            # An unevaluated owner is not permission to remove a step.
+            try:
+                decision = resolve_executor(step, plan=plan)
+            except Exception:  # noqa: BLE001 - retain for ordinary owner preflight
+                continue
+            if decision.claimed_by is not None:
+                continue
+            omitted.append(OmittedRenderStep(
+                step_id=step.step_id,
+                expected_outputs=list(step.expected_outputs),
+                message=(
+                    f"已省略可选绘图步骤 {step.step_id}：它没有已声明的标准绘图执行器，"
+                    "且没有后续步骤或必需输出依赖它。"
+                ),
+            ))
+        if omitted:
+            omitted_ids = {note.step_id for note in omitted}
+            plan = plan.model_copy(update={
+                "steps": [step for step in plan.steps if step.step_id not in omitted_ids],
+                "rationale": "\n".join(filter(None, [plan.rationale, *(note.message for note in omitted)])),
+            })
     skeleton_payload = skeleton.model_dump(mode="json")
     plan_payload = plan.model_dump(mode="json")
     return plan, ProgressivePlanCompileReceipt(
         skeleton_sha256=canonical_sha256(skeleton_payload),
         analysis_plan_sha256=canonical_sha256(plan_payload),
         compiled_steps=step_receipts,
+        omitted_render_steps=omitted,
     )
 
 
