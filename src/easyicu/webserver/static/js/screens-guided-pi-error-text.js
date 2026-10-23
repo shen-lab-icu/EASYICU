@@ -404,6 +404,10 @@
       const missing = Array.isArray(detail && detail.missing) ? detail.missing.map(String).filter(Boolean) : [];
       const list = missing.length ? missing.join(', ') : '';
       const detailCopy = {
+        landmark_spline_binary_sensitivity_unsupported: tr(
+          'A sensitivity analysis in the plan reused the continuous exposure result for a two-group comparison, which needs its own grouped model, so EasyICU stopped before any analysis ran. Generate the plan again.',
+          '计划里有一项敏感性分析沿用了连续暴露的结果做两组比较，这需要单独按分组建模，因此在分析前停止。请重新生成计划。',
+        ),
         required_concepts_unavailable: list
           ? tr(`Variables this study needs are not in this data: ${list}. Choose another data source or drop them from the question.`, `这份数据里没有研究所需的变量：${list}。请更换数据源，或从问题中去掉这些变量。`)
           : tr('A variable this study needs is not in this data.', '这份数据里缺少研究所需的变量。'),

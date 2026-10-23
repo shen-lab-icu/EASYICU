@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -15,6 +16,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
+    CurrentCaseScientificAuthorityError,
     LandmarkCategoricalAssociationRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
@@ -41,6 +43,219 @@ from easyicu.webserver.scientific_runtime_projection import (
     compile_web_scientific_runtime_projection,
 )
 from tests.support.native_outcome_export import typed_native_export
+
+
+def _metadata_pipeline(tmp_path, *, revision=False, grouped=True):
+    """Run the real grouping and binding boundaries, with scripted planning only."""
+    from easyicu.research_agent.contracts.association_execution import (
+        ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
+    )
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+    from easyicu.research_agent.orchestration.services import PipelineServices
+    from easyicu.research_agent.pipeline import ResearchAgentPipeline
+
+    catalog = tmp_path / "catalog.parquet"
+    frame = pd.DataFrame({
+        name: pd.Series(dtype="float64")
+        for name in ("hr_max", "age", "death", "death_time", "los_hosp")
+    })
+    frame["stay_id"] = pd.Series(dtype="int64")
+    frame.attrs["easyicu_planning_authority"] = {
+        "kind": "metadata_only_planning_catalog", "patient_rows_read": False,
+    }
+    frame.to_parquet(catalog, index=False)
+    specs = _runtime_projection_sensitivity_specs(
+        (LANDMARK,), primary_exposure="hr_max", primary_exposure_source="hr",
+        universe_path=catalog,
+    )
+    projection = _project(catalog, None, concept="hr", source="hr_max", specs=specs)
+    assert projection.authority["authority_kind"] == "landmark_spline_association"
+    answer = {"groupings": [{
+        "id": "x1", "concept": "hr", "scale": "ordinal",
+        "window": {"start_hours": 0, "end_hours": 24},
+        "groups": [
+            {"id": "g3", "label": "Upper band", "rule": {
+                "summary": "max", "op": ">=", "value": 110,
+            }},
+            {"id": "g2", "label": "Reference band", "rule": {
+                "summary": "max", "op": ">=", "value": 70,
+            }},
+            {"id": "g1", "label": "Remaining band", "rule": "otherwise"},
+        ],
+        "unmeasured": {"handling": "exclude"},
+        "reference": "g2", "contrast": "g3",
+        "quote": "Compare synthetic measurement bands", "source": "question",
+    }] if grouped else []}
+    draft = _plan("hr_group_x1" if grouped else "hr_max", reference="2", contrast="3")
+    if grouped:
+        draft.steps[-1].scientific_capability = ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+        draft.steps[-1].sensitivity_spec_ids = ["band_contrast_check"]
+    else:
+        draft.steps[1].model_requirements = []
+        draft = draft.model_copy(update={"steps": draft.steps[:-1]})
+    plan_path = tmp_path / "draft.json"
+    plan_path.write_text(draft.model_dump_json(), encoding="utf-8")
+    client = ScriptedMockLLMClient([json.dumps(answer)])
+    pipeline = ResearchAgentPipeline(
+        config=PipelineConfig(
+            workdir=tmp_path / "pipeline", planner_only=True,
+            development_diagnostic=True, require_human_plan_review=True,
+            development_locked_analysis_plan_path=plan_path,
+            development_locked_analysis_plan_sha256=hashlib.sha256(plan_path.read_bytes()).hexdigest(),
+            bound_plan_revision_contract=(
+                "Retain the grouped primary contrast and add a binary contrast sensitivity."
+                if revision else None
+            ),
+            current_case_scientific_runtime_authority=projection.authority,
+            scientific_runtime_projection_sha256=projection.projection_sha256,
+            enable_exposure_grouping=True, enable_memory=False, enable_replanning=False,
+        ),
+        services=PipelineServices(llm=client),
+    )
+    outcome = pipeline.run(
+        question=draft.research_question, cohort=catalog, database="synthetic",
+        target_outcome="death", primary_exposure="hr_max", id_columns=["stay_id"],
+        user_preferences={
+            "covariate_selection": "exact", "covariates": ["age"],
+            "sensitivity_specs": [LANDMARK.model_dump(mode="json")],
+            "data_constraints": json.dumps({
+                "materialization_window": {
+                    "role": "outer_observation_window", "anchor": "icu_admission", "hours": 24,
+                },
+                "analysis_design": {
+                    "analysis_family": "association_study", "analysis_unit": "icu_stay",
+                    "variance_estimator": "model_based",
+                },
+                "cohort": {"exclude_readmissions": False},
+            }),
+        },
+        stop_after_analysis=True,
+    )
+    return pipeline, outcome, client
+
+
+@pytest.mark.parametrize("revision", [False, True], ids=["first-plan", "automatic-revision"])
+def test_a_metadata_plan_binds_the_groups_formed_in_this_run(tmp_path, revision):
+    pipeline, outcome, client = _metadata_pipeline(tmp_path, revision=revision)
+    assert type(outcome).__name__ == "HumanReviewPending"
+    assert len(client.calls) == 1
+    assert pipeline._scientific_runtime_authorities.current_case is None
+    assert pipeline._scientific_runtime_projection_sha256 is None
+    context = json.loads((Path(outcome.run_dir) / "research_context.json").read_text())
+    assert context["primary_exposure"] == "hr_group_x1"
+    saved = AnalysisPlan.model_validate_json((Path(outcome.run_dir) / "analysis_plan.json").read_text())
+    primary = next(step for step in saved.steps if step.planned_analysis_role == "primary")
+    assert primary.model_requirements[0].exposure_source == "hr_group_x1"
+    assert primary.model_requirements[0].exposure_reference_level == "2"
+    assert primary.model_requirements[0].primary_contrast_level == "3"
+    assert any(step.method == "binary_exposure_sensitivity" for step in saved.steps)
+
+
+def test_a_continuous_metadata_plan_keeps_its_spline_authority(tmp_path):
+    pipeline, outcome, _client = _metadata_pipeline(tmp_path, grouped=False)
+    assert type(outcome).__name__ == "HumanReviewPending"
+    authority = pipeline._scientific_runtime_authorities.current_case
+    assert authority.authority_kind == "landmark_spline_association"
+    assert authority.exposure_column == "hr_max"
+    assert pipeline._scientific_runtime_projection_sha256 is not None
+    saved = AnalysisPlan.model_validate_json((Path(outcome.run_dir) / "analysis_plan.json").read_text())
+    authority.validate_plan(saved)
+
+
+def test_an_unsupported_spline_binary_sensitivity_keeps_its_cause_in_conversation(tmp_path):
+    from easyicu.research_agent.contracts.association_execution import (
+        ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
+    )
+    from easyicu.webserver import agent_pipeline_runs
+    from easyicu.webserver.pi_copilot.workflow import gate_detail_projection
+
+    universe = _universe(tmp_path, "hr")
+    specs = _runtime_projection_sensitivity_specs(
+        (LANDMARK,), primary_exposure="hr", primary_exposure_source="hr", universe_path=universe,
+    )
+    projection = _project(universe, None, concept="hr", source="hr", specs=specs)
+    authority = load_current_case_scientific_runtime_authority(projection.authority)
+    draft = _plan("hr")
+    draft.steps[-1].scientific_capability = ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+    with pytest.raises(CurrentCaseScientificAuthorityError) as refused:
+        authority.bind_plan(draft)
+    wrapper = RuntimeError("plan phase failed")
+    wrapper.__cause__ = refused.value
+    code = agent_pipeline_runs._pipeline_failure_code(wrapper)
+    agent_pipeline_runs._record_pipeline_failure(
+        wrapper_dir=tmp_path, study={"id": "synthetic"}, provider={}, exc=wrapper,
+        code=code, execution_retry_id=None,
+    )
+    gate = json.loads((tmp_path / "quality_gate.json").read_text())["gate"]
+    projected = gate_detail_projection(gate["detail"])
+    assert projected["gate_detail_code"] == "landmark_spline_binary_sensitivity_unsupported"
+
+
+@pytest.mark.parametrize("primary,source", [
+    ("hr", "hr"), ("hr_group_other", "hr"), ("hr_group_x1", "temp"),
+])
+def test_a_grouping_cannot_release_a_spline_for_a_different_primary(tmp_path, primary, source):
+    from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
+
+    _groupings(tmp_path, concept="hr", thresholds=(110, 70))
+    catalog = tmp_path / "planning/cohort.parquet"
+    universe = _universe(tmp_path, source)
+    specs = _runtime_projection_sensitivity_specs(
+        (LANDMARK,), primary_exposure=source, primary_exposure_source=source, universe_path=universe,
+    )
+    projection = _project(universe, None, concept=source, source=source, specs=specs)
+    authorities = ScientificRuntimeAuthorities.load(trajectory=None, current_case=projection.authority)
+    assert authorities.for_planning_context(
+        context=_context(catalog, primary_exposure=primary),
+        run_dir=catalog.parent, cohort_path=catalog,
+    ) is authorities
+
+
+@pytest.mark.parametrize("source", ["hr", "hr_max"])
+def test_only_the_run_verified_grouping_releases_its_source_spline(tmp_path, source):
+    from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
+
+    _groupings(tmp_path, concept="hr", thresholds=(110, 70))
+    catalog = tmp_path / "planning/cohort.parquet"
+    universe = _universe(tmp_path, source)
+    specs = _runtime_projection_sensitivity_specs(
+        (LANDMARK,), primary_exposure=source, primary_exposure_source="hr", universe_path=universe,
+    )
+    projection = _project(universe, None, concept="hr", source=source, specs=specs)
+    authorities = ScientificRuntimeAuthorities.load(trajectory=None, current_case=projection.authority)
+    context = _context(catalog, primary_exposure="hr_group_x1")
+    assert authorities.for_planning_context(
+        context=context, run_dir=catalog.parent, cohort_path=catalog,
+    ).current_case is None
+    record_path = catalog.parent / "exposure_groupings.json"
+    original = record_path.read_bytes()
+    record = json.loads(original)
+    record["compiled"]["groupings"][0]["derivation_sha256"] = "0" * 64
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="does not declare the group columns"):
+        authorities.for_planning_context(context=context, run_dir=catalog.parent, cohort_path=catalog)
+    record_path.unlink()
+    assert authorities.for_planning_context(
+        context=context, run_dir=catalog.parent, cohort_path=catalog,
+    ) is authorities
+
+
+def test_an_accepted_grouped_candidate_keeps_its_categorical_authority(tmp_path):
+    from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
+
+    groupings = _groupings(tmp_path, concept="hr", thresholds=(110, 70))
+    universe = _universe(tmp_path, "hr_max")
+    projection = _project(universe, groupings, concept="hr", source="hr_max")
+    authorities = ScientificRuntimeAuthorities.load(trajectory=None, current_case=projection.authority)
+    rebound = authorities.for_planning_context(
+        context=_context(universe, primary_exposure="hr_group_x1"),
+        run_dir=tmp_path, cohort_path=universe,
+    )
+    assert rebound is authorities
+    assert rebound.current_case.authority_kind == "landmark_categorical_association"
+    bound, _findings = rebound.bind_plan(_plan("hr_group_x1"))
+    rebound.validate_plan(bound)
+    assert bound.steps[-1].method == "binary_exposure_sensitivity"
 
 
 LANDMARK = PrespecifiedSensitivitySpec(
@@ -74,7 +289,8 @@ def _phase(cohort, *, answer=None, candidate=None):
     )
 
 
-def _groupings(tmp_path, *, concept="lact", scale="ordinal", count=1, keep_unmeasured=False):
+def _groupings(tmp_path, *, concept="lact", scale="ordinal", count=1, keep_unmeasured=False,
+               thresholds=(5, 2.5)):
     summary = "value" if concept == "bmi" else "max"
     answer = {"groupings": [{
         "id": "x1", "concept": concept, "scale": scale,
@@ -83,10 +299,10 @@ def _groupings(tmp_path, *, concept="lact", scale="ordinal", count=1, keep_unmea
         # comparison is the first/last level default.
         "groups": [
             {"id": "g3", "label": "Upper band", "rule": {
-                "summary": summary, "op": ">=", "value": 5,
+                "summary": summary, "op": ">=", "value": thresholds[0],
             }},
             {"id": "g1", "label": "Lower band", "rule": {
-                "summary": summary, "op": "<", "value": 2.5,
+                "summary": summary, "op": "<", "value": thresholds[1],
             }},
             {"id": "g2", "label": "Middle band", "rule": "otherwise"},
         ],

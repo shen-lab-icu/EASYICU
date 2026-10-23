@@ -175,6 +175,19 @@ def test_a_scientific_authority_refusal_has_its_own_code_and_sentence():
     assert "24 小时 landmark" in entry
 
 
+def test_an_unrecognized_scientific_authority_cause_stays_private():
+    from easyicu.research_agent.authority.current_case_scientific_runtime import (
+        CurrentCaseScientificAuthorityError,
+    )
+
+    private = "private synthetic cause"
+    failure = CurrentCaseScientificAuthorityError(private)
+    failure.reason_code = private
+    projected = agent_pipeline_runs._safe_pipeline_typed_failure(failure)
+    assert projected["reason_code"] == "current_case_scientific_authority_invalid"
+    assert private not in json.dumps(projected)
+
+
 def test_existing_typed_owner_takes_precedence_over_transport_cause():
     failure = RuntimeError("private compiler detail")
     failure.easyicu_safe_diagnostic = {

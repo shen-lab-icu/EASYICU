@@ -887,7 +887,11 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
         if isinstance(item, CurrentCaseScientificAuthorityError):
             return {
                 "owner": "easyicu.current_case_scientific_authority_v1",
-                "reason_code": "current_case_scientific_authority_invalid",
+                "reason_code": (
+                    item.reason_code
+                    if item.reason_code == "landmark_spline_binary_sensitivity_unsupported"
+                    else "current_case_scientific_authority_invalid"
+                ),
                 "exception_type": "CurrentCaseScientificAuthorityError",
             }
         if isinstance(item, ValidationError):

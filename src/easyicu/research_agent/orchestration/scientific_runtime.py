@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Mapping
 
 from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificAuthorityError,
     CurrentCaseScientificRuntimeAuthority,
+    LandmarkSplineRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
 from ..contracts.endpoint import EndpointSpec
@@ -23,7 +25,7 @@ from ..contracts.primary_cohort import (
     HOST_BOUND_COHORT_PRODUCT,
 )
 from ..planning.cohort_contract import cohort_concept_id_scope
-from ..schema import AnalysisPlan, AnalysisStep, ValidationFinding
+from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from ..trajectory.runtime_validation import signed_trajectory_plan_contract_errors
 from ..trajectory.scientific_runtime_authority import (
     TrajectoryScientificRuntimeAuthority,
@@ -434,6 +436,41 @@ class ScientificRuntimeAuthorities:
             self.trajectory.validate_plan(plan)
         if self.current_case is not None:
             self.current_case.validate_plan(plan)
+
+    def for_planning_context(
+        self, *, context: ResearchContext, run_dir: Path, cohort_path: Path
+    ) -> "ScientificRuntimeAuthorities":
+        """Yield a source spline when this planning run formed its primary groups.
+
+        Web metadata planning selects a source authority before the grouping
+        phase. Its spline cannot govern the grouped primary exposure. The
+        grouping owner verifies the run's record against its empty input; only
+        that exact primary column, derived from the signed source, can release
+        this authority. Normal grouped-plan contracts still govern the plan.
+        Execution on an accepted candidate already has its categorical
+        authority and never takes this path.
+        """
+
+        from ..authority.evidence_store import sha256_of_file
+        from ..contracts.exposure_group_rules import read_grouping_rules
+        from ..planning.exposure_group_compile import planned_on_metadata
+        from .exposure_grouping_phase import planning_run_groupings
+
+        authority = self.current_case
+        if not isinstance(authority, LandmarkSplineRuntimeAuthority) or not planned_on_metadata(context):
+            return self
+        groupings = planning_run_groupings(
+            run_dir, cohort_sha256=sha256_of_file(cohort_path)
+        )
+        if groupings is None:
+            return self
+        for column in groupings.columns:
+            if column.variable != context.primary_exposure:
+                continue
+            sources = (column.concept, *read_grouping_rules(column.parameters).read_columns)
+            if authority.exposure_column in sources:
+                return replace(self, current_case=None)
+        return self
 
     def bind_run_inputs(
         self,
