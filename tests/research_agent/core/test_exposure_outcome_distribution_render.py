@@ -1129,3 +1129,24 @@ assert list(args['out_dir'].glob('*.pdf'))
         timeout=45,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_a_risk_difference_between_rounded_rates_renders(tmp_path, monkeypatch):
+    """1/3 minus 1/6: the displayed rates differ by 16.666666, the risks by 16.666667.
+
+    A real run's figure stopped here after its table had passed: the renderer
+    subtracted the two rounded rates and allowed only 1e-6.
+    """
+
+    frame = pd.DataFrame({EXPOSURE: [1] * 3 + [0] * 6, OUTCOME: [1, 0, 0, 1, 0, 0, 0, 0, 0]})
+    table = _produced_table(tmp_path, monkeypatch, frame=frame, spec_updates={
+        "risk_difference_contrast": {
+            "reference_exposure_level": 0,
+            "comparison_exposure_level": 1,
+            "effect_measure": "risk_difference",
+            "interval_method": "linear_probability_wald",
+        },
+    })
+    run_dir, manifest = _bound(tmp_path, table)
+    _render(run_dir, manifest, tmp_path / "figure")
+    assert (tmp_path / "figure" / f"{PRODUCT}.svg").is_file()
