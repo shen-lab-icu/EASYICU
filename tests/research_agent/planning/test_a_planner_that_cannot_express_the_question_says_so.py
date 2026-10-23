@@ -81,14 +81,15 @@ def test_an_outline_drafts_steps_or_declares_a_gap_never_both() -> None:
         ProgressivePlanOutline.model_validate(
             {**outline, "capability_gap_concept": "age_years"}
         )
-    # Only a thresholds gap names the variable to group, on an outline and in a claim.
+    # A thresholds gap names the variable to group; a design-element gap may
+    # name the stated adjustment it concerns; no other gap names one.
     for requirement, concept in (
         ("estimand_unsupported", "age_years"),
         ("levels_from_thresholds_unavailable", None),
     ):
         with pytest.raises(ValueError, match="set capability_gap_concept to the non-empty variable name"):
             ProgressivePlanOutline.model_validate(_gap_outline(requirement, concept))
-        with pytest.raises(ValueError, match="only that requirement names one"):
+        with pytest.raises(ValueError, match="no other requirement names one"):
             _claim(requirement, concept)
 
 

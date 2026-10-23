@@ -425,6 +425,9 @@ def test_the_receipt_projects_every_field_the_tool_accepts():
             study[key] = {"age": f"{key} for age"}
         elif key == "confirmations":
             study[key] = {"repeated_icu_stays_retained": True}
+        elif key == "stated_adjustments":
+            study[key] = [{"variable": "年龄", "words": "调整年龄", "concept": "age",
+                           "source_status": "available"}]
         else:
             study[key] = _a_value(key)
 

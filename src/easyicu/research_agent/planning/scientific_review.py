@@ -1915,6 +1915,21 @@ def render_plan_scientific_guardrails(context: ResearchContext) -> str:
     """Render case-neutral, context-derived guardrails before Planner generation."""
 
     lines = ["PRE-APPROVAL SCIENTIFIC PLAN GUARDRAILS (host-derived):"]
+    from .adjustment_authority import context_stated_adjustments
+
+    adjustments = context_stated_adjustments(context)
+    if adjustments:
+        lines.append(
+            "- STATED ADJUSTMENTS are a required subset: include each as a covariate "
+            "in every primary model, with clinical rationale and proven baseline timing. "
+            "Additional justified confounders are allowed unless an exact roster is bound. "
+            "Table 1, audit and sensitivity mentions do not count. If the source cannot "
+            "supply one, or measures it after typed time zero, declare "
+            "capability_gap='design_element_unsupported' with capability_gap_concept "
+            "naming it. A gap stops planning; never "
+            "silently fit a different estimand. "
+            + json.dumps([item.model_dump(mode="json") for item in adjustments], ensure_ascii=False)
+        )
     baseline = baseline_requirement_projection(context)
     if baseline["tables"]:
         lines.append(
@@ -4760,6 +4775,46 @@ def build_plan_scientific_review(
             )
         )
 
+    from .requirement_coverage import stated_adjustment_coverage
+
+    adjustment_coverage = stated_adjustment_coverage(context, plan)
+    for record in adjustment_coverage.records:
+        if record.status == "covered":
+            continue
+        if record.reason_code == "stated_adjustment_concept_unresolved":
+            findings.append(PlanScientificFinding(
+                code="STATED_ADJUSTMENT_UNRESOLVED",
+                severity="major", dimension="statistical_design",
+                message=(
+                    f"The question requires adjustment for {record.concept_identity}, "
+                    "which no source concept was matched to, so the primary "
+                    "model's adjustment for it could not be checked."
+                ),
+                evidence_refs=[record.source_ref, "analysis_plan.json.steps.model_requirements"],
+                remediation=(
+                    "Check that the primary model adjusts for the variable the "
+                    "question names before approving."
+                ),
+                remediation_route="independent_review",
+            ))
+            continue
+        unavailable = record.status == "unsupported"
+        findings.append(PlanScientificFinding(
+            code="STATED_ADJUSTMENT_UNAVAILABLE" if unavailable else "STATED_ADJUSTMENT_MISSING",
+            severity="blocker", dimension="statistical_design",
+            message=(f"The question requires adjustment for {record.concept_identity}; "
+                     + ("the source cannot supply it." if unavailable else
+                        "not every primary fitted model includes it as a covariate.")),
+            evidence_refs=[record.source_ref, "analysis_plan.json.steps.model_requirements"],
+            remediation=(
+                "Resolve the named source gap before offering an executable plan."
+                if unavailable else
+                "Include the stated adjustment in the primary model with rationale and "
+                "baseline timing, or declare the named typed capability gap. "
+                "Keep the question's required subset when adding other confounders."
+            ),
+            remediation_route="runtime_capability" if unavailable else "agent_plan_revision",
+        ))
     findings.extend(primary_model_retention_findings(model_retention))
     findings.extend(_missing_category_complete_case_findings(plan))
     findings.extend(_complete_case_repeats_primary_findings(plan))
@@ -4819,6 +4874,7 @@ def build_plan_scientific_review(
         dimension_scores=dimensions,
         findings=findings,
         facts={
+            "stated_adjustment_coverage": adjustment_coverage.model_dump(mode="json"),
             "primary_model_retention": (
                 model_retention.facts() if model_retention is not None else None
             ),

@@ -609,8 +609,9 @@ class ProgressiveOutlineStep(BaseModel):
 
 #: The design element a capability gap concerns, and why no offered family can
 #: express it.  The first three requirements are checked against the study's
-#: typed context before planning stops (``planning.capability_gap``); the host
-#: has no evidence for or against the last two, so it records them unverifiable.
+#: typed context before planning stops (``planning.capability_gap``), as is a
+#: design-element gap that names a stated adjustment; other estimand/design
+#: claims can be unverifiable.
 CapabilityGapElement = Literal[
     "population", "exposure", "outcome", "timing", "comparison", "analysis"
 ]
@@ -624,14 +625,20 @@ CapabilityGapRequirement = Literal[
 
 
 def _names_its_concept(requirement: Optional[str], concept: Optional[str]) -> bool:
-    """A thresholds gap names the variable to group; no other gap names one."""
+    """A thresholds gap names the variable to group; a design-element gap may
+    name the stated adjustment it concerns (``planning.capability_gap`` checks
+    it); no other gap names one.  Reusing the design-element requirement keeps
+    the outline schema inside its byte budget."""
 
-    return (requirement == "levels_from_thresholds_unavailable") == (concept is not None)
+    if requirement == "levels_from_thresholds_unavailable":
+        return concept is not None
+    return requirement == "design_element_unsupported" or concept is None
 
 
 _CONCEPT_RULE = (
-    "a capability gap's concept names the variable to group by thresholds, "
-    "and only that requirement names one"
+    "a capability gap's concept names the variable to group by thresholds, or "
+    "the stated adjustment a design_element_unsupported gap concerns; no other "
+    "requirement names one"
 )
 
 
@@ -652,7 +659,7 @@ class ProgressiveCapabilityGap(BaseModel):
     detail: Optional[str] = Field(default=None, min_length=8, max_length=300)
 
     @model_validator(mode="after")
-    def _only_thresholds_name_a_concept(self) -> "ProgressiveCapabilityGap":
+    def _variable_gaps_name_a_concept(self) -> "ProgressiveCapabilityGap":
         if not _names_its_concept(self.requirement, self.concept):
             raise ValueError(_CONCEPT_RULE)
         return self
@@ -710,7 +717,8 @@ class ProgressivePlanOutline(BaseModel):
             raise self._contract_error(
                 "outline_capability_gap_concept",
                 "set capability_gap_concept to the non-empty variable name when "
-                "capability_gap='levels_from_thresholds_unavailable'; otherwise set "
+                "capability_gap='levels_from_thresholds_unavailable', or to the stated "
+                "adjustment a design_element_unsupported gap concerns; otherwise set "
                 "capability_gap_concept=null",
             )
         step_ids = [step.step_id for step in self.steps]

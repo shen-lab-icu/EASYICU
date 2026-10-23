@@ -138,3 +138,4 @@ def test_the_candidate_roster_requires_the_named_concepts() -> None:
     roster = source.index("required_concepts=(", acquisition)
     closing = source.index("patient_grouping=patient_grouping", roster)
     assert '"question_named_concepts"' in source[roster:closing]
+    assert '"required_adjustment_concepts"' in source[roster:closing]

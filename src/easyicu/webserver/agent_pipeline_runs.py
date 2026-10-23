@@ -2562,6 +2562,20 @@ def _research_user_preferences(
         preferences["covariates"] = list(covariates)
 
     constraints: Dict[str, Any] = {}
+    if study.get("stated_adjustments"):
+        from easyicu.webserver.research_launch_scientific import (
+            _stated_reading,
+            checked_stated_adjustments,
+        )
+
+        # Recheck against the bound source, including studies saved before
+        # source selection. Both metadata and prepared runs use this compiler.
+        constraints["stated_adjustments"] = checked_stated_adjustments(
+            [_stated_reading(item) for item in study["stated_adjustments"]],
+            question=str(study.get("question") or ""),
+            source=study.get("data_source") or {},
+            recheck=True,
+        )
     cohort = study.get("cohort")
     if isinstance(cohort, Mapping) and cohort:
         constraints["cohort"] = dict(cohort)
@@ -6460,6 +6474,7 @@ def make_research_pipeline_run_runner(
                             for column in item["concepts"]
                         ),
                         *candidate_outcome_concepts,
+                        *(metadata_planning_coordinates.get("required_adjustment_concepts") or ()),
                         *covariates,
                         *(
                             variable

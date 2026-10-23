@@ -4,8 +4,8 @@ A Planner that cannot express a design element the question needs declares a
 capability gap instead of drafting steps that quietly answer another question
 (``progressive_contract.ProgressiveCapabilityGap``).  A gap stops planning, so
 the host first checks the claim against the study's typed context: a claim the
-context contradicts goes back to the Planner as a repair.  Three requirements
-are checkable here.  The host has no typed evidence for or against an
+context contradicts goes back to the Planner as a repair. Concrete requirements
+are checked here. The host has no typed evidence for or against an
 unsupported estimand or design element, so those stop as unverifiable, and the
 run record says so.
 """
@@ -48,6 +48,28 @@ def check_capability_gap(
     planning_contract_context: str = "",
 ) -> CapabilityGapCheck:
     """Check one declared gap against the study's typed context."""
+
+    if gap.requirement == "design_element_unsupported" and gap.concept is not None:
+        # A stated adjustment the plan cannot fit: the source lacks it, or
+        # measures it after typed time zero.  Anything else contradicts it.
+        from .adjustment_authority import (
+            context_stated_adjustments, stated_adjustment_after_time_zero,
+            stated_adjustment_columns,
+        )
+
+        adjustment = next((item for item in context_stated_adjustments(context)
+                           if (item.concept or item.variable) == gap.concept), None)
+        if adjustment is None:
+            return CapabilityGapCheck("unverified", f"{gap.concept!r} is not a stated adjustment")
+        if adjustment.source_status == "unavailable":
+            return CapabilityGapCheck("verified", f"the bound source lacks {gap.concept!r}")
+        if stated_adjustment_after_time_zero(context, adjustment):
+            return CapabilityGapCheck("verified", f"{gap.concept!r} is measured after typed time zero")
+        if adjustment.source_status == "available" or stated_adjustment_columns(context, adjustment):
+            return CapabilityGapCheck(
+                "unverified", f"the study offers {gap.concept!r} by time zero"
+            )
+        return CapabilityGapCheck("unverifiable", f"source availability for {gap.concept!r} needs resolution")
 
     if gap.requirement == "levels_from_thresholds_unavailable":
         variables = {variable.name: variable for variable in context.variables}
