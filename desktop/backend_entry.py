@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ntpath
 import os
 from pathlib import Path
 import sys
@@ -10,10 +11,25 @@ import threading
 from typing import Callable, Sequence
 
 
+def _windows_extended_path(raw: str) -> str:
+    """Keep absolute drive/UNC paths usable beyond Win32's legacy MAX_PATH."""
+    path = ntpath.normpath(raw)
+    if path.startswith("\\\\?\\"):
+        return path
+    if path.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + path[2:]
+    drive, tail = ntpath.splitdrive(path)
+    if not drive or not tail.startswith("\\"):
+        raise ValueError("Windows directory must be an absolute drive or UNC path")
+    return "\\\\?\\" + path
+
+
 def _absolute_directory(raw: str, *, name: str) -> Path:
     path = Path(str(raw or "").strip()).expanduser()
     if not path.is_absolute():
         raise ValueError(f"{name} must be an absolute path")
+    if sys.platform == "win32":
+        path = Path(_windows_extended_path(str(path)))
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     return path.resolve()
 

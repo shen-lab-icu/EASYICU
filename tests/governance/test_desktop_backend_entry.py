@@ -89,3 +89,34 @@ def test_parent_loss_requests_graceful_shutdown_not_hard_exit(monkeypatch):
     stop = module._watch_parent_process(987654, interval=0.01, request_shutdown=shutdown.set)
     assert shutdown.wait(1)
     stop.set()
+
+
+@pytest.mark.parametrize("path,expected", [
+    ("C:\\Users\\临床 user\\" + "nested\\" * 40 + "state", "\\\\?\\C:\\Users\\临床 user\\" + "nested\\" * 40 + "state"),
+    (r"\\server\share\临床 user\state", r"\\?\UNC\server\share\临床 user\state"),
+    (r"\\?\C:\Users\state", r"\\?\C:\Users\state"),
+])
+def test_windows_state_paths_preserve_unicode_spaces_unc_and_long_paths(path, expected):
+    assert _backend_entry_module()._windows_extended_path(path) == expected
+
+
+@pytest.mark.parametrize("path", ["relative", r"C:relative", r"\rooted-without-drive"])
+def test_windows_state_path_requires_an_absolute_drive_or_share(path):
+    with pytest.raises(ValueError, match="absolute drive or UNC"):
+        _backend_entry_module()._windows_extended_path(path)
+
+
+def test_windows_directory_setup_applies_the_extended_path_before_creation(tmp_path, monkeypatch):
+    module = _backend_entry_module()
+    calls = []
+
+    def windows_path(raw):
+        calls.append(raw)
+        return raw  # Use the host filesystem for this orchestration check.
+
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setattr(module, "_windows_extended_path", windows_path)
+    directory = tmp_path / "临床 state space"
+    assert module._absolute_directory(str(directory), name="state-dir") == directory
+    assert calls == [str(directory)]
+    assert directory.is_dir()

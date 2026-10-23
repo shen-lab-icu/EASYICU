@@ -64,9 +64,88 @@ With these overrides, `build-inputs.json` is in `EASYICU_DESKTOP_BUILD_DIR`
 and the DMG is in `CARGO_TARGET_DIR/release/bundle/dmg/`. Copy the receipt and
 final DMG to a retained release directory before the temporary area is cleared.
 
+## Build on Windows
+
+Target: Windows x64, Python 3.11, Tauri NSIS, **per-user installation**. Build
+on Windows with Rust's MSVC toolchain and Visual Studio C++ Build Tools,
+Python 3.11 x64, and Node 22.19+ x64 (including npm and its distribution
+LICENSE). These are build-machine requirements. End users need no Python,
+Node, Git, Docker, source checkout, or administrator rights. The installer
+includes the WebView2 offline installer for machines missing that runtime.
+
+**Lock generation is pending.** `requirements-windows-x64-py311.lock` is an
+explicit placeholder, not a resolved dependency set. The offline worker could
+not download or verify Windows distributions. The build refuses a missing or
+placeholder lock before invoking any build tool. A maintainer with network
+access must run this exact command from the repository root, review the pins
+and hashes, and commit the resulting lock before dispatching CI:
+
+```powershell
+uv pip compile pyproject.toml desktop/build-requirements.in --extra webapp --python-version 3.11 --python-platform x86_64-pc-windows-msvc --generate-hashes --no-emit-package easyicu --output-file desktop/requirements-windows-x64-py311.lock
+```
+
+Then, from the repository root:
+
+```powershell
+python desktop/scripts/build_windows.py --dry-run
+python desktop/scripts/build_windows.py
+```
+
+`--dry-run` prints a JSON build plan and lock status without running commands
+or creating files; it also works on Linux/macOS. `--backend-only` prepares the
+frozen backend and Node without Tauri packaging. `EASYICU_DESKTOP_PYTHON` and
+`EASYICU_DESKTOP_NODE` can select specific executable paths. The default build
+venv and receipt are in `desktop/.build/windows/`; override with
+`EASYICU_DESKTOP_BUILD_DIR`. The NSIS installer is under
+`desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`, or under
+`CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release/bundle/nsis/` when set.
+Short local build/cache paths avoid legacy toolchain path-length limitations.
+
+Both platform drivers share the wheel installation, locked Pi installation,
+Node bundling, freezing, source preservation, and build receipt helpers.
+The Windows venv is isolated, Python dependencies use `--require-hashes`,
+EasyICU is installed as a wheel with no editable/source-checkout import path,
+and `pip check` verifies dependencies. Cargo builds with `--locked`.
+The backend is a PyInstaller **onedir** runtime, with its Python runtime,
+installed EasyICU `.py` sources and package data under `_internal`. Preserving
+the exact installed sources is necessary for `build_execution_kernel_identity`;
+the Windows build compares the installed and frozen source identities and
+records the result in `build-inputs.json`, alongside the commit, dirty flag,
+versions, dependency lock hashes, and installer SHA-256. Keep the receipt with
+the installer. There is no runtime unpacking or modification of executables.
+
+Windows application state, runtime files (including the WebView2 profile), and logs live under
+`%LOCALAPPDATA%\EasyICU\{state,runtime,logs}`. The NSIS product is named
+**EasyICU Desktop**, separating its default installation directory from this
+data root. Keep a custom installation directory separate from user data too.
+Arguments are passed as arrays, preserving spaces and non-ASCII characters;
+Windows state paths use extended drive/UNC paths (`\\?\`) and the application
+and backend manifests declare long-path awareness. External tools may still
+have their own path-length limits.
+
+Uninstall removes the application and retains the user's state and exports.
+To explicitly remove retained data, close EasyICU, uninstall, then delete
+`%LOCALAPPDATA%\EasyICU`; separately delete any exports saved elsewhere.
+The installer does not silently erase those files. Production Windows releases
+should use a maintainer's Authenticode signing setup; this lane produces an
+unsigned internal-test installer and does not claim SmartScreen/Defender approval.
+
+`.github/workflows/desktop_windows_build.yml` is **workflow_dispatch only** on
+`windows-latest`. After lock generation it builds the installer, silently
+installs into a temporary profile path containing spaces and Chinese characters,
+and runs the installed app with `--smoke-test`. This mode creates no WebView;
+it launches the bundled loopback backend, waits for the authenticated
+`/api/catalog` readiness endpoint, checks rejection of an invalid token, and
+stops/reaps the backend. The smoke process has no Python, Node, Git, or Docker
+on PATH. The workflow then silently uninstalls and checks that tiny synthetic
+state/export sentinels remain. It uploads the installer and receipt only after
+success; synthetic smoke diagnostics are retained on failure. This uses the
+runner account with temporary profile/environment paths, not a new Windows
+account. Run it manually after the real lock lands.
+
 ## Updating Python dependencies
 
-The committed lock is for macOS arm64 / Python 3.11 only. Its initial runtime
+The resolved committed lock is for macOS arm64 / Python 3.11 only. Its initial runtime
 pins were seeded from the existing product development environment. Installing
 the lock checks the distribution hashes; `pip check` then verifies the installed
 dependency relationships. A lock update still requires packaging and user-flow
@@ -99,6 +178,16 @@ release credentials when producing a public release.
 
 ## Current platform boundary
 
-The build target is macOS Apple Silicon. The
-Tauri shell and Python entry point are platform-neutral, but Windows artifacts
-must be built and tested on Windows before they are claimed as supported.
+The existing release target is macOS Apple Silicon. Windows x64 has an opt-in
+CI build/install/readiness/uninstall lane, currently blocked by the placeholder
+dependency lock. No Windows build was run in the offline Linux worker, and
+Windows has **not yet been validated on a clinician's PC**. After its first
+successful dispatch, describe the artifact as "built and smoke-tested in CI,
+not yet validated on a clinician's PC"; do not claim that result in advance.
+
+Desktop startup requires no Docker. Research execution without Docker depends
+on the host runner delivered separately in task `t7a`; packaging and the
+readiness smoke test do not establish that research analyses run successfully.
+Before claiming Windows support, validate normal GUI startup, WebView2 setup
+under a standard user, clinical workflows, the host runner, upgrades/uninstall,
+and long/Unicode user paths on an actual Windows PC.

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "EasyICU Desktop",
+  "mainBinaryName": "easyicu-desktop",
+  "bundle": {
+    "targets": ["nsis"],
+    "resources": [
+      "resources/backend",
+      "resources/node.exe",
+      "resources/NODE_LICENSE"
+    ],
+    "icon": ["icons/windows/icon.ico"],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      },
+      "webviewInstallMode": {
+        "type": "offlineInstaller",
+        "silent": true
+      }
+    }
+  }
+}

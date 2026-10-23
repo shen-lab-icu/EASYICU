@@ -1,0 +1,5 @@
+# EASYICU_WINDOWS_LOCK_PENDING
+# Deliberately not a usable requirements lock. The offline worker cannot resolve
+# or authenticate Windows wheels. build_windows.py refuses this placeholder.
+# Generate, review and commit the real hash lock with the exact uv pip compile
+# command in README.md (Build on Windows) before dispatching Windows CI.
