@@ -11,6 +11,7 @@ from typing import Any, Optional, Union, List, Sequence
 
 import pandas as pd
 import numpy as np
+from pandas.api.indexers import BaseIndexer
 
 # 🚀 Try to import numba for JIT compilation
 try:
@@ -1904,6 +1905,62 @@ def _slide_vectorized(
     return pd.concat(results, ignore_index=True)
 
 
+def _grouped_row_batches(group_codes: np.ndarray, max_rows: int = 262_144):
+    """Yield contiguous, whole-stay row batches without rectangular padding.
+
+    A single stay longer than the budget is processed alone. Every other
+    batch is bounded by actual rows, independent of the longest stay nearby.
+    ``boundaries`` contains local group edges, including the final stop.
+    """
+    if not len(group_codes):
+        return
+    edges = np.r_[0, np.flatnonzero(group_codes[1:] != group_codes[:-1]) + 1, len(group_codes)]
+    first = 0
+    while first < len(edges) - 1:
+        stop = max(first + 1, int(np.searchsorted(edges, edges[first] + max_rows, side="right")) - 1)
+        yield slice(edges[first], edges[stop]), edges[first:stop + 1] - edges[first]
+        first = stop
+
+
+class _SharedWindowBounds(BaseIndexer):
+    """Reuse one set of flat group-aware bounds in pandas' rolling kernels."""
+
+    def __init__(self, left, right):
+        super().__init__(window_size=0)
+        self.left = left
+        self.right = right
+
+    def get_window_bounds(self, num_values=0, min_periods=None, center=None, closed=None, step=None):
+        return self.left, self.right
+
+
+def _grouped_window_bounds(times, group_codes, window, *, include_future_peers=False):
+    """Inclusive lower edges and row-wise upper edges on sorted stay clocks."""
+    if np.any((group_codes[1:] == group_codes[:-1]) & (times[1:] < times[:-1])):
+        raise ValueError("Each rolling group must have monotonic times")
+    left = np.empty(len(times), dtype=np.int64)
+    right = np.arange(1, len(times) + 1, dtype=np.int64)
+    for batch, edges in _grouped_row_batches(group_codes):
+        for begin, end in zip(edges[:-1] + batch.start, edges[1:] + batch.start):
+            clock = times[begin:end]
+            left[begin:end] = np.searchsorted(clock, clock - window, side="left") + begin
+            if include_future_peers:
+                right[begin:end] = np.searchsorted(clock, clock, side="right") + begin
+    return _SharedWindowBounds(left, right)
+
+
+def _grouped_rolling_extrema(values, times, group_codes, signs, window_ns):
+    """Share flat bounds across columns using pandas' linear rolling extrema.
+
+    This uses the same compiled min/max kernels as groupby.rolling, without
+    repeating its per-stay window setup for every column. There is no padding,
+    sparse table or search over missing cells on long-tailed stay lengths.
+    """
+    bounds = _grouped_window_bounds(times, group_codes, window_ns)
+    aggregations = {i: "min" if sign < 0 else "max" for i, sign in enumerate(signs)}
+    return pd.DataFrame(values).rolling(bounds, min_periods=1).agg(aggregations).to_numpy()
+
+
 def _slide_vectorized_bulk(
     data: pd.DataFrame,
     id_cols: list,
@@ -1914,14 +1971,10 @@ def _slide_vectorized_bulk(
     is_numeric_time: bool,
     _pre_sorted: bool = False,
 ) -> pd.DataFrame:
-    """Bulk vectorized slide using pandas groupby().rolling().
-    
-    🚀 Performance: Eliminates per-patient Python loop entirely.
-    All rolling computations happen in a single C-level call.
-    
-    cProfile benchmark: 5000 patients MIIV SOFA
-    - Per-patient loop: 17.4s (sort + set_index + rolling + agg per patient)
-    - Bulk groupby().rolling(): ~1-2s (single C-level operation)
+    """Bulk slide with shared min/max bounds and pandas' other aggregations.
+
+    Numeric extrema use shared flat bounds, avoiding repeated pandas window
+    construction for every column and stay in large component-score frames.
     """
     # Sort globally once (the only sort we need!)
     if not _pre_sorted:
@@ -1940,45 +1993,51 @@ def _slide_vectorized_bulk(
     
     window_td = pd.Timedelta(hours=window_size_hours)
     
-    # Create group key array
-    if len(id_cols) == 1:
-        group_key = data[id_cols[0]].values
-    else:
-        group_key = list(zip(*(data[c].values for c in id_cols)))
-    
-    # Create work DataFrame with only aggregation columns, indexed by time
-    # 🚀 Avoid .copy() - construct from numpy arrays directly
-    work = pd.DataFrame(
-        {c: data[c].values for c in agg_cols},
-        index=td_index,
-    )
-    
-    # 🚀 核心: 单次 groupby().rolling().agg() 替代 N 次逐患者循环
-    min_periods = None if full_window else 1
-    grouped_rolling = (
-        work
-        .groupby(group_key, sort=False)[agg_cols]
-        .rolling(window=window_td, closed='both', min_periods=min_periods)
-    )
-    
-    # 🚀 PERF: 当所有聚合函数相同时，使用直接方法调用替代 .agg(dict)
-    # .agg(dict) 对每列创建独立 Rolling 对象 (_gotitem)，开销大
-    # 直接 .max() / .min() 走 Cython 快路径
     unique_funcs = set(agg_map.values())
-    if len(unique_funcs) == 1:
-        func_name = next(iter(unique_funcs))
-        result = getattr(grouped_rolling, func_name)()
+    if (
+        unique_funcs <= {"min", "max"}
+        and all(pd.api.types.is_numeric_dtype(data[c]) for c in agg_cols)
+        and not td_index.isna().any()
+        and not data[id_cols].isna().any().any()
+        and window_td.value >= 0
+    ):
+        group_codes = data.groupby(id_cols, sort=False, observed=True).ngroup().to_numpy()
+        signs = np.array([-1.0 if agg_map[c] == "min" else 1.0 for c in agg_cols])
+        values = data[agg_cols].to_numpy(dtype=float, na_value=np.nan)
+        clock_dtype = "timedelta64[ns]" if is_numeric_time else "datetime64[ns]"
+        result_values = _grouped_rolling_extrema(
+            values, td_index.to_numpy(dtype=clock_dtype).astype("int64"), group_codes, signs, window_td.value,
+        )
+        del values
     else:
-        result = grouped_rolling.agg({c: agg_map[c] for c in agg_cols})
+        group_key = (
+            data[id_cols[0]].values if len(id_cols) == 1
+            else list(zip(*(data[c].values for c in id_cols)))
+        )
+        work = pd.DataFrame({c: data[c].values for c in agg_cols}, index=td_index)
+        min_periods = None if full_window else 1
+        grouped_rolling = (
+            work.groupby(group_key, sort=False)[agg_cols]
+            .rolling(window=window_td, closed='both', min_periods=min_periods)
+        )
+        if len(unique_funcs) == 1:
+            result = getattr(grouped_rolling, next(iter(unique_funcs)))()
+        else:
+            result = grouped_rolling.agg({c: agg_map[c] for c in agg_cols})
+        result_values = result.values
     
     # 🚀 PERF: 用 .values 直接提取 numpy 数组，跳过昂贵的 droplevel + reset_index
     # droplevel(0) 对 6.8M 行 MultiIndex 花费 ~25s（Index.get_loc 51.8s）
     # rolling 保持行数和顺序与输入完全一致，可安全用 .values 提取
     result_df = pd.DataFrame(
-        result.values,
+        result_values,
         columns=agg_cols,
     )
     
+    # Composite IDs previously used the per-group fallback, whose time column
+    # precedes the IDs. Preserve that public column order as well as its values.
+    if len(id_cols) > 1:
+        result_df[index_col] = data[index_col].values
     # Restore id and time columns from sorted data
     for col in id_cols:
         result_df[col] = data[col].values
