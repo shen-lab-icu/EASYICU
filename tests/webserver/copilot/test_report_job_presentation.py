@@ -63,8 +63,10 @@ def test_live_and_archived_report_labels_do_not_claim_a_new_analysis():
              {'status': 'done', 'analysis_results_available': True, 'analysis_validated': True}]
     source = Path(__file__).resolve().parents[3] / 'src/easyicu/webserver/static/js/screens-guided-pi-replay.js'
     script = '''
-global.window = {EasyICU: {guidedPi: {declare: (name, api) => {global.api = api;}}}};
+global.window = {};
+require(require('node:path').join(require('node:path').dirname(process.argv[1]), 'screens-guided-pi-modules.js'));
 require(process.argv[1]);
+const api = window.EasyICU.guidedPi.require('replay');
 process.stdout.write(JSON.stringify(JSON.parse(process.argv[2]).map(j=>api.childJobPresentation(j,(en,zh)=>zh))));
 '''
     result = run_node('node', script, str(source), json.dumps(cases), check=True)

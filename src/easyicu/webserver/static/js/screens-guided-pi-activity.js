@@ -592,7 +592,8 @@
       const start = pipelineTime(event.started_at);
       const end = pipelineTime(event.ended_at);
       const id = actionRowId(event);
-      const span = SPAN_ACTIONS.has(action) && !(action === 'plan_validation' && event.retry_phase !== 'started');
+      const span = SPAN_ACTIONS.has(action) && !(action === 'plan_validation' && event.retry_phase !== 'started')
+        && !(event.status === 'complete' && start != null && end != null);
       const failed = ['error', 'failed', 'blocked'].includes(String(event.status || ''))
         || ['repair_failed', 'step_error'].includes(action)
         || (action === 'plan_validation' && event.retry_phase === 'rejected');
@@ -610,7 +611,8 @@
         row.durationKnown = row.endedAt != null;
       } else {
         row.endedAt = end != null ? end : at;
-        row.durationKnown = false;
+        row.durationKnown = SPAN_ACTIONS.has(action) && start != null && end != null;
+        if (row.durationKnown) row.startedAt = start;
       }
       if (!previous) activity.steps.push(row);
       return row;

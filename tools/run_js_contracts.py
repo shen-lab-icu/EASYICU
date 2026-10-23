@@ -68,6 +68,7 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_pi_data_workbench.test.js": [],
     "guided_pi_conversation_timeline.test.js": ["screens-guided-pi-activity.js"],
     "guided_pi_trace_language.test.js": [],
+    "guided_pi_job_projection.test.js": [],
     # Rows, then the step workbench: activity owns rows, step-detail the
     # step's Input/Output, source-view the tabs and the code renderer.
     "guided_pi_step_detail.test.js": [

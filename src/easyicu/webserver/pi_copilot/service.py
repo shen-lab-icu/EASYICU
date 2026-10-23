@@ -81,7 +81,7 @@ from .provider_config import (
 from .resource_lifecycle import WebMemoryAdmission
 from .registered_source_offer import bind_offered_registered_source, registered_source_offer
 from .projections import (
-    project_job,
+    project_job_for_replay as project_job,
     project_pi_replay_event,
     project_transcript,
     reject_sensitive_message,

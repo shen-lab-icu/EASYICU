@@ -1,5 +1,9 @@
 'use strict';
 
+const progressOwner = { window: {} };
+require('node:vm').runInNewContext(require('node:fs').readFileSync(require('node:path').resolve(
+  __dirname, '../../src/easyicu/webserver/static/js/screens-guided-pi-modules.js'), 'utf8'), progressOwner);
+
 /* Node-only compatibility harness for owner files tested outside index.html.
    Production loads screens-guided-pi-modules.js first. These isolated tests
    replace `window` repeatedly, so the setter installs a fresh equivalent
@@ -49,6 +53,7 @@ function augment(target) {
   const declared = Object.create(null);
   target.EasyICU = target.EasyICU || {};
   target.EasyICU.guidedPi = {
+    jobProgress: progressOwner.window.EasyICU.guidedPi.jobProgress,
     declare(name, api) {
       if (Object.prototype.hasOwnProperty.call(declared, name)) throw new Error(`duplicate ${name}`);
       declared[name] = api;

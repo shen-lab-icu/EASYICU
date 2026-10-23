@@ -120,7 +120,7 @@
      worth saying. */
   function processNotes(job, latestRun, tr) {
     const t = translate(tr);
-    const progress = Array.isArray(job && job.progress) ? job.progress : [];
+    const progress = window.EasyICU.guidedPi.jobProgress(job);
     const distinct = predicate => new Set(progress.filter(predicate)
       .map(event => [event.step, event.step_id, event.action, event.repair_kind, event.current, event.attempt,
         event.planning_unit, event.label].join('|'))).size;

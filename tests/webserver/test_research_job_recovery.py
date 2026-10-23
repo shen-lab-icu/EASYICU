@@ -327,12 +327,15 @@ def test_conversation_keeps_two_distinct_system_resumes():
     from tests.support.node import run_node
     root = Path(__file__).resolve().parents[2]
     script = """
-global.window = {EasyICU: {guidedPi: {declare: (n,a) => {global.api=a;}, require: () => null}}};
+global.window = {};
+require(require('node:path').join(require('node:path').dirname(process.argv[2]), 'screens-guided-pi-modules.js'));
+const modules = window.EasyICU.guidedPi;
+modules.declare('replay', {});
 require(process.argv[2]);
-const activity = api.create({tr: en => en});
+const activity = modules.require('activity').create({tr: en => en});
 require(process.argv[1]);
 const messages = [];
-const owner = api.create({
+const owner = modules.require('childJob').create({
   tr: (en,zh) => en, messages: () => messages, session: () => ({}),
   activity,
   upsertActivityStep: (a,s) => {const i=a.steps.findIndex(x=>x.id===s.id); if(i<0) a.steps.push(s); else a.steps[i]=s;}

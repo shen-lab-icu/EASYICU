@@ -23,6 +23,8 @@ from .user_visible_text import project_tool_receipt, project_user_turn_text, san
 MAX_PROJECTION_BYTES = 32_768
 MAX_TEXT_CHARS = 2_000
 MAX_LIST_ITEMS = 80
+# Leave room for gate state and digest-bound artifact references in a job.
+MAX_JOB_PROGRESS_BYTES = 22_000
 
 
 class StudySetupReceipt(BaseModel):
@@ -471,6 +473,22 @@ def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
 
 
 def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    return _project_job(snapshot, include_progress=True)
+
+
+def project_job_for_replay(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """A size failure of one child must not take its conversation offline."""
+    try:
+        return project_job(snapshot)
+    except PiCopilotError as exc:
+        if exc.code != "pi_projection_too_large":
+            raise
+        return _project_job(snapshot, include_progress=False)
+
+
+def _project_job(
+    snapshot: Optional[Mapping[str, Any]], *, include_progress: bool
+) -> Dict[str, Any]:
     if not snapshot:
         return {"present": False}
     events = snapshot.get("events")
@@ -487,6 +505,7 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
          **({"run_id": audit_run_id} if audit_run_id else {}),
          **{key: row[key] for key in (
              "timestamp", "status", "step_id", "current", "total", "planning_unit",
+             "started_at", "ended_at",
              "retry_phase", *TRACE_ACTION_KEYS, *TRACE_FACT_KEYS,
          ) if key in row}}
         for row in timings if isinstance(row, Mapping)
@@ -516,6 +535,8 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                     "total",
                     "step",
                     "timestamp",
+                    "started_at",
+                    "ended_at",
                     "step_id",
                     "actor",
                     "planning_unit",
@@ -527,12 +548,20 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             }
             | {
                 **({"label": label} if label else {}),
-                "reason_code": stable_code(event.get("reason") or event.get("reason_code"))
+                **({"reason_code": code} if (code := stable_code(
+                    event.get("reason") or event.get("reason_code")
+                )) else {}),
             }
             | _trace_facts(event)
         )
-    if len(progress) > MAX_LIST_ITEMS or audit_events:
+    # Check before compaction can overwrite an older value or drop display
+    # facts. A budget fallback must never hide a privacy refusal.
+    _check_projection_privacy(progress)
+    compacted = bool(len(progress) > MAX_LIST_ITEMS or audit_events)
+    if compacted:
         progress = _compact_job_progress(progress)
+    if not include_progress:
+        progress = []
     run_id = stable_code(result.get("run_id"))
     gate = result.get("gate")
     gate = gate if isinstance(gate, Mapping) else {}
@@ -655,7 +684,7 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 ),
             }
         )
-    return ensure_safe_projection(
+    return _bound_job_projection(
         {
             "present": True,
             "job_id": snapshot.get("id"),
@@ -667,6 +696,8 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "cancel_reason_code": stable_code(snapshot.get("cancel_reason")),
             "error_code": _safe_error_code(snapshot.get("error")),
             "progress": progress,
+            **({"progress_compacted": True} if compacted else {}),
+            **({"progress_withheld_reason": "projection_budget"} if not include_progress else {}),
             "run_id": run_id,
             "research_input_state": project_research_input_state(
                 result.get("research_input_state")
@@ -694,6 +725,117 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             ),
         }
     )
+
+
+def _projection_bytes(value: Any) -> int:
+    # Match ensure_safe_projection's actual wire measurement, including spaces.
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
+
+
+def _progress_table(progress: list[Dict[str, Any]]) -> Dict[str, Any]:
+    """Lossless column encoding; each nested list respects MAX_LIST_ITEMS.
+
+    Constant fields (including run coordinates and bilingual reader labels)
+    live once in defaults. The decoder restores timestamp from ended_at when
+    they coincide. No operation is merged with a different action/attempt.
+    """
+    rows = []
+    for event in progress:
+        row = dict(event)
+        if row.get("timestamp") == row.get("ended_at"):
+            row.pop("timestamp", None)
+        rows.append(row)
+    defaults = {key: value for key, value in rows[0].items()
+                if all(key in row and row[key] == value for row in rows)}
+    columns = list(dict.fromkeys(key for row in rows for key in row if key not in defaults))
+    dictionaries = {}
+    indices = {}
+    # A column's repeated values (step ids, actions, reader labels) are stored
+    # once, without inheriting a label onto a row that never carried it.
+    for key in columns:
+        values = [row.get(key) for row in rows]
+        unique = {json.dumps(value, ensure_ascii=False, sort_keys=True): value
+                  for value in values if value is not None}
+        if len(unique) > MAX_LIST_ITEMS:
+            continue
+        lookup = {encoded: index for index, encoded in enumerate(unique)}
+        encoded = [lookup[json.dumps(value, ensure_ascii=False, sort_keys=True)]
+                   if value is not None else None for value in values]
+        if _projection_bytes(list(unique.values())) + _projection_bytes(encoded) + len(key) + 16 < _projection_bytes(values):
+            dictionaries[key] = list(unique.values())
+            indices[key] = encoded
+    cells = []
+    for index, row in enumerate(rows):
+        values = [indices[key][index] if key in indices else row.get(key) for key in columns]
+        while values and values[-1] is None:
+            values.pop()
+        cells.append(values)
+    return {
+        "schema_version": "easyicu.pi-job-progress/1",
+        "defaults": defaults,
+        "columns": columns,
+        "dictionaries": dictionaries,
+        "batches": [
+            cells[start:start + MAX_LIST_ITEMS]
+            for start in range(0, len(cells), MAX_LIST_ITEMS)
+        ],
+    }
+
+
+def _bound_job_projection(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Deterministic ladder: operations, lossless table, display-free table.
+
+    An irreducible trace cannot fit an arbitrarily large number of identities
+    into 32 KiB. Withhold it explicitly rather than silently taking a tail;
+    the full trace remains in the run's audit artifacts.
+    """
+    _check_projection_privacy(payload)
+    progress = payload["progress"]
+    header = {key: value for key, value in payload.items() if key != "progress"}
+    budget = min(MAX_JOB_PROGRESS_BYTES, MAX_PROJECTION_BYTES - _projection_bytes(header) - 256)
+    if len(progress) > MAX_LIST_ITEMS or _projection_bytes(progress) > budget:
+        progress = _compact_job_progress(progress)
+        payload.update(progress=[], progress_compacted=True, progress_operation_count=len(progress))
+        # No representation can fit this many nonempty operations in the byte
+        # budget. Avoid allocating a table with unbounded batches.
+        if progress and len(progress) <= MAX_LIST_ITEMS * MAX_LIST_ITEMS:
+            for optional_fields in ((), ("label", "queries", "source_label", "source_database",
+                                         "group_variable_label", "outcome_label")):
+                table = _progress_table([
+                    {key: value for key, value in row.items() if key not in optional_fields
+                     # Legacy step/verdict/reuse semantics still live in these
+                     # fixed labels; only typed action prose is redundant.
+                     or (key == "label" and (not row.get("action")
+                                             or row.get("step") in {"step", "resume", "planning"}))}
+                    for row in progress
+                ])
+                if _projection_bytes(table) <= budget:
+                    payload["progress_table"] = table
+                    if optional_fields:
+                        payload["progress_display_facts_omitted"] = True
+                    break
+        if "progress_table" not in payload:
+            payload["progress_withheld_reason"] = "projection_budget"
+    try:
+        return ensure_safe_projection(payload)
+    except PiCopilotError as exc:
+        if exc.code != "pi_projection_too_large":
+            raise
+    # Even artifact lists or optional setup receipts can consume the entire
+    # contract. Keep the typed outcome and as many complete references as fit.
+    minimal = {key: value for key, value in payload.items() if key not in {
+        "progress_table", "target_trial_compile", "research_input_state",
+    }}
+    minimal.update(progress=[], progress_compacted=True, progress_withheld_reason="projection_budget")
+    refs = minimal.pop("artifact_refs")
+    minimal["artifact_refs"] = []
+    for ref in refs:
+        candidate = {**minimal, "artifact_refs": [*minimal["artifact_refs"], ref]}
+        if _projection_bytes(candidate) > MAX_PROJECTION_BYTES - 128:
+            minimal["artifact_refs_withheld_reason"] = "projection_budget"
+            break
+        minimal["artifact_refs"].append(ref)
+    return ensure_safe_projection(minimal)
 
 
 def _visible_fact_text(value: Any, limit: int) -> str:
@@ -773,10 +915,13 @@ def _compact_job_progress(events: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
         previous = grouped.get(key)
         timestamp = str(event.get("timestamp") or "")
         row = {**(previous or {}), **event}
-        if timestamp:
-            start = str((previous or {}).get("started_at") or timestamp)
-            end = str((previous or {}).get("ended_at") or timestamp)
-            row.update(started_at=min(start, timestamp), ended_at=max(end, timestamp))
+        start = str(event.get("started_at") or timestamp)
+        end = str(event.get("ended_at") or timestamp)
+        if start or end:
+            row.update(
+                started_at=min(str((previous or {}).get("started_at") or start), start),
+                ended_at=max(str((previous or {}).get("ended_at") or end), end),
+            )
         if step_id:
             row["step_id"] = step_id
         grouped[key] = row
@@ -1448,9 +1593,8 @@ def bounded_json_projection(
     return value
 
 
-def ensure_safe_projection(
-    value: Any, *, max_bytes: int = MAX_PROJECTION_BYTES
-) -> Any:
+def _check_projection_privacy(value: Any) -> None:
+    """Privacy precedes size checks, including fields a size fallback omits."""
     def visit(node: Any) -> None:
         if isinstance(node, Mapping):
             for key, child in node.items():
@@ -1467,12 +1611,6 @@ def ensure_safe_projection(
                     )
                 visit(child)
         elif isinstance(node, (list, tuple)):
-            if len(node) > MAX_LIST_ITEMS:
-                raise PiCopilotError(
-                    "pi_projection_too_large",
-                    "The host projection contains too many list items.",
-                    status_code=500,
-                )
             for child in node:
                 visit(child)
         elif isinstance(node, Path):
@@ -1482,13 +1620,6 @@ def ensure_safe_projection(
                 status_code=500,
             )
         elif isinstance(node, str):
-            if len(node) > MAX_TEXT_CHARS:
-                raise PiCopilotError(
-                    "pi_projection_too_large",
-                    "A model-visible string exceeded the projection limit.",
-                    status_code=500,
-                    details={"max_chars": MAX_TEXT_CHARS},
-                )
             for pattern in _SENSITIVE_TEXT_PATTERNS:
                 if pattern.search(node):
                     raise PiCopilotError(
@@ -1498,13 +1629,42 @@ def ensure_safe_projection(
                     )
 
     visit(value)
-    encoded = json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")
-    if len(encoded) > max_bytes:
+
+
+def ensure_safe_projection(
+    value: Any, *, max_bytes: int = MAX_PROJECTION_BYTES
+) -> Any:
+    _check_projection_privacy(value)
+
+    def visit(node: Any) -> None:
+        if isinstance(node, Mapping):
+            for child in node.values():
+                visit(child)
+        elif isinstance(node, (list, tuple)):
+            if len(node) > MAX_LIST_ITEMS:
+                raise PiCopilotError(
+                    "pi_projection_too_large",
+                    "The host projection contains too many list items.",
+                    status_code=500,
+                )
+            for child in node:
+                visit(child)
+        elif isinstance(node, str) and len(node) > MAX_TEXT_CHARS:
+            raise PiCopilotError(
+                "pi_projection_too_large",
+                "A model-visible string exceeded the projection limit.",
+                status_code=500,
+                details={"max_chars": MAX_TEXT_CHARS},
+            )
+
+    visit(value)
+    size = _projection_bytes(value)
+    if size > max_bytes:
         raise PiCopilotError(
             "pi_projection_too_large",
             "The host projection exceeded the bounded Pi tool-result contract.",
             status_code=500,
-            details={"bytes": len(encoded), "max_bytes": max_bytes},
+            details={"bytes": size, "max_bytes": max_bytes},
         )
     return value
 
@@ -1559,6 +1719,7 @@ __all__ = [
     "project_artifacts",
     "project_capabilities",
     "project_job",
+    "project_job_for_replay",
     "project_run_row",
     "project_study_context",
     "project_study_setup_receipt",
