@@ -31,8 +31,9 @@ from ..concept_availability import (
 )
 from ..planning.accepted_analysis_inputs import analysis_input_value_columns
 from ..planning.baseline_requirements import (
-    baseline_outline_coverage,
     baseline_requirement_projection,
+    validate_baseline_materialization,
+    validate_baseline_outline,
 )
 from ..planning.literature_bindings import (
     allowed_method_source_keys,
@@ -1947,21 +1948,10 @@ class ProgressivePlannerAgent:
                         str(exc), step_id=step.step_id, step_index=step_index,
                         path="population_scope",
                     ) from exc
-            baseline = baseline_outline_coverage(
+            validate_baseline_outline(
                 article_context,
                 [step.model_dump(mode="json") for step in outline.steps],
             )
-            if baseline["status"] == "incomplete":
-                raise ProgressivePlanCompileError(
-                    "progressive_outline_accepted_baseline_incomplete",
-                    "The outline must preserve each accepted baseline roster in one "
-                    "table_one step before foundation or step materialization. "
-                    "Include the required grouping and one available clinical-value "
-                    "column per required variable; measurement metadata and mentions "
-                    "in an audit or prose do not satisfy this requirement. "
-                    + json.dumps(baseline, ensure_ascii=False, sort_keys=True),
-                    path="steps", findings=(baseline,),
-                )
             descriptors = {variable.name: variable for variable in article_context.variables}
             for step_index, step in enumerate(outline.steps):
                 for name in step.variable_names:
@@ -4117,6 +4107,7 @@ class ProgressivePlannerAgent:
                 "Progressive Planner know-how authority and prompt must be supplied together"
             )
         article_context = article_contract_context or context
+        validate_baseline_materialization(article_context)
         if required_primary_cohort_selection_mode not in {
             None,
             "all_input_rows",
