@@ -131,6 +131,24 @@ assert.deepEqual(records.rows({ decision_records: [
 ] }), []);
 assert.equal(records.clock(at('2026-10-21T06:03:59Z')), '06:03');
 
+// A host-selected first-day landmark is the Agent's decision and explains
+// the surviving population in both languages, including after a reload.
+const timing = { code: 'post_baseline_landmark_selected', actor: 'agent', at: '2026-10-21T05:59:00Z' };
+for (language of ['zh', 'en']) {
+  window.EU_LANG = language;
+  const session = { decision_records: [timing] };
+  const html = conversation(JSON.parse(JSON.stringify(session)), MESSAGES.map(row => ({ ...row })));
+  assert.deepEqual(recordLines(html), [['agent', language === 'zh'
+    ? 'Agent 决策：暴露在入 ICU 后第一天内测量，因此分析从第 24 小时开始，仅纳入该时点仍存活的患者 · 05:59'
+    : 'Agent decision: the exposure is measured during the first ICU day, so the analysis starts at 24 hours among patients alive then · 05:59']]);
+  assert.deepEqual(order(html).slice(0, 3), ['question', 'post_baseline_landmark_selected', 'plan-ready']);
+}
+assert.deepEqual(records.rows({ decision_records: [
+  { ...timing, actor: 'user' }, { ...timing, actor: 'system' }, { ...timing, at: 'invalid' },
+] }), []);
+language = 'zh';
+window.EU_LANG = 'zh';
+
 // A data source the researcher typed already shows its past choice under
 // that reply, so the record line is not repeated.
 const typed = conversation(

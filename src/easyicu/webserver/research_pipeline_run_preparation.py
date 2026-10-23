@@ -283,6 +283,24 @@ def _prepare_scientific_launch(
     primary_exposure = configured_primary_exposure or planning_coordinates.get(
         "primary_exposure"
     )
+    if not (
+        request.execution_resume_source_run_id
+        or request.development_resume_source_job_id
+        or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV)
+    ):
+        from easyicu.webserver.pi_copilot.plan_decisions import record_post_baseline_landmark
+
+        timed_study = record_post_baseline_landmark(
+            study=study, materialization_study=materialization_study,
+            primary_exposure=primary_exposure, target=target,
+            endpoint=planning_coordinates.get("endpoint"), database=database,
+        )
+        if timed_study is not study:
+            study = dict(timed_study)
+            materialization_study = {
+                **materialization_study,
+                **{key: study[key] for key in ("sensitivity_specs", "confirmations", "revision") if key in study},
+            }
     covariate_selection = _configured_covariate_selection(study)
     sensitivity_specs = _configured_sensitivity_specs(study)
     window = _cohort_window(materialization_study)

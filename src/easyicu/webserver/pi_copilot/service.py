@@ -2831,7 +2831,19 @@ class PiCopilotService:
                 mode="json"
             ),
             recovery_receipts=receipts,
+            study=self._decision_study(record.binding.study_context_id),
         )
+
+    @staticmethod
+    def _decision_study(study_context_id: Optional[str]) -> Mapping[str, Any]:
+        # An unbound conversation, or one whose study was removed, has no
+        # study-owned decision; it must still load.
+        if not study_context_id:
+            return {}
+        try:
+            return study_contexts.get_context(study_context_id) or {}
+        except study_contexts.StudyContextError:
+            return {}
 
     def _watch_child_job_for_replay(
         self,
