@@ -44,6 +44,18 @@ def test_node_runtime_validates_the_current_catalog_schema_and_arguments() -> No
     assert 'const TOOL_ARGUMENT_FIELDS = new Set(["model", "host", "required"])' in source
 
 
+def test_concept_lookup_offers_database_metadata_without_a_source() -> None:
+    row = next(row for row in TOOL_CATALOG if row.name == "easyicu_list_source_concepts")
+    assert row.data_source_required is False
+    source = (
+        Path(tools.__file__).with_name("node_app") / "src" / "main.mjs"
+    ).read_text(encoding="utf-8")
+    declaration = next(line for line in source.splitlines()
+                       if 'name: "easyicu_list_source_concepts"' in line)
+    assert "source_id: Type.Optional(Type.String(" in declaration
+    assert "database capability catalog" in declaration
+
+
 @pytest.mark.parametrize(
     "mutation",
     [

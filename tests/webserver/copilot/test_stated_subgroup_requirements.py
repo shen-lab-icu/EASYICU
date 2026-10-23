@@ -51,6 +51,7 @@ def test_the_wording_rule_and_save_tool_request_subgroup_words():
     rule = next(line for line in main.splitlines() if "Question wording rule:" in line)
     assert "stated_subgroups" in rule and "subgroup" in rule
     assert "full clause" in rule and "easyicu_list_source_concepts" in rule
+    assert "before a source is bound" in rule and "stated adjustments and subgroups" in rule
     assert "stated_subgroups: Type.Optional(Type.Array(Type.Object({" in main
 
 

@@ -762,12 +762,71 @@ def _list_data_sources(
     )
 
 
+def _data_source_confirmation_block(
+    context: ToolExecutionContext,
+) -> Optional[Dict[str, Any]]:
+    authorization = context.session.data_source_authorization
+    if authorization.status not in {"pending", "selection_in_progress"}:
+        return None
+    return _result(
+        context,
+        status="blocked",
+        code="pi_session_data_source_confirmation_required",
+        summary=(
+            "Choose and confirm a local or official-demo data source before "
+            "EasyICU reads data or starts analysis. Research planning can continue."
+        ),
+        owner="easyicu.webserver.pi_copilot.data_source_authority",
+        details={
+            "status": authorization.status,
+            "reason": authorization.reason,
+            "conversation_available": True,
+        },
+    )
+
+
 def _list_source_concepts(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    """List path-free concept identifiers from one validated registered export."""
+    """List export concepts, or named-database metadata before source binding."""
 
     source_id = str(params.get("source_id") or "").strip()
+    study = _bound_context(context.session.binding) or {}
+    study_source = (
+        study.get("data_source")
+        if isinstance(study.get("data_source"), Mapping)
+        else {}
+    )
+    bound_path = str(study_source.get("path") or "").strip()
+    if not source_id and not bound_path:
+        # The host's study/setup words choose the database, never a model argument.
+        database = (
+            str(study_source.get("database") or "").strip()
+            or database_named_in(context.user_message)
+            or database_named_in(str(study.get("question") or ""))
+        )
+        if not database:
+            raise PiCopilotError(
+                "pi_source_id_required",
+                "Choose one exact registered source_id or name a supported database "
+                "in the study question or setup before looking up concepts.",
+            )
+        try:
+            profile = get_database_profile(database)
+        except KeyError as exc:
+            raise PiCopilotError(
+                "pi_database_not_supported",
+                "Choose one supported database before looking up its capability concepts.",
+            ) from exc
+        if not profile.is_public:
+            raise PiCopilotError(
+                "pi_database_not_supported",
+                "Choose a full-database family before looking up capability concepts.",
+            )
+        return _list_concept_catalog(context, params, database=profile.key)
+    confirmation_block = _data_source_confirmation_block(context)
+    if confirmation_block is not None:
+        return confirmation_block
     if not source_id:
         raise PiCopilotError(
             "pi_source_id_required",
@@ -787,14 +846,6 @@ def _list_source_concepts(
         ),
         None,
     )
-    study = _bound_context(context.session.binding)
-    study_source = (
-        study.get("data_source")
-        if isinstance(study, Mapping)
-        and isinstance(study.get("data_source"), Mapping)
-        else {}
-    )
-    bound_path = str(study_source.get("path") or "").strip()
     bound_source = next(
         (
             row
@@ -845,6 +896,18 @@ def _list_source_concepts(
             summary="The selected registered source is not currently readable.",
             owner="easyicu.webserver.sources",
         )
+    return _list_concept_catalog(context, params, source=source)
+
+
+def _list_concept_catalog(
+    context: ToolExecutionContext,
+    params: Mapping[str, Any],
+    *,
+    source: Optional[Mapping[str, Any]] = None,
+    database: str = "",
+) -> Dict[str, Any]:
+    """Bound the same concept metadata projection for either catalog owner."""
+
     requested_modules = {
         str(value).strip().lower()
         for value in (params.get("modules") or [])
@@ -852,7 +915,7 @@ def _list_source_concepts(
     }
     known_modules = {
         str(value).strip().lower()
-        for value in (source.get("modules") or [])
+        for value in ((source or {}).get("modules") or [])
         if str(value).strip()
     }
     unknown_modules = sorted(requested_modules - known_modules)
@@ -861,7 +924,11 @@ def _list_source_concepts(
             context,
             status="blocked",
             code="pi_source_concept_modules_invalid",
-            summary="One or more requested modules are not present in this registered source.",
+            summary=(
+                "One or more requested modules are not present in this registered source."
+                if source is not None
+                else "Omit modules when looking up database capability metadata before binding a source."
+            ),
             owner="easyicu.research_agent.acquisition.catalog",
             details={"unknown_modules": unknown_modules},
         )
@@ -878,9 +945,17 @@ def _list_source_concepts(
         )
     limit = min(max(raw_limit, 1), 80)
 
-    from easyicu.research_agent.acquisition.catalog import build_available_catalog
+    from easyicu.research_agent.acquisition.catalog import (
+        build_available_catalog,
+        build_database_capability_catalog,
+    )
 
-    catalog = build_available_catalog(Path(source_path).expanduser())
+    catalog = (
+        build_database_capability_catalog(database)
+        if database
+        else build_available_catalog(Path(str(source["path"]).strip()).expanduser())
+    )
+
     def project_concept(concept: Any) -> Dict[str, str]:
         return {
             "concept_id": str(concept.concept_id)[:80],
@@ -932,14 +1007,27 @@ def _list_source_concepts(
     return _result(
         context,
         status="ok",
-        code="easyicu_source_concepts_listed",
+        code=(
+            "easyicu_database_concepts_listed"
+            if database
+            else "easyicu_source_concepts_listed"
+        ),
         summary=(
             f"Listed {len(rows)} exact EasyICU concept identifiers from the "
-            "selected registered source without paths or patient rows."
+            f"{database} database capability catalog, not yet a bound source."
+            if database
+            else (
+                f"Listed {len(rows)} exact EasyICU concept identifiers from the "
+                "selected registered source without paths or patient rows."
+            )
         ),
         owner="easyicu.research_agent.acquisition.catalog",
         details={
-            "source_id": source_id,
+            **(
+                {"catalog_scope": "database_capability", "database": database, "source_bound": False}
+                if database
+                else {"source_id": str(source["id"])}
+            ),
             "concepts": rows,
             "canonical_alternatives": canonical_alternatives,
             "returned_count": len(rows),
@@ -4806,26 +4894,10 @@ def execute_tool(
     # tuple, which meant 42 tools carried the same contract in three files in
     # two languages with nothing checking that they agreed.
     _require_catalog_args(tool_name, arguments)
-    authorization = context.session.data_source_authorization
-    if (
-        tool_name in DATA_SOURCE_REQUIRED_TOOLS
-        and authorization.status in {"pending", "selection_in_progress"}
-    ):
-        return _result(
-            context,
-            status="blocked",
-            code="pi_session_data_source_confirmation_required",
-            summary=(
-                "Choose and confirm a local or official-demo data source before "
-                "EasyICU reads data or starts analysis. Research planning can continue."
-            ),
-            owner="easyicu.webserver.pi_copilot.data_source_authority",
-            details={
-                "status": authorization.status,
-                "reason": authorization.reason,
-                "conversation_available": True,
-            },
-        )
+    if tool_name in DATA_SOURCE_REQUIRED_TOOLS:
+        confirmation_block = _data_source_confirmation_block(context)
+        if confirmation_block is not None:
+            return confirmation_block
     return handler(context, arguments)
 
 
