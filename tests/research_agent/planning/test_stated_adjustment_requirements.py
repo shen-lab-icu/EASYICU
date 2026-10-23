@@ -152,6 +152,23 @@ def test_an_availability_gap_is_checked_against_the_required_source(status, conc
     assert check_capability_gap(gap, context=_stated_context(source_status=status)).verification == expected
 
 
+def test_a_gap_for_a_reading_no_concept_matched_is_refused_with_the_roster_route():
+    """An unmatched name is not a source that lacks the variable: plan with its column."""
+
+    context = _stated_context()
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints["stated_adjustments"][0].update(concept=None, source_status="unresolved")
+    context = context.model_copy(update={"user_preferences": context.user_preferences.model_copy(
+        update={"data_constraints": json.dumps(constraints)},
+    )})
+    check = check_capability_gap(
+        ProgressiveCapabilityGap(requirement="design_element_unsupported", concept="age"), context=context,
+    )
+    assert check.verification == "unverified" and "roster column" in check.fact
+    guardrails = render_plan_scientific_guardrails(context)
+    assert "'unresolved' matched no source concept" in guardrails and "it is no gap" in guardrails
+
+
 def test_a_design_element_gap_without_a_concept_stays_unverifiable():
     gap = ProgressiveCapabilityGap(requirement="design_element_unsupported")
     assert check_capability_gap(gap, context=_stated_context()).verification == "unverifiable"

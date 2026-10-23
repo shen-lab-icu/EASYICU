@@ -1929,7 +1929,9 @@ def render_plan_scientific_guardrails(context: ResearchContext) -> str:
             "summary). Table 1 group_by, covariate adjustment, audits and prose do "
             "not count. If the family can do neither or the source cannot supply the "
             "variable, declare capability_gap='design_element_unsupported' with "
-            "capability_gap_concept naming it; never drop the requirement. "
+            "capability_gap_concept naming it; never drop the requirement. A reading "
+            "whose source_status is 'unresolved' matched no source concept: analyse "
+            "by the roster column that is that variable, or plan without it; it is no gap. "
             + json.dumps([item.model_dump(mode="json") for item in subgroups], ensure_ascii=False)
         )
 
@@ -1943,7 +1945,9 @@ def render_plan_scientific_guardrails(context: ResearchContext) -> str:
             "supply one, or measures it after typed time zero, declare "
             "capability_gap='design_element_unsupported' with capability_gap_concept "
             "naming it. A gap stops planning; never "
-            "silently fit a different estimand. "
+            "silently fit a different estimand. A reading whose source_status is "
+            "'unresolved' matched no source concept: include the roster column that "
+            "is that variable, or plan without it; it is no gap. "
             + json.dumps([item.model_dump(mode="json") for item in adjustments], ensure_ascii=False)
         )
     baseline = baseline_requirement_projection(context)

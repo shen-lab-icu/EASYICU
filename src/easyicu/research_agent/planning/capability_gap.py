@@ -41,6 +41,15 @@ def threshold_grouping_expressible(context: ResearchContext, concept: str) -> bo
     return False
 
 
+#: A stated reading no source concept was matched to proves no gap: the host
+#: could not name the variable, which is not the source lacking it.
+_UNRESOLVED_FACT = (
+    "no source concept was matched to the stated words {words!r}, which does not show "
+    "the source lacks the variable; use the roster column that is this variable, or "
+    "plan without it, and scientific review shows the unresolved requirement"
+)
+
+
 def check_capability_gap(
     gap: ProgressiveCapabilityGap,
     *,
@@ -74,6 +83,8 @@ def check_capability_gap(
             family = infer_analysis_type(context).key
             if not subgroup_actions_for_family(family) and not family_describes_by_group(family):
                 return CapabilityGapCheck("verified", f"{family} has no subgroup owner for {gap.concept!r}")
+            if subgroup.source_status == "unresolved":
+                return CapabilityGapCheck("unverified", _UNRESOLVED_FACT.format(words=subgroup.words))
             if subgroup.source_status != "available" or subgroup.concept is None:
                 return CapabilityGapCheck("unverifiable", f"source availability for subgroup {gap.concept!r} needs resolution")
             return CapabilityGapCheck("unverified", f"{family} offers a subgroup owner and the source supplies {gap.concept!r}")
@@ -84,6 +95,8 @@ def check_capability_gap(
             return CapabilityGapCheck(
                 "unverified", f"the study offers {gap.concept!r} by time zero"
             )
+        if adjustment.source_status == "unresolved":
+            return CapabilityGapCheck("unverified", _UNRESOLVED_FACT.format(words=adjustment.words))
         return CapabilityGapCheck("unverifiable", f"source availability for {gap.concept!r} needs resolution")
 
     if gap.requirement == "levels_from_thresholds_unavailable":
