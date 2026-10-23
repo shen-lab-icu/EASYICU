@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from easyicu.concept.selection_policy import concept_selection_policy
 from easyicu.research_agent.concept_availability import explain_concept_availability
 from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
+from easyicu.research_agent.providers.client_trust import PROVIDER_NOT_CLEARED
 from easyicu.webserver.study_family_scope import v1_scope_description
 
 ActionKind = Literal[
@@ -26,6 +27,7 @@ ActionKind = Literal[
     "drop_variable",
     "retry",
     "rephrase_in_scope",
+    "open_provider_settings",
 ]
 _CODE = re.compile(r"[a-z][a-z0-9_]{0,79}")
 Code = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")]
@@ -53,6 +55,12 @@ class RetryParams(BaseModel):
     route: Literal["retry"] = "retry"
 
 
+class ProviderSettingsParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    route: Literal["provider_settings"] = "provider_settings"
+
+
 class ScopeParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -72,7 +80,7 @@ class StopNextAction(BaseModel):
     action_id: str = Field(pattern=r"^[a-z_]+_[a-f0-9]{16}$")
     kind: ActionKind
     label_key: str
-    params: PlanEditParams | RetryParams | ScopeParams
+    params: PlanEditParams | RetryParams | ScopeParams | ProviderSettingsParams
 
     @model_validator(mode="after")
     def _matching_params(self) -> StopNextAction:
@@ -81,6 +89,8 @@ class StopNextAction(BaseModel):
             if self.kind == "retry"
             else (ScopeParams if self.kind == "rephrase_in_scope" else PlanEditParams)
         )
+        if self.kind == "open_provider_settings":
+            expected = ProviderSettingsParams
         if not isinstance(self.params, expected):
             raise ValueError("action kind and params disagree")
         if isinstance(self.params, PlanEditParams):
@@ -330,6 +340,7 @@ _SCOPE_CODES = frozenset(
     }
 )
 STOP_POLICIES = {
+    PROVIDER_NOT_CLEARED: "provider_settings",
     **dict.fromkeys(_EDIT_CODES, "edit_plan"),
     **dict.fromkeys(_RETRY_CODES, "retry"),
     **dict.fromkeys(_REPAIR_CODES, "repair"),
@@ -394,7 +405,8 @@ def source_stop_coordinates(payload: Any) -> dict[str, Any]:
 
 
 def _action(
-    kind: ActionKind, params: PlanEditParams | RetryParams | ScopeParams
+    kind: ActionKind,
+    params: PlanEditParams | RetryParams | ScopeParams | ProviderSettingsParams,
 ) -> StopNextAction:
     content = json.dumps(
         [kind, params.model_dump(mode="json", exclude_none=True)], sort_keys=True
@@ -445,6 +457,8 @@ def next_actions_for_stop(
     cause = _code(detail.get("cause_code"))
     inner = _code(detail.get("reason_code"))
     policy = STOP_POLICIES.get(reason, "edit_plan")
+    if policy == "provider_settings":
+        return [_action("open_provider_settings", ProviderSettingsParams())]
     if reason not in _RETRY_CODES and inner in _SCOPE_CODES:
         policy = "scope"
     if reason not in _RETRY_CODES and (inner in _DATA_CODES or cause in _DATA_CODES):

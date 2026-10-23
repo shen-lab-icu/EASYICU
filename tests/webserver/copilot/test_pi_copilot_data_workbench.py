@@ -585,7 +585,7 @@ def test_patient_timeline_stays_browser_only_and_uses_pseudonymous_ordinal(
     assert result["code"] == "easyicu_patient_timeline_ready"
     assert "ent_browser_only" not in model_receipt
     assert '"times"' not in model_receipt
-    assert result["details"]["loaded_trajectory_count"] == 1
+    assert result["details"]["loaded_trajectory_count"] == "suppressed"
     resource = result["details"]["resource"]
     snapshot = store.load(
         project_id="project-data-workbench", digest=resource["snapshot_sha256"]

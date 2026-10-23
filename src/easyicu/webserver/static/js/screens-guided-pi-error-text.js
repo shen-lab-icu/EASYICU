@@ -103,6 +103,12 @@
       if (error.code === 'pi_provider_connection_failed') {
         return tr('EasyICU could not reach the model service.', 'EasyICU 无法连接到模型服务，请检查地址和服务状态。');
       }
+      if (error.code === 'provider_not_cleared_for_credentialed_data') {
+        return tr('This model is not cleared for credentialed data such as MIMIC-IV or eICU, so this step did not call it. The PhysioNet data use agreement allows only a model that runs on this computer or one whose service keeps no data.', '这个模型未获准处理 MIMIC-IV、eICU 等需授权的数据，所以这一步没有调用它。按 PhysioNet 数据使用协议，只能使用在本机运行的模型，或服务方不保留数据的模型。');
+      }
+      if (error.code === 'agentic_coder_credentialed_source_forbidden') {
+        return tr('The desktop app does not run model-written code on credentialed data such as MIMIC-IV or eICU. No analysis was run.', '桌面版不会在 MIMIC-IV、eICU 等需授权的数据上运行模型临时写的代码。尚未运行任何分析。');
+      }
       // The connect-then-choose form (pi_copilot/provider_config.py).
       if (error.code === 'pi_provider_credential_required') {
         return tr('Enter the API credential for this service. A saved credential is reused only for the same service and address.', '请输入这个服务的 API 凭据。已保存的凭据只用于同一服务和地址。');
@@ -599,6 +605,9 @@
       if (resumeFailure) return resumeFailure;
       const suffix = runFailureDetailText(detail);
       const withDetail = text => (suffix ? `${text} ${suffix}` : text);
+      if (value === 'provider_not_cleared_for_credentialed_data' || value === 'agentic_coder_credentialed_source_forbidden') {
+        return withDetail(errorText({ code: value }));
+      }
       // A failed-closed run did not pass a check after it started. Its detail
       // says which check and why; the fallback holds for every check.
       if (value === 'research_agent_pipeline_failed_closed') {

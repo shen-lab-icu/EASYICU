@@ -44,8 +44,9 @@ def metadata_lookup(monkeypatch):
 
     monkeypatch.setattr(catalog, "build_database_capability_catalog", build_database)
 
-    def lookup(*, message="", status="pending", params=None):
+    def lookup(*, message="", status="pending", params=None, data_handling="unspecified"):
         context = ToolExecutionContext(
+            data_handling=data_handling,
             session=PiSessionRecord(
                 session_id="metadata-concept-session",
                 data_source_authorization=PiSessionDataSourceAuthorization(status=status),
@@ -158,7 +159,8 @@ def test_a_bound_source_keeps_its_confirmation_gate(metadata_lookup, status, sou
     study, calls, lookup = metadata_lookup
     study.update(question="Study the trial marker in eICU.",
                  data_source={"database": "eicu", "path": "/synthetic/source"})
-    result = lookup(status=status, params={"source_id": source_id} if source_id else {})
+    result = lookup(status=status, params={"source_id": source_id} if source_id else {},
+                    data_handling="zero_retention_declared")
     assert result["code"] == "pi_session_data_source_confirmation_required"
     assert calls == []
 
@@ -189,7 +191,7 @@ def test_a_confirmed_bound_source_returns_its_export_catalog(monkeypatch):
         ])
 
     monkeypatch.setattr(catalog, "build_available_catalog", build_export)
-    context = ToolExecutionContext(session=PiSessionRecord(
+    context = ToolExecutionContext(data_handling="zero_retention_declared", session=PiSessionRecord(
         session_id="bound-concept-session",
         data_source_authorization=PiSessionDataSourceAuthorization(status="confirmed"),
     ))

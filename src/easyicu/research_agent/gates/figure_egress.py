@@ -397,7 +397,7 @@ def authorize_figure_upload(
             "can carry patient-level marks, identifiers or small-cell strata, so "
             "it is not covered by the text outbound projection. Enable it "
             "explicitly with allow_external_figure_upload=True after confirming "
-            "the figures are aggregate-only, or use a loopback/local VLM."
+            "the figures are aggregate-only, or use an explicitly declared on-device VLM."
         )
     if policy.evidence is None or policy.run_dir is None:
         raise FigureEgressError(

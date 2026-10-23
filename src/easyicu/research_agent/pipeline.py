@@ -90,6 +90,7 @@ from .authority.figure_renderer import (
     _ordered_distribution_availability_parent_digest_seal,
     _sealed_renderer_figure_step_matches_parent,
 )
+from .providers.client_trust import require_run_clearance
 from .providers.cost import CostMeter, metered_role_resolver
 from .providers.hard_stop import HardStopClient
 from .figures.distribution_availability import (
@@ -4431,12 +4432,7 @@ class ResearchAgentPipeline:
             raise ValueError(
                 "`question` is required (or pass `skill=...` to derive one)."
             )
-        if self._llm is None:
-            raise ValueError(
-                "ResearchAgentPipeline.run() now requires an explicit `llm=` "
-                "client. Pass MockLLMClient() only for tests or deterministic "
-                "demo runs; the pipeline no longer falls back to mock silently."
-            )
+        require_run_clearance(database, cross_database_validation, self._llm, self._llm_concept_auditor_client)
         # Fail fast on a malformed session key before planning spends budget.
         _validate_resume_session_key(resume_session_key)
         if resume_run_id and self._capability_runtime.activation is not None:

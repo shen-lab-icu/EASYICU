@@ -43,6 +43,7 @@ _LOCK = threading.RLock()
 DEFAULTS: Dict[str, Any] = {
     "support_contact": "",  # administrator-owned, read-only in the browser
     "ai_enabled": False,  # external-LLM opt-in gate — OFF by default
+    "copilot_enabled": False,  # conversational shell only; no Research Agent grant
     "language": "en",  # "en" | "zh"
     "data_mode": "demo",  # "demo" | "real"
     "export_dir": None,
@@ -114,6 +115,7 @@ def _choice(key: str):
 _COERCE = {
     "support_contact": _support_contact,
     "ai_enabled": parse_bool,
+    "copilot_enabled": parse_bool,
     "language": _choice("language"),
     "data_mode": _choice("data_mode"),
     "export_dir": _optional_path,

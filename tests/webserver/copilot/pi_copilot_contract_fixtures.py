@@ -58,6 +58,7 @@ class FakeGateway:
     def __init__(self, session_dir: Path | None = None) -> None:
         self.environ = {
             "EASYICU_PI_PROVIDER": "easyicu-local",
+            "EASYICU_PI_DATA_HANDLING": "zero_retention_declared",
             "EASYICU_PI_API_KEY": "test-only-placeholder",
         }
         self.calls: list[tuple[str, dict[str, Any], Any]] = []

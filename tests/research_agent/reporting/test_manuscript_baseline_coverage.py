@@ -72,13 +72,14 @@ def test_baseline_repair_names_authorized_reader_labels_not_only_internal_ids():
 
 def test_methods_writer_receives_exact_baseline_naming_contract(monkeypatch):
     from easyicu.research_agent.agents import reporting
+    from easyicu.research_agent.providers.mocks import MockLLMClient
 
     captured = []
     def complete(_llm, messages, **_kwargs):
         captured.append(messages[-1].content)
         return "## Methods\nStudy methods."
     monkeypatch.setattr(reporting, "authorized_complete", complete)
-    writer = reporting.WriterAgent(SimpleNamespace())
+    writer = reporting.WriterAgent(MockLLMClient())
     writer._call_section(
         section_name="Methods", instruction="Write Methods.",
         context=_bound_context("age", "charlson"),

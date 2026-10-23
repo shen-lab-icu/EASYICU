@@ -858,7 +858,7 @@ def test_chitchat_with_client_provider_run_requires_authorization(
     monkeypatch.setattr(
         research_run_submission, "submit_research_run", _must_not_submit
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-chitchat-provider-run",
             external_llm_opt_in=True,

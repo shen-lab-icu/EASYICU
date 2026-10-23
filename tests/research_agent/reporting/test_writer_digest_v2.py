@@ -86,6 +86,20 @@ def test_write_phase_never_reads_append_only_evidence_without_current_ledger() -
     assert "evidence.records()" not in source
 
 
+def test_numeric_registry_does_not_bypass_the_writer_field_allowlist(tmp_path):
+    evidence = EvidenceStore(tmp_path)
+    _register_step_evidence(evidence, tmp_path, step_id="fixture", evidence_id="summary")
+    for field, value in (("private_record_id", 987654321), ("incidence", 0.2),
+                         ("reportable_descriptive_results.groups[0].n_total", 3)):
+        evidence.register_numeric_claim(value=str(value), canonical=float(value), evidence_id="summary", step_id="fixture", source_field=field)
+    out = _render_writer_evidence_digest_v2([
+        {**_record("fixture", "ok", {}), "evidence_ids": ["summary"]},
+    ], evidence=evidence, run_dir=tmp_path)
+    assert "private_record_id" not in out and "987654321" not in out
+    assert "incidence=0.2" in out
+    assert "groups[0].n_total=suppressed" in out
+
+
 def test_live_writer_digest_uses_verified_result_envelope_records() -> None:
     source = inspect.getsource(write_phase._draft_manuscript)
     dispatch_source = inspect.getsource(write_phase._render_or_resume_writer_scaffold)
@@ -341,30 +355,30 @@ def test_v2_excludes_claims_from_retired_failed_attempt(tmp_path: Path) -> None:
         canonical=999.0,
         evidence_id="failed_summary",
         step_id="03_primary",
-        source_field="secondary_metric",
+        source_field="incidence",
     )
     evidence.register_numeric_claim(
         value="1.25",
         canonical=1.25,
         evidence_id="current_summary",
         step_id="03_primary",
-        source_field="secondary_metric",
+        source_field="incidence",
     )
     records = [
         {
-            **_record("03_primary", "contract_failed", {"secondary_metric": 999}),
+            **_record("03_primary", "contract_failed", {"incidence": 999}),
             "evidence_ids": ["failed_summary"],
         },
         {
-            **_record("03_primary", "ok", {"secondary_metric": 1.25}),
+            **_record("03_primary", "ok", {"incidence": 1.25}),
             "evidence_ids": ["current_summary"],
         },
     ]
 
     out = _render_writer_evidence_digest_v2(records, evidence=evidence)
 
-    assert "secondary_metric=1.25" in out
-    assert "secondary_metric=999" not in out
+    assert "incidence=1.25" in out
+    assert "incidence=999" not in out
 
 
 def test_v2_does_not_let_failed_claim_borrow_another_steps_active_id(
@@ -382,14 +396,14 @@ def test_v2_does_not_let_failed_claim_borrow_another_steps_active_id(
         canonical=999.0,
         evidence_id="current_other_step",
         step_id="03_failed",
-        source_field="secondary_metric",
+        source_field="incidence",
     )
     evidence.register_numeric_claim(
         value="777",
         canonical=777.0,
         evidence_id="orphan",
         step_id="99_orphan",
-        source_field="secondary_metric",
+        source_field="incidence",
     )
     run_path = tmp_path / "research_context.json"
     run_path.write_text('{"n": 1}', encoding="utf-8")
@@ -405,7 +419,7 @@ def test_v2_does_not_let_failed_claim_borrow_another_steps_active_id(
         canonical=666.0,
         evidence_id="research_context",
         step_id="99_orphan",
-        source_field="secondary_metric",
+        source_field="incidence",
     )
     records = [
         {
@@ -420,23 +434,23 @@ def test_v2_does_not_let_failed_claim_borrow_another_steps_active_id(
 
     out = _render_writer_evidence_digest_v2(records, evidence=evidence)
 
-    assert "secondary_metric=999" not in out
-    assert "secondary_metric=777" not in out
-    assert "secondary_metric=666" not in out
+    assert "incidence=999" not in out
+    assert "incidence=777" not in out
+    assert "incidence=666" not in out
     assert "99_orphan" not in out
 
 
 def test_writer_digest_hides_values_from_current_failed_attempt() -> None:
     records = [
-        _record("03_primary", "ok", {"secondary_metric": 1.25}),
-        _record("03_primary", "contract_failed", {"secondary_metric": 999}),
+        _record("03_primary", "ok", {"incidence": 1.25}),
+        _record("03_primary", "contract_failed", {"incidence": 999}),
     ]
 
     out = _render_writer_evidence_digest_v2(records)
 
     assert "03_primary [contract_failed]" in out
-    assert "secondary_metric=999" not in out
-    assert "secondary_metric=1.25" not in out
+    assert "incidence=999" not in out
+    assert "incidence=1.25" not in out
 
 
 def test_v2_secondary_cap_truncates_with_marker(tmp_path: Path) -> None:
@@ -455,7 +469,7 @@ def test_v2_secondary_cap_truncates_with_marker(tmp_path: Path) -> None:
             canonical=float(i + 100),
             evidence_id="03_primary_summary",
             step_id="03_primary",
-            source_field=f"leaf_{i:02d}",
+            source_field=f"metrics[{i}].estimate",
         )
     records = [
         {
@@ -467,7 +481,7 @@ def test_v2_secondary_cap_truncates_with_marker(tmp_path: Path) -> None:
         records, evidence=evidence, secondary_cap_per_step=3
     )
     # Three visible entries
-    visible_count = sum(1 for line in out.splitlines() if line.startswith("  leaf_"))
+    visible_count = sum(1 for line in out.splitlines() if line.startswith("  metrics["))
     assert visible_count == 3
     # Truncation marker mentions remaining count
     assert "22 more leaves omitted" in out
@@ -494,7 +508,7 @@ def test_v2_secondary_cap_counts_only_uncovered_claims(tmp_path: Path) -> None:
             canonical=float(i + 100),
             evidence_id="03_primary_summary",
             step_id="03_primary",
-            source_field=f"leaf_{i:02d}",
+            source_field=f"metrics[{i}].estimate",
         )
     records = [
         {
@@ -521,7 +535,7 @@ def test_v2_reserves_cap_for_typed_reportable_results(tmp_path: Path) -> None:
         canonical=999.0,
         evidence_id="04_descriptive_summary",
         step_id="04_descriptive",
-        source_field="diagnostic_first",
+        source_field="metrics.estimate",
     )
     for source_field, value in (
         ("reportable_descriptive_results.groups[0].risk_pct", "14.7"),
@@ -551,7 +565,7 @@ def test_v2_reserves_cap_for_typed_reportable_results(tmp_path: Path) -> None:
     assert "groups[0].risk_pct=14.7" in out
     assert "groups[1].risk_pct=6.3" in out
     assert "overall_outcome.risk_pct=10.0" in out
-    assert "diagnostic_first=999" not in out
+    assert "metrics.estimate=999" not in out
     assert "1 more leaves omitted" in out
 
 

@@ -30,6 +30,69 @@ def test_cliproxyapi_default_uses_the_reported_model_identifier() -> None:
     assert DEFAULT_MODEL == "gpt-5.6-luna"
 
 
+@pytest.mark.parametrize("handling", ["on_device", "zero_retention_declared", "unspecified"])
+def test_data_handling_declaration_survives_save_reload_and_model_switch(tmp_path, handling):
+    store = PiProviderConfigStore(config_path=tmp_path / "fixture-config",
+                                  receipt_path=tmp_path / "fixture-receipt.json")
+    config, status = store.verify_and_save(
+        provider="easyicu-local", api_key="test-private-key",
+        base_url="http://127.0.0.1:8317/v1", model="gpt5.6 luna",
+        api_transport="openai-completions", data_handling=handling, verifier=_models_ok,
+    )
+    assert config.data_handling.value == handling
+    assert status["data_handling"] == handling
+    assert status["data_handling_notice_key"] == "physionet_llm_data_handling_declaration"
+    restored, _ = store.switch_model("gpt5.6 luna", verifier=_models_ok, environ={})
+    assert restored.data_handling.value == handling
+    env = store.research_agent_environment(external_llm_opt_in=True, environ={})
+    assert env["EASYICU_PROVIDER_DATA_HANDLING"] == handling
+    assert env["EASYICU_PROVIDER_INFERENCE_LOCATION"] == (
+        "on_device" if handling == "on_device" else "unspecified"
+    )
+
+
+@pytest.mark.parametrize("provider,base_url", [
+    ("openrouter", "https://openrouter.ai/api/v1"),
+    ("openai-codex", "https://chatgpt.com/backend-api"),
+    ("easyicu-local", "http://127.0.0.1:8317/v1"),
+])
+def test_provider_presets_never_declare_retention(provider, base_url):
+    from easyicu.webserver.pi_copilot.provider_config import PiProviderConfig
+
+    config = PiProviderConfig(provider=provider, api_key="fixture", base_url=base_url,
+                              model="fixture", api_transport="openai-completions")
+    assert config.data_handling.value == "unspecified"
+    assert config.inference_location.value == "unspecified"
+
+
+def test_gateway_restart_keeps_the_configured_declaration(tmp_path):
+    from easyicu.webserver.pi_copilot.gateway import PiGatewayClient
+    from easyicu.webserver.pi_copilot.provider_config import PiProviderConfig
+
+    store = PiProviderConfigStore(config_path=tmp_path / "fixture-config",
+                                  receipt_path=tmp_path / "fixture-receipt.json")
+    config = PiProviderConfig(provider="fixture", api_key="synthetic",
+                              base_url="http://127.0.0.1:8317/v1", model="fixture",
+                              api_transport="openai-completions", data_handling="on_device")
+    gateway = PiGatewayClient(app_dir=tmp_path, session_dir=tmp_path / "sessions",
+                              cwd=tmp_path, environ=config.as_environment(), provider_store=store)
+    try:
+        assert gateway.environ["EASYICU_PI_DATA_HANDLING"] == "on_device"
+        assert gateway.environ["EASYICU_PI_INFERENCE_LOCATION"] == "on_device"
+    finally:
+        gateway.close()
+
+
+@pytest.mark.parametrize("field", ["data_handling", "inference_location"])
+def test_provider_settings_api_rejects_untyped_declarations(field):
+    from pydantic import ValidationError
+    from easyicu.webserver.routes.pi_copilot import PiProviderConfigRequest
+
+    with pytest.raises(ValidationError) as error:
+        PiProviderConfigRequest(api_key="synthetic", **{field: "automatic"})
+    assert error.value.errors()[0]["loc"] == (field,)
+
+
 def _models_ok(
     method: str,
     url: str,
@@ -115,6 +178,8 @@ def test_verified_provider_config_projects_to_research_memory_only_after_opt_in(
         "OPENAI_MODEL": "gpt5.6 luna",
         OPENAI_AUTH_HEADER_ENV: "x-api-key",
         "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
+        "EASYICU_PROVIDER_DATA_HANDLING": "unspecified",
+        "EASYICU_PROVIDER_INFERENCE_LOCATION": "unspecified",
     }
     assert "test-private-key" not in json.dumps(store.public_status())
 

@@ -24,7 +24,7 @@ def _update(monkeypatch, *, words="在控制年龄之后", variable="年龄", co
         "easyicu.research_agent.acquisition.catalog.build_available_catalog",
         lambda _path: SimpleNamespace(concepts=[SimpleNamespace(concept_id=name) for name in concepts]),
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="adjustment-session", binding=AuthorityBinding(
             study_context_id=current["id"], study_revision=current["revision"],
         )), user_message=question, allowed_actions={"configure"},

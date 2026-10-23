@@ -128,7 +128,7 @@ def test_opening_update_preserves_question_without_silently_confirming_design(mo
             "primary_exposure": "乳酸", "analysis_goal": "评估二者关系"}
     result = study_tools.execute_tool(
         "easyicu_update_study_context", args,
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(
                 session_id="pi-entry-owner-test",
                 binding=AuthorityBinding(study_context_id=current["id"], study_revision=1),
@@ -192,7 +192,7 @@ def test_explicit_descriptive_question_becomes_one_reviewable_candidate_setup(
             "primary_exposure": "Sepsis-3 状态",
             "analysis_goal": "估计 Sepsis-3 患病率，并描述其与院内死亡的关系。",
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(
                 session_id="pi-entry-descriptive-owner-test",
                 binding=AuthorityBinding(
@@ -248,7 +248,7 @@ def _stated_timing_update(monkeypatch, question, *, current_extra=None):
     result = study_tools.execute_tool(
         "easyicu_update_study_context",
         {"question": question, "outcome": "住院死亡", "primary_exposure": "KDIGO AKI 分期"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(
                 session_id="pi-entry-landmark-owner-test",
                 binding=AuthorityBinding(study_context_id=current["id"], study_revision=1),

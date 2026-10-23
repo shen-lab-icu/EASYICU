@@ -389,6 +389,8 @@ class PiProviderConfigRequest(BaseModel):
         "openai-responses",
     ] = "openai-completions"
     enable_ai: StrictBool = False
+    data_handling: Literal["on_device", "zero_retention_declared", "unspecified"] = "unspecified"
+    inference_location: Literal["on_device", "unspecified"] = "unspecified"
 
 
 class PiProviderModelsRequest(BaseModel):
@@ -535,6 +537,8 @@ def post_pi_copilot_provider_config(body: PiProviderConfigRequest) -> dict:
             model=body.model,
             api_transport=body.api_transport,
             enable_ai=body.enable_ai,
+            data_handling=body.data_handling,
+            inference_location=body.inference_location,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

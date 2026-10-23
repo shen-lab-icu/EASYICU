@@ -71,6 +71,8 @@ from .coder_output_contract import (
 
 from ._support import (
     _CODER_GUIDE,
+    _coder_prompt_payload_bytes,
+    require_context_clearance,
     _coder_relevant_notes,
     _coder_system_messages,
     _format_context,
@@ -125,10 +127,6 @@ class CoderPromptBudgetError(PatchTransportUnavailable, RuntimeError):
             "No authoritative typed contract or scientific coordinate was "
             "truncated; split the Planner step or reduce non-authoritative context."
         )
-
-
-def _coder_prompt_payload_bytes(messages: Sequence[LLMMessage]) -> int:
-    return sum(len(str(message.content or "").encode("utf-8")) for message in messages)
 
 
 def _enforce_coder_prompt_budget(
@@ -699,6 +697,7 @@ class CoderAgent:
             format_violation_message,
         )
 
+        require_context_clearance(context, self.llm, self.repair_llm)
         host_authority = host_authority or HostCoderAuthority()
         _family = infer_analysis_type(context)
         scoped_context = scoped_coder_context(context, step)
@@ -888,6 +887,7 @@ class CoderAgent:
         exact unique replacements.  A complete-script request is made only
         when the patch response cannot be parsed or safely applied.
         """
+        require_context_clearance(context, self.llm, self.repair_llm)
         host_authority = host_authority or HostCoderAuthority()
         repair_authority = repair_authority or RepairPromptAuthority()
         current_repair_authority = current_repair_authority or repair_authority

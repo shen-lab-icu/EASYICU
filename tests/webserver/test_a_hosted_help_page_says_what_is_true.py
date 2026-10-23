@@ -47,7 +47,7 @@ global.icon = () => '';
 require(process.argv[1]);
 require(process.argv[2]);
 const page = window.SCREENS.tutorial;
-process.stdout.write(JSON.stringify({ action: page.actionHtml(), rail: page.rail(), body: page.render(), aside: page.contextAside() }));
+process.stdout.write(JSON.stringify({ action: page.actionHtml(), rail: page.rail(), body: page.render(), aside: page.contextAside(), disclosure: window.SCREENS.llmEgressDisclosure }));
 """
 
 
@@ -75,8 +75,17 @@ def test_the_hosted_page_names_the_server_the_prepared_data_and_the_administrato
     assert "运行在医院服务器上" in body
     assert "研究数据保存在医院服务器上" in body
     assert "这台服务器上已准备好：MIMIC-IV、eICU-CRD。" in body
-    assert "由管理员配置的模型" in body
     assert "患者的逐行记录不会发给模型" in body
+    assert "隐藏了极小计数的汇总统计" in body
+    assert "只有在管理员声明该模型运行在本服务器上、或其服务不保留数据时才会使用" in body
+    assert page["disclosure"] == {
+        "noticeKey": "physionet_llm_data_handling_declaration",
+        "sent": [
+            "user_messages", "analysis_plans_and_code", "schema_and_concept_metadata",
+            "aggregate_statistics_with_small_cell_suppression", "structured_diagnostics",
+            "project_artifacts_after_privacy_projection",
+        ],
+    }
     assert "不能替代对个体患者的临床判断" in body
     # Patient-level rows stay on the server (user decision 2026-10-22).
     assert "患者级数据（包括你抽取的数据）只保存在医院服务器上，不能下载" in body

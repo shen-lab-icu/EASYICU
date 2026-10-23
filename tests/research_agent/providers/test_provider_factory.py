@@ -657,6 +657,8 @@ def test_factory_authorization_records_exact_nonsecret_endpoint():
             "base_url": "https://router.example/v1",
             "destination": "external",
             "authorization_mode": "operator_env",
+            "data_handling": "unspecified",
+            "inference_location": "unspecified",
             "authorization_sha256": payload["clients"][0]["authorization_sha256"],
             "transport_policy": {
                 "schema_version": "easyicu.provider_transport_policy/2",
@@ -1351,4 +1353,4 @@ def test_hosted_attested_loopback_transport_is_external(monkeypatch, hosted):
 
     monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
     client, _ = _constructed_local_openai(monkeypatch)
-    assert provider_transport_destination(client) == ("external" if hosted else "local")
+    assert provider_transport_destination(client) == "external"

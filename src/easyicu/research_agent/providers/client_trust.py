@@ -22,7 +22,10 @@ import os
 import sys
 import threading
 import weakref
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from enum import Enum
 from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
@@ -47,11 +50,107 @@ INVALID_PROVIDER_BASE_URL_OVERRIDE = "invalid_provider_base_url_override"
 OPENROUTER_BASE_URL_OVERRIDE = "openrouter_base_url_override"
 UNSUPPORTED_PROVIDER = "unsupported_provider"
 EXTERNAL_LLM_NOT_AUTHORIZED = "external_llm_not_authorized"
+PROVIDER_NOT_CLEARED = "provider_not_cleared_for_credentialed_data"
+PROVIDER_POLICY_NOTICE_KEY = "physionet_llm_data_handling_declaration"
+
+
+class DataHandling(str, Enum):
+    ON_DEVICE = "on_device"
+    ZERO_RETENTION_DECLARED = "zero_retention_declared"
+    UNSPECIFIED = "unspecified"
+
+
+class InferenceLocation(str, Enum):
+    ON_DEVICE = "on_device"
+    UNSPECIFIED = "unspecified"
+
+
+def provider_policy_fields(environment: Mapping[str, str]) -> dict[str, Any]:
+    """Declarations are explicit configuration; no provider preset supplies one."""
+    return {
+        "data_handling": DataHandling(environment.get("EASYICU_PROVIDER_DATA_HANDLING", "unspecified")),
+        "inference_location": InferenceLocation(environment.get("EASYICU_PROVIDER_INFERENCE_LOCATION", "unspecified")),
+    }
+
+
+def credentialed_source(source: str) -> bool:
+    """Resolve registry aliases without conflating public demos with parents."""
+    from easyicu.databases.profiles import get_database_profile
+
+    key = str(source or "").strip().lower()
+    try:
+        key = get_database_profile(key).key
+    except (KeyError, ValueError):
+        pass
+    return key in {"miiv", "mimic", "miii", "eicu", "hirid", "aumc", "sic", "sicdb"}
+
+
+_PUBLIC_DEMO_DATABASE: ContextVar[str] = ContextVar("public_demo_database", default="")
+
+
+@contextmanager
+def public_demo_source_scope(database: str):
+    """Host-only scope for a pinned public release verified by the source owner."""
+    token = _PUBLIC_DEMO_DATABASE.set(database)
+    try:
+        yield
+    finally:
+        _PUBLIC_DEMO_DATABASE.reset(token)
+
+
+def source_requires_clearance(source: str) -> bool:
+    return credentialed_source(source) and source != _PUBLIC_DEMO_DATABASE.get()
+
+
+def require_data_handling(source: str, data_handling: DataHandling | str) -> None:
+    if source_requires_clearance(source) and DataHandling(data_handling) is DataHandling.UNSPECIFIED:
+        raise ProviderConfigurationError(PROVIDER_NOT_CLEARED, "configured_provider")
+
+
+def require_credentialed_data_clearance(client: Any, source: str) -> None:
+    """Check every possible provider leaf before deriving a credentialed prompt."""
+    if not source_requires_clearance(source):
+        return
+    stack = [client]
+    seen: set[int] = set()
+    while stack:
+        item = stack.pop()
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
+        record = _trusted_client_record(item)
+        if record is not None and record.kind in {"offline", "external_capture"}:
+            continue
+        if record is not None and record.kind == "wrapper" and record.children_getter:
+            stack.extend(record.children_getter())
+            continue
+        authorization = record.authorization if record else None
+        handling = (
+            authorization.data_handling
+            if _valid_provider_authorization(authorization)
+            else DataHandling.UNSPECIFIED
+        )
+        require_data_handling(source, handling)
+
+
+def require_run_clearance(database: str, additional_sources: Sequence[str] | None, *clients: Any) -> None:
+    if clients and clients[0] is None:
+        raise ValueError(
+            "ResearchAgentPipeline.run() now requires an explicit `llm=` "
+            "client. Pass MockLLMClient() only for tests or deterministic "
+            "demo runs; the pipeline no longer falls back to mock silently."
+        )
+    for source in (database, *(additional_sources or ())):
+        for client in clients:
+            if client is not None:
+                require_credentialed_data_clearance(client, source)
+
+
+def require_context_clearance(context: Any, *clients: Any) -> None:
+    require_run_clearance(context.cohort.database, context.cross_database_validation, *clients)
 
 
 @dataclass(frozen=True)
-
-
 class _CallableContract:
     client_type: type[Any] | None = None
     complete_impl: object | None = None
@@ -117,6 +216,8 @@ class ProviderAuthorization:
     destination: str
     authorization_mode: str
     authorization_sha256: str
+    data_handling: DataHandling = DataHandling.UNSPECIFIED
+    inference_location: InferenceLocation = InferenceLocation.UNSPECIFIED
 
     @classmethod
     def create(
@@ -127,9 +228,18 @@ class ProviderAuthorization:
         base_url: str,
         destination: str,
         authorization_mode: str,
+        data_handling: DataHandling | str = DataHandling.UNSPECIFIED,
+        inference_location: InferenceLocation | str = InferenceLocation.UNSPECIFIED,
     ) -> "ProviderAuthorization":
         if destination not in {"external", "local"}:
             raise ValueError("provider destination must be external or local")
+        handling = DataHandling(data_handling)
+        location = InferenceLocation(inference_location)
+        if handling is DataHandling.ON_DEVICE:
+            location = InferenceLocation.ON_DEVICE
+        if location is InferenceLocation.ON_DEVICE:
+            handling = DataHandling.ON_DEVICE
+        destination = "local" if location is InferenceLocation.ON_DEVICE else "external"
         payload = {
             "schema": "easyicu.provider_authorization/1",
             "provider": str(provider),
@@ -137,6 +247,8 @@ class ProviderAuthorization:
             "base_url": str(base_url),
             "destination": destination,
             "authorization_mode": str(authorization_mode),
+            "data_handling": handling.value,
+            "inference_location": location.value,
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return cls(
@@ -146,6 +258,8 @@ class ProviderAuthorization:
             destination=destination,
             authorization_mode=payload["authorization_mode"],
             authorization_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            data_handling=handling,
+            inference_location=location,
         )
 
 
@@ -155,11 +269,14 @@ def _valid_provider_authorization(value: object) -> bool:
     if value.destination == "external" and value.authorization_mode not in {
         "operator_env",
         "account_session",
+        "local_exempt",
+        "local_x_api_key",
     }:
         return False
     if value.destination == "local" and value.authorization_mode not in {
         "local_exempt",
         "local_x_api_key",
+        "operator_env",
     }:
         return False
     expected = ProviderAuthorization.create(
@@ -168,6 +285,8 @@ def _valid_provider_authorization(value: object) -> bool:
         base_url=value.base_url,
         destination=value.destination,
         authorization_mode=value.authorization_mode,
+        data_handling=value.data_handling,
+        inference_location=value.inference_location,
     )
     return value == expected
 
@@ -181,8 +300,8 @@ def _is_reviewed_client_type(client: Any, name: str) -> bool:
 def provider_transport_destination(client: Any) -> str:
     """Classify provider transport without reading credentials.
 
-    Direct non-loopback :class:`OpenAIClient` instances remain external even
-    before all legacy constructors have migrated into this factory.
+    Only a factory-bound on-device declaration grants local data handling.
+    Network addresses, including loopback proxies, do not establish it.
     """
 
     record = _trusted_client_record(client)
@@ -208,15 +327,14 @@ def provider_transport_destination(client: Any) -> str:
         assert record.authorization is not None
         return record.authorization.destination
     if bool(getattr(client, "__easyicu_openai_transport__", False)):
-        base_url = getattr(client, "_resolved_base_url", None)
-        return "local" if is_loopback_openai_base_url(base_url) else "external"
+        return "external"
     if bool(getattr(client, "__easyicu_anthropic_transport__", False)):
         return "external"
     # Unknown adapters are never trusted merely because they are in-process:
     # they may forward requests to an arbitrary remote service. Treat them as
     # external so repair prompts receive the structured outbound envelope, and
     # keep their authorization mode unmanaged below. A truly local transport
-    # must be factory-attested (for example, a loopback OpenAI endpoint).
+    # must carry an explicit factory-bound on-device declaration.
     return "external"
 
 
@@ -415,6 +533,8 @@ def provider_authorization_manifest(client: Any) -> dict[str, Any]:
                     "model": authorization.model,
                     "base_url": authorization.base_url,
                     "destination": authorization.destination,
+                    "data_handling": authorization.data_handling.value,
+                    "inference_location": authorization.inference_location.value,
                     "authorization_mode": authorization.authorization_mode,
                     "authorization_sha256": authorization.authorization_sha256,
                     "transport_policy": transport_policy,
@@ -719,8 +839,9 @@ def _transport_matches_authorization(
             authorization.base_url
         ):
             return False
-        is_loopback = is_loopback_openai_base_url(live_base_url)
-        if (authorization.destination == "local") != is_loopback:
+        if authorization.destination == "local" and (
+            authorization.inference_location is not InferenceLocation.ON_DEVICE
+        ):
             return False
         live_auth_header = str(
             getattr(client, "_provider_auth_header_mode", "authorization")
@@ -855,6 +976,7 @@ class ProviderConfigurationError(ValueError):
 
     def __init__(self, issue: str, provider: str) -> None:
         self.issue = issue
+        self.reason_code = issue
         self.provider = provider
         if issue == MISSING_OPENAI_KEY:
             message = "OPENAI_API_KEY is required for --provider openai"
@@ -899,6 +1021,8 @@ class ProviderConfigurationError(ValueError):
                 f"{ALLOW_EXTERNAL_LLM_ENV}=1 only after approving the exact "
                 "provider endpoint and outbound data policy"
             )
+        elif issue in {PROVIDER_NOT_CLEARED, "agentic_coder_credentialed_source_forbidden"}:
+            message = issue
         else:
             message = f"Unsupported provider: {provider}"
         super().__init__(message)

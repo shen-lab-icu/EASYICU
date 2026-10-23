@@ -19,6 +19,10 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 import pandas as pd
 
 from ..schema import ResearchContext
+from ..gates.publication_disclosure import SMALL_CELL_BELOW
+from ..research_context.outbound import (
+    SUPPRESSED_COUNT, project_outbound_counts, project_outbound_step_summary,
+)
 from ..authority.evidence_store import EvidenceStore
 from ..authority.target_trial_scientific_claims import (
     TARGET_TRIAL_REPORTING_KEY,
@@ -122,13 +126,19 @@ def _summarise_table_one_rows(rows: Any) -> Dict[str, Any]:
             ("median", f"{prefix}_median"),
             ("q25", f"{prefix}_q25"),
             ("q75", f"{prefix}_q75"),
-            ("most_common", f"{prefix}_most_common"),
-            ("most_common_n", f"{prefix}_most_common_n"),
         ):
             scalar = _first_present_scalar(item, (source_key,))
             if scalar is not None:
                 summary[target_key] = scalar
-    return summary
+        common_n = item.get("most_common_n")
+        total = item.get("n")
+        if (
+            isinstance(common_n, (int, float)) and not isinstance(common_n, bool)
+            and isinstance(total, (int, float)) and not isinstance(total, bool)
+            and SMALL_CELL_BELOW <= common_n <= total
+        ):
+            summary[f"{prefix}_most_common_share"] = common_n / total
+    return project_outbound_counts(summary)
 
 
 def _summarise_primary_association_table(
@@ -387,6 +397,34 @@ _REPORTABLE_NUMERIC_PREFIXES = (
     "reportable_target_trial_results.",
 )
 _REPORTABLE_NUMERIC_CAP_PER_STEP = 50
+_SECONDARY_NUMERIC_KEYS = frozenset({
+    "cohort_male_fraction", "exposure_p_value", "primary_or_se", "prevalence_pct",
+    "standard_error", "se",
+})
+
+
+def _writer_numeric_field_allowed(field: str) -> bool:
+    """Evidence verification binds bytes; it does not confer egress permission."""
+    from ..gates.publication_disclosure import is_subject_count_name
+
+    if "most_common" in field or field == "__easyicu_numeric_claim_overflow__":
+        return False
+    if field.startswith(_REPORTABLE_NUMERIC_PREFIXES):
+        return True
+    key = re.sub(r"^metrics(?:\[\d+\])?\.", "", field.removeprefix("statistic:"))
+    if "." in key or "[" in key:
+        return False
+    return (
+        key in WRITER_DIGEST_PREFERRED_KEYS
+        or key in _SECONDARY_NUMERIC_KEYS
+        or any(
+            key.removesuffix(suffix) in WRITER_DIGEST_PREFERRED_KEYS
+            for suffix in ("_se", "_ci_low", "_ci_high", "_ci_lower", "_ci_upper")
+            if key.endswith(suffix)
+        )
+        or is_subject_count_name(key)
+        or key in project_outbound_step_summary({key: 0})
+    )
 
 
 def _preferred_writer_scalar(summary: Mapping[str, Any], key: str) -> Any:
@@ -753,14 +791,14 @@ def _render_writer_evidence_digest(
                     "research_question": context.research_question,
                     "cohort_name": context.cohort.cohort_name,
                     "database": context.cohort.database,
-                    "source_export_n_stays": context.cohort.n_stays,
-                    "source_export_n_patients": context.cohort.n_patients,
+                    "source_export_n_stays": project_outbound_counts(context.cohort.n_stays, key="n"),
+                    "source_export_n_patients": project_outbound_counts(context.cohort.n_patients, key="n"),
                     "source_population_role": "pre_analysis_source_export",
                     "target_outcome": context.target_outcome,
                     # The population the analysis selected; the question
                     # above names one and selects no one.
                     **(
-                        {"population_selection": population.record()}
+                        {"population_selection": project_outbound_counts(population.record())}
                         if population is not None
                         else {}
                     ),
@@ -941,7 +979,7 @@ def _render_writer_evidence_digest(
                     ),
                 )
             )
-        digest_row = prepare_p_values_for_writer(digest_row)
+        digest_row = project_outbound_counts(prepare_p_values_for_writer(digest_row))
         lines.append(
             "  "
             + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
@@ -959,7 +997,7 @@ def _render_writer_evidence_digest(
     )
     if method_rows:
         lines.extend(
-            "- " + json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+            "- " + json.dumps(project_outbound_counts(row), ensure_ascii=False, sort_keys=True, default=str)
             for row in method_rows
         )
     else:
@@ -1130,7 +1168,7 @@ def _render_writer_evidence_digest_v2(
         # Group claims by step_id, sorted for determinism.
         claims_by_step: Dict[str, List[Any]] = {}
         for claim in evidence.authoritative_numeric_claims(all_records):
-            if claim.source_field == "__easyicu_numeric_claim_overflow__":
+            if not _writer_numeric_field_allowed(claim.source_field):
                 continue
             claims_by_step.setdefault(claim.step_id, []).append(claim)
         if claims_by_step:
@@ -1182,7 +1220,10 @@ def _render_writer_evidence_digest_v2(
                         f"{src_step}.{src_field}"
                         for src_step, src_field in getattr(c, "derived_from", [])
                     )
-                    derived_lines.append(f"  {c.source_field}={c.value}")
+                    projected = project_outbound_counts(c.value, key=c.source_field)
+                    derived_lines.append(f"  {c.source_field}={projected}")
+                    if projected == SUPPRESSED_COUNT:
+                        continue
                     derived_lines.append(f"    cite={{evidence:{c.evidence_id}}}")
                     derived_lines.append(f"    formula={c.formula}")
                     if sources:
@@ -1228,8 +1269,8 @@ def _render_writer_evidence_digest_v2(
                     f"  {c.source_field}="
                     + render_claim_value_for_writer(
                         source_field=c.source_field,
-                        value=c.value,
-                        canonical=c.canonical,
+                        value=project_outbound_counts(c.value, key=c.source_field),
+                        canonical=(None if project_outbound_counts(c.value, key=c.source_field) == SUPPRESSED_COUNT else c.canonical),
                     )
                     + f"; cite={{evidence:{c.evidence_id}}}"
                 )
@@ -1248,7 +1289,11 @@ def _render_writer_evidence_digest_v2(
             if not isinstance(summary, dict) or not summary:
                 continue
             uncovered_pairs: List[tuple[str, Any]] = []
-            for key, value in summary.items():
+            allowed_summary = {
+                **project_outbound_step_summary(summary),
+                **{key: value for key, value in summary.items() if key in (*WRITER_DIGEST_PREFERRED_KEYS, *_SECONDARY_NUMERIC_KEYS)},
+            }
+            for key, value in allowed_summary.items():
                 if not isinstance(value, (int, float, str)) and not (
                     isinstance(value, list)
                     and value
@@ -1274,7 +1319,7 @@ def _render_writer_evidence_digest_v2(
                     f"  {key}="
                     + render_claim_value_for_writer(
                         source_field=key,
-                        value=value,
+                        value=project_outbound_counts(value, key=key),
                     )
                 )
             if truncated:
@@ -1684,7 +1729,7 @@ def _render_robustness_panel_block(
             f"point={_fmt_panel_number(primary.point_estimate)}, "
             f"CI=[{_fmt_panel_number(primary.ci_low)}, "
             f"{_fmt_panel_number(primary.ci_high)}], "
-            f"n={primary.n}, "
+            f"n={project_outbound_counts(primary.n, key='n')}, "
             f"cite={{evidence:{primary.evidence_id}}}"
         )
         lines.extend(
@@ -1702,7 +1747,7 @@ def _render_robustness_panel_block(
     ):
         lines.append(
             "primary record has no reportable effect: "
-            f"n={primary.n}, converged={primary.converged}, notes={primary.notes}. "
+            f"n={project_outbound_counts(primary.n, key='n')}, converged={primary.converged}, notes={primary.notes}. "
             "Retain this recorded failure or limitation; do not invent an estimate."
         )
     else:
@@ -1755,7 +1800,7 @@ def _render_robustness_panel_block(
             continue
         lines.append(
             f"{'variant' if row.independent_variant else 'documentation only (not an independent refit)'}: "
-            f"spec_id={row.spec_id}, axis={row.axis}, n={row.n}, converged={row.converged}, "
+            f"spec_id={row.spec_id}, axis={row.axis}, n={project_outbound_counts(row.n, key='n')}, converged={row.converged}, "
             f"point={_fmt_panel_number(row.point_estimate)}, "
             f"CI=[{_fmt_panel_number(row.ci_low)}, {_fmt_panel_number(row.ci_high)}], "
             f"contrast={row.contrast_id or 'not declared'}, unit={row.effect_unit or 'not declared'}, "

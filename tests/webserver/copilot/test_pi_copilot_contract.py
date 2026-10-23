@@ -154,7 +154,7 @@ def test_service_workspace_seal_survives_tool_context_composition(
         store_path=tmp_path / "pi-sessions.json",
         gateway=gateway,
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-workspace-seal",
             project_id="project-a",
@@ -361,7 +361,7 @@ def test_service_and_tool_adapters_share_one_project_workflow_owner(
 
     service_payload = service.get_project_workflow(project_id="project-one-owner")
     tool_payload = tool_module._workflow_snapshot(
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(
                 session_id="pi-one-owner",
                 binding=AuthorityBinding(
@@ -1757,7 +1757,8 @@ def test_verified_first_use_config_is_applied_before_chat_unlocks(
         enable_ai=True,
     )
 
-    assert current_settings["ai_enabled"] is True
+    assert current_settings["ai_enabled"] is False
+    assert current_settings["copilot_enabled"] is True
     assert gateway.applied_config is not None
     assert gateway.applied_config.api_key == "private-setup-key"
     assert payload["runtime"]["status"] == "ready"
@@ -1785,6 +1786,17 @@ def test_session_requires_both_global_and_per_session_opt_in(
     with pytest.raises(PiCopilotError) as turn_block:
         service.create_session(project_id="project-opt-in", external_llm_opt_in=False)
     assert turn_block.value.code == "external_llm_opt_in_required"
+
+
+def test_session_persists_the_callers_opt_in_without_granting_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, study_state: dict[str, Any],
+) -> None:
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=FakeGateway())
+    # Isolate session persistence from the separately tested external-provider
+    # gate, as an offline connection may be created without an external grant.
+    monkeypatch.setattr(service, "_provider_gate", lambda **kwargs: {})
+    created = service.create_session(project_id="project-local", external_llm_opt_in=False)
+    assert service._get_record(created["session"]["session_id"]).external_llm_opt_in is False
 
 
 def test_new_codex_session_uses_one_account_model_for_chat_and_analysis(
@@ -1961,7 +1973,7 @@ def test_session_binding_prefers_newer_pipeline_run_in_project_workspace(
 def test_implicit_run_inspection_uses_latest_history_not_stale_session_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-latest-run",
             binding=AuthorityBinding(
@@ -2917,7 +2929,7 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
     result = tool_module.execute_tool(
         "easyicu_inspect_run",
         {},
-        ToolExecutionContext(session=record),
+        ToolExecutionContext(data_handling="zero_retention_declared", session=record),
     )
     assert result["code"] == "easyicu_run_not_found"
     assert manager.lookups == []
@@ -3334,19 +3346,21 @@ def test_control_tools_fail_closed_without_owner_contracts(
         session_id="pi-test",
         binding=AuthorityBinding(run_id="run-1"),
     )
-    no_grant = ToolExecutionContext(session=session)
+    no_grant = ToolExecutionContext(data_handling="zero_retention_declared", session=session)
     run_block = tool_module.execute_tool(
         "easyicu_run", {"run_type": "preflight"}, no_grant
     )
     assert run_block["code"] == "study_context_required"
 
-    run_grant = ToolExecutionContext(
+    run_grant = ToolExecutionContext(data_handling="zero_retention_declared",
         session=session, allowed_actions=frozenset({"provider_run"})
     )
     full_block = tool_module.execute_tool(
         "easyicu_run", {"run_type": "full"}, run_grant
     )
-    assert full_block["code"] == "external_llm_opt_in_required"
+    assert full_block["code"] == "study_context_required"
+    without_run_grant = tool_module.execute_tool("easyicu_run", {"run_type": "full"}, no_grant)
+    assert without_run_grant["code"] == "external_llm_opt_in_required"
 
     resume_block = tool_module.execute_tool("easyicu_resume", {}, no_grant)
     assert resume_block["code"] == "scientific_resume_not_supported"
@@ -3384,7 +3398,7 @@ def test_invalid_control_request_does_not_consume_one_use_grant(
     expected_code: str,
 ) -> None:
     monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: None)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(session_id="pi-invalid-grant"),
         allowed_actions={action},
     )
@@ -3447,7 +3461,7 @@ def test_superseded_plan_replan_starts_fresh_pipeline_run(
         ),
     )
     assert study_owner.scientific_configuration_sha256(study) != "a" * 64
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-fresh-plan",
             external_llm_opt_in=True,
@@ -3514,7 +3528,7 @@ def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
             submitted, request, job_id="job-terminal-retry", **kwargs
         ),
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-terminal-retry",
             external_llm_opt_in=True,
@@ -3597,7 +3611,7 @@ def test_preflight_only_history_replan_starts_fresh_pipeline_run(
             submitted, request, job_id="job-fresh-after-bridge-failure", **kwargs
         ),
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-preflight-only",
             external_llm_opt_in=True,
@@ -3687,7 +3701,7 @@ def test_current_plan_restarts_only_with_current_user_amendments(
         tool_module.sources, "load_registry",
         lambda: {"sources": [{"ok": True, "path": "/private/export", "label": "MIIV"}]},
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-current-review",
             external_llm_opt_in=True,
@@ -3780,7 +3794,7 @@ def test_registered_data_source_choices_are_path_free(
             ],
         },
     )
-    context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-sources"))
+    context = ToolExecutionContext(data_handling="zero_retention_declared", session=PiSessionRecord(session_id="pi-sources"))
 
     catalog = tool_module.execute_tool("easyicu_list_data_sources", {}, context)
 
@@ -3875,7 +3889,7 @@ def test_registered_data_source_choices_are_path_free(
     ambiguous = tool_module.execute_tool(
         "easyicu_list_data_sources",
         {"database": "miiv"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-sources-ambiguous"),
             user_message="帮我查一下 MIMIC 数据库里的 A41 队列",
         ),
@@ -3888,7 +3902,7 @@ def test_registered_data_source_choices_are_path_free(
     explicit = tool_module.execute_tool(
         "easyicu_list_data_sources",
         {"database": "miiv"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-sources-explicit"),
             user_message="使用 MIMIC-IV 3.1",
         ),
@@ -3914,7 +3928,7 @@ def test_registered_data_source_choices_are_path_free(
     alternatives = tool_module.execute_tool(
         "easyicu_list_data_sources",
         {"database": "miiv"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-sources-alternatives"),
             user_message="选择其他已注册的 MIMIC-IV v3.1 导出",
         ),
@@ -3935,7 +3949,7 @@ def test_registered_data_source_choices_are_path_free(
     corrected_model_argument = tool_module.execute_tool(
         "easyicu_list_data_sources",
         {"database": "mimic"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(session_id="pi-sources-corrected-model-argument"),
             user_message="研究 MIMIC-IV 成人 ICU 人群",
         ),
@@ -3972,7 +3986,7 @@ def test_conversational_setup_requires_explicit_first_stay_selection(
     blocked = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"cohort": {"preset": "adult_first", "label": "Adult first ICU stay"}},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="研究成人 ICU 人群的患病率",
             allowed_actions={"configure"},
@@ -3985,7 +3999,7 @@ def test_conversational_setup_requires_explicit_first_stay_selection(
     accepted = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"cohort": {"preset": "adult_first", "label": "Adult first ICU stay"}},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="采用每位患者首次 ICU 入住",
             allowed_actions={"configure"},
@@ -4023,7 +4037,7 @@ def test_conversational_setup_requires_explicit_all_stays_selection(
     blocked = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"cohort": {"preset": "adult_all", "label": "All adult ICU stays"}},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="研究成人 ICU 人群的患病率",
             allowed_actions={"configure"},
@@ -4036,7 +4050,7 @@ def test_conversational_setup_requires_explicit_all_stays_selection(
     accepted = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"cohort": {"preset": "adult_all", "label": "All adult ICU stays"}},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="纳入所有符合条件的成人 ICU stays，包括重复 ICU 入住。",
             allowed_actions={"configure"},
@@ -4084,7 +4098,7 @@ def test_opening_question_saves_without_inventing_an_analysis_unit(
             "purpose": "Estimate prevalence and evaluate an observational association.",
             "cohort": {"preset": "adult_all", "label": "Adult ICU population"},
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message=(
                 "研究 MIMIC-IV 成人 ICU 人群中 Sepsis-3 的患病率，"
@@ -4130,7 +4144,7 @@ def test_opening_question_defers_phenotype_restrictions_to_reviewed_plan(
             **({"question": question} if include_question else {}),
             "cohort": {"preset": preset, "label": "Keep both groups"},
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session, user_message=question, allowed_actions={"configure"},
         ),
     )
@@ -4178,7 +4192,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
     blocked_outcome = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"outcome": "ICU mortality"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="研究 Sepsis-3 与 ICU 死亡的关系。",
             allowed_actions={"configure"},
@@ -4189,7 +4203,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
     blocked_exposure = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"primary_exposure": "Standard Sepsis-3"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="研究 Sepsis-3 与 ICU 死亡的关系。",
             allowed_actions={"configure"},
@@ -4201,7 +4215,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
     accepted_outcome = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"outcome": "ICU mortality"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="主要结局使用 ICU stay 期间死亡，不改成住院期间死亡。",
             allowed_actions={"configure"},
@@ -4215,7 +4229,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
             "question": "研究 Sepsis-3 与院内死亡的关系。",
             "outcome": "院内死亡（本次住院期间死亡）",
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message=(
                 "当前导出没有可验证的 ICU 专用死亡结局。"
@@ -4232,7 +4246,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
     accepted_rendered_affirmation = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"outcome": "24 小时 landmark 后至出院期间发生的院内死亡"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="是，采用该定义",
             allowed_actions={"configure"},
@@ -4244,7 +4258,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
     accepted_explicit_reconfirmation = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"outcome": "24 小时 landmark 后至出院期间发生的院内死亡"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message=(
                 "请重新确认主要结局为“24 小时 landmark 后至出院期间发生的院内死亡”"
@@ -4260,7 +4274,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
             "outcome": "ICU mortality",
             "primary_exposure": "Standard Sepsis-3",
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="ICU 住院期间死亡（推荐）",
             allowed_actions={"configure"},
@@ -4273,7 +4287,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
     accepted_exposure = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"primary_exposure": "Standard Sepsis-3"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="主要暴露采用标准 Sepsis-3，不要使用实验性的 SOFA-2。",
             allowed_actions={"configure"},
@@ -4284,7 +4298,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
     accepted_rendered_exposure_affirmation = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"primary_exposure": "入 ICU 后 0–24 小时内最高的有效乳酸值"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="是，采用该定义",
             allowed_actions={"configure"},
@@ -4295,7 +4309,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
     accepted_rendered_exposure_named_choice = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"primary_exposure": "lact"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="确认将乳酸水平作为本研究的主要暴露",
             allowed_actions={"configure"},
@@ -4337,7 +4351,7 @@ def test_conversational_setup_keeps_confirmed_outcome_when_model_bundles_exposur
             "outcome": "ICU mortality",
             "primary_exposure": "Standard Sepsis-3",
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="主要结局使用 ICU stay 期间死亡，不改成住院期间死亡。",
             allowed_actions={"configure"},
@@ -4385,7 +4399,7 @@ def test_conversational_setup_does_not_bundle_all_stays_with_clustering(
     blocked = tool_module.execute_tool(
         "easyicu_update_study_context",
         proposal,
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="纳入所有符合条件的成人 ICU stays，包括重复 ICU 入住。",
             allowed_actions={"configure"},
@@ -4397,7 +4411,7 @@ def test_conversational_setup_does_not_bundle_all_stays_with_clustering(
     capability_checked = tool_module.execute_tool(
         "easyicu_update_study_context",
         proposal,
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="如果能验证患者聚类坐标，请在统计推断中按患者处理相关性。",
             allowed_actions={"configure"},
@@ -4449,7 +4463,7 @@ def test_exact_question_label_does_not_confirm_sibling_candidate_slots(
             "primary_exposure": "Sepsis-3",
             "analysis_goal": "描述 Sepsis-3 的患病率，并评估其与 ICU 死亡的关联。",
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message=(
                 "我的 ICU 研究问题是：我想研究 MIMIC-IV 成人 ICU 人群中 "
@@ -4511,7 +4525,7 @@ def test_dropped_scientific_slots_are_named_in_the_receipt(
             "outcome": "ICU mortality",
             "primary_exposure": "Sepsis-3",
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message=(
                 "我想研究 MIMIC-IV 成人 ICU 人群中 Sepsis-3 的患病率，"
@@ -4565,7 +4579,7 @@ def test_conversational_setup_requires_direct_analysis_goal_choice(
     blocked = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"analysis_goal": "Descriptive prevalence and observational association"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="保留重复 ICU stays 并按患者聚类。",
             allowed_actions={"configure"},
@@ -4577,7 +4591,7 @@ def test_conversational_setup_requires_direct_analysis_goal_choice(
     accepted = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"analysis_goal": "Descriptive prevalence and observational association"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="先报告患病率，再评估观察性关联；不要写成因果效应。",
             allowed_actions={"configure"},
@@ -4589,7 +4603,7 @@ def test_conversational_setup_requires_direct_analysis_goal_choice(
     compact_choice = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"analysis_goal": "Adjusted observational association"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="描述患病率，并进行协变量调整后的关联分析（推荐）",
             allowed_actions={"configure"},
@@ -4601,7 +4615,7 @@ def test_conversational_setup_requires_direct_analysis_goal_choice(
     explicit_noncausal_goal = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"analysis_goal": "乳酸与死亡的描述性及预后关联"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="评估描述性和预后关联，不作因果解释。",
             allowed_actions={"configure"},
@@ -4620,7 +4634,7 @@ def test_conversational_setup_requires_direct_analysis_goal_choice(
                 "入 ICU 后前24小时 KDIGO AKI 分级（有序分类变量）"
             ),
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message=(
                 "把 KDIGO 作为有序分类变量，不用均值或标准差把它当连续变量。"
@@ -4636,7 +4650,7 @@ def test_conversational_setup_requires_direct_analysis_goal_choice(
     synchronized_wording = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"analysis_goal": "描述患病率并评估与院内死亡的调整后关联"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message=(
                 "请把分析目标中的 ICU mortality 同步替换为院内死亡；"
@@ -4694,7 +4708,7 @@ def test_analysis_goal_update_preserves_confirmed_patient_clustering(
                 "variance_estimator": "none_counts_only",
             },
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message=(
                 "先报告患病率，再评估观察性关联；不要写成因果效应。"
@@ -4765,7 +4779,7 @@ def test_explicit_age_sex_adjustment_gets_owner_known_baseline_roles(
             "covariates": ["age", "sex"],
             "covariate_selection": "planner_selectable",
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message=(
                 "主要调整年龄和性别；其他候选协变量必须逐项让我确认。"
@@ -4811,7 +4825,7 @@ def test_covariate_operationalization_rejects_modeling_role_before_write(
     result = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"covariate_operationalizations": {"age": "nonlinear_continuous"}},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="年龄作为非线性连续变量建模。",
             allowed_actions={"configure"},
@@ -4903,7 +4917,7 @@ def test_explicit_no_adjustment_clears_covariate_contract_atomically(
                 "variance_estimator": "none_counts_only",
             },
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message=(
                 "保留 descriptive_epidemiology，并清除旧 age/sex 调整登记；"
@@ -4998,7 +5012,7 @@ def test_explicit_export_format_writes_confirmation_receipt(
     result = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"export_format": "parquet"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="研究数据包导出为 Parquet。",
             allowed_actions={"configure"},
@@ -5012,7 +5026,7 @@ def test_explicit_export_format_writes_confirmation_receipt(
     compact_choice = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"export_format": "parquet"},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="Parquet（推荐，适合后续分析）",
             allowed_actions={"configure"},
@@ -5056,7 +5070,7 @@ def test_conversational_setup_rejects_unrequested_explicit_only_feature_module(
                 "concept_selection_sep3_sofa2_user_turn_verified": True,
             },
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="研究成人 ICU 人群的 Sepsis-3 患病率",
             allowed_actions={"configure"},
@@ -5070,7 +5084,7 @@ def test_conversational_setup_rejects_unrequested_explicit_only_feature_module(
     accepted = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"modules": ["demographics", "sepsis3_sofa2", "outcome"]},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message="使用实验性 SOFA-2 Sepsis-3 敏感性表型",
             allowed_actions={"configure"},
@@ -5169,7 +5183,7 @@ def test_source_concept_choices_are_exact_module_scoped_and_path_free(
             ],
         ),
     )
-    context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-concepts"))
+    context = ToolExecutionContext(data_handling="zero_retention_declared", session=PiSessionRecord(session_id="pi-concepts"))
 
     result = tool_module.execute_tool(
         "easyicu_list_source_concepts",
@@ -5255,7 +5269,7 @@ def test_source_concepts_resolve_bound_source_display_alias(
             ],
         ),
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-bound-source",
             binding=AuthorityBinding(
@@ -5336,7 +5350,7 @@ def test_conversational_setup_binds_verified_execution_concepts(
         return {**current, **raw, "revision": 3}
 
     monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-execution-bind",
             binding=AuthorityBinding(
@@ -5428,7 +5442,7 @@ def test_conversational_setup_surfaces_repeated_stay_dependence_gate(
         "_bound_context",
         lambda _binding: tool_module.study_contexts.get_context(current["id"]),
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-repeat-stays",
             binding=AuthorityBinding(
@@ -5493,7 +5507,7 @@ def test_conversational_setup_merges_partial_nested_scientific_patch(
             "cohort": {"exclude_readmissions": True},
             "confirmations": {"first_eligible_icu_stay_only": True},
         },
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(
                 session_id="pi-nested-patch",
                 binding=AuthorityBinding(
@@ -5540,7 +5554,7 @@ def test_conversational_setup_rejects_prose_extraction_cohort_preset(
     result = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"cohort": {"preset": "ICU stay; age >= 18; ICD-10 prefix A41"}},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(
                 session_id="pi-prose-cohort-preset",
                 binding=AuthorityBinding(
@@ -5597,7 +5611,7 @@ def test_conversational_setup_rejects_generic_sepsis_sofa2_drift(
         "upsert_context",
         lambda raw, **_kwargs: writes.append(dict(raw)) or raw,
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-generic-sepsis",
             binding=AuthorityBinding(
@@ -5665,7 +5679,7 @@ def test_conversational_setup_persists_host_verified_explicit_concept_authorizat
         "upsert_context",
         lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 3},
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-explicit-sepsis",
             binding=AuthorityBinding(
@@ -5739,7 +5753,7 @@ def test_conversational_setup_binds_exact_registered_source_id(
         return {**current, **raw, "revision": 3}
 
     monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-source-bind",
             binding=AuthorityBinding(
@@ -5827,7 +5841,7 @@ def test_confirmed_conversation_source_is_not_silently_rebound(
             confirmed_at="2026-08-25T00:00:00Z",
         ),
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=session,
         user_message="我想研究 MIMIC-IV 成人 ICU 人群中的 Sepsis-3 患病率。",
         allowed_actions={"configure"},
@@ -5856,7 +5870,7 @@ def test_workspace_tools_are_project_scoped_and_reuse_one_turn_write_grant(
         project_id="project-a",
         agent_mode="research",
     )
-    research_context = ToolExecutionContext(
+    research_context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=research,
         workspace_root=tmp_path,
     )
@@ -5872,7 +5886,7 @@ def test_workspace_tools_are_project_scoped_and_reuse_one_turn_write_grant(
         project_id="project-a",
         agent_mode="workspace",
     )
-    no_grant = ToolExecutionContext(session=workspace, workspace_root=tmp_path)
+    no_grant = ToolExecutionContext(data_handling="zero_retention_declared", session=workspace, workspace_root=tmp_path)
     blocked_write = tool_module.execute_tool(
         "easyicu_write_project_file",
         {"file": "index.html", "content": "<h1>Blocked</h1>"},
@@ -5880,7 +5894,7 @@ def test_workspace_tools_are_project_scoped_and_reuse_one_turn_write_grant(
     )
     assert blocked_write["code"] == "pi_workspace_write_authorization_required"
 
-    granted = ToolExecutionContext(
+    granted = ToolExecutionContext(data_handling="zero_retention_declared",
         session=workspace,
         allowed_actions={"workspace_write"},
         workspace_root=tmp_path,
@@ -5946,7 +5960,7 @@ def test_workspace_tool_rejects_path_escape_before_host_file_access(
         project_id="project-a",
         agent_mode="workspace",
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=session,
         allowed_actions={"workspace_write"},
         workspace_root=tmp_path,
@@ -6017,7 +6031,7 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
     blocked = tool_module.execute_tool(
         "easyicu_update_study_context",
         proposal,
-        ToolExecutionContext(session=session),
+        ToolExecutionContext(data_handling="zero_retention_declared", session=session),
     )
     assert blocked["code"] == "pi_action_authorization_required"
     assert writes == []
@@ -6025,7 +6039,7 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
     saved = tool_module.execute_tool(
         "easyicu_update_study_context",
         proposal,
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=session,
             user_message=proposal["question"],
             allowed_actions=frozenset({"configure"}),
@@ -6055,7 +6069,7 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
         "_server_design_variance_basis_write": True,
     }
 
-    one_grant = ToolExecutionContext(
+    one_grant = ToolExecutionContext(data_handling="zero_retention_declared",
         session=session,
         user_message=proposal["question"],
         allowed_actions=frozenset({"configure"}),
@@ -6112,7 +6126,7 @@ def test_rejected_sensitivity_does_not_consume_configure_grant(
         return {**current, **raw, "revision": 6}
 
     monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
-    execution = ToolExecutionContext(
+    execution = ToolExecutionContext(data_handling="zero_retention_declared",
         session=session,
         allowed_actions=frozenset({"configure"}),
     )
@@ -6181,7 +6195,7 @@ def test_study_update_accepts_linear_per_unit_and_strips_optional_nulls(
         return {**current, **raw, "revision": 6}
 
     monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
-    execution = ToolExecutionContext(
+    execution = ToolExecutionContext(data_handling="zero_retention_declared",
         session=session,
         allowed_actions=frozenset({"configure"}),
         user_message="Use a linear per-unit lactate sensitivity analysis.",
@@ -6239,7 +6253,7 @@ def test_unsupported_runtime_design_does_not_consume_configure_grant(
         return {**current, **raw, "revision": 6}
 
     monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
-    execution = ToolExecutionContext(
+    execution = ToolExecutionContext(data_handling="zero_retention_declared",
         session=session,
         allowed_actions=frozenset({"configure"}),
     )
@@ -6335,7 +6349,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
             "missing_setup_fields": [],
         },
     )
-    context = ToolExecutionContext(
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-test",
             binding=AuthorityBinding(study_context_id="study-1", study_revision=7),
@@ -6371,7 +6385,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
         ),
     )
 
-    full_context = ToolExecutionContext(
+    full_context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-full-test",
             external_llm_opt_in=True,
@@ -6389,7 +6403,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
     assert pipeline_requests[-1].planner_start_mode == "auto"
     assert not hasattr(pipeline_requests[-1], "path")
 
-    conservative_model_context = ToolExecutionContext(
+    conservative_model_context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-conservative-model-test",
             external_llm_opt_in=True,
@@ -6407,7 +6421,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
     assert promoted_result["details"]["run_id_status"] == "pending_pipeline_start"
     assert pipeline_requests[-1].intent == "candidate_plan"
 
-    literature_context = ToolExecutionContext(
+    literature_context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-full-literature-test",
             external_llm_opt_in=True,
@@ -6452,7 +6466,7 @@ def test_plan_review_run_projection_cannot_be_mistaken_for_executed_analysis(
     result = tool_module.execute_tool(
         "easyicu_inspect_run",
         {},
-        ToolExecutionContext(
+        ToolExecutionContext(data_handling="zero_retention_declared",
             session=PiSessionRecord(
                 session_id="pi-plan-review",
                 binding=AuthorityBinding(

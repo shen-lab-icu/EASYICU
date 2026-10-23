@@ -40,7 +40,8 @@ def discovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     calls: list[tuple[Any, ...]] = []
 
     def transport(method, url, headers, body, timeout):
-        assert settings.load_settings()["ai_enabled"] is True
+        assert settings.load_settings()["copilot_enabled"] is True
+        assert settings.load_settings()["ai_enabled"] is False
         calls.append((method, url, dict(headers), body, timeout))
         return 200, {"data": [{"id": "zeta-model"}, {"id": "alpha-model"}]}
 

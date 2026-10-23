@@ -20,6 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
+from easyicu.research_agent.providers.client_trust import (
+    DataHandling, InferenceLocation, PROVIDER_POLICY_NOTICE_KEY,
+)
 from easyicu.provider_auth import (
     OPENAI_AUTH_HEADER_ENV,
     OpenAIAuthHeader,
@@ -64,6 +67,8 @@ _CONFIG_KEYS = frozenset(
         "EASYICU_PI_MODEL",
         "EASYICU_PI_BASE_URL",
         "EASYICU_PI_API",
+        "EASYICU_PI_DATA_HANDLING",
+        "EASYICU_PI_INFERENCE_LOCATION",
     }
 )
 _MAX_VERIFICATION_RESPONSE_BYTES = 1024 * 1024
@@ -83,6 +88,17 @@ class PiProviderConfig:
     base_url: str
     model: str
     api_transport: str
+    data_handling: DataHandling = DataHandling.UNSPECIFIED
+    inference_location: InferenceLocation = InferenceLocation.UNSPECIFIED
+
+    def __post_init__(self) -> None:
+        handling = DataHandling(self.data_handling)
+        location = InferenceLocation(self.inference_location)
+        if handling is DataHandling.ON_DEVICE or location is InferenceLocation.ON_DEVICE:
+            handling = DataHandling.ON_DEVICE
+            location = InferenceLocation.ON_DEVICE
+        object.__setattr__(self, "data_handling", handling)
+        object.__setattr__(self, "inference_location", location)
 
     @property
     def openai_auth_header(self) -> OpenAIAuthHeader:
@@ -100,6 +116,8 @@ class PiProviderConfig:
             "EASYICU_PI_BASE_URL": self.base_url,
             "EASYICU_PI_MODEL": self.model,
             "EASYICU_PI_API": self.api_transport,
+            "EASYICU_PI_DATA_HANDLING": self.data_handling.value,
+            "EASYICU_PI_INFERENCE_LOCATION": self.inference_location.value,
         }
 
     def fingerprint(self) -> str:
@@ -154,6 +172,8 @@ class PiProviderConfigStore:
         base_url: str,
         model: str,
         api_transport: str,
+        data_handling: DataHandling = DataHandling.UNSPECIFIED,
+        inference_location: InferenceLocation = InferenceLocation.UNSPECIFIED,
     ) -> PiProviderConfig:
         provider_text = cls._clean(provider, field="provider", limit=80)
         api_key_text = cls._clean(api_key, field="api_key", limit=8192)
@@ -183,6 +203,8 @@ class PiProviderConfigStore:
             base_url=base_url_text.rstrip("/"),
             model=model_text,
             api_transport=transport_text,
+            data_handling=data_handling,
+            inference_location=inference_location,
         )
 
     def verify_and_save(
@@ -193,6 +215,8 @@ class PiProviderConfigStore:
         base_url: str,
         model: str,
         api_transport: str,
+        data_handling: DataHandling = DataHandling.UNSPECIFIED,
+        inference_location: InferenceLocation = InferenceLocation.UNSPECIFIED,
         verifier: Optional[Verifier] = None,
     ) -> tuple[PiProviderConfig, Dict[str, Any]]:
         """Verify first, then atomically persist the credential and receipt."""
@@ -203,6 +227,8 @@ class PiProviderConfigStore:
             base_url=base_url,
             model=model,
             api_transport=api_transport,
+            data_handling=data_handling,
+            inference_location=inference_location,
         )
         verification = verify_provider_connection(config, transport=verifier)
         with self._lock:
@@ -260,6 +286,8 @@ class PiProviderConfigStore:
             base_url=stored.base_url,
             model=model,
             api_transport=stored.api_transport,
+            data_handling=stored.data_handling,
+            inference_location=stored.inference_location,
             verifier=verifier,
         )
 
@@ -303,8 +331,10 @@ class PiProviderConfigStore:
                 api_transport=str(
                     values.get("EASYICU_PI_API") or DEFAULT_API_TRANSPORT
                 ),
+                data_handling=DataHandling(values.get("EASYICU_PI_DATA_HANDLING", "unspecified")),
+                inference_location=InferenceLocation(values.get("EASYICU_PI_INFERENCE_LOCATION", "unspecified")),
             )
-        except PiCopilotError:
+        except (PiCopilotError, ValueError):
             return None
 
     def research_agent_environment(
@@ -360,6 +390,8 @@ class PiProviderConfigStore:
             "OPENAI_MODEL": config.model,
             OPENAI_AUTH_HEADER_ENV: config.openai_auth_header.value,
             "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
+            "EASYICU_PROVIDER_DATA_HANDLING": config.data_handling.value,
+            "EASYICU_PROVIDER_INFERENCE_LOCATION": config.inference_location.value,
         }
 
     def public_status(
@@ -388,6 +420,9 @@ class PiProviderConfigStore:
             "base_url": str(values.get("EASYICU_PI_BASE_URL") or DEFAULT_BASE_URL),
             "model": str(values.get("EASYICU_PI_MODEL") or DEFAULT_MODEL),
             "api_transport": str(values.get("EASYICU_PI_API") or DEFAULT_API_TRANSPORT),
+            "data_handling": config.data_handling.value if config else "unspecified",
+            "inference_location": config.inference_location.value if config else "unspecified",
+            "data_handling_notice_key": PROVIDER_POLICY_NOTICE_KEY,
             "credential_present": bool(config),
             "connection_verified": verified,
             "verified_at": receipt.get("verified_at") if verified else None,

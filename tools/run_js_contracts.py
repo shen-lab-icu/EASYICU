@@ -30,6 +30,11 @@ CONTRACTS: dict[str, list[str]] = {
     "agent_render_security.test.js": ["screens-agent-render.js"],
     "composer_keyboard.test.js": ["composer-keyboard.js"],
     "copilot_history.test.js": [],
+    "credentialed_egress_copy.test.js": [
+        "screens-guided-pi-error-text.js",
+        "screens-guided-pi-hosted.js",
+        "screens-help.js",
+    ],
     "crossdb_job_continuity.test.js": ["screens-viz-crossdb-job-continuity.js"],
     "crossdb_progress_owner.test.js": ["screens-viz-crossdb-progress.js"],
     "crossdb_raw_scope.test.js": ["screens-viz-crossdb-raw.js"],

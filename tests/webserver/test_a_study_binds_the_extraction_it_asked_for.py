@@ -339,6 +339,9 @@ def _tool_context() -> ToolExecutionContext:
     return ToolExecutionContext(
         session=PiSessionRecord(session_id="pi-extract-bound-modules"),
         allowed_actions={"extract"},
+        # This contract is about extraction binding, not the credentialed-data
+        # egress policy, so the fixture provider declares zero retention.
+        data_handling="zero_retention_declared",
     )
 
 

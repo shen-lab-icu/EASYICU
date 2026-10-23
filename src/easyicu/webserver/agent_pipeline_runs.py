@@ -6225,6 +6225,9 @@ def make_research_pipeline_run_runner(
                 details=retry.public(),
             )
 
+    from .demo_source_storage import public_demo_egress_scope
+
+    @public_demo_egress_scope(export_path)
     def runner(job: Any) -> Dict[str, Any]:
         scientific = prepared.scientific
         authority = prepared.authority

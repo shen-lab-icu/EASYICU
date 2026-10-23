@@ -22,7 +22,7 @@ from tests.support.node import run_node
 
 
 def _context(user_message: str = "") -> ToolExecutionContext:
-    return ToolExecutionContext(
+    return ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
             session_id="pi-extraction-workspace",
             binding=AuthorityBinding(

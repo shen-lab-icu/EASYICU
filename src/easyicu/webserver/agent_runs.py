@@ -947,6 +947,7 @@ def resolve_agent_provider_config(
     external_llm_opt_in: bool,
     ai_enabled: bool,
     environ: Optional[Mapping[str, str]] = None,
+    database: str = "",
 ) -> Dict[str, Any]:
     """Resolve the provider boundary without loading credentials or clients."""
     resolved_run_type = normalize_run_type(run_type)
@@ -956,6 +957,8 @@ def resolve_agent_provider_config(
             llm_provider=llm_provider,
             external_llm_opt_in=external_llm_opt_in,
             ai_enabled=ai_enabled,
+            database=database,
+            data_handling=str((environ or {}).get("EASYICU_PROVIDER_DATA_HANDLING", "unspecified")),
         )
     except provider_gate.ProviderGateError as exc:
         raise AgentRunConfigError(exc.detail) from exc

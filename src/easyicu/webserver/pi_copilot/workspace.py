@@ -109,7 +109,7 @@ def _relative_file(value: Any, *, model_read: bool = False) -> PurePosixPath:
             "pi_workspace_path_escape",
             "Project files must stay inside the isolated Pi workspace.",
         )
-    if model_read and os.environ.get("EASYICU_HOSTED") == "1":
+    if model_read:
         data_directory = any(
             part.casefold() in _DATA_DIRECTORIES
             or any(part.casefold().startswith(name + separator)
@@ -119,7 +119,7 @@ def _relative_file(value: Any, *, model_read: bool = False) -> PurePosixPath:
         if data_directory or relative.suffix.lower() not in HOSTED_READ_SUFFIXES:
             raise PiCopilotError(
                 "tabular_read_unavailable_when_hosted",
-                "Hosted model workspace reads exclude data files and data directories.",
+                "Model workspace reads exclude data files and data directories.",
                 status_code=403,
                 details={"cause_code": (
                     "workspace_data_directory" if data_directory else "workspace_data_file"
@@ -420,12 +420,10 @@ class ProjectWorkspace:
         start_line: int = 1,
         end_line: Optional[int] = None,
     ) -> Dict[str, Any]:
-        hosted = os.environ.get("EASYICU_HOSTED") == "1"
-        if hosted:
-            _relative_file(relative_file, model_read=True)
+        _relative_file(relative_file, model_read=True)
         with self._project_lock(project_id):
             candidate, relative, text, raw = self._read_complete_file(
-                project_id, relative_file, model_read=hosted,
+                project_id, relative_file, model_read=True,
             )
             lines = text.splitlines()
             first = max(1, int(start_line or 1))

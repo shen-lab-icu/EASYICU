@@ -30,6 +30,45 @@ from easyicu.webserver.research_run_submission import ResearchRunSubmissionReque
 from easyicu.webserver.run_record import RunGate
 
 
+def test_uncleared_provider_offers_only_settings_without_execution_authority() -> None:
+    reason = "provider_not_cleared_for_credentialed_data"
+    gate = {
+        "status": "blocked", "reason": reason,
+        "detail": {"reason_code": "concept_unavailable", "missing_concepts": ["age"]},
+    }
+    projected = owner.project_stop_next_actions(gate)
+    assert len(projected) == 1
+    action = owner.StopNextAction.model_validate(projected[0])
+    assert action.kind == "open_provider_settings"
+    assert action.label_key == "stop_next_actions.open_provider_settings"
+    assert action.params.model_dump() == {"route": "provider_settings"}
+    assert reason in owner.STOP_POLICIES
+    assert owner.project_stop_next_actions(gate) == projected
+    assert project_job({"id": "fixture", "status": "failed", "error": reason})["next_actions"] == projected
+    with pytest.raises(ValidationError):
+        action.params.route = "retry"
+
+
+@pytest.mark.parametrize("params", [{"route": "retry"}, {"route": "plan_edit"},
+                                    {"route": "provider_settings", "execute": True}])
+def test_provider_settings_choice_rejects_execution_and_mismatched_params(params) -> None:
+    with pytest.raises(ValidationError):
+        owner.StopNextAction.model_validate({
+            "action_id": "open_provider_settings_0123456789abcdef",
+            "kind": "open_provider_settings",
+            "label_key": "stop_next_actions.open_provider_settings",
+            "params": params,
+        })
+
+
+def test_provider_settings_params_cannot_masquerade_as_retry() -> None:
+    with pytest.raises(ValidationError):
+        owner.StopNextAction.model_validate({
+            "action_id": "retry_0123456789abcdef", "kind": "retry",
+            "label_key": "stop_next_actions.retry", "params": {"route": "provider_settings"},
+        })
+
+
 def test_a_provider_stop_offers_retry_in_the_run_and_conversation(tmp_path) -> None:
     assert agent_pipeline_runs._write_pipeline_failure_projection(
         wrapper_dir=tmp_path,

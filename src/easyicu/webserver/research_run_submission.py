@@ -405,6 +405,8 @@ def submit_research_run(
     )
     if not compute.get("ok"):
         _reject(compute)
+    from .demo_source_storage import egress_source_database
+
     try:
         provider_meta = agent_runs.resolve_agent_provider_config(
             run_type=run_type,
@@ -412,6 +414,7 @@ def submit_research_run(
             external_llm_opt_in=external_llm_opt_in,
             ai_enabled=bool(settings.get("ai_enabled")),
             environ=provider_environment,
+            database=egress_source_database(path, str(database or "")),
         )
         context_store.build_agent_context_binding(
             study_context,

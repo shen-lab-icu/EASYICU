@@ -89,10 +89,10 @@ def test_report_tool_rejects_foreign_or_missing_source(setup):
     assert setup == []
 
 
-def test_report_tool_preserves_opt_in_gate(setup):
+def test_report_grant_authorizes_only_its_run_without_session_opt_in(setup):
     result = tools.execute_tool('easyicu_repair_report', {}, context(opt_in=False))
-    assert result['code'] == 'external_llm_opt_in_required'
-    assert setup == []
+    assert result['code'] == 'easyicu_report_repair_submitted'
+    assert len(setup) == 1 and setup[0].external_llm_opt_in is True
 
 
 def test_report_tool_does_not_admit_scientific_or_provider_parameters(setup):
