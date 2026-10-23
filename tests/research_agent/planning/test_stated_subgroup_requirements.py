@@ -155,6 +155,12 @@ def test_a_declared_gap_is_checked_against_the_stated_subgroup(status, concept, 
     assert check_capability_gap(gap, context=_stated(status=status)).verification == expected
 
 
+def test_a_subgroup_gap_for_a_reading_no_concept_matched_is_refused():
+    gap = ProgressiveCapabilityGap(requirement="design_element_unsupported", concept="age")
+    check = check_capability_gap(gap, context=_stated(status="unresolved", concept=None))
+    assert check.verification == "unverified" and "roster column" in check.fact
+
+
 @pytest.mark.parametrize("family,expected", [("causal_inference", "verified"), ("descriptive_epidemiology", "unverified")])
 def test_a_declared_family_gap_is_verified_against_its_owners(family, expected):
     context = _stated()

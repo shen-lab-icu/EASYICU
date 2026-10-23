@@ -131,6 +131,16 @@ def test_a_requirement_saved_before_source_selection_is_checked_when_compiled(mo
     assert json.loads(compiled["data_constraints"])["stated_adjustments"][0]["source_status"] == "available"
 
 
+def test_a_reading_saved_without_a_concept_asks_for_its_lookup(monkeypatch):
+    current = {"id": "adjustment-study", "revision": 1, "question": "在控制试验评分之后，指标与结局的关系如何？"}
+    result, writes = _update(monkeypatch, current=current, words="在控制试验评分之后", variable="试验评分")
+    assert writes[0]["stated_adjustments"][0]["concept"] is None
+    assert "stated_adjustments saved without a source concept: 试验评分" in result["summary"]
+    named, _ = _update(monkeypatch, words="在控制试验评分之后", variable="试验评分", concepts=("trial_score",),
+                       statements=[{"variable": "试验评分", "words": "在控制试验评分之后", "concept": "trial_score"}])
+    assert "without a source concept" not in named["summary"]
+
+
 def test_the_store_retains_the_requirement_and_binds_its_scientific_digest(tmp_path, monkeypatch):
     monkeypatch.setattr(study_contexts, "_CONFIG_PATH", tmp_path / "studies.json")
     record = {"variable": "年龄", "words": "调整年龄", "concept": "age", "source_status": "available"}

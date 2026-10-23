@@ -2280,6 +2280,16 @@ def update_study_context(
                 "saved question, and concept set to the identifier "
                 "easyicu_list_source_concepts returns for it."
             )
+    # A reading saved without a concept stays a requirement no one can check
+    # (``unresolved`` once a source is bound); the conversation can name it.
+    for field in STATED_VARIABLE_FIELDS:
+        unnamed = [item["variable"] for item in patch.get(field) or () if not item.get("concept")]
+        if unnamed:
+            summary += (
+                f" {field} saved without a source concept: " + "; ".join(unnamed)
+                + ". Once a data source is bound, look each up with "
+                "easyicu_list_source_concepts and save it again with concept."
+            )
     summary += _causal_receipt_text(causal_receipt)
     summary += _family_receipt_text(family_receipt)
     summary += _variance_receipt_text(variance_receipt)
