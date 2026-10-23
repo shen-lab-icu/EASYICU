@@ -4975,7 +4975,7 @@ class _CandidatePlanMaterializationAuthority:
     """Exact metadata-only Plan coordinates accepted for data preparation."""
 
     primary_exposure: Optional[str]
-    target_outcome: str
+    target_outcome: Optional[str]
     outcome_concepts: tuple[str, ...]
     contract: str
     primary_cohort_selection_mode: CohortSelectionMode
@@ -5224,7 +5224,7 @@ def _load_candidate_plan_materialization_authority(
             if _clean_text(value, 160)
         )
     )
-    if not requested_outcomes:
+    if not requested_outcomes and target_outcome:
         requested_outcomes = (target_outcome,)
     for identity_key in ("row_identity_column", "patient_identity_column"):
         coordinate = _clean_text(receipt.get(identity_key), 160)
@@ -5252,13 +5252,17 @@ def _load_candidate_plan_materialization_authority(
     # discovery) has no exposure coordinate on either side.  Launch
     # preparation requires one only when the StudyContext configures it, and
     # the sealed candidate must agree with that configuration
-    # (``primary_exposure != expected_primary_exposure`` below).  Every other
-    # coordinate stays mandatory.
+    # (``primary_exposure != expected_primary_exposure`` below).  A
+    # measurement's distribution has no outcome role either: the candidate
+    # and the question's own reading must then both name none
+    # (``target_outcome != proposed_outcome`` below).  Every other coordinate
+    # stays mandatory.
+    proposed_outcome = _clean_text(proposed.get("target_outcome"), 160)
     source_required_concepts = tuple(
         dict.fromkeys(
             (
                 *((configured_primary_exposure,) if configured_primary_exposure else ()),
-                _clean_text(proposed.get("target_outcome"), 160),
+                *((proposed_outcome,) if proposed_outcome or target_outcome else ()),
                 *requested_outcomes,
                 *covariates,
             )
@@ -5268,7 +5272,7 @@ def _load_candidate_plan_materialization_authority(
         dict.fromkeys(
             (
                 *((primary_exposure,) if primary_exposure else ()),
-                target_outcome,
+                *((target_outcome,) if target_outcome or proposed_outcome else ()),
                 *requested_outcomes,
                 *candidate_covariates,
             )
@@ -5294,8 +5298,8 @@ def _load_candidate_plan_materialization_authority(
         # source coordinate and its declared aggregation.  The text parser's
         # broader proposal is not an authority to rename a prepared column.
         or primary_exposure != expected_primary_exposure
-        or target_outcome != proposed.get("target_outcome")
-        or target_outcome not in requested_outcomes
+        or target_outcome != proposed_outcome
+        or (bool(target_outcome) and target_outcome not in requested_outcomes)
         or not set(explicit_outcome_concepts(str(study.get("question") or ""))).issubset(
             requested_outcomes
         )
@@ -5380,7 +5384,7 @@ def _load_candidate_plan_materialization_authority(
         ) from exc
     return _CandidatePlanMaterializationAuthority(
         primary_exposure=primary_exposure or None,
-        target_outcome=target_outcome,
+        target_outcome=target_outcome or None,
         outcome_concepts=requested_outcomes,
         contract=_candidate_plan_contract(review=parsed_review, plan=plan),
         primary_cohort_selection_mode=candidate_cohort.selection_mode,
