@@ -73,10 +73,29 @@ left in control.
 | File | Purpose |
 |---|---|
 | `reextract_native_export_v2.py` | Canonical resumable six-database native-v2 extraction, resource measurement, and atomic publication. |
+| `report_export_plausibility.py` | Aggregate-only clinical screening of one native-v2 database export, optionally compared with an older export. |
 | `run_analysis_bench_overnight.py` | Batch wrapper around `run_research_agent_bench.py` for long runs. |
 | `run_openrouter_fullflow_validation.py` | Real-provider full-flow validation for OpenRouter-compatible models. |
 | `evaluate_concept_usage_auditor.py` | Helper for checking concept-usage audit behavior. |
 | `fetch_baselines.py` | Fetches external baseline systems into ignored local checkout directories. |
+
+Before publishing an export, an administrator can run:
+
+```bash
+PYTHONPATH=src python tools/report_export_plausibility.py /path/to/export \
+  --compare /path/to/older-export --out report.json --threads 2 --memory-limit 8GB
+```
+
+The root is the database export containing `_manifest.json`. The tool scans
+only declared parquet files with DuckDB, applies the memory/thread settings,
+and prints a Chinese/English summary and JSON (also saved with `--out`). All
+thresholds and their rationale are in its `SCREENING_RULES` table. Rates use
+fractions; coverage uses all distinct stays across the declared modules;
+SOFA comparisons use stays with both maxima; Sepsis-3 reports both all-stay
+and observed-stay denominators. Quantiles are approximate. Missing inputs warn.
+It returns zero for screening findings and unreadable inputs and never prints
+identifiers, patient rows, file listings or extreme-stay examples. Clinical
+review of findings remains necessary; this report is not a publication gate.
 
 ## Archived locally, not uploaded
 
