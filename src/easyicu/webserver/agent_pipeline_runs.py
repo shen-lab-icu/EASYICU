@@ -608,7 +608,11 @@ def _pipeline_failure_code(
     *,
     budget_mode: str = "full_reviewed",
 ) -> str:
+    from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopExceeded
+
     chain = _pipeline_exception_chain(exc)
+    if any(isinstance(item, ProviderHardStopExceeded) for item in chain):
+        return "research_pipeline_provider_budget_exhausted"
     if any("timeout" in type(item).__name__.casefold() for item in chain):
         return "research_pipeline_provider_timeout"
     if any(type(item).__name__ == "StructuredResponseFailure" for item in chain):
@@ -870,6 +874,21 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
     from easyicu.research_agent.authority.current_case_scientific_runtime import (
         CurrentCaseScientificAuthorityError,
     )
+    from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopExceeded
+
+    for item in _pipeline_exception_chain(exc):
+        if isinstance(item, ProviderHardStopExceeded):
+            return {
+                "owner": "easyicu.providers.hard_stop_v1",
+                "reason_code": "provider_budget_exhausted",
+                "cause_code": item.code if item.code in {
+                    "RUN_PROVIDER_ATTEMPT_LIMIT", "BATCH_PROVIDER_ATTEMPT_LIMIT",
+                    "RUN_TOKEN_LIMIT", "BATCH_TOKEN_LIMIT", "BATCH_COST_LIMIT",
+                    "TASK_WALL_CLOCK_EXHAUSTED", "TASK_NOT_RUNNING",
+                    "PROVIDER_COMPLETION_USAGE_EXCEEDED_RESERVATION",
+                    "PROVIDER_USAGE_EXCEEDED_RESERVATION",
+                } else "PROVIDER_HARD_STOP_EXCEEDED",
+            }
 
     # ``__context__`` can preserve an earlier Planner compiler finding when a
     # later Provider transport call fails while that finding is being handled.

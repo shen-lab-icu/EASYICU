@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from ..authority.provider_budget import (
     consume_active_transport_attempt,
 )
+from ..authority.provider_hard_stop import record_active_provider_transport_failure
 from ..authority.secret_redaction import (
     debug_capture_enabled,
     redact_debug_value,
@@ -946,6 +947,7 @@ class OpenAIClient:
         manual_attempts = 1 + max(0, int(getattr(self, "_max_retries", 8)))
 
         def _record_transport_failure(exc: BaseException, attempts: int) -> None:
+            record_active_provider_transport_failure(type(exc).__name__)
             self.last_transport_attempts = int(attempts)
             # The structured-retry owner may receive this exception instead of
             # a response.  Attach only a count -- never request/response data.
@@ -1290,7 +1292,11 @@ class OpenAIClient:
                 float(hard_stop_remaining),
             )
         self.last_transport_attempts = 1
-        resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
+        try:
+            resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
+        except Exception as exc:
+            record_active_provider_transport_failure(type(exc).__name__)
+            raise
         try:
             usage = getattr(resp, "usage", None)
             if usage is not None:
@@ -1538,6 +1544,7 @@ class AnthropicMessagesClient:
                 response = self._client.messages.create(**transport_kwargs)
                 break
             except Exception as exc:  # noqa: BLE001
+                record_active_provider_transport_failure(type(exc).__name__)
                 last_exc = exc
                 try:
                     exc.easyicu_transport_attempts = attempt + 1

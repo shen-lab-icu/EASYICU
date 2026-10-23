@@ -11,13 +11,13 @@ atomically persists that reservation *before* the transport starts.  A
 successful response releases the conservative difference between the
 reservation and provider-reported usage.
 
-A failed or interrupted attempt stays charged at its full reservation,
-because a remote provider may have accepted work even when the client never
-received usage metadata.  The prompt byte bound and the completion floor made
-the decision before transport, and only a provider usage receipt proves a
-lower charge, so unknown usage releases neither hold (``finish_transport_
-attempt``).  Read spend that was actually incurred from the provider-reported
-calls in ``task_accounting_summary``.
+A failed attempt with an observed transport end keeps its full prompt hold
+and bounds its completion hold by elapsed transport time at a generous maximum
+generation rate. The transport records this end before retry backoff. Unknown
+transport ends (including interrupted processes and older clients) retain the
+full reservation, as do successful responses without usage. These remain
+unknown-usage upper bounds, not receipts of spend; read reported spend from
+the provider-reported calls in ``task_accounting_summary``.
 
 The ledger intentionally contains no prompts, responses, credentials, or
 patient data.  It is also the batch progress checkpoint: task transitions and
@@ -61,6 +61,12 @@ PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION = 4096
 # losses remain pre-transport even when the serving path cannot enforce the
 # requested per-response cap. Successful calls release the difference.
 PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR = 128_000
+# Per response, including hidden reasoning tokens: 10 microseconds per token.
+# Deliberately far above production autoregressive decoding rates, including
+# accelerated providers. A 128k hold is fully retained after only 1.28s.
+# This is a conservative accounting envelope, not an observed throughput or a
+# provider output cap; review it before enabling a faster serving path.
+MAX_COMPLETION_TOKENS_PER_SECOND = 100_000
 _MAX_LEDGER_BYTES = 16 * 1024 * 1024
 _TERMINAL_TASK_STATES = frozenset(
     {"completed", "failed", "batch_canary_blocked", "budget_exhausted"}
@@ -1135,7 +1141,13 @@ class ProviderHardStopLedger:
         attempt_id: str,
         usage: Optional[Mapping[str, object]],
         error_type: Optional[str],
+        transport_elapsed_seconds: Optional[float] = None,
     ) -> None:
+        # Capture the observed end before ledger locking/fsync, not on the
+        # next reservation after a retry wait. Legacy callers supply no clock.
+        transport_finished_at = (
+            _utc_now() if transport_elapsed_seconds is not None else None
+        )
         with self._durable_transaction():
             task = self._task_locked(task_id)
             calls = task.get("calls")
@@ -1191,9 +1203,34 @@ class ProviderHardStopLedger:
                     if error_type is not None
                     else "completed_usage_unreported"
                 )
-                # Unknown usage cannot release either hold. The prompt byte
-                # bound and completion floor are what made the decision
-                # pre-transport; only a provider receipt proves a lower charge.
+                # Only a measured failed transport can release completion
+                # headroom. Input billing stays unknown, and a successful
+                # response without usage still retains both original holds.
+                if (
+                    error_type is not None
+                    and isinstance(transport_elapsed_seconds, (int, float))
+                    and not isinstance(transport_elapsed_seconds, bool)
+                    and math.isfinite(transport_elapsed_seconds)
+                    and transport_elapsed_seconds >= 0.0
+                ):
+                    completion_bound = min(
+                        int(call["completion_token_reservation"]),
+                        math.ceil(
+                            transport_elapsed_seconds * MAX_COMPLETION_TOKENS_PER_SECOND
+                        ),
+                    )
+                    prompt_reserve = int(call["prompt_token_reservation"])
+                    call.update(
+                        transport_finished_at=transport_finished_at,
+                        transport_elapsed_seconds=transport_elapsed_seconds,
+                        max_completion_tokens_per_second=MAX_COMPLETION_TOKENS_PER_SECOND,
+                        failed_completion_token_bound=completion_bound,
+                        accounted_tokens=prompt_reserve + completion_bound,
+                        accounted_estimated_cost_usd=(
+                            prompt_reserve * self.limits.input_cost_usd_per_million_tokens
+                            + completion_bound * self.limits.output_cost_usd_per_million_tokens
+                        ) / 1_000_000.0,
+                    )
                 self._persist_locked()
                 return
             prompt_tokens = reported_prompt or 0
@@ -1445,6 +1482,7 @@ class _ActiveHardStopCall:
         )
         self.attempt_ids: list[str] = []
         self._active_attempt_id: Optional[str] = None
+        self._attempt_started_monotonic: Optional[float] = None
 
     def reserve_attempt(self) -> float:
         prior = self._active_attempt_id
@@ -1452,6 +1490,7 @@ class _ActiveHardStopCall:
         # reservation. Clear the local pointer first so a denied retry is not
         # later finalized a second time by ``fail()``.
         self._active_attempt_id = None
+        self._attempt_started_monotonic = None
         attempt_id = self.task.ledger.reserve_transport_attempt(
             task_id=self.task.task_id,
             role=self.role,
@@ -1463,6 +1502,7 @@ class _ActiveHardStopCall:
         )
         self.attempt_ids.append(attempt_id)
         self._active_attempt_id = attempt_id
+        self._attempt_started_monotonic = time.monotonic()
         return self.task.assert_active()
 
     def complete(self, usage: Optional[Mapping[str, object]]) -> None:
@@ -1477,17 +1517,23 @@ class _ActiveHardStopCall:
             error_type=None,
         )
         self._active_attempt_id = None
+        self._attempt_started_monotonic = None
 
-    def fail(self, error_type: str) -> None:
+    def fail(self, error_type: str, *, transport_ended: bool = False) -> None:
         if self._active_attempt_id is None:
             return
+        elapsed = None
+        if transport_ended and self._attempt_started_monotonic is not None:
+            elapsed = time.monotonic() - self._attempt_started_monotonic
         self.task.ledger.finish_transport_attempt(
             task_id=self.task.task_id,
             attempt_id=self._active_attempt_id,
             usage=None,
             error_type=error_type,
+            transport_elapsed_seconds=elapsed,
         )
         self._active_attempt_id = None
+        self._attempt_started_monotonic = None
 
 
 _ACTIVE_HARD_STOP_CALL: ContextVar[Optional[_ActiveHardStopCall]] = ContextVar(
@@ -1533,7 +1579,20 @@ def consume_active_provider_hard_stop_attempt() -> Optional[float]:
     return None
 
 
+def record_active_provider_transport_failure(error_type: str) -> None:
+    """Close a raw failed request durably before any retry wait or teardown.
+
+    Call at the transport exception boundary, never from error-body parsing.
+    The outer wrapper's later ``fail`` becomes a no-op for this attempt.
+    """
+
+    state = _ACTIVE_HARD_STOP_CALL.get()
+    if state is not None:
+        state.fail(error_type, transport_ended=True)
+
+
 __all__ = [
+    "MAX_COMPLETION_TOKENS_PER_SECOND",
     "PROVIDER_HARD_STOP_SCHEMA",
     "PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR",
     "PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION",
@@ -1546,5 +1605,6 @@ __all__ = [
     "consume_active_provider_hard_stop_attempt",
     "load_provider_hard_stop_ledger",
     "provider_hard_stop_call_scope",
+    "record_active_provider_transport_failure",
     "validate_provider_transport_reservation_capacity",
 ]

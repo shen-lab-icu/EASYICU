@@ -50,6 +50,20 @@ function job(events, extra) {
 for (language of ['zh', 'en']) {
   window.EU_LANG = language;
 
+  const budgetCode = 'research_pipeline_provider_budget_exhausted';
+  const budgetSentence = tr(
+    'The run used up its model budget before it finished, and repeated connection failures count against that budget; try again once the connection is stable.',
+    '本次运行在完成前用完了模型预算，反复连接失败也会计入预算，请在连接稳定后重试。');
+  assert.equal(runFailureText(budgetCode), budgetSentence);
+  assert.equal(runFailureText(budgetCode, {
+    code: 'provider_budget_exhausted', cause: 'RUN_TOKEN_LIMIT', missing: [],
+  }), budgetSentence, 'the gate cause adds no secondary label');
+  const budgetStop = job([], { jobCode: 'plan_analysis', status: 'error', failureCode: budgetCode });
+  const budgetHtml = budgetStop.owner.render(budgetStop.activity);
+  assert.equal(count(budgetHtml, budgetSentence), 1);
+  assert.ok(budgetHtml.endsWith(`<p class="gpi-activity-note">${budgetSentence}</p>`));
+  assert.ok(!budgetHtml.includes(runFailureText('research_pipeline_execution_failed')));
+
   // --- an automatically continued analysis -------------------------------
   const continued = job([
     step(10, 'baseline_table', 1, 3, 'started'), step(13, 'baseline_table', 1, 3, 'complete'),
