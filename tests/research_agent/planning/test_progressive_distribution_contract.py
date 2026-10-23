@@ -110,7 +110,7 @@ def test_distribution_policy_repair_reuses_compiled_prefix_and_sealed_outline():
 
     plan = attempt.output
     assert len(llm.calls) == 10
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     spec = plan.steps[2].exposure_outcome_distribution_spec
     assert spec.denominator_policy == "observed_outcome_rows"
     assert spec.missing_outcome_policy == "exclude_from_denominator"

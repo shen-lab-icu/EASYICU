@@ -584,7 +584,7 @@ def test_planner_continues_from_the_grouped_context_checkpoint(grouped_source, t
     assert result.generation_mode == "llm_progressive_v2_dev_resume"
     assert result.facts.resume_validated is True
     assert len(resumed_client.calls) == 4
-    assert len(result.plan.steps) == 7
+    assert len(result.plan.steps) == 6  # The terminal unowned figure is omitted.
     assert not (target / "plan_approval.json").exists()
 
 

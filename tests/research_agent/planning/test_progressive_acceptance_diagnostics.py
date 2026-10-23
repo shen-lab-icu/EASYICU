@@ -34,7 +34,7 @@ def test_unsupported_optional_design_input_retries_outline_and_completes_plan():
     llm.supports_strict_json_schema = True
     before = context.model_dump_json()
     plan = planner.ProgressivePlannerAgent(llm).run(context)
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 6  # The terminal unowned figure is omitted.
     assert len(llm.calls) == 10
     assert "progressive_design_input_structurally_unavailable" in llm.calls[1][0][-1].content
     assert "optional_repeat_visit" in llm.calls[1][0][-1].content
@@ -153,8 +153,8 @@ def test_final_acceptance_runs_once_after_all_validated_prefixes(monkeypatch):
         _outline_payload(), _foundation_payload(), *_materialization_payloads(),
     ]])
     planner.ProgressivePlannerAgent(llm).run(_context())
-    assert prefixes == list(range(1, 8))
-    assert accepted == [7]
+    assert prefixes == list(range(1, 8))  # Prefixes keep every outline step.
+    assert accepted == [6]  # The terminal unowned figure is omitted.
 
 
 @pytest.mark.parametrize(
