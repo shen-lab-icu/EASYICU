@@ -15,6 +15,7 @@ from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
 from ..research_input_progress import project_research_input_state
 from ..run_step_trace import TRACE_ACTION_KEYS, TRACE_FACT_KEYS
 from ..run_record import MAX_ARTIFACT_SIZE_BYTES
+from ..stop_next_actions import STOP_POLICIES, project_stop_next_actions
 from ..target_trial_setup import project_target_trial_compile
 from . import cohort_eligibility
 from .contracts import PiCopilotError, plan_approval_allowed
@@ -565,6 +566,12 @@ def _project_job(
     run_id = stable_code(result.get("run_id"))
     gate = result.get("gate")
     gate = gate if isinstance(gate, Mapping) else {}
+    stop_gate = gate
+    error_code = _safe_error_code(snapshot.get("error"))
+    if not gate.get("reason") and snapshot.get("status") == "failed" and error_code in STOP_POLICIES:
+        # A launch may stop before it has a run receipt. The existing job
+        # projection already owns this code; no message supplies coordinates.
+        stop_gate = {"status": "blocked", "reason": error_code}
     gate_checks = {
         str(item.get("id") or "").strip(): bool(item.get("passed"))
         for item in (gate.get("checks") or [])
@@ -706,6 +713,7 @@ def _project_job(
             "gate_status": stable_code(gate.get("status")),
             "gate_reason_code": stable_code(gate.get("reason")),
             **gate_detail_projection(gate.get("detail")),
+            "next_actions": project_stop_next_actions(stop_gate),
             "execution_complete": gate_checks.get("execution_complete") is True,
             "analysis_validated": gate_checks.get("analysis_validated") is True,
             "numeric_verified": gate_checks.get("numeric_verified") is True,
@@ -1043,6 +1051,7 @@ def project_run_outcome(
                 "gate_detail_code",
                 "gate_detail_cause_code",
                 "gate_missing_concepts",
+                "next_actions",
                 "execution_complete",
                 "analysis_validated",
                 "numeric_verified",
@@ -1543,6 +1552,11 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
         }
     if pending_review_reason_codes:
         projected["pending_review_reason_codes"] = pending_review_reason_codes
+    projected["next_actions"] = project_stop_next_actions(
+        {"status": row.get("gate_status"), "reason": row.get("gate_reason"),
+         "detail": row.get("gate_detail"), "next_actions": row.get("next_actions")},
+        pending_reason_codes=pending_review_reason_codes,
+    )
     if waiting_for_plan_review:
         # Result/manuscript files are intentionally emitted as governed
         # placeholders at the plan stage.  Make the execution state explicit

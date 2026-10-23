@@ -201,6 +201,8 @@ def test_run_record_projects_every_bound_run_without_paths():
             dict(candidate, updated_at="2026-09-21T17:31:00Z", artifact_count=2, plan_available=True)]
     projected = project_run_history(rows, authoritative_run_id="run_candidate")
     assert [row["run_id"] for row in projected] == ["run_preparation", "run_candidate"]
+    actions = projected[0].pop("next_actions")
+    assert [(a["kind"], a["params"]) for a in actions] == [("retry", {"route": "retry"})]
     assert projected[0] == {
         "run_id": "run_preparation", "run_type": "full", "engine": "easyicu.research_agent.pipeline",
         "run_status": "failed", "gate_status": "blocked",

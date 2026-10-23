@@ -374,6 +374,8 @@ def test_a_checked_gap_stops_planning_with_its_cause_and_outline_checkpoint() ->
         == "levels_from_thresholds_unavailable"
     )
     assert stop.path == "capability_gap"
+    assert stop.easyicu_safe_diagnostic["element"] == "levels_from_thresholds_unavailable"
+    assert stop.easyicu_safe_diagnostic["question_required"] is True
     (finding,) = stop.details["findings"]
     assert (finding["requirement"], finding["concept"], finding["verification"]) == (
         "levels_from_thresholds_unavailable",

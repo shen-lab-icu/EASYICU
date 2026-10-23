@@ -33,6 +33,7 @@ __all__ = [
     "bound_study_family_gap",
     "stop_family_out_of_scope",
     "study_family_database_gap",
+    "v1_scope_description",
 ]
 
 STUDY_FAMILY_DATABASE_OUT_OF_SCOPE = "study_family_database_out_of_scope"
@@ -43,6 +44,34 @@ _OUT_OF_SCOPE: Dict[str, frozenset[str]] = {
 }
 #: Where v1 offers every study family.
 _ALL_FAMILIES_DATABASES = ("miiv",)
+
+
+def v1_scope_description(
+    *, reason_code: str, detail: Mapping[str, Any], database: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Scope-copy coordinates from the same owners that refuse a study.
+
+    The presentation owns the wording behind these stable label keys. Never
+    copy a refusal's free text or infer another endpoint for the researcher.
+    """
+
+    import re
+
+    from easyicu.webserver.target_trial_setup import (
+        TARGET_TRIAL_DATABASE_OUT_OF_SCOPE, TARGET_TRIAL_DATABASES,
+    )
+
+    trial = reason_code == TARGET_TRIAL_DATABASE_OUT_OF_SCOPE
+    source = database or detail.get("database")
+    family = detail.get("family")
+    return {
+        "scope_label_key": (
+            "v1_scope.target_trial" if trial else "v1_scope.study_family"
+        ),
+        "database": source if isinstance(source, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", source) else None,
+        "family": family if isinstance(family, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", family) else None,
+        "supported_databases": tuple(sorted(TARGET_TRIAL_DATABASES)) if trial else _ALL_FAMILIES_DATABASES,
+    }
 
 
 def _reading_disagreement(study: Mapping[str, Any], question: str) -> Optional[Dict[str, Any]]:

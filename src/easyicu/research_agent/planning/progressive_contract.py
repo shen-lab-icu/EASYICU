@@ -1363,6 +1363,8 @@ class ProgressivePlanCompileError(ValueError):
         metrics: Optional[Mapping[str, Any]] = None,
         cause_code: Optional[str] = None,
         concepts: Sequence[str] = (),
+        element: Optional[str] = None,
+        question_required: Optional[bool] = None,
     ) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code):
             raise ValueError(
@@ -1420,6 +1422,12 @@ class ProgressivePlanCompileError(ValueError):
         if safe_concepts:
             self.easyicu_safe_diagnostic["concepts"] = safe_concepts
             self.details["concepts"] = safe_concepts
+        if isinstance(element, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", element):
+            self.easyicu_safe_diagnostic["element"] = element
+            self.details["element"] = element
+        if type(question_required) is bool:
+            self.easyicu_safe_diagnostic["question_required"] = question_required
+            self.details["question_required"] = question_required
         if findings:
             self.details["findings"] = [dict(item) for item in findings]
         coordinate = f" step={step_id!r}" if step_id else ""
