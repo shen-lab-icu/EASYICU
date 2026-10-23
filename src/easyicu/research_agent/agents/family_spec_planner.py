@@ -60,6 +60,7 @@ from ..planning.family_spec.contract import (
     validate_family_plan_spec,
 )
 from ..planning.capability_gap import check_capability_gap
+from ..planning.family_spec.landmark_categorical_template import reconcile_population_grouping
 from ..planning.literature_bindings import missing_required_method_layers
 from ..planning.question_requirements import (
     QUESTION_REQUIREMENTS_GUIDE,
@@ -1090,6 +1091,7 @@ def run_family_spec_attempt(
         raise ProgressivePlanCompileError(
             f"progressive_{exc.reason_code}", str(exc), path=exc.path or "family_spec",
         ) from exc
+    draft = reconcile_population_grouping(draft, context=context, spec=spec)
     outline = draft.outline
     validate_outline(outline)
     attempt.outline = outline

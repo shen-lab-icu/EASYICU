@@ -39,7 +39,7 @@ from fractions import Fraction
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from ..authority.declared_levels import closed_planning_levels_for, observed_levels_for
-from ..cohort.schema import ConceptPredicate, predicate_accepts_closed_level
+from ..cohort.schema import CohortDefinition, ConceptPredicate, predicate_accepts_closed_level
 from ..contracts.exposure_group_rules import (
     EXPOSURE_GROUP_LABELS_KEY,
     UNMEASURED_GROUP_ID,
@@ -209,12 +209,6 @@ def population_emptied_exposure_levels(
     unknown semantics provide no proof. Each reported predicate suffices alone.
     """
 
-    if plan.cohort is None:
-        return ()
-    variables = {variable.name: variable for variable in context.variables}
-    windows = context_column_windows(context)
-    outcomes = stay_outcome_columns(context)
-    groupings = context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY) or ()
     targets: dict[str, list[Any]] = {}
     from ..authority.table_one_binding import table_one_execution_spec
 
@@ -225,9 +219,25 @@ def population_emptied_exposure_levels(
         distribution = step.exposure_outcome_distribution_spec
         if distribution is not None:
             targets.setdefault(distribution.exposure, []).extend(distribution.exposure_levels)
+    return cohort_emptied_exposure_levels(context, plan.cohort, targets=targets)
+
+
+def cohort_emptied_exposure_levels(
+    context: ResearchContext, cohort: CohortDefinition | None,
+    *, targets: Mapping[str, Sequence[Any]] | None = None,
+) -> tuple[PredicateEmptiesExposureLevel, ...]:
+    """The same typed proof before executable steps exist, or on a compiled plan."""
+
+    if cohort is None:
+        return ()
+    targets = targets or {}
+    variables = {variable.name: variable for variable in context.variables}
+    windows = context_column_windows(context)
+    outcomes = stay_outcome_columns(context)
+    groupings = context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY) or ()
     found: list[PredicateEmptiesExposureLevel] = []
-    for side, predicates in (("inclusion", plan.cohort.inclusion),
-                             ("exclusion", plan.cohort.exclusion)):
+    for side, predicates in (("inclusion", cohort.inclusion),
+                             ("exclusion", cohort.exclusion)):
         for index, predicate in enumerate(predicates):
             column = predicate_context_column(variables, predicate.concept_id, predicate.aggregation)
 
@@ -330,5 +340,6 @@ def _scalar_intersection_empty(
 __all__ = [
     "PredicateOutsideColumnDomain",
     "cohort_predicates_outside_column_domain",
+    "cohort_emptied_exposure_levels",
     "population_emptied_exposure_levels",
 ]
