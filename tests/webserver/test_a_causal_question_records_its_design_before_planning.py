@@ -218,7 +218,11 @@ def test_a_database_v1_emulates_no_trial_in_is_a_gap_on_the_first_turn(
 
 @pytest.mark.parametrize(
     ("bound", "out_of_scope"),
-    [("MIMIC-IV", None), ("mimic-iv", None), ("eICU-CRD", "eicu"), ("hirid", "hirid")],
+    [
+        ("MIMIC-IV", None), ("mimic-iv", None), ("eICU-CRD", "eicu"), ("hirid", "hirid"),
+        # A public demo has the scope of the database it samples.
+        ("eicu_demo", "eicu_demo"),
+    ],
 )
 def test_the_bound_database_is_read_by_its_registry_key(bound: str, out_of_scope) -> None:
     # A display name or alias is the database the launch reads, not another one.

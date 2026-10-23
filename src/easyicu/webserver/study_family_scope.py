@@ -31,6 +31,7 @@ __all__ = [
     "STUDY_FAMILY_DATABASE_OUT_OF_SCOPE",
     "STUDY_FAMILY_GAP_FIELD",
     "bound_study_family_gap",
+    "scope_database_key",
     "stop_family_out_of_scope",
     "study_family_database_gap",
     "v1_scope_description",
@@ -143,7 +144,7 @@ def study_family_database_gap(
             "database": database,
             "choices": _choices(disagreement),
         }
-    excluded = _OUT_OF_SCOPE.get(str(database or "").strip().lower())
+    excluded = _OUT_OF_SCOPE.get(scope_database_key(database))
     if not excluded:
         return None
     family = _study_family(study, question, database)
@@ -155,6 +156,19 @@ def study_family_database_gap(
         "database": database,
         "supported_databases": list(_ALL_FAMILIES_DATABASES),
     }
+
+
+def scope_database_key(database: Optional[str]) -> str:
+    """The database whose v1 scope a source has; a demo has its parent's."""
+
+    from easyicu.databases import get_database_profile
+
+    key = str(database or "").strip().lower()
+    try:
+        profile = get_database_profile(key)
+    except KeyError:
+        return key
+    return profile.parent_key or profile.key
 
 
 def _choices(disagreement: Mapping[str, Any]) -> list[Dict[str, str]]:

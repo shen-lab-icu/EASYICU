@@ -92,3 +92,14 @@ def test_the_recorded_design_is_the_family_checked():
     assert study_family_database_gap(
         survival, question="入 ICU 首日最高乳酸与院内死亡有关吗？", database="eicu",
     )["family"] == "survival"
+
+
+def test_a_demo_source_has_the_scope_of_the_database_it_samples():
+    # The public demos are separate sources, not separate v1 scopes.
+    survival = {"analysis_design": {"analysis_family": "survival"}}
+    gap = study_family_database_gap(survival, question=_COX, database="eicu_demo")
+
+    assert gap["code"] == STUDY_FAMILY_DATABASE_OUT_OF_SCOPE
+    assert gap["database"] == "eicu_demo"
+    for question in _IN_SCOPE:
+        assert study_family_database_gap({}, question=question, database="eicu_demo") is None
