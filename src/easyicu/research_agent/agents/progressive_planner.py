@@ -4658,6 +4658,7 @@ class ProgressivePlannerAgent:
                 f"({gap.requirement}, {check.verification}): {outline.rationale}",
                 path="capability_gap",
                 cause_code=gap.requirement,
+                concepts=(gap.concept,) if gap.concept else (),
                 findings=[
                     {
                         "requirement": gap.requirement,
