@@ -14,6 +14,26 @@ def table_one_variable_kind(variable: Any, levels: Sequence[Any]) -> str:
         return "ordinal"
     dtype = str(variable.dtype or "").lower()
     declared, _basis = declared_domain_for_variable(variable)
+    # A host-typed measurement reduction keeps its quantity scale even when
+    # a small cohort happens to observe only two integer-valued results.
+    # Raw measurements, category/boolean units and declared closed domains
+    # gain no authority from storage dtype or observed values.
+    windowed_quantity = (
+        getattr(variable, "role", None) == VariableRole.OUTCOME
+        and getattr(variable, "unit_normalization", None) in {
+            "window_numeric_max", "window_numeric_min", "window_numeric_mean",
+            "window_numeric_first", "window_numeric_last",
+        }
+        and bool(getattr(variable, "analysis_window", None))
+        and getattr(variable, "analysis_window_role", None) == "outer_observation_window"
+        and bool(getattr(variable, "source_concept", None))
+        and bool(getattr(variable, "unit", None))
+        and str(variable.unit).casefold() not in {"boolean", "category"}
+        and dtype.startswith(("float", "double", "int", "uint", "decimal"))
+        and not declared
+    )
+    if windowed_quantity:
+        return "continuous"
     if levels and (bool(declared) or len(levels) == 2 or dtype.startswith(("object", "str", "string", "category", "bool"))):
         return "categorical"
     # A dictionary factor is a category before its levels are known: a

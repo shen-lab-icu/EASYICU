@@ -52,7 +52,7 @@ def test_question_named_measurement_becomes_the_grouped_continuous_endpoint(owne
                         [(('ward_group',), 'ward_group'), (('analyte',), 'analyte')])
     monkeypatch.setattr(study_intent, "catalog_named_concepts", lambda q: ["ward_group", "analyte"])
     result = launch._metadata_only_planning_coordinates(
-        question="Describe maximum analyte by ward_group.", database="synthetic", stated_exposure="ward_group",
+        question="Describe maximum analyte in the first 24 hours by ward_group.", database="synthetic", stated_exposure="ward_group",
     )
     assert result["target_outcome"] == "analyte"
     assert result["endpoint"].kind == "continuous"
@@ -80,10 +80,11 @@ def test_one_categorical_measurement_is_not_a_grouped_outcome_question(owners):
 def test_unselected_measurement_summary_does_not_acquire_an_endpoint(owners, monkeypatch):
     from easyicu.webserver import study_intent
     monkeypatch.setattr(study_intent, "explicit_exposure_aggregation", lambda *args, **kwargs: None)
-    result = launch._metadata_only_planning_coordinates(
-        question="Describe analyte.", database="synthetic", configured_outcome="analyte",
-    )
-    assert result["endpoint"] is None
+    with pytest.raises(launch.ResearchPipelineRunError) as error:
+        launch._metadata_only_planning_coordinates(
+            question="Describe analyte.", database="synthetic", configured_outcome="analyte",
+        )
+    assert error.value.code == "windowed_summary_statistic_unresolved"
 
 
 @pytest.mark.parametrize("role", ["count", "measurement_status", "event_time"])
@@ -102,7 +103,7 @@ def test_an_unknown_requested_concept_does_not_offer_events(owners):
 @pytest.mark.parametrize("outcome,aggregation", [("recovery", None), ("analyte", "max")])
 def test_defined_continuous_outcome_and_stay_group_reach_planning(owners, outcome, aggregation):
     coordinates = launch._metadata_only_planning_coordinates(
-        question="Describe the synthetic measurement by ward_group.", database="synthetic",
+        question="Describe the synthetic measurement in the first 24 hours by ward_group.", database="synthetic",
         configured_outcome=outcome, stated_exposure="ward_group",
     )
     assert coordinates["endpoint"] is not None

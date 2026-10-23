@@ -936,8 +936,8 @@ class ExplicitExposureAggregation:
 
 
 _MEASUREMENT_OPERATIONS = (
-    ("max", r"\b(?:maximum|highest|peak)\b|最高(?:值)?|最大(?:值)?|峰值"),
-    ("min", r"\b(?:minimum|lowest|nadir)\b|最低(?:值)?|最小(?:值)?"),
+    ("max", r"\b(?:max|maximum|highest|peak)\b|最高(?:值)?|最大(?:值)?|峰值"),
+    ("min", r"\b(?:min|minimum|lowest|nadir)\b|最低(?:值)?|最小(?:值)?"),
     ("mean", r"\b(?:mean|average)\b|平均(?:值)?"),
     ("median", r"\bmedian\b|中位数"),
     ("first", r"\b(?:first|initial)\b|首次|初次"),
@@ -1059,6 +1059,8 @@ def explicit_exposure_aggregation(
     text = _clean_question(question)
     lowered = text.lower()
     matches: Dict[str, str] = {}
+    operations = "|".join(f"(?:{expression})" for _, expression in _MEASUREMENT_OPERATIONS)
+    join = r"\s*(?:and|or|/|和|及|或)\s*"
     patterns = [pattern for pattern, concept in _PHRASE_TO_CONCEPT if concept == concept_id]
     name_pattern = _concept_name_pattern(concept_id)
     if name_pattern is not None:
@@ -1079,11 +1081,11 @@ def explicit_exposure_aggregation(
     for begin, finish in sorted(spans):
         for operation, expression in _MEASUREMENT_OPERATIONS:
             before = re.search(
-                rf"(?:{expression})\s*(?:(?:serum|blood|plasma)\s+|血清|血浆|血)?$",
+                rf"(?:{expression})(?:{join}(?:{operations}))*\s*(?:(?:serum|blood|plasma)\s+|血清|血浆|血)?$",
                 text[:begin], re.IGNORECASE,
             )
             after = re.match(
-                rf"\s*(?:(?:levels?|values?)\s+|的|值|水平)?(?:{expression})",
+                rf"\s*(?:(?:levels?|values?)\s+|的|值|水平)?(?:(?:{operations}){join})*(?:{expression})",
                 text[finish:], re.IGNORECASE,
             )
             if before is not None:
@@ -1251,7 +1253,7 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
     first_day = next(
         (
             match
-            for match in re.finditer(r"首日|第一天|first day", lowered)
+            for match in re.finditer(r"首日|第一天|first[\s-]+(?:icu[\s-]+)?day", lowered)
             if not any(start <= match.start() < end for start, end in elsewhere)
         ),
         None,

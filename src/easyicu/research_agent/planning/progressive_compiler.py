@@ -2118,6 +2118,21 @@ def _compile_inputs(
         materialized_input_column_authority(context).reserved_navigation_coordinates
     )
     raw_names = list(step.raw_inputs)
+    if (step.planned_analysis_role == "primary"
+            and step.scientific_action_id == "descriptive.descriptive_summary"
+            and context.endpoint is not None and context.endpoint.kind == "continuous"):
+        outcome = variables.get(context.target_outcome)
+        if (outcome is not None and outcome.role.value == "outcome"
+                and outcome.name == context.endpoint.name and outcome.analysis_window
+                and outcome.unit_normalization in {
+                    "window_numeric_max", "window_numeric_min", "window_numeric_mean",
+                    "window_numeric_first", "window_numeric_last",
+                }):
+            # This is the host's selected reduction of this exact concept,
+            # not an arbitrary numeric column or a Planner-authored formula.
+            raw_names = [
+                outcome.name if name == outcome.source_concept else name for name in raw_names
+            ]
     # An outcome-by-cluster comparison joins class labels to the cohort on its
     # row identity, and its typed spec names that identity among the inputs.
     # In a materialized run the identity is a reserved navigation coordinate;

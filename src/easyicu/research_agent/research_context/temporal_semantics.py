@@ -21,7 +21,22 @@ _WS = r"(?:\s|_)+"
 _PATTERNS = [
     (
         "first_window",
-        re.compile(rf"\bfirst{_WS}(?P<hours>\d+(?:\.\d+)?)\s*h(?:ours?)?\b", re.I),
+        re.compile(
+            r"\bfirst[\s-]+(?:icu[\s-]+)?(?P<day>day)\b"
+            r"(?:\s+(?:of|after|following)\s+(?P<anchor>icu admission|hospital admission))?"
+            r"|(?P<zh_day>首日|第一天)", re.I,
+        ),
+    ),
+    (
+        "first_window",
+        re.compile(r"(?:首|最初|前)\s*(?P<hours>\d+(?:\.\d+)?)\s*小时", re.I),
+    ),
+    (
+        "first_window",
+        re.compile(
+            rf"\bfirst{_WS}(?P<hours>\d+(?:\.\d+)?)\s*h(?:ours?)?\b"
+            rf"(?:\s+(?:of|after|following)\s+(?P<anchor>icu admission|hospital admission))?", re.I,
+        ),
     ),
     (
         "within_after",
@@ -950,7 +965,16 @@ class TimeWindowSemanticParser:
                     continue
                 groups = match.groupdict()
                 anchor = _normalise_anchor(groups.get("anchor") or "icu_admission")
-                hours = float(groups["hours"]) if groups.get("hours") else None
+                if relation == "first_window":
+                    prefix = text[max(0, match.start() - 20):match.start()]
+                    if match.group(0).startswith("前") and re.search(r"(?:ICU|入院|入科)\s*$", prefix, re.I):
+                        continue  # Before admission is not its first-N-hours window.
+                    if re.search(r"(?:住院|入医院)(?:后)?\s*$", prefix):
+                        anchor = "hospital_admission"
+                hours = (
+                    24.0 if groups.get("day") or groups.get("zh_day")
+                    else float(groups["hours"]) if groups.get("hours") else None
+                )
                 concept = groups.get("concept")
                 constraint = TemporalConstraint(
                     raw_text=match.group(0),
@@ -1051,7 +1075,7 @@ class TemporalAlignmentEngine:
                     windows.append(
                         TimeWindow(
                             name=f"first_{int(constraint.end_hours)}h",
-                            anchor="icu_admission",
+                            anchor=constraint.anchor_event,
                             start_hours=0.0,
                             end_hours=float(constraint.end_hours),
                             rationale=f"Inferred from request phrase: {constraint.raw_text}",

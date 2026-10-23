@@ -35,7 +35,10 @@ from easyicu.webserver.landmark_survival_runtime_projection import (
 from easyicu.webserver.causal_trial_design import stop_unset_causal_design
 from easyicu.webserver.study_family_scope import stop_family_out_of_scope
 from easyicu.webserver.study_family_design import record_unset_family_design
-from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.research_pipeline_run_errors import (
+    ResearchPipelineRunError,
+    WINDOWED_SUMMARY_STOP_MESSAGES,
+)
 from easyicu.webserver.plan_change_request import PlanChangeRequest
 from easyicu.webserver.research_plan_revision import (
     PreparedPlanRevision,
@@ -304,6 +307,15 @@ def _prepare_scientific_launch(
     covariate_selection = _configured_covariate_selection(study)
     sensitivity_specs = _configured_sensitivity_specs(study)
     window = _cohort_window(materialization_study)
+    outcome_window = planning_coordinates.get("target_outcome_window")
+    if outcome_window is not None and window != (
+        outcome_window["start_hours"], outcome_window["end_hours"],
+    ):
+        raise ResearchPipelineRunError(
+            "windowed_summary_materialization_window_mismatch",
+            WINDOWED_SUMMARY_STOP_MESSAGES["windowed_summary_materialization_window_mismatch"],
+            details={"requested_window": outcome_window, "materialization_window": window},
+        )
     metadata_only_planning = budget_mode == "planner_canary"
     # A candidate-plan run is the owner that proposes unresolved scientific
     # design choices for human review.  Requiring an execution-ready analysis

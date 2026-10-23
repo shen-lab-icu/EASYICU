@@ -18,6 +18,7 @@ from easyicu.research_agent.acquisition import catalog
 from easyicu.research_agent.planning.progressive_compiler import compile_progressive_plan
 from easyicu.research_agent.planning.progressive_contract import ProgressivePlanSkeleton
 from easyicu.research_agent.research_context.builder import build_research_context
+from easyicu.research_agent.schema import VariableRole
 from easyicu.webserver import research_launch_scientific as owner
 from easyicu.webserver import study_contexts
 
@@ -110,13 +111,14 @@ def test_a_windowed_measurement_compiles_as_a_typed_grouped_outcome(grouping_cat
     assert coordinates["execution_authorized"] is False
 
 
-def test_words_only_preserve_the_original_compile_refusal(grouping_catalog):
+def test_words_only_bind_the_measurement_without_inventing_a_grouping(grouping_catalog):
     coordinates = _coordinates()
-    assert coordinates["primary_exposure"] is coordinates["target_outcome"] is coordinates["endpoint"] is None
+    assert coordinates["primary_exposure"] is None
+    assert coordinates["target_outcome"] == "k"
+    assert coordinates["endpoint"].name == "k_max"
     context = _context(coordinates)
-    assert context.variable("k_max").role.value == "lab"
-    with pytest.raises(ValueError, match="progressive_continuous_outcome_invalid.*raw_inputs"):
-        _compile(context)
+    assert context.variable("k_max").role.value == "outcome"
+    assert _compile(context).steps[-1].inputs == ["artifact:analysis_cohort", GROUP, "k_max"]
 
 
 def test_a_whole_stay_quantity_compiles_with_the_same_grouping_reading(grouping_catalog):
@@ -149,7 +151,7 @@ def test_a_measurements_checked_identifier_does_not_make_it_a_grouping(grouping_
         question=QUESTION, database="eicu", stated_exposure="血钾", stated_exposure_concept="k",
     )
     assert coordinates["primary_exposure"] is None
-    assert coordinates["endpoint"] is None
+    assert coordinates["endpoint"].name == "k_max"
 
 
 def test_an_event_status_is_also_an_owner_defined_grouping(grouping_catalog, monkeypatch):
@@ -357,7 +359,7 @@ def test_the_launch_carries_the_measurement_through_the_zero_row_schema(grouping
     }))
     assert without.primary_exposure is None
     if not configured:
-        assert without.metadata_planning_coordinates["endpoint"] is None
+        assert without.metadata_planning_coordinates["endpoint"].name == "k_max"
 
 
 def test_endpoint_choices_use_the_checked_grouping_and_its_bound_source(grouping_catalog, monkeypatch):
@@ -428,8 +430,13 @@ def test_the_failed_compile_explains_the_unbound_coordinates_in_chinese(grouping
     from easyicu.webserver import agent_pipeline_runs
     from tests.support.node import run_node
 
+    context = _context(_coordinates())
+    context = context.model_copy(update={"variables": [
+        item.model_copy(update={"role": VariableRole.LAB}) if item.name == "k_max" else item
+        for item in context.variables
+    ]})
     with pytest.raises(ValueError) as caught:
-        _compile(_context(_coordinates()))
+        _compile(context)
     assert "categorical grouping and a numeric measure" in agent_pipeline_runs._progressive_compile_failure_message(caught.value)
     typed = agent_pipeline_runs._safe_pipeline_typed_failure(caught.value)
     node = shutil.which("node")

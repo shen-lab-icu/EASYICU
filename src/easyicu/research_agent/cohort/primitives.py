@@ -31,10 +31,10 @@ def first_nonnull(series: pd.Series):
 
 
 def merge_left(base: pd.DataFrame, frames: Iterable[pd.DataFrame]) -> pd.DataFrame:
-    """Left-join non-empty stay-level frames onto ``base``."""
+    """Left-join stay-level frames, retaining empty declared columns as missing."""
     out = base.copy()
     for frame in frames:
-        if frame is None or frame.empty or ID_COL not in frame.columns:
+        if frame is None or ID_COL not in frame.columns:
             continue
         out = out.merge(frame, on=ID_COL, how="left")
     return out

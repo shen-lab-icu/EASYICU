@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from easyicu.research_agent.research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
     window_extends_after_anchor,
@@ -40,6 +42,18 @@ def test_temporal_alignment_engine_derives_time_window(ra):
     )
     assert constraints
     assert any(w.name.startswith("within_48h_after_icu_admission") for w in windows)
+
+
+@pytest.mark.parametrize("question", [
+    "Read the synthetic measurement on the first day after hospital admission.",
+    "Read the synthetic measurement over the first 24 hours after hospital admission.",
+    "读取合成测量的住院首日窗口。",
+])
+def test_a_first_window_keeps_the_admission_it_counts_from(ra, question):
+    windows, _ = ra.TemporalAlignmentEngine().infer(research_question=question)
+    assert len(windows) == 1
+    assert windows[0].anchor == "hospital_admission"
+    assert windows[0].start_hours == 0.0 and windows[0].end_hours == 24.0
 
 
 def test_parser_records_explicit_relative_anchor_phrases(ra):
