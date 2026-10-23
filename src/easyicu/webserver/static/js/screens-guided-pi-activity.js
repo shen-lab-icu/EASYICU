@@ -1163,6 +1163,11 @@
       // instead of exposing an empty or misleading execution disclosure.
       if (!visibleSteps.length && !failed) return '';
       const title = failed ? tr('Execution needs attention', '执行过程需要处理') : kicker;
+      // A job that stopped before any step has no row to carry its cause; it
+      // is said under the summary, or the stop reads as nothing at all.
+      const unplacedCause = failed && !causes.size && row && row.failureCode
+        && typeof host.runFailureText === 'function'
+        ? String(host.runFailureText(row.failureCode) || '').trim() : '';
       const traceMeta = `${tr(`${rowCount} steps`, `${rowCount} 个步骤`)}${row.durationKnown === false ? '' : ` · ${tr(`total ${durationText(row.startedAt, row.endedAt)}`, `总耗时 ${durationText(row.startedAt, row.endedAt)}`)}`}`;
       // Finished failures expose their status in the summary but keep verbose
       // diagnostic receipts collapsed. Persisted rows from older builds may
@@ -1178,7 +1183,7 @@
           ${longTrace ? expandButton(expanded) : ''}
           <p class="sr-only">${tr('Reasoning summaries, lifecycle facts, and EasyICU receipts — tool arguments, credentials, and patient rows are never displayed.', '这里展示模型的思考摘要、生命周期事实和 EasyICU 回执；工具参数、凭据和患者行级数据不会展示。')}</p>
         </div>
-      </details>`;
+      </details>${unplacedCause ? `<p class="gpi-activity-note">${esc(unplacedCause)}</p>` : ''}`;
     }
     /* A finished turn collapses. Its summary line already carries what a
        researcher needs -- which tools ran and how long the turn took -- while

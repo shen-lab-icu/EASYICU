@@ -363,6 +363,33 @@ def test_a_job_that_ended_without_clearing_its_pointer_holds_no_decision(
     assert len(study.submitted) == 2
 
 
+def test_asking_again_after_its_job_failed_records_the_new_job(study: Study) -> None:
+    """A retried decision is another attempt with its own row.
+
+    The new job then belongs to the conversation, so its end is archived and
+    its failure shown, instead of the page offering the same button again.
+    """
+
+    first = study.start(study.ask(), submit=study.submit(fails=True))
+    study.finish(first["job_id"], "failed")
+
+    again = study.start(study.ask(), submit=study.submit(fails=True))
+    study.finish(again["job_id"], "failed")
+
+    assert again["reused"] is False and again["host_action"]["recorded"] is True
+    assert [row["child_job_id"] for row in study.rows()] == [first["job_id"], again["job_id"]]
+    archived = study.service.archive_child_job(
+        study.sessions[0], project_id=study.project, job_id=again["job_id"]
+    )
+    assert archived["job"]["job_id"] == again["job_id"]
+    # Recording the same job again is the same row.
+    study.service.record_job_host_action(
+        study.sessions[0], project_id=study.project, action_code="prepare_analysis_data",
+        action_key=again["host_action"]["decision_key"], child_job_id=again["job_id"],
+    )
+    assert len(study.rows()) == 2
+
+
 def test_a_page_opened_before_the_job_finished_is_answered_by_that_job(
     study: Study,
 ) -> None:
