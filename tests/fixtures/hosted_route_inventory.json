@@ -525,6 +525,24 @@
     "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
+    "method": "GET",
+    "route": "/api/copilot/pi/provider-config/declaration",
+    "fields": [],
+    "reaches": "PiProviderConfigStore.declaration_status; reads the active connection and declaration journal without credentials in the response",
+    "protection": "no path inputs",
+    "writes": "instance home",
+    "write_owner": "PiProviderConfigStore appends an observed connection lapse to its fixed private declaration journal."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/provider-config/declaration",
+    "fields": ["body:connection", "body:value", "body:notice_key", "body:notice_version", "body:channel"],
+    "reaches": "PiProviderConfigStore.declare_data_handling; exact active connection comparison, no network access",
+    "protection": "refused route: pi_provider_declaration_admin_required",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request and the declaration owner retain the hosted administrator boundary; desktop settings append a private record."
+  },
+  {
     "method": "POST",
     "route": "/api/copilot/pi/provider-config/models",
     "fields": [

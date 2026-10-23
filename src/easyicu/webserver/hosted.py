@@ -110,6 +110,7 @@ _ADMIN_ROUTES = frozenset({
     "/api/extensions/skills/install", "/api/extensions/mcp/install",
     "/api/extensions/state", "/api/extensions/remove", "/api/extensions/mcp/test",
     "/api/copilot/pi/provider-config", "/api/copilot/pi/provider-config/models",
+    "/api/copilot/pi/provider-config/declaration",
     "/api/agent-runs/provider-config", "/api/agent-runs/codex-auth/login",
     "/api/agent-runs/codex-auth/cancel", "/api/agent-runs/codex-auth/logout",
     "/api/copilot/pi/research-provider/model", "/api/copilot/pi/research-provider/codex/login",
@@ -168,6 +169,14 @@ async def guard_request(request: Request) -> None:
     path = request.url.path.rstrip("/")
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         if path in _ADMIN_ROUTES:
+            if path == "/api/copilot/pi/provider-config/declaration":
+                from easyicu.webserver.pi_copilot.provider_config import declaration_error
+
+                error = declaration_error("admin_required")
+                raise HTTPException(status_code=error.status_code, detail={
+                    "error": error.code,
+                    "reason": error.message,
+                })
             unavailable()
         if path.startswith("/api/jobs/") and path.endswith("/open-output"):
             unavailable(status_code=503)

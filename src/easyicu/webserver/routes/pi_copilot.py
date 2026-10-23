@@ -24,6 +24,9 @@ from easyicu.webserver.pi_copilot.provider_config import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
     DEFAULT_PROVIDER,
+    PiProviderConnection,
+    PiProviderDeclarationState,
+    declaration_error,
 )
 from easyicu.webserver import codex_account_sessions
 
@@ -405,6 +408,17 @@ class PiProviderModelsRequest(BaseModel):
     enable_ai: StrictBool = False
 
 
+class PiProviderDeclarationRequest(BaseModel):
+    """No actor or role is accepted from the browser or a model."""
+
+    model_config = ConfigDict(extra="forbid")
+    connection: PiProviderConnection
+    value: str
+    notice_key: str
+    notice_version: str
+    channel: str = "settings_ui"
+
+
 class PiProviderModelRequest(BaseModel):
     """A model change on an already-verified connection.
 
@@ -530,6 +544,8 @@ def post_pi_copilot_session_maintenance(
 @router.post("/api/copilot/pi/provider-config")
 def post_pi_copilot_provider_config(body: PiProviderConfigRequest) -> dict:
     try:
+        if body.data_handling != "unspecified" or body.inference_location != "unspecified":
+            raise declaration_error("settings_only")
         return get_pi_copilot_service().configure_provider(
             provider=body.provider,
             api_key=body.api_key,
@@ -540,6 +556,22 @@ def post_pi_copilot_provider_config(body: PiProviderConfigRequest) -> dict:
             data_handling=body.data_handling,
             inference_location=body.inference_location,
         )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.get("/api/copilot/pi/provider-config/declaration", response_model=PiProviderDeclarationState)
+def get_pi_copilot_provider_declaration() -> dict:
+    try:
+        return get_pi_copilot_service().provider_store.declaration_status()
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/provider-config/declaration", response_model=PiProviderDeclarationState)
+def post_pi_copilot_provider_declaration(body: PiProviderDeclarationRequest) -> dict:
+    try:
+        return get_pi_copilot_service().declare_provider_data_handling(**body.model_dump())
     except PiCopilotError as exc:
         _raise_http(exc)
 

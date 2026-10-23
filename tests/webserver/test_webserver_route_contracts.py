@@ -115,6 +115,16 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "post_pi_copilot_provider_config",
     ),
     (
+        "GET",
+        "/api/copilot/pi/provider-config/declaration",
+        "get_pi_copilot_provider_declaration",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/provider-config/declaration",
+        "post_pi_copilot_provider_declaration",
+    ),
+    (
         "POST",
         "/api/copilot/pi/provider-config/models",
         "post_pi_copilot_provider_models",

@@ -472,6 +472,12 @@
   function savePiCopilotProviderConfig(body) {
     return postJSON('/api/copilot/pi/provider-config', body || {});
   }
+  function loadPiCopilotProviderDeclaration() {
+    return getJSON('/api/copilot/pi/provider-config/declaration');
+  }
+  function savePiCopilotProviderDeclaration(body) {
+    return postJSON('/api/copilot/pi/provider-config/declaration', body || {});
+  }
   function discoverPiCopilotProviderModels(body) {
     return postJSON('/api/copilot/pi/provider-config/models', body || {});
   }
@@ -837,6 +843,8 @@
   window.EU_API.loadPiCopilotStatus = loadPiCopilotStatus;
   window.EU_API.savePiCopilotProviderConfig = savePiCopilotProviderConfig;
   window.EU_API.discoverPiCopilotProviderModels = discoverPiCopilotProviderModels;
+  window.EU_API.loadPiCopilotProviderDeclaration = loadPiCopilotProviderDeclaration;
+  window.EU_API.savePiCopilotProviderDeclaration = savePiCopilotProviderDeclaration;
   window.EU_API.loadPiCopilotCodexStatus = loadPiCopilotCodexStatus;
   window.EU_API.startPiCopilotCodexLogin = startPiCopilotCodexLogin;
   window.EU_API.cancelPiCopilotCodexLogin = cancelPiCopilotCodexLogin;
