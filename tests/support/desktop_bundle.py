@@ -24,7 +24,9 @@ def write_files(root: Path, files: dict[str, str]) -> None:
 
 def node_app(root: Path) -> Path:
     write_files(root, {
-        "package.json": '{"type":"module"}',
+        "package.json": json.dumps({"type": "module", "dependencies": {
+            "@earendil-works/pi-coding-agent": "1.0.0", "@earendil-works/pi-ai": "1.0.0", "typebox": "1.0.0",
+        }}),
         "src/main.mjs": "export const gateway = true;\n",
         "src/skills/web-prototype/SKILL.md": "Synthetic skill\n",
     })

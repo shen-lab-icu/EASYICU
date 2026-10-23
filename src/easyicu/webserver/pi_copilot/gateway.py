@@ -29,6 +29,7 @@ from .contracts import (
 from .install import (
     packaged_app_dir,
     packaged_runtime_is_complete,
+    pi_package_manifest,
     preferred_app_dir,
     runtime_is_installed,
 )
@@ -332,13 +333,7 @@ class PiGatewayClient:
             environ=self.environ,
             include_file=self._provider_file_enabled,
         )
-        dependency = (
-            self.app_dir
-            / "node_modules"
-            / "@earendil-works"
-            / "pi-coding-agent"
-            / "package.json"
-        )
+        dependency = pi_package_manifest(self.app_dir)
         packaged = self.app_dir == packaged_app_dir().resolve()
         runtime_integrity_verified = self._runtime_integrity_status(packaged=packaged)
         account_configured = bool(self.account_binding_sha256)

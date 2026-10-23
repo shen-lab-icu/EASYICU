@@ -235,7 +235,9 @@ def test_staging_shortens_pi_without_mutating_installed_wheel_and_checks_imports
     result = common.prepare_bundle(desktop_root=desktop, build_root=tmp_path / "build", run=run, windows=True)
     assert not staged.exists()
     short = desktop / "src-tauri/p"
-    assert (short / runtime_file).is_file()
+    rooted_file = runtime_file.removeprefix("node_modules/@earendil-works/pi-coding-agent/")
+    assert (short / rooted_file).is_file()
+    assert json.loads((short / "package.json").read_text())["name"] == "@earendil-works/pi-coding-agent"
     assert (short / "tool_catalog.json").read_text() == "{}"
     assert (short / "src/skills/web-prototype/SKILL.md").is_file()
     assert (source / "node_modules/typebox/index.d.ts").is_file()
@@ -255,6 +257,7 @@ def test_both_dry_runs_explain_pruning_smoke_and_budget_without_build_tools(driv
     assert module.main(["--dry-run"]) == 0
     plan = capsys.readouterr().out.lower()
     assert "prun" in plan and ".d.ts" in plan and ".map" in plan
+    assert "root package" in plan and "pi-coding-agent" in plan
     assert "160" in plan and "100" in plan
     assert "import" in plan
     assert ("warn" if driver == "build_macos" else "fail") in plan

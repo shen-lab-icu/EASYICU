@@ -35,6 +35,7 @@ RUNTIME_SOURCE_FILES = (
 RUNTIME_MANIFEST_FILE = "runtime-manifest.json"
 INSTALLATION_SCHEMA_VERSION = "easyicu.pi-runtime-installation/2"
 _EXECUTABLE_SUFFIXES = frozenset({".js", ".mjs", ".cjs"})
+_PI_AGENT_PATH = "node_modules/@earendil-works/pi-coding-agent"
 
 
 def packaged_app_dir() -> Path:
@@ -56,11 +57,33 @@ def _sha256(path: Path) -> str:
 def _packaged_source_file(root: Path, relative: str) -> Path:
     """Resolve one runtime file without duplicating its package owner."""
 
+    metadata = root / "gateway" / relative
+    if relative in RUNTIME_FILES and metadata.is_file():
+        return metadata
     direct = root / relative
     if direct.is_file():
         return direct
     if relative in RUNTIME_EXTERNAL_FILES:
         return root.parent / relative
+    return direct
+
+
+def pi_package_manifest(root: Path, relative: str = _PI_AGENT_PATH) -> Path:
+    """Resolve an original locked Pi path in canonical or root-staged layouts."""
+
+    staged = (root / "gateway/package.json").is_file()
+    if staged and (relative == _PI_AGENT_PATH or relative.startswith(_PI_AGENT_PATH + "/")):
+        relative = relative[len(_PI_AGENT_PATH):].lstrip("/")
+    direct = root / relative / "package.json"
+    if staged and not direct.is_file() and relative:
+        owner, _, name = relative.rpartition("node_modules/")
+        importer = root / owner
+        for parent in (importer, *importer.parents):
+            if not parent.is_relative_to(root):
+                break
+            candidate = parent / "node_modules" / name / "package.json"
+            if candidate.is_file():
+                return candidate
     return direct
 
 
@@ -79,7 +102,7 @@ def runtime_manifest(source: Optional[Path] = None) -> dict[str, object]:
             raise RuntimeError(f"Packaged Pi runtime file is missing: {relative}")
         files[relative] = _sha256(candidate)
     try:
-        lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
+        lock = json.loads(_packaged_source_file(root, "package-lock.json").read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         raise RuntimeError("Packaged Pi runtime lockfile is invalid") from exc
     packages = lock.get("packages") if isinstance(lock, dict) else None
@@ -204,11 +227,13 @@ def packaged_runtime_is_complete(path: Optional[Path] = None) -> bool:
     try:
         expected = runtime_manifest(root)
         for relative, version in dict(expected["pi_packages"]).items():
-            package_file = root / relative / "package.json"
+            package_file = pi_package_manifest(root, relative)
             if not package_file.is_file():
                 return False
             package = json.loads(package_file.read_text(encoding="utf-8"))
             if str(package.get("version") or "") != version:
+                return False
+            if (root / "gateway/package.json").is_file() and package.get("name") != relative.split("node_modules/")[-1]:
                 return False
     except (
         KeyError,
@@ -275,7 +300,7 @@ def install_runtime(
     )
     try:
         for name in RUNTIME_FILES:
-            shutil.copy2(source_dir / name, staging / name)
+            shutil.copy2(_packaged_source_file(source_dir, name), staging / name)
         for name in RUNTIME_EXTERNAL_FILES:
             shutil.copy2(_packaged_source_file(source_dir, name), staging / name)
         shutil.copytree(source_dir / "src", staging / "src")
@@ -351,6 +376,7 @@ __all__ = [
     "install_runtime",
     "main",
     "packaged_app_dir",
+    "pi_package_manifest",
     "preferred_app_dir",
     "packaged_runtime_is_complete",
     "runtime_manifest",
