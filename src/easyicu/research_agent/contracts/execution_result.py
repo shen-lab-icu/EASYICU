@@ -12,6 +12,7 @@ class RunnerFailureCode(str, Enum):
     """Host-issued runner diagnostics that generated code cannot mint."""
 
     ISOLATION_BACKEND_UNAVAILABLE = "isolation_backend_unavailable"
+    HOST_RUNNER_REFUSES_MODEL_CODE = "host_runner_refuses_model_code"
 
 
 @dataclass

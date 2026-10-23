@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from easyicu.webserver import provider_adapter
+from easyicu.webserver.hosted import deployment_kind
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 
 
@@ -42,7 +43,10 @@ def _validated_pipeline_credential_source(
     return selected
 
 
-def _submission_profile_ref(*, budget_mode: str, live_pubmed: bool) -> str:
+def _submission_profile_ref(
+    *, budget_mode: str, live_pubmed: bool,
+    runner_kind: str | None = None,
+) -> str:
     """Resolve the one submission profile a budget mode selects.
 
     The launch-time runtime preflight and the run itself have to agree on which
@@ -55,8 +59,12 @@ def _submission_profile_ref(*, budget_mode: str, live_pubmed: bool) -> str:
         CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF,
         CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
         CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF,
+        DESKTOP_FIRST_RESULT,
+        DESKTOP_FIRST_RESULT_LIVE_PUBMED,
     )
 
+    if runner_kind == "host":
+        return (DESKTOP_FIRST_RESULT_LIVE_PUBMED if live_pubmed else DESKTOP_FIRST_RESULT).ref
     if str(budget_mode or "").strip().lower() == "full_reviewed":
         return (
             CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF
@@ -68,6 +76,34 @@ def _submission_profile_ref(*, budget_mode: str, live_pubmed: bool) -> str:
         if live_pubmed
         else CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF
     )
+
+
+def recorded_submission_profile_ref(
+    *, manifest: Mapping[str, Any] | None = None, requests=(),
+) -> str | None:
+    """Project the run's recorded profile; never infer it from today's runtime."""
+    from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+    from easyicu.research_agent.orchestration.profiles import get_submission_profile
+
+    refs = set()
+    if manifest:
+        name, version = manifest.get("submission_profile_name"), manifest.get("submission_profile_version")
+        if isinstance(name, str) and isinstance(version, str):
+            refs.add(f"{name}/{version}")
+    for request in requests:
+        payload = request.payload if isinstance(request.payload, Mapping) else {}
+        try:
+            authority = PlanReviewAuthority.model_validate(payload.get("plan_review_authority"))
+        except ValueError:
+            return None
+        if authority.execution is not None and authority.execution.submission_profile_ref:
+            refs.add(authority.execution.submission_profile_ref)
+    if len(refs) != 1:
+        return None
+    try:
+        return get_submission_profile(refs.pop()).ref
+    except ValueError:
+        return None
 
 
 def _require_profile_dictionaries(*, budget_mode: str) -> None:
@@ -110,7 +146,7 @@ def _require_profile_dictionaries(*, budget_mode: str) -> None:
 
 def _require_execution_runtime(
     *, budget_mode: str, runner_image: str, project_root: str | None = None,
-) -> None:
+) -> str:
     """Refuse a launch whose execution backend is already known to be down.
 
     Whether the mandated container runtime can run is a static fact a bounded
@@ -144,7 +180,13 @@ def _require_execution_runtime(
             workdir=Path(project_root) if project_root is not None else None,
         )
         if availability.available:
-            continue
+            return kind
+        if deployment_kind() == "desktop" and kind == "docker" and availability.reason_code in {
+            "docker_executable_missing", "docker_daemon_unreachable", "docker_image_missing",
+        }:
+            availability = runner_module.probe_runner_availability("host")
+            if availability.available:
+                return "host"
         raise ResearchPipelineRunError(
             "research_pipeline_execution_runtime_unavailable",
             "The governed execution runtime is not ready, so this run would "
@@ -157,3 +199,4 @@ def _require_execution_runtime(
                 "runner_image": availability.image,
             },
         )
+    return "docker"  # Planner-only profile: no execution runtime is required.

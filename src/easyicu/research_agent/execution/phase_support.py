@@ -28,6 +28,8 @@ from typing import (
 
 from ..audits.step_summary_integrity import StepSummaryIntegrityValidator
 from .article_audit import RunArticleAuditResult, collect_run_article_audits
+from .initial_code_policy import resolve_initial_code_origin, standard_executor_finding
+from .step_execution import CodeOrigin
 from ..gates.concept import (
     deterministic_gate_stamp as _deterministic_gate_stamp,
     finding_detail_without_source_positions as _finding_detail_without_source_positions,
@@ -2178,29 +2180,18 @@ def _step_resolve_initial_code(
     prior_step_record: Any,
     prior_attempt_records: Sequence[Mapping[str, Any]],
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-    """Resolve the code the step executes; returns ``(code, terminal_record)``.
-
-    A non-``None`` terminal record means the step failed before execution and
-    the caller must return it immediately.
-    """
+    """Return initial code, or a terminal failure record for immediate return."""
+    if not resolve_initial_code_origin(
+        runner_kind=getattr(pipeline, "_runner_kind", ""), host_code=preflight_standard_code,
+        step_id=step.step_id, step_record=step_record, findings=findings,
+        shared_lock=shared_lock, per_step_records=per_step_records,
+        append_terminal=_append_terminal_step_record, flush_manifest=_flush_partial_manifest,
+    ):
+        return None, step_record
     if preflight_standard_code is not None:
         code = preflight_standard_code
         with shared_lock:
-            findings.append(
-                ValidationFinding(
-                    validator="coder",
-                    severity="info",
-                    message=(
-                        "Using the deterministic calculator for the complete "
-                        "Planner-owned standard-executor specification in "
-                        f"step {step.step_id}."
-                    ),
-                    detail={
-                        "step_id": step.step_id,
-                        "analysis_kind": standard_executor.analysis_kind,
-                    },
-                )
-            )
+            findings.append(standard_executor_finding(step.step_id, standard_executor.analysis_kind))
     elif preflight_figure_code is not None:
         code = preflight_figure_code
         with shared_lock:
@@ -2218,6 +2209,7 @@ def _step_resolve_initial_code(
             )
     elif resume_deterministic_repair_code is not None:
         code = resume_deterministic_repair_code
+        step_record["code_origin"] = CodeOrigin.REPAIR.value
     elif (
         _retry_host_code := explicit_retry_host_owned_code(
             step_record,
@@ -2237,6 +2229,7 @@ def _step_resolve_initial_code(
         code = _retry_host_code
     elif step_attempt_state.selected_resume_capsule is not None:
         code = step_attempt_state.selected_resume_capsule.candidate_code
+        step_record["code_origin"] = CodeOrigin.RECOVERED_CAPSULE.value
         worker_progress.resumed_code_reuse_used = True
         step_record["generation_mode"] = "resumed_code_reuse"
         step_record["step_authority_capsule_reused"] = True
@@ -2249,17 +2242,17 @@ def _step_resolve_initial_code(
         )
     elif quarantined_resume_draft is not None:
         code = _use_quarantined_draft(quarantined_resume_draft)
+        step_record["code_origin"] = CodeOrigin.RECOVERED_CAPSULE.value
     elif resume_critic_repair_code is not None:
         code = resume_critic_repair_code
+        step_record["code_origin"] = CodeOrigin.REPAIR.value
     elif preflight_resumed_code is not None:
         if failed_contract_code_preflight_reuse:
             step_record["resumed_failed_contract_code_preflight"] = True
         code = _use_resumed_code(preflight_resumed_code)
-    # Primary estimands and cohort selection stay agent-owned.  Deterministic
-    # preflight below is limited to standard auxiliary products (descriptive
-    # context, robustness replay, missingness audit, figures, and overlap
-    # rendering); it must never replace a planned Cox/IPTW/ordinal method or
-    # choose the analysis cohort before the coder runs.
+        step_record["code_origin"] = CodeOrigin.RECOVERED_CAPSULE.value
+    # Legacy auxiliary renderers remain available to sandboxed execution.
+    # The provenance gate above never grants these fallbacks desktop authority.
     elif (
         _preflight_absolute_risk_code := (
             _deterministic_absolute_risk_context_code(

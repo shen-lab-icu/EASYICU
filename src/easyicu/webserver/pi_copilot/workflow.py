@@ -639,6 +639,11 @@ def build_research_workflow_snapshot(
     plan_review_summary = (
         {
             "run_id": str(review_authority.get("run_id") or "")[:160],
+            **(
+                {"submission_profile_ref": review_authority.get("submission_profile_ref")}
+                if review_authority.get("submission_profile_ref")
+                else {}
+            ),
             "status": str(raw_scientific_review.get("status") or "")[:40],
             "score": raw_scientific_review.get("score"),
             "top_journal_candidate": bool(

@@ -1,17 +1,7 @@
-"""A missing container runtime must be said early, and said by name.
+"""Select a usable runtime before spending on planning or materialization.
 
-Whether the mandated backend can run generated code is a static fact a bounded
-probe settles in seconds. It used to be discovered only inside the pipeline --
-after the provider was authorized, the data foundation was built and the cohort
-was materialized -- so a stopped daemon cost roughly a minute and a half of real
-provider spend before saying anything. What it then said was "The governed
-Research Agent operation failed." with an empty ``exception_types``: the word
-"Docker" appeared nowhere between the daemon's own error and the screen.
-
-Requiring the container is deliberate -- results without an image digest are not
-submission-grade -- so the repair is not to start it automatically or to fall
-back to the host. It is to ask before spending, and to keep the answer
-attributable.
+Only an explicit desktop install may select the typed-executor host profile.
+Server and developer installs still refuse a missing or stopped Docker runtime.
 """
 
 from __future__ import annotations
@@ -59,6 +49,40 @@ def _stub_probe(monkeypatch: pytest.MonkeyPatch, availability):
 
     monkeypatch.setattr(runner_module, "probe_runner_availability", probe)
     return asked
+
+
+@pytest.fixture(autouse=True)
+def _explicit_deployment(monkeypatch):
+    monkeypatch.delenv("EASYICU_DEPLOYMENT", raising=False)
+    monkeypatch.delenv("EASYICU_HOSTED", raising=False)
+
+
+@pytest.mark.parametrize("deployment", [None, "server", "pilot1", "desktop", "unknown"])
+@pytest.mark.parametrize("hosted", [False, True])
+@pytest.mark.parametrize("docker_ready", [False, True])
+def test_only_declared_desktop_can_fall_back_to_host(
+    monkeypatch, deployment, hosted, docker_ready,
+):
+    if deployment is not None:
+        monkeypatch.setenv("EASYICU_DEPLOYMENT", deployment)
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
+    asked = _stub_probe(monkeypatch, lambda kind: (
+        runner_module.RunnerAvailability(kind=kind, available=True, image="")
+        if docker_ready or kind == "host" else _unavailable("docker_daemon_unreachable")
+    ))
+    if docker_ready or (deployment == "desktop" and not hosted):
+        assert research_launch_runtime._require_execution_runtime(
+            budget_mode="full_reviewed", runner_image="synthetic:image",
+        ) == ("docker" if docker_ready else "host")
+        assert asked == (["docker"] if docker_ready else ["docker", "host"])
+    else:
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as error:
+            research_launch_runtime._require_execution_runtime(
+                budget_mode="full_reviewed", runner_image="synthetic:image",
+            )
+        assert error.value.code == "research_pipeline_execution_runtime_unavailable"
+        assert "Start Docker" in str(error.value)
+        assert asked == ["docker"]
 
 
 def test_a_stopped_daemon_is_refused_before_the_run_spends_anything(

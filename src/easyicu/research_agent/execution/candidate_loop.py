@@ -23,7 +23,7 @@ from ..repairs.source import (
 from ..repairs.attempt_record import record_deterministic_runner_repair_attempt
 from ..repairs.runner_dispatch import mark_semantic_stub_injection
 from .code_hygiene import reorder_forward_references
-from .failure_classification import classify_runtime_failure
+from .failure_classification import classify_runtime_failure, record_host_code_refusal
 from ..contracts.retry_policy import repair_route_for
 from .concept_audit import ConceptQuarantineState
 from .concept_repair import MAX_DETERMINISTIC_CONCEPT_REPAIRS
@@ -97,7 +97,7 @@ from ..authority.step_runtime import (
     seal_execution_capsule,
 )
 from ..authority.step_attempt import StepAttemptState
-from .step_execution import LockedStepExecutionRequest, StepExecutor
+from .step_execution import CodeOrigin, LockedStepExecutionRequest, StepExecutor
 from .executor_stop_record import read_executor_stop_record
 from ..repairs.summary import salvage_step_summary
 
@@ -213,6 +213,8 @@ class _CandidateLoopState:
     concept_approved_code_digest: Optional[str]
     deterministic_contract_approved_code_digest: Optional[str]
     final_concept_gate_approved_code_digest: Optional[str]
+    code_origin: CodeOrigin = CodeOrigin.MODEL_GENERATED
+    host_rendered_code: Optional[str] = None
     standard_executor_terminal_block: bool = False
     standard_executor_terminal_reason: Optional[str] = None
     standard_executor_terminal_summary: Dict[str, Any] = dataclass_field(
@@ -238,6 +240,20 @@ class _CandidateLoopState:
     early_contract_errors: List[ValidationFinding] = dataclass_field(
         default_factory=list
     )
+
+    def execution_code_origin(self) -> CodeOrigin:
+        if self.code_origin == CodeOrigin.HOST_RENDERED_EXECUTOR and self.code != self.host_rendered_code:
+            return CodeOrigin.REPAIR
+        return self.code_origin
+
+    @classmethod
+    def from_initial_code(cls, code: str, step_record: Mapping[str, Any], **kwargs):
+        origin = CodeOrigin(step_record.get("code_origin", "model_generated"))
+        return cls(
+            code=code, code_origin=origin,
+            host_rendered_code=code if origin == CodeOrigin.HOST_RENDERED_EXECUTOR else None,
+            **kwargs,
+        )
 
 
 # Candidate-loop stage implementations are generated below from the previously
@@ -713,9 +729,26 @@ def _candidate_concept_audit_transition(
     return _CandidateLoopAction.PROCEED
 
 
+def _refuse_non_host_candidate(host, attempt, state) -> bool:
+    if host.pipeline._runner_kind == "host" and state.execution_code_origin() != CodeOrigin.HOST_RENDERED_EXECUTOR:
+        # Refuse before capsule replay as well as before subprocess execution.
+        # A recovered execution result cannot launder a repaired candidate.
+        record_host_code_refusal(
+            step_id=attempt.step.step_id, step_record=attempt.step_record,
+            findings=host.findings, shared_lock=host.shared_lock,
+            per_step_records=host.per_step_records,
+            append_terminal=host._append_terminal_step_record,
+            flush_manifest=host._flush_partial_manifest,
+        )
+        return True
+    return False
+
+
 def _candidate_execute_transition(
     host: _CandidateLoopHost, attempt: _CandidateLoopAttempt, state: _CandidateLoopState
 ) -> _CandidateLoopAction:
+    if _refuse_non_host_candidate(host, attempt, state):
+        return _CandidateLoopAction.RETURN
     state.current_generation_mode = attempt.worker_progress.generation_mode()
     run_label = {
         "llm": "generated script",
@@ -936,6 +969,7 @@ def _candidate_execute_transition(
                 code=state.code,
                 resolved_inputs_path=attempt.resolved_inputs_path,
                 output_dir=(host.run_dir / "steps" / attempt.step.step_id / "outputs"),
+                code_origin=state.execution_code_origin(),
             ),
         )
 
@@ -2718,6 +2752,10 @@ def _run_candidate_loop(
     """
 
     while True:
+        # Permission belongs to the rendered bytes. Any repair, including a
+        # critic/quarantine rewrite, loses it before another attempt. Only the
+        # two host normalization operations below may preserve that origin.
+        state.code_origin = state.execution_code_origin()
         state.code = reorder_forward_references(state.code)
         # Every candidate, including a repaired rewrite, receives the same
         # host-owned receipt before its authority digest is calculated.
@@ -2731,6 +2769,9 @@ def _run_candidate_loop(
                 scope=attempt.plausibility_authority.scope,
             ),
         )
+        if state.code_origin == CodeOrigin.HOST_RENDERED_EXECUTOR:
+            state.host_rendered_code = state.code
+        attempt.step_record["code_origin"] = state.code_origin.value
         attempt.checkpoint_authority.ensure_candidate(
             state.code,
             reason="host_code_normalization_or_deterministic_mutation",

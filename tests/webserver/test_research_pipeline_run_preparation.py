@@ -400,7 +400,8 @@ def test_public_preparation_interface_does_not_expose_primitive_operations() -> 
     assert tuple(signature.parameters) == ("request",)
     assert len(inspect.signature(PreparedScientificLaunch).parameters) < 22
     assert len(inspect.signature(PreparedLaunchAuthority).parameters) == 6
-    assert len(inspect.signature(PreparedLaunchExecution).parameters) == 11
+    assert len(inspect.signature(PreparedLaunchExecution).parameters) == 12
+    assert "runner_kind" in inspect.signature(PreparedLaunchExecution).parameters
     # Restored mode and planning constraint travel as one immutable owner value,
     # not additional adapter-controlled primitive arguments.
     assert "development_resume_scope" in inspect.signature(PreparedLaunchExecution).parameters

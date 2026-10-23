@@ -44,6 +44,7 @@ Two boundaries it keeps:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Iterable, List, Sequence, Tuple
 
 from .runners.selection import (
@@ -57,9 +58,56 @@ __all__ = [
     "execution_declaration_refusal",
     "owner_declaration_plan_findings",
     "owner_declaration_replan_directive",
+    "require_host_rendered_plan",
 ]
 
 _VALIDATOR = "plan_owner_declaration"
+
+
+class HostPlanStepNeedsSandbox(ValueError):
+    """The desktop plan contains a step without a typed executor owner."""
+
+    reason_code = "research_pipeline_plan_step_needs_sandbox"
+
+    def __init__(self, step_id: str) -> None:
+        super().__init__(
+            f"{self.reason_code}: This step needs code the desktop app cannot "
+            "run safely. Remove or change this step before approving the plan."
+        )
+        self.easyicu_safe_diagnostic = {
+            "owner": "easyicu.execution.host_plan_v1",
+            "reason_code": self.reason_code,
+        }
+        if isinstance(step_id, str) and re.fullmatch(r"[a-z0-9][a-z0-9_]{0,79}", step_id):
+            self.easyicu_safe_diagnostic["step_id"] = step_id
+
+
+def require_host_plan_before_review(pipeline: Any, plan: Any) -> None:
+    """Apply the desktop ownership boundary before creating any approval."""
+    if getattr(pipeline, "_runner_kind", None) == "host":
+        require_host_rendered_plan(
+            plan=plan,
+            trajectory_scientific_runtime_authority=pipeline._scientific_runtime_authorities.trajectory,
+            current_case_scientific_runtime_authority=pipeline._scientific_runtime_authorities.current_case,
+            scientific_runtime_projection_sha256=pipeline._scientific_runtime_projection_sha256,
+        )
+
+
+def require_host_rendered_plan(*, plan: Any, **runtime_authority: Any) -> None:
+    """Refuse before approval unless every step has an actual typed owner.
+
+    In particular, naming ordinal_trend without its ordered/stratified spec
+    does not grant host execution. Resolve using the same authority as Execute;
+    this query never renders or accepts a model-supplied script.
+    """
+
+    for step in plan.steps:
+        try:
+            decision = resolve_standard_executor(step, plan=plan, **runtime_authority)
+        except Exception as exc:
+            raise HostPlanStepNeedsSandbox(step.step_id) from exc
+        if decision.claimed_by is None:
+            raise HostPlanStepNeedsSandbox(step.step_id)
 
 
 def execution_declaration_refusal(

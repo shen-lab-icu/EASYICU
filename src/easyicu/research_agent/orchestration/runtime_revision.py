@@ -167,6 +167,10 @@ def prepare_execution_runtime_revision(
     run_dir: Path,
 ) -> tuple[PipelineConfig, ExecutionRuntimeRevision | None]:
     """Select the host's current image without rebuilding the scientific plan."""
+    if approved_config.runner_kind == "host":
+        # Host receipts bind the interpreter and installed kernel, not a Docker
+        # tag. Retain the exact approved config when the server tag changes.
+        return approved_config, None
     if not runner_image or approved_config.runner_image == runner_image:
         return approved_config, None
     checkpoint = load_checkpoint(

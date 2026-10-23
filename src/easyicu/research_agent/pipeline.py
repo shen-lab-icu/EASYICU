@@ -456,6 +456,12 @@ from .execution.runner import (
     reject_reserved_runner_env,
     select_safe_runner_kind,
 )
+from .execution.host_runner import HostRunner
+from .execution.owner_declaration import require_host_plan_before_review
+from .orchestration.run_entry import (
+    _validate_resume_session_key,
+    analysis_only_after_input_validation,
+)
 from .execution.method_capabilities import (
     runtime_capability_job_scope,
     set_runtime_capability_snapshot_provider,
@@ -1975,27 +1981,20 @@ class ResearchAgentPipeline:
             enabled=self._enable_reviewed_memory,
             namespaces=self._reviewed_memory_namespaces,
         )
-        # T3.1 — runner backend selection. ``auto`` prefers a probed Docker
-        # image and uses macOS sandbox-exec only when Docker is unavailable;
-        # ``docker`` explicitly selects :class:`DockerRunner`
-        # which mounts the cohort read-only inside a container with
-        # ``--network none`` by default. Users with their own sandbox
-        # (e.g. OpenHands) can pass an arbitrary ``runner_factory``
-        # that accepts ``workdir=, cohort_parquet=, timeout_seconds=``
-        # and returns a runner with a ``run(step_id, code)`` method.
+        # Auto selects a sandbox; desktop enforces provenance; custom factories own policy.
         kind = (config.runner_kind or "auto").lower()
         if services.runner_factory is not None:
             self._runner_kind = "custom"
         elif kind in {"auto", "default"}:
             self._runner_kind = "auto"
-        elif kind in {"subprocess", "host"}:
-            self._runner_kind = "subprocess"
+        elif kind in {"host", "subprocess"}:
+            self._runner_kind = kind
         elif kind in {"docker", "container", "openhands"}:
             self._runner_kind = "docker"
         else:
             raise ValueError(
                 f"Unknown runner_kind {config.runner_kind!r}; "
-                "expected 'auto', 'subprocess', 'docker', or pass a runner_factory."
+                "expected 'auto', 'host', 'subprocess', 'docker', or pass a runner_factory."
             )
         self._runner_image = config.runner_image
         self._runner_network = config.runner_network
@@ -2197,13 +2196,14 @@ class ResearchAgentPipeline:
                     **runner_kwargs,
                 )
             else:
-                runner = CodeRunner(
+                backend = HostRunner if runner_kind == "host" else CodeRunner
+                python_options = {} if runner_kind == "host" else {"python_executable": self._python_executable}
+                runner = backend(
                     workdir=run_dir,
                     cohort_parquet=cohort_path,
                     timeout_seconds=effective_timeout_seconds,
-                    python_executable=self._python_executable,
                     extra_env=extra_env,
-                    **runner_kwargs,
+                    **python_options, **runner_kwargs,
                 )
         # ``_build_runner`` intentionally clears any previous ContextVar at
         # entry.  After the pre-plan probe, every later runner rebuild (for
@@ -4434,7 +4434,7 @@ class ResearchAgentPipeline:
             )
         require_run_clearance(database, cross_database_validation, self._llm, self._llm_concept_auditor_client)
         # Fail fast on a malformed session key before planning spends budget.
-        _validate_resume_session_key(resume_session_key)
+        stop_after_analysis = analysis_only_after_input_validation(self, stop_after_analysis, resume_session_key)
         if resume_run_id and self._capability_runtime.activation is not None:
             raise ValueError(
                 "Approved capability activation requires a new run; resume is forbidden"
@@ -7012,23 +7012,6 @@ def _pipeline_run___provenance_hook(
         )
 
 
-def _validate_resume_session_key(value: Any) -> Optional[Tuple[str, str, str]]:
-    """Validate an explicit resume session key early (fail fast on shape)."""
-
-    if value is None:
-        return None
-    if (
-        not isinstance(value, (tuple, list))
-        or len(value) != 3
-        or not all(isinstance(part, str) and part.strip() for part in value)
-    ):
-        raise ValueError(
-            "resume_session_key must be a (project_id, task_id, session_id) "
-            "triple of non-empty strings"
-        )
-    return (value[0], value[1], value[2])
-
-
 def _resolve_session_resume_inputs(
     *, resume_session_key: Any, evidence: Any
 ) -> Optional[Tuple[Any, Tuple[str, str, str]]]:
@@ -7216,6 +7199,7 @@ def _pipeline_run___review_evidence_store(
 def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any):
     from .orchestration.workflow import human_review_requests_for_plan
 
+    require_host_plan_before_review(self, plan_result.plan)
     reviewed_plan.append(plan_result)
     plan_evidence = getattr(plan_result, "evidence", None)
     capsule_record = (

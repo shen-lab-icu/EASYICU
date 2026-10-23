@@ -39,6 +39,7 @@ from ...robustness.primary_effect import (
     _primary_effect_payload_is_complete,
 )
 from .typed_input_binding import contained_regular_file
+from .replay_environment import primary_replay_refusal, replay_environment
 from ...robustness.membership import (
     _identifier_column,
     _membership_audit,
@@ -1985,6 +1986,8 @@ def _replay_primary_model_on_frame(
 ) -> Dict[str, Any]:
     """Replay sealed primary code on an already materialized variant cohort."""
 
+    if refusal := primary_replay_refusal(source):
+        return _blocked_structured_replay(spec=spec, error=refusal)
     replay_outputs = replay_root / "outputs"
     replay_outputs.mkdir(parents=True, exist_ok=True)
     try:
@@ -2025,10 +2028,7 @@ def _replay_primary_model_on_frame(
             error=str(exc),
         )
 
-    env = os.environ.copy()
-    env["COHORT_PARQUET"] = str(cohort_path)
-    env["STEP_OUT_DIR"] = str(replay_outputs)
-    env["MPLCONFIGDIR"] = str(replay_root / "matplotlib")
+    env = replay_environment(cohort_path, replay_outputs, replay_root)
     if replay_manifest_path is not None:
         env["EASYICU_RUN_DIR"] = str(replay_root)
         env["EASYICU_RESOLVED_INPUTS_JSON"] = str(replay_manifest_path)

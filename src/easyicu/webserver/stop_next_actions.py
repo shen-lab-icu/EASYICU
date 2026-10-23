@@ -157,6 +157,7 @@ _EDIT_CODES = frozenset(
         "research_pipeline_analysis_design_required",
         "research_pipeline_analysis_family_invalid",
         "research_pipeline_budget_mode_invalid",
+        "research_pipeline_plan_step_needs_sandbox",
         "research_pipeline_cancelled",
         "research_pipeline_cluster_unit_unsupported",
         "research_pipeline_cluster_variance_unsupported",

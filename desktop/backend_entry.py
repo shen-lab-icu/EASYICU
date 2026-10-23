@@ -46,6 +46,7 @@ def _configure_environment(
     os.environ["EASYICU_HOME"] = str(state_root)
     os.environ["EASYICU_RUNTIME_DIR"] = str(runtime_root)
     os.environ["EASYICU_DESKTOP_SESSION_TOKEN"] = token
+    os.environ["EASYICU_DEPLOYMENT"] = "desktop"
     os.environ.setdefault("PYTHONUTF8", "1")
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     os.environ.setdefault("EASYICU_VERBOSE", "0")

@@ -105,6 +105,13 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.doesNotMatch(late, /variable level or model term/);
   const errorTextZh = guided.require('errorText').create({ tr: (en, zh) => zh, staticPreview: () => false });
   const runFailureZh = errorTextZh.runFailureText;
+  const desktopStop = 'research_pipeline_plan_step_needs_sandbox';
+  const desktopStopEn = 'One step in this plan needs code written by the model during the run, and the desktop app does not run such code. Remove or change that step, then approve the plan. No analysis has been run.';
+  const desktopStopZh = '计划里有一步要靠模型临时写代码才能完成，桌面版不运行这类代码。请删除或修改这一步，再批准计划。尚未运行任何分析。';
+  assert.equal(runFailure(desktopStop), desktopStopEn);
+  assert.equal(live({ code: desktopStop }), desktopStopEn);
+  assert.equal(runFailureZh(desktopStop), desktopStopZh);
+  assert.equal(errorTextZh.errorText({ code: desktopStop }), desktopStopZh);
   // A reply that used up its own model budget asks to continue, not to wait for the service.
   const modelErrorZh = errorTextZh.modelErrorText;
   for (const code of ['pi_shell_message_provider_call_budget_exhausted', 'pi_shell_message_cost_budget_exhausted']) {
