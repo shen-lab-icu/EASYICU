@@ -64,6 +64,42 @@ def test_empirical_summary_renderer_preserves_frequencies_and_distribution_role(
         )
 
 
+@pytest.mark.parametrize("levels", [["alpha", "beta"], ["NA", "null"]])
+def test_grouped_empirical_primary_renders_each_validated_partition(tmp_path, monkeypatch, levels):
+    import sys
+
+    frame = pd.DataFrame({
+        "variable": ["temperature"] * 4, "value": [35., 37., 35., 37.],
+        "count": [1, 2, 1, 2], "denominator": [3, 3, 1, 2], "cohort_n": [4, 4, 2, 2],
+        "proportion": [1 / 3, 2 / 3, 1., 1.], "cumulative_proportion": [1 / 3, 1., 1., 1.],
+        "group_variable": ["admission_category"] * 4,
+        "group": ["Overall", "Overall", *levels],
+        "row_role": ["overall", "overall", "exposure_level", "exposure_level"],
+    })
+    monkeypatch.setattr(sys.modules[__name__], "_distribution_frame", lambda: frame)
+    source = "table:distribution_summary"
+    step = _distribution_step(inputs=[source], input_consumption_contracts=[
+        ArtifactConsumptionContract(input_key=source, mode="all_rows"),
+    ])
+    run_dir, manifest, binding = _binding(tmp_path, step=step, kind="table")
+    assert descriptive_result_figure_executor_owns_step(step, resolved_bindings={source: binding})
+    out = tmp_path / "grouped"
+    run_descriptive_result_figure(
+        out_dir=out, run_dir=run_dir, resolved_inputs=manifest,
+        step_id=step.step_id, input_key=source, figure_product="grouped",
+    )
+    pd.testing.assert_frame_equal(pd.read_csv(out / "grouped_source_data.csv", converters={"group": str}), frame)
+    svg = (out / "grouped.svg").read_text()
+    assert all(level in svg for level in levels)
+    frame.loc[2, "denominator"] = 3
+    run_dir, manifest, _ = _binding(tmp_path / "corrupt", step=step, kind="table")
+    with pytest.raises(ValueError, match="frequencies"):
+        run_descriptive_result_figure(
+            out_dir=tmp_path / "bad", run_dir=run_dir, resolved_inputs=manifest,
+            step_id=step.step_id, input_key=source, figure_product="bad",
+        )
+
+
 def _distribution_step(**updates: object) -> AnalysisStep:
     payload: dict[str, object] = {
         "step_id": "06_distribution_figure",

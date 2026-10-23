@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
+from ..authority.declared_levels import closed_planning_levels_for
 from .cohort_product_keys import sole_typed_cohort_input
+from .continuous_outcome_metadata import continuous_summary_columns
+from .table_one_semantics import table_one_variable_kind
 
 if TYPE_CHECKING:
-    from ..schema import AnalysisStep
+    from ..schema import AnalysisStep, ConceptDescriptor, ResearchContext
 
 
 DESCRIPTIVE_SUMMARY_ACTION = "descriptive.descriptive_summary"
@@ -21,6 +24,46 @@ def declared_summary_columns(step: AnalysisStep) -> tuple[str, ...]:
         for value in step.inputs
         if str(value).strip() and ":" not in str(value).strip()
     )
+
+
+def primary_descriptive_summary_scope(
+    *, declared_columns: Sequence[str], variables: Mapping[str, ConceptDescriptor],
+    grouping: str | None = None, planning_context: ResearchContext | None = None,
+) -> tuple[str | None, str]:
+    """Bind one numeric measurement and, optionally, its declared categories.
+
+    Identity roles are lineage only. Grouped outcomes share the continuous
+    summary owner's metadata rule, including its row-free factor deferral;
+    execution must supply closed levels instead of that planning allowance.
+    """
+
+    if not declared_columns or any(name not in variables for name in declared_columns):
+        raise ValueError("Primary descriptive summary needs known typed columns")
+    measured = [name for name in declared_columns if variables[name].role.value not in {"id", "index"}]
+    if grouping in declared_columns and grouping not in measured:
+        raise ValueError("Primary descriptive grouping cannot be an identity column")
+    if len(measured) == 2 and not grouping:
+        categorical = [name for name in measured if table_one_variable_kind(
+            variables[name], closed_planning_levels_for(name=name, variables=dict(variables)),
+        ) != "continuous"]
+        if len(categorical) == 1:
+            grouping = categorical[0]
+    if len(measured) == 2 and grouping in measured:
+        group, outcome = continuous_summary_columns(
+            grouping=grouping, raw_inputs=measured, variables=variables,
+            planning_context=planning_context,
+        )
+        return group, outcome
+    if len(measured) != 1:
+        raise ValueError("Primary descriptive summary needs one measurement and an optional declared grouping")
+    variable = variables[measured[0]]
+    if (
+        not any(token in str(variable.dtype).lower() for token in ("float", "int", "double", "numeric"))
+        or (variable.observed_domain or {}).get("levels")
+        or table_one_variable_kind(variable, ()) != "continuous"
+    ):
+        raise ValueError("Primary empirical summary requires numeric measurements")
+    return None, measured[0]
 
 
 def is_primary_descriptive_summary_step(step: AnalysisStep) -> bool:
@@ -67,6 +110,8 @@ def descriptive_summary_result_receipt_valid(summary: Any) -> bool:
         and receipt.get("source_rows") == summary.get("cohort_n")
         and receipt.get("columns") == summary.get("declared_columns")
         and bool(receipt.get("columns"))
+        and receipt.get("grouping_variable") == summary.get("grouping_variable")
+        and receipt.get("grouping_levels") == summary.get("grouping_levels")
         and all(
             isinstance(receipt.get(key), str)
             and len(receipt[key]) == 64

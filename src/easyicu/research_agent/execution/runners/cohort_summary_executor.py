@@ -14,7 +14,7 @@ import math
 import os
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Iterator, Optional, Sequence
 
 import pandas as pd
 
@@ -26,11 +26,13 @@ from ...gates.plausibility_receipt import (
     RECEIPT_COMPARED_FIELD,
     RECEIPT_TOTAL_FIELD,
 )
-from ...schema import AnalysisStep
+from ...schema import AnalysisStep, ConceptDescriptor
+from ...contracts.closed_levels import validate_closed_scalar_levels
 from ...contracts.cohort_summary import (
     declared_summary_columns as _declared_columns,
     is_descriptive_cohort_summary_step as cohort_summary_executor_owns_step,
     is_primary_descriptive_summary_step,
+    primary_descriptive_summary_scope,
 )
 from ...numeric_scalars import coerce_optional_finite_float as _finite_number
 from .plausibility_receipt import render_standard_plausibility_receipt_code
@@ -281,14 +283,181 @@ def _row(
     }
 
 
+def _cohort_summary_table(
+    frame: pd.DataFrame, columns: Sequence[str], metadata_by_name: Dict[str, Dict[str, Any]],
+    *, numeric_only: bool = False,
+) -> pd.DataFrame:
+    """Compute the declared empirical rows without selecting any variables."""
+
+    cohort_n = int(len(frame))
+    rows = [
+        _row(
+            variable="__cohort__",
+            statistic="cohort_n",
+            value=cohort_n,
+            numerator=cohort_n,
+            denominator=cohort_n,
+            percentage=100.0 if cohort_n else None,
+        )
+    ]
+    for column in columns:
+        values = frame[column]
+        metadata = metadata_by_name[column]
+        unit = metadata.get("unit")
+        nonmissing_n = int(values.notna().sum())
+        missing_n = cohort_n - nonmissing_n
+        rows.append(
+            _row(
+                variable=column,
+                statistic="nonmissing_n",
+                value=nonmissing_n,
+                numerator=nonmissing_n,
+                denominator=cohort_n,
+                percentage=(100.0 * nonmissing_n / cohort_n if cohort_n else None),
+                unit=unit,
+            )
+        )
+        rows.append(
+            _row(
+                variable=column,
+                statistic="missing_n",
+                value=missing_n,
+                numerator=missing_n,
+                denominator=cohort_n,
+                percentage=(100.0 * missing_n / cohort_n if cohort_n else None),
+                unit=unit,
+            )
+        )
+
+        domain = metadata.get("observed_domain")
+        levels = domain.get("levels") if isinstance(domain, dict) else None
+        if not numeric_only and isinstance(levels, list) and levels:
+            if any(
+                isinstance(level, (dict, list, tuple, set)) or level is None
+                for level in levels
+            ):
+                raise RuntimeError(
+                    f"Structured categorical levels are invalid for {column}"
+                )
+            for level in levels:
+                count = int(values.eq(level).fillna(False).sum())
+                rows.append(
+                    _row(
+                        variable=column,
+                        statistic="level_count",
+                        level=level,
+                        value=count,
+                        numerator=count,
+                        denominator=nonmissing_n,
+                        percentage=(
+                            100.0 * count / nonmissing_n if nonmissing_n else None
+                        ),
+                        unit=unit,
+                    )
+                )
+            continue
+
+        numeric = pd.to_numeric(values, errors="coerce")
+        if int(numeric.notna().sum()) != nonmissing_n:
+            raise RuntimeError(
+                f"Non-numeric {column} lacks closed categorical levels in metadata"
+            )
+        observed = numeric.dropna()
+        statistics = {
+            "mean": observed.mean() if not observed.empty else None,
+            "std": observed.std(ddof=1) if len(observed) > 1 else None,
+            "median": observed.median() if not observed.empty else None,
+            "q1": observed.quantile(0.25) if not observed.empty else None,
+            "q3": observed.quantile(0.75) if not observed.empty else None,
+            "minimum": observed.min() if not observed.empty else None,
+            "maximum": observed.max() if not observed.empty else None,
+        }
+        for statistic, raw_value in statistics.items():
+            rows.append(
+                _row(
+                    variable=column,
+                    statistic=statistic,
+                    value=_finite_number(raw_value),
+                    denominator=nonmissing_n,
+                    unit=unit,
+                )
+            )
+
+    return pd.DataFrame(rows)
+
+
+def _primary_partitions(
+    frame: pd.DataFrame, grouping_variable: str | None, grouping_levels: Sequence[Any],
+) -> Iterator[tuple[str, str, pd.DataFrame]]:
+    yield "Overall", "overall", frame
+    if grouping_variable is None:
+        return
+    levels = validate_closed_scalar_levels(grouping_levels, label="descriptive grouping levels")
+    if len(levels) < 2 or len({str(level) for level in levels}) != len(levels):
+        raise ValueError("descriptive grouping needs at least two distinct closed levels")
+    grouping = frame[grouping_variable]
+    if bool((grouping.notna() & ~grouping.isin(levels)).any()):
+        raise ValueError("descriptive grouping values fall outside the closed metadata domain")
+    partition_n = 0
+    for level in levels:
+        partition = frame.loc[grouping.eq(level).fillna(False)]
+        partition_n += len(partition)
+        yield str(level), "exposure_level", partition
+    if bool(grouping.isna().any()):
+        partition = frame.loc[grouping.isna()]
+        partition_n += len(partition)
+        yield "Missing", "missing_group", partition
+    if partition_n != len(frame):
+        raise ValueError("descriptive grouping levels must partition every stay exactly once")
+
+
+def _empirical_distribution_table(frame: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
+    frequencies = []
+    for column in columns:
+        values = pd.to_numeric(frame[column], errors="raise").dropna()
+        cumulative = 0
+        for value, count in values.value_counts().sort_index().items():
+            cumulative += int(count)
+            frequencies.append({
+                "variable": column, "value": float(value), "count": int(count),
+                "denominator": len(values), "cohort_n": len(frame),
+                "proportion": int(count) / len(values),
+                "cumulative_proportion": cumulative / len(values),
+            })
+    return pd.DataFrame(frequencies, columns=[
+        "variable", "value", "count", "denominator", "cohort_n",
+        "proportion", "cumulative_proportion",
+    ])
+
+
 def validate_primary_descriptive_tables(
     frame: pd.DataFrame, summary: pd.DataFrame, distribution: pd.DataFrame,
+    *, grouping_variable: str | None = None, grouping_levels: Sequence[Any] = (),
 ) -> None:
     """Reconcile every empirical statistic and frequency against the bound rows."""
 
     def require(condition: bool) -> None:
         if not condition:
             raise ValueError("descriptive summary does not reconcile with its source")
+
+    if grouping_variable is not None:
+        group_columns = {"group_variable", "group", "row_role"}
+        require(group_columns.issubset(summary) and group_columns.issubset(distribution))
+        require(summary["group_variable"].eq(grouping_variable).all())
+        require(distribution["group_variable"].eq(grouping_variable).all())
+        summary_rows = distribution_rows = 0
+        for group, role, partition in _primary_partitions(frame, grouping_variable, grouping_levels):
+            selected_summary = summary.loc[summary["group"].eq(group) & summary["row_role"].eq(role)]
+            selected_distribution = distribution.loc[distribution["group"].eq(group) & distribution["row_role"].eq(role)]
+            validate_primary_descriptive_tables(
+                partition.drop(columns=grouping_variable),
+                selected_summary.drop(columns=list(group_columns)),
+                selected_distribution.drop(columns=list(group_columns)),
+            )
+            summary_rows += len(selected_summary)
+            distribution_rows += len(selected_distribution)
+        require(summary_rows == len(summary) and distribution_rows == len(distribution))
+        return
 
     n = len(frame)
     require(set(summary["variable"]) == {"__cohort__", *frame.columns})
@@ -389,112 +558,27 @@ def run_cohort_summary_from_env(
     identifiers = [column for column in columns if metadata_by_name[column].get("role") in {"id", "index"}]
     if identifiers and not primary_summary:
         raise RuntimeError("Identifiers cannot be described as clinical characteristics: " + ", ".join(identifiers))
+    grouping_variable = None
+    grouping_levels = []
     if primary_summary:
-        columns = tuple(column for column in columns if column not in identifiers)
-        if len(columns) != 1:
-            raise RuntimeError("Primary descriptive summary needs exactly one measured variable")
+        try:
+            variables = {name: ConceptDescriptor.model_validate(metadata_by_name[name]) for name in columns}
+            grouping_variable, measurement = primary_descriptive_summary_scope(
+                declared_columns=columns, variables=variables, grouping=context.get("primary_exposure"),
+            )
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        columns = (measurement,)
+        if grouping_variable is not None:
+            grouping_levels = (metadata_by_name[grouping_variable].get("observed_domain") or {}).get("levels") or []
         for column in columns:
-            if (metadata_by_name[column].get("observed_domain") or {}).get("levels"):
-                raise RuntimeError("Primary empirical summary requires numeric measurements")
             numeric = pd.to_numeric(frame[column], errors="raise").dropna()
             if not all(math.isfinite(float(value)) for value in numeric):
                 raise RuntimeError("Primary descriptive summary requires finite observed values")
     cohort_n = int(len(frame))
-    rows = [
-        _row(
-            variable="__cohort__",
-            statistic="cohort_n",
-            value=cohort_n,
-            numerator=cohort_n,
-            denominator=cohort_n,
-            percentage=100.0 if cohort_n else None,
-        )
-    ]
-    for column in columns:
-        values = frame[column]
-        metadata = metadata_by_name[column]
-        unit = metadata.get("unit")
-        nonmissing_n = int(values.notna().sum())
-        missing_n = cohort_n - nonmissing_n
-        rows.append(
-            _row(
-                variable=column,
-                statistic="nonmissing_n",
-                value=nonmissing_n,
-                numerator=nonmissing_n,
-                denominator=cohort_n,
-                percentage=(100.0 * nonmissing_n / cohort_n if cohort_n else None),
-                unit=unit,
-            )
-        )
-        rows.append(
-            _row(
-                variable=column,
-                statistic="missing_n",
-                value=missing_n,
-                numerator=missing_n,
-                denominator=cohort_n,
-                percentage=(100.0 * missing_n / cohort_n if cohort_n else None),
-                unit=unit,
-            )
-        )
-
-        domain = metadata.get("observed_domain")
-        levels = domain.get("levels") if isinstance(domain, dict) else None
-        if isinstance(levels, list) and levels:
-            if any(
-                isinstance(level, (dict, list, tuple, set)) or level is None
-                for level in levels
-            ):
-                raise RuntimeError(
-                    f"Structured categorical levels are invalid for {column}"
-                )
-            for level in levels:
-                count = int(values.eq(level).fillna(False).sum())
-                rows.append(
-                    _row(
-                        variable=column,
-                        statistic="level_count",
-                        level=level,
-                        value=count,
-                        numerator=count,
-                        denominator=nonmissing_n,
-                        percentage=(
-                            100.0 * count / nonmissing_n if nonmissing_n else None
-                        ),
-                        unit=unit,
-                    )
-                )
-            continue
-
-        numeric = pd.to_numeric(values, errors="coerce")
-        if int(numeric.notna().sum()) != nonmissing_n:
-            raise RuntimeError(
-                f"Non-numeric {column} lacks closed categorical levels in metadata"
-            )
-        observed = numeric.dropna()
-        statistics = {
-            "mean": observed.mean() if not observed.empty else None,
-            "std": observed.std(ddof=1) if len(observed) > 1 else None,
-            "median": observed.median() if not observed.empty else None,
-            "q1": observed.quantile(0.25) if not observed.empty else None,
-            "q3": observed.quantile(0.75) if not observed.empty else None,
-            "minimum": observed.min() if not observed.empty else None,
-            "maximum": observed.max() if not observed.empty else None,
-        }
-        for statistic, raw_value in statistics.items():
-            rows.append(
-                _row(
-                    variable=column,
-                    statistic=statistic,
-                    value=_finite_number(raw_value),
-                    denominator=nonmissing_n,
-                    unit=unit,
-                )
-            )
 
     table_path = out_dir / "cohort_summary.csv"
-    summary_table = pd.DataFrame(rows)
+    summary_table = _cohort_summary_table(frame, columns, metadata_by_name, numeric_only=primary_summary)
     summary_table.to_csv(table_path, index=False)
     summary = {
         "status": "ok",
@@ -513,38 +597,37 @@ def run_cohort_summary_from_env(
         "output_files": {"table:cohort_summary": table_path.name},
     }
     if primary_summary:
-        frequencies = []
-        for column in columns:
-            values = pd.to_numeric(frame[column], errors="raise").dropna()
-            cumulative = 0
-            for value, count in values.value_counts().sort_index().items():
-                cumulative += int(count)
-                frequencies.append({
-                    "variable": column, "value": float(value), "count": int(count),
-                    "denominator": len(values), "cohort_n": cohort_n,
-                    "proportion": int(count) / len(values),
-                    "cumulative_proportion": cumulative / len(values),
-                })
-        distribution = pd.DataFrame(frequencies, columns=[
-            "variable", "value", "count", "denominator", "cohort_n",
-            "proportion", "cumulative_proportion",
-        ])
+        distribution = _empirical_distribution_table(frame, columns)
+        if grouping_variable is not None:
+            summaries, distributions = [], []
+            for group, role, partition in _primary_partitions(frame, grouping_variable, grouping_levels):
+                identity = {"group_variable": grouping_variable, "group": group, "row_role": role}
+                summaries.append(_cohort_summary_table(partition, columns, metadata_by_name, numeric_only=True).assign(**identity))
+                distributions.append(_empirical_distribution_table(partition, columns).assign(**identity))
+            summary_table = pd.concat(summaries, ignore_index=True)
+            distribution = pd.concat(distributions, ignore_index=True)
+            summary_table.to_csv(table_path, index=False)
         distribution_path = out_dir / "distribution_summary.csv"
         distribution.to_csv(distribution_path, index=False)
         # Validate the serialized products that will be registered, not just
         # their in-memory precursors. The input binding has already verified
         # the exact cohort bytes and preserves every stay.
         validate_primary_descriptive_tables(
-            frame[list(columns)], pd.read_csv(table_path), pd.read_csv(distribution_path),
+            frame[[*columns, *([grouping_variable] if grouping_variable else [])]],
+            pd.read_csv(table_path, converters={"group": str, "group_variable": str}),
+            pd.read_csv(distribution_path, converters={"group": str, "group_variable": str}),
+            grouping_variable=grouping_variable, grouping_levels=grouping_levels,
         )
         summary.update(
             analysis_role="primary",
             interpretation_ceiling="empirical_stay_distribution",
             paper_authorization_allowed=False,
             repeated_stays="all_stays_retained_no_independence_assumption",
+            grouping_variable=grouping_variable, grouping_levels=grouping_levels,
             descriptive_summary_validation={
                 "schema_version": "easyicu.descriptive_summary_validation/1",
                 "validated": True, "source_rows": cohort_n, "columns": list(columns),
+                "grouping_variable": grouping_variable, "grouping_levels": grouping_levels,
                 "source_sha256": _file_sha256(cohort_path),
                 "cohort_summary_sha256": _file_sha256(table_path),
                 "distribution_summary_sha256": _file_sha256(distribution_path),
