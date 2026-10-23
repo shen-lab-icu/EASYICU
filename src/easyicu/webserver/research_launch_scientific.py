@@ -1098,12 +1098,15 @@ def _checked_stated_adjustment(
     available: set[str],
     source_bound: bool,
     recheck: bool = False,
+    database_concepts: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Ground one structured adjustment reading, or say why it is not one.
 
     A save refuses a looked-up identifier the bound source does not offer, so
     the conversation looks it up again; a launch rechecking a saved reading
-    keeps it as an unavailable requirement instead of dropping it.
+    keeps it as an unavailable requirement instead of dropping it.  Before a
+    source is bound, ``database_concepts`` (the concepts of the database the
+    question names) refuse an identifier that database does not define.
     """
 
     from easyicu.concept_output_sources import resolve_composite_concept_output
@@ -1142,6 +1145,11 @@ def _checked_stated_adjustment(
                 f"{stated!r} is not a concept the bound source offers; look it up "
                 "with easyicu_list_source_concepts"
             )
+        if not source_bound and not recheck and database_concepts and stated not in database_concepts:
+            raise ValueError(
+                f"{stated!r} is not a concept of the database the question names; "
+                "look it up with easyicu_list_source_concepts"
+            )
         concept = stated
     elif concept is None and variable in available:
         concept = output(variable)  # the question wrote the source's identifier
@@ -1161,6 +1169,7 @@ def checked_stated_adjustments(
     source: Mapping[str, Any],
     rejected: Optional[list[dict[str, str]]] = None,
     recheck: bool = False,
+    database: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Ground structured adjustment readings in words and source metadata only.
 
@@ -1171,7 +1180,10 @@ def checked_stated_adjustments(
     others are kept; without it the first failure raises.
     """
 
-    from easyicu.research_agent.acquisition.catalog import build_available_catalog
+    from easyicu.research_agent.acquisition.catalog import (
+        build_available_catalog,
+        build_database_capability_catalog,
+    )
     from easyicu.research_agent.planning.adjustment_authority import normalize_stated_adjustments
     from easyicu.webserver.study_intent import catalog_named_concepts
 
@@ -1182,6 +1194,14 @@ def checked_stated_adjustments(
         {item.concept_id for item in build_available_catalog(Path(path)).concepts}
         if path else set()
     )
+    database_concepts: frozenset[str] = frozenset()
+    if not path and database and statements:
+        try:
+            database_concepts = frozenset(
+                item.concept_id for item in build_database_capability_catalog(database).concepts
+            )
+        except (KeyError, ValueError):
+            database_concepts = frozenset()
     question_concepts = set(catalog_named_concepts(question))
     records = []
     for item in statements:
@@ -1189,6 +1209,7 @@ def checked_stated_adjustments(
             records.append(_checked_stated_adjustment(
                 item, question=question, question_concepts=question_concepts,
                 available=available, source_bound=bool(path), recheck=recheck,
+                database_concepts=database_concepts,
             ))
         except ValueError as exc:
             if rejected is None:

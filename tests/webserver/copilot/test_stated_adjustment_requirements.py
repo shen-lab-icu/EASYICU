@@ -226,3 +226,41 @@ def test_a_variable_named_elsewhere_is_not_grounded_by_another_adjustment_clause
     assert result["status"] == "ok" and not writes[0].get("stated_adjustments")
     assert result["details"]["stated_adjustments_unread"][0]["variable"] == "性别"
 
+
+
+@pytest.mark.parametrize("concept,recorded", [("apache_iv", True), ("not_an_eicu_concept", False)])
+def test_before_a_source_the_named_database_checks_a_looked_up_concept(monkeypatch, concept, recorded):
+    """The conversation can still correct a guessed identifier in this turn."""
+
+    question = "在 eICU 中，控制试验量表后，指标与结局的关系如何？"
+    current = {"id": "adjustment-study", "revision": 1, "question": question}
+    result, writes = _update(monkeypatch, current=current, question=question, statements=[{
+        "variable": "试验量表", "words": "控制试验量表后", "concept": concept,
+    }])
+    assert result["status"] == "ok"
+    if recorded:
+        record, = writes[0]["stated_adjustments"]
+        assert record["concept"] == concept and record["source_status"] == "unbound"
+    else:
+        assert not writes[0].get("stated_adjustments")
+        assert "easyicu_list_source_concepts" in result["summary"]
+
+
+def test_a_saved_reading_a_bound_source_lacks_stays_an_unavailable_requirement(monkeypatch):
+    """A later save binding a source rechecks it as a launch does, never drops it."""
+
+    question = "控制试验量表后，指标与结局的关系如何？"
+    saved = {
+        "id": "adjustment-study", "revision": 2, "question": question,
+        "data_source": {"path": "/synthetic/source", "database": "miiv"},
+        "stated_adjustments": [{
+            "variable": "试验量表", "words": "控制试验量表后", "concept": "trial_score",
+            "source_status": "unbound",
+        }],
+    }
+    result, writes = _update(monkeypatch, current=saved, question=question, statements=[],
+                             concepts=("age",))
+    assert result["status"] == "ok"
+    record, = writes[0]["stated_adjustments"]
+    assert record["concept"] == "trial_score" and record["source_status"] == "unavailable"
+    assert "stated_adjustments_unread" not in result["details"]

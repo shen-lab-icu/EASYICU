@@ -37,6 +37,7 @@ from .projections import (
 )
 from . import plan_decisions
 from easyicu.webserver.study_question_wording import resolve_question_wording
+from .turn_authority import database_named_in
 from .workflow import build_project_workflow_projection
 
 
@@ -2057,18 +2058,25 @@ def update_study_context(
             )
         stated_pairs = {(item.get("variable"), item.get("words")) for item in proposed
                         if isinstance(item, Mapping)}
-        statements = [
-            *(item for item in retained
-              if (item["variable"], item["words"]) not in stated_pairs),
-            *proposed,
-        ]
+        # Before a source is bound, the database the question names checks a
+        # looked-up identifier, while the conversation can still correct it.
+        database = str(effective_source.get("database") or "").strip() or database_named_in(question)
         try:
-            # A reading that fails is not recorded and the conversation is
+            # A new reading that fails is not recorded and the conversation is
             # told why; the rest of the setup, the question included, is saved.
-            patch["stated_adjustments"] = checked_stated_adjustments(
-                statements, question=question, source=effective_source,
-                rejected=adjustments_unread,
+            # A saved reading is rechecked as a launch rechecks it: a source
+            # bound since keeps it as an unavailable requirement, never drops
+            # it where no one reads the receipt.
+            kept = checked_stated_adjustments(
+                [item for item in retained
+                 if (item["variable"], item["words"]) not in stated_pairs],
+                question=question, source=effective_source,
+                rejected=adjustments_unread, recheck=True, database=database,
             )
+            patch["stated_adjustments"] = [*kept, *checked_stated_adjustments(
+                proposed, question=question, source=effective_source,
+                rejected=adjustments_unread, database=database,
+            )]
         except (ValueError, OSError) as exc:
             adjustments_unread.append({"variable": "", "reason": str(exc)})
             patch.pop("stated_adjustments", None)
