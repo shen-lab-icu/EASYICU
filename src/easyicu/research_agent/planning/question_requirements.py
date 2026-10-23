@@ -103,9 +103,12 @@ from .progressive_contract import (
     ProgressiveCapabilityGap,
 )
 from .requirement_coverage import (
+    ANALYSIS_ROLES,
+    SUBGROUP_ACTIONS,
     PlanRequirementCoverage,
     PlanRequirementCoverageRecord,
     RequirementCoverageStatus,
+    concept_relatives,
 )
 
 QUESTION_REQUIREMENTS_SCHEMA_VERSION = "easyicu.question_requirements/1"
@@ -133,142 +136,6 @@ BENCHMARK_ACTIONS = frozenset(
         "prediction.reclassification",
     }
 )
-#: Actions that analyse a named subgroup.
-SUBGROUP_ACTIONS = frozenset(
-    {
-        "association.effect_modification",
-        "prediction.subgroup_fairness",
-        "time_to_event.subgroup_hr",
-    }
-)
-
-
-def _family_actions(analysis_type: str) -> tuple[Any, ...]:
-    from .scientific_action_catalog import scientific_actions_for_analysis_type
-
-    try:
-        actions = scientific_actions_for_analysis_type(analysis_type).actions
-    except ValueError:
-        return ()
-    return tuple(action for action in actions if action.execution_mode != "not_available")
-
-
-def subgroup_actions_for_family(analysis_type: str) -> frozenset[str]:
-    """Executable subgroup owners offered by the existing family catalog."""
-
-    return frozenset(
-        action.action_id for action in _family_actions(analysis_type)
-        if action.action_id in SUBGROUP_ACTIONS
-    )
-
-
-def family_describes_by_group(analysis_type: str) -> bool:
-    """Whether the family answers a grouping by describing each of its levels.
-
-    A descriptive family estimates no stratum effects: "describe the outcome
-    in each ICU type" is answered by a result reported level by level of that
-    grouping, as ``_judge`` accepts for a stated subgroup requirement.
-    """
-
-    return any(action.analysis_family == "descriptive" for action in _family_actions(analysis_type))
-
-
-def _grouped_result_steps(plan: AnalysisPlan, columns: frozenset[str]) -> tuple[str, ...]:
-    """Analysis steps whose typed result is reported in each level of a column."""
-
-    from ..contracts.continuous_outcome_summary import (
-        CONTINUOUS_OUTCOME_SUMMARY, continuous_outcome_columns,
-    )
-
-    owners = []
-    for step in plan.steps:
-        if step.planned_analysis_role not in ANALYSIS_ROLES:
-            continue
-        distribution = step.exposure_outcome_distribution_spec
-        if distribution is not None:
-            grouping = (distribution.exposure,)
-        elif str(step.method or "").strip().casefold() == CONTINUOUS_OUTCOME_SUMMARY:
-            grouping = continuous_outcome_columns(step)[:1]
-        else:
-            grouping = ()
-        if columns.intersection(grouping):
-            owners.append(step.step_id)
-    return tuple(owners)
-
-
-def stated_subgroup_owner_steps(context: ResearchContext, plan: AnalysisPlan, concept: str) -> tuple[str, ...]:
-    """The analysis steps that answer a stated subgroup in this plan's family.
-
-    A family with subgroup estimates answers only with a subgroup-capable step
-    reading the variable; a Table 1 grouping or a covariate term is no stratum
-    estimate.  A descriptive family answers with a result reported in each
-    level of the variable.  Reuse the question owner's concept identities,
-    excluding metadata companions.
-    """
-
-    columns = concept_relatives(context)(concept) & {
-        variable.name for variable in context.variables
-        if variable.role.value not in {"meta", "time", "id", "index"}
-    }
-    actions = subgroup_actions_for_family(plan.analysis_type)
-    if not actions and family_describes_by_group(plan.analysis_type):
-        return _grouped_result_steps(plan, frozenset(columns))
-    return tuple(
-        step.step_id for step in plan.steps
-        if step.scientific_action_id in actions
-        and step.planned_analysis_role in ANALYSIS_ROLES
-        and step.table_one_spec is None
-        and columns.intersection(step.inputs)
-    )
-
-
-def stated_subgroup_coverage(context: ResearchContext, plan: AnalysisPlan) -> PlanRequirementCoverage:
-    """Bind conversation subgroup requirements even when an outline states none.
-
-    Only the static prediction template plans a static prediction primary,
-    and it drafts no subgroup step, so such a plan has no route to an owner.
-    """
-
-    from ..contracts.prediction_execution import PREDICTION_PRIMARY_ACTION
-    from .adjustment_authority import context_stated_variables
-
-    subgroups = context_stated_variables(context, "stated_subgroups")
-    answerable = bool(subgroups) and (
-        bool(subgroup_actions_for_family(plan.analysis_type))
-        or family_describes_by_group(plan.analysis_type)
-    ) and not any(step.scientific_action_id == PREDICTION_PRIMARY_ACTION for step in plan.steps)
-    records = {}
-    for item in subgroups:
-        identity = item.concept or item.variable
-        owners = stated_subgroup_owner_steps(context, plan, item.concept) if item.concept else ()
-        if item.source_status == "unavailable":
-            status, reason = "unsupported", "source_concept_unavailable"
-        elif item.source_status != "available" or item.concept is None:
-            status, reason = "unsupported", "stated_subgroup_concept_unresolved"
-        elif owners:
-            status, reason = "covered", "typed_subgroup_owner_present"
-        elif not answerable:
-            status, reason = "unsupported", "stated_subgroup_owner_unavailable"
-        else:
-            status, reason = "missing", "typed_subgroup_owner_missing"
-        records[identity] = PlanRequirementCoverageRecord(
-            requirement_id=f"stated_subgroup:{identity}", kind="question", question_kind="subgroup",
-            concept_identity=identity,
-            source_ref="research_context.json.user_preferences.data_constraints.stated_subgroups",
-            status=status, owner_step_ids=owners if status == "covered" else (), reason_code=reason,
-        )
-    return PlanRequirementCoverage(
-        context_sha256=canonical_sha256(context.model_dump(mode="json")),
-        plan_sha256=canonical_sha256(plan.model_dump(mode="json")),
-        records=tuple(records.values()),
-        complete=all(record.status == "covered" for record in records.values()),
-    )
-
-
-#: The step roles that analyse.  Cohort accounting, Table 1, audits, figures
-#: and the report are auxiliary: reading a concept there answers nothing.
-ANALYSIS_ROLES = frozenset({"primary", "secondary", "sensitivity"})
-
 #: Why a plan cannot be approved, one code per remedy: a requirement the plan
 #: could answer and does not, and one it cannot answer.  Stable: a published
 #: code never changes.
@@ -503,35 +370,6 @@ def unaccounted_named_concepts(
     )
     read.update(str(value) for value in sealed if str(value or "").strip())
     return tuple(item for item in named if not read.intersection(item.concepts))
-
-
-def concept_relatives(context: ResearchContext) -> Callable[[str], frozenset[str]]:
-    """The run's columns the concept dictionary relates to a column.
-
-    A column's identity is its name, its source concept and the concepts it
-    derives from; two columns are related when their identities meet.
-    """
-
-    identities = {
-        str(variable.name): frozenset(
-            str(value)
-            for value in (
-                variable.name,
-                getattr(variable, "source_concept", None),
-                *(getattr(variable, "derived_from_concepts", None) or ()),
-            )
-            if str(value or "").strip()
-        )
-        for variable in context.variables
-    }
-
-    def relatives(column: str) -> frozenset[str]:
-        own = identities.get(column, frozenset({column}))
-        return frozenset(
-            {column, *(name for name, ids in identities.items() if ids & own)}
-        )
-
-    return relatives
 
 
 def bind_named_question_concepts(

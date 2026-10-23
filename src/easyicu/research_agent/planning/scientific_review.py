@@ -4803,8 +4803,7 @@ def build_plan_scientific_review(
             )
         )
 
-    from .requirement_coverage import stated_adjustment_coverage
-    from .question_requirements import stated_subgroup_coverage
+    from .requirement_coverage import stated_adjustment_coverage, stated_subgroup_coverage
 
     subgroup_coverage = stated_subgroup_coverage(context, plan)
     for record in subgroup_coverage.records:
