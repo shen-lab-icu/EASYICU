@@ -72,8 +72,10 @@ def _node_runtime_references(manifests: list[Path]) -> tuple[set[Path], set[Path
 def prune_node_modules(staged_root: Path) -> dict[str, int]:
     """Prune all staged dependency copies, including nested node_modules.
 
-    Runtime-referenced docs/tests/examples directories stay intact: their entry
-    may import siblings or load assets. Type declarations and maps never execute.
+    Only docs/tests/examples directly at package roots are optional. Nested
+    names can be runtime code (for example dist/doc reached by require).
+    Runtime-referenced directories stay intact: their entry may import siblings
+    or load assets. Type declarations and maps never execute.
     Keep source siblings when a package actually exposes TypeScript at runtime.
     The installed wheel and checkout are deliberately outside this owner.
     """
@@ -92,6 +94,7 @@ def prune_node_modules(staged_root: Path) -> dict[str, int]:
         and not _node_package_root(path)
         and (path.name.lower() == "dist-types" or (
             path.name.lower() in _OPTIONAL_NODE_DIRS
+            and path.parent in packages
             and not any(parent in protected for parent in (path, *path.parents))
         ))
     }
@@ -414,7 +417,7 @@ def bundle_plan(*, windows=False) -> list[str]:
         "Stage pi-coding-agent as the root package of short install resource p/; "
         "preserve declared dependency/peer versions and the gateway/skill resource owner; "
         "prune staged node_modules only: "
-        "*.d.ts/*.d.mts/*.d.cts, dist-types/, *.map and unreferenced docs/tests/examples; "
+        "*.d.ts/*.d.mts/*.d.cts, dist-types/, *.map and unreferenced docs/tests/examples at package roots; "
         "prune *.ts/*.mts/*.cts when package runtime entries do not use TypeScript",
         "Hoist staged Pi dependencies; deduplicate only identical copies with matching versions; retain conflicts",
         f"{'Fail' if windows else 'Warn'} on installed relative paths over {BUNDLE_PATH_BUDGET} "

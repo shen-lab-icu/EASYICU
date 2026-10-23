@@ -108,7 +108,10 @@ runtime owner reads the original gateway metadata and unchanged lock bytes for
 integrity checks and explicit private-runtime installs.
 The owner prunes only
 staged `node_modules`: TypeScript declarations, `dist-types/`, source maps, and
-docs/tests/examples directories without runtime `main`/`exports`/`bin` entries.
+docs/tests/examples directories at package roots without runtime
+`main`/`exports`/`bin` entries. Nested directories with these names remain intact:
+compiled code can reach them through relative imports or `require`, as in
+`yaml/dist/compose/composer.js` loading `../doc/directives.js`.
 It also drops `*.ts`/`*.mts`/`*.cts` sources from packages whose runtime entries
 do not use TypeScript. Runtime-referenced directories and source siblings remain.
 Root staging preserves the agent's private graph, retains required outer

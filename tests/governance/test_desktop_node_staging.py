@@ -10,6 +10,59 @@ from tests.support.desktop_bundle import load_script, node_app, node_package, wr
 from tests.support.node import run_node
 
 
+@pytest.mark.parametrize("directory", [
+    "doc", "docs", "documentation", "test", "tests", "__tests__", "example", "examples",
+])
+@pytest.mark.parametrize("prefix", ["dist", "lib", "esm", "cjs", "build", "nested/runtime"])
+def test_optional_directory_pruning_is_limited_to_package_root(tmp_path, directory, prefix):
+    common = load_script("build_common")
+    package = node_package(tmp_path / "node_modules/synthetic")
+    write_files(package, {
+        f"{directory}/guide.md": "Unused root documentation\n",
+        f"{prefix}/{directory}/runtime.js": "export const value = 1;\n",
+    })
+    assert common.prune_node_modules(tmp_path) == {
+        "files": 1, "bytes": len("Unused root documentation\n"),
+    }
+    assert not (package / directory).exists()
+    assert (package / prefix / directory / "runtime.js").is_file()
+
+
+def test_staged_pi_smoke_retains_transitively_required_dist_doc(tmp_path):
+    common = load_script("build_common")
+    source = node_app(tmp_path / "wheel/node_app")
+    agent = node_package(source / "node_modules/@earendil-works/pi-coding-agent",
+                         name="@earendil-works/pi-coding-agent", dependencies={"synthetic-yaml": "1.0.0"})
+    yaml = node_package(agent / "node_modules/synthetic-yaml", name="synthetic-yaml",
+                        type="commonjs", exports="./dist/index.js", main="./dist/index.js")
+    write_files(agent, {"index.js": "import yaml from 'synthetic-yaml'; export const value = yaml.value;\n"})
+    write_files(yaml, {
+        "dist/index.js": "module.exports = require('./compose/composer.js');\n",
+        "dist/compose/composer.js": "module.exports = require('../doc/directives.js');\n",
+        "dist/doc/directives.js": "exports.value = 42;\n",
+        "docs/guide.md": "Unused package documentation\n",
+    })
+    node = shutil.which("node")
+    assert node
+    common.check_staged_pi(source, node, run=run_command)
+    desktop = tmp_path / "desktop"
+    staged = desktop / "src-tauri/resources/backend/_internal/easyicu/webserver/pi_copilot/node_app"
+    shutil.copytree(source, staged)
+    write_files(staged.parent, {"tool_catalog.json": "{}"})
+    shutil.copy2(node, desktop / "src-tauri/resources/node.exe")
+    write_files(desktop / "src-tauri", {
+        "tauri.conf.json": json.dumps({"bundle": {"resources": {"resources/backend": "resources/backend", "p": "p"}}}),
+        "tauri.windows.conf.json": "{}",
+    })
+    result = common.prepare_bundle(desktop_root=desktop, build_root=tmp_path / "build", run=run_command, windows=True)
+    packaged = desktop / "src-tauri/p/node_modules/synthetic-yaml"
+    assert (packaged / "dist/doc/directives.js").read_bytes() == (yaml / "dist/doc/directives.js").read_bytes()
+    assert not (packaged / "docs").exists()
+    assert (yaml / "docs/guide.md").is_file()
+    assert result["bundle_paths"]["over_budget"] == 0
+    assert result["node_modules_pruned"]["files"] == 19
+
+
 @pytest.mark.parametrize("suffix", ["ts", "mts", "cts"])
 @pytest.mark.parametrize("field", ["main", "exports", "bin"])
 def test_typescript_pruning_retains_runtime_entries_and_their_siblings(tmp_path, suffix, field):
@@ -274,5 +327,6 @@ def test_dry_run_explains_hoisting_typescript_and_lazy_provider_smoke(driver, ca
     assert module.main(["--dry-run"]) == 0
     plan = capsys.readouterr().out.lower()
     assert "hoist" in plan and "version" in plan
+    assert "at package roots" in plan
     assert "*.ts" in plan and "*.mts" in plan and "*.cts" in plan
     assert "provider" in plan and "openai-completions" in plan
