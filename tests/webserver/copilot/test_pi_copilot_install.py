@@ -34,6 +34,9 @@ def test_pi_event_projection_is_in_both_distribution_manifests() -> None:
     budget_relative = "pi_copilot/node_app/src/shell-budget.mjs"
     assert f"src/easyicu/webserver/{budget_relative}" in manifest
     assert f'"{budget_relative}"' in pyproject
+    retry_relative = "pi_copilot/node_app/src/provider-retry.mjs"
+    assert f"src/easyicu/webserver/{retry_relative}" in manifest
+    assert f'"{retry_relative}"' in pyproject
     finalizer_relative = "pi_copilot/node_app/src/post-tool-finalization.mjs"
     assert f"src/easyicu/webserver/{finalizer_relative}" in manifest
     assert f'"{finalizer_relative}"' in pyproject
@@ -76,6 +79,7 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
         "", encoding="utf-8"
     )
     (source / "src" / "shell-budget.mjs").write_text("", encoding="utf-8")
+    (source / "src" / "provider-retry.mjs").write_text("", encoding="utf-8")
     (source / "src" / "session-lifecycle.mjs").write_text("", encoding="utf-8")
     (source / "src" / "skills" / "web-prototype").mkdir(parents=True)
     (source / "src" / "skills" / "web-prototype" / "SKILL.md").write_text(
@@ -146,6 +150,7 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
 
     assert runtime_is_installed(target, source=source)
     assert (target / "tool_catalog.json").is_file()
+    assert (target / "src" / "provider-retry.mjs").is_file()
     manifest = json.loads(
         (target / "runtime-manifest.json").read_text(encoding="utf-8")
     )
@@ -159,6 +164,11 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     )
     assert "node_modules/typebox/package.json" in executable_files
     assert "node_modules/typebox/build/index.mjs" in executable_files
+    retry_owner = target / "src" / "provider-retry.mjs"
+    retry_owner.write_text("export const tampered = true;\n", encoding="utf-8")
+    assert runtime_is_installed(target, source=source) is False
+    retry_owner.write_text("", encoding="utf-8")
+    assert runtime_is_installed(target, source=source)
     command, cwd, child_env, check = calls[0]
     assert command == [
         "/usr/local/bin/npm",

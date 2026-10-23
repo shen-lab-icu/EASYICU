@@ -103,7 +103,14 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.match(late, /before the model was called/);
   assert.match(late, /move time zero later/);
   assert.doesNotMatch(late, /variable level or model term/);
-  const runFailureZh = guided.require('errorText').create({ tr: (en, zh) => zh, staticPreview: () => false }).runFailureText;
+  const errorTextZh = guided.require('errorText').create({ tr: (en, zh) => zh, staticPreview: () => false });
+  const runFailureZh = errorTextZh.runFailureText;
+  // A reply that used up its own model budget asks to continue, not to wait for the service.
+  const modelErrorZh = errorTextZh.modelErrorText;
+  for (const code of ['pi_shell_message_provider_call_budget_exhausted', 'pi_shell_message_cost_budget_exhausted']) {
+    assert.match(modelErrorZh(code, false), /发送“继续”/);
+  }
+  assert.match(modelErrorZh('pi_shell_session_cost_budget_exhausted', false), /新建后续对话/);
   const splineCause = { code: 'landmark_spline_binary_sensitivity_unsupported' };
   const splineFailure = runFailure('research_pipeline_scientific_authority_refused', splineCause);
   assert.match(splineFailure, /two-group comparison/);

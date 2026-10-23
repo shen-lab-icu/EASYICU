@@ -16,18 +16,19 @@ function boundedText(value, limit = MAX_TEXT_CHARS) {
   return String(value ?? "").slice(0, limit);
 }
 
-function modelErrorCode(message) {
+export function modelErrorCode(message) {
   if (!message || message.stopReason !== "error") return "";
   const detail = String(message.errorMessage || "").toLowerCase();
-  if (detail.includes("pi_shell_token_budget_exhausted")) {
-    return "pi_shell_token_budget_exhausted";
-  }
-  if (detail.includes("pi_shell_session_provider_call_budget_exhausted")) {
-    return "pi_shell_session_provider_call_budget_exhausted";
-  }
+  const shellCode = detail.match(/\bpi_shell_(?:[a-z_]+_budget_exhausted|provider_call_without_message)\b/);
+  if (shellCode) return shellCode[0];
+  // An HTTP status must not be confused with a connection's port (e.g. :443).
+  const httpStatus = detail.match(
+    /(?:^\s*|\bhttp(?:\/[\d.]+)?(?: error)?\s+|\bstatus(?: code)?\s*[:=]?\s*)([45]\d\d)\b/,
+  )?.[1];
   if (/context|token.*limit|maximum.*length/.test(detail)) return "pi_model_context_limit";
-  if (/rate.?limit|too many requests|quota/.test(detail)) return "pi_model_rate_limited";
-  if (/timeout|timed out|connection reset|server_error|internal_server_error|\b5\d\d\b/.test(detail)) {
+  if (/rate.?limit|too many requests|quota/.test(detail) || httpStatus === "429") return "pi_model_rate_limited";
+  if (httpStatus?.startsWith("4") || detail.includes("budget")) return "pi_model_provider_error";
+  if (/timeout|timed out|connection reset|econnreset|etimedout|server_error|internal_server_error|\b5\d\d\b/.test(detail)) {
     return "pi_model_provider_unavailable";
   }
   return "pi_model_provider_error";
