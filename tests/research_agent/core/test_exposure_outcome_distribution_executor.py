@@ -611,6 +611,26 @@ def test_a_declared_risk_difference_is_comparison_minus_reference(
     assert all(claim.adjusted_for == [] for claim in claims)
 
 
+def test_a_risk_difference_between_rounded_rates_is_checked_from_its_counts(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """2/3 minus 1/3: the displayed rates differ by 33.333334, the risks by 33.333333.
+
+    A real run stopped here: the product check subtracted the two rounded
+    rates and demanded exact equality with the rounded difference.
+    """
+
+    frame = pd.DataFrame({EXPOSURE: [1] * 3 + [0] * 3, OUTCOME: [1, 1, 0, 1, 0, 0]})
+    summary = _run(monkeypatch, tmp_path, frame, risk_difference_contrast={
+        "reference_exposure_level": 0,
+        "comparison_exposure_level": 1,
+        "effect_measure": "risk_difference",
+        "interval_method": "linear_probability_wald",
+    })
+    row = _table(summary, tmp_path).iloc[0]
+    assert row["risk_difference_pct"] == pytest.approx(100.0 / 3.0, abs=1e-6)
+
+
 def test_patient_cluster_robust_risk_difference_uses_only_bound_grouping(
     monkeypatch, tmp_path: Path
 ) -> None:

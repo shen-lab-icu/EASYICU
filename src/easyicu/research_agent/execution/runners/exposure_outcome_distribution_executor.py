@@ -1317,12 +1317,25 @@ def _verify_product(
             )
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
+    # From the published counts, in the producer's arithmetic: the two rates
+    # are each rounded for display, so their rounded difference can sit one
+    # unit in the sixth decimal away from the rounded difference of the risks.
     expected_difference = round(
-        float(comparison_row["outcome_rate_pct"])
-        - float(reference_row["outcome_rate_pct"]),
+        100.0 * (
+            int(comparison_row["outcome_events"])
+            / int(comparison_row["outcome_denominator"])
+            - int(reference_row["outcome_events"])
+            / int(reference_row["outcome_denominator"])
+        ),
         6,
     )
-    if rows[0]["risk_difference_pct"] != expected_difference:
+    published_difference = float(comparison_row["outcome_rate_pct"]) - float(
+        reference_row["outcome_rate_pct"]
+    )
+    if (
+        rows[0]["risk_difference_pct"] != expected_difference
+        or abs(expected_difference - published_difference) > 2e-6
+    ):
         raise RuntimeError(
             "risk difference is not comparison absolute risk minus reference "
             "absolute risk"
