@@ -7860,6 +7860,12 @@ def test_prepared_plan_revision_reuses_inputs_but_requires_a_new_plan_review(
         "source_plan_sha256": "d" * 64, "source_digest_kind": "canonical_plan_sha256",
         "populations": [{"source_step_id": "risk", "output_product": "table:absolute_risk_context", "population_scope": "primary_model"}]}
     review["facts"] = {"accepted_baseline_requirements": baseline, "plan_population_requirements": population}
+    source_plan = {"research_question": "Synthetic source question.", "steps": []}
+    review["plan_sha256"] = agent_pipeline_runs.canonical_sha256(source_plan)
+    guard = research_plan_revision.PlanRevisionGuard.from_review(
+        plan=source_plan, review=PlanScientificReview.model_validate(review),
+    )
+    monkeypatch.setattr(research_plan_revision, "load_plan_revision_guard", lambda **kw: guard)
     monkeypatch.setattr(agent_pipeline_runs, "_load_plan_revision_source_review", lambda **kw: PlanScientificReview.model_validate(review))
     monkeypatch.setattr(research_pipeline_run_preparation, "_data_foundation_profile", lambda **kw: _foundation_profile())
     monkeypatch.setattr(provider_adapter, "build_research_agent_provider_client", lambda *a, **kw: (object(), {"provider": "openai", "model": "test"}))
@@ -7891,7 +7897,7 @@ def test_prepared_plan_revision_reuses_inputs_but_requires_a_new_plan_review(
             raise agent_pipeline_runs.ResearchPipelineRunError("research_pipeline_cancelled", "test stops before planning")
 
     def pipeline(config, *, services):
-        captured["config"] = config
+        captured.update(config=config, services=services)
         return FakePipeline()
 
     monkeypatch.setattr(research_agent.ResearchAgentPipeline, "from_config", pipeline)
@@ -7921,6 +7927,8 @@ def test_prepared_plan_revision_reuses_inputs_but_requires_a_new_plan_review(
     assert thaw_payload(config.bound_analysis_inputs) == accepted_inputs.model_dump(mode="json")
     assert "48-hour" in config.bound_plan_revision_contract
     assert ("ACCEPTED_BASELINE_CONTENT_MISSING" in config.bound_plan_revision_contract) is not failed_execution
+    assert captured["services"].plan_revision_guard is (None if failed_execution else guard)
+    assert ("REPAIR-OR-REMOVE" in config.bound_plan_revision_contract) is not failed_execution
     assert all(path.read_bytes() == content for path, content in before.items())
 
 

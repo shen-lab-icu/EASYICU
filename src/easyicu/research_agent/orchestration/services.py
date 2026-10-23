@@ -29,6 +29,8 @@ class PipelineServices:
     case_plugin_registry: Optional[Any] = None
     provider_hard_stop: Optional[Any] = None
     execution_runtime_revision: Optional[ExecutionRuntimeRevision] = None
+    # Host admission control for a fresh repair of a digest-bound reviewed plan.
+    plan_revision_guard: Optional[Any] = None
 
     @classmethod
     def split_legacy_kwargs(
@@ -51,6 +53,11 @@ class PipelineServices:
                 f"received both services= and legacy option(s): {names}"
             )
         return services or cls(**supplied), remaining
+
+    def validate_plan_revision(self, *, plan: Any, context: Any) -> None:
+        """Apply the host revision guard, when this run repairs a reviewed plan."""
+        if self.plan_revision_guard is not None:
+            self.plan_revision_guard.validate_plan(plan=plan, context=context)
 
     def canonical_payload(self) -> Dict[str, Optional[str]]:
         """Return type identities only; never serialize live object state."""
