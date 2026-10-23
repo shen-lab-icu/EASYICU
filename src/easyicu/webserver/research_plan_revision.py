@@ -104,6 +104,56 @@ def _step_coordinate(step: Mapping[str, Any], plan: Mapping[str, Any]) -> tuple[
     )
 
 
+def _repair_inputs_within_source(
+    source: Mapping[str, Any], step: Mapping[str, Any], *,
+    source_columns: set[str], revised_references: set[str],
+) -> bool:
+    """New input bindings must name an existing variable or revised producer."""
+    return all(
+        value in revised_references or (":" not in value and value in source_columns)
+        for value in set(step.get("inputs", ())) - set(source.get("inputs", ()))
+    )
+
+
+def _existing_step_binding_repair(
+    source: Mapping[str, Any], step: Mapping[str, Any], *,
+    source_coordinate: tuple[str, str, str], coordinate: tuple[str, str, str],
+    revised_references: set[str],
+) -> bool:
+    """Ignore transport and display repairs, retaining exact scientific specs.
+
+    In particular, model rosters and ordered levels are not sets of inputs:
+    changing them must still pass the question or blocker authority below.
+    """
+    if source.get("step_id") != step.get("step_id") or source_coordinate[:2] != coordinate[:2]:
+        return False
+    before, after = (json.loads(item[2]) for item in (source_coordinate, coordinate))
+    before.pop("columns", None)
+    after.pop("columns", None)
+    old_panels = before.pop("figure_panels", ())
+    new_panels = after.pop("figure_panels", ())
+    if before != after:
+        return False
+    # These are typed FigurePresentationSpec/local lineage fields, not chart
+    # grammars or scientific coordinates. Keep the latter exact and consume
+    # each old panel at most once, permitting removal and reordering.
+    def panel_coordinate(panel: Mapping[str, Any]) -> str:
+        return json.dumps({key: value for key, value in panel.items() if key not in {
+            "panel_id", "figure_output", "source_products", "placement", "presentation",
+        }}, sort_keys=True, separators=(",", ":"))
+
+    remaining_panels = Counter(panel_coordinate(panel) for panel in old_panels)
+    for panel in new_panels:
+        if (not set(panel.get("source_products", ())) <= revised_references
+                or panel.get("figure_output") not in step.get("expected_outputs", ())):
+            return False
+        bound = panel_coordinate(panel)
+        if remaining_panels[bound] < 1:
+            return False
+        remaining_panels[bound] -= 1
+    return True
+
+
 @dataclass(frozen=True)
 class PlanRevisionGuard:
     """Host-only admission of a repair; the source plan is never overwritten.
@@ -142,11 +192,25 @@ class PlanRevisionGuard:
     def validate_plan(self, *, plan: AnalysisPlan, context: ResearchContext) -> None:
         previous = self.previous_plan
         revised = plan.model_dump(mode="json")
-        remaining = [_step_coordinate(step, previous) for step in previous["steps"]]
+        remaining = [(step, _step_coordinate(step, previous)) for step in previous["steps"]]
+        source_columns = {value for step in previous["steps"] for value in step.get("inputs", ()) if ":" not in value}
+        revised_references = {value for step in revised["steps"] for value in (
+            step["step_id"], *step.get("expected_outputs", ()),
+        )}
         for step, raw in zip(plan.steps, revised["steps"]):
             coordinate = _step_coordinate(raw, revised)
-            if coordinate in remaining:
-                remaining.remove(coordinate)
+            # Prefer the same identity so an unchanged sibling with identical
+            # coordinates cannot consume the source needed for a later repair.
+            matches = [index for index, (old, bound) in enumerate(remaining)
+                       if _repair_inputs_within_source(
+                           old, raw, source_columns=source_columns, revised_references=revised_references,
+                       ) and (bound == coordinate or _existing_step_binding_repair(
+                           old, raw, source_coordinate=bound, coordinate=coordinate,
+                           revised_references=revised_references,
+                       ))]
+            if matches:
+                match = next((index for index in matches if remaining[index][0]["step_id"] == step.step_id), matches[0])
+                remaining.pop(match)
                 continue
             single = plan.model_copy(update={"steps": [step]})
             if self._question_requires(single, context) or self._blocker_requires(single, context):
@@ -182,7 +246,21 @@ class PlanRevisionGuard:
         # sensitivity, subgroup, or rendering module.
         outcomes = {context.target_outcome, *(context.cohort.requested_outcome_columns or ())}
         old_models = [old for old in self.previous_plan["steps"]
-                      if old.get("planned_analysis_role") == "primary" and _module(old) == _module(step.model_dump())]
+                      if old.get("planned_analysis_role") == "primary" and _module(old) == _module(step.model_dump())
+                      and str(old.get("method") or "").strip().casefold().split("(", 1)[0].strip()
+                      == str(step.method or "").strip().casefold().split("(", 1)[0].strip()]
+        # The required-outcome/adjustment path is not permission to add an
+        # arbitrary predictor to an existing primary model.
+        allowed_covariates = set(preferences.covariates or ()) if preferences else set()
+        allowed_covariates.update(value for old in old_models for req in old.get("model_requirements", ())
+                                  for value in req.get("covariates", ()))
+        allowed_inputs = {value for old in old_models for value in old.get("inputs", ())}
+        allowed_inputs.update({context.primary_exposure, *outcomes, *allowed_covariates})
+        if (any(":" not in value and value not in allowed_inputs for value in step.inputs)
+                or any(not set(req.covariates) <= allowed_covariates or any(
+                    term.role == "covariate" and term.name not in allowed_covariates for term in req.model_terms
+                ) for req in step.model_requirements)):
+            return False
         if (old_models and step.planned_analysis_role == "primary"
                 and not step.model_requirements and not step.functional_form_spec
                 and not step.sensitivity_spec_ids
