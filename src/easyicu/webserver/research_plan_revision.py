@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -19,7 +20,7 @@ from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.contracts.frozen_payload import thaw_payload
 from easyicu.research_agent.planning.accepted_analysis_inputs import AcceptedAnalysisInputs
 from easyicu.research_agent.planning.baseline_requirements import (
-    AcceptedBaselineRequirements, candidate_baseline_requirements,
+    AcceptedBaselineRequirements, baseline_requirement_coverage, candidate_baseline_requirements,
 )
 from easyicu.research_agent.planning.population_requirements import (
     PlanPopulationRequirements, candidate_population_requirements,
@@ -29,13 +30,239 @@ from easyicu.research_agent.orchestration.human_review_checkpoint import load_ch
 from easyicu.research_agent.planning.scientific_review import (
     PlanScientificReview,
     plan_revision_blocker_codes,
+    remediation_route_for_finding,
+    timing_design_closed,
 )
+from easyicu.research_agent.planning.requirement_coverage import SUBGROUP_ACTIONS, concept_relatives, stated_subgroup_coverage
+from easyicu.research_agent.planning.sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
+from easyicu.research_agent.planning.robustness_contract import complete_case_variables
+from easyicu.research_agent.schema import AnalysisPlan, ResearchContext
 from easyicu.webserver import agent_runs, dataio, study_contexts
 from easyicu.webserver.agent_review_recovery import load_recovery_seed
 from easyicu.webserver.research_input_progress import research_input_state
 from easyicu.webserver.research_launch_resume import _slug
+from easyicu.webserver.research_launch_scientific import _configured_sensitivity_specs
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 from easyicu.webserver.run_record import RunRecordReadError
+
+
+def _module(step: Mapping[str, Any]) -> str:
+    return str(step.get("scientific_action_id") or step.get("method") or "").strip().casefold().split("(", 1)[0].strip()
+
+
+def _scientific_binding(value: Any) -> Any:
+    """Compare scientific coordinates, independent of local ids and references."""
+    if isinstance(value, Mapping):
+        result = {}
+        for key, item in value.items():
+            if key in {
+                "requirement_id", "spec_id", "product_id", "figure_id", "description",
+                "rationale", "target_outputs", "primary_model_requirement_id",
+                "multiplicity_family_id",
+            }:
+                continue
+            bound = _scientific_binding(item)
+            if isinstance(bound, list) and key in {
+                "model_requirements", "covariates", "model_terms", "products",
+                "subgroup_columns", "sensitivity_spec_ids", "phenotyping_feature_columns",
+            }:
+                bound = sorted(bound, key=lambda item: json.dumps(item, sort_keys=True))
+            result[key] = bound
+        return result
+    if isinstance(value, (list, tuple)):
+        return [_scientific_binding(item) for item in value]
+    return value
+
+
+def _step_coordinate(step: Mapping[str, Any], plan: Mapping[str, Any]) -> tuple[str, str, str]:
+    bindings = {
+        key: value for key, value in step.items()
+        if value and (key.endswith("_spec") or key in {
+            "model_requirements", "family_primary_result_requirement", "figure_panels",
+            "sensitivity_spec_ids", "phenotyping_feature_columns", "population_scope",
+        })
+    }
+    # A corrected dependency or model's input roster is a binding repair.
+    # Untyped analyses still have their actual source columns as coordinates.
+    if not any(key in bindings for key in {
+        "model_requirements", "family_primary_result_requirement", "functional_form_spec",
+        "table_one_spec", "exposure_outcome_distribution_spec", "cohort_definition_spec",
+        "phenotyping_feature_columns", "phenotype_comparison_spec",
+    }):
+        bindings["columns"] = sorted(value for value in step.get("inputs", ()) if ":" not in value)
+    method = str(step.get("method") or "").strip().casefold().split("(", 1)[0].strip()
+    bindings["method"] = method
+    if step.get("robustness_replay_spec"):
+        bindings["robustness_specs"] = plan.get("robustness_specs", ())
+    if method in {"subgroup_analysis", "effect_modification"} or _module(step) in SUBGROUP_ACTIONS:
+        bindings["subgroup"] = plan.get("subgroup_analysis_spec")
+    if method == "e_value":
+        bindings["evalue"] = plan.get("evalue_conversion_spec")
+    return (
+        str(step.get("planned_analysis_role") or "auxiliary"), _module(step),
+        json.dumps(_scientific_binding(bindings), sort_keys=True, separators=(",", ":")),
+    )
+
+
+@dataclass(frozen=True)
+class PlanRevisionGuard:
+    """Host-only admission of a repair; the source plan is never overwritten.
+
+    This is deliberately separate from scientific review and execution
+    authority. A review suggestion cannot authorize optional new science.
+    """
+
+    source_plan_json: str
+    review: PlanScientificReview
+    question_sensitivity_ids: frozenset[str] | None = None
+
+    @classmethod
+    def from_review(cls, *, plan: Mapping[str, Any], review: PlanScientificReview,
+                    question_sensitivity_ids: frozenset[str] | None = None) -> PlanRevisionGuard:
+        if canonical_sha256(plan) != review.plan_sha256:
+            raise ResearchPipelineRunError(
+                "plan_revision_source_plan_mismatch", "The reviewed source plan changed.",
+            )
+        return cls(json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                   review.model_copy(deep=True), question_sensitivity_ids)
+
+    @property
+    def previous_plan(self) -> dict[str, Any]:
+        return json.loads(self.source_plan_json)
+
+    def prompt_contract(self) -> str:
+        return "\n".join((
+            "REPAIR-OR-REMOVE REVISION SCOPE (host-derived):",
+            f"- source_plan_sha256: {self.review.plan_sha256}",
+            "- Repair or remove existing analyses. Add a step only to satisfy a typed question requirement or a blocking finding's required remediation.",
+            "- Do not add optional sensitivities, functional-form exploration, subgroup analyses, ordinal trends, E-values, imputation, figures or tables.",
+            "- source_plan_json: " + self.source_plan_json,
+        ))
+
+    def validate_plan(self, *, plan: AnalysisPlan, context: ResearchContext) -> None:
+        previous = self.previous_plan
+        revised = plan.model_dump(mode="json")
+        remaining = [_step_coordinate(step, previous) for step in previous["steps"]]
+        for step, raw in zip(plan.steps, revised["steps"]):
+            coordinate = _step_coordinate(raw, revised)
+            if coordinate in remaining:
+                remaining.remove(coordinate)
+                continue
+            single = plan.model_copy(update={"steps": [step]})
+            if self._question_requires(single, context) or self._blocker_requires(single, context):
+                continue
+            raise ResearchPipelineRunError(
+                "revision_added_unrequested_analysis",
+                "The revision added an unrequested analysis; the previous plan was kept.",
+                details={"module": coordinate[1], "role": coordinate[0],
+                         "step_id": step.step_id, "source_plan_sha256": self.review.plan_sha256},
+            )
+
+    def _question_requires(self, plan: AnalysisPlan, context: ResearchContext) -> bool:
+        step = plan.steps[0]
+        covered_subgroups = [record for record in stated_subgroup_coverage(context, plan).records if record.status == "covered"]
+        if covered_subgroups and not step.functional_form_spec and not step.sensitivity_spec_ids:
+            required_columns = set().union(*(concept_relatives(context)(row.concept_identity) for row in covered_subgroups))
+            axes = set(plan.subgroup_analysis_spec.subgroup_columns) if plan.subgroup_analysis_spec else set()
+            if axes <= required_columns:
+                return True
+        preferences = context.user_preferences
+        specs = {spec.spec_id: spec for spec in preferences.sensitivity_specs} if preferences else {}
+        if step.sensitivity_spec_ids and all(
+            spec_id in specs
+            and (self.question_sensitivity_ids is None or spec_id in self.question_sensitivity_ids)
+            and str(step.method or "").strip().casefold() in EXECUTABLE_METHODS_BY_STRATEGY[specs[spec_id].strategy]
+            and set(specs[spec_id].execution_variables) <= set(step.inputs)
+            and (step.functional_form_spec is None or step.functional_form_spec.target_column in specs[spec_id].execution_variables)
+            for spec_id in step.sensitivity_spec_ids
+        ):
+            return True
+        # Required outcome/adjustment repairs stay in the existing model
+        # module. Merely reading a required outcome cannot authorize a new
+        # sensitivity, subgroup, or rendering module.
+        outcomes = {context.target_outcome, *(context.cohort.requested_outcome_columns or ())}
+        old_models = [old for old in self.previous_plan["steps"]
+                      if old.get("planned_analysis_role") == "primary" and _module(old) == _module(step.model_dump())]
+        if (old_models and step.planned_analysis_role == "primary"
+                and not step.model_requirements and not step.functional_form_spec
+                and not step.sensitivity_spec_ids
+                and {context.primary_exposure, context.target_outcome} <= set(step.inputs)):
+            return True
+        covered = {req["outcome"] for old in old_models for req in old.get("model_requirements", ())}
+        covered.update(outcome for outcome in outcomes if any(
+            not old.get("model_requirements") and outcome in old.get("inputs", ()) for old in old_models
+        ))
+        missing_outcomes = outcomes - covered - {context.target_outcome}
+        prior_bindings = Counter(
+            (req["outcome"], req["exposure_source"], req["analysis_role"])
+            for old in old_models for req in old.get("model_requirements", ())
+        )
+        if step.planned_analysis_role == "primary":
+            allowed_bindings = prior_bindings.copy()
+            primary_binding = (context.target_outcome, context.primary_exposure, "primary")
+            allowed_bindings[primary_binding] = max(1, allowed_bindings[primary_binding])
+            allowed_bindings.update((outcome, context.primary_exposure, "secondary") for outcome in missing_outcomes)
+        else:
+            allowed_bindings = Counter(
+                (outcome, context.primary_exposure, step.planned_analysis_role) for outcome in missing_outcomes
+            ) if step.planned_analysis_role == "secondary" else Counter()
+        current_bindings = Counter((req.outcome, req.exposure_source, req.analysis_role) for req in step.model_requirements)
+        return bool(
+            old_models and step.model_requirements and not step.functional_form_spec
+            and not step.sensitivity_spec_ids
+            and current_bindings <= allowed_bindings
+        )
+
+    def _blocker_requires(self, plan: AnalysisPlan, context: ResearchContext) -> bool:
+        step = plan.steps[0]
+        codes = {
+            finding.code for finding in self.review.findings
+            if finding.severity == "blocker"
+            and remediation_route_for_finding(finding) == "agent_plan_revision"
+        }
+        if "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in codes and timing_design_closed(plan):
+            return True
+        if "ACCEPTED_BASELINE_CONTENT_MISSING" in codes and step.table_one_spec is not None:
+            return any(table["complete"] for table in baseline_requirement_coverage(context, plan).get("tables", ()))
+        if "ARTICLE_CONTENT_ROLES_INCOMPLETE" in codes and step.measurement_audit_spec is not None:
+            missing = set((self.review.facts.get("content_roles") or {}).get("missing_roles") or ())
+            allowed = set()
+            if "cohort" in missing:
+                allowed.add("cohort_flow")
+            if "quality" in missing:
+                allowed.update({"measurement_missingness", "missingness_profile", "measurement_source", "measurement_process"})
+            return bool(step.measurement_audit_spec.products) and all(
+                product.audit in allowed for product in step.measurement_audit_spec.products
+            )
+        return bool(
+            "MISSING_CATEGORY_WITHOUT_COMPLETE_CASE_SENSITIVITY" in codes
+            and step.method == "complete_case_sensitivity"
+            and step.planned_analysis_role == "sensitivity"
+            and plan.robustness_specs
+            and all(spec.axis == "missing" and complete_case_variables(spec)
+                    and spec.outcome_override is None and spec.cohort_override is None
+                    for spec in plan.robustness_specs)
+        )
+
+
+def load_plan_revision_guard(*, study: Mapping[str, Any], project_root: str | None,
+                             source_run_id: str, review: PlanScientificReview) -> PlanRevisionGuard:
+    rows = agent_runs.list_run_history(
+        study_id=str(study.get("id") or ""), project_root=project_root, limit=100,
+    ).get("runs", ())
+    row = next((item for item in rows if item.get("run_id") == source_run_id), None)
+    if row is not None:
+        record = agent_runs.read_run_record(str(row.get("project_dir") or ""))
+        if not isinstance(record, RunRecordReadError):
+            plan = thaw_payload(record.artifact_payloads.get("agent_plan.json"))
+            if isinstance(plan, Mapping):
+                return PlanRevisionGuard.from_review(
+                    plan=plan, review=review,
+                    question_sensitivity_ids=frozenset(spec.spec_id for spec in _configured_sensitivity_specs(study)),
+                )
+    raise ResearchPipelineRunError(
+        "plan_revision_source_plan_missing", "The exact reviewed source plan could not be loaded.",
+    )
 
 
 @dataclass(frozen=True)

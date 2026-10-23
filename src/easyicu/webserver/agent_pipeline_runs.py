@@ -6336,6 +6336,7 @@ def make_research_pipeline_run_runner(
         )
         bound_analysis_inputs: Optional[AcceptedAnalysisInputs] = None
         source_agent_plan_revision_codes: tuple[str, ...] = ()
+        plan_revision_guard = None
         if prepared_revision is not None and prepared_revision.failed_execution_replan:
             bound_plan_revision_contract = prepared_revision.prior_plan_contract or ""
             bound_baseline_requirements = prepared_revision.baseline_requirements
@@ -6397,9 +6398,16 @@ def make_research_pipeline_run_runner(
                 source_agent_plan_revision_codes = _agent_plan_revision_codes(
                     source_review
                 )
+                from easyicu.webserver.research_plan_revision import load_plan_revision_guard
+
+                plan_revision_guard = load_plan_revision_guard(
+                    study=study, project_root=project_root,
+                    source_run_id=source_run_id, review=source_review,
+                )
                 bound_plan_revision_contract = render_agent_plan_revision_contract(
                     source_review
                 )
+                bound_plan_revision_contract += "\n\n" + plan_revision_guard.prompt_contract()
                 if prepared_revision is not None and prepared_revision.prior_plan_contract:
                     bound_plan_revision_contract = "\n\n".join((
                         prepared_revision.prior_plan_contract,
@@ -7208,6 +7216,7 @@ def make_research_pipeline_run_runner(
                     human_review_gate=_WebHumanReviewGate(),
                     provider_hard_stop=provider_hard_stop,
                     execution_runtime_revision=execution_runtime_revision,
+                    plan_revision_guard=plan_revision_guard,
                 ),
             )
             try:
