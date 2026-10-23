@@ -30,10 +30,13 @@ from ...schema import AnalysisStep, ConceptDescriptor
 from ...contracts.closed_levels import validate_closed_scalar_levels
 from ...contracts.cohort_summary import (
     declared_summary_columns as _declared_columns,
-    is_descriptive_cohort_summary_step as cohort_summary_executor_owns_step,
     is_primary_descriptive_summary_step,
     primary_descriptive_summary_scope,
 )
+from ...contracts.cohort_summary_products import (
+    is_descriptive_summary_product_step as cohort_summary_executor_owns_step,
+)
+from ...contracts.product_identity import is_canonical_typed_product_token
 from ...numeric_scalars import coerce_optional_finite_float as _finite_number
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import (
@@ -95,6 +98,7 @@ def cohort_summary_executor_code(
                 declared_columns={_declared_columns(step)!r},
                 typed_cohort_input={_typed_cohort_input(step)!r},
                 primary_summary={is_primary_descriptive_summary_step(step)!r},
+                summary_product_id={step.expected_outputs[0]!r},
             )
             """
         ).strip()
@@ -131,6 +135,7 @@ def cohort_summary_executor_code(
             plausibility_audit=plausibility_audit,
             emit_step_summary=False,
             primary_summary={is_primary_descriptive_summary_step(step)!r},
+            summary_product_id={step.expected_outputs[0]!r},
         )
         summary["plausibility_audit"] = plausibility_audit
         out_dir = Path(os.environ["STEP_OUT_DIR"])
@@ -504,6 +509,7 @@ def run_cohort_summary_from_env(
     plausibility_audit: Optional[Dict[str, Any]] = None,
     emit_step_summary: bool = True,
     primary_summary: bool = False,
+    summary_product_id: str = "table:cohort_summary",
 ) -> Dict[str, Any]:
     """Execute exact descriptive summaries from the standard runner environment.
 
@@ -521,6 +527,13 @@ def run_cohort_summary_from_env(
     authority.
     """
 
+    if (
+        not is_canonical_typed_product_token(summary_product_id)
+        or not summary_product_id.startswith("table:")
+    ):
+        raise RuntimeError("Descriptive summary requires a canonical table product")
+    if primary_summary and summary_product_id != "table:cohort_summary":
+        raise RuntimeError("Primary descriptive summary must retain its registered product")
     columns = tuple(str(value).strip() for value in declared_columns)
     if (
         not columns
@@ -577,7 +590,7 @@ def run_cohort_summary_from_env(
                 raise RuntimeError("Primary descriptive summary requires finite observed values")
     cohort_n = int(len(frame))
 
-    table_path = out_dir / "cohort_summary.csv"
+    table_path = out_dir / f"{summary_product_id.split(':', 1)[1]}.csv"
     summary_table = _cohort_summary_table(frame, columns, metadata_by_name, numeric_only=primary_summary)
     summary_table.to_csv(table_path, index=False)
     summary = {
@@ -594,7 +607,7 @@ def run_cohort_summary_from_env(
             "filtering_performed": False,
         },
         "adjusted_effect": None,
-        "output_files": {"table:cohort_summary": table_path.name},
+        "output_files": {summary_product_id: table_path.name},
     }
     if primary_summary:
         distribution = _empirical_distribution_table(frame, columns)

@@ -39,15 +39,18 @@ def test_baseline_product_identity_does_not_depend_on_free_text_method_alias() -
     step = _custom_baseline("artifact:baseline_context")
 
     assert _is_ungrouped_baseline_summary(step)
-    assert _canonical_outputs(step) == [("table:cohort_summary", "custom")]
+    assert _canonical_outputs(step) == [("table:cohort_summary_baseline_context", "custom")]
 
 
-@pytest.mark.parametrize("product_id", ["table:table_one", "table:cohort_summary"])
-def test_a_custom_step_naming_table_one_is_the_ungrouped_summary(product_id) -> None:
+@pytest.mark.parametrize("product_id,compiled_product", [
+    ("table:table_one", "table:cohort_summary_baseline_context"),
+    ("table:cohort_summary", "table:cohort_summary"),
+])
+def test_a_custom_step_naming_table_one_is_the_ungrouped_summary(product_id, compiled_product) -> None:
     """A real plan stopped three times on this spelling: the outline fixed the
     product, and step repairs could not change it.  A custom step owns no
     Table 1 spec, so the name can only mean the ungrouped summary."""
 
     assert _canonical_outputs(_custom_baseline(product_id)) == [
-        ("table:cohort_summary", "custom")
+        (compiled_product, "custom")
     ]
