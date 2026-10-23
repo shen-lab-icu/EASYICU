@@ -50,21 +50,36 @@ def check_capability_gap(
     """Check one declared gap against the study's typed context."""
 
     if gap.requirement == "design_element_unsupported" and gap.concept is not None:
-        # A stated adjustment the plan cannot fit: the source lacks it, or
-        # measures it after typed time zero.  Anything else contradicts it.
+        # Source, timing and family owners can prove a named requirement gap.
+        # A variable can have both roles; a verified gap in either still stops.
         from .adjustment_authority import (
-            context_stated_adjustments, stated_adjustment_after_time_zero,
+            context_stated_adjustments, context_stated_variables, stated_adjustment_after_time_zero,
             stated_adjustment_columns,
         )
+        from .analysis_types import infer_analysis_type
+        from .question_requirements import family_describes_by_group, subgroup_actions_for_family
 
         adjustment = next((item for item in context_stated_adjustments(context)
                            if (item.concept or item.variable) == gap.concept), None)
+        if adjustment is not None:
+            if adjustment.source_status == "unavailable":
+                return CapabilityGapCheck("verified", f"the bound source lacks {gap.concept!r}")
+            if stated_adjustment_after_time_zero(context, adjustment):
+                return CapabilityGapCheck("verified", f"{gap.concept!r} is measured after typed time zero")
+        subgroup = next((item for item in context_stated_variables(context, "stated_subgroups")
+                         if (item.concept or item.variable) == gap.concept), None)
+        if subgroup is not None:
+            if subgroup.source_status == "unavailable":
+                return CapabilityGapCheck("verified", f"the bound source lacks subgroup {gap.concept!r}")
+            family = infer_analysis_type(context).key
+            if not subgroup_actions_for_family(family) and not family_describes_by_group(family):
+                return CapabilityGapCheck("verified", f"{family} has no subgroup owner for {gap.concept!r}")
+            if subgroup.source_status != "available" or subgroup.concept is None:
+                return CapabilityGapCheck("unverifiable", f"source availability for subgroup {gap.concept!r} needs resolution")
+            return CapabilityGapCheck("unverified", f"{family} offers a subgroup owner and the source supplies {gap.concept!r}")
+
         if adjustment is None:
-            return CapabilityGapCheck("unverified", f"{gap.concept!r} is not a stated adjustment")
-        if adjustment.source_status == "unavailable":
-            return CapabilityGapCheck("verified", f"the bound source lacks {gap.concept!r}")
-        if stated_adjustment_after_time_zero(context, adjustment):
-            return CapabilityGapCheck("verified", f"{gap.concept!r} is measured after typed time zero")
+            return CapabilityGapCheck("unverified", f"{gap.concept!r} is not a stated adjustment or subgroup")
         if adjustment.source_status == "available" or stated_adjustment_columns(context, adjustment):
             return CapabilityGapCheck(
                 "unverified", f"the study offers {gap.concept!r} by time zero"

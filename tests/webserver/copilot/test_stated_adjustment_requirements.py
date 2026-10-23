@@ -6,38 +6,8 @@ import json
 
 import pytest
 
-from easyicu.webserver.pi_copilot import tools as tool_module
-from easyicu.webserver.pi_copilot.contracts import (
-    AuthorityBinding, PiSessionRecord, ToolExecutionContext,
-)
 from easyicu.webserver import agent_pipeline_runs, study_contexts
-
-
-def _update(monkeypatch, *, words="在控制年龄之后", variable="年龄", concepts=("age",),
-            statements=None, current=None, question=None):
-    question = question or f"{words}，指标与结局的关系如何？"
-    current = current or {
-        "id": "adjustment-study", "revision": 1, "question": question,
-        "data_source": {"path": "/synthetic/source", "database": "miiv"},
-    }
-    writes = []
-    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: dict(current))
-    monkeypatch.setattr(tool_module, "_workflow_snapshot", lambda *args, **kwargs: {})
-    monkeypatch.setattr(tool_module.study_contexts, "upsert_context",
-                        lambda raw, **kwargs: writes.append(raw) or {**current, **raw, "revision": 2})
-    monkeypatch.setattr(
-        "easyicu.research_agent.acquisition.catalog.build_available_catalog",
-        lambda _path: SimpleNamespace(concepts=[SimpleNamespace(concept_id=name) for name in concepts]),
-    )
-    context = ToolExecutionContext(
-        session=PiSessionRecord(session_id="adjustment-session", binding=AuthorityBinding(
-            study_context_id=current["id"], study_revision=current["revision"],
-        )), user_message=question, allowed_actions={"configure"},
-    )
-    params = {"question": question, "stated_adjustments": (
-        [{"variable": variable, "words": words}] if statements is None else statements
-    )}
-    return tool_module.execute_tool("easyicu_update_study_context", params, context), writes
+from .stated_variable_fixtures import _update
 
 
 @pytest.mark.parametrize("words", ["在控制年龄之后", "以年龄为协变量", "调整年龄"])

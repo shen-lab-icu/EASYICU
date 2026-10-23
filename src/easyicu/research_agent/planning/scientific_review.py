@@ -1915,7 +1915,23 @@ def render_plan_scientific_guardrails(context: ResearchContext) -> str:
     """Render case-neutral, context-derived guardrails before Planner generation."""
 
     lines = ["PRE-APPROVAL SCIENTIFIC PLAN GUARDRAILS (host-derived):"]
-    from .adjustment_authority import context_stated_adjustments
+    from .adjustment_authority import context_stated_adjustments, context_stated_variables
+
+    subgroups = context_stated_variables(context, "stated_subgroups")
+    if subgroups:
+        lines.append(
+            "- STATED SUBGROUPS are binding analysis requirements: each needs a "
+            "subgroup-capable analysis step reading its concept, such as "
+            "association.effect_modification, prediction.subgroup_fairness or "
+            "time_to_event.subgroup_hr, when offered by the selected family; a "
+            "descriptive family answers with a result reported in each level of "
+            "the variable (its exposure-outcome distribution exposure or grouped "
+            "summary). Table 1 group_by, covariate adjustment, audits and prose do "
+            "not count. If the family can do neither or the source cannot supply the "
+            "variable, declare capability_gap='design_element_unsupported' with "
+            "capability_gap_concept naming it; never drop the requirement. "
+            + json.dumps([item.model_dump(mode="json") for item in subgroups], ensure_ascii=False)
+        )
 
     adjustments = context_stated_adjustments(context)
     if adjustments:
@@ -4776,6 +4792,53 @@ def build_plan_scientific_review(
         )
 
     from .requirement_coverage import stated_adjustment_coverage
+    from .question_requirements import stated_subgroup_coverage
+
+    subgroup_coverage = stated_subgroup_coverage(context, plan)
+    for record in subgroup_coverage.records:
+        if record.status == "covered":
+            continue
+        if record.reason_code == "stated_subgroup_concept_unresolved":
+            # As for an adjustment: nothing can repair an unmatched name, and
+            # the card shows it so the reviewer checks the plan's grouping.
+            findings.append(PlanScientificFinding(
+                code="STATED_SUBGROUP_UNRESOLVED", severity="major", dimension="statistical_design",
+                message=(
+                    f"The question requires subgroup analysis by {record.concept_identity}, "
+                    "which no source concept was matched to, so the plan's subgroup "
+                    "analysis for it could not be checked."
+                ),
+                evidence_refs=[record.source_ref, "analysis_plan.json.steps"],
+                remediation="Check that the plan analyses the subgroup the question names before approving.",
+                remediation_route="independent_review",
+            ))
+            continue
+        if record.reason_code == "source_concept_unavailable":
+            code, detail = "STATED_SUBGROUP_UNAVAILABLE", "the bound source cannot supply this variable."
+        elif record.reason_code == "stated_subgroup_owner_unavailable":
+            code, detail = (
+                "STATED_SUBGROUP_UNSUPPORTED",
+                f"no executable route of the {plan.analysis_type} family analyses a subgroup in this plan.",
+            )
+        else:
+            code, detail = (
+                "STATED_SUBGROUP_MISSING",
+                "no analysis step answers it in each subgroup; a Table 1 grouping does not.",
+            )
+        findings.append(PlanScientificFinding(
+            code=code, severity="blocker", dimension="statistical_design",
+            message=f"The question requires subgroup analysis by {record.concept_identity}; {detail}",
+            evidence_refs=[record.source_ref, "analysis_plan.json.steps"],
+            remediation=(
+                "Add the family's subgroup-capable analysis reading the stated concept "
+                "(in a descriptive family, a result reported in each of its levels), "
+                "retaining any accepted Table 1 grouping and rows, or declare "
+                "design_element_unsupported naming the concept."
+                if record.status == "missing" else
+                "Resolve the named subgroup capability or source gap before offering an executable plan."
+            ),
+            remediation_route="agent_plan_revision" if record.status == "missing" else "runtime_capability",
+        ))
 
     adjustment_coverage = stated_adjustment_coverage(context, plan)
     for record in adjustment_coverage.records:
@@ -4875,6 +4938,7 @@ def build_plan_scientific_review(
         findings=findings,
         facts={
             "stated_adjustment_coverage": adjustment_coverage.model_dump(mode="json"),
+            "stated_subgroup_coverage": subgroup_coverage.model_dump(mode="json"),
             "primary_model_retention": (
                 model_retention.facts() if model_retention is not None else None
             ),

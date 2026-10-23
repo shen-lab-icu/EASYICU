@@ -1,4 +1,4 @@
-"""Origin-aware adjustment-set authority for analysis planning.
+"""Origin-aware adjustment sets and host-verified question variables.
 
 Owner
 -----
@@ -9,9 +9,11 @@ contract and validates Planner output.  It does not select covariates, inspect
 rows, or infer an adjustment set from available demographic columns.
 
 The host's structured question reading is a separate required subset in
-``data_constraints.stated_adjustments``. It does not close the Planner's
-remaining choices or claim baseline timing; requirement coverage checks the
-primary model and capability-gap validation checks any declared inability.
+``data_constraints.stated_adjustments``. The shared variable receipt also
+carries ``stated_subgroups``; its coverage belongs to question_requirements.
+Neither role closes the Planner's remaining choices or claims baseline timing.
+Requirement coverage checks the primary model and capability-gap validation
+checks any declared inability.
 
 The validator is intentionally called both while structured Planner retry is
 available and again at the execution boundary.  A stored/resumed plan must not
@@ -56,34 +58,36 @@ WINDOW_DESCRIPTION_ROLES = frozenset({*_MODEL_TERM_DYNAMIC_ROLES, "other"})
 HostTemporalRole = Literal["baseline_static", "at_or_before_time_zero"]
 
 
-class StatedAdjustment(BaseModel):
-    """A conversation reading grounded by the host, independent of exact rosters.
+StatedVariableField = Literal["stated_adjustments", "stated_subgroups"]
+STATED_VARIABLE_FIELDS = ("stated_adjustments", "stated_subgroups")
 
-    The model assigns the adjustment role; the host checks the quote, variable
-    identity and source availability. Availability never proves baseline timing.
+
+class StatedVariable(BaseModel):
+    """A model-read variable and quote whose identity the host checked.
+
+    The containing field states its role. Availability never proves baseline
+    timing; unresolved means no source concept was matched to the words.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     variable: str = Field(min_length=1, max_length=160)
     words: str = Field(min_length=1, max_length=240)
-    concept: Optional[str] = Field(default=None, min_length=1, max_length=128)
-    #: ``unresolved``: the source is bound but neither the dictionary nor the
-    #: conversation's lookup names a concept for the words.
+    concept: str | None = Field(default=None, min_length=1, max_length=128)
     source_status: Literal["available", "unavailable", "unbound", "unresolved"]
 
 
-def normalize_stated_adjustments(value: Any) -> list[dict[str, Any]]:
-    """Validate host receipts without deriving an adjustment role from keywords."""
+def normalize_stated_variables(value: Any) -> list[dict[str, Any]]:
+    """Validate receipts without inferring a scientific role from keywords."""
 
-    items = TypeAdapter(list[StatedAdjustment]).validate_python([] if value is None else value)
+    items = TypeAdapter(list[StatedVariable]).validate_python([] if value is None else value)
     if len(items) > 16 or len({(item.variable, item.words) for item in items}) != len(items):
-        raise ValueError("stated adjustments must be distinct and contain at most 16 entries")
+        raise ValueError("stated variables must be distinct and contain at most 16 entries")
     return [item.model_dump(mode="json") for item in items]
 
 
-def context_stated_adjustments(context: Any) -> tuple[StatedAdjustment, ...]:
-    """Read the host's required subset from the existing data-constraints channel."""
+def context_stated_variables(context: Any, field: StatedVariableField) -> tuple[StatedVariable, ...]:
+    """Read a required subset from the existing data-constraints channel."""
 
     raw = getattr(getattr(context, "user_preferences", None), "data_constraints", None)
     try:
@@ -92,8 +96,17 @@ def context_stated_adjustments(context: Any) -> tuple[StatedAdjustment, ...]:
         return ()  # Legacy free-form constraints carry no structured requirements.
     if not isinstance(constraints, Mapping):
         return ()
-    return tuple(StatedAdjustment.model_validate(item) for item in
-                 normalize_stated_adjustments(constraints.get("stated_adjustments")))
+    return tuple(StatedVariable.model_validate(item) for item in
+                 normalize_stated_variables(constraints.get(field)))
+
+
+# Saved adjustments retain their record shape, digest and public reader names.
+StatedAdjustment = StatedVariable
+normalize_stated_adjustments = normalize_stated_variables
+
+
+def context_stated_adjustments(context: Any) -> tuple[StatedAdjustment, ...]:
+    return context_stated_variables(context, "stated_adjustments")
 
 
 def stated_adjustment_columns(context: Any, adjustment: StatedAdjustment) -> tuple[str, ...]:
@@ -568,6 +581,8 @@ def validate_plan_against_adjustment_authority(*, plan: Any, context: Any) -> No
 
 
 __all__ = [
+    "StatedAdjustment",
+    "normalize_stated_adjustments",
     "AdjustmentAuthorityError",
     "AdjustmentSetAuthority",
     "HostTemporalRole",
