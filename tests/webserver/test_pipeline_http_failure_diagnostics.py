@@ -9,6 +9,62 @@ import pytest
 from easyicu.webserver import agent_pipeline_runs
 
 
+@pytest.mark.parametrize("cause_code", [
+    "RUN_PROVIDER_ATTEMPT_LIMIT", "BATCH_PROVIDER_ATTEMPT_LIMIT",
+    "RUN_TOKEN_LIMIT", "BATCH_TOKEN_LIMIT", "BATCH_COST_LIMIT",
+    "TASK_WALL_CLOCK_EXHAUSTED",
+])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_provider_hard_stop_has_its_own_run_code_and_gate_cause(
+    tmp_path, cause_code, wrapped,
+):
+    from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopExceeded
+    from easyicu.webserver.pi_copilot.projections import gate_detail_projection
+
+    stop = ProviderHardStopExceeded(code=cause_code, detail="private synthetic detail")
+    # The retry which exhausted the budget can retain an earlier timeout.
+    stop.__context__ = TimeoutError("earlier synthetic failure")
+    failure = RuntimeError("outer synthetic failure") if wrapped else stop
+    if wrapped:
+        failure.__cause__ = stop
+    code = agent_pipeline_runs._pipeline_failure_code(failure)
+    assert code == "research_pipeline_provider_budget_exhausted"
+    assert agent_pipeline_runs._pipeline_failure_code(
+        failure, budget_mode="planner_canary",
+    ) == code
+    agent_pipeline_runs._record_pipeline_failure(
+        wrapper_dir=tmp_path, study={"id": "synthetic-study"}, provider={},
+        exc=failure, code=code, execution_retry_id=None,
+    )
+    gate = json.loads((tmp_path / "quality_gate.json").read_text())["gate"]
+    assert gate["reason"] == code
+    assert gate_detail_projection(gate["detail"]) == {
+        "gate_detail_code": "provider_budget_exhausted",
+        "gate_detail_cause_code": cause_code,
+        "gate_missing_concepts": [],
+    }
+    assert "private synthetic detail" not in json.dumps(gate)
+
+
+def test_an_error_body_cannot_claim_to_be_a_provider_hard_stop():
+    assert agent_pipeline_runs._pipeline_failure_code(
+        RuntimeError("ProviderHardStopExceeded RUN_TOKEN_LIMIT"),
+    ) == "research_pipeline_execution_failed"
+
+
+def test_an_unknown_hard_stop_code_cannot_leak_into_the_gate_detail():
+    from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopExceeded
+
+    typed = agent_pipeline_runs._safe_pipeline_typed_failure(
+        ProviderHardStopExceeded(code="private-synthetic-value", detail="private detail"),
+    )
+    assert typed == {
+        "owner": "easyicu.providers.hard_stop_v1",
+        "reason_code": "provider_budget_exhausted",
+        "cause_code": "PROVIDER_HARD_STOP_EXCEEDED",
+    }
+
+
 def test_outer_http_failure_takes_precedence_over_contextual_compiler_failure():
     from easyicu.research_agent.planning.progressive_contract import (
         ProgressivePlanCompileError,

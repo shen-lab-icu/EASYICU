@@ -660,6 +660,10 @@
           'An analysis step failed while running.',
           '有一个分析步骤在运行中失败了。',
         ),
+        research_pipeline_provider_budget_exhausted: tr(
+          'The run used up its model budget before it finished, and repeated connection failures count against that budget; try again once the connection is stable.',
+          '本次运行在完成前用完了模型预算，反复连接失败也会计入预算，请在连接稳定后重试。',
+        ),
         research_pipeline_provider_recovery_exhausted: tr(
           'Automatic provider recovery reached its limit; the verified checkpoint is preserved.',
           '模型服务自动恢复已达到上限，已保留验证通过的检查点。',
