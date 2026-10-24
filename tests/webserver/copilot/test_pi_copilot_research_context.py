@@ -1131,7 +1131,7 @@ def _large_diagnosis_study(count: int) -> dict[str, Any]:
     return study
 
 
-@pytest.mark.parametrize("count", [0, 12, 18, 28, 64])
+@pytest.mark.parametrize("count", [0, 12, 18, 28])
 def test_web_data_constraints_never_silently_drop_a_constraint_key(
     count: int,
 ) -> None:
@@ -1162,19 +1162,15 @@ def test_web_data_constraints_never_silently_drop_a_constraint_key(
     assert "repeat" in str(validated.data_constraints).casefold()
 
 
-def test_web_data_constraints_elide_list_items_visibly() -> None:
-    """Anything actually dropped is dropped inside the structure, in the open."""
+def test_web_data_constraints_refuse_list_elision() -> None:
+    """Even a visible omission changes the researcher's stated population."""
 
-    compiled = agent_pipeline_runs._research_user_preferences(
-        _large_diagnosis_study(64)
-    )
-    constraints = json.loads(str(compiled["data_constraints"]))
-    included = constraints["cohort"]["include_diagnoses"]
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as excinfo:
+        agent_pipeline_runs._research_user_preferences(_large_diagnosis_study(64))
 
-    assert len(included) < 64
-    assert included[-1] == f"[{64 - (len(included) - 1)} omitted]"
-    # The marker must not be able to satisfy a gate's text scan on its own.
-    assert "readmission" not in included[-1].casefold()
+    assert excinfo.value.code == "research_pipeline_data_constraints_too_large"
+    assert excinfo.value.details["limit_chars"] == 4_096
+    assert excinfo.value.details["serialized_chars"] > 4_096
 
 
 def test_web_oversized_data_constraints_fail_closed_instead_of_truncating() -> None:
@@ -1198,7 +1194,7 @@ def test_web_oversized_data_constraints_fail_closed_instead_of_truncating() -> N
         agent_pipeline_runs._research_user_preferences(study)
 
     assert excinfo.value.code == "research_pipeline_data_constraints_too_large"
-    assert excinfo.value.details["section_chars"]["cohort"] > 2_400
+    assert excinfo.value.details["section_chars"]["cohort"] > 4_096
 
 
 def test_web_study_context_preserves_an_explicit_empty_adjustment_set() -> None:
