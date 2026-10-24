@@ -2748,7 +2748,7 @@ class ResearchAgentPipeline:
                 self._provider_hard_stop, prompt_version, emit_progress,
             )
         plan = generation.plan
-        self._services.validate_plan_revision(plan=plan, context=agent_context)
+        self._services.validate_plan_revision(plan=plan, context=agent_context, before_runtime_binding=self._scientific_runtime_authorities)
         reused_prior_plan = generation.reused_prior_plan
         reused_plan_path = generation.reused_plan_path
         migrated_plan_path = generation.migrated_plan_path
@@ -2776,7 +2776,6 @@ class ResearchAgentPipeline:
                 long_trajectory_bound=long_trajectory_bound,
                 findings=findings,
             )
-            self._services.validate_plan_revision(plan=plan, context=agent_context)
         # One boundary for every plan source: LLM, deterministic skill and
         # digest-verified resume. Planner parsing also binds early for prompt
         # diagnostics, but execution authority cannot depend on which producer
@@ -2808,6 +2807,7 @@ class ResearchAgentPipeline:
             )
             findings.extend(scientific_runtime_compile_findings)
             plan = _figure_plan.apply_runtime_bound_figure_contracts(plan, findings)
+        self._services.validate_plan_revision(plan=plan, context=agent_context)
         # The endpoint half of the same declaration, checked for every plan
         # rather than only inside the cohort branch above: a family can require
         # a typed endpoint whether or not it also defines an analysis cohort.

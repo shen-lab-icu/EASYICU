@@ -200,7 +200,7 @@
       if (error.code === 'research_pipeline_execution_runtime_unavailable') {
         return tr('The container runtime that executes analysis code is not running. Start it (Docker Desktop, or "colima start") and run again.', '执行分析代码的容器运行环境未启动。请先启动它（Docker Desktop，或 "colima start"），然后重新运行。');
       }
-      if (error.code === 'research_pipeline_plan_step_needs_sandbox') {
+      if (error.code === 'research_pipeline_plan_step_needs_sandbox' || error.code === 'revision_added_unrequested_analysis') {
         return runFailureText(error.code);
       }
       if (error.code === 'requested_concept_no_data') {
@@ -766,8 +766,8 @@
           '计划与 EasyICU 为这项研究设定的分析设计不一致（例如 24 小时 landmark、暴露的编码方式或模型组合），因此在任何分析运行前停止。请重新生成计划；如果再次停在这里，请保留运行记录供排查。',
         ),
         revision_added_unrequested_analysis: tr(
-          'The revised plan added an analysis that neither your question nor the review asked for, so the previous plan was kept.',
-          '修订后的计划多加了一项你的问题和审查都没有要求的分析，已保留修订前的计划。',
+          'The revised plan added an analysis that neither your question nor the review asked for, so the previous plan was kept. Review it, then generate a revised candidate if that button is shown; if not, or if it stops again, send the failure receipt to support.',
+          '修订后的计划多加了一项你的问题和审查都没有要求的分析，已保留修订前的计划。请先审阅这份计划；如有「生成修订版候选计划」按钮可点击重试，若没有或再次停止，请把失败回执发给支持人员。',
         ),
         research_pipeline_execution_failed: tr(
           'An analysis step failed while running.',

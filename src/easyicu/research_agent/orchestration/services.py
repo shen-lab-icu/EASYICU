@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Tuple
 
 if TYPE_CHECKING:
     from .runtime_revision import ExecutionRuntimeRevision
+    from .scientific_runtime import ScientificRuntimeAuthorities
 
 
 @dataclass(frozen=True)
@@ -54,8 +55,22 @@ class PipelineServices:
             )
         return services or cls(**supplied), remaining
 
-    def validate_plan_revision(self, *, plan: Any, context: Any) -> None:
-        """Apply the host revision guard, when this run repairs a reviewed plan."""
+    def validate_plan_revision(
+        self, *, plan: Any, context: Any,
+        before_runtime_binding: Optional[ScientificRuntimeAuthorities] = None,
+    ) -> None:
+        """Compare repairs at the same stage as the reviewed source plan.
+
+        Signed runtime owners compile generic Planner methods and their figure
+        bindings. Defer their draft check until that compilation is complete;
+        the final call must still check the entire plan before persistence.
+        Ordinary drafts retain their early scope check.
+        """
+        if before_runtime_binding is not None and (
+            before_runtime_binding.current_case is not None
+            or before_runtime_binding.trajectory is not None
+        ):
+            return
         if self.plan_revision_guard is not None:
             self.plan_revision_guard.validate_plan(plan=plan, context=context)
 

@@ -105,6 +105,121 @@ test('a revision the launcher refuses for a non-plan blocker is not offered', ()
   }).nonApprovable, true);
 });
 
+test('a blocked revision explains the next step without promising an automatic repair', () => {
+  for (const language of ['en', 'zh']) {
+    const workflow = {
+      next_action_code: 'plan_scientific_changes_required',
+      plan_review_summary: {
+        run_id: 'retained-candidate', authorization_questions: [],
+        remediation_buckets: {
+          agent_plan_revision: ['FIGURE_ROLE_COVERAGE_INCOMPLETE'],
+          runtime_capability: ['REPEATED_STAY_IDENTITY_UNAVAILABLE'],
+        },
+        automatic_revision_blockers: ['REPEATED_STAY_IDENTITY_UNAVAILABLE'],
+      },
+      latest_attempt_failure: {
+        run_id: 'failed-preparation', candidate_run_id: 'retained-candidate',
+        reason: 'preparation_failed', checkpoint_resume_available: false,
+      },
+    };
+    const owner = confirmationOwner(workflow, language);
+    const before = JSON.stringify(workflow);
+    const html = owner.workflowConfirmationHtml();
+    assert.equal(owner.workflowConfirmation().nonApprovable, true);
+    assert.doesNotMatch(html, /data-gpi-confirm-action|data-gpi-confirm-edit/);
+    assert.doesNotMatch(html, /will revise the candidate plan|将在分析前修订候选计划/);
+    assert.doesNotMatch(html, /use the action below to recover|请使用下方操作恢复/);
+    assert.match(html, language === 'en'
+      ? /Open the review details.*conversation.*support/
+      : /审阅详情.*对话.*支持人员/);
+    assert.match(html, /retained-candidate:scientific_plan_review.json/);
+    assert.match(html, /failed-preparation:source_run_manifest.json/);
+    assert.equal(JSON.stringify(workflow), before);
+  }
+});
+
+test('an actionable revision keeps its revision button and recovery guidance', () => {
+  const workflow = {
+    next_action_code: 'plan_scientific_changes_required',
+    plan_review_summary: {
+      run_id: 'retained-candidate', authorization_questions: [],
+      remediation_buckets: { agent_plan_revision: ['FIGURE_ROLE_COVERAGE_INCOMPLETE'] },
+      automatic_revision_blockers: [],
+    },
+    latest_attempt_failure: {
+      run_id: 'failed-preparation', candidate_run_id: 'retained-candidate',
+      reason: 'preparation_failed', checkpoint_resume_available: false,
+    },
+  };
+  for (const language of ['en', 'zh']) {
+    const owner = confirmationOwner(workflow, language);
+    const html = owner.workflowConfirmationHtml();
+    assert.equal(owner.workflowConfirmation().nonApprovable, false);
+    assert.match(html, /data-gpi-confirm-action/);
+    assert.match(html, language === 'en' ? /use the action below to recover/ : /请使用下方操作恢复/);
+    assert.doesNotMatch(html, /contact support|请联系支持人员/);
+  }
+});
+
+test('a review without an executable repair explains how to resolve its evidence gap', () => {
+  for (const language of ['en', 'zh']) {
+    const owner = confirmationOwner({
+      next_action_code: 'plan_scientific_changes_required',
+      plan_review_summary: {
+        run_id: 'evidence-review', authorization_questions: [],
+        remediation_buckets: { external_evidence: ['LITERATURE_SUPPORT_INSUFFICIENT'] },
+      },
+    }, language);
+    const html = owner.workflowConfirmationHtml();
+    assert.equal(owner.workflowConfirmation().nonApprovable, true);
+    assert.doesNotMatch(html, /data-gpi-confirm-action|will revise the candidate plan|将在分析前修订候选计划/);
+    assert.match(html, language === 'en' ? /send the review and failure receipt to support/ : /发给支持人员/);
+    assert.match(html, /evidence-review:scientific_plan_review.json/);
+  }
+});
+
+test('a user decision keeps its answer action after a preparation failure', () => {
+  for (const language of ['en', 'zh']) {
+    const owner = confirmationOwner({
+      next_action_code: 'plan_scientific_changes_required',
+      plan_review_summary: {
+        run_id: 'endpoint-review',
+        authorization_questions: [{ code: 'OUTCOME_DEFINITION_UNRESOLVED' }],
+        remediation_buckets: { agent_plan_revision: ['FIGURE_ROLE_COVERAGE_INCOMPLETE'] },
+      },
+      latest_attempt_failure: {
+        run_id: 'failed-preparation', candidate_run_id: 'endpoint-review',
+        reason: 'preparation_failed', checkpoint_resume_available: false,
+      },
+    }, language);
+    const html = owner.workflowConfirmationHtml();
+    assert.match(html, /data-gpi-confirm-edit/);
+    assert.match(html, language === 'en' ? /use the action below to recover/ : /请使用下方操作恢复/);
+    assert.doesNotMatch(html, /contact support|请联系支持人员/);
+  }
+});
+
+test('a refused scope expansion tells the user how to request a revision', () => {
+  const context = { window: { EU_HTML: { esc: String } } };
+  vm.createContext(context);
+  for (const name of ['modules', 'error-text']) {
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname,
+      `../../src/easyicu/webserver/static/js/screens-guided-pi-${name}.js`), 'utf8'), context);
+  }
+  for (const language of ['en', 'zh']) {
+    const errors = context.window.EasyICU.guidedPi.require('errorText').create({
+      tr: (en, zh) => language === 'zh' ? zh : en, staticPreview: () => false,
+    });
+    const code = 'revision_added_unrequested_analysis';
+    const text = errors.runFailureText(code);
+    assert.equal(errors.errorText({ code }), text);
+    assert.match(text, language === 'en' ? /previous plan was kept/ : /已保留修订前的计划/);
+    assert.match(text, language === 'en' ? /review.*generate a revised candidate/i : /审阅.*生成修订版候选计划/);
+    assert.match(text, language === 'en' ? /if that button is shown/ : /如有.*若没有/);
+    assert.match(text, language === 'en' ? /failure receipt.*support/ : /失败回执.*支持人员/);
+  }
+});
+
 test('missing plan authority never falls back to the latest session run', () => {
   const card = confirmation({ remediation_buckets: {} });
   for (const resource of card.reviewResources) assert.equal(resource.run_id, '');
