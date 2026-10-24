@@ -32,6 +32,9 @@ from typing import Any, Mapping, Optional
 import pyarrow.parquet as pq
 
 from easyicu.research_agent.acquisition.first_icu_stay import FirstIcuStayBinding
+from easyicu.research_agent.acquisition.first_icu_stay import (
+    FirstIcuStayPerHospitalizationBinding,
+)
 from easyicu.research_agent.acquisition.patient_grouping import (
     DERIVED_PATIENT_COLUMN,
     DERIVED_STAY_COLUMN,
@@ -526,7 +529,44 @@ def resolve_study_first_icu_stay(
     )
 
 
+def resolve_study_first_icu_stay_per_hospitalization(
+    *, export_path: str | Path, database: str,
+) -> Optional[FirstIcuStayPerHospitalizationBinding]:
+    """Bind eICU's hospital-level ordinal without claiming patient independence."""
+    from easyicu.webserver import raw_source_authority
+
+    try:
+        binding = raw_source_authority.resolve_raw_hospital_source_binding(
+            export_path=export_path, database=database,
+        )
+        if binding is None or not getattr(binding, "first_icu_stay_per_hospitalization_available", False):
+            return None
+        derived = binding.materialize_first_icu_stay_per_hospitalization()
+    except raw_source_authority.RawSourceAuthorityError as exc:
+        raise PatientGroupingAuthorityError(exc.code, str(exc), details=exc.details) from exc
+    table_sha256 = binding.table_sha256["patient"]
+    target = state_paths.state_root() / "private" / "first-icu-stay-per-hospitalization" / (
+        f"{_database(database)}.{table_sha256}.v1.parquet"
+    )
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    digest = _materialize_private_mapping(_serialize_grouping(derived.frame), target=target)
+    return FirstIcuStayPerHospitalizationBinding(
+        coordinate_path=target, coordinate_sha256=digest,
+        authority_coordinates={
+            **dict(derived.receipt),
+            "schema_version": "easyicu.first_icu_stay_per_hospitalization_runtime_authority/1",
+            "authority_ref": f"{binding.authority_ref}/first_icu_stay_per_hospitalization",
+            "database": _database(database),
+            "export_manifest_file": binding.export_manifest_file,
+            "export_manifest_sha256": binding.export_manifest_sha256,
+            "identity_table_sha256": table_sha256,
+            "coordinate_sha256": digest, "provider_visible_values": False,
+        },
+    )
+
+
 __all__ = [
+    "resolve_study_first_icu_stay_per_hospitalization",
     "PatientGroupingAuthorityError",
     "resolve_derived_patient_grouping",
     "resolve_patient_grouping_authority",

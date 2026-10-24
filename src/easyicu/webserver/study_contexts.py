@@ -160,7 +160,7 @@ _COHORT_NUMBER_FIELDS = {
     "cohort_size",
     "source_count",
 }
-_COHORT_BOOL_FIELDS = {"exclude_readmissions", "icd_enabled"}
+_COHORT_BOOL_FIELDS = {"exclude_readmissions", "icd_enabled", "first_icu_stay_per_hospitalization"}
 _COHORT_LIST_FIELDS = {"include_diagnoses", "exclude_diagnoses"}
 # Compatibility projection for callers that display raw StudyContext fields.
 # Scientific scope and invalidation no longer consume this roster; they use

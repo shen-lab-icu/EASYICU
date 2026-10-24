@@ -158,6 +158,12 @@ class FirstIcuStay(_Kept):
     kind: Literal["first_icu_stay"]
 
 
+class FirstIcuStayPerHospitalization(_Kept):
+    """The first ICU stay within each hospitalization, not each patient."""
+
+    kind: Literal["first_icu_stay_per_hospitalization"]
+
+
 class IcuStayHours(_Kept):
     """An ICU length of stay within ``[min_hours, max_hours]``."""
 
@@ -268,6 +274,7 @@ PopulationCriterion = Annotated[
     Union[
         AgeYears,
         FirstIcuStay,
+        FirstIcuStayPerHospitalization,
         IcuStayHours,
         ConditionPresent,
         DiagnosisCodes,
@@ -423,6 +430,7 @@ __all__ = [
     "DiagnosisCodes",
     "EventAbsent",
     "FirstIcuStay",
+    "FirstIcuStayPerHospitalization",
     "IcuStayHours",
     "Measurement",
     "MeasurementOp",

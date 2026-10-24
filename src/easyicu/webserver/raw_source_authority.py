@@ -91,7 +91,7 @@ _REQUIRED_TABLE_COLUMNS = {
 # never needs them, so a source without one must still bind.  The
 # patient-grouping resolver below fails closed instead.
 _OPTIONAL_TABLE_COLUMNS = {
-    "patient": frozenset({"unitdischargeoffset", "uniquepid"}),
+    "patient": frozenset({"unitdischargeoffset", "uniquepid", "patienthealthsystemstayid", "unitvisitnumber", "unittype"}),
     "icustays": frozenset({"subject_id"}),
 }
 # Which official table carries each family's stay-to-patient identity, and the
@@ -644,6 +644,32 @@ class RawHospitalSourceBinding:
             profile,
             database=self.database,
         )
+
+    @property
+    def first_icu_stay_per_hospitalization_available(self) -> bool:
+        return self.family == "eicu" and {
+            "patienthealthsystemstayid", "unitvisitnumber", "unittype",
+        } <= set(self.table_columns.get("patient", ()))
+
+    def materialize_first_icu_stay_per_hospitalization(self):
+        from easyicu.research_agent.acquisition.first_icu_stay import (
+            FirstIcuStayPerHospitalizationError,
+            derive_first_icu_stay_per_hospitalization,
+        )
+
+        if not self.first_icu_stay_per_hospitalization_available:
+            raise RawSourceAuthorityError(
+                "first_icu_stay_per_hospitalization_authority_unavailable",
+                "This source cannot identify the first ICU stay within each hospitalization.",
+                details={"database": self.database},
+            )
+        try:
+            return derive_first_icu_stay_per_hospitalization(self._table("patient"))
+        except FirstIcuStayPerHospitalizationError as exc:
+            raise RawSourceAuthorityError(
+                "first_icu_stay_per_hospitalization_coordinate_invalid", str(exc),
+                details={"database": self.database},
+            ) from exc
 
     def _table(self, name: str) -> pd.DataFrame:
         return _read_verified_table(

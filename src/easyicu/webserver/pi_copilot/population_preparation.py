@@ -17,6 +17,7 @@ from easyicu.research_agent.planning.population_review import sealed_population
 from easyicu.research_agent.planning.population_spec import (
     AgeYears,
     FirstIcuStay,
+    FirstIcuStayPerHospitalization,
     IcuStayHours,
     PopulationSpec,
     STUDY_WORDING_SOURCES,
@@ -32,9 +33,18 @@ def _admission_patch(criterion: Any, cohort: dict, time_zero: Any) -> str | None
         return "population_preparation_kind_unsupported"
     current = primary_cohort.normalize_execution_cohort(cohort)
     if isinstance(criterion, FirstIcuStay):
+        if current["first_icu_stay_per_hospitalization"]:
+            return "population_preparation_first_stay_scope_conflict"
         if "exclude_readmissions" in cohort and not current["exclude_readmissions"]:
             return "population_preparation_all_stays_conflict"
         cohort["exclude_readmissions"] = True
+        return None
+    if isinstance(criterion, FirstIcuStayPerHospitalization):
+        if current["exclude_readmissions"]:
+            return "population_preparation_first_stay_scope_conflict"
+        if "first_icu_stay_per_hospitalization" in cohort and not current["first_icu_stay_per_hospitalization"]:
+            return "population_preparation_all_stays_conflict"
+        cohort["first_icu_stay_per_hospitalization"] = True
         return None
     if isinstance(criterion, AgeYears):
         bounds = (

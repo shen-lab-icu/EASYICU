@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from types import MappingProxyType
@@ -46,7 +47,12 @@ from ..cohort.schema import (
     predicates_read_over_the_whole_stay,
     predicates_read_through_another_window,
 )
-from ..intake.materialized_metadata import FIRST_ICU_STAY_RESTRICTION_SCHEMA
+from ..intake.materialized_metadata import (
+    FIRST_ICU_STAY_RESTRICTION_SCHEMA,
+    FIRST_ICU_STAY_PER_HOSPITALIZATION_RESTRICTION_SCHEMA,
+    MaterializedMetadataError,
+    first_icu_stay_per_hospitalization_policy_projection,
+)
 from ..research_context.concept_population import (
     ConceptCohortWindowError,
     context_data_constraints,
@@ -95,6 +101,7 @@ from .population_spec import (
     DiagnosisCodes,
     EventAbsent,
     FirstIcuStay,
+    FirstIcuStayPerHospitalization,
     IcuStayHours,
     Measurement,
     NotTyped,
@@ -110,7 +117,8 @@ Disposition = Literal[
     "applied_by_source", "applied_by_plan", "requires_extraction", "not_applied"
 ]
 ProofKind = Literal[
-    "export_report_step", "recorded_study_contract", "host_first_icu_stay"
+    "export_report_step", "recorded_study_contract", "host_first_icu_stay",
+    "host_first_icu_stay_per_hospitalization",
 ]
 Side = Literal["inclusion", "exclusion"]
 
@@ -135,6 +143,7 @@ REQUIRES_EXTRACTION_REASONS = (
     "population_concept_not_in_export",
     "population_diagnosis_codes_need_extraction",
     "population_first_icu_stay_not_restricted",
+    "population_first_icu_stay_per_hospitalization_not_restricted",
 )
 #: Why a plan cannot be approved while an inclusion is ``blocking``, one code
 #: per remedy (population spec design 3.3 and 3.5): an extraction of the
@@ -486,6 +495,7 @@ class _Sources:
     executed: Optional[Mapping[str, Any]] = None
     #: The host's receipt for restricting the input to first ICU stays.
     first_stay_receipt: bool = False
+    first_hospitalization_receipt: Optional[Mapping[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -534,6 +544,24 @@ def _read_sources(context: ResearchContext) -> _Sources:
     record = context_data_constraints(context).get("source_selection")
     executed = record.get(_EXECUTED_COHORT) if isinstance(record, Mapping) else None
     receipt = context.cohort.provenance.get("first_icu_stay_restriction")
+    per_hospitalization = context.cohort.provenance.get("first_icu_stay_per_hospitalization_restriction")
+    if receipt is not None and per_hospitalization is not None:
+        # Conflicting host scopes prove neither restriction. Do not fall back
+        # to export predicates or a previously recorded cohort either.
+        return _Sources(steps=(), executed=None, first_stay_receipt=False,
+                        first_hospitalization_receipt=None)
+    verified_hospitalization_receipt = None
+    if (
+        isinstance(per_hospitalization, Mapping)
+        and per_hospitalization.get("schema_version")
+        == FIRST_ICU_STAY_PER_HOSPITALIZATION_RESTRICTION_SCHEMA
+        and re.fullmatch(r"[0-9a-f]{64}", str(per_hospitalization.get("coordinate_sha256") or ""))
+    ):
+        try:
+            policy = first_icu_stay_per_hospitalization_policy_projection(per_hospitalization)
+            verified_hospitalization_receipt = {**per_hospitalization, **policy}
+        except MaterializedMetadataError:
+            pass
     return _Sources(
         steps=counts.steps if counts is not None else (),
         executed=executed if recorded and isinstance(executed, Mapping) else None,
@@ -541,6 +569,7 @@ def _read_sources(context: ResearchContext) -> _Sources:
             isinstance(receipt, Mapping)
             and receipt.get("schema_version") == FIRST_ICU_STAY_RESTRICTION_SCHEMA
         ),
+        first_hospitalization_receipt=verified_hospitalization_receipt,
     )
 
 
@@ -583,6 +612,13 @@ def _compile(criterion: PopulationCriterion, reading: _Input) -> CompiledCriteri
                 "population_first_icu_stay_not_restricted",
                 "Neither the host nor the export records restricting this input to "
                 "each patient's first ICU stay.",
+            )
+        if isinstance(criterion, FirstIcuStayPerHospitalization):
+            raise _NotApplied(
+                "population_first_icu_stay_per_hospitalization_not_restricted",
+                "No verified host receipt restricts this input to the first ICU "
+                "stay within each hospitalization. A per-patient first-stay "
+                "receipt cannot establish this different population.",
             )
         side, predicates, note = _plan_predicates(criterion, reading)
     except _NotApplied as found:
@@ -1006,6 +1042,14 @@ def _source_proof(
         )
     if isinstance(criterion, FirstIcuStay):
         return _first_stay_proof(sources)
+    if isinstance(criterion, FirstIcuStayPerHospitalization):
+        if sources.first_hospitalization_receipt is not None:
+            return SourceProof(
+                kind="host_first_icu_stay_per_hospitalization",
+                record_ref="cohort.provenance.first_icu_stay_per_hospitalization_restriction",
+                parameters=dict(sources.first_hospitalization_receipt),
+            )
+        return None
     if isinstance(criterion, DiagnosisCodes):
         return _diagnosis_proof(criterion, sources)
     return None

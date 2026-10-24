@@ -315,12 +315,23 @@ def export_selection_counts(context: ResearchContext) -> SelectionCountsReading:
     except _Unchained:
         return SelectionCountsReading(None, cap, "counts_do_not_chain")
     exported = steps[-1].n_remaining if steps else source_total
-    restriction = context.cohort.provenance.get("first_icu_stay_restriction")
-    if restriction is not None:
-        host = _host_restriction_step(restriction)
+    if all(context.cohort.provenance.get(key) is not None for key in (
+        "first_icu_stay_restriction", "first_icu_stay_per_hospitalization_restriction",
+    )):
+        # These scopes are mutually exclusive, even when corrupt receipts
+        # happen to form an arithmetically consistent chain.
+        return SelectionCountsReading(None, cap, "host_restriction_unreadable")
+    for key, reader in (
+        ("first_icu_stay_restriction", _host_restriction_step),
+        ("first_icu_stay_per_hospitalization_restriction", _host_hospitalization_restriction_step),
+    ):
+        restriction = context.cohort.provenance.get(key)
+        if restriction is None:
+            continue
+        host = reader(restriction)
         if host is None:
             return SelectionCountsReading(None, cap, "host_restriction_unreadable")
-        if host.n_before != exported:
+        if host.n_before != (steps[-1].n_remaining if steps else exported):
             return SelectionCountsReading(
                 None, cap, "counts_do_not_reach_the_analysis_input"
             )
@@ -504,6 +515,42 @@ def _host_restriction_step(raw: Any) -> Optional[SelectionStep]:
         n_before=before,
         n_excluded=removed,
         n_remaining=after,
+    )
+
+
+def _host_hospitalization_restriction_step(raw: Any) -> Optional[SelectionStep]:
+    """Keep the per-admission exclusion and unknown-eligibility counts distinct."""
+
+    from ..intake.materialized_metadata import FIRST_ICU_STAY_PER_HOSPITALIZATION_RESTRICTION_SCHEMA
+
+    if not isinstance(raw, Mapping) or raw.get("schema_version") != FIRST_ICU_STAY_PER_HOSPITALIZATION_RESTRICTION_SCHEMA:
+        return None
+    before, after, non_first, non_icu, unknown = (
+        _count(raw.get(name)) for name in (
+            "stays_before", "stays_after", "non_first_icu_stays_removed",
+            "non_icu_stays_removed", "unknown_eligibility_stays_removed",
+        )
+    )
+    reasons = raw.get("excluded_reason_counts")
+    if (
+        any(value is None for value in (before, after, non_first, non_icu, unknown))
+        or before - after != non_first + non_icu + unknown
+        or not isinstance(reasons, Mapping)
+        or any(_count(value) is None for value in reasons.values())
+        or sum(reasons.values()) != non_first + non_icu + unknown
+        or reasons.get("non_first_icu_stay", 0) != non_first
+        or reasons.get("non_icu_unit", 0) != non_icu
+    ):
+        return None
+    return SelectionStep(
+        stage="host", criterion="first_icu_stay_per_hospitalization_restriction",
+        parameters={
+            "non_first_icu_stays_removed": non_first,
+            "non_icu_stays_removed": non_icu,
+            "unknown_eligibility_stays_removed": unknown,
+            "excluded_reason_counts": dict(reasons),
+        },
+        n_before=before, n_excluded=non_first + non_icu + unknown, n_remaining=after,
     )
 
 

@@ -60,6 +60,7 @@ ADMISSION_ELIGIBILITY_FIELDS: Tuple[str, ...] = (
     "age_min",
     "age_max",
     "min_icu_los_hours",
+    "first_icu_stay_per_hospitalization",
     "exclude_readmissions",
 )
 DIAGNOSIS_ELIGIBILITY_FIELDS: Tuple[str, ...] = (
@@ -188,11 +189,16 @@ def normalize_execution_cohort(cohort: Any) -> Dict[str, Any]:
             raw.get("exclude_readmissions"),
             default=preset == "adult_first",
         )
+        first_per_hospitalization = parse_bool(
+            raw.get("first_icu_stay_per_hospitalization"), default=False,
+        )
     except ValueError as exc:
         raise PrimaryCohortContractError(
             "invalid_cohort_boolean",
-            {"fields": ["icd_enabled", "exclude_readmissions"]},
+            {"fields": ["icd_enabled", "exclude_readmissions", "first_icu_stay_per_hospitalization"]},
         ) from exc
+    if exclude_readmissions and first_per_hospitalization:
+        raise PrimaryCohortContractError("conflicting_first_icu_stay_scope")
     if not icd_enabled:
         include = ()
         exclude = ()
@@ -225,6 +231,7 @@ def normalize_execution_cohort(cohort: Any) -> Dict[str, Any]:
         "min_icu_los_hours": min_los,
         "observation_window_hours": observation_window,
         "exclude_readmissions": exclude_readmissions,
+        "first_icu_stay_per_hospitalization": first_per_hospitalization,
         "icd_enabled": icd_enabled,
         "icd_include": list(include),
         "icd_exclude": list(exclude),
@@ -306,7 +313,9 @@ class NormalizedPrimaryCohortScope:
             fields.append("admission_eligibility.maximum_age_years")
         if int(admission.get("minimum_icu_duration_hours") or 0) > 0:
             fields.append("admission_eligibility.minimum_icu_duration_hours")
-        if admission.get("repeated_admission_policy") == "first_icu_admission_only":
+        if admission.get("repeated_admission_policy") in {
+            "first_icu_admission_only", "first_icu_stay_per_hospitalization",
+        }:
             fields.append("admission_eligibility.repeated_admission_policy")
         diagnosis = self.diagnosis_eligibility
         if diagnosis.get("enabled"):
@@ -343,6 +352,8 @@ def normalize_primary_cohort_scope(
     repeated_policy = (
         "first_icu_admission_only"
         if execution["exclude_readmissions"]
+        else "first_icu_stay_per_hospitalization"
+        if execution["first_icu_stay_per_hospitalization"]
         else "all_icu_admissions"
     )
     admission = {
@@ -380,7 +391,7 @@ def normalize_primary_cohort_scope(
         or admission["minimum_age_years"] > 0
         or admission["maximum_age_years"] < 100
         or admission["minimum_icu_duration_hours"] > 0
-        or repeated_policy == "first_icu_admission_only"
+        or repeated_policy != "all_icu_admissions"
         or diagnosis["enabled"]
     )
     return NormalizedPrimaryCohortScope(
@@ -407,6 +418,12 @@ def first_icu_stay_only(cohort: Any) -> bool:
         return raw.get("exclude_readmissions") is True
 
 
+def first_icu_stay_per_hospitalization_only(cohort: Any) -> bool:
+    """Whether a separately declared host restriction keeps one stay per admission."""
+
+    return bool(normalize_execution_cohort(cohort)["first_icu_stay_per_hospitalization"])
+
+
 def planner_selectable_cohort(cohort: Any) -> Dict[str, Any]:
     """The cohort a Planner still selects rows from, after host restrictions.
 
@@ -418,6 +435,8 @@ def planner_selectable_cohort(cohort: Any) -> Dict[str, Any]:
     raw = dict(cohort) if isinstance(cohort, Mapping) else {}
     # Explicit, because a legacy ``adult_first`` preset implies it when absent.
     raw["exclude_readmissions"] = False
+    if "first_icu_stay_per_hospitalization" in raw:
+        raw["first_icu_stay_per_hospitalization"] = False
     return raw
 
 
@@ -478,6 +497,7 @@ __all__ = [
     "normalize_preset",
     "normalize_primary_cohort_scope",
     "first_icu_stay_only",
+    "first_icu_stay_per_hospitalization_only",
     "planner_selectable_cohort",
     "planning_selection_mode",
 ]

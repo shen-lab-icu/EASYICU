@@ -58,11 +58,14 @@ from ..contracts.exposure_group_rules import (
 from ..intake.materialized_metadata import (
     EXPOSURE_GROUP_STAGE_PRODUCER,
     FIRST_ICU_STAY_RESTRICTION_SCHEMA,
+    FIRST_ICU_STAY_PER_HOSPITALIZATION_RESTRICTION_SCHEMA,
+    first_icu_stay_per_hospitalization_policy_projection,
     MaterializedMetadataError,
     VerifiedMaterializedCohortAuthority,
     load_verified_materialized_cohort_authority,
     read_verified_materialized_cohort_table,
     sealed_first_icu_stay_restriction,
+    sealed_first_icu_stay_per_hospitalization_restriction,
     verified_cohort_replacement_row_identity,
 )
 from ..intake.materialized_trajectory import (
@@ -313,6 +316,20 @@ def _planning_catalog_provenance(frame: pd.DataFrame) -> Dict[str, Any]:
         projected["first_icu_stay_restriction"] = {
             "schema_version": FIRST_ICU_STAY_RESTRICTION_SCHEMA,
             "coordinate_sha256": first_stay["coordinate_sha256"],
+        }
+    per_hospitalization = authority.get("first_icu_stay_per_hospitalization_restriction")
+    if per_hospitalization is not None:
+        if (
+            not isinstance(per_hospitalization, dict)
+            or per_hospitalization.get("schema_version") != FIRST_ICU_STAY_PER_HOSPITALIZATION_RESTRICTION_SCHEMA
+            or re.fullmatch(r"[0-9a-f]{64}", str(per_hospitalization.get("coordinate_sha256") or "")) is None
+            or per_hospitalization.get("provider_visible_values") is not False
+        ):
+            raise MaterializedMetadataError("metadata-only first ICU stay per hospitalization restriction is invalid")
+        projected["first_icu_stay_per_hospitalization_restriction"] = {
+            "schema_version": FIRST_ICU_STAY_PER_HOSPITALIZATION_RESTRICTION_SCHEMA,
+            "coordinate_sha256": per_hospitalization["coordinate_sha256"],
+            **first_icu_stay_per_hospitalization_policy_projection(per_hospitalization),
         }
     replacement = authority.get("replacement_row_identity")
     projected.update(_planning_grouping_status(authority, bound=replacement is not None))
@@ -1092,6 +1109,10 @@ def build_research_context(
         if legacy_materialization_provenance is not None
         else None
     )
+    sealed_first_per_hospitalization = (
+        sealed_first_icu_stay_per_hospitalization_restriction(verified_cohort, cohort_path=cohort_path_obj)
+        if verified_cohort is not None else None
+    )
     replacement_row_identity = (
         legacy_materialization_provenance.get("replacement_row_identity")
         if legacy_materialization_provenance is not None
@@ -1138,6 +1159,10 @@ def build_research_context(
                 {"first_icu_stay_restriction": sealed_first_stay}
                 if sealed_first_stay is not None
                 else {}
+            ),
+            **(
+                {"first_icu_stay_per_hospitalization_restriction": sealed_first_per_hospitalization}
+                if sealed_first_per_hospitalization is not None else {}
             ),
             "inclusion_criteria": list(inclusion_criteria or []),
             "exclusion_criteria": list(exclusion_criteria or []),
