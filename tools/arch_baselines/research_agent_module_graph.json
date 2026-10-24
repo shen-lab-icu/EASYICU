@@ -9976,6 +9976,10 @@
       "easyicu.research_agent.orchestration.runtime_revision"
     ],
     [
+      "easyicu.research_agent.orchestration.services",
+      "easyicu.research_agent.orchestration.scientific_runtime"
+    ],
+    [
       "easyicu.research_agent.orchestration.step_selector",
       "easyicu.research_agent.schema"
     ],
@@ -15884,7 +15888,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3963,
+    "edge_count": 3964,
     "largest_scc_size": 0,
     "module_count": 865,
     "package_count": 36,
