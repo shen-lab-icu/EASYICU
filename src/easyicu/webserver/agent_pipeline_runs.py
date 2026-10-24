@@ -5084,6 +5084,7 @@ class _CandidatePlanMaterializationAuthority:
     # The accepted steps that cannot run without patient groups
     # (``contracts.patient_grouping_need.steps_needing_patient_groups``).
     patient_grouping_steps: tuple[str, ...] = ()
+    primary_cohort_definition: Optional[Mapping[str, Any]] = None
 
 
 def _candidate_analysis_inputs(
@@ -5495,6 +5496,7 @@ def _load_candidate_plan_materialization_authority(
         outcome_concepts=source_outcomes,
         contract=_candidate_plan_contract(review=parsed_review, plan=plan),
         primary_cohort_selection_mode=candidate_cohort.selection_mode,
+        primary_cohort_definition=candidate_cohort.to_dict(),
         primary_exposure_aggregation=aggregation or None,
         baseline_requirements=baseline_requirements,
         population_requirements=population_requirements,
@@ -7119,6 +7121,16 @@ def make_research_pipeline_run_runner(
                 required_cohort_mode = prepared_revision.required_primary_cohort_selection_mode
             elif candidate_authority is not None:
                 required_cohort_mode = candidate_authority.primary_cohort_selection_mode
+                if candidate_authority.primary_cohort_definition is not None:
+                    from .research_launch_population import prepared_candidate_selection_mode
+
+                    required_cohort_mode = prepared_candidate_selection_mode(
+                        candidate_definition=candidate_authority.primary_cohort_definition,
+                        required_mode=required_cohort_mode,
+                        source_basis=bound_export_selection_basis(study, export_path),
+                        source_report=bound_export_selection_report(export_path),
+                        database=database,
+                    )
             elif metadata_only_planning:
                 required_cohort_mode = primary_cohort.planning_selection_mode(
                     primary_cohort.planner_selectable_cohort(study.get("cohort"))
