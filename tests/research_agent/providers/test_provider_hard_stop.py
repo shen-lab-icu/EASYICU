@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.support.provider_recovery import _limits
+
 import json
 import sys
 import time
@@ -11,23 +13,6 @@ from types import SimpleNamespace
 import pytest
 
 
-def _limits(**overrides):
-    from easyicu.research_agent.authority.provider_hard_stop import (
-        ProviderHardStopLimits,
-    )
-
-    values = {
-        "max_provider_attempts_per_run": 3,
-        "max_provider_attempts_per_batch": 6,
-        "max_total_tokens_per_run": 1_000_000,
-        "max_total_tokens_per_batch": 2_000_000,
-        "max_estimated_cost_usd_per_batch": 10.0,
-        "max_wall_clock_seconds_per_task": 60.0,
-        "input_cost_usd_per_million_tokens": 1.0,
-        "output_cost_usd_per_million_tokens": 2.0,
-    }
-    values.update(overrides)
-    return ProviderHardStopLimits(**values)
 
 
 def _ledger(tmp_path, *, task_ids=("E1",), limits=None):
