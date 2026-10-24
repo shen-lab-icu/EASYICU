@@ -42,9 +42,18 @@ def node_app(root: Path) -> Path:
             "examples/unused.js": "// synthetic example\n",
         })
     write_files(root / "node_modules/@earendil-works/pi-ai", {
-        "index.js": 'export const loadProvider = () => import("./providers/openai-completions.js");\n',
+        "index.js": 'export const loadProvider = () => import("./api/openai-completions.js");\n',
+        # pi-ai 0.84.1's api/*.lazy.js imports these implementations; lazyApi
+        # reads stream and streamSimple, rather than provider-named exports.
+        **{f"api/{name}.js": (
+            "export const stream = () => { throw new Error('smoke must not call the API'); };\n"
+            "export const streamSimple = stream;\n"
+        ) for name in (
+            "anthropic-messages", "google-generative-ai", "openai-completions",
+            "openai-responses", "openai-codex-responses",
+        )},
         **{f"providers/{name}.js": "export const synthetic = true;\n" for name in (
-            "anthropic", "google", "openai-completions", "openai-responses", "openai-codex-responses",
+            "anthropic", "google", "openai", "openai-codex",
         )},
     })
     return root

@@ -180,7 +180,9 @@ def run_command(command, **kwargs):
 
 
 @pytest.mark.parametrize("nested_ai", [False, True])
-@pytest.mark.parametrize("adapter", ["anthropic", "google", "openai-completions", "openai-responses", "openai-codex-responses"])
+@pytest.mark.parametrize("adapter", [
+    "anthropic-messages", "google-generative-ai", "openai-completions", "openai-responses", "openai-codex-responses",
+])
 def test_import_smoke_loads_lazy_providers_in_gateway_and_agent_contexts(tmp_path, nested_ai, adapter):
     common = load_script("build_common")
     app = node_app(tmp_path / "p")
@@ -192,12 +194,44 @@ def test_import_smoke_loads_lazy_providers_in_gateway_and_agent_contexts(tmp_pat
     node = shutil.which("node")
     assert node
     common.check_staged_pi(app, node, run=run_command)
-    write_files(ai, {f"providers/{adapter}.js": "import 'synthetic-missing-peer';\n"})
+    write_files(ai, {f"api/{adapter}.js": "import 'synthetic-missing-peer';\n"})
     # The public entries still load: only importing the lazy adapter catches this.
     run_node(node, "await import('@earendil-works/pi-coding-agent'); await import('@earendil-works/pi-ai');",
              module=True, cwd=app, check=True, timeout=15)
     with pytest.raises(common.StagedPiImportError, match=f"desktop_pi_import_failed:.*{adapter}"):
         common.check_staged_pi(app, node, run=run_command)
+
+
+def test_import_smoke_accepts_pi_ai_runtime_api_layout_and_exports(tmp_path):
+    common = load_script("build_common")
+    app = node_app(tmp_path / "p")
+    ai = app / "node_modules/@earendil-works/pi-ai"
+    assert not (ai / "providers/openai-completions.js").exists()
+    node = shutil.which("node")
+    assert node
+    # The synthetic stream functions throw if invoked: smoke imports adapters
+    # and checks their shape without sending requests or needing credentials.
+    common.check_staged_pi(app, node, run=run_command)
+
+
+@pytest.mark.parametrize("adapter", [
+    "anthropic-messages", "google-generative-ai", "openai-completions", "openai-responses", "openai-codex-responses",
+])
+@pytest.mark.parametrize("missing", ["stream", "streamSimple"])
+@pytest.mark.parametrize("replacement", ["", "export const {name} = 1;\n"])
+def test_import_smoke_checks_the_exports_read_by_pi_ai_lazy_api(tmp_path, adapter, missing, replacement):
+    common = load_script("build_common")
+    app = node_app(tmp_path / "p")
+    ai = app / "node_modules/@earendil-works/pi-ai"
+    retained = "streamSimple" if missing == "stream" else "stream"
+    write_files(ai, {f"api/{adapter}.js": (
+        f"export const {retained} = () => {{}};\n" + replacement.format(name=missing)
+    )})
+    node = shutil.which("node")
+    assert node
+    with pytest.raises(common.StagedPiImportError, match=f"desktop_pi_import_failed:.*api/{adapter}.js") as error:
+        common.check_staged_pi(app, node, run=run_command)
+    assert missing in str(error.value)
 
 
 @pytest.mark.parametrize("name", ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai", "typebox"])
@@ -218,12 +252,12 @@ def test_import_smoke_checks_gateway_adapters_even_with_a_healthy_private_ai(tmp
     ai = app / "node_modules/@earendil-works/pi-ai"
     shutil.copytree(ai, app / "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai")
     if missing:
-        (ai / "providers/openai-completions.js").unlink()
+        (ai / "api/openai-completions.js").unlink()
     else:
-        write_files(ai, {"providers/openai-completions.js": "throw new Error('synthetic root adapter failure');\n"})
+        write_files(ai, {"api/openai-completions.js": "throw new Error('synthetic root adapter failure');\n"})
     node = shutil.which("node")
     assert node
-    with pytest.raises(common.StagedPiImportError, match="desktop_pi_import_failed:.*providers/openai-completions.js"):
+    with pytest.raises(common.StagedPiImportError, match="desktop_pi_import_failed:.*api/openai-completions.js"):
         common.check_staged_pi(app, node, run=run_command)
 
 
@@ -236,7 +270,10 @@ def test_import_smoke_catches_a_peer_stranded_by_hoisting(tmp_path, monkeypatch)
     adapter = node_package(owner / "node_modules/provider-sdk", name="provider-sdk", peerDependencies={"peer": "1.0.0"})
     node_package(owner / "node_modules/peer", name="peer")
     write_files(adapter, {"index.js": "import {value} from 'peer'; export {value};\n"})
-    write_files(ai, {"providers/openai-completions.js": "export {value} from 'provider-sdk';\n"})
+    write_files(ai, {"api/openai-completions.js": (
+        "import {value} from 'provider-sdk';\n"
+        "export const stream = () => value; export const streamSimple = stream;\n"
+    )})
     node = shutil.which("node")
     assert node
     common.check_staged_pi(app, node, run=run_command)

@@ -313,8 +313,10 @@ class StagedPiImportError(RuntimeError):
 
 def check_staged_pi(staged_root: Path, node: Path, *, run) -> None:
     # Resolve from both actual importers using ESM conditions. The agent may
-    # retain a private pi-ai version. pi-ai's compiled providers/ modules are
-    # loaded lazily, so importing its public index alone cannot validate them.
+    # retain a private pi-ai version. In pi-ai 0.84.1, api/*.lazy.js imports
+    # api/<transport>.js and lazyApi reads its stream/streamSimple exports
+    # (also used by compat.js's BUILTIN_APIS registry). The gateway accepts
+    # these five transports. Importing the public index cannot validate them.
     script = r"""
 import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -333,10 +335,19 @@ try {
         if (checked.has(entry)) continue;
         checked.add(entry);
         await import(entry);
+        for (const api of [
+            'anthropic-messages', 'google-generative-ai', 'openai-completions',
+            'openai-responses', 'openai-codex-responses',
+        ]) {
+            specifier = new URL(`./api/${api}.js`, entry).href;
+            const implementation = await import(specifier);
+            for (const name of ['stream', 'streamSimple']) {
+                if (typeof implementation[name] !== 'function') throw new Error(`Missing callable ${name} export`);
+            }
+        }
         const providers = new URL('./providers/', entry);
-        specifier = providers.href + 'openai-completions.js';
+        specifier = providers.href;
         const adapters = readdirSync(providers).filter(name => /\.(?:js|mjs|cjs)$/.test(name)).sort();
-        if (!adapters.includes('openai-completions.js')) throw new Error('Missing OpenAI completions adapter');
         for (const name of adapters) {
             specifier = new URL(name, providers).href;
             await import(specifier);
