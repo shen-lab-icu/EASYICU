@@ -592,7 +592,10 @@ def test_revision_rejects_growth_before_authority_or_any_plan_write(tmp_path):
     path.write_text(previous.model_dump_json())
     before = path.read_bytes()
     guard = _revision_guard(previous)
-    pipeline = SimpleNamespace(_services=PipelineServices(plan_revision_guard=guard))
+    pipeline = SimpleNamespace(
+        _services=PipelineServices(plan_revision_guard=guard),
+        _scientific_runtime_authorities=SimpleNamespace(current_case=None, trajectory=None),
+    )
     method = ResearchAgentPipeline._validate_and_persist_plan
     kwargs = {name: None for name in inspect.signature(method).parameters if name != "self"}
     kwargs.update(generation=SimpleNamespace(plan=_revision_plan(_revision_step())), agent_context=_context())
@@ -724,12 +727,15 @@ def test_revision_refuses_an_optional_analysis_added_by_host_shaping(monkeypatch
     previous = _revision_plan()
     calls = []
     class Runtime:
+        current_case = trajectory = None
+
         def seal_for_plan(self, plan):
             calls.append("seal")
             return self
 
         def bind_plan(self, plan):
-            pytest.fail("An unrequested host-shaped step reached execution authority")
+            calls.append("bind")
+            return plan, []
 
     pipeline = SimpleNamespace(_services=PipelineServices(plan_revision_guard=_revision_guard(previous)),
                                _scientific_runtime_authorities=Runtime())
@@ -739,11 +745,88 @@ def test_revision_refuses_an_optional_analysis_added_by_host_shaping(monkeypatch
     kwargs.update(generation=SimpleNamespace(
         plan=previous, reused_prior_plan=False, reused_plan_path=None, migrated_plan_path=None,
         plan_generation_mode="llm", used_mock_llm=False, planner_prompt_metrics=None,
-    ), agent_context=_context())
+    ), agent_context=_context(), findings=[])
     with pytest.raises(owner.ResearchPipelineRunError) as raised:
         method(pipeline, **kwargs)
     assert raised.value.code == "revision_added_unrequested_analysis"
-    assert calls == ["seal"]
+    assert calls == ["seal", "seal", "bind"]
+
+
+@pytest.mark.parametrize("runtime_kind", ["current_case", "trajectory"])
+@pytest.mark.parametrize("extra_stage", [None, "draft", "shape", "runtime", "figure"])
+def test_revision_compares_the_runtime_bound_plan_before_persisting(
+    tmp_path, monkeypatch, runtime_kind, extra_stage,
+):
+    """A compiler-owned method change is not additional scientific scope."""
+    import inspect
+
+    from easyicu.research_agent import pipeline as module
+    from easyicu.research_agent.orchestration.services import PipelineServices
+    from tests.research_agent.planning.scientific_review_fixtures import _context
+
+    previous = _revision_plan()
+    before = previous.model_dump(mode="json")
+    guard = _revision_guard(previous)
+    draft = previous.model_copy(update={"steps": [previous.steps[0].model_copy(
+        update={"method": "synthetic_planner_template"},
+    )]})
+    source_file = tmp_path / "analysis_plan.json"
+    source_file.write_text(previous.model_dump_json())
+    source_bytes = source_file.read_bytes()
+    calls = []
+
+    def add_optional(plan, stage):
+        return plan.model_copy(update={"steps": [*plan.steps, _revision_step()]}) if extra_stage == stage else plan
+
+    class Runtime:
+        current_case = object() if runtime_kind == "current_case" else None
+        trajectory = object() if runtime_kind == "trajectory" else None
+
+        def seal_for_plan(self, plan):
+            return self
+
+        def bind_plan(self, plan):
+            calls.append("runtime_binding")
+            normalized = plan.model_copy(update={"steps": [
+                plan.steps[0].model_copy(update={"method": previous.steps[0].method}),
+                *plan.steps[1:],
+            ]})
+            return add_optional(normalized, "runtime"), []
+
+    class LaterValidation(Exception):
+        pass
+
+    def next_validation(*args, **kwargs):
+        raise LaterValidation
+
+    def bind_figures(plan, findings):
+        calls.append("figure_binding")
+        return add_optional(plan, "figure")
+
+    monkeypatch.setattr(module, "_shape_fresh_plan", lambda **kw: add_optional(kw["plan"], "shape"))
+    monkeypatch.setattr(module._figure_plan, "apply_runtime_bound_figure_contracts", bind_figures)
+    monkeypatch.setattr(module._final_plan, "endpoint_contract_findings", next_validation)
+    pipeline = SimpleNamespace(
+        _services=PipelineServices(plan_revision_guard=guard),
+        _scientific_runtime_authorities=Runtime(),
+    )
+    method = module.ResearchAgentPipeline._validate_and_persist_plan
+    kwargs = {name: None for name in inspect.signature(method).parameters if name != "self"}
+    kwargs.update(generation=SimpleNamespace(
+        plan=add_optional(draft, "draft"), reused_prior_plan=False, reused_plan_path=None,
+        migrated_plan_path=None, plan_generation_mode="llm", used_mock_llm=False,
+        planner_prompt_metrics=None,
+    ), agent_context=_context(), findings=[])
+    expected = owner.ResearchPipelineRunError if extra_stage else LaterValidation
+    with pytest.raises(expected) as raised:
+        method(pipeline, **kwargs)
+    if extra_stage:
+        assert raised.value.code == "revision_added_unrequested_analysis"
+        assert raised.value.details["step_id"] == "extra"
+    assert calls == ["runtime_binding", "figure_binding"]
+    assert source_file.read_bytes() == source_bytes
+    assert guard.previous_plan == before == previous.model_dump(mode="json")
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["analysis_plan.json"]
 
 
 @pytest.mark.parametrize("allowed", [True, False])

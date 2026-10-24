@@ -647,6 +647,8 @@
           }
         : { automatic: 0, evidence: 0, runtime: 0 };
       const decisionCount = decisionItems.length;
+      const revisionBlocked = confirmation.code === 'plan_scientific_changes_required'
+        && confirmation.nonApprovable && !decisionCount;
       const firstDecisionItem = decisionCount ? decisionItems[0] : null;
       const firstDecisionCopy = firstDecisionItem
         ? localizedAuthorizationDecisionCopy(firstDecisionItem)
@@ -654,10 +656,15 @@
       const reviewStatus = confirmation.code === 'plan_scientific_changes_required'
         ? firstDecisionCopy
           ? `<div class="gpi-decision-evidence"><span>${esc(firstDecisionCopy.evidenceLabel)}</span><strong>${esc(firstDecisionCopy.evidenceStatus)}</strong><small>${esc(firstDecisionCopy.evidenceDetail)}</small></div><p class="gpi-decision-guidance">${esc(firstDecisionCopy.guidance)}</p>`
-          : `<div class="gpi-confirmation-review-status"><strong>${esc(tr('EasyICU will revise the candidate plan before analysis', 'EasyICU 将在分析前修订候选计划'))}</strong><span>${esc(tr(
+          : `<div class="gpi-confirmation-review-status"><strong>${esc(revisionBlocked
+            ? tr('Candidate plan revision is blocked', '候选计划修订已暂停')
+            : tr('EasyICU will revise the candidate plan before analysis', 'EasyICU 将在分析前修订候选计划'))}</strong><span>${esc(tr(
             `${remediationCounts.automatic + remediationCounts.evidence} plan and evidence items are system-owned; ${remediationCounts.runtime} runtime-contract items remain blocked without asking for another scientific setup answer.`,
             `${remediationCounts.automatic + remediationCounts.evidence} 项计划修订与补证由系统负责；另有 ${remediationCounts.runtime} 项运行时合同仍被阻断，但不需要再次回答科学设定问题。`,
-          ))}</span></div>`
+          ))}</span>${revisionBlocked ? `<p>${esc(tr(
+            'Open the review details below to see what is unresolved. To change the study, describe the change in the conversation; otherwise send the review and failure receipt to support. Analysis stays paused.',
+            '请打开下方审阅详情查看未解决的问题。如需修改研究，请在对话中说明；否则请把审阅记录和失败回执发给支持人员。分析保持暂停。',
+          ))}</p>` : ''}</div>`
         : '';
       const trialOwner = confirmation.trialCard ? window.EasyICU.guidedPi.optional('targetTrial') : null;
       const trialBody = trialOwner ? trialOwner.bodyHtml(host.workflow(), { tr, esc }) : '';
@@ -731,7 +738,7 @@
         : '';
       const populationPreparation = populationPreparationHtml(confirmation.populationPreparation);
       const populationAcceptance = populationAcceptanceHtml(((host.workflow() || {}).plan_review_summary || {}).population_acceptance);
-      const failureNotice = latestAttemptFailureHtml();
+      const failureNotice = latestAttemptFailureHtml(revisionBlocked);
       const decisionActions = firstDecisionCopy && Array.isArray(firstDecisionCopy.options)
         ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span>${option.requirement ? `<small>${esc(option.requirement)}</small>` : ''}</button>`).join('')
         : '';
@@ -748,7 +755,7 @@
       </section>`;
     }
 
-    function latestAttemptFailureHtml() {
+    function latestAttemptFailureHtml(revisionBlocked) {
       const workflow = host.workflow() || {};
       const failure = workflow.latest_attempt_failure;
       const reviewedId = workflow.plan_review_summary && workflow.plan_review_summary.run_id;
@@ -762,7 +769,10 @@
       const detail = tr(
         'The previous candidate remains available below. This failed attempt did not add plan approval or validated results.',
         '下方保留的是之前的候选方案；这次失败没有新增计划批准或已验证结果。',
-      ) + (failure.checkpoint_resume_available === false ? tr(
+      ) + (failure.checkpoint_resume_available === false ? revisionBlocked ? tr(
+        ' This checkpoint cannot be resumed. Read the review guidance below.',
+        '该检查点无法继续，请查看下方审阅说明。',
+      ) : tr(
         ' This checkpoint cannot be resumed; use the action below to recover.',
         '该检查点无法继续，请使用下方操作恢复。',
       ) : '');
