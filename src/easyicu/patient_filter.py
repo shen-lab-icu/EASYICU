@@ -348,7 +348,7 @@ class PatientFilter:
             age_text = (
                 patient['age'].astype('string').str.replace(r'\s+', '', regex=True)
             )
-            censored = age_text.eq('>89')
+            censored = age_text.eq('>89').fillna(False)
             age = pd.to_numeric(age_text.mask(censored), errors='coerce').mask(
                 censored, 90
             )
@@ -546,7 +546,7 @@ class PatientFilter:
             df['intime'] = pd.to_datetime(df['intime'])
             raw_age = _calendar_age_years(df['intime'], df['dob'])
             # Official tutorials identify the shifted DOB sentinel above 100.
-            censored = raw_age.gt(100)
+            censored = raw_age.gt(100).fillna(False)
             age = raw_age.mask(censored, 90)
             _publish_age_interval(
                 df,

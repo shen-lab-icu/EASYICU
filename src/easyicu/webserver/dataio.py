@@ -1503,6 +1503,12 @@ def _normalize_export_cohort(cohort: Optional[Dict[str, Any]]) -> Dict[str, Any]
 
 
 def _database_for_patient_filter(database: str) -> str:
+    # Official demos share their parent's table layout. Adapt only this
+    # filter boundary; the loader and export manifest retain the demo identity.
+    if database == "eicu_demo":
+        return "eicu"
+    if database == "mimic_demo":
+        return "mimic"
     if database == "sicdb":
         return "sic"
     if database == "miii":
