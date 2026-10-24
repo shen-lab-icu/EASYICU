@@ -808,8 +808,6 @@ class PiCopilotService:
             base_url=base_url,
             model=model,
             api_transport=api_transport,
-            data_handling=data_handling,
-            inference_location=inference_location,
         )
         apply_config(config)
         payload = self.runtime_status()
@@ -853,31 +851,14 @@ class PiCopilotService:
         # before any credential can leave the host.
         settings.update_settings({"copilot_enabled": True})
         stored = self.provider_store.resolved_config()
-        reuse_credential = not api_key.strip()
-        if reuse_credential and stored is None:
-            raise PiCopilotError(
-                "pi_provider_credential_required",
-                "Enter an API credential for this model-service connection.",
-                status_code=422,
-            )
-        config = self.provider_store.make_config(
+        config = self.provider_store.make_connection_config(
             provider=provider,
-            api_key=stored.api_key if reuse_credential else api_key,
+            api_key=api_key,
             base_url=base_url,
             # Required by make_config; never used as a model selection or probe.
             model="catalog-discovery",
             api_transport=api_transport,
         )
-        if reuse_credential and (
-            config.provider != stored.provider
-            or config.base_url != stored.base_url
-            or config.api_transport != stored.api_transport
-        ):
-            raise PiCopilotError(
-                "pi_provider_credential_required",
-                "Enter an API credential for this model-service connection.",
-                status_code=422,
-            )
         models = discover_provider_models(config)
         default_model = PROVIDER_DEFAULT_MODELS.get(config.provider)
         recommended = (
