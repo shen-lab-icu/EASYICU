@@ -199,6 +199,12 @@ class ConceptDefinition:
                         and source.callback == "transform_fun(comp_na(`==`, 'Expired'))"
                     ):
                         source.callback = EICU_HOSPITAL_STATUS_BINDING
+                        source.params.update(
+                            clinical_binding=EICU_HOSPITAL_STATUS_BINDING,
+                            event_status="Expired",
+                            survivor_status="Alive",
+                            unknown_status_policy="retain_null",
+                        )
 
         unit_value = payload.get("unit")
         if isinstance(unit_value, str):

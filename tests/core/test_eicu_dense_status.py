@@ -190,3 +190,31 @@ def test_export_cohort_summary_never_counts_unknown_status_as_survival(tmp_path,
     assert group["outcome_missing_n"] == 1
     assert group["outcome_risk_pct"] == pytest.approx(200 / 3)
     assert reporting["overall_outcome"]["missing_n"] == 1
+
+
+@pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
+def test_status_overlay_carries_the_declared_unknown_policy_into_export_lineage(database):
+    from easyicu.concept.export_metadata import build_export_file_metadata_binding
+    from easyicu.hospital_mortality import EICU_HOSPITAL_STATUS_BINDING
+
+    dictionary = load_dictionary()
+    source, = dictionary["death"].for_data_source(load_data_sources().get(database))
+    expected = {
+        "clinical_binding": EICU_HOSPITAL_STATUS_BINDING,
+        "event_status": "Expired", "survivor_status": "Alive",
+        "unknown_status_policy": "retain_null",
+    }
+    assert all(source.params.get(key) == value for key, value in expected.items())
+    frame = pd.DataFrame({
+        "patientunitstayid": [1, 2, 3],
+        "death": pd.Series([True, False, pd.NA], dtype="boolean"),
+    })
+    binding = build_export_file_metadata_binding(
+        relative_path="outcome.parquet", module="outcome", frame=frame,
+        concept_ids=["death"], database=database,
+        database_class_prefixes=load_data_sources().get(database).class_prefix,
+        dictionary=dictionary,
+    )
+    lineage, = binding.columns["death"].metadata.source_lineage
+    assert dict(lineage.semantic_parameters)["unknown_status_policy"] == '"retain_null"'
+    assert lineage.callback == EICU_HOSPITAL_STATUS_BINDING
