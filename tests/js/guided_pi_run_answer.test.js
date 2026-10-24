@@ -122,6 +122,17 @@ const outcome = modules.require('runOutcome').create({
     return { html, followUps: outcome.followUps(run, workflow) };
   }
   const plan = payloads['agent_plan.json'];
+  payloads['run_context.json'].population_preparation = {
+    schema_version: 'easyicu.prepared_population_summary/1',
+    selection: 'first_icu_stay_per_hospitalization',
+    stays_before: 100000, stays_after: 94458,
+    excluded_reason_counts: { non_first_icu_stay: 5000, hospitalization_prior_unit_coverage_incomplete: 542 },
+  };
+  const preparedPopulation = await reread(plan);
+  assert.match(preparedPopulation.html, /每次住院首次 ICU 筛选：准备数据 100,000 条，保留 94,458 条/);
+  assert.match(preparedPopulation.html, /同次住院后续 ICU 入住 5,000；前序单元记录不完整 542/);
+  assert.match(preparedPopulation.html, /同一患者不同住院可分别计数/);
+  delete payloads['run_context.json'].population_preparation;
   const completeOutcomeTables = payloads['result_tables.json'];
   payloads['result_tables.json'] = { tables: [
     table('flow.csv', ['n_before', 'n_remaining'], [[12, 10]]),

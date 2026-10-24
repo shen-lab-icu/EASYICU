@@ -311,6 +311,7 @@
       return {
         source,
         question: String(context.question || plan.research_question || ''),
+        populationPreparation: context.population_preparation,
         analysisType: String(plan.analysis_type || ''),
         exposureLabel,
         // What a grouped exposure's groups are groups of ("Glucose" / "血糖").
@@ -417,6 +418,27 @@
       }
       const groups = view.groups;
       const source = view.source || tr('this data source', '本数据源');
+      const preparation = view.populationPreparation;
+      if (preparation && preparation.schema_version === 'easyicu.prepared_population_summary/1'
+        && preparation.selection === 'first_icu_stay_per_hospitalization'
+        && Number.isSafeInteger(preparation.stays_before) && Number.isSafeInteger(preparation.stays_after)) {
+        const reasonNames = {
+          non_first_icu_stay: ['later ICU stays', '同次住院后续 ICU 入住'],
+          non_icu_unit: ['non-ICU units', '非 ICU 单元'],
+          hospitalization_prior_unit_coverage_incomplete: ['incomplete preceding-unit history', '前序单元记录不完整'],
+          hospitalization_identifier_missing_or_invalid: ['missing or invalid hospitalization identity', '住院标识缺失或无效'],
+          hospitalization_unit_type_missing_or_unknown: ['unknown unit type', '单元类型未知'],
+          hospitalization_unit_ordinal_duplicate: ['duplicate unit order', '单元顺序重复'],
+          hospitalization_unit_ordinal_missing_or_invalid: ['missing or invalid unit order', '单元顺序缺失或无效'],
+        };
+        const exclusions = Object.entries(preparation.excluded_reason_counts || {})
+          .filter(([reason, n]) => reasonNames[reason] && Number.isSafeInteger(n) && n > 0)
+          .map(([reason, n]) => `${tr(...reasonNames[reason])} ${count(n)}`).join(tr('; ', '；')) || tr('none', '无');
+        sentences.push(tr(
+          `First ICU stay per hospitalization: ${count(preparation.stays_before)} prepared records → ${count(preparation.stays_after)} records; exclusions: ${exclusions}. Counts are ICU stays, and repeated patients across hospitalizations remain.`,
+          `每次住院首次 ICU 筛选：准备数据 ${count(preparation.stays_before)} 条，保留 ${count(preparation.stays_after)} 条；排除：${exclusions}。这些数量按 ICU 入住记录计，同一患者不同住院可分别计数。`,
+        ));
+      }
       if (groups.length === 2) {
         const reference = groups[0];
         const focal = groups[1];
