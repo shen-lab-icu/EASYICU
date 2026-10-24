@@ -502,7 +502,32 @@ def select_node() -> Path:
     node = Path(raw).expanduser().resolve()
     if node_version(node) < MIN_NODE:
         raise RuntimeError("Node 22.19+ is required to build the Copilot runtime")
+    if sys.platform == "darwin":
+        check_macos_node_portability(node)
     return node
+
+
+def check_macos_node_portability(node: Path) -> None:
+    """The bundle copies one executable, so only macOS system libraries may link.
+
+    Homebrew Node can run on the build machine while depending on libnode and
+    other libraries outside the app. Reject it before an expensive freeze.
+    """
+    result = subprocess.run(
+        ["/usr/bin/otool", "-L", str(node)], capture_output=True, text=True, check=True,
+    )
+    libraries = [line.strip().split(" (", 1)[0] for line in result.stdout.splitlines()[1:]
+                 if line.strip()]
+    external = [library for library in libraries
+                if not library.startswith(("/usr/lib/", "/System/Library/"))]
+    if not libraries or external:
+        detail = ", ".join(external) or "no dynamic-library information"
+        raise RuntimeError(
+            f"desktop_node_not_portable: {node}: {detail}. "
+            "Set EASYICU_DESKTOP_NODE to the node executable from an official standalone "
+            "Node distribution (for example one installed by nvm); the app bundles only "
+            "the executable and cannot use Homebrew libraries."
+        )
 
 
 def node_license(node: Path) -> Path:

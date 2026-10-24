@@ -1,6 +1,7 @@
 """Synthetic dependency hoisting and lazy-provider import checks; no npm/network."""
 
 import json
+from pathlib import Path
 import shutil
 import subprocess
 
@@ -367,3 +368,39 @@ def test_dry_run_explains_hoisting_typescript_and_lazy_provider_smoke(driver, ca
     assert "at package roots" in plan
     assert "*.ts" in plan and "*.mts" in plan and "*.cts" in plan
     assert "provider" in plan and "openai-completions" in plan
+
+
+@pytest.mark.parametrize("dependency", [
+    "@rpath/libnode.127.dylib", "@loader_path/libnode.dylib", "/opt/homebrew/opt/libuv/lib/libuv.1.dylib",
+    "/usr/local/lib/libnode.dylib", "libnode.dylib",
+])
+def test_selected_macos_node_rejects_external_libraries_before_staging(tmp_path, monkeypatch, dependency):
+    common = load_script("build_common")
+    node = tmp_path / "node"
+    monkeypatch.setenv("EASYICU_DESKTOP_NODE", str(node))
+    monkeypatch.setattr(common.sys, "platform", "darwin")
+    monkeypatch.setattr(common, "node_version", lambda value: (24, 11, 0))
+    calls = []
+
+    def inspect(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout=f"{node}:\n\t{dependency} (compatibility version 0.0.0)\n")
+
+    monkeypatch.setattr(common.subprocess, "run", inspect)
+    with pytest.raises(RuntimeError, match="desktop_node_not_portable:.*EASYICU_DESKTOP_NODE"):
+        common.select_node()
+    assert calls == [["/usr/bin/otool", "-L", str(node)]]
+
+
+def test_selected_macos_node_accepts_standalone_distribution(tmp_path, monkeypatch):
+    common = load_script("build_common")
+    node = tmp_path / "node"
+    monkeypatch.setenv("EASYICU_DESKTOP_NODE", str(node))
+    monkeypatch.setattr(common.sys, "platform", "darwin")
+    monkeypatch.setattr(common, "node_version", lambda value: (24, 11, 0))
+    monkeypatch.setattr(common.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(
+        command, 0, stdout=f"{node}:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n"
+        "\t/System/Library/Frameworks/Security.framework/Versions/A/Security (compatibility version 1.0.0)\n",
+    ))
+    assert common.select_node() == Path(node)
+
