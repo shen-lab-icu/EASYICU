@@ -30,6 +30,7 @@ RUNTIME_SOURCE_FILES = (
     "src/shell-budget.mjs",
     "src/provider-retry.mjs",
     "src/session-lifecycle.mjs",
+    "src/research-context.mjs",
     "src/skills/web-prototype/SKILL.md",
 )
 RUNTIME_MANIFEST_FILE = "runtime-manifest.json"
