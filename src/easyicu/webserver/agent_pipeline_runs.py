@@ -6931,6 +6931,7 @@ def make_research_pipeline_run_runner(
             profile_options = submission_profile.pipeline_options()
             profile_options.update(
                 {
+                    "require_human_plan_review": True,
                     "enable_memory": False,
                     "enable_experience_bank": False,
                     "enable_reviewed_memory": False,
@@ -7138,7 +7139,6 @@ def make_research_pipeline_run_runner(
                 # the claim-aware v2 evidence digest.  The primary-only v1
                 # digest omits that authority and would make an otherwise
                 # valid Web analysis fail at the writing boundary.
-                require_human_plan_review=True,
                 # This explicit development-only owner may execute without
                 # implying reportable science. All other Web routes retain
                 # their existing reportable-capability requirement.
