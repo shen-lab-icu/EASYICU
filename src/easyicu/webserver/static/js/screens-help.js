@@ -200,8 +200,8 @@
         [
           t('Is any patient data uploaded?', '会上传患者数据吗？'),
           t(
-            'No. EasyICU is local-first and the guarantee is enforced — extraction, review, and analysis all run on your machine. The only thing that can ever leave (and only if you explicitly enable it) is the Research Agent’s plan text, never patient rows.',
-            '不会。EasyICU 是 local-first，抽取、审阅和分析都在你的机器上运行。只有在你显式开启时，Research Agent 的计划文本才可能离开本机；患者行级数据不会上传。',
+            'Extraction, review, and analysis run on your machine. If you enable model calls, your messages, analysis plans and code, variable names, error details, and summary statistics with very small counts hidden may be sent to the configured model. The data tools block patient-level rows from model requests. Do not paste patient records into messages.',
+            '抽取、审阅和分析在本机运行。开启模型调用后，你的消息、分析计划及代码、变量名称、错误详情，以及隐藏了极小计数的汇总统计可能发送给已配置的模型。数据工具会阻止患者逐行记录进入模型请求；请勿在消息中粘贴患者记录。',
           ),
         ],
         [

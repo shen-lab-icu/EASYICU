@@ -342,8 +342,8 @@
     const detail = !known
       ? T('Waiting for the backend to report its host policy.', '正在等待后端返回其主机策略。')
       : enforced
-        ? T('The server accepts loopback clients only and rejects proxy-forwarded requests, so patient data has no route off this machine.', '服务器只接受回环客户端并拒绝经代理转发的请求，患者数据没有离开本机的通道。')
-        : T('Host access has been widened by an environment variable, so a loopback peer is no longer proof of a local user. Patient data can now reach whatever is in front of this server.', '主机访问已被环境变量放宽，回环 peer 不再等于本地用户。患者数据现在可以到达该服务器前面的任何东西。');
+        ? T('The server accepts loopback clients only and rejects proxy-forwarded requests. This controls access to EasyICU; model requests follow the separate setting below.', '服务器只接受回环客户端，并拒绝经代理转发的请求。这限制了谁能访问 EasyICU；模型请求由下方的独立设置控制。')
+        : T('Host access has been widened by an environment variable. Clients allowed by this host policy may access EasyICU through the configured proxy or network.', '主机访问范围已通过环境变量扩大。主机策略允许的客户端可以通过已配置的代理或网络访问 EasyICU。');
     const ctl = !known
       ? lockedCtl(T('unknown', '未知'), T('Backend has not reported local_access yet.', '后端尚未返回 local_access。'))
       : enforced
@@ -618,7 +618,7 @@
       <div class="sec-stack" id="set-privacy"><div class="lbl">${T('Privacy', '隐私')}</div><h2>${T('Local-first guarantees', '本地优先保障')}</h2></div>
       <div class="card pad">
         ${localAccessRow()}
-        ${row(T('Allow outbound model calls', '允许外部模型调用'), T('Off by default. When on, only the Research Agent prompt and plan - never patient rows - may reach a configured model endpoint.', '默认关闭。开启后，只有研究代理的提示词和计划可以发送到已配置的模型端点，患者行数据永不发送。'), sw(!!S0().ai_enabled, '', 'ai_enabled'))}
+        ${row(T('Allow outbound model calls', '允许外部模型调用'), T('Off by default. When enabled, your messages, analysis plans and code, variable names, error details, and summary statistics with very small counts hidden may reach the configured model. The data tools block patient-level rows; do not paste patient records into messages.', '默认关闭。开启后，你的消息、分析计划及代码、变量名称、错误详情，以及隐藏了极小计数的汇总统计可能发送给已配置的模型。数据工具会阻止患者逐行记录进入模型请求；请勿在消息中粘贴患者记录。'), sw(!!S0().ai_enabled, '', 'ai_enabled'))}
       </div>
 
       <div class="sec-stack" id="set-research-agent"><div class="lbl">${T('Research Agent', '研究代理')}</div><h2>${T('Run behavior', '运行行为')}</h2></div>
