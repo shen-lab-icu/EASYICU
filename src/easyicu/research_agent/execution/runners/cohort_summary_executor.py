@@ -559,6 +559,9 @@ def run_cohort_summary_from_env(
             "Declared cohort-summary columns are absent: " + ", ".join(missing_columns)
         )
 
+    from ...methods.descriptive_inputs import require_observed_columns
+
+    require_observed_columns(frame, columns)
     context = _load_context(run_dir)
     metadata_by_name = _variable_metadata(context)
     missing_metadata = [column for column in columns if column not in metadata_by_name]

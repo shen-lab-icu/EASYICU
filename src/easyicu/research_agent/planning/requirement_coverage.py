@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Optional, Seq
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..methods.descriptive_inputs import REQUESTED_CONCEPT_NO_DATA, context_columns_without_data
+
 if TYPE_CHECKING:
     from ..schema import AnalysisPlan, ResearchContext
 
@@ -77,6 +79,23 @@ class PlanRequirementCoverage(BaseModel):
         if self.complete != expected:
             raise ValueError("plan requirement coverage completeness drifted")
         return self
+
+
+def with_requirement_data_availability(
+    coverage: PlanRequirementCoverage, context: ResearchContext,
+) -> PlanRequirementCoverage:
+    """An owner cannot cover a requirement whose clinical values are all empty."""
+
+    records = tuple(
+        record.model_copy(update={
+            "status": "unsupported", "owner_step_ids": (),
+            "reason_code": REQUESTED_CONCEPT_NO_DATA,
+        }) if context_columns_without_data(context, (record.concept_identity,)) else record
+        for record in coverage.records
+    )
+    return coverage.model_copy(update={
+        "records": records, "complete": all(record.status == "covered" for record in records),
+    })
 
 
 def build_plan_requirement_coverage(
@@ -215,13 +234,16 @@ def stated_adjustment_coverage(context, plan, *, runtime_authority=None) -> Plan
             step_id for step_id, covariates in primary if columns.intersection(covariates)
         ]
         unavailable = adjustment.source_status == "unavailable"
+        no_data = bool(columns) and set(columns) <= set(context_columns_without_data(context, columns))
         # Without a concept no column can be checked; the review shows it.
         unresolved = adjustment.concept is None
         covered = (
             bool(primary) and len(owners) == len(primary)
-            and not unavailable and not unresolved
+            and not unavailable and not unresolved and not no_data
         )
-        if unavailable:
+        if no_data:
+            status, reason = "unsupported", REQUESTED_CONCEPT_NO_DATA
+        elif unavailable:
             status, reason = "unsupported", "source_concept_unavailable"
         elif unresolved:
             status, reason = "unsupported", "stated_adjustment_concept_unresolved"

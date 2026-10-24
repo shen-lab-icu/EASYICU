@@ -20,6 +20,7 @@ import pandas as pd
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...schema import AnalysisStep
+from ...methods.descriptive_inputs import require_observed_columns
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import sole_typed_cohort_input
 
@@ -241,6 +242,7 @@ def grouped_distribution_table(
     if frame.empty:
         raise RuntimeError("Descriptive distribution cohort is empty")
 
+    require_observed_columns(frame, (grouping_variable, value_variable))
     metadata = _context_metadata(Path(run_dir))
     if grouping_variable not in metadata or value_variable not in metadata:
         raise RuntimeError("Declared distribution columns lack structured metadata")

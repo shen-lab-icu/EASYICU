@@ -21,6 +21,7 @@ from scipy.stats import spearmanr
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...schema import AnalysisStep
+from ...methods.descriptive_inputs import require_observed_columns
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import sole_typed_cohort_input
 
@@ -158,6 +159,7 @@ def _numeric_complete_cases(
         raise RuntimeError(
             "Declared association columns are absent: " + ", ".join(missing)
         )
+    require_observed_columns(frame, (predictor, outcome))
     source = frame[[predictor, outcome]]
     numeric = source.apply(pd.to_numeric, errors="coerce")
     for column in (predictor, outcome):

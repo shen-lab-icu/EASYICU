@@ -15,6 +15,7 @@ import math
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from ..contracts.model_retention import estimable_missing_category_rows
+from ..methods.descriptive_inputs import require_observed_columns
 from ..contracts.model_terms import (
     ModelTermSpec,
     level_identity_class,
@@ -140,6 +141,7 @@ def compile_model_terms(
             "declared model term column(s) are absent: " + ", ".join(missing),
         )
 
+    require_observed_columns(frame, names)
     design = pd.DataFrame(index=frame.index)
     source_by_column: Dict[str, str] = {}
     exposure_columns: list[str] = []
@@ -297,6 +299,7 @@ def primary_model_rows(
         item if isinstance(item, ModelTermSpec) else ModelTermSpec.model_validate(item)
         for item in terms
     ]
+    require_observed_columns(frame, (outcome,))
     compiled = compile_model_terms(frame, terms=roster, exposure=exposure)
     if outcome not in frame.columns:
         raise ModelTermCompilationError(

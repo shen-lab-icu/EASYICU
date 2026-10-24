@@ -391,9 +391,10 @@ def test_the_host_materializes_and_summarizes_the_selected_quantity_by_group(
         assert missing["value"] == 1 and missing["denominator"] == 3
 
 
-def test_a_window_with_no_measurements_still_materializes_missing_quantities(owners, tmp_path, monkeypatch):
+def test_a_window_with_no_measurements_retains_quantities_but_stops_analysis(owners, tmp_path, monkeypatch):
     from easyicu.research_agent.cohort.materializer import materialize_to_parquet
     from easyicu.research_agent.execution.runners.cohort_summary_executor import run_cohort_summary_from_env
+    from easyicu.research_agent.methods.descriptive_inputs import RequestedConceptNoDataError
 
     paths = materialize_to_parquet(
         tmp_path / "materialized", data_path=_typed_export(tmp_path / "export", owners, observed=False),
@@ -405,6 +406,8 @@ def test_a_window_with_no_measurements_still_materializes_missing_quantities(own
     for statistic in ("max", "min", "mean", "first", "last"):
         assert frame[f"signal_{statistic}"].isna().all()
     assert frame["signal_n"].eq(0).all()
+    assert frame["signal_measured"].eq(0).all()
+    assert frame.groupby("ward_group").size().to_dict() == {"A": 3, "B": 3}
     assert json.loads(paths["provenance"].read_text())["last_value_concepts"] == ["signal"]
     proposal = _planning_context("max")
     context = build_research_context(
@@ -414,13 +417,15 @@ def test_a_window_with_no_measurements_still_materializes_missing_quantities(own
     (tmp_path / "research_context.json").write_text(context.model_dump_json())
     monkeypatch.setenv("EASYICU_RUN_DIR", str(tmp_path))
     monkeypatch.setenv("STEP_OUT_DIR", str(tmp_path / "out"))
-    result = run_cohort_summary_from_env(
-        declared_columns=["stay_id", "ward_group", "signal_max"], typed_cohort_input="artifact:analysis_cohort",
-        frame=frame, cohort_path=paths["parquet"], primary_summary=True,
-    )
-    assert result["status"] == "ok" and result["cohort_n"] == 6
-    table = pd.read_csv(tmp_path / "out/cohort_summary.csv")
-    assert table[table.statistic == "missing_n"].set_index("group")["value"].to_dict() == {"Overall": 6., "A": 3., "B": 3.}
+    with pytest.raises(RequestedConceptNoDataError) as stopped:
+        run_cohort_summary_from_env(
+            declared_columns=["stay_id", "ward_group", "signal_max"], typed_cohort_input="artifact:analysis_cohort",
+            frame=frame, cohort_path=paths["parquet"], primary_summary=True,
+        )
+    assert stopped.value.reason_code == "requested_concept_no_data"
+    assert stopped.value.columns == ("signal_max",)
+    assert not (tmp_path / "out/cohort_summary.csv").exists()
+    assert not (tmp_path / "out/step_summary.json").exists()
 
 
 def test_an_optional_last_summary_must_name_a_materialized_feature(owners, tmp_path):

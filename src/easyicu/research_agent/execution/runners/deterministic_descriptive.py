@@ -604,6 +604,9 @@ def run_absolute_risk_context(
             reason="The structured run context did not resolve to an outcome column.",
             n_total=n_total,
         )
+    from ...methods.descriptive_inputs import require_observed_columns
+
+    require_observed_columns(frame, (outcome_col,))
     outcome = pd.to_numeric(frame[outcome_col], errors="coerce")
     outcome_values = set(outcome.dropna().astype(float).unique().tolist())
     if not outcome_values or not outcome_values <= {0.0, 1.0}:
@@ -642,6 +645,7 @@ def run_absolute_risk_context(
             outcome=outcome_col,
         )
 
+    require_observed_columns(frame, exposures)
     rows: List[Dict[str, Any]] = []
     source_columns: Dict[str, Dict[str, Optional[str]]] = {}
     for exposure in exposures:

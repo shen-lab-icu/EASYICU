@@ -12,10 +12,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import re
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Literal, Sequence
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from ..schema import AnalysisPlan, ResearchContext
+
 
 _NUMERIC_CATEGORY_STRING = re.compile(
     r"[+-]?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?\Z"
@@ -335,7 +339,97 @@ def measurement_provenance_receipt(
     }
 
 
+REQUESTED_CONCEPT_NO_DATA = "requested_concept_no_data"
+_NON_VALUE_ROLES = frozenset({"id", "index", "meta", "time"})
+
+
+class RequestedConceptNoDataError(ValueError):
+    """A declared value column has no observation in the entire cohort."""
+
+    reason_code: Literal["requested_concept_no_data"] = "requested_concept_no_data"
+
+    def __init__(self, columns: Iterable[str]) -> None:
+        self.columns = tuple(sorted(set(columns)))
+        super().__init__(
+            f"{self.reason_code}: the extracted data have no recorded values for {', '.join(self.columns)}"
+        )
+
+
+def require_observed_columns(frame: Any, columns: Iterable[str]) -> None:
+    """Stop before filtering, encoding, fitting or publishing empty values.
+
+    Missing columns and empty cohorts retain their existing owner-specific
+    checks. Counts and measurement flags contain real zeros and are not empty
+    clinical values. A single observed value is sufficient for this gate;
+    estimator-specific sample-size and contrast checks still apply afterwards.
+    """
+
+    if frame.empty:
+        return
+    empty = [
+        column for column in dict.fromkeys(columns)
+        if column in frame.columns and bool(frame[column].isna().all())
+    ]
+    if empty:
+        raise RequestedConceptNoDataError(empty)
+
+
+def context_columns_without_data(
+    context: ResearchContext, columns: Iterable[str],
+) -> tuple[str, ...]:
+    """Use host missingness facts, with exact coordinates taking precedence.
+
+    A source concept can resolve to several clinical summaries; all must be
+    proven empty before declaring that concept unavailable. No profile means
+    no proof. Metadata/timing companions cannot supply a clinical observation.
+    """
+
+    values = {
+        variable.name: variable for variable in context.variables
+        if variable.role.value not in _NON_VALUE_ROLES
+    }
+    empty = set()
+    for column in dict.fromkeys(columns):
+        candidates = (
+            [values[column]] if column in values else
+            [variable for variable in values.values() if variable.source_concept == column]
+        )
+        if candidates and all(
+            variable.missingness is not None
+            and variable.missingness.n_total > 0
+            and variable.missingness.n_missing == variable.missingness.n_total
+            for variable in candidates
+        ):
+            empty.update(variable.name for variable in candidates)
+    return tuple(sorted(empty))
+
+
+def plan_value_columns(plan: AnalysisPlan) -> tuple[str, ...]:
+    """Read the clinical columns chosen by typed analysis/table declarations."""
+
+    columns: list[str] = []
+    for step in plan.steps:
+        if step.table_one_spec is not None:
+            columns.extend((step.table_one_spec.group_by, *(
+                item.name for item in step.table_one_spec.variables
+            )))
+        if step.exposure_outcome_distribution_spec is not None:
+            spec = step.exposure_outcome_distribution_spec
+            columns.extend((spec.exposure, spec.outcome))
+        for requirement in step.model_requirements:
+            columns.extend((requirement.outcome, requirement.exposure_source, *requirement.covariates))
+            columns.extend(term.name for term in requirement.model_terms or ())
+        if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}:
+            columns.extend(value for value in step.inputs if ":" not in value)
+    return tuple(dict.fromkeys(column for column in columns if column))
+
+
 __all__ = [
+    "REQUESTED_CONCEPT_NO_DATA",
+    "RequestedConceptNoDataError",
+    "context_columns_without_data",
+    "plan_value_columns",
+    "require_observed_columns",
     "ClosedCategoricalCounts",
     "DescriptiveInputError",
     "StrictNumericInput",

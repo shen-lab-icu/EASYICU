@@ -37,6 +37,8 @@ from ..cohort.schema import (
 )
 from ..concept_availability import normalize_database_name
 from ..gates.plan_declared_inputs import declared_raw_input_plan_findings
+from ..gates.data_answerability import requested_context_data_columns
+from ..methods.descriptive_inputs import context_columns_without_data, plan_value_columns
 from ..contracts.host_action_robustness import host_action_prespecified_axes
 from ..contracts.sealed_suite_robustness import sealed_suite_prespecified_axes
 from ..contracts.cohort_product_keys import (
@@ -193,7 +195,7 @@ class PlanScientificFinding(BaseModel):
     )
 
 
-CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/17"
+CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/18"
 
 
 class PlanScientificReview(BaseModel):
@@ -201,8 +203,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # Archived reviews remain readable, but cannot substitute for a /17
-    # execution review, which also checks population/exposure-level overlap.
+    # Archived reviews remain readable, but cannot substitute for a /18
+    # execution review, which also blocks requested values with no observations.
     schema_version: Literal[
         "easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11",
         "easyicu.plan_scientific_review/12",
@@ -211,6 +213,7 @@ class PlanScientificReview(BaseModel):
         "easyicu.plan_scientific_review/15",
         "easyicu.plan_scientific_review/16",
         "easyicu.plan_scientific_review/17",
+        "easyicu.plan_scientific_review/18",
     ] = (
         CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
     )
@@ -3413,6 +3416,18 @@ def build_plan_scientific_review(
     """Score and adjudicate the exact proposed plan before human approval."""
 
     findings: list[PlanScientificFinding] = []
+    unobserved = context_columns_without_data(
+        context, (*requested_context_data_columns(context), *plan_value_columns(plan)),
+    )
+    if unobserved:
+        findings.append(PlanScientificFinding(
+            code="REQUESTED_CONCEPT_NO_DATA", severity="blocker", dimension="content_completeness",
+            message=(f"The data contain no recorded values for {', '.join(unobserved)}, "
+                     "which the question asks to summarize."),
+            remediation="Choose a variable or data source that records these measurements, then plan again.",
+            evidence_refs=["research_context.json.variables"],
+            remediation_route="runtime_capability",
+        ))
     diagnostic_products = {
         product for source in plan.steps if source.functional_form_spec is not None
         for product in source.expected_outputs[:1]
@@ -4924,6 +4939,7 @@ def build_plan_scientific_review(
         dimension_scores=dimensions,
         findings=findings,
         facts={
+            "requested_columns_without_data": list(unobserved),
             "stated_adjustment_coverage": adjustment_coverage.model_dump(mode="json"),
             "stated_subgroup_coverage": subgroup_coverage.model_dump(mode="json"),
             "primary_model_retention": (

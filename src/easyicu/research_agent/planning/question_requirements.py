@@ -697,8 +697,11 @@ def question_requirement_coverage(
 ) -> PlanRequirementCoverage:
     """The requirement-coverage rows: one per verifiable requirement and concept."""
 
-    return _coverage(
-        judged, context_sha256=_sha256(context.model_dump(mode="json")), plan=plan
+    from .requirement_coverage import with_requirement_data_availability
+
+    return with_requirement_data_availability(
+        _coverage(judged, context_sha256=_sha256(context.model_dump(mode="json")), plan=plan),
+        context,
     )
 
 

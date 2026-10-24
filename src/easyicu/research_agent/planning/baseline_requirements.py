@@ -196,7 +196,9 @@ def _available_columns(
             # Use the host's source/role metadata, not column-name suffixes.
             # Measurement counts/timestamps are not the required clinical value.
             matches.append(variable.name)
-    return sorted(set(matches))
+    from ..methods.descriptive_inputs import context_columns_without_data
+
+    return sorted(set(matches) - set(context_columns_without_data(context, matches)))
 
 
 def baseline_requirement_projection(context: ResearchContext) -> dict[str, Any]:
