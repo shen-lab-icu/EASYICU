@@ -62,6 +62,7 @@ __all__ = [
     "MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND",
     "MISSINGNESS_MEASUREMENT_FIGURE_INPUTS",
     "missingness_measurement_figure_declaration_verdict",
+    "missingness_measurement_figure_executor_declares_step",
     "missingness_measurement_figure_executor_code",
     "missingness_measurement_figure_executor_owns_step",
     "measurement_missingness_figure_executor_code",
@@ -245,13 +246,12 @@ def _binding_carries_the_columns_read(
     return set(_columns_read(input_key, audit_role=audit_role)).issubset(set(columns))
 
 
-def missingness_measurement_figure_executor_owns_step(
+def missingness_measurement_figure_executor_declares_step(
     step: AnalysisStep,
     *,
     plan: Any | None = None,
-    resolved_bindings: Mapping[str, Any] | None = None,
 ) -> bool:
-    """Return whether every scientific choice is fixed by the typed contract."""
+    """Recognize the closed figure declaration before audit tables exist."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
     input_by_role = resolve_data_quality_figure_inputs(
@@ -266,7 +266,7 @@ def missingness_measurement_figure_executor_owns_step(
         for contract in step.input_consumption_contracts or ()
         if contract.mode == "all_rows"
     }
-    if not (
+    return bool(
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
         and {str(value) for value in step.inputs} == set(required_inputs)
@@ -278,8 +278,22 @@ def missingness_measurement_figure_executor_owns_step(
         # sole output is one figure (verified 2026-07-31), so guarding them
         # would read as protection while protecting nothing.
         and step.trajectory_stability_spec is None
-    ):
+    )
+
+
+def missingness_measurement_figure_executor_owns_step(
+    step: AnalysisStep,
+    *,
+    plan: Any | None = None,
+    resolved_bindings: Mapping[str, Any] | None = None,
+) -> bool:
+    """Require the declaration and actual typed columns before execution."""
+
+    if not missingness_measurement_figure_executor_declares_step(step, plan=plan):
         return False
+    input_by_role = resolve_data_quality_figure_inputs(
+        step.inputs, steps=getattr(plan, "steps", ()) or (),
+    )
     if not isinstance(resolved_bindings, Mapping):
         return False
     return all(

@@ -457,7 +457,7 @@ from .execution.runner import (
     select_safe_runner_kind,
 )
 from .execution.host_runner import HostRunner
-from .execution.owner_declaration import require_host_plan_before_review
+from .execution.owner_declaration import host_plan_review_root, require_host_plan_before_review
 from .orchestration.run_entry import (
     _validate_resume_session_key,
     analysis_only_after_input_validation,
@@ -7199,7 +7199,7 @@ def _pipeline_run___review_evidence_store(
 def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any):
     from .orchestration.workflow import human_review_requests_for_plan
 
-    require_host_plan_before_review(self, plan_result.plan)
+    require_host_plan_before_review(self, plan_result.plan, run_dir=host_plan_review_root(plan_result))
     reviewed_plan.append(plan_result)
     plan_evidence = getattr(plan_result, "evidence", None)
     capsule_record = (
