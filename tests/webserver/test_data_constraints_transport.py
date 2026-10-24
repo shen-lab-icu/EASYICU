@@ -5,8 +5,27 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
+from easyicu.research_agent.agents.plan_payload import planner_structured_output_request
+from easyicu.research_agent.agents.planner import PlannerAgent
+from easyicu.research_agent.agents.progressive_payload import (
+    progressive_outline_structured_output_request,
+)
+from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.run_input import (
+    build_scientific_identity,
+    load_verified_run_input_capsule,
+    seal_run_input_capsule,
+)
+from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
+from easyicu.research_agent.providers.prompt_budget import budgeted_client
+from easyicu.research_agent.research_context.builder import build_research_context
+from easyicu.research_agent.research_context.concept_population import context_data_constraints
+from easyicu.research_agent.research_context.outbound import outbound_safe_context_payload
+from easyicu.research_agent.research_context.typed import parse_research_context_json
 from easyicu.webserver import agent_pipeline_runs, primary_cohort
 from easyicu.webserver.research_launch_scientific import (
     _require_export_holds_study_cohort,
@@ -139,6 +158,151 @@ def test_an_ordinary_population_is_transported_without_elision() -> None:
     assert 3_100 <= len(expected) <= 3_300
 
     assert agent_pipeline_runs._compile_data_constraints(constraints) == expected
+
+
+@pytest.mark.parametrize("size", [4_000, 4_096])
+@pytest.mark.parametrize("language", ["english", "chinese"])
+def test_complete_web_constraints_reach_planner_context_and_sealed_run_inputs(
+    tmp_path: Path, size: int, language: str,
+) -> None:
+    """Exercise real transport owners without ASGI, providers or a research run."""
+
+    constraints = _ordinary_constraints()
+    constraints["source_selection"]["host_applied"] = []
+    constraints["cohort"]["review"] += (
+        " Verify the selected population against the native export receipt before "
+        "constructing an analysis cohort. Preserve the distinction between a stay "
+        "excluded by the source and a row with a missing baseline measurement. "
+        "Do not exclude a stay solely because one requested measurement is absent; "
+        "report measurement availability and the population used by each analysis. "
+        "Keep the feature window anchored to ICU admission and describe outcome "
+        "follow-up independently. Read recorded death times using their declared "
+        "event-time semantics; a discharge label cannot establish the hour of death. "
+        "Check that exclusions are applied in their recorded order and reconcile "
+        "the remaining stays with the export report. Retain the stated patient "
+        "grouping across separate hospitalizations for uncertainty estimates. "
+        "Do not reinterpret the exported module defaults as user approval for "
+        "additional endpoints, exposure groups or subgroup comparisons. Keep the "
+        "original eligibility wording alongside the executable population so "
+        "reviewers can identify any restriction that the available source cannot "
+        "prove. State unresolved source limitations before interpreting results."
+    )
+    if language == "chinese":
+        constraints["cohort"]["review"] += " 保留全部入组条件、缺失值规则及重复住院的患者聚类要求。"
+    # Only whitespace pads the exact boundary; the substantive receipt above
+    # remains realistic and every section must survive byte for byte.
+    serialized = json.dumps(constraints, ensure_ascii=False, sort_keys=True)
+    assert 3_800 <= len(serialized) <= size
+    constraints["cohort"]["review"] += " " * (size - len(serialized))
+    expected = json.dumps(constraints, ensure_ascii=False, sort_keys=True)
+    assert len(expected) == size
+    if language == "chinese":
+        assert len(expected.encode("utf-8")) > size
+
+    preferences = agent_pipeline_runs._research_user_preferences(
+        {
+            "cohort": constraints["cohort"],
+            "analysis_design": constraints["analysis_design"],
+            "confirmations": constraints["confirmations"],
+            "time_window": {"hours": 24, "anchor": "ICU admission"},
+        },
+        source_selection_basis="export_contract",
+        source_selection_report=constraints["source_selection"]["export_report"],
+        event_time_semantics=constraints["event_time_semantics"],
+    )
+    assert preferences["data_constraints"] == expected
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2, 3, 4], "age": [24, 37, 58, 76]}).to_parquet(
+        cohort_path, index=False,
+    )
+    request = {
+        "cohort": cohort_path,
+        "cohort_name": "synthetic_adults",
+        "database": "synthetic",
+        "target_outcome": None,
+        "primary_exposure": None,
+        "cross_database_validation": None,
+        "inclusion_criteria": ["age range: 18 to 100"],
+        "exclusion_criteria": [],
+        "id_columns": ["stay_id"],
+        "time_columns": None,
+        "outcome_columns": None,
+        "time_windows": None,
+        "concept_descriptions": None,
+        "user_preferences": preferences,
+        "notes": None,
+    }
+    question = "Describe the age distribution of eligible adult ICU stays."
+    identity = build_scientific_identity(
+        question=question, skill_key=None, experiment_spec=None,
+        source_files=None, disable_icu_context=False, **request,
+    )
+    assert identity["user_preferences"]["data_constraints"] == expected
+    context = build_research_context(research_question=question, **request)
+    context_path = tmp_path / "research_context.json"
+    context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
+    restored = parse_research_context_json(context_path.read_text(encoding="utf-8"))
+    assert restored.user_preferences.data_constraints == expected
+    assert context_data_constraints(restored) == constraints
+    assert outbound_safe_context_payload(restored)["study_preferences"]["data_constraints"] == expected
+
+    evidence = EvidenceStore(tmp_path)
+    evidence.register_file(
+        kind="log", description="Synthetic research context.",
+        source_path=context_path, evidence_id="research_context",
+        producer="pipeline", generation_mode="system",
+    )
+    seal_run_input_capsule(
+        run_dir=tmp_path, evidence=evidence, scientific_identity=identity,
+        initial_environment={}, context_path=context_path,
+        cohort_path=cohort_path, experiment_spec_path=None,
+    )
+    authority = load_verified_run_input_capsule(run_dir=tmp_path, scientific_identity=identity)
+    assert authority.capsule.scientific_identity["user_preferences"]["data_constraints"] == expected
+    sealed_context = parse_research_context_json(
+        authority.context_evidence_path.read_text(encoding="utf-8")
+    )
+    assert sealed_context.user_preferences.data_constraints == expected
+
+    class RecordingTransport:
+        def complete(self, messages, **kwargs):
+            assert kwargs["structured_output"].payload_bytes > 0
+            self.messages = messages
+            return "captured"
+
+    for planner in (PlannerAgent, ProgressivePlannerAgent):
+        if planner is PlannerAgent:
+            schema = planner_structured_output_request()
+        else:
+            families, variables, actions, _ = planner._request_authorities(sealed_context)
+            schema = progressive_outline_structured_output_request(
+                analysis_types=families, variable_names=variables,
+                scientific_action_ids=actions,
+            )
+        messages = planner.request_messages(
+            sealed_context, strict_transport_schema=True, structured_output=schema,
+        )
+        transport = RecordingTransport()
+        client = budgeted_client(transport, "planner", "planner_plan_generation")
+        assert client.complete(messages, structured_output=schema) == "captured"
+        content = transport.messages[-1].content
+        assert '"data_constraints":' in content, planner.__name__
+        received, _ = json.JSONDecoder().raw_decode(
+            content.split('"data_constraints":', 1)[1].lstrip()
+        )
+        assert received == expected, planner.__name__
+        assert json.loads(received) == constraints
+
+    refused_transport = RecordingTransport()
+    bounded = budgeted_client(
+        refused_transport, "planner", "planner_plan_generation", limit_tokens=1_024,
+    )
+    with pytest.raises(ProgressivePlanCompileError) as raised:
+        ProgressivePlannerAgent(bounded).run_attempt(sealed_context, stop_after_outline=True)
+    assert raised.value.code == "progressive_prompt_budget_exceeded"
+    assert raised.value.path == "planner_request"
+    assert not hasattr(refused_transport, "messages")
 
 
 @pytest.mark.parametrize("size", [4_096, 4_097])

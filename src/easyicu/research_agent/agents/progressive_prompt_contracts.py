@@ -8,6 +8,7 @@ from typing import Any, Mapping, Sequence
 
 from ..research_context.concept_population import ConceptCohortWindowError
 from ..research_context.export_selection import export_applied_selection
+from ..research_context.outbound import outbound_safe_context_payload
 from ..research_context.typed import declared_domain_for_variable
 from ..schema import ResearchContext
 from ..planning.progressive_contract import (
@@ -21,6 +22,35 @@ from ..contracts.trajectory_design import TRAJECTORY_OWNER_PLANNER_RULE
 from ..planning.outline_action_rules import replay_producer_rule_text
 from ..planning.literature_design_authority import LITERATURE_DESIGN_DIMENSIONS
 from .population_spec_transport import population_spec_contract, population_spec_shape
+
+
+def outline_study_anchors(context: ResearchContext) -> str:
+    """Keep the study's complete constraints visible before design selection.
+
+    Use the outbound owner's preference projection, as foundation and step
+    requests do. No per-field bound or clipping may narrow the web transport;
+    the assembled request's existing budget refuses an oversized prompt.
+    """
+
+    return json.dumps(
+        {
+            "research_question": context.research_question,
+            "primary_exposure": context.primary_exposure,
+            "target_outcome": context.target_outcome,
+            "cohort": context.cohort.model_dump(
+                mode="json",
+                include={
+                    "cohort_name", "database", "n_stays", "id_columns",
+                    "outcome_columns", "requested_outcome_columns",
+                },
+            ),
+            "study_preferences": outbound_safe_context_payload(context).get(
+                "study_preferences"
+            ),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 DESIGN_SELECTION_CONTRACT = (

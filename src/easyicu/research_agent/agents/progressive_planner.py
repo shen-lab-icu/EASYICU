@@ -193,6 +193,7 @@ from .progressive_prompt_contracts import (
     custom_analysis_step_shape as _custom_analysis_step_shape,
     foundation_shape_contract as _foundation_shape_contract,
     declared_cohort_concept_domains,
+    outline_study_anchors,
     source_selection_statement,
     outline_shape_contract as _outline_shape_contract,
     selected_counts_only_inference_coordinate as _selected_counts_only_inference_coordinate,
@@ -1549,26 +1550,7 @@ class ProgressivePlannerAgent:
             "Do not omit a required role merely because "
             "the article requirement id differs from the executable module id.",
             "Research question and sealed study anchors:\n"
-            + json.dumps(
-                {
-                    "research_question": context.research_question,
-                    "primary_exposure": context.primary_exposure,
-                    "target_outcome": context.target_outcome,
-                    "cohort": context.cohort.model_dump(
-                        mode="json",
-                        include={
-                            "cohort_name",
-                            "database",
-                            "n_stays",
-                            "id_columns",
-                            "outcome_columns",
-                            "requested_outcome_columns",
-                        },
-                    ),
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
+            + outline_study_anchors(context)
             + question_anchor_rule_text(
                 (context.primary_exposure, context.target_outcome), variables
             )
