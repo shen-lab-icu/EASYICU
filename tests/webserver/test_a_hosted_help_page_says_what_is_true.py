@@ -1,8 +1,7 @@
 """快速上手 on a hosted instance describes the hospital server, not a local install.
 
-The local page promises that EasyICU runs on the reader's machine, that
-nothing is uploaded and that a model token is the reader's to bring. None of
-that holds for a clinician on the hospital server, so the hosted page names
+The local page describes computing on the reader's machine and setting up
+their own model. Neither applies to a clinician on the hospital server, so the hosted page names
 where the data is, which databases the administrator prepared, that the
 conversation uses the administrator's model, and whom to ask. A hosted
 instance also drops the expert single-key shortcuts, the design-reference
@@ -102,10 +101,10 @@ def test_the_hosted_page_names_the_server_the_prepared_data_and_the_administrato
 
 
 @pytest.mark.requires_node
-def test_the_local_page_is_unchanged() -> None:
+def test_the_local_page_keeps_desktop_guidance_and_entry_points() -> None:
     page = _page("local")
 
-    assert "local-first" in page["body"]
+    assert "抽取、审阅和分析在本机运行" in page["body"]
     assert "data-help-startdemo" in page["action"]
     assert "快捷键" in page["rail"]
     assert page["aside"] == ""

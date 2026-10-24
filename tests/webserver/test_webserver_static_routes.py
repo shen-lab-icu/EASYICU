@@ -189,7 +189,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/screens-extraction.js?v=20261023-demo-identity1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261023-stop-attribution1" in index_html
-    assert "js/screens-help.js?v=20261023-egress1" in index_html
+    assert "js/screens-help.js?v=20261023-desktop-egress1" in index_html
 
 
 def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
@@ -337,7 +337,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert "How a study moves through EasyICU</h2>" not in help_js
 
     assert "js/app.js?v=20261022-help1" in index_html
-    assert "js/screens-help.js?v=20261023-egress1" in index_html
+    assert "js/screens-help.js?v=20261023-desktop-egress1" in index_html
 
 
 def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
@@ -1129,7 +1129,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "css/tweaks.css?v=20260625-stage96" in index_html
     assert "css/settings.css?v=20260921-anchor-room1" in index_html
     assert "js/screens-settings-extensions.js?v=20260812-extension-manager1" in index_html
-    assert "js/screens-settings.js?v=20261021-account1" in index_html
+    assert "js/screens-settings.js?v=20261023-desktop-egress1" in index_html
     assert ".settings-cap-panel" in settings_css
     assert ".settings-cap-tabs" in settings_css
     assert ".settings-cap-tile" in settings_css
