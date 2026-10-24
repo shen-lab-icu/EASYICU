@@ -166,6 +166,7 @@ from easyicu.webserver.research_launch_scientific import (
     _configured_sensitivity_specs,
     _data_foundation_profile,
     _first_icu_stay_for_cohort,
+    _first_icu_stay_per_hospitalization_for_cohort,
     _metadata_only_planning_coordinates,
     _normalized_metadata_planning_operationalized_columns,
     _primary_exposure,
@@ -1775,6 +1776,7 @@ def _metadata_only_planning_acquisition(
     operationalized_columns: Sequence[str] = (),
     plan_change_request: PlanChangeRequest | None = None,
     first_icu_stay: Any = None,
+    first_icu_stay_per_hospitalization: Any = None,
     required_coordinates: Sequence[Optional[str]] = (),
 ) -> Any:
     """Select a planning catalog without reading patient data.
@@ -2088,6 +2090,20 @@ def _metadata_only_planning_acquisition(
         if first_icu_stay is not None
         else None
     )
+    hospital_first_restriction = None
+    if first_icu_stay_per_hospitalization is not None:
+        authority = first_icu_stay_per_hospitalization.authority_coordinates
+        hospital_first_restriction = {
+            "schema_version": "easyicu.first_icu_stay_per_hospitalization_restriction/1",
+            "coordinate_sha256": first_icu_stay_per_hospitalization.coordinate_sha256,
+            "provider_visible_values": False,
+            **{key: authority[key] for key in (
+                "selection_rule", "missing_hospitalization_policy",
+                "invalid_or_duplicate_ordinal_policy", "unknown_unit_type_policy",
+                "prior_unit_coverage_policy", "non_icu_unit_policy",
+                "icu_unit_types", "non_icu_unit_types", "establishes_patient_independence",
+            ) if key in authority},
+        }
     stated_grouping: Dict[str, Any] = (
         {
             PATIENT_GROUPING_STATUS_KEY: patient_grouping_status[0],
@@ -2122,6 +2138,8 @@ def _metadata_only_planning_acquisition(
             else {}
         ),
     }
+    if hospital_first_restriction is not None:
+        planning_catalog.attrs["easyicu_planning_authority"]["first_icu_stay_per_hospitalization_restriction"] = hospital_first_restriction
     planning_catalog.to_parquet(universe_path, index=False)
     provenance_path = output_dir / "planner_catalog_receipt.json"
     _write_json(
@@ -2134,6 +2152,8 @@ def _metadata_only_planning_acquisition(
             "patient_identity_column": projected_patient_identity,
             "operationalized_columns": list(normalized_operationalized),
             "replacement_row_identity": replacement_row_identity,
+            **({"first_icu_stay_per_hospitalization_restriction": hospital_first_restriction}
+               if hospital_first_restriction is not None else {}),
             **(
                 {"first_icu_stay_restriction": first_icu_stay_restriction}
                 if first_icu_stay_restriction is not None
@@ -2976,10 +2996,24 @@ def _host_applied_criteria(study: Mapping[str, Any]) -> List[str]:
     cohort = raw if isinstance(raw, Mapping) else {}
     try:
         executed = primary_cohort.normalize_execution_cohort(cohort)
-        return [_FIRST_ICU_STAY_EXCLUSION] if primary_cohort.first_icu_stay_only(executed) else []
+        if primary_cohort.first_icu_stay_only(executed):
+            return [_FIRST_ICU_STAY_EXCLUSION]
+        first_per_hospitalization = (
+            primary_cohort.first_icu_stay_per_hospitalization_only(executed)
+        )
     except primary_cohort.PrimaryCohortContractError:
         # Diagnostics declare nothing; execution admission owns the refusal.
         return []
+    if first_per_hospitalization:
+        return [
+            "later ICU stays within each hospitalization: the host keeps the unique "
+            "earliest declared ICU unitvisitnumber per patienthealthsystemstayid "
+            "with complete preceding unit ordinals; SDU/Step down units are excluded; "
+            "missing hospital identity, missing or duplicate ordinals, unknown unit "
+            "types, and incomplete prior-unit history are excluded with counts; repeated patients across "
+            "hospitalizations remain and patient independence is not established"
+        ]
+    return []
 
 
 def _executed_cohort(cohort: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
@@ -3008,7 +3042,14 @@ def _verified_first_icu_stay_or_none(study: Mapping[str, Any]) -> Any:
         return None
 
 
-def _require_first_icu_stay_materialized(acquisition: Any, binding: Any) -> None:
+def _verified_hospital_first_stay_or_none(study: Mapping[str, Any]) -> Any:
+    try:
+        return _first_icu_stay_per_hospitalization_for_cohort(study)
+    except ResearchPipelineRunError:
+        return None
+
+
+def _require_first_icu_stay_materialized(acquisition: Any, binding: Any, *, per_hospitalization: bool = False) -> None:
     """Refuse a universe whose provenance does not carry the bound restriction."""
 
     try:
@@ -3018,18 +3059,19 @@ def _require_first_icu_stay_materialized(acquisition: Any, binding: Any) -> None
     except (TypeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
         provenance = {}
     restriction = (
-        provenance.get("first_icu_stay_restriction")
+        provenance.get("first_icu_stay_per_hospitalization_restriction" if per_hospitalization else "first_icu_stay_restriction")
         if isinstance(provenance, Mapping)
         else None
     )
     if (
         not isinstance(restriction, Mapping)
         or restriction.get("coordinate_sha256") != binding.coordinate_sha256
+        or (per_hospitalization and restriction.get("schema_version") != "easyicu.first_icu_stay_per_hospitalization_restriction/1")
     ):
         raise ResearchPipelineRunError(
             "research_pipeline_first_stay_restriction_not_materialized",
             "The prepared universe does not carry the verified first ICU stay restriction.",
-            details={"field": "cohort.exclude_readmissions"},
+            details={"field": "cohort.first_icu_stay_per_hospitalization" if per_hospitalization else "cohort.exclude_readmissions"},
         )
 
 
@@ -6632,6 +6674,7 @@ def make_research_pipeline_run_runner(
                     patient_grouping_status=planning_grouping_status,
                     operationalized_columns=metadata_operationalized_columns,
                     first_icu_stay=_verified_first_icu_stay_or_none(study),
+                    first_icu_stay_per_hospitalization=_verified_hospital_first_stay_or_none(study),
                     required_coordinates=(primary_exposure, target),
                 )
             elif trial_run:
@@ -6713,6 +6756,7 @@ def make_research_pipeline_run_runner(
                         target,
                     ),
                     first_icu_stay=foundation_profile.get("first_icu_stay"),
+                    first_icu_stay_per_hospitalization=foundation_profile.get("first_icu_stay_per_hospitalization"),
                 )
                 if (
                     foundation_profile.get("first_icu_stay") is not None
@@ -6720,6 +6764,10 @@ def make_research_pipeline_run_runner(
                 ):
                     _require_first_icu_stay_materialized(
                         acquisition, foundation_profile["first_icu_stay"]
+                    )
+                if foundation_profile.get("first_icu_stay_per_hospitalization") is not None and not acquisition.blocked:
+                    _require_first_icu_stay_materialized(
+                        acquisition, foundation_profile["first_icu_stay_per_hospitalization"], per_hospitalization=True,
                     )
                 if not acquisition.blocked and any(spec.strategy == "time_varying" for spec in sensitivity_specs):
                     from easyicu.webserver.time_varying_runtime_projection import materialize_web_time_varying_input

@@ -116,6 +116,7 @@ _BOUND = "<number or null>"
 _KIND_FIELDS: dict[str, dict[str, Any]] = {
     "age_years": {"min_years": _BOUND, "max_years": _BOUND},
     "first_icu_stay": {},
+    "first_icu_stay_per_hospitalization": {},
     "icu_stay_hours": {"min_hours": _BOUND, "max_hours": _BOUND},
     "condition_present": {"concepts_all_of": [_CONCEPT], "window": _WINDOW},
     "diagnosis_codes": {"system": "<icd9|icd10>", "codes": ["<code or code prefix>"]},
@@ -194,6 +195,13 @@ def population_spec_contract(concept_ids: Sequence[str]) -> str:
         "a condition_present or event_absent window may be null, meaning the "
         "whole stay. Age and stay-length bounds are inclusive: give at least "
         "one, and null for an open end. "
+        "first_icu_stay means each patient's first ICU stay; "
+        "first_icu_stay_per_hospitalization means the first ICU stay within "
+        "each hospitalization and can keep multiple hospitalizations of one "
+        "patient. Never substitute one scope for the other. For the latter, "
+        "state the source-verified selection rule and its exclusion of missing "
+        "or ambiguous hospitalization/unit-type/visit-order records, and non-ICU "
+        "units, in the complete plan. "
         + ", ".join(sorted(KEPT_KINDS & set(kinds)))
         + " state the stays kept, so their role is include; an excluding "
         "condition_present names one concept. A condition is present or "

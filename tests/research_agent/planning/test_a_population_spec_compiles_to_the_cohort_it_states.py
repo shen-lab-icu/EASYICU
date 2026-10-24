@@ -442,6 +442,12 @@ _REASON_CASES: list[tuple[str, dict, Any, float | None]] = [
         None,
         None,
     ),
+    (
+        "population_first_icu_stay_per_hospitalization_not_restricted",
+        {"kind": "first_icu_stay_per_hospitalization"},
+        None,
+        None,
+    ),
 ]
 
 

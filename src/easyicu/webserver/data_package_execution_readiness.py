@@ -42,6 +42,10 @@ def _cohort_eligibility_review(
     review = _age_eligibility_review(
         study, source_path=source_path, registered_denominator=registered_denominator
     )
+    if review["status"] == "ready" and primary_cohort.first_icu_stay_per_hospitalization_only(study.get("cohort")):
+        return _hospital_first_eligibility_review(
+            study, source_path=source_path, registered_denominator=registered_denominator, age_review=review,
+        )
     if review["status"] != "ready" or not primary_cohort.first_icu_stay_only(
         study.get("cohort")
     ):
@@ -79,6 +83,56 @@ def _cohort_eligibility_review(
         "count": int(eligible.sum()),
         "basis": f"{review['basis']}+first_icu_stay",
         "excluded_non_first_icu_stay_count": int((~flags.astype(bool)).sum()),
+    }
+
+
+def _hospital_first_eligibility_review(
+    study: Mapping[str, Any], *, source_path: str, registered_denominator: int,
+    age_review: dict[str, Any],
+) -> dict[str, Any]:
+    from easyicu.research_agent.acquisition.first_icu_stay import (
+        FLAG, REASON, FirstIcuStayPerHospitalizationError,
+        load_verified_first_icu_stay_per_hospitalization,
+    )
+
+    source = study.get("data_source") or {}
+    unavailable = {
+        "status": "unavailable", "count": None,
+        "basis": "first_icu_stay_per_hospitalization_eligibility",
+        "reason_code": "cohort_first_icu_stay_per_hospitalization_eligibility_unavailable",
+    }
+    try:
+        binding = source_identity_authority.resolve_study_first_icu_stay_per_hospitalization(
+            export_path=source_path, database=str(source.get("database") or ""),
+        )
+        if binding is None:
+            return unavailable
+        coordinate = load_verified_first_icu_stay_per_hospitalization(
+            binding.coordinate_path, expected_sha256=binding.coordinate_sha256,
+        ).set_index("stay_id")
+    except (source_identity_authority.PatientGroupingAuthorityError, FirstIcuStayPerHospitalizationError):
+        return unavailable
+    stays = _read_review_concept(source_path, "age")
+    if stays is None or "stay_id" not in stays:
+        return unavailable
+    one = stays.drop_duplicates(subset=["stay_id"]).copy()
+    flags = one["stay_id"].map(coordinate[FLAG])
+    if len(one) != registered_denominator or flags.isna().any():
+        return {**unavailable, "reason_code": "cohort_first_icu_stay_per_hospitalization_coverage_incomplete"}
+    eligible = flags.astype(bool)
+    if age_review["basis"] == "typed_age_eligibility":
+        age = pd.to_numeric(one["age"], errors="coerce")
+        eligible &= age.notna()
+        if age_review["age_min"] is not None:
+            eligible &= age.ge(float(age_review["age_min"]))
+        if age_review["age_max"] is not None:
+            eligible &= age.le(float(age_review["age_max"]))
+    reasons = one["stay_id"].map(coordinate[REASON])
+    counts = {str(key): int(value) for key, value in reasons[~flags.astype(bool)].value_counts().items()}
+    return {
+        **age_review, "count": int(eligible.sum()),
+        "basis": f"{age_review['basis']}+first_icu_stay_per_hospitalization",
+        "excluded_reason_counts": counts, "coordinate_sha256": binding.coordinate_sha256,
     }
 
 
@@ -234,6 +288,21 @@ def _first_icu_stay_review(
     }
 
 
+def _hospital_first_stay_review(study: Mapping[str, Any], *, source_path: str) -> Optional[dict[str, Any]]:
+    if not primary_cohort.first_icu_stay_per_hospitalization_only(study.get("cohort")):
+        return None
+    source = study.get("data_source") or {}
+    try:
+        binding = source_identity_authority.resolve_study_first_icu_stay_per_hospitalization(
+            export_path=source_path, database=str(source.get("database") or ""),
+        )
+    except source_identity_authority.PatientGroupingAuthorityError as exc:
+        return {"status": "invalid", "reason_code": exc.code}
+    if binding is None:
+        return {"status": "unavailable", "reason_code": "first_icu_stay_per_hospitalization_authority_unavailable"}
+    return {"status": "ready", **dict(binding.authority_coordinates)}
+
+
 def _concept_time_capability(
     source_path: str, concept_id: str, *, event_status: bool = False
 ) -> dict[str, Any]:
@@ -351,6 +420,7 @@ def _runtime_readiness_review(
 
     grouping = _patient_grouping_review(study, source_path=source_path)
     first_icu_stay = _first_icu_stay_review(study, source_path=source_path)
+    hospital_first_stay = _hospital_first_stay_review(study, source_path=source_path)
     time_varying_requested = "time_varying" in strategies
     timing_sensitive_survival_requested = bool(
         {"landmark", "time_varying"}.intersection(strategies)
@@ -477,6 +547,8 @@ def _runtime_readiness_review(
         required_findings.append("non_readmission_indicator_unavailable")
     if first_icu_stay is not None and first_icu_stay["status"] != "ready":
         required_findings.append(str(first_icu_stay["reason_code"]))
+    if hospital_first_stay is not None and hospital_first_stay["status"] != "ready":
+        required_findings.append(str(hospital_first_stay["reason_code"]))
 
     outcome_event_time = dict(event_time)
     if (
@@ -505,6 +577,8 @@ def _runtime_readiness_review(
     }
     if first_icu_stay is not None:
         result["first_icu_stay"] = first_icu_stay
+    if hospital_first_stay is not None:
+        result["first_icu_stay_per_hospitalization"] = hospital_first_stay
     if hospital_mortality_followup is not None:
         result["hospital_mortality_followup"] = hospital_mortality_followup
     return result
@@ -519,6 +593,18 @@ def build_data_package_execution_readiness(
 ) -> dict[str, Any]:
     """Compile the path-free pre-analysis execution capability receipt."""
 
+    try:
+        primary_cohort.normalize_execution_cohort(study.get("cohort"))
+    except primary_cohort.PrimaryCohortContractError as exc:
+        # Malformed or conflicting scopes are a review blocker, not evidence
+        # for either population and not a reason to inspect source rows.
+        return {
+            "eligible_denominator": {
+                "status": "unavailable", "count": None,
+                "basis": "cohort_contract", "reason_code": exc.code,
+            },
+            "runtime_readiness": {"status": "blocked", "required_findings": [exc.code]},
+        }
     return {
         "eligible_denominator": _cohort_eligibility_review(
             study,

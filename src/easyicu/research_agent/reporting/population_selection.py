@@ -519,6 +519,14 @@ def _step_label(step: SelectionStep) -> str:
         if step.stage == "host":
             label += " (restricted by the host)"
         return label
+    if step.criterion == "first_icu_stay_per_hospitalization_restriction":
+        return (
+            "not the first ICU stay within a hospitalization, non-ICU unit, or "
+            "hospitalization/unit type/visit order unknown (restricted by the host; "
+            f"non-first: {parameters.get('non_first_icu_stays_removed')}, "
+            f"non-ICU: {parameters.get('non_icu_stays_removed')}, "
+            f"unknown eligibility: {parameters.get('unknown_eligibility_stays_removed')})"
+        )
     if step.criterion == "los":
         bounds = []
         if parameters.get("los_min") is not None:

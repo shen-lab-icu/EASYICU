@@ -36,6 +36,7 @@ from .catalog import (
     build_available_catalog,
 )
 from .first_icu_stay import FirstIcuStayBinding
+from .first_icu_stay import FirstIcuStayPerHospitalizationBinding
 from .patient_grouping import PatientGroupingBinding
 from ..canonical_json import extract_json_object as _extract_json_object
 from ..contracts.trajectory_design import longitudinal_capability_note
@@ -362,6 +363,7 @@ def acquire_universe_for_question(
     patient_grouping: Optional[PatientGroupingBinding] = None,
     host_derivations: Sequence[str] = (),
     first_icu_stay: Optional[FirstIcuStayBinding] = None,
+    first_icu_stay_per_hospitalization: Optional[FirstIcuStayPerHospitalizationBinding] = None,
     event_onset_windows: Optional[Mapping[str, Tuple[float, float]]] = None,
 ) -> AcquisitionResult:
     """Agent selects concepts, we check coverage, then materialise the universe.
@@ -590,6 +592,10 @@ def acquire_universe_for_question(
     # the analysis cohort and any trajectory cut from it inherit it.
     if first_icu_stay is not None:
         identity_kwargs = {**identity_kwargs, **first_icu_stay.materializer_kwargs()}
+    if first_icu_stay_per_hospitalization is not None:
+        if first_icu_stay is not None:
+            raise MaterializedMetadataError("patient-first and hospital-first restrictions cannot be combined")
+        identity_kwargs = {**identity_kwargs, **first_icu_stay_per_hospitalization.materializer_kwargs()}
     # A longitudinal artifact must not silently widen the user-reviewed
     # materialization window.  Callers that need a different trajectory span
     # must declare it explicitly.

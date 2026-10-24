@@ -787,3 +787,32 @@ def test_acceptance_endpoint_rejects_arbitrary_approval_and_scope_fields(
     response = client.post(endpoint, json=body)
     assert response.status_code == 200, response.text
     assert response.json()["next_action"] == "review_complete_plan"
+
+
+def test_hospitalization_first_icu_proposal_persists_exact_scope_through_extraction(study):
+    _, requests = reviewed_population({"kind": "first_icu_stay_per_hospitalization"})
+    result = proposal(study, requests)
+    assert result["available"] is True
+    assert result["cohort"]["first_icu_stay_per_hospitalization"] is True
+    assert result["cohort"].get("exclude_readmissions", False) is False
+    updated = study_contexts.upsert_context(
+        {"id": study["id"], "cohort": result["cohort"]},
+        expected_revision=study["revision"], require_revision=True, lifecycle_write=False,
+    )
+    calls = []
+    extraction_handoff.submit_study_extraction(
+        study=updated, registered_source=None,
+        submit=lambda body: calls.append(body) or {"job_id": "synthetic"},
+    )
+    assert calls[0]["cohort"]["first_icu_stay_per_hospitalization"] is True
+    assert calls[0]["cohort"].get("exclude_readmissions", False) is False
+    assert calls[0]["cohort"]["max_patients"] == 57
+
+
+def test_hospitalization_first_icu_proposal_refuses_explicit_each_patient_scope(study):
+    _, requests = reviewed_population({"kind": "first_icu_stay_per_hospitalization"})
+    study = deepcopy(study)
+    study["cohort"]["exclude_readmissions"] = True
+    result = proposal(study, requests)
+    assert result["available"] is False
+    assert "population_preparation_first_stay_scope_conflict" in result["blocker_codes"]

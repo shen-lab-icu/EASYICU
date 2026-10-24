@@ -1235,3 +1235,67 @@ def test_invalid_web_adjustment_authority_fails_closed() -> None:
         agent_pipeline_runs._research_user_preferences(study)
 
     assert exc.value.code == "research_pipeline_covariate_selection_invalid"
+
+
+def test_a_first_stay_study_transports_defaults_and_complete_source_rules() -> None:
+    study = _complete_study()
+    study["cohort"] = {
+        "preset": "all_icu",
+        "age_min": 18,
+        "age_max": 100,
+        "first_icu_stay_per_hospitalization": True,
+        "exclude_readmissions": False,
+        "label": "Adults, first ICU stay in each hospitalization",
+        "review": (
+            "Select the first declared ICU unit within each hospitalization, "
+            "keeping repeated patients across distinct hospitalizations. "
+        ) * 3,
+        "exclusion_statement": (
+            "Exclude non-ICU units and hospitalizations whose preceding unit "
+            "history cannot be verified; report the exclusions by reason. "
+        ) * 3,
+        # The native workspace carries module-default metadata even for a
+        # demographics/outcome-only extraction. It is not a Sepsis cohort.
+        "sepsis_definition": {
+            "record_scope": "metadata_current_runtime_defaults",
+            "runtime_profile": "easyicu_sepsis3_locked_v1",
+            "definition_locked": True,
+            "suspected_infection": {
+                "mode": "auto", "abx_win_hours": 24, "samp_win_hours": 72,
+                "abx_count_win_hours": 24, "abx_min_count": 1,
+                "positive_cultures_required": False,
+            },
+            "sofa_increase": {
+                "si_window": "first", "window_before_si_hours": 48,
+                "window_after_si_hours": 24, "delta_function": "delta_cummin",
+                "threshold": 2, "keep_components": False,
+            },
+        },
+    }
+    source_report = {
+        "mode": "filtered", "count_unit": "icu_stay",
+        "source_total": 20, "selected": 12,
+        "demographic_steps": [{"criterion": "age", "before": 20, "after": 12}],
+    }
+    compiled = agent_pipeline_runs._research_user_preferences(
+        study,
+        source_selection_basis="export_contract",
+        source_selection_report=source_report,
+        event_time_semantics={},
+        question_named_concepts=[{"concepts": ["sex"], "evidence": "sex"}],
+    )
+    validated = UserPreferences.model_validate(compiled)
+    payload = str(validated.data_constraints)
+    constraints = json.loads(payload)
+
+    assert 2_400 < len(payload) <= 4_096
+    assert constraints["cohort"] == study["cohort"]
+    assert constraints["source_selection"]["export_report"] == source_report
+    assert constraints["source_selection"]["host_applied"] == (
+        agent_pipeline_runs._host_applied_criteria(study)
+    )
+    assert "complete preceding unit ordinals" in payload
+    assert "patient independence is not established" in payload
+    assert constraints["confirmations"] == study["confirmations"]
+    assert constraints["materialization_window"]["role"] == "outer_observation_window"
+    assert "omitted]" not in payload

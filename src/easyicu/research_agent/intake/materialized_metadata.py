@@ -2134,6 +2134,95 @@ def _local_authority_reference(
 
 #: The host's receipt for a universe restricted to each patient's first ICU stay.
 FIRST_ICU_STAY_RESTRICTION_SCHEMA = "easyicu.first_icu_stay_restriction/1"
+FIRST_ICU_STAY_PER_HOSPITALIZATION_RESTRICTION_SCHEMA = (
+    "easyicu.first_icu_stay_per_hospitalization_restriction/1"
+)
+def first_icu_stay_per_hospitalization_policy_projection(raw: Mapping) -> dict:
+    """Read only the declared selection policy, never raw source identities."""
+
+    from ..acquisition.first_icu_stay import SELECTION_POLICY
+
+    coordinates = raw.get("authority_coordinates", raw)
+    if not isinstance(coordinates, Mapping):
+        raise MaterializedMetadataError("first ICU stay per hospitalization policy is invalid")
+    for key, expected in SELECTION_POLICY.items():
+        value = coordinates.get(key)
+        # Sealed canonical mappings freeze JSON arrays as tuples.
+        if isinstance(expected, (tuple, list)):
+            valid = isinstance(value, (tuple, list)) and list(value) == list(expected)
+        else:
+            valid = value == expected and (not isinstance(expected, bool) or value is expected)
+        if not valid:
+            raise MaterializedMetadataError("first ICU stay per hospitalization policy is invalid")
+    return {
+        key: list(value) if isinstance(value, (tuple, list)) else value
+        for key, value in SELECTION_POLICY.items()
+    }
+
+
+def sealed_first_icu_stay_per_hospitalization_restriction(
+    verified: "VerifiedMaterializedCohortAuthority", *, cohort_path: Path,
+) -> Optional[dict[str, object]]:
+    """A distinct, verified per-hospitalization restriction inherited by children."""
+
+    from ..acquisition.first_icu_stay import UNKNOWN_REASONS
+
+    authority: Optional[MaterializedCohortAuthority] = verified.authority
+    seen: set[str] = set()
+    allowed_reasons = {"non_first_icu_stay", "non_icu_unit", *UNKNOWN_REASONS}
+    count_fields = (
+        "stays_before", "stays_after", "non_first_icu_stays_removed",
+        "non_icu_stays_removed", "unknown_eligibility_stays_removed",
+    )
+    while authority is not None:
+        restriction = authority.producer_parameters.get(
+            "first_icu_stay_per_hospitalization_restriction"
+        )
+        if restriction is not None:
+            if (
+                not isinstance(restriction, Mapping)
+                or restriction.get("schema_version")
+                != FIRST_ICU_STAY_PER_HOSPITALIZATION_RESTRICTION_SCHEMA
+            ):
+                raise MaterializedMetadataError(
+                    "sealed first ICU stay per hospitalization restriction is invalid"
+                )
+            coordinate = _digest(
+                restriction.get("coordinate_sha256"),
+                label="first ICU stay per hospitalization coordinate sha256",
+            )
+            counts = {key: restriction.get(key) for key in count_fields}
+            reasons = restriction.get("excluded_reason_counts")
+            if (
+                any(type(value) is not int or value < 0 for value in counts.values())
+                or not isinstance(reasons, Mapping)
+                or any(
+                    key not in allowed_reasons or type(value) is not int or value < 0
+                    for key, value in reasons.items()
+                )
+                or counts["stays_before"] != sum(counts[key] for key in count_fields[1:])
+                or sum(reasons.values()) != counts["stays_before"] - counts["stays_after"]
+                or reasons.get("non_first_icu_stay", 0) != counts["non_first_icu_stays_removed"]
+                or reasons.get("non_icu_unit", 0) != counts["non_icu_stays_removed"]
+            ):
+                raise MaterializedMetadataError(
+                    "sealed per-hospitalization restriction counts do not reconcile"
+                )
+            return {
+                "schema_version": FIRST_ICU_STAY_PER_HOSPITALIZATION_RESTRICTION_SCHEMA,
+                "coordinate_sha256": coordinate,
+                **counts,
+                "excluded_reason_counts": dict(reasons),
+                **first_icu_stay_per_hospitalization_policy_projection(restriction),
+            }
+        parent = authority.parent_authority_sha256
+        if parent is None or parent in seen:
+            return None
+        seen.add(parent)
+        _reference, authority = _local_authority_reference(
+            Path(cohort_path).parent, authority_sha256=parent,
+        )
+    return None
 
 
 def sealed_first_icu_stay_restriction(
@@ -4711,6 +4800,9 @@ def _publish_hospital_followup_at(
 
 __all__ = [
     "FIRST_ICU_STAY_RESTRICTION_SCHEMA",
+    "FIRST_ICU_STAY_PER_HOSPITALIZATION_RESTRICTION_SCHEMA",
+    "first_icu_stay_per_hospitalization_policy_projection",
+    "sealed_first_icu_stay_per_hospitalization_restriction",
     "MATERIALIZED_COHORT_AUTHORITY_SCHEMA",
     "MATERIALIZED_COHORT_DESCRIPTOR_SCHEMA",
     "MaterializedCohortAuthority",

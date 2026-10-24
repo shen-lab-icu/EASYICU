@@ -2765,6 +2765,9 @@ def materialize_to_parquet(
     first_icu_stay_path: Optional[Union[str, Path]] = None,
     first_icu_stay_sha256: Optional[str] = None,
     first_icu_stay_authority_coordinates: Optional[Mapping[str, object]] = None,
+    first_icu_stay_per_hospitalization_path: Optional[Union[str, Path]] = None,
+    first_icu_stay_per_hospitalization_sha256: Optional[str] = None,
+    first_icu_stay_per_hospitalization_authority_coordinates: Optional[Mapping[str, object]] = None,
     **kwargs: Any,
 ) -> Dict[str, Path]:
     """Materialize and write ``<stem>.parquet`` + ``<stem>_provenance.json``.
@@ -2830,6 +2833,29 @@ def materialize_to_parquet(
         provenance["columns"] = list(cohort.columns)
         provenance["cohort_sha256"] = _hash_df(cohort.reset_index(drop=True))
         provenance["first_icu_stay_restriction"] = first_icu_stay_restriction
+    hospital_first_restriction: Optional[dict[str, object]] = None
+    if (first_icu_stay_per_hospitalization_path is None) != (first_icu_stay_per_hospitalization_sha256 is None):
+        raise MaterializedMetadataError("hospital first-stay coordinate path and digest must be declared together")
+    if first_icu_stay_per_hospitalization_path is not None:
+        from ..acquisition.first_icu_stay import (
+            FirstIcuStayPerHospitalizationError,
+            restrict_to_first_icu_stay_per_hospitalization,
+        )
+
+        if first_icu_stay_path is not None:
+            raise MaterializedMetadataError("patient-first and hospital-first restrictions cannot be combined")
+        try:
+            cohort, hospital_first_restriction = restrict_to_first_icu_stay_per_hospitalization(
+                cohort, coordinate_path=Path(first_icu_stay_per_hospitalization_path).expanduser(),
+                coordinate_sha256=str(first_icu_stay_per_hospitalization_sha256),
+                authority_coordinates=first_icu_stay_per_hospitalization_authority_coordinates,
+            )
+        except FirstIcuStayPerHospitalizationError as exc:
+            raise MaterializedMetadataError(str(exc)) from exc
+        provenance["n_stays_after_inclusion_exclusion"] = int(len(cohort))
+        provenance["columns"] = list(cohort.columns)
+        provenance["cohort_sha256"] = _hash_df(cohort.reset_index(drop=True))
+        provenance["first_icu_stay_per_hospitalization_restriction"] = hospital_first_restriction
     identity_options = (
         replacement_identity_path,
         replacement_identity_sha256,
@@ -2900,6 +2926,8 @@ def materialize_to_parquet(
     }
     if first_icu_stay_restriction is not None:
         producer_parameters["first_icu_stay_restriction"] = first_icu_stay_restriction
+    if hospital_first_restriction is not None:
+        producer_parameters["first_icu_stay_per_hospitalization_restriction"] = hospital_first_restriction
     if materialize_args["last_value_concepts"]:
         producer_parameters["last_value_concepts"] = list(materialize_args["last_value_concepts"])
     trajectory_concepts_resolved: Optional[List[str]] = None

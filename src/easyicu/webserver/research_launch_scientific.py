@@ -329,6 +329,31 @@ def _first_icu_stay_for_cohort(
     )
 
 
+def _first_icu_stay_per_hospitalization_for_cohort(study: Mapping[str, Any]):
+    """Resolve the distinct hospital-level restriction; never substitute patient-first."""
+    if not primary_cohort.first_icu_stay_per_hospitalization_only(study.get("cohort")):
+        return None
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    try:
+        binding = source_identity_authority.resolve_study_first_icu_stay_per_hospitalization(
+            export_path=_clean_text(source.get("path"), 2_000),
+            database=_clean_text(source.get("database"), 80),
+        )
+    except source_identity_authority.PatientGroupingAuthorityError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_hospital_first_stay_restriction_unverified", str(exc),
+            details={"field": "cohort.first_icu_stay_per_hospitalization", "reason_code": exc.code},
+        ) from exc
+    if binding is None:
+        raise ResearchPipelineRunError(
+            "research_pipeline_hospital_first_stay_restriction_unverified",
+            "The selected source cannot prove the first ICU stay within each hospitalization.",
+            details={"field": "cohort.first_icu_stay_per_hospitalization"},
+        )
+    return binding
+
+
 def resolve_study_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
     """Resolve legacy descriptive scope identically for planning and launch.
 
@@ -431,6 +456,7 @@ def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
             details={"field": "analysis_design"},
         )
     _first_icu_stay_for_cohort(study)
+    _first_icu_stay_per_hospitalization_for_cohort(study)
     dependence_finding = study_context_owner.analysis_dependence_finding(dict(study))
     if dependence_finding is not None:
         raise ResearchPipelineRunError(
@@ -1923,6 +1949,7 @@ def _data_foundation_profile(
             required_feature_concepts.append(source_concept)
 
     first_icu_stay = _first_icu_stay_for_cohort(study)
+    hospital_first = _first_icu_stay_per_hospitalization_for_cohort(study)
     return {
         "allowed_modules": modules,
         "available_concepts": tuple(by_id),
@@ -1934,6 +1961,7 @@ def _data_foundation_profile(
         # The host restricts the universe itself to each patient's first ICU
         # stay; a cohort that keeps every stay carries no such coordinate.
         **({"first_icu_stay": first_icu_stay} if first_icu_stay is not None else {}),
+        **({"first_icu_stay_per_hospitalization": hospital_first} if hospital_first is not None else {}),
     }
 
 
@@ -1992,6 +2020,7 @@ class TargetTrialLaunchInputs:
             "patient_grouping": patient_grouping,
             "host_derivations": (),
             "first_icu_stay": profile.get("first_icu_stay"),
+            "first_icu_stay_per_hospitalization": profile.get("first_icu_stay_per_hospitalization"),
             "event_onset_windows": dict(self.event_onset_windows),
         }
 
