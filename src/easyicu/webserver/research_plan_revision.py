@@ -27,6 +27,7 @@ from easyicu.research_agent.planning.population_requirements import (
 )
 from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.orchestration.human_review_checkpoint import load_checkpoint
+from easyicu.research_agent.orchestration.exposure_grouping_phase import PlanningRunGroupings, planning_run_groupings
 from easyicu.research_agent.planning.scientific_review import (
     PlanScientificReview,
     plan_revision_blocker_codes,
@@ -564,4 +565,54 @@ def load_prepared_plan_revision(
         ) from exc
 
 
-__all__ = ["PreparedPlanRevision", "load_prepared_plan_revision"]
+def load_configured_plan_groupings(
+    *, study: Mapping[str, Any], project_root: str | None,
+) -> PlanningRunGroupings | None:
+    """Keep the reviewed groups across a host configuration change.
+
+    Configuration is not candidate approval. Its existing choice receipt
+    binds the exact old run to the current study revision, so only that
+    run's verified grouping definitions cross this handoff. They must be
+    available before materialization and runtime-family selection.
+    """
+
+    from easyicu.webserver.pi_copilot.plan_review_progress import matching_progress
+
+    if not project_root:
+        return None
+    rows = agent_runs.list_run_history(
+        study_id=str(study.get("id") or ""), project_root=project_root, limit=100,
+    ).get("runs", ())
+    for row in rows:
+        progress = matching_progress(study, row)
+        if (progress is None or progress.choices.get("agent_plan_configuration")
+                != "typed_runtime_projection"):
+            continue
+        try:
+            study_root = Path(project_root).resolve() / _slug(study.get("id"))
+            wrapper = Path(str(row.get("project_dir") or ""))
+            run_id = str(row.get("run_id") or "")
+            run_dir = wrapper / "pipeline" / run_id
+            if (not run_id or Path(run_id).name != run_id
+                    or wrapper.parent.resolve() != study_root.resolve()
+                    or any(path.is_symlink() for path in (study_root, wrapper, run_dir.parent, run_dir))):
+                raise ValueError("configured plan is outside the exact study")
+            paths = [run_dir / name for name in ("human_review_checkpoint.json", "run_input_capsule.json")]
+            if any(path.is_symlink() or path.stat().st_size > 4 * 1024 * 1024 for path in paths):
+                raise ValueError("configured plan input receipt is not a bounded regular file")
+            checkpoint_raw, capsule_raw = (path.read_bytes() for path in paths)
+            checkpoint, capsule = json.loads(checkpoint_raw), json.loads(capsule_raw)
+            if (checkpoint.get("run_id") != run_id
+                    or checkpoint.get("run_input_capsule_sha256") != hashlib.sha256(capsule_raw).hexdigest()):
+                raise ValueError("configured plan input receipt changed")
+            return planning_run_groupings(run_dir, cohort_sha256=str(capsule.get("cohort_sha256") or ""))
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            raise ResearchPipelineRunError(
+                "candidate_plan_materialization_authority_invalid",
+                "The configured plan's exposure groupings failed their input binding.",
+                details={"field": "exposure_groupings"},
+            ) from exc
+    return None
+
+
+__all__ = ["PreparedPlanRevision", "load_prepared_plan_revision", "load_configured_plan_groupings"]

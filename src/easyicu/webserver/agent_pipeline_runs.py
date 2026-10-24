@@ -5166,7 +5166,7 @@ def _exposure_grouping_config(
 ) -> Dict[str, Any]:
     """Whether a run asks for the study's exposure groupings, and those it binds.
 
-    A planning run asks; the run that follows an accepted candidate forms the
+    A planning run asks; the run that follows an accepted or configured candidate forms the
     candidate's groupings again without asking.  A development continuation
     is not asked: its replayed outline is the source run's.
     """
@@ -6495,6 +6495,20 @@ def make_research_pipeline_run_runner(
                         prepared_revision.prior_plan_contract,
                         bound_plan_revision_contract,
                     ))
+        bound_exposure_groupings = candidate_authority.exposure_groupings if candidate_authority else None
+        if not source_run_id and execution_resume_inputs is None and development_resume_binding is None:
+            from easyicu.webserver.research_plan_revision import load_configured_plan_groupings
+
+            bound_exposure_groupings = load_configured_plan_groupings(study=study, project_root=project_root)
+            if bound_exposure_groupings is not None:
+                foundation_profile = _data_foundation_profile(
+                    export_path=export_path, study=candidate_planning_study,
+                    target=target, primary_exposure=primary_exposure,
+                    require_target=True, require_primary_exposure=True,
+                    covariates=covariates, sensitivity_specs=sensitivity_specs,
+                    additional_outcomes=candidate_outcome_concepts,
+                    analysis_inputs=bound_exposure_groupings.concepts,
+                )
         if bound_analysis_inputs is None and prepared_revision is not None:
             # A repair on the same prepared input is still bound to the
             # accepted candidate's primary-analysis inputs.  Without them the
@@ -7025,10 +7039,6 @@ def make_research_pipeline_run_runner(
                 or primary_exposure
                 or ""
             ).strip()
-            bound_exposure_groupings = (
-                candidate_authority.exposure_groupings
-                if candidate_authority is not None else None
-            )
             runtime_projection_specs = _runtime_projection_sensitivity_specs(
                 sensitivity_specs,
                 primary_exposure_source=runtime_primary_exposure_source,
@@ -7237,11 +7247,7 @@ def make_research_pipeline_run_runner(
                 **_exposure_grouping_config(
                     metadata_only_planning=metadata_only_planning,
                     development_continuation=development_resume_binding is not None,
-                    candidate_groupings=(
-                        candidate_authority.exposure_groupings
-                        if candidate_authority is not None
-                        else None
-                    ),
+                    candidate_groupings=bound_exposure_groupings,
                 ),
                 # Live PubMed is frozen by the selected additive profile, not
                 # passed as an ad-hoc override. When an accepted Idea handoff
