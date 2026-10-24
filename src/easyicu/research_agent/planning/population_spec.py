@@ -398,18 +398,23 @@ def quote_written_in(quote: str, source: str, study_texts: Sequence[str]) -> boo
 
 
 def unquoted_criteria(
-    spec: PopulationSpec, study_texts: Sequence[str]
+    spec: PopulationSpec, study_texts: Sequence[str], *,
+    question_texts: Sequence[str] | None = None,
 ) -> tuple[PopulationCriterion, ...]:
     """The criteria citing the study's words whose quote is not written in them.
 
     ``study_texts`` are the question and the study's own statements of whom it
-    includes.
+    includes. When supplied, ``question_texts`` restricts question attribution
+    to that source instead of borrowing wording from another study field.
     """
 
     return tuple(
         criterion
         for criterion in spec.criteria
-        if not quote_written_in(criterion.quote, criterion.source, study_texts)
+        if not quote_written_in(
+            criterion.quote, criterion.source,
+            question_texts if criterion.source == "question" and question_texts is not None else study_texts,
+        )
     )
 
 

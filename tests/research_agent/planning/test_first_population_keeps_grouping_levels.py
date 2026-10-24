@@ -2,6 +2,8 @@
 
 import json
 
+from tests.support.distribution_policies import EXCLUDE_MISSING
+
 import pytest
 
 from easyicu.research_agent.agents.progressive_planner import select_progressive_variables
@@ -98,6 +100,7 @@ def _payload(context, *, side="inclusion", reading=True, typed_bound=False):
         "schema_version": "easyicu.family_plan_spec/1", "family_id": request.family_id,
         "request_sha256": request.request_sha256, "adjustment_set": [],
         "baseline_variables": ["age"],
+        "distribution_missing_policies": dict(EXCLUDE_MISSING),
         "reader_display_labels": [
             {"key": key, "value": "Clinical " + key.replace("_", " ")}
             for key in dict.fromkeys([*request.required_reader_label_keys, *request.level_label_keys])

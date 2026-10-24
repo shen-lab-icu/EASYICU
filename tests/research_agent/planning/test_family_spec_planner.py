@@ -8,6 +8,8 @@ case-neutral landmark context.
 
 from __future__ import annotations
 
+from .family_spec_fixtures import DESCRIPTIVE_LABELS, _descriptive_payload
+
 import hashlib
 import json
 import re
@@ -1111,41 +1113,8 @@ def test_spline_family_article_figure_binds_to_its_deterministic_renderer() -> N
 # Descriptive exposure–outcome family (counts-only when repeated units are unresolved)
 # ---------------------------------------------------------------------------
 
-DESCRIPTIVE_LABELS = {
-    "phenotype_flag": "Phenotype present in the first 24 h",
-    "phenotype_flag=0": "Phenotype absent",
-    "phenotype_flag=1": "Phenotype present",
-    "death": "In-hospital death",
-    "age": "Age at ICU admission (years)",
-    "sex": "Patient sex",
-    "score_first": "Chronic disease score (first value)",
-    "readmit_flag": "ICU readmission indicator",
-}
 
 
-def _descriptive_payload(request, *, baseline_variables, adjustment_set=None):
-    return {
-        "schema_version": "easyicu.family_plan_spec/1",
-        "family_id": request.family_id,
-        "request_sha256": request.request_sha256,
-        "adjustment_set": adjustment_set or [],
-        "baseline_variables": baseline_variables,
-        "reader_display_labels": [
-            {"key": key, "value": DESCRIPTIVE_LABELS[key]}
-            for key in [*request.required_reader_label_keys, *request.level_label_keys]
-        ],
-        "comparator_applications": [
-            {
-                "citation_key": key,
-                "application": (
-                    f"Compare this description with {key} on population, exposure definition, "
-                    "time zero, and estimand without copying its design or claiming novelty."
-                ),
-            }
-            for key in request.direct_comparator_literature_keys
-        ],
-        "roster_decision_note": "Descriptive family: no adjustment; baseline variables chosen from host-timed candidates.",
-    }
 
 
 def test_descriptive_family_request_offers_window_bound_baseline_variables_and_level_labels() -> None:

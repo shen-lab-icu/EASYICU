@@ -63,6 +63,7 @@ from ..schema import (
     PhenotypeComparisonSpec,
 )
 from ..research_context.typed import declared_domain_for_variable
+from ..research_context.concept_population import context_data_constraints
 from ..contracts.table_one_semantics import table_one_variable_kind as _table_one_variable_kind, validate_table_one_column_roles
 from .analysis_types import (
     canonical_analysis_family,
@@ -607,13 +608,24 @@ def _stated_population_spec(
         ) from exc
     if spec is None:
         return None
-    study_texts = (
+    # Explicit review/exclusion text can supply study wording; a display label
+    # alone cannot establish population intent. Wording never proves that the
+    # input rows already satisfy a restriction.
+    cohort_wording = context_data_constraints(context).get("cohort")
+    stated_wording = (
+        tuple(value for key in ("review", "exclusion_statement")
+              if isinstance(value := cohort_wording.get(key), str) and value.strip())
+        if isinstance(cohort_wording, Mapping) else ()
+    )
+    question_texts = (
         str(context.research_question or ""),
         *(str(item) for item in context.cohort.inclusion_criteria),
         *(str(item) for item in context.cohort.exclusion_criteria),
     )
-    for criterion in unquoted_criteria(spec, study_texts):
+    study_texts = (*question_texts, *stated_wording)
+    for criterion in unquoted_criteria(spec, study_texts, question_texts=question_texts):
         index = next(i for i, item in enumerate(spec.criteria) if item is criterion)
+        source_texts = question_texts if criterion.source == "question" else study_texts
         raise _fail(
             "progressive_population_quote_not_verbatim",
             f"criterion {criterion.id} cites the {criterion.source.replace('_', ' ')}, "
@@ -621,7 +633,7 @@ def _stated_population_spec(
             "state it exactly as the study writes them, in their own language; "
             "never paraphrase or translate them. Allowed source texts "
             "(research question and study cohort wording): "
-            + _population_quote_source_excerpt(criterion.quote, study_texts),
+            + _population_quote_source_excerpt(criterion.quote, source_texts),
             path=f"cohort.population_spec.criteria[{index}].quote",
         )
     return spec
