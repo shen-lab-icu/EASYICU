@@ -39,6 +39,8 @@
         code: detail.reason_code || run.gate_detail_code,
         missing: detail.missing_concepts || run.gate_missing_concepts,
         cause: detail.cause_code || run.gate_detail_cause_code,
+        step: detail.step_id || run.gate_detail_step_id,
+        stepTitle: detail.step_title || run.gate_detail_step_title,
       }) || '').trim() : '';
       return text || tr('This run stopped before it finished.', '这次运行在完成前停止。');
     }

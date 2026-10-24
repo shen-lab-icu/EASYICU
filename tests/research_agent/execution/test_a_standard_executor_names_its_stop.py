@@ -20,6 +20,7 @@ import os
 import threading
 from pathlib import Path
 from types import MappingProxyType
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -40,12 +41,63 @@ from easyicu.research_agent.execution.executor_stop_record import (
     read_executor_stop_record,
 )
 from easyicu.research_agent.execution.standard_executor_diagnostics import (
+    standard_executor_failure_codes,
     standard_executor_failure_finding,
 )
 from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
 _INTERVAL = "continuous_survival_interval_result_not_estimable"
 _SUITE = "signed_landmark_continuous_survival_suite"
+
+
+@pytest.mark.parametrize("override", [
+    {"status": "ok"}, {"deterministic_standard_analysis": ""},
+    {"standard_executor_terminal_reason": "unregistered"},
+    {"standard_executor_terminal_reason": ["executor_runtime_failure"]},
+])
+def test_standard_failure_projection_requires_a_host_terminal_failure(override):
+    record = {
+        "status": "deterministic_standard_blocked",
+        "deterministic_standard_analysis": "grouped_table_one",
+        "standard_executor_terminal_reason": "executor_runtime_failure",
+    }
+    assert standard_executor_failure_codes({**record, **override}) == {}
+
+
+def test_any_standard_executor_output_failure_stops_before_model_repair():
+    from easyicu.research_agent.execution.candidate_loop import (
+        _CandidateLoopAction, _candidate_contract_repair_transition,
+    )
+    from easyicu.research_agent.schema import ValidationFinding
+
+    class NoRepair:
+        @property
+        def _enable_deterministic_runner_repair(self):
+            pytest.fail("A host-owned output failure reached code repair")
+
+    finding = ValidationFinding(
+        validator="emitted_table_aggregate_row", severity="error",
+        message="The emitted total needs its row role.",
+        detail={"reason": "unlabelled_aggregate_row"},
+    )
+    host = SimpleNamespace(
+        _locked_measurement_data_quality_issues=lambda _: [], pipeline=NoRepair(),
+    )
+    attempt = SimpleNamespace(
+        step_record={}, sealed_renderer_authorized_code_sha256=None,
+        is_trajectory_stability_standard=False,
+        worker_progress=SimpleNamespace(deterministic_standard_executor_used=True),
+    )
+    state = SimpleNamespace(
+        early_contract_errors=[finding], early_contract_findings=[finding],
+        visual_step_summary={"status": "ok"}, code="host code",
+    )
+    assert _candidate_contract_repair_transition(host, attempt, state) == _CandidateLoopAction.BREAK
+    assert state.standard_executor_terminal_block is True
+    assert state.standard_executor_terminal_reason == "executor_output_contract_failed"
+    assert state.standard_executor_terminal_findings == [finding]
+    assert state.code == "host code"
+    assert attempt.step_record["contract_repair_triggers"] == [[finding.model_dump()]]
 
 
 def _record(**overrides):

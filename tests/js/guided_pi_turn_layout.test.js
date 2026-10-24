@@ -255,6 +255,38 @@ const runFilesApi = {
   // owner that offers every choice and records the answer.
   const confirmation = { code: 'failed_pipeline_execution_retry_available', approve: '从失败步骤重试分析' };
   const stop = modules.require('runStop').create({ tr, runFailureText });
+  for (language of ['zh', 'en']) {
+    window.EU_LANG = language;
+    for (const flattened of [false, true]) {
+      for (const [cause, sentence] of [
+        ['executor_runtime_failure', tr('the built-in calculation failed', '内置计算执行失败')],
+        ['executor_output_contract_failed', tr('its output did not pass validation', '输出未通过校验')],
+        ['missing_executor_outputs', tr('it did not produce the required output', '未生成必需的输出')],
+      ]) {
+        // The approved plan title wins; a historical run falls back to its id,
+        // and a receipt with neither uses the generic sentence.
+        for (const [stepTitle, stepId, prefix] of [
+          ['Describe score by arm', '02_baseline', tr('Step “Describe score by arm” stopped', '步骤「Describe score by arm」停止')],
+          ['', '02_baseline', tr('Step “02_baseline” stopped', '步骤「02_baseline」停止')],
+          ['   ', '02_baseline', tr('Step “02_baseline” stopped', '步骤「02_baseline」停止')],
+          ['', '', tr('An analysis step stopped', '有分析步骤停止')],
+        ]) {
+          const detail = { reason_code: 'deterministic_standard_executor_failed_closed', cause_code: cause, step_id: stepId, step_title: stepTitle };
+          const failed = { ...savedRun, run_status: 'blocked', gate_reason: 'research_agent_pipeline_failed_closed',
+            ...(flattened ? { gate_detail_code: detail.reason_code, gate_detail_cause_code: cause,
+              gate_detail_step_id: stepId, gate_detail_step_title: stepTitle } : { gate_detail: detail }) };
+          const text = visible(stop.render({ savedRuns: [failed] })).trim();
+          assert.equal(text, tr(
+            `${prefix}: ${sentence}. The run is incomplete. Send the failure receipt to support; retry the approved plan after EasyICU is updated.`,
+            `${prefix}：${sentence}。本次运行未完成。请把失败回执发给支持人员，EasyICU 更新后再按已批准计划重试。`,
+          ));
+          if (stepTitle.trim()) assert.ok(!text.includes(stepId), text);
+        }
+      }
+    }
+  }
+  language = 'zh';
+  window.EU_LANG = language;
   const older = { ...savedRun, run_id: 'run_older', run_ref: 'rr_' + 'e'.repeat(32), updated_at_epoch: 100, gate_reason: 'data_foundation_blocked', run_status: 'blocked' };
   const timeline = [{ role: 'saved_run', savedRuns: [older] }, { role: 'saved_run', savedRuns: [savedRun] }];
   const newest = stop.render(timeline[1]);
@@ -273,7 +305,7 @@ const runFilesApi = {
   // the server note above the composer while a job runs.
   const stub = (overrides = {}) => new Proxy(overrides, { get: (target, key) => (key in target ? target[key] : () => '') });
   const conversation = (messages, overrides = {}) => modules.require('sessionView').create({
-    state: { session: { session_id: 'session-1', binding: {} }, messages, workflowReceipts: [], busy: false, projectLoading: false,
+    state: { session: { session_id: 'session-1', binding: {} }, messages, workflow: overrides.workflow, workflowReceipts: [], busy: false, projectLoading: false,
       draft: '', regenerating: false, planStarting: null },
     modules, dataConsent: stub({ requiresConfirmation: () => false }), starters: null, ideaSource: null,
     header: stub(), regeneration: null, studyWorkspace: stub({ messageView: row => ({ text: row.text }) }),
@@ -293,6 +325,25 @@ const runFilesApi = {
   assert.equal(count(stoppedPanel, 'class="gpi-run-stop"'), 1);
   assert.doesNotMatch(stoppedPanel, /这次运行没有完成，文件作为历史保留在下方/);
   assert.ok(!visible(stoppedPanel).includes(RUN));
+  // The workflow can finish before the independent run-file catalog reloads.
+  // Its authoritative stop must be visible during that gap, then appear once
+  // when the saved-run block arrives.
+  const workflowFailure = { run_id: 'synthetic-stopped-run', authoritative: true,
+    run_status: 'blocked', gate_status: 'blocked', gate_reason_code: 'research_agent_pipeline_failed_closed',
+    gate_detail_code: 'deterministic_standard_executor_failed_closed',
+    gate_detail_cause_code: 'executor_runtime_failure', gate_detail_step_id: '02_baseline',
+    gate_detail_step_title: 'Describe score by arm' };
+  const question = { id: 'q', role: 'user', text: '问题', complete: true };
+  for (const catalogLoaded of [false, true]) {
+    const messages = catalogLoaded ? [question, { role: 'saved_run', savedRuns: [workflowFailure] }] : [question];
+    const panel = conversation(messages, { workflow: { runs: [workflowFailure] } });
+    assert.equal(count(panel, 'class="gpi-run-stop"'), 1);
+    assert.match(visible(panel), /Describe score by arm.*内置计算执行失败.*请把失败回执发给支持人员/);
+    assert.ok(!visible(panel).includes('02_baseline'));
+  }
+  assert.doesNotMatch(conversation([question], { workflow: {
+    runs: [{ ...workflowFailure, authoritative: false }],
+  } }), /gpi-run-stop/);
   // The saved dA6 planning failure has no artifact refs or job run_id.
   // Its wrapper run id still identifies the child job that owns its trace.
   const receipt = JSON.parse(require('node:fs').readFileSync(

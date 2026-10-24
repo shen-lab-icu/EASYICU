@@ -13,7 +13,9 @@ from pydantic import BaseModel, ConfigDict
 
 from ..contracts.executor_stop import executor_stop_codes
 from ..execution.failure_classification import runtime_failure_codes
+from ..execution.standard_executor_diagnostics import standard_executor_failure_codes
 from ..planning.figure_step_contract import _output_declares_figure
+from ..schema import AnalysisPlan
 from .writer_stop import writer_stop
 
 
@@ -175,24 +177,31 @@ def step_completion_projection(
     record_by_step: Mapping[str, Mapping[str, Any]],
     status_by_step: Mapping[str, str],
     step_ok: Callable[[str], bool],
+    plan: AnalysisPlan | None = None,
 ) -> dict[str, object]:
     """Project outer execution and closed scientific terminal states.
 
     A failed step carries the stop its executor named, as codes
-    (``contracts.executor_stop``); one without a stop keeps its two keys.
+    (``contracts.executor_stop``). Host failures also carry the approved
+    plan's step intent as their title, never a runner-supplied title.
     """
 
     failed: list[dict[str, Any]] = []
     incomplete: list[dict[str, str]] = []
     states: list[dict[str, Any]] = []
+    step_titles = {step.step_id: step.intent for step in plan.steps} if plan else {}
     for step_id in required_step_ids:
         record = record_by_step.get(step_id, {})
         if step_id in status_by_step and not step_ok(step_id):
+            standard_failure = standard_executor_failure_codes(record)
             failed.append(
                 {"step_id": step_id, "status": status_by_step.get(step_id)}
+                | standard_failure
                 | executor_stop_codes(record)
                 | runtime_failure_codes(record)
             )
+            if standard_failure and step_titles.get(step_id):
+                failed[-1]["step_title"] = step_titles[step_id]
         summary = record.get("step_summary")
         summary_status = (
             str(summary.get("status") or "").strip().lower()

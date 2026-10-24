@@ -65,6 +65,18 @@ def _error(
     )
 
 
+def _overall_mask(rows: pd.DataFrame) -> pd.Series:
+    """Separate the total from a declared group literally named Overall.
+
+    The producer's group order identifies the total independently of its
+    display label. Older tables without that coordinate keep the label check.
+    """
+
+    if "group_order" in rows:
+        return pd.to_numeric(rows["group_order"], errors="coerce").eq(0)
+    return rows["group"].astype(str).eq("Overall")
+
+
 def _smd_rows_findings(
     *,
     step: AnalysisStep,
@@ -132,8 +144,9 @@ def _smd_rows_findings(
 
     findings: list[ValidationFinding] = []
     for category, stratum in strata:
-        reference = stratum[stratum["group"].astype(str).eq(reference_group)]
-        comparison = stratum[stratum["group"].astype(str).eq(comparison_group)]
+        stratum_groups = stratum[~_overall_mask(stratum)]
+        reference = stratum_groups[stratum_groups["group"].astype(str).eq(reference_group)]
+        comparison = stratum_groups[stratum_groups["group"].astype(str).eq(comparison_group)]
         if len(reference) != 1 or len(comparison) != 1:
             findings.append(
                 _error(
@@ -353,12 +366,14 @@ def _group_assignment_findings(
         rows = table[table["variable"].astype(str).eq(variable.name)]
         if rows.empty:
             continue
-        per_group = rows.groupby(rows["group"].astype(str))["denominator_n"].first()
-        if "Overall" not in per_group or any(
+        overall = rows[_overall_mask(rows)]
+        groups = rows[~_overall_mask(rows)]
+        per_group = groups.groupby(groups["group"].astype(str))["denominator_n"].first()
+        if overall.empty or any(
             name not in per_group for name in declared_groups
         ):
             continue
-        overall_n = pd.to_numeric(pd.Series([per_group["Overall"]]), errors="coerce")
+        overall_n = pd.to_numeric(overall["denominator_n"].iloc[:1], errors="coerce")
         parts = pd.to_numeric(
             pd.Series([per_group[name] for name in declared_groups]), errors="coerce"
         )
@@ -455,7 +470,7 @@ def table_one_output_findings(
                 "Table 1 rows are not bound to the Planner-owned design.",
             )
         )
-    expected_groups = {"Overall", *(str(value) for value in spec.group_levels)}
+    expected_groups = {str(value) for value in spec.group_levels}
     for variable in spec.variables:
         rows = table[table["variable"].astype(str).eq(variable.name)]
         if rows.empty:
@@ -468,8 +483,10 @@ def table_one_output_findings(
                 )
             )
             continue
-        observed_groups = set(rows["group"].dropna().astype(str))
-        if observed_groups != expected_groups:
+        overall_rows = rows[_overall_mask(rows)]
+        comparison_rows = rows[~_overall_mask(rows)]
+        observed_groups = set(comparison_rows["group"].dropna().astype(str))
+        if overall_rows.empty or observed_groups != expected_groups:
             findings.append(
                 _error(
                     step,
@@ -480,15 +497,14 @@ def table_one_output_findings(
             )
         p_values = pd.to_numeric(rows["p_value"], errors="coerce").dropna().unique()
         test_names = set(rows["test_name"].dropna().astype(str))
-        group_nonmissing = rows.groupby("group", dropna=False)["nonmissing_n"].first()
+        group_nonmissing = comparison_rows.groupby("group", dropna=False)["nonmissing_n"].first()
         empty_comparison_group = any(
             float(value) == 0
-            for group, value in group_nonmissing.items()
-            if str(group) != "Overall" and pd.notna(value)
+            for value in group_nonmissing
+            if pd.notna(value)
         )
         declared_empty_group = test_names == {"not_testable_empty_group"}
         declared_no_variation = test_names == {"not_testable_no_variation"}
-        overall_rows = rows[rows["group"].astype(str).eq("Overall")]
         active_overall_categories = (
             pd.to_numeric(overall_rows["count"], errors="coerce").gt(0).sum()
         )
@@ -545,7 +561,9 @@ def table_one_output_findings(
                 group_levels=list(spec.group_levels),
             )
         )
-        for group_name, group_rows in rows.groupby("group", dropna=False):
+        group_keys = ["group_order", "group"] if "group_order" in rows else "group"
+        for _, group_rows in rows.groupby(group_keys, dropna=False):
+            group_name = group_rows["group"].iloc[0]
             denominator = pd.to_numeric(group_rows["denominator_n"], errors="coerce")
             nonmissing = pd.to_numeric(group_rows["nonmissing_n"], errors="coerce")
             missing = pd.to_numeric(group_rows["missing_n"], errors="coerce")

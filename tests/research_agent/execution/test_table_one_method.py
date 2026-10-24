@@ -91,6 +91,57 @@ def test_grouped_table_one_has_overall_groups_tests_and_correct_missingness():
     assert set(table["test_name"]) == {"mann_whitney_u", "fisher_exact"}
 
 
+@pytest.mark.parametrize("levels", [["Overall", "right"], ["left", "Overall"], ["left", "Overall", "right"]])
+@pytest.mark.parametrize("descriptive_only", [False, True])
+def test_table_one_accepts_a_declared_group_named_overall(tmp_path, levels, descriptive_only):
+    spec = _repeated_unit_spec() if descriptive_only else _spec()
+    spec["group_levels"] = levels
+    frame = pd.DataFrame({
+        "arm": [level for level in levels for _ in range(3)],
+        "age": [15.0, None, 25.0] * len(levels),
+        "sex": ["F", "M", None] * len(levels),
+    })
+    step = AnalysisStep.model_validate({**_step().model_dump(), "table_one_spec": spec})
+    table = build_grouped_table_one(frame, spec)
+    table.to_csv(tmp_path / "table_one.csv", index=False)
+
+    assert table_one_output_findings(step=step, out_dir=tmp_path) == []
+    age = table[table["variable"].eq("age")]
+    assert age["group"].tolist() == ["Overall", *levels]
+    assert age["denominator_n"].tolist() == [3 * len(levels), *([3] * len(levels))]
+    assert age["row_role"].tolist() == ["overall", *(["exposure_level"] * len(levels))]
+
+    # The collision must not hide a missing total or a total from another cohort.
+    age_overall = table["variable"].eq("age") & table["group_order"].eq(0)
+    table.loc[age_overall, "denominator_n"] += 1
+    table.to_csv(tmp_path / "table_one.csv", index=False)
+    assert "table_one_overall_denominator_mismatch" in {
+        finding.detail["reason"] for finding in table_one_output_findings(step=step, out_dir=tmp_path)
+    }
+    table = table.loc[~age_overall]
+    table.to_csv(tmp_path / "table_one.csv", index=False)
+    assert "table_one_groups_incomplete" in {
+        finding.detail["reason"] for finding in table_one_output_findings(step=step, out_dir=tmp_path)
+    }
+
+
+@pytest.mark.parametrize("case", ["empty_comparison", "constant_category"])
+def test_overall_named_group_keeps_untestable_comparisons_honest(tmp_path, case):
+    spec = _spec()
+    spec["group_levels"] = ["Overall", "right"]
+    frame = _frame()
+    frame["arm"] = ["Overall"] * 3 + ["right"] * 3
+    if case == "empty_comparison":
+        frame.loc[frame["arm"].eq("Overall"), "age"] = None
+    else:
+        frame["sex"] = "F"
+    table = build_grouped_table_one(frame, spec)
+    table.to_csv(tmp_path / "table_one.csv", index=False)
+    step = AnalysisStep.model_validate({**_step().model_dump(), "table_one_spec": spec})
+
+    assert table_one_output_findings(step=step, out_dir=tmp_path) == []
+
+
 def test_repeated_unit_table_one_reports_descriptions_and_smd_without_p_values(
     tmp_path,
 ):
@@ -375,10 +426,12 @@ def test_grouped_table_one_marks_constant_category_not_testable(tmp_path):
     assert table_one_output_findings(step=_step(), out_dir=tmp_path) == []
 
 
-def test_table_one_output_gate_accepts_exact_sdk_result(tmp_path):
-    build_grouped_table_one(_frame(), _spec()).to_csv(
-        tmp_path / "table_one.csv", index=False
-    )
+@pytest.mark.parametrize("group_order", [True, False])
+def test_table_one_output_gate_accepts_exact_sdk_result(tmp_path, group_order):
+    table = build_grouped_table_one(_frame(), _spec())
+    if not group_order:
+        table = table.drop(columns=["group_order"])
+    table.to_csv(tmp_path / "table_one.csv", index=False)
     assert table_one_output_findings(step=_step(), out_dir=tmp_path) == []
 
 

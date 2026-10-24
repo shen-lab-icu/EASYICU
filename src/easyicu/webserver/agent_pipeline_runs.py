@@ -3710,7 +3710,13 @@ def _failed_closed_detail(axes: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     failed = [entry for entry in axes.get("failed_steps") or [] if isinstance(entry, Mapping)]
     if failed:
         from easyicu.research_agent.execution.failure_classification import DECLARED_EXPOSURE_LEVEL_EMPTY
+        from easyicu.research_agent.execution.standard_executor_diagnostics import STANDARD_EXECUTOR_FAILURE_REASONS
 
+        if (
+            failed[0].get("reason_code") == "deterministic_standard_executor_failed_closed"
+            and failed[0].get("cause_code") in STANDARD_EXECUTOR_FAILURE_REASONS
+        ):
+            return {key: failed[0][key] for key in ("reason_code", "cause_code", "step_id", "step_title") if key in failed[0]}
         if failed[0].get("reason_code") == DECLARED_EXPOSURE_LEVEL_EMPTY:
             return {"reason_code": DECLARED_EXPOSURE_LEVEL_EMPTY}
         stop = registered_executor_stop(

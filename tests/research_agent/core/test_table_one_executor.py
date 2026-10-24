@@ -13,6 +13,7 @@ from easyicu.research_agent.authority.plausibility import (
 )
 from easyicu.research_agent.contracts.table_one import table_one_output_findings
 from easyicu.research_agent.audits import StepSummaryIntegrityValidator
+from easyicu.research_agent.audits.aggregate_row import unlabelled_aggregate_row_findings
 from easyicu.research_agent.authority.typed_binding import (
     _write_host_input_binding_receipts,
 )
@@ -31,6 +32,39 @@ from easyicu.research_agent.gates.plausibility_receipt import (
     plausibility_audit_receipt_findings,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+
+@pytest.mark.parametrize("levels", [[10.0, 20.0, 30.0], ["left", "right"]])
+def test_host_table_labels_its_total_without_repair(tmp_path, monkeypatch, levels):
+    frame = pd.DataFrame({
+        "arm": [level for level in levels for _ in range(3)] + [None],
+        "score": [2.5, None, 7.5] * len(levels) + [99.0],
+    })
+    step = AnalysisStep(
+        step_id="baseline_table", intent="Describe score by the declared arm.",
+        inputs=["artifact:analysis_cohort", "arm", "score"],
+        expected_outputs=["table:table_one"], method="table_one",
+        table_one_spec={
+            "schema_version": "easyicu.table_one/2",
+            "group_by": "arm", "group_levels": levels,
+            "variables": [{"name": "score", "variable_kind": "continuous",
+                           "summary": "both", "test": "none_descriptive_smd_only"}],
+            "missing_group_policy": "exclude_and_report", "p_values_required": False,
+            "p_value_adjustment": "not_applicable_repeated_units",
+        },
+    )
+    _, out_dir = _bind_typed_cohort(
+        tmp_path, monkeypatch, bound_frame=frame, raw_frame=frame,
+    )
+    exec(table_one_executor_code(step), {})
+    assert unlabelled_aggregate_row_findings(step_id=step.step_id, out_dir=out_dir) == []
+    table = pd.read_csv(out_dir / "table_one.csv")
+    assert table["row_role"].tolist() == ["overall"] + ["exposure_level"] * len(levels)
+    assert table["denominator_n"].tolist() == [3 * len(levels)] + [3] * len(levels)
+    assert table["missing_n"].tolist() == [len(levels)] + [1] * len(levels)
+    assert set(table["group_missing_excluded_n"]) == {1}
+    assert table["p_value"].isna().all()
+    assert table_one_output_findings(step=step, out_dir=out_dir) == []
 
 
 def _step(*, outputs: list[str] | None = None) -> AnalysisStep:

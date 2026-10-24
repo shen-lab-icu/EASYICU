@@ -1053,6 +1053,8 @@ def project_run_outcome(
                 "gate_reason_code",
                 "gate_detail_code",
                 "gate_detail_cause_code",
+                "gate_detail_step_id",
+                "gate_detail_step_title",
                 "gate_missing_concepts",
                 "next_actions",
                 "execution_complete",
@@ -1701,13 +1703,13 @@ def _safe_error_code(value: Any) -> Optional[str]:
 
 
 def gate_detail_projection(detail: Any) -> Dict[str, Any]:
-    """Project a blocked gate's lower-layer cause as codes, or nothing.
+    """Project a blocked gate's cause and bounded plain step title, or nothing.
 
     ``detail`` is the gate owner's ``{reason_code, cause_code,
     missing_concepts}``: a data foundation's reason and the concept ids it
     could not source, or what stopped a failed-closed run and that stop's own
-    cause.  Only codes and concept ids cross; a gate without a detail adds no
-    keys, so ordinary rows keep their shape.
+    cause. Only codes, concept ids and the approved step's plain title cross;
+    a gate without a detail adds no keys, so ordinary rows keep their shape.
     """
 
     if not isinstance(detail, Mapping):
@@ -1724,6 +1726,15 @@ def gate_detail_projection(detail: Any) -> Dict[str, Any]:
     cause = stable_code(detail.get("cause_code"))
     if cause:
         projected["gate_detail_cause_code"] = cause
+    step_id = str(detail.get("step_id") or "")
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,159}", step_id):
+        projected["gate_detail_step_id"] = step_id
+    step_title = detail.get("step_title")
+    if (
+        isinstance(step_title, str) and step_title.strip()
+        and re.fullmatch(r"[^<>\x00-\x1f\x7f]{1,160}", step_title)
+    ):
+        projected["gate_detail_step_title"] = step_title.strip()
     return projected
 
 

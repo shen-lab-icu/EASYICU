@@ -1956,7 +1956,7 @@ def _candidate_contract_repair_transition(
                 total_steps=host.total_steps,
             )
             return _CandidateLoopAction.RETURN
-        if attempt.is_trajectory_stability_standard:
+        if attempt.worker_progress.deterministic_standard_executor_used:
             state.standard_executor_terminal_block = True
             state.standard_executor_terminal_reason = "executor_output_contract_failed"
             state.standard_executor_terminal_summary = dict(state.visual_step_summary)
