@@ -225,6 +225,30 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   // A failed-closed run says which check it did not pass. A stop its executor
   // named carries its own cause, and the remedy follows that cause.
   const failedClosed = 'research_agent_pipeline_failed_closed';
+  assert.equal(runFailure(failedClosed, { code: 'manuscript_checks_not_passed' }), 'The manuscript draft did not pass its automated checks.');
+  const manuscriptReasons = {
+    manuscript_checks_not_passed: ['The manuscript draft did not pass its automated checks.', '论文稿没有通过自动检查。'],
+    evidence_complete_not_satisfied: ['Some statements in the manuscript draft are not linked to a result from this analysis.', '论文稿中有部分表述没有对应到本次分析的结果。'],
+    numeric_verified_not_satisfied: ['Some numbers in the manuscript draft do not match the analysis results.', '论文稿中有部分数字与分析结果不一致。'],
+    writer_provider_transport_unavailable: ['Every analysis step finished, but the model service could not be reached while the manuscript draft was being written. Try again later.', '所有分析步骤都已完成，但撰写论文稿时一直无法连接模型服务。请稍后重试。'],
+  };
+  for (const language of ['en', 'zh']) {
+    const errors = guided.require('errorText').create({
+      tr: (en, zh) => language === 'zh' ? zh : en, staticPreview: () => false,
+    });
+    const prefix = language === 'zh' ? '分析已完成；只有论文稿未通过检查。'
+      : 'The analysis finished; only the manuscript draft did not pass its checks. ';
+    for (const [code, translations] of Object.entries(manuscriptReasons)) {
+      const sentence = translations[language === 'zh' ? 1 : 0];
+      assert.equal(errors.runFailureText(failedClosed, { code }), sentence);
+      const notice = errors.manuscriptNotPassedText(code);
+      assert.equal(notice, prefix + sentence);
+      assert.doesNotMatch(notice, /TODO\(lead copy\)|[a-z]+_[a-z_]+|[\[\]]/);
+    }
+    for (const code of [undefined, null, '', 'unknown_manuscript_reason', 'analysis_validated_not_satisfied', 'toString']) {
+      assert.equal(errors.manuscriptNotPassedText(code), prefix + manuscriptReasons.manuscript_checks_not_passed[language === 'zh' ? 1 : 0]);
+    }
+  }
   const intervalStop = 'continuous_survival_interval_result_not_estimable';
   assert.match(runFailure(failedClosed), /did not pass EasyICU's checks/);
   const noEvents = runFailure(failedClosed, { code: intervalStop, cause: 'interval_without_event' });
@@ -306,8 +330,8 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   const axisSentences = {
     execution_complete_not_satisfied: /An analysis step did not finish/,
     analysis_validated_not_satisfied: /automated validation did not pass/,
-    evidence_complete_not_satisfied: /lack the evidence they rest on/,
-    numeric_verified_not_satisfied: /could not be checked against the results/,
+    evidence_complete_not_satisfied: /Some statements in the manuscript draft are not linked to a result from this analysis/,
+    numeric_verified_not_satisfied: /Some numbers in the manuscript draft do not match the analysis results/,
   };
   Object.entries(axisSentences).forEach(([code, sentence]) => {
     assert.match(runFailure(failedClosed, { code }), sentence);
@@ -316,10 +340,10 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   // finished: whichever retry limit ended it, the results are kept.
   for (const cause of ['transport_retry_attempts_exhausted', 'transport_retry_window_exhausted', 'transport_retry_wall_clock_exhausted']) {
     const writerStop = runFailure(failedClosed, { code: 'writer_provider_transport_unavailable', cause });
-    assert.match(writerStop, /model service was unavailable while the manuscript was being drafted; the analysis finished/);
+    assert.equal(writerStop, manuscriptReasons.writer_provider_transport_unavailable[0]);
     assert.doesNotMatch(writerStop, /did not pass EasyICU's checks/);
   }
-  assert.match(runFailureZh(failedClosed, { code: 'writer_provider_transport_unavailable' }), /写稿时模型服务不可用；分析已完成，结果已保留。可以重试这次运行重新写稿/);
+  assert.equal(runFailureZh(failedClosed, { code: 'writer_provider_transport_unavailable' }), manuscriptReasons.writer_provider_transport_unavailable[1]);
 
   // A runner image built from other EasyICU source needs a rebuild; telling the
   // researcher to start Docker would send them to a runtime that is already up.

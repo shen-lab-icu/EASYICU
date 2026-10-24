@@ -1497,6 +1497,9 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
         "engine": review.engine,
         "run_type": review.run_type,
         "project_dir": str(review.directory.path),
+        **{key: value.model_dump() for key, value in (
+            ("analysis_outcome", gate.analysis_outcome), ("manuscript_outcome", gate.manuscript_outcome),
+        ) if value is not None},
         "gate_status": gate.status,
         "gate_reason": gate.reason,
         "next_actions": project_stop_next_actions(
@@ -1510,7 +1513,9 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
             else None
         ),
         "gate_checks": gate_checks,
-        "run_status": source_manifest.get("status"),
+        "run_status": ("completed" if gate.analysis_outcome is not None
+                       and gate.analysis_outcome.status == "completed"
+                       else source_manifest.get("status")),
         "research_input_state": project_research_input_state(source_manifest.get("research_input_state")),
         "pending_review_reason_codes": pending_reason_codes,
         "plan_approval_allowed": source_manifest.get("plan_approval_allowed"),

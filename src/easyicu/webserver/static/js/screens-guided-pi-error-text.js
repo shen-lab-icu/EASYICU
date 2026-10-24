@@ -497,12 +497,12 @@
         execution_complete_not_satisfied: tr('An analysis step did not finish, so the run produced no result it can report.', '有分析步骤没有完成，这次运行没有可以报告的结果。'),
         analysis_validated_not_satisfied: tr('The analysis ran, but its automated validation did not pass, so its results cannot be reported.', '分析已运行，但没有通过自动校验，结果不能报告。'),
         // Every evidence error was a manuscript check; no result lacks its evidence.
-        manuscript_checks_not_passed: tr('The analysis finished and its results can be reviewed, but the automatically drafted manuscript did not pass its checks (for example, a section was incomplete), so it is not a reportable manuscript. Retry the run to draft it again; finished analysis steps are reused.', '分析已完成，结果可以在分析审阅中查看；但自动起草的稿件没有通过检查（例如某一部分不完整），还不能作为可报告的稿件。可以重试这次运行重新写稿，已完成的分析步骤会复用。'),
-        evidence_complete_not_satisfied: tr('The analysis ran, but some results lack the evidence they rest on, so they cannot be reported.', '分析已运行，但有些结果缺少所依据的证据，不能报告。'),
-        numeric_verified_not_satisfied: tr('The analysis ran, but some reported numbers could not be checked against the results they come from, so they cannot be reported.', '分析已运行，但有些报告的数字无法与其来源结果核对，不能报告。'),
+        manuscript_checks_not_passed: tr('The manuscript draft did not pass its automated checks.', '论文稿没有通过自动检查。'),
+        evidence_complete_not_satisfied: tr('Some statements in the manuscript draft are not linked to a result from this analysis.', '论文稿中有部分表述没有对应到本次分析的结果。'),
+        numeric_verified_not_satisfied: tr('Some numbers in the manuscript draft do not match the analysis results.', '论文稿中有部分数字与分析结果不一致。'),
         // Every analysis step finished; the Writer's model service then
         // stayed unavailable through its retries.
-        writer_provider_transport_unavailable: tr('The model service was unavailable while the manuscript was being drafted; the analysis finished and its results are kept. Retry the run to draft it again; finished analysis steps are reused.', '写稿时模型服务不可用；分析已完成，结果已保留。可以重试这次运行重新写稿，已完成的分析步骤会复用。'),
+        writer_provider_transport_unavailable: tr('Every analysis step finished, but the model service could not be reached while the manuscript draft was being written. Try again later.', '所有分析步骤都已完成，但撰写论文稿时一直无法连接模型服务。请稍后重试。'),
         continuous_survival_interval_result_not_estimable: intervalResultNotEstimableText(cause),
         landmark_survival_interval_result_not_estimable: intervalResultNotEstimableText(cause),
         continuous_survival_exposure_has_one_value: tr('Every analysed stay had the same value of the continuous exposure, so no association with it can be estimated. The run has no primary result. Choose an exposure, summary or window whose values differ between stays, then generate the plan again.', '分析人群中每次入住的连续暴露取值都相同，无法估计与它的关联。这次运行没有主结果。请选用在不同入住之间取值不同的暴露、汇总方式或窗口，再生成计划。'),
@@ -828,7 +828,18 @@
       return withDetail(tr(`The run stopped before finishing (code: ${value}).`, `运行在完成前停止（代码：${value}）。`));
     }
 
-    return Object.freeze({ errorText, jobErrorText, modelErrorText, providerPreset, option, runFailureText, studyFamilyGapText });
+    function manuscriptNotPassedText(reasonCode) {
+      const code = String(reasonCode || '').trim();
+      // Only manuscript reasons belong in a completed analysis notice.
+      const reason = [
+        'manuscript_checks_not_passed', 'evidence_complete_not_satisfied',
+        'numeric_verified_not_satisfied', 'writer_provider_transport_unavailable',
+      ].includes(code) ? code : 'manuscript_checks_not_passed';
+      return tr('The analysis finished; only the manuscript draft did not pass its checks. ', '分析已完成；只有论文稿未通过检查。')
+        + runFailureDetailText({ code: reason });
+    }
+
+    return Object.freeze({ errorText, jobErrorText, modelErrorText, providerPreset, option, runFailureText, studyFamilyGapText, manuscriptNotPassedText });
   }
 
   window.EasyICU.guidedPi.declare('errorText', { create, scanErrorText });

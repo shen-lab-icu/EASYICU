@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Union
 
+from pydantic import ValidationError
+
 from easyicu.research_agent.contracts.frozen_payload import freeze_payload, thaw_payload
+from easyicu.research_agent.reporting.completion import (
+    AnalysisOutcome, ManuscriptOutcome, completion_outcomes,
+)
 from easyicu.webserver.run_file_guide import RunFileGuideEntry, run_file_guide
 from easyicu.webserver.hosted import require_instance_path
 
@@ -59,11 +64,45 @@ class RunGate:
     draft_unlocked: bool
     checks: tuple[Mapping[str, Any], ...]
     payload: Mapping[str, Any]
+    analysis_outcome: AnalysisOutcome | None = None
+    manuscript_outcome: ManuscriptOutcome | None = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "RunGate":
         checks = payload.get("checks")
         rows = checks if isinstance(checks, Sequence) and not isinstance(checks, str) else ()
+        payload = dict(payload)
+        axes = {row.get("id"): row.get("passed") for row in rows if isinstance(row, Mapping)}
+        analysis = manuscript = None
+        if "execution_complete" in axes or "analysis_validated" in axes:
+            outcomes = completion_outcomes(
+                axes, pending=payload.get("reason") == "human_plan_review_required",
+            )
+            analysis = AnalysisOutcome.model_validate(outcomes["analysis_outcome"])
+            manuscript = ManuscriptOutcome.model_validate(outcomes["manuscript_outcome"])
+            try:
+                recorded = ManuscriptOutcome.model_validate(payload.get("manuscript_outcome"))
+            except ValidationError:
+                recorded = None
+            if recorded is not None and (
+                recorded.status == manuscript.status or recorded.status == "not_requested"
+            ):
+                manuscript = recorded
+            elif manuscript.status == "not_passed" and analysis.status == "completed":
+                # Older wrappers stored a manuscript failure in the run detail.
+                detail = payload.get("detail")
+                if isinstance(detail, Mapping):
+                    try:
+                        manuscript = ManuscriptOutcome(
+                            status="not_passed", reason_code=detail.get("reason_code"),
+                        )
+                    except ValidationError:
+                        pass
+            payload.update(analysis_outcome=analysis.model_dump(), manuscript_outcome=manuscript.model_dump())
+            if analysis.status == "completed" and payload.get("reason") == "research_agent_pipeline_failed_closed":
+                payload.update(status="analysis_only", reason="research_agent_pipeline_complete_human_interpretation_required")
+                if "detail" in payload:
+                    payload["manuscript_detail"] = payload.pop("detail")
         return cls(
             status=str(payload["status"]) if payload.get("status") is not None else None,
             reason=str(payload["reason"]) if payload.get("reason") is not None else None,
@@ -71,6 +110,8 @@ class RunGate:
             draft_unlocked=bool(payload.get("draft_unlocked")),
             checks=tuple(freeze_payload(row) for row in rows if isinstance(row, Mapping)),
             payload=freeze_payload(payload),
+            analysis_outcome=analysis,
+            manuscript_outcome=manuscript,
         )
 
     def to_dict(self) -> Dict[str, Any]:

@@ -168,6 +168,7 @@
     // results shelf above shows only the run that currently owns the
     // workflow. Rows are informational; historical artifacts stay closed.
     function runStatus(run) {
+      if (run.analysis_outcome && run.analysis_outcome.status === 'completed') return { key: 'done', label: tr('Analysis complete', '分析已完成') };
       const status = String(run.run_status || '');
       const gate = String(run.gate_status || '');
       if (status === 'human_review_pending') return { key: 'review', label: tr('Awaiting review', '待审阅') };
@@ -191,7 +192,9 @@
         ? tr('Full analysis', '完整分析') : run.plan_available ? tr('Candidate plan', '候选计划') : tr('Run', '运行');
       const rows = runs.map(run => {
         const status = runStatus(run);
-        const cause = ['failed', 'blocked'].includes(status.key) && run.gate_reason_code && typeof host.runFailureText === 'function'
+        const cause = run.manuscript_outcome && run.manuscript_outcome.status === 'not_passed' && status.key === 'done'
+          ? host.manuscriptNotPassedText(run.manuscript_outcome.reason_code)
+          : ['failed', 'blocked'].includes(status.key) && run.gate_reason_code && typeof host.runFailureText === 'function'
           ? String(host.runFailureText(run.gate_reason_code, { code: run.gate_detail_code, missing: run.gate_missing_concepts, cause: run.gate_detail_cause_code }) || '') : '';
         const count = Number(run.artifact_count || 0);
         return `<li class="gpi-run-row is-${status.key}${run.authoritative ? ' is-current' : ''}"><span class="gpi-run-mark" aria-hidden="true"></span><div class="gpi-run-copy"><strong>${esc(kind(run))} · ${esc(status.label)}${run.authoritative ? `<span class="gpi-run-current">${tr('current', '当前')}</span>` : ''}</strong><small>${esc(when(run.updated_at))}${count ? ` · ${count} ${tr('files', '个文件')}` : ''}</small>${cause ? `<small class="gpi-run-cause">${esc(cause)}</small>` : ''}<code>${esc(run.run_id)}</code></div></li>`;

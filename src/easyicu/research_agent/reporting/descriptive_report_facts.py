@@ -17,11 +17,13 @@ from typing import Any, Mapping, Sequence
 from ..contracts.cohort_product_keys import is_closed_cohort_product_key
 from ..contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
 from ..contracts.descriptive_execution import exposure_outcome_distribution_result_receipt_valid
-from ..authority.manuscript_claim_policy import fact_sentence_visible
+from ..authority.manuscript_claim_policy import fact_sentence_visible, fact_sentence_in_results
 from ..authority.scientific_claims import ScientificClaim
 from ..authority.evidence_store import evidence_artifact_basename_stem
 from ..authority.numeric_claim_identity import NumericClaim
-from ..authority.runtime_artifacts import current_successful_step_records, verified_run_evidence_path
+from ..authority.runtime_artifacts import (
+    current_successful_step_records, verified_run_evidence_path,
+)
 from ..contracts.continuous_outcome_summary import CONTINUOUS_OUTCOME_OUTPUT, continuous_outcome_columns
 from ..contracts.exposure_group_rules import (
     grouping_measure_description, grouping_rule_texts, grouping_rule_values,
@@ -31,6 +33,7 @@ from ..orchestration.exposure_group_labels import exposure_group_label_rows
 from ..schema import ValidationFinding
 from .manuscript_surface import in_sentence_label
 from .report_fact import DescriptiveReportFact
+from .manuscript_provenance import verified_evidence_json as _verified_evidence_json
 
 #: A host-issued unit a fact sentence may name after its count ("ICU stays",
 #: "first ICU stays"): letters, spaces and hyphens only, so no number,
@@ -300,7 +303,6 @@ def compile_counts_only_report_facts(
 
 def verified_descriptive_source_records(projected, evidence):
     """Recover the exact primary result contract from its sealed summary."""
-    from .writer_evidence import _verified_evidence_json
 
     records = []
     for row in projected:
@@ -319,6 +321,45 @@ def verified_descriptive_source_records(projected, evidence):
     return records
 
 
+def concise_results_word_floor(
+    manuscript, *, evidence, records, reader_display_labels=None, context=None,
+):
+    """Size one counts-only result by its verified facts, never the question.
+
+    A compact Results must state *every* host fact, including the denominator,
+    group shares and outcome counts. Unsupported, stale, incomplete or more
+    complex outputs retain the normal floor and all other manuscript gates.
+    """
+    if evidence is None or not records:
+        return 200
+    current = current_successful_step_records(records)
+    result_records = [row for row in current if (
+        row.get("step_summary", {}).get("analysis_role")
+        in {"primary", "secondary", "sensitivity", "exploratory"}
+    )]
+    if len(result_records) != 1:
+        return 200
+    try:
+        claims = evidence.authoritative_scientific_claims(records)
+        if not claims or any(claim.claim_type != "descriptive_absolute_risk" for claim in claims):
+            return 200
+        verified = verified_descriptive_source_records(result_records, evidence)
+        facts = compile_counts_only_report_facts(
+            verified, evidence=evidence, reader_display_labels=reader_display_labels or {},
+            scientific_claims=claims, context=context,
+        )
+    except (ValueError, KeyError, TypeError, OSError, RuntimeError):
+        return 200
+    if not facts or not {claim.claim_ref for claim in claims}.issubset(
+        {fact.replaces_claim_ref for fact in facts}
+    ):
+        return 200
+    sentences = {fact.text for fact in facts if "Results" in fact.required_result_sections}
+    if not sentences or not all(fact_sentence_in_results(manuscript, text) for text in sentences):
+        return 200
+    return min(200, sum(len(re.findall(r"\b[\w'-]+\b", text)) for text in sentences))
+
+
 def _compile_grouped_table_one_cohort_report_facts(projected, evidence, *, context=None):
     """Copy the cohort count from a verified grouped Table 1 result.
 
@@ -327,7 +368,6 @@ def _compile_grouped_table_one_cohort_report_facts(projected, evidence, *, conte
     cohort as extracted.  Neither is the source database's stay count.
     """
 
-    from .writer_evidence import _verified_evidence_json
 
     facts = []
     for row in projected:
@@ -383,7 +423,6 @@ def _compile_survival_cohort_report_facts(projected, evidence):
     dropped records, their recorded count follows as a second fact.
     """
 
-    from .writer_evidence import _verified_evidence_json
     from ..authority.continuous_survival_scientific_claims import (
         ContinuousSurvivalReporting,
         continuous_survival_reporting_requests_claims,
@@ -518,7 +557,6 @@ def _compile_study_population_occurrence_report_facts(projected, evidence, reade
     digest-verified source summary.
     """
 
-    from .writer_evidence import _verified_evidence_json
 
     facts = []
     for row in projected:

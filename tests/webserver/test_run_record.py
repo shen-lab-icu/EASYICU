@@ -180,3 +180,27 @@ def test_pending_plan_projection_is_detached_json():
     assert isinstance(wire["steps"], list)
     wire["steps"][0]["method"] = "changed"
     assert authority.plan_payload["steps"][0]["method"] == "descriptive"
+
+
+def test_saved_history_reports_analysis_completion_beside_a_failed_manuscript(tmp_path):
+    from dataclasses import replace
+    from easyicu.webserver.agent_runs import _history_row
+    from easyicu.webserver.run_record import RunGate
+
+    gate = RunGate.from_payload({
+        "status": "blocked", "reason": "research_agent_pipeline_failed_closed",
+        "detail": {"reason_code": "manuscript_checks_not_passed"},
+        "checks": [{"id": "execution_complete", "passed": True},
+                   {"id": "analysis_validated", "passed": True},
+                   {"id": "manuscript_ready", "passed": False}],
+    })
+    record = replace(_record(tmp_path), gate=gate)
+    record.directory.path.mkdir(parents=True)
+    record.directory.artifact("quality_gate.json").write_text("{}")
+    row = _history_row(record, record.directory.path)
+    assert row["run_status"] == "completed"
+    assert row["gate_status"] == "analysis_only"
+    assert row["analysis_outcome"] == {"status": "completed", "reason_code": None}
+    assert row["manuscript_outcome"] == {"status": "not_passed", "reason_code": "manuscript_checks_not_passed"}
+    assert row["reportable"] is False
+    assert row["draft_unlocked"] is False

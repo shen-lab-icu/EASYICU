@@ -105,6 +105,8 @@ def test_run_status_surfaces_four_distinct_completion_axes(tmp_path: Path):
     assert gates["scientific_requirement_complete"] is False
     assert gates["paper_authorized"] is False
     assert gates["analysis_validated"] is False
+    assert gates["analysis_outcome"]["status"] == "blocked"
+    assert gates["manuscript_outcome"]["status"] == "not_requested"
     status = json.loads((tmp_path / "run_status.json").read_text(encoding="utf-8"))
     assert status["schema_version"] == "easyicu.run_status/2"
     assert status["status"] == "analysis_only"

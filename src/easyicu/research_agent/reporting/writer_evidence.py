@@ -29,6 +29,7 @@ from ..authority.target_trial_scientific_claims import (
     TARGET_TRIAL_REPORTING_SCHEMA_VERSION,
 )
 from .readiness import _blocked_outcome_step_ids
+from .manuscript_provenance import verified_evidence_json as _verified_evidence_json
 from ..robustness.panel import (
     RobustnessPanel,
     load_robustness_panel,
@@ -1509,52 +1510,6 @@ def _is_hidden_robustness_row_claim(step_id: str, source_field: str) -> bool:
     """
 
     return step_id == "robustness_panel" and source_field.startswith("row_")
-
-
-def _verified_evidence_json(
-    evidence: EvidenceStore,
-    evidence_id_or_alias: str,
-    *,
-    exact_evidence_id: bool = False,
-    expected_kind: str | None = None,
-    expected_producer: str | None = None,
-) -> Dict[str, Any]:
-    record = evidence.get(evidence_id_or_alias)
-    if (
-        record is None
-        or (exact_evidence_id and record.evidence_id != evidence_id_or_alias)
-        or (expected_kind is not None and record.kind != expected_kind)
-        or (expected_producer is not None and record.producer != expected_producer)
-    ):
-        raise RuntimeError(
-            f"writer evidence {evidence_id_or_alias!r} lost its registered identity"
-        )
-    path = verified_run_evidence_path(evidence.root, record)
-    if path is None:
-        raise RuntimeError(
-            f"writer evidence {evidence_id_or_alias!r} failed digest verification"
-        )
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise RuntimeError(
-            f"writer evidence {evidence_id_or_alias!r} became unreadable"
-        ) from exc
-    if hashlib.sha256(raw).hexdigest() != record.sha256:
-        raise RuntimeError(
-            f"writer evidence {evidence_id_or_alias!r} changed while being read"
-        )
-    try:
-        payload = json.loads(raw)
-    except (UnicodeError, ValueError, TypeError) as exc:
-        raise RuntimeError(
-            f"writer evidence {evidence_id_or_alias!r} is not valid JSON"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError(
-            f"writer evidence {evidence_id_or_alias!r} is not a JSON object"
-        )
-    return payload
 
 
 def _load_writer_robustness_panel(

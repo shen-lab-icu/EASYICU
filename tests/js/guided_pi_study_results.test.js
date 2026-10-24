@@ -13,6 +13,7 @@ const jsRoot = fs.existsSync(_first) && fs.statSync(_first).isDirectory()
 global.window = global;
 global.EU_HTML = { esc: value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;') };
 require(path.join(jsRoot, 'screens-guided-pi-modules.js'));
+require(path.join(jsRoot, 'screens-guided-pi-error-text.js'));
 require(path.join(jsRoot, 'screens-guided-pi-resources.js'));
 require(path.join(jsRoot, 'screens-guided-pi-study-workspace.js'));
 require(path.join(jsRoot, 'screens-guided-pi-run-outcome.js'));
@@ -20,6 +21,7 @@ const modules = global.EasyICU.guidedPi;
 const resources = modules.require('resources').create(EU_HTML);
 const outcome = modules.require('runOutcome').create({
   tr: en => en, esc: EU_HTML.esc, iconHtml: () => '', resourceButton: resources.button,
+  manuscriptNotPassedText: modules.require('errorText').create({ tr: en => en, staticPreview: () => false }).manuscriptNotPassedText,
 });
 const ledgerSha = 'a'.repeat(64);
 const artifactSha = 'd'.repeat(64);
@@ -44,6 +46,18 @@ const latest = {
 const workflow = { current_stage: 'interpretation', stages: [
   { id: 'analysis', status: 'complete' }, { id: 'interpretation', status: 'review_required' },
 ] };
+const shortManuscript = {
+  ...latest, manuscript_ready: false, report_revision_ready: false, report_revision_pdf_ready: false,
+  analysis_outcome: { status: 'completed', reason_code: null },
+  manuscript_outcome: { status: 'not_passed', reason_code: 'manuscript_checks_not_passed' },
+};
+const shortHtml = outcome.render(shortManuscript, workflow);
+assert.match(shortHtml, /Analysis complete/);
+assert.ok(shortHtml.includes('The analysis finished; only the manuscript draft did not pass its checks. The manuscript draft did not pass its automated checks.'));
+assert.doesNotMatch(shortHtml, /data-gpi-run-outcome-retry/);
+assert.ok(outcome.collection(shortManuscript, workflow).some(row => row.artifact === 'result_tables.json'));
+assert.ok(!outcome.collection(shortManuscript, workflow).some(row => row.artifact === 'article_report.json'));
+assert.doesNotMatch(outcome.render(latest, workflow), /data-manuscript-outcome/);
 const original = JSON.stringify({ latest, workflow });
 const collection = outcome.collection(latest, workflow);
 assert.equal(collection.length, 7);
@@ -302,6 +316,40 @@ assert.equal(reveals, 1);
 panelBody.onclick({ target: { closest: query => query === '[data-gpi-resource-kind]' ? {} : null } });
 assert.equal(selections, 1);
 assert.equal(JSON.stringify({ latest, workflow }), original);
+for (const language of ['en', 'zh']) {
+  const tr = (en, zh) => language === 'zh' ? zh : en;
+  const manuscriptNotPassedText = modules.require('errorText').create({ tr, staticPreview: () => false }).manuscriptNotPassedText;
+  const translatedOutcome = modules.require('runOutcome').create({
+    tr, esc: EU_HTML.esc, iconHtml: () => '', resourceButton: resources.button, manuscriptNotPassedText,
+  });
+  for (const code of ['manuscript_checks_not_passed', 'evidence_complete_not_satisfied', 'writer_provider_transport_unavailable', 'unknown_manuscript_reason', undefined]) {
+    const run = { ...shortManuscript, manuscript_outcome: { status: 'not_passed', reason_code: code } };
+    const html = translatedOutcome.render(run, workflow);
+    const notice = html.match(/<p data-manuscript-outcome="not_passed">([^<]*)<\/p>/)[1];
+    const prefix = language === 'zh' ? '分析已完成；只有论文稿未通过检查。'
+      : 'The analysis finished; only the manuscript draft did not pass its checks. ';
+    const reason = code === 'evidence_complete_not_satisfied'
+      ? tr('Some statements in the manuscript draft are not linked to a result from this analysis.', '论文稿中有部分表述没有对应到本次分析的结果。')
+      : code === 'writer_provider_transport_unavailable'
+        ? tr('Every analysis step finished, but the model service could not be reached while the manuscript draft was being written. Try again later.', '所有分析步骤都已完成，但撰写论文稿时一直无法连接模型服务。请稍后重试。')
+        : tr('The manuscript draft did not pass its automated checks.', '论文稿没有通过自动检查。');
+    assert.equal(notice, prefix + reason);
+    assert.doesNotMatch(notice, /TODO\(lead copy\)|[a-z]+_[a-z_]+|[\[\]]/);
+    modules.require('aside').create({
+      tr, esc: EU_HTML.esc, iconHtml: () => '', projectId: () => 'project_current', manuscriptNotPassedText,
+      displayProjectTitle: value => value, demoMode: () => false, shell: () => 'pi', project: () => ({}),
+      workflow: () => ({ ...workflow, runs: [{
+        run_id: 'synthetic', run_type: 'full', run_status: 'completed', gate_status: 'analysis_only',
+        analysis_outcome: run.analysis_outcome, manuscript_outcome: run.manuscript_outcome,
+      }] }),
+    }).syncProjectWorkflowAside();
+    const history = panelBody.innerHTML.match(/<details class="gpi-run-history"[\s\S]*?<\/ol><\/details>/)[0].replace(/<[^>]+>/g, '');
+    assert.ok(history.includes(tr('Full analysis · Analysis complete', '完整分析 · 分析已完成')));
+    assert.ok(history.includes(prefix + reason));
+    assert.doesNotMatch(history, /TODO\(lead copy\)|[a-z]+_[a-z_]+|[\[\]]/);
+    assert.doesNotMatch(panelBody.innerHTML, /is-blocked/);
+  }
+}
 process.stdout.write('Current results, revision identity, historical isolation, in-place layout and review receipts passed.\n');
 
 // Compact title chrome leaves model selection in the composer, preserving mode controls.

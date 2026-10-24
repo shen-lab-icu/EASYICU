@@ -1141,6 +1141,8 @@ def build_research_workflow_snapshot(
                 if analysis_complete and has_manuscript and report_revision_ready
                 else "manuscript_draft_ready_for_review"
                 if analysis_complete and has_manuscript
+                else (run_row.get("manuscript_outcome") or {}).get("reason_code")
+                if analysis_complete and (run_row.get("manuscript_outcome") or {}).get("status") == "not_passed"
                 else "full_agent_manuscript_required"
             ),
         ),

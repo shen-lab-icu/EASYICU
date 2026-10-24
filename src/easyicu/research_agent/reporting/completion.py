@@ -7,11 +7,111 @@ from dataclasses import dataclass, fields
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict
 
 from ..contracts.executor_stop import executor_stop_codes
 from ..execution.failure_classification import runtime_failure_codes
 from ..planning.figure_step_contract import _output_declares_figure
+from .writer_stop import writer_stop
+
+
+class AnalysisOutcome(BaseModel):
+    """Execution and analysis validation, independent of derived writing."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    status: Literal["completed", "blocked", "pending"]
+    reason_code: Literal[
+        "execution_complete_not_satisfied", "analysis_validated_not_satisfied",
+        "human_plan_review_required",
+    ] | None = None
+
+
+class ManuscriptOutcome(BaseModel):
+    """A deliverable verdict; passing never grants publication authority."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    status: Literal["passed", "not_passed", "not_requested", "pending"]
+    reason_code: Literal[
+        "manuscript_checks_not_passed", "evidence_complete_not_satisfied",
+        "numeric_verified_not_satisfied", "writer_provider_transport_unavailable",
+        "execution_complete_not_satisfied", "analysis_validated_not_satisfied",
+    ] | None = None
+
+
+def completion_outcomes(
+    axes: Mapping[str, Any], *, pending: bool = False,
+) -> dict[str, Any]:
+    """Separate outcomes using only host verdicts and registered Writer stops.
+
+    Evidence/numeric axes concern the manuscript. The analysis validator owns
+    the executed outputs and still fails closed on evidence/integrity errors.
+    """
+
+    analysis_reason = next((
+        f"{axis}_not_satisfied"
+        for axis in ("execution_complete", "analysis_validated")
+        if axes.get(axis) is not True
+    ), None)
+    analysis = AnalysisOutcome(
+        status="pending" if pending else "blocked" if analysis_reason else "completed",
+        reason_code="human_plan_review_required" if pending else analysis_reason,
+    )
+    if pending:
+        manuscript = ManuscriptOutcome(status="pending")
+    elif axes.get("manuscript_requested") is False:
+        manuscript = ManuscriptOutcome(status="not_requested")
+    elif (
+        analysis.status == "completed" and axes.get("manuscript_ready") is True
+        and axes.get("evidence_complete") is True and axes.get("numeric_verified") is True
+    ):
+        manuscript = ManuscriptOutcome(status="passed")
+    else:
+        stop = writer_stop(axes.get("writer_stop"))
+        reason = analysis_reason or (stop or {}).get("reason_code")
+        if reason is None:
+            if axes.get("evidence_complete") is not True:
+                reason = (
+                    "manuscript_checks_not_passed"
+                    if axes.get("missing_evidence_count") == 0
+                    and (axes.get("evidence_error_count") or 0) > 0
+                    else "evidence_complete_not_satisfied"
+                )
+            elif axes.get("numeric_verified") is not True:
+                reason = "numeric_verified_not_satisfied"
+            else:
+                reason = "manuscript_checks_not_passed"
+        manuscript = ManuscriptOutcome(status="not_passed", reason_code=reason)
+    return {
+        "analysis_outcome": analysis.model_dump(),
+        "manuscript_outcome": manuscript.model_dump(),
+    }
+
+
+def run_status_payload(
+    *, gates: dict[str, Any], research_question: str, code_version: Any,
+    stop_after_analysis: bool, writer_probe_mode: bool,
+    writer_probe_failed_steps: Sequence[str] | None, force_diagnostic_only: bool,
+) -> dict[str, Any]:
+    """Persist outcomes beside the unchanged content/publication gates."""
+
+    gates["manuscript_requested"] = not (stop_after_analysis or writer_probe_mode)
+    gates.update(completion_outcomes(gates))
+    return {
+        "schema_version": "easyicu.run_status/2",
+        "status": gates["completion_status"],
+        "analysis_outcome": gates["analysis_outcome"],
+        "manuscript_outcome": gates["manuscript_outcome"],
+        "strict_fail_closed": True,
+        "forced_diagnostic_only": bool(force_diagnostic_only),
+        "writer_probe_mode": bool(writer_probe_mode),
+        "writer_probe_failed_steps": list(writer_probe_failed_steps or []),
+        "research_question": research_question,
+        "code_version": code_version,
+        "gates": gates,
+        "canonical_outputs": {},
+    }
 
 
 def count_missing_evidence_markers(text: str) -> int:
@@ -314,6 +414,10 @@ def readiness_status(gates: Mapping[str, Any]) -> str:
 
 
 __all__ = [
+    "AnalysisOutcome",
+    "ManuscriptOutcome",
+    "completion_outcomes",
+    "run_status_payload",
     "count_missing_evidence_markers",
     "count_writer_attempts",
     "has_figure_only_output_contract",
