@@ -7,12 +7,19 @@ It does not discover files, select a cohort or authorize an analysis.
 """
 
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Mapping
 
 import pandas as pd
 
 MIMIC_HOSPITAL_STATUS_BINDING = "mimic_hospital_mortality_status_v1"
 EICU_HOSPITAL_STATUS_BINDING = "eicu_hospital_mortality_status_v1"
+EICU_HOSPITAL_STATUS_PARAMETERS = MappingProxyType({
+    "clinical_binding": EICU_HOSPITAL_STATUS_BINDING,
+    "event_status": "Expired",
+    "survivor_status": "Alive",
+    "unknown_status_policy": "retain_null",
+})
 # These source callbacks issue a status for every record, including unknowns.
 # Sparse event callbacks retain ricu's default logical ``any`` aggregation.
 DENSE_STATUS_BINDINGS: frozenset[str] = frozenset({EICU_HOSPITAL_STATUS_BINDING})
@@ -35,8 +42,8 @@ def hospital_mortality_status_from_flag(values: pd.Series) -> pd.Series:
 def hospital_mortality_status_from_discharge(values: pd.Series) -> pd.Series:
     recorded = values.astype("string").str.strip().str.lower()
     status = pd.Series(pd.NA, index=values.index, dtype="boolean")
-    status.loc[recorded.eq("alive").fillna(False)] = False
-    status.loc[recorded.eq("expired").fillna(False)] = True
+    status.loc[recorded.eq(EICU_HOSPITAL_STATUS_PARAMETERS["survivor_status"].lower()).fillna(False)] = False
+    status.loc[recorded.eq(EICU_HOSPITAL_STATUS_PARAMETERS["event_status"].lower()).fillna(False)] = True
     return status
 
 

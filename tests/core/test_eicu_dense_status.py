@@ -1,6 +1,7 @@
 """Dense source statuses retain unknowns; sparse events keep occurrence semantics."""
 
 from types import SimpleNamespace
+import json
 
 import pandas as pd
 import pytest
@@ -155,6 +156,8 @@ def test_recursive_logical_aggregation_obeys_the_source_binding(monkeypatch, den
 @pytest.mark.parametrize("typed", [False, True])
 @pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
 def test_export_cohort_summary_never_counts_unknown_status_as_survival(tmp_path, typed, database):
+    from easyicu.concept.export_metadata import build_export_file_metadata_binding
+    from easyicu.hospital_mortality import EICU_HOSPITAL_STATUS_BINDING
     from easyicu.api.extraction import _canonicalise_native_export_frame
     from easyicu.research_agent.cohort.materializer import materialize_cohort
     from easyicu.research_agent.execution.runners.deterministic_descriptive import _group_rows, _reportable_descriptive_results
@@ -169,8 +172,24 @@ def test_export_cohort_summary_never_counts_unknown_status_as_survival(tmp_path,
         extracted, module="outcome", requested_concepts=["death", "los_icu"],
         dictionary=load_dictionary(), database=database,
     )
+    binding = build_export_file_metadata_binding(
+        relative_path="outcome.parquet", module="outcome", frame=extracted,
+        concept_ids=["death", "los_icu"], database=database,
+        database_class_prefixes=load_data_sources().get(database).class_prefix,
+        dictionary=load_dictionary(),
+    )
+    lineage, = binding.columns["death"].metadata.source_lineage
+    # Semantic parameters are canonical JSON, not unencoded strings. Check
+    # the declaration on the same extracted rows whose nulls survive below.
+    parameters = {key: json.loads(value) for key, value in lineage.semantic_parameters}
+    assert parameters.items() >= {
+        "clinical_binding": EICU_HOSPITAL_STATUS_BINDING,
+        "event_status": "Expired", "survivor_status": "Alive",
+        "unknown_status_policy": "retain_null",
+    }.items()
     exporter = typed_native_export if typed else untyped_native_export
     root = exporter(tmp_path / "export", outcome=extracted, outcome_concepts=["death", "los_icu"], database=database)
+    assert pd.read_parquet(root / "outcome.parquet").death.isna().sum() == 1
     cohort, _ = materialize_cohort(
         feature_concepts=[], database=database, data_path=str(root),
         cohort_window=(0.0, 24.0), outcome_concepts=["death"], static_concepts=["age"],
@@ -190,6 +209,26 @@ def test_export_cohort_summary_never_counts_unknown_status_as_survival(tmp_path,
     assert group["outcome_missing_n"] == 1
     assert group["outcome_risk_pct"] == pytest.approx(200 / 3)
     assert reporting["overall_outcome"]["missing_n"] == 1
+
+
+def test_status_decoder_and_export_semantics_share_the_binding(monkeypatch):
+    from easyicu import hospital_mortality
+
+    policy = {
+        "clinical_binding": hospital_mortality.EICU_HOSPITAL_STATUS_BINDING,
+        "event_status": "Synthetic event", "survivor_status": "Synthetic survivor",
+        "unknown_status_policy": "retain_null",
+    }
+    monkeypatch.setattr(hospital_mortality, "EICU_HOSPITAL_STATUS_PARAMETERS", policy, raising=False)
+    definition = ConceptDefinition.from_name_and_payload("death", {"sources": {"eicu": [{
+        "table": "patient", "val_var": "hospitaldischargestatus",
+        "callback": "transform_fun(comp_na(`==`, 'Expired'))",
+    }]}})
+    assert definition.sources["eicu"][0].params.items() >= policy.items()
+    actual = hospital_mortality.hospital_mortality_status_from_discharge(
+        pd.Series(["Synthetic event", "Synthetic survivor", "Unknown"])
+    )
+    pd.testing.assert_series_equal(actual, pd.Series([True, False, pd.NA], dtype="boolean"))
 
 
 @pytest.mark.parametrize("database", ["eicu", "eicu_demo"])

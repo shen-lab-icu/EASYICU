@@ -41,6 +41,7 @@ from typing import Dict, Iterable, List, Mapping, Optional
 import pandas as pd
 
 from ..config import DataSourceConfig
+from .. import hospital_mortality
 from ..hospital_mortality import EICU_HOSPITAL_STATUS_BINDING
 from .expr_parser import _maybe_float, _maybe_int, _maybe_timedelta
 
@@ -199,12 +200,7 @@ class ConceptDefinition:
                         and source.callback == "transform_fun(comp_na(`==`, 'Expired'))"
                     ):
                         source.callback = EICU_HOSPITAL_STATUS_BINDING
-                        source.params.update(
-                            clinical_binding=EICU_HOSPITAL_STATUS_BINDING,
-                            event_status="Expired",
-                            survivor_status="Alive",
-                            unknown_status_policy="retain_null",
-                        )
+                        source.params.update(hospital_mortality.EICU_HOSPITAL_STATUS_PARAMETERS)
 
         unit_value = payload.get("unit")
         if isinstance(unit_value, str):
