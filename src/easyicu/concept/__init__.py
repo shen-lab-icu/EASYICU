@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from ..config import DataSourceConfig
+from ..hospital_mortality import DENSE_STATUS_BINDINGS
 from ..datasource import (
     DuckDBQueryInterrupted, FilterOp, FilterSpec, ICUDataSource,
     _duckdb_path, enumerate_bucket_parquet_files,
@@ -4702,7 +4703,7 @@ class ConceptResolver:
             # 删除无效的NaN
             if concept_name in frame.columns:
                 # 检查是否在merge模式（通过kwargs传递）
-                keep_na_rows = kwargs.get('_keep_na_rows', False)
+                keep_na_rows = kwargs.get('_keep_na_rows', False) or source.callback in DENSE_STATUS_BINDINGS
                 if not keep_na_rows:
                     _before_dropna = len(frame)
                     # 只在非merge模式下删除NaN（单独加载概念时）
@@ -5429,7 +5430,9 @@ class ConceptResolver:
                     if concept_name in combined.columns:
                         col_dtype = combined[concept_name].dtype
                         if pd.api.types.is_bool_dtype(col_dtype):
-                            agg_method = 'any'  # R ricu: logical -> "any"
+                            agg_method = 'max' if any(
+                                src.callback in DENSE_STATUS_BINDINGS for src in sources
+                            ) else 'any'
                         elif pd.api.types.is_numeric_dtype(col_dtype):
                             agg_method = 'median'  # R ricu: numeric -> "median"
                         else:
@@ -7511,7 +7514,10 @@ class ConceptResolver:
                 
                 if value_col and value_col in result.data.columns:
                     if pd.api.types.is_bool_dtype(result.data[value_col]):
-                        agg_method = 'any'
+                        agg_method = 'max' if any(
+                            src.callback in DENSE_STATUS_BINDINGS
+                            for src in definition.for_data_source(data_source.config)
+                        ) else 'any'
                     elif pd.api.types.is_numeric_dtype(result.data[value_col]):
                         agg_method = 'median'  # Changed from 'mean' to 'median' to match R ricu default
                     else:
@@ -9041,7 +9047,10 @@ class ConceptResolver:
                         # R ricu aggregate.id_tbl: numeric -> median, logical -> any, character -> first
                         col_dtype = df[value_col].dtype
                         if pd.api.types.is_bool_dtype(col_dtype):
-                            agg_func = 'any'
+                            agg_func = 'max' if any(
+                                src.callback in DENSE_STATUS_BINDINGS
+                                for src in definition.for_data_source(data_source.config)
+                            ) else 'any'
                         elif pd.api.types.is_numeric_dtype(col_dtype):
                             agg_func = 'median'
                         else:
@@ -9781,6 +9790,12 @@ class ConceptResolver:
             time_col=time_col,
             interval_hours=interval_hours,
             consume_input=consume_sources,
+            dense_status_columns={
+                name for name in concept_data if data_source is not None
+                and (definition := self.dictionary.get(name)) is not None
+                and any(src.callback in DENSE_STATUS_BINDINGS
+                        for src in definition.for_data_source(data_source.config))
+            },
         )
         result = self._ensure_requested_concept_columns(
             result,

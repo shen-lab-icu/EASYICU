@@ -1460,6 +1460,7 @@ def run_exposure_outcome_distribution_from_env(
                 "level": level,
                 "events": int(row["outcome_events"]),
                 "denominator": int(row["outcome_denominator"]),
+                "missing_n": int(row["outcome_missing_n"]),
                 "estimate_pct": row["outcome_rate_pct"],
                 "standard_error_pct": row["outcome_standard_error_pct"],
                 "ci_low_pct": row["ci_low_pct"],

@@ -119,6 +119,28 @@ def test_numeric_fact_adapter_does_not_claim_other_analysis_families():
     assert compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={}) == ()
 
 
+def test_outcome_facts_use_each_groups_known_outcomes_and_report_missing_counts():
+    records, evidence = _inputs()
+    risks = records[0]["step_summary"]["descriptive_estimates"]["outcome_absolute_risks"]
+    risks[0].update(denominator=50, estimate_pct=12.0, missing_n=10)
+    risks[1].update(denominator=32, estimate_pct=25.0, missing_n=8)
+    facts = compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={})
+    text = facts[2].scaffold
+    assert "12.00% (6 of 50 records)" in text
+    assert "25.00% (8 of 32 records)" in text
+    assert "10 records" in text and "8 records" in text and "missing" in text
+    assert "descriptive_estimates.outcome_absolute_risks[0].missing_n" in facts[2].source_fields
+
+
+def test_an_outcome_denominator_must_reconcile_with_its_reported_missing_count():
+    records, evidence = _inputs()
+    records[0]["step_summary"]["descriptive_estimates"]["outcome_absolute_risks"][0].update(
+        denominator=50, estimate_pct=12.0, missing_n=9,
+    )
+    with pytest.raises(ValueError):
+        compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={})
+
+
 def test_modern_descriptive_results_contain_all_registered_primary_facts_once():
     records, evidence = _inputs()
     facts = compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={})

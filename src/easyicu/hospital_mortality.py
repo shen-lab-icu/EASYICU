@@ -1,4 +1,4 @@
-"""MIMIC hospital-discharge status, independent of an event/censor clock.
+"""Hospital-discharge status, independent of an event/censor clock.
 
 One admission status applies to every linked ICU stay. Missing timestamps do
 not erase known status; missing/invalid flags never establish survival. This
@@ -12,6 +12,10 @@ from typing import Any, Mapping
 import pandas as pd
 
 MIMIC_HOSPITAL_STATUS_BINDING = "mimic_hospital_mortality_status_v1"
+EICU_HOSPITAL_STATUS_BINDING = "eicu_hospital_mortality_status_v1"
+# These source callbacks issue a status for every record, including unknowns.
+# Sparse event callbacks retain ricu's default logical ``any`` aggregation.
+DENSE_STATUS_BINDINGS: frozenset[str] = frozenset({EICU_HOSPITAL_STATUS_BINDING})
 
 
 class HospitalMortalityStatusError(ValueError):
@@ -25,6 +29,14 @@ def hospital_mortality_status_from_flag(values: pd.Series) -> pd.Series:
     status = pd.Series(pd.NA, index=values.index, dtype="boolean")
     status.loc[flag.eq(0)] = False
     status.loc[flag.eq(1)] = True
+    return status
+
+
+def hospital_mortality_status_from_discharge(values: pd.Series) -> pd.Series:
+    recorded = values.astype("string").str.strip().str.lower()
+    status = pd.Series(pd.NA, index=values.index, dtype="boolean")
+    status.loc[recorded.eq("alive").fillna(False)] = False
+    status.loc[recorded.eq("expired").fillna(False)] = True
     return status
 
 

@@ -179,6 +179,7 @@
         sharePct: finite(item.record.exposure_pct),
         events: finite(item.record.outcome_events),
         denominator: finite(item.record.outcome_denominator),
+        missingN: finite(item.record.outcome_missing_n),
         outcomeRatePct: finite(item.record.outcome_rate_pct),
       }; });
     // A population-flow ledger is a typed contract.  Audit summaries may also
@@ -202,15 +203,20 @@
       ? eligible.record.n : (eligible.record.n_remaining != null ? eligible.record.n_remaining : eligible.record.n_rows)) : null;
     const completeN = complete ? finite(complete.record.n) : null;
     const eventN = overall ? finite(overall.record.outcome_events) : null;
+    const exposureN = overall ? finite(overall.record.exposure_denominator) : null;
+    const outcomeN = overall ? finite(overall.record.outcome_denominator) : null;
+    const missingOutcomeN = overall ? finite(overall.record.outcome_missing_n) : null;
     const riskPct = overall ? finite(overall.record.outcome_rate_pct) : null;
     return {
       claims: [
         claim('cohort.n_stays', sourceN, integerDisplay(sourceN), source),
         claim('n_total', eligibleN, integerDisplay(eligibleN), eligible),
         claim('n_complete_case', completeN, integerDisplay(completeN), complete || eligible),
-        claim('exposure_distribution.n_total', eligibleN, integerDisplay(eligibleN), overall || eligible),
+        claim('exposure_distribution.n_total', exposureN, integerDisplay(exposureN), overall),
         claim('n_events', eventN, integerDisplay(eventN), overall),
         claim('overall_outcome.event_n', eventN, integerDisplay(eventN), overall),
+        claim('overall_outcome.n', outcomeN, integerDisplay(outcomeN), overall),
+        claim('overall_outcome.missing_n', missingOutcomeN, integerDisplay(missingOutcomeN), overall),
         claim('overall_outcome.risk_pct', riskPct, percentDisplay(riskPct), overall),
         ...exposureLevels.map((row, index) => claim(
           `exposures[0].groups[${index}].outcome_risk_pct`,

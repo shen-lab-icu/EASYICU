@@ -69,6 +69,7 @@ from .expr_parser import (
     _strip_quotes,
 )
 from ..datasource import _duckdb_path, enumerate_bucket_parquet_files
+from ..hospital_mortality import EICU_HOSPITAL_STATUS_BINDING, hospital_mortality_status_from_discharge
 
 if TYPE_CHECKING:
     from ..datasource import ICUDataSource
@@ -753,6 +754,10 @@ def _apply_callback(
         return frame
 
     expr = callback.strip()
+
+    if expr == EICU_HOSPITAL_STATUS_BINDING:
+        value_column = concept_name if concept_name in frame else source.value_var
+        return frame.assign(**{concept_name: hospital_mortality_status_from_discharge(frame[value_column])})
 
     if expr == "identity_callback":
         return frame

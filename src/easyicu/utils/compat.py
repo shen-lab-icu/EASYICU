@@ -25,7 +25,7 @@ from __future__ import annotations
 import math
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, MutableMapping, Optional
+from typing import Dict, Iterable, List, MutableMapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -619,6 +619,7 @@ def merge_concepts_r_style(
     interval_hours: float = 1.0,
     *,
     consume_input: bool = False,
+    dense_status_columns: Iterable[str] = (),
 ) -> pd.DataFrame:
     """以ricu风格合并多个概念数据
     
@@ -635,12 +636,14 @@ def merge_concepts_r_style(
         consume_input: 内部提取热路径可设为 ``True``，逐概念转移所有权并
             清空传入字典，从而避免最终宽表合并时仍保留整套上游帧。公开调用
             默认保留输入，维持既有 API 语义。
+        dense_status_columns: Source-bound statuses whose nulls retain record identity.
         
     Returns:
         合并后的宽格式DataFrame
     """
     if not concept_data:
         return pd.DataFrame()
+    dense_status_columns = frozenset(dense_status_columns)
     
     # 标准化列名
     # 🚀 优化：不再 .copy()，调用者 _to_r_format_merged_enhanced 已经复制过
@@ -749,6 +752,8 @@ def merge_concepts_r_style(
                 interval_hours=interval_hours
             )
         
+        if name in dense_status_columns and name in df_copy:
+            df_copy = df_copy.assign(**{name: df_copy[name].astype("boolean")})
         normalized[name] = df_copy
         if not has_grid_rows and "id" in df_copy.columns:
             if "time" in df_copy.columns:
@@ -760,7 +765,7 @@ def merge_concepts_r_style(
             else:
                 has_grid_rows = bool(df_copy["id"].notna().any())
 
-    if not has_grid_rows:
+    if not has_grid_rows and not dense_status_columns:
         # 没有时间数据，简单合并
         if len(normalized) == 1:
             name = list(normalized.keys())[0]
@@ -846,11 +851,14 @@ def merge_concepts_r_style(
                 companion_time = f"{name}_time"
                 if companion_time in df.columns:
                     static_columns.append(companion_time)
-                static = (
-                    df[static_columns]
-                    .dropna(subset=["id", name])
-                    .drop_duplicates(subset=["id"], keep="last")
-                )
+                static = df[static_columns].dropna(subset=["id"])
+                if name in dense_status_columns:
+                    static = static.groupby("id", as_index=False).agg(
+                        {column: "max" if column == name else "first"
+                         for column in static_columns if column != "id"}
+                    )
+                else:
+                    static = static.dropna(subset=[name]).drop_duplicates(subset=["id"], keep="last")
                 if not static.empty:
                     static_concepts[name] = static
             continue
@@ -894,9 +902,13 @@ def merge_concepts_r_style(
             # bool 列中 True=1, False=0, max() 相当于 any()，且自动跳过 NaN
             _bool_df = df[keep_cols].copy()
             _bool_df[name] = _bool_df[name].astype('float32')
-            prepared = _bool_df.groupby(["id", "time"], as_index=False).agg({name: 'max'})
+            prepared = _bool_df.groupby(
+                ["id", "time"], as_index=False, dropna=name not in dense_status_columns
+            ).agg({name: 'max'})
             # 将 max 结果转回布尔: 1.0→True, 0.0→False, NaN→NaN
             prepared[name] = prepared[name].map({1.0: True, 0.0: False})
+            if name in dense_status_columns:
+                prepared[name] = prepared[name].astype("boolean")
             boolean_concepts.append(name)
         else:
             prepared = df[keep_cols].drop_duplicates(subset=["id", "time"], keep="last")
@@ -904,8 +916,9 @@ def merge_concepts_r_style(
         # Missing values must not contribute a physical event key.  The outer
         # merge will still place NA at keys supplied by other concepts, but a
         # value-less source row can no longer create an otherwise empty module
-        # row on its own.
-        prepared = prepared.dropna(subset=["id", "time", name])
+        # row on its own. Dense statuses instead retain the source identity,
+        # including unknown values and an unrecorded clock.
+        prepared = prepared.dropna(subset=["id"] if name in dense_status_columns else ["id", "time", name])
         if prepared.empty:
             continue
         

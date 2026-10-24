@@ -302,7 +302,7 @@
         .map(row => ({ ...row, label: levelName(spec && spec.exposure, row.label) }));
       const figures = mainFigure(payload('figure_gallery.json'));
       const tables = Array.isArray(payload('result_tables.json').tables) ? payload('result_tables.json').tables : [];
-      const total = claim('n_total');
+      const total = claim('exposure_distribution.n_total') || claim('n_total');
       const overallRisk = claim('overall_outcome.risk_pct');
       // The database as readers know it ("eICU v2.0"), which the host states
       // beside the registered label; that label can carry an export id.
@@ -448,6 +448,13 @@
           `${outcome} by ${view.exposureLabel || 'group'} in ${source}: ${rows.join('; ')}.`,
           `${source} 中按${view.exposureLabel || '分组'}的${outcome}：${rows.join('；')}。`,
         ));
+      }
+      const missingGroups = groups.filter(row => row.missingN > 0).map(row => tr(
+        `“${row.label}” ${count(row.missingN)}`,
+        `「${row.label}」组 ${count(row.missingN)} 个`,
+      ));
+      if (missingGroups.length) {
+        sentences.push(tr(`Missing outcomes: ${missingGroups.join('; ')}.`, `结局缺失：${missingGroups.join('；')}。`));
       }
       if (view.groupsUnreadable && (groups.length || view.estimate) && window.AGENT_EXPOSURE_LEVELS) {
         sentences.push(window.AGENT_EXPOSURE_LEVELS.unreadableText(tr));
