@@ -1172,8 +1172,9 @@ def load_concepts(
         the current renal bundle are appended in lexical order, followed by
         explicitly requested legacy renal outputs in lexical order. Dict
         projections use the same order within each bundle. Comorbidity
-        outputs keep the export order Elixhauser then Charlson; microbiology
-        outputs follow lexical order. Neither order depends on Python's hash seed.
+        outputs keep the order Elixhauser then Charlson; circulatory, outcome
+        and microbiology outputs follow lexical order. Module exports then
+        project values into catalog order. None depend on Python's hash seed.
 
     Examples:
         >>> # 最简单的用法 - 自动检测所有参数
@@ -2022,7 +2023,7 @@ def load_concepts(
                         )
                         if c in cf_df.columns
                     ]
-                    for c in _need_circ:
+                    for c in sorted(_need_circ):
                         if c in cf_df.columns:
                             special_dict[c] = cf_df[id_time + [c]].copy()
             except Exception as e:
@@ -2087,7 +2088,7 @@ def load_concepts(
                     )
                     if col in oc.columns
                 ]
-                for c in _need_outcome:
+                for c in sorted(_need_outcome):
                     if c in oc.columns and id_cols:
                         special_dict[c] = oc[id_cols + [c]].copy()
         if _need_micro:
