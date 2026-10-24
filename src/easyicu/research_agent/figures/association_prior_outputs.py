@@ -17,7 +17,7 @@ from .prior_output_support import (
     short_figure_label as _short_figure_label,
 )
 from .prior_output_contracts import _planned_primary_association_contract
-from ..reporting.publication_bundles import (
+from .prior_output_support import (
     association_descriptive_context as _association_descriptive_context,
     context_axis_label as _context_axis_label,
 )
