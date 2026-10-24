@@ -144,7 +144,7 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
         research_question=question,
         cohort=synthetic_cohort,
         cohort_name="prose_cohort",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
     base_plan = AnalysisPlan.model_validate_json(_mock_plan_json(context))
@@ -231,7 +231,7 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
         question=question,
         cohort=synthetic_cohort,
         cohort_name="prose_cohort",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 

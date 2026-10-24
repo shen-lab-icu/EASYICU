@@ -35,7 +35,7 @@ def _pipeline_context(synthetic_cohort):
         research_question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="router_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -203,7 +203,7 @@ def test_pipeline_with_router_routes_each_agent_to_its_role(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="router_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         force_writer_probe=True,
     )
@@ -252,7 +252,7 @@ def test_pipeline_backwards_compat_plain_client(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="legacy_compat",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
     assert result.evidence_count > 0

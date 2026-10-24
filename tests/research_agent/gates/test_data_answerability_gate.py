@@ -257,7 +257,7 @@ def test_constant_outcome_aborts_pipeline_before_any_provider_call(
     result = pipeline.run(
         cohort=cohort,
         cohort_name="constant_outcome",
-        database="synthetic",
+        database="miiv",
         primary_exposure="exposure_x",
         skill=skill,
     )

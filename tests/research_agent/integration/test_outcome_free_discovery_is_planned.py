@@ -37,7 +37,7 @@ def test_an_outcome_free_discovery_question_is_planned(ra, tmp_path: Path):
         ),
         cohort=cohort,
         cohort_name="outcome_free_discovery",
-        database="synthetic",
+        database="miiv",
     )
 
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))

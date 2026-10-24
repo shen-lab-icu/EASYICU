@@ -25,7 +25,7 @@ def _context() -> ResearchContext:
         research_question="Estimate a prespecified association.",
         cohort=CohortDescriptor(
             cohort_name="publication_skill_fixture",
-            database="fixture",
+            database="miiv",
             n_patients=20,
             n_stays=20,
         ),

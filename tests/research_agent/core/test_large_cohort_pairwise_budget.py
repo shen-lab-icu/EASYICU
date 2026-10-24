@@ -25,7 +25,7 @@ def _context(*, n_stays: int) -> ResearchContext:
         research_question="Discover reproducible physiological subgroups.",
         cohort=CohortDescriptor(
             cohort_name="large_general_cohort",
-            database="example",
+            database="miiv",
             n_patients=n_stays,
             n_stays=n_stays,
             id_columns=["stay_id"],

@@ -60,7 +60,7 @@ def _ctx(ra):
     return ra.ResearchContext(
         research_question="Association between X and mortality.",
         cohort=ra.CohortDescriptor(
-            cohort_name="demo", database="synthetic", n_stays=10, n_patients=10
+            cohort_name="demo", database="eicu_demo", n_stays=10, n_patients=10
         ),
         variables=[],
     )

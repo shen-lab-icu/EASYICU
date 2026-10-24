@@ -176,7 +176,7 @@ def result(ra, tmp_path: Path, monkeypatch):
             }
         ),
         cohort_name="under_declared_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_analysis=True,
     )

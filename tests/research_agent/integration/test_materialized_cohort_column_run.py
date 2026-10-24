@@ -129,7 +129,7 @@ def test_a_run_filtering_its_own_column_completes_and_binds_its_plan(
         question=QUESTION,
         cohort=_cohort(),
         cohort_name="flagged",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -183,7 +183,7 @@ def test_a_development_replay_of_such_a_plan_reaches_review(
         question=QUESTION,
         cohort=_cohort(),
         cohort_name="flagged",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_analysis=True,
     )

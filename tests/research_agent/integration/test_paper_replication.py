@@ -63,7 +63,7 @@ def test_pipeline_reproduce_paper_writes_replication_artefacts(
     result = pipeline.reproduce_paper(
         paper=_mock_association_paper(),
         cohort=synthetic_cohort,
-        database="synthetic",
+        database="miiv",
         mode="replication",
     )
 
@@ -109,7 +109,7 @@ def test_manuscript_mode_does_not_override_an_unreportable_scientific_capability
     result = pipeline.reproduce_paper(
         paper=_mock_association_paper(),
         cohort=synthetic_cohort,
-        database="synthetic",
+        database="miiv",
         mode="manuscript",
     )
 
@@ -133,7 +133,7 @@ We used imaging, waveform data, and clinical notes to train a deep model.
 The primary outcome was ICU mortality.
 """,
         cohort=synthetic_cohort,
-        database="synthetic",
+        database="miiv",
         mode="manuscript",
     )
 

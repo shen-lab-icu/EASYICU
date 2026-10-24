@@ -37,7 +37,7 @@ def _context() -> ResearchContext:
         research_question="Apply the Planner-owned eligibility definition.",
         cohort=CohortDescriptor(
             cohort_name="planned_cohort",
-            database="synthetic",
+            database="miiv",
             n_stays=10,
             n_patients=9,
         ),

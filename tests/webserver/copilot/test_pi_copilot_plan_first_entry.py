@@ -227,7 +227,7 @@ def test_explicit_descriptive_question_becomes_one_reviewable_candidate_setup(
 def _stated_timing_update(monkeypatch, question, *, current_extra=None):
     current = {
         "id": "entry-landmark-owner-test", "revision": 1, "question": "",
-        "data_source": {"database": "eicu_demo", "path": "/test/eicu_demo"},
+        "data_source": {"database": "eicu", "path": "/test/eicu"},
         "time_window": {"hours": 24, "anchor": "ICU admission"},
         "confirmations": {},
         **(current_extra or {}),

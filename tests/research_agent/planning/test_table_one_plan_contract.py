@@ -49,7 +49,7 @@ def _context() -> ResearchContext:
         research_question="Describe the cohort by the Planner-selected group.",
         cohort=CohortDescriptor(
             cohort_name="synthetic",
-            database="synthetic",
+            database="miiv",
             n_patients=10,
             n_stays=10,
         ),

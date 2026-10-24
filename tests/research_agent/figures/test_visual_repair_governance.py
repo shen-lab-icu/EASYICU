@@ -236,7 +236,7 @@ def _run(
         question="Summarize the cohort.",
         cohort=pd.DataFrame({"stay_id": [1, 2, 3]}),
         cohort_name="visual_governance_test",
-        database="synthetic",
+        database="miiv",
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
     )

@@ -1889,7 +1889,7 @@ def test_runtime_preflight_failure_spends_zero_llm_calls(
             question="Is exposure associated with mortality?",
             cohort=synthetic_cohort,
             cohort_name="runtime_preflight",
-            database="synthetic",
+            database="miiv",
             target_outcome="death",
         )
 

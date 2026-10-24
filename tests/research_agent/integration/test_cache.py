@@ -30,7 +30,7 @@ def _run(ra, *, cohort, workdir: Path, enable_cache: bool, **kwargs):
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=cohort,
         cohort_name="cache_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         **kwargs,
     )
@@ -119,7 +119,7 @@ def test_cache_invalidates_on_question_change(ra, synthetic_cohort, tmp_path: Pa
         question="A different research question entirely.",  # ← changed
         cohort=synthetic_cohort,
         cohort_name="cache_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
     assert b.run_id != a.run_id
@@ -156,7 +156,7 @@ def test_resume_bypasses_cache(ra, synthetic_cohort, tmp_path: Path):
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="cache_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id="run_does_not_exist_yet",
     )

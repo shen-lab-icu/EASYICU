@@ -184,7 +184,7 @@ def _run(pipeline, cohort: pd.DataFrame):
         question="Summarize the cohort.",
         cohort=cohort,
         cohort_name="post_repair_gate_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_summary",
         stop_after_analysis=True,

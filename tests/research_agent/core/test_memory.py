@@ -28,7 +28,7 @@ def test_legacy_memory_failure_cannot_overturn_successful_run(
     result = pipeline.run(
         skill="association_analysis",
         cohort=synthetic_cohort,
-        database="synthetic",
+        database="miiv",
     )
 
     assert Path(result.manifest_path).is_file()

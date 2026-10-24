@@ -304,7 +304,7 @@ def test_registered_export_download_opens_exact_source_in_native_workspace(
         lambda _binding: {
             "id": "study-extraction-workspace",
             "revision": 3,
-            "data_source": {"path": "/private/registered/export"},
+            "data_source": {"path": "/private/registered/export", "database": "miiv"},
         },
     )
     monkeypatch.setattr(
@@ -316,6 +316,7 @@ def test_registered_export_download_opens_exact_source_in_native_workspace(
                 {
                     "id": "src_0123456789ab",
                     "path": "/private/registered/export",
+                    "database": "miiv",
                     "ok": True,
                     "summary": {"file_count": 3, "total_rows": 147},
                 }
@@ -340,6 +341,7 @@ def test_registered_export_download_opens_exact_source_in_native_workspace(
         "label": "Data Extraction",
         "media_type": "application/vnd.easyicu.native-workspace",
         "source_id": "src_0123456789ab",
+        "expected_database": "miiv",
     }
 
     replay = projections._project_replay_resource(result["details"]["resource"])

@@ -18,7 +18,7 @@ def _context() -> ResearchContext:
         research_question="Estimate an exposure-outcome association with audit context.",
         cohort=CohortDescriptor(
             cohort_name="synthetic",
-            database="synthetic",
+            database="miiv",
             n_stays=120,
             id_columns=["stay_id"],
             outcome_columns=["outcome_flag"],

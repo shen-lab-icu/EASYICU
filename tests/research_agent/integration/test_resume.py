@@ -124,7 +124,7 @@ def _run_full(ra, synthetic_cohort, workdir: Path):
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="resume_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -155,7 +155,7 @@ def _write_capsule_resume_fixture(ra, tmp_path: Path):
         "question": "Is exposure A associated with the outcome?",
         "cohort": cohort,
         "cohort_name": "capsule_cohort",
-        "database": "synthetic",
+        "database": "miiv",
         "target_outcome": "outcome",
         "primary_exposure": "exposure_a",
         "inclusion_criteria": ["adult ICU stays"],
@@ -366,13 +366,9 @@ def test_resume_environment_drift_is_receipted_without_overwriting_inputs(
         lambda *, llm_signature: changed_environment,
     )
 
-    class DifferentModelLLM:
-        name = "different-model"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            return "{}"
-
-    pipeline._llm = DifferentModelLLM()
+    different_model_llm = ra.MockLLMClient()
+    different_model_llm.name = "different-model"
+    pipeline._llm = different_model_llm
 
     def stop_after_receipt(**_kwargs):
         raise RuntimeError("stop after resume receipt")
@@ -2233,7 +2229,7 @@ def test_partial_manifest_checkpoints_executed_step_before_interpretation(
             question="Is admission SOFA-2 associated with ICU mortality?",
             cohort=synthetic_cohort,
             cohort_name="resume_test",
-            database="synthetic",
+            database="miiv",
             target_outcome="death",
         )
 
@@ -2271,7 +2267,7 @@ def test_resume_skips_completed_steps(ra, synthetic_cohort, tmp_path: Path):
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="resume_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id=first.run_id,
     )
@@ -2318,7 +2314,7 @@ def test_resume_reruns_missing_step(ra, synthetic_cohort, tmp_path: Path):
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="resume_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id=first.run_id,
     )
@@ -2361,7 +2357,7 @@ def test_resume_from_completed_step_can_stop_after_that_step(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="resume_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id=first.run_id,
         resume_from_step_id="04_primary_association",
@@ -2502,7 +2498,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         question="Is SOFA associated with ICU mortality?",
         cohort=cohort,
         cohort_name="resume_code_reuse_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_analysis=True,
     )
@@ -2585,7 +2581,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         question="Is SOFA associated with ICU mortality?",
         cohort=cohort,
         cohort_name="resume_code_reuse_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id=first.run_id,
         resume_from_step_id=("04_primary_association" if explicit_resume else None),
@@ -2757,7 +2753,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         question="Summarize the ICU cohort.",
         cohort=cohort,
         cohort_name="quarantine_resume_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
@@ -2812,7 +2808,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         question="Summarize the ICU cohort.",
         cohort=cohort,
         cohort_name="quarantine_resume_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id=first.run_id,
         resume_from_step_id="01_summary",
@@ -2854,7 +2850,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         question="Summarize the ICU cohort.",
         cohort=cohort,
         cohort_name="quarantine_resume_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id=first.run_id,
         resume_from_step_id="01_summary",
@@ -2900,7 +2896,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         question="Summarize the ICU cohort.",
         cohort=cohort,
         cohort_name="quarantine_resume_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id=first.run_id,
         resume_from_step_id="01_summary",
@@ -3016,7 +3012,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         question="Summarize the cohort.",
         cohort=cohort,
         cohort_name="current_coordinate_resume",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
@@ -3045,7 +3041,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         question="Summarize the cohort.",
         cohort=cohort,
         cohort_name="current_coordinate_resume",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id=first.run_id,
         resume_from_step_id="01_summary",
@@ -3233,7 +3229,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         question="Summarize the cohort for in-hospital mortality.",
         cohort=cohort,
         cohort_name="policy_supersession",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
@@ -3277,7 +3273,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         question="Summarize the cohort for in-hospital mortality.",
         cohort=cohort,
         cohort_name="policy_supersession",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id=first.run_id,
         resume_from_step_id="01_summary",
@@ -3473,7 +3469,7 @@ if __name__ == "__main__":
         question="Summarize the ICU cohort.",
         cohort=cohort,
         cohort_name="deterministic_quarantine_resume",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
@@ -3608,7 +3604,7 @@ if __name__ == "__main__":
         question="Summarize the ICU cohort.",
         cohort=cohort,
         cohort_name="deterministic_quarantine_resume",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id=first.run_id,
         resume_from_step_id="01_summary",
@@ -3765,7 +3761,7 @@ def _policy_supersession_context_and_script(ra):
             }
         ),
         cohort_name="policy_supersession",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
     script = """
@@ -3860,7 +3856,7 @@ def test_quarantine_policy_supersession_reclassifies_isolated_raw_branch_false_o
         research_question="Assess balance by treatment.",
         cohort=pd.DataFrame({"stay_id": [1, 2], "treatment": [0, 1]}),
         cohort_name="c",
-        database="synthetic",
+        database="miiv",
         primary_exposure="treatment",
     )
     script = """
@@ -3921,7 +3917,7 @@ def test_quarantine_policy_does_not_trust_artifact_literal_decoy_flow(ra) -> Non
         research_question="Assess balance by treatment.",
         cohort=pd.DataFrame({"stay_id": [1, 2], "treatment": [0, 1]}),
         cohort_name="c",
-        database="synthetic",
+        database="miiv",
         primary_exposure="treatment",
     )
     script = """
@@ -3965,7 +3961,7 @@ def test_quarantine_policy_does_not_trust_uncalled_return_as_consumption(ra) -> 
         research_question="Assess balance by treatment.",
         cohort=pd.DataFrame({"stay_id": [1, 2], "treatment": [0, 1]}),
         cohort_name="c",
-        database="synthetic",
+        database="miiv",
         primary_exposure="treatment",
     )
     script = """
@@ -4009,7 +4005,7 @@ def test_quarantine_policy_does_not_trust_audit_only_authority_flow(ra) -> None:
         research_question="Assess balance by treatment.",
         cohort=pd.DataFrame({"stay_id": [1, 2], "treatment": [0, 1]}),
         cohort_name="c",
-        database="synthetic",
+        database="miiv",
         primary_exposure="treatment",
     )
     script = """
@@ -4140,45 +4136,33 @@ def test_resume_reuses_locked_plan_instead_of_replanning(
     ]
     assert step_ids_before, "first run produced no plan steps"
 
-    class DifferentPlanLLM:
-        """Planner here returns a plan with a step_id that must never appear
-        if the locked plan is reused."""
+    different_plan_llm = _pattern_llm(
+        plan={
+            "research_question": "Is admission SOFA-2 associated with ICU mortality?",
+            "steps": [
+                {
+                    "step_id": "88_resume_should_ignore_this",
+                    "planned_analysis_role": "primary",
+                    "intent": "This plan must be ignored on resume.",
+                    "inputs": ["sofa2", "death"],
+                    "expected_outputs": ["table:ignored"],
+                    "method": "descriptive",
+                    "icu_rule_refs": ["aggregation_rule_for"],
+                }
+            ],
+            "rationale": "resume must not use this plan",
+        },
+        code="{}",
+        interpretation="Reused-plan interpretation {evidence:primary_association}.",
+        manuscript="# Title\n\n## Results\n\nReused {evidence:primary_association}.",
+    )
 
-        name = "different-plan-llm"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Is admission SOFA-2 associated with ICU mortality?",
-                        "steps": [
-                            {
-                                "step_id": "88_resume_should_ignore_this",
-                                "planned_analysis_role": "primary",
-                                "intent": "This plan must be ignored on resume.",
-                                "inputs": ["sofa2", "death"],
-                                "expected_outputs": ["table:ignored"],
-                                "method": "descriptive",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            }
-                        ],
-                        "rationale": "resume must not use this plan",
-                    }
-                )
-            if "INTERPRET THE RESULTS" in upper:
-                return "Reused-plan interpretation {evidence:primary_association}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nReused {evidence:primary_association}."
-            return "{}"
-
-    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=DifferentPlanLLM())
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=different_plan_llm)
     second = pipeline.run(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="resume_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id=first.run_id,
     )
@@ -4301,7 +4285,7 @@ def test_resume_adopts_legacy_figure_edge_migration_without_replanning(
         question=legacy_plan.research_question,
         cohort=synthetic_cohort,
         cohort_name="legacy_figure_edge",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id=run_id,
         resume_from_step_id=parent.step_id,
@@ -4366,7 +4350,7 @@ def test_resume_to_nonexistent_run_id_starts_fresh_directory(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="resume_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         resume_run_id="run_does_not_exist_yet",
     )
@@ -4455,7 +4439,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         question="Is SOFA associated with ICU mortality?",
         cohort=cohort,
         cohort_name="hosted_stub_resume_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 

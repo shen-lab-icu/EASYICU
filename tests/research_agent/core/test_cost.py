@@ -509,7 +509,7 @@ def test_pipeline_with_cost_tracking_records_per_role_calls(
         enable_latex=False,
     )
     result = pipeline.run(
-        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+        skill="association_analysis", cohort=synthetic_cohort, database="miiv"
     )
 
     run_dir = Path(result.workdir)
@@ -558,7 +558,7 @@ def test_pipeline_without_cost_tracking_writes_no_cost_files(
         enable_latex=False,
     )
     result = pipeline.run(
-        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+        skill="association_analysis", cohort=synthetic_cohort, database="miiv"
     )
 
     run_dir = Path(result.workdir)

@@ -91,7 +91,7 @@ def _context(endpoint: EndpointSpec | None = None) -> ResearchContext:
         research_question="Estimate time to death.",
         cohort=CohortDescriptor(
             cohort_name="c",
-            database="synthetic",
+            database="miiv",
             n_patients=10,
             n_stays=10,
         ),
@@ -417,7 +417,7 @@ def _rendered_audit_prompt(study_endpoint: object) -> str:
             "mortality with time-to-event methods."
         ),
         cohort=CohortDescriptor(
-            cohort_name="c", database="synthetic", n_stays=10, n_patients=10
+            cohort_name="c", database="miiv", n_stays=10, n_patients=10
         ),
         variables=[],
         target_outcome="death",
@@ -553,7 +553,7 @@ def test_a_replan_candidate_without_the_required_endpoint_is_rejected() -> None:
         research_question="Estimate time to death.",
         cohort=CohortDescriptor(
             cohort_name="c",
-            database="synthetic",
+            database="miiv",
             n_patients=10,
             n_stays=10,
         ),
@@ -629,7 +629,7 @@ def test_missing_endpoint_is_blocked_after_planner_and_replanner_miss(
         question="Estimate time to death.",
         cohort=synthetic_cohort,
         cohort_name="endpoint_contract_fail_closed",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))

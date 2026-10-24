@@ -86,7 +86,7 @@ def test_replanner_grown_cohort_step_with_empty_definition_is_flagged(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="cohort_contract_replan",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 

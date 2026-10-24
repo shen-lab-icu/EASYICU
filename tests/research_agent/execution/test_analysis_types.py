@@ -555,7 +555,7 @@ def test_mock_planner_emits_prediction_analysis_and_publication_for_prediction_q
         question="Build an ICU mortality prediction model and define evaluation metrics.",
         cohort=cohort,
         cohort_name="prediction_protocol_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -589,7 +589,7 @@ def test_reused_mock_pipeline_refreshes_context_between_prediction_and_clusterin
         question="Build an ICU mortality prediction model and define evaluation metrics.",
         cohort=cohort,
         cohort_name="prediction_then_clustering",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
     second = pipeline.run(
@@ -599,7 +599,7 @@ def test_reused_mock_pipeline_refreshes_context_between_prediction_and_clusterin
         ),
         cohort=cohort,
         cohort_name="prediction_then_clustering",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -641,7 +641,7 @@ def test_mock_planner_rejects_protocol_only_survival_plan(ra, tmp_path: Path):
             ),
             cohort=cohort,
             cohort_name="survival_protocol_test",
-            database="synthetic",
+            database="miiv",
             target_outcome="death",
             user_preferences={
                 "inferred_analysis_family": "survival",

@@ -103,7 +103,7 @@ def _wide_context(ra, *, n_families: int = 4):
         research_question="Audit an already selected ordered exposure safely.",
         cohort=ra.CohortDescriptor(
             cohort_name="prompt_budget",
-            database="synthetic",
+            database="miiv",
             n_stays=100,
             n_patients=95,
         ),
@@ -2315,7 +2315,7 @@ def test_scientific_semantics_repair_keeps_planner_science_authority(ra):
         research_question="Estimate the declared association safely.",
         cohort=ra.CohortDescriptor(
             cohort_name="semantic_authority",
-            database="synthetic",
+            database="miiv",
             n_stays=100,
             n_patients=90,
             inclusion_criteria=["adult ICU stays"],

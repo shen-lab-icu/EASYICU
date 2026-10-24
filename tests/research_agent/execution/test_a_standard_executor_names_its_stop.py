@@ -502,7 +502,7 @@ def _run(
         question="Summarize the ICU cohort.",
         cohort=pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0], "age": [40, 50, 60]}),
         cohort_name="executor_stop_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_summary",
         stop_after_analysis=True,

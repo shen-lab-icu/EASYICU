@@ -22,7 +22,7 @@ def _context() -> ResearchContext:
         research_question="Does an aggregate ICU exposure predict mortality?",
         cohort=CohortDescriptor(
             cohort_name="synthetic",
-            database="synthetic",
+            database="miiv",
             n_patients=10,
             n_stays=10,
         ),

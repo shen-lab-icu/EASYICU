@@ -32,7 +32,7 @@ def _context() -> ResearchContext:
         research_question="Estimate the prespecified study result.",
         cohort=CohortDescriptor(
             cohort_name="synthetic",
-            database="synthetic",
+            database="miiv",
             n_patients=10,
             n_stays=10,
         ),

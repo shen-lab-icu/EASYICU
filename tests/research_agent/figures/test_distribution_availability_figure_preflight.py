@@ -1313,7 +1313,7 @@ print(json.dumps(summary))
         question="Describe the planned marker audit.",
         cohort=cohort,
         cohort_name="planned_marker_audit",
-        database="synthetic",
+        database="miiv",
         primary_exposure="marker_value",
         stop_after_analysis=True,
     )
