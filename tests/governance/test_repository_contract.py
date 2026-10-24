@@ -185,6 +185,7 @@ def test_native_webserver_static_assets_are_packaged() -> None:
         "pi_copilot/node_app/src/shell-budget.mjs",
         "pi_copilot/node_app/src/provider-retry.mjs",
         "pi_copilot/node_app/src/session-lifecycle.mjs",
+        "pi_copilot/node_app/src/research-context.mjs",
         "pi_copilot/node_app/src/skills/web-prototype/SKILL.md",
     ]
     assert "recursive-include src/easyicu/webserver/static *.html *.css *.js" in manifest

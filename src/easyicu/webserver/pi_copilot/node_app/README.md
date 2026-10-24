@@ -77,10 +77,10 @@ returned over the gateway protocol. Environment overrides must still match a
 local verification receipt before the chat gate opens. Node `>=22.19.0` is
 required.
 
-The shell registers fifteen EasyICU research tools. Study setup can be collected
+The shell registers the research tools in the host's `tool_catalog.json`. Study setup can be collected
 and saved inside the conversation with a one-message Configure grant; the
 existing typed StudyContext store remains authoritative. Workspace mode adds
-seven governed artifact tools plus the packaged `web-prototype` skill. Writes
+the catalog's governed artifact tools plus the packaged `web-prototype` skill. Writes
 require a reusable host-held capability for that message and remain inside the
 project-specific private workspace. Generic Pi filesystem, network, and shell
 tools stay disabled. The
@@ -96,6 +96,13 @@ so reopening the conversation restores its history. At the emergency RSS
 threshold the sidecar rejects new work with `pi_shell_memory_pressure`; the Web
 process has an additional process-tree admission guard configured by
 `EASYICU_WEB_SOFT_RSS_MB` and `EASYICU_WEB_EMERGENCY_RSS_MB`.
+
+The discovery-free loader includes one host-owned Pi `context` extension.
+`research-context.mjs` injects the current study receipt before each agent call,
+independently of Pi's conversation summary. The projection is bounded to 24 KiB,
+invalidated before host mutations, and cleared at the end of a turn. It is not
+stored as a new grant or cross-project memory. Pi's existing compactor continues
+to use the same guarded stream function and cumulative budget accounting.
 
 See `docs/pi_copilot_integration_architecture.md` for authority, PHI, session,
 failure, and upgrade contracts.

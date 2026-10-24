@@ -35,6 +35,7 @@ import {
   ShellBudgetGuard,
 } from "./shell-budget.mjs";
 import { retryTransientProviderStream } from "./provider-retry.mjs";
+import { ResearchContextMemory } from "./research-context.mjs";
 import { DATA_SOURCE_CONFIRMED_MARKER, hostPostToolFinalization } from "./post-tool-finalization.mjs";
 import {
   HotSessionLifecycle,
@@ -695,10 +696,14 @@ function userPromptStudySnapshot(value) {
   };
 }
 
-function resourceLoader(agentMode, extensionSnapshot, language) {
+function resourceLoader(agentMode, extensionSnapshot, language, researchContext) {
   const workspaceMode = agentMode === "workspace";
   return {
-    getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
+    getExtensions: () => ({
+      extensions: [researchContext.extension()],
+      errors: [],
+      runtime: createExtensionRuntime(),
+    }),
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
@@ -822,10 +827,15 @@ function hostTool(sessionId, definition) {
     ...definition,
     executionMode: catalogEntry.execution_mode,
     execute: async (_toolCallId, params) => {
+      const researchContext = sessions.get(sessionId)?.researchContext;
+      // A pending mutation may already have changed the owner even if its
+      // response is lost. Do not inject the pre-mutation state again.
+      const contextToken = researchContext?.startTool(catalogEntry.host_mutating);
       let result;
       try {
         result = await requestHostTool(sessionId, definition.name, params);
       } catch (error) {
+        researchContext?.finishTool(contextToken);
         const code = boundedText(error?.code || "pi_host_tool_rejected", 160);
         const modelVisible = {
           status: "blocked",
@@ -841,6 +851,10 @@ function hostTool(sessionId, definition) {
           isError: true,
         };
       }
+      researchContext?.finishTool(contextToken,
+        definition.name === "easyicu_inspect_workflow"
+          || (definition.name === "easyicu_update_study_context" && result?.code === "study_context_updated")
+          ? result : undefined);
       const code = boundedText(result?.code || "pi_tool_result", 160);
       const summary = boundedText(result?.summary || code, 2000);
       const modelVisible = {
@@ -1312,6 +1326,7 @@ async function createSession(params) {
     // disables them and lets every outbound call cross ShellBudgetGuard once.
     retry: { enabled: false, maxRetries: 0 },
   });
+  const researchContext = new ResearchContextMemory();
   let session;
   try {
     ({ session } = await createAgentSession({
@@ -1320,7 +1335,7 @@ async function createSession(params) {
       model: selected,
       thinkingLevel,
       modelRuntime: runtime,
-      resourceLoader: resourceLoader(agentMode, extensionSnapshot, language),
+      resourceLoader: resourceLoader(agentMode, extensionSnapshot, language, researchContext),
       sessionManager: manager,
       settingsManager,
       noTools: "builtin",
@@ -1346,6 +1361,7 @@ async function createSession(params) {
       extensionActivationSha256: extensionSnapshot.activation_sha256,
       session,
       sessionManager: manager,
+      researchContext,
       unsubscribe,
       sessionTokenBudget: config.sessionTokenBudget,
       maxTokens: config.maxTokens,
@@ -1425,6 +1441,7 @@ async function promptSession(requestId, params) {
       record.session.setActiveToolsByName([]);
     }
     const ownerContext = await currentTurnOwnerContext(sessionId);
+    record.researchContext.beginTurn(ownerContext);
     const prompt = modelPrompt(message, record.language, ownerContext, intent, params.idea_source);
     if (intent === "advance_after_data_source_confirmation") {
       await record.session.sendCustomMessage({
@@ -1439,6 +1456,7 @@ async function promptSession(requestId, params) {
     }
     return sessionState(record);
   } finally {
+    record.researchContext.endTurn();
     record.session.setActiveToolsByName(activeTools);
     record.budgetGuard.endMessage();
     activeRequestBySession.delete(sessionId);
@@ -1530,6 +1548,7 @@ async function regenerateSession(requestId, params) {
       throw Object.assign(new Error("regenerate branch navigation was cancelled"), { code: "pi_regenerate_cancelled" });
     }
     const ownerContext = await currentTurnOwnerContext(sessionId);
+    record.researchContext.beginTurn(ownerContext);
     appendPromptOrigin(record, editedTurn && supplied !== target.message ? params.message_origin : target.messageOrigin);
     await record.session.prompt(modelPrompt(
       editedTurn ? supplied : target.message,
@@ -1540,6 +1559,7 @@ async function regenerateSession(requestId, params) {
     ));
     return { ...sessionState(record), replaced_turn_index: target.turnIndex };
   } finally {
+    record.researchContext.endTurn();
     record.session.setActiveToolsByName(activeTools);
     record.budgetGuard.endMessage();
     activeRequestBySession.delete(sessionId);
