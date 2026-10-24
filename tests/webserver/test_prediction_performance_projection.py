@@ -321,8 +321,15 @@ def test_the_run_projection_carries_the_block_with_its_gate(tmp_path: Path) -> N
 
     block = result_tables["prediction_performance"]
     assert block["evidence_id"] == "table_perf"
-    assert block["authority_scope"] == "blocked"
+    assert block["authority_scope"] == "analysis_only"
     assert block["paper_authorization_allowed"] is False
+    gate = json.loads((tmp_path / "wrapper/quality_gate.json").read_text())["gate"]
+    assert block["authority_scope"] == gate["status"]
+    assert gate["analysis_outcome"] == {"status": "completed", "reason_code": None}
+    assert gate["manuscript_outcome"] == {
+        "status": "not_passed", "reason_code": "numeric_verified_not_satisfied",
+    }
+    assert gate["reportable"] is False
     assert "table_perf__prediction_performance.csv" in {
         table["name"] for table in result_tables["tables"]
     }

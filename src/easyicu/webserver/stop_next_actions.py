@@ -18,6 +18,7 @@ from easyicu.concept.selection_policy import concept_selection_policy
 from easyicu.research_agent.concept_availability import explain_concept_availability
 from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
 from easyicu.research_agent.providers.client_trust import PROVIDER_NOT_CLEARED
+from easyicu.webserver.research_pipeline_run_errors import WINDOWED_SUMMARY_STOP_MESSAGES
 from easyicu.webserver.study_family_scope import v1_scope_description
 
 ActionKind = Literal[
@@ -125,6 +126,10 @@ _EDIT_CODES = frozenset(
     {
         # A plan that refuses approval is edited like any other plan review.
         *PLAN_APPROVAL_STOPS,
+        # Unbound measurement summaries need a new explicit design choice.
+        *WINDOWED_SUMMARY_STOP_MESSAGES,
+        # An unverified restriction cannot be silently dropped or retried.
+        "research_pipeline_hospital_first_stay_restriction_unverified",
         # A revision whose source plan is gone or changed starts from a fresh plan.
         "plan_revision_source_plan_missing",
         # A population predicate emptied a declared group; an unchanged retry

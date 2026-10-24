@@ -25,7 +25,10 @@ from easyicu.webserver.pi_copilot.workflow import (
     build_research_workflow_snapshot,
     project_run_history,
 )
-from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.research_pipeline_run_errors import (
+    ResearchPipelineRunError,
+    WINDOWED_SUMMARY_STOP_MESSAGES,
+)
 from easyicu.webserver.research_run_submission import ResearchRunSubmissionRequest
 from easyicu.webserver.run_record import RunGate
 
@@ -246,6 +249,7 @@ def _owned_terminal_codes() -> set[str]:
     codes.update(
         (
             *PLAN_APPROVAL_STOPS,
+            *WINDOWED_SUMMARY_STOP_MESSAGES,
             STUDY_FAMILY_DATABASE_OUT_OF_SCOPE,
             TARGET_TRIAL_DATABASE_OUT_OF_SCOPE,
         )
@@ -267,6 +271,25 @@ def test_each_terminal_code_from_the_owners_has_an_explicit_disposition() -> Non
         actions = owner.next_actions_for_stop(code)
         assert actions, code
         assert all(action.action_id and action.label_key for action in actions)
+
+
+@pytest.mark.parametrize("code", [
+    "research_pipeline_hospital_first_stay_restriction_unverified",
+    *WINDOWED_SUMMARY_STOP_MESSAGES,
+])
+def test_restriction_and_measurement_stops_require_an_explicit_plan_edit(code):
+    job = project_job({"id": "synthetic_job", "status": "failed", "error": code})
+    assert [action["kind"] for action in job["next_actions"]] == ["edit_plan"]
+    assert owner.STOP_POLICIES[code] == "edit_plan"
+    actions = owner.next_actions_for_stop(code, detail={
+        "element": "population", "step_id": "cohort", "question_required": False,
+    })
+    assert [action.kind for action in actions] == ["edit_plan"]
+    params = actions[0].params
+    assert params.route == "plan_edit"
+    assert params.planner_start_mode == "fresh"
+    assert params.requires_explicit_choice is True
+    assert params.requires_plan_approval is True
 
 
 @pytest.mark.parametrize(

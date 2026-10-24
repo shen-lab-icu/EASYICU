@@ -514,7 +514,13 @@ def test_project_workflow_exposes_validated_analysis_results_when_publication_is
 
     latest = payload["latest_run"]
     assert latest["analysis_results_available"] is True
-    assert latest["gate_status"] == "blocked"
+    assert latest["gate_status"] == "analysis_only"
+    assert latest["analysis_outcome"] == {"status": "completed", "reason_code": None}
+    assert latest["manuscript_outcome"] == {
+        "status": "not_passed", "reason_code": "evidence_complete_not_satisfied",
+    }
+    assert latest["reportable"] is False
+    assert latest["evidence_complete"] is False
     assert [row["artifact"] for row in latest["artifact_refs"]] == [
         "result_tables.json",
         "figure_gallery.json",

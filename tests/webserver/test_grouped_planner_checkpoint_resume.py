@@ -195,7 +195,20 @@ def test_prepared_continuation_restores_science_without_execution_options(groupe
     assert restored == continuation.run_arguments()
 
 
-def test_prepared_continuation_reaches_planner_on_the_original_context(grouped_source, tmp_path, monkeypatch):
+@pytest.fixture
+def planning_runtime(monkeypatch):
+    """Exercise restoration and planning without probing a host execution backend."""
+    from easyicu.research_agent import pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module.ResearchAgentPipeline, "_preflight_execution_runtime", lambda *a, **kw: ())
+
+    def unexpected_analysis(*args, **kwargs):
+        pytest.fail("A grouping-resume test must stop before building an analysis runner")
+
+    monkeypatch.setattr(pipeline_module.ResearchAgentPipeline, "_build_runner", unexpected_analysis)
+
+
+def test_prepared_continuation_reaches_planner_on_the_original_context(grouped_source, tmp_path, monkeypatch, planning_runtime):
     from easyicu.research_agent import pipeline as pipeline_module
     from easyicu.research_agent.orchestration import progressive_planning
     from easyicu.research_agent.planning.progressive_resume import progressive_resume_context_sha256
@@ -588,7 +601,7 @@ def test_planner_continues_from_the_grouped_context_checkpoint(grouped_source, t
     assert not (target / "plan_approval.json").exists()
 
 
-def test_pipeline_restores_grouping_before_any_planner_or_analysis_call(tmp_path, monkeypatch):
+def test_pipeline_restores_grouping_before_any_planner_or_analysis_call(tmp_path, monkeypatch, planning_runtime):
     from easyicu.research_agent import pipeline as pipeline_module
     from easyicu.research_agent.providers.mocks import MockLLMClient
     from easyicu.webserver.agent_pipeline_runs import _pipeline_failure_code

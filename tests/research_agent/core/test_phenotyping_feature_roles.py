@@ -5,6 +5,7 @@ import json
 import numpy as np
 import pandas as pd
 import pytest
+from threadpoolctl import threadpool_limits
 
 from easyicu.research_agent.contracts.phenotyping_features import require_phenotyping_features
 from easyicu.research_agent.execution.runners.cross_sectional_phenotyping_executor import (
@@ -92,7 +93,10 @@ def test_scientific_review_does_not_approve_an_unbound_fit_roster():
     assert not review.approval_allowed
 
 
+@threadpool_limits.wrap(limits=1)
 def _run(tmp_path, frame, features=("marker_a", "marker_b")):
+    # Fix reduction order as well as the random seed: threaded inertia sums
+    # can differ in their last bits even when the fit matrix is identical.
     tmp_path.mkdir()
     context = _context(len(frame))
     context.variables.extend([
