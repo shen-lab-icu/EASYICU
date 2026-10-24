@@ -330,6 +330,13 @@ STUDY_WORDING_SOURCES = frozenset({"question", "study_wording"})
 #: The owner's errors kept for a refused spec.
 _MAX_SPEC_ERRORS = 20
 _SPACE = re.compile(r"\s+")
+# NFKC already folds width and canonical Unicode forms. Quotation marks
+# remain typographic variants; retain their positions instead of discarding
+# punctuation (which would also erase decimal points and comparison signs).
+_QUOTE_FORMS = str.maketrans({
+    **dict.fromkeys("“”「」『』", '"'),
+    **dict.fromkeys("‘’", "'"),
+})
 
 
 class PopulationSpecRefused(ValueError):
@@ -367,14 +374,14 @@ def _words(text: Any) -> str:
     """``text`` as words are compared: one form per character, no case, no spacing."""
 
     folded = unicodedata.normalize("NFKC", str(text or "")).casefold()
-    return _SPACE.sub("", folded)
+    return _SPACE.sub("", folded.translate(_QUOTE_FORMS))
 
 
 def quote_written_in(quote: str, source: str, study_texts: Sequence[str]) -> bool:
     """Whether a quote citing the study's words is written in one of ``study_texts``.
 
     A quote from another source cites no text of the study's, so it holds.
-    Spacing, letter case and full-width forms are not words.
+    Spacing, letter case, width and typographic quote forms are not words.
     """
 
     if source not in STUDY_WORDING_SOURCES:

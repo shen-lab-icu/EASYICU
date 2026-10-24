@@ -37,6 +37,27 @@ def test_structured_retry_returns_first_success_without_retrying():
     assert len(client.calls) == 1, "no retry should have happened"
 
 
+@pytest.mark.parametrize("error_type", [TypeError, RuntimeError])
+def test_a_caller_can_propagate_programming_errors_without_retrying(error_type):
+    client = ScriptedMockLLMClient(['{"value": 42}'], repeat_last=True)
+    error = error_type("synthetic parser bug")
+    events = []
+
+    def broken_parser(raw):
+        raise error
+
+    with pytest.raises(error_type) as stopped:
+        call_llm_with_structured_retry(
+            client, [], parser=broken_parser,
+            retryable_parse_error=lambda exc: isinstance(exc, ValueError),
+            progress_callback=events.append,
+        )
+
+    assert stopped.value is error
+    assert len(client.calls) == 1
+    assert [event.phase for event in events] == ["started"]
+
+
 def test_structured_retry_forwards_one_immutable_schema_on_every_attempt():
     from easyicu.research_agent.providers.protocol import StructuredOutputRequest
 

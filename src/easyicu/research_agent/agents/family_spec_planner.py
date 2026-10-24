@@ -24,6 +24,7 @@ from ..planning.family_spec import (
     BASELINE_ASSOCIATION_FAMILY_ID,
     build_baseline_association_skeleton,
     FamilySpecError,
+    FamilySkeletonDraft,
     build_family_spec_request,
     DESCRIPTIVE_FAMILY_ID,
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
@@ -103,6 +104,7 @@ from ..providers.strict_json_schema import (
 from ..providers.structured_retry import call_llm_with_structured_retry
 from ..reporting.article_contract import build_article_analysis_contract
 from ..schema import AnalysisPlan, ResearchContext
+from ._support import _dump_raw
 from .progressive_attempt import ProgressivePlannerAttemptState
 
 FAMILY_SPEC_STRATEGY = "family_spec_v1"
@@ -924,11 +926,12 @@ def run_family_spec_attempt(
     """One spec call, then a host-projected skeleton through the same gates.
 
     The Planner fills the family spec; the host template projects outline,
-    foundation, and every step; the fresh-plan outline authority, foundation
-    validator, prefix compiler, and final acceptance run unchanged (they are
-    injected by the Progressive agent).  A projection that any of them rejects
-    raises the validator's own reason code: there is no Provider suffix repair
-    on this path.  A request the host refuses stops the same way, so the run
+    foundation, and every step. Foundation validation runs inside parsing,
+    so a population quote refusal reaches structured retry with its existing
+    budget. The fresh-plan outline authority, prefix compiler, and final
+    acceptance run unchanged (injected by the Progressive agent). A rejected
+    projection keeps the validator's own reason code; there is no Provider
+    suffix repair on this path. A request the host refuses stops the same way, so the run
     records the request's own reason code, and states that the Planner made no
     Provider call (``planner_provider_calls`` 0).
     """
@@ -1034,17 +1037,102 @@ def run_family_spec_attempt(
         "foundation_plan_revision_projection": [],
     }
 
-    def parse_spec(raw: str) -> FamilyPlanSpec:
-        spec = parse_family_plan_spec(raw, request)
-        check_question_requirement_gaps(
-            spec, context=context, planning_contract_context=planning_contract_context
+    def project_spec(spec: FamilyPlanSpec) -> FamilySkeletonDraft:
+        builder = {
+            BASELINE_ASSOCIATION_FAMILY_ID: build_baseline_association_skeleton,
+            DESCRIPTIVE_FAMILY_ID: build_descriptive_skeleton,
+            PHENOTYPING_FAMILY_ID: build_phenotyping_skeleton,
+            PREDICTION_FAMILY_ID: build_prediction_skeleton,
+            LANDMARK_SURVIVAL_FAMILY_ID: build_landmark_survival_skeleton,
+            LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID: build_landmark_continuous_survival_skeleton,
+            FIXED_WINDOW_TRAJECTORY_FAMILY_ID: build_fixed_window_trajectory_skeleton,
+            SOURCE_FEASIBILITY_FAMILY_ID: build_source_feasibility_skeleton,
+        }.get(request.family_id, build_landmark_association_skeleton)
+        try:
+            if builder is build_landmark_association_skeleton:
+                draft = builder(
+                    request, spec, bind_outline=bind_outline,
+                    source_absolute_risk_scope=_source_absolute_risk_scope(article_context),
+                )
+            else:
+                draft = builder(request, spec, bind_outline=bind_outline)
+        except FamilySpecError as exc:
+            raise ProgressivePlanCompileError(
+                f"progressive_{exc.reason_code}", str(exc), path=exc.path or "family_spec",
+            ) from exc
+        draft = reconcile_population_grouping(draft, context=context, spec=spec)
+        outline = draft.outline
+        if draft.foundation.outline_sha256 != canonical_sha256(outline.model_dump(mode="json")):
+            raise ProgressivePlanCompileError(
+                "progressive_foundation_outline_digest_mismatch",
+                "family template foundation did not bind the validated outline digest",
+                path="outline_sha256",
+            )
+        require_robustness_intent = bool(
+            enforce_article_contract
+            and "robustness"
+            in build_article_analysis_contract(
+                article_context, analysis_type=outline.analysis_type,
+            ).required_roles
         )
-        return spec
+        # The same foundation owner checks the population's original words.
+        # Keep it inside parsing so the model sees its located refusal within
+        # the existing retry budget, before any checkpoint is published.
+        validate_progressive_foundation(
+            draft.foundation.foundation,
+            context=context,
+            analysis_type=outline.analysis_type,
+            require_robustness_intent=require_robustness_intent,
+            robustness_replay_required=any(
+                step.module_id == "robustness_replay" for step in outline.steps
+            ),
+            required_binary_display_label_scopes=required_binary_display_label_scopes(
+                context, outline.steps,
+            ),
+            required_reader_display_label_keys=required_reader_display_label_keys(
+                context, outline.design_selection,
+            ),
+        )
+        return draft
 
-    spec = call_llm_with_structured_retry(
+    def retryable_parse_error(exc: Exception) -> bool:
+        # JSON, Pydantic and family/question validation errors derive from
+        # ValueError. Of the compiler's refusals, only the quote check moved
+        # into retry; the capability-gap check was already retried here.
+        return isinstance(exc, ValueError) and (
+            not isinstance(exc, ProgressivePlanCompileError)
+            or exc.reason_code in {
+                "progressive_population_quote_not_verbatim",
+                "progressive_capability_gap_claim_unverified",
+            }
+        )
+
+    def parse_spec(raw: str) -> tuple[FamilyPlanSpec, FamilySkeletonDraft]:
+        try:
+            spec = parse_family_plan_spec(raw, request)
+            check_question_requirement_gaps(
+                spec, context=context, planning_contract_context=planning_contract_context
+            )
+            return spec, project_spec(spec)
+        except ValueError as exc:
+            if not retryable_parse_error(exc):
+                raise
+            # The located rejection comes first so even a quote beyond the
+            # bounded response head is diagnosable. The shared capture owner
+            # requires explicit opt-in and keeps redacted, private files only.
+            # Reserve room for the response even if the allowed source is long.
+            rejection = f"{getattr(exc, 'path', '')}: {exc}"[:1000]
+            _dump_raw(
+                f"{rejection}\n\nRejected response:\n{raw}",
+                "family_spec_rejected",
+            )
+            raise
+
+    spec, draft = call_llm_with_structured_retry(
         llm,
         messages,
         parser=parse_spec,
+        retryable_parse_error=retryable_parse_error,
         role=FAMILY_SPEC_ROLE,
         max_retries=max_parse_retries,
         max_tokens=FAMILY_SPEC_MAX_OUTPUT_TOKENS,
@@ -1069,29 +1157,6 @@ def run_family_spec_attempt(
     attempt.question_requirements = list(spec.question_requirements)
     attempt.family_template = True
 
-    builder = {
-        BASELINE_ASSOCIATION_FAMILY_ID: build_baseline_association_skeleton,
-        DESCRIPTIVE_FAMILY_ID: build_descriptive_skeleton,
-        PHENOTYPING_FAMILY_ID: build_phenotyping_skeleton,
-        PREDICTION_FAMILY_ID: build_prediction_skeleton,
-        LANDMARK_SURVIVAL_FAMILY_ID: build_landmark_survival_skeleton,
-        LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID: build_landmark_continuous_survival_skeleton,
-        FIXED_WINDOW_TRAJECTORY_FAMILY_ID: build_fixed_window_trajectory_skeleton,
-        SOURCE_FEASIBILITY_FAMILY_ID: build_source_feasibility_skeleton,
-    }.get(request.family_id, build_landmark_association_skeleton)
-    try:
-        if builder is build_landmark_association_skeleton:
-            draft = builder(
-                request, spec, bind_outline=bind_outline,
-                source_absolute_risk_scope=_source_absolute_risk_scope(article_context),
-            )
-        else:
-            draft = builder(request, spec, bind_outline=bind_outline)
-    except FamilySpecError as exc:
-        raise ProgressivePlanCompileError(
-            f"progressive_{exc.reason_code}", str(exc), path=exc.path or "family_spec",
-        ) from exc
-    draft = reconcile_population_grouping(draft, context=context, spec=spec)
     outline = draft.outline
     validate_outline(outline)
     attempt.outline = outline
@@ -1107,35 +1172,7 @@ def run_family_spec_attempt(
         prompt_metrics=attempt.prompt_metrics,
     )
     foundation_materialization = draft.foundation
-    if foundation_materialization.outline_sha256 != outline_sha256:
-        raise ProgressivePlanCompileError(
-            "progressive_foundation_outline_digest_mismatch",
-            "family template foundation did not bind the validated outline digest",
-            path="outline_sha256",
-        )
     foundation = foundation_materialization.foundation
-    require_robustness_intent = bool(
-        enforce_article_contract
-        and "robustness"
-        in build_article_analysis_contract(
-            article_context, analysis_type=outline.analysis_type,
-        ).required_roles
-    )
-    validate_progressive_foundation(
-        foundation,
-        context=context,
-        analysis_type=outline.analysis_type,
-        require_robustness_intent=require_robustness_intent,
-        robustness_replay_required=any(
-            step.module_id == "robustness_replay" for step in outline.steps
-        ),
-        required_binary_display_label_scopes=required_binary_display_label_scopes(
-            context, outline.steps,
-        ),
-        required_reader_display_label_keys=required_reader_display_label_keys(
-            context, outline.design_selection,
-        ),
-    )
     attempt.foundation = foundation_materialization
     checkpoint_emitter.emit(
         stage="foundation",
