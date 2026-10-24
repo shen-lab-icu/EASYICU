@@ -29,6 +29,7 @@ from easyicu.webserver import (
     dataio,
     provider_adapter,
 )
+from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.landmark_survival_runtime_projection import (
     survival_exposure_onset_column,
 )
@@ -329,10 +330,14 @@ def _prepare_scientific_launch(
     # A declared trajectory design is validated before anything is spent, in
     # a candidate run as well: its concepts join the planning catalog.
     trajectory_design = _validate_trajectory_design(study)
+    # Optional source identity is projected with a typed planning status later.
+    # Full preparation must retain it even before clustered inference is chosen.
     patient_grouping = (
         _patient_grouping_for_analysis_design(study)
-        if metadata_only_planning
-        or validated_analysis_design.get("cluster_unit") == "patient"
+        if not metadata_only_planning
+        or study_context_owner.analysis_design_reads_patient_grouping(
+            study.get("analysis_design") or {}
+        )
         else None
     )
 
