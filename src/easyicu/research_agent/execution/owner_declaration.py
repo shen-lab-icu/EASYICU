@@ -165,7 +165,7 @@ def require_host_rendered_plan(
         try:
             decision = resolve_standard_executor(step, plan=plan, **runtime_authority)
             owned = decision.claimed_by is not None or _declared_host_figure(
-                step, plan=plan, host_cohort_step=host_cohort_step
+                step, plan=plan, host_cohort_step=host_cohort_step, **runtime_authority
             )
         except Exception as exc:
             raise HostPlanStepNeedsSandbox(step.step_id) from exc
@@ -173,7 +173,9 @@ def require_host_rendered_plan(
             raise HostPlanStepNeedsSandbox(step.step_id)
 
 
-def _declared_host_figure(step: Any, *, plan: Any, host_cohort_step: str | None) -> bool:
+def _declared_host_figure(
+    step: Any, *, plan: Any, host_cohort_step: str | None, **runtime_authority: Any
+) -> bool:
     """Check future table renderers without inventing runtime table evidence.
 
     The executor owns each shape predicate. This pre-review query additionally
@@ -194,7 +196,7 @@ def _declared_host_figure(step: Any, *, plan: Any, host_cohort_step: str | None)
     producers = []
     for key in step.inputs:
         matches = [parent for parent in plan.steps if key in parent.expected_outputs]
-        if len(matches) != 1 or matches[0] is step:
+        if len(matches) != 1 or plan.steps.index(matches[0]) >= plan.steps.index(step):
             return False
         producers.append(matches[0])
     if cohort_flow_figure_executor_declares_step(step):
@@ -209,7 +211,7 @@ def _declared_host_figure(step: Any, *, plan: Any, host_cohort_step: str | None)
     # model-generated tables need their actual bindings before being claimable.
     return bool(producers) and all(
         parent.measurement_audit_spec is not None
-        and resolve_standard_executor(parent, plan=plan).claimed_by
+        and resolve_standard_executor(parent, plan=plan, **runtime_authority).claimed_by
         == "declared_missingness_audit_products"
         for parent in producers
     )
