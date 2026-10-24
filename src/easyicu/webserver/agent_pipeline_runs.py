@@ -4315,6 +4315,12 @@ def _write_projection(
             "time_window_hours": _projection_time_window_hours(study),
         },
     }
+    from .research_population_summary import prepared_population_summary
+
+    preparation = prepared_population_summary(acquisition)
+    if preparation is not None:
+        run_context["population_preparation"] = preparation
+        cohort_summary["population_preparation"] = preparation
     # At a plan-review pause the final manifest does not exist yet.  Recover
     # the plan only from the digest-bound review authority; never fall back to
     # the mutable initial file for this browser projection.
