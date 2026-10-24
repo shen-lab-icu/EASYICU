@@ -56,7 +56,7 @@ from .kernel_identity import (
 )
 from .method_capabilities import set_runtime_capability_snapshot_provider
 from .step_execution import host_runtime_available
-from .runtime_diagnostics import runner_unavailable_remediation as runner_unavailable_remediation
+from .runtime_diagnostics import _classify_docker_failure, runner_unavailable_remediation as runner_unavailable_remediation
 
 _SAFE_INHERITED_ENV_KEYS = (
     "PATH",
@@ -3262,31 +3262,6 @@ RUNNER_UNAVAILABLE_REASON_CODES = frozenset(
         "runner_image_lock_mismatch",
     }
 )
-
-
-_DOCKER_DAEMON_UNREACHABLE_MARKERS = (
-    "cannot connect to the docker daemon",
-    "is the docker daemon running",
-    "docker daemon is not running",
-    "error during connect",
-)
-
-
-
-def _classify_docker_failure(stderr: str, stdout: str) -> str:
-    """Collapse one docker CLI failure into a closed reason code.
-
-    A missing image and a stopped daemon are different problems with different
-    fixes, and only the daemon's message distinguishes them -- but that message
-    carries the host socket path. Classify here, return the code, drop the text.
-    """
-
-    text = f"{stderr}\n{stdout}".strip().lower()
-    if any(marker in text for marker in _DOCKER_DAEMON_UNREACHABLE_MARKERS):
-        return "docker_daemon_unreachable"
-    if "no such image:" in text or "no such object:" in text:
-        return "docker_image_missing"
-    return "docker_probe_failed"
 
 
 @dataclass(frozen=True)

@@ -119,6 +119,40 @@ def test_a_ready_runtime_is_not_an_obstacle(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
 
+@pytest.mark.parametrize("deployment", ["desktop", "server"])
+@pytest.mark.parametrize("host_ready", [False, True])
+def test_docker_api_connection_failure_reaches_only_a_verified_desktop_host(
+    monkeypatch, deployment, host_ready,
+):
+    stderr = (
+        "failed to connect to the docker API at unix:///var/run/docker.sock; "
+        "check if the path is correct and if the daemon is running: "
+        "dial unix /var/run/docker.sock: connect: no such file or directory"
+    )
+    reason = runner_module._classify_docker_failure(stderr, "")
+    assert reason == "docker_daemon_unreachable"
+    monkeypatch.setenv("EASYICU_DEPLOYMENT", deployment)
+    asked = _stub_probe(monkeypatch, lambda kind: (
+        _unavailable(reason) if kind == "docker"
+        else runner_module.RunnerAvailability(
+            kind="host", available=host_ready, image="",
+            reason_code="" if host_ready else "host_runtime_unavailable",
+        )
+    ))
+    if deployment == "desktop" and host_ready:
+        assert research_launch_runtime._require_execution_runtime(
+            budget_mode="full_reviewed", runner_image="synthetic:image",
+        ) == "host"
+    else:
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as error:
+            research_launch_runtime._require_execution_runtime(
+                budget_mode="full_reviewed", runner_image="synthetic:image",
+            )
+        assert stderr not in str(error.value)
+        assert "/var/run/docker.sock" not in repr(error.value.details)
+    assert asked == (["docker", "host"] if deployment == "desktop" else ["docker"])
+
+
 @pytest.mark.parametrize("result_kind", ["roundtrip", "missing_output", "wrong_output", "mount_denied", "timeout"])
 def test_workspace_probe_requires_a_real_roundtrip_and_cleans_up(monkeypatch, tmp_path, result_kind):
     commands = []
