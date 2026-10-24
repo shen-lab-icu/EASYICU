@@ -14,8 +14,10 @@ anything is materialized instead.  At approval, a plan whose steps need
 patient groups that its planned data does not hold stops before any step
 runs, whether the source has no grouping or this run did not bind it.
 
-A metadata-only planning context states what the source can provide
-(:func:`planning_patient_grouping_status`), decided by the same resolver and
+A stay-based wide cohort carries available source grouping even before its
+design chooses clustered inference, so planning and review can identify
+repeated patients. A metadata-only planning context states what its source can
+provide (:func:`planning_patient_grouping_status`), decided by the same resolver and
 rule as the binding at execution, so planning and execution cannot disagree.
 Descriptive stay intervals also read source grouping, without rewriting the
 study's declared variance (:func:`runtime_patient_dependence`).
@@ -98,11 +100,12 @@ def planning_patient_grouping(
     bound: Optional[PatientGroupingBinding],
     first_icu_stay_restricted: bool = False,
 ) -> tuple[Optional[PatientGroupingBinding], tuple[PatientGroupingStatus, Optional[str]]]:
-    """Bind descriptive stay intervals to the same source authority as execution.
+    """Carry stay-level identity from the same source authority as execution.
 
     A verified first-stay restriction needs no new binding. Long trajectories
     still cannot carry it. Invalid authority remains a typed planning ceiling;
     execution refuses with that same code if an accepted step needs groups.
+    Binding identity alone does not select a variance estimator.
     """
 
     if bound is not None:
@@ -118,7 +121,7 @@ def planning_patient_grouping(
     design = study.get("analysis_design")
     if (
         isinstance(design, Mapping)
-        and _descriptive_patient_intervals(design)
+        and design.get("analysis_unit") == "icu_stay"
         and not first_icu_stay_restricted
     ):
         return grouping, ("bound", None)

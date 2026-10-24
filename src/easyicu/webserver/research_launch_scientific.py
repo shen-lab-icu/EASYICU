@@ -214,8 +214,9 @@ def verified_patient_grouping(
 def declared_longitudinal_design(study: Mapping[str, Any]) -> Optional[str]:
     """The design a study declares that reads each stay's long trajectory, if any.
 
-    A trajectory design reads the trajectory itself, and a landmark design
-    cuts its at-risk set from it.  A grouped materialization emits no
+    A trajectory design reads the trajectory itself. A hospital landmark reads
+    its at-risk set from verified wide follow-up columns; other landmarks
+    still need the long trajectory. A grouped materialization emits no
     trajectory (``acquisition.foundation``), except beside a time-varying
     specification, whose owner applies the grouping to both row spaces.
     """
@@ -226,7 +227,12 @@ def declared_longitudinal_design(study: Mapping[str, Any]) -> Optional[str]:
         return None
     if _validate_trajectory_design(study) is not None:
         return "trajectory_design"
-    if any(spec.strategy == "landmark" for spec in _configured_sensitivity_specs(study)):
+    if any(
+        spec.strategy == "landmark"
+        and getattr(spec, "observation_duration_variable", None)
+        != "hospital_followup_time_hours"
+        for spec in _configured_sensitivity_specs(study)
+    ):
         return "landmark"
     return None
 
@@ -234,20 +240,31 @@ def declared_longitudinal_design(study: Mapping[str, Any]) -> Optional[str]:
 def _patient_grouping_for_analysis_design(
     study: Mapping[str, Any],
 ) -> Optional[PatientGroupingBinding]:
+    """Carry verified identity before a stay-based study chooses its inference.
+
+    A wide cohort can report repeated patients or propose clustered inference
+    only if it retains the source's grouping. Its presence does not change the
+    declared estimator. Long trajectories retain their existing identity owner.
+    """
+
     raw = study.get("analysis_design")
     design = raw if isinstance(raw, Mapping) else {}
-    if not study_context_owner.analysis_design_reads_patient_grouping(design):
+    if study_context_owner.analysis_design_reads_patient_grouping(design):
+        cluster_unit = _clean_text(design.get("cluster_unit"), 80)
+        if cluster_unit != "patient":
+            raise ResearchPipelineRunError(
+                "research_pipeline_cluster_unit_unsupported",
+                "The current Web runner supports clustered inference only for a verified patient grouping.",
+                details={
+                    "cluster_unit": cluster_unit or None,
+                    "supported_cluster_units": ["patient"],
+                },
+            )
+    elif (
+        design.get("analysis_unit") != "icu_stay"
+        or declared_longitudinal_design(study) is not None
+    ):
         return None
-    cluster_unit = _clean_text(design.get("cluster_unit"), 80)
-    if cluster_unit != "patient":
-        raise ResearchPipelineRunError(
-            "research_pipeline_cluster_unit_unsupported",
-            "The current Web runner supports clustered inference only for a verified patient grouping.",
-            details={
-                "cluster_unit": cluster_unit or None,
-                "supported_cluster_units": ["patient"],
-            },
-        )
     return verified_patient_grouping(study)
 
 

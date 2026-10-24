@@ -14,9 +14,9 @@ read from the long trajectory stops before materialization, because a grouped
 materialization omits the trajectory.  An approval whose plan needs groups
 that its planned data does not hold stops before any step runs; a source
 without a grouping is left to that check, since the materialized rows may
-still carry a direct patient identifier.  A metadata-only planning context,
-which binds no grouping unless its design reads one, states what the source
-can provide, decided by the same resolver and rule as the binding.
+still carry a direct patient identifier. A stay-based planning context carries
+available grouping before its inference reads it, decided by the same source
+resolver as the binding at execution.
 
 Synthetic studies, plans and sources; no benchmark item.
 """
@@ -448,6 +448,56 @@ def test_a_cluster_design_still_resolves_through_the_same_grouping(
         is None
     )
     assert calls == [study]
+
+
+def test_a_stay_based_association_resolves_identity_before_clustering_is_chosen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        research_launch_scientific, "verified_patient_grouping", lambda _study: _GROUPING,
+    )
+    study = {"analysis_design": {
+        "analysis_family": "association_study",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "model_based",
+    }}
+    original = json.dumps(study, sort_keys=True)
+
+    assert research_launch_scientific._patient_grouping_for_analysis_design(study) is _GROUPING
+    assert json.dumps(study, sort_keys=True) == original
+
+
+@pytest.mark.parametrize("longitudinal", ["trajectory_design", "landmark"])
+def test_identity_discovery_preserves_a_declared_long_trajectory(
+    monkeypatch: pytest.MonkeyPatch, longitudinal: str,
+) -> None:
+    monkeypatch.setattr(
+        research_launch_scientific, "verified_patient_grouping", _forbidden,
+    )
+    monkeypatch.setattr(
+        research_launch_scientific, "declared_longitudinal_design", lambda _: longitudinal,
+    )
+    study = {"analysis_design": {"analysis_unit": "icu_stay", "variance_estimator": "model_based"}}
+
+    assert research_launch_scientific._patient_grouping_for_analysis_design(study) is None
+
+
+def test_a_hospital_landmark_keeps_patient_identity_on_its_wide_cohort(monkeypatch):
+    from easyicu.webserver.pi_copilot.plan_decisions import landmark_timing_specification
+
+    study = {"analysis_design": {
+        "analysis_family": "association_study", "analysis_unit": "icu_stay",
+        "variance_estimator": "model_based",
+    }, "sensitivity_specs": [landmark_timing_specification(
+        outcome="death", landmark_hours=24, spec_id="synthetic_hospital_landmark",
+    )]}
+    monkeypatch.setattr(research_launch_scientific, "verified_patient_grouping", lambda _: _GROUPING)
+    monkeypatch.setattr(run_patient_grouping, "verified_patient_grouping", lambda _: _GROUPING)
+
+    assert research_launch_scientific.declared_longitudinal_design(study) is None
+    assert research_launch_scientific._patient_grouping_for_analysis_design(study) is _GROUPING
+    assert run_patient_grouping.planning_patient_grouping(study, bound=None) == (_GROUPING, ("bound", None))
+    assert run_patient_grouping.execution_patient_grouping(study, step_ids=("association",)) is _GROUPING
 
 
 @pytest.mark.parametrize(

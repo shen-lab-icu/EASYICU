@@ -50,6 +50,7 @@ def _eicu_source(
     raw.mkdir(parents=True)
     columns: dict[str, list] = {
         "patientunitstayid": stays,
+        "patienthealthsystemstayid": [101 + index for index in range(len(stays))],
         "hospitaldischargeoffset": [100 * (index + 1) for index in range(len(stays))],
         "hospitaldischargestatus": ["Alive"] * len(stays),
     }
@@ -383,3 +384,173 @@ def test_an_owner_approved_bridge_is_never_replaced_by_a_derived_one(
     assert binding is not None
     assert binding.mapping_path == mapping.resolve()
     assert binding.authority_coordinates["authority_ref"] == "owner/bridge/v1"
+
+
+@pytest.mark.parametrize("typed", [False, True])
+@pytest.mark.parametrize("with_identifier", [False, True])
+@pytest.mark.parametrize("hospital_landmark", [False, True])
+def test_an_eicu_association_carries_source_identity_through_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, typed: bool, with_identifier: bool,
+    hospital_landmark: bool,
+) -> None:
+    from easyicu.concept.metadata_projection import (
+        ColumnProjectionSpec,
+        ConceptColumnRole,
+        project_concept_column_metadata,
+    )
+    from easyicu.concept.metadata_sidecar import (
+        EXPORT_PHYSICAL_SCOPE,
+        ColumnMetadataBinding,
+        ColumnMetadataFileBinding,
+        ColumnMetadataSidecar,
+        TimeCoordinate,
+        write_content_addressed_sidecar,
+    )
+    from easyicu.research_agent.cohort.materializer import materialize_to_parquet
+    from easyicu.research_agent.acquisition.foundation import AcquisitionResult
+    from easyicu.research_agent.intake import export_package as intake
+    from easyicu.research_agent.intake.materialized_metadata import (
+        load_verified_materialized_cohort_authority,
+        stage_materialized_cohort_authority,
+    )
+    from easyicu.research_agent.planning.dependence_authority import (
+        context_patient_group_authority,
+        descriptive_interval_decision,
+    )
+    from easyicu.research_agent.planning.scientific_review import (
+        build_plan_scientific_review,
+        patient_identity_available,
+    )
+    from easyicu.research_agent.research_context.builder import build_research_context
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, UserPreferences
+    from easyicu.resources import load_dictionary
+    from easyicu.webserver import research_launch_scientific, run_patient_grouping
+    from easyicu.webserver.pi_copilot.plan_decisions import landmark_timing_specification
+    from easyicu.webserver.time_varying_runtime_projection import materialize_web_hospital_followup
+
+    monkeypatch.setattr(
+        source_identity_authority.state_paths, "state_root", lambda: tmp_path / "state",
+    )
+    export = _eicu_source(tmp_path, with_identifier=with_identifier)
+    frame = pd.DataFrame({
+        "patientunitstayid": [11, 12, 13, 14],
+        "charttime": [1.0] * 4,
+        "age": [50.0, 51.0, 60.0, 70.0],
+        "lact": [1.0, 2.0, 3.0, 4.0],
+        "death": [False, True, False, True],
+    })
+    frame.to_parquet(export / "clinical.parquet", index=False)
+    manifest_path = export / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.update({
+        "format": "parquet",
+        "files": [{"file": "clinical.parquet", "module": "clinical", "rows": 4,
+                   "concepts": 3, "concept_ids": ["age", "lact", "death"]}],
+        "concept_selection": {"mode": "explicit", "modules": {"clinical": ["age", "lact", "death"]}},
+    })
+    if typed:
+        manifest["files"][0]["column_metadata_columns"] = ["age", "death", "lact"]
+        dictionary = load_dictionary(include_sofa2=True)
+        sidecar = ColumnMetadataSidecar(
+            source_database="eicu", source_database_class_prefixes=(),
+            scope=EXPORT_PHYSICAL_SCOPE,
+            files=(ColumnMetadataFileBinding(
+                relative_path="clinical.parquet", module="clinical",
+                identity_column="patientunitstayid",
+                time_coordinates=(TimeCoordinate(column="charttime", origin="icu_admission", unit="h"),),
+                columns={concept: ColumnMetadataBinding(metadata=project_concept_column_metadata(
+                    dictionary[concept], spec=ColumnProjectionSpec(
+                        column_name=concept, source_concept=concept,
+                        role=ConceptColumnRole.EVENT_STATUS if concept == "death" else ConceptColumnRole.VALUE,
+                    ),
+                    source_database="eicu",
+                )) for concept in ("age", "lact", "death")},
+            ),),
+        )
+        manifest.update({
+            "schema_version": intake.NATIVE_MANIFEST_SCHEMA_V2,
+            "time_window_authority": {"required": True, "source": "outcome.los_icu", "bounded_stays": 4},
+            "column_metadata": write_content_addressed_sidecar(export, sidecar).to_dict(),
+        })
+    manifest_path.write_text(json.dumps(manifest))
+    study = {
+        "data_source": {"path": str(export), "database": "eicu"},
+        "analysis_design": {"analysis_family": "association_study", "analysis_unit": "icu_stay",
+                            "variance_estimator": "model_based"},
+    }
+    if hospital_landmark:
+        study["sensitivity_specs"] = [landmark_timing_specification(
+            outcome="death", landmark_hours=24, spec_id="synthetic_hospital_landmark",
+        )]
+    grouping, status = run_patient_grouping.planning_patient_grouping(study, bound=None)
+    assert status == (("bound", None) if with_identifier else ("source_has_none", None))
+    runtime_grouping = research_launch_scientific._patient_grouping_for_analysis_design(study)
+    assert (runtime_grouping is not None) is with_identifier
+    assert run_patient_grouping.runtime_patient_dependence(runtime_grouping, study["analysis_design"]) is None
+    with intake.open_export_package(export) as package:
+        assert "uniquepid" not in package.concept_index
+        paths = materialize_to_parquet(
+            tmp_path / "prepared", database="eicu", data_path=export,
+            source_package=package, feature_concepts=("lact",),
+            static_concepts=("age",), outcome_concepts=("death",),
+            **(runtime_grouping.materializer_kwargs() if runtime_grouping else {}),
+        )
+    prepared = paths["parquet"]
+    if hospital_landmark:
+        parent = load_verified_materialized_cohort_authority(prepared)
+        acquisition = AcquisitionResult(
+            universe_path=prepared, provenance_path=paths["provenance"],
+            selection=None, coverage=None, materialized_concepts=["age", "lact", "death"],
+            cohort_authority_path=prepared.parent / parent.reference.file if parent else None,
+            cohort_authority_ref=parent.reference if parent else None,
+        )
+        extended = materialize_web_hospital_followup(
+            acquisition, specs=research_launch_scientific._configured_sensitivity_specs(study),
+            export_path=export, database="eicu",
+        )
+        prepared = extended.universe_path
+    if typed:
+        staged = tmp_path / "run" / "cohort.parquet"
+        stage_materialized_cohort_authority(
+            prepared, staged, producer_implementation_sha256="a" * 64,
+        )
+        prepared = staged
+    context = build_research_context(
+        research_question="Estimate a synthetic lactate association with hospital mortality.",
+        cohort=prepared, database="eicu", cohort_name="synthetic_eicu",
+        primary_exposure="lact_max", target_outcome="death",
+        user_preferences=UserPreferences(data_constraints=json.dumps({"analysis_design": study["analysis_design"]})),
+    )
+    assert context.cohort.n_stays == 4
+    assert patient_identity_available(context) is with_identifier
+    assert context.cohort.provenance["patient_identity_available"] is with_identifier
+    assert context.cohort.n_patients == (3 if with_identifier else None)
+    review = build_plan_scientific_review(context=context, plan=AnalysisPlan(
+        research_question=context.research_question, analysis_type="association_study",
+        steps=[AnalysisStep(
+            step_id="association", intent="Estimate a synthetic association.",
+            method="adjusted_association_models", planned_analysis_role="primary",
+            inputs=["lact_max", "death", "age"], expected_outputs=["table:association"],
+        )],
+    ))
+    assert ("REPEATED_STAY_IDENTITY_UNAVAILABLE" in {finding.code for finding in review.findings}) is not with_identifier
+    decision = descriptive_interval_decision(context, analysis_type="descriptive_epidemiology")
+    if with_identifier:
+        # Stays 11 and 12 belong to one patient across two hospitalizations.
+        values = pd.read_parquet(prepared)["patient_stay_id"]
+        assert values.nunique() == 4
+        groups = values.str.split(":s").str[0]
+        assert groups.iloc[0] == groups.iloc[1]
+        assert groups.nunique() == 3
+        authority = context_patient_group_authority(context)
+        assert authority.group_source == "patient_stay_id"
+        assert decision.dependence.group_source == "patient_stay_id"
+        assert decision.limitation is None
+        assert context.cohort.provenance["n_patients_source"] == "patient_stay_id:prefix_before_:s"
+    else:
+        assert context.cohort.id_columns == ["stay_id"]
+        assert decision.counts_only
+        assert decision.limitation.reason == "repeated_stays_possible_without_verified_patient_grouping"
+    safe_receipts = context.model_dump_json() + paths["provenance"].read_text()
+    assert "002-9" not in safe_receipts
+    assert "001-3" not in safe_receipts

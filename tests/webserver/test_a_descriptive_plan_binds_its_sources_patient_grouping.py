@@ -209,11 +209,11 @@ def test_a_descriptive_binding_reaches_compilation_review_and_execution(
 
 
 @pytest.mark.parametrize("family", ["association_study", "prediction_model"])
-def test_other_model_based_families_keep_their_unbound_grouping(grouping, family):
+def test_stay_based_families_carry_identity_without_changing_inference(grouping, family):
     study = _study(family)
     bound, status = run_patient_grouping.planning_patient_grouping(study, bound=None)
-    assert bound is None
-    assert status == ("available_unbound", None)
+    assert bound is grouping
+    assert status == ("bound", None)
     assert run_patient_grouping.runtime_patient_dependence(grouping, study["analysis_design"]) is None
 
 

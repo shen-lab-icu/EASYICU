@@ -96,11 +96,20 @@ def test_full_launch_materializes_planner_proposed_exposure_and_outcome(
                 "outcome": "In-hospital mortality",
                 "primary_exposure": "Peak lactate in the first 24 hours",
                 "execution_concepts": {"covariates": []},
+                "analysis_design": {
+                    "analysis_family": "association_study",
+                    "analysis_unit": "icu_stay",
+                    "variance_estimator": "model_based",
+                },
                 "data_source": {"database": "miiv"},
             },
         }
     )
     captured: dict[str, object] = {}
+    grouping = object()
+    monkeypatch.setattr(
+        preparation, "_patient_grouping_for_analysis_design", lambda _study: grouping,
+    )
     monkeypatch.setattr(preparation, "_neutral_materialization_scope", lambda study, **_kwargs: study)
     monkeypatch.setattr(
         preparation,
@@ -147,6 +156,7 @@ def test_full_launch_materializes_planner_proposed_exposure_and_outcome(
     assert captured["require_target"] is False
     assert captured["require_primary_exposure"] is False
     assert scientific.foundation_profile["required_feature_concepts"] == ("lact",)
+    assert scientific.patient_grouping is grouping
 
 
 def test_a_trajectory_population_is_materialized_with_its_coordinates(
@@ -299,6 +309,22 @@ def test_candidate_plan_projects_preconfirmed_patient_grouping_metadata(
     assert scientific.metadata_only_planning is True
     assert scientific.validated_analysis_design == {}
     assert scientific.patient_grouping is grouping
+
+
+def test_candidate_defers_optional_identity_checks_to_the_planning_status_owner(monkeypatch):
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    request = replace(_request(), study_context={
+        **_request().study_context,
+        "analysis_design": {"analysis_unit": "icu_stay", "variance_estimator": "model_based"},
+    })
+
+    def forbidden(_study):
+        raise AssertionError("optional authority errors belong in the planning status")
+
+    monkeypatch.setattr(preparation, "_patient_grouping_for_analysis_design", forbidden)
+    scientific = preparation._prepare_scientific_launch(request)
+    assert scientific.patient_grouping is None
 
 
 def test_candidate_plan_binds_question_operation_without_mutating_study() -> None:
