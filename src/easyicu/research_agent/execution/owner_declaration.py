@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any, Iterable, List, Sequence, Tuple
 
 from .runners.selection import (
@@ -82,18 +83,71 @@ class HostPlanStepNeedsSandbox(ValueError):
             self.easyicu_safe_diagnostic["step_id"] = step_id
 
 
-def require_host_plan_before_review(pipeline: Any, plan: Any) -> None:
+def host_plan_review_root(plan_result: Any) -> Path | None:
+    """Resolve the materialization root for a new or evidence-backed plan."""
+    evidence = getattr(plan_result, "evidence", None)
+    run_root = getattr(evidence, "root", None)
+    plan_path = getattr(plan_result, "plan_path", None)
+    return (Path(run_root) if run_root is not None
+            else Path(plan_path).parent if plan_path is not None else None)
+
+
+def require_host_plan_before_review(
+    pipeline: Any, plan: Any, *, run_dir: Path | None = None
+) -> None:
     """Apply the desktop ownership boundary before creating any approval."""
     if getattr(pipeline, "_runner_kind", None) == "host":
         require_host_rendered_plan(
             plan=plan,
+            run_dir=run_dir,
             trajectory_scientific_runtime_authority=pipeline._scientific_runtime_authorities.trajectory,
             current_case_scientific_runtime_authority=pipeline._scientific_runtime_authorities.current_case,
             scientific_runtime_projection_sha256=pipeline._scientific_runtime_projection_sha256,
         )
 
 
-def require_host_rendered_plan(*, plan: Any, **runtime_authority: Any) -> None:
+def _verified_host_cohort_step(plan: Any, run_dir: Path | None) -> str | None:
+    """Recognize only the typed cohort Execute can adopt without any script."""
+
+    if run_dir is None:
+        return None
+    from ..authority.run_input import _declares_host_cohort_products
+    from ..cohort.schema import (
+        _load_locked_cohort_definition,
+        cohort_definition_sha,
+        load_materialized_analysis_cohort_result,
+    )
+
+    # Use the same unique product owner and verifier as cohort_adoption. A
+    # second cohort declaration cannot be adopted, even if only one is typed.
+    steps = [step for step in plan.steps if _declares_host_cohort_products(step)]
+    if len(steps) != 1:
+        return None
+    step = steps[0]
+    if (
+        step.method != "cohort_definition_and_attrition"
+        or step.planned_analysis_role != "auxiliary"
+        or step.cohort_definition_spec is None
+        or step.model_requirements
+    ):
+        return None
+    try:
+        result = load_materialized_analysis_cohort_result(run_dir=run_dir, plan=plan)
+        if (
+            result is None
+            or result.get("authority_ref") is None
+            or cohort_definition_sha(_load_locked_cohort_definition(run_dir))
+            != result.get("cohort_definition_sha256")
+        ):
+            return None
+    except Exception:  # malformed authority is never an ownership grant
+        return None
+    return str(step.step_id)
+
+
+def require_host_rendered_plan(
+    *, plan: Any, run_dir: Path | None = None, **runtime_authority: Any
+) -> None:
     """Refuse before approval unless every step has an actual typed owner.
 
     In particular, naming ordinal_trend without its ordered/stratified spec
@@ -101,13 +155,64 @@ def require_host_rendered_plan(*, plan: Any, **runtime_authority: Any) -> None:
     this query never renders or accepts a model-supplied script.
     """
 
+    # The plan-phase host materializer is script-free; Execute adopts these
+    # exact verified products before scheduling steps. Product names alone are
+    # not proof, and every other step must still have its typed executor.
+    host_cohort_step = _verified_host_cohort_step(plan, run_dir)
     for step in plan.steps:
+        if step.step_id == host_cohort_step:
+            continue
         try:
             decision = resolve_standard_executor(step, plan=plan, **runtime_authority)
+            owned = decision.claimed_by is not None or _declared_host_figure(
+                step, plan=plan, host_cohort_step=host_cohort_step
+            )
         except Exception as exc:
             raise HostPlanStepNeedsSandbox(step.step_id) from exc
-        if decision.claimed_by is None:
+        if not owned:
             raise HostPlanStepNeedsSandbox(step.step_id)
+
+
+def _declared_host_figure(step: Any, *, plan: Any, host_cohort_step: str | None) -> bool:
+    """Check future table renderers without inventing runtime table evidence.
+
+    The executor owns each shape predicate. This pre-review query additionally
+    requires unique host-owned producers. Execute must still resolve the real
+    table bindings and validate their columns and digests; no selection or
+    executable code is returned here.
+    """
+
+    if any(panel.presentation is not None for panel in step.figure_panels):
+        return False
+    from .runners.cohort_flow_figure_executor import (
+        cohort_flow_figure_executor_declares_step,
+    )
+    from .runners.missingness_measurement_figure_executor import (
+        missingness_measurement_figure_executor_declares_step,
+    )
+
+    producers = []
+    for key in step.inputs:
+        matches = [parent for parent in plan.steps if key in parent.expected_outputs]
+        if len(matches) != 1 or matches[0] is step:
+            return False
+        producers.append(matches[0])
+    if cohort_flow_figure_executor_declares_step(step):
+        return bool(
+            host_cohort_step is not None
+            and len(producers) == 1
+            and producers[0].step_id == host_cohort_step
+        )
+    if not missingness_measurement_figure_executor_declares_step(step, plan=plan):
+        return False
+    # Only the typed audit producer guarantees these two schemas. Legacy or
+    # model-generated tables need their actual bindings before being claimable.
+    return bool(producers) and all(
+        parent.measurement_audit_spec is not None
+        and resolve_standard_executor(parent, plan=plan).claimed_by
+        == "declared_missingness_audit_products"
+        for parent in producers
+    )
 
 
 def execution_declaration_refusal(

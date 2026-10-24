@@ -30,6 +30,7 @@ from ...schema import AnalysisStep
 from ._shared import figure_product as _figure_product, method_head as _method_head
 
 __all__ = [
+    "cohort_flow_figure_executor_declares_step",
     "COHORT_FLOW_INPUT",
     "COHORT_ACCOUNTING_COMPLETE",
     "COHORT_ACCOUNTING_DENOMINATOR_ONLY",
@@ -127,12 +128,8 @@ def _binding_is_cohort_flow(binding: Any, *, input_key: str) -> bool:
     )
 
 
-def cohort_flow_figure_executor_owns_step(
-    step: AnalysisStep,
-    *,
-    resolved_bindings: Mapping[str, Any] | None = None,
-) -> bool:
-    """Return whether the exact typed parent fully fixes the figure."""
+def cohort_flow_figure_executor_declares_step(step: AnalysisStep) -> bool:
+    """Recognize the renderer's declaration before its table is produced."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
     contracts = list(step.input_consumption_contracts or [])
@@ -150,6 +147,19 @@ def cohort_flow_figure_executor_owns_step(
         and step.table_one_spec is None
         and step.trajectory_stability_spec is None
         and step.exposure_outcome_distribution_spec is None
+    )
+
+
+def cohort_flow_figure_executor_owns_step(
+    step: AnalysisStep,
+    *,
+    resolved_bindings: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return whether the exact typed parent fully fixes the figure."""
+
+    source_input = _population_flow_input(step)
+    return bool(
+        cohort_flow_figure_executor_declares_step(step)
         and isinstance(resolved_bindings, Mapping)
         and set(resolved_bindings) == {source_input}
         and _binding_is_cohort_flow(
