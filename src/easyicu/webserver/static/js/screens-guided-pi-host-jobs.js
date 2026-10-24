@@ -21,13 +21,16 @@
   const POLL_MS = 3000;
   const DEMO_WORD = '(?:demo|演示|示例)';
 
-  // A catalog demo is named when its title's product token ("eICU",
-  // "MIMIC-IV") sits next to a demo word in the researcher's own text.
+  // Accept the catalog's complete demo title or a nearby short product name
+  // and demo word. Do not widen the short-name gap across unrelated names.
   function demoNamePattern(demo) {
-    const head = String(demo && demo.title || '').trim().split(/\s+/)[0] || '';
+    const title = String(demo && demo.title || '').normalize('NFKC').trim().toLowerCase();
+    const head = title.split(/\s+/)[0] || '';
     const name = head.toLowerCase().replace(/[^a-z0-9]+/g, '[\\s-]*');
     if (!name) return null;
-    return new RegExp(`${name}[^。.!！?？;；\\n]{0,16}${DEMO_WORD}|${DEMO_WORD}[^。.!！?？;；\\n]{0,8}${name}`);
+    const fullTitle = new RegExp(DEMO_WORD).test(title)
+      ? title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+') : '';
+    return new RegExp(`${name}[^。.!！?？;；\\n]{0,16}${DEMO_WORD}|${DEMO_WORD}[^。.!！?？;；\\n]{0,8}${name}${fullTitle ? `|${fullTitle}` : ''}`);
   }
 
   function create(host) {
@@ -292,6 +295,11 @@
       const hits = text ? catalog.rows.filter(demo => { const pattern = demoNamePattern(demo); return pattern && pattern.test(text); }) : [];
       if (hits.length !== 1) return null;
       const demo = hits[0];
+      const product = row => String(row && row.title || '').normalize('NFKC').trim().split(/\s+/)[0].toLowerCase();
+      // A second database makes the source choice ambiguous even if only
+      // one is followed by "Demo". Let the researcher choose explicitly.
+      if (catalog.rows.some(row => product(row) !== product(demo) && product(row)
+        && new RegExp(`(?:^|[^a-z0-9])${product(row).replace(/[^a-z0-9]+/g, '[\\s-]*')}(?=$|[^a-z0-9])`).test(text))) return null;
       const status = demo.status && typeof demo.status === 'object' ? demo.status : {};
       const database = String(demo.database || '');
       // Legacy demos sharing a full loader key cannot identify a demo export
