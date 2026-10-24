@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,7 +29,10 @@ MIN_NODE = (22, 19, 0)
 
 
 def _run(command: list[str], *, cwd: Path = REPO_ROOT, capture_output: bool = False) -> None:
-    subprocess.run(command, cwd=cwd, check=True, capture_output=capture_output)
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    env.pop("PYTHONHOME", None)
+    subprocess.run(command, cwd=cwd, check=True, capture_output=capture_output, env=env)
 
 
 def _select_python() -> str:
@@ -85,9 +89,9 @@ def _build_backend(python: Path) -> Path:
     )
 
 
-def _build_tauri() -> None:
+def _build_tauri() -> Path:
     _run(["npm", "ci"], cwd=DESKTOP_ROOT)
-    _run(["npm", "run", "tauri", "--", "build", "--bundles", "app"], cwd=DESKTOP_ROOT)
+    _run(["npm", "run", "tauri", "--", "build", "--bundles", "app", "--", "--locked"], cwd=DESKTOP_ROOT)
     target_root = Path(
         os.environ.get("CARGO_TARGET_DIR") or DESKTOP_ROOT / "src-tauri" / "target"
     ).expanduser().resolve()
@@ -129,6 +133,7 @@ def _build_tauri() -> None:
         )
     if not dmg.is_file():
         raise RuntimeError(f"hdiutil did not create {dmg}")
+    return dmg
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -151,11 +156,14 @@ def main(argv: list[str] | None = None) -> int:
     if sys.platform != "darwin" or platform.machine() != "arm64":
         raise RuntimeError("This dependency lock targets macOS Apple Silicon only")
     BUILD_ROOT.mkdir(parents=True, exist_ok=True)
+    receipt = BUILD_ROOT / "build-inputs.json"
+    receipt.unlink(missing_ok=True)
     os.environ["EASYICU_HOME"] = str(BUILD_ROOT / "build-state")
     node = _select_node()
     python = _prepare_python_runtime(_select_python())
     _prepare_node_runtime(node, python)
     backend = _build_backend(python)
+    identity = common.verify_kernel_identity(python, BUILD_ROOT, backend)
     bundle_inputs = common.prepare_bundle(
         desktop_root=DESKTOP_ROOT, build_root=BUILD_ROOT, run=_run,
     )
@@ -164,13 +172,18 @@ def main(argv: list[str] | None = None) -> int:
         lock=PYTHON_LOCK,
     )
     inputs.update(bundle_inputs)
-    (BUILD_ROOT / "build-inputs.json").write_text(
+    inputs.update(target="aarch64-apple-darwin", execution_kernel_identity=identity)
+    receipt.write_text(
         json.dumps(inputs, indent=2) + "\n", encoding="utf-8"
     )
     print(f"Frozen backend: {backend}")
     if not args.backend_only:
-        _build_tauri()
-        print("Desktop build complete; distribute the signed DMG.")
+        installer = _build_tauri()
+        with installer.open("rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+        inputs["installer"] = {"name": installer.name, "sha256": digest}
+        receipt.write_text(json.dumps(inputs, indent=2) + "\n", encoding="utf-8")
+        print(f"Desktop build complete: {installer}\nBuild receipt: {receipt}")
     return 0
 
 
