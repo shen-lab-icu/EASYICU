@@ -760,6 +760,31 @@ def test_wide_table_column_chunks_reassemble_identical_grid(
     ]
 
 
+@pytest.mark.parametrize("column_batch_size", [1, 8])
+def test_wide_table_aggregation_orders_stays_and_hours(tmp_path, monkeypatch, column_batch_size):
+    parquet = tmp_path / "vitalperiodic.parquet"
+    pd.DataFrame({
+        "patientunitstayid": [102, 101, 101, 102],
+        "observationoffset": [180, 120, 60, 0],
+        "a": [4.0, 2.0, 1.0, 3.0],
+        "b": [40.0, 20.0, 10.0, 30.0],
+    }).to_parquet(parquet, index=False)
+    source = SimpleNamespace(
+        config=SimpleNamespace(get_table=lambda name: SimpleNamespace(defaults=SimpleNamespace(
+            id_var="patientunitstayid", index_var="observationoffset",
+        ))),
+        resolve_loader_from_disk=lambda name: parquet,
+    )
+    monkeypatch.setenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", str(column_batch_size))
+    result = load_wide_table_aggregated(source, "vitalperiodic", ["a", "b"], patient_ids=[102, 101])
+    # Physical key order must agree across column chunks and the unsplit
+    # GROUP BY. Source-file and requested-ID order are deliberately reversed.
+    assert result.to_dict("list") == {
+        "patientunitstayid": [101, 101, 102, 102], "charttime": [1.0, 2.0, 0.0, 3.0],
+        "a": [1.0, 2.0, 3.0, 4.0], "b": [10.0, 20.0, 30.0, 40.0],
+    }
+
+
 def test_mimic_hospital_value_transform_carries_unit_through_rolling_cte(
     tmp_path,
 ):

@@ -29,7 +29,11 @@ from ..datasource import (
 )
 from ..table import ICUTable, WinTbl
 from .callbacks import ConceptCallbackContext, execute_concept_callback
-from .availability_signal import ConceptAvailabilityRecord
+from .availability_signal import (
+    ConceptAvailabilityRecord,
+    set_table_availability,
+    table_availability,
+)
 from .data_source_contract import ConceptDataSourceStorage
 from ..utils import compat
 
@@ -345,6 +349,9 @@ def _build_availability_record(
     table: object,
     availability_context: _AvailabilityLoadContext,
 ) -> ConceptAvailabilityRecord:
+    recorded = table_availability(table, concept_name)
+    if recorded is not None:
+        return recorded
     sources_defined = availability_context.sources_for(concept_name)
     missing_tables = availability_context.missing_for(concept_name)
     n_rows, has_present_value = _availability_table_stats(table, concept_name)
@@ -1274,9 +1281,13 @@ class ConceptResolver:
         aggregators = self._normalise_aggregators(aggregate, required_names)
         config = data_source.config
         db_name = config.name if hasattr(config, 'name') else 'unknown'
+        # Callbacks need to distinguish an observed empty component from an
+        # absent source even when the caller did not request an audit sink.
         availability_context = (
             _AvailabilityLoadContext(str(db_name))
-            if availability_sink is not None
+            if availability_sink is not None or any(
+                name in {"abx", "samp", "infection_icd"} for name in names
+            )
             else None
         )
         
@@ -9056,6 +9067,15 @@ class ConceptResolver:
             with self._cache_lock:
                 self._get_inflight().discard(concept_name)
             raise
+
+        if availability_context is not None:
+            set_table_availability(result, _build_availability_record(
+                concept_name=concept_name,
+                definition=definition,
+                database=availability_context.database,
+                table=result,
+                availability_context=availability_context,
+            ))
 
         # 🔧 如果 _skip_concept_cache=True，跳过缓存写入
         if not _skip_concept_cache:

@@ -36,6 +36,7 @@ from easyicu.concept.export_metadata import (
     build_export_file_metadata_binding,
     missing_primary_metadata_concepts,
 )
+from easyicu.concept.availability_signal import ConceptAvailabilityRecord
 from easyicu.concept_output_sources import (
     ConceptLoadPlan,
     ConceptLoadPlanError,
@@ -2426,6 +2427,57 @@ def _materialize_concept_load_plan(frame: Any, plan: ConceptLoadPlan) -> Any:
     return projected
 
 
+def _prepare_export_availability(
+    frame: Any,
+    *,
+    module: str,
+    plan: ConceptLoadPlan,
+    records: Mapping[str, ConceptAvailabilityRecord],
+    dictionary: Any,
+) -> tuple[Any, Dict[str, Any]]:
+    """Materialize only owner-explained gaps; retain missing-binding failures."""
+    from easyicu.api.extraction import _native_export_empty_schema_frame
+
+    template = _native_export_empty_schema_frame(
+        module=module, requested_concepts=list(plan.output_concepts), dictionary=dictionary,
+    )
+    source_by_output = {
+        binding.output_concept: binding.source_concept for binding in plan.materializations
+    }
+    statuses: Dict[str, Any] = {}
+    for concept in plan.output_concepts:
+        record = records.get(source_by_output.get(concept, concept))
+        if concept not in frame.columns:
+            if record is None or record.reason == "mapped_present":
+                continue
+            frame[concept] = template[concept].reindex(frame.index)
+        non_null = int(frame[concept].notna().sum())
+        unavailable = record is not None and record.status == "blocked" and non_null == 0
+        status = {
+            "availability": (
+                "structurally_unavailable_placeholder" if unavailable
+                else "produced_all_null" if non_null == 0 else "available"
+            ),
+            "non_null": non_null,
+        }
+        if record is not None and non_null == 0:
+            status["reason_code"] = record.reason_code or record.reason
+            if record.evaluation_status is not None:
+                status["evaluation_status"] = record.evaluation_status
+            if record.missing_tables:
+                status["missing_tables"] = list(record.missing_tables)
+        statuses[concept] = status
+    if frame.empty:
+        # Even a whole zero-row module needs physical identity/time keys.
+        coordinates = ["charttime"]
+        if entity_id_contract.resolve_entity_id_column(frame.columns) is None:
+            coordinates.append("stay_id")
+        for coordinate in coordinates:
+            if coordinate in template and coordinate not in frame:
+                frame[coordinate] = template[coordinate]
+    return frame, statuses
+
+
 def make_export_runner(
     data_path: str,
     database: str,
@@ -2603,6 +2655,7 @@ def make_export_runner(
         total = len(sel)
         module_resource_plans: Dict[str, Dict[str, object]] = {}
         stay_time_upper_bounds = None
+        runtime_unavailable: List[Dict[str, Any]] = []
         with api.keep_cache(database=database, data_path=str(data_path)):
             for i, mod in enumerate(sel, start=1):
                 if getattr(job, "cancel_requested", False):
@@ -2635,6 +2688,8 @@ def make_export_runner(
                 # legacy estimate cannot silently re-batch a measured fast path.
                 # ``batch_size == cohort_size`` is one scan / one patient batch.
                 module_kwargs["batch_size"] = int(module_resource_plan["batch_size"])
+                module_availability: Dict[str, ConceptAvailabilityRecord] = {}
+                module_kwargs["availability_sink"] = module_availability
                 if module_resource_plan["mode"] == "patient_batches":
                     job.emit(
                         {
@@ -2712,6 +2767,10 @@ def make_export_runner(
                                 stay_time_upper_bounds=stay_time_upper_bounds,
                             )
                         fname = f"{mod}__{key}.{ext}"
+                        sub, statuses = _prepare_export_availability(
+                            sub, module=mod, plan=load_plan,
+                            records=module_availability, dictionary=metadata_dictionary,
+                        )
                         binding = _build_export_file_metadata_binding(
                             relative_path=fname,
                             module=mod,
@@ -2732,6 +2791,7 @@ def make_export_runner(
                             }
                         )
                         written[-1]["column_metadata_columns"] = list(binding.columns)
+                        written[-1]["concept_status"] = statuses
                         metadata_file_bindings.append(binding)
                 else:
                     if mod not in {"demographics", "outcome"}:
@@ -2740,6 +2800,10 @@ def make_export_runner(
                             stay_time_upper_bounds=stay_time_upper_bounds,
                         )
                     fname = f"{mod}.{ext}"
+                    df, statuses = _prepare_export_availability(
+                        df, module=mod, plan=load_plan,
+                        records=module_availability, dictionary=metadata_dictionary,
+                    )
                     binding = _build_export_file_metadata_binding(
                         relative_path=fname,
                         module=mod,
@@ -2760,7 +2824,21 @@ def make_export_runner(
                         }
                     )
                     written[-1]["column_metadata_columns"] = list(binding.columns)
+                    written[-1]["concept_status"] = statuses
                     metadata_file_bindings.append(binding)
+                for concept in module_concepts:
+                    unavailable_status = next((
+                        entry["concept_status"][concept]
+                        for entry in written
+                        if entry["concept_status"].get(concept, {}).get("availability")
+                        == "structurally_unavailable_placeholder"
+                    ), None)
+                    if unavailable_status is not None:
+                        runtime_unavailable.append({
+                            "concept_id": concept, "module": mod, "database": database,
+                            "status": "structurally_unavailable",
+                            "reason_code": unavailable_status["reason_code"],
+                        })
                 files.extend(written)
                 job.emit(
                     {
@@ -2804,6 +2882,7 @@ def make_export_runner(
                 "column_metadata_primary_binding_missing",
                 {"concepts": unexplained_missing},
             )
+        unavailable_concepts.extend(runtime_unavailable)
 
         if include_feature_definitions:
             definition_payload = _feature_definition_payload(

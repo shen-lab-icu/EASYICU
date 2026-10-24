@@ -2175,6 +2175,23 @@ def load_concepts(
     # stay-ID request is an exact public-output boundary.
     result = _restrict_result_to_requested_ids(result, patient_ids)
 
+    availability_sink = kwargs.get("availability_sink")
+    if availability_sink is not None:
+        from ..concept.availability_signal import ConceptAvailabilityRecord
+
+        # Dedicated score owners can return no physical output on sparse
+        # inputs. This is not evidence of a negative score or exposure.
+        for name in _special:
+            frame = result.get(name) if isinstance(result, dict) else result
+            frame = getattr(frame, "data", frame)
+            if frame is None or name not in frame.columns:
+                availability_sink[name] = ConceptAvailabilityRecord(
+                    concept=name, database=loader.database,
+                    reason="source_unavailable", n_rows=0,
+                    reason_code="producer_returned_no_physical_output",
+                    evaluation_status="not_evaluable",
+                )
+
     # 🆕 内存优化模式：压缩数据类型
     if memory_efficient:
         if isinstance(result, pd.DataFrame):
