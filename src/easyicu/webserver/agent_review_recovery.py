@@ -544,6 +544,7 @@ def recover_pending_review(
         batch_id=task_id,
         declaration_sha256=record.hard_stop_declaration_sha256,
         resume_existing=True,
+        require_existing=True,
     )
     task = ledger.start_task(task_id)
     pipeline = ResearchAgentPipeline.from_config(

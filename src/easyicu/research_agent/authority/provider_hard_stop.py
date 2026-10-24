@@ -449,6 +449,7 @@ class ProviderHardStopLedger:
         batch_id: Optional[str] = None,
         declaration_sha256: Optional[str] = None,
         resume_existing: bool = False,
+        require_existing: bool = False,
     ) -> None:
         normalized_ids = tuple(str(task_id).strip() for task_id in task_ids)
         if (
@@ -510,6 +511,12 @@ class ProviderHardStopLedger:
                     raise FileExistsError(self.path)
                 self._reload_locked()
             else:
+                # Recovery must never recreate an empty budget if the original
+                # accounting file vanished between its preflight and this lock.
+                if require_existing:
+                    raise ProviderHardStopLedgerError(
+                        "Required Provider hard-stop ledger is missing; recovery cannot reset accounting"
+                    )
                 self._persist_locked()
 
     def _validate_invocation_locked(self, payload: Mapping[str, object]) -> None:
