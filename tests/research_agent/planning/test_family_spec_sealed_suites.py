@@ -459,8 +459,13 @@ def test_a_sealed_suite_keeps_only_an_accepted_roster_its_own_table_one_describe
             planning_contract_context=disclosure,
             required_primary_cohort_selection_mode="all_input_rows",
         )
-    assert planned.value.reason_code == "progressive_family_spec_accepted_baseline_unsatisfiable"
-    assert planned.value.__cause__.reason_code == "family_spec_accepted_baseline_unsatisfiable"
+    if suite == "trajectory":
+        # The landed trajectory route checks the retained Table 1 before
+        # constructing a family request; it must still stop before the Provider.
+        assert planned.value.reason_code == "progressive_accepted_baseline_materialization_missing"
+    else:
+        assert planned.value.reason_code == "progressive_family_spec_accepted_baseline_unsatisfiable"
+        assert planned.value.__cause__.reason_code == "family_spec_accepted_baseline_unsatisfiable"
     assert llm.calls == []
 
 

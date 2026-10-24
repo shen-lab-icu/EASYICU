@@ -145,6 +145,9 @@ def _typed_export(root: Path, *, layout: str, integer_levels: bool = False) -> P
                 }
             )
     labs = pd.DataFrame(rows)
+    # Every invented ICU episode lasts 48 hours; the 30-hour rows are in-stay
+    # but outside the requested 24-hour analysis window.
+    assert labs["charttime"].between(0.0, 48.0).all()
     outcomes = pd.DataFrame(
         {
             "stay_id": stays.astype(int),
@@ -191,6 +194,11 @@ def _typed_export(root: Path, *, layout: str, integer_levels: bool = False) -> P
         json.dumps(
             {
                 "schema_version": intake.NATIVE_MANIFEST_SCHEMA_V2,
+                "time_window_authority": {
+                    "required": True,
+                    "source": "synthetic_fixed_48h_icu_episodes",
+                    "bounded_stays": int(labs["stay_id"].nunique()),
+                },
                 "database": "miiv",
                 "format": "parquet",
                 "concept_selection": {

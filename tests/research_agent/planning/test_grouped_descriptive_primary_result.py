@@ -231,7 +231,7 @@ def test_grouped_primary_executes_and_validates_every_partition(tmp_path, monkey
     with pytest.raises(ValueError, match="descriptive"):
         validate(summary, pd.concat([distribution, extra], ignore_index=True))
     wrong_source = frame.copy()
-    wrong_source.loc[0, "admission_category"] = 99
+    wrong_source.loc[0, "admission_category"] = "undeclared" if isinstance(levels[0], str) else 99
     with pytest.raises(ValueError, match="closed metadata domain"):
         validate_primary_descriptive_tables(
             wrong_source[["admission_category", "recovery"]], summary, distribution,
