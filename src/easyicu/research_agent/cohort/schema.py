@@ -32,6 +32,7 @@ from ..authority.lock_contract import (
 )
 from ..authority.runtime_artifacts import verified_run_evidence_path
 from ..contracts.concept_values import columns_without_values
+from ..contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORMS
 from ..planning.cohort_contract import (
     ALLOWED_CTAS_AGGREGATIONS,
     Aggregation,
@@ -507,9 +508,15 @@ def _planner_declared_context_column_bindings(
             if str(getattr(descriptor, "analysis_window", "") or "").strip()
         ]
         if coordinate_descriptors and not any(
-            _descriptor_aggregation_matches_predicate(
-                descriptor_name=str(getattr(descriptor, "name", "") or ""),
-                predicate=predicate,
+            (
+                # A derived group already holds one code per stay. Reading
+                # that code does not reaggregate its underlying measurement.
+                (getattr(descriptor, "unit_normalization", None) in EXPOSURE_GROUP_TRANSFORMS
+                 and predicate.aggregation in {"first", "last", "min", "max"})
+                or _descriptor_aggregation_matches_predicate(
+                    descriptor_name=str(getattr(descriptor, "name", "") or ""),
+                    predicate=predicate,
+                )
             )
             and _descriptor_window_matches_predicate(
                 getattr(descriptor, "analysis_window", None),

@@ -293,6 +293,23 @@ const runFilesApi = {
   assert.equal(count(stoppedPanel, 'class="gpi-run-stop"'), 1);
   assert.doesNotMatch(stoppedPanel, /这次运行没有完成，文件作为历史保留在下方/);
   assert.ok(!visible(stoppedPanel).includes(RUN));
+  // The saved dA6 planning failure has no artifact refs or job run_id.
+  // Its wrapper run id still identifies the child job that owns its trace.
+  const receipt = JSON.parse(require('node:fs').readFileSync(
+    path.resolve('tests/fixtures/demo_round_stops/da6_stop.json'), 'utf8'));
+  const child = receipt.child_job;
+  const stopped = job(child.progress, { childJobId: child.job_id,
+    jobCode: 'plan_analysis', status: 'error', failureCode: child.error_code });
+  const wrapper = { ...receipt.saved_run, run_ref: REF };
+  const detached = modules.require('runFiles').projectTimeline([stopped.activity], [wrapper]);
+  const detachedPanel = conversation(detached, { activity: activityOwner() });
+  assert.equal(count(visible(detachedPanel), runFailureText(child.error_code)), 1,
+    'the failed child trace and its saved wrapper share one cause');
+  assert.equal(count(detachedPanel, 'class="gpi-run-stop"'), 1);
+  assert.equal(detached.length, 1, 'the run files attach to their originating child job');
+  const otherChild = { ...stopped.activity, childJobId: 'unrelated-job' };
+  assert.equal(modules.require('runFiles').projectTimeline([otherChild], [wrapper]).length, 2,
+    'an unrelated job cannot claim a stopped run');
   const note = 'EasyICU 在服务器上运行，可以切换对话或关闭页面，回来后继续显示进度。';
   assert.doesNotMatch(stoppedPanel, /gpi-compose-server-note/);
   // The saved gap is the cause of this activity's compile stop. Rendering

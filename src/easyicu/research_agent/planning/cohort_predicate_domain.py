@@ -42,6 +42,7 @@ from ..authority.declared_levels import closed_planning_levels_for, observed_lev
 from ..cohort.schema import CohortDefinition, ConceptPredicate, predicate_accepts_closed_level
 from ..contracts.exposure_group_rules import (
     EXPOSURE_GROUP_LABELS_KEY,
+    EXPOSURE_GROUP_TRANSFORMS,
     UNMEASURED_GROUP_ID,
     ExposureGroupRuleError,
     read_grouping_rules,
@@ -253,7 +254,10 @@ def cohort_emptied_exposure_levels(
             same_value = (
                 predicate.aggregation in {"first", "last", "min", "max"}
                 if kind in {"admission", "stay_level"}
-                else column.endswith(f"_{predicate.aggregation}") and window is not None
+                else (column.endswith(f"_{predicate.aggregation}") or (
+                    getattr(variable, "unit_normalization", None) in EXPOSURE_GROUP_TRANSFORMS
+                    and predicate.aggregation in {"first", "last", "min", "max"}
+                )) and window is not None
                 and window.is_window(predicate.time_window.anchor,
                                      predicate.time_window.start_offset_hours,
                                      predicate.time_window.end_offset_hours)
