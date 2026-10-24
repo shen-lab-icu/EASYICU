@@ -19,6 +19,7 @@ import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
@@ -168,14 +169,20 @@ def _local_module_target(
     return None
 
 
-def _import_targets(
+@lru_cache(maxsize=1024)
+def _import_candidates(
     *,
     module_name: str,
     path: Path,
-    tree: ast.AST,
+    source: str,
     seed: bool,
-    module_index: dict[str, Path],
-) -> set[str]:
+) -> tuple[str, ...]:
+    """Cache parsing by exact source text, never a runtime authority decision.
+
+    Retain only import strings, not large ASTs. Resolve these candidates against
+    the freshly scanned module index on every call, including added modules.
+    """
+    tree = ast.parse(source, filename=str(path))
     package_initializer = path.name == "__init__.py"
     nodes: Iterable[ast.AST] = (
         _package_import_nodes(tree) if package_initializer else ast.walk(tree)
@@ -214,11 +221,8 @@ def _import_targets(
                 candidates.append(first.value)
         elif seed and isinstance(node, ast.Constant) and isinstance(node.value, str):
             candidates.extend(_DYNAMIC_MODULE_RE.findall(node.value))
-        for candidate in candidates:
-            target = _local_module_target(candidate, module_index)
-            if target is not None:
-                targets.add(target)
-    return targets
+        targets.update(candidates)
+    return tuple(sorted(targets))
 
 
 def execution_kernel_relative_paths(package_root: Path) -> tuple[str, ...]:
@@ -250,21 +254,21 @@ def execution_kernel_relative_paths(package_root: Path) -> tuple[str, ...]:
             package_parts.pop()
 
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            candidates = _import_candidates(
+                module_name=module_name,
+                path=path,
+                source=path.read_text(encoding="utf-8"),
+                seed=module_name in seeds,
+            )
         except (OSError, UnicodeDecodeError, SyntaxError) as exc:
             raise ExecutionKernelIdentityError(
                 f"execution kernel module could not be parsed: {module_name}"
             ) from exc
         pending.extend(
             target
-            for target in _import_targets(
-                module_name=module_name,
-                path=path,
-                tree=tree,
-                seed=module_name in seeds,
-                module_index=module_index,
-            )
-            if target not in selected
+            for candidate in candidates
+            if (target := _local_module_target(candidate, module_index)) is not None
+            and target not in selected
         )
 
     return tuple(

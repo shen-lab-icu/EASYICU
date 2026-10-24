@@ -32,7 +32,11 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from hashlib import sha1
+from threading import Lock
+from time import monotonic, sleep
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -70,6 +74,24 @@ from .providers.protocol import LLMClient, LLMMessage
 from .schema import HypothesisBlueprint, ResearchContext, VariableRole
 
 logger = logging.getLogger(__name__)
+
+_pubmed_request_lock = Lock()
+_pubmed_next_request_at = 0.0
+
+
+def _pace_pubmed_request() -> None:
+    """Share a conservative three-requests/second pace within this process.
+
+    Only request starts are serialized; slow responses may overlap. Keep the
+    unauthenticated rate even with a key so simultaneous clients share one
+    allowance. This does not coordinate separate application processes.
+    """
+    global _pubmed_next_request_at
+    with _pubmed_request_lock:
+        delay = _pubmed_next_request_at - monotonic()
+        if delay > 0:
+            sleep(delay)
+        _pubmed_next_request_at = monotonic() + 0.35
 
 
 
@@ -822,6 +844,7 @@ class PubMedLiteratureClient:
     def _http_get(self, path: str, params: Dict[str, str]) -> Optional[bytes]:
         url = f"{self.base_url}/{path}?{urllib.parse.urlencode(params)}"
         try:
+            _pace_pubmed_request()
             with urllib.request.urlopen(url, timeout=self.timeout) as resp:
                 return resp.read()
         except Exception as exc:
@@ -921,11 +944,14 @@ class PubMedLiteratureClient:
 
         queries = build_pubmed_protocol_queries_for_context(context)
         candidate_limit = max(int(retmax) * 4, 20)
-        ids_by_query: List[List[str]] = []
+        # Independent strata may wait on the source together. map retains the
+        # prescribed query order; hydration, ranking and screening stay serial.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            ids_by_query = list(
+                pool.map(partial(self._esearch, retmax=candidate_limit), queries)
+            )
         queries_by_pmid: Dict[str, List[str]] = {}
-        for query in queries:
-            ids = self._esearch(query, retmax=candidate_limit)
-            ids_by_query.append(ids)
+        for query, ids in zip(queries, ids_by_query):
             for pmid in ids:
                 queries_by_pmid.setdefault(pmid, []).append(query)
 
