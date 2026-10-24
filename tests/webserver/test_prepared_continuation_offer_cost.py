@@ -233,9 +233,12 @@ def test_configuration_changes_invalidate_the_persisted_verdict(prepared_source,
 @pytest.mark.parametrize("change", ["inode", "mtime", "size", "sidecar", "manifest"])
 def test_package_memo_invalidates_on_members_and_manifest(prepared_source, monkeypatch, change):
     source = prepared_source
+    validation = Mock(wraps=dataio.validate_research_pipeline_source)
+    monkeypatch.setattr(dataio, "validate_research_pipeline_source", validation)
     package = Mock(wraps=export_package.open_export_package)
     monkeypatch.setattr(export_package, "open_export_package", package)
     assert offer(source)
+    assert validation.call_count == 1
     assert package.call_count == 1
     path = source.export / "labs.parquet"
     original_stat = path.stat()
@@ -258,10 +261,13 @@ def test_package_memo_invalidates_on_members_and_manifest(prepared_source, monke
         if change == "size":
             os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
     assert offer(source) is (change in {"inode", "mtime"})
-    # A manifest mismatch is refused before opening any member snapshot.
-    assert package.call_count == (1 if change == "manifest" else 2)
+    # Invalidated identities are validated once; a manifest mismatch or the
+    # corrupt Parquet footer is refused before opening any member snapshot.
+    assert validation.call_count == (1 if change == "manifest" else 2)
+    assert package.call_count == (1 if change in {"manifest", "size"} else 2)
     assert offer(source) is (change in {"inode", "mtime"})
-    assert package.call_count == (1 if change == "manifest" else 2)
+    assert validation.call_count == (1 if change == "manifest" else 2)
+    assert package.call_count == (1 if change in {"manifest", "size"} else 2)
 
 
 def test_launch_refuses_in_place_package_mutation_even_with_unchanged_stat(prepared_source):

@@ -123,6 +123,10 @@ def screening_export(root: Path, *, planted: bool = False) -> Path:
         json.dumps(
             {
                 "schema_version": "easyicu_native_export_v2",
+                "time_window_authority": {
+                    "required": True, "source": "outcome.los_icu",
+                    "bounded_stays": int(frames["vitals"]["stay_id"].nunique()),
+                },
                 "database": "miiv",
                 "format": "parquet",
                 "files": members,

@@ -2473,6 +2473,7 @@ def make_export_runner(
         # trips the low-mem path; force the fast in-process path (see CLAUDE.md).
         os.environ.setdefault("EASYICU_FORCE_INPROCESS_BATCH", "1")
         import easyicu.api as api
+        from easyicu.api import extraction
         from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
         from easyicu.concept.metadata_sidecar import (
             EXPORT_PHYSICAL_SCOPE,
@@ -2601,6 +2602,7 @@ def make_export_runner(
         )
         total = len(sel)
         module_resource_plans: Dict[str, Dict[str, object]] = {}
+        stay_time_upper_bounds = None
         with api.keep_cache(database=database, data_path=str(data_path)):
             for i, mod in enumerate(sel, start=1):
                 if getattr(job, "cancel_requested", False):
@@ -2664,6 +2666,20 @@ def make_export_runner(
                 try:
                     if getattr(job, "cancel_requested", False):
                         break
+                    if mod not in {"demographics", "outcome"} and stay_time_upper_bounds is None:
+                        # Load the authority independently of selected outputs:
+                        # outcome may be omitted or projected without los_icu.
+                        stay_time_upper_bounds = extraction._native_export_stay_time_upper_bounds(
+                            api.load_concepts(
+                                ["los_icu"], patient_ids=patient_ids, database=database,
+                                data_path=str(data_path), merge=True, verbose=False,
+                                batch_size=int(module_resource_plan["batch_size"]),
+                            )
+                        )
+                        extraction._native_export_time_window_authority(
+                            modules=sel, stay_time_upper_bounds=stay_time_upper_bounds,
+                            required=True,
+                        )
                     df = api.load_concepts(
                         list(load_plan.source_concepts),
                         patient_ids=patient_ids,
@@ -2690,6 +2706,11 @@ def make_export_runner(
                 written: List[Dict[str, Any]] = []
                 if isinstance(df, dict):
                     for key, sub in df.items():
+                        if mod not in {"demographics", "outcome"}:
+                            sub, _ = extraction._enforce_native_export_time_axis(
+                                sub, module=mod, database=database,
+                                stay_time_upper_bounds=stay_time_upper_bounds,
+                            )
                         fname = f"{mod}__{key}.{ext}"
                         binding = _build_export_file_metadata_binding(
                             relative_path=fname,
@@ -2713,6 +2734,11 @@ def make_export_runner(
                         written[-1]["column_metadata_columns"] = list(binding.columns)
                         metadata_file_bindings.append(binding)
                 else:
+                    if mod not in {"demographics", "outcome"}:
+                        df, _ = extraction._enforce_native_export_time_axis(
+                            df, module=mod, database=database,
+                            stay_time_upper_bounds=stay_time_upper_bounds,
+                        )
                     fname = f"{mod}.{ext}"
                     binding = _build_export_file_metadata_binding(
                         relative_path=fname,
@@ -2801,6 +2827,11 @@ def make_export_runner(
 
         manifest = {
             "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
+            "export_kind": "web_module_extraction",
+            "time_window_authority": extraction._native_export_time_window_authority(
+                modules=sel, stay_time_upper_bounds=stay_time_upper_bounds or {},
+                required=True,
+            ),
             "database": database,
             "data_path": str(data_path),
             "format": export_format,
@@ -3343,6 +3374,11 @@ def _research_pipeline_intake_diagnostic(exc: BaseException) -> Dict[str, Any]:
     code = getattr(exc, "code", None)
     if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", code):
         code = "export_package_unreadable"
+    if code == "export_time_window_unbounded":
+        return {
+            "intake_error_code": code,
+            "intake_error_message": "This export was made by an earlier version of EasyICU that did not limit measurements to each ICU stay. Export the data again, then run the study.",
+        }
     messages = {
         "export_manifest_json_invalid": "The export manifest is not valid UTF-8 JSON.",
         "export_manifest_missing": "The export manifest could not be read.",
@@ -3431,10 +3467,14 @@ def validate_research_pipeline_source(
 
     from easyicu.research_agent.intake.export_package import (
         ExportPackageError,
+        inspect_export_layout,
         open_export_package,
     )
 
     try:
+        # Also refuse pre-v2 packages at run binding, before either planning
+        # or execution. The metadata-only check never clips historical rows.
+        inspect_export_layout(path, require_time_window=True)
         with open_export_package(path) as package:
             try:
                 manifest_database = normalize_database_key(package.database)
@@ -3475,7 +3515,11 @@ def validate_research_pipeline_source(
             }
     except ExportCohortError:
         raise
-    except (ExportPackageError, FileNotFoundError, OSError) as exc:
+    except (ExportPackageError, FileNotFoundError, OSError, ValueError) as exc:
+        if getattr(exc, "code", None) == "export_time_window_unbounded":
+            raise ExportCohortError(
+                exc.code, _research_pipeline_intake_diagnostic(exc)
+            ) from exc
         if expected_binding is not None:
             raise ExportCohortError(
                 "research_pipeline_package_binding_changed",

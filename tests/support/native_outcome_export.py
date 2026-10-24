@@ -101,6 +101,10 @@ def typed_native_export(
         json.dumps(
             {
                 "schema_version": intake.NATIVE_MANIFEST_SCHEMA_V2,
+                "time_window_authority": {
+                    "required": True, "source": "outcome.los_icu",
+                    "bounded_stays": int(statics["stay_id"].nunique()),
+                },
                 "database": "miiv",
                 "format": "parquet",
                 "concept_selection": {

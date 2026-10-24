@@ -28,6 +28,7 @@ ActionKind = Literal[
     "retry",
     "rephrase_in_scope",
     "open_provider_settings",
+    "reexport_data",
 ]
 _CODE = re.compile(r"[a-z][a-z0-9_]{0,79}")
 Code = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")]
@@ -61,6 +62,13 @@ class ProviderSettingsParams(BaseModel):
     route: Literal["provider_settings"] = "provider_settings"
 
 
+class DataExtractionParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    route: Literal["data_extraction"] = "data_extraction"
+    requires_explicit_choice: Literal[True] = True
+
+
 class ScopeParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -80,17 +88,16 @@ class StopNextAction(BaseModel):
     action_id: str = Field(pattern=r"^[a-z_]+_[a-f0-9]{16}$")
     kind: ActionKind
     label_key: str
-    params: PlanEditParams | RetryParams | ScopeParams | ProviderSettingsParams
+    params: PlanEditParams | RetryParams | ScopeParams | ProviderSettingsParams | DataExtractionParams
 
     @model_validator(mode="after")
     def _matching_params(self) -> StopNextAction:
-        expected = (
-            RetryParams
-            if self.kind == "retry"
-            else (ScopeParams if self.kind == "rephrase_in_scope" else PlanEditParams)
-        )
-        if self.kind == "open_provider_settings":
-            expected = ProviderSettingsParams
+        expected = {
+            "open_provider_settings": ProviderSettingsParams,
+            "reexport_data": DataExtractionParams,
+            "retry": RetryParams,
+            "rephrase_in_scope": ScopeParams,
+        }.get(self.kind, PlanEditParams)
         if not isinstance(self.params, expected):
             raise ValueError("action kind and params disagree")
         if isinstance(self.params, PlanEditParams):
@@ -319,6 +326,7 @@ _REPAIR_CODES = frozenset(
 )
 _DATA_CODES = frozenset(
     {
+        "export_time_window_unbounded",
         "data_foundation_blocked",
         "concept_unavailable",
         "source_unavailable",
@@ -407,7 +415,7 @@ def source_stop_coordinates(payload: Any) -> dict[str, Any]:
 
 def _action(
     kind: ActionKind,
-    params: PlanEditParams | RetryParams | ScopeParams | ProviderSettingsParams,
+    params: PlanEditParams | RetryParams | ScopeParams | ProviderSettingsParams | DataExtractionParams,
 ) -> StopNextAction:
     content = json.dumps(
         [kind, params.model_dump(mode="json", exclude_none=True)], sort_keys=True
@@ -457,6 +465,10 @@ def next_actions_for_stop(
         return []
     cause = _code(detail.get("cause_code"))
     inner = _code(detail.get("reason_code"))
+    if "export_time_window_unbounded" in {
+        reason, cause, inner, _code(detail.get("intake_error_code")),
+    }:
+        return [_action("reexport_data", DataExtractionParams())]
     policy = STOP_POLICIES.get(reason, "edit_plan")
     if policy == "provider_settings":
         return [_action("open_provider_settings", ProviderSettingsParams())]

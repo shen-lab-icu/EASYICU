@@ -179,7 +179,8 @@ def test_a_capped_export_persists_the_shared_sample_and_aggregate_provenance(
     result = runner(job)
     manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
 
-    assert result["file_count"] == len(loaded) == 2
+    assert result["file_count"] == 2
+    assert len(loaded) == 3  # Includes the private LOS authority read.
     assert listing_caps == ([] if filtered else [None])
     for call in loaded:
         assert call["kwargs"]["patient_ids"] == {"stay_id": [1, 6, 11, 13, 20]}
@@ -375,7 +376,7 @@ def test_export_runner_honors_module_specific_concept_selection(
     readme = (tmp_path / "out" / "README.md").read_text(encoding="utf-8")
 
     assert result["file_count"] == 2
-    assert [row["concepts"] for row in loaded] == [["age"], ["hr", "map"]]
+    assert [row["concepts"] for row in loaded] == [["age"], ["los_icu"], ["hr", "map"]]
     assert manifest["concept_selection"]["mode"] == "explicit"
     assert manifest["concept_selection"]["modules"] == {
         "demographics": ["age"],
@@ -464,6 +465,8 @@ def test_export_runner_loads_composite_source_and_publishes_public_output(
     def exact_sep3_export(concepts, **kwargs):
         loaded.append({"concepts": list(concepts), "kwargs": kwargs})
         ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
+        if concepts == ["los_icu"]:
+            return pd.DataFrame({"stay_id": ids, "los_icu": [1.0] * len(ids)})
         return pd.DataFrame(
             {
                 "stay_id": ids,
@@ -615,6 +618,8 @@ def test_export_runner_explains_a_source_native_renal_column_its_profile_lacks(
     def urine_components_only(concepts, **kwargs):
         loaded.append({"concepts": list(concepts), "kwargs": kwargs})
         ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
+        if concepts == ["los_icu"]:
+            return pd.DataFrame({"stay_id": ids, "los_icu": [1.0] * len(ids)})
         return pd.DataFrame(
             {"stay_id": ids, "aki_stage_source_native": [0] * len(ids)}
         )
@@ -678,6 +683,8 @@ def test_export_runner_explains_the_renal_column_of_the_adapter_branch_not_taken
     def component_branch(concepts, **kwargs):
         loaded.append({"concepts": list(concepts), "kwargs": kwargs})
         ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
+        if concepts == ["los_icu"]:
+            return pd.DataFrame({"stay_id": ids, "los_icu": [1.0] * len(ids)})
         return pd.DataFrame(
             {
                 "stay_id": ids,
@@ -739,6 +746,8 @@ def test_export_runner_still_fails_on_a_renal_column_the_profile_publishes(
     def missing_crrt_component(concepts, **kwargs):
         loaded.append({"concepts": list(concepts), "kwargs": kwargs})
         ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
+        if concepts == ["los_icu"]:
+            return pd.DataFrame({"stay_id": ids, "los_icu": [1.0] * len(ids)})
         return pd.DataFrame(
             {"stay_id": ids, "aki_stage_source_native": [0] * len(ids)}
         )

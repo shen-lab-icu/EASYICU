@@ -115,6 +115,9 @@ def _typed_export(root: Path) -> Path:
         json.dumps(
             {
                 "schema_version": intake.NATIVE_MANIFEST_SCHEMA_V2,
+                "time_window_authority": {
+                    "required": True, "source": "outcome.los_icu", "bounded_stays": 2,
+                },
                 "database": "miiv",
                 "format": "parquet",
                 "concept_selection": {
