@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import math
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -26,6 +28,56 @@ from easyicu.research_agent.execution.runners.selection import (
 )
 from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+
+@pytest.mark.parametrize("grouped", [True, False])
+def test_saved_demo_summary_preserves_decimal_values_on_csv_readback(tmp_path, monkeypatch, grouped):
+    from easyicu.research_agent.contracts.cohort_summary import descriptive_summary_result_receipt_valid
+    from easyicu.research_agent.execution.runners import cohort_summary_executor as owner
+
+    fixture = Path(__file__).parents[2] / "fixtures/demo_round_stops/dd3_descriptive_summary.json"
+    saved = json.loads(fixture.read_text())
+    step = AnalysisStep.model_validate(saved["step"])
+    context = saved["context"]
+    grouping, outcome = step.inputs[:2]
+    levels = next(v["observed_domain"]["levels"] for v in context["variables"] if v["name"] == grouping)
+    # Synthetic fractional days exercise CSV parsing precision; no saved rows.
+    frame = pd.DataFrame({
+        grouping: [levels[0], levels[0], levels[1], levels[1], None],
+        outcome: [1 / 1440, 113 / 1440, 1 / 1440, None, 2 / 1440],
+    })
+    if not grouped:
+        step = step.model_copy(update={"inputs": [outcome, "artifact:analysis_cohort"]})
+        frame = frame.drop(columns=grouping)
+    source = tmp_path / "synthetic.parquet"
+    frame.to_parquet(source, index=False)
+    (tmp_path / "research_context.json").write_text(json.dumps(context))
+    out = tmp_path / "out"
+    monkeypatch.setenv("EASYICU_RUN_DIR", str(tmp_path))
+    monkeypatch.setenv("EASYICU_RESEARCH_CONTEXT", str(tmp_path / "research_context.json"))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out))
+    monkeypatch.setattr(owner, "load_cohort_summary_frame", lambda **kwargs: (frame, source))
+    selection = select_standard_executor(step, plan=AnalysisPlan(
+        research_question="Describe a synthetic duration by category.",
+        analysis_type=saved["analysis_type"], steps=[step],
+    ))
+    assert selection.analysis_kind == saved["stop"]["deterministic_standard_analysis"]
+    exec(compile(selection.code, "<saved-demo-summary>", "exec"), {})
+    result = json.loads((out / "step_summary.json").read_text())
+    assert descriptive_summary_result_receipt_valid(result)
+    assert result["grouping_variable"] == (grouping if grouped else None)
+    summary = pd.read_csv(out / "cohort_summary.csv", float_precision="round_trip")
+    distribution = pd.read_csv(out / "distribution_summary.csv", float_precision="round_trip")
+    assert set(distribution["value"]) == set(frame[outcome].dropna())
+    kwargs = {"grouping_variable": grouping, "grouping_levels": levels} if grouped else {}
+    owner.validate_primary_descriptive_tables(frame, summary, distribution, **kwargs)
+    # Precision preservation must not weaken exact support-value/count checks.
+    for field in ("value", "count"):
+        corrupt = distribution.copy()
+        original = corrupt.at[0, field]
+        corrupt.at[0, field] = math.nextafter(original, math.inf) if field == "value" else original + 1
+        with pytest.raises(ValueError, match=saved["stop"]["exception_message"]):
+            owner.validate_primary_descriptive_tables(frame, summary, corrupt, **kwargs)
 
 
 def test_primary_summary_emits_exact_empirical_counts_and_validated_statistics(tmp_path, monkeypatch):

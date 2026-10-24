@@ -1,0 +1,60 @@
+{
+  "analysis_type": "descriptive_epidemiology",
+  "step": {
+    "step_id": "icu_type_los_distribution",
+    "planned_analysis_role": "primary",
+    "inputs": [
+      "icu_unit_type",
+      "los_icu",
+      "artifact:analysis_cohort"
+    ],
+    "expected_outputs": [
+      "table:cohort_summary",
+      "table:distribution_summary"
+    ],
+    "method": "grouped_empirical_distribution_summary",
+    "scientific_action_id": "descriptive.descriptive_summary",
+    "intent": "Describe the declared measurement distribution in each category."
+  },
+  "context": {
+    "primary_exposure": null,
+    "target_outcome": "los_icu",
+    "variables": [
+      {
+        "name": "los_icu",
+        "role": "outcome",
+        "dtype": "float64",
+        "unit": "days",
+        "source_concept": "los_icu",
+        "unit_normalization": "stay_level_unique_value"
+      },
+      {
+        "name": "icu_unit_type",
+        "role": "other",
+        "dtype": "str",
+        "source_concept": "icu_unit_type",
+        "unit_normalization": "stay_level_unique_value",
+        "observed_domain": {
+          "levels": [
+            "CCU-CTICU",
+            "CSICU",
+            "CTICU",
+            "Cardiac ICU",
+            "MICU",
+            "Med-Surg ICU",
+            "Neuro ICU",
+            "SICU"
+          ]
+        }
+      }
+    ]
+  },
+  "stop": {
+    "status": "deterministic_standard_blocked",
+    "standard_executor_terminal_reason": "executor_runtime_failure",
+    "deterministic_standard_analysis": "descriptive_cohort_summary",
+    "deterministic_standard_selection_reason": "cohort_summary_contract_preflight",
+    "exception_type": "ValueError",
+    "exception_message": "descriptive summary does not reconcile with its source"
+  }
+}

@@ -276,6 +276,33 @@ def test_wide_materialized_projection_keeps_primary_and_no_science_choices(
     assert not (_recursive_keys(payload) & _FORBIDDEN_SCIENTIFIC_SELECTION_KEYS)
 
 
+@pytest.mark.parametrize("run", ["dh1", "dh3"])
+def test_demo_measurement_audit_facts_fit_without_protecting_outcome_companions(run):
+    from easyicu.research_agent.research_context.typed import parse_research_context
+
+    fixture = Path(__file__).parents[2] / "fixtures" / "demo_round_stops"
+    context = parse_research_context(json.loads(
+        (fixture / f"{run}_prompt_metadata.json").read_text()
+    ))
+    before = context.model_dump(mode="json")
+    attachment = materialized_input_prompt_attachment(context)
+    assert len(attachment.encode("utf-8")) <= 4096
+    payload = json.loads(attachment.split("\n", 1)[1])
+    cohort = payload["cohort"]
+    assert {context.primary_exposure, "death"} <= {
+        row["column"] for row in cohort["column_bindings"]
+    }
+    assert cohort["column_binding_omitted_count"] > 0
+    assert len(cohort["column_bindings"]) + cohort["column_binding_omitted_count"] == 4
+    assert cohort["column_binding_payload_sha256"] == (
+        context.materialized_inputs.cohort.column_binding_payload_sha256
+    )
+    assert {row["concept"] for row in payload["trajectory"]["concepts"]} == {
+        context.primary_exposure.split("_")[0], "death"
+    }
+    assert context.model_dump(mode="json") == before
+
+
 def test_typed_trajectory_prompt_is_bounded_and_preserves_primary_source_facts(
     tmp_path: Path,
 ) -> None:

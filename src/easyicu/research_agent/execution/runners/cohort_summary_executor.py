@@ -624,11 +624,12 @@ def run_cohort_summary_from_env(
         distribution.to_csv(distribution_path, index=False)
         # Validate the serialized products that will be registered, not just
         # their in-memory precursors. The input binding has already verified
-        # the exact cohort bytes and preserves every stay.
+        # the exact cohort bytes and preserves every stay. Round-trip parsing
+        # preserves the exact empirical support values written to CSV.
         validate_primary_descriptive_tables(
             frame[[*columns, *([grouping_variable] if grouping_variable else [])]],
             pd.read_csv(table_path, converters={"group": str, "group_variable": str}),
-            pd.read_csv(distribution_path, converters={"group": str, "group_variable": str}),
+            pd.read_csv(distribution_path, converters={"group": str, "group_variable": str}, float_precision="round_trip"),
             grouping_variable=grouping_variable, grouping_levels=grouping_levels,
         )
         summary.update(

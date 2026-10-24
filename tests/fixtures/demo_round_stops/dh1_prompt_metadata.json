@@ -1,0 +1,729 @@
+{
+  "research_question": "Describe the association of the declared marker with the outcome.",
+  "cohort": {
+    "cohort_name": "synthetic",
+    "database": "eicu_demo",
+    "n_patients": 0,
+    "n_stays": 0,
+    "id_columns": [
+      "stay_id"
+    ],
+    "outcome_columns": [
+      "death"
+    ]
+  },
+  "variables": [
+    {
+      "name": "k_max",
+      "description": "potassium",
+      "role": "lab",
+      "dtype": "float64",
+      "unit": "mEq/L",
+      "valid_range": [
+        0.0,
+        10.0
+      ],
+      "allowed_aggregations": [
+        "none"
+      ],
+      "aggregation_default": "none",
+      "source_concept": "k",
+      "source_files": [
+        "hospital_followup_cohort.parquet"
+      ],
+      "source_tables": [
+        "lab"
+      ],
+      "item_ids": [
+        "\"potassium\""
+      ],
+      "unit_normalization": "window_numeric_max",
+      "analysis_window": "icu_admission[0,24]h",
+      "analysis_window_role": "outer_observation_window",
+      "source_databases": [
+        "aumc",
+        "eicu",
+        "eicu_demo",
+        "hirid",
+        "miiv",
+        "mimic",
+        "mimic_demo",
+        "sic"
+      ],
+      "clinical_caveats": [
+        "This materialized column is the precomputed maximum value within its declared analysis window. Do not reinterpret it using the source concept's default aggregation policy."
+      ]
+    },
+    {
+      "name": "death",
+      "description": "in hospital mortality",
+      "role": "outcome",
+      "dtype": "bool",
+      "allowed_aggregations": [
+        "max_or_last",
+        "first_value",
+        "sum"
+      ],
+      "aggregation_default": "first_value",
+      "source_concept": "death",
+      "source_files": [
+        "hospital_followup_cohort.parquet"
+      ],
+      "source_tables": [
+        "patient"
+      ],
+      "unit_normalization": "hospital_followup_event_status",
+      "source_databases": [
+        "aumc",
+        "eicu",
+        "eicu_demo",
+        "hirid",
+        "miiv",
+        "mimic",
+        "mimic_demo",
+        "sic"
+      ],
+      "pitfalls": [
+        "ICU mortality vs hospital mortality vs 28-day mortality are NOT interchangeable; record which one is in use."
+      ],
+      "clinical_caveats": [
+        "ICU mortality vs hospital mortality vs 28-day mortality are NOT interchangeable; record which one is in use.",
+        "For this analysis, 'death' retains its owner-issued clinical definition ('in hospital mortality'), which agrees with the requested hospital mortality."
+      ],
+      "cross_database_notes": [
+        "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality for one another when using 'death'."
+      ]
+    },
+    {
+      "name": "death_time_hours",
+      "description": "in hospital mortality",
+      "role": "time",
+      "dtype": "float64",
+      "unit": "h",
+      "allowed_aggregations": [
+        "max_or_last",
+        "first_value",
+        "sum"
+      ],
+      "aggregation_default": "first_value",
+      "source_concept": "death",
+      "source_files": [
+        "hospital_followup_cohort.parquet"
+      ],
+      "source_tables": [
+        "patient"
+      ],
+      "unit_normalization": "hospital_followup_event_time",
+      "temporal_resolution": "relative to icu_admission in h",
+      "source_databases": [
+        "aumc",
+        "eicu",
+        "eicu_demo",
+        "hirid",
+        "miiv",
+        "mimic",
+        "mimic_demo",
+        "sic"
+      ],
+      "pitfalls": [
+        "ICU mortality vs hospital mortality vs 28-day mortality are NOT interchangeable; record which one is in use."
+      ],
+      "clinical_caveats": [
+        "ICU mortality vs hospital mortality vs 28-day mortality are NOT interchangeable; record which one is in use."
+      ],
+      "missingness_semantics": "death_time_hours is applicable only when death=1; event-negative rows are not missing.",
+      "observation_semantics": {
+        "kind": "conditional_event_time",
+        "event_status_column": "death",
+        "representative_column": "death_time_hours",
+        "time_origin": "icu_admission",
+        "time_unit": "h"
+      },
+      "concept_enrichment_degraded": true
+    },
+    {
+      "name": "hospital_followup_time_hours",
+      "description": "Last observation time: in hospital mortality",
+      "dtype": "float64",
+      "unit": "h",
+      "allowed_aggregations": [
+        "mean_or_median",
+        "median_only",
+        "max_or_last",
+        "first_value"
+      ],
+      "aggregation_default": "mean_or_median",
+      "source_concept": "death",
+      "source_files": [
+        "hospital_followup_cohort.parquet"
+      ],
+      "source_tables": [
+        "patient"
+      ],
+      "unit_normalization": "hospital_followup_observation_duration",
+      "temporal_resolution": "relative to icu_admission in h",
+      "source_databases": [
+        "aumc",
+        "eicu",
+        "eicu_demo",
+        "hirid",
+        "miiv",
+        "mimic",
+        "mimic_demo",
+        "sic"
+      ],
+      "concept_enrichment_degraded": true
+    }
+  ],
+  "time_windows": [
+    {
+      "name": "icu_admission_0_24h",
+      "rationale": "Outer feature-materialization window bound by the host before this run; the cohort carries no observation outside it."
+    }
+  ],
+  "target_outcome": "death",
+  "endpoint": {
+    "name": "death",
+    "kind": "binary",
+    "absence_semantics": "no_absent_rows",
+    "levels": [
+      0,
+      1
+    ]
+  },
+  "primary_exposure": "k_max",
+  "cohort_parquet": "synthetic/cohort.parquet",
+  "materialized_inputs": {
+    "cohort": {
+      "authority_ref": {
+        "schema_version": "easyicu.materialized_cohort_authority_ref/1",
+        "file": "cohort_authority.sha256-b2f998f48af2ef558545cc725ff5f387a7fa637b92bc524eaf642b14b3161aa3.json",
+        "sha256": "b2f998f48af2ef558545cc725ff5f387a7fa637b92bc524eaf642b14b3161aa3",
+        "size": 14217
+      },
+      "cohort_file": "cohort.parquet",
+      "cohort_sha256": "c455d97db0ba0b30862012be2d4b85fe0e65c998cb516f2793b51eefcbfd584e",
+      "cohort_size": 56845,
+      "cohort_rows": 0,
+      "cohort_columns": [
+        "stay_id",
+        "age",
+        "sex",
+        "k_max",
+        "k_min",
+        "k_mean",
+        "k_n",
+        "k_first",
+        "k_measured",
+        "k_first_time",
+        "k_last_time",
+        "death",
+        "death_time_hours",
+        "hospital_followup_time_hours"
+      ],
+      "cohort_schema_sha256": "e1551c3609fad971475480501f09d47926ce20ac3141a60f3e007f4be84e69e0",
+      "identity_column": "stay_id",
+      "row_identity_sha256": "cc18c483822991c0d1a364bbb74accfc70f995608a268cfd5a3b76776efed943",
+      "column_metadata_ref": {
+        "file": "cohort_column_metadata.sha256-f7817a83feca3bcaca19a1c01547a7caedb1b0ee934f29e1ecf322044c7de4f1.json",
+        "sha256": "f7817a83feca3bcaca19a1c01547a7caedb1b0ee934f29e1ecf322044c7de4f1",
+        "size": 16090,
+        "record_count": 13,
+        "schema_version": "easyicu.column_metadata_sidecar/1",
+        "metadata_schema_version": "easyicu.concept_column_metadata/1"
+      },
+      "file_metadata_payload_sha256": "0a170e83c301804ea06238ff348b8dd875da4df4bf6a340ec45c1181e5bfe1f8",
+      "source_export_authority_sha256": "f5ae4445c6ff9b32d0a77a14173f6dc02dabdbe10d04199af82b889ea70b5aaf",
+      "source_database": "eicu_demo",
+      "time_coordinates": [],
+      "projection_scope": "scoped",
+      "column_bindings": {
+        "death": {
+          "binding": {
+            "metadata": {
+              "schema_version": "easyicu.concept_column_metadata/1",
+              "column_name": "death",
+              "source_concept": "death",
+              "role": "event_status",
+              "aggregation": null,
+              "canonical_unit": null,
+              "accepted_units": [],
+              "extraction_bounds": null,
+              "analysis_plausibility_range": null,
+              "allowed_values": [
+                0,
+                1
+              ],
+              "time_origin": null,
+              "time_unit": null,
+              "source_database": "eicu_demo",
+              "dictionary_source_database": "eicu_demo",
+              "source_resolution_chain": [
+                "eicu_demo",
+                "eicu"
+              ],
+              "available_databases": [
+                "aumc",
+                "eicu",
+                "eicu_demo",
+                "hirid",
+                "miiv",
+                "mimic",
+                "mimic_demo",
+                "sic"
+              ],
+              "source_declared_for_database": true,
+              "availability_basis": "direct_source",
+              "source_lineage": [
+                {
+                  "database": "eicu_demo",
+                  "table": "patient",
+                  "selector_variable": null,
+                  "selector_regex": null,
+                  "item_ids": [],
+                  "value_variable": "hospitaldischargestatus",
+                  "unit_variable": null,
+                  "time_variable": "unitdischargeoffset",
+                  "duration_variable": null,
+                  "source_class_name": "col_itm",
+                  "target": null,
+                  "callback": "transform_fun(comp_na(`==`, 'Expired'))",
+                  "interval_iso8601": null,
+                  "semantic_parameters": {}
+                }
+              ],
+              "description": "in hospital mortality",
+              "category": "outcome",
+              "class_name": "lgl_cncpt",
+              "derived_from_concepts": []
+            },
+            "derivation_window": null,
+            "representation_transform": "hospital_followup_event_status"
+          },
+          "binding_sha256": "00648b64d68e63a02b90bb94ef2fcff5bbdff8037733f0e2d6bc6ee863b24d11"
+        },
+        "death_time_hours": {
+          "binding": {
+            "metadata": {
+              "schema_version": "easyicu.concept_column_metadata/1",
+              "column_name": "death_time_hours",
+              "source_concept": "death",
+              "role": "event_time",
+              "aggregation": null,
+              "canonical_unit": null,
+              "accepted_units": [],
+              "extraction_bounds": null,
+              "analysis_plausibility_range": null,
+              "allowed_values": null,
+              "time_origin": "icu_admission",
+              "time_unit": "h",
+              "source_database": "eicu_demo",
+              "dictionary_source_database": "eicu_demo",
+              "source_resolution_chain": [
+                "eicu_demo",
+                "eicu"
+              ],
+              "available_databases": [
+                "aumc",
+                "eicu",
+                "eicu_demo",
+                "hirid",
+                "miiv",
+                "mimic",
+                "mimic_demo",
+                "sic"
+              ],
+              "source_declared_for_database": true,
+              "availability_basis": "direct_source",
+              "source_lineage": [
+                {
+                  "database": "eicu_demo",
+                  "table": "patient",
+                  "selector_variable": null,
+                  "selector_regex": null,
+                  "item_ids": [],
+                  "value_variable": "hospitaldischargestatus",
+                  "unit_variable": null,
+                  "time_variable": "unitdischargeoffset",
+                  "duration_variable": null,
+                  "source_class_name": "col_itm",
+                  "target": null,
+                  "callback": "transform_fun(comp_na(`==`, 'Expired'))",
+                  "interval_iso8601": null,
+                  "semantic_parameters": {}
+                }
+              ],
+              "description": "in hospital mortality",
+              "category": "outcome",
+              "class_name": "lgl_cncpt",
+              "derived_from_concepts": []
+            },
+            "derivation_window": null,
+            "representation_transform": "hospital_followup_event_time"
+          },
+          "binding_sha256": "e4c64b856ff40be1c05f6cab1db09e70bb7fddd3079a605c5220d0e0d2eae6b6"
+        },
+        "hospital_followup_time_hours": {
+          "binding": {
+            "metadata": {
+              "schema_version": "easyicu.concept_column_metadata/1",
+              "column_name": "hospital_followup_time_hours",
+              "source_concept": "death",
+              "role": "last_observation_time",
+              "aggregation": null,
+              "canonical_unit": null,
+              "accepted_units": [],
+              "extraction_bounds": null,
+              "analysis_plausibility_range": null,
+              "allowed_values": null,
+              "time_origin": "icu_admission",
+              "time_unit": "h",
+              "source_database": "eicu_demo",
+              "dictionary_source_database": "eicu_demo",
+              "source_resolution_chain": [
+                "eicu_demo",
+                "eicu"
+              ],
+              "available_databases": [
+                "aumc",
+                "eicu",
+                "eicu_demo",
+                "hirid",
+                "miiv",
+                "mimic",
+                "mimic_demo",
+                "sic"
+              ],
+              "source_declared_for_database": true,
+              "availability_basis": "direct_source",
+              "source_lineage": [
+                {
+                  "database": "eicu_demo",
+                  "table": "patient",
+                  "selector_variable": null,
+                  "selector_regex": null,
+                  "item_ids": [],
+                  "value_variable": "hospitaldischargestatus",
+                  "unit_variable": null,
+                  "time_variable": "unitdischargeoffset",
+                  "duration_variable": null,
+                  "source_class_name": "col_itm",
+                  "target": null,
+                  "callback": "transform_fun(comp_na(`==`, 'Expired'))",
+                  "interval_iso8601": null,
+                  "semantic_parameters": {}
+                }
+              ],
+              "description": "Last observation time: in hospital mortality",
+              "category": "outcome",
+              "class_name": "lgl_cncpt",
+              "derived_from_concepts": []
+            },
+            "derivation_window": null,
+            "representation_transform": "hospital_followup_observation_duration"
+          },
+          "binding_sha256": "cf35c3248bbbdf1e443a56ccdcdf48d715245b17e8e8a4f6a9e266951f66b686"
+        },
+        "k_max": {
+          "binding": {
+            "metadata": {
+              "schema_version": "easyicu.concept_column_metadata/1",
+              "column_name": "k_max",
+              "source_concept": "k",
+              "role": "numeric_aggregate",
+              "aggregation": "max",
+              "canonical_unit": "mEq/L",
+              "accepted_units": [
+                "mEq/L",
+                "mmol/l"
+              ],
+              "extraction_bounds": {
+                "minimum": 0.0,
+                "maximum": 10.0
+              },
+              "analysis_plausibility_range": null,
+              "allowed_values": null,
+              "time_origin": null,
+              "time_unit": null,
+              "source_database": "eicu_demo",
+              "dictionary_source_database": "eicu_demo",
+              "source_resolution_chain": [
+                "eicu_demo",
+                "eicu"
+              ],
+              "available_databases": [
+                "aumc",
+                "eicu",
+                "eicu_demo",
+                "hirid",
+                "miiv",
+                "mimic",
+                "mimic_demo",
+                "sic"
+              ],
+              "source_declared_for_database": true,
+              "availability_basis": "direct_source",
+              "source_lineage": [
+                {
+                  "database": "eicu_demo",
+                  "table": "lab",
+                  "selector_variable": "labname",
+                  "selector_regex": null,
+                  "item_ids": [
+                    "potassium"
+                  ],
+                  "value_variable": null,
+                  "unit_variable": null,
+                  "time_variable": null,
+                  "duration_variable": null,
+                  "source_class_name": null,
+                  "target": null,
+                  "callback": null,
+                  "interval_iso8601": null,
+                  "semantic_parameters": {}
+                }
+              ],
+              "description": "potassium",
+              "category": "chemistry",
+              "class_name": null,
+              "derived_from_concepts": []
+            },
+            "derivation_window": {
+              "origin": "icu_admission",
+              "start_hours": 0.0,
+              "end_hours": 24.0
+            },
+            "representation_transform": "window_numeric_max"
+          },
+          "binding_sha256": "4aa1ae2adcff1113c6bf15814b628aae7d68f332add42b809cff8c30795b5f8c",
+          "analysis_plausibility_range": {
+            "minimum": 0.0,
+            "maximum": 10.0
+          }
+        }
+      },
+      "column_binding_payload_sha256": "b8cc64418a54d0e777fc4be92e95fc414bd7a50a48e0252c9a2399add22d52fc",
+      "producer_implementation_sha256": "cae082bcfefe6e1908fa8bbf4d9cc4eb235eac856c87f3f46e7f8e519f7a4ff7",
+      "metadata_projection_sha256": "643c78ea27c808d653abafdcce3b96d4c3db8f0dfb5dc5bd7e0b933924da4921",
+      "metadata_sidecar_sha256": "faa0d7a9b9c37bb4af11213301ce183c9a5560be0c85ba0f165ffb99e63a1770",
+      "icu_rules_sha256": "2e22affd79ef09caea738c1bc8457091d0c70c1cad40bd81ce2fa31b04a91476",
+      "metadata_implementation_bundle_sha256": "5fc4333744d269013e18986ba756c6f873ba6877c766b03856282f3c0446aee7"
+    },
+    "trajectory": {
+      "authority_ref": {
+        "schema_version": "easyicu.materialized_trajectory_authority_ref/1",
+        "file": "trajectory_authority.sha256-730524417a6194cd62007a437080edc86e1185e967127a8e27ef71eea6d355b6.json",
+        "sha256": "730524417a6194cd62007a437080edc86e1185e967127a8e27ef71eea6d355b6",
+        "size": 11019
+      },
+      "trajectory_file": "cohort_trajectory.parquet",
+      "trajectory_sha256": "893133763a574dda0c47b00c21bb8c36a817ea853df40519cb8033c33ac00184",
+      "trajectory_size": 42334,
+      "trajectory_rows": 0,
+      "trajectory_columns": [
+        "stay_id",
+        "charttime",
+        "concept",
+        "value_num",
+        "value_str",
+        "evidence_state",
+        "owner_observed",
+        "owner_available"
+      ],
+      "trajectory_schema_sha256": "b146796d6535364f4911b896549a51680e6400471bab33881fc306044dc07038",
+      "identity_column": "stay_id",
+      "time_column": "charttime",
+      "time_origin": "icu_admission",
+      "time_unit": "h",
+      "concept_column": "concept",
+      "numeric_value_column": "value_num",
+      "text_value_column": "value_str",
+      "ordered_row_key_sha256": "e5673e320ed51ed5bbda27b4cf3499575bbfd94d1b71b9c163bf55fd548e5d97",
+      "stay_identity_set_sha256": "b02d36b99952e015eb570f8a59d43a66adc23f63bfccca830dbeb010a8f232c2",
+      "trajectory_stays": 0,
+      "bound_universe_authority_ref": {
+        "schema_version": "easyicu.materialized_cohort_authority_ref/1",
+        "file": "cohort_authority.sha256-b2f998f48af2ef558545cc725ff5f387a7fa637b92bc524eaf642b14b3161aa3.json",
+        "sha256": "b2f998f48af2ef558545cc725ff5f387a7fa637b92bc524eaf642b14b3161aa3",
+        "size": 14217
+      },
+      "bound_universe_row_identity_sha256": "cc18c483822991c0d1a364bbb74accfc70f995608a268cfd5a3b76776efed943",
+      "source_export_authority_sha256": "f5ae4445c6ff9b32d0a77a14173f6dc02dabdbe10d04199af82b889ea70b5aaf",
+      "requested_concepts": [
+        "k",
+        "death"
+      ],
+      "materialized_concepts": [
+        "k",
+        "death"
+      ],
+      "available_unobserved_concepts": [],
+      "unavailable_concepts": [],
+      "window": {
+        "origin": "icu_admission",
+        "unit": "h",
+        "start_hours": 0.0,
+        "end_hours": 24.0,
+        "inclusive": true
+      },
+      "projection_scope": "scoped",
+      "concept_bindings": {
+        "k": {
+          "concept_id": "k",
+          "source": {
+            "authority_sha256": "f5ae4445c6ff9b32d0a77a14173f6dc02dabdbe10d04199af82b889ea70b5aaf",
+            "file": "chemistry.parquet",
+            "column": "k",
+            "binding_sha256": "7de5553c4b782490aa734ba29ab34d22dad815b425ecdac73a11289b5df0abe4"
+          },
+          "binding": {
+            "metadata": {
+              "schema_version": "easyicu.concept_column_metadata/1",
+              "column_name": "k",
+              "source_concept": "k",
+              "role": "value",
+              "aggregation": null,
+              "canonical_unit": "mEq/L",
+              "accepted_units": [
+                "mEq/L",
+                "mmol/l"
+              ],
+              "extraction_bounds": {
+                "minimum": 0.0,
+                "maximum": 10.0
+              },
+              "analysis_plausibility_range": null,
+              "allowed_values": null,
+              "time_origin": null,
+              "time_unit": null,
+              "source_database": "eicu_demo",
+              "dictionary_source_database": "eicu_demo",
+              "source_resolution_chain": [
+                "eicu_demo",
+                "eicu"
+              ],
+              "available_databases": [
+                "aumc",
+                "eicu",
+                "eicu_demo",
+                "hirid",
+                "miiv",
+                "mimic",
+                "mimic_demo",
+                "sic"
+              ],
+              "source_declared_for_database": true,
+              "availability_basis": "direct_source",
+              "source_lineage": [
+                {
+                  "database": "eicu_demo",
+                  "table": "lab",
+                  "selector_variable": "labname",
+                  "selector_regex": null,
+                  "item_ids": [
+                    "potassium"
+                  ],
+                  "value_variable": null,
+                  "unit_variable": null,
+                  "time_variable": null,
+                  "duration_variable": null,
+                  "source_class_name": null,
+                  "target": null,
+                  "callback": null,
+                  "interval_iso8601": null,
+                  "semantic_parameters": {}
+                }
+              ],
+              "description": "potassium",
+              "category": "chemistry",
+              "class_name": null,
+              "derived_from_concepts": []
+            },
+            "derivation_window": null,
+            "representation_transform": null
+          }
+        },
+        "death": {
+          "concept_id": "death",
+          "source": {
+            "authority_sha256": "f5ae4445c6ff9b32d0a77a14173f6dc02dabdbe10d04199af82b889ea70b5aaf",
+            "file": "outcome.parquet",
+            "column": "death",
+            "binding_sha256": "1699603588d47842e18544c5e4fa7e402aef1af2d4e08f36626fe4b04588e42f"
+          },
+          "binding": {
+            "metadata": {
+              "schema_version": "easyicu.concept_column_metadata/1",
+              "column_name": "death",
+              "source_concept": "death",
+              "role": "event_status",
+              "aggregation": null,
+              "canonical_unit": null,
+              "accepted_units": [],
+              "extraction_bounds": null,
+              "analysis_plausibility_range": null,
+              "allowed_values": [
+                0,
+                1
+              ],
+              "time_origin": null,
+              "time_unit": null,
+              "source_database": "eicu_demo",
+              "dictionary_source_database": "eicu_demo",
+              "source_resolution_chain": [
+                "eicu_demo",
+                "eicu"
+              ],
+              "available_databases": [
+                "aumc",
+                "eicu",
+                "eicu_demo",
+                "hirid",
+                "miiv",
+                "mimic",
+                "mimic_demo",
+                "sic"
+              ],
+              "source_declared_for_database": true,
+              "availability_basis": "direct_source",
+              "source_lineage": [
+                {
+                  "database": "eicu_demo",
+                  "table": "patient",
+                  "selector_variable": null,
+                  "selector_regex": null,
+                  "item_ids": [],
+                  "value_variable": "hospitaldischargestatus",
+                  "unit_variable": null,
+                  "time_variable": "unitdischargeoffset",
+                  "duration_variable": null,
+                  "source_class_name": "col_itm",
+                  "target": null,
+                  "callback": "transform_fun(comp_na(`==`, 'Expired'))",
+                  "interval_iso8601": null,
+                  "semantic_parameters": {}
+                }
+              ],
+              "description": "in hospital mortality",
+              "category": "outcome",
+              "class_name": "lgl_cncpt",
+              "derived_from_concepts": []
+            },
+            "derivation_window": null,
+            "representation_transform": null
+          }
+        }
+      },
+      "concept_analysis_plausibility_ranges": {
+        "k": {
+          "minimum": 0.0,
+          "maximum": 10.0
+        },
+        "death": null
+      },
+      "concept_binding_payload_sha256": "b058fdd4ead83f3e2a7e80e17aae88efc90ed566748a22e58dc21650b0b4b652",
+      "producer_implementation_sha256": "8abce52fa22daebd5a92d5374f145628c7103c29061a1ed1f8d8eba3be8a7129"
+    }
+  },
+  "schema_version": "easyicu.research_context/3"
+}

@@ -697,6 +697,12 @@ def materialized_input_prompt_projection(
         for value in (context.primary_exposure, context.target_outcome)
         if str(value or "").strip()
     }
+    # An exact outcome/exposure column protects that value, not every time
+    # or count companion sharing its source concept. Concept-only coordinates
+    # still need their source binding when no exact physical column exists.
+    protected_source_names = protected_science_names - {
+        column.casefold() for column in cohort.column_bindings
+    }
 
     def column_priority(column: str) -> tuple[int, int, str]:
         binding = cohort.column_bindings[column]
@@ -709,7 +715,7 @@ def materialized_input_prompt_projection(
         normalized = column.casefold()
         protected = int(
             normalized in protected_science_names
-            or source_concept in protected_science_names
+            or source_concept in protected_source_names
         )
         try:
             variable_index = exact_variable_order.index(column)
@@ -884,7 +890,7 @@ def materialized_input_prompt_projection(
             if (
                 str(row.get("column") or "").casefold() not in protected_science_names
                 and str(row.get("source_concept") or "").casefold()
-                not in protected_science_names
+                not in protected_source_names
             ):
                 removable = index
                 break

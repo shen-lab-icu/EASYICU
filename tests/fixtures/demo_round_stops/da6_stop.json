@@ -1,0 +1,164 @@
+{
+  "child_job": {
+    "job_id": "23bbe54a54d9",
+    "run_id": null,
+    "status": "failed",
+    "error_code": "research_pipeline_execution_failed",
+    "artifact_refs": [],
+    "created_at_epoch": 1792779437.7332153,
+    "finished_at_epoch": 1792779623.3675146,
+    "progress": [
+      {
+        "label": "Research Agent provider authorized",
+        "seq": 0,
+        "step": "provider",
+        "timestamp": "2026-10-23T18:17:17.995997+00:00",
+        "type": "progress"
+      },
+      {
+        "label": "Selecting concepts from database metadata; no patient data will be read",
+        "seq": 1,
+        "step": "data_foundation",
+        "timestamp": "2026-10-23T18:17:18.048753+00:00",
+        "type": "progress"
+      },
+      {
+        "label": "Research Agent planning started; execution remains blocked pending human plan review",
+        "seq": 2,
+        "step": "research_pipeline",
+        "timestamp": "2026-10-23T18:17:30.616345+00:00",
+        "type": "progress"
+      },
+      {
+        "label": "Starting research-agent run.",
+        "seq": 3,
+        "status": "running",
+        "step": "run",
+        "timestamp": "2026-10-23T18:17:30.643932+00:00",
+        "type": "progress"
+      },
+      {
+        "action": "cohort_materialized",
+        "label": "Cohort materialised to parquet.",
+        "run_id": "run_20261023T181730_3567bc",
+        "seq": 4,
+        "status": "running",
+        "step": "cohort",
+        "timestamp": "2026-10-23T18:17:30.653393+00:00",
+        "type": "progress"
+      },
+      {
+        "label": "Execution runtime preflight skipped for planner-only authority.",
+        "run_id": "run_20261023T181730_3567bc",
+        "seq": 5,
+        "status": "running",
+        "step": "runtime",
+        "timestamp": "2026-10-23T18:17:30.667524+00:00",
+        "type": "progress"
+      },
+      {
+        "label": "Asking whether the study groups a measured value.",
+        "run_id": "run_20261023T181730_3567bc",
+        "seq": 6,
+        "status": "running",
+        "step": "context",
+        "timestamp": "2026-10-23T18:17:31.173164+00:00",
+        "type": "progress"
+      },
+      {
+        "action": "exposure_groups_staged",
+        "group_variable_count": 1,
+        "label": "Exposure groups staged: lact_group_x1.",
+        "run_id": "run_20261023T181730_3567bc",
+        "seq": 7,
+        "status": "running",
+        "step": "context",
+        "timestamp": "2026-10-23T18:17:51.745990+00:00",
+        "type": "progress"
+      },
+      {
+        "label": "The grouped primary exposure is planned without the continuous spline authority.",
+        "run_id": "run_20261023T181730_3567bc",
+        "seq": 8,
+        "status": "running",
+        "step": "context",
+        "timestamp": "2026-10-23T18:17:51.762914+00:00",
+        "type": "progress"
+      },
+      {
+        "action": "context_built",
+        "label": "Research context built.",
+        "run_id": "run_20261023T181730_3567bc",
+        "seq": 9,
+        "status": "running",
+        "stay_count": 0,
+        "step": "context",
+        "timestamp": "2026-10-23T18:17:51.784051+00:00",
+        "type": "progress",
+        "variable_count": 9
+      },
+      {
+        "action": "cohort_audit",
+        "label": "Initial cohort audit passed.",
+        "run_id": "run_20261023T181730_3567bc",
+        "seq": 10,
+        "status": "running",
+        "step": "audit",
+        "timestamp": "2026-10-23T18:17:54.349267+00:00",
+        "type": "progress"
+      },
+      {
+        "action": "literature_build",
+        "label": "Building pre-plan literature and hypothesis blueprint.",
+        "run_id": "run_20261023T181730_3567bc",
+        "seq": 11,
+        "status": "running",
+        "step": "hypothesis",
+        "timestamp": "2026-10-23T18:17:54.353194+00:00",
+        "type": "progress"
+      },
+      {
+        "label": "Analysis family association_study (study_design).",
+        "run_id": "run_20261023T181730_3567bc",
+        "seq": 12,
+        "status": "running",
+        "step": "plan",
+        "timestamp": "2026-10-23T18:19:36.388232+00:00",
+        "type": "progress"
+      },
+      {
+        "action": "plan_validation",
+        "current": 1,
+        "label": "Plan draft validation attempt 1/3 started.",
+        "planning_unit": "plan",
+        "retry_phase": "started",
+        "run_id": "run_20261023T181730_3567bc",
+        "seq": 13,
+        "status": "running",
+        "step": "planning",
+        "timestamp": "2026-10-23T18:19:36.449708+00:00",
+        "total": 3,
+        "type": "progress"
+      },
+      {
+        "action": "plan_validation",
+        "current": 1,
+        "label": "Plan draft attempt 1/3 passed validation.",
+        "planning_unit": "plan",
+        "retry_phase": "accepted",
+        "run_id": "run_20261023T181730_3567bc",
+        "seq": 14,
+        "status": "complete",
+        "step": "planning",
+        "timestamp": "2026-10-23T18:20:19.449742+00:00",
+        "total": 3,
+        "type": "progress"
+      }
+    ]
+  },
+  "saved_run": {
+    "run_id": "run_23bbe54a54d9",
+    "run_status": "failed",
+    "gate_reason": "research_pipeline_execution_failed"
+  }
+}

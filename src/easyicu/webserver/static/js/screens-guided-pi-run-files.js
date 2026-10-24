@@ -160,7 +160,10 @@
   function runIds(row) {
     const resources = rows(row && row.resources).concat(row && row.resource || []);
     rows(row && row.steps).forEach(step => resources.push(...rows(step.resources), ...(step.resource ? [step.resource] : [])));
-    return [...new Set(resources.filter(resource => /^research_(artifact|document|report)$/.test(resource.kind || '') && resource.run_id).map(resource => resource.run_id))];
+    // RunDirectory.create names an early-failure wrapper run_<job_id> even
+    // when the failed child has no artifact refs or completed pipeline id.
+    const wrapper = row && row.role === 'activity' && row.childJobId ? [`run_${row.childJobId}`] : [];
+    return [...new Set([...wrapper, ...resources.filter(resource => /^research_(artifact|document|report)$/.test(resource.kind || '') && resource.run_id).map(resource => resource.run_id)])];
   }
 
   // Keep saved receipts at their original resource-bearing message. Runs with

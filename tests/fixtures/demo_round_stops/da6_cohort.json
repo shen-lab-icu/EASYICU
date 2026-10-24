@@ -1,0 +1,86 @@
+{
+  "cohort": {
+    "name": "synthetic",
+    "inclusion": [
+      {
+        "concept_id": "lact_group_x1",
+        "time_window": {
+          "anchor": "icu_admission",
+          "start_offset_hours": 0.0,
+          "end_offset_hours": 24.0
+        },
+        "aggregation": "last",
+        "op": "in",
+        "value": [
+          "1",
+          "3"
+        ]
+      }
+    ],
+    "exclusion": [],
+    "derived_from_named": null,
+    "locked_at": "not_locked"
+  },
+  "variable": {
+    "name": "lact_group_x1",
+    "role": "other",
+    "dtype": "int64",
+    "unit": "category",
+    "valid_range": [
+      1.0,
+      3.0
+    ],
+    "is_ordinal": true,
+    "ordinal_levels": [
+      1,
+      2,
+      3
+    ],
+    "source_concept": "lact_group_x1",
+    "derived_from_concepts": [
+      "lact"
+    ],
+    "unit_normalization": "exposure_group_ordinal",
+    "analysis_window": "icu_admission[0,24]h",
+    "analysis_window_role": "outer_observation_window"
+  },
+  "exception_type": "CohortAuthorityError",
+  "message_sha256": "b73fc0731051ad6e5d318d8a68266ca780b2e0e6c596ae5bfa1eefb3257e633e",
+  "table_step": {
+    "step_id": "table_one",
+    "intent": "Summarize the declared groups.",
+    "inputs": [
+      "lact_group_x1",
+      "age",
+      "artifact:analysis_cohort"
+    ],
+    "expected_outputs": [
+      "table:table_one"
+    ],
+    "method": "table_one",
+    "table_one_spec": {
+      "schema_version": "easyicu.table_one/2",
+      "group_by": "lact_group_x1",
+      "group_levels": [
+        1,
+        2,
+        3
+      ],
+      "variables": [
+        {
+          "name": "age",
+          "variable_kind": "continuous",
+          "summary": "both",
+          "test": "none_descriptive_smd_only",
+          "levels": []
+        }
+      ],
+      "include_overall": true,
+      "missing_group_policy": "fail_closed",
+      "missingness_display": "n_percent_by_group",
+      "p_values_required": false,
+      "p_value_adjustment": "not_applicable_repeated_units",
+      "standardized_difference_mode": "auto_binary_groups"
+    }
+  }
+}
