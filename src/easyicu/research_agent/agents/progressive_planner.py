@@ -30,11 +30,7 @@ from ..concept_availability import (
     require_supported_variable_source,
 )
 from ..planning.accepted_analysis_inputs import analysis_input_value_columns
-from ..planning.baseline_requirements import (
-    baseline_requirement_projection,
-    validate_baseline_materialization,
-    validate_baseline_outline,
-)
+from ..planning.baseline_requirements import baseline_requirement_projection
 from ..planning.literature_bindings import (
     allowed_method_source_keys,
     method_layers_for_source_keys,
@@ -58,6 +54,8 @@ from ..planning.ordinal_multi_outcome import (
     resolve_ordinal_multi_outcome_contract,
 )
 from ..planning.planner_output_contract import (
+    validate_baseline_materialization,
+    validate_baseline_outline,
     validate_fresh_planner_typed_product_specs,
 )
 from ..planning.preplan_know_how import verify_know_how_decisions

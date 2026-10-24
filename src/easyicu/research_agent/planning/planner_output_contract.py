@@ -1,18 +1,23 @@
-"""Fresh Planner-only typed product declarations.
+"""Fresh Planner-only typed product declarations and accepted-roster checks.
 
-This owner keeps rules that the model can repair out of the broad Agent parser
-while leaving ``AnalysisPlan`` compatible with digest-verified historical
-plans.  Scientific choices are declared here; runtime owners only execute the
-resulting immutable contracts.
+This owner checks accepted-roster availability before a provider request and
+keeps repairable omissions inside the Planner's local retry. ``AnalysisPlan``
+remains compatible with digest-verified historical plans; shared runtime
+readers consume baseline coverage without loading Planner schemas or retries.
 """
 
 from __future__ import annotations
+
+import json
+from typing import Any, Mapping, Sequence
 
 from ..schema import AnalysisPlan, ResearchContext
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
 )
 from ..contracts.table_one_semantics import validate_table_one_semantic_roles
+from .baseline_requirements import baseline_outline_coverage
+from .progressive_contract import ProgressivePlanCompileError
 from .scientific_review import post_baseline_exposure
 
 
@@ -125,8 +130,46 @@ def validate_fresh_planner_typed_product_specs(
         )
 
 
+def validate_baseline_materialization(context: ResearchContext) -> None:
+    """Refuse unavailable accepted coordinates before any provider request.
+
+    A Planner can repair an omitted available row, but cannot materialize a
+    missing clinical coordinate. Keep that host failure outside parse retries.
+    """
+
+    coverage = baseline_outline_coverage(context, ())
+    unavailable = [table for table in coverage["tables"] if table["unavailable_coordinates"]]
+    if unavailable:
+        names = sorted({name for table in unavailable for name in table["unavailable_coordinates"]})
+        raise ProgressivePlanCompileError(
+            "progressive_accepted_baseline_materialization_missing",
+            "Accepted baseline coordinates are unavailable after extraction: " + ", ".join(names),
+            step_id=unavailable[0]["source_step_id"], path="accepted_baseline_requirements",
+            concepts=names, findings=unavailable,
+        )
+
+
+def validate_baseline_outline(context: ResearchContext, steps: Sequence[Mapping[str, Any]]) -> None:
+    """Keep repairable roster omissions inside the outline's local retry."""
+
+    baseline = baseline_outline_coverage(context, steps)
+    if baseline["status"] == "incomplete":
+        raise ProgressivePlanCompileError(
+            "progressive_outline_accepted_baseline_incomplete",
+            "The outline must preserve each accepted baseline roster in one "
+            "table_one step (or an auxiliary summary for an ungrouped roster) "
+            "before foundation or step materialization. Include the required "
+            "grouping and one available clinical-value column per required variable; "
+            "measurement metadata and mentions in an audit or prose do not satisfy "
+            "this requirement. " + json.dumps(baseline, ensure_ascii=False, sort_keys=True),
+            path="steps", findings=(baseline,),
+        )
+
+
 __all__ = [
     "PlannerOutputContractError",
     "missing_post_baseline_descriptive_claims",
     "validate_fresh_planner_typed_product_specs",
+    "validate_baseline_materialization",
+    "validate_baseline_outline",
 ]
