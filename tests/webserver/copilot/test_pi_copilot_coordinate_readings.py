@@ -38,25 +38,64 @@ def test_prediction_does_not_invent_an_exposure_reading():
 
 @pytest.mark.parametrize("database,concept,question", [
     ("eicu", "age", "描述一个合成 ICU 队列中年龄的分布。"),
-    ("miiv", "lact", "描述一个合成 MIMIC-IV 队列中首日血乳酸的分布。"),
     ("eicu", "age", "Describe the age distribution in a synthetic ICU cohort."),
-    ("miiv", "lact", "Describe first-day blood lactate in a synthetic MIMIC-IV cohort."),
-    ("miiv", "lact", "What proportion of synthetic ICU stays have high blood lactate?"),
 ])
-def test_described_measurement_is_a_keyword_hint_without_an_exposure(database, concept, question):
+def test_described_stay_attribute_is_a_keyword_outcome_without_an_exposure(database, concept, question):
     result = research_launch_scientific._metadata_only_planning_coordinates(
         question=question, database=database,
     )
     assert result["primary_exposure"] is None
-    assert result["target_outcome"] is None
+    assert result["target_outcome"] == concept
+    assert result["endpoint"].name == concept
+    assert result["endpoint"].kind == "continuous"
+    assert result["target_outcome_aggregation"] is None
+    assert result["target_outcome_window"] is None
     assert result["primary_exposure_aggregation"] is None
     assert not any(row["role"] == "exposure" for row in result["coordinate_readings"])
-    hint = next(row for row in result["coordinate_readings"] if row["role"] == "measurement")
+    hint = next(row for row in result["coordinate_readings"] if row["role"] == "outcome")
     assert hint["concept"] == concept and hint["basis"] == "keyword"
     assert hint["evidence"].casefold() in question.casefold()
     assert any(concept in row["concepts"] and row["evidence"]
                for row in result["question_named_concepts"])
     assert result["source"] == "question_keywords_plus_database_capability"
+    assert result["execution_authorized"] is False
+
+
+@pytest.mark.parametrize("question", [
+    "描述一个合成 MIMIC-IV 队列中首日血乳酸的分布。",
+    "Describe first-day blood lactate in a synthetic MIMIC-IV cohort.",
+    "What proportion of synthetic ICU stays have high blood lactate?",
+])
+def test_described_repeated_measurement_requires_an_explicit_statistic(question):
+    with pytest.raises(research_launch_scientific.ResearchPipelineRunError) as error:
+        research_launch_scientific._metadata_only_planning_coordinates(
+            question=question, database="miiv",
+        )
+    assert error.value.code == "windowed_summary_statistic_unresolved"
+    assert error.value.details == {"concept": "lact"}
+
+
+@pytest.mark.parametrize("question", [
+    "描述一个合成 MIMIC-IV 队列中入 ICU 首日最高血乳酸的分布。",
+    "Describe maximum blood lactate in the first 24 hours after ICU admission in a synthetic cohort.",
+])
+def test_an_explicit_measurement_summary_is_an_outcome_without_an_exposure(question):
+    result = research_launch_scientific._metadata_only_planning_coordinates(
+        question=question, database="miiv",
+    )
+    assert result["primary_exposure"] is None
+    assert result["primary_exposure_aggregation"] is None
+    assert result["target_outcome"] == "lact"
+    assert result["target_outcome_aggregation"] == "max"
+    assert result["endpoint"].name == "lact_max"
+    assert result["endpoint"].kind == "continuous"
+    assert result["target_outcome_window"] == {
+        "anchor": "icu_admission", "start_hours": 0.0, "end_hours": 24.0,
+    }
+    assert [row["role"] for row in result["coordinate_readings"]] == ["outcome"]
+    outcome = result["coordinate_readings"][0]
+    assert outcome["concept"] == "lact" and outcome["column"] == "lact_max"
+    assert outcome["basis"] == "keyword" and outcome["evidence"] in question
     assert result["execution_authorized"] is False
 
 
