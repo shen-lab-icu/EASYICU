@@ -230,9 +230,10 @@ _MAX_TABLE_COLUMNS = 12
 # load-bearing example).  Cutting the serialized text at a character offset
 # silently deletes whole trailing keys -- ``sort_keys`` sorts ``confirmations``
 # and ``materialization_window`` last -- and leaves an unparseable value behind.
-# Bound the STRUCTURE instead, so every top-level constraint key survives, the
-# value stays valid JSON, and anything actually dropped is dropped visibly.
-_MAX_DATA_CONSTRAINTS_CHARS = 2_400
+# Transport the complete structure: even visible list elision changes a stated
+# population. Allow ordinary native-export receipts and host-applied rules to
+# fit, and refuse any payload that still exceeds this bound.
+_MAX_DATA_CONSTRAINTS_CHARS = 4_096
 
 
 def _provider_request_timeouts_for_budget(
@@ -244,7 +245,6 @@ def _provider_request_timeouts_for_budget(
         _DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS,
         _DEVELOPMENT_PROVIDER_REQUEST_HARD_TIMEOUT_SECONDS,
     )
-_DATA_CONSTRAINT_LIST_HEADS = (16, 8, 4, 2, 1, 0)
 _MANUSCRIPT_DOCUMENT_SPECS = {
     "manuscript_scaffold.pdf": ("application/pdf", 16 * 1024 * 1024),
     "manuscript_scaffold.tex": ("text/x-tex; charset=utf-8", 2 * 1024 * 1024),
@@ -2477,49 +2477,17 @@ def _resolve_planning_outcome_columns(
     return requested
 
 
-def _elide_constraint_lists(
-    constraints: Mapping[str, Any], *, head: int
-) -> Dict[str, Any]:
-    """Shorten list values in place of deleting whole constraint keys."""
-
-    reduced: Dict[str, Any] = {}
-    for key, value in constraints.items():
-        if not isinstance(value, Mapping):
-            reduced[key] = value
-            continue
-        row: Dict[str, Any] = {}
-        for name, item in value.items():
-            if isinstance(item, list) and len(item) > head:
-                # The marker is deliberately token-free: it must not be able to
-                # satisfy a downstream gate's text scan on its own.
-                row[name] = [*item[:head], f"[{len(item) - head} omitted]"]
-            else:
-                row[name] = item
-        reduced[key] = row
-    return reduced
-
-
 def _compile_data_constraints(constraints: Mapping[str, Any]) -> str:
     """Serialize the study's data constraints without silent key loss.
 
-    Returns valid JSON containing every top-level constraint key, or fails
-    closed.  A study whose constraints cannot fit even with every list fully
-    elided is a configuration the user must shorten; it must never be answered
-    by handing the Research Agent a truncated blob whose missing tail happens
-    to be the user's confirmations.
+    Returns the complete JSON or fails closed. A study whose constraints do
+    not fit is a configuration the user must shorten; neither list elision
+    nor text truncation may change the population handed to the Research Agent.
     """
 
     payload = json.dumps(constraints, ensure_ascii=False, sort_keys=True)
     if len(payload) <= _MAX_DATA_CONSTRAINTS_CHARS:
         return payload
-    for head in _DATA_CONSTRAINT_LIST_HEADS:
-        candidate = json.dumps(
-            _elide_constraint_lists(constraints, head=head),
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-        if len(candidate) <= _MAX_DATA_CONSTRAINTS_CHARS:
-            return candidate
     raise ResearchPipelineRunError(
         "research_pipeline_data_constraints_too_large",
         "The configured study constraints are too large to transport to the "
@@ -3006,7 +2974,12 @@ def _host_applied_criteria(study: Mapping[str, Any]) -> List[str]:
 
     raw = study.get("cohort")
     cohort = raw if isinstance(raw, Mapping) else {}
-    return [_FIRST_ICU_STAY_EXCLUSION] if primary_cohort.first_icu_stay_only(cohort) else []
+    try:
+        executed = primary_cohort.normalize_execution_cohort(cohort)
+        return [_FIRST_ICU_STAY_EXCLUSION] if primary_cohort.first_icu_stay_only(executed) else []
+    except primary_cohort.PrimaryCohortContractError:
+        # Diagnostics declare nothing; execution admission owns the refusal.
+        return []
 
 
 def _executed_cohort(cohort: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
