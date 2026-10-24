@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 _RUNNER_UNAVAILABLE_REMEDIATION: dict[str, str] = {
     "host_runner_refuses_model_code": (
         "Declare a supported typed executor for every desktop step, or use "
@@ -49,6 +51,7 @@ _RUNNER_UNAVAILABLE_REMEDIATION: dict[str, str] = {
     ),
 }
 
+
 def runner_unavailable_remediation(reason_code: str) -> str:
     """Return the constant, host-neutral remediation for one closed reason."""
 
@@ -59,15 +62,13 @@ def runner_unavailable_remediation(reason_code: str) -> str:
 
 _DOCKER_DAEMON_UNREACHABLE_MARKERS = (
     "cannot connect to the docker daemon",
-    "failed to connect to the docker api",
     "is the docker daemon running",
     "docker daemon is not running",
     "error during connect",
 )
 
 
-
-def _classify_docker_failure(stderr: str, stdout: str) -> str:
+def classify_docker_failure(stderr: str, stdout: str) -> str:
     """Collapse one docker CLI failure into a closed reason code.
 
     A missing image and a stopped daemon are different problems with different
@@ -76,8 +77,20 @@ def _classify_docker_failure(stderr: str, stdout: str) -> str:
     """
 
     text = f"{stderr}\n{stdout}".strip().lower()
-    if any(marker in text for marker in _DOCKER_DAEMON_UNREACHABLE_MARKERS):
-        return "docker_daemon_unreachable"
+    # These are explicit image-lookup results; image names themselves may
+    # contain words such as tls or certificate without reporting a failure.
     if "no such image:" in text or "no such object:" in text:
         return "docker_image_missing"
+    # Configuration and remote-endpoint failures must not select a different
+    # execution backend, even when Docker appends a generic connection hint.
+    if any(marker in text for marker in (
+        "permission denied", "access is denied", "x509", "tls", "certificate",
+        "unauthorized", "authentication", "forbidden", "tcp://", "ssh://",
+    )) or re.search(r"https?://(?!%2f)", text):
+        return "docker_probe_failed"
+    if ("failed to connect to the docker api" in text and "unix" in text
+            and any(cause in text for cause in ("no such file or directory", "connection refused"))):
+        return "docker_daemon_unreachable"
+    if any(marker in text for marker in _DOCKER_DAEMON_UNREACHABLE_MARKERS):
+        return "docker_daemon_unreachable"
     return "docker_probe_failed"
