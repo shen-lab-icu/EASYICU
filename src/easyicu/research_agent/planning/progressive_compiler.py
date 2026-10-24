@@ -8,7 +8,9 @@ unlocked suffix instead of rewriting an already-valid prefix.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from pydantic import ValidationError
@@ -559,6 +561,29 @@ def _require_stated_population_applied(
             )
 
 
+def _population_quote_source_excerpt(quote: str, study_texts: Sequence[str]) -> str:
+    """Bound retry wording, keeping source words near the rejected quote.
+
+    Matching locates an excerpt only; the population owner still decides
+    whether the quote is verbatim. The marker also covers omitted sources.
+    """
+
+    max_chars = 1800
+    if sum(map(len, study_texts)) <= max_chars:
+        rendered = json.dumps(study_texts, ensure_ascii=False)
+        if len(rendered) <= max_chars:
+            return rendered
+    source, match = max(
+        ((text, SequenceMatcher(None, text, quote, autojunk=False).find_longest_match())
+         for text in study_texts),
+        key=lambda item: item[1].size,
+    )
+    marker = "[truncated]"
+    width = max_chars - 2 * len(marker) - 2
+    start = min(max(0, match.a - (width - match.size) // 2), max(0, len(source) - width))
+    return f"{marker} {source[start:start + width]} {marker}"
+
+
 def _stated_population_spec(
     cohort_intent: ProgressiveCohortIntent,
     *,
@@ -594,7 +619,9 @@ def _stated_population_spec(
             f"criterion {criterion.id} cites the {criterion.source.replace('_', ' ')}, "
             f"but {criterion.quote!r} is not written there: quote the words that "
             "state it exactly as the study writes them, in their own language; "
-            "never paraphrase or translate them",
+            "never paraphrase or translate them. Allowed source texts "
+            "(research question and study cohort wording): "
+            + _population_quote_source_excerpt(criterion.quote, study_texts),
             path=f"cohort.population_spec.criteria[{index}].quote",
         )
     return spec

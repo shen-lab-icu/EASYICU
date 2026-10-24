@@ -647,6 +647,7 @@ def call_llm_with_structured_retry(
     feedback_instructions: str = _DEFAULT_FEEDBACK_INSTRUCTIONS,
     progress_callback: Optional[Callable[[StructuredRetryProgress], None]] = None,
     structured_output: Any = None,
+    retryable_parse_error: Optional[Callable[[Exception], bool]] = None,
 ) -> T:
     """Call ``llm.complete`` and parse the result; retry with feedback on parse failure.
 
@@ -664,7 +665,11 @@ def call_llm_with_structured_retry(
         A function that takes the raw string and returns ``T`` or
         raises any subclass of ``Exception``. Common parsers raise
         ``json.JSONDecodeError``, ``pydantic.ValidationError`` or
-        ``ValueError``; all are caught here.
+        ``ValueError``. ``retryable_parse_error`` can narrow this policy.
+    retryable_parse_error:
+        Whether the caller attributes an error to a rejected response. Other
+        parser errors propagate unchanged, without retrying or recording a
+        rejected answer. Defaults to all exceptions for existing callers.
     role:
         Free-form label for the agent role using this retry. Recorded in
         ``StructuredResponseFailure.role`` and used in logs.
@@ -699,7 +704,7 @@ def call_llm_with_structured_retry(
     Raises
     ------
     StructuredResponseFailure
-        When every attempt up to ``max_retries`` raised during parsing.
+        When every attempt up to ``max_retries`` raised a retryable parse error.
     """
     attempts: List[StructuredAttempt] = []
     base_messages: List[LLMMessage] = list(messages)
@@ -779,7 +784,9 @@ def call_llm_with_structured_retry(
             value = parser(raw)
         except ProgressControlSignal:
             raise
-        except Exception as exc:  # noqa: BLE001 — parser may raise anything
+        except Exception as exc:  # noqa: BLE001 -- caller may narrow parser failures
+            if retryable_parse_error is not None and not retryable_parse_error(exc):
+                raise
             # Rendered once, then reused for the record, the feedback message
             # and the carry-forward signature -- three readers of one string,
             # so the retry cannot be shown a different rejection from the one
