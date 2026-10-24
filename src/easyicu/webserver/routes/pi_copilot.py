@@ -46,7 +46,7 @@ ProviderText = Annotated[
 ]
 CredentialText = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=8192),
+    StringConstraints(strip_whitespace=True, max_length=8192),
 ]
 EndpointText = Annotated[
     str,
@@ -382,7 +382,7 @@ class PiProviderConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: ProviderText = "easyicu-local"
-    api_key: CredentialText
+    api_key: CredentialText = ""
     base_url: EndpointText = "http://127.0.0.1:8317/v1"
     model: ModelText = DEFAULT_MODEL
     api_transport: Literal[
@@ -541,7 +541,6 @@ def post_pi_copilot_session_maintenance(
         _raise_http(exc)
 
 
-@router.post("/api/copilot/pi/provider-config")
 def post_pi_copilot_provider_config(body: PiProviderConfigRequest) -> dict:
     try:
         if body.data_handling != "unspecified" or body.inference_location != "unspecified":
@@ -558,6 +557,14 @@ def post_pi_copilot_provider_config(body: PiProviderConfigRequest) -> dict:
         )
     except PiCopilotError as exc:
         _raise_http(exc)
+
+
+router.add_api_route(
+    "/api/copilot/pi/provider-config",
+    post_pi_copilot_provider_config,
+    methods=["POST"],
+    route_class_override=_PrivateProviderModelsRoute,
+)
 
 
 @router.get("/api/copilot/pi/provider-config/declaration", response_model=PiProviderDeclarationState)

@@ -402,6 +402,54 @@ class PiProviderConfigStore:
             inference_location=inference_location,
         )
 
+    def make_connection_config(
+        self,
+        *,
+        provider: str,
+        api_key: str,
+        base_url: str,
+        model: str,
+        api_transport: str,
+        data_handling: Optional[DataHandling] = None,
+        inference_location: Optional[InferenceLocation] = None,
+        environ: Optional[Mapping[str, str]] = None,
+    ) -> PiProviderConfig:
+        """Resolve a blank credential only within its saved connection identity."""
+        reuse_credential = not api_key.strip()
+        # Settings declarations remain in their journal; copying their effective
+        # value here would turn them into administrator policy on a new model.
+        stored = self._configured_connection(environ=environ) if reuse_credential else None
+        if reuse_credential and stored is None:
+            raise PiCopilotError(
+                "pi_provider_credential_required",
+                "Enter an API credential for this model-service connection.",
+                status_code=422,
+            )
+        if data_handling is None:
+            data_handling = stored.data_handling if stored else DataHandling.UNSPECIFIED
+        if inference_location is None:
+            inference_location = stored.inference_location if stored else InferenceLocation.UNSPECIFIED
+        config = self.make_config(
+            provider=provider,
+            api_key=stored.api_key if stored else api_key,
+            base_url=base_url,
+            model=model,
+            api_transport=api_transport,
+            data_handling=data_handling,
+            inference_location=inference_location,
+        )
+        if stored and (
+            config.provider != stored.provider
+            or config.base_url != stored.base_url
+            or config.api_transport != stored.api_transport
+        ):
+            raise PiCopilotError(
+                "pi_provider_credential_required",
+                "Enter an API credential for this model-service connection.",
+                status_code=422,
+            )
+        return config
+
     def verify_and_save(
         self,
         *,
@@ -410,14 +458,14 @@ class PiProviderConfigStore:
         base_url: str,
         model: str,
         api_transport: str,
-        data_handling: DataHandling = DataHandling.UNSPECIFIED,
-        inference_location: InferenceLocation = InferenceLocation.UNSPECIFIED,
+        data_handling: Optional[DataHandling] = None,
+        inference_location: Optional[InferenceLocation] = None,
         verifier: Optional[Verifier] = None,
         environ: Optional[Mapping[str, str]] = None,
     ) -> tuple[PiProviderConfig, Dict[str, Any]]:
         """Verify first, then atomically persist the credential and receipt."""
 
-        config = self.make_config(
+        config = self.make_connection_config(
             provider=provider,
             api_key=api_key,
             base_url=base_url,
@@ -425,6 +473,7 @@ class PiProviderConfigStore:
             api_transport=api_transport,
             data_handling=data_handling,
             inference_location=inference_location,
+            environ=environ,
         )
         verification = verify_provider_connection(config, transport=verifier)
         source = os.environ if environ is None else environ
