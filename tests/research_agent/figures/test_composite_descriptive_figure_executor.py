@@ -25,6 +25,7 @@ from easyicu.research_agent.execution.runners.composite_descriptive_figure_execu
     run_composite_descriptive_figure,
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
+from easyicu.research_agent.execution.runners.typed_input_binding import TypedInputBindingError
 from easyicu.research_agent.execution.figure_plan_binding import (
     validate_step_planned_figure_contract_binding,
 )
@@ -350,6 +351,152 @@ def test_owner_refuses_widened_or_incomplete_contract(tmp_path: Path) -> None:
     assert not composite_descriptive_figure_executor_owns_step(
         _step(), resolved_bindings=incomplete
     )
+
+
+@pytest.mark.parametrize("exposure_levels,display_labels,expected_labels", [
+    (["Female", "Male"], {}, ["Female", "Male"]),
+    (["Female", "Male"], {"sex=Female": "Group F", "sex=Male": "Group M"}, ["Group F", "Group M"]),
+    (["Male", "Female"], {}, ["Male", "Female"]),
+    (["01", "1"], {"sex=01": "Code 01", "sex=1": "Code 1"}, ["Code 01", "Code 1"]),
+    (["1e3", "1000"], {}, ["1e3", "1000"]),
+    (["None", "Drug_A"], {}, ["None", "Drug A"]),
+    (["none", "NONE"], {}, ["none", "NONE"]),
+    (["Male_Sex", "Female_Sex"], {"sex=Male_Sex": "Men"}, ["Men", "Female Sex"]),
+    (["01.0", "1.0"], {"sex=1": "One"}, ["01.0", "One"]),
+    (["10.0", "10"], {"sex=10.0": "Decimal code", "sex=10": "Integer code"}, ["Decimal code", "Integer code"]),
+    ([True, False], {}, ["True", "False"]),
+])
+@pytest.mark.parametrize("suffix", ["csv", "parquet"])
+def test_descriptive_figure_preserves_exposure_labels_order_and_source_values(
+    tmp_path: Path, monkeypatch, exposure_levels, display_labels, expected_labels, suffix,
+) -> None:
+    from easyicu.research_agent.execution.runners import composite_descriptive_figure_executor as owner
+
+    frames = _frames()
+    distribution = frames["table:exposure_outcome_distribution"]
+    distribution["exposure_level"] = [*exposure_levels, exposure_levels[0]]
+    distribution["exposure_column"] = "sex"
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.{suffix}"
+        if suffix == "parquet":
+            frame.to_parquet(path, index=False)
+        else:
+            frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    step = _step()
+    assert composite_descriptive_figure_executor_owns_step(step, resolved_bindings=bindings)
+
+    rendered = []
+    save = owner.save_publication_figure
+
+    def capture_figure(fig, *args, **kwargs):
+        axis = fig.axes[1]
+        rendered.append(([tick.get_text() for tick in axis.get_xticklabels()],
+                         [bar.get_height() for bar in axis.patches],
+                         list(axis.get_xticks())))
+        return save(fig, *args, **kwargs)
+
+    monkeypatch.setattr(owner, "save_publication_figure", capture_figure)
+    out_dir = tmp_path / "outputs"
+    summary = run_composite_descriptive_figure(
+        out_dir=out_dir, run_dir=tmp_path,
+        resolved_inputs={"step_id": step.step_id, "inputs": bindings},
+        step_id=step.step_id, figure_product="mortality_by_sex",
+        display_labels=display_labels,
+    )
+    assert summary["status"] == "ok"
+    assert rendered == [(expected_labels, [60.0, 40.0, 10.0, 20.0], [0, 1])]
+    assert "Overall" not in rendered[0][0]
+    for suffix in ("png", "svg", "pdf", "tiff", "figure_contract.json"):
+        assert (out_dir / f"mortality_by_sex.{suffix}").stat().st_size > 0
+    source = pd.read_csv(out_dir / "exposure_outcome_distribution_source_data.csv", dtype={"exposure_level": str}, keep_default_na=False)
+    original = distribution.copy()
+    original["exposure_level"] = original["exposure_level"].astype(str)
+    pd.testing.assert_frame_equal(source[original.columns], original)
+    assert source["source_row_index"].tolist() == [0, 1, 2]
+    assert source["outcome_rate_pct"].tolist() == [10.0, 20.0, 14.0]
+
+
+@pytest.mark.parametrize("level", [None, pd.NA, float("nan"), "NA", "n/a", "NaN", "null", "<NA>", "", " unknown "])
+@pytest.mark.parametrize("suffix", ["csv", "parquet"])
+def test_unknown_exposure_levels_cannot_be_drawn_as_known_groups(tmp_path, level, suffix):
+    frames = _frames()
+    frames["table:exposure_outcome_distribution"]["exposure_level"] = [level, "Female", "Overall"]
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.{suffix}"
+        if suffix == "parquet":
+            frame.to_parquet(path, index=False)
+        else:
+            frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    with pytest.raises(ValueError, match="missing or unknown exposure level"):
+        run_composite_descriptive_figure(
+            out_dir=tmp_path / "outputs", run_dir=tmp_path,
+            resolved_inputs={"step_id": _step().step_id, "inputs": bindings},
+            step_id=_step().step_id, figure_product="unknown_exposure",
+        )
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+@pytest.mark.parametrize("suffix", ["csv", "parquet"])
+def test_numeric_exposure_dtype_and_display_label_collisions(tmp_path, monkeypatch, duplicate, suffix):
+    from easyicu.research_agent.execution.runners import composite_descriptive_figure_executor as owner
+
+    bindings = {}
+    frames = _frames()
+    frames["table:exposure_outcome_distribution"]["exposure_level"] = [10.0, 2.5, -1.0]
+    frames["table:exposure_outcome_distribution"]["exposure_column"] = "sex"
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.{suffix}"
+        if suffix == "parquet":
+            frame.to_parquet(path, index=False)
+        else:
+            frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    rendered = []
+
+    def capture(fig, *args, **kwargs):
+        rendered.append([tick.get_text() for tick in fig.axes[1].get_xticklabels()])
+        return {}
+
+    monkeypatch.setattr(owner, "save_publication_figure", capture)
+    labels = {"sex=10": "Ten", "sex=2.5": "Ten" if duplicate else "Two point five"}
+    kwargs = dict(
+        out_dir=tmp_path / "outputs", run_dir=tmp_path,
+        resolved_inputs={"step_id": _step().step_id, "inputs": bindings},
+        step_id=_step().step_id, figure_product="numeric_exposure", display_labels=labels,
+    )
+    if duplicate:
+        with pytest.raises(ValueError, match="exposure labels must be unique"):
+            run_composite_descriptive_figure(**kwargs)
+    else:
+        run_composite_descriptive_figure(**kwargs)
+        assert rendered == [["Ten", "Two point five"]]
+
+
+@pytest.mark.parametrize("columns", [["sex", "drug", "sex"], ["sex", "sex", "drug"], ["sex", None, "sex"]])
+@pytest.mark.parametrize("suffix", ["csv", "parquet"])
+def test_distribution_refuses_conflicting_exposure_columns(tmp_path, columns, suffix):
+    frames = _frames()
+    frames["table:exposure_outcome_distribution"]["exposure_column"] = columns
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.{suffix}"
+        if suffix == "parquet":
+            frame.to_parquet(path, index=False)
+        else:
+            frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    with pytest.raises(TypedInputBindingError, match="exposure_column") as error:
+        run_composite_descriptive_figure(
+            out_dir=tmp_path / "outputs", run_dir=tmp_path,
+            resolved_inputs={"step_id": _step().step_id, "inputs": bindings},
+            step_id=_step().step_id, figure_product="conflicting_exposure",
+        )
+    assert error.value.reason_code == "product_identity_mismatch"
+    assert not list((tmp_path / "outputs").iterdir())
 
 
 def test_robustness_four_table_contract_selects_and_renders(tmp_path: Path) -> None:
