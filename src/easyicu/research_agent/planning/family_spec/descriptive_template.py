@@ -11,7 +11,7 @@ unchanged Progressive validators and compiler.
 Step layout (mirrors the family's reference workflow):
 
 1. ``cohort_accounting``             denominators and cohort flow for every input row
-2. ``baseline_context``              baseline table by exposure level, SMD only
+2. ``baseline_context``              optional baseline table by exposure level, SMD only
 3. ``exposure_outcome_distribution`` counts and proportions by exposure level (primary)
 4. ``measurement_audit``             measurement coverage and missingness
 
@@ -41,6 +41,7 @@ from ..progressive_contract import (
 )
 from .contract import (
     DESCRIPTIVE_FAMILY_ID,
+    DistributionMissingPolicies,
     FamilyPlanSpec,
     FamilySpecError,
     FamilySpecRequest,
@@ -121,6 +122,8 @@ def _design_selection(
     *,
     required_variables: list[str],
     method_keys: list[str],
+    has_baseline: bool,
+    missing_policies: DistributionMissingPolicies,
 ) -> ResearchDesignSelection:
     exposure = _label(spec, request.primary_exposure)
     outcome = _label(spec, request.outcome)
@@ -145,6 +148,28 @@ def _design_selection(
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
     ]
+    if language == "zh":
+        missing_statement = (
+            "缺失暴露行从描述表分母排除并单独报告；"
+            if missing_policies.missing_exposure_policy == "exclude_from_denominator"
+            else "发现缺失暴露则停止该分析，等待修订与审阅；"
+        ) + (
+            "缺失结局仍保留在人群与缺失审计中，按组报告数量；各组结局率分母仅含该组结局已知行。"
+            if missing_policies.missing_outcome_policy == "exclude_from_denominator"
+            else "发现缺失结局则停止该分析，等待修订与审阅；结局率分母为各组全部已声明行。"
+        )
+    else:
+        missing_statement = (
+            "Rows with missing exposure leave the descriptive table denominator and are reported; "
+            if missing_policies.missing_exposure_policy == "exclude_from_denominator"
+            else "Missing exposure stops this analysis pending a reviewed revision; "
+        ) + (
+            "missing outcomes remain in cohort and missingness audits with counts by group; "
+            "each group's outcome-rate denominator contains only its observed-outcome rows."
+            if missing_policies.missing_outcome_policy == "exclude_from_denominator"
+            else "missing outcomes stop this analysis pending a reviewed revision; "
+            "each outcome-rate denominator contains all declared rows in that group."
+        )
     selected = ResearchDesignCandidate(
         design_id="stay_level_descriptive",
         analysis_type="descriptive_epidemiology",
@@ -158,12 +183,15 @@ def _design_selection(
             "available hospital outcome record for every analysis row."
         ),
         primary_method=(
-            "Counts and proportions by exposure level, plus a baseline table by level; no adjusted "
-            "model, no inferential contrast, and no confidence interval, standard error, or p-value "
-            "(typed counts-only design: repeated units cannot be resolved)."
-            if request.counts_only
-            else "Counts and proportions by exposure level with confidence intervals, plus a baseline "
-            "table by level; no adjusted model and no inferential contrast is proposed."
+            "Counts and proportions by exposure level"
+            + ("" if request.counts_only else " with confidence intervals")
+            + (", plus a baseline table by level" if has_baseline else "")
+            + (
+                "; no adjusted model, no inferential contrast, and no confidence interval, "
+                "standard error, or p-value (typed counts-only design)."
+                if request.counts_only
+                else "; no adjusted model and no inferential contrast is proposed."
+            )
         ),
         required_variables=required_variables,
         assumptions=[
@@ -202,9 +230,11 @@ def _design_selection(
                 + f"；{unit_text_zh}。"
                 + stated_population_sentence(spec.population, language),
                 f"{exposure}，封闭水平为 {listing(request.exposure_levels, language)}；"
-                "无法评估水平的行单独计数并报告，不重编码。",
-                f"{outcome}；报告总体及按暴露水平的计数与比例。",
-                "不建立调整模型；本设计为描述性研究，不提出调整后的关联。",
+                "保留来源定义的缺失映射；无法评估水平的行单独计数并报告，"
+                "不将未知值重编码为已声明的有效水平。",
+                f"{outcome}；报告总体及按暴露水平的计数与比例。" + missing_statement,
+                "不建立调整模型；本设计为描述性研究，不提出调整后的关联。"
+                + ("不生成基线表；仅为纳入条件使用的变量不会因此增加基线汇总。" if not has_baseline else "按声明的基线变量清单生成基线表。"),
                 "在解读任何比例之前，先审计暴露、结局和基线变量的测量可得性与缺失情况。",
                 "物化前检查暴露水平是否封闭、分母是否一致、是否可能存在重复行，以及观察窗口是否可得。",
             ]
@@ -223,11 +253,14 @@ def _design_selection(
                 + f"; {unit_text}."
                 + stated_population_sentence(spec.population, language),
                 sentence(
-                    f"{exposure} with closed levels {levels}; rows without an evaluable level are "
-                    "counted and reported, never recoded."
+                    f"{exposure} with closed levels {levels}; retain the source owner's missing-value "
+                    "mapping and count and report rows without an evaluable level, never recoding "
+                    "unknown values as declared valid levels."
                 ),
-                sentence(f"{outcome}; counts and proportions are reported overall and by exposure level."),
-                "No adjustment model; the design is descriptive and proposes no adjusted association.",
+                sentence(f"{outcome}; counts and proportions are reported overall and by exposure level.")
+                + " " + missing_statement,
+                "No adjustment model; the design is descriptive and proposes no adjusted association. "
+                + ("No baseline table; eligibility-only variables add no baseline summaries." if not has_baseline else "A baseline table uses the declared baseline roster."),
                 "Measurement availability and missingness of the exposure, outcome, and baseline "
                 "variables are audited before any proportion is interpreted.",
                 "Closed exposure levels, denominator consistency, repeated-row possibility, and window "
@@ -339,16 +372,18 @@ def build_descriptive_skeleton(
     exposure = request.primary_exposure
     outcome = request.outcome
     identity = request.identity_column
-    # Known missing values are complete-case with their count reported;
-    # otherwise a missing value stops the step.
-    missing_policies = (
-        request.distribution_missing_policies.model_dump()
-        if request.distribution_missing_policies is not None
-        else {
-            "denominator_policy": "all_declared_rows",
-            "missing_exposure_policy": "fail_closed",
-            "missing_outcome_policy": "fail_closed",
-        }
+    # The candidate's declared policy is fixed for review and later execution.
+    # Legacy observed-data requests retain their prior host defaults.
+    if request.distribution_missingness_unobserved and spec.distribution_missing_policies is None:
+        raise FamilySpecError(
+            "family_spec_missing_policies_required",
+            "Unobserved missingness requires explicit policies before review.",
+            path="distribution_missing_policies",
+        )
+    missing_policies = spec.distribution_missing_policies or request.distribution_missing_policies or DistributionMissingPolicies(
+        denominator_policy="all_declared_rows",
+        missing_exposure_policy="fail_closed",
+        missing_outcome_policy="fail_closed",
     )
     baseline = [str(value).strip() for value in spec.baseline_variables]
     # An accepted baseline roster keeps its rows beside the Planner's choice.
@@ -365,11 +400,21 @@ def build_descriptive_skeleton(
         )
     )[:12]
     required_variables = list(dict.fromkeys([identity, exposure, outcome]))
+    # Only roster-validated concepts in an explicit attrition requirement
+    # enter this owner; they do not become baseline or outcome summaries.
+    accounting_inputs = list(dict.fromkeys([
+        identity, exposure, outcome,
+        *(concept for item in spec.question_requirements
+          if item.kind == "cohort_accounting" and item.coverage == "plan"
+          for concept in item.concepts),
+    ]))
     design = _design_selection(
         request,
         spec,
         required_variables=required_variables,
         method_keys=[k for k in method_keys if k in set(distribution_keys)][:6],
+        has_baseline=bool(table_one_rows),
+        missing_policies=missing_policies,
     )
     exposure_label = _label(spec, exposure)
     outcome_label = _label(spec, outcome)
@@ -400,13 +445,13 @@ def build_descriptive_skeleton(
         _outline_step(
             step_id="cohort_accounting", role="auxiliary", module_id="cohort_definition",
             objective=objectives["cohort_accounting"], depends_on=[],
-            variable_names=[identity, exposure, outcome], citations=[],
+            variable_names=accounting_inputs, citations=[],
         ),
-        _outline_step(
+        *([_outline_step(
             step_id="baseline_context", role="auxiliary", module_id="table_one",
             objective=objectives["baseline_context"], depends_on=["cohort_accounting"],
             variable_names=[exposure, *table_one_rows], citations=[], action=TABLE_ONE_ACTION,
-        ),
+        )] if table_one_rows else []),
         _outline_step(
             step_id="exposure_outcome_distribution", role="primary",
             module_id="exposure_outcome_distribution",
@@ -426,7 +471,8 @@ def build_descriptive_skeleton(
         cohort_objective=(
             f"Describe the distribution of {exposure_label} and the proportion with {outcome_label} "
             f"by level among the analysis rows of the study cohort, with denominators, "
-            "baseline context, and measurement limits visible for review."
+            + ("baseline context, " if table_one_rows else "")
+            + "and measurement limits visible for review."
         ),
         design_selection=design,
         steps=outline_steps,
@@ -444,9 +490,9 @@ def build_descriptive_skeleton(
         ProgressiveSkeletonStep(
             step_id="cohort_accounting", planned_analysis_role="auxiliary", module_id="cohort_definition",
             objective=objectives["cohort_accounting"], depends_on=[],
-            raw_inputs=[identity, exposure, outcome], literature_bindings=[],
+            raw_inputs=accounting_inputs, literature_bindings=[],
         ),
-        ProgressiveSkeletonStep(
+        *([ProgressiveSkeletonStep(
             step_id="baseline_context", planned_analysis_role="auxiliary", module_id="table_one",
             objective=objectives["baseline_context"], depends_on=["cohort_accounting"],
             raw_inputs=list(dict.fromkeys([exposure, *table_one_rows])),
@@ -469,7 +515,7 @@ def build_descriptive_skeleton(
                 ),
             ],
             literature_bindings=[],
-        ),
+        )] if table_one_rows else []),
         ProgressiveSkeletonStep(
             step_id="exposure_outcome_distribution", planned_analysis_role="primary",
             module_id="exposure_outcome_distribution",
@@ -481,7 +527,7 @@ def build_descriptive_skeleton(
             event_level_index=request.event_level_index,
             reference_exposure_level_index=request.reference_level_index,
             comparison_exposure_level_index=request.primary_contrast_level_index,
-            **missing_policies,
+            **missing_policies.model_dump(),
             confidence_level=0.95,
             literature_bindings=_bindings(
                 bound["exposure_outcome_distribution"], comparator_applications=spec.applications

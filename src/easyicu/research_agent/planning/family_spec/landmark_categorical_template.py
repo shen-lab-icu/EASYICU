@@ -699,7 +699,10 @@ def typed_bound_applies(request: FamilySpecRequest) -> bool:
 def population_restricts(population: SpecPopulation | None) -> bool:
     """Whether the population a study states applies a predicate to the cohort."""
 
-    return population is not None and bool(population.inclusion or population.exclusion)
+    return population is not None and bool(
+        population.inclusion or population.exclusion
+        or (population.population_spec is not None and population.population_spec.criteria)
+    )
 
 
 def stated_population_sentence(population: SpecPopulation | None, language: str) -> str:
@@ -711,6 +714,14 @@ def stated_population_sentence(population: SpecPopulation | None, language: str)
 
     if population is None:
         return ""
+    if population.population_spec is not None:
+        words = "; ".join(dict.fromkeys(item.quote for item in population.population_spec.criteria))
+        return (
+            f"研究提出的类型化人群条件：{words}。是否已施加及是否需要提取，以人群编译审核为准。"
+            if language == "zh" else
+            f" The study's typed population criteria: {words}. Population compilation and review "
+            "determine which are applied and which require extraction."
+        )
     applied = [item.criterion for item in population.criteria if item.concept_ids]
     unapplied = [item.criterion for item in population.criteria if not item.concept_ids]
     if language == "zh":
@@ -750,6 +761,14 @@ def _cohort_intent(
     stated_inclusion = list(population.inclusion) if population is not None else []
     stated_exclusion = list(population.exclusion) if population is not None else []
     criteria = list(population.criteria) if population is not None else []
+    typed_population = population.population_spec if population is not None else None
+    if typed_population is not None:
+        return ProgressiveCohortIntent(
+            name=request.cohort_name,
+            selection_mode="all_input_rows",
+            inclusion=[], exclusion=[], population_criteria=[],
+            population_spec=typed_population.model_dump(mode="json"),
+        )
     if request.cohort_selection_mode == "all_input_rows" and not (
         stated_inclusion or stated_exclusion
     ):

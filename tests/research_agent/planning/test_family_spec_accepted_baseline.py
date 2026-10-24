@@ -29,6 +29,7 @@ from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
 from .family_spec_fixtures import (
     _context,
     _descriptive_context,
+    _descriptive_payload,
     _prediction_context,
     _prediction_payload,
     _request,
@@ -157,41 +158,8 @@ def test_the_prediction_family_keeps_accepted_rows_in_its_outcome_grouped_table(
     assert baseline_requirement_coverage(context, result.output)["status"] == "complete"
 
 
-_DESCRIPTIVE_LABELS = {
-    "phenotype_flag": "Phenotype present in the first 24 h",
-    "phenotype_flag=0": "Phenotype absent",
-    "phenotype_flag=1": "Phenotype present",
-    "death": "In-hospital death",
-    "age": "Age at ICU admission (years)",
-    "sex": "Patient sex",
-    "score_first": "Chronic disease score (first value)",
-    "readmit_flag": "ICU readmission indicator",
-}
 
 
-def _descriptive_payload(request, *, baseline_variables):
-    return {
-        "schema_version": "easyicu.family_plan_spec/1",
-        "family_id": request.family_id,
-        "request_sha256": request.request_sha256,
-        "adjustment_set": [],
-        "baseline_variables": baseline_variables,
-        "reader_display_labels": [
-            {"key": key, "value": _DESCRIPTIVE_LABELS[key]}
-            for key in [*request.required_reader_label_keys, *request.level_label_keys]
-        ],
-        "comparator_applications": [
-            {
-                "citation_key": key,
-                "application": (
-                    f"Compare this description with {key} on population, exposure definition, "
-                    "time zero, and estimand without copying its design or claiming novelty."
-                ),
-            }
-            for key in request.direct_comparator_literature_keys
-        ],
-        "roster_decision_note": "Descriptive family: baseline variables chosen from host-timed candidates.",
-    }
 
 
 def test_the_descriptive_family_keeps_accepted_rows_beside_the_planner_choice() -> None:

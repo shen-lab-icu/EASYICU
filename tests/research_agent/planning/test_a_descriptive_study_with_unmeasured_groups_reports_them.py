@@ -8,13 +8,16 @@ on the hosted pilot every grouped descriptive study stopped at data
 preparation.  The request now seals complete-case policies for a variable
 with known missing values -- those rows leave the denominator and their
 count travels in the table -- as the study-population occurrence does.  A
-request without known missing values keeps its fail-closed plan and its
-identity.  Synthetic context only.
+request without known missing values can explicitly retain its fail-closed
+plan. Metadata-only requests separately declare that missingness is unknown.
+Synthetic context only.
 """
 
 from __future__ import annotations
 
 import json
+
+from tests.support.distribution_policies import missing_policies_for
 
 from easyicu.research_agent.schema import MissingnessProfile
 
@@ -27,6 +30,7 @@ def _payload(request) -> dict:
         "family_id": request.family_id,
         "request_sha256": request.request_sha256,
         "adjustment_set": [],
+        "distribution_missing_policies": missing_policies_for(request),
         "baseline_variables": ["age", "sex"],
         "reader_display_labels": [
             {"key": key, "value": f"Reader label {index}"}
@@ -91,9 +95,10 @@ def test_an_unrecorded_exposure_alone_keeps_every_outcome_row() -> None:
     assert policies == ("all_declared_rows", "exclude_from_denominator", "fail_closed")
 
 
-def test_without_known_missing_values_the_plan_and_the_request_are_unchanged() -> None:
+def test_without_known_missing_values_an_explicit_stop_policy_is_preserved() -> None:
     request, policies = _distribution(_descriptive_context())
 
     assert policies == ("all_declared_rows", "fail_closed", "fail_closed")
     assert request.distribution_missing_policies is None
+    assert request.distribution_missingness_unobserved
     assert "distribution_missing_policies" not in json.dumps(request.model_dump(mode="json"))

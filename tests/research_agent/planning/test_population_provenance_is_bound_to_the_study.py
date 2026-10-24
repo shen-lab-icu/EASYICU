@@ -198,3 +198,15 @@ def test_a_typed_match_does_not_validate_a_borrowed_label_as_study_words():
         _read(source="study_wording", quote="Adults with sepsis", kind="icu_stay_hours",
               bounds={"min_hours": 24, "max_hours": None},
               settings={"min_icu_los_hours": 24, "label": "Adults with sepsis"})
+
+
+@pytest.mark.parametrize("field", ["review", "exclusion_statement"])
+def test_question_attribution_cannot_borrow_explicit_study_review_words(field):
+    with pytest.raises(ValueError, match="not written there"):
+        _read(source="question", quote="Adult patients", settings={field: "Adult patients"})
+
+
+@pytest.mark.parametrize("field", ["review", "exclusion_statement"])
+def test_explicit_study_wording_keeps_its_own_source(field):
+    criterion = _read(source="study_wording", quote="Adult patients", settings={field: "Adult patients"}).criteria[0]
+    assert criterion.source == "study_wording" and criterion.quote == "Adult patients"

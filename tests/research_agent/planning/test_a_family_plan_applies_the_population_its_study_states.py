@@ -18,6 +18,8 @@ answer states none.  Fixtures are generic.
 from __future__ import annotations
 
 import json
+
+from tests.support.distribution_policies import missing_policies_for
 from typing import Any
 
 import pytest
@@ -465,6 +467,7 @@ def _descriptive_payload(request) -> dict:
         "family_id": request.family_id,
         "request_sha256": request.request_sha256,
         "adjustment_set": [],
+        "distribution_missing_policies": missing_policies_for(request),
         "baseline_variables": ["age", "sex"],
         "reader_display_labels": [
             {"key": key, "value": f"Reader label for {key}"} for key in dict.fromkeys(keys)

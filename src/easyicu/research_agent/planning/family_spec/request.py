@@ -2248,6 +2248,14 @@ def _build_descriptive_request(
         distribution_missing_policies=_distribution_missing_policies(
             context, exposure=exposure, outcome=outcome
         ),
+        distribution_missingness_unobserved=(
+            context.cohort.provenance.get("evidence_stage") == "metadata_only_planning"
+            or context.cohort.provenance.get("patient_rows_read") is False
+            or any(
+                not getattr(context.variable(name).missingness, "n_total", 0)
+                for name in (exposure, outcome)
+            )
+        ),
     )
 
 

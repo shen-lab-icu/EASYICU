@@ -164,6 +164,12 @@ def _cohort_intent(request: FamilySpecRequest, spec: FamilyPlanSpec) -> Progress
     # The population the study states follows the host's bounds; its criteria
     # travel with the intent, where the foundation check applies them.
     stated = spec.population
+    if stated is not None and stated.population_spec is not None:
+        return ProgressiveCohortIntent(
+            name=request.cohort_name, selection_mode="all_input_rows",
+            inclusion=[], exclusion=[], population_criteria=[],
+            population_spec=stated.population_spec.model_dump(mode="json"),
+        )
     exclusion = list(stated.exclusion) if stated is not None else []
     criteria = list(stated.criteria) if stated is not None else []
     if stated is not None:

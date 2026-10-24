@@ -19,6 +19,10 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Mapping, Optional, Sequence, get_args
 
+from .population_spec_transport import (
+    bind_population_spec_transport, population_spec_contract, population_spec_shape,
+)
+
 from ..canonical_json import canonical_sha256
 from ..planning.family_spec import (
     BASELINE_ASSOCIATION_FAMILY_ID,
@@ -53,6 +57,7 @@ from ..planning.family_spec.contract import (
     FAMILY_SPEC_SCHEMA_VERSION,
     LANDMARK_FAMILY_IDS,
     POPULATION_ANCHOR,
+    DistributionMissingPolicies,
     FamilyPlanSpec,
     FamilySpecRequest,
     literature_design_card_keys_by_dimension,
@@ -119,7 +124,7 @@ The host has already fixed the study family, exposure, outcome, time zero, the t
 
 1. For a landmark association family: the adjustment set. Choose covariates ONLY from the candidates marked selectable, at least one whenever any is selectable. For each, give one concise clinical confounding rationale (why it can cause both the exposure and the outcome, and that it is fixed before time zero). Do not adjust for a consequence of the exposure or for the outcome. A candidate marked not selectable cannot be used, whatever the rationale; explain any omission in roster_decision_note. If the roster is an exact user-reviewed roster, return it unchanged.
    Code each covariate with one of that candidate's allowed_codings. A binary or categorical coding needs reference_level_index, the 0-based index of the reference level (below the candidate's closed_domain_size); a continuous coding takes reference_level_index null.
-   For the descriptive family: no adjustment set (leave it empty). Instead choose baseline_variables for Table 1 ONLY from the candidates marked selectable; they describe the groups and imply no model.
+   For the descriptive family: no adjustment set (leave it empty). Choose baseline_variables for Table 1 ONLY when baseline summaries are requested; [] means no baseline table. A variable used only for eligibility does not require a baseline summary. Select only candidates marked selectable. Explicitly declare distribution_missing_policies before review: choose whether missing exposure/outcome stops execution (fail_closed) or leaves the descriptive denominator with counts reported (exclude_from_denominator). Missing outcomes stay in cohort/missingness audits, never become negative outcomes. The denominator is observed_outcome_rows exactly when missing outcomes are excluded; otherwise all_declared_rows. Metadata-only missingness is unknown, even when its placeholder counts are zero. Follow the user's declared policies; do not select or change them after reading prepared data.
    For the phenotyping family: no adjustment set. Choose feature_variables (at least two) ONLY from the feature candidates marked selectable — the numeric window-bound measurements that should define candidate phenotypes; choose baseline_variables for the cluster characterization from the baseline candidates; optionally choose one cohort_membership_column from the membership flags when the question restricts the population to rows with that flag. Label every selected feature and baseline variable.
    For the prediction family: no adjustment set. Choose feature_variables (at least two predictors) ONLY from the feature candidates marked selectable; do not include the outcome or anything measured after the observation window. Label every selected predictor.
    For the landmark survival suite family with a sealed_suite: no adjustment set and no other roster. The host has sealed the exposure status and onset columns, the event and follow-up columns, the landmark, the horizon, the adjustment set and the PH policy; you only label the sealed columns and write the comparator applications.
@@ -129,6 +134,7 @@ The host has already fixed the study family, exposure, outcome, time zero, the t
    For the sealed source-feasibility family: no adjustment set, no roster and no labels. The reviewed protocol found the requested treatment contrast not identifiable from the current source, so the host executes only the sealed fail-closed decision; you write the comparator applications (how each screened study's design differs from what this source can support) and nothing else.
 2. Reader labels: a concise clinical label for every required variable key, derived from the sealed variable descriptions (never a restatement of the identifier). When level label keys such as `<exposure>=0` and `<exposure>=1` are required, give the two groups distinct clinical names.
 3. Comparator applications: for each screened direct comparator, one sentence on how this study is compared with it (population, exposure, time zero, estimand) without copying its design and without claiming novelty.
+For a population restriction expressed by a typed kind, use population.population_spec as the complete population (including every pending_typed_population_bounds entry) and leave the legacy criteria/inclusion/exclusion arrays empty. The old already_applied view includes bounds that the legacy template adds; it does not authorize omitting those bounds from a complete population_spec. The typed owner compiles it and decides whether it is already applied, can be applied by the plan, or requires data extraction and review. A host-owned typed kind does not need a concept column. Do not replace first ICU within each hospitalization with each patient's first ICU or a nonmissing unit-type predicate. Only the legacy predicate representation follows the concept-only rules below.
 4. Population, only when the request offers population concepts (otherwise omit it or return null): the host applies only the typed cohort bounds and the source export's own population. A population that the research question or the study's own cohort wording names beyond them (for example an age group, a diagnosis or syndrome, or a treatment received) is applied only by the population you state. List each restriction in population.criteria in the words that state it, with the offered concepts that express it, and apply every criterion that has concepts with at least one inclusion or exclusion predicate over one of them, anchored at icu_admission and decided by time zero (end_offset_hours at most the time zero shown). Every predicate applies a listed criterion. Give a criterion no concepts only when no offered concept expresses it over the window the criterion states. Return population null when the study includes every row the typed bounds keep. When population_required is true, the caller has bound a filtered cohort that no typed bound filters: state the population with at least one inclusion or exclusion predicate (a phenotyping plan may restrict by its membership flag instead). A restriction already_applied states (a typed bound, the source concept population, or a source inclusion or exclusion contract) is applied already: do not state it again. When source_selection_recorded is true, already_applied is everything that selected the input rows, and no other condition, treatment or age restriction has.
 5. """
     + QUESTION_REQUIREMENTS_GUIDE
@@ -237,6 +243,19 @@ def family_spec_user_prompt(
         "Host-fixed design (binding, not editable):\n"
         + json.dumps(host_design, ensure_ascii=False, sort_keys=True)
     )
+    if request.family_id == DESCRIPTIVE_FAMILY_ID:
+        sections.append(
+            "Descriptive missingness evidence (not a policy choice):\n"
+            + json.dumps({
+                "missingness_unobserved": request.distribution_missingness_unobserved,
+                "legacy_host_default": (
+                    request.distribution_missing_policies.model_dump(mode="json")
+                    if request.distribution_missing_policies is not None else None
+                ),
+            }, sort_keys=True)
+            + "\nDeclare distribution_missing_policies in the candidate for review. "
+            "An unobserved missingness profile is not evidence that all values are present."
+        )
     sections.append(
         (
             "Baseline-table variable candidates (host timing authority is binding; select only selectable=true):\n"
@@ -353,6 +372,27 @@ def family_spec_user_prompt(
             "population stated beyond it is applied only by the population you write):\n"
             + json.dumps(_population_authority(request), ensure_ascii=False)
         )
+        if request.prediction_time_hours is None:
+            from ..acquisition.first_icu_stay import SELECTION_POLICY
+
+            if not response_shape:
+                sections.append(_typed_population_response_contract(request))
+            sections.append(
+                "Host-owned typed population policy for eicu/eicu_demo raw sources: "
+                "first_icu_stay_per_hospitalization uses patienthealthsystemstayid, "
+                "unitvisitnumber and unittype. The kind includes the ICU taxonomy and "
+                "prior-unit completeness checks below; these are not separate concept "
+                "predicates. This is the owner's rule, not proof that this input is "
+                "already restricted. Only a verified receipt establishes that. If the "
+                "study requests this kind, preserve these rules in its reviewable plan; "
+                "other databases need their own verified owner. This is a population "
+                "definition, not a separate longitudinal analysis: do not duplicate its "
+                "unit taxonomy or prior-unit completeness as an analysis capability gap. "
+                "If a named source concept also needs a question_requirements entry, "
+                "use definition/definition_only and name the population element it defines; "
+                "independently requested analyses still need their own coverage:\n"
+                + json.dumps(SELECTION_POLICY, ensure_ascii=False, sort_keys=True)
+            )
     if request.question_named_concepts:
         sections.append(
             "Concepts the research question names (question_named_concepts: each is "
@@ -475,6 +515,51 @@ def _population_predicate_shape() -> dict[str, Any]:
     }
 
 
+def _typed_population_response_contract(request: FamilySpecRequest) -> str:
+    """Show the nested transport and the host bounds a complete spec retains.
+
+    This is a response template and a projection of existing request authority,
+    never a population injected into the response or a researcher approval.
+    """
+
+    shape = population_spec_shape()
+    shape["criteria"][0]["id"] = "c1"
+    pending = []
+    if request.cohort_selection_mode == "predicate_filtered" and not request.caller_binds_all_input_rows:
+        if request.age_min is not None or request.age_max is not None:
+            pending.append({"kind": "age_years", "min_years": request.age_min,
+                            "max_years": request.age_max})
+        if request.minimum_icu_hours is not None:
+            pending.append({"kind": "icu_stay_hours", "min_hours": request.minimum_icu_hours,
+                            "max_hours": None})
+    return (
+        "Typed population response template (angle brackets are instructions to replace, "
+        "not literal output; add each selected kind's own fields below):\n"
+        + json.dumps({"population": {"criteria": [], "inclusion": [], "exclusion": [],
+                                     "population_spec": shape}}, ensure_ascii=False)
+        + "\npopulation.population_spec must be one JSON object with exactly the key "
+        "criteria; it is never an array, and is never a direct criterion object. Only "
+        "population.population_spec.criteria is the array of typed criteria. Every "
+        "criterion has id, quote, source, role, kind and that kind's own fields. "
+        'Each id is a unique string matching ^c[1-9][0-9]?$: "c1", "c2", ..., "c99"; '
+        'never a number, a kind name, "age", or "first_icu". Each quote copies its '
+        "source words exactly, including the study's explicit cohort review/exclusion "
+        "wording when source is study_wording; a display label alone is not source evidence. "
+        "When source is question, quote the question or its canonical inclusion/exclusion text. A kind with no extra fields still keeps these "
+        "five common fields. For age_years, include min_years and max_years as numbers or "
+        "null (an open bound); for icu_stay_hours use min_hours and max_hours the same way. "
+        "At least one bound must be a number. Do not write null as a string."
+        "\npending_typed_population_bounds: "
+        + json.dumps(pending, ensure_ascii=False)
+        + "\nThese are already host-bound values, not new choices. If using population_spec, "
+        "include criteria retaining every listed age/stay bound, alongside any other "
+        "restriction the study requests. Do not omit them because the legacy "
+        "already_applied view lists them: that template no longer supplies predicates "
+        "when population_spec replaces the whole cohort. Choose the criterion ids and "
+        "verbatim quotes yourself; this template does not select or approve other criteria."
+    )
+
+
 def _population_schema(concepts: Sequence[str]) -> dict[str, Any]:
     """The strict shape of a stated population over the offered concepts."""
 
@@ -533,11 +618,12 @@ def _population_schema(concepts: Sequence[str]) -> dict[str, Any]:
             {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["criteria", "inclusion", "exclusion"],
+                "required": ["criteria", "inclusion", "exclusion", "population_spec"],
                 "properties": {
                     "criteria": {"type": "array", "items": criterion},
                     "inclusion": {"type": "array", "items": predicate},
                     "exclusion": {"type": "array", "items": predicate},
+                    "population_spec": {"type": "null"},
                 },
             },
             {"type": "null"},
@@ -579,6 +665,7 @@ def family_spec_structured_output_request(
             "request_sha256",
             "adjustment_set",
             *(["baseline_variables"] if descriptive or phenotyping else []),
+            *(["distribution_missing_policies"] if descriptive else []),
             *(["feature_variables", "cohort_membership_column"] if phenotyping else []),
             *(["feature_variables"] if prediction else []),
             "reader_display_labels",
@@ -610,6 +697,10 @@ def family_spec_structured_output_request(
                 {"baseline_variables": {"type": "array", "items": _enum(covariate_names)}}
                 if descriptive or phenotyping
                 else {}
+            ),
+            **(
+                {"distribution_missing_policies": DistributionMissingPolicies.model_json_schema()}
+                if descriptive else {}
             ),
             **(
                 {
@@ -697,6 +788,13 @@ def family_spec_structured_output_request(
             ),
         },
     }
+    if request.population_concepts:
+        population_properties = schema["properties"]["population"]["anyOf"][0]["properties"]
+        bind_population_spec_transport(
+            schema.setdefault("$defs", {}), population_properties,
+            concept_ids=request.population_concepts,
+            stated=request.prediction_time_hours is None,
+        )
     strictify_json_schema(schema)
     try:
         assert_closed_json_schema(schema)
@@ -799,6 +897,16 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
         )
     if request.family_id in {DESCRIPTIVE_FAMILY_ID, PHENOTYPING_FAMILY_ID}:
         lines.append('- "baseline_variables": array of distinct names from ' + json.dumps(selectable))
+    if request.family_id == DESCRIPTIVE_FAMILY_ID:
+        lines.extend([
+            '  Use [] when no baseline summaries are requested; eligibility-only variables do not require Table 1.',
+            '- "distribution_missing_policies": object with exactly "denominator_policy" '
+            '(all_declared_rows or observed_outcome_rows), "missing_exposure_policy" and '
+            '"missing_outcome_policy" (each fail_closed or exclude_from_denominator). '
+            'Use observed_outcome_rows exactly when missing_outcome_policy is exclude_from_denominator. '
+            'Excluded missing values are counted and reported; missing outcomes remain in cohort audits. '
+            'Choose explicitly before review; metadata-only zero counts do not prove completeness.',
+        ])
     if request.family_id in {PHENOTYPING_FAMILY_ID, PREDICTION_FAMILY_ID}:
         lines.append(
             '- "feature_variables": array of at least two distinct names from '
@@ -853,8 +961,11 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
     lines.append('- "roster_decision_note": one or more sentences (8-1200 characters)')
     if request.population_concepts:
         lines.append(
-            '- "population": null, or an object with exactly the keys "criteria", "inclusion" '
-            'and "exclusion". "criteria" is an array of 1-6 objects, each exactly '
+            '- "population": null, or an object with exactly the keys "criteria", "inclusion", '
+            '"exclusion" and "population_spec". Use population_spec for the complete typed '
+            'population, retaining pending host age/stay bounds, with the other three lists empty. '
+            'Its kinds need no concept column unless their own fields name one. For the legacy '
+            'predicate representation set population_spec null; "criteria" is an array of 1-6 objects, each exactly '
             '{"criterion": "<2-160 characters, in the words that state it>", "concept_ids": '
             "[0-6 distinct names from "
             + json.dumps(list(request.population_concepts), ensure_ascii=False)
@@ -862,7 +973,16 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
             + json.dumps(_population_predicate_shape(), ensure_ascii=False, separators=(",", ":"))
             + ", with only the value field its mode selects filled. Every criterion with "
             "concepts is applied by at least one predicate over one of them, and every "
-            "predicate reads a concept that a criterion names"
+            "predicate reads a concept that a criterion names. "
+            + (
+                _typed_population_response_contract(request)
+                + population_spec_contract(request.population_concepts)
+                + " A phenotyping membership-column filter must use the legacy representation; "
+                "do not combine it with population_spec."
+                if request.prediction_time_hours is None else
+                "This request has a template-owned prediction risk set: population_spec must "
+                "be null and any additional population must use the legacy representation."
+            )
         )
     lines.append(question_requirements_shape(request.variable_roster))
     return "\n".join(lines)

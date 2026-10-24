@@ -343,6 +343,11 @@ def build_article_analysis_contract(
         if module.tier == "supplementary" and module.role != "data_quality":
             continue
         required = module.tier in _REQUIRED_TIERS or module.role == "data_quality"
+        if source_analysis_type == "descriptive_epidemiology" and module.role == "baseline_context":
+            # The typed descriptive roster may explicitly be empty. Its template
+            # still retains requested and already-accepted baseline rows; a
+            # static article playbook must not force an unrequested Table 1.
+            required = False
         requirement = ArticleDisplayRequirement(
             module_id=module.module_id,
             role=module.role,

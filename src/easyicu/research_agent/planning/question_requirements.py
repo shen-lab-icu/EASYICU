@@ -122,7 +122,7 @@ MAX_NAMED_QUESTION_CONCEPTS = 8
 #: The columns one named concept may denote, the dictionary's relatives included.
 MAX_DENOTED_COLUMNS = 8
 
-RequirementKind = Literal["benchmark", "subgroup", "estimand", "analysis", "definition"]
+RequirementKind = Literal["benchmark", "subgroup", "estimand", "analysis", "cohort_accounting", "definition"]
 CoverageClaim = Literal["plan", "capability_gap", "definition_only"]
 Disposition = Literal[
     "covered", "not_covered", "capability_gap", "attested", "definition_only"
@@ -168,7 +168,10 @@ QUESTION_REQUIREMENTS_GUIDE = (
     "for beyond the sealed design as one question_requirements entry, quoting the "
     "question's own words: a comparison of the model or estimate with an existing score, "
     "model or estimate (benchmark), a named subgroup (subgroup), a named estimand or "
-    "performance measure (estimand), or any other named analysis (analysis). Name the "
+    "performance measure (estimand), counts of included/excluded rows by eligibility "
+    "reason (cohort_accounting), or any other named analysis (analysis). Cohort "
+    "accounting is an explicit count-reporting requirement, not definition_only; "
+    "it is answered by the typed cohort/attrition owner, not an outcome model. Name the "
     "concepts each one reads. Set coverage to plan when the plan answers it, to "
     "capability_gap with the gap when this plan cannot, and use kind definition with "
     "coverage definition_only for a concept the question names only to define another "
@@ -248,7 +251,7 @@ class QuestionRequirement(BaseModel):
         if self.kind == "definition" and not self.note:
             raise ValueError("a definition says in its note which element it defines")
         if (
-            self.kind in {"benchmark", "subgroup"}
+            self.kind in {"benchmark", "subgroup", "cohort_accounting"}
             and self.coverage == "plan"
             and not concepts
         ):
@@ -554,6 +557,28 @@ def _judge(
     if item.kind == "definition":
         return JudgedRequirement(
             item, "definition_only", DEFINITION_REASON, reading_step_ids=reading
+        )
+    if item.kind == "cohort_accounting" and item.gap is None:
+        from ..contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
+
+        # Attrition is produced by the unique typed cohort owner, often an
+        # auxiliary step. Keep ordinary auxiliary reads, models and figures
+        # outside this authority; neither prose nor an input alone grants it.
+        # Its typed row identity is also a consumed concept: accounting does
+        # not require treating the identity as an ordinary clinical variable.
+        owners = tuple(
+            step.step_id for step in plan.steps
+            if denoted and step.cohort_definition_spec is not None
+            and primary_analysis_cohort_producer_uses_universe(step=step, plan=plan)
+            and all(
+                columns & (set(step.inputs) | {step.cohort_definition_spec.identity_column})
+                for columns in denoted
+            )
+        )
+        return JudgedRequirement(
+            item, "covered" if owners else "not_covered",
+            "typed_plan_owner_present" if owners else QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"],
+            owner_step_ids=owners, host_judged=bool(owners), reading_step_ids=owners,
         )
     actions = _METHOD_SETS.get(item.kind)
     if actions is not None:
@@ -1150,6 +1175,7 @@ def question_requirements_schema(concepts: Sequence[str]) -> dict[str, Any]:
                         "subgroup",
                         "estimand",
                         "analysis",
+                        "cohort_accounting",
                         "definition",
                     ],
                 },
@@ -1171,7 +1197,7 @@ def question_requirements_shape(concepts: Sequence[str]) -> str:
 
     return (
         '- "question_requirements": array of 0-6 objects, each exactly {"id": "r1".."r6", '
-        '"kind": "benchmark"|"subgroup"|"estimand"|"analysis"|"definition", "quote": "<the '
+        '"kind": "benchmark"|"subgroup"|"estimand"|"analysis"|"cohort_accounting"|"definition", "quote": "<the '
         'question\'s own words, 2-240 characters>", "concepts": [0-4 distinct names from '
         + json.dumps(list(concepts), ensure_ascii=False)
         + '], "coverage": "plan"|"capability_gap"|"definition_only", "gap": null or '

@@ -47,6 +47,7 @@ from ..progressive_contract import (
     ProgressivePopulationCriterion,
     ProgressivePredicateValue,
 )
+from ..population_spec import AgeYears, IcuStayHours, PopulationSpec
 
 FAMILY_SPEC_SCHEMA_VERSION = "easyicu.family_plan_spec/1"
 FAMILY_SPEC_REQUEST_SCHEMA_VERSION = "easyicu.family_spec_request/1"
@@ -625,12 +626,12 @@ class StudyPopulationOccurrence(BaseModel):
 
 
 class DistributionMissingPolicies(BaseModel):
-    """The primary distribution's missing-value policies, from known missingness.
+    """The primary distribution's declared missing-value and denominator policies.
 
-    Sealed when the exposure or the outcome has known missing observations:
-    those rows leave the denominator and their count travels in the table,
-    as for :class:`StudyPopulationOccurrence`.  Without it a missing value
-    stops the step.
+    A candidate can state these before rows are inspected. Legacy requests
+    also carry them when an exposure or outcome has known missing values.
+    Excluded rows are counted in the table; without an exclusion declaration,
+    a missing value stops the step rather than changing the approved plan.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -796,6 +797,11 @@ class FamilySpecRequest(BaseModel):
     #: existed, and requests without known missing values, keep their identity.
     distribution_missing_policies: Optional[DistributionMissingPolicies] = Field(
         default=None, exclude_if=lambda value: value is None
+    )
+    #: No patient rows were inspected, or no missingness denominator is known.
+    #: Zero missing observations in that context is not evidence of completeness.
+    distribution_missingness_unobserved: bool = Field(
+        default=False, exclude_if=lambda value: not value
     )
     #: The cohort concepts a population the study states may read.  Offered
     #: only to a family that applies its plan's own cohort by a known time
@@ -1346,9 +1352,12 @@ def accepted_baseline_additions(
 
 
 class SpecPopulation(BaseModel):
-    """The population a study states beyond the host's typed cohort bounds.
+    """The whole typed population, or legacy predicates beyond host bounds.
 
-    Each criterion is written in the words that state it, with the offered
+    A typed spec is passed unchanged to the shared population compiler and
+    review. It replaces the legacy representation, including pending host
+    bounds; the validator ensures those bounds are retained. In the legacy
+    representation, each criterion is written in the words that state it, with the offered
     population concepts that express it, and the predicates apply it, each
     decided by the family's time zero.  A criterion that no offered concept
     expresses carries none: it is stated, and nothing applies it.
@@ -1356,12 +1365,19 @@ class SpecPopulation(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    criteria: list[ProgressivePopulationCriterion] = Field(min_length=1, max_length=6)
+    criteria: list[ProgressivePopulationCriterion] = Field(default_factory=list, max_length=6)
     inclusion: list[ProgressiveCohortPredicate] = Field(default_factory=list, max_length=8)
     exclusion: list[ProgressiveCohortPredicate] = Field(default_factory=list, max_length=8)
+    population_spec: Optional[PopulationSpec] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def _unique_criteria(self) -> "SpecPopulation":
+        if self.population_spec is None and not self.criteria:
+            raise ValueError("a legacy population needs at least one criterion")
+        if self.population_spec is not None and (self.criteria or self.inclusion or self.exclusion):
+            raise ValueError("a typed population uses population_spec only; legacy lists must be empty")
         stated = [item.criterion.casefold() for item in self.criteria]
         if len(stated) != len(set(stated)):
             raise ValueError("population criteria must be unique")
@@ -1378,6 +1394,10 @@ class FamilyPlanSpec(BaseModel):
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     adjustment_set: list[SpecCovariateDecision] = Field(default_factory=list, max_length=24)
     baseline_variables: list[str] = Field(default_factory=list, max_length=16)
+    #: A reviewable descriptive choice, fixed before prepared rows are read.
+    distribution_missing_policies: Optional[DistributionMissingPolicies] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     feature_variables: list[str] = Field(default_factory=list, max_length=MAX_FIT_FEATURES)
     cohort_membership_column: Optional[str] = Field(default=None, max_length=128)
     reader_display_labels: list[SpecReaderLabel] = Field(default_factory=list, max_length=64)
@@ -1464,6 +1484,20 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
             path="adjustment_set",
         )
     reserved = {request.primary_exposure, request.outcome, request.identity_column}
+    if request.family_id == DESCRIPTIVE_FAMILY_ID:
+        if request.distribution_missingness_unobserved and spec.distribution_missing_policies is None:
+            raise FamilySpecError(
+                "family_spec_missing_policies_required",
+                "Missingness is unobserved: explicitly declare the exposure/outcome missing-value "
+                "policies and their denominator before review; zero metadata rows do not prove completeness.",
+                path="distribution_missing_policies",
+            )
+    elif spec.distribution_missing_policies is not None:
+        raise FamilySpecError(
+            "family_spec_missing_policies_not_applicable",
+            "distribution_missing_policies belongs to the descriptive family",
+            path="distribution_missing_policies",
+        )
     if request.family_id == DESCRIPTIVE_FAMILY_ID and spec.adjustment_set:
         raise FamilySpecError(
             "family_spec_adjustment_not_applicable",
@@ -1835,6 +1869,9 @@ def _validate_population(spec: FamilyPlanSpec, request: FamilySpecRequest) -> No
     """
 
     population = spec.population
+    if population is not None and population.population_spec is not None:
+        _validate_typed_population(population.population_spec, spec=spec, request=request)
+        return
     if (
         population_required(request)
         and spec.cohort_membership_column is None
@@ -1915,6 +1952,62 @@ def _validate_population(spec: FamilyPlanSpec, request: FamilySpecRequest) -> No
                 "window the criterion states",
                 path=f"population.criteria[{index}]",
             )
+
+
+def _validate_typed_population(
+    population: PopulationSpec, *, spec: FamilyPlanSpec, request: FamilySpecRequest
+) -> None:
+    """A complete typed population retains the host bounds its cohort replaces.
+
+    Compilation, source proofs, verbatim quotes and extraction disposition stay
+    with the shared population owner. This boundary only binds the offered
+    coordinates and prevents a new representation from dropping host filters.
+    """
+
+    path = "population.population_spec"
+    if not request.population_concepts:
+        raise FamilySpecError("family_spec_population_not_applicable",
+                              "this request offers no population to state", path=path)
+    if population_required(request) and not population.criteria:
+        raise FamilySpecError("family_spec_population_required",
+                              "a caller-bound filtered cohort needs stated typed criteria", path=path)
+    offered = set(request.population_concepts)
+    for index, criterion in enumerate(population.criteria):
+        named = list(getattr(criterion, "concepts_all_of", ()))
+        if hasattr(criterion, "concept"):
+            named.append(criterion.concept)
+        if set(named) - offered:
+            raise FamilySpecError(
+                "family_spec_population_concept_unavailable",
+                "a typed population may name only offered population concepts",
+                path=f"{path}.criteria[{index}]",
+            )
+    # The source's already-applied bounds need no new predicate. A template's
+    # own pending bounds, however, must still be represented in the whole spec.
+    if request.cohort_selection_mode == "predicate_filtered":
+        ages = [item for item in population.criteria if isinstance(item, AgeYears)]
+        stays = [item for item in population.criteria if isinstance(item, IcuStayHours)]
+        for expected, field, values, lower in (
+            (request.age_min, "min_years", ages, True),
+            (request.age_max, "max_years", ages, False),
+            (request.minimum_icu_hours, "min_hours", stays, True),
+        ):
+            if expected is not None and not any(
+                (value := getattr(item, field)) is not None
+                and (value >= expected if lower else value <= expected)
+                for item in values
+            ):
+                raise FamilySpecError(
+                    "family_spec_population_typed_bound_missing",
+                    f"the complete typed population must retain the host {field} bound {expected:g}",
+                    path=path,
+                )
+    if request.prediction_time_hours is not None or spec.cohort_membership_column is not None:
+        raise FamilySpecError(
+            "family_spec_population_template_filter_unrepresented",
+            "this template's risk-set or membership filter is not represented by this typed bridge",
+            path=path,
+        )
 
 
 def literature_design_card_keys_by_dimension(
