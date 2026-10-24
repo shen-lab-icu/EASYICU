@@ -108,6 +108,28 @@ def test_execution_kernel_manifest_tracks_runtime_not_control_plane() -> None:
     assert "research_agent/planning/progressive_contract.py" not in paths
 
 
+def test_figure_renderers_do_not_bind_host_publication_workflows() -> None:
+    package_root = Path(__file__).resolve().parents[3] / "src" / "easyicu"
+    paths = set(execution_kernel_relative_paths(package_root))
+
+    assert {
+        "research_agent/figures/association_prior_outputs.py",
+        "research_agent/figures/sensitivity_prior_outputs.py",
+        "research_agent/figures/prior_output_support.py",
+    } <= paths
+    host_workflows = {
+        "research_agent/reporting/publication_bundles.py",
+        "research_agent/reporting/readiness.py",
+        "research_agent/reporting/scientific_maturity.py",
+        "research_agent/orchestration/exposure_grouping_phase.py",
+        "research_agent/agents/exposure_grouping_planner.py",
+        "research_agent/planning/progressive_compiler.py",
+        "research_agent/providers/structured_retry.py",
+        "research_agent/resources/coder.py",
+    }
+    assert not (paths & host_workflows), sorted(paths & host_workflows)
+
+
 def test_execution_kernel_identity_separates_host_source_and_runner_inputs(
     tmp_path: Path,
 ) -> None:
