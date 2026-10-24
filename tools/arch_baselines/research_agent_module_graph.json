@@ -781,7 +781,15 @@
     ],
     [
       "easyicu.research_agent.agents.family_spec_planner",
+      "easyicu.research_agent.acquisition.first_icu_stay"
+    ],
+    [
+      "easyicu.research_agent.agents.family_spec_planner",
       "easyicu.research_agent.agents._support"
+    ],
+    [
+      "easyicu.research_agent.agents.family_spec_planner",
+      "easyicu.research_agent.agents.population_spec_transport"
     ],
     [
       "easyicu.research_agent.agents.family_spec_planner",
@@ -8993,6 +9001,10 @@
     ],
     [
       "easyicu.research_agent.intake.materialized_metadata",
+      "easyicu.research_agent.acquisition.first_icu_stay"
+    ],
+    [
+      "easyicu.research_agent.intake.materialized_metadata",
       "easyicu.research_agent.authority.filesystem"
     ],
     [
@@ -11193,6 +11205,10 @@
     ],
     [
       "easyicu.research_agent.planning.family_spec.contract",
+      "easyicu.research_agent.planning.population_spec"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.contract",
       "easyicu.research_agent.planning.progressive_contract"
     ],
     [
@@ -12149,6 +12165,10 @@
     ],
     [
       "easyicu.research_agent.planning.progressive_compiler",
+      "easyicu.research_agent.research_context.concept_population"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_compiler",
       "easyicu.research_agent.research_context.typed"
     ],
     [
@@ -12306,6 +12326,10 @@
     [
       "easyicu.research_agent.planning.question_requirements",
       "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.planning.question_requirements",
+      "easyicu.research_agent.contracts.primary_cohort"
     ],
     [
       "easyicu.research_agent.planning.question_requirements",
@@ -15101,6 +15125,10 @@
     ],
     [
       "easyicu.research_agent.research_context.export_selection",
+      "easyicu.research_agent.intake.materialized_metadata"
+    ],
+    [
+      "easyicu.research_agent.research_context.export_selection",
       "easyicu.research_agent.research_context.concept_population"
     ],
     [
@@ -15888,7 +15916,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3964,
+    "edge_count": 3971,
     "largest_scc_size": 0,
     "module_count": 865,
     "package_count": 36,

@@ -1,8 +1,6 @@
 {
   "baseline_change_summary": {
-    "source_digest_changes": [
-      "src/easyicu/research_agent/planning/analysis_types.py"
-    ],
+    "source_digest_changes": [],
     "summary_changes": {}
   },
   "baseline_history": [
@@ -803,9 +801,21 @@
         "src/easyicu/research_agent/planning/analysis_types.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Verify ported population contracts and share dense-status lineage semantics; refresh import and resource provenance after scoped review fixes.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/reporting/article_contract.py"
+      ],
+      "summary_changes": {}
+    },
+    {
+      "reason": "Verify ported population contracts and share dense-status lineage semantics; refresh import and resource provenance after scoped review fixes.",
+      "source_digest_changes": [],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "declined-mortality-setting reading in research_context builder",
+  "baseline_reason": "Verify ported population contracts and share dense-status lineage semantics; refresh import and resource provenance after scoped review fixes.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -830,7 +840,7 @@
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
-    "src/easyicu/research_agent/reporting/article_contract.py": "53db7793ec10128d04216ef45a23281b942d7382a8f462347e900da84e406102",
+    "src/easyicu/research_agent/reporting/article_contract.py": "d413f456385f195233ca8b2148c6a43e194fad534475e785215f3165f2a7f095",
     "src/easyicu/research_agent/research_context/outbound.py": "c578ef462f5f0d1cd33400e639d70d481914fb78248d614ee485f0c471360c68",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "037224b99bddde4ef37cf2119fc708ca33a932b274e932ba6cb902e689f8bd75",
@@ -899,15 +909,15 @@
       "know_how_prompt_bytes": 4029,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14747,
+        "approx_input_tokens": 14681,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 45884,
+            "bytes": 45620,
             "included": true,
             "required": true,
-            "sha256": "41aecda33ef78ab06eccf33af1d524e7d2aaabdaeb52a2851bca111b11325d1e"
+            "sha256": "fdf8bfebb0c6aec8a72850282e3f2ef09ba0ad37b28476dbf980b9e14bd4fb18"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -918,30 +928,30 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 58985,
+        "total_bytes": 58721,
         "truncated_strings": false,
-        "user_bytes": 50541
+        "user_bytes": 50277
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13582,
+        "approx_input_tokens": 13516,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 45884,
+            "bytes": 45620,
             "included": true,
             "required": true,
-            "sha256": "41aecda33ef78ab06eccf33af1d524e7d2aaabdaeb52a2851bca111b11325d1e"
+            "sha256": "fdf8bfebb0c6aec8a72850282e3f2ef09ba0ad37b28476dbf980b9e14bd4fb18"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 54328,
+        "total_bytes": 54064,
         "truncated_strings": false,
-        "user_bytes": 45884
+        "user_bytes": 45620
       },
-      "planning_contract_bytes": 6392,
-      "planning_contract_sha256": "1503bcadc43869ccfef3acd0a682303740b73d11d167d05db8208bab247c69e0",
+      "planning_contract_bytes": 6128,
+      "planning_contract_sha256": "703681b904a34c690aacf7f56dedb766cf1d8f311dabbc8988ef54d93dfb9d4f",
       "question": "Estimate Sepsis-3 prevalence and mortality association.",
       "resource_added_bytes": 4657,
       "resource_allowlist_sha256": "8adc13a12942ac73918005d454a567e8477bbc5f25682e947d60e4e800ddf855",
@@ -1128,42 +1138,42 @@
       "know_how_prompt_bytes": 0,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13522,
+        "approx_input_tokens": 13456,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 45643,
+            "bytes": 45379,
             "included": true,
             "required": true,
-            "sha256": "fbd4912795962bfe8c272c1a45e0be7c2485d8783c2adf81ac6eb4a93badaaa3"
+            "sha256": "ccec768fc9118d37c9251137df90285e19cee949d25bd252455654b76925be65"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 54087,
+        "total_bytes": 53823,
         "truncated_strings": false,
-        "user_bytes": 45643
+        "user_bytes": 45379
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13522,
+        "approx_input_tokens": 13456,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 45643,
+            "bytes": 45379,
             "included": true,
             "required": true,
-            "sha256": "fbd4912795962bfe8c272c1a45e0be7c2485d8783c2adf81ac6eb4a93badaaa3"
+            "sha256": "ccec768fc9118d37c9251137df90285e19cee949d25bd252455654b76925be65"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 54087,
+        "total_bytes": 53823,
         "truncated_strings": false,
-        "user_bytes": 45643
+        "user_bytes": 45379
       },
-      "planning_contract_bytes": 6048,
-      "planning_contract_sha256": "8033e8d0f4d28b9a1e0940c98d078b31f7454cbc1f598bce7fc797df77271c4d",
+      "planning_contract_bytes": 5784,
+      "planning_contract_sha256": "9ec94c6b086f85e8708e27dfb0e64c1720dc0b6edbeb2df65752f710c7795862",
       "question": "Estimate the KDIGO AKI stage gradient for mortality and length of stay.",
       "resource_added_bytes": 0,
       "resource_allowlist_sha256": "72a487e695a508647cde784bdca0ad51f2135e64885bdeba1f91da1d89095e12",
