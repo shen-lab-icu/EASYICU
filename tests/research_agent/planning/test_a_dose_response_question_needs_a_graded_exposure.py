@@ -16,6 +16,8 @@ import json
 
 import pytest
 
+from tests.support.distribution_policies import STOP_MISSING
+
 from easyicu.research_agent.planning.analysis_types import requested_dose_response_cues
 from easyicu.research_agent.planning.figure_strategy import build_article_figure_strategy
 from easyicu.research_agent.planning.scientific_review import (
@@ -80,6 +82,8 @@ def test_a_continuous_exposure_can_carry_it() -> None:
 
 def _descriptive_plan(context):
     request = _request(context, cohort_mode="all_input_rows")
+    assert request.distribution_missingness_unobserved is True
+    assert request.distribution_missing_policies is None
     labels = {
         "phenotype_flag": "Phenotype in the first 24 h",
         "death": "In-hospital death",
@@ -95,6 +99,8 @@ def _descriptive_plan(context):
         "request_sha256": request.request_sha256,
         "adjustment_set": [],
         "baseline_variables": ["age"],
+        # Metadata-only planning cannot establish complete exposure/outcome data.
+        "distribution_missing_policies": dict(STOP_MISSING),
         "reader_display_labels": [
             {"key": key, "value": labels[key]}
             for key in [*request.required_reader_label_keys, *request.level_label_keys]
@@ -114,6 +120,13 @@ def _descriptive_plan(context):
     _llm, result = _run(
         context, [json.dumps(payload)], required_primary_cohort_selection_mode="all_input_rows"
     )
+    distribution, = [
+        step.exposure_outcome_distribution_spec
+        for step in result.output.steps
+        if step.step_id == "exposure_outcome_distribution"
+    ]
+    assert distribution is not None
+    assert distribution.model_dump(include=set(STOP_MISSING)) == STOP_MISSING
     return result.output
 
 
