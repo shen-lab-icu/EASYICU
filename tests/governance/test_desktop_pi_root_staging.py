@@ -17,9 +17,13 @@ def root_fixture(tmp_path):
     shutil.copytree(ai, agent / "node_modules/@earendil-works/pi-ai")
     node_package(source / "node_modules/provider-sdk", name="provider-sdk", version="2.0.0")
     private = node_package(agent / "node_modules/provider-sdk", name="provider-sdk")
-    write_files(ai, {"providers/openai-completions.js": "export {value} from 'provider-sdk';\n"})
+    implementation = (
+        "import {value} from 'provider-sdk';\n"
+        "export const stream = () => value; export const streamSimple = stream;\n"
+    )
+    write_files(ai, {"api/openai-completions.js": implementation})
     write_files(agent / "node_modules/@earendil-works/pi-ai", {
-        "providers/openai-completions.js": "export {value} from 'provider-sdk';\n",
+        "api/openai-completions.js": implementation,
     })
     write_files(source, {
         "package.json": json.dumps({"type": "module", "dependencies": {
