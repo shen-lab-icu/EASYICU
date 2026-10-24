@@ -203,6 +203,9 @@
       if (error.code === 'research_pipeline_plan_step_needs_sandbox') {
         return runFailureText(error.code);
       }
+      if (error.code === 'requested_concept_no_data') {
+        return tr('The data contain no recorded values for a variable the question asks to summarize, so this part of the result cannot be produced.', '问题要求汇总的变量在当前数据中没有任何记录值，这部分结果无法给出。');
+      }
       if (error.code === 'research_pipeline_execution_retry_futile') {
         // A stop the failed step's executor named repeats on the same plan
         // and data; no repair budget was involved.
@@ -625,7 +628,7 @@
       if (resumeFailure) return resumeFailure;
       const suffix = runFailureDetailText(detail);
       const withDetail = text => (suffix ? `${text} ${suffix}` : text);
-      if (value === 'provider_not_cleared_for_credentialed_data' || value === 'agentic_coder_credentialed_source_forbidden') {
+      if (value === 'provider_not_cleared_for_credentialed_data' || value === 'agentic_coder_credentialed_source_forbidden' || value === 'requested_concept_no_data') {
         return withDetail(errorText({ code: value }));
       }
       // A failed-closed run did not pass a check after it started. Its detail

@@ -17,6 +17,7 @@
   // [Chinese title, Chinese detail].  English readers keep the host's own
   // finding message, so only the Chinese reading is supplied here.
   const FINDINGS = {
+    REQUESTED_CONCEPT_NO_DATA: ['所需变量没有数据', '问题要求汇总的变量在当前数据中没有任何记录值，这部分结果无法给出。请换用有记录的变量或数据源后重新规划。'],
     POPULATION_EMPTIES_EXPOSURE_LEVEL: ['入组条件清空了一个研究分组', '入组条件会排除某个研究分组的所有住院，当前计划不能批准，请重新生成保留各组的计划。'],
     ACCEPTED_BASELINE_CONTENT_MISSING: ['已接受的基线表内容缺失', '此前已接受的基线表有变量或数据坐标没有保留；需先恢复这些来源绑定的数据再重新规划。'],
     ACCEPTED_BASELINE_MATERIALIZATION_MISSING: ['已接受的基线表数据缺失', '此前已接受的基线表有变量或数据坐标没有保留；需先恢复这些来源绑定的数据再重新规划。'],

@@ -5,6 +5,10 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 const expected = {
+  requested_concept_no_data: [
+    'The data contain no recorded values for a variable the question asks to summarize, so this part of the result cannot be produced.',
+    '问题要求汇总的变量在当前数据中没有任何记录值，这部分结果无法给出。',
+  ],
   windowed_summary_statistic_unresolved: [
     'The question names a measurement but not which summary to report, such as its highest, lowest or mean value over a time window. State it, for example the highest lactate in the first 24 hours after ICU admission, then generate the plan again.',
     '问题提到了一项测量，但没有说明要报告哪种汇总值，例如某个时间窗内的最高值、最低值或平均值。请写明，例如入 ICU 后最初 24 小时内的最高乳酸，然后重新生成计划。',
@@ -52,7 +56,11 @@ for (const [index, language] of ['en', 'zh'].entries()) {
   const errors = owners.errorText.create({ tr, staticPreview: () => false });
   for (const [code, sentences] of Object.entries(expected)) {
     assert.equal(errors.runFailureText(code), sentences[index], `${language}: ${code}`);
+    if (code === 'requested_concept_no_data') {
+      assert.equal(errors.errorText({ code }), sentences[index]);
+      assert.equal(errors.jobErrorText(`${code}: extracted values are empty`), sentences[index]);
+    }
   }
 }
 
-console.log('Windowed summary copy: seven refusal codes pass verbatim in English and Chinese.');
+console.log('Windowed summary copy: eight refusal codes pass verbatim in English and Chinese.');

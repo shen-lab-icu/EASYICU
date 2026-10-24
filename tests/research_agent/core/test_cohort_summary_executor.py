@@ -503,7 +503,7 @@ def test_the_receipt_reaches_the_step_summary_the_host_reads(
     )
 
 
-def test_a_column_with_nothing_to_compare_is_not_a_clean_bill_of_health(
+def test_a_column_with_nothing_to_compare_stops_after_the_receipt(
     tmp_path,
     monkeypatch,
 ):
@@ -527,21 +527,25 @@ def test_a_column_with_nothing_to_compare_is_not_a_clean_bill_of_health(
     )
     step = _step()
 
-    exec(
-        compile(
-            cohort_summary_executor_code(
-                step,
-                plausibility_scope=_scope(digest, "age"),
-            ),
-            "<cohort-summary>",
-            "exec",
-        ),
-        {},
-    )
+    from easyicu.research_agent.methods.descriptive_inputs import RequestedConceptNoDataError
 
-    receipt = json.loads((out_dir / "step_summary.json").read_text("utf-8"))[
-        "plausibility_audit"
-    ]["age"]
+    namespace = {}
+    with pytest.raises(RequestedConceptNoDataError) as caught:
+        exec(
+            compile(
+                cohort_summary_executor_code(
+                    step,
+                    plausibility_scope=_scope(digest, "age"),
+                ),
+                "<cohort-summary>",
+                "exec",
+            ),
+            namespace,
+        )
+    assert caught.value.reason_code == "requested_concept_no_data"
+    assert not (out_dir / "step_summary.json").exists()
+    assert not (out_dir / "cohort_summary.csv").exists()
+    receipt = namespace["plausibility_audit"]["age"]
 
     assert receipt["out_of_range_n"] == 0
     assert receipt["compared_n"] == 0

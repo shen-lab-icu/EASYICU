@@ -215,10 +215,12 @@ def test_a_policy_the_fit_cannot_honour_is_refused(listed, terms, code) -> None:
 
 
 def test_a_covariate_never_measured_on_a_fitting_row_is_refused() -> None:
+    from easyicu.research_agent.methods.descriptive_inputs import RequestedConceptNoDataError
+
     frame = _frame()
     frame["lab"] = np.nan
 
-    with pytest.raises(ModelTermCompilationError) as raised:
+    with pytest.raises(RequestedConceptNoDataError) as raised:
         primary_model_rows(
             frame,
             terms=TERMS,
@@ -227,6 +229,17 @@ def test_a_covariate_never_measured_on_a_fitting_row_is_refused() -> None:
             missing_category_covariates=["lab"],
         )
 
+    assert raised.value.reason_code == "requested_concept_no_data"
+
+
+def test_a_covariate_observed_only_outside_the_fitting_rows_keeps_its_policy_stop() -> None:
+    frame = _frame(n=80)
+    frame.loc[frame["lab"].notna(), "outcome"] = np.nan
+    with pytest.raises(ModelTermCompilationError) as raised:
+        primary_model_rows(
+            frame, terms=TERMS, exposure="exposure", outcome="outcome",
+            missing_category_covariates=["lab"],
+        )
     assert raised.value.reason_code == "missing_category_covariate_unobserved"
 
 

@@ -889,6 +889,9 @@ def _distribution_rows(
     *,
     spec: ExposureOutcomeDistributionSpec,
 ) -> List[Dict[str, Any]]:
+    from ...methods.descriptive_inputs import require_observed_columns
+
+    require_observed_columns(frame, (spec.exposure, spec.outcome))
     exposure_values = frame[spec.exposure]
     outcome_values = frame[spec.outcome]
     observed_outcome = outcome_values.notna()

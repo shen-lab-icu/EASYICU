@@ -18,6 +18,7 @@ import pandas as pd
 from scipy import stats
 
 from ..schema import TableOneSpec, TableOneVariableSpec
+from .descriptive_inputs import require_observed_columns
 
 
 class TableOneContractError(ValueError):
@@ -441,6 +442,7 @@ def build_grouped_table_one(
         raise TableOneContractError(
             f"Table 1 input columns are missing: {missing_columns}"
         )
+    require_observed_columns(frame, sorted(required))
     frame = _canonicalize_declared_boolean_encodings(frame, contract)
     ungrouped = frame[contract.group_by].isna()
     group_missing_excluded_n = int(ungrouped.sum())

@@ -14,6 +14,35 @@ from ..authority.source_status import (
     source_status_contract_from_context,
 )
 from ..schema import ResearchContext, ValidationFinding
+from ..methods.descriptive_inputs import REQUESTED_CONCEPT_NO_DATA, context_columns_without_data
+from ..planning.adjustment_authority import (
+    AdjustmentSetAuthority, context_stated_adjustments, stated_adjustment_columns,
+)
+
+
+def requested_context_data_columns(context: ResearchContext) -> tuple[str, ...]:
+    """The requested exposure, endpoints and adjustment roster, including aliases."""
+
+    return tuple(dict.fromkeys(column for column in (
+        context.primary_exposure, context.target_outcome,
+        *(context.cohort.requested_outcome_columns or ()),
+        *AdjustmentSetAuthority.from_context(context).operational_covariates,
+        *(column for item in context_stated_adjustments(context)
+          for column in stated_adjustment_columns(context, item)),
+    ) if column))
+
+
+def requested_data_answerability_findings(context: ResearchContext) -> list[ValidationFinding]:
+    columns = context_columns_without_data(context, requested_context_data_columns(context))
+    if not columns:
+        return []
+    return [ValidationFinding(
+        validator="data_answerability_gate", severity="error", message=(
+            f"The data contain no recorded values for {', '.join(columns)}, "
+            "which the question asks to summarize."
+        ),
+        detail={"kind": REQUESTED_CONCEPT_NO_DATA, "columns": list(columns)},
+    )]
 
 
 def _domain_has_fewer_than_two_levels(domain: dict[str, object]) -> bool:
@@ -245,6 +274,7 @@ def analysis_answerability_findings(
     """Return every proven pre-Planner exposure/outcome infeasibility."""
 
     return [
+        *requested_data_answerability_findings(context),
         *primary_exposure_answerability_findings(context),
         *target_outcome_answerability_findings(context),
     ]

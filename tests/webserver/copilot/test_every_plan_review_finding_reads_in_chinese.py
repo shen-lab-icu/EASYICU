@@ -80,6 +80,18 @@ def test_every_plan_review_finding_has_a_chinese_title_and_detail() -> None:
     assert english == []
 
 
+def test_a_requested_variable_without_data_has_the_reviewed_next_step() -> None:
+    html = _render_zh([{
+        "code": "REQUESTED_CONCEPT_NO_DATA", "severity": "blocker",
+        "message": "The data contain no recorded values for fixture_response_max.",
+    }])
+    assert "所需变量没有数据" in html
+    assert (
+        "问题要求汇总的变量在当前数据中没有任何记录值，这部分结果无法给出。"
+        "请换用有记录的变量或数据源后重新规划。"
+    ) in html
+
+
 @pytest.mark.parametrize(
     "reason",
     [
