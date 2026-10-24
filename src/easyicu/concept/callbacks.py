@@ -68,6 +68,13 @@ _SUSP_INF_UNSUPPORTED_WARNED: set[str] = set()
 
 from ..utils.unit_conversion import convert_vaso_rate
 from .errors import ConceptTableReadError
+from .availability_signal import (
+    ConceptAvailabilityRecord,
+    ConceptEvaluationReason,
+    ConceptEvaluationStatus,
+    set_table_availability,
+    table_availability,
+)
 
 
 def _callback_source_name(data_source: object) -> str:
@@ -4530,7 +4537,13 @@ def _callback_supp_o2(
     merge_cols = [c for c in id_columns if c in vent_df.columns and c in fio2_df.columns] + [fio2_index]
     merge_cols = [c for c in merge_cols if c in vent_df.columns and c in fio2_df.columns]
     
-    if merge_cols:
+    if fio2_df.empty:
+        result = vent_df.copy()
+        result["fio2"] = pd.Series(index=result.index, dtype="float64")
+    elif vent_df.empty:
+        result = fio2_df.copy()
+        result["vent_ind"] = False
+    elif merge_cols:
         result = pd.merge(fio2_df, vent_df, on=merge_cols, how='outer')
     else:
         result = pd.merge(fio2_df, vent_df, on=[fio2_index], how='outer')
@@ -5869,19 +5882,59 @@ def _callback_vaso_ind_rate(
 
     return _as_icutbl(result_df, id_columns=id_columns, index_column=time_col, value_column="vaso_ind")
 
+def _infection_empty_result(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+    *,
+    reason_code: ConceptEvaluationReason,
+    evaluation_status: ConceptEvaluationStatus,
+    source: Optional[ConceptAvailabilityRecord] = None,
+) -> ICUTable:
+    """An empty event set with an explicit evaluated/unavailable disposition."""
+    reference = next(iter(tables.values()), None)
+    ids = _get_id_columns(reference) if reference is not None else ["stay_id"]
+    index = "charttime"
+    frame = pd.DataFrame({column: pd.Series(dtype="int64") for column in ids})
+    frame[index] = pd.Series(dtype="float64")
+    frame[ctx.concept_name] = pd.Series(dtype="boolean")
+    result = _as_icutbl(frame, id_columns=ids, index_column=index, value_column=ctx.concept_name)
+    set_table_availability(result, ConceptAvailabilityRecord(
+        concept=ctx.concept_name,
+        database=_callback_source_name(ctx.data_source),
+        reason="data_missing" if evaluation_status == "evaluated" else "source_unavailable",
+        n_rows=0,
+        sources_defined=source.sources_defined if source else (),
+        missing_tables=source.missing_tables if source else (),
+        reason_code=reason_code,
+        evaluation_status=evaluation_status,
+    ))
+    return result
+
+
+def _sepsis_infection_disposition(
+    tables: Dict[str, ICUTable], ctx: ConceptCallbackContext,
+) -> Optional[ICUTable]:
+    record = table_availability(tables.get("susp_inf"), "susp_inf")
+    if record is not None and record.evaluation_status is not None:
+        return _infection_empty_result(
+            tables, ctx, reason_code=record.reason_code,
+            evaluation_status=record.evaluation_status, source=record,
+        )
+    return None
+
+
 def _callback_sep3(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
+    disposition = _sepsis_infection_disposition(tables, ctx)
+    if disposition is not None:
+        return disposition
     # Check if required tables exist
     if "sofa" not in tables or "susp_inf" not in tables:
-        # Return empty result if required tables are missing
-        import pandas as pd
-        return _as_icutbl(
-            pd.DataFrame(columns=['stay_id', 'charttime', 'sep3']),
-            id_columns=['stay_id'],
-            index_column='charttime',
-            value_column='sep3'
+        return _infection_empty_result(
+            tables, ctx, reason_code="required_component_missing",
+            evaluation_status="not_evaluable",
         )
     
     # Convert ID columns if needed (hadm_id → stay_id) before merging
@@ -5894,13 +5947,9 @@ def _callback_sep3(
     
     # Check if tables still exist after conversion (they may have been removed if empty)
     if "sofa" not in converted_tables or "susp_inf" not in converted_tables:
-        # Return empty result if conversion resulted in empty tables
-        import pandas as pd
-        return _as_icutbl(
-            pd.DataFrame(columns=list(id_columns) + ([index_column] if index_column else []) + ['sep3']),
-            id_columns=id_columns,
-            index_column=index_column,
-            value_column='sep3'
+        return _infection_empty_result(
+            tables, ctx, reason_code="required_component_missing",
+            evaluation_status="not_evaluable",
         )
     
     # Use converted tables
@@ -5941,12 +5990,13 @@ def _callback_sep3_sofa2(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
+    disposition = _sepsis_infection_disposition(tables, ctx)
+    if disposition is not None:
+        return disposition
     if "sofa2" not in tables or "susp_inf" not in tables:
-        return _as_icutbl(
-            pd.DataFrame(columns=['stay_id', 'charttime', 'sep3_sofa2']),
-            id_columns=['stay_id'],
-            index_column='charttime',
-            value_column='sep3_sofa2'
+        return _infection_empty_result(
+            tables, ctx, reason_code="required_component_missing",
+            evaluation_status="not_evaluable",
         )
 
     id_columns, index_column, converted_tables = _assert_shared_schema(
@@ -5956,11 +6006,9 @@ def _callback_sep3_sofa2(
     )
 
     if "sofa2" not in converted_tables or "susp_inf" not in converted_tables:
-        return _as_icutbl(
-            pd.DataFrame(columns=list(id_columns) + ([index_column] if index_column else []) + ['sep3_sofa2']),
-            id_columns=id_columns,
-            index_column=index_column,
-            value_column='sep3_sofa2'
+        return _infection_empty_result(
+            tables, ctx, reason_code="required_component_missing",
+            evaluation_status="not_evaluable",
         )
 
     sofa2_tbl = converted_tables["sofa2"]
@@ -6610,6 +6658,25 @@ def _callback_susp_inf(
             si_mode = "and"
             logger.debug(f"susp_inf: Using si_mode='and' for {ds_name}")
 
+    required = ("abx", "infection_icd") if si_mode == "icd_abx" else ("abx", "samp")
+    for name in required:
+        if name not in tables:
+            return _infection_empty_result(
+                tables, ctx, reason_code="required_component_missing",
+                evaluation_status="not_evaluable",
+            )
+        record = table_availability(tables[name], name)
+        if record is not None and (record.status == "blocked" or record.missing_tables):
+            return _infection_empty_result(
+                tables, ctx, reason_code="required_source_table_missing",
+                evaluation_status="not_evaluable", source=record,
+            )
+    if si_mode in {"and", "abx", "icd_abx"} and tables["abx"].data.empty:
+        return _infection_empty_result(
+            tables, ctx, reason_code="no_antibiotics_observed",
+            evaluation_status="evaluated", source=table_availability(tables["abx"], "abx"),
+        )
+
     unsupported_strict_si_dbs = {"hirid", "sic", "sicdb"}
     samp_data = getattr(tables.get("samp"), "data", None)
     infection_icd_data = getattr(tables.get("infection_icd"), "data", None)
@@ -6632,13 +6699,6 @@ def _callback_susp_inf(
     
     # ===== eICU新策略: icd_abx (ICD感染诊断定人 + 抗生素定时) =====
     if si_mode == "icd_abx":
-        # 需要 infection_icd 和 abx 两个概念
-        if "infection_icd" not in tables or "abx" not in tables:
-            raise ValueError(
-                f"si_mode='icd_abx' requires 'infection_icd' and 'abx' concepts. "
-                f"Available: {list(tables.keys())}"
-            )
-        
         # 获取感染诊断数据 (定人 - 只需要患者有感染诊断即可)
         infection_tbl = tables["infection_icd"]
         abx_tbl = tables["abx"]
@@ -6662,8 +6722,9 @@ def _callback_susp_inf(
         # charttime；保留 metadata 也使显式 icd_abx 调用不依赖字典顺序。
         abx_idx = converted_tables["abx"].index_column
         if not abx_idx or abx_idx not in abx_data.columns:
-            raise ValueError(
-                "susp_inf icd_abx requires a time-indexed antibiotic component"
+            return _infection_empty_result(
+                tables, ctx, reason_code="antibiotic_time_index_missing",
+                evaluation_status="not_evaluable",
             )
         
         # ICD感染诊断"定人" - 获取有感染诊断的患者列表
@@ -6691,13 +6752,6 @@ def _callback_susp_inf(
         )
     
     # ===== 原有策略: and/or/abx/samp =====
-    # 需要 abx 和 samp 两个概念
-    if "abx" not in tables or "samp" not in tables:
-        raise ValueError(
-            f"si_mode='{si_mode}' requires 'abx' and 'samp' concepts. "
-            f"Available: {list(tables.keys())}"
-        )
-    
     # Convert ID columns if needed (hadm_id → stay_id) before merging
     id_columns, index_column, converted_tables = _assert_shared_schema(
         {"abx": tables["abx"], "samp": tables["samp"]},
@@ -6710,7 +6764,10 @@ def _callback_susp_inf(
     samp_tbl = converted_tables["samp"]
     
     if index_column is None:
-        raise ValueError("susp_inf requires time-indexed component tables")
+        return _infection_empty_result(
+            tables, ctx, reason_code="component_time_index_missing",
+            evaluation_status="not_evaluable",
+        )
     
     # Standardize time column names
     abx_data = abx_tbl.data.copy()

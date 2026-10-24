@@ -47,3 +47,28 @@ tests cover all three counterexamples, exact boundaries and negative/missing
 inputs. Retaining actual dependencies fixes reproducibility without changing
 firstSI, the infection window, SOFA threshold, or publication policy. A passing
 receipt is engineering evidence, not clinical closure or research approval.
+
+## Sparse source exports
+
+The web runner publishes native-v2 manifests even when source tables have only
+headers or selected concepts have no events. Each physical file records
+`concept_status`: `available` has observed values; `produced_all_null` has no
+values after evaluating the available source; `structurally_unavailable_placeholder`
+has a typed null column because a mapping, required table or score output is
+unavailable. Missing primary columns without a producer receipt still fail
+publication. Existing catalog coverage and review readers exclude both null
+statuses from observed coverage.
+
+For suspected infection and both Sepsis-3 outputs, complete required source
+tables with no antibiotic events yield `produced_all_null`,
+`evaluation_status=evaluated`, and `reason_code=no_antibiotics_observed`.
+The empty positive-event set represents zero positive stays. Missing any
+required antibiotic source table yields `structurally_unavailable_placeholder`,
+`evaluation_status=not_evaluable`, `reason_code=required_source_table_missing`,
+and the missing table names. This includes a partial multi-table antibiotic
+source: its empty observed component cannot establish a negative. An absent
+component or invalid time metadata uses `required_component_missing`,
+`antibiotic_time_index_missing` or `component_time_index_missing` instead.
+Dedicated score owners that return no physical output are unavailable with
+`producer_returned_no_physical_output`; their missing score is never zero.
+Populated source values and the clinical scoring definitions are preserved.

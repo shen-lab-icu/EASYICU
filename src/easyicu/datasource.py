@@ -4626,9 +4626,8 @@ def load_wide_table_aggregated(
     # does not pre-sweep every file's metadata for schema reconciliation —
     # on slow filesystems this dominated wall-clock. Fall back to
     # union_by_name=true if the fast path raises a schema-mismatch error.
-    # 🚀 perf B5: drop the trailing ORDER BY — downstream groupby/merge
-    # does not depend on it, and sorting tens of millions of rows after
-    # aggregation was pure overhead.
+    # The direct wide-result path publishes these rows without another sort.
+    # Match the chunked path's key order, regardless of GROUP BY scheduling.
     _wide_query_tpl = (
         "SELECT\n"
         f"    {id_col},\n"
@@ -4637,6 +4636,7 @@ def load_wide_table_aggregated(
         "FROM {read_expr}\n"
         f"{where_clause}\n"
         f"GROUP BY {id_col}, FLOOR({time_col} / {interval_hours * 60.0})\n"
+        f"ORDER BY {id_col}, charttime\n"
     )
     _wide_read_fast = f"read_parquet('{glob_pattern}')"
     _wide_read_safe = f"read_parquet('{glob_pattern}', union_by_name=true)"
