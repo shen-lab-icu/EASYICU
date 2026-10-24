@@ -137,6 +137,9 @@ def write_cohort_export(
         )
     manifest = {
         "schema_version": "easyicu_native_export_v2",
+        "time_window_authority": {
+            "required": True, "source": "outcome.los_icu", "bounded_stays": stays,
+        },
         "database": "eicu",
         "generated": "2026-01-01T00:00:00",
         "format": "csv" if case == "csv" else "parquet",

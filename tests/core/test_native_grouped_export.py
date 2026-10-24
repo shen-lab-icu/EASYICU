@@ -222,12 +222,17 @@ def test_native_sofa2_receipts_survive_producer_to_trajectory(
         }
     ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
 
+    pd.DataFrame({"stay_id": [1, 2], "los_icu": [2.0, 2.0]}).to_parquet(
+        tmp_path / "outcome.parquet", index=False
+    )
+
     api._publish_native_export_v2(
         database="miiv",
         data_path="/raw/source-must-not-be-read",
         output_dir=str(tmp_path),
         modules=["sofa2_score"],
         max_patients=None,
+        require_stay_time_bounds=True,
         result=_completed_result("sofa2_score"),
     )
 
@@ -351,12 +356,17 @@ def test_native_sofa2_missing_receipt_fails_closed_after_real_publication(
         }
     ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
 
+    pd.DataFrame({"stay_id": [1, 2], "los_icu": [2.0, 2.0]}).to_parquet(
+        tmp_path / "outcome.parquet", index=False
+    )
+
     api._publish_native_export_v2(
         database="miiv",
         data_path="/raw/source-must-not-be-read",
         output_dir=str(tmp_path),
         modules=["sofa2_score"],
         max_patients=None,
+        require_stay_time_bounds=True,
         result=_completed_result("sofa2_score"),
     )
 
@@ -400,12 +410,17 @@ def test_native_sofa2_duplicate_consolidation_keeps_value_receipt_paired(
         }
     ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
 
+    pd.DataFrame({"stay_id": [1, 2], "los_icu": [2.0, 2.0]}).to_parquet(
+        tmp_path / "outcome.parquet", index=False
+    )
+
     api._publish_native_export_v2(
         database="miiv",
         data_path="/raw/source-must-not-be-read",
         output_dir=str(tmp_path),
         modules=["sofa2_score"],
         max_patients=None,
+        require_stay_time_bounds=True,
         result=_completed_result("sofa2_score"),
     )
 
@@ -932,12 +947,17 @@ def test_grouped_export_records_structural_unavailability_without_selecting_it(
         tmp_path / "demographics.parquet", index=False
     )
 
+    pd.DataFrame({"stay_id": [1, 2], "los_icu": [2.0, 2.0]}).to_parquet(
+        tmp_path / "outcome.parquet", index=False
+    )
+
     published = api._publish_native_export_v2(
         database="miiv",
         data_path="/raw/source-must-not-be-read",
         output_dir=str(tmp_path),
         modules=["demographics", "sepsis_shared"],
         max_patients=None,
+        require_stay_time_bounds=True,
         result={
             "modules": {
                 "demographics": {"errors": []},
@@ -983,6 +1003,7 @@ def test_grouped_export_records_structural_unavailability_without_selecting_it(
         output_dir=str(tmp_path),
         modules=["demographics", "sepsis_shared"],
         max_patients=None,
+        require_stay_time_bounds=True,
         result={
             "modules": {
                 "demographics": {"errors": []},
@@ -1575,12 +1596,17 @@ def test_grouped_export_reads_special_concept_from_saved_key(
         json.dumps({"saved": {"sep3_sofa1": {"rows": 2}}}), encoding="utf-8"
     )
 
+    pd.DataFrame({"stay_id": [1, 2], "los_icu": [2.0, 2.0]}).to_parquet(
+        tmp_path / "outcome.parquet", index=False
+    )
+
     api._publish_native_export_v2(
         database="miiv",
         data_path=str(tmp_path / "source"),
         output_dir=str(tmp_path),
         modules=["sepsis3_sofa1"],
         max_patients=None,
+        require_stay_time_bounds=True,
         result={"modules": {"sepsis3_sofa1": {"errors": []}}},
     )
 

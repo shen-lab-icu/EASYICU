@@ -54,6 +54,7 @@ _DECLINED_SEED_REFUSALS = frozenset(
 
 _NEXT_STEP_SUMMARIES = {
     **WINDOWED_SUMMARY_STOP_MESSAGES,
+    "export_time_window_unbounded": "This export was made by an earlier version of EasyICU that did not limit measurements to each ICU stay. Export the data again, then run the study.",
     "research_pipeline_manifest_required": (
         "The bound directory is a converted ICU database, not a prepared "
         "EasyICU export package, so the Research Agent has nothing "

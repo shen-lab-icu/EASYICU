@@ -1426,6 +1426,24 @@ def _authorized_native_value_columns(
     return authorized
 
 
+def require_export_time_window_authority(
+    manifest: Mapping[str, Any], *, modules: Sequence[str],
+) -> None:
+    """Refuse longitudinal research inputs without the publisher's bounds.
+
+    The cohort observation window selects stays; it is not authority for the
+    temporal extent of their measurements. Intake never repairs older exports.
+    """
+    if not any(module not in {"demographics", "outcome"} for module in modules):
+        return
+    authority = manifest.get("time_window_authority")
+    if not isinstance(authority, Mapping) or authority.get("required") is not True:
+        raise ExportPackageError(
+            "This export was made by an earlier version of EasyICU that did not limit measurements to each ICU stay. Export the data again, then run the study.",
+            code="export_time_window_unbounded",
+        )
+
+
 def _open_export_package_impl(
     export_dir: Union[str, Path],
     *,
@@ -1598,6 +1616,10 @@ def _open_export_package_impl(
             entries=entries,
         )
     )
+    if native_schema == NATIVE_MANIFEST_SCHEMA_V2:
+        require_export_time_window_authority(
+            manifest, modules=[item.module for item in physical_files],
+        )
     for physical_file in physical_files:
         common_info: dict[str, object] = {
             "file": str(physical_file.path),
@@ -1759,13 +1781,16 @@ def _open_export_package_impl(
     )
 
 
-def inspect_export_layout(export_dir: Union[str, Path]) -> dict[str, Any]:
+def inspect_export_layout(
+    export_dir: Union[str, Path], *, require_time_window: bool = False,
+) -> dict[str, Any]:
     """Metadata-only scan, NOT sealed execution or scientific authority.
 
     Reuse intake's manifest selection, inventory and path rules, but inspect
     only headers/Parquet footers. Do not copy/hash whole patient tables merely
     to populate a folder-picker readiness badge. Execution must still use
-    ``open_export_package`` with its complete content-bound checks.
+    ``open_export_package`` with its complete content-bound checks. Run binding
+    additionally requests the temporal authority through ``require_time_window``.
     """
     root = Path(export_dir)
     manifest_path, kind = _select_manifest(root)
@@ -1820,6 +1845,10 @@ def inspect_export_layout(export_dir: Union[str, Path]) -> dict[str, Any]:
             finally:
                 book.close()
         _identity_column(columns, database, path=path)
+    if require_time_window:
+        require_export_time_window_authority(
+            manifest, modules=[str(entry.get("module") or entry.get("group") or "") for entry in entries],
+        )
     return {"database": database, "files": len(entries), "readiness_scope": "layout_only"}
 
 

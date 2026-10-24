@@ -206,6 +206,9 @@ def _v2_package(root: Path, *, export_format: str = "parquet") -> Path:
     ]
     manifest = {
         "schema_version": intake.NATIVE_MANIFEST_SCHEMA_V2,
+        "time_window_authority": {
+            "required": True, "source": "outcome.los_icu", "bounded_stays": 2,
+        },
         "database": "miiv",
         "format": export_format,
         "concept_selection": {

@@ -5924,6 +5924,26 @@ def _native_export_stay_time_upper_bounds(outcome_frame) -> Dict[int, float]:
     }
 
 
+def _native_export_time_window_authority(
+    *,
+    modules: Sequence[str],
+    stay_time_upper_bounds: Mapping[int, float],
+    required: bool,
+) -> Dict[str, object]:
+    """Describe the shared publication policy, refusing an unbounded claim."""
+    longitudinal = [m for m in modules if m not in {"demographics", "outcome"}]
+    if required and longitudinal and not stay_time_upper_bounds:
+        raise ValueError(
+            "native_export_v2 requires outcome.los_icu time bounds before "
+            "publishing longitudinal modules"
+        )
+    return {
+        "required": required,
+        "source": "outcome.los_icu" if stay_time_upper_bounds else "fallback_only",
+        "bounded_stays": len(stay_time_upper_bounds),
+    }
+
+
 def _enforce_native_export_time_axis(
     frame,
     *,
@@ -5989,14 +6009,15 @@ def _enforce_native_export_time_axis(
         return frame, audit
 
     charttime = pd.to_numeric(frame["charttime"], errors="coerce")
-    upper = frame["stay_id"].map(stay_time_upper_bounds).astype("float64")
+    identity = next(column for column in _NATIVE_EXPORT_ID_COLUMNS if column in frame)
+    upper = frame[identity].map(stay_time_upper_bounds).astype("float64")
     upper = upper.fillna(ICU_TIME_FALLBACK_LIMIT_HOURS)
     invalid = charttime.notna() & (
         (charttime < -ICU_TIME_PRE_ADMISSION_HOURS) | (charttime > upper)
     )
     audit["excluded_rows"] = int(invalid.sum())
     audit["rows_with_los_bound"] = int(
-        frame["stay_id"].isin(stay_time_upper_bounds).sum()
+        frame[identity].isin(stay_time_upper_bounds).sum()
     )
     kept = frame.loc[~invalid].copy() if bool(invalid.any()) else frame
 
@@ -6027,7 +6048,7 @@ def _enforce_native_export_time_axis(
         positive_untimed = null_time & rrt_criteria.eq(True).fillna(False)
         if bool(positive_untimed.any()):
             sample_ids = (
-                kept.loc[positive_untimed, "stay_id"].drop_duplicates().head(5).tolist()
+                kept.loc[positive_untimed, identity].drop_duplicates().head(5).tolist()
             )
             raise ValueError(
                 "native renal export contains positive rrt_criteria rows without "
@@ -6312,22 +6333,11 @@ def _publish_native_export_v2(
         stay_time_upper_bounds = _native_export_stay_time_upper_bounds(
             pd.read_parquet(outcome_source)
         )
-    longitudinal_modules = [
-        module for module in published_modules if module not in {"demographics", "outcome"}
-    ]
-    if require_stay_time_bounds and longitudinal_modules and not stay_time_upper_bounds:
-        raise ValueError(
-            "native_export_v2 requires outcome.parquet with usable los_icu time "
-            "bounds before publishing longitudinal modules; include outcome in "
-            f"the same extraction package (modules={longitudinal_modules})"
-        )
-    time_window_authority = {
-        "required": bool(require_stay_time_bounds),
-        "source": (
-            "outcome.los_icu" if stay_time_upper_bounds else "fallback_only"
-        ),
-        "bounded_stays": int(len(stay_time_upper_bounds)),
-    }
+    time_window_authority = _native_export_time_window_authority(
+        modules=published_modules,
+        stay_time_upper_bounds=stay_time_upper_bounds,
+        required=bool(require_stay_time_bounds),
+    )
     eicu_tidal_volume_age_lookup = None
     if normalized_database == "eicu" and "ventilator" in published_modules:
         eicu_tidal_volume_age_lookup = _load_eicu_tidal_volume_age_lookup(output_root)

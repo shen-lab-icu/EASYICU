@@ -277,6 +277,9 @@ def _typed_export(root, definitions, *, observed=True, two_quantities=False):
     ))
     (root / intake.NATIVE_MANIFEST).write_text(json.dumps({
         "schema_version": intake.NATIVE_MANIFEST_SCHEMA_V2, "database": "miiv", "format": "parquet",
+        "time_window_authority": {
+            "required": True, "source": "outcome.los_icu", "bounded_stays": 6,
+        },
         "concept_selection": {"mode": "explicit", "modules": {name: concepts for name, (_, concepts) in modules.items()}},
         "files": files, "feature_definitions": {"included": False}, "column_metadata": ref.to_dict(),
     }))

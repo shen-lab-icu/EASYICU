@@ -1171,7 +1171,9 @@ def load_concepts(
         Standard columns retain their existing order. Special outputs from
         the current renal bundle are appended in lexical order, followed by
         explicitly requested legacy renal outputs in lexical order. Dict
-        projections use the same order within each bundle.
+        projections use the same order within each bundle. Comorbidity
+        outputs keep the export order Elixhauser then Charlson; microbiology
+        outputs follow lexical order. Neither order depends on Python's hash seed.
 
     Examples:
         >>> # 最简单的用法 - 自动检测所有参数
@@ -2035,7 +2037,9 @@ def load_concepts(
                 "charlson": "charlson_index",
                 "elixhauser": "elixhauser_vw",
             }
-            for c in _need_comorb:
+            # Preserve the established export columns across processes:
+            # these requested names come from a salted, unordered set.
+            for c in sorted(_need_comorb, reverse=True):
                 try:
                     como = load_comorbidity(
                         loader.database,
@@ -2105,7 +2109,7 @@ def load_concepts(
                     for col in ("stay_id", "icustay_id", "patientunitstayid")
                     if col in mic.columns
                 ]
-                for c in _need_micro:
+                for c in sorted(_need_micro):
                     if c in mic.columns and id_cols:
                         special_dict[c] = mic[id_cols + [c]].copy()
 
