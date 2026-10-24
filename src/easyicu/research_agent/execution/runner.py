@@ -56,7 +56,10 @@ from .kernel_identity import (
 )
 from .method_capabilities import set_runtime_capability_snapshot_provider
 from .step_execution import host_runtime_available
-from .runtime_diagnostics import _classify_docker_failure, runner_unavailable_remediation as runner_unavailable_remediation
+from .runtime_diagnostics import (
+    classify_docker_failure as _classify_docker_failure,
+    runner_unavailable_remediation as runner_unavailable_remediation,
+)
 
 _SAFE_INHERITED_ENV_KEYS = (
     "PATH",

@@ -121,14 +121,16 @@ def test_a_ready_runtime_is_not_an_obstacle(monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.mark.parametrize("deployment", ["desktop", "server"])
 @pytest.mark.parametrize("host_ready", [False, True])
+@pytest.mark.parametrize("stderr", [
+    "failed to connect to the docker API at unix:///var/run/docker.sock; "
+    "check if the path is correct and if the daemon is running: "
+    "dial unix /var/run/docker.sock: connect: no such file or directory",
+    'error during connect: Get "http://%2Fvar%2Frun%2Fdocker.sock/_ping": '
+    "dial unix /var/run/docker.sock: connect: no such file or directory",
+])
 def test_docker_api_connection_failure_reaches_only_a_verified_desktop_host(
-    monkeypatch, deployment, host_ready,
+    monkeypatch, deployment, host_ready, stderr,
 ):
-    stderr = (
-        "failed to connect to the docker API at unix:///var/run/docker.sock; "
-        "check if the path is correct and if the daemon is running: "
-        "dial unix /var/run/docker.sock: connect: no such file or directory"
-    )
     reason = runner_module._classify_docker_failure(stderr, "")
     assert reason == "docker_daemon_unreachable"
     monkeypatch.setenv("EASYICU_DEPLOYMENT", deployment)
@@ -151,6 +153,50 @@ def test_docker_api_connection_failure_reaches_only_a_verified_desktop_host(
         assert stderr not in str(error.value)
         assert "/var/run/docker.sock" not in repr(error.value.details)
     assert asked == (["docker", "host"] if deployment == "desktop" else ["docker"])
+
+
+@pytest.mark.parametrize("stderr", [
+    "failed to connect to the docker API at unix:///var/run/docker.sock: permission denied",
+    "failed to connect to the docker API at tcp://example.invalid:2376: connection refused",
+    "failed to connect to the docker API: x509: certificate signed by unknown authority",
+    "Cannot connect to the Docker daemon at unix:///var/run/docker.sock: permission denied",
+    "failed to connect to the docker API: unexpected response",
+])
+def test_configuration_failures_do_not_switch_a_desktop_run_to_host(monkeypatch, stderr):
+    monkeypatch.setenv("EASYICU_DEPLOYMENT", "desktop")
+    monkeypatch.setattr(runner_module, "resolve_docker_executable", lambda _: "docker")
+    monkeypatch.setattr(runner_module, "_run_with_bounded_output", lambda *args, **kwargs:
+                        SimpleNamespace(returncode=1, stdout="", stderr=stderr))
+    monkeypatch.setattr(runner_module, "host_runtime_available", lambda *_args: True)
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as error:
+        research_launch_runtime._require_execution_runtime(
+            budget_mode="full_reviewed", runner_image="synthetic:image",
+        )
+    assert error.value.details["reason_code"] == "docker_probe_failed"
+    assert error.value.details["runner_kind"] == "docker"
+    assert stderr not in str(error.value)
+    assert "/var/run/docker.sock" not in repr(error.value.details)
+
+
+def test_real_daemon_probe_discards_stderr_before_launch_diagnostics(monkeypatch):
+    monkeypatch.setenv("EASYICU_DEPLOYMENT", "server")
+    monkeypatch.setattr(runner_module, "resolve_docker_executable", lambda _: "docker")
+    monkeypatch.setattr(runner_module, "_run_with_bounded_output", lambda *args, **kwargs:
+                        SimpleNamespace(returncode=1, stdout="", stderr=_DAEMON_DOWN_STDERR))
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as error:
+        research_launch_runtime._require_execution_runtime(
+            budget_mode="full_reviewed", runner_image="synthetic:image",
+        )
+    assert error.value.details["reason_code"] == "docker_daemon_unreachable"
+    assert _SOCKET_PATH not in str(error.value)
+    assert _SOCKET_PATH not in repr(error.value.details)
+
+
+@pytest.mark.parametrize("image", ["synthetic-tls-worker:latest", "synthetic-certificate-worker:latest"])
+def test_missing_image_names_are_not_misread_as_configuration_failures(image):
+    assert runner_module._classify_docker_failure(
+        f"Error response from daemon: No such image: {image}", "",
+    ) == "docker_image_missing"
 
 
 @pytest.mark.parametrize("result_kind", ["roundtrip", "missing_output", "wrong_output", "mount_denied", "timeout"])
