@@ -383,9 +383,9 @@ def test_a_question_that_names_an_official_demo_is_offered_that_demo() -> None:
 
     The opening question already names the data. While the conversation
     still needs a source, the host-jobs owner matches the researcher's own
-    first message against the official demo catalog (the title's product
-    token next to a demo word; exactly one match, never a bare database
-    name) and the data-source card offers that demo as its primary action.
+    first message against the official demo catalog (its complete title or
+    product token next to a demo word; exactly one match, never a bare
+    database name) and offers that demo as the card's primary action.
     The click is the source decision: the owner submits the allowlisted
     prepare job and, once the export is registered, binds and confirms it
     through the same path as the ready notice. No model text is sent.
@@ -437,8 +437,14 @@ def test_a_question_that_names_an_official_demo_is_offered_that_demo() -> None:
           eicuDemo: ask('在 eICU demo 数据里，评估最高乳酸与 ICU 死亡率'),
           mimicDemo: ask('用 MIMIC-IV Demo 看看乳酸分布'),
           chineseWord: ask('用mimic iv 演示数据做一个描述'),
+          eicuOfficialTitle: ask('Use official eICU Collaborative Research Database Demo v2.0.1 for a synthetic descriptive example.'),
+          mimicOfficialTitle: ask('Use MIMIC-IV Clinical Database Demo v2.2 to describe ICU stays.'),
           bareDatabase: ask('在 eICU 数据里评估'),
+          fullDatabase: ask('用 eICU Collaborative Research Database v2.0 全量数据分析'),
+          unrelatedDemo: ask('Use eICU Collaborative Research Database. Another project is a demo.'),
           twoDemos: ask('mimic-iv demo 和 eicu demo 对比'),
+          twoOfficialTitles: ask('比较 eICU Collaborative Research Database Demo v2.0.1 与 MIMIC-IV Clinical Database Demo v2.2'),
+          twoDatabasesOneDemo: ask('比较 eICU Collaborative Research Database Demo v2.0.1 与 MIMIC-IV 全量数据'),
         }};
         ask('在 eICU demo 数据里，评估最高乳酸与 ICU 死亡率');
         const offer = owner.namedDemo();
@@ -469,8 +475,14 @@ def test_a_question_that_names_an_official_demo_is_offered_that_demo() -> None:
             "eicuDemo": "eicu_demo_v2_0_1",
             "mimicDemo": "mimic_iv_demo_v2_2",
             "chineseWord": "mimic_iv_demo_v2_2",
+            "eicuOfficialTitle": "eicu_demo_v2_0_1",
+            "mimicOfficialTitle": "mimic_iv_demo_v2_2",
             "bareDatabase": None,
+            "fullDatabase": None,
+            "unrelatedDemo": None,
             "twoDemos": None,
+            "twoOfficialTitles": None,
+            "twoDatabasesOneDemo": None,
         },
         "card": {"names": True, "primary": True, "other": True, "plainWithoutOffer": True},
         "wrongId": False,
