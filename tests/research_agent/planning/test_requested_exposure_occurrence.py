@@ -19,6 +19,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.support.distribution_policies import STOP_MISSING
+
 from easyicu.research_agent import pipeline as research_pipeline
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     build_current_case_scientific_runtime_authority,
@@ -623,6 +625,8 @@ def test_the_review_blocks_a_plan_that_leaves_the_occurrence_unanswered() -> Non
 def test_a_descriptive_plan_answers_the_occurrence_with_its_own_distribution() -> None:
     context = _descriptive_context()
     request = _request(context, cohort_mode="all_input_rows")
+    assert request.distribution_missingness_unobserved is True
+    assert request.distribution_missing_policies is None
     labels = {
         "phenotype_flag": "Phenotype in the first 24 h",
         "death": "In-hospital death",
@@ -638,6 +642,8 @@ def test_a_descriptive_plan_answers_the_occurrence_with_its_own_distribution() -
         "request_sha256": request.request_sha256,
         "adjustment_set": [],
         "baseline_variables": ["age"],
+        # Metadata-only planning cannot establish complete exposure/outcome data.
+        "distribution_missing_policies": dict(STOP_MISSING),
         "reader_display_labels": [
             {"key": key, "value": labels[key]}
             for key in [*request.required_reader_label_keys, *request.level_label_keys]
@@ -657,6 +663,14 @@ def test_a_descriptive_plan_answers_the_occurrence_with_its_own_distribution() -
     _llm, result = _run(
         context, [json.dumps(payload)], required_primary_cohort_selection_mode="all_input_rows"
     )
+    distribution, = [
+        step for step in result.output.steps
+        if step.step_id == "exposure_outcome_distribution"
+    ]
+    assert step_cohort_population(step=distribution, plan=result.output) == "study_cohort"
+    spec = distribution.exposure_outcome_distribution_spec
+    assert spec is not None
+    assert spec.model_dump(include=set(STOP_MISSING)) == STOP_MISSING
 
     review = build_plan_scientific_review(
         context=context, plan=result.output, literature=None,
