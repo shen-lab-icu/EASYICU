@@ -65,9 +65,9 @@ _AGENT_COMPILED_RUNTIME_FINDINGS = frozenset(
 #: as robustness (research_agent/planning/scientific_review.py).  Nothing
 #: closes them, so they never make a reviewed plan uncompilable.
 _DOCUMENTED_RUNTIME_FINDINGS = frozenset({"COMPLETE_CASE_SENSITIVITY_REPEATS_PRIMARY"})
-#: The reviewer hands this finding to the host only for a plan with no
-#: estimator that could carry patient dependence; its closure is a population
-#: of one first ICU stay per patient, not a plan coordinate.
+#: The review facts distinguish a host-fixed association variance from a plan
+#: without a dependence estimator. The former retains the population and
+#: compiles clustering; the latter needs the first-stay population.
 _ONE_STAY_POPULATION_FINDING = "REPEATED_STAY_METHOD_NOT_DECLARED"
 #: The reviewer hands this finding to the host only for a trajectory plan that
 #: clusters one value per stay of coordinates the signed fixed-window owner can
@@ -872,6 +872,25 @@ def _one_stay_population_patch(study: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _patient_cluster_configuration_patch(study: Mapping[str, Any]) -> Dict[str, Any]:
+    """Repair host-owned covariance while retaining every population coordinate."""
+
+    configuration = ScientificConfiguration.inspect(study)
+    prior = study.get("confirmations")
+    prior = prior if isinstance(prior, Mapping) else {}
+    confirmations = configuration.merge_confirmations(
+        plan_repeated_stays_first=False, plan_repeated_stays_clustered=True,
+        agent_plan_configuration_compiled=True,
+    )
+    if (prior.get("plan_repeated_stays_clustered") is not True
+            or prior.get(REPEATED_STAYS_SYSTEM_DEFAULT) is True):
+        confirmations[REPEATED_STAYS_SYSTEM_DEFAULT] = True
+    return {
+        "analysis_design": {**dict(study.get("analysis_design") or {}), **_PATIENT_CLUSTERED_DESIGN},
+        "confirmations": confirmations,
+    }
+
+
 def _trajectory_design_configuration(
     study: Mapping[str, Any],
     *,
@@ -1315,7 +1334,32 @@ def compile_agent_plan_configuration(
         codes = tuple(
             code for code in codes if code != "REPEATED_STAY_IDENTITY_UNAVAILABLE"
         )
-    if _ONE_STAY_POPULATION_FINDING in codes:
+    cluster_configuration_required = bool(
+        _ONE_STAY_POPULATION_FINDING in codes
+        and isinstance(review_facts, Mapping)
+        and review_facts.get("patient_cluster_configuration_required") is True
+    )
+    if cluster_configuration_required:
+        if first_stay_restricted:
+            raise PlanDecisionError(
+                "agent_plan_runtime_finding_unsupported",
+                "A patient-clustering repair cannot replace a first-stay population.",
+            )
+        if not _declared_family_executes_patient_clustering(study):
+            raise PlanDecisionError(
+                "agent_plan_family_clustering_unsupported",
+                "The study's analysis family has no patient-clustered execution owner.",
+            )
+        if not patient_cluster_available:
+            raise PlanDecisionError(
+                "agent_plan_patient_grouping_unavailable",
+                "Patient-clustered inference requires source-owned patient grouping.",
+            )
+        if codes == (_ONE_STAY_POPULATION_FINDING,):
+            return CompiledAgentPlanConfiguration(
+                patch=_patient_cluster_configuration_patch(study), runtime_finding_codes=codes,
+            )
+    elif _ONE_STAY_POPULATION_FINDING in codes:
         cohort = study.get("cohort")
         if isinstance(cohort, Mapping) and cohort.get("exclude_readmissions") is False:
             # Retaining every stay is a population commitment; an executor
@@ -1508,6 +1552,8 @@ def compile_agent_plan_configuration(
             confirmations[REPEATED_STAYS_SYSTEM_DEFAULT] = True
     patch["analysis_design"] = analysis_design
     patch["confirmations"] = confirmations
+    if cluster_configuration_required:
+        patch.update(_patient_cluster_configuration_patch({**dict(study), **patch}))
     return CompiledAgentPlanConfiguration(
         patch=patch,
         runtime_finding_codes=codes,

@@ -4256,6 +4256,13 @@ def build_plan_scientific_review(
             )
     interval_decision = descriptive_interval_decision(context, analysis_type=plan.analysis_type)
     requested_variance = context_variance_estimator(context)
+    cluster_configuration_required = bool(
+        repeats and patient_identity
+        and canonical_analysis_family(plan.analysis_type) == "association_study"
+        and requested_variance in {"model_based", "heteroskedasticity_robust"}
+        and repeated_unit_estimator_present(context, plan)
+        and not repeated_unit_design_closed(context, plan)
+    )
     counts_only_steps = [
         step.step_id for step in plan.steps
         if step.exposure_outcome_distribution_spec is not None
@@ -4374,12 +4381,21 @@ def build_plan_scientific_review(
                     message="Patient identity exists, but no executable estimator addresses repeated ICU stays.",
                     evidence_refs=["research_context.json", "analysis_plan.json"],
                     remediation=(
+                        "The host-fixed analysis_design does not permit patient-clustered "
+                        "inference. Compile cluster_robust variance with cluster_unit "
+                        "patient from the verified grouping, retain the population, "
+                        "and regenerate the plan for whole-plan review. The Planner "
+                        "cannot change this host-owned coordinate."
+                        if cluster_configuration_required else
                         "Revise the Agent plan so it selects and binds one executable "
                         "one-stay, clustered, or mixed estimator. The researcher reviews "
                         "the resulting plan as a whole and is not asked to choose the "
                         "statistical implementation."
                     ),
-                    remediation_route="agent_plan_revision",
+                    remediation_route=(
+                        "runtime_capability" if cluster_configuration_required
+                        else "agent_plan_revision"
+                    ),
                 )
             )
         else:
@@ -4986,6 +5002,7 @@ def build_plan_scientific_review(
                 if descriptive_only_step(step)
             ],
             "repeated_unit_design_executable": repeated_unit_design_closed(context, plan),
+            "patient_cluster_configuration_required": cluster_configuration_required,
             "trajectory_representation": trajectory_representation,
             **(
                 {"landmark_survival_suite": survival_suite}

@@ -331,8 +331,9 @@ def repeat_units_possible(context: ResearchContext) -> bool:
     if (
         provenance.get("evidence_stage") == "metadata_only_planning"
         and analysis_unit == "icu_stay"
-        and context_patient_group_authority(context) is None
     ):
+        # A zero-row catalog has not counted stays per patient. Knowing how
+        # to group future rows does not establish that those rows are unique.
         return True
     if (
         n_stays is not None

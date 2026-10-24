@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -63,7 +64,9 @@ from easyicu.research_agent.trajectory.scientific_runtime_authority import (
 from easyicu.webserver import agent_pipeline_runs, agent_runs, provider_adapter
 from easyicu.webserver import scientific_runtime_projection
 from easyicu.webserver import research_pipeline_run_preparation
+from easyicu.webserver import research_plan_revision
 from easyicu.webserver import study_contexts as study_context_owner
+from easyicu.webserver.pi_copilot import plan_review_progress
 from tests.webserver.copilot.research_workflow_fixtures import (
     _acquisition_receipt,
     _foundation_profile,
@@ -457,18 +460,23 @@ def _grouped_candidate() -> PlanningRunGroupings:
     )
 
 
+@pytest.mark.parametrize("handoff", ["accepted", "configured"])
 @pytest.mark.parametrize("primary_exposure", [None, "heart_rate"])
 def test_the_run_that_follows_the_candidate_forms_its_groups(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     workflow_complete_study: dict,
     primary_exposure: str | None,
+    handoff: str,
 ) -> None:
     groupings = _grouped_candidate()
     study = {
         **workflow_complete_study,
         "primary_exposure": primary_exposure or "",
-        "execution_concepts": {"outcome": "death"},
+        "execution_concepts": {
+            "outcome": "death",
+            **({"primary_exposure": primary_exposure} if handoff == "configured" and primary_exposure else {}),
+        },
     }
     foundation_profile = {
         **_foundation_profile(), "primary_exposure_source_concept": primary_exposure,
@@ -484,7 +492,11 @@ def test_the_run_that_follows_the_candidate_forms_its_groups(
     monkeypatch.setattr(
         agent_pipeline_runs,
         "_load_candidate_plan_materialization_authority",
-        lambda **_kwargs: authority,
+        lambda **_kwargs: authority if handoff == "accepted" else None,
+    )
+    monkeypatch.setattr(
+        research_plan_revision, "load_configured_plan_groupings",
+        lambda **_kwargs: groupings, raising=False,
     )
     profiles: list[dict[str, Any]] = []
 
@@ -559,7 +571,7 @@ def test_the_run_that_follows_the_candidate_forms_its_groups(
         provider={"provider": "openai", "external": True},
         provider_environment=_PROVIDER_ENVIRONMENT,
         budget_mode="full_reviewed",
-        plan_revision_source_run_id=SOURCE_RUN_ID,
+        plan_revision_source_run_id=SOURCE_RUN_ID if handoff == "accepted" else None,
     )
 
     with pytest.raises(_Captured):
@@ -590,7 +602,8 @@ def test_the_run_that_follows_the_candidate_forms_its_groups(
         pytest.param(True, False, False, True, False, id="a-planning-run-asks"),
         pytest.param(True, True, False, None, False, id="a-continuation-replays"),
         pytest.param(False, False, True, True, True, id="the-candidates-run-binds"),
-        pytest.param(False, False, False, None, False, id="another-run-plans-none"),
+        pytest.param(False, False, False, None, False, id="a-prepared-run-needs-bound-groups"),
+        pytest.param(False, True, False, None, False, id="a-prepared-continuation-replays"),
     ],
 )
 def test_a_run_asks_for_groups_only_when_it_plans_them(
@@ -610,3 +623,74 @@ def test_a_run_asks_for_groups_only_when_it_plans_them(
 
     assert config["enable_exposure_grouping"] is asks
     assert (config["bound_exposure_groupings"] is not None) is binds
+
+
+@pytest.mark.parametrize("change", [
+    None, "unrelated_edit", "unrecorded", "other_choice", "capsule",
+    "capsule_metadata", "checkpoint_run", "grouping", "outside_study", "symlink",
+])
+def test_configuration_carries_only_its_digest_bound_source_groups(
+    tmp_path, monkeypatch, workflow_complete_study, change,
+) -> None:
+    monkeypatch.setenv("EASYICU_HOME", str(tmp_path / "state"))
+    before = _study(workflow_complete_study)
+    before["revision"] = 1
+    after = {**before, "revision": 2, "covariates": ["age"]}
+    root = tmp_path / "projects"
+    wrapper = root / before["id"] / "wrapper"
+    inner = wrapper / "pipeline" / SOURCE_RUN_ID
+    inner.mkdir(parents=True)
+    cohort_sha = _planning_run(inner, ["stay_id", "lact", "age", OUTCOME])
+    capsule = inner / "run_input_capsule.json"
+    capsule.write_text(json.dumps({"cohort_sha256": cohort_sha}))
+    (inner / "human_review_checkpoint.json").write_text(json.dumps({
+        "run_id": SOURCE_RUN_ID,
+        "run_input_capsule_sha256": hashlib.sha256(capsule.read_bytes()).hexdigest(),
+    }))
+    row = {
+        "run_id": SOURCE_RUN_ID, "project_dir": str(wrapper),
+        "scientific_configuration_sha256": study_context_owner.scientific_configuration_sha256(before),
+    }
+    monkeypatch.setattr(agent_runs, "list_run_history", lambda **_kwargs: {"runs": [row]})
+    if change != "unrecorded":
+        plan_review_progress.record_choice(
+            before=before, after=after, run=row,
+            decision_code="other_choice" if change == "other_choice" else "agent_plan_configuration",
+            option_id="typed_runtime_projection",
+        )
+    if change == "unrelated_edit":
+        after["question"] = "Another synthetic question."
+    elif change == "capsule":
+        capsule.write_text(json.dumps({"cohort_sha256": "0" * 64}))
+    elif change == "capsule_metadata":
+        capsule.write_text(json.dumps({"cohort_sha256": cohort_sha, "changed": True}))
+    elif change == "checkpoint_run":
+        path = inner / "human_review_checkpoint.json"
+        checkpoint = json.loads(path.read_text())
+        checkpoint["run_id"] = "another-run"
+        path.write_text(json.dumps(checkpoint))
+    elif change == "grouping":
+        (inner / "exposure_groupings.json").write_text("{}")
+    elif change == "outside_study":
+        other = root / "other-study" / "wrapper"
+        shutil.copytree(wrapper, other)
+        row["project_dir"] = str(other)
+    elif change == "symlink":
+        other = root / before["id"] / "linked-wrapper"
+        other.symlink_to(wrapper, target_is_directory=True)
+        row["project_dir"] = str(other)
+    def load():
+        return research_plan_revision.load_configured_plan_groupings(study=after, project_root=str(root))
+    if change in {"capsule", "capsule_metadata", "checkpoint_run", "grouping", "outside_study", "symlink"}:
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+            load()
+        assert raised.value.code == "candidate_plan_materialization_authority_invalid"
+    else:
+        groups = load()
+        if change is None:
+            assert groups.variables == (_GROUPED,)
+            assert groups.concepts == ("lact",)
+            assert groups.columns[0].variable == _GROUPED
+            assert list(groups.candidate.derivations) == ["x1"]
+        else:
+            assert groups is None
