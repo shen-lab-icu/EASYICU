@@ -21,16 +21,37 @@
   const POLL_MS = 3000;
   const DEMO_WORD = '(?:demo|演示|示例)';
 
-  // Accept the catalog's complete demo title or a nearby short product name
-  // and demo word. Do not widen the short-name gap across unrelated names.
+  function normalizedDemoTitle(demo) {
+    return String(demo && demo.title || '').normalize('NFKC').trim().toLowerCase();
+  }
+
+  function demoProduct(demo) {
+    return normalizedDemoTitle(demo).split(/\s+/)[0] || '';
+  }
+
+  function escapedPattern(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  }
+
+  function demoTitlePattern(demo, withVersion) {
+    const title = normalizedDemoTitle(demo);
+    if (!title || !new RegExp(DEMO_WORD).test(title)) return null;
+    const version = String(demo.version || '').normalize('NFKC').trim().toLowerCase();
+    const suffix = withVersion && version ? `\\s+v?${escapedPattern(version)}` : '';
+    return new RegExp(`(?:^|[^a-z0-9])${escapedPattern(title)}${suffix}(?![a-z0-9]|[._+-][a-z0-9])`);
+  }
+
+  // Short names remain useful, but cannot override an explicit full title
+  // or its version. Keep the gap local to one clause and whole product names.
   function demoNamePattern(demo) {
-    const title = String(demo && demo.title || '').normalize('NFKC').trim().toLowerCase();
-    const head = title.split(/\s+/)[0] || '';
-    const name = head.toLowerCase().replace(/[^a-z0-9]+/g, '[\\s-]*');
+    const name = demoProduct(demo).replace(/[^a-z0-9]+/g, '[\\s-]*');
     if (!name) return null;
-    const fullTitle = new RegExp(DEMO_WORD).test(title)
-      ? title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+') : '';
-    return new RegExp(`${name}[^。.!！?？;；\\n]{0,16}${DEMO_WORD}|${DEMO_WORD}[^。.!！?？;；\\n]{0,8}${name}${fullTitle ? `|${fullTitle}` : ''}`);
+    const product = `(?:^|[^a-z0-9])${name}(?=$|[^a-z0-9])`;
+    const version = String(demo.version || '').normalize('NFKC').trim().toLowerCase();
+    const versionOrAbsent = version
+      ? `(?:\\s+v?${escapedPattern(version)}(?![a-z0-9]|[._+-][a-z0-9])|(?!\\s+v?\\d))`
+      : '(?!\\s+v?\\d)';
+    return new RegExp(`(?:${product}[^。.!！?？;；\\n]{0,16}${DEMO_WORD}|${DEMO_WORD}[^。.!！?？;；\\n]{0,8}${product})${versionOrAbsent}`);
   }
 
   function create(host) {
@@ -292,14 +313,16 @@
       if (!catalog.rows) { void loadCatalog(); return null; }
       const first = host.messages().find(row => row && row.role === 'user' && String(row.text || '').trim());
       const text = first ? String(first.text).normalize('NFKC').toLowerCase() : '';
-      const hits = text ? catalog.rows.filter(demo => { const pattern = demoNamePattern(demo); return pattern && pattern.test(text); }) : [];
+      const titleHits = text ? catalog.rows.filter(demo => demoTitlePattern(demo, false)?.test(text)) : [];
+      const hits = titleHits.length
+        ? titleHits.filter(demo => demoTitlePattern(demo, true)?.test(text))
+        : (text ? catalog.rows.filter(demo => demoNamePattern(demo)?.test(text)) : []);
       if (hits.length !== 1) return null;
       const demo = hits[0];
-      const product = row => String(row && row.title || '').normalize('NFKC').trim().split(/\s+/)[0].toLowerCase();
       // A second database makes the source choice ambiguous even if only
       // one is followed by "Demo". Let the researcher choose explicitly.
-      if (catalog.rows.some(row => product(row) !== product(demo) && product(row)
-        && new RegExp(`(?:^|[^a-z0-9])${product(row).replace(/[^a-z0-9]+/g, '[\\s-]*')}(?=$|[^a-z0-9])`).test(text))) return null;
+      if (catalog.rows.some(row => demoProduct(row) !== demoProduct(demo) && demoProduct(row)
+        && new RegExp(`(?:^|[^a-z0-9])${demoProduct(row).replace(/[^a-z0-9]+/g, '[\\s-]*')}(?=$|[^a-z0-9])`).test(text))) return null;
       const status = demo.status && typeof demo.status === 'object' ? demo.status : {};
       const database = String(demo.database || '');
       // Legacy demos sharing a full loader key cannot identify a demo export
