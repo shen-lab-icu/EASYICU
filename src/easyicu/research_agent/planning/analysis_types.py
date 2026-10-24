@@ -1579,6 +1579,87 @@ _MISSINGNESS_COHORT_QUALIFIER = re.compile(
 )
 
 
+_DECLINED_ANALYSIS_START = re.compile(
+    r"\b(?:do\s+not|don't|without|avoid|no|not)\b(?!\s+only\b)"
+    r"|(?:不(?:再)?(?:做|作|进行|开展|采用|使用|需要|要求|估计|评估|研究|分析|生成)|"
+    r"无需|不要|不必|避免|禁止|不得)",
+    re.IGNORECASE,
+)
+_DECLINABLE_ANALYSIS_METHOD = re.compile(
+    r"\b(?:predict\w*|forecast\w*|causal\w*|regression|adjust(?:ed|ing|ment)?|"
+    r"statistical\s+inference|confidence\s+intervals?|significance\s+tests?|"
+    r"hypothesis\s+tests?|survival|cox|kaplan(?:[- ]meier)?|propensity|"
+    r"target\s+trial|iptw|ipw)\b"
+    r"|统计推断|置信区间|显著性检验|假设检验|回归|调整|校正|预测|因果|"
+    r"倾向评分|目标试验|逆概率加权|生存分析|时间到事件",
+    re.IGNORECASE,
+)
+# The negation must directly govern a method, possibly through a narrow
+# method-action phrase. Population verbs such as exclude/include never qualify.
+_DECLINED_METHOD_PREFIX = re.compile(
+    r"\s*(?:(?:build|develop|fit|use|perform|run|conduct|draw|make|estimate|"
+    r"report|calculate)\s+)?(?:(?:a|an|the|any)\s+)?"
+    r"(?:(?:进行|开展|采用|使用|建立|构建|估计|生成|报告)(?:任何)?)?",
+    re.IGNORECASE,
+)
+_ANALYSIS_SCOPE_BOUNDARY = re.compile(
+    r"[,，。；;.!?？！\n]|\b(?:but|however|instead|then|rather)\b"
+    r"|但是|但|然而|不过|而是|而要|而需|只需要|只需|只做|只描述",
+    re.IGNORECASE,
+)
+_ANALYSIS_LIST_JOIN = re.compile(r"\s*(?:(?:and|or)\b\s*)?", re.IGNORECASE)
+# A comma may continue a list of declined methods, but a verb starts a new
+# request ("without adjustment, predict mortality"). Chinese method lists use
+# enumeration commas (、), already inside the original clause.
+_ANALYSIS_LIST_METHOD = re.compile(
+    r"(?:prediction|forecasting|predictive\s+model(?:ing|ling|s)?|"
+    r"causal\s+(?:inference|analysis|estimation)|regression|adjustment|"
+    r"statistical\s+inference|confidence\s+intervals?|significance\s+tests?|"
+    r"hypothesis\s+tests?|survival\s+analysis|propensity\s+(?:scores?|weighting)|"
+    r"target\s+trial(?:s|\s+emulation)?)\b",
+    re.IGNORECASE,
+)
+
+
+_ANALYSIS_NOUN_LIST = re.compile(
+    _ANALYSIS_LIST_METHOD.pattern
+    + r"(?:\s+(?:and|or)\s+" + _ANALYSIS_LIST_METHOD.pattern + r")*\s*",
+    re.IGNORECASE,
+)
+
+
+def mask_declined_analysis_phrases(text: str) -> str:
+    """Blank explicitly declined analyses, preserving original evidence offsets.
+
+    A negation governs its clause and comma-separated method list, including
+    Chinese enumeration commas. Sentence boundaries and contrastive requests
+    end its scope; a later positive request must still select its own family.
+    The method must follow the negation or a listed method-action verb directly;
+    an unrelated population exclusion never governs a later analysis request.
+    """
+
+    masked = list(text)
+    for negation in _DECLINED_ANALYSIS_START.finditer(text):
+        start = negation.start()
+        boundary = _ANALYSIS_SCOPE_BOUNDARY.search(text, negation.end())
+        end = boundary.start() if boundary else len(text)
+        method_start = _DECLINED_METHOD_PREFIX.match(text, negation.end()).end()
+        if not _DECLINABLE_ANALYSIS_METHOD.match(text, method_start, end):
+            continue
+        while boundary and boundary.group(0) == ",":
+            item_start = _ANALYSIS_LIST_JOIN.match(text, boundary.end()).end()
+            next_boundary = _ANALYSIS_SCOPE_BOUNDARY.search(text, item_start)
+            item_end = next_boundary.start() if next_boundary else len(text)
+            # "prediction should use ..." is a positive clause, not a noun
+            # enumeration under the earlier negation.
+            if not _ANALYSIS_NOUN_LIST.fullmatch(text, item_start, item_end):
+                break
+            boundary = next_boundary
+            end = item_end
+        masked[start:end] = " " * (end - start)
+    return "".join(masked)
+
+
 def mask_non_association_phrases(text: str) -> str:
     """Blank declined, described and incidental relationships, preserving offsets.
 
@@ -1692,8 +1773,10 @@ def _infer_analysis_type_with_basis(
     preferred = _preferred_family_key(context)
     if preferred is not None:
         return _REGISTRY[preferred], FAMILY_BASIS_STUDY_DESIGN
-    text = _question_text(context)
-    primary_question_text = (context.research_question or "").lower().strip()
+    text = mask_declined_analysis_phrases(_question_text(context))
+    primary_question_text = mask_declined_analysis_phrases(
+        (context.research_question or "").lower().strip()
+    )
     association_text = mask_non_association_phrases(text)
     relationship_question = RELATIONSHIP_QUESTION.search(
         mask_non_association_phrases(primary_question_text)

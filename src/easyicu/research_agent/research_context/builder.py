@@ -1527,6 +1527,36 @@ _NAMED_HORIZON_OUTCOMES = {
 _ICU_MORTALITY_TERMS = ("icu mortality", "icu死亡", "icu 死亡", "重症监护病房死亡")
 _HOSPITAL_MORTALITY_TERMS = ("in-hospital mortality", "hospital mortality", "院内死亡", "住院死亡")
 
+_DECLINED_MORTALITY_SETTING = re.compile(
+    r"(?:"
+    r"\b(?:not|never|cannot|can't|don't)\s+"
+    r"(?:(?:use|using|substitute|substituting|report|reporting|measure|measuring)\s+)?"
+    r"|\b(?:rather than|instead of)\s+"
+    r"|(?:不能|不得|不要|不应|不用|不使用|不采用|不以|不是|而非|而不是|并非)\s*"
+    r"(?:(?:使用|采用|报告|分析|计算|用|以)\s*)?"
+    r")(?P<endpoint>"
+    + "|".join(re.escape(term) for term in (*_ICU_MORTALITY_TERMS, *_HOSPITAL_MORTALITY_TERMS))
+    + r")",
+    re.IGNORECASE,
+)
+
+
+def _affirmed_mortality_setting_text(question: str) -> str:
+    """Ignore only an endpoint mention directly governed by explicit rejection.
+
+    A prohibition on substituting ICU mortality does not request it. Mask the
+    named endpoint alone, so later affirmative clauses and population wording
+    ("do not exclude patients with ICU mortality") retain their meaning.
+    This projection cannot change the physical concept's owner definition.
+    """
+
+    def omit(match: re.Match[str]) -> str:
+        prefix = match.group(0)[:match.start("endpoint") - match.start()]
+        return prefix + " " * len(match.group("endpoint"))
+
+    return _DECLINED_MORTALITY_SETTING.sub(omit, question)
+
+
 
 def _stated_horizon_request(
     horizons: Sequence[StatedHorizon],
@@ -1564,7 +1594,7 @@ def _infer_outcome_semantics(
     research_question: str,
     outcome_name: Optional[str],
 ) -> Dict[str, Any]:
-    question = (research_question or "").lower()
+    question = _affirmed_mortality_setting_text((research_question or "").lower())
     outcome = (outcome_name or "").lower()
     # The horizons the question states for death or survival ("survival to
     # day 28", "one-year mortality"): a request names its horizon as well as

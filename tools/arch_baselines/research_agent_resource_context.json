@@ -1,7 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/reporting/article_contract.py"
+      "src/easyicu/research_agent/planning/analysis_types.py"
     ],
     "summary_changes": {}
   },
@@ -796,9 +796,16 @@
         "src/easyicu/research_agent/reporting/article_contract.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "declined-mortality-setting reading in research_context builder",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/analysis_types.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Credit closed step-scoped auxiliary cohort summaries as baseline content; refresh only the article-contract source digest, preserving all resource selections and prompt byte budgets.",
+  "baseline_reason": "declined-mortality-setting reading in research_context builder",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -817,7 +824,7 @@
     "src/easyicu/research_agent/learning/runtime.py": "87743106defc0df92c826bcc5a16e9156c89877517ce1d29ce5be9654840925a",
     "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
-    "src/easyicu/research_agent/planning/analysis_types.py": "ed8c9377aa2962c96e46710a5eeffaa906ba9a1912199554f9f0f20bfeb51a6b",
+    "src/easyicu/research_agent/planning/analysis_types.py": "28b56d39001150fb1839e840ca2f0898c967f3e25642b18b2eedc15a250cd8f9",
     "src/easyicu/research_agent/planning/cohort_contract.py": "e043ca40d59f613031a1b41f9280152ac3c58cefcc86e877d466d5142496899a",
     "src/easyicu/research_agent/planning/figure_strategy.py": "42b617ad40d993c585df27598613731ceedc2e4645f197a2cb96c54645f7cec2",
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
