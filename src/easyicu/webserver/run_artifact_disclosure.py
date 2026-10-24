@@ -364,6 +364,21 @@ def scan_browser_projection(payloads: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def browser_review_summary(value: Any) -> str:
+    """Withhold unsafe free text while preserving the structured review stop.
+
+    A conservative identifier scanner also rejects a prose concept list such
+    as ``stay_id, age``. The original digest-bound request stays on the host;
+    neither a false positive nor a real unsafe value may reach the browser.
+    The complete browser package is still scanned after this projection.
+    """
+
+    summary = _clean_text(value, 1_000)
+    if not summary or not scan_browser_projection({"summary": summary})["passed"]:
+        return "Review is required. See the structured findings before proceeding."
+    return summary
+
+
 def privacy_blocked_projection(
     *,
     run_context: Mapping[str, Any],
@@ -408,6 +423,7 @@ def privacy_blocked_projection(
 
 
 __all__ = [
+    "browser_review_summary",
     "privacy_blocked_projection",
     "project_artifact_governance",
     "safe_artifacts_after_privacy_scan",

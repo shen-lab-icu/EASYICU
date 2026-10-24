@@ -2,10 +2,94 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from easyicu.webserver import agent_runs, run_artifact_disclosure
 from easyicu.webserver.app import app
+
+
+@pytest.mark.parametrize('summary', [
+    'No analysis step reads stay_id, icu_unit_type, age.',
+    'Input unavailable at /Users/synthetic/private.csv',
+    'Bearer synthetic-only-credential',
+    'stay_id: synthetic-row-123',
+    '',
+])
+def test_unsafe_review_prose_is_withheld_without_relaxing_disclosure(summary):
+    projected = run_artifact_disclosure.browser_review_summary(summary)
+    assert projected != summary
+    assert run_artifact_disclosure.scan_browser_projection({'summary': projected})['passed']
+    # A different unsafe field still blocks the entire browser package.
+    assert not run_artifact_disclosure.scan_browser_projection({
+        'summary': projected, 'other': 'stay_id: synthetic-row-123',
+    })['passed']
+
+
+def test_review_summary_projection_preserves_the_bound_request_and_stop():
+    from easyicu.research_agent.orchestration.workflow import HumanReviewRequest
+
+    request = HumanReviewRequest.create(
+        kind='scientific_stop', authority_sha256='a' * 64,
+        summary='No analysis step reads stay_id, icu_unit_type, age.',
+        payload={'reason': 'question_requirement_not_covered', 'approval_allowed': False},
+    )
+    before = request.model_dump(mode='json')
+    projection = {
+        'summary': run_artifact_disclosure.browser_review_summary(request.summary),
+        'authority_sha256': request.authority_sha256,
+        'reason': request.payload['reason'],
+        'approval_allowed': request.payload['approval_allowed'],
+    }
+    assert projection['approval_allowed'] is False
+    assert projection['reason'] == 'question_requirement_not_covered'
+    assert projection['authority_sha256'] == before['authority_sha256']
+    assert request.model_dump(mode='json') == before
+
+
+def test_a_safe_complete_plan_review_summary_remains_visible():
+    summary = 'Review and explicitly approve the complete analysis plan before execution.'
+    assert run_artifact_disclosure.browser_review_summary(summary) == summary
+
+
+def test_review_api_withholds_unsafe_summary_and_keeps_approval_blocked(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from easyicu.research_agent.orchestration.workflow import HumanReviewRequest
+    from easyicu.webserver import agent_pipeline_runs
+    from tests.webserver.copilot.research_workflow_fixtures import complete_study
+    from tests.webserver.copilot.test_a_plan_review_names_the_levels_of_a_grouped_exposure import _pending
+
+    pending = _pending(tmp_path)
+    original = pending.requests[0]
+    request = HumanReviewRequest.create(
+        kind=original.kind, authority_sha256=original.authority_sha256,
+        summary='No analysis step reads stay_id, icu_unit_type, age.',
+        payload={**original.payload, 'reason': 'question_requirement_not_covered',
+                 'approval_allowed': False},
+    )
+    pending = pending.model_copy(update={'requests': (request,)})
+    entry = SimpleNamespace(
+        pending=pending, study=complete_study(), credential_source='pi_verified',
+        budget_mode='full_reviewed', provider={}, wrapper_dir=tmp_path,
+    )
+    monkeypatch.setattr(agent_pipeline_runs, '_PENDING_REVIEWS', {pending.run_id: entry})
+    # Compare every existing review control with the former prose projection.
+    # The minimal fixture has a stale scientific policy, which must keep its
+    # higher-priority refusal rather than being changed by display redaction.
+    with monkeypatch.context() as original_display:
+        original_display.setattr(run_artifact_disclosure, 'browser_review_summary', lambda value: value)
+        before = agent_pipeline_runs.pending_review(pending.run_id)['requests'][0]
+    projected = agent_pipeline_runs.pending_review(pending.run_id)
+    public_request = projected['requests'][0]
+    assert public_request['summary'] != request.summary
+    assert public_request['approval_allowed'] is False
+    assert {key: value for key, value in public_request.items() if key != 'summary'} == {
+        key: value for key, value in before.items() if key != 'summary'
+    }
+    assert public_request['review_id'] == request.review_id
+    assert public_request['authority_sha256'] == request.authority_sha256
+    assert run_artifact_disclosure.scan_browser_projection({'request': public_request})['passed']
 
 
 def test_disclosure_owner_applies_both_browser_and_artifact_policies() -> None:

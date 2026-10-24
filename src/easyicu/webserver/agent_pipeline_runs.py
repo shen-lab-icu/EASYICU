@@ -4441,7 +4441,7 @@ def _write_projection(
                     ),
                     160,
                 ),
-                "summary": request.summary,
+                "summary": run_artifact_disclosure.browser_review_summary(request.summary),
                 "authority_sha256": request.authority_sha256,
                 "approval_allowed": plan_recommendation_complete and current_review_approval_allowed,
                 "review_score": (
@@ -4866,7 +4866,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             {
                 "review_id": request.review_id,
                 "kind": request.kind,
-                "summary": request.summary,
+                "summary": run_artifact_disclosure.browser_review_summary(request.summary),
                 "authority_sha256": request.authority_sha256,
                 "reason_code": _clean_text(
                     "agent_plan_revision_nonconvergent"
