@@ -34,7 +34,7 @@ from ...figures.display_labels import figure_language_labels
 from .bound_variable_display import load_bound_variable_descriptions
 from .cohort_flow_figure_executor import render_cohort_flow_axis
 from .figure_input_capability import TypedInputCapability
-from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
+from .typed_input_binding import BoundTypedInput, TypedInputBindingError, load_typed_input, sha256_file
 from ._shared import figure_product as _figure_product, method_head as _method_head
 
 COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS = (
@@ -329,7 +329,7 @@ def _load_inputs(
     step_id: str,
     input_keys: tuple[str, ...],
 ) -> dict[str, BoundTypedInput]:
-    return {
+    bound = {
         key: load_typed_input(
             input_key=key,
             run_dir=run_dir,
@@ -339,9 +339,19 @@ def _load_inputs(
             expected_evidence_kind="table",
             require_consumption_contract=True,
             minimum_row_count=1,
+            text_columns=("exposure_level",) if key == "table:exposure_outcome_distribution" else (),
         )
         for key in input_keys
     }
+    distribution = bound.get("table:exposure_outcome_distribution")
+    if distribution is not None:
+        frame = distribution.frame
+        if "exposure_column" in frame and frame["exposure_column"].nunique(dropna=False) > 1:
+            raise TypedInputBindingError(
+                "product_identity_mismatch",
+                "exposure_column must agree across all exposure/outcome distribution rows",
+            )
+    return bound
 
 
 def _finite_series(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -381,6 +391,38 @@ def _reader_label(value: Any) -> str:
     if value is None or (not isinstance(value, str) and pd.isna(value)):
         return "Variable"
     return re.sub(r"[_\s]+", " ", str(value).strip()) or "Variable"
+
+
+def _exposure_labels(levels: pd.DataFrame, display_labels: Mapping[str, str]) -> list[str]:
+    """Preserve raw identities and apply the distribution's missing-token convention.
+
+    Nulls and blank/NA/N/A/NaN/null/<NA>/unknown tokens denote missingness.
+    ``None`` is a known category (for example, no drug); producers must encode
+    dictionary-declared missing categories as nulls or these explicit tokens.
+    """
+
+    column = str(levels.iloc[0].get("exposure_column") or "exposure")
+    numeric = (pd.api.types.is_numeric_dtype(levels["exposure_level"])
+               and not pd.api.types.is_bool_dtype(levels["exposure_level"]))
+    labels = []
+    for value in levels["exposure_level"]:
+        if (pd.isna(value) or str(value).strip().casefold() in
+                {"", "na", "n/a", "nan", "null", "<na>", "unknown"}
+                or (numeric and not np.isfinite(value))):
+            raise ValueError("missing or unknown exposure level cannot be drawn as a known group")
+        level = str(value)
+        # CSV preserves text while parquet retains numeric dtypes. Offer the
+        # same integer display alias for 10.0 on either path, after the raw key;
+        # leading-zero and scientific-notation identities stay literal.
+        integer = re.fullmatch(r"(-?(?:0|[1-9][0-9]*))\.0+", level)
+        alias = str(int(integer[1])) if integer else level
+        labels.append(display_labels.get(
+            f"{column}={level}",
+            display_labels.get(f"{column}={alias}", _reader_label(level)),
+        ))
+    if len(set(labels)) != len(labels):
+        raise ValueError("exposure labels must be unique for distinct source rows")
+    return labels
 
 
 def _write_exact_source(bound: BoundTypedInput, *, out_dir: Path) -> str:
@@ -484,6 +526,7 @@ def run_composite_descriptive_figure(
     ].copy()
     if levels.empty:
         raise ValueError("exposure/outcome distribution has no exposure-level rows")
+    labels = _exposure_labels(levels, dict(display_labels or {}))
     levels["n_rows"] = _integer_series(levels, "n_rows")
     levels["exposure_denominator"] = _integer_series(levels, "exposure_denominator")
     levels["outcome_events"] = _integer_series(levels, "outcome_events")
@@ -564,15 +607,6 @@ def run_composite_descriptive_figure(
     add_panel_label(ax, "A", x=-0.12, y=1.04)
 
     ax = axes[0, 1]
-    display_labels = dict(display_labels or {})
-    exposure_column = str(levels.iloc[0].get("exposure_column") or "exposure")
-    labels = []
-    for value in levels["exposure_level"]:
-        numeric = float(value)
-        level = str(int(numeric)) if numeric.is_integer() else str(numeric)
-        labels.append(
-            display_labels.get(f"{exposure_column}={level}", _reader_label(value))
-        )
     positions = np.arange(len(levels))
     width = 0.36
     ax.bar(
