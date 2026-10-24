@@ -204,7 +204,7 @@ def test_pipeline_production_callsite_persists_and_binds_resources(
         question="Assess fixed-window trajectory phenotypes.",
         cohort=cohort,
         cohort_name="coder_resource_production_wiring",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_representation",
         stop_after_analysis=True,

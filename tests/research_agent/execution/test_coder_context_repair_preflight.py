@@ -69,7 +69,7 @@ def _context(ra, *, variable_count: int = 0):
     return ra.ResearchContext(
         research_question="Run the planner-owned ICU analysis.",
         cohort=ra.CohortDescriptor(
-            cohort_name="demo", database="synthetic", n_stays=20, n_patients=18
+            cohort_name="demo", database="miiv", n_stays=20, n_patients=18
         ),
         variables=variables,
         primary_exposure="selected_first",

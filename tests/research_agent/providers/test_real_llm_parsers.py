@@ -369,7 +369,7 @@ def test_planner_uses_enough_completion_budget(ra):
     ctx = schema.ResearchContext(
         research_question="Is sofa2 -> death?",
         cohort=schema.CohortDescriptor(
-            cohort_name="c", database="d", n_patients=1, n_stays=1
+            cohort_name="c", database="miiv", n_patients=1, n_stays=1
         ),
         variables=[],
     )
@@ -394,7 +394,7 @@ def test_planner_retries_primary_cohort_step_with_side_output(ra):
     ctx = schema.ResearchContext(
         research_question="Describe a closed primary cohort.",
         cohort=schema.CohortDescriptor(
-            cohort_name="c", database="d", n_patients=1, n_stays=1
+            cohort_name="c", database="miiv", n_patients=1, n_stays=1
         ),
         variables=[],
     )
@@ -1316,7 +1316,7 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
     ctx = schema.ResearchContext(
         research_question="x",
         cohort=schema.CohortDescriptor(
-            cohort_name="c", database="d", n_patients=1, n_stays=1
+            cohort_name="c", database="miiv", n_patients=1, n_stays=1
         ),
         variables=[],
     )
@@ -1336,7 +1336,7 @@ def test_writer_language_prompt_preserves_evidence_ids(ra):
     ctx = schema.ResearchContext(
         research_question="x",
         cohort=schema.CohortDescriptor(
-            cohort_name="c", database="d", n_patients=1, n_stays=1
+            cohort_name="c", database="miiv", n_patients=1, n_stays=1
         ),
         variables=[],
     )
@@ -1371,7 +1371,7 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     ctx = schema.ResearchContext(
         research_question="x",
         cohort=schema.CohortDescriptor(
-            cohort_name="c", database="d", n_patients=1, n_stays=1
+            cohort_name="c", database="miiv", n_patients=1, n_stays=1
         ),
         variables=[],
     )

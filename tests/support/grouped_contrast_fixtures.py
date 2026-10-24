@@ -19,7 +19,7 @@ def grouped_context(*, stated=None):
         contrast["stated"] = stated
     return context.model_copy(update={
         "variables": [variable, *context.variables[1:]],
-        "cohort": context.cohort.model_copy(update={"provenance": {
+        "cohort": context.cohort.model_copy(update={"database": "miiv", "provenance": {
             EXPOSURE_GROUP_CONTRASTS_KEY: [contrast],
             EXPOSURE_GROUP_LABELS_KEY: [{
                 "variable": "exposure_flag", "concept": "bmi", "scale": "ordinal",

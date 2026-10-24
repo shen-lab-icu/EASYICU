@@ -121,7 +121,7 @@ def _context(ra):
     return ra.ResearchContext(
         research_question="Describe an ICU cohort.",
         cohort=ra.CohortDescriptor(
-            cohort_name="demo", database="synthetic", n_stays=10, n_patients=10
+            cohort_name="demo", database="miiv", n_stays=10, n_patients=10
         ),
         variables=[],
     )
@@ -247,7 +247,7 @@ def test_coder_context_exposes_registered_source_concept_metadata(ra):
     context = ra.ResearchContext(
         research_question="Describe a binary intervention.",
         cohort=ra.CohortDescriptor(
-            cohort_name="demo", database="synthetic", n_stays=10, n_patients=10
+            cohort_name="demo", database="miiv", n_stays=10, n_patients=10
         ),
         variables=[
             ra.ConceptDescriptor(
@@ -321,7 +321,7 @@ def test_coder_sparse_event_repair_surfaces_referenced_context_metadata(ra):
     context = ra.ResearchContext(
         research_question="Define the selected treatment event.",
         cohort=ra.CohortDescriptor(
-            cohort_name="demo", database="synthetic", n_stays=10, n_patients=10
+            cohort_name="demo", database="miiv", n_stays=10, n_patients=10
         ),
         variables=[
             ra.ConceptDescriptor(

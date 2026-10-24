@@ -17,6 +17,7 @@ from easyicu.research_agent.planning.prompt_projection import (
 )
 from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
 from easyicu.research_agent.providers import structured_retry
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.providers.prompt_budget import (
     PromptBudgetClient, PROMPT_TRANSPORT_BUDGETS, PromptTransportBudgetError,
 )
@@ -160,16 +161,17 @@ def test_stage_projection_retains_unrecognized_source_verbatim():
     assert receipts[0]["status"] == "retained"
 
 
-class _NoProvider:
-    supports_strict_json_schema = False
-
-    def complete(self, *args, **kwargs):
-        raise AssertionError("Real transport forbidden")
+def _no_provider(*, strict: bool = False) -> ScriptedMockLLMClient:
+    client = ScriptedMockLLMClient(
+        [AssertionError("Real transport forbidden")], repeat_last=True,
+    )
+    client.supports_strict_json_schema = strict
+    return client
 
 
 @pytest.mark.parametrize("limit", [100, 40000, 41000])
 def test_preflight_and_transport_agree_including_schema_and_configured_limit(limit):
-    client = PromptBudgetClient(_NoProvider(), budget=PROMPT_TRANSPORT_BUDGETS[
+    client = PromptBudgetClient(_no_provider(), budget=PROMPT_TRANSPORT_BUDGETS[
         "planner_plan_generation"
     ].with_limit_tokens(limit))
     byte_limit = planner_prompt_byte_limit(client)
@@ -186,7 +188,7 @@ def test_progressive_preflight_rejects_old_four_byte_gap_before_transport(monkey
     monkeypatch.setattr(progressive, "_GUIDE", "")
     monkeypatch.setattr(progressive.ProgressivePlannerAgent, "_user_prompt", lambda *a, **kw: "x" * 120001)
     with pytest.raises(ProgressivePlanCompileError, match="limit=120000"):
-        progressive.ProgressivePlannerAgent(_NoProvider()).run(_context())
+        progressive.ProgressivePlannerAgent(_no_provider()).run(_context())
 
 
 @pytest.mark.parametrize("agent_class", [PlannerAgent, progressive.ProgressivePlannerAgent])
@@ -212,7 +214,7 @@ def test_shared_projection_reaches_both_planners_without_rebinding_source(monkey
     monkeypatch.setattr(progressive, "build_progressive_checkpoint_authorities", capture_authority)
     monkeypatch.setattr(progressive, "call_llm_with_structured_retry", capture)
     monkeypatch.setattr(structured_retry, "call_llm_with_structured_retry", capture)
-    agent = agent_class(_NoProvider())
+    agent = agent_class(_no_provider())
     with pytest.raises(Captured) as caught:
         agent.run(_context(), planning_contract_context=contract)
     assert expected in captured[1].content
@@ -231,7 +233,7 @@ def test_retry_keeps_base_shape_and_all_distinct_feedback_without_duplicate_shap
     before = base[0].content
     reminders = retry_shape_reminder(base, shape)
     assert retry_shape_reminder(base, "unseen shape") == "unseen shape"
-    client = PromptBudgetClient(_NoProvider(), budget=PROMPT_TRANSPORT_BUDGETS["planner_plan_generation"])
+    client = PromptBudgetClient(_no_provider(), budget=PROMPT_TRANSPORT_BUDGETS["planner_plan_generation"])
     captured = []
 
     def capture(llm, messages, **kwargs):
@@ -259,7 +261,7 @@ def test_retry_keeps_base_shape_and_all_distinct_feedback_without_duplicate_shap
 
 def test_oversize_feedback_still_fails_closed_without_dropping_base(monkeypatch):
     base = [LLMMessage(role="user", content="x" * 119000)]
-    client = PromptBudgetClient(_NoProvider(), budget=PROMPT_TRANSPORT_BUDGETS["planner_plan_generation"])
+    client = PromptBudgetClient(_no_provider(), budget=PROMPT_TRANSPORT_BUDGETS["planner_plan_generation"])
     accepted_requests = []
 
     def capture(llm, messages, **kwargs):
@@ -370,7 +372,7 @@ def _run_progressive(monkeypatch, limit_tokens, contract):
     monkeypatch.setattr(progressive, "call_llm_with_structured_retry", capture)
     monkeypatch.setattr(structured_retry, "call_llm_with_structured_retry", capture)
 
-    client = _NoProvider()
+    client = _no_provider()
     client.budget = PROMPT_TRANSPORT_BUDGETS[
         "planner_plan_generation"
     ].with_limit_tokens(limit_tokens)
@@ -389,7 +391,7 @@ def _run_legacy(monkeypatch, limit_tokens, contract):
 
     monkeypatch.setattr(structured_retry, "call_llm_with_structured_retry", capture)
 
-    client = _NoProvider()
+    client = _no_provider()
     client.budget = PROMPT_TRANSPORT_BUDGETS[
         "planner_plan_generation"
     ].with_limit_tokens(limit_tokens)
@@ -469,7 +471,7 @@ def test_progressive_oversized_compact_plan_fails_closed_naming_the_plan_block(
 
     monkeypatch.setattr(progressive, "call_llm_with_structured_retry", capture)
     monkeypatch.setattr(structured_retry, "call_llm_with_structured_retry", capture)
-    client = _NoProvider()
+    client = _no_provider()
     client.budget = PROMPT_TRANSPORT_BUDGETS[
         "planner_plan_generation"
     ].with_limit_tokens(limit_tokens)
@@ -872,9 +874,8 @@ def _run_progressive_request(monkeypatch, limit_tokens, contract, strict):
 
     monkeypatch.setattr(progressive, "call_llm_with_structured_retry", capture)
     monkeypatch.setattr(structured_retry, "call_llm_with_structured_retry", capture)
-    monkeypatch.setattr(_NoProvider, "supports_strict_json_schema", strict)
 
-    client = _NoProvider()
+    client = _no_provider(strict=strict)
     client.budget = PROMPT_TRANSPORT_BUDGETS[
         "planner_plan_generation"
     ].with_limit_tokens(limit_tokens)
@@ -982,7 +983,7 @@ def test_legacy_planner_oversized_plan_fails_closed_naming_the_plan_block(
         structured_retry, "call_llm_with_structured_retry",
         lambda *args, **kwargs: pytest.fail("oversized request must not reach transport"),
     )
-    client = _NoProvider()
+    client = _no_provider()
     client.budget = PROMPT_TRANSPORT_BUDGETS[
         "planner_plan_generation"
     ].with_limit_tokens(limit_tokens)

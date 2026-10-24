@@ -18,6 +18,7 @@ from easyicu.research_agent.orchestration.profiles import (
 from easyicu.research_agent.concept_dict_audit import (
     compute_concept_dict_fingerprint,
 )
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.resources import (
     CapabilityApproval,
     build_capability_activation,
@@ -29,15 +30,10 @@ IMAGE_DIGEST = "sha256:" + "a" * 64
 BASE_IMPORTS = ("numpy", "pandas", "scipy", "sklearn", "statsmodels")
 
 
-class _CountingLLM:
-    name = "capability-zero-provider-test"
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def complete(self, *_args, **_kwargs):
-        self.calls += 1
-        raise AssertionError("provider must not run while capability review is pending")
+def _never_called_llm() -> ScriptedMockLLMClient:
+    return ScriptedMockLLMClient(
+        [AssertionError("provider must not run while capability review is pending")]
+    )
 
 
 def _request(*, runtime_imports=BASE_IMPORTS):
@@ -111,7 +107,7 @@ def test_missing_capability_pauses_real_pipeline_before_provider(
         test_trajectory_stability_pipeline_success as fixture,
     )
 
-    llm = _CountingLLM()
+    llm = _never_called_llm()
     runners: dict[float, object] = {}
 
     def runner_factory(*, workdir, timeout_seconds, **_kwargs):
@@ -140,14 +136,14 @@ def test_missing_capability_pauses_real_pipeline_before_provider(
         question="Assess fixed-window trajectory phenotypes.",
         cohort=_cohort(),
         cohort_name="capability_review_pending",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_analysis=True,
     )
 
     run_dir = Path(result.workdir)
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
-    assert llm.calls == 0
+    assert llm.calls == []
     assert manifest["notes"] == "aborted: capability_review_required"
     assert (run_dir / "capability" / "request.json").is_file()
     finding = next(
@@ -178,7 +174,7 @@ def test_approved_capability_requires_new_run_not_resume(
     )
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=_CountingLLM(),
+        llm=_never_called_llm(),
         **target.pipeline_options(),
         capability_request=request.model_dump(mode="json"),
         capability_approval=approval.model_dump(mode="json"),
@@ -188,7 +184,7 @@ def test_approved_capability_requires_new_run_not_resume(
         pipeline.run(
             question="test",
             cohort=_cohort(),
-            database="synthetic",
+            database="miiv",
             resume_run_id="old-run",
         )
 
@@ -262,7 +258,7 @@ def test_approved_capability_enters_coder_only_on_pinned_new_image(
         question="Assess fixed-window trajectory phenotypes.",
         cohort=_cohort(),
         cohort_name="capability_activated_new_run",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_representation",
         stop_after_analysis=True,
@@ -308,7 +304,7 @@ def test_wrong_runtime_image_fails_before_provider(
         def export_validated_runtime_bundle():
             return {"image_id": "sha256:" + "c" * 64, "repo_digests": []}
 
-    llm = _CountingLLM()
+    llm = _never_called_llm()
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -325,7 +321,7 @@ def test_wrong_runtime_image_fails_before_provider(
         pipeline.run(
             question="Assess fixed-window trajectory phenotypes.",
             cohort=_cohort(),
-            database="synthetic",
+            database="miiv",
             target_outcome="death",
         )
-    assert llm.calls == 0
+    assert llm.calls == []

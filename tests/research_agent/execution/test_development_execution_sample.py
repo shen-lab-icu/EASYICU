@@ -420,7 +420,7 @@ def test_missing_post_qc_cohort_blocks_scientific_steps_without_coder_calls(
         question="Is admission SOFA associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="development_sample_requires_post_qc_cohort",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 

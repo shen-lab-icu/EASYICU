@@ -569,7 +569,7 @@ def test_pipeline_holds_the_sealed_contract_for_the_reviewed_plan(tmp_path):
     outcome = pipeline.run(
         question=draft.research_question,
         cohort=universe,
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         primary_exposure="aki_stage_strict",
         id_columns=["patient_stay_id"],

@@ -95,7 +95,7 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="synthetic_test_cohort",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         cross_database_validation=["miiv", "eicu"],
     )
@@ -221,7 +221,7 @@ def test_strict_evidence_failure_writes_structured_diagnostic_package(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="strict_failure_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
     run_dir = Path(result.workdir)
@@ -259,7 +259,7 @@ def test_writer_failure_does_not_pass_empty_manuscript(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="writer_failure_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -296,7 +296,7 @@ def test_pipeline_with_clinical_skill(ra, synthetic_cohort, tmp_path: Path):
     result = pipeline.run(
         cohort=synthetic_cohort,
         cohort_name="synthetic_skill_cohort",
-        database="synthetic",
+        database="miiv",
         skill=skill,
     )
     assert result.evidence_count > 0
@@ -349,7 +349,7 @@ def test_pipeline_stops_when_hypothesis_blueprint_is_blocked(
         question="Describe admission SOFA-2 signal in this ICU cohort.",
         cohort=cohort_path,
         cohort_name="blocked_blueprint_cohort",
-        database="synthetic",
+        database="miiv",
     )
 
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
@@ -397,7 +397,7 @@ def test_strict_literature_design_gate_stops_before_planner_provider(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="strict_literature_design_gate",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -421,7 +421,7 @@ def test_pipeline_run_async(ra, synthetic_cohort, tmp_path: Path):
             question="Is admission SOFA-2 associated with ICU mortality?",
             cohort=synthetic_cohort,
             cohort_name="synthetic_async_cohort",
-            database="synthetic",
+            database="miiv",
             target_outcome="death",
         )
 
@@ -452,7 +452,7 @@ def test_host_cancellation_never_enters_deterministic_planner_fallback(
         pipeline.run(
             question="Is admission SOFA-2 associated with ICU mortality?",
             cohort=synthetic_cohort, cohort_name="cancelled_planner",
-            database="synthetic", target_outcome="death",
+            database="miiv", target_outcome="death",
         )
 
     assert raised.value is signal
@@ -481,7 +481,7 @@ def test_pipeline_falls_back_when_planner_returns_empty(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="planner_fallback_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
@@ -534,7 +534,7 @@ def test_pipeline_recovers_when_planner_parses_to_zero_steps(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="planner_zero_step_retry",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
     assert len(flaky.calls) >= 2  # the retry happened
@@ -636,7 +636,7 @@ print(json.dumps(summary))
         question="Does age describe ICU mortality?",
         cohort=cohort,
         cohort_name="repair_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -784,7 +784,7 @@ print(json.dumps(summary))
         question="Keep measured lab counts consistent.",
         cohort=cohort,
         cohort_name="cross_step_source_status_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -890,7 +890,7 @@ print(json.dumps(summary))
         question="Keep the analytic cohort fixed.",
         cohort=cohort,
         cohort_name="cross_step_cohort_lock_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -1028,7 +1028,7 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
         question="Is the exposure associated with mortality?",
         cohort=cohort,
         cohort_name="contract_then_crash_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -1158,7 +1158,7 @@ print(json.dumps(summary))
         question="Is Sepsis-3 associated with mortality?",
         cohort=cohort,
         cohort_name="overadjustment_budget_zero_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         primary_exposure="sepsis3",
         stop_after_analysis=True,
@@ -1300,7 +1300,7 @@ print(json.dumps(summary))
         question="Is Sepsis-3 associated with mortality?",
         cohort=cohort,
         cohort_name="figure_rescue_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         primary_exposure="sepsis3",
         stop_after_analysis=True,
@@ -1436,7 +1436,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         question="Summarize the locked ICU cohort.",
         cohort=pd.DataFrame({"stay_id": [1, 2]}),
         cohort_name="checkpoint_failure_test",
-        database="synthetic",
+        database="miiv",
         stop_after_analysis=True,
     )
 
@@ -1746,7 +1746,7 @@ print(json.dumps(summary))
         question="Does SOFA describe ICU mortality?",
         cohort=cohort,
         cohort_name="concept_repair_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -1836,7 +1836,7 @@ def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
         question="Is SOFA associated with ICU mortality?",
         cohort=cohort,
         cohort_name="fallback_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -1913,7 +1913,7 @@ def test_pipeline_falls_back_when_repair_model_call_fails(
         question="Is SOFA associated with ICU mortality?",
         cohort=cohort,
         cohort_name="repair_raises_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -1981,7 +1981,7 @@ def test_pipeline_falls_back_when_successful_script_writes_no_artefacts(
         question="Is SOFA associated with ICU mortality?",
         cohort=cohort,
         cohort_name="no_artefact_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -2090,7 +2090,7 @@ def test_pipeline_can_pause_after_analysis_phase(ra, synthetic_cohort, tmp_path:
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="synthetic_analysis_only",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_analysis=True,
         progress_callback=events.append,
@@ -2125,7 +2125,7 @@ def test_mock_planner_honours_sofa2_when_sofa_is_also_present(
         question="Is early SOFA-2 associated with ICU mortality?",
         cohort=cohort,
         cohort_name="synthetic_sofa_and_sofa2",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -2145,7 +2145,7 @@ def test_pipeline_run_requires_explicit_llm(tmp_path: Path):
             question="Does death exist?",
             cohort=cohort,
             cohort_name="missing_llm",
-            database="synthetic",
+            database="miiv",
             target_outcome="death",
         )
 
@@ -2188,7 +2188,7 @@ def test_mock_planner_maps_clinical_phrases_to_expected_predictors(ra, tmp_path:
             question=question,
             cohort=cohort,
             cohort_name=f"{predictor}_phrase_test",
-            database="synthetic",
+            database="miiv",
             target_outcome="death",
         )
         plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
@@ -2227,7 +2227,7 @@ def test_mock_planner_skips_table_one_for_minimal_association_question(
         question="Is GCS associated with ICU mortality?",
         cohort=cohort,
         cohort_name="minimal_gcs_mortality",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -2255,7 +2255,7 @@ def test_mock_planner_uses_quality_only_plan_when_question_is_data_audit(
         question="Audit bilirubin and vasopressor measurement completeness in this ICU cohort.",
         cohort=cohort,
         cohort_name="quality_only_audit",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -2626,7 +2626,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         question="Audit then model mortality.",
         cohort=cohort,
         cohort_name="replan_case",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
     run_dir = Path(result.workdir)
@@ -9619,7 +9619,7 @@ def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="synthetic_test_cohort",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 
@@ -11224,7 +11224,7 @@ def test_pipeline_run_from_spec_writes_runtime_artifacts(ra, tmp_path: Path):
         cohort=ra.CohortInputSpec(
             cohort=str(cohort_path),
             cohort_name="demo",
-            database="synthetic",
+            database="miiv",
             target_outcome="death",
             user_preferences={"inferred_analysis_family": "association_study"},
         ),

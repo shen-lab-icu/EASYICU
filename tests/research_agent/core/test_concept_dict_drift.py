@@ -95,7 +95,7 @@ def test_profile_locked_sha_enforced_at_plan_start(
             question="Is age associated with mortality?",
             cohort=synthetic_cohort,
             cohort_name="synthetic",
-            database="synthetic",
+            database="miiv",
             target_outcome="death",
         )
 
@@ -107,7 +107,7 @@ def test_manifest_records_full_fingerprint(
         question="Is age associated with mortality?",
         cohort=synthetic_cohort,
         cohort_name="synthetic",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
     manifest = json.loads((Path(result.workdir) / "manifest.json").read_text())
@@ -171,7 +171,7 @@ def test_resume_rejects_dict_drift_before_writing_receipt(
         "question": "Is age associated with mortality?",
         "cohort": synthetic_cohort,
         "cohort_name": "synthetic",
-        "database": "synthetic",
+        "database": "miiv",
         "target_outcome": "death",
     }
     first = ra.ResearchAgentPipeline(

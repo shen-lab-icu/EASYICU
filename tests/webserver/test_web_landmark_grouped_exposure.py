@@ -113,7 +113,7 @@ def _metadata_pipeline(tmp_path, *, revision=False, grouped=True):
         services=PipelineServices(llm=client),
     )
     outcome = pipeline.run(
-        question=draft.research_question, cohort=catalog, database="synthetic",
+        question=draft.research_question, cohort=catalog, database="miiv",
         target_outcome="death", primary_exposure="hr_max", id_columns=["stay_id"],
         user_preferences={
             "covariate_selection": "exact", "covariates": ["age"],

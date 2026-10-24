@@ -45,7 +45,7 @@ def _context_and_step(ra):  # noqa: ANN001
         research_question="Test an outbound repair boundary.",
         cohort=ra.CohortDescriptor(
             cohort_name="synthetic",
-            database="synthetic",
+            database="miiv",
             n_stays=10,
             n_patients=10,
         ),
@@ -104,7 +104,7 @@ def _all_prompt_text(llm: ExternalCaptureMockLLMClient) -> str:
 def test_hosted_loopback_repair_withholds_stdout_and_stderr(ra, monkeypatch, hosted, host):
     import sys
     from types import SimpleNamespace
-    from easyicu.research_agent.providers.llm import OpenAIClient
+    from easyicu.research_agent.providers.factory import build_provider_client
 
     context, step = _context_and_step(ra)
     monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
@@ -125,8 +125,13 @@ def test_hosted_loopback_repair_withholds_stdout_and_stderr(ra, monkeypatch, hos
             completions=SimpleNamespace(create=complete),
         )),
     ))
-    llm = OpenAIClient(model="synthetic", api_key="synthetic-test-key",
-                       base_url=f"http://{host}:8787/v1", stream_enabled=False)
+    llm = build_provider_client(
+        provider="openai", model="synthetic", request_timeout=1, title="fixture",
+        stream_enabled=False, environment={
+            "OPENAI_BASE_URL": f"http://{host}:8787/v1",
+            "EASYICU_PROVIDER_DATA_HANDLING": "zero_retention_declared",
+        },
+    )
     CoderAgent(llm).repair(
         context=context, step=step, code="import os\nvalue = 1\n",
         run_log="stdout=SYNTHETIC_ROW_SENTINEL\nstderr=SYNTHETIC_ERROR_SENTINEL",
@@ -228,7 +233,7 @@ def test_external_full_rewrite_also_uses_the_same_closed_envelope(ra):
     assert "do-not-send" not in prompt
 
 
-def test_unmanaged_custom_provider_is_rejected_before_prompt_delivery(ra):
+def test_unmanaged_custom_provider_is_rejected_before_prompt_delivery(ra, monkeypatch):
     context, step = _context_and_step(ra)
     patch = json.dumps(
         {
@@ -236,7 +241,11 @@ def test_unmanaged_custom_provider_is_rejected_before_prompt_delivery(ra):
             "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
         }
     )
-    llm = _UnmanagedCaptureLLM([patch])
+    forwarder = _UnmanagedCaptureLLM([patch])
+    llm = ExternalCaptureMockLLMClient([patch])
+    # Clear the credentialed fixture through the reviewed capture client, then
+    # require the authorization boundary to reject its unmanaged replacement.
+    monkeypatch.setattr(llm, "complete", forwarder.complete)
 
     with pytest.raises(ProviderConfigurationError) as exc_info:
         CoderAgent(llm).repair(
@@ -250,6 +259,7 @@ def test_unmanaged_custom_provider_is_rejected_before_prompt_delivery(ra):
 
     assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
     assert llm.calls == []
+    assert forwarder.calls == []
 
 
 def test_diagnostic_envelope_has_no_runtime_log_input_surface():

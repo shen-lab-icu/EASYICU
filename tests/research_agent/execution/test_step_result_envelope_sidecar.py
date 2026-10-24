@@ -938,7 +938,7 @@ def _run_minimal_pipeline(ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         question="Assess fixed-window trajectory phenotypes.",
         cohort=cohort,
         cohort_name="trajectory_stability_success",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="04_characterization",
         stop_after_analysis=True,

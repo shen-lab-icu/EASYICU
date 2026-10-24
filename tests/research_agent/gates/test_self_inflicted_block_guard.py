@@ -413,7 +413,7 @@ def test_directed_replan_fires_through_execute_loop(
         question="Build an in-hospital mortality prediction model.",
         cohort=synthetic_cohort,
         cohort_name="m2_selfblock",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
 

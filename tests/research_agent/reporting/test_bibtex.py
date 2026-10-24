@@ -444,7 +444,7 @@ def test_pipeline_writes_bib_alongside_tex(ra, synthetic_cohort, tmp_path: Path)
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
         cohort_name="bibtex_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
     )
     run_dir = Path(result.workdir)

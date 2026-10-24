@@ -88,7 +88,7 @@ def _trajectory_context() -> ResearchContext:
         ),
         cohort=CohortDescriptor(
             cohort_name="wide_trajectory",
-            database="synthetic",
+            database="miiv",
             n_stays=1000,
             n_patients=1000,
             inclusion_criteria=["Adult ICU stays with a prespecified minimum coverage"],

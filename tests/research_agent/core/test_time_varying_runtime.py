@@ -159,7 +159,7 @@ def source(tmp_path):
         exclusions=pd.DataFrame(columns=["stay_id", "reason_code"]),
         receipt={
             "schema_version": "easyicu.mimic_iv_hospital_mortality_followup/1",
-            "database": "synthetic",
+            "database": "miiv",
             "analysis_unit": "icu_stay",
             "time_origin": "icu_admission",
             "time_unit": "hours",
@@ -428,7 +428,7 @@ def test_pipeline_persists_time_varying_plan_with_required_cohort_without_provid
         question="Time-updated lactate and hospital mortality",
         cohort=acquired.universe_path,
         trajectory_path=acquired.trajectory_path,
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         primary_exposure="lact",
         id_columns=["patient_stay_id"],

@@ -593,7 +593,7 @@ def _run_terminal_case(
         question="Assess fixed-window trajectory phenotypes.",
         cohort=cohort,
         cohort_name="trajectory_terminal_sentinel",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="03_stability",
         stop_after_analysis=True,

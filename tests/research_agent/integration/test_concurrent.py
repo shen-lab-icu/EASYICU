@@ -114,10 +114,10 @@ def test_concurrent_pipeline_matches_sequential_findings(
     )
 
     seq_result = seq_pipeline.run(
-        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+        skill="association_analysis", cohort=synthetic_cohort, database="miiv"
     )
     par_result = par_pipeline.run(
-        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+        skill="association_analysis", cohort=synthetic_cohort, database="miiv"
     )
 
     seq_findings = _critical_findings(Path(seq_result.manifest_path))
@@ -143,7 +143,7 @@ def test_concurrent_pipeline_records_sorted_by_plan_order(
         enable_latex=False,
     )
     result = pipeline.run(
-        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+        skill="association_analysis", cohort=synthetic_cohort, database="miiv"
     )
 
     # The skill plan begins with table_one and ends with the QC/audit step.
@@ -197,7 +197,7 @@ def test_replanning_forces_sequential_even_when_concurrency_requested(
         enable_latex=False,
     )
     result = pipeline.run(
-        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+        skill="association_analysis", cohort=synthetic_cohort, database="miiv"
     )
 
     data = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
@@ -232,7 +232,7 @@ def test_concurrent_default_one_worker_keeps_sequential_path(
     )
     assert pipeline._max_concurrent_steps == 1
     result = pipeline.run(
-        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+        skill="association_analysis", cohort=synthetic_cohort, database="miiv"
     )
     # If the default broke, the run wouldn't even produce a manifest.
     assert Path(result.manifest_path).exists()

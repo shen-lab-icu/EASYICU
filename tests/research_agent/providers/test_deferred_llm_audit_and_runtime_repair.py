@@ -221,7 +221,7 @@ def test_llm_concept_audit_runs_once_only_after_local_contracts_pass(
         question="Summarize the ICU cohort.",
         cohort=pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}),
         cohort_name="deferred_audit_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
@@ -321,7 +321,7 @@ def test_automatic_contract_repair_does_not_consume_llm_contract_allowance(
         question="Summarize the ICU cohort.",
         cohort=pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}),
         cohort_name="independent_contract_budget_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
@@ -363,7 +363,7 @@ def test_disabled_llm_audit_records_final_gate_without_claiming_llm_approval(
         question="Summarize the ICU cohort.",
         cohort=pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}),
         cohort_name="audit_disabled_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
@@ -475,7 +475,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
             }
         ),
         cohort_name="lossy_guard_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="02_exposure_qc",
         stop_after_analysis=True,
@@ -548,7 +548,7 @@ def test_runtime_repair_transport_retry_does_not_reexecute_known_failure(
         question="Summarize the ICU cohort.",
         cohort=pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}),
         cohort_name="runtime_transport_retry_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
@@ -608,7 +608,7 @@ def test_noop_runtime_repair_is_retried_without_reexecution(
         question="Summarize the ICU cohort.",
         cohort=pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}),
         cohort_name="noop_runtime_retry_test",
-        database="synthetic",
+        database="miiv",
         target_outcome="death",
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
@@ -771,7 +771,7 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
         "question": "Summarize the ICU cohort.",
         "cohort": pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}),
         "cohort_name": "capsule_resume_test",
-        "database": "synthetic",
+        "database": "miiv",
         "target_outcome": "death",
         "stop_after_step_id": "01_summary",
         "stop_after_analysis": True,
@@ -1002,6 +1002,7 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     agentic_kwargs = {
         **run_kwargs,
         "cohort_name": "agentic_capsule_resume_test",
+        "database": "mimic_demo",
     }
     agentic_first = build_pipeline(auditor_b).run(**agentic_kwargs)
     agentic_first_record = _latest_step_record(Path(agentic_first.workdir))
@@ -1168,7 +1169,7 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
         "question": "Summarize the ICU cohort.",
         "cohort": pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}),
         "cohort_name": "capsule_repair_crash_test",
-        "database": "synthetic",
+        "database": "miiv",
         "target_outcome": "death",
         "stop_after_step_id": "01_summary",
         "stop_after_analysis": True,
@@ -1255,7 +1256,7 @@ def test_hosted_run_records_agentic_coder_refusal(ra, tmp_path, monkeypatch):
     ).run(
         question="Summarize the synthetic cohort.",
         cohort=pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}),
-        cohort_name="hosted_egress_test", database="synthetic", target_outcome="death",
+        cohort_name="hosted_egress_test", database="miiv", target_outcome="death",
         stop_after_step_id="01_summary", stop_after_analysis=True,
     )
     receipt = json.loads((Path(result.workdir) / "agentic_coder_refusal.json").read_text())

@@ -35,7 +35,7 @@ def test_counting_client_remains_a_registered_planner_wrapper() -> None:
         research_question="Describe the ICU cohort.",
         cohort=CohortDescriptor(
             cohort_name="synthetic",
-            database="synthetic",
+            database="miiv",
             n_patients=10,
             n_stays=10,
         ),
@@ -431,12 +431,7 @@ def test_know_how_opt_in_requires_its_additive_submission_profile(
 
 
 def test_complete_planner_request_budget_fails_before_provider_call() -> None:
-    class NeverCalled:
-        calls = 0
-
-        def complete(self, messages, **kwargs):
-            self.calls += 1
-            raise AssertionError("provider must not be called")
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
     context = ResearchContext(
         research_question="Describe the ICU cohort.",
@@ -448,7 +443,7 @@ def test_complete_planner_request_budget_fails_before_provider_call() -> None:
         ),
         variables=[],
     )
-    llm = NeverCalled()
+    llm = ScriptedMockLLMClient([AssertionError("provider must not be called")])
 
     with pytest.raises(PlannerPromptBudgetError, match="budget exceeded"):
         PlannerAgent(llm).run(
@@ -456,4 +451,4 @@ def test_complete_planner_request_budget_fails_before_provider_call() -> None:
             allowed_know_how_decisions={"oversized_card": {}},
             know_how_context="x" * 90_000,
         )
-    assert llm.calls == 0
+    assert llm.calls == []
