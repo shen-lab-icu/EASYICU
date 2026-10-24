@@ -209,7 +209,7 @@ def test_pre_review_capability_does_not_grant_runtime_figure_ownership(typed_run
         assert resolve_standard_executor(figure, plan=plan).claimed_by is None
 
 
-@pytest.mark.parametrize("change", ["duplicate_parent", "unowned_parent", "no_consumption", "wrong_input"])
+@pytest.mark.parametrize("change", ["duplicate_parent", "unowned_parent", "no_consumption", "wrong_input", "late_parent"])
 def test_pending_figure_needs_its_unique_declared_host_producers(typed_run, change):
     run_dir, _ = typed_run
     plan = _with_audit_figures()
@@ -221,6 +221,8 @@ def test_pending_figure_needs_its_unique_declared_host_producers(typed_run, chan
         plan.steps[1].measurement_audit_spec = None
     elif change == "no_consumption":
         plan.steps[-1].input_consumption_contracts = []
+    elif change == "late_parent":
+        plan.steps.append(plan.steps.pop(1))
     else:
         plan.steps[-1].inputs = ["table:unproduced"]
     with pytest.raises(HostPlanStepNeedsSandbox):
@@ -242,3 +244,25 @@ def test_ambiguous_cohort_products_are_refused_before_loading_a_grant(tmp_path, 
     monkeypatch.setattr(schema, "load_materialized_analysis_cohort_result", load)
     assert _verified_host_cohort_step(plan, tmp_path) is None
     assert consulted == []
+
+
+def test_pre_review_checks_parent_ownership_with_the_same_runtime_authority(typed_run, monkeypatch):
+    from easyicu.research_agent.execution import owner_declaration as owner
+
+    run_dir, _ = typed_run
+    plan = _with_audit_figures()
+    _lock(run_dir, plan)
+    resolve = owner.resolve_standard_executor
+    seen = []
+    authority = object()
+
+    def checked(step, **kwargs):
+        if step.step_id == "audit":
+            seen.append(kwargs.get("trajectory_scientific_runtime_authority"))
+        return resolve(step, **kwargs)
+
+    monkeypatch.setattr(owner, "resolve_standard_executor", checked)
+    require_host_rendered_plan(
+        plan=plan, run_dir=run_dir, trajectory_scientific_runtime_authority=authority,
+    )
+    assert seen and all(value is authority for value in seen)
