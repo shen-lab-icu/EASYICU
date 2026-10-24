@@ -58,7 +58,7 @@ def test_review_api_withholds_unsafe_summary_and_keeps_approval_blocked(tmp_path
     from easyicu.research_agent.orchestration.workflow import HumanReviewRequest
     from easyicu.webserver import agent_pipeline_runs
     from tests.webserver.copilot.research_workflow_fixtures import complete_study
-    from tests.webserver.copilot.test_a_plan_review_names_the_levels_of_a_grouped_exposure import _pending
+    from tests.support.plan_review_fixtures import pending_plan_review as _pending
 
     pending = _pending(tmp_path)
     original = pending.requests[0]
