@@ -56,3 +56,28 @@ def runner_unavailable_remediation(reason_code: str) -> str:
         str(reason_code), "The configured execution backend is not usable."
     )
 
+
+_DOCKER_DAEMON_UNREACHABLE_MARKERS = (
+    "cannot connect to the docker daemon",
+    "failed to connect to the docker api",
+    "is the docker daemon running",
+    "docker daemon is not running",
+    "error during connect",
+)
+
+
+
+def _classify_docker_failure(stderr: str, stdout: str) -> str:
+    """Collapse one docker CLI failure into a closed reason code.
+
+    A missing image and a stopped daemon are different problems with different
+    fixes, and only the daemon's message distinguishes them -- but that message
+    carries the host socket path. Classify here, return the code, drop the text.
+    """
+
+    text = f"{stderr}\n{stdout}".strip().lower()
+    if any(marker in text for marker in _DOCKER_DAEMON_UNREACHABLE_MARKERS):
+        return "docker_daemon_unreachable"
+    if "no such image:" in text or "no such object:" in text:
+        return "docker_image_missing"
+    return "docker_probe_failed"
