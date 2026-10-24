@@ -29,6 +29,22 @@ const latest = {
 };
 const workflow = { current_stage: 'interpretation', stages: [{ id: 'analysis', status: 'complete' }] };
 const table = (name, headers, rows) => ({ name, label: `Table ${name} from step x.`, evidence_id: name, headers, rows });
+const missingStatusSummary = modules.require('resultSummary').summarize({ tables: [
+  table('flow.csv', ['n_before', 'n_remaining'], [[12, 10]]),
+  table('distribution.csv', ['row_role', 'exposure_level', 'n_rows', 'exposure_denominator', 'exposure_pct',
+    'outcome_events', 'outcome_denominator', 'outcome_rate_pct', 'outcome_missing_n'], [
+    ['exposure_level', 0, 4, 8, 50, 1, 2, 50, 2],
+    ['exposure_level', 1, 4, 8, 50, 2, 3, 200 / 3, 1],
+    ['overall', '', 8, 8, 100, 3, 5, 60, 3],
+  ]),
+] }, {}, {});
+const summaryValue = field => missingStatusSummary.claims.find(row => row.source_field === field)?.canonical_value;
+assert.equal(summaryValue('n_total'), 10);
+assert.equal(summaryValue('exposure_distribution.n_total'), 8);
+assert.equal(summaryValue('overall_outcome.n'), 5);
+assert.equal(summaryValue('overall_outcome.missing_n'), 3);
+assert.deepEqual(missingStatusSummary.exposureLevels.map(row => row.denominator), [2, 3]);
+assert.deepEqual(missingStatusSummary.exposureLevels.map(row => row.missingN), [2, 1]);
 const payloads = {
   'result_tables.json': { tables: [
     table('flow__cohort_analysis_flow.csv', ['n_before', 'n_excluded', 'n_remaining'], [['94458', '0', '94458']]),
@@ -106,6 +122,22 @@ const outcome = modules.require('runOutcome').create({
     return { html, followUps: outcome.followUps(run, workflow) };
   }
   const plan = payloads['agent_plan.json'];
+  const completeOutcomeTables = payloads['result_tables.json'];
+  payloads['result_tables.json'] = { tables: [
+    table('flow.csv', ['n_before', 'n_remaining'], [[12, 10]]),
+    table('distribution.csv', ['row_role', 'exposure_level', 'n_rows', 'exposure_denominator', 'exposure_pct',
+      'outcome_events', 'outcome_denominator', 'outcome_rate_pct', 'outcome_missing_n'], [
+      ['exposure_level', 0, 4, 8, 50, 1, 2, 50, 2],
+      ['exposure_level', 1, 4, 8, 50, 2, 3, 200 / 3, 1],
+      ['overall', '', 8, 8, 100, 3, 5, 60, 3],
+    ]),
+  ] };
+  const missingOutcomes = await reread(plan);
+  assert.match(missingOutcomes.html, /2\/3/);
+  assert.match(missingOutcomes.html, /1\/2/);
+  assert.match(missingOutcomes.html, /在 MIMIC-IV 的 8 个 ICU 入住记录中/);
+  assert.match(missingOutcomes.html, /结局缺失：.*2.*1/);
+  payloads['result_tables.json'] = completeOutcomeTables;
   // The plan registers its display labels for the English manuscript. A
   // Chinese reader sees the governed catalog name of a column that is itself
   // a catalog concept; an aggregated column (`_max`) and the group values

@@ -270,7 +270,11 @@ def compile_counts_only_report_facts(
             _, label, count = levels[index]
             events = _count(row.get("events"))
             denominator = _count(row.get("denominator"), positive=True)
-            if events > denominator or denominator != count:
+            missing = _count(row.get("missing_n", 0))
+            if (
+                events > denominator or denominator > count or missing > count
+                or (denominator < count and denominator + missing != count)
+            ):
                 raise ValueError("Outcome fact denominator differs from its exposure group")
             estimate = _estimate(row, events, denominator)
             prefix = f"descriptive_estimates.outcome_absolute_risks[{position}]"
@@ -284,11 +288,14 @@ def compile_counts_only_report_facts(
             if len(matching_claims) > 1:
                 raise ValueError("Ambiguous source-bound descriptive claim")
             outcome_parts.append(f"{estimate:.2f}% ({events:,} of {denominator:,} {unit}) in {label}")
+            if missing:
+                outcome_parts[-1] += f"; {missing:,} {unit} had missing outcomes"
             outcome_facts.append(DescriptiveReportFact(
                 subsection="Primary outcome",
                 text="",
                 evidence_id=source.evidence_id, source_sha256=source.sha256,
-                source_fields=tuple(f"{prefix}.{key}" for key in ("level", "events", "denominator", "estimate_pct")),
+                source_fields=tuple(f"{prefix}.{key}" for key in ("level", "events", "denominator", "estimate_pct"))
+                + ((f"{prefix}.missing_n",) if "missing_n" in row else ()),
                 replaces_claim_ref=matching_claims[0].claim_ref if matching_claims else None,
                 outcome_label=outcome_label, group_label=label, estimate_pct=estimate,
                 supporting_evidence_ids=label_citations.get(f"{summary['exposure']}={level}", ()),

@@ -452,6 +452,7 @@ def _reportable_group(
             else None
         ),
         "outcome_n": int(risk_row["n"]),
+        "outcome_missing_n": int(prevalence_row["n"]) - int(risk_row["n"]),
         "outcome_event_n": int(risk_row["event_n"]),
         "outcome_risk_pct": _finite_or_none(risk_row["outcome_risk_pct"]),
         "outcome_risk_ci_low_pct": (
@@ -527,6 +528,7 @@ def _reportable_descriptive_results(
         "overall_outcome": {
             "outcome": outcome_col,
             "n": outcome_n,
+            "missing_n": int(outcome.isna().sum()),
             "event_n": outcome_event_n,
             "risk_pct": risk * 100.0 if risk is not None else None,
             "risk_ci_low_pct": risk_low * 100.0 if risk_low is not None else None,

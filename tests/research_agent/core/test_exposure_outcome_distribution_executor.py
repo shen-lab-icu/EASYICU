@@ -552,6 +552,9 @@ def test_the_denominator_policy_changes_the_reported_rate(
 
     assert _exposed_rate(over_all, tmp_path / "a") == pytest.approx(30.0)  # 3/10
     assert _exposed_rate(over_observed, tmp_path / "b") == pytest.approx(100.0 * 3 / 9)
+    for summary in (over_all, over_observed):
+        risks = summary["descriptive_estimates"]["outcome_absolute_risks"]
+        assert [row["missing_n"] for row in risks] == [1, 1]
 
 
 def test_a_declared_risk_difference_is_comparison_minus_reference(

@@ -23,11 +23,11 @@ from easyicu.concept.metadata_sidecar import (
     write_content_addressed_sidecar,
 )
 from easyicu.research_agent.intake import export_package as intake
-from easyicu.resources import load_dictionary
+from easyicu.resources import load_data_sources, load_dictionary
 
 
 def file_binding(
-    *, relative_path: str, module: str, frame: pd.DataFrame, concepts: list[str]
+    *, relative_path: str, module: str, frame: pd.DataFrame, concepts: list[str], database: str = "miiv"
 ) -> ColumnMetadataFileBinding:
     """Type one physical file with the module exporter's own binder."""
 
@@ -36,8 +36,8 @@ def file_binding(
         module=module,
         frame=frame,
         concept_ids=concepts,
-        database="miiv",
-        database_class_prefixes=(),
+        database=database,
+        database_class_prefixes=tuple(load_data_sources().get(database).class_prefix),
         dictionary=load_dictionary(include_sofa2=True),
     )
 
@@ -50,6 +50,7 @@ def typed_native_export(
     longitudinal: pd.DataFrame | None = None,
     longitudinal_concepts: list[str] | None = None,
     statics: pd.DataFrame | None = None,
+    database: str = "miiv",
 ) -> Path:
     """Write the export; ``statics`` holds each stay's age, else one per index."""
 
@@ -77,7 +78,7 @@ def typed_native_export(
     for relative_path, module, frame, concepts in members:
         frame.to_parquet(root / relative_path, index=False)
         binding = file_binding(
-            relative_path=relative_path, module=module, frame=frame, concepts=concepts
+            relative_path=relative_path, module=module, frame=frame, concepts=concepts, database=database
         )
         bindings.append(binding)
         files.append(
@@ -91,8 +92,8 @@ def typed_native_export(
             }
         )
     sidecar = ColumnMetadataSidecar(
-        source_database="miiv",
-        source_database_class_prefixes=(),
+        source_database=database,
+        source_database_class_prefixes=tuple(load_data_sources().get(database).class_prefix),
         scope=EXPORT_PHYSICAL_SCOPE,
         files=tuple(bindings),
     )
@@ -105,7 +106,7 @@ def typed_native_export(
                     "required": True, "source": "outcome.los_icu",
                     "bounded_stays": int(statics["stay_id"].nunique()),
                 },
-                "database": "miiv",
+                "database": database,
                 "format": "parquet",
                 "concept_selection": {
                     "mode": "explicit",
@@ -129,6 +130,7 @@ def untyped_native_export(
     unrecorded_stays: tuple[int, ...] = (),
     longitudinal: pd.DataFrame | None = None,
     longitudinal_concepts: list[str] | None = None,
+    database: str = "miiv",
 ) -> Path:
     """The same export as an older native export writes it: no column types.
 
@@ -170,7 +172,7 @@ def untyped_native_export(
     (root / intake.NATIVE_MANIFEST).write_text(
         json.dumps(
             {
-                "database": "miiv",
+                "database": database,
                 "format": "parquet",
                 "concept_selection": {
                     "mode": "explicit",

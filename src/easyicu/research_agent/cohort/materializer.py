@@ -347,6 +347,7 @@ def _normalize_typed_output_domain(
     frame: pd.DataFrame,
     *,
     collector: MaterializedColumnMetadataCollector,
+    dense_status_columns: Sequence[str] = (),
 ) -> tuple[pd.DataFrame, List[str]]:
     """Validate every typed output against its sealed physical-role contract."""
 
@@ -364,7 +365,10 @@ def _normalize_typed_output_domain(
         values = frame[column]
         if role is ConceptColumnRole.EVENT_STATUS:
             decoded = _strict_event_status_series(values, concept=column)
-            frame[column] = decoded.astype(int)
+            frame[column] = (
+                decoded.astype("Int8").mask(values.isna())
+                if column in dense_status_columns else decoded.astype(int)
+            )
             event_columns.append(column)
             continue
         if role is ConceptColumnRole.MEASUREMENT_STATUS:
@@ -1807,9 +1811,9 @@ def _materialize_cohort_from_resolved_source(
     static_set = list(dict.fromkeys(static_concepts))
     outcome_set = list(dict.fromkeys(outcome_concepts))
     dense_status_outcomes: set[str] = set()
-    if source_mode != "export":
+    if outcome_set:
         from ...config import load_src_cfg
-        from ...hospital_mortality import MIMIC_HOSPITAL_STATUS_BINDING
+        from ...hospital_mortality import DENSE_STATUS_BINDINGS, MIMIC_HOSPITAL_STATUS_BINDING
         from ...resources import load_dictionary
 
         definitions = load_dictionary()
@@ -1817,7 +1821,10 @@ def _materialize_cohort_from_resolved_source(
         dense_status_outcomes = {
             concept for concept in outcome_set
             if concept in definitions and any(
-                source.params.get("clinical_binding") == MIMIC_HOSPITAL_STATUS_BINDING
+                source.callback in DENSE_STATUS_BINDINGS or (
+                    source_mode != "export"
+                    and source.params.get("clinical_binding") == MIMIC_HOSPITAL_STATUS_BINDING
+                )
                 for source in definitions[concept].for_data_source(source_config)
             )
         }
@@ -2101,6 +2108,7 @@ def _materialize_cohort_from_resolved_source(
         wide, event_indicator_columns = _normalize_typed_output_domain(
             wide,
             collector=metadata_collector,
+            dense_status_columns=tuple(dense_status_outcomes),
         )
     else:
         for c in [*outcome_set, *stay_level_untyped_events]:

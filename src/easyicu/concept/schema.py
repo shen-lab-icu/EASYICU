@@ -41,6 +41,7 @@ from typing import Dict, Iterable, List, Mapping, Optional
 import pandas as pd
 
 from ..config import DataSourceConfig
+from ..hospital_mortality import EICU_HOSPITAL_STATUS_BINDING
 from .expr_parser import _maybe_float, _maybe_int, _maybe_timedelta
 
 
@@ -186,6 +187,18 @@ class ConceptDefinition:
             sources[src_name] = [
                 ConceptSource.from_mapping(entry) for entry in entries
             ]
+
+        # Bind the shipped eICU status source without changing the sealed
+        # dictionary or overriding a caller's explicit source callback.
+        if name == "death":
+            for database in ("eicu", "eicu_demo"):
+                for source in sources.get(database, []):
+                    if (
+                        source.table == "patient"
+                        and source.value_var == "hospitaldischargestatus"
+                        and source.callback == "transform_fun(comp_na(`==`, 'Expired'))"
+                    ):
+                        source.callback = EICU_HOSPITAL_STATUS_BINDING
 
         unit_value = payload.get("unit")
         if isinstance(unit_value, str):
