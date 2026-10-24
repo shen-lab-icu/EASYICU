@@ -3655,6 +3655,7 @@ def _readiness_axes(run_dir: Path) -> Dict[str, Any]:
             "missing_steps",
             "analysis_errors",
             "writer_stop",
+            "manuscript_requested",
         )
         if key in merged
     }
@@ -3727,24 +3728,15 @@ def _failed_closed_detail(axes: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _gate_from_axes(axes: Mapping[str, Any], *, pending: bool) -> Dict[str, Any]:
-    if pending:
-        status = "blocked"
-        reason = "human_plan_review_required"
-    else:
-        complete = bool(axes.get("execution_complete"))
-        validated = bool(axes.get("analysis_validated"))
-        evidence = bool(axes.get("evidence_complete"))
-        numeric = bool(axes.get("numeric_verified"))
-        status = (
-            "analysis_only"
-            if complete and validated and evidence and numeric
-            else "blocked"
-        )
-        reason = (
-            "research_agent_pipeline_complete_human_interpretation_required"
-            if status == "analysis_only"
-            else "research_agent_pipeline_failed_closed"
-        )
+    from easyicu.research_agent.reporting.completion import completion_outcomes
+
+    outcomes = completion_outcomes(axes, pending=pending)
+    status = "analysis_only" if outcomes["analysis_outcome"]["status"] == "completed" else "blocked"
+    reason = (
+        "human_plan_review_required" if pending else
+        "research_agent_pipeline_complete_human_interpretation_required"
+        if status == "analysis_only" else "research_agent_pipeline_failed_closed"
+    )
     check_labels = {
         "execution_complete": "execution complete",
         "analysis_validated": "automated analysis validation",
@@ -3769,6 +3761,7 @@ def _gate_from_axes(axes: Mapping[str, Any], *, pending: bool) -> Dict[str, Any]
             }
         )
     return {
+        **outcomes,
         "status": status,
         "reason": reason,
         "reportable": False,
@@ -4303,6 +4296,8 @@ def _write_projection(
         failed_closed = _failed_closed_detail(axes)
         if failed_closed is not None:
             gate["detail"] = failed_closed
+    if gate["manuscript_outcome"]["status"] == "not_passed":
+        gate["manuscript_detail"] = _failed_closed_detail(axes)
     source = study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
     reader_label = source_reader_label(source)

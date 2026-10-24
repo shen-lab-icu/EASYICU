@@ -86,6 +86,7 @@ from .completion import (
     RunCompletionFacts,
     readiness_status as _readiness_status,
     step_completion_projection,
+    run_status_payload as build_run_status_payload,
 )
 from .manuscript_labels import reader_claim_labels
 from .manuscript_gate_state import (
@@ -2208,6 +2209,7 @@ def _compute_readiness_gates(
         run_dir=run_dir,
         display_suite=display_suite,
         publication_bundle=publication,
+        evidence=evidence, per_step_records=per_step_records,
     )
     scientific_maturity_gates = scientific_maturity_readiness_gates(scientific_maturity)
     # Read the FULL findings list, not `active_findings`: supersession retires a
@@ -2342,20 +2344,13 @@ def write_readiness_artifacts(
     artifact_paths: Dict[str, str] = {}
 
     run_status_path = run_dir / "run_status.json"
-    run_status_payload = {
-        "schema_version": "easyicu.run_status/2",
-        "status": status,
-        "strict_fail_closed": True,
-        "forced_diagnostic_only": bool(force_diagnostic_only),
-        "writer_probe_mode": bool(writer_probe_mode),
-        "writer_probe_failed_steps": list(writer_probe_failed_steps or []),
-        "research_question": context.research_question,
-        # Code identity for quick access without opening the full manifest;
-        # the authoritative copy lives in manifest.json's ``code_version``.
-        "code_version": capture_code_version(),
-        "gates": gates,
-        "canonical_outputs": {},
-    }
+    run_status_payload = build_run_status_payload(
+        gates=gates, research_question=context.research_question,
+        code_version=capture_code_version(), stop_after_analysis=stop_after_analysis,
+        writer_probe_mode=writer_probe_mode,
+        writer_probe_failed_steps=writer_probe_failed_steps,
+        force_diagnostic_only=force_diagnostic_only,
+    )
     run_status_path.write_text(
         json.dumps(run_status_payload, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",

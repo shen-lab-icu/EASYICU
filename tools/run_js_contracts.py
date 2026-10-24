@@ -93,6 +93,7 @@ CONTRACTS: dict[str, list[str]] = {
     # changing what the harness resolves from the directory.
     "guided_pi_study_results.test.js": [
         "screens-guided-pi-modules.js",
+        "screens-guided-pi-error-text.js",
         "screens-guided-pi-resources.js",
         "screens-guided-pi-study-workspace.js",
         "screens-guided-pi-run-outcome.js",
@@ -141,6 +142,7 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_pi_run_files_manuscript.test.js": [
         "screens-guided-pi-modules.js",
         "html-escape.js",
+        "screens-guided-pi-error-text.js",
         "screens-guided-pi-resources.js",
         "screens-agent-reader-vocab.js",
         "screens-agent-render.js",

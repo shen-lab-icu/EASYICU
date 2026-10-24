@@ -16,7 +16,7 @@ import math
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, Mapping, Optional
+from typing import Any, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -45,6 +45,8 @@ from .display_suite import panel_has_absolute_risk_context
 from .review_disclaimer import SIMULATED_REVIEW_NOT_INDEPENDENT
 from . import manuscript_surface as _manuscript_surface
 from .novelty_positioning import novelty_authority_digests
+from .descriptive_report_facts import concise_results_word_floor
+from .manuscript_labels import reader_claim_labels
 
 
 Severity = Literal["blocker", "major", "minor"]
@@ -746,7 +748,11 @@ def _section_target_deviations(manuscript: str) -> list[dict[str, Any]]:
     return _manuscript_surface.manuscript_section_target_deviations(manuscript)
 
 
-def _manuscript_facts(run_dir: Path) -> dict[str, Any]:
+def _manuscript_facts(
+    run_dir: Path, *, evidence: Any = None,
+    per_step_records: Sequence[Mapping[str, Any]] = (),
+    context: ResearchContext | None = None, plan: AnalysisPlan | None = None,
+) -> dict[str, Any]:
     audit = _read_json(run_dir, "manuscript_literature_audit.json")
     manuscript_path = run_dir / "manuscript_scaffold_bound.md"
     try:
@@ -772,14 +778,16 @@ def _manuscript_facts(run_dir: Path) -> dict[str, Any]:
     missing = [sorted(group)[0] for group in required_groups if not (headings & group)]
     section_word_counts = _manuscript_section_word_counts(manuscript)
     # These are structural anti-stub floors, not a target-journal word limit.
-    # A journal-ready manuscript may be much longer, but a core section below
-    # these bounds cannot contain a reproducible design or a critical account
-    # of the findings.
+    # A compact counts-only Results is measured against its complete verified
+    # facts. The other sections and every evidence/claim gate remain required.
     section_word_floors = {
         "abstract": 80,
         "introduction": 180,
         "methods": 250,
-        "results": 200,
+        "results": concise_results_word_floor(
+            manuscript, evidence=evidence, records=per_step_records, context=context,
+            reader_display_labels=reader_claim_labels(context, dict(getattr(plan, "display_labels", None) or {})) if context else {},
+        ),
         "discussion": 250,
     }
     thin_sections = [
@@ -925,6 +933,8 @@ def build_scientific_maturity_audit(
     display_suite: Optional[Mapping[str, Any]] = None,
     publication_bundle: Optional[Mapping[str, Any]] = None,
     reviewer_report: Optional[Mapping[str, Any]] = None,
+    evidence: Any = None,
+    per_step_records: Sequence[Mapping[str, Any]] = (),
 ) -> ScientificMaturityAudit:
     findings: list[ScientificMaturityFinding] = []
     literature = _read_json(run_dir, "preplan_literature_bundle.json")
@@ -1070,7 +1080,9 @@ def build_scientific_maturity_audit(
     reviewer_summary = reviewer.get("summary")
     reviewer_summary = reviewer_summary if isinstance(reviewer_summary, Mapping) else {}
     endpoint = _endpoint_semantic_facts(context)
-    manuscript = _manuscript_facts(run_dir)
+    manuscript = _manuscript_facts(
+        run_dir, evidence=evidence, per_step_records=per_step_records, context=context, plan=plan,
+    )
     primary_figure = _primary_figure_facts(run_dir, plan)
     covariates = tuple(primary_figure["adjustment_covariates"])
     if not covariates and plan is not None and any(

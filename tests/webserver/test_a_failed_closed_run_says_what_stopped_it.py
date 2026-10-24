@@ -1,8 +1,7 @@
 """A failed-closed run says what stopped it, as codes.
 
-A finished run fails closed when one of its gate axes is not satisfied: a step
-did not finish, the automated validation did not pass, a result lacks its
-evidence or a reported number could not be verified.  Its gate detail names
+A run fails closed when execution or analysis validation does not pass. A
+manuscript check names the failed deliverable while the analysis stays complete.  Its gate detail names
 which: the stop its first failed step's executor named, with that stop's
 lower-layer cause, or else the first axis the run did not satisfy.  When that
 axis is one a missing draft fails and the Writer named its stop (the model
@@ -89,7 +88,7 @@ def _stopped(cause: str = "interval_without_event"):
         ),
         ({**_PASSED, "evidence_complete": False}, {"reason_code": "evidence_complete_not_satisfied"}),
         # Only manuscript checks failed and no claim lacks its evidence
-        # (pilot1 fixed-set A2: a thin Results section).
+        # (a synthetic thin Results section).
         (
             {**_PASSED, "evidence_complete": False, "missing_evidence_count": 0, "evidence_error_count": 3},
             {"reason_code": "manuscript_checks_not_passed"},
@@ -206,14 +205,16 @@ def test_the_writer_s_stop_reaches_the_conversation_as_codes(tmp_path):
         run_dir=run_dir,
     )["gate"]
 
-    assert gate["reason"] == "research_agent_pipeline_failed_closed"
-    assert gate["detail"]["reason_code"] == _WRITER
-    assert gate["detail"]["provider_http_status"] == 500
-    assert projections.gate_detail_projection(gate["detail"]) == {
+    assert gate["status"] == "analysis_only"
+    assert gate["analysis_outcome"]["status"] == "completed"
+    assert gate["manuscript_outcome"] == {"status": "not_passed", "reason_code": _WRITER}
+    assert gate["manuscript_detail"]["provider_http_status"] == 500
+    assert projections.gate_detail_projection(gate["manuscript_detail"]) == {
         "gate_detail_code": _WRITER,
         "gate_missing_concepts": [],
         "gate_detail_cause_code": "transport_retry_attempts_exhausted",
     }
+
 
 
 def test_a_blocked_reason_that_replaces_the_gate_s_own_carries_no_such_detail(tmp_path):

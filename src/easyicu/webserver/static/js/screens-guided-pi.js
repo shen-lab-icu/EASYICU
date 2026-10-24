@@ -222,7 +222,7 @@
   const ERROR_TEXT = MODULES.require('errorText').create({
     tr, staticPreview: isStaticPreview,
   });
-  const { errorText, modelErrorText, providerPreset, option, runFailureText, studyFamilyGapText } = ERROR_TEXT;
+  const { errorText, modelErrorText, providerPreset, option, runFailureText, studyFamilyGapText, manuscriptNotPassedText } = ERROR_TEXT;
   const RESOURCE_OWNER = MODULES.require('resources').create({ esc });
   const resourceName = RESOURCE_OWNER.name;
   const resourceKey = RESOURCE_OWNER.key;
@@ -236,7 +236,7 @@
       busy: state.busy || Boolean(state.childJobId) };
   }
   const RUN_FILES = MODULES.require('runFiles').create({
-    api, context: runFilesContext, changed: () => render(true), resourceButton,
+    api, context: runFilesContext, changed: () => render(true), resourceButton, manuscriptNotPassedText,
   });
   const PROVIDER_CONTROL = MODULES.require('providerControl').create({
     state, api, tr, render, runtimeReady, shellReady,
@@ -256,7 +256,7 @@
     canPreview: () => Boolean(state.session) && !state.busy && !state.childJobId && !sessionIsStale(),
     preview: () => MODULES.optional('preview'),
     workflowContext: previewWorkflowContext,
-    errorText,
+    errorText, manuscriptNotPassedText,
     recordHostAction,
     onError: value => { state.error = value; render(); },
   });
@@ -348,7 +348,7 @@
     openResource: button => EVENTS.openResourceButton(button),
     revealPendingReview: () => EVENTS.revealPendingReview(),
     progressLabel: event => ACTIVITY.pipelineEventLabel(event),
-    runFailureText,
+    runFailureText, manuscriptNotPassedText,
   });
   const syncProjectWorkflowAside = ASIDE.syncProjectWorkflowAside;
   const DATA_BINDING = MODULES.require('dataBinding').create({

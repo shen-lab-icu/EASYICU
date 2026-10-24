@@ -9,12 +9,14 @@ data artefacts that produced it.  It never computes or upgrades a result.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.authority.numeric_claim_identity import NumericClaim
+from easyicu.research_agent.authority.runtime_artifacts import verified_run_evidence_path
 from easyicu.research_agent.schema import EvidenceRecord
 
 
@@ -33,6 +35,54 @@ _HEADING = re.compile(r"^(?P<hashes>#{1,6})\s+(?P<text>.+)$")
 
 class ManuscriptProvenanceError(ValueError):
     """The bound manuscript and EvidenceStore disagree."""
+
+
+def verified_evidence_json(
+    evidence: EvidenceStore,
+    evidence_id_or_alias: str,
+    *,
+    exact_evidence_id: bool = False,
+    expected_kind: str | None = None,
+    expected_producer: str | None = None,
+) -> dict[str, Any]:
+    """Read a registered JSON object with exact identity and byte verification."""
+
+    record = evidence.get(evidence_id_or_alias)
+    if (
+        record is None
+        or (exact_evidence_id and record.evidence_id != evidence_id_or_alias)
+        or (expected_kind is not None and record.kind != expected_kind)
+        or (expected_producer is not None and record.producer != expected_producer)
+    ):
+        raise RuntimeError(
+            f"writer evidence {evidence_id_or_alias!r} lost its registered identity"
+        )
+    path = verified_run_evidence_path(evidence.root, record)
+    if path is None:
+        raise RuntimeError(
+            f"writer evidence {evidence_id_or_alias!r} failed digest verification"
+        )
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise RuntimeError(
+            f"writer evidence {evidence_id_or_alias!r} became unreadable"
+        ) from exc
+    if hashlib.sha256(raw).hexdigest() != record.sha256:
+        raise RuntimeError(
+            f"writer evidence {evidence_id_or_alias!r} changed while being read"
+        )
+    try:
+        payload = json.loads(raw)
+    except (UnicodeError, ValueError, TypeError) as exc:
+        raise RuntimeError(
+            f"writer evidence {evidence_id_or_alias!r} is not valid JSON"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"writer evidence {evidence_id_or_alias!r} is not a JSON object"
+        )
+    return payload
 
 
 def _parse_definition(body: str) -> dict[str, str]:

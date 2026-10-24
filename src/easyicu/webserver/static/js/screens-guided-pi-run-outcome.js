@@ -8,7 +8,7 @@
   function create(deps) {
     const {
       tr, esc, iconHtml, resourceButton, api, projectId, host, canPreview,
-      preview, workflowContext, errorText, recordHostAction, onError, session,
+      preview, workflowContext, errorText, recordHostAction, onError, session, manuscriptNotPassedText,
     } = deps;
     const labels = {
       'result_tables.json': ['View result tables', '查看结果表'],
@@ -549,6 +549,9 @@
         primaryActions.unshift(`<button class="btn sm primary" type="button" data-gpi-run-outcome-retry="${validated && numericVerified ? 'restore' : 'validation_repair'}">${iconHtml('refresh', 13)} ${esc(retryLabel)}</button>`);
       }
       if (!primaryActions.length && !detailActions.length) return '';
+      const manuscript = latestRun.manuscript_outcome;
+      const manuscriptNotice = manuscript && manuscript.status === 'not_passed' && !manuscriptReady
+        ? `<p data-manuscript-outcome="not_passed">${esc(manuscriptNotPassedText(manuscript.reason_code))}</p>` : '';
       const figureNote = figureCount === 0
         ? `<p class="gpi-run-outcome-figure-note">${esc(tr('No figure was registered for this analysis; review the result tables first.', '本次分析未登记图件；请先查看结果表。'))}</p>`
         : '';
@@ -575,6 +578,7 @@
             ? tr('Analysis complete', '分析已完成')
             : tr('Results generated — validation needs review', '结果已生成，请核对待处理事项'))}<span class="gpi-run-outcome-status">${esc(status)}</span></strong>
           ${lead}
+          ${manuscriptNotice}
           ${renderDeliverables(latestRun, workflow)}
           ${figureNote}
           <div class="gpi-run-outcome-actions gpi-run-outcome-primary">${primaryActions.join('')}</div>

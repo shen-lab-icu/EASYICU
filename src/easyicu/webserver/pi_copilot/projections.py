@@ -14,7 +14,7 @@ from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
 
 from ..research_input_progress import project_research_input_state
 from ..run_step_trace import TRACE_ACTION_KEYS, TRACE_FACT_KEYS
-from ..run_record import MAX_ARTIFACT_SIZE_BYTES
+from ..run_record import MAX_ARTIFACT_SIZE_BYTES, RunGate
 from ..stop_next_actions import STOP_POLICIES, project_stop_next_actions
 from ..target_trial_setup import project_target_trial_compile
 from . import cohort_eligibility
@@ -567,7 +567,7 @@ def _project_job(
         progress = []
     run_id = stable_code(result.get("run_id"))
     gate = result.get("gate")
-    gate = gate if isinstance(gate, Mapping) else {}
+    gate = RunGate.from_payload(gate).to_dict() if isinstance(gate, Mapping) else {}
     stop_gate = gate
     error_code = _safe_error_code(snapshot.get("error"))
     if not gate.get("reason") and snapshot.get("status") == "failed" and error_code in STOP_POLICIES:
@@ -712,6 +712,7 @@ def _project_job(
                 result.get("research_input_state")
             ),
             "artifact_refs": artifact_refs,
+            **{key: gate[key] for key in ("analysis_outcome", "manuscript_outcome") if key in gate},
             "gate_status": stable_code(gate.get("status")),
             "gate_reason_code": stable_code(gate.get("reason")),
             **gate_detail_projection(gate.get("detail")),
@@ -954,7 +955,7 @@ def project_run_outcome(
     if not isinstance(review, Mapping) or not review.get("ok"):
         return {"present": False}
     gate = review.get("gate")
-    gate = gate if isinstance(gate, Mapping) else {}
+    gate = RunGate.from_payload(gate).to_dict() if isinstance(gate, Mapping) else {}
     projection = project_job(
         {
             "id": review.get("run_id"),
@@ -1059,6 +1060,8 @@ def project_run_outcome(
                 "numeric_verified",
                 "evidence_complete",
                 "manuscript_ready",
+                "analysis_outcome",
+                "manuscript_outcome",
                 "report_revision_ready",
                 "report_revision_pdf_ready",
                 "analysis_results_available",
@@ -1533,6 +1536,8 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
                 "run_type",
                 "engine",
                 "gate_status",
+                "analysis_outcome",
+                "manuscript_outcome",
                 "run_status",
                 "readiness_status",
                 "signed",
