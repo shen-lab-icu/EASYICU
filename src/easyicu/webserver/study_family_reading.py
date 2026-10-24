@@ -53,6 +53,7 @@ from easyicu.research_agent.planning.analysis_types import (
     RELATIONSHIP_QUESTION,
     data_quality_question,
     mask_non_association_phrases,
+    mask_declined_analysis_phrases,
 )
 
 __all__ = [
@@ -239,8 +240,9 @@ def study_family_reading(question: Any) -> Optional[StudyFamilyReading]:
 
 
 def _reading(text: str) -> Optional[StudyFamilyReading]:
-    relationship = RELATIONSHIP_QUESTION.search(mask_non_association_phrases(text))
-    proportion = PROPORTION_QUESTION.search(text)
+    requested = mask_declined_analysis_phrases(text)
+    relationship = RELATIONSHIP_QUESTION.search(mask_non_association_phrases(requested))
+    proportion = PROPORTION_QUESTION.search(requested)
     if relationship is not None:
         elements = [_evidence("relationship", text, relationship)]
         if proportion is not None:
@@ -251,19 +253,19 @@ def _reading(text: str) -> Optional[StudyFamilyReading]:
         )
     adjustment = next(
         (
-            match for match in _ADJUSTMENT_REQUEST.finditer(text)
+            match for match in _ADJUSTMENT_REQUEST.finditer(requested)
             if not re.search(r"\b(?:without|not|no|un)\s*$", text[max(0, match.start() - 12):match.start()], re.IGNORECASE)
         ),
         None,
     )
     # An adjusted proportion ("校正年龄后的死亡比例") may be a standardized
     # rate, which states no family; an adjusted comparison does.
-    if adjustment is not None and proportion is None and not _OTHER_ADJUSTED_FAMILY.search(text):
+    if adjustment is not None and proportion is None and not _OTHER_ADJUSTED_FAMILY.search(requested):
         return StudyFamilyReading(
             family="association_study",
             elements=(_evidence("adjustment", text, adjustment),),
         )
-    if proportion is not None and not INFERENTIAL_ESTIMATE.search(text):
+    if proportion is not None and not INFERENTIAL_ESTIMATE.search(requested):
         return StudyFamilyReading(
             family="descriptive_epidemiology",
             elements=(_evidence("proportion", text, proportion),),
