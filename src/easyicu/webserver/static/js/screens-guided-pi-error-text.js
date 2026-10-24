@@ -475,6 +475,19 @@
       const cause = String(detail && detail.cause || '').trim();
       const missing = Array.isArray(detail && detail.missing) ? detail.missing.map(String).filter(Boolean) : [];
       const list = missing.length ? missing.join(', ') : '';
+      if (code === 'deterministic_standard_executor_failed_closed') {
+        const title = String(detail && detail.stepTitle || '').trim();
+        const step = title || String(detail && detail.step || '').trim();
+        const why = {
+          executor_runtime_failure: tr('the built-in calculation failed', '内置计算执行失败'),
+          executor_output_contract_failed: tr('its output did not pass validation', '输出未通过校验'),
+          missing_executor_outputs: tr('it did not produce the required output', '未生成必需的输出'),
+        }[cause] || tr('the built-in calculation stopped', '内置计算停止');
+        return tr(
+          `${step ? `Step “${step}” stopped` : 'An analysis step stopped'}: ${why}. The run is incomplete. Send the failure receipt to support; retry the approved plan after EasyICU is updated.`,
+          `${step ? `步骤「${step}」停止` : '有分析步骤停止'}：${why}。本次运行未完成。请把失败回执发给支持人员，EasyICU 更新后再按已批准计划重试。`,
+        );
+      }
       const detailCopy = {
         declared_exposure_level_empty: tr(
           'A declared group has no analysable stays, so the run stopped; generate a new plan that checks eligibility and preserves every group.',

@@ -483,9 +483,7 @@ def execution_gate_status(
         step_id: str(record.get("status") or "")
         for step_id, record in record_by_step.items()
     }
-    missing_steps = [
-        step_id for step_id in required_step_ids if step_id not in status_by_step
-    ]
+    missing_steps = [sid for sid in required_step_ids if sid not in status_by_step]
     # Credit ``*_figure`` steps whose figure a later rendering-only repair step
     # actually produced: the figure exists on disk, so a hard fail-close here
     # would be a false negative (the deliverable is present). Only figure steps
@@ -505,6 +503,7 @@ def execution_gate_status(
         return status_by_step.get(step_id) == "ok" or (step_id in repaired_figures)
 
     completion = step_completion_projection(
+        plan=plan,
         required_step_ids=required_step_ids,
         record_by_step=record_by_step,
         status_by_step=status_by_step,

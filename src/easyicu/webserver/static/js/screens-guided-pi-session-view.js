@@ -278,7 +278,16 @@
       const outcome = showProjectContinuationCards ? RUN_OUTCOME.render(state.latestRun, state.workflow) : '';
       const emptyResearch = !workspace && !messages && !outcome;
       const resultsView = Boolean(outcome) && !dataConsentRequired;
-      const conversation = messages;
+      // Workflow completion may arrive before the separate run-file catalog.
+      // Use its authoritative stop until that run has a stop in the timeline.
+      const pendingStop = showProjectContinuationCards && RUN_STOP
+        ? (state.workflow && Array.isArray(state.workflow.runs) ? state.workflow.runs : []).find(run => (
+          run.authoritative && RUN_STOP.stopped(run)
+          && !timeline.some(row => (row.savedRuns || []).some(saved => (
+            saved.run_id === run.run_id && RUN_STOP.stopped(saved)
+          )))
+        )) : null;
+      const conversation = messages + (pendingStop ? RUN_STOP.render({ savedRuns: [pendingStop] }) : '');
       const dataConsentHtml = dataConsentRequired
         ? DATA_CONSENT.render(session, {
           tr, esc, icon: iconHtml,

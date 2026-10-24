@@ -332,6 +332,7 @@ def _base_row(
         "category": None,
         "group": group,
         "group_order": group_order,
+        "row_role": "overall" if group_order == 0 else "exposure_level",
         "denominator_n": denominator_n,
         "nonmissing_n": nonmissing_n,
         "missing_n": missing_n,

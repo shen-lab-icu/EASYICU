@@ -56,6 +56,91 @@ def _stopped(cause: str = "interval_without_event"):
     }
 
 
+@pytest.mark.parametrize("cause", ["executor_runtime_failure", "executor_output_contract_failed", "missing_executor_outputs"])
+def test_standard_failure_reaches_the_conversation_with_its_step(tmp_path, cause):
+    from easyicu.research_agent.reporting.readiness import execution_gate_status
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(research_question="Describe a synthetic cohort.", steps=[
+        AnalysisStep(step_id="02_baseline", intent="Describe score by arm.",
+                     inputs=[], expected_outputs=[]),
+    ])
+    axes = execution_gate_status(plan=plan, per_step_records=[{
+        "step_id": "02_baseline", "status": "deterministic_standard_blocked",
+        "step_title": "A title outside the approved plan",
+        "deterministic_standard_analysis": "grouped_table_one",
+        "standard_executor_terminal_reason": cause,
+    }])
+    detail = {
+        "reason_code": "deterministic_standard_executor_failed_closed",
+        "cause_code": cause, "step_id": "02_baseline", "step_title": "Describe score by arm.",
+    }
+    gate = _project(tmp_path, axes)["gate"]
+    assert gate["status"] == "blocked"
+    assert gate["detail"] == detail
+    assert projections.gate_detail_projection(detail) == {
+        "gate_detail_code": detail["reason_code"], "gate_detail_cause_code": cause,
+        "gate_detail_step_id": "02_baseline", "gate_missing_concepts": [],
+        "gate_detail_step_title": "Describe score by arm.",
+    }
+    outcome = projections.project_run_outcome({
+        "ok": True, "run_id": "synthetic-run", "gate": gate,
+    })
+    assert outcome["gate_detail_step_id"] == "02_baseline"
+    assert outcome["gate_detail_step_title"] == "Describe score by arm."
+    assert outcome["gate_detail_cause_code"] == cause
+    assert outcome["analysis_results_available"] is False
+    [history] = workflow.project_run_history([{
+        "run_id": "synthetic-run", "run_status": "blocked",
+        "gate_reason": gate["reason"], "gate_detail": detail,
+    }])
+    assert history["gate_detail_step_id"] == "02_baseline"
+    assert history["gate_detail_step_title"] == "Describe score by arm."
+    assert history["gate_detail_cause_code"] == cause
+
+
+@pytest.mark.parametrize("step_id", ["/private/run/step", "bad<script>", "x" * 161])
+def test_failure_projection_does_not_publish_paths_or_unbounded_step_names(step_id):
+    assert "gate_detail_step_id" not in projections.gate_detail_projection({
+        "reason_code": "deterministic_standard_executor_failed_closed", "step_id": step_id,
+    })
+
+
+@pytest.mark.parametrize("title", ["Describe score by arm.", "按研究组汇总评分", "x" * 160])
+def test_failure_projection_preserves_bounded_plain_step_titles(title):
+    projected = projections.gate_detail_projection({
+        "reason_code": "deterministic_standard_executor_failed_closed", "step_title": title,
+    })
+    assert projected["gate_detail_step_title"] == title
+
+
+@pytest.mark.parametrize("title", ["bad<script>", "x" * 161, "title\nnext", "title\x7f", "   ", 123, {}])
+def test_failure_projection_omits_unsafe_or_unbounded_step_titles(title):
+    assert "gate_detail_step_title" not in projections.gate_detail_projection({
+        "reason_code": "deterministic_standard_executor_failed_closed", "step_title": title,
+    })
+
+
+def test_standard_failure_without_a_plan_title_keeps_the_step_id(tmp_path):
+    from easyicu.research_agent.reporting.readiness import execution_gate_status
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    axes = execution_gate_status(
+        plan=AnalysisPlan(research_question="Describe score.", steps=[
+            AnalysisStep(step_id="02_baseline", intent=""),
+        ]),
+        per_step_records=[{
+            "step_id": "02_baseline", "status": "deterministic_standard_blocked",
+            "step_title": "An unapproved runner title",
+            "deterministic_standard_analysis": "grouped_table_one",
+            "standard_executor_terminal_reason": "executor_runtime_failure",
+        }],
+    )
+    projected = projections.gate_detail_projection(_project(tmp_path, axes)["gate"]["detail"])
+    assert projected["gate_detail_step_id"] == "02_baseline"
+    assert "gate_detail_step_title" not in projected
+
+
 @pytest.mark.parametrize(
     ("axes", "detail"),
     [
