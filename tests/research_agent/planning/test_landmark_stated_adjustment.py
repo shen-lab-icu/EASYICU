@@ -110,6 +110,112 @@ def test_multiple_score_summaries_remain_an_explicit_adjustment_choice():
     assert "several columns" in agent_pipeline_runs._progressive_compile_failure_message(stopped.value)
 
 
+def _prepared_adjustment(concept, database):
+    context = _study(())
+    context.cohort.database = database
+    context.variables.extend(ConceptDescriptor(
+        name=f"{concept}_{summary}", source_concept=concept,
+        role="other", dtype="float64", analysis_window="icu_admission[0,24]h",
+        unit_normalization=f"window_numeric_{summary}",
+    ) for summary in ("max", "min", "mean", "first"))
+    context.variables.extend(ConceptDescriptor(
+        name=f"{concept}_{suffix}", source_concept=concept,
+        role=role, dtype="float64", analysis_window="icu_admission[0,24]h",
+    ) for suffix, role in (("n", "meta"), ("measured", "meta"),
+                          ("first_time", "time"), ("last_time", "time")))
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints["stated_adjustments"] = [{
+        "variable": "Adjustment measure", "words": "adjust for the adjustment measure",
+        "concept": concept, "source_status": "available",
+    }]
+    context.user_preferences.data_constraints = json.dumps(constraints)
+    return context
+
+
+@pytest.mark.parametrize("concept,database", [
+    ("apache_iv", "eicu"), ("apache_iv", "eicu_demo"), ("saps3", "sic"),
+    ("weight", "miiv"),
+])
+def test_a_prepared_stay_value_binds_one_recorded_adjustment(concept, database):
+    from easyicu.research_agent.planning.adjustment_authority import (
+        context_stated_adjustments, stated_adjustment_columns,
+    )
+
+    context = _prepared_adjustment(concept, database)
+    original = context.model_dump(mode="json")
+    adjustment, = context_stated_adjustments(context)
+    assert stated_adjustment_columns(context, adjustment) == (f"{concept}_first",)
+    request = _request(context)
+    assert request.exact_roster == [f"{concept}_first"]
+    assert request.landmark_hours == 24
+    assert request.model_dump(mode="json")["exact_roster"] == [f"{concept}_first"]
+    assert context.model_dump(mode="json") == original
+
+
+def test_a_bare_stay_value_takes_precedence_over_legacy_summaries():
+    context = _prepared_adjustment("apache_iv", "eicu")
+    context.variables.append(ConceptDescriptor(
+        name="apache_iv", source_concept="apache_iv", role="other", dtype="float64",
+    ))
+    assert _request(context).exact_roster == ["apache_iv"]
+
+
+@pytest.mark.parametrize("concept,database", [
+    ("lact", "eicu"), ("lact", "miiv"), ("sofa", "eicu"), ("sofa", "miiv"),
+    ("sofa2", "miiv"), ("local_score", "synthetic"),
+])
+def test_repeated_measurements_and_scores_still_require_a_summary_choice(concept, database):
+    context = _prepared_adjustment(concept, database)
+    with pytest.raises(FamilySpecError, match="stated_adjustment_unavailable") as stopped:
+        _request(context)
+    assert stopped.value.cause_code == "stated_adjustment_column_ambiguous"
+
+
+@pytest.mark.parametrize("change", ["lineage", "transform", "window", "no_window", "no_first"])
+def test_a_stay_value_resolution_needs_a_matching_first_value_receipt(change):
+    context = _prepared_adjustment("apache_iv", "eicu")
+    first = context.variable("apache_iv_first")
+    if change == "lineage":
+        first.source_concept = "unrelated_measure"
+    elif change == "transform":
+        first.unit_normalization = "window_numeric_sum"
+    elif change == "window":
+        first.analysis_window = "icu_admission[24,48]h"
+    elif change == "no_window":
+        for variable in context.variables:
+            if variable.source_concept == "apache_iv":
+                variable.analysis_window = None
+    else:
+        context.variables.remove(first)
+    with pytest.raises(FamilySpecError, match="stated_adjustment_unavailable"):
+        _request(context)
+
+
+def test_retrieval_cannot_hide_a_repeated_measurements_ambiguity():
+    from easyicu.research_agent.planning.family_spec.request import _association_adjustment
+
+    context = _prepared_adjustment("lact", "miiv")
+    with pytest.raises(FamilySpecError, match="stated_adjustment_unavailable") as stopped:
+        _association_adjustment(context, ["lact_max"])
+    assert stopped.value.cause_code == "stated_adjustment_column_ambiguous"
+
+
+def test_a_resolved_stay_value_must_still_be_in_the_offered_roster():
+    from easyicu.research_agent.planning.family_spec.request import _association_adjustment
+
+    context = _prepared_adjustment("apache_iv", "eicu")
+    with pytest.raises(FamilySpecError, match="stated_adjustment_unavailable") as stopped:
+        _association_adjustment(context, ["apache_iv_max"])
+    assert stopped.value.cause_code == "stated_adjustment_column_unavailable"
+
+
+def test_resolving_a_native_score_does_not_grant_early_landmark_availability():
+    context = _prepared_adjustment("apache_iv", "eicu")
+    context.user_preferences.landmark_hours = 12
+    with pytest.raises(FamilySpecError, match="covariate_timing_unproven"):
+        _request(context)
+
+
 def _study(roster=("sex",)):
     context = _context(exact=False)
     constraints = json.loads(context.user_preferences.data_constraints)

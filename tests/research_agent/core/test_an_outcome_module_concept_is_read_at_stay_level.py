@@ -125,6 +125,68 @@ def _kept(root: Path, *, inclusion=(), exclusion=()) -> list[int]:
     return sorted(int(stay) for stay in cohort["stay_id"])
 
 
+@pytest.mark.parametrize("concept,database", [
+    ("apache_iv", "eicu"), ("apache_iv", "eicu_demo"), ("saps3", "sic"),
+    ("weight", "miiv"),
+])
+@pytest.mark.parametrize("window", [(0.0, 24.0), (24.0, 48.0)])
+def test_a_dictionary_stay_value_is_not_summarized_by_its_export_grid(
+    tmp_path, concept, database, window,
+):
+    source = typed_native_export(
+        tmp_path / "export", database=database,
+        outcome=native_outcome(death=[False, True, False, False], los_icu=[4.0] * 4),
+        outcome_concepts=["death", "los_icu"],
+        longitudinal=pd.DataFrame({
+            "stay_id": [1, 1, 2, 2], "charttime": [0.0, 1.0, 0.0, 1.0],
+            concept: [65.0, 65.0, None, 80.0],
+        }), longitudinal_concepts=[concept],
+    )
+    cohort, provenance = materialize_cohort(
+        data_path=source, database=database, feature_concepts=[concept],
+        static_concepts=["age"], outcome_concepts=["death"], cohort_window=window,
+    )
+    assert _column(cohort, concept) == {1: 65.0, 2: 80.0, 3: None, 4: None}
+    assert not any(name.startswith(f"{concept}_") for name in cohort.columns)
+    assert provenance["stay_level_concepts"] == {concept: {"source": "stay_level_value"}}
+
+
+def test_a_declared_stay_value_with_conflicting_records_is_refused(tmp_path):
+    source = typed_native_export(
+        tmp_path / "export", database="eicu",
+        outcome=native_outcome(death=[False] * 4, los_icu=[4.0] * 4),
+        outcome_concepts=["death", "los_icu"],
+        longitudinal=pd.DataFrame({
+            "stay_id": [1, 1], "charttime": [0.0, 1.0], "apache_iv": [65.0, 80.0],
+        }), longitudinal_concepts=["apache_iv"],
+    )
+    with pytest.raises(MaterializedMetadataError, match="conflicting stay-level values"):
+        materialize_cohort(
+            data_path=source, database="eicu", feature_concepts=["apache_iv"],
+            static_concepts=["age"], outcome_concepts=["death"],
+        )
+
+
+@pytest.mark.parametrize("concept", ["lact", "sofa", "sofa2"])
+def test_a_repeated_measurement_keeps_its_window_summaries(tmp_path, concept):
+    source = typed_native_export(
+        tmp_path / "export", database="miiv",
+        outcome=native_outcome(death=[False] * 4, los_icu=[4.0] * 4),
+        outcome_concepts=["death", "los_icu"],
+        longitudinal=pd.DataFrame({
+            "stay_id": [1, 1], "charttime": [0.0, 1.0], concept: [2.0, 4.0],
+        }), longitudinal_concepts=[concept],
+    )
+    cohort, provenance = materialize_cohort(
+        data_path=source, database="miiv", feature_concepts=[concept],
+        static_concepts=["age"], outcome_concepts=["death"],
+    )
+    assert _column(cohort, f"{concept}_first")[1] == 2.0
+    assert _column(cohort, f"{concept}_mean")[1] == 3.0
+    assert _column(cohort, f"{concept}_max")[1] == 4.0
+    assert concept not in provenance["stay_level_concepts"]
+
+
 @pytest.mark.parametrize("window", [(0.0, 24.0), (24.0, 48.0)])
 def test_a_value_feature_is_the_stays_value_whatever_the_window(
     tmp_path: Path, window
@@ -376,6 +438,29 @@ def test_the_acquisition_binds_a_stay_level_event_feature_to_its_column(
     # Before: only ``death_max`` was a public coordinate; now the bare status is.
     assert result.analysis_columns["death"] == "death"
     assert {"death", "death_time"} <= set(result.materialized_columns)
+
+
+@pytest.mark.parametrize("concept,database", [("apache_iv", "eicu"), ("saps3", "sic"), ("weight", "miiv")])
+def test_the_acquisition_binds_a_stay_value_to_its_bare_coordinate(tmp_path, concept, database):
+    source = typed_native_export(
+        tmp_path / "export", database=database,
+        outcome=native_outcome(death=[False] * 4, los_icu=[4.0] * 4),
+        outcome_concepts=["death", "los_icu"],
+        longitudinal=pd.DataFrame({
+            "stay_id": [1, 1, 2, 2], "charttime": [0.0, 1.0, 0.0, 1.0],
+            concept: [65.0, 65.0, 80.0, 80.0],
+        }), longitudinal_concepts=[concept],
+    )
+    result = acquire_universe_for_question(
+        export_dir=source, database=database, question="Describe the admission measure and hospital outcome.",
+        llm=ScriptedMockLLMClient([]), output_dir=tmp_path / "universe",
+        target_outcome="death", outcome_concepts=["death"],
+        required_feature_concepts=[concept], primary_exposure_concept=concept,
+        static_concepts=["age"], concept_selection_authority="host_exact", emit_trajectory=False,
+    )
+    assert result.blocked is False
+    assert concept in result.materialized_columns
+    assert result.analysis_columns[concept] == concept
 
 
 @pytest.mark.parametrize("read_at_stay_level", [True, False])

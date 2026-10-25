@@ -657,6 +657,10 @@ def acquire_universe_for_question(
     # materialization; otherwise a valid event-status exposure is silently
     # treated as an unaggregated repeated measure and Web planning stops.
     stay_level_concepts = materialized_provenance.get("stay_level_concepts")
+    if isinstance(stay_level_concepts, dict):
+        for concept, record in stay_level_concepts.items():
+            if record.get("source") == "stay_level_value" and concept in materialized_columns:
+                analysis_columns[concept] = concept
     for concept in event_status_feature_concepts:
         canonical_event_column = f"{concept}_max"
         if canonical_event_column in materialized_columns:
