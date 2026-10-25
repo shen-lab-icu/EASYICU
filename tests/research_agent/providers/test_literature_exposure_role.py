@@ -8,7 +8,11 @@ from easyicu.research_agent.literature import (
 )
 
 
-def _screen(exposure: str, excerpt: str):
+def _screen(
+    exposure: str,
+    excerpt: str,
+    title: str = "A biomarker model for hospital mortality in ICU patients",
+):
     return screen_source_backed_direct_comparator(
         exposure=exposure,
         outcome="hospital mortality",
@@ -16,7 +20,7 @@ def _screen(exposure: str, excerpt: str):
         record=CitationRecord(
             key="source_backed_candidate",
             year="2024",
-            title="A biomarker model for hospital mortality in ICU patients",
+            title=title,
             relevance="Study-design excerpt: " + excerpt,
             publication_types=["Observational Study"],
         ),
@@ -101,6 +105,169 @@ def test_secondary_performance_comparator_does_not_become_direct_comparator():
     assert decision.exposure_match is False
     assert decision.disposition == "exclude"
     assert decision.evidence_role == "related_context"
+
+
+@pytest.mark.parametrize("marker", ["marker alpha", "enzyme omega"])
+@pytest.mark.parametrize(
+    ("studied", "difference"),
+    [
+        ("{marker}-to-protein beta ratio", "比值"),
+        ("{marker}-protein beta ratio", "比值"),
+        ("{marker}/protein beta", "比值"),
+        ("protein beta-to-{marker} ratio", "比值"),
+        ("ratio of {marker} to protein beta", "比值"),
+        ("ratio of protein beta to {marker}", "比值"),
+        ("{marker} and protein beta composite score", "复合指标"),
+        ("{marker}-protein beta score", "复合指标"),
+        ("composite index incorporating {marker} and protein beta", "复合指标"),
+        ("composite of {marker} and protein beta", "复合指标"),
+        ("{marker} and protein beta composite predictor", "复合指标"),
+        ("combination of {marker} and protein beta", "复合指标"),
+        ("{marker} combined with protein beta", "复合指标"),
+        ("{marker} trajectory", "动态变化"),
+        ("trajectories of {marker}", "动态变化"),
+        ("{marker} clearance", "动态变化"),
+        ("change in {marker}", "动态变化"),
+        ("{marker} variability", "动态变化"),
+        ("{marker} kinetics", "动态变化"),
+    ],
+)
+def test_derived_exposure_is_related_context_for_its_component(marker, studied, difference):
+    studied = studied.format(marker=marker)
+    decision = _screen(
+        marker,
+        f"We evaluated {studied} for hospital mortality in ICU patients.",
+        title=f"{studied} predicts hospital mortality in ICU patients",
+    )
+
+    assert decision.population_match and decision.outcome_match
+    assert decision.design_excerpt_available and decision.publication_type_eligible
+    assert not decision.exposure_match
+    assert decision.disposition == "exclude"
+    assert decision.evidence_role == "related_context"
+    assert difference in decision.rationale
+    assert "相关背景" in decision.rationale
+
+
+@pytest.mark.parametrize(
+    "exposure",
+    [
+        "marker alpha-to-protein beta ratio",
+        "marker alpha and protein beta composite score",
+        "marker alpha trajectory",
+    ],
+)
+def test_plain_component_cannot_authorize_a_derived_exposure(exposure):
+    decision = _screen(
+        exposure,
+        "We evaluated marker alpha for hospital mortality in ICU patients. "
+        "Protein beta was also measured.",
+        title="Marker alpha predicts hospital mortality in ICU patients",
+    )
+    assert not decision.exposure_match
+    assert decision.evidence_role == "related_context"
+
+
+@pytest.mark.parametrize(
+    "exposure",
+    [
+        "marker alpha",
+        "marker alpha-to-protein beta ratio",
+        "marker alpha/protein beta",
+        "marker alpha and protein beta composite score",
+        "marker alpha trajectory",
+    ],
+)
+def test_matching_studied_identity_remains_a_candidate_pending_review(exposure):
+    decision = _screen(
+        exposure,
+        f"We evaluated {exposure} for hospital mortality in ICU patients.",
+        title=f"{exposure} predicts hospital mortality in ICU patients",
+    )
+    assert decision.exposure_match
+    assert decision.disposition == "include"
+    assert decision.evidence_role == "direct_comparator"
+    assert "Human review" in decision.rationale
+    assert "time zero, estimand, and adjustment" in decision.rationale
+
+
+@pytest.mark.parametrize(
+    "studied",
+    [
+        "marker alpha-to-protein beta ratio",
+        "marker alpha and protein beta composite score",
+        "marker alpha trajectory",
+    ],
+)
+@pytest.mark.parametrize("location", ["title", "excerpt"])
+def test_identity_guard_applies_to_each_source_field(studied, location):
+    statement = f"We evaluated {studied} for hospital mortality in ICU patients."
+    decision = _screen(
+        "marker alpha",
+        statement if location == "excerpt" else "A retrospective study of ICU patients.",
+        title=statement if location == "title" else "A biomarker study in ICU patients",
+    )
+    assert not decision.exposure_match
+    assert decision.evidence_role == "related_context"
+
+
+def test_ratio_direction_is_part_of_the_exposure_identity():
+    decision = _screen(
+        "marker alpha-to-protein beta ratio",
+        "We evaluated protein beta-to-marker alpha ratio for hospital mortality in ICU patients.",
+    )
+    assert not decision.exposure_match
+    assert decision.evidence_role == "related_context"
+
+
+@pytest.mark.parametrize(
+    "excerpt",
+    [
+        "We evaluated marker alpha for hospital mortality, adjusting for protein beta in ICU patients.",
+        "Adjusted for age, marker alpha predicts hospital mortality in ICU patients.",
+        "We evaluated marker alpha and reported an odds ratio for hospital mortality in ICU patients.",
+        "Marker alpha was a predictor of hospital mortality; the hazard ratio was estimated in ICU patients.",
+        "We evaluated the odds ratio of marker alpha for hospital mortality in ICU patients.",
+        "We evaluated the hazard ratio of marker alpha for hospital mortality in ICU patients.",
+        "We evaluated the risk ratio of marker alpha for hospital mortality in ICU patients.",
+        "We assessed marker alpha for hospital mortality and a composite outcome in ICU patients.",
+        "We evaluated marker alpha for hospital mortality in ICU patients with a trajectory of organ failure.",
+        "We evaluated marker alpha-to-protein beta ratio; separately we evaluated marker alpha for hospital mortality in ICU patients.",
+        "We evaluated marker alpha-to-protein beta ratio and independently evaluated marker alpha for hospital mortality in ICU patients.",
+        "We evaluated marker alpha kinetics and separately evaluated marker alpha for hospital mortality in ICU patients.",
+    ],
+)
+def test_separate_plain_marker_analysis_is_not_hidden_by_other_terms(excerpt):
+    decision = _screen("marker alpha", excerpt)
+    assert decision.exposure_match
+    assert decision.evidence_role == "direct_comparator"
+
+
+@pytest.mark.parametrize(
+    "adjustment",
+    [
+        "after adjusting for marker alpha",
+        "after adjustment for age and marker alpha",
+        "with adjustment for marker alpha and age",
+        "after controlling for marker alpha",
+        "with marker alpha as a covariate",
+        "with marker alpha included as an adjustment variable",
+        "with marker alpha used only as a covariate",
+        "where covariates included age and marker alpha",
+        "using marker alpha-adjusted models",
+    ],
+)
+def test_adjustment_only_marker_mention_stays_related_context(adjustment):
+    decision = _screen(
+        "marker alpha",
+        f"We evaluated protein beta {adjustment} for hospital mortality in ICU patients.",
+        title="Protein beta predicts hospital mortality in ICU patients",
+    )
+    assert decision.population_match and decision.outcome_match
+    assert not decision.exposure_match
+    assert decision.disposition == "exclude"
+    assert decision.evidence_role == "related_context"
+    assert "调整变量" in decision.rationale
 
 
 def test_adjustment_covariate_does_not_become_studied_exposure():
