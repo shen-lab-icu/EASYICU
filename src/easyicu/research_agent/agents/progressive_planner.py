@@ -29,7 +29,7 @@ from ..concept_availability import (
     ConceptSourceUnavailableError,
     require_supported_variable_source,
 )
-from ..planning.accepted_analysis_inputs import analysis_input_value_columns
+from ..planning.accepted_analysis_inputs import required_planning_value_columns
 from ..planning.baseline_requirements import baseline_requirement_projection
 from ..planning.literature_bindings import (
     allowed_method_source_keys,
@@ -1056,7 +1056,7 @@ def select_progressive_variables(
     # reads.  Process companions never stand in for the value.  A Table 1 that
     # describes those same inputs (a prediction model's predictors) does not
     # move them back into the budget.
-    accepted_inputs = analysis_input_value_columns(context)
+    accepted_inputs = required_planning_value_columns(context)
     lost_inputs = sorted(concept for concept, columns in accepted_inputs.items() if not columns)
     if lost_inputs:
         raise ProgressivePlanCompileError(

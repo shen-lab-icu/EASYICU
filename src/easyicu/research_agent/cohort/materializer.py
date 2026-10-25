@@ -47,6 +47,7 @@ from __future__ import annotations
 from easyicu.runtime.platform_compat import fsync_directory
 
 from ..canonical_json import sha256_file as _sha256_file
+from ..concept_availability import concept_records_one_value_per_stay
 
 import hashlib
 import inspect
@@ -1328,12 +1329,13 @@ def _binary_event_column(
 
 
 def _export_concept_is_stay_level(package: ExportPackage, concept: str) -> bool:
-    """Whether an export records ``concept`` at its stay's coordinate only.
+    """Whether the concept or export owner declares one value per stay.
 
     A native export publishes its outcome module as stay-level rows at one
     coordinate, 0 h from ICU admission. That coordinate is the stay's: no event
     happened and nothing was measured there, so such a concept has no reading
-    within a window of the stay.
+    within a window of the stay. Dictionary-declared stay values retain this
+    meaning even when another module repeats them on its observation grid.
     """
 
     index = package.concept_index
@@ -1341,7 +1343,8 @@ def _export_concept_is_stay_level(package: ExportPackage, concept: str) -> bool:
     if resolved is None:
         return False
     return (
-        package.manifest_kind == "native" and index[resolved].get("module") == "outcome"
+        concept_records_one_value_per_stay(concept)
+        or (package.manifest_kind == "native" and index[resolved].get("module") == "outcome")
     )
 
 

@@ -2063,9 +2063,9 @@ def _association_adjustment(
     stated = context_stated_adjustments(context)
     columns = []
     for item in stated:
-        matched = [name for name in stated_adjustment_columns(context, item) if name in available]
+        matched = stated_adjustment_columns(context, item)
         require_distinct(matched)
-        if item.source_status != "available" or len(matched) != 1:
+        if item.source_status != "available" or len(matched) != 1 or matched[0] not in available:
             cause = ("name_unresolved" if item.concept is None else
                      "source_unavailable" if item.source_status != "available" else
                      "column_ambiguous" if len(matched) > 1 else "column_unavailable")

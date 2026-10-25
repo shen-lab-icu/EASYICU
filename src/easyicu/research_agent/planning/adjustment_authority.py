@@ -30,6 +30,7 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from ..authority.declared_levels import observed_levels_for
+from ..concept_availability import concept_records_one_value_per_stay
 from ..contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORMS, read_grouping_rules
 from ..research_context.materialization_window import bound_feature_window_end_hours, context_column_windows
 from ..research_context.stay_events import (
@@ -110,15 +111,35 @@ def context_stated_adjustments(context: Any) -> tuple[StatedAdjustment, ...]:
 
 
 def stated_adjustment_columns(context: Any, adjustment: StatedAdjustment) -> tuple[str, ...]:
-    """Value columns for a required concept, never measurement/time companions."""
+    """Resolve a stay value, or retain every repeated-measurement alternative.
+
+    Older preparation repeated native stay values on a time grid and emitted
+    several summaries. The dictionary's one-value declaration makes the
+    recorded first value a representation of that same value, not a choice of
+    clinical aggregation. Require matching source/window receipts; a suffix
+    alone grants no such equivalence. Timing remains the window owner's job.
+    """
 
     if adjustment.concept is None:
         return ()
-    return tuple(
-        variable.name for variable in context.variables
+    candidates = [
+        variable for variable in context.variables
         if _matches_declared_covariate(adjustment.concept, variable.name)
         and str(getattr(variable.role, "value", variable.role)) not in _MODEL_TERM_INELIGIBLE_ROLES
-    )
+    ]
+    if concept_records_one_value_per_stay(adjustment.concept):
+        for variable in candidates:
+            if (variable.name == adjustment.concept
+                    and variable.source_concept in {None, adjustment.concept}):
+                return (variable.name,)
+        for variable in candidates:
+            if (variable.name == f"{adjustment.concept}_first"
+                    and variable.unit_normalization == "window_numeric_first"
+                    and variable.analysis_window
+                    and all(item.source_concept == adjustment.concept
+                            and item.analysis_window == variable.analysis_window for item in candidates)):
+                return (variable.name,)
+    return tuple(variable.name for variable in candidates)
 
 
 def stated_adjustment_after_time_zero(context: Any, adjustment: StatedAdjustment) -> bool:

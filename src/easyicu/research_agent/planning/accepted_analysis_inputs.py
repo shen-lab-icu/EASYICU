@@ -131,10 +131,29 @@ def analysis_input_value_columns(context: ResearchContext) -> dict[str, tuple[st
     }
 
 
+def required_planning_value_columns(context: ResearchContext) -> dict[str, tuple[str, ...]]:
+    """Keep accepted inputs and stated adjustments outside retrieval quotas.
+
+    Retrieval cannot select a summary by dropping its alternatives, nor lose
+    the canonical value selected by the stay-level concept owner. Missing
+    stated adjustments retain their family-request diagnostic; an accepted
+    input with no representation retains its existing retrieval refusal.
+    """
+    from .adjustment_authority import context_stated_adjustments, stated_adjustment_columns
+
+    required = analysis_input_value_columns(context)
+    for item in context_stated_adjustments(context):
+        columns = stated_adjustment_columns(context, item)
+        if item.concept and columns:
+            required[item.concept] = tuple(dict.fromkeys((*required.get(item.concept, ()), *columns)))
+    return required
+
+
 __all__ = [
     "AcceptedAnalysisInputs",
     "analysis_input_value_columns",
     "bind_analysis_inputs",
     "candidate_analysis_inputs",
     "context_analysis_inputs",
+    "required_planning_value_columns",
 ]
