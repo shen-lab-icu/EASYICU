@@ -67,7 +67,7 @@ def test_label_lookups_never_return_text_in_another_script() -> None:
     assert scoped_label_lookup("vasopressor_any", 1, labels) is None
     assert label_lookup("mort_28d", labels) == "28-day mortality"
     assert scoped_label_lookup("sex", 1, labels) == "Male"
-    assert display_label("vasopressor_any", labels) == "Vasopressor Any"
+    assert display_label("vasopressor_any", labels) == "Vasopressor any"
 
 
 def test_an_event_time_is_named_after_its_event(tmp_path: Path) -> None:

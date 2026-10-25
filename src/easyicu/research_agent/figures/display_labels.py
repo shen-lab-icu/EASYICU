@@ -17,6 +17,11 @@ from typing import Any, Mapping, Optional
 from ..contracts.exposure_group_rules import ExposureGroupRuleError, read_grouping_rules
 
 _FOREIGN_SCRIPT_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯豈-﫿]")
+_CLINICAL_ACRONYMS = {
+    token.casefold(): token
+    for token in ("AKI", "BUN", "CI", "CNS", "HR", "ICU", "KDIGO", "MAP",
+                  "OR", "RR", "RRT", "SOFA", "SpO2", "WBC", "pH")
+}
 
 
 @dataclass(frozen=True)
@@ -165,13 +170,28 @@ def _normalise_display_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value or "").casefold()).strip("_")
 
 
+def _sentence_case(text: str) -> str:
+    """Lowercase ordinary label words while retaining clinical notation."""
+    def word_case(match: re.Match[str]) -> str:
+        word = match.group()
+        if word.casefold() in _CLINICAL_ACRONYMS:
+            return _CLINICAL_ACRONYMS[word.casefold()]
+        # Keep unknown acronyms and mixed-case notation (e.g. CRP, eGFR).
+        if word.isupper() or (not word.islower() and not word.istitle()):
+            return word
+        return word.capitalize() if match.start() == 0 else word.lower()
+
+    return re.sub(r"[A-Za-z][A-Za-z0-9]*", word_case, text)
+
+
 def _figure_text(label: Any) -> Optional[str]:
     text = str(label or "").strip()
     if not text or _FOREIGN_SCRIPT_RE.search(text):
         return None
-    return "In-hospital mortality" if text.casefold() in {
+    text = "In-hospital mortality" if text.casefold() in {
         "in hospital mortality", "in-hospital mortality",
     } else text
+    return _sentence_case(text)
 
 
 def figure_language_labels(
@@ -181,8 +201,8 @@ def figure_language_labels(
     """Keep only labels a figure can show in its own (English) text.
 
     A variable label in another script is replaced by that variable's English
-    source description, first letter capitalised. A sealed grouping's
-    descriptions also carry its English level names (``variable=level``),
+    source description in sentence case, preserving clinical notation. A sealed
+    grouping's descriptions also carry its English level names (``variable=level``),
     including ones the Planner did not label.
     """
 
@@ -196,8 +216,8 @@ def figure_language_labels(
     }
     for name in tuple(result):
         scope = name.partition("=")[0]
-        if _figure_text(english.get(scope)) is not None:
-            result.setdefault(scope, english[scope])
+        if (scope_text := _figure_text(english.get(scope))) is not None:
+            result.setdefault(scope, scope_text)
     for key, label in (display_labels or {}).items():
         text = _figure_text(label)
         if text is not None:
@@ -205,7 +225,7 @@ def figure_language_labels(
             continue
         description = _figure_text(english.get(str(key)))
         if description is not None:
-            result[str(key)] = description[:1].upper() + description[1:]
+            result[str(key)] = description
     return result
 
 
@@ -339,7 +359,7 @@ def binary_scope_label(
 def display_label(
     value: Any, display_labels: Optional[Mapping[str, str]] = None
 ) -> str:
-    """Render a declared label, otherwise apply case-neutral title casing."""
+    """Render sentence-case labels without changing their clinical meaning."""
 
     declared = label_lookup(value, display_labels)
     if declared is not None:
@@ -375,8 +395,8 @@ def display_label(
         "temp": "Temperature",
         "wbc": "WBC",
     }
-    rendered = [clinical_tokens.get(word.casefold(), word.title()) for word in words]
-    return " ".join(rendered)
+    rendered = [clinical_tokens.get(word.casefold(), word) for word in words]
+    return _figure_text(" ".join(rendered)) or "Value"
 
 
 __all__ = [
