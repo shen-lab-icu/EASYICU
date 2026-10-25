@@ -174,8 +174,10 @@
       const figures = Array.isArray(gallery && gallery.figures) ? gallery.figures : [];
       const usable = figures.filter(figure => figure && RASTER_IMAGE.test(String(figure.data_url || '')));
       const main = usable.find(figure => figure.placement === 'main' || figure.tier === 'primary_publication') || usable[0] || null;
+      const reading = main && window.AGENT_RENDER && typeof window.AGENT_RENDER.figureReading === 'function'
+        ? window.AGENT_RENDER.figureReading(main) : {};
       return {
-        figure: main ? { dataUrl: String(main.data_url), caption: String(main.caption || '').slice(0, 400) } : null,
+        figure: main ? { dataUrl: String(main.data_url), caption: reading.clinical || '', title: reading.title || tr('Main result figure', '主要结果图') } : null,
         total: figures.length,
         main: figures.filter(figure => figure && figure.placement === 'main').length,
       };
@@ -578,8 +580,8 @@
       return `<figure class="gpi-run-answer-figure">${resourceButton(
         { ...ref, label },
         label,
-        { className: 'gpi-run-answer-figure-open', contentHtml: `<img src="${esc(view.figure.dataUrl)}" alt="${esc(view.figure.caption || tr('Main result figure', '主要结果图'))}" loading="lazy" decoding="async">` },
-      )}<figcaption>${esc(tr('Main figure', '主图'))} · ${resourceButton({ ...ref, label }, label)}</figcaption></figure>`;
+        { className: 'gpi-run-answer-figure-open', contentHtml: `<img src="${esc(view.figure.dataUrl)}" alt="${esc(view.figure.title)}" loading="lazy" decoding="async">` },
+      )}<figcaption>${view.figure.caption ? `<p class="gpi-run-answer-figure-caption">${esc(view.figure.caption)}</p>` : ''}${resourceButton({ ...ref, label }, label)}</figcaption></figure>`;
     }
 
     function sourceButtons(latestRun, sources, fallback = false) {

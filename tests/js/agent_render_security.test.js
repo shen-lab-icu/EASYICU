@@ -76,6 +76,130 @@ assert.ok(captioned.includes('&lt;script&gt;'), 'caption markup must be escaped'
 assert.ok(!captioned.includes('<script>'), 'caption must not execute markup');
 assert.ok(!escaped.includes('ag-figure-caption'), 'legacy figures need no empty caption paragraph');
 
+// The same preview reads in Chinese without rewriting the scientific caption.
+const chinese = vm.createContext({ window: { t: (_en, zh) => zh, icon: () => '' } });
+for (const owner of [escapeOwner, vocabOwner, path.resolve(process.argv[2])]) {
+  vm.runInContext(fs.readFileSync(owner, 'utf8'), chinese, { filename: owner });
+}
+const scientificCaption = 'Observed group risks (events/n) and rates in mL/min. '.repeat(20)
+  + 'Final scientific qualification. <script>bad()</script>';
+const clinicalFigure = {
+  label: 'Primary publication figure', data_url: safePng,
+  relative_path: 'publication_figures/synthetic_result.png',
+  chart_types: ['dot_interval_absolute_risk', 'forest'],
+  panel_roles: ['descriptive_result', 'primary_estimand'],
+  caption: scientificCaption,
+  source_code: { evidence_id: 'synthetic_renderer', sha256: 'd'.repeat(64) },
+};
+const clinicalGallery = chinese.window.AGENT_RENDER.figureGallery({ figures: [clinicalFigure] });
+assert.match(clinicalGallery, /<p class="ag-figure-caption">[^<]*各组[^<]*关联[^<]*因果/,
+  'the existing caption area must give concise Chinese clinical context');
+assert.match(clinicalGallery, /英文图注[\s\S]*Final scientific qualification\./,
+  'the complete scientific caption must remain readable in the existing preview');
+assert.match(clinicalGallery, /&lt;script&gt;bad\(\)&lt;\/script&gt;/);
+assert.doesNotMatch(clinicalGallery, /<script>|publication_figures\/|Primary publication figure/);
+assert.match(clinicalGallery, /type="checkbox"[^>]*aria-label="[^"]*原尺寸/,
+  'the preview needs an accessible original-size control');
+assert.equal((clinicalGallery.match(/<img /g) || []).length, 1, 'zoom must reuse the existing image');
+assert.match(clinicalGallery, /data-source-evidence-id="synthetic_renderer"/,
+  'runtime source-code enrichment must survive the caption change');
+const unboundFormats = chinese.window.AGENT_RENDER.figureGallery({ figures: [{
+  ...clinicalFigure, exports: { pdf: '../private/synthetic.pdf', svg: 'javascript:bad()' },
+}] });
+assert.doesNotMatch(unboundFormats, /href=|download=|\.pdf|javascript:/,
+  'raw export paths are not download authority');
+assert.doesNotMatch(clinicalGallery, />PDF<|>SVG<|>TIFF</,
+  'absent formats must never be advertised');
+for (const [metadata, wording] of [
+  [{ panel_roles: ['cohort_accounting'] }, /最终分析人数可能不同/],
+  [{ panel_roles: ['data_quality'] }, /缺少记录不等于未发生临床事件/],
+  [{ chart_types: ['specification_grid'] }, /不一定是独立验证/],
+  [{ panel_roles: ['primary_estimand'], chart_types: ['forest'] }, /主要关联估计/],
+  [{ panel_roles: ['descriptive_result'] }, /描述性差异不能说明因果/],
+]) {
+  const html = chinese.window.AGENT_RENDER.figureGallery({ figures: [{
+    data_url: safePng, caption: 'Scientific context.', ...metadata,
+  }] });
+  assert.match(html, wording);
+  assert.equal((html.match(/Scientific context\./g) || []).length, 1);
+}
+for (const filename of ['figures/result.png', '/private/result.pdf', 'result.svg']) {
+  const html = chinese.window.AGENT_RENDER.figureGallery({ figures: [{
+    data_url: safePng, label: filename, caption: filename,
+  }] });
+  assert.doesNotMatch(html, /result\.(?:png|pdf|svg)|\/private\//, 'paths must not become captions or labels');
+}
+const figureCss = fs.readFileSync(path.join(path.dirname(escapeOwner), '../css/agent.css'), 'utf8');
+assert.match(figureCss, /input:checked~\.ag-figure-scroll img\{width:auto;max-width:none\}/,
+  'the original-size control must remove image scaling');
+
+// Emit the companion projection regression for the shell to run with $PY.
+// This keeps the exclusive test owner and avoids Node child-process sockets.
+// node <this file> <renderer> --projection-test | PYTHONPATH=$PWD/src $PY
+if (process.argv.includes('--projection-test')) {
+  process.stdout.write(String.raw`
+import hashlib
+import json
+import tempfile
+from pathlib import Path
+from easyicu.webserver.agent_pipeline_runs import _figure_projection
+
+scratch = Path.cwd() / '.codex_lane' / 'tmp'
+scratch.mkdir(parents=True, exist_ok=True)
+with tempfile.TemporaryDirectory(dir=scratch, prefix='figure-contract-') as directory:
+    root = Path(directory)
+    (root / 'evidence').mkdir()
+    (root / 'figures').mkdir()
+    (root / 'figures/result.png').write_bytes(b'synthetic png')
+    records = []
+    for fmt in ('pdf', 'svg', 'tiff'):
+        raw = ('synthetic ' + fmt).encode()
+        (root / ('figures/result.' + fmt)).write_bytes(raw)
+        (root / ('evidence/registered.' + fmt)).write_bytes(raw)
+        records.append({'evidence_id': 'synthetic_' + fmt, 'kind': 'figure',
+            'relative_path': 'evidence/registered.' + fmt,
+            'sha256': hashlib.sha256(raw).hexdigest()})
+    row = {'relative_path': 'figures/result.png', 'caption': 'Scientific context. ' * 240 + 'Final sentence.',
+        'exports': {fmt: 'figures/result.' + fmt for fmt in ('pdf', 'svg', 'tiff')}}
+    def project():
+        (root / 'figure_gallery.json').write_text(json.dumps({'figures': [row]}))
+        (root / 'evidence/evidence_index.json').write_text(json.dumps(records))
+        return _figure_projection(root)['figures'][0]
+    result = project()
+    assert set(result.get('export_locators', {})) == {'pdf', 'svg', 'tiff'}, 'validated existing formats must survive projection'
+    assert result['caption'] == row['caption'], 'scientific captions must not be truncated'
+    assert result['export_locators']['pdf'] == {'evidence_id': 'synthetic_pdf', 'sha256': records[0]['sha256'], 'kind': 'figure'}
+    assert 'relative_path' not in json.dumps(result['export_locators']), 'format locators must be path-free'
+    (root / 'figures/result.tiff').unlink()
+    assert 'tiff' not in project()['export_locators'], 'an absent format must not be advertised'
+    (root / 'figures/result.svg').write_bytes(b'changed svg')
+    assert 'svg' not in project()['export_locators'], 'changed alias bytes must fail closed'
+    original = records[0]['sha256']
+    records[0]['sha256'] = '0' * 64
+    assert not project()['export_locators'], 'stale registry digests must fail closed'
+    records[0]['sha256'] = original
+    (root / 'evidence/registered.pdf').write_bytes(b'changed evidence')
+    assert not project()['export_locators'], 'registered bytes must be checked as well as the alias'
+    (root / 'evidence/registered.pdf').write_bytes(b'synthetic pdf')
+    for unsafe in ('../private.pdf', '/private.pdf', 'figures/../figures/result.pdf', 'figures/result.svg', 'evidence/registered.pdf'):
+        row['exports']['pdf'] = unsafe
+        assert 'pdf' not in project()['export_locators'], 'unchecked or wrong-format paths must be rejected'
+    row['exports']['pdf'] = 'figures/result.pdf'
+    (root / 'figures/result.pdf').unlink()
+    (root / 'figures/result.pdf').symlink_to(root / 'evidence/registered.pdf')
+    assert 'pdf' not in project()['export_locators'], 'symlinked aliases must fail closed'
+    (root / 'figures/result.pdf').unlink()
+    (root / 'figures/result.pdf').write_bytes(b'synthetic pdf')
+    records[0]['kind'] = 'table'
+    assert 'pdf' not in project()['export_locators'], 'only registered figures authorize formats'
+    records[0]['kind'] = 'figure'
+    row['exports'] = {}
+    assert not project()['export_locators'], 'do not discover a format by guessing a sibling filename'
+print('Figure projection: all 16 assertions passed')
+`);
+  process.exit(0);
+}
+
 const hostileSource = renderer.figureGallery({
   figures: [{
     label: 'bad source',
@@ -285,4 +409,42 @@ assert.equal(scrubbedUrls.metadata_url, 'https://example.test/metadata.json', 'o
 assert.equal(scrubbedUrls.Data_URL, '[embedded image hidden in JSON preview]');
 assert.equal(scrubbedUrls.image_data_url, '[embedded image hidden in JSON preview]');
 
-process.stdout.write(JSON.stringify({ ok: true, cases: 23 }));
+async function checkInlineClinicalCaption() {
+  chinese.window.EU_LANG = 'zh';
+  for (const filename of ['screens-guided-pi-modules.js', 'screens-guided-pi-resources.js',
+    'screens-guided-pi-result-summary.js', 'screens-guided-pi-run-answer.js']) {
+    const owner = path.join(path.dirname(escapeOwner), filename);
+    vm.runInContext(fs.readFileSync(owner, 'utf8'), chinese, { filename: owner });
+  }
+  const modules = chinese.window.EasyICU.guidedPi;
+  const payloads = {
+    'agent_plan.json': { steps: [], display_labels: {} },
+    'result_tables.json': { tables: [{
+      name: 'adjusted_association_estimates.csv', label: 'Synthetic adjusted association.',
+      evidence_id: 'synthetic_table', sha256: 'a'.repeat(64),
+      headers: ['fit_status', 'estimate', 'ci_low', 'ci_high', 'effect_scale', 'is_primary_contrast', 'n', 'contrast'],
+      rows: [['fitted', 1.2, 1.01, 1.5, 'odds_ratio', true, 24, 'Group B vs Group A']],
+    }] },
+    'figure_gallery.json': { figures: [clinicalFigure] },
+  };
+  const run = { run_id: 'run_synthetic', artifact_refs: Object.keys(payloads).map(artifact => ({
+    kind: 'research_artifact', run_id: 'run_synthetic', artifact, sha256: 'b'.repeat(64),
+  })) };
+  const esc = chinese.window.EU_HTML.esc;
+  const resourceButton = modules.require('resources').create({ esc }).button;
+  const answer = modules.require('runAnswer').create({
+    tr: (_en, zh) => zh, esc, resourceButton, projectId: () => 'project_synthetic',
+    api: () => ({ loadPiCopilotResearchArtifact: async (_project, _run, artifact) => ({ payload: payloads[artifact] }) }),
+  });
+  await answer.load(run);
+  const html = answer.render(run);
+  assert.match(html, /<figcaption><p class="gpi-run-answer-figure-caption">[^<]*各组[^<]*因果/,
+    'the conversation must show the same clinical caption outside alt text');
+  assert.match(html, /data-gpi-resource-artifact="figure_gallery.json"/,
+    'the image must open the existing preview');
+  assert.doesNotMatch(html, /Observed group risks|Final scientific qualification/,
+    'the long scientific caption belongs in the preview');
+}
+checkInlineClinicalCaption().then(() => {
+  process.stdout.write(JSON.stringify({ ok: true, legacyCases: 23, figureCaptionAndSecurityChecks: 'passed' }));
+}).catch(error => { console.error(error); process.exitCode = 1; });

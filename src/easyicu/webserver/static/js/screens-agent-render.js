@@ -265,6 +265,48 @@
     // registered display ids like "Table 1" legitimately contain spaces.
     return id ? ` data-gpi-display-anchor="${escAttr(id)}"` : '';
   }
+  function figureReading(row) {
+    const charts = new Set(Array.isArray(row.chart_types) ? row.chart_types : []);
+    const roles = new Set(Array.isArray(row.panel_roles) ? row.panel_roles : []);
+    let title = '';
+    let clinical = '';
+    // Explain the registered display's scope, never infer a result from its
+    // filename or turn a coverage panel into independent sensitivity evidence.
+    if (charts.has('dot_interval_absolute_risk') && charts.has('forest')) {
+      title = t('Group outcomes and association estimates', '分组结局与关联估计');
+      clinical = t('Compare observed group risks and association estimates; observational associations do not establish causation.',
+        '比较各组结局发生比例与关联估计；观察性关联不能说明因果。');
+    } else if (roles.has('cohort_accounting') || charts.has('cohort_flow')) {
+      title = t('Cohort selection', '研究人群筛选');
+      clinical = t('Counts show the recorded eligibility stages; the final analysis population may differ.',
+        '展示各筛选阶段保留和排除的记录数；最终分析人数可能不同。');
+    } else if (roles.has('data_quality')) {
+      title = t('Data availability', '数据可用情况');
+      clinical = t('Read source availability and record coverage; missingness is not absence of a clinical event.',
+        '查看变量缺失和记录覆盖情况；缺少记录不等于未发生临床事件。');
+    } else if (charts.has('specification_grid')) {
+      title = t('Analysis specifications', '不同分析设定');
+      clinical = t('Read each analysis estimate and its limitations separately; rows need not be directly comparable or independent.',
+        '逐项查看分析估计及其限制；各行不一定可直接比较，也不一定是独立验证。');
+    } else if (roles.has('primary_estimand') && charts.has('forest')) {
+      title = t('Primary association estimate', '主要关联估计');
+      clinical = t('Read the primary association and its uncertainty; an association does not establish causation.',
+        '查看主要关联估计及其不确定性；关联不能说明因果。');
+    } else if (roles.has('descriptive_result')) {
+      title = t('Group comparison', '分组结果比较');
+      clinical = t('Compare the observed groups; a descriptive difference does not establish causation.',
+        '比较各组的观察结果；描述性差异不能说明因果。');
+    }
+    const prose = value => {
+      const text = String(value || '').trim();
+      return /^(?:file:\/\/|\/|[A-Za-z]:\\|\.\.?[\\/])|^(?:[\w.-]+[\\/])*[\w.-]+\.(?:png|pdf|svg|tiff?)$/i.test(text) ? '' : text;
+    };
+    return {
+      title: title || prose(row.label) || t('Study figure', '研究结果图'),
+      clinical,
+      scientific: prose(row.caption),
+    };
+  }
   function figureGallery(payload) {
     const figs = payload && Array.isArray(payload.figures) ? payload.figures : [];
     const visible = figs
@@ -280,15 +322,20 @@
       const focusEnd = Number(source.focus_end_line || 0);
       const focus = Number.isInteger(focusStart) && Number.isInteger(focusEnd) && focusStart > 0 && focusEnd >= focusStart
         ? ` data-source-focus-start="${focusStart}" data-source-focus-end="${focusEnd}"` : '';
-      return `<button class="ag-figure-source" type="button" data-gpi-source-code data-source-evidence-id="${escAttr(evidenceId)}" data-source-sha256="${escAttr(sha256)}" data-source-title="${escAttr(t('Figure generation source', '图表生成代码'))}" data-source-output="${escAttr(row.label || row.relative_path || 'figure')}" data-source-step="${escAttr(source.produced_by_step || '')}" data-source-producer="${escAttr(source.producer || '')}" data-source-generation="${escAttr(source.generation_mode || '')}" data-source-display-name="${escAttr(source.display_name || 'analysis.py')}" data-source-language="${escAttr(source.language || 'text')}"${focus}>${icon('search', 13)} ${esc(t('View source', '查看源代码'))}</button>`;
+      return `<button class="ag-figure-source" type="button" data-gpi-source-code data-source-evidence-id="${escAttr(evidenceId)}" data-source-sha256="${escAttr(sha256)}" data-source-title="${escAttr(t('Figure generation source', '图表生成代码'))}" data-source-output="${escAttr(figureReading(row).title)}" data-source-step="${escAttr(source.produced_by_step || '')}" data-source-producer="${escAttr(source.producer || '')}" data-source-generation="${escAttr(source.generation_mode || '')}" data-source-display-name="${escAttr(source.display_name || 'analysis.py')}" data-source-language="${escAttr(source.language || 'text')}"${focus}>${icon('search', 13)} ${esc(t('View source', '查看源代码'))}</button>`;
     };
     return `
       <div class="ag-figure-gallery">
-        ${visible.map(({ row, imageSource }, index) => `
+        ${visible.map(({ row, imageSource }, index) => {
+          const reading = figureReading(row);
+          return `
           <figure${displayAnchorAttributes(row)} class="${index === 0 || row.tier === 'primary_publication' || row.status === 'canonical_main' ? 'is-primary' : 'is-supporting'}">
-            <img src="${escAttr(imageSource)}" alt="${escAttr(row.label || row.relative_path || 'figure')}" />
-            <figcaption><strong>${esc(row.label || 'figure')}</strong>${row.caption ? `<p class="ag-figure-caption">${esc(row.caption)}</p>` : ''}<span class="mono">${esc(row.relative_path || row.name || '')}</span>${sourceButton(row)}</figcaption>
-          </figure>`).join('')}
+            <label class="ag-figure-image"><input type="checkbox" aria-label="${escAttr(t('Show figure at original size', '按原尺寸查看图件'))}"><span class="ag-figure-zoom-label">${esc(t('Original size', '原尺寸'))}</span><span class="ag-figure-scroll" tabindex="0"><img src="${escAttr(imageSource)}" alt="${escAttr(reading.title)}" /></span></label>
+            <figcaption><strong>${esc(reading.title)}</strong>${reading.clinical ? `<p class="ag-figure-caption">${esc(reading.clinical)}</p>` : ''}${reading.scientific ? reading.clinical
+              ? `<details class="ag-figure-scientific-caption"><summary>${esc(t('Scientific caption', '英文图注'))}</summary><p>${esc(reading.scientific)}</p></details>`
+              : `<p class="ag-figure-caption">${esc(reading.scientific)}</p>` : ''}${sourceButton(row)}</figcaption>
+          </figure>`;
+        }).join('')}
       </div>`;
   }
   function artifactNumber(value, key) {
@@ -1575,7 +1622,7 @@
     DEMO_STUDIES,
     runStatusLabel, runStatusHint, gateCheckLabel, readableArtifactText, firstValue, fmtCount,
     artifactKind, artifactTitle, artifactCategory, artifactSummary, artifactRank, defaultArtifactName,
-    thumb, scrubDataUrls, figureGallery, artifactScalar, artifactKeyLabel,
+    thumb, scrubDataUrls, figureReading, figureGallery, artifactScalar, artifactKeyLabel,
     artifactSummaryRows, artifactTable, objectArrayRows, firstObjectArray, stepRowsFrom, manuscriptProvenanceView, scientificReadinessView, artifactStructuredView,
   };
 })();
