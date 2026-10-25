@@ -123,6 +123,120 @@ def _binding(
     return run_dir, manifest, binding
 
 
+def _landmark_frame(*, analytic: bool = False) -> pd.DataFrame:
+    frame = pd.DataFrame(
+        [
+            [0, "source_cohort", 120, 0, 120],
+            [1, "nonnegative_event_time", 120, 0, 120],
+            [2, "alive_at_landmark", 120, 10, 110],
+            [3, "observed_at_landmark", 110, 20, 90],
+        ],
+        columns=_frame().columns,
+    )
+    if analytic:
+        frame.loc[len(frame)] = [4, "complete_case_model_population", 90, 36, 54]
+        frame = frame.rename(columns={
+            "predicate_kind": "stage", "n_remaining": "n",
+            "n_excluded": "excluded_from_previous",
+        }).drop(columns=["step_order", "n_before"])
+        frame["population_rule"] = [
+            "Source records", "Nonnegative event times", "Alive at landmark",
+            "Observed at landmark", "Complete records for exposure and adjustment",
+        ]
+    frame["landmark_hours"] = 36.0
+    return frame
+
+
+@pytest.mark.parametrize("has_time", [True, False])
+@pytest.mark.parametrize("singleton", [True, False])
+def test_landmark_flow_stops_at_eligibility_without_bound_analysis_selection(
+    tmp_path: Path, has_time: bool, singleton: bool,
+) -> None:
+    frame = _landmark_frame()
+    if singleton:
+        frame = frame.iloc[[-1]].assign(step_order=0)
+    if not has_time:
+        frame = frame.drop(columns="landmark_hours")
+    run_dir, manifest, binding = _binding(tmp_path, frame=frame)
+    # A nearby model result and unsigned metadata cannot extend the one bound
+    # input or supply a missing landmark. No patient-level file is needed.
+    unrelated = run_dir / "steps/adjusted_association/outputs/step_summary.json"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text(json.dumps({"n_total": 54, "landmark_hours": 36}))
+    binding["analysis_selection_receipt"] = {
+        "n_eligible": 90, "n_analyzed": 54, "reason": "Missing exposure",
+    }
+    out_dir = tmp_path / "figure"
+    summary = run_cohort_flow_figure(
+        out_dir=out_dir, run_dir=run_dir, resolved_inputs=manifest,
+        step_id=_step().step_id, figure_product="cohort_accounting",
+    )
+    source = pd.read_csv(out_dir / "cohort_accounting_source_data.csv")
+    contract = json.loads((out_dir / "cohort_accounting.figure_contract.json").read_text())
+
+    assert source["n_remaining"].tolist() == frame["n_remaining"].tolist()
+    assert source["n_excluded"].tolist() == frame["n_excluded"].tolist()
+    assert summary["source_rows_consumed"] == len(frame)
+    assert summary["cohort_flow_scope"] == "eligibility_only"
+    assert summary["cohort_accounting_completeness"] == (
+        "eligibility_denominator_only" if singleton else COHORT_ACCOUNTING_COMPLETE
+    )
+    assert summary["paper_grade_cohort_accounting"] is False
+    assert contract["panels"][0]["metadata"]["paper_grade_cohort_accounting"] is False
+    assert contract["panels"][0]["review_risk"]
+    caption = contract["reader_caption"]
+    assert "Eligibility flow only" in caption
+    assert "90 eligible records" in caption
+    assert "analysis denominator" in caption and "model results" in caption
+    assert "54" not in caption and "36 excluded" not in caption
+    assert contract["core_claim"] == caption
+    label = source["display_label"].iloc[-1]
+    assert label.startswith("Eligible")
+    if has_time:
+        assert "36 h landmark" in label and "36 h landmark" in caption
+    else:
+        assert "time not recorded" in label and "time is not recorded" in caption
+        assert "36 h" not in label and "24 h" not in label
+    assert FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source, source_path=out_dir / "cohort_accounting_source_data.csv",
+        upstream_path=run_dir / binding["relative_path"],
+    )["ok"] is True
+
+
+@pytest.mark.parametrize("hours", [36.0, 12.5])
+def test_bound_analysis_selection_keeps_its_count_reason_and_landmark(tmp_path, hours):
+    frame = _landmark_frame(analytic=True).assign(landmark_hours=hours)
+    run_dir, manifest, _ = _binding(tmp_path, frame=frame)
+    out_dir = tmp_path / "figure"
+    summary = run_cohort_flow_figure(
+        out_dir=out_dir, run_dir=run_dir, resolved_inputs=manifest,
+        step_id=_step().step_id, figure_product="cohort_accounting",
+    )
+    source = pd.read_csv(out_dir / "cohort_accounting_source_data.csv")
+    contract = json.loads((out_dir / "cohort_accounting.figure_contract.json").read_text())
+
+    assert summary["cohort_flow_scope"] == "analysis_selection"
+    assert summary["paper_grade_cohort_accounting"] is True
+    assert source["n"].tolist() == [120, 120, 110, 90, 54]
+    assert source["excluded_from_previous"].tolist() == [0, 0, 10, 20, 36]
+    assert f"{hours:g} h landmark" in source["display_label"].iloc[-2]
+    assert "Analyzed" in source["display_label"].iloc[-1]
+    assert "90 eligible records" in contract["reader_caption"]
+    assert "54 analyzed records" in contract["reader_caption"]
+    assert "Complete records for exposure and adjustment" in contract["reader_caption"]
+
+
+@pytest.mark.parametrize("hours", [[36, 36, 36, 12], [36, 36, 36, None], [0]*4, [-1]*4, [float("inf")]*4, [True]*4])
+def test_landmark_flow_refuses_invalid_or_inconsistent_bound_time(tmp_path, hours):
+    frame = _landmark_frame().assign(landmark_hours=hours)
+    run_dir, manifest, _ = _binding(tmp_path, frame=frame)
+    with pytest.raises(ValueError, match="landmark.*time"):
+        run_cohort_flow_figure(
+            out_dir=tmp_path / "figure", run_dir=run_dir, resolved_inputs=manifest,
+            step_id=_step().step_id, figure_product="cohort_accounting",
+        )
+
+
 def test_exact_cohort_flow_selects_and_renders_without_llm(tmp_path: Path) -> None:
     step = _step()
     run_dir, manifest, binding = _binding(tmp_path)

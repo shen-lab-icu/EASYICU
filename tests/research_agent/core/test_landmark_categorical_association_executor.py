@@ -831,3 +831,50 @@ def test_landmark_eligibility_preserves_missing_censoring_and_exact_thresholds()
     )
 
     assert (nonnegative & alive & observed).tolist() == [True, False, False, True, False]
+
+
+def test_landmark_flow_carries_eligibility_scope_and_time(tmp_path):
+    universe, projection, authority = _projection(tmp_path)
+    summary = run_landmark_categorical_cohort(
+        frame=pd.read_parquet(universe), source_path=universe, authority=authority,
+        runtime_projection_sha256=projection.projection_sha256,
+        out_dir=tmp_path / "cohort",
+    )
+
+    flow = pd.read_csv(tmp_path / "cohort/cohort_flow.csv")
+    assert flow["landmark_hours"].tolist() == [24.0] * 4
+    assert summary["cohort_flow_scope"] == "eligibility_only"
+    assert summary["n_eligible"] == flow["n_remaining"].iloc[-1]
+    assert flow["predicate_kind"].tolist() == [
+        "source_cohort", "nonnegative_event_time", "alive_at_landmark",
+        "observed_at_landmark",
+    ]
+
+
+def test_landmark_result_reports_eligible_and_analyzed_counts_separately(tmp_path):
+    universe, projection, authority = _projection(tmp_path)
+    frame = pd.read_parquet(universe)
+    frame.loc[:29, "age"] = np.nan
+    frame.to_parquet(universe, index=False)
+    cohort = run_landmark_categorical_cohort(
+        frame=frame, source_path=universe, authority=authority,
+        runtime_projection_sha256=projection.projection_sha256,
+        out_dir=tmp_path / "cohort",
+    )
+    cohort_path = tmp_path / "cohort/analysis_cohort.parquet"
+    eligible = pd.read_parquet(cohort_path)
+    plan = authority.bind_plan(_draft_plan())
+    result = run_landmark_categorical_primary(
+        frame=eligible, cohort_path=cohort_path,
+        step=authority.governed_primary_step(plan), authority=authority,
+        runtime_projection_sha256=projection.projection_sha256,
+        out_dir=tmp_path / "model",
+    )
+
+    expected = len(eligible.dropna(subset=["aki_stage_strict", "death", "age", "sex"]))
+    assert expected < len(eligible)
+    assert result["n_total"] == expected
+    assert cohort["n_eligible"] == len(eligible)
+    receipt = result["landmark_runtime_receipt"]
+    assert receipt["n_eligible"] == len(eligible)
+    assert receipt["n_analyzed"] == expected

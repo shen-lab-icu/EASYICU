@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import textwrap
@@ -56,6 +57,7 @@ _MODEL_FLOW_REQUIRED_COLUMNS = (
     "excluded_from_previous",
     "population_rule",
 )
+_LANDMARK_STAGES = {"alive_at_landmark", "observed_at_landmark"}
 #: The trajectory representation owner's window-eligibility flow is ``metric,n``:
 #: the input cohort, the rows meeting the minimum of observed windows and the
 #: rows clustered are its stages, and one row counts the rows excluded for too
@@ -366,13 +368,15 @@ def _accounting_completeness(frame: pd.DataFrame) -> str:
     """Classify only what the bound ledger itself can prove.
 
     A singleton row proves one denominator, not upstream eligibility or
-    attrition.  It remains useful as an analysis-denominator display but must
-    never be promoted to complete participant-flow accounting.
+    attrition. A landmark eligibility count also does not prove the analysis
+    denominator. Neither can be promoted to complete participant-flow accounting.
     """
 
     return (
         COHORT_ACCOUNTING_COMPLETE
         if len(frame) > 1
+        else "eligibility_denominator_only"
+        if _landmark_flow_scope(frame) == "eligibility_only"
         else COHORT_ACCOUNTING_DENOMINATOR_ONLY
     )
 
@@ -413,17 +417,89 @@ def _humanize_token(value: Any) -> str:
     return f"{text[:1].upper()}{text[1:]}" if text else ""
 
 
+def _landmark_hours(frame: pd.DataFrame) -> float | None:
+    """Read time only from the digest-bound table, never a nearby summary."""
+
+    if "landmark_hours" not in frame:
+        return None
+    values = pd.to_numeric(frame["landmark_hours"], errors="coerce")
+    if (
+        pd.api.types.is_bool_dtype(values)
+        or values.isna().any()
+        or values.nunique() != 1
+        or not all(math.isfinite(value) and value > 0 for value in values)
+    ):
+        raise ValueError("cohort-flow landmark time is invalid or inconsistent")
+    return float(values.iloc[0])
+
+
+def _landmark_flow_scope(frame: pd.DataFrame) -> str:
+    """An eligibility endpoint does not establish model-specific selection.
+
+    A model population ledger already binds its count, excluded count and
+    population rule. It can display that transition without joining an
+    unbound model summary or subtracting an unrelated analysis denominator.
+    """
+
+    predicates = frame["predicate_kind"].astype(str).str.strip()
+    if predicates.iloc[-1] in _LANDMARK_STAGES:
+        return "eligibility_only"
+    if (
+        predicates.isin(_LANDMARK_STAGES).any()
+        and set(_MODEL_FLOW_REQUIRED_COLUMNS).issubset(frame.columns)
+        and predicates.iloc[-1] == "complete_case_model_population"
+    ):
+        return "analysis_selection"
+    return "recorded_stages"
+
+
+def _landmark_scope_caption(frame: pd.DataFrame, scope: str) -> str | None:
+    if scope == "recorded_stages":
+        return None
+    hours = _landmark_hours(frame)
+    timing = (
+        f"Eligibility is assessed at the {hours:g} h landmark. "
+        if hours is not None else "The landmark time is not recorded. "
+    )
+    eligible = int(frame.loc[
+        frame["predicate_kind"].astype(str).str.strip().isin(_LANDMARK_STAGES),
+        "n_remaining",
+    ].iloc[-1])
+    if scope == "eligibility_only":
+        return (
+            f"Eligibility flow only. The ledger ends at {eligible:,} eligible records. "
+            + timing
+            + "Analysis selection is not shown; the analysis denominator is reported "
+            "separately with the model results. No additional exclusions are inferred."
+        )
+    analyzed = int(frame["n_remaining"].iloc[-1])
+    rule = _humanize_token(frame["population_rule"].iloc[-1])
+    return (
+        "Cohort eligibility and analysis selection. " + timing
+        + f"The bound flow records {eligible:,} eligible records and "
+        f"{analyzed:,} analyzed records. Analysis selection: {rule}. "
+        "Counts and exclusions reproduce the bound population ledger."
+    )
+
+
 def _display_labels(frame: pd.DataFrame, *, complete: bool) -> list[str]:
     """Reader names for each stage, from the ledger's own predicates.
 
     The first stage is the ledger's source cohort whatever its predicate is
-    called.  The last stage is marked by its drawing, not by a prefix.
+    called. Landmark stages name their bound time and distinguish the eligible
+    population from a separately established model population.
     """
+    hours = _landmark_hours(frame)
+    landmark = (
+        f"the {hours:g} h landmark" if hours is not None
+        else "landmark (time not recorded)"
+    )
+    scope = _landmark_flow_scope(frame)
     if not complete:
         return [
-            "All bound input rows"
-            if _unfiltered_universe(frame)
-            else "Analysis denominator only"
+            f"Eligible at {landmark}" if scope == "eligibility_only" else
+            "All bound input rows" if _unfiltered_universe(frame) else
+            "Analysis denominator only"
         ]
     labels: list[str] = []
     for index, (_, row) in enumerate(frame.iterrows()):
@@ -437,6 +513,13 @@ def _display_labels(frame: pd.DataFrame, *, complete: bool) -> list[str]:
             if concept and kind.casefold() in {"inclusion", "exclusion"}
             else _humanize_token(kind)
         )
+        if kind in _LANDMARK_STAGES:
+            state = "Alive" if kind == "alive_at_landmark" else "Observed"
+            if index == len(frame) - 1 and scope == "eligibility_only":
+                state = "Eligible"
+            label = f"{state} at {landmark}"
+        elif index == len(frame) - 1 and scope == "analysis_selection":
+            label = "Analyzed (complete cases)"
         labels.append(label)
     return labels
 
@@ -971,6 +1054,9 @@ def run_cohort_flow_figure(
     frame = _verified_flow(path, binding)
     completeness = _accounting_completeness(frame)
     complete = completeness == COHORT_ACCOUNTING_COMPLETE
+    scope = _landmark_flow_scope(frame)
+    scope_caption = _landmark_scope_caption(frame, scope)
+    paper_grade = complete and scope != "eligibility_only"
     unfiltered_universe = (not complete) and _unfiltered_universe(frame)
     missing_drawn = (
         complete
@@ -1013,6 +1099,7 @@ def run_cohort_flow_figure(
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
+            scope_caption if scope_caption else
             "The figure reproduces the sequential source-to-final denominator "
             "ledger from the digest-verified cohort-flow table."
             if complete
@@ -1034,6 +1121,7 @@ def run_cohort_flow_figure(
             {
                 "panel_id": COHORT_FLOW_FIGURE_PANELS[0].panel_id,
                 "title": (
+                    "Cohort eligibility" if scope == "eligibility_only" else
                     "Cohort accounting"
                     if complete
                     else (
@@ -1044,6 +1132,7 @@ def run_cohort_flow_figure(
                 ),
                 "role": COHORT_FLOW_FIGURE_PANELS[0].article_role,
                 "claim": (
+                    scope_caption if scope_caption else
                     "Every displayed source, eligibility, and final count comes "
                     "from the bound sequential cohort flow."
                     if complete
@@ -1052,6 +1141,9 @@ def run_cohort_flow_figure(
                 ),
                 "evidence_ids": [str(binding.get("evidence_id") or "")],
                 "review_risk": (
+                    "Analysis selection is not included; use the analysis denominator "
+                    "reported with the model results."
+                    if scope == "eligibility_only" else
                     None
                     if complete
                     else "Upstream attrition is unavailable; this panel must not "
@@ -1063,12 +1155,15 @@ def run_cohort_flow_figure(
                     "source_products": list((source_input,)),
                     "source_data": [source_path.name],
                     "accounting_completeness": completeness,
-                    "paper_grade_cohort_accounting": complete,
+                    "cohort_flow_scope": scope,
+                    "paper_grade_cohort_accounting": paper_grade,
                 },
             }
         ],
         source_data=[source_path.name],
         reader_caption=(
+            scope_caption + (_MISSING_CAPTION if missing_drawn else "")
+            if scope_caption else
             "Cohort accounting. Counts reproduce the bound sequential ledger of "
             "records entering, excluded from, and remaining after each recorded "
             "eligibility stage; no additional selection is applied by the figure. "
@@ -1118,7 +1213,8 @@ def run_cohort_flow_figure(
         "source_sha256": binding.get("sha256"),
         "source_rows_consumed": len(frame) + len(exclusions),
         "cohort_accounting_completeness": completeness,
-        "paper_grade_cohort_accounting": complete,
+        "cohort_flow_scope": scope,
+        "paper_grade_cohort_accounting": paper_grade,
         "upstream_attrition_available": complete,
         "rendering_mode": (
             "sequential_attrition_flow" if complete else "denominator_only_node"
