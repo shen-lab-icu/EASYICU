@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping, Optional
 
 from easyicu.research_agent.orchestration.progress import ProgressControlSignal
@@ -56,3 +57,36 @@ class ResearchPipelineRunError(ProgressControlSignal):
         super().__init__(message)
         self.code = str(code)
         self.details = dict(details or {})
+
+
+def revision_scope_diagnostic(error: BaseException) -> dict[str, Any]:
+    """Project bounded coordinates of a refused revision, never free text.
+
+    Review codes describe the recorded revision requests, not authorization
+    for the refused step. The guard has already found no applicable request.
+    """
+    if not isinstance(error, ResearchPipelineRunError) or error.code != "revision_added_unrequested_analysis":
+        return {}
+    details = error.details
+    diagnostic: dict[str, Any] = {
+        "owner": "easyicu.planning.revision_scope_v1",
+        "reason_code": error.code,
+        "authorization": "no_question_or_applicable_review_item",
+    }
+    for key in ("step_id", "module"):
+        value = details.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}", value):
+            diagnostic[key] = value
+    role = details.get("role")
+    if isinstance(role, str) and role in {"primary", "secondary", "sensitivity", "auxiliary"}:
+        diagnostic["role"] = role
+    for key, pattern in (
+        ("added_inputs", r"[a-zA-Z][a-zA-Z0-9_]{0,63}"),
+        ("review_item_codes", r"[A-Z][A-Z0-9_]{0,79}"),
+    ):
+        values = details.get(key)
+        diagnostic[key] = [
+            value for value in values[:16]
+            if isinstance(value, str) and re.fullmatch(pattern, value)
+        ] if isinstance(values, (list, tuple)) else []
+    return diagnostic

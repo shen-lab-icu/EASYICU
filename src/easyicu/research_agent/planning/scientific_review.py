@@ -153,6 +153,7 @@ from .distribution_authority import (
 from .method_literature import method_binding_support
 from .novelty_contract import NOVELTY_REVIEW_DIMENSIONS
 from .publication_readiness import build_publication_readiness_facts
+from .study_design_playbook import family_requires_novelty_review
 from .sensitivity_authority import (
     EXECUTABLE_METHODS_BY_STRATEGY,
     FUNCTIONAL_FORM_EXECUTABLE_METHODS,
@@ -3677,6 +3678,7 @@ def build_plan_scientific_review(
         sensitivity=sensitivity,
     )
     robustness_readiness = publication_readiness["robustness"]
+    novelty_required = family_requires_novelty_review(robustness_readiness["family"])
     figure_roles = publication_readiness["figure_roles"]
     content_roles = publication_readiness["content_roles"]
     linearity = _continuous_linearity_facts(plan)
@@ -4771,7 +4773,7 @@ def build_plan_scientific_review(
                 remediation="Add evidence-producing cohort, baseline, quality, descriptive, primary, or robustness modules as applicable.",
             )
         )
-    if not literature_facts["comparison_source_keys"]:
+    if novelty_required and not literature_facts["comparison_source_keys"]:
         findings.append(
             PlanScientificFinding(
                 code="NOVELTY_NOT_ESTABLISHED",
@@ -4790,7 +4792,7 @@ def build_plan_scientific_review(
                 ),
             )
         )
-    else:
+    elif novelty_required:
         findings.append(
             PlanScientificFinding(
                 code="NOVELTY_POSITIONING_REVIEW_REQUIRED",
@@ -4956,7 +4958,7 @@ def build_plan_scientific_review(
     return PlanScientificReview(
         status=status,
         approval_allowed=not blockers,
-        top_journal_candidate=not blockers and not majors and getattr(plan.design_selection, "execution_tier", "article") == "article",
+        top_journal_candidate=novelty_required and not blockers and not majors and getattr(plan.design_selection, "execution_tier", "article") == "article",
         score=score,
         dimension_scores=dimensions,
         findings=findings,
@@ -5037,12 +5039,14 @@ def build_plan_scientific_review(
             "figure_roles": figure_roles,
             "content_roles": content_roles,
             "novelty_status": (
+                "not_required" if not novelty_required else
                 "independent_review_required"
                 if literature_facts["comparison_source_keys"]
                 else "not_established"
             ),
             "novelty_review": {
                 "status": (
+                    "not_required" if not novelty_required else
                     "independent_review_required"
                     if literature_facts["comparison_source_keys"]
                     else "comparison_source_required"

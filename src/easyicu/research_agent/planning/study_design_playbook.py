@@ -213,9 +213,11 @@ _FAMILY_TEMPLATES: Dict[StudyDesignFamily, Dict[str, object]] = {
         "reporting_guidelines": ["STROBE-style descriptive observational reporting"],
         "required_methods": [
             "explicit cohort denominator",
-            "descriptive summaries with uncertainty where appropriate",
+            "verifiable descriptive summary computation with uncertainty where appropriate",
             "missingness and data-quality audit",
             "clinically meaningful strata when pre-specified",
+            "explicit analysis unit and repeat-stay handling",
+            "source-backed literature context for the descriptive design",
         ],
         "main_text_displays": [
             "cohort flow / denominator",
@@ -229,10 +231,10 @@ _FAMILY_TEMPLATES: Dict[StudyDesignFamily, Dict[str, object]] = {
             "stratified summaries",
             "analysis provenance and code manifest",
         ],
-        "sensitivity_requirements": [
-            "denominator definition sensitivity",
-            "missingness/measurement availability sensitivity",
-        ],
+        # Denominator and availability audits are required methods, not a
+        # request to add effect re-estimation to a distribution question.
+        # Explicit question-required sensitivities retain their own authority.
+        "sensitivity_requirements": [],
         "covariate_strategy": (
             "Do not force adjustment variables into a descriptive question; classify variables "
             "as descriptors, strata, or denominators."
@@ -1110,6 +1112,15 @@ _ROLE_CHECK_TERMS: Dict[str, Sequence[str]] = {
 
 def family_template(family: StudyDesignFamily) -> Dict[str, object]:
     return _FAMILY_TEMPLATES[family]
+
+
+def family_requires_novelty_review(family: StudyDesignFamily) -> bool:
+    """A descriptive analysis result requires context, not a novelty claim.
+
+    This does not grant publication or novelty authority. Those claims still
+    require their independent evidence outside the analysis review.
+    """
+    return family != "descriptive"
 
 
 def design_principles_for_family(family: StudyDesignFamily) -> List[str]:
