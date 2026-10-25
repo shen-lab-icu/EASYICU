@@ -25,7 +25,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from pydantic import ValidationError
 
@@ -6282,6 +6282,7 @@ def make_research_pipeline_run_runner(
     budget_mode: str = "planner_canary",
     runner_image: Optional[str] = None,
     plan_change_request: Optional[PlanChangeRequest] = None,
+    on_prepared_study: Optional[Callable[[Mapping[str, Any]], None]] = None,
 ) -> Any:
     """Build the JobManager runner for a real, evidence-bound pipeline run."""
 
@@ -6301,6 +6302,11 @@ def make_research_pipeline_run_runner(
         plan_change_request=plan_change_request,
     )
     prepared = prepare_research_pipeline_run(request)
+    # Launch can persist system-owned design/timing decisions. Handoff and
+    # recovery must bind the same snapshot the runner actually plans from.
+    request = replace(request, study_context=prepared.scientific.study)
+    if on_prepared_study is not None:
+        on_prepared_study(prepared.scientific.study)
     if prepared.execution.execution_resume_source_run_id:
         # The page hides a futile retry, but a stale page or a direct request
         # can still ask.  Answer afresh, against the image this launch would

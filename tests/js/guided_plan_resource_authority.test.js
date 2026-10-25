@@ -130,8 +130,8 @@ test('a blocked revision explains the next step without promising an automatic r
     assert.doesNotMatch(html, /will revise the candidate plan|将在分析前修订候选计划/);
     assert.doesNotMatch(html, /use the action below to recover|请使用下方操作恢复/);
     assert.match(html, language === 'en'
-      ? /Open the review details.*conversation.*support/
-      : /审阅详情.*对话.*支持人员/);
+      ? /Open the review details.*cannot supply missing data or independent evidence/
+      : /审阅详情.*不能补足数据或独立证据/);
     assert.match(html, /retained-candidate:scientific_plan_review.json/);
     assert.match(html, /failed-preparation:source_run_manifest.json/);
     assert.equal(JSON.stringify(workflow), before);
@@ -156,7 +156,7 @@ test('an actionable revision keeps its revision button and recovery guidance', (
     const html = owner.workflowConfirmationHtml();
     assert.equal(owner.workflowConfirmation().nonApprovable, false);
     assert.match(html, /data-gpi-confirm-action/);
-    assert.match(html, language === 'en' ? /use the action below to recover/ : /请使用下方操作恢复/);
+    assert.match(html, language === 'en' ? /Follow the next action below/ : /请按下方提示处理/);
     assert.doesNotMatch(html, /contact support|请联系支持人员/);
   }
 });
@@ -173,7 +173,7 @@ test('a review without an executable repair explains how to resolve its evidence
     const html = owner.workflowConfirmationHtml();
     assert.equal(owner.workflowConfirmation().nonApprovable, true);
     assert.doesNotMatch(html, /data-gpi-confirm-action|will revise the candidate plan|将在分析前修订候选计划/);
-    assert.match(html, language === 'en' ? /send the review and failure receipt to support/ : /发给支持人员/);
+    assert.match(html, language === 'en' ? /independent evidence or review/ : /补充独立证据或人工审阅/);
     assert.match(html, /evidence-review:scientific_plan_review.json/);
   }
 });
@@ -194,7 +194,7 @@ test('a user decision keeps its answer action after a preparation failure', () =
     }, language);
     const html = owner.workflowConfirmationHtml();
     assert.match(html, /data-gpi-confirm-edit/);
-    assert.match(html, language === 'en' ? /use the action below to recover/ : /请使用下方操作恢复/);
+    assert.match(html, language === 'en' ? /Follow the next action below/ : /请按下方提示处理/);
     assert.doesNotMatch(html, /contact support|请联系支持人员/);
   }
 });
@@ -238,7 +238,8 @@ test('a preserved candidate and its failed preparation have separate evidence li
   const owner = confirmationOwner(workflow);
   const html = owner.workflowConfirmationHtml();
   assert.match(html, /gpi-confirmation-failure/);
-  assert.match(html, /provider request failed/i);
+  assert.match(html, /model service did not respond/i);
+  assert.match(html, /Transient timeouts are retried once automatically/);
   assert.match(html, /failed-preparation:source_run_manifest.json/);
   assert.match(html, /reviewed-plan:agent_plan.json/);
   assert.doesNotMatch(html, /private response|failed-preparation:agent_plan.json/);
@@ -267,15 +268,15 @@ test('an unavailable checkpoint offers preparation of the same retained candidat
   const owner = confirmationOwner(workflow);
   const card = owner.workflowConfirmation();
   assert.match(card.approve, /Prepare data again/);
-  assert.match(card.note, /same candidate/);
-  assert.match(owner.workflowConfirmationHtml(), /checkpoint cannot be resumed/);
+  assert.match(card.note, /Your candidate is saved.*Prepare the data again/);
+  assert.doesNotMatch(owner.workflowConfirmationHtml(), /data-gpi-confirm-edit|checkpoint/);
   assert.doesNotMatch(card.message, /approve.*analysis/i);
   assert.ok(card.grants.includes('extract'));
   for (const resource of card.reviewResources) assert.equal(resource.run_id, 'retained-candidate');
   const chinese = confirmationOwner(workflow, 'zh');
   assert.equal(chinese.workflowConfirmation().approve, '重新准备数据');
-  assert.match(chinese.workflowConfirmation().note, /同一份候选方案/);
-  assert.match(chinese.workflowConfirmationHtml(), /该检查点无法继续/);
+  assert.match(chinese.workflowConfirmation().note, /候选方案已保留.*重新准备数据/);
+  assert.doesNotMatch(chinese.workflowConfirmationHtml(), /检查点/);
 });
 
 test('the cause a failed run recorded is said once, by its run-stop block', () => {

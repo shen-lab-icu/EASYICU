@@ -50,7 +50,7 @@
     target_trial_family_mismatch: ['A target trial is stated only for a causal-inference study. If this study estimates a causal effect, declare its analysis type as causal inference in the conversation first; otherwise it needs no target trial.', '目标试验只用于因果推断研究。如果这项研究要估计因果效应，请先在对话里把分析类型改为因果推断；否则不需要目标试验。'],
     target_trial_export_required: ['The study has no prepared data package to compile the trial on. Extract the study\'s data first.', '研究还没有准备好的数据包，无法编译试验。请先提取研究数据。'],
     target_trial_compile_busy: ['Another target trial is compiling. State this one when it finishes.', '另一个目标试验正在编译。请等它完成后再说明这个试验。'],
-    target_trial_database_out_of_scope: ['This version emulates target trials in MIMIC-IV only. Use a MIMIC-IV data package for this study.', '本版本只在 MIMIC-IV 中模拟目标试验。请为研究改用 MIMIC-IV 的数据包。'],
+    target_trial_database_out_of_scope: ['This version emulates target trials in MIMIC-IV only. Describe which study design or data source you want to change in the conversation.', '本版本只在 MIMIC-IV 中模拟目标试验。请在对话里说明想修改的研究设计或数据来源。'],
     target_trial_study_not_ready: ['A run of this study would refuse to start, so the trial was not compiled. Complete the study\'s setup, then state the trial again.', '研究设置尚不完整，运行会被拒绝启动，因此没有编译试验。请先补全研究设置，再说明试验。'],
     target_trial_data_unavailable: ['The study\'s data package does not provide concepts the trial reads (listed below). Extract data that includes them, or restate the trial.', '研究的数据包缺少试验要读的概念（见下方列表）。请提取包含它们的数据，或改述试验。'],
     target_trial_population_not_compiled: ['The stated population does not compile at the trial\'s time zero. Restate the population in the conversation.', '所述人群在试验的时间零点上无法编译。请在对话里改述人群。'],

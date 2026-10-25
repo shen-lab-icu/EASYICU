@@ -23,7 +23,7 @@ STATIC = Path(__file__).parents[3] / "src" / "easyicu" / "webserver" / "static"
 MODULES_SOURCE = (STATIC / "js/screens-guided-pi-modules.js").read_text(encoding="utf-8")
 CONFIRMATION_SOURCE = (STATIC / "js/screens-guided-pi-confirmation.js").read_text(encoding="utf-8")
 RENDERER_SOURCE = (STATIC / "js/screens-agent-render.js").read_text(encoding="utf-8")
-NO_ANSWER_NEEDED = "不需要再次回答科学设定问题"
+SYSTEM_REVIEW_SUMMARY = "项属于系统计划修订"
 
 
 def _node() -> str:
@@ -76,7 +76,7 @@ def test_an_endpoint_question_names_itself_and_opens_the_answer():
     assert "计划还需回答 1 个问题才能修订" in html
     assert "这项研究应使用哪个当前数据可支持的临床结局及时间范围？" in html
     assert "data-gpi-confirm-edit" in html
-    assert NO_ANSWER_NEEDED not in html
+    assert SYSTEM_REVIEW_SUMMARY not in html
     assert "data-gpi-confirm-action" not in html
 
 
@@ -98,7 +98,7 @@ def test_a_method_choice_never_becomes_a_question(code):
 
     assert "data-gpi-plan-decision-option" not in html
     assert "data-gpi-confirm-edit" not in html
-    assert NO_ANSWER_NEEDED in html
+    assert SYSTEM_REVIEW_SUMMARY in html
 
 
 def test_the_endpoint_question_offers_the_projected_endpoints():
@@ -122,7 +122,7 @@ def test_without_a_question_the_revision_is_offered():
     html = _card(_review([], agent_plan_revision=["FIGURE_ROLE_COVERAGE_INCOMPLETE"]))
 
     assert "生成修订版候选计划" in html
-    assert NO_ANSWER_NEEDED in html
+    assert SYSTEM_REVIEW_SUMMARY in html
 
 
 def _review_view(findings: list[dict]) -> str:

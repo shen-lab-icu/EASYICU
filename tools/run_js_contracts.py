@@ -50,6 +50,7 @@ CONTRACTS: dict[str, list[str]] = {
     "agent_render_security.test.js": ["screens-agent-render.js"],
     "composer_keyboard.test.js": ["composer-keyboard.js"],
     "copilot_history.test.js": [],
+    "guided_pi_audit_recovery_choices.test.js": [],
     "credentialed_egress_copy.test.js": [
         "screens-guided-pi-error-text.js",
         "screens-guided-pi-hosted.js",
