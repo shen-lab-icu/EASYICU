@@ -16,7 +16,7 @@ function reader(lang) {
   const context = vm.createContext({ window });
   for (const file of [
     'html-escape.js', 'screens-guided-pi-modules.js', 'screens-agent-reader-vocab.js',
-    'screens-agent-render.js', 'screens-guided-pi-resources.js',
+    'screens-agent-report-reader.js', 'screens-agent-render.js', 'screens-guided-pi-resources.js',
     'screens-guided-pi-analysis-report.js', 'screens-guided-pi-article-report.js',
     'screens-guided-pi-data-preview.js',
   ]) {

@@ -748,6 +748,50 @@ def test_guided_pipeline_owner_contains_summary_effects_and_collapse_state() -> 
     assert not re.search(r"\bconsole\.(warn|error|info|log|debug)\s*\(", code)
 
 
+def test_agent_report_reader_owns_figures_and_manuscript_with_explicit_helpers() -> None:
+    renderer = (STATIC / "js" / "screens-agent-render.js").read_text(encoding="utf-8")
+    reader = (STATIC / "js" / "screens-agent-report-reader.js").read_text(encoding="utf-8")
+    index = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    for name in ("boundedPngDataUrl", "displayAnchorId", "displayAnchorAttributes", "figureReading", "figureGallery"):
+        assert f"function {name}(" in reader
+        assert f"function {name}(" not in renderer
+    assert "function manuscriptProvenanceView(payload, { artifactTable, manuscriptUnavailable })" in reader
+    assert "window.AGENT_REPORT_READER = { figureReading, figureGallery, manuscriptProvenanceView };" in reader
+    assert "const { figureReading, figureGallery } = window.AGENT_REPORT_READER;" in renderer
+    assert "window.AGENT_REPORT_READER.manuscriptProvenanceView(payload, { artifactTable, manuscriptUnavailable })" in renderer
+    assert "window.AGENT_RENDER" not in reader
+    assert "const { esc, escAttr } = window.EU_HTML;" in reader
+    scripts = re.findall(r'<script src="js/([^"?]+)', index)
+    assert scripts.count("screens-agent-report-reader.js") == 1
+    assert scripts.index("html-escape.js") < scripts.index("screens-agent-report-reader.js")
+    assert scripts.index("screens-agent-report-reader.js") + 1 == scripts.index("screens-agent-render.js")
+    assert scripts.index("screens-agent-render.js") < scripts.index("screens-guided-pi-run-files.js")
+    assert "js/screens-agent-report-reader.js?v=20261025-owner-split1" in index
+    assert "js/screens-agent-render.js?v=20261025-owner-split1" in index
+
+
+def test_clinical_card_styles_have_one_owner_before_route_overrides() -> None:
+    shell = (STATIC / "css" / "guided-pi.css").read_text(encoding="utf-8")
+    card = (STATIC / "css" / "guided-pi-clinical-card.css").read_text(encoding="utf-8")
+    index = (STATIC / "index.html").read_text(encoding="utf-8")
+    for selector in (
+        ".gpi-plan-conversation-summary>ol.gpi-clinical-lines",
+        ".gpi-clinical-lines>li",
+        ".gpi-clinical-lines>li:first-child",
+        ".gpi-clinical-lines>li>em",
+        ".gpi-plan-timing",
+    ):
+        assert selector in card
+        assert selector not in shell
+    sheets = re.findall(r'<link rel="stylesheet" href="css/([^"?]+)', index)
+    assert sheets.count("guided-pi-clinical-card.css") == 1
+    assert sheets.index("guided-pi.css") + 1 == sheets.index("guided-pi-clinical-card.css")
+    assert sheets.index("guided-pi-clinical-card.css") < sheets.index("guided-pi-desktop.css")
+    assert "css/guided-pi-clinical-card.css?v=20261025-owner-split1" in index
+    assert "css/guided-pi.css?v=20261025-owner-split1" in index
+
+
 def test_owner_js_files_do_not_grow_past_their_ratchet() -> None:
     too_big: list[str] = []
     for path in sorted((STATIC / "js").glob("*.js")):

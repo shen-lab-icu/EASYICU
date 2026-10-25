@@ -23,6 +23,12 @@ NODE_MODULE_HARNESS = Path(__file__).resolve().parents[2] / "js" / (
 
 def _read(relative: str) -> str:
     source = (STATIC / relative).read_text(encoding="utf-8")
+    if relative == "js/screens-agent-render.js":
+        # The artifact facade requires its report reader, as index.html does.
+        reader = (STATIC / "js/screens-agent-report-reader.js").read_text(
+            encoding="utf-8"
+        )
+        return f"{reader}\n{source}"
     if relative == "js/screens-guided-pi.js":
         # Static contracts treat the shell and its extracted session renderer
         # as one logical owner. Preserve browser load order in the aggregate.

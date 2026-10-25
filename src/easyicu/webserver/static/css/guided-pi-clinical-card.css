@@ -1,0 +1,8 @@
+/* Owner: the confirmation card's clinical summary and timing.
+   Load after guided-pi.css and before the route/desktop overrides. */
+/* Five clinical sentences; no clipped uncertainty or numbered tiles. */
+.gpi-plan-conversation-summary>ol.gpi-clinical-lines{display:grid;grid-template-columns:1fr;gap:0;padding:0 12px 8px}
+.gpi-clinical-lines>li{display:grid;grid-template-columns:6em minmax(0,1fr);gap:10px;padding:6px 0;border:0;border-radius:0;background:none}
+.gpi-clinical-lines>li:first-child{border:0}
+.gpi-clinical-lines>li>em{display:block;overflow:visible;margin:0;-webkit-line-clamp:unset;color:var(--ink-2)}
+.gpi-plan-timing{margin:0;padding:0 12px 10px;font-size:12px;line-height:1.5;color:var(--ink-2)}

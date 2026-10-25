@@ -19,6 +19,8 @@ const context = vm.createContext(sandbox);
 vm.runInNewContext(fs.readFileSync(escapeOwner, 'utf8'), context, { filename: escapeOwner });
 const vocabOwner = path.join(path.dirname(path.resolve(process.argv[2])), 'screens-agent-reader-vocab.js');
 vm.runInNewContext(fs.readFileSync(vocabOwner, 'utf8'), context, { filename: vocabOwner });
+const reportOwner = path.join(path.dirname(escapeOwner), 'screens-agent-report-reader.js');
+vm.runInNewContext(fs.readFileSync(reportOwner, 'utf8'), context, { filename: reportOwner });
 vm.runInNewContext(source, context, { filename: process.argv[2] });
 const renderer = sandbox.window.AGENT_RENDER;
 
@@ -78,7 +80,7 @@ assert.ok(!escaped.includes('ag-figure-caption'), 'legacy figures need no empty 
 
 // The same preview reads in Chinese without rewriting the scientific caption.
 const chinese = vm.createContext({ window: { t: (_en, zh) => zh, icon: () => '' } });
-for (const owner of [escapeOwner, vocabOwner, path.resolve(process.argv[2])]) {
+for (const owner of [escapeOwner, vocabOwner, reportOwner, path.resolve(process.argv[2])]) {
   vm.runInContext(fs.readFileSync(owner, 'utf8'), chinese, { filename: owner });
 }
 const scientificCaption = 'Observed group risks (events/n) and rates in mL/min. '.repeat(20)

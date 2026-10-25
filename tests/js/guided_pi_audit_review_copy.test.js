@@ -9,7 +9,7 @@ global.t = (en, zh) => EU_LANG === 'zh' ? zh : en;
 global.icon = () => '';
 global.document = { addEventListener() {} };
 for (const name of ['screens-guided-pi-modules.js', 'html-escape.js', 'screens-guided-pi-error-text.js',
-  'screens-guided-pi-resources.js', 'screens-agent-reader-vocab.js', 'screens-agent-render.js',
+  'screens-guided-pi-resources.js', 'screens-agent-reader-vocab.js', 'screens-agent-report-reader.js', 'screens-agent-render.js',
   'screens-guided-pi-run-files.js', 'screens-guided-pi-job-narration.js', 'screens-guided-pi-run-outcome.js']) {
   require(path.resolve('src/easyicu/webserver/static/js', name));
 }

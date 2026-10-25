@@ -70,7 +70,8 @@ process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20261022-legacy1" in index
+    assert "css/guided-pi.css?v=20261025-owner-split1" in index
+    assert "css/guided-pi-clinical-card.css?v=20261025-owner-split1" in index
     # The connection dialog sheet reads the provider tokens the base sheet defines.
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261021-hosted1") < index.index("css/guided-pi-header.css?v=")
     # The header's narrow-width layout is its own owner, loaded right after the base sheet.
@@ -5985,13 +5986,13 @@ def test_research_artifact_renderer_rejects_attribute_xss_and_non_png_data_urls(
 
 
 def test_evidence_bound_manuscript_reader_stays_in_its_preview_owner() -> None:
-    renderer = _read("js/screens-agent-render.js")
+    renderer = _read("js/screens-agent-report-reader.js")
     preview = _read("js/screens-guided-pi-preview.js")
     evidence_preview = _read("js/screens-guided-pi-evidence-preview.js")
     styles = _read("css/guided-pi-preview.css")
 
     assert "manuscriptProvenanceView" in renderer
-    assert "manuscript_provenance.json" in renderer
+    assert "manuscript_provenance.json" in _read("js/screens-agent-render.js")
     assert "data-gpi-claim" in renderer
     assert "data-gpi-evidence-open" in renderer
     assert "Open result evidence preview" in renderer
@@ -6100,7 +6101,7 @@ def test_e2_full_and_article_reports_have_dedicated_safe_owners() -> None:
     assert "article_report.json" in preview
     assert "Preview complete analysis report" in confirmation
     assert "Preview article report with figures" in confirmation
-    assert "gpi-article-figure-insert" in renderer
+    assert "gpi-article-figure-insert" in _read("js/screens-agent-report-reader.js")
     assert ".gpi-analysis-report" in analysis_css
     assert ".gpi-article-figure-insert" in article_css
     for unrelated in ("css/app.css", "css/tweaks.css", "css/guided-pi-preview.css"):
