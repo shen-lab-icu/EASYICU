@@ -544,8 +544,14 @@ def submit_research_run(
             except WriterOnlyMigrationError as exc:
                 _reject({"error": exc.code, "message": "The sealed report inputs did not pass validation; the original analysis was preserved."})
         else:
+            def remember_prepared_study(prepared_study: Mapping[str, Any]) -> None:
+                nonlocal study_context
+                # Carry only the factory's exact snapshot, never a later store
+                # reload that could adopt an unrelated concurrent user edit.
+                study_context = dict(prepared_study)
+
             base_runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-                **runner_kwargs
+                **runner_kwargs, on_prepared_study=remember_prepared_study,
             )
     except ProviderConfigurationError as exc:
         _reject({"error": exc.issue})

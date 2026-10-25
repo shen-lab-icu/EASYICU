@@ -531,8 +531,8 @@ def test_the_card_names_each_requirement_and_its_source() -> None:
         "这份计划没有回答：「the r6 analysis」",
         "规划声明这份计划做不到（EasyICU 未核实）：「the r5 analysis」",
         "这份计划做不到：「the r7 analysis」",
-        "计划声明，EasyICU 未核实：「the r3 analysis」",
-        "计划声明，EasyICU 未核实：「the r2 analysis」（计划说它只用于定义：the comparison score）",
+        "计划中写明：the r3 analysis。尚需核对。",
+        "计划中写明：the r2 analysis。尚需核对。（计划说它只用于定义：the comparison score）",
         "另有 2 项已由计划步骤回答（EasyICU 已核实）",
     ]
     assert html.count("data-resource=") == 1
@@ -599,7 +599,7 @@ def test_question_text_is_escaped_and_clipped_on_the_card() -> None:
     assert "<img" not in html
     assert "&lt;img src=x onerror=alert(1)&gt;" in html
     (line,) = _lines(html)
-    assert line.endswith("…」")
+    assert line.endswith("…。尚需核对。")
     assert len(line) < 320
 
 
@@ -674,7 +674,7 @@ def test_the_approval_card_shows_the_block_with_its_own_link() -> None:
     html = _card_html(_notes(), "operator_plan_approval_required")
 
     assert 'class="gpi-question-requirements"' in html
-    assert "计划声明，EasyICU 未核实：「the r3 analysis」" in html
+    assert "计划中写明：the r3 analysis。尚需核对。" in html
     assert html.count(f'data-resource="{REVIEW}"') == 1
 
 

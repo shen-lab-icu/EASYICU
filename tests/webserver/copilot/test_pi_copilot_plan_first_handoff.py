@@ -308,8 +308,8 @@ def test_repeated_stay_runtime_gap_stays_blocked_without_a_method_question(
     assert result["spec"]["nonApprovable"] is True
     assert "暂不能执行" in rendered
     assert "1 项分析或数据条件尚未落实" in rendered
-    assert "不需要再次回答科学设定问题" in rendered
-    assert "数据合同或独立证据缺口会保持阻断" in rendered
+    assert "需要补充独立证据或人工审阅" in rendered
+    assert "重复生成计划不能补足数据或独立证据，分析保持暂停" in rendered
     assert "打开完整计划" in rendered
     assert "查看审阅详情" in rendered
     assert "请选择重复 ICU 入住的研究目标" not in rendered

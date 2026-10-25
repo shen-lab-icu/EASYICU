@@ -1076,7 +1076,10 @@ def test_manual_scientific_plan_repair_does_not_trigger_a_duplicate_automatic_ru
       global.window = {{}};
       eval({owner!r});
       const calls = [];
-      let workflow = {{next_action_code: 'plan_scientific_changes_required', plan_review_summary: {{authorization_questions: []}}}};
+      let workflow = {{next_action_code: 'plan_scientific_changes_required', plan_review_summary: {{
+        authorization_questions: [], automatic_revision_blockers: [],
+        remediation_buckets: {{agent_plan_revision: ['SYNTHETIC_PLAN_REPAIR']}},
+      }}}};
       const host = {{
         tr: (en, zh) => zh, errorText: error => String(error), regeneration: {{}},
         nextActions: {{}}, replay: {{}}, projectId: () => 'p1', turnGrants: () => [],
@@ -3160,7 +3163,7 @@ process.stdout.write(JSON.stringify({
     result = run_node(node, script, str(owner_path), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     payload = json.loads(result.stdout)
-    assert payload["title"] == "研究规划未通过合同检查"
+    assert payload["title"] == "计划生成未完成"
     assert payload["grants"] == ["provider_run", "literature"]
     assert payload["runIds"] == ["run_reviewable"] * 9
     assert payload["artifacts"][:3] == [
@@ -6343,7 +6346,7 @@ def test_literature_preview_receives_current_workflow_status_from_guided_owner()
     assert "setWorkflowContext" in preview
     assert "literature.renderArtifact(state.payload || {}, {" in preview
     assert "runId: state.resource.run_id" in preview
-    assert "研究规划未通过合同检查" in confirmation
+    assert "计划生成未完成" in confirmation
     assert "分析尚未开始" in confirmation
 
 

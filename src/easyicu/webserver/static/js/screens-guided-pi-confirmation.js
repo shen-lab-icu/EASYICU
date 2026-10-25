@@ -130,6 +130,8 @@
         : failedRun
           ? String(host.runFailureText(failedRun.gate_reason_code, { code: failedRun.gate_detail_code, missing: failedRun.gate_missing_concepts, cause: failedRun.gate_detail_cause_code }) || '')
           : latestFailedAgentJob ? String(host.runFailureText(latestFailedAgentJob.error_code) || '') : '';
+      const providerFailure = ['research_pipeline_provider_timeout', 'research_pipeline_planner_provider_unavailable']
+        .includes(String(failedRun && failedRun.gate_reason_code || latestFailedAgentJob && latestFailedAgentJob.error_code || ''));
       // The host is starting the job of a decision already taken on this
       // study (its start checks run before the job exists): nothing to act on.
       if (code === 'starting') return {
@@ -191,7 +193,7 @@
             : tr('The study changed. Generate a fresh analysis plan?', '研究配置已更新，是否重新生成分析计划？'),
         note: code === 'scientific_plan_review_policy_stale'
           ? tr('The prepared data remain available. Only the old review and plan execution authority are stale; no extraction or analysis will be repeated automatically.', '已准备的数据仍可继续使用；只有旧审阅和计划执行权限已过期，不会自动重复提取或开始分析。')
-          : tr('The old run stays as history. The new run receives a new id and current configuration digest.', '旧 run 仅保留为历史；新 run 使用新的标识和当前配置摘要。'),
+          : tr('The previous plan is saved as history. The new plan will use the current study settings and pause for your review before analysis.', '旧计划已保留。新计划将使用当前研究设置，分析前仍需你审阅。'),
         approve: tr('Generate fresh plan', '重新生成计划'),
       };
       if (code === 'failed_pipeline_execution_retry_available') return {
@@ -241,15 +243,18 @@
         };
       }
       if (code === 'failed_pipeline_requires_fresh_plan') return {
-        code, grants: ['provider_run', 'literature'],
+        code, grants: ['provider_run', 'literature'], hideEdit: true,
         message: tr(
           'Keep the failed planning attempt and the previous candidate plan as history. Start a fresh Research Agent planning run from the current study configuration, and pause for my review before analysis.',
           '保留失败的规划尝试和上一版候选计划作为历史。请按当前研究配置启动一次新的 Research Agent 规划，并在分析前停下让我审核。',
         ),
-        title: planContractExhausted
-          ? tr('Research planning did not pass its contract checks', '研究规划未通过合同检查')
+        title: providerFailure ? tr('Plan generation paused because the model service did not respond', '模型服务暂时未响应，计划生成已暂停') : planContractExhausted
+          ? tr('Plan generation did not finish', '计划生成未完成')
           : tr('The previous research task did not complete', '上次科研任务未完成'),
-        note: planContractExhausted
+        note: providerFailure ? tr(
+          'Transient timeouts are retried once automatically. If the service remains unavailable, use the action below to generate a new plan later. Analysis has not started.',
+          '短暂超时会自动重试一次。服务仍未恢复时，请稍后使用下方操作重新生成计划。分析尚未开始。',
+        ) : planContractExhausted
           ? tr(
             'Planning exhausted its allowed attempts before producing a valid plan. No analysis started. The failed attempt remains in the run history; generate a fresh plan for review.',
             '规划在允许的尝试次数内未能生成有效计划，分析尚未开始。失败尝试保留在运行记录中；需要重新生成计划并审阅。',
@@ -274,13 +279,13 @@
         ] : [],
       };
       if (code === 'planner_checkpoint_resume_available') return {
-        code, grants: ['provider_run', 'literature'],
+        code, grants: ['provider_run', 'literature'], hideEdit: true,
         message: tr(
           'Keep the failed Planner attempt as immutable history. Continue plan generation from its validated checkpoint for the unchanged study configuration, reuse its verified input, and pause for my review before analysis.',
           '保留失败的 Planner 尝试作为不可变历史。请基于未改变研究配置的已验证检查点继续生成计划，复用已校验输入，并在分析前停下让我审核。',
         ),
-        title: tr('The Planner saved a validated checkpoint. Continue?', 'Planner 已保存验证检查点，是否继续？'),
-        note: tr('The validated prefix is reused under a new bounded provider turn. No analysis has run.', '已验证前缀会在新的受限模型轮次中复用；尚未运行任何分析。'),
+        title: tr('Plan progress is saved. Continue?', '计划生成进度已保存，继续生成？'),
+        note: tr('Continue from the saved progress using the same study settings. Review the completed plan before analysis.', '使用原研究设置，从已保存的进度继续生成。分析前仍需核对完整计划。'),
         approve: tr('Continue plan generation', '继续生成计划'),
         reviewMaterialsTitle: tr('Preserved candidate plan · read only', '保留的候选方案 · 只读'),
         reviewResources: workflow.latest_attempt_failure && reviewedPlanRunId ? [
@@ -321,6 +326,7 @@
         // provider grant into a hidden second interaction made a valid click
         // fail with an authorization error.
         code, grants: ['configure', 'extract', 'provider_run', 'literature'],
+        hideEdit: Boolean(retryPreparation),
         message: tr(
           'I confirm this candidate plan as the basis for data preparation. Keep the plan, prepare only the cohort, variables, and time windows it requires, then generate a package-bound execution plan and pause again for my review before analysis.',
           '我确认以这份候选计划作为数据准备依据。请保留计划，只准备计划所需的队列、变量和时间窗；数据包就绪后再生成与数据包绑定的可执行计划，并在分析前再次停下让我审核。',
@@ -330,8 +336,8 @@
           '候选研究计划已生成，请确认数据准备',
         ),
         note: retryPreparation ? tr(
-          'The checkpoint cannot be resumed. Prepare the same candidate again, then review the resulting plan before analysis.',
-          '该检查点无法继续。请按同一份候选方案重新准备数据，待计划生成后再次审阅，再决定是否分析。',
+          'Plan generation did not finish. Your candidate is saved. Prepare the data again, then review the new plan.',
+          '这次计划生成未完成。候选方案已保留，请重新准备数据，再核对新计划。',
         ) : tr(
           'This plan used metadata only; it does not mean a prepared package already exists. EasyICU will prepare the required data first and will not start analysis yet.',
           '这份计划只使用了能力目录，并不代表数据包已经准备好。EasyICU 将先按计划准备所需数据，此时不会开始分析。',
@@ -553,8 +559,8 @@
         ),
         title: tr('The candidate plan needs one revision before it can run', '候选计划还需要修订，暂不能执行'),
         note: tr(
-          'The plan is saved and analysis has not started. EasyICU only reruns Planner when its own review identifies an executable repair; a source-contract or independent-evidence gap remains blocked rather than repeating the same plan.',
-          '计划已经保存，分析尚未开始。只有审阅明确给出可执行的系统修订时，EasyICU 才会重新运行 Planner；数据合同或独立证据缺口会保持阻断，不会重复生成同一计划。',
+          'The candidate is saved; analysis has not started. Resolve the issues below first.',
+          '候选计划已保存，分析尚未开始。请先处理下列问题。',
         ),
         approve: tr('Generate revised candidate plan', '生成修订版候选计划'),
         reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
@@ -687,11 +693,11 @@
           : `<div class="gpi-confirmation-review-status"><strong>${esc(revisionBlocked
             ? tr('Candidate plan revision is blocked', '候选计划修订已暂停')
             : tr('EasyICU will revise the candidate plan before analysis', 'EasyICU 将在分析前修订候选计划'))}</strong><span>${esc(tr(
-            `${remediationCounts.automatic + remediationCounts.evidence} plan and evidence items need system follow-up; ${remediationCounts.runtime} analysis or data conditions remain unresolved without asking for another scientific setup answer.`,
-            `${remediationCounts.automatic + remediationCounts.evidence} 项计划修订与补证由系统负责；另有 ${remediationCounts.runtime} 项分析或数据条件尚未落实，但不需要再次回答科学设定问题。`,
+            `System plan repairs: ${remediationCounts.automatic}; independent evidence or review: ${remediationCounts.evidence}; unresolved analysis or data requirements: ${remediationCounts.runtime}.`,
+            `${remediationCounts.automatic} 项属于系统计划修订；${remediationCounts.evidence} 项需要补充独立证据或人工审阅；${remediationCounts.runtime} 项分析或数据条件尚未落实。`,
           ))}</span>${reviewFindings ? `<ul>${reviewFindings}</ul>` : ''}${revisionBlocked ? `<p>${esc(tr(
-            'Open the review details below to see what is unresolved. To change the study, describe the change in the conversation; otherwise send the review and failure receipt to support. Analysis stays paused.',
-            '请打开下方审阅详情查看未解决的问题。如需修改研究，请在对话中说明；否则请把审阅记录和失败回执发给支持人员。分析保持暂停。',
+            'Open the review details below to check the unresolved requirements. Generating the same plan again cannot supply missing data or independent evidence. Analysis stays paused.',
+            '请先打开下方审阅详情，核对未解决的要求。重复生成计划不能补足数据或独立证据，分析保持暂停。',
           ))}</p>` : ''}</div>`
         : '';
       const trialOwner = confirmation.trialCard ? window.EasyICU.guidedPi.optional('targetTrial') : null;
@@ -766,7 +772,7 @@
         : '';
       const populationPreparation = populationPreparationHtml(confirmation.populationPreparation);
       const populationAcceptance = populationAcceptanceHtml(((host.workflow() || {}).plan_review_summary || {}).population_acceptance);
-      const failureNotice = latestAttemptFailureHtml(revisionBlocked);
+      const failureNotice = latestAttemptFailureHtml();
       const decisionActions = firstDecisionCopy && Array.isArray(firstDecisionCopy.options)
         ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span>${option.requirement ? `<small>${esc(option.requirement)}</small>` : ''}</button>`).join('')
         : '';
@@ -783,27 +789,26 @@
       </section>`;
     }
 
-    function latestAttemptFailureHtml(revisionBlocked) {
+    function latestAttemptFailureHtml() {
       const workflow = host.workflow() || {};
       const failure = workflow.latest_attempt_failure;
       const reviewedId = workflow.plan_review_summary && workflow.plan_review_summary.run_id;
       if (!failure || !failure.run_id || failure.run_id === reviewedId
         || !reviewedId || failure.candidate_run_id !== reviewedId) return '';
-      const title = failure.reason === 'provider_unavailable'
-        ? tr('The latest planning provider request failed', '最近一次规划服务调用失败')
+      const attempt = (workflow.runs || []).find(run => run && run.run_id === failure.run_id) || {};
+      const providerFailure = failure.reason === 'provider_unavailable'
+        || ['research_pipeline_provider_timeout', 'research_pipeline_planner_provider_unavailable'].includes(attempt.gate_reason_code);
+      const title = providerFailure
+        ? tr('The model service did not respond; plan generation is paused', '模型服务暂时未响应，计划生成已暂停')
         : failure.reason === 'planner_budget_exhausted'
-          ? tr('The latest planning attempt reached its budget', '最近一次规划达到预算上限')
-          : tr('The latest preparation attempt failed', '最近一次数据准备或规划失败');
-      const detail = tr(
-        'The previous candidate remains available below. This failed attempt did not add plan approval or validated results.',
-        '下方保留的是之前的候选方案；这次失败没有新增计划批准或已验证结果。',
-      ) + (failure.checkpoint_resume_available === false ? revisionBlocked ? tr(
-        ' This checkpoint cannot be resumed. Read the review guidance below.',
-        '该检查点无法继续，请查看下方审阅说明。',
-      ) : tr(
-        ' This checkpoint cannot be resumed; use the action below to recover.',
-        '该检查点无法继续，请使用下方操作恢复。',
-      ) : '');
+          ? tr('Plan generation reached its attempt limit', '计划生成已达到本次尝试上限')
+          : attempt.gate_reason_code === 'research_pipeline_plan_contract_exhausted'
+          ? tr('Plan generation did not finish', '计划生成未完成')
+          : tr('Data preparation did not finish', '数据准备未完成');
+      const detail = providerFailure ? tr(
+        'Transient timeouts are retried once automatically. If the service remains unavailable, planning pauses. Use the next action below when ready.',
+        '短暂超时会自动重试一次。服务仍未恢复时，计划生成会暂停；请按下方提示处理。',
+      ) : tr('This attempt stopped before analysis. Follow the next action below.', '本次尝试已停止，分析尚未开始。请按下方提示处理。');
       const receipt = resourceButton({
         kind: 'research_artifact', run_id: failure.run_id, artifact: 'source_run_manifest.json',
         media_type: 'application/json', label: tr('View failure receipt', '查看失败回执'),
@@ -1165,6 +1170,9 @@
 
     function planChangeDraft() {
       const workflow = host.workflow() || {};
+      if (['study_family_database_out_of_scope', 'study_family_reading_disagreement'].includes(workflow.next_action_code)) return tr(
+        'I want to change the study design or data source: ', '我想修改研究设计或数据来源：',
+      );
       const trial = window.EasyICU.guidedPi.optional('targetTrial');
       const trialDraft = trial ? trial.changeDraft(workflow, tr) : '';
       if (trialDraft) return trialDraft;

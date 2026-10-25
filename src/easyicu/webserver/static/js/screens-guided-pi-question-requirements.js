@@ -36,7 +36,7 @@
           `规划声明这份计划做不到（EasyICU 未核实）：「${quote}」`,
         );
     }
-    const stated = tr(`Stated by the plan, not verified by EasyICU: “${quote}”`, `计划声明，EasyICU 未核实：「${quote}」`);
+    const stated = tr(`The plan states: ${quote}. Verification is still needed.`, `计划中写明：${quote}。尚需核对。`);
     const note = item.disposition === 'definition_only' ? clip(item.note, NOTE_LIMIT) : '';
     return note
       ? stated + tr(` (the plan says it only defines: ${note})`, `（计划说它只用于定义：${note}）`)

@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  const PLAN_ACTION = /^(?:重新生成研究计划|生成候选研究计划|生成正式研究计划|generate (?:a fresh|the candidate|the formal) research plan)[。.!！]?$/i;
+  const PLAN_ACTION = /^(?:重新生成研究计划|(?:开始)?(?:生成研究计划|生成候选研究计划|生成正式研究计划)|start plan generation|(?:start generating|generate) (?:a fresh|the candidate|the formal) research plan)[。.!！]?$/i;
 
   function isPlanActionText(value) {
     return PLAN_ACTION.test(String(value || '').trim());

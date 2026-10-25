@@ -238,8 +238,12 @@
       // confirmation action owns this transition; job completion cannot
       // manufacture approval to prepare its data package.
       if (automatic && reasonCode === 'plan_execution_upgrade_required') return false;
-      if (automatic && reasonCode === 'plan_scientific_changes_required'
-        && automaticRevisionBlocked()) return false;
+      if (reasonCode === 'plan_scientific_changes_required') {
+        const review = (host.workflow() || {}).plan_review_summary || {};
+        const repairs = (review.remediation_buckets || {}).agent_plan_revision;
+        if (automaticRevisionBlocked() || (review.authorization_questions || []).length
+          || !Array.isArray(repairs) || !repairs.length) return false;
+      }
       const request = generationRequest(String(reasonCode || ''));
       const session = host.session() || {};
       const expectedProjectId = host.projectId();
@@ -265,8 +269,9 @@
       // only their exact materialization roster.
       const revisionSourceRunId = retryingStoppedPlan
         ? String(host.workflow().plan_review_summary.run_id).trim()
-        : revisingScientificPlan || executionUpgrade || replanningFailedExecution
-          ? String(binding.run_id || '').trim()
+        : revisingScientificPlan || executionUpgrade
+          ? String(((host.workflow() || {}).plan_review_summary || {}).run_id || binding.run_id || '').trim()
+          : replanningFailedExecution ? String(binding.run_id || '').trim()
           : '';
       if (replanningFailedExecution && !revisionSourceRunId) {
         host.setError(tr(

@@ -208,7 +208,7 @@
     };
     const items = rows(reading.elements).slice(0, 5).filter(row => Object.prototype.hasOwnProperty.call(labels, row.element) && row.evidence);
     if (!items.length) return '';
-    return `<div class="gpi-question-requirements gpi-trial-reading"><strong>${esc(tr('Why EasyICU treats this as a target trial', 'EasyICU 为什么按目标试验处理这道题'))}</strong><ul>${items.map(row => `<li>${esc(tr(...labels[row.element]))}：${esc(String(row.evidence).slice(0, 300))}</li>`).join('')}</ul></div>`;
+    return `<details class="gpi-question-requirements gpi-trial-reading"><summary>${esc(tr('Target-trial reading details', '目标试验判断依据'))}</summary><ul>${items.map(row => `<li>${esc(tr(...labels[row.element]))}：${esc(String(row.evidence).slice(0, 300))}</li>`).join('')}</ul></details>`;
   }
 
   // The card's body under the confirmation's title and note.
@@ -247,6 +247,9 @@
   function changeDraft(workflow, tr) {
     const code = String((workflow && workflow.next_action_code) || '');
     if (!CODES.has(code)) return '';
+    if (stopReason(cardOf(workflow)) === 'target_trial_database_out_of_scope') return tr(
+      'I want to change the study design or data source: ', '我想修改研究设计或数据来源：',
+    );
     return code === 'target_trial_statement_needed'
       ? tr('The target trial I want to emulate: ', '我要模拟的目标试验：')
       : tr('I want to change the target trial: ', '我想修改目标试验：');
