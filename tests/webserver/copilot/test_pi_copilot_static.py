@@ -6365,7 +6365,7 @@ def test_guided_analysis_outcome_stays_visible_after_refresh() -> None:
     assert "分析已完成；完整质量审阅尚未通过" in replay
     # The card leads with the run's answer; its status says what review remains.
     assert "tr('Analysis complete', '分析已完成')" in owner
-    assert "仅供分析审阅 · 投稿审阅未完成" in owner
+    assert "结果待审阅 · 论文尚未完成审阅" in owner
     assert "ANSWER.render(latestRun)" in owner
     assert "result_tables.json" in owner
     assert "figure_gallery.json" in owner
