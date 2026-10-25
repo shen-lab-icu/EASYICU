@@ -543,6 +543,12 @@
   function setPiCopilotThinkingLevel(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/thinking-level', body || {});
   }
+  function loadPiCopilotFollowups(sessionId, projectId) {
+    return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/followups?project_id=' + encodeURIComponent(projectId));
+  }
+  function cancelPiCopilotFollowup(sessionId, itemId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/followups/' + encodeURIComponent(itemId) + '/cancel', body || {});
+  }
   function sendPiCopilotMessage(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/message', body || {});
   }
@@ -864,6 +870,8 @@
   window.EU_API.saveGuidedProjectNotes = saveGuidedProjectNotes;
   window.EU_API.deleteEmptyPiCopilotSession = deleteEmptyPiCopilotSession;
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
+  window.EU_API.loadPiCopilotFollowups = loadPiCopilotFollowups;
+  window.EU_API.cancelPiCopilotFollowup = cancelPiCopilotFollowup;
   window.EU_API.confirmPiCopilotCohortEligibility = confirmPiCopilotCohortEligibility;
   window.EU_API.confirmPiCopilotPlanDecision = confirmPiCopilotPlanDecision;
   window.EU_API.approvePiCopilotTargetTrial = approvePiCopilotTargetTrial;

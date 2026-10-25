@@ -68,6 +68,7 @@ from .conversation_status import (
 )
 from .decision_records import conversation_job_ids, project_decision_records
 from .gateway import PiGatewayClient
+from .followup_queue import FollowupQueue
 from .message_input import prepare_user_message
 from .project_authority import (
     ProjectAuthorityStore,
@@ -299,6 +300,9 @@ class PiCopilotService:
         self._lock = threading.RLock()
         self._active_message_jobs: Dict[str, str] = {}
         self._busy_sessions: set[str] = set()
+        self.followups = FollowupQueue(self.store_path.with_suffix(".followups.json"))
+        self._dispatching_followups: Dict[str, object] = {}
+        self._closing = threading.Event()
         self._pending_retirements: Dict[str, PiSessionRecord] = {}
         self._opening_sessions = 0
         self._replay_child_watchers: set[tuple[str, str]] = set()
@@ -2326,6 +2330,79 @@ class PiCopilotService:
             "EASYICU_PI_DATA_HANDLING", "unspecified",
         )).value
 
+    def followup_messages(self, session_id: str, *, project_id: str) -> Dict[str, Any]:
+        self._scoped_record(session_id, project_id=project_id)
+        return {"ok": True, "queue": self.followups.snapshot(session_id)}
+
+    def cancel_followup(self, session_id: str, *, project_id: str, item_id: str) -> Dict[str, Any]:
+        self._scoped_record(session_id, project_id=project_id)
+        with self._lock:
+            self.followups.cancel(session_id, item_id)
+        return self.followup_messages(session_id, project_id=project_id)
+
+    def _cancel_pending_followups(self, session_id: str, *, error: str = "user_cancelled") -> bool:
+        try:
+            self.followups.cancel(session_id, error=error)
+            return True
+        except PiCopilotError:
+            # The queue quarantines itself on write failure. A queue disk error
+            # must never prevent stopping the already running conversation.
+            return False
+
+    def _schedule_followups(self, session_id: str, completed_job: jobs.Job) -> None:
+        with self._lock:
+            if session_id in self._dispatching_followups:
+                return
+        if not any(row.get("status") == "queued" for row in self.followups.snapshot(session_id)["items"]):
+            return
+        def after_terminal() -> None:
+            # The completing message still consumes capacity inside its runner.
+            # Wait for JobManager's terminal transition before submitting another.
+            while completed_job.status == "running":
+                if self._closing.wait(0.02):
+                    return
+            if self._closing.is_set():
+                return
+            if completed_job.status == "done":
+                self._drain_followups(session_id)
+            else:
+                self._cancel_pending_followups(session_id, error="previous_turn_failed")
+        threading.Thread(target=after_terminal, name="pi-followup-delivery", daemon=True).start()
+
+    def _drain_followups(self, session_id: str) -> None:
+        # Reserve this session only. Opening Pi or refreshing provider credentials
+        # can wait on I/O and must not hold the service-wide lock.
+        with self._lock:
+            if self._closing.is_set() or session_id in self._busy_sessions or session_id in self._dispatching_followups:
+                return
+            token = object()
+            self._dispatching_followups[session_id] = token
+        submitted_job = None
+        try:
+            while (item := self.followups.take(session_id)) is not None:
+                try:
+                    record = self._scoped_record(session_id, project_id=item["project_id"])
+                    if record.binding.model_dump(mode="json") != item["binding"]:
+                        raise PiCopilotError("pi_followup_binding_changed", "Study state changed while this message was queued.", status_code=409)
+                    child = record.latest_research_job
+                    if child is not None and child.state == "running":
+                        raise PiCopilotError("pi_followup_research_running", "Wait for the research task before resending this message.", status_code=409)
+                    submitted = self.send_message(session_id, project_id=item["project_id"], message=item["message"], message_origin="typed", _followup_delivery=token)
+                    submitted_job = jobs.MANAGER.get(submitted["job_id"])
+                    self.followups.update(item["id"], status="submitted", job_id=submitted["job_id"])
+                    return
+                except Exception as exc:
+                    self.followups.update(item["id"], status="interrupted", error=str(getattr(exc, "code", "") or "pi_followup_delivery_failed"))
+        except PiCopilotError:
+            # Storage failure quarantines the queue and remains visible there.
+            return
+        finally:
+            with self._lock:
+                if self._dispatching_followups.get(session_id) is token:
+                    self._dispatching_followups.pop(session_id, None)
+            if submitted_job is not None:
+                self._schedule_followups(session_id, submitted_job)
+
     def send_message(
         self,
         session_id: str,
@@ -2338,7 +2415,12 @@ class PiCopilotService:
         message_intent: Optional[str] = None,
         idea_source: Optional[Mapping[str, Any]] = None,
         message_origin: Optional[str] = None,
+        queue_if_busy: bool = False,
+        _followup_delivery: Optional[object] = None,
     ) -> Dict[str, Any]:
+        with self._lock:
+            if session_id in self._dispatching_followups and self._dispatching_followups[session_id] is not _followup_delivery:
+                raise PiCopilotError("pi_session_busy", "This session is delivering a queued message.", status_code=409)
         record = self._scoped_record(session_id, project_id=project_id)
         self._provider_gate(
             external_llm_opt_in=record.external_llm_opt_in,
@@ -2367,6 +2449,19 @@ class PiCopilotService:
             registered_sources=sources.load_registry().get("sources") or [],
         )
         provider_text = prepared_input.provider_message
+        if queue_if_busy:
+            if message_origin != "typed" or allowed_actions or message_intent or idea_source or regenerate_user_entry_id:
+                raise PiCopilotError("pi_followup_plain_message_required", "Queue only a directly typed message without action grants or attachments.", status_code=400)
+            with self._lock:
+                if record.session_id in self._busy_sessions:
+                    # Admission records text only, before any source mutation or
+                    # inference. A queued approval cannot acquire future scope.
+                    if (prepared_input.registered_source is not None
+                        or explicitly_confirms_easyicu_registered_source(provider_text)
+                        or infer_explicit_turn_actions(provider_text)):
+                        raise PiCopilotError("pi_followup_action_requires_idle", "Send action or approval requests after the current reply finishes.", status_code=409)
+                    item = self.followups.enqueue(session_id=session_id, project_id=project_id, message=text, binding=record.binding.model_dump(mode="json"))
+                    return {"ok": True, "status": "queued", "session_id": session_id, "queue_item_id": item["id"], "queue": self.followups.snapshot(session_id)}
         stale = self._stale_details(record)
         if stale.get("stale"):
             raise PiCopilotError(
@@ -2507,7 +2602,10 @@ class PiCopilotService:
                 inferred_actions & PRIVILEGED_ONE_SHOT_TURN_ACTIONS
             )
         with self._lock:
-            if record.session_id in self._busy_sessions:
+            if _followup_delivery is not None and self._dispatching_followups.get(record.session_id) is not _followup_delivery:
+                raise PiCopilotError("pi_followup_cancelled", "The queued message was cancelled before delivery.", status_code=409)
+            if (record.session_id in self._busy_sessions
+                or (record.session_id in self._dispatching_followups and self._dispatching_followups[record.session_id] is not _followup_delivery)):
                 raise PiCopilotError(
                     "pi_session_busy",
                     "This EasyICU Copilot session already has an active message.",
@@ -2598,6 +2696,8 @@ class PiCopilotService:
                     )
 
             try:
+                if job.cancel_requested:
+                    raise RuntimeError("pi_message_cancelled_before_delivery")
                 if regenerate_target is not None:
                     self.replay_store.supersede_from_turn_index(
                         session_id=record.session_id,
@@ -2652,6 +2752,8 @@ class PiCopilotService:
                     if regeneration_intent:
                         params["intent"] = str(regeneration_intent)
                 require_copilot_data_clearance(active_tool_context)
+                if job.cancel_requested:
+                    raise RuntimeError("pi_message_cancelled_before_delivery")
                 state = conversation_gateway.request(
                     method,
                     params,
@@ -2726,6 +2828,7 @@ class PiCopilotService:
                     "message_status": "aborted" if job.cancel_requested else "done",
                 }
             finally:
+                terminal = record
                 try:
                     terminal = self._get_record(record.session_id)
                     if terminal.active_message_job_id == job.id:
@@ -2750,9 +2853,19 @@ class PiCopilotService:
                     pending_retirement = record.session_id in self._pending_retirements
                 if pending_retirement:
                     self._flush_pending_retirement(record.session_id)
+                if pending_retirement or job.cancel_requested:
+                    self._cancel_pending_followups(record.session_id, error="turn_stopped")
+                elif terminal.last_turn_status == "done":
+                    self._schedule_followups(record.session_id, job)
+                else:
+                    self._cancel_pending_followups(record.session_id, error="previous_turn_failed")
 
         try:
-            job = jobs.MANAGER.submit("pi-copilot-message", runner)
+            with self._lock:
+                if _followup_delivery is not None and self._dispatching_followups.get(record.session_id) is not _followup_delivery:
+                    raise PiCopilotError("pi_followup_cancelled", "The queued message was cancelled before submission.", status_code=409)
+                job = jobs.MANAGER.submit("pi-copilot-message", runner)
+                self._active_message_jobs[record.session_id] = job.id
         except jobs.JobCapacityError as exc:
             with self._lock:
                 self._busy_sessions.discard(record.session_id)
@@ -2798,6 +2911,8 @@ class PiCopilotService:
             )
             with self._lock:
                 self._busy_sessions.discard(record.session_id)
+                if self._active_message_jobs.get(record.session_id) == job.id:
+                    self._active_message_jobs.pop(record.session_id, None)
             start_gate.set()
             raise
         start_gate.set()
@@ -3247,16 +3362,18 @@ class PiCopilotService:
         record = self._scoped_record(session_id, project_id=project_id)
         with self._lock:
             active_job_id = self._active_message_jobs.get(record.session_id)
-        requested_job_id = str(message_job_id or "").strip()
-        if requested_job_id and requested_job_id != active_job_id:
-            raise PiCopilotError(
-                "pi_message_job_mismatch",
-                "The abort request does not match this session's active message job.",
-                status_code=409,
-            )
-        target_job_id = str(active_job_id or "").strip()
-        job = jobs.MANAGER.get(target_job_id) if target_job_id else None
-        cancel_requested = bool(job and job.request_cancel("pi_copilot_user_abort"))
+            requested_job_id = str(message_job_id or "").strip()
+            if requested_job_id and requested_job_id != active_job_id:
+                raise PiCopilotError(
+                    "pi_message_job_mismatch",
+                    "The abort request does not match this session's active message job.",
+                    status_code=409,
+                )
+            target_job_id = str(active_job_id or "").strip()
+            job = jobs.MANAGER.get(target_job_id) if target_job_id else None
+            cancel_requested = bool(job and job.request_cancel("pi_copilot_user_abort"))
+            self._dispatching_followups.pop(record.session_id, None)
+            self._cancel_pending_followups(record.session_id)
         state = self._conversation_gateway(record).request(
             "session.abort",
             {"session_id": record.session_id},
@@ -5061,6 +5178,7 @@ class PiCopilotService:
             "model": state.get("model"),
             "message_count": int(state.get("message_count") or 0),
             "has_history": has_history,
+            "followup_queue": self.followups.snapshot(record.session_id),
             "history_turn_count": sum(
                 1
                 for row in replay_turns
@@ -5273,6 +5391,7 @@ class PiCopilotService:
             return
 
     def close(self) -> None:
+        self._closing.set()
         self.gateway.close()
         self.codex_gateway_pool.close()
 

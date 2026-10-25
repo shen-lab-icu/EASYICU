@@ -230,6 +230,8 @@ class PiIdeaSourceRequest(BaseModel):
 class PiMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    queue_if_busy: StrictBool = False
+
     project_id: ShortText
     message: MessageText
     idea_source: PiIdeaSourceRequest | None = None
@@ -1043,7 +1045,24 @@ def post_pi_copilot_message(session_id: ShortText, body: PiMessageRequest) -> di
             message_intent=body.turn_intent,
             idea_source=(body.idea_source.model_dump() if body.idea_source else None),
             message_origin=body.message_origin,
+            queue_if_busy=body.queue_if_busy,
         )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.get("/api/copilot/pi/sessions/{session_id}/followups")
+def get_pi_followups(session_id: ShortText, project_id: ShortText) -> dict:
+    try:
+        return get_pi_copilot_service().followup_messages(session_id, project_id=project_id)
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/followups/{item_id}/cancel")
+def cancel_pi_followup(session_id: ShortText, item_id: ShortText, body: PiProjectRequest) -> dict:
+    try:
+        return get_pi_copilot_service().cancel_followup(session_id, project_id=body.project_id, item_id=item_id)
     except PiCopilotError as exc:
         _raise_http(exc)
 
