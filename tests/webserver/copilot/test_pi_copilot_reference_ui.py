@@ -627,8 +627,9 @@ def test_results_section_lists_the_project_run_record() -> None:
     """成果 shows the project's run record below the current run's files.
 
     The workflow payload now carries every bound run (`runs`); the aside
-    renders them newest first as facts — type, outcome, time, file count,
-    the failure cause as a sentence, the authoritative run marked 当前 —
+    renders them newest first as facts — reached stage, outcome, time,
+    file count, the failure cause as a sentence, the authoritative run
+    marked 当前, and run IDs in collapsed technical details —
     open by default only when the shelf itself is empty, and it keeps its
     disclosure state across re-renders.
     """
@@ -682,9 +683,9 @@ def test_results_section_lists_the_project_run_record() -> None:
         keptOpen: kept.includes('data-gpi-run-history open>'),
         count: emptyShelf.includes('运行记录<small class="gpi-aside-count">3</small>'),
         rows: rowsOf(emptyShelf),
-        failedRow: emptyShelf.includes('<strong>完整分析 · 失败</strong><small>T(09-21T17:40) · 1 个文件</small><small class="gpi-run-cause">模型服务不可用，规划未能完成。</small><code>run_b</code>'),
-        currentRow: emptyShelf.includes('<strong>完整分析 · 待审阅<span class="gpi-run-current">当前</span></strong><small>T(09-21T17:31) · 12 个文件</small><code>run_a</code>'),
-        passedRow: emptyShelf.includes('<strong>完整分析 · 已通过</strong>'),
+        failedRow: emptyShelf.includes('<strong>计划生成 · 失败</strong><small>T(09-21T17:40) · 1 个文件</small><small class="gpi-run-cause">模型服务不可用，规划未能完成。</small><details data-gpi-run-support><summary>技术详情</summary><code>run_b</code></details>'),
+        currentRow: emptyShelf.includes('<strong>计划生成 · 待审阅<span class="gpi-run-current">当前</span></strong><small>T(09-21T17:31) · 12 个文件</small><details data-gpi-run-support><summary>技术详情</summary><code>run_a</code></details>'),
+        passedRow: emptyShelf.includes('<strong>研究任务 · 已通过</strong>'),
         noHistoryWithoutRuns: (() => {{ runs.length = 0; panel.syncProjectWorkflowAside(); return !body.innerHTML.includes('gpi-run-history'); }})(),
       }}));
     """

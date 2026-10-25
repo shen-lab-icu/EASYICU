@@ -273,8 +273,14 @@ def test_know_how_prompt_lists_exact_claim_decision_coordinates() -> None:
     ].content
 
     assert "KNOW-HOW DECISION OUTPUT CONTRACT" in prompt
-    assert "`card_sha256`" in prompt
-    assert "Do not use a `decision` key" in prompt
+    assert (
+        "Each `know_how_decisions` object must use exactly these keys: "
+        "`card_id`, `claim_id`, `disposition`, `reason_code`, `rationale`, "
+        "and `citation_ids`."
+    ) in prompt
+    assert "The host supplies card version and SHA." in prompt
+    assert "`card_version`" not in prompt
+    assert "`card_sha256`" not in prompt
 
 
 def test_fresh_planner_preserves_observed_numeric_level_types() -> None:
