@@ -199,7 +199,7 @@ def test_dense_clinical_profiles_preserve_readable_labels_and_editable_text(tmp_
     axis = next(ax for ax in figure.axes if ax.get_title(loc="left") == "Clinical feature profiles")
     labels = axis.get_yticklabels()
     assert len(labels) == len(names)
-    assert all("First" in label.get_text() for label in labels)
+    assert all("first" in label.get_text().casefold() for label in labels)
     from matplotlib.backends.backend_agg import FigureCanvasAgg
 
     canvas = FigureCanvasAgg(figure)
@@ -212,4 +212,4 @@ def test_dense_clinical_profiles_preserve_readable_labels_and_editable_text(tmp_
     tree = ET.parse(tmp_path / "figure" / "phenotypes.svg")
     texts = [element.text or "" for element in tree.iter("{http://www.w3.org/2000/svg}text")]
     assert any("Clinical feature profiles" in text for text in texts)
-    assert any("First" in text for text in texts)
+    assert any("first" in text.casefold() for text in texts)

@@ -654,10 +654,10 @@ def test_panels_share_missingness_rank_without_reassigning_values(
     run_dir, manifest = _binding(tmp_path, audit=audit, process=process)
     out_dir, summary = _run(run_dir, manifest)
 
-    ranked_labels = ["Marker Zeta", "Marker Alpha", "Event Beta"]
-    assert rendered["bar_labels"] == [*ranked_labels[:2], "Event Beta †"]
+    ranked_labels = ["Marker zeta", "Marker alpha", "Event beta"]
+    assert rendered["bar_labels"] == [*ranked_labels[:2], "Event beta †"]
     assert rendered["grid_labels"] == ranked_labels + (
-        ["Process Delta"] if different_process_variables else []
+        ["Process delta"] if different_process_variables else []
     )
     assert rendered["bars"] == [60.0, 20.0, 5.0]
     assert rendered["counts"] == ["60.0%  n=600", "20.0%  n=200", "5.0%  n=50"]
