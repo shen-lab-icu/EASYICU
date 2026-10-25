@@ -627,13 +627,14 @@
         survival: ['survival (time-to-event) analysis', '生存分析（时间到事件）'],
         trajectory_clustering: ['subtype or trajectory clustering', '亚型或轨迹聚类分析'],
       }[value.family] || ['this kind of study', '这类研究'];
-      const databases = { eicu: 'eICU', miiv: 'MIMIC-IV' };
+      const databases = { eicu: 'eICU', eicu_demo: 'eICU demo', miiv: 'MIMIC-IV', miiv_demo: 'MIMIC-IV demo' };
       const database = databases[value.database] || tr('this database', '这个数据库');
       const offered = (Array.isArray(value.supported_databases) ? value.supported_databases : ['miiv'])
         .map(key => databases[key]).filter(Boolean).join(tr(' or ', '或')) || 'MIMIC-IV';
       return {
         refusal: tr(`This version does not offer ${family[0]} on ${database}`, `本版本在 ${database} 上不支持${family[1]}`),
-        instead: tr(`Ask it on ${offered}, or ask with another study design.`, `可以改用 ${offered} 数据，或换一种研究设计后再问。`),
+        // Where it is offered is a fact, not advice: the researcher may not hold that database.
+        instead: tr(`This version offers it only on ${offered}; you can also ask with another study design.`, `本版本只在 ${offered} 上提供这类分析；也可以换一种研究设计再问。`),
       };
     }
 

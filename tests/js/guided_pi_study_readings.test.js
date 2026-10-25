@@ -95,6 +95,12 @@ for (const language of ['zh', 'en']) {
   assert.ok(scope.includes('eICU') && scope.includes('MIMIC-IV'));
   assert.ok(scope.includes(language === 'zh' ? '亚型或轨迹聚类分析' : 'subtype or trajectory clustering'));
   assert.ok(errors.errorText({ code: 'study_family_database_out_of_scope' }).includes(language === 'zh' ? '这类研究' : 'this kind of study'));
+  // The public demo is named, and the offered database is stated, not prescribed.
+  const demoScope = errors.errorText({ code: 'study_family_database_out_of_scope', details: { study_family_gap: {
+    code: 'study_family_database_out_of_scope', family: 'survival', database: 'eicu_demo', supported_databases: ['miiv'],
+  } } });
+  assert.ok(demoScope.includes('eICU demo') && !demoScope.includes(language === 'zh' ? '这个数据库' : 'this database'));
+  assert.ok(demoScope.includes(language === 'zh' ? '只在 MIMIC-IV 上提供' : 'only on MIMIC-IV'));
   // The plan step says the same refusal before any plan is offered: a card
   // with the refusal and what to ask instead, no approval, and the edit route.
   const gapWorkflow = { next_action_code: 'study_family_database_out_of_scope', study_family_gap: {
