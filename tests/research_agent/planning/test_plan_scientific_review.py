@@ -1541,30 +1541,18 @@ def test_descriptive_absolute_risk_with_supporting_tables_does_not_invent_infere
         "descriptive_epidemiology"
     )
     assert review.facts["robustness_readiness"] == {
-        "status": "blocked",
-        "reason": "no_typed_sensitivity_authority",
+        "status": "not_applicable",
+        "reason": "study_family_declares_no_robustness_requirement",
         "family": "descriptive",
-        "family_requirements": [
-            "denominator definition sensitivity",
-            "missingness/measurement availability sensitivity",
-        ],
-        "required_axis_count": 2,
+        "family_requirements": [],
+        "required_axis_count": 0,
         "executable_axes": [],
         "declared_authority_ids": [],
         "effect_style_grid_required": False,
         "planner_revision_supported": False,
     }
     assert "ROBUSTNESS_AXES_TOO_NARROW" not in codes
-    finding = next(
-        item
-        for item in review.findings
-        if item.code == "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED"
-    )
-    assert finding.requires_user_authorization is False
-    assert finding.authorization_question is None
-    assert finding.remediation_route == "runtime_capability"
-    assert finding.severity == "major"
-    assert "do not prove sensitivity robustness" in finding.remediation
+    assert "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED" not in codes
 
 
 def test_absolute_risk_difference_without_typed_ceiling_remains_inferential() -> None:

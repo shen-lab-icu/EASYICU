@@ -105,9 +105,8 @@ def test_companion_closure_keeps_summaries_executable_and_keeps_the_audit(groupe
     assert not {"SCIENTIFIC_CAPABILITY_NOT_REPORTABLE", "OUTCOME_DEFINITION_UNRESOLVED"} & {
         finding.code for finding in review.findings
     }
-    # Publication evidence stays visible, and cannot demand new optional science.
-    robustness = next(f for f in review.findings if f.code == "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED")
-    assert (robustness.severity, robustness.remediation_route) == ("major", "runtime_capability")
+    assert "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED" not in {f.code for f in review.findings}
+    assert review.facts["robustness_readiness"]["status"] == "not_applicable"
     assert review.facts["robustness_readiness"]["effect_style_grid_required"] is False
 
 
@@ -266,3 +265,152 @@ def test_cohort_can_restore_only_its_already_declared_identity_input(identity):
         with pytest.raises(ResearchPipelineRunError) as raised:
             guard.validate_plan(plan=revised, context=context)
         assert raised.value.code == "revision_added_unrequested_analysis"
+
+
+@pytest.mark.parametrize("categorical", [False, True])
+@pytest.mark.parametrize("with_literature", [False, True])
+def test_descriptive_review_requires_summary_and_context_without_sensitivity_or_novelty(categorical, with_literature):
+    from easyicu.research_agent.planning.study_design import build_study_design_brief
+    from tests.research_agent.planning.scientific_review_fixtures import (
+        _absolute_risk_distribution_step, _context, _literature,
+    )
+
+    context, plan = _study()
+    if categorical:
+        context = _context().model_copy(update={
+            "research_question": "Describe observed event proportions by recorded category.",
+            "user_preferences": None,
+        })
+        plan = AnalysisPlan(research_question=context.research_question,
+                            analysis_type="descriptive_epidemiology",
+                            steps=[_absolute_risk_distribution_step()])
+    brief = build_study_design_brief(context, analysis_type=plan.analysis_type)
+    review = build_plan_scientific_review(
+        context=context, plan=plan, literature=_literature() if with_literature else None,
+        require_reportable_capability=True,
+    )
+    codes = {f.code for f in review.findings}
+    assert brief.sensitivity_requirements == []
+    assert not {"ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED", "NOVELTY_NOT_ESTABLISHED",
+                "NOVELTY_POSITIONING_REVIEW_REQUIRED", "SCIENTIFIC_CAPABILITY_NOT_REPORTABLE"} & codes
+    assert review.facts["robustness_readiness"]["required_axis_count"] == 0
+    assert review.facts["novelty_status"] == "not_required"
+    assert review.facts["novelty_review"]["status"] == "not_required"
+    assert review.top_journal_candidate is False
+    if categorical:
+        # Repeated stays cannot acquire independent-row intervals just
+        # because effect sensitivity and novelty are outside this family.
+        assert "DESCRIPTIVE_INTERVAL_DEPENDENCE_UNRESOLVED" in codes
+    if not with_literature:
+        assert "TOP_JOURNAL_LITERATURE_SEARCH_NOT_ESTABLISHED" in codes
+        assert {"DESIGN_ANALOGUE_NOT_ESTABLISHED", "DIRECT_COMPARATOR_NOT_ESTABLISHED"} & codes
+    # An invalid calculation still stops a descriptive plan.
+    invalid = plan.model_copy(update={"steps": [
+        step.model_copy(update={"scientific_action_id": None, "method": "unowned_summary",
+                                "exposure_outcome_distribution_spec": None})
+        if step.planned_analysis_role == "primary" else step for step in plan.steps
+    ]})
+    invalid_review = build_plan_scientific_review(context=context, plan=invalid, require_reportable_capability=True)
+    assert "SCIENTIFIC_CAPABILITY_NOT_REPORTABLE" in {f.code for f in invalid_review.findings}
+
+
+def test_association_keeps_family_sensitivity_and_novelty_requirements():
+    from tests.research_agent.planning.scientific_review_fixtures import _context, _plan
+
+    review = build_plan_scientific_review(context=_context(), plan=_plan())
+    assert review.facts["robustness_readiness"]["required_axis_count"] == 2
+    assert {"ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED", "NOVELTY_NOT_ESTABLISHED"} <= {
+        f.code for f in review.findings
+    }
+
+
+def test_unrequested_audit_expansion_has_a_bounded_typed_stop_and_retains_review_items(tmp_path):
+    from easyicu.research_agent.planning.scientific_review import PlanScientificFinding
+    from easyicu.webserver.agent_pipeline_runs import _safe_pipeline_typed_failure
+
+    context, plan = _study()
+    guard = _guard(context, plan)
+    guard.review.findings[:] = [PlanScientificFinding(
+        code="REPEATED_STAY_DEDUP_UNDECLARED", severity="major", dimension="statistical_design",
+        message="Declare repeated-unit handling.", remediation="Report repeat structure.",
+        remediation_route="agent_plan_revision",
+    ), PlanScientificFinding(
+        code="NOVELTY_NOT_ESTABLISHED", severity="major", dimension="novelty",
+        message="An archived publication limitation.", remediation="Obtain independent evidence.",
+        remediation_route="external_evidence",
+    )]
+    revised = plan.model_copy(update={"steps": [
+        step.model_copy(update={"scientific_action_id": "descriptive.missingness_audit",
+                                "inputs": [*step.inputs, "unrequested_score"]})
+        if step.step_id == "availability" else step for step in plan.steps
+    ]})
+    with pytest.raises(ResearchPipelineRunError) as raised:
+        guard.validate_plan(plan=revised, context=context)
+    diagnostic = _safe_pipeline_typed_failure(raised.value)
+    assert diagnostic == {
+        "owner": "easyicu.planning.revision_scope_v1",
+        "reason_code": "revision_added_unrequested_analysis",
+        "step_id": "availability", "module": "descriptive.missingness_audit", "role": "auxiliary",
+        "added_inputs": ["unrequested_score"],
+        "review_item_codes": ["REPEATED_STAY_DEDUP_UNDECLARED"],
+        "authorization": "no_question_or_applicable_review_item",
+    }
+    assert guard.previous_plan == plan.model_dump(mode="json")
+    outer = RuntimeError("Private exception text must not enter the receipt")
+    outer.__cause__ = raised.value
+    assert _safe_pipeline_typed_failure(outer) == diagnostic
+    from easyicu.webserver.agent_pipeline_runs import _record_pipeline_failure
+
+    _record_pipeline_failure(wrapper_dir=tmp_path, study={"id": "synthetic"}, provider={},
+                             exc=raised.value, code=raised.value.code, execution_retry_id=None)
+    receipt = json.loads((tmp_path / "diagnostics/research_pipeline_failure.json").read_text())
+    assert receipt["typed_failure"] == diagnostic
+    assert json.loads((tmp_path / "quality_gate.json").read_text())["gate"]["reason"] == raised.value.code
+
+
+@pytest.mark.parametrize("invalid_role", ["private free text", ["primary"], {"role": "primary"}])
+def test_revision_diagnostic_rejects_unbounded_or_free_text_coordinates(invalid_role):
+    from easyicu.webserver.agent_pipeline_runs import _safe_pipeline_typed_failure
+
+    error = ResearchPipelineRunError("revision_added_unrequested_analysis", "private text", details={
+        "step_id": "bad/id", "module": "x" * 200, "role": invalid_role,
+        "added_inputs": ["valid_column", "private text", "x" * 200, *[f"v{i}" for i in range(100)]],
+        "review_item_codes": ["SCIENTIFIC_CAPABILITY_NOT_REPORTABLE", "private text", "X" * 200],
+        "prompt": "private prompt", "path": "/private/path",
+    })
+    diagnostic = _safe_pipeline_typed_failure(error)
+    assert diagnostic["reason_code"] == error.code
+    assert diagnostic["review_item_codes"] == ["SCIENTIFIC_CAPABILITY_NOT_REPORTABLE"]
+    assert diagnostic["added_inputs"][0] == "valid_column"
+    assert len(diagnostic["added_inputs"]) <= 16
+    assert not {"step_id", "module", "role", "prompt", "path"} & diagnostic.keys()
+    assert "private" not in json.dumps(diagnostic)
+    assert _safe_pipeline_typed_failure(ResearchPipelineRunError("unrelated", "private text")) == {}
+
+
+def test_descriptive_family_exemption_keeps_an_explicit_question_sensitivity():
+    from easyicu.research_agent.schema import UserPreferences
+
+    context, plan = _study()
+    context = context.model_copy(update={"user_preferences": UserPreferences(sensitivity_specs=[{
+        "spec_id": "requested_complete_case", "axis": "missing_data", "strategy": "complete_case",
+        "execution_variables": ["signal_max"],
+    }])})
+    review = build_plan_scientific_review(context=context, plan=plan)
+    finding = next(f for f in review.findings if f.code == "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY")
+    assert finding.severity == "blocker"
+    assert not review.approval_allowed
+    assert review.facts["sensitivity"]["missing_spec_ids"] == ["requested_complete_case"]
+
+
+def test_a_closed_descriptive_analysis_review_does_not_grant_a_novelty_claim(monkeypatch):
+    from easyicu.research_agent.planning import publication_readiness
+
+    # Isolate the approval projection after all other findings have been
+    # closed; absence of a novelty requirement is not novelty evidence.
+    monkeypatch.setattr(publication_readiness, "tier_review_findings", lambda plan, findings: [])
+    context, plan = _study()
+    review = build_plan_scientific_review(context=context, plan=plan)
+    assert review.approval_allowed
+    assert review.status == "ready_for_approval"
+    assert review.top_journal_candidate is False

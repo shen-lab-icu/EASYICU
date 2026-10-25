@@ -241,7 +241,13 @@ class PlanRevisionGuard:
                 "revision_added_unrequested_analysis",
                 "The revision added an unrequested analysis; the previous plan was kept.",
                 details={"module": coordinate[1], "role": coordinate[0],
-                         "step_id": step.step_id, "source_plan_sha256": self.review.plan_sha256},
+                         "step_id": step.step_id, "source_plan_sha256": self.review.plan_sha256,
+                         "added_inputs": sorted(set(raw.get("inputs", ())) - {
+                             value for old in previous["steps"] if old["step_id"] == step.step_id
+                             for value in old.get("inputs", ())
+                         }),
+                         "review_item_codes": sorted({finding.code for finding in self.review.findings
+                             if remediation_route_for_finding(finding) == "agent_plan_revision"})},
             )
 
     def _question_requires(self, plan: AnalysisPlan, context: ResearchContext) -> bool:

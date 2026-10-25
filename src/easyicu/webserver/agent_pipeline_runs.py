@@ -140,7 +140,7 @@ from easyicu.webserver.prediction_performance_projection import (
     prediction_result_step_ids,
 )
 from easyicu.webserver.research_evidence_preview import is_identifier_column
-from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError, revision_scope_diagnostic
 from easyicu.webserver.stop_next_actions import (
     project_stop_next_actions, safe_stop_coordinates, source_stop_coordinates,
     provider_timeout_coordinates,
@@ -975,6 +975,8 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
                 "exception_type": type(item).__name__,
                 **({"mismatch_fields": list(item.mismatch_fields)} if isinstance(item, BaselineAssociationAuthorityError) else {}),
             }
+        if revision_diagnostic := revision_scope_diagnostic(item):
+            return revision_diagnostic
         if isinstance(item, ValidationError):
             coordinates: List[Dict[str, Any]] = []
             for error in item.errors(
