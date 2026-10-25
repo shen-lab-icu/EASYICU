@@ -1413,8 +1413,8 @@ class PlannerAgent:
     cannot leak past the parser.
     """
 
-    def __init__(self, llm: LLMClient) -> None:
-        self.llm = llm
+    def __init__(self, llm: LLMClient, *, scientific_authorities: Any = None) -> None:
+        self.llm, self.scientific_authorities = llm, scientific_authorities
         self.last_dropped_plan_keys: Dict[str, List[str]] = {
             "top_level": [],
             "steps": [],
@@ -1658,10 +1658,9 @@ class PlannerAgent:
                 f"{planner_prompt_byte_limit(self.llm)} bytes.{plan_note} "
                 "Reduce selected know-how cards or split the research context."
             )
-        from ..providers.structured_retry import call_llm_with_structured_retry
 
-        return call_llm_with_structured_retry(
-            self.llm,
+        return _payload.call_planner_with_structured_retry(
+            self,
             messages,
             parser=lambda raw: self._parse(
                 raw,
@@ -2032,4 +2031,4 @@ class PlannerAgent:
                 "denominator tables."
             )
         _validate_required_primary_result(plan=plan, context=context)
-        return plan
+        return self.scientific_authorities.check_planner_plan(plan, context) if getattr(self, "scientific_authorities", None) else plan

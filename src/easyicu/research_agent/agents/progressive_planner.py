@@ -11,13 +11,10 @@ from ..authority.declared_levels import closed_planning_levels_for, observed_lev
 from ..research_context.typed import declared_domain_for_variable
 from ..cohort.schema import (
     materialized_input_column_authority,
-    validate_plan_typed_bindings_against_context,
 )
-from ..contracts.primary_cohort import primary_analysis_cohort_plan_findings
 from ..planning.adjustment_authority import (
     AdjustmentSetAuthority,
     adjusted_model_term_planning_authority,
-    validate_plan_against_adjustment_authority,
 )
 from ..planning.analysis_types import (
     get_analysis_type,
@@ -35,7 +32,6 @@ from ..planning.literature_bindings import (
     allowed_method_source_keys,
     method_layers_for_source_keys,
     missing_required_method_layers,
-    validate_literature_citation_bindings,
 )
 from ..planning.literature_design_authority import (
     LITERATURE_DESIGN_DIMENSIONS,
@@ -47,7 +43,6 @@ from ..planning.literature_design_authority import (
 from ..planning.method_literature import (
     method_cards_for_layers,
     method_binding_support,
-    reporting_method_source_keys_for_guidelines,
 )
 from ..planning.ordinal_multi_outcome import (
     is_numeric_metadata_dtype,
@@ -56,12 +51,9 @@ from ..planning.ordinal_multi_outcome import (
 from ..planning.planner_output_contract import (
     validate_baseline_materialization,
     validate_baseline_outline,
-    validate_fresh_planner_typed_product_specs,
 )
-from ..planning.preplan_know_how import verify_know_how_decisions
 from ..planning.primary_result_contract import (
     families_requiring_family_result_contract,
-    validate_required_primary_result,
 )
 from ..planning.progressive_compiler import (
     compile_progressive_plan,
@@ -115,7 +107,8 @@ from ..planning.progressive_artifacts import (
     ProgressivePlannerCheckpointEmitter,
 )
 from ..planning.progressive_resume import (
-    article_role_repair_owners,
+    _accept_compiled_plan,
+    _article_reporting_source_keys,
     final_acceptance_repair_start,
     ProgressivePrefixState,
     assemble_progressive_skeleton,
@@ -128,7 +121,6 @@ from ..planning.progressive_resume import (
     validate_progressive_resume_outline_binding,
     validate_progressive_resume_runtime_dependencies,
 )
-from ..planning.robustness_contract import validate_planner_robustness_specs
 from ..planning.scientific_action_catalog import scientific_actions_for_analysis_type
 from ..planning.scientific_review import required_method_layers_for_context, requested_outcomes
 from ..planning.outline_action_menu import outline_action_catalog as _action_catalog
@@ -158,7 +150,6 @@ from ..providers.structured_retry import call_llm_with_structured_retry
 from ..reporting.article_contract import (
     build_article_analysis_contract,
     hinted_typed_products,
-    validate_plan_against_article_contract,
 )
 from ..research_context.outbound import (
     format_outbound_safe_context,
@@ -1115,160 +1106,12 @@ def select_progressive_variables(
     return ordered
 
 
-def _primary_or_first_step_index(plan: AnalysisPlan) -> int:
-    for index, step in enumerate(plan.steps):
-        if step.planned_analysis_role == "primary":
-            return index
-    return 0
-
-
-def _step_index_from_error(plan: AnalysisPlan, message: str) -> int:
-    for index, step in enumerate(plan.steps):
-        if step.step_id and step.step_id in message:
-            return index
-    return _primary_or_first_step_index(plan)
-
-
-def _article_reporting_source_keys(
-    *,
-    article_context: ResearchContext,
-    analysis_type: str,
-    enforce_article_contract: bool,
-) -> tuple[str, ...]:
-    if not enforce_article_contract:
-        return ()
-    contract = build_article_analysis_contract(
-        article_context,
-        analysis_type=analysis_type,
-    )
-    return reporting_method_source_keys_for_guidelines(contract.reporting_guidelines)
-
-
-def _accept_compiled_plan(
-    *,
-    plan: AnalysisPlan,
-    agent_context: ResearchContext,
-    article_context: ResearchContext,
-    allowed_literature_citation_keys: Sequence[str],
-    direct_comparator_literature_keys: Sequence[str],
-    allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None,
-    enforce_article_contract: bool,
-    llm: LLMClient,
-) -> None:
-    """Apply the same fresh-plan authorities after host compilation."""
-
-    # Retain a closed, host-owned gate coordinate when the lower-level
-    # validator only supplies a ValueError. Its text can contain private
-    # candidate values and must not become the public diagnostic.
-    gate = "robustness_specs"
-    try:
-        if plan.robustness_specs:
-            validate_planner_robustness_specs(plan.robustness_specs)
-        gate = "literature_citation_bindings"
-        validate_literature_citation_bindings(
-            plan,
-            allowed_literature_citation_keys,
-            context=agent_context,
-            direct_comparator_keys=direct_comparator_literature_keys,
-        )
-        if allowed_know_how_decisions is not None:
-            gate = "know_how_decisions"
-            verify_know_how_decisions(
-                plan.know_how_decisions,
-                allowed_know_how_decisions,
-            )
-        if enforce_article_contract:
-            gate = "article_contract"
-            contract = build_article_analysis_contract(
-                article_context,
-                analysis_type=plan.analysis_type,
-            )
-            findings = validate_plan_against_article_contract(
-                plan=plan,
-                contract=contract,
-            )
-            missing_roles = sorted(
-                {
-                    str(role)
-                    for finding in findings
-                    for role in (finding.detail or {}).get("missing_roles", [])
-                    if str(role).strip()
-                }
-            )
-            if "robustness" in contract.required_roles and not plan.robustness_specs:
-                missing_roles = sorted({*missing_roles, "robustness_specs"})
-            if missing_roles:
-                message = (
-                    "progressive article contract is missing required role(s): "
-                    + ", ".join(missing_roles)
-                )
-                role_owners = article_role_repair_owners(plan, contract, missing_roles)
-                located = all(role_owners.get(role) for role in missing_roles)
-                index = min(i for indices in role_owners.values() for i in indices) if located else 0
-                raise ProgressivePlanCompileError(
-                    "progressive_article_required_roles_missing",
-                    message,
-                    step_id=plan.steps[index].step_id if plan.steps else None,
-                    step_index=index if plan.steps else None,
-                    path=f"article_analysis_contract.{missing_roles[0]}",
-                    findings=({
-                        "missing_roles": missing_roles,
-                        "role_owner_indices": role_owners,
-                        "repair_localization": (
-                            "declared_article_products" if located
-                            else "unlocated_full_materialization"
-                        ),
-                    },),
-                )
-        if not llm_is_mockish(llm):
-            gate = "typed_product_specs"
-            validate_fresh_planner_typed_product_specs(
-                plan,
-                context=agent_context,
-            )
-        gate = "context_bindings"
-        validate_plan_typed_bindings_against_context(
-            plan=plan,
-            context=agent_context,
-        )
-        gate = "adjustment_authority"
-        validate_plan_against_adjustment_authority(
-            plan=plan,
-            context=agent_context,
-        )
-        gate = "primary_cohort"
-        cohort_findings = primary_analysis_cohort_plan_findings(plan=plan)
-        if cohort_findings:
-            raise ValueError(
-                "primary cohort contract findings: "
-                + json.dumps(
-                    [item.detail for item in cohort_findings],
-                    ensure_ascii=False,
-                    default=str,
-                )
-            )
-        gate = "primary_result"
-        validate_required_primary_result(plan=plan, context=agent_context)
-    except ProgressivePlanCompileError:
-        raise
-    except ValueError as exc:
-        message = str(exc)
-        index = _step_index_from_error(plan, message)
-        step = plan.steps[index] if plan.steps else None
-        raise ProgressivePlanCompileError(
-            f"progressive_{gate}_invalid",
-            message,
-            step_id=step.step_id if step is not None else None,
-            step_index=index if step is not None else None,
-            path=gate,
-        ) from exc
-
-
 class ProgressivePlannerAgent:
     """Emit a small plan skeleton, compile it, and revise only failed suffixes."""
 
-    def __init__(self, llm: LLMClient) -> None:
+    def __init__(self, llm: LLMClient, *, scientific_authorities: Any = None) -> None:
         self.llm = llm
+        self.scientific_authorities = scientific_authorities
         self._attempt = ProgressivePlannerAttemptState()
         self._last_result: ProgressivePlannerAttemptResult | None = None
 
@@ -3378,6 +3221,8 @@ class ProgressivePlannerAgent:
             enforce_article_contract=enforce_article_contract,
             llm=self.llm,
         )
+        if self.scientific_authorities is not None:
+            self.scientific_authorities.check_planner_plan(plan, agent_context)
         return plan, receipt
 
     def _accept_materialized_plan(
@@ -3414,6 +3259,7 @@ class ProgressivePlannerAgent:
                     enforce_article_contract=enforce_article_contract,
                 )
             except ProgressivePlanCompileError as exc:
+                self._attempt.record_final_rejection(exc)
                 start = final_acceptance_repair_start(exc, outline)
                 if (
                     start is None or final_revision >= _MAX_COMPILE_REVISIONS
@@ -4042,6 +3888,7 @@ class ProgressivePlannerAgent:
 
         self._attempt = ProgressivePlannerAttemptState()
         self._last_result = None
+        kwargs["progress_callback"] = self._attempt.retry_progress_callback(kwargs.get("progress_callback"))
         try:
             output = self._run_output(context, **kwargs)
         except BaseException as error:
@@ -4565,12 +4412,15 @@ class ProgressivePlannerAgent:
                     direct_comparator_literature_keys=direct_keys,
                     article_context=article_context,
                 )
+                if self.scientific_authorities is not None:
+                    self.scientific_authorities.check_planner_outline(parsed)
                 return parsed
 
             outline = call_llm_with_structured_retry(
                 self.llm,
                 messages,
                 parser=parse_outline,
+                retryable_parse_error=(self.scientific_authorities.planner_retryable_error if self.scientific_authorities else None),
                 role="progressive_planner_outline",
                 max_retries=_MAX_INITIAL_PARSE_RETRIES,
                 max_tokens=_MAX_OUTLINE_OUTPUT_TOKENS,

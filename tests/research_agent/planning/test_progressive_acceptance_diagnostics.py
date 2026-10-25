@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from easyicu.research_agent.agents import progressive_planner as planner
+from easyicu.research_agent.planning import progressive_resume as acceptance
 from easyicu.research_agent.planning.progressive_compiler import required_reader_display_label_keys
 from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
 
@@ -172,15 +173,15 @@ def test_fresh_acceptance_attributes_rejection_without_message_leak(monkeypatch,
         "validate_plan_against_adjustment_authority", "validate_required_primary_result",
     ]
     for name in validators:
-        monkeypatch.setattr(planner, name, lambda *a, **k: None)
-    monkeypatch.setattr(planner, "primary_analysis_cohort_plan_findings", lambda **k: [])
-    monkeypatch.setattr(planner, "llm_is_mockish", lambda _: True)
+        monkeypatch.setattr(acceptance, name, lambda *a, **k: None)
+    monkeypatch.setattr(acceptance, "primary_analysis_cohort_plan_findings", lambda **k: [])
+    monkeypatch.setattr(acceptance, "llm_is_mockish", lambda _: True)
     original = ValueError("untrusted_candidate_value_and_private_path")
 
     def reject(*a, **k):
         raise original
 
-    monkeypatch.setattr(planner, validator, reject)
+    monkeypatch.setattr(acceptance, validator, reject)
     step = SimpleNamespace(step_id="primary_estimate", planned_analysis_role="primary")
     plan = SimpleNamespace(steps=[step], robustness_specs=[])
     with pytest.raises(ProgressivePlanCompileError) as caught:
@@ -226,12 +227,12 @@ def test_reader_label_request_keeps_unknown_local_source_and_full_required_roste
 def test_missing_article_roles_reach_safe_diagnostic_without_candidate_text(monkeypatch):
     from easyicu.webserver.agent_pipeline_runs import _safe_pipeline_typed_failure
 
-    monkeypatch.setattr(planner, "validate_literature_citation_bindings", lambda *a, **k: None)
-    monkeypatch.setattr(planner, "build_article_analysis_contract", lambda *a, **k: SimpleNamespace(
+    monkeypatch.setattr(acceptance, "validate_literature_citation_bindings", lambda *a, **k: None)
+    monkeypatch.setattr(acceptance, "build_article_analysis_contract", lambda *a, **k: SimpleNamespace(
         required_roles=("causal_protocol", "balance_positivity"),
         requirements=(),
     ))
-    monkeypatch.setattr(planner, "validate_plan_against_article_contract", lambda **k: [
+    monkeypatch.setattr(acceptance, "validate_plan_against_article_contract", lambda **k: [
         SimpleNamespace(detail={"missing_roles": ["causal_protocol", "balance_positivity"]}),
     ])
     plan = SimpleNamespace(

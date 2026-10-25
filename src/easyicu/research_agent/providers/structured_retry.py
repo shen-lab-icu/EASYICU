@@ -798,6 +798,8 @@ def call_llm_with_structured_retry(
             raise
         except Exception as exc:  # noqa: BLE001 -- caller may narrow parser failures
             if retryable_parse_error is not None and not retryable_parse_error(exc):
+                if attempts:
+                    annotate_with_attempt_history(exc, attempts, role=role)
                 raise
             # Rendered once, then reused for the record, the feedback message
             # and the carry-forward signature -- three readers of one string,

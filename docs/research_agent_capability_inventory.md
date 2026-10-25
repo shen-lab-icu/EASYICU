@@ -137,6 +137,10 @@ It is an administrator tool; it is not selected by the Planner.
 | `methods/gray_test.py` | 393 | `experimental` | methods | Gray K-sample competing-risk comparison with IPCW adjustment (no R cmprsk oracle; self-proven via log-rank degeneration and hand computation). Offered to the Coder for survival steps. | `tests/research_agent/test_gee_mixed_gam_gray_nomogram_v9k4m7.py` | - | 2026-11-01 |
 | `methods/nomogram.py` | 492 | `experimental` | methods | Points-scale nomogram tables from fitted logistic/Cox coefficients (tables only, no figure rendering). Offered to the Coder for prediction steps. | `tests/research_agent/test_gee_mixed_gam_gray_nomogram_v9k4m7.py` | - | 2026-11-01 |
 
+| `planning/progressive_resume.py` | 993 | `production_reachable` | planning | ProgressivePlannerAgent.run → _compile_and_accept → _accept_compiled_plan; whole-plan gates before final acceptance, with unchanged scientific validators. | `tests/research_agent/planning/test_progressive_final_repair.py::test_final_finding_reaches_suffix_and_preserves_prefix` | `call:agent.run` | 2026-11-01 |
+| `agents/plan_payload.py` | 2152 | `production_reachable` | agents | PlannerAgent.run → call_planner_with_structured_retry; existing attempt budget and safe retry history, with terminal signed-design refusals. | `tests/research_agent/planning/test_scientific_authority_feedback.py::test_full_plan_agent_repairs_and_retains_its_retry_receipt` | `call:agent.run` | 2026-11-01 |
+| `orchestration/scientific_runtime.py` | 892 | `production_reachable` | orchestration | ProgressivePlannerAgent.run → ScientificRuntimeAuthorities.check_planner_outline; located optional-sensitivity or proven coding repair, followed by unchanged authority binding. | `tests/research_agent/planning/test_scientific_authority_feedback.py::test_progressive_outline_repairs_optional_step_before_sealing` | `call:agent.run` | 2026-11-01 |
+
 ## Rules
 
 1. A new module that no production path calls must be added here in the same
