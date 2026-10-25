@@ -224,10 +224,44 @@ def test_explicit_descriptive_question_becomes_one_reviewable_candidate_setup(
     assert writes[0]["confirmations"]["plan_timing_descriptive_only"] is True
 
 
-def _stated_timing_update(monkeypatch, question, *, current_extra=None):
+@pytest.fixture
+def timing_demo_export(tmp_path):
+    """Use a synthetic native export with verifiable demo source identity."""
+    import pandas as pd
+
+    from easyicu.concept.export_metadata import build_export_file_metadata_binding
+    from easyicu.concept.metadata_sidecar import (
+        EXPORT_PHYSICAL_SCOPE, ColumnMetadataSidecar, write_content_addressed_sidecar,
+    )
+    from easyicu.resources import load_dictionary
+
+    root = tmp_path / "timing-demo"
+    root.mkdir()
+    frame = pd.DataFrame({"patientunitstayid": [1, 2], "age": [40, 60]})
+    frame.to_parquet(root / "demographics.parquet", index=False)
+    binding = build_export_file_metadata_binding(
+        relative_path="demographics.parquet", module="demographics", frame=frame,
+        concept_ids=["age"], database="eicu_demo", database_class_prefixes=("eicu_demo", "eicu"),
+        dictionary=load_dictionary(include_sofa2=True),
+    )
+    reference = write_content_addressed_sidecar(root, ColumnMetadataSidecar(
+        source_database="eicu_demo", source_database_class_prefixes=("eicu_demo", "eicu"),
+        scope=EXPORT_PHYSICAL_SCOPE, files=(binding,),
+    ))
+    (root / "_manifest.json").write_text(json.dumps({
+        "schema_version": "easyicu_native_export_v2", "database": "eicu_demo", "format": "parquet",
+        "concept_selection": {"mode": "explicit", "modules": {"demographics": ["age"]}},
+        "files": [{"file": "demographics.parquet", "module": "demographics", "rows": len(frame),
+                   "concepts": 1, "concept_ids": ["age"], "column_metadata_columns": list(binding.columns)}],
+        "column_metadata": reference.to_dict(),
+    }), encoding="utf-8")
+    return str(root)
+
+
+def _stated_timing_update(monkeypatch, source_path, question, *, current_extra=None):
     current = {
         "id": "entry-landmark-owner-test", "revision": 1, "question": "",
-        "data_source": {"database": "eicu", "path": "/test/eicu"},
+        "data_source": {"database": "eicu_demo", "path": source_path},
         "time_window": {"hours": 24, "anchor": "ICU admission"},
         "confirmations": {},
         **(current_extra or {}),
@@ -260,7 +294,7 @@ def _stated_timing_update(monkeypatch, question, *, current_extra=None):
     return result, writes
 
 
-def test_a_question_stated_landmark_is_the_first_candidates_timing(monkeypatch):
+def test_a_question_stated_landmark_is_the_first_candidates_timing(monkeypatch, timing_demo_export):
     """"24 小时 landmark" in the researcher's own words is a timing choice.
 
     Planning the first candidate without it guaranteed a post-baseline review
@@ -268,7 +302,7 @@ def test_a_question_stated_landmark_is_the_first_candidates_timing(monkeypatch):
     """
 
     result, writes = _stated_timing_update(
-        monkeypatch,
+        monkeypatch, timing_demo_export,
         "评估入 ICU 24 小时内的 KDIGO AKI 分期与住院死亡的关联，"
         "采用 24 小时 landmark，限定于该时点仍存活的 ICU stay。",
     )
@@ -305,8 +339,8 @@ def test_a_question_stated_landmark_is_the_first_candidates_timing(monkeypatch):
     # Only the in-hospital death follow-up contract is compiled.
     "评估 KDIGO AKI 分期与 ICU 住院时长的关联，采用 24 小时 landmark。",
 ])
-def test_no_timing_is_compiled_unless_a_death_landmark_is_stated(monkeypatch, question):
-    result, writes = _stated_timing_update(monkeypatch, question)
+def test_no_timing_is_compiled_unless_a_death_landmark_is_stated(monkeypatch, timing_demo_export, question):
+    result, writes = _stated_timing_update(monkeypatch, timing_demo_export, question)
     assert result["code"] == "study_context_updated"
     assert not [
         spec for spec in (writes[0].get("sensitivity_specs") or [])
@@ -315,13 +349,13 @@ def test_no_timing_is_compiled_unless_a_death_landmark_is_stated(monkeypatch, qu
     assert (writes[0].get("confirmations") or {}).get("plan_timing_landmark_24h") is not True
 
 
-def test_a_stated_landmark_never_replaces_an_existing_timing_choice(monkeypatch):
+def test_a_stated_landmark_never_replaces_an_existing_timing_choice(monkeypatch, timing_demo_export):
     existing = {
         "spec_id": "time_varying_primary", "axis": "timing", "strategy": "time_varying",
         "execution_variables": ["death_time_hours"],
     }
     result, writes = _stated_timing_update(
-        monkeypatch,
+        monkeypatch, timing_demo_export,
         "评估 KDIGO AKI 分期与住院死亡的关联，采用 24 小时 landmark。",
         current_extra={"sensitivity_specs": [existing]},
     )

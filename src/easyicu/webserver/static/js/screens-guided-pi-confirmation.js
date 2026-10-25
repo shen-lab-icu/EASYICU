@@ -63,6 +63,23 @@
       // belongs to that exact plan, not the session's latest run binding.
       const reviewedPlanRunId = String(workflow.plan_review_summary && workflow.plan_review_summary.run_id || '');
       const code = String(workflow.next_action_code || '');
+      if (code === 'bound_export_cohort_mismatch') {
+        const offer = (workflow.bound_export_cohort_refusal || {}).planning_source;
+        const available = Boolean(offer && offer.action === 'use_official_demo_raw_for_plan'
+          && offer.offer_sha256 && offer.expected_revision);
+        return {
+          code, grants: [], nonApprovable: !available,
+          title: tr('Plan from the same official Demo source', '使用同一官方 Demo 的原始数据规划'),
+          note: available ? tr(
+            'The current export uses a different population. Its verified original Demo data are available. Choose them to generate a candidate plan for this study; data preparation and analysis remain subject to their separate reviews.',
+            '现有导出的人群与本研究不同。已找到并核验同一官方 Demo 的原始数据；选择后可按本研究生成候选计划，数据准备和分析仍需随后分别审阅。',
+          ) : tr(
+            'This export does not match the study population. Request extraction for this study or choose another validated source.',
+            '当前导出不符合本研究的人群条件。请按本研究条件请求提取，或选择其他已验证的数据源。',
+          ),
+          approve: tr('Use the original Demo data for planning', '使用同源原始数据规划'),
+        };
+      }
       // A causal study's target trial (owner: screens-guided-pi-target-trial.js).
       const trial = window.EasyICU.guidedPi.optional('targetTrial');
       const trialConfirmation = trial ? trial.confirmation(workflow, tr) : null;

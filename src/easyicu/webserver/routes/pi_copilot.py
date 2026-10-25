@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, Response
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints, field_validator, model_validator
 
 from easyicu.databases.profiles import iter_database_profiles
 from easyicu.webserver.pi_copilot import get_pi_copilot_service
@@ -297,9 +297,22 @@ class PiDataSourceAuthorizationRequest(BaseModel):
         "begin_full_data_selection",
         "confirm_selected_source",
         "cancel_local_selection",
+        "use_official_demo_raw_for_plan",
     ]
     database: str | None = None
     source_id: ShortText | None = None
+    expected_revision: StrictInt | None = Field(default=None, ge=1)
+    offer_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _require_exact_planning_offer(self):
+        if self.action == "use_official_demo_raw_for_plan":
+            if (self.expected_revision is None or self.offer_sha256 is None
+                    or self.database is not None or self.source_id is not None):
+                raise ValueError("Choose the displayed official Demo planning source without overrides.")
+        elif self.expected_revision is not None or self.offer_sha256 is not None:
+            raise ValueError("This source action does not accept a planning offer.")
+        return self
 
     @field_validator("database")
     @classmethod
@@ -1190,6 +1203,8 @@ def post_pi_copilot_data_source_authorization(
             action=body.action,
             database=body.database,
             source_id=body.source_id,
+            **({"expected_revision": body.expected_revision, "offer_sha256": body.offer_sha256}
+               if body.action == "use_official_demo_raw_for_plan" else {}),
         )
     except PiCopilotError as exc:
         _raise_http(exc)

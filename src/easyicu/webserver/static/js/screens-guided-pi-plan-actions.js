@@ -395,6 +395,50 @@
       }
     }
 
+    async function useOfficialDemoPlanningSource() {
+      if (unavailable()) return false;
+      const workflow = host.workflow() || {};
+      const offer = (workflow.bound_export_cohort_refusal || {}).planning_source;
+      const session = host.session() || {};
+      const binding = session.binding || {};
+      const api = host.api();
+      if (workflow.next_action_code !== 'bound_export_cohort_mismatch'
+        || !offer || offer.action !== 'use_official_demo_raw_for_plan'
+        || offer.study_id !== binding.study_context_id
+        || offer.expected_revision !== binding.study_revision
+        || !offer.offer_sha256 || startedTransitions.has(offer.offer_sha256)
+        || typeof api.authorizePiCopilotDataSource !== 'function') return false;
+      const projectId = host.projectId();
+      const stillCurrent = () => host.projectId() === projectId
+        && (host.session() || {}).session_id === session.session_id
+        && ((host.session() || {}).binding || {}).study_context_id === binding.study_context_id;
+      startedTransitions.add(offer.offer_sha256);
+      setPending(true);
+      try {
+        await api.authorizePiCopilotDataSource(session.session_id, {
+          project_id: projectId, action: offer.action,
+          expected_revision: offer.expected_revision, offer_sha256: offer.offer_sha256,
+        });
+        if (!stillCurrent()) return false;
+        await host.refreshSession(true);
+        if (!stillCurrent()) return false;
+        await host.loadWorkflow();
+        if (!stillCurrent()) return false;
+        // This click selects a source. The next plan card owns planning;
+        // no extraction, Provider or analysis action is started here.
+        host.setBusy(false);
+        host.render();
+        return true;
+      } catch (error) {
+        startedTransitions.delete(offer.offer_sha256);
+        if (!stillCurrent()) return false;
+        host.setBusy(false);
+        host.setError(host.errorText(error));
+        host.render();
+        return false;
+      }
+    }
+
     async function applyPopulationReviewChoice(kind) {
       if (unavailable()) return false;
       const workflow = host.workflow() || {};
@@ -760,6 +804,10 @@
 
     async function confirmWorkflow(confirmation) {
       if (!confirmation) return;
+      if (confirmation.code === 'bound_export_cohort_mismatch') {
+        await useOfficialDemoPlanningSource();
+        return;
+      }
       if (confirmation.code === 'population_inclusion_requires_extraction') {
         await applyPopulationReviewChoice('preparation');
         return;
