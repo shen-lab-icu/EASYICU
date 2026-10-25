@@ -430,9 +430,21 @@
           if (!Array.isArray(value.evidence_refs) || !value.evidence_refs.length) return '';
           const registered = refs.slice().sort((left, right) => String(right.artifact || '').length - String(left.artifact || '').length);
           const chips = value.evidence_refs.slice(0, 3).map(rawRef => {
-            const label = String(rawRef || '').trim().slice(0, 120);
-            if (!label) return '';
-            const registryRef = reviewEvidence.find(ref => String(ref.reference || '') === label);
+            const reference = String(rawRef || '').trim().slice(0, 120);
+            if (!reference) return '';
+            const purposes = {
+              run_status: tr('Run status', '运行状态'),
+              reviewer_report: tr('Scientific review', '科学审阅'),
+              reviewer_report_post_readiness: tr('Scientific review', '科学审阅'),
+              scientific_maturity_audit: tr('Open issues', '待处理问题'),
+              critique_report: tr('Step check', '步骤检查'),
+            };
+            const name = reference.split(/\.(?:json|md)(?:\.|$)/)[0];
+            const label = purposes[name] || tr('Supporting record', '关联记录');
+            const matches = reviewEvidence.filter(ref => String(ref.reference || '') === reference);
+            const registryRef = matches.length === 1
+              && /^[A-Za-z0-9_.-]{1,160}$/.test(String(matches[0].evidence_id || ''))
+              && /^[a-f0-9]{64}$/.test(String(matches[0].sha256 || '')) ? matches[0] : null;
             if (registryRef && evidenceHost) {
               return resourceButton({
                 ...evidenceHost,
@@ -440,11 +452,12 @@
                 evidence_id: registryRef.evidence_id,
                 evidence_sha256: registryRef.sha256,
                 evidence_kind: registryRef.kind,
-                evidence_label: registryRef.description || label,
+                evidence_label: label,
                 evidence_pointer: registryRef.pointer || '',
               }, label);
             }
-            const matched = registered.find(ref => label === ref.artifact || label.startsWith(`${ref.artifact}.`));
+            const matched = registered.find(ref => /^[a-f0-9]{64}$/.test(String(ref.sha256 || ''))
+              && (reference === ref.artifact || reference.startsWith(`${ref.artifact}.`)));
             return matched
               ? resourceButton({ ...matched, label }, label)
               : `<span class="gpi-review-evidence-missing" title="${safe(tr('This reference is recorded but no governed preview is registered.', '该引用已记录，但尚未登记可受控预览。'), 180)}">${safe(label, 120)}</span>`;

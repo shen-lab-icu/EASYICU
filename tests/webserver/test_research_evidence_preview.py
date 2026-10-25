@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 from pathlib import Path
 
@@ -519,3 +520,111 @@ def test_registered_symlink_is_rejected_even_when_target_is_inside_run(
     with pytest.raises(EvidencePreviewError) as blocked:
         build_evidence_preview(tmp_path, "code_link_1", digest)
     assert blocked.value.code == "evidence_preview_symlink_forbidden"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [None, "missing_image", "changed_image", "changed_registered_image", "missing_code",
+     "changed_code", "unregistered_code", "ambiguous_figure", "ambiguous_code",
+     "conflicting_script", "unregistered_figure", "same_name_only", "symlink", "wrong_role",
+     "embedded_match", "changed_embedded_image", "bad_embedded_image", "wrong_declared_digest"],
+)
+def test_gallery_without_ids_requires_exact_registered_figure_bytes(
+    tmp_path: Path, fault: str | None,
+) -> None:
+    code, code_digest = _register(
+        tmp_path, evidence_id="renderer", kind="code", name="renderer__draw.py",
+        content=b"print('synthetic aggregate figure')\n", produced_by_step="",
+    )
+    image, _ = _register(
+        tmp_path, evidence_id="figure", kind="figure", name="figure__summary.png",
+        content=b"synthetic aggregate image", script_evidence_id="renderer",
+        metadata={"artifact_role": "manuscript_figure", "figure_id": "summary"},
+    )
+    published = tmp_path / "publication_figures" / "summary.png"
+    published.parent.mkdir()
+    published.write_bytes(image.read_bytes())
+    index = tmp_path / "evidence" / "evidence_index.json"
+    records = json.loads(index.read_text())
+    if fault == "missing_image":
+        published.unlink()
+    elif fault in {"changed_image", "same_name_only"}:
+        published.write_bytes(b"different aggregate image")
+    elif fault == "changed_registered_image":
+        image.write_bytes(b"changed registered aggregate image")
+    elif fault == "missing_code":
+        code.unlink()
+    elif fault == "changed_code":
+        code.write_bytes(b"print('changed')\n")
+    elif fault == "unregistered_code":
+        records = records[1:]
+    elif fault in {"ambiguous_figure", "ambiguous_code"}:
+        records.append(dict(records[1 if fault == "ambiguous_figure" else 0]))
+    elif fault == "conflicting_script":
+        records[1]["metadata"]["script_evidence_id"] = "missing_other_renderer"
+    elif fault == "unregistered_figure":
+        records = records[:1]
+    elif fault == "wrong_role":
+        records[1]["metadata"]["artifact_role"] = "unrelated_image"
+    elif fault == "symlink":
+        published.unlink()
+        published.symlink_to(image)
+    index.write_text(json.dumps(records))
+    gallery = {"figures": [{
+        "name": "summary.png", "relative_path": "publication_figures/summary.png",
+        "source_code": {"evidence_id": "unverified_cached_link", "sha256": "a" * 64},
+    }]}
+    if fault in {"embedded_match", "changed_embedded_image", "bad_embedded_image"}:
+        raw = b"different image" if fault == "changed_embedded_image" else image.read_bytes()
+        gallery["figures"][0]["data_url"] = (
+            "data:image/png;base64,@@" if fault == "bad_embedded_image"
+            else "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+        )
+    if fault == "wrong_declared_digest":
+        gallery["figures"][0]["sha256"] = "a" * 64
+    before = json.dumps(gallery)
+    projected = project_figure_source_code(tmp_path, gallery)
+    if fault in {None, "embedded_match"}:
+        assert projected["figures"][0]["source_code"]["evidence_id"] == "renderer"
+        assert projected["figures"][0]["source_code"]["sha256"] == code_digest
+    else:
+        assert "source_code" not in projected["figures"][0]
+    assert json.dumps(gallery) == before
+
+
+def test_gallery_clears_unverified_action_when_registry_is_missing(tmp_path: Path) -> None:
+    projected = project_figure_source_code(tmp_path, {"figures": [{
+        "name": "summary.png", "source_code": {"evidence_id": "invented"},
+    }]})
+    assert "source_code" not in projected["figures"][0]
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "stale", "ambiguous"])
+def test_reviewer_markdown_reference_opens_only_verified_json_sibling(
+    tmp_path: Path, fault: str | None,
+) -> None:
+    path, digest = _register(
+        tmp_path, evidence_id="review_json", kind="log",
+        name="review_json__reviewer_report.json", content=b'{"summary":{},"critiques":[]}',
+    )
+    _register(
+        tmp_path, evidence_id="review_md", kind="log",
+        name="review_md__reviewer_report.md", content=b"# Synthetic scientific review\n",
+    )
+    if fault == "missing":
+        path.unlink()
+    elif fault == "stale":
+        path.write_bytes(b"{}")
+    elif fault == "ambiguous":
+        index = tmp_path / "evidence" / "evidence_index.json"
+        records = json.loads(index.read_text())
+        records.append(dict(records[0]))
+        index.write_text(json.dumps(records))
+    refs = project_review_evidence_refs(tmp_path, ["reviewer_report.md"])
+    if fault is None:
+        assert refs[0]["reference"] == "reviewer_report.md"
+        assert refs[0]["evidence_id"] == "review_json"
+        assert refs[0]["sha256"] == digest
+        assert build_evidence_preview(tmp_path, refs[0]["evidence_id"], digest)["renderer"] == "json"
+    else:
+        assert not any(ref["evidence_id"] == "review_json" for ref in refs)

@@ -5,8 +5,20 @@
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
   function text(value, limit) { return String(value == null ? '' : value).slice(0, limit || 500); }
+  function recordPurpose(name) {
+    const purposes = {
+      'run_status.json': tr('Run status', '运行状态'),
+      'reviewer_report.json': tr('Scientific review', '科学审阅'),
+      'reviewer_report_post_readiness.json': tr('Scientific review', '科学审阅'),
+      'scientific_maturity_audit.json': tr('Open issues', '待处理问题'),
+      'critique_report.json': tr('Step check', '步骤检查'),
+    };
+    return purposes[name] || '';
+  }
   function title(payload) {
     const p = payload && typeof payload === 'object' ? payload : {};
+    if (recordPurpose(p.display_name)) return recordPurpose(p.display_name);
+    if (p.renderer === 'json' && p.kind !== 'statistic') return tr('Evidence record', '证据记录');
     return text(p.display_name || p.evidence_id || tr('Evidence', '证据'), 160);
   }
   function kindLabel(payload) {
@@ -59,6 +71,7 @@
   function fileAuditView(payload, locator) {
     const p = payload && typeof payload === 'object' ? payload : {};
     const facts = [
+      [tr('File name', '文件名'), p.display_name],
       [tr('Run-relative file', '运行内真实文件'), p.relative_path],
       [tr('Analysis step', '生成步骤'), p.role],
       [tr('Producer', '生成 owner'), p.producer],
@@ -117,16 +130,103 @@
     return typeof level === 'number' && Number.isFinite(level) && level > 0 && level < 1
       ? `${Number((level * 100).toFixed(4))}% CI` : tr('Confidence interval', '置信区间');
   }
+  function recorded(value) {
+    return typeof value === 'string' && value.trim() ? text(value)
+      : typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
+  }
+  function contextFacts(context) {
+    return [
+      [tr('Selected metric', '当前指标'), context.metric],
+      [tr('Group', '分组'), context.group],
+      [tr('Reference group', '参照组'), context.reference],
+      [tr('Denominator / sample', '分母 / 样本量'), context.denominator],
+      [tr('Unit', '单位'), context.unit],
+      [tr('Time window / anchor', '时间窗 / 时间锚点'), context.window],
+      [tr('Adjustment', '调整因素'), context.adjustment],
+    ].map(([label, value]) => [label, recorded(value) || tr('Not recorded', '未记录')]);
+  }
+  function producerStatisticFacts(value, pointer) {
+    const context = {};
+    // These producers publish unversioned step summaries. A future schema is
+    // not silently interpreted as today's contract.
+    if (value.schema_version) return contextFacts(context);
+    if (value.analysis_family === 'grouped_table_one' && pointer === '/cohort_n') {
+      context.metric = tr('Table 1 cohort denominator', '表 1 队列分母');
+      context.denominator = value.cohort_n;
+    }
+    const modelField = /^\/(primary_or|primary_estimate|adjusted_effect|primary_ci_low|primary_ci_high|n_total|n_events|primary_or_ci\/[01]|primary_estimate_interval\/[01])$/.exec(pointer);
+    if (value.analysis_family === 'association' && modelField) {
+      const field = modelField[1];
+      const scale = {odds_ratio:tr('Odds ratio', '优势比（OR）'),risk_ratio:tr('Risk ratio', '风险比（RR）'),hazard_ratio:tr('Hazard ratio', '风险率比（HR）')}[value.effect_scale];
+      context.metric = field === 'n_total' ? tr('Model sample', '模型样本量')
+        : field === 'n_events' ? tr('Model outcome events', '模型结局事件数')
+          : scale ? scale + (/low$|\/0$/.test(field) ? tr(' — interval lower bound', '：区间下限') : /high$|\/1$/.test(field) ? tr(' — interval upper bound', '：区间上限') : '') : '';
+      const contrast = value.primary_contrast || {};
+      context.group = contrast.exposure_level;
+      context.reference = contrast.reference_level;
+      context.denominator = value.n_total;
+      const covariates = value.adjustment_covariates;
+      if (Array.isArray(covariates) && covariates.every(item => typeof item === 'string' && item.trim())) {
+        context.adjustment = covariates.length ? covariates.map(item => text(item, 100)).join(', ') : tr('Unadjusted', '未调整');
+      }
+      const receipt = value.landmark_runtime_receipt || {};
+      if (receipt.schema_version === 'easyicu.landmark_categorical_association_runtime_receipt/1'
+          && typeof receipt.landmark_hours === 'number' && Number.isFinite(receipt.landmark_hours) && receipt.landmark_hours >= 0) {
+        context.window = tr('Landmark: ', '界标：') + receipt.landmark_hours + tr(' hours', ' 小时');
+      }
+    }
+    const analysisRow = /^\/analysis_rows\/(0|[1-9]\d*)\/(odds_ratio|ci_low|ci_high|n_stays|n_deaths)$/.exec(pointer);
+    if (value.analysis_family === 'association' && analysisRow && Array.isArray(value.analysis_rows)) {
+      const row = value.analysis_rows[Number(analysisRow[1])];
+      if (row && row.strategy === 'functional_form' && row.effect_measure === 'odds_ratio') {
+        const field = analysisRow[2];
+        context.metric = field === 'n_stays' ? tr('Model stays', '模型入住数') : field === 'n_deaths' ? tr('Model deaths', '模型死亡数')
+          : tr('Odds ratio', '优势比（OR）') + (field === 'ci_low' ? tr(' — interval lower bound', '：区间下限') : field === 'ci_high' ? tr(' — interval upper bound', '：区间上限') : '');
+        context.denominator = row.n_stays;
+        // A sensitivity row cannot inherit the primary model's contrast,
+        // adjustment roster, or time anchor from elsewhere in the file.
+      }
+    }
+    const report = value.reportable_descriptive_results;
+    if (report && report.schema_version === 'easyicu.absolute_risk_reporting/1') {
+      if (value.analysis_family === 'absolute_risk_context' && pointer === '/n_total') {
+        context.metric = tr('Absolute-risk analysis sample', '绝对风险分析样本量');
+        context.denominator = value.n_total;
+      }
+      const overall = /^\/reportable_descriptive_results\/overall_outcome\/(n|event_n|risk_pct|risk_ci_low_pct|risk_ci_high_pct)$/.exec(pointer);
+      const group = /^\/reportable_descriptive_results\/exposures\/(0|[1-9]\d*)\/groups\/(0|[1-9]\d*)\/(n|outcome_n|outcome_event_n|outcome_risk_pct|outcome_risk_ci_low_pct|outcome_risk_ci_high_pct|prevalence_pct|prevalence_ci_low_pct|prevalence_ci_high_pct)$/.exec(pointer);
+      const exposure = group && Array.isArray(report.exposures) ? report.exposures[Number(group[1])] : null;
+      const row = overall ? report.overall_outcome : exposure && Array.isArray(exposure.groups) ? exposure.groups[Number(group[2])] : null;
+      const field = overall ? overall[1] : group ? group[3] : '';
+      if (row && typeof row === 'object') {
+        const prevalence = field.startsWith('prevalence_');
+        const metrics = {
+          n: tr('Records in this population', '当前人群记录数'),
+          outcome_n: tr('Outcome denominator in this group', '该分组结局分母'),
+          event_n: tr('Outcome events', '结局事件数'),
+          outcome_event_n: tr('Outcome events in this group', '该分组结局事件数'),
+        };
+        context.metric = metrics[field] || (prevalence ? tr('Group share of the cohort', '分组占队列比例')
+          : overall ? tr('Overall outcome proportion', '总体结局比例') : tr('Observed outcome proportion within the group', '组内观察到的结局比例'));
+        if (field.includes('_ci_')) context.metric += field.includes('_low_') ? tr(' — interval lower bound', '：区间下限') : tr(' — interval upper bound', '：区间上限');
+        context.denominator = overall ? row.n : prevalence ? value.n_total : field === 'n' ? row.n : row.outcome_n;
+        context.group = overall ? tr('Overall', '总体') : recorded(row.label) || row.group_value;
+        context.unit = field.endsWith('_pct') ? '%' : '';
+      }
+    }
+    if (!Number.isSafeInteger(context.denominator) || context.denominator < 0) delete context.denominator;
+    return contextFacts(context);
+  }
   function selectedStatisticFacts(payload, pointer) {
     const value = payload.value || {};
     const estimates = value.descriptive_estimates;
     const match = /^\/descriptive_estimates\/(exposure_prevalence|outcome_absolute_risks)\/(0|[1-9]\d*)\/(n|events|denominator|estimate_pct)$/.exec(pointer);
-    if (!match || !estimates || estimates.schema_version !== 'easyicu.exposure_outcome_descriptive_estimates/1') return [];
+    if (!match || !estimates || estimates.schema_version !== 'easyicu.exposure_outcome_descriptive_estimates/1') return producerStatisticFacts(value, pointer);
     const prevalence = match[1] === 'exposure_prevalence';
-    if ((prevalence && match[3] === 'events') || (!prevalence && match[3] === 'n')) return [];
+    if ((prevalence && match[3] === 'events') || (!prevalence && match[3] === 'n')) return contextFacts({});
     const rows = estimates[match[1]];
     const row = Array.isArray(rows) ? rows[Number(match[2])] : null;
-    if (!row || typeof row !== 'object') return [];
+    if (!row || typeof row !== 'object') return contextFacts({});
     const count = row[prevalence ? 'n' : 'events'];
     const denominator = row.denominator;
     const metric = {
@@ -135,7 +235,9 @@
       denominator: prevalence ? tr('Cohort denominator', '队列分母') : tr('Outcome denominator in this group', '该分组结局分母'),
       estimate_pct: prevalence ? tr('Group share of the cohort', '分组占队列比例') : tr('Observed outcome proportion within the group', '组内观察到的结局比例'),
     }[match[3]];
-    const facts = [[tr('Selected metric', '当前指标'), metric]];
+    const facts = contextFacts({metric, group:typeof row.level === 'boolean' ? String(row.level) : row.level,
+      denominator:Number.isSafeInteger(denominator) && denominator > 0 ? denominator : null,
+      unit:match[3] === 'estimate_pct' ? '%' : ''});
     if (typeof value.exposure === 'string' && value.exposure) facts.push([tr('Exposure field', '分组变量'), text(value.exposure)]);
     if (typeof row.level === 'string' || typeof row.level === 'number' || typeof row.level === 'boolean') {
       facts.push([tr('Recorded group value', '原始分组值'), String(row.level)]);
@@ -214,6 +316,63 @@
     const rows = Array.isArray(payload.rows) ? payload.rows.slice(0, 100) : [];
     return `<div class="gpi-evidence-table-wrap" tabindex="0"><table class="gpi-evidence-table"><thead><tr>${headers.map(value => `<th>${esc(text(value, 160))}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${headers.map((_, index) => `<td>${esc(text(Array.isArray(row) ? row[index] : '', 1000))}</td>`).join('')}</tr>`).join('')}</tbody></table>${payload.rows_truncated || payload.columns_truncated ? `<p>${esc(tr('Preview is bounded; additional rows or columns are not shown.', '只预览了一部分；其余行或列未展示。'))}</p>` : ''}</div>`;
   }
+  function reviewRecordView(payload) {
+    const value = payload.value && typeof payload.value === 'object' && !Array.isArray(payload.value) ? payload.value : {};
+    const unknown = tr('Not recorded', '未记录');
+    const states = {
+      analysis_only:tr('Analysis only', '仅供分析'), manuscript_ready:tr('Manuscript generated', '稿件已生成'),
+      publication_ready:tr('Publication ready', '具备投稿条件'), blocked:tr('Blocked', '未通过'),
+      failed:tr('Failed', '未通过'), diagnostic_only:tr('Diagnostic only', '仅供诊断'),
+      pass:tr('Passed', '通过'), needs_revision:tr('Open issues', '有待处理项'),
+      major_revision:tr('Major revision required', '需重大修订'), minor_revision:tr('Minor revision required', '需小修'),
+      accept:tr('Accepted by this review', '本轮审阅接受'), reject:tr('Rejected by this review', '本轮审阅不接受'),
+    };
+    const severity = {blocker:tr('Blocking', '阻断'),reject:tr('Reject', '拒绝'),major:tr('Major', '重大'),minor:tr('Minor', '次要'),info:tr('Information', '提示')};
+    const facts = [];
+    let status = '', findings = null, repairs = [], boundary = '';
+    if (value.schema_version === 'easyicu.run_status/2') {
+      status = value.status;
+      const gates = value.gates && typeof value.gates === 'object' ? value.gates : {};
+      for (const [key, en, zh] of [
+        ['execution_complete','Analysis execution','分析执行'],['analysis_validated','Analysis validation','分析校验'],
+        ['evidence_complete','Evidence completeness','证据完整性'],['numeric_verified','Numeric verification','数字核验'],
+        ['manuscript_ready','Manuscript generation','稿件生成'],['paper_authorized','Publication permission','投稿使用权限'],
+      ]) facts.push([tr(en, zh), gates[key] === true ? tr('Passed', '通过') : gates[key] === false ? tr('Not passed', '未通过') : unknown]);
+      findings = Array.isArray(gates.scientific_maturity_findings) ? gates.scientific_maturity_findings : null;
+    } else if (value.schema_version === 'easyicu.scientific_maturity/1') {
+      status = value.status;
+      findings = Array.isArray(value.findings) ? value.findings : null;
+    } else if (!value.schema_version && /^reviewer_report(?:_post_readiness)?\.json$/.test(payload.display_name || '')
+        && value.summary && typeof value.summary === 'object' && Array.isArray(value.critiques)) {
+      status = value.summary.aggregated_recommendation;
+      findings = value.critiques.flatMap(row => row && Array.isArray(row.comments) ? row.comments : []);
+      const counts = value.summary.counts || {};
+      Object.entries(severity).forEach(([key,label]) => {
+        if (Number.isSafeInteger(counts[key]) && counts[key] >= 0) facts.push([label, String(counts[key])]);
+      });
+      if (value.summary.review_mode === 'simulated_deterministic') {
+        boundary = tr('Simulated review; it is not independent external review or publication permission.', '模拟审阅；不代表独立外部审阅，也不授予投稿使用权限。');
+      } else if (typeof value.summary.claim_boundary === 'string') boundary = value.summary.claim_boundary;
+    } else if (!value.schema_version && payload.display_name === 'critique_report.json'
+        && ['concerns','unsupported_claims','missing_evidence_refs','suggested_repairs'].every(key => Array.isArray(value[key]))) {
+      status = value.status;
+      findings = [...value.concerns, ...value.unsupported_claims].map(message => ({message}));
+      repairs = value.suggested_repairs;
+      facts.push([tr('Missing evidence references', '缺失证据引用'), String(value.missing_evidence_refs.length)]);
+    }
+    const wording = (message, label) => {
+      const clean = recorded(message);
+      if (!clean) return '';
+      return window.EU_LANG === 'zh' && !/[\u3400-\u9fff]/.test(clean)
+        ? `<details><summary>${esc(label || tr('Original wording', '原文（英文）'))}</summary><p>${esc(clean)}</p></details>` : `<p>${esc(clean)}</p>`;
+    };
+    facts.unshift([tr('Status', '状态'), states[status] || unknown]);
+    facts.push([tr('Recorded findings', '已记录问题'), findings ? String(findings.length) : unknown]);
+    const issues = (findings || []).slice(0, 20).filter(row => row && typeof row === 'object').map(row =>
+      `<li>${severity[row.severity] ? `<strong>${esc(severity[row.severity])}</strong>` : ''}${wording(row.message)}${wording(row.remediation, tr('Suggested repair', '处理建议（英文）'))}</li>`).join('');
+    const repairList = repairs.slice(0, 20).map(item => `<li>${wording(item)}</li>`).join('');
+    return `<section class="gpi-evidence-statistic"><div class="gpi-evidence-statistic-head"><strong>${esc(title(payload))}</strong></div><div class="gpi-evidence-statistic-facts">${facts.map(([label,fact]) => `<div class="gpi-evidence-statistic-card"><span>${esc(label)}</span><strong>${esc(fact)}</strong></div>`).join('')}</div>${wording(boundary)}${issues ? `<ul>${issues}</ul>` : ''}${repairList ? `<h3>${esc(tr('Suggested repairs', '处理建议'))}</h3><ul>${repairList}</ul>` : ''}${findings && findings.length > 20 ? `<p>${esc(tr('Additional findings are retained in the full file audit.', '其余问题见完整文件审计。'))}</p>` : ''}</section>`;
+  }
   function metadataView(payload) {
     const reasons = {
       patient_level_rows_withheld: tr('Patient-level cohort rows are withheld. File identity and digest remain visible.', '患者级队列行已隐藏；文件身份与摘要仍可核对。'),
@@ -229,7 +388,7 @@
   }
   function render(payload, locator) {
     const p = payload && typeof payload === 'object' ? payload : {};
-    const isStatistic = p.previewable && p.renderer === 'json' && p.kind === 'statistic';
+    const isStatistic = p.previewable && p.renderer === 'json' && p.kind === 'statistic' && !recordPurpose(p.display_name);
     let body = metadataView(p);
     if (p.previewable && p.renderer === 'code') body = codeView(p);
     else if (isStatistic) {
@@ -240,9 +399,10 @@
       body = selected + (selected && wholeFile
         ? `<details class="gpi-evidence-result-details"><summary>${esc(tr('Whole-file context (not the selected metric)', '整份结果背景（不是当前所选指标）'))}</summary>${wholeFile}</details>` : wholeFile);
     }
-    else if (p.previewable && p.renderer === 'json') body = jsonView(p);
+    else if (p.previewable && p.renderer === 'json') body = reviewRecordView(p);
     else if (p.previewable && p.renderer === 'table') body = tableView(p);
-    return `<div class="gpi-evidence-view">${isStatistic ? body : ''}${recordView(p)}${declaredLineageView(p)}${fileAuditView(p, locator)}${runAuthorityView(p)}${isStatistic ? '' : body}<p class="gpi-evidence-readonly">${esc(tr('Read-only preview. Code is displayed, never executed; raw patient rows and absolute host paths remain outside the browser boundary.', '只读预览。代码只展示、不执行；原始患者行和主机绝对路径不会进入浏览器边界。'))}</p></div>`;
+    const summaryFirst = p.previewable && p.renderer === 'json';
+    return `<div class="gpi-evidence-view">${summaryFirst ? body : ''}${recordView(p)}${declaredLineageView(p)}${fileAuditView(p, locator)}${runAuthorityView(p)}${summaryFirst ? '' : body}<p class="gpi-evidence-readonly">${esc(tr('Read-only preview. Code is displayed, never executed; raw patient rows and absolute host paths remain outside the browser boundary.', '只读预览。代码只展示、不执行；原始患者行和主机绝对路径不会进入浏览器边界。'))}</p></div>`;
   }
 
   window.EasyICU.guidedPi.declare('evidencePreview', { render, title, kindLabel });

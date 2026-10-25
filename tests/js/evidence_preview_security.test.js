@@ -164,7 +164,7 @@ assert.ok(wrongSelectedValue.includes('Selected number could not be matched'));
 assert.ok(!wrongSelectedValue.includes('Selected metric'));
 const unsupported = JSON.parse(originalDistribution);
 unsupported.value.descriptive_estimates.schema_version = 'unknown';
-assert.ok(!selectionOnly(unsupported, '/descriptive_estimates/exposure_prevalence/1/estimate_pct', 40).includes('Selected metric'));
+assert.match(selectionOnly(unsupported, '/descriptive_estimates/exposure_prevalence/1/estimate_pct', 40), /Selected metric<\/span><strong>Not recorded/);
 const invalidDenominator = JSON.parse(originalDistribution);
 invalidDenominator.value.descriptive_estimates.exposure_prevalence[1].denominator = -1;
 assert.ok(!selectionOnly(invalidDenominator, '/descriptive_estimates/exposure_prevalence/1/estimate_pct', 40).includes('Group records / cohort records'));
@@ -202,4 +202,150 @@ assert.ok(!withheld.includes('<table'));
 assert.ok(!withheld.includes('Source field and value match'));
 assert.ok(!withheld.includes('23.46%'));
 
-process.stdout.write(JSON.stringify({ ok: true, suites: ['safe_preview', 'exact_source_selection', 'typed_metric_context', 'confidence_level_metadata'] }));
+// Recorded producer semantics apply only to the exact selected field.
+const tableOne = {...selectedPayload, value:{
+  analysis_family:'grouped_table_one', cohort_n:24, group_by:'category',
+  reportable_descriptive_results:{overall_outcome:{outcome:'unrelated_endpoint',n:99}},
+}};
+assert.match(selectionOnly(tableOne, '/cohort_n', 24), /Table 1 cohort denominator/);
+const model = {...selectedPayload, value:{
+  analysis_family:'association', effect_scale:'odds_ratio', primary_or:1.25,
+  primary_ci_low:1.1, primary_ci_high:1.4, n_total:24, n_events:0,
+  primary_contrast:{exposure_level:'upper',reference_level:'lower'},
+  adjustment_covariates:['baseline_covariate'],
+  landmark_runtime_receipt:{schema_version:'easyicu.landmark_categorical_association_runtime_receipt/1',landmark_hours:12},
+  unrelated:{estimate:1.25,n_total:99,outcome:'unrelated_endpoint'},
+}};
+const modelSelection = selectionOnly(model, '/primary_or', 1.25);
+for (const fact of ['Odds ratio', 'upper', 'lower', '24', 'baseline_covariate', '12']) assert.ok(modelSelection.includes(fact));
+assert.match(modelSelection, /<span>Group<\/span><strong>upper<\/strong>/);
+assert.match(modelSelection, /<span>Reference group<\/span><strong>lower<\/strong>/);
+assert.ok(!modelSelection.includes('unrelated_endpoint'));
+assert.match(selectionOnly(model, '/primary_ci_low', 1.1), /lower bound/);
+assert.match(selectionOnly(model, '/n_events', 0), /Model outcome events/);
+const unrelatedSelection = selectionOnly(model, '/unrelated/estimate', 1.25);
+assert.match(unrelatedSelection, /Selected metric<\/span><strong>Not recorded/);
+assert.ok(!unrelatedSelection.includes('baseline_covariate'));
+const futureModel = {...model, value:{...model.value,schema_version:'future/99'}};
+assert.ok(!selectionOnly(futureModel, '/primary_or', 1.25).includes('Odds ratio'));
+const futureReceipt = {...model,value:{...model.value,landmark_runtime_receipt:{schema_version:'future/1',landmark_hours:12}}};
+assert.match(selectionOnly(futureReceipt,'/primary_or',1.25), /Time window \/ anchor<\/span><strong>Not recorded/);
+const unsafeModel = {...model,value:{...model.value,primary_contrast:{exposure_level:'<svg onload=bad()>',reference_level:0},adjustment_covariates:['<img src=x onerror=bad()>']}};
+const unsafeModelHtml = selectionOnly(unsafeModel,'/primary_or',1.25);
+assert.ok(!unsafeModelHtml.includes('<svg onload'));
+assert.ok(!unsafeModelHtml.includes('<img src=x'));
+assert.ok(unsafeModelHtml.includes('&lt;svg onload'));
+assert.match(unsafeModelHtml, /Reference group<\/span><strong>0/);
+const missingFacts = selectionOnly({...model,value:{analysis_family:'association',primary_or:1.25}}, '/primary_or', 1.25);
+for (const label of ['Group', 'Reference group', 'Denominator / sample', 'Unit', 'Time window / anchor', 'Adjustment']) {
+  assert.ok(missingFacts.includes(`<span>${label}</span><strong>Not recorded</strong>`), label);
+}
+const risk = {...selectedPayload,value:{
+  analysis_family:'absolute_risk_context',n_total:24,
+  reportable_descriptive_results:{schema_version:'easyicu.absolute_risk_reporting/1',
+    overall_outcome:{outcome:'overall_only',n:24,event_n:6,risk_pct:25},
+    exposures:[{exposure:'category',unit:'category',groups:[
+      {label:'upper',n:8,outcome_n:8,outcome_event_n:0,outcome_risk_pct:0,prevalence_pct:100/3},
+    ]}],
+  },
+}};
+const groupRisk = selectionOnly(risk, '/reportable_descriptive_results/exposures/0/groups/0/outcome_risk_pct', 0);
+for (const fact of ['Observed outcome proportion within the group','upper','8','%']) assert.ok(groupRisk.includes(fact));
+assert.ok(!groupRisk.includes('overall_only'));
+assert.match(selectionOnly(risk, '/reportable_descriptive_results/overall_outcome/risk_pct', 25), /Overall outcome proportion/);
+assert.match(selectionOnly(risk, '/n_total', 24), /Absolute-risk analysis sample/);
+assert.match(selectionOnly(risk, '/reportable_descriptive_results/exposures/0/groups/0/prevalence_pct', 100/3), /Group share of the cohort/);
+const sensitivity = {...model,value:{...model.value,analysis_rows:[
+  {odds_ratio:1.3,ci_low:1.05,effect_measure:'odds_ratio',n_stays:18,strategy:'functional_form'},
+]}};
+const sensitivitySelection = selectionOnly(sensitivity, '/analysis_rows/0/odds_ratio', 1.3);
+assert.match(sensitivitySelection, /Odds ratio/);
+assert.match(sensitivitySelection, /<strong>18<\/strong>/);
+assert.ok(!sensitivitySelection.includes('baseline_covariate'));
+assert.ok(!sensitivitySelection.includes('upper'));
+assert.match(selectionOnly(sensitivity, '/analysis_rows/0/ci_low', 1.05), /lower bound/);
+const mismatchContext = renderer.render(model,{pointer:'/primary_or',value:'1.2'});
+assert.ok(!mismatchContext.includes('Selected metric'));
+assert.ok(mismatchContext.includes('Selected number could not be matched'));
+
+// Record summaries lead; unknown records and all raw JSON stay in audit.
+context.window.EU_LANG = 'zh';
+const logPayload = {renderer:'json',previewable:true,kind:'log',sha256:'b'.repeat(64)};
+const records = [
+  ['run_status.json', '运行状态', {schema_version:'easyicu.run_status/2',status:'manuscript_ready',gates:{execution_complete:true,paper_authorized:false}}, ['稿件已生成','投稿使用权限','未通过']],
+  ['reviewer_report.json', '科学审阅', {summary:{aggregated_recommendation:'major_revision',review_mode:'simulated_deterministic',counts:{major:1,minor:0}},critiques:[{comments:[{severity:'major',message:'需要检查区间。'}]}]}, ['需重大修订','模拟审阅','需要检查区间。']],
+  ['scientific_maturity_audit.json','待处理问题',{schema_version:'easyicu.scientific_maturity/1',status:'analysis_only',findings:[{severity:'blocker',message:'还需核对设计。'}]},['仅供分析','还需核对设计。']],
+  ['critique_report.json','步骤检查',{status:'pass',concerns:[],unsupported_claims:[],missing_evidence_refs:[],suggested_repairs:[]},['通过','0']],
+];
+for (const [display_name, purpose, value, facts] of records) {
+  const payload = {...logPayload,display_name,value};
+  const html = renderer.render(payload);
+  assert.equal(renderer.title(payload),purpose);
+  const first = html.slice(0,html.indexOf('完整文件审计'));
+  assert.ok(first.includes(purpose));
+  for (const fact of facts) assert.ok(first.includes(fact), fact);
+  assert.ok(!first.includes('gpi-evidence-json'));
+  assert.equal((html.match(/<pre /g)||[]).length,1,'raw JSON appears once, under audit');
+}
+const maturityStatistic = renderer.render({...logPayload,kind:'statistic',display_name:'scientific_maturity_audit.json',
+  value:{schema_version:'easyicu.scientific_maturity/1',status:'analysis_only',findings:[{message:'核对设计。'}]},
+});
+assert.ok(maturityStatistic.slice(0,maturityStatistic.indexOf('完整文件审计')).includes('仅供分析'));
+const unsafeReview = renderer.render({...logPayload,display_name:'critique_report.json',value:{
+  status:'needs_revision',concerns:['<img src=x onerror=bad()>'],missing_evidence_refs:['missing_source'],suggested_repairs:['核对来源'],unsupported_claims:[],
+}});
+assert.ok(unsafeReview.includes('&lt;img src=x'));
+assert.ok(!unsafeReview.includes('<img src=x'));
+assert.ok(unsafeReview.includes('有待处理项'));
+assert.ok(!unsafeReview.includes('data-gpi-evidence-open'));
+for (const value of [{status:'pass'}, {schema_version:'future/1',status:'pass',concerns:[],unsupported_claims:[],missing_evidence_refs:[],suggested_repairs:[]}]) {
+  const unknownReview = renderer.render({...logPayload,display_name:'critique_report.json',value});
+  const first = unknownReview.slice(0,unknownReview.indexOf('完整文件审计'));
+  assert.ok(first.includes('未记录'));
+  assert.ok(!first.includes('<strong>通过</strong>'));
+}
+const unknownJson = renderer.render({...logPayload,display_name:'unknown.json',value:{status:'pass'}});
+assert.ok(unknownJson.slice(0,unknownJson.indexOf('完整文件审计')).includes('未记录'));
+
+// Exercise the real run card without changing the shared runner's owner map.
+const path = require('node:path');
+vm.runInContext(fs.readFileSync(path.join(path.dirname(process.argv[3]),'screens-guided-pi-run-outcome.js'),'utf8'),context);
+async function checkRecordLabels() {
+  const buttons = [];
+  const refs = ['run_status.json','reviewer_report.md','scientific_maturity_audit.json','critique_report.json','missing_record.json'];
+  const latest = {run_id:'run_synthetic',present:true,analysis_results_available:true,
+    artifact_refs:[{run_id:'run_synthetic',artifact:'scientific_readiness.json',sha256:'d'.repeat(64)}],
+    review_evidence_refs:refs.slice(0,4).map((reference,i)=>({reference,evidence_id:`record_${i}`,sha256:'b'.repeat(64),kind:'log'})),
+  };
+  const workflow = {stages:[{id:'analysis',status:'complete'}]};
+  const outcome = context.window.EasyICU.guidedPi.require('runOutcome').create({
+    tr:(en,zh)=>zh,esc:escape,iconHtml:()=>'',projectId:()=> 'project_synthetic',
+    resourceButton:(ref,label)=>{buttons.push({ref,label});return `<button>${escape(label)}</button>`;},
+    manuscriptNotPassedText:()=>'',
+    api:()=>({loadPiCopilotResearchArtifact:async()=>({ok:true,payload:{run_id:latest.run_id,
+      domains:[{domain:'analysis',status:'warning',summary:'检查记录',evidence_refs:refs.slice(0,3)},
+        {domain:'manuscript',status:'warning',summary:'核对记录',evidence_refs:refs.slice(3)}],findings:[],
+    }})}),
+  });
+  await outcome.loadScientificReview(latest,workflow);
+  const html = outcome.render(latest,workflow);
+  for (const [index,label] of ['运行状态','科学审阅','待处理问题','步骤检查'].entries()) {
+    assert.ok(buttons.some(b=>b.ref.evidence_id===`record_${index}` && b.label===label), label);
+  }
+  assert.ok(!buttons.some(b=>b.label==='missing_record.json'));
+  assert.ok(html.includes('gpi-review-evidence-missing'));
+  assert.ok(!html.includes('>missing_record.json<'));
+  latest.review_evidence_refs[0].sha256='invalid';
+  latest.review_evidence_refs[1].evidence_id='../wrong';
+  buttons.length=0;
+  outcome.render(latest,workflow);
+  assert.ok(!buttons.some(b=>['record_0','../wrong'].includes(b.ref.evidence_id)));
+  latest.review_evidence_refs.push({...latest.review_evidence_refs[2]});
+  buttons.length=0;
+  outcome.render(latest,workflow);
+  assert.ok(!buttons.some(b=>b.ref.evidence_id==='record_2'));
+}
+checkRecordLabels().then(()=>process.stdout.write(JSON.stringify({ ok: true, suites: [
+  'safe_preview','exact_source_selection','typed_metric_context','confidence_level_metadata',
+  'producer_metric_context','readable_records','review_record_labels',
+] }))).catch(error=>{console.error(error);process.exitCode=1;});
