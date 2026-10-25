@@ -683,6 +683,10 @@ _TARGET_TRIAL_CONFIRMATION_OWNER = "easyicu.planning.target_trial_confirmation_v
 #: whose remedy is the researcher's.  Any other stop is described by what is
 #: true of it.
 _PLANNING_STOP_SENTENCES = {
+    "progressive_analysis_module_unavailable": (
+        "The candidate plan used an analysis step that EasyICU cannot run for this kind of study, "
+        "so planning stopped and no analysis was run. Generate the plan again."
+    ),
     "progressive_exposure_window_required": (
         "The exposure is a measurement with no time window, so EasyICU cannot tell "
         "whether it was already known at ICU admission or measured later. Planning "
@@ -1256,7 +1260,11 @@ def _write_pipeline_failure_diagnostic(
         "traceback_frames": traceback_frames[-16:],
         "message": diagnostic_message,
         "message_sha256": message_sha256,
-        "structured_retry_history": [],
+        "structured_retry_history": next((
+            safe_structured_attempt_metadata(rows)
+            for item in _pipeline_exception_chain(exc)
+            if isinstance(rows := getattr(item, "easyicu_compile_retry_metadata", None), list) and rows
+        ), attempts),
         "structured_attempts": attempts,
         "raw_model_output_recorded": False,
         "prompt_recorded": False,

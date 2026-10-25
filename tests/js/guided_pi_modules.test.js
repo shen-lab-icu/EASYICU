@@ -176,8 +176,13 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
       assert.match(zh, /数据/);
     }
   }
-  ['progressive_unknown_variable', 'progressive_model_levels_unavailable'].forEach(code => {
-    assert.match(runFailure('research_pipeline_progressive_compile_failed', { code }), /variable level or model term/);
+  [
+    ['progressive_unknown_variable', /variable outside the study's available inputs/],
+    ['progressive_model_levels_unavailable', /category levels that the data description has not established/],
+  ].forEach(([code, cause]) => {
+    const sentence = runFailure('research_pipeline_progressive_compile_failed', { code });
+    assert.match(sentence, cause);
+    assert.doesNotMatch(sentence, /progressive_/);
   });
   // Two owners of one result, and a reused result no earlier step produces,
   // name their own cause.

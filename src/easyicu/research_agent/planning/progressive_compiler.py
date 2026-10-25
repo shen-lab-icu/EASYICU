@@ -111,6 +111,7 @@ from .progressive_contract import (
     ProgressiveCompiledStepReceipt,
     ProgressiveCohortIntent,
     ProgressiveLiteratureBinding,
+    ProgressiveOutlineStep,
     ProgressivePlanCompileError,
     ProgressivePlanCompileReceipt,
     ProgressivePlanFoundation,
@@ -194,6 +195,50 @@ def progressive_output_roles_for_module(module_id: str) -> tuple[str, ...]:
     """Return the compiler-owned semantic output-role vocabulary for a module."""
 
     return tuple(sorted(_MODULE_OUTPUT_ROLES.get(str(module_id or ""), ())))
+
+
+def progressive_module_selection_contract(
+    analysis_type: str, step: ProgressiveOutlineStep | ProgressiveSkeletonStep,
+) -> str:
+    """Show the compiler's bounded menu and the closed baseline materialization.
+
+    Module identity is sealed by the outline. A product-shape repair can stay
+    within that identity; choosing another method needs a new outline.
+    """
+
+    modules = progressive_module_ids_for_analysis_types((analysis_type,))
+    text = (
+        f"Available modules for this analysis type ({analysis_type}): "
+        + ", ".join(modules)
+        + ". These remain subject to their role, action and input contracts. "
+        "Use table_one for a baseline description with a closed grouping domain "
+        "for the scientific comparison; never invent group levels. "
+    )
+    if analysis_type == "descriptive_epidemiology":
+        text += (
+            "custom_analysis is restricted to the primary action "
+            f"{DESCRIPTIVE_SUMMARY_ACTION} or the auxiliary ungrouped baseline below; "
+            "it is not an arbitrary method fallback. "
+        )
+    if step.module_id == "custom_analysis" and step.planned_analysis_role == "auxiliary" and step.scientific_action_id is None:
+        text += (
+            "Ungrouped baseline contract: keep module_id=custom_analysis, "
+            "planned_analysis_role=auxiliary and scientific_action_id=null. "
+            f"Declare exactly one output {auxiliary_summary_product(step.step_id)} "
+            "with semantic_role=custom. Set custom_method to a concise summary "
+            "description; its wording does not select a different method. Bind "
+            "artifact:analysis_cohort from the preceding cohort owner. Include "
+            "only clinical descriptors in raw_inputs, excluding identity, index, "
+            "time and metadata columns. Leave grouping, model and contrast fields "
+            "null or empty. This produces descriptive_cohort_summary, not a grouped "
+            "Table 1 or an inferential comparison. "
+        )
+    return text + (
+        "The current outline's module, role and action are immutable. If no "
+        "available contract serves its objective, stop for outline repair; omit "
+        "an optional step only in a new outline. Do not substitute a different "
+        "method or estimand."
+    )
 
 
 _COHORT_FRAME_ONLY_MODULES = frozenset(
@@ -3247,10 +3292,19 @@ def compile_progressive_plan(
             raise _fail(
                 "progressive_analysis_module_unavailable",
                 f"module {step.module_id!r} is unavailable for analysis type "
-                f"{canonical_type!r}",
+                f"{canonical_type!r} in this materialization. "
+                + progressive_module_selection_contract(canonical_type, step),
                 step=step,
                 step_index=index,
                 path="module_id",
+                detail={
+                    "available_modules": list(progressive_module_ids_for_analysis_types((canonical_type,))),
+                    "repair_scope": (
+                        "current_step_only" if step.module_id in allowed_modules
+                        and descriptive_custom_module_allowed(step.planned_analysis_role, step.scientific_action_id)
+                        else "outline_required"
+                    ),
+                },
             )
     variables = _variable_index(context)
     population_spec = _stated_population_spec(skeleton.cohort, context=context)
