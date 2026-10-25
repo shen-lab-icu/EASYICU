@@ -89,7 +89,7 @@ _FILES: Dict[str, _Text] = {
         "预测风险与观察风险的一致性。",
     ),
     "agent_plan.json": (
-        "plan", "Agent plan", "Agent 计划",
+        "plan", "Analysis plan", "分析计划",
         "The step-by-step analysis plan used by the Agent.",
         "Agent 执行时使用的分步分析计划。",
     ),
@@ -121,7 +121,7 @@ _FILES: Dict[str, _Text] = {
         "自动核验结果，说明为何仍保持 analysis-only。",
     ),
     "scientific_readiness.json": (
-        "checks", "Scientific readiness", "科学就绪情况",
+        "checks", "Study review", "研究审阅",
         "Which scientific checks passed and which remain open for this run.",
         "本次运行哪些科学核查已通过、哪些仍未关闭。",
     ),
@@ -164,6 +164,15 @@ _FILES: Dict[str, _Text] = {
         "provenance", "Locked manuscript draft", "锁定论文草稿",
         "Locked claims and evidence ids; not a reportable manuscript.",
         "锁定论断及其证据 ID；不是可报告论文草稿。",
+    ),
+    "full_analysis_report.json": (
+        "provenance", "Research results and interpretation", "研究结果与解读", "", "",
+    ),
+    "article_report.json": (
+        "provenance", "Manuscript draft", "论文草稿", "", "",
+    ),
+    "technical_report.json": (
+        "provenance", "Technical report", "技术报告", "", "",
     ),
     "manuscript_pdf_receipt.json": (
         "provenance", "Report PDF receipt", "报告 PDF 回执",
