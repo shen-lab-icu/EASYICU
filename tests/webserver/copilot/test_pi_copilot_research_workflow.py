@@ -3651,10 +3651,9 @@ def test_failed_approved_execution_retries_exact_plan_when_study_is_unchanged() 
 
     by_id = {row.id: row for row in snapshot.stages}
     assert snapshot.next_action_code == "failed_pipeline_execution_retry_available"
+    assert [action.kind for action in snapshot.next_actions] == ["retry", "edit_plan"]
     assert by_id["plan"].reason_code == "failed_pipeline_execution_retry_available"
-    assert by_id["analysis"].reason_code == (
-        "failed_pipeline_execution_retry_available"
-    )
+    assert by_id["analysis"].reason_code == "failed_pipeline_execution_retry_available"
 
 
 def test_durable_web_execution_failure_also_retries_exact_approved_plan() -> None:

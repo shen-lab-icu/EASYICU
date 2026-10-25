@@ -115,7 +115,7 @@
     }
 
     async function prepareNewTaskFollowUp(prompt) {
-      if (!prompt || state.busy || state.childJobId || !projectId()) return;
+      if (!prompt || state.busy || state.childJobId || state.session?.stale?.stale || !projectId()) return;
       clearSessionSelection();
       render();
       await createSession();
@@ -129,6 +129,21 @@
         if (HELP && HELP.handleClick(event)) return;
         if (PROVIDER_CONTROL && PROVIDER_CONTROL.handleClick(event)) return;
         if (RUN_FILES && RUN_FILES.handleClick(event)) return;
+        if (event.target.closest('[data-gpi-stop-recovery]')) { revealPendingReview(); return; }
+        const stopAction = event.target.closest('[data-gpi-stop-action]');
+        if (stopAction) {
+          if (!state.session || state.busy || state.childJobId || state.session.stale?.stale) return;
+          const owner = window.EasyICU.guidedPi.optional('runStop');
+          const workflow = state.workflow || {};
+          const run = (workflow.runs || []).find(row => row.run_id === stopAction.dataset.gpiStopRun);
+          if (!owner || !owner.currentRun(run, workflow, state.latestRun)) return;
+          const action = owner.offeredActions(run, workflow).find(row => row.action_id === stopAction.dataset.gpiStopAction);
+          const route = owner.actionRoute(action, workflow);
+          if (route === 'retry' && typeof retryFailedExecution === 'function') retryFailedExecution();
+          if (route === 'confirm' && typeof confirmWorkflowAction === 'function') confirmWorkflowAction();
+          if (route === 'edit' && typeof editWorkflow === 'function') editWorkflow();
+          return;
+        }
         const filePill = event.target.closest('[data-gpi-file]');
         if (filePill) {
           event.preventDefault();

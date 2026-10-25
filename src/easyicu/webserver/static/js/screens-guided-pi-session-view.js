@@ -15,7 +15,13 @@
     } = deps;
     // A stopped run's block (owner: screens-guided-pi-run-stop.js).
     const stopOwner = MODULES.optional('runStop');
-    const RUN_STOP = stopOwner ? stopOwner.create({ tr, runFailureText }) : null;
+    const RUN_STOP = stopOwner ? stopOwner.create({ tr, runFailureText,
+      workflow: () => state.workflow, latestRun: () => state.latestRun,
+      canAct: () => Boolean(state.session) && !state.busy && !state.childJobId && !sessionIsStale(),
+      canPreview: () => Boolean(MODULES.optional('preview')),
+      hasRecovery: () => typeof workflowConfirmation === 'function' && Boolean(workflowConfirmation()),
+      resourceButton: RESOURCE_OWNER.button,
+    }) : null;
 
     function messageHtml(row, options) {
       if (row.childJobHandoff) return '';

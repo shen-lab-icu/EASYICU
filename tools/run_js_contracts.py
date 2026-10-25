@@ -26,6 +26,15 @@ TESTS = ROOT / "tests" / "js"
 JS = ROOT / "src" / "easyicu" / "webserver" / "static" / "js"
 
 CONTRACTS: dict[str, list[str]] = {
+    "guided_pi_result_next_steps.test.js": [
+        "html-escape.js", "screens-guided-pi-run-outcome.js", "screens-guided-pi-events.js",
+    ],
+    "guided_pi_stop_buttons.test.js": [
+        "html-escape.js", "product-labels.js", "screens-guided-pi-run-stop.js", "screens-guided-pi-events.js",
+    ],
+    "guided_pi_clinical_card.test.js": [
+        "html-escape.js", "product-labels.js", "screens-guided-pi-confirmation.js",
+    ],
     "guided_pi_extraction_terminal.test.js": [],
     "guided_pi_source_picker_stability.test.js": [],
     "guided_pi_demo_raw_planning.test.js": [],

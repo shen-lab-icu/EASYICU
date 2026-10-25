@@ -153,11 +153,11 @@ def test_conversation_preview_projects_identity_columns_to_safe_roles() -> None:
     assert ensure_safe_projection(preview) is preview
 
 
-def test_conversation_preview_refuses_incomplete_or_unselected_designs() -> None:
+def test_conversation_preview_keeps_typed_facts_without_prose_but_requires_selection() -> None:
     source = _plan()
-    assert project_plan_conversation_preview(source) is None
+    assert len(project_plan_conversation_preview(source)["clinical_summary"]["lines"]) == 5
     source["design_selection"]["candidates"][0]["reviewable_plan"] = ["short"]
-    assert project_plan_conversation_preview(source) is None
+    assert project_plan_conversation_preview(source)["items"] == []
     source["design_selection"]["candidates"][0]["disposition"] = "rejected"
     assert project_plan_conversation_preview(source) is None
 

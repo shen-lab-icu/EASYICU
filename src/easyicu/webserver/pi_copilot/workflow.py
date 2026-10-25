@@ -1222,6 +1222,7 @@ def build_research_workflow_snapshot(
         next_action_code=next_action,
         next_actions=project_stop_next_actions(
             stop_gate,
+            execution_retry_available=next_action == "failed_pipeline_execution_retry_available",
             pending_reason_codes=run_row.get("pending_review_reason_codes") or (),
             database=(study_row.get("data_source") or {}).get("database")
             if isinstance(study_row.get("data_source"), Mapping) else None,
@@ -1433,7 +1434,10 @@ def _enrich_plan_review(
         snapshot = snapshot.model_copy(
             update={"next_action_code": "agent_plan_configuration_required"}
         )
-    plan_preview = project_plan_conversation_preview(agent_plan)
+    plan_preview = project_plan_conversation_preview(
+        agent_plan, study=study, review_summary=snapshot.plan_review_summary,
+        exposure_groups=(snapshot.plan_review_summary or {}).get("exposure_groups"),
+    )
     if plan_preview:
         snapshot = snapshot.model_copy(
             update={"plan_conversation_preview": plan_preview}
