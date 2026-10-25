@@ -477,6 +477,26 @@
       const code = String(detail && detail.code || '').trim();
       const cause = String(detail && detail.cause || '').trim();
       const statedVariable = String(detail && detail.statedVariable || '').trim();
+      const baselineDesignMismatch = code === 'baseline_association_design_mismatch'
+        || (code === 'progressive_scientific_authority_repairable' && cause === 'baseline_association_design_mismatch');
+      if (baselineDesignMismatch && Array.isArray(detail.mismatchFields)) {
+        const labels = {
+          dependence: tr('handling of repeated ICU stays within a patient', '患者内多次 ICU 入住的相关性处理'),
+          exposure_source: tr('exposure', '暴露'),
+          outcome: tr('outcome', '结局'),
+          outcome_type: tr('outcome type', '结局类型'),
+          exposure_levels: tr('exposure groups', '暴露分组'),
+          exposure_reference_level: tr('reference group', '参照组'),
+          primary_contrast_level: tr('comparison group', '比较组'),
+          exposure_encoding: tr('exposure coding', '暴露编码'),
+        };
+        const fields = Object.keys(labels).filter(field => detail.mismatchFields.includes(field));
+        if (fields.length) {
+          const names = fields.map(field => labels[field]).join(tr(', ', '、'));
+          return tr(`The plan's ${names} differs from the confirmed design. Planning stopped; analysis has not started. Generate the plan again; keep the failure record if it stops again.`,
+            `计划中的「${names}」与已确认的设计不一致。规划已停止，分析尚未开始。请重新生成计划；如再次停止，请保留失败记录供排查。`);
+        }
+      }
       if (code === 'progressive_family_spec_stated_adjustment_unavailable' && statedVariable) {
         const why = cause === 'stated_adjustment_name_unresolved'
           ? tr(`EasyICU could not identify the stated adjustment “${statedVariable}”. Give its exact name, or remove it from the question.`,

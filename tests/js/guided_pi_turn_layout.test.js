@@ -271,6 +271,22 @@ const runFilesApi = {
           : { gate_detail: { reason_code: 'baseline_association_design_mismatch' } }) }] });
       assert.equal(visible(authorityStop).trim(), specific, 'the specific authority reason replaces the generic gate sentence');
       assert.equal(count(authorityStop, '<p>'), 1);
+      const dependenceStop = stop.render({ savedRuns: [{ ...savedRun, run_status: 'blocked', gate_reason: authorityGate,
+        ...(flattened ? { gate_detail_code: 'baseline_association_design_mismatch', gate_detail_mismatch_fields: ['dependence'] }
+          : { gate_detail: { reason_code: 'baseline_association_design_mismatch', mismatch_fields: ['dependence'] } }) }] });
+      assert.ok(visible(dependenceStop).includes(tr('handling of repeated ICU stays within a patient', '患者内多次 ICU 入住的相关性处理')));
+      assert.ok(!visible(dependenceStop).includes(tr('exposure, outcome', '暴露、结局')));
+      assert.ok(!visible(dependenceStop).includes('dependence'));
+      assert.equal(count(dependenceStop, '<p>'), 1);
+      const exhaustedStop = stop.render({ savedRuns: [{ ...savedRun, run_status: 'blocked', gate_reason: 'research_pipeline_plan_contract_exhausted',
+        ...(flattened ? { gate_detail_code: 'progressive_scientific_authority_repairable', gate_detail_cause_code: 'baseline_association_design_mismatch',
+          gate_detail_mismatch_fields: ['dependence'] }
+          : { gate_detail: { reason_code: 'progressive_scientific_authority_repairable', cause_code: 'baseline_association_design_mismatch',
+            mismatch_fields: ['dependence'] } }) }] });
+      assert.ok(visible(exhaustedStop).includes(tr('handling of repeated ICU stays within a patient', '患者内多次 ICU 入住的相关性处理')));
+      assert.ok(visible(exhaustedStop).includes(tr('allowed attempts', '允许的尝试次数')));
+      assert.equal(runFailureText(authorityGate, { code: 'baseline_association_design_mismatch',
+        mismatchFields: ['<private coordinate>'] }), specific);
       for (const [cause, sentence] of [
         ['executor_runtime_failure', tr('the built-in calculation failed', '内置计算执行失败')],
         ['executor_output_contract_failed', tr('its output did not pass validation', '输出未通过校验')],

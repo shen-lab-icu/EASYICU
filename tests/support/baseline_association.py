@@ -67,7 +67,7 @@ def baseline_context(exposure="sex", *, outcome="death", covariates=(), subgroup
     return context
 
 
-def baseline_plan_attempt(context, *, planning_contract_context=""):
+def baseline_plan_attempt(context, *, planning_contract_context="", scientific_authorities=None):
     request = build_family_spec_request(
         context, analysis_types=("association_study",), variable_roster=[v.name for v in context.variables],
         allowed_literature_citation_keys=(), required_primary_cohort_selection_mode="all_input_rows",
@@ -80,7 +80,7 @@ def baseline_plan_attempt(context, *, planning_contract_context=""):
         "comparator_applications": [], "roster_decision_note": "Keep the study's exact stated adjustment roster.",
     }
     llm = ScriptedMockLLMClient([json.dumps(payload)])
-    result = ProgressivePlannerAgent(llm).run_attempt(
+    result = ProgressivePlannerAgent(llm, scientific_authorities=scientific_authorities).run_attempt(
         context, planner_strategy=FAMILY_SPEC_STRATEGY, allowed_literature_citation_keys=(),
         required_primary_cohort_selection_mode="all_input_rows",
         planning_contract_context=planning_contract_context,

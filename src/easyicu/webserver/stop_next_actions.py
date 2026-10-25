@@ -15,6 +15,7 @@ from typing import Annotated, Any, Literal, Mapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from easyicu.concept.selection_policy import concept_selection_policy
+from easyicu.research_agent.authority.baseline_association_runtime import BaselineAssociationAuthorityError
 from easyicu.research_agent.concept_availability import explain_concept_availability
 from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
 from easyicu.research_agent.providers.client_trust import PROVIDER_NOT_CLEARED
@@ -390,11 +391,16 @@ def safe_stop_coordinates(payload: Any) -> dict[str, Any]:
 
     if not isinstance(payload, Mapping):
         return {}
+    raw_fields = payload.get("mismatch_fields")
+    mismatch_fields = [field for field in BaselineAssociationAuthorityError.mismatch_field_names
+                       if isinstance(raw_fields, list) and field in raw_fields]
     result: dict[str, Any] = {
         key: code
         for key in ("element", "concept", "database", "family")
         if (code := _code(payload.get(key))) is not None
     }
+    if mismatch_fields:
+        result["mismatch_fields"] = mismatch_fields
     variable = payload.get("stated_variable")
     if (isinstance(variable, str) and 0 < len(variable.strip()) <= 160
             and not any(ord(char) < 32 or ord(char) == 127 for char in variable)):

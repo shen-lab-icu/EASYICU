@@ -430,7 +430,7 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   vm.createContext(context);
   vm.runInContext(source, context);
   vm.runInContext(asideSource, context);
-  const render = run => {
+  const render = (run, failureText) => {
     context.window.EasyICU.guidedPi.require('aside').create({
       tr: en => en, esc: value => String(value ?? ''), iconHtml: () => '',
       projectId: () => 'project', displayProjectTitle: value => value,
@@ -438,7 +438,7 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
       workflow: () => ({ current_stage: 'analysis', runs: [run],
         stages: [{ id: 'analysis', status: 'blocked', reason_code: 'failed_pipeline_requires_fresh_plan' }] }),
       latestRun: () => run,
-      runFailureText: (code, detail) => [code, detail && detail.code, detail && detail.cause].filter(Boolean).join(' / '),
+      runFailureText: failureText || ((code, detail) => [code, detail && detail.code, detail && detail.cause].filter(Boolean).join(' / ')),
     }).syncProjectWorkflowAside();
     return body.innerHTML;
   };
@@ -450,6 +450,18 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   const closed = render(run);
   assert.ok(closed.includes(`<div class="si-s gpi-run-failure" title="${cause}">${cause}</div>`), closed);
   assert.ok(closed.includes(`<small class="gpi-run-cause">${cause}</small>`), closed);
+  context.window.EU_HTML = { esc: String };
+  vm.runInContext(fs.readFileSync(path.join(dir, 'screens-guided-pi-error-text.js'), 'utf8'), context);
+  const errors = context.window.EasyICU.guidedPi.require('errorText').create({ tr: (_en, zh) => zh, staticPreview: () => false });
+  for (const detail of [{ gate_detail_mismatch_fields: ['dependence'] }, { gate_detail: { mismatch_fields: ['dependence'] } }]) {
+    const failed = { ...run, gate_reason_code: 'research_pipeline_scientific_authority_refused',
+      gate_detail_code: 'baseline_association_design_mismatch', ...detail };
+    const sentence = errors.runFailureText(failed.gate_reason_code, { code: failed.gate_detail_code, mismatchFields: ['dependence'] });
+    assert.ok(sentence.includes('患者内多次 ICU 入住的相关性处理'));
+    const html = render(failed, errors.runFailureText);
+    assert.ok(html.includes(`<div class="si-s gpi-run-failure" title="${sentence}">${sentence}</div>`));
+    assert.ok(html.includes(`<small class="gpi-run-cause">${sentence}</small>`));
+  }
   // A run waiting for its interpretation review has not failed.
   const waiting = render({ ...run, gate_reason_code: 'research_agent_pipeline_complete_human_interpretation_required',
     gate_detail_code: undefined, gate_detail_cause_code: undefined });
