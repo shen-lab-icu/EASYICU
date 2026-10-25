@@ -477,6 +477,14 @@
       const code = String(detail && detail.code || '').trim();
       const cause = String(detail && detail.cause || '').trim();
       const statedVariable = String(detail && detail.statedVariable || '').trim();
+      if (code === 'progressive_context_bindings_invalid') {
+        const step = String(detail && detail.step || '').trim();
+        const title = String(detail && detail.stepTitle || '').trim()
+          || (step === 'adjusted_association' ? tr('adjusted association analysis', '调整后的关联分析') : step);
+        const where = title ? tr(`The “${title}” step`, `「${title}」步骤`) : tr('A candidate plan step', '候选计划中的一个步骤');
+        return tr(`${where} could not be matched to columns in the prepared data. Planning stopped; analysis has not started. Generate the plan again; keep the failure record if it stops again.`,
+          `${where}无法对应到准备好的数据中的字段。规划已停止，分析尚未开始。请重新生成计划；如再次停止，请保留失败记录供排查。`);
+      }
       const baselineDesignMismatch = code === 'baseline_association_design_mismatch'
         || (code === 'progressive_scientific_authority_repairable' && cause === 'baseline_association_design_mismatch');
       if (baselineDesignMismatch && Array.isArray(detail.mismatchFields)) {

@@ -43,6 +43,7 @@ from .product_files import (
     file_kinds as _file_kinds,
 )
 from .product_identity import (
+    EFFECT_PRODUCT_BASES as _EFFECT_PRODUCT_BASES,
     canonical_product_kind as _canonical_kind,
     normalize_product_token as _normalise,
     typed_product,
@@ -139,63 +140,6 @@ def is_failed_step_status(value: Any) -> bool:
     status = _normalise(value)
     return status in _FAILED_STATUSES or status.startswith(("fail_", "failed_"))
 
-
-_EFFECT_PRODUCT_BASES = frozenset(
-    {
-        "adjusted_effect",
-        "adjusted_effect_estimate",
-        "adjusted_effect_estimates",
-        "adjusted_association",
-        "adjusted_associations",
-        "adjusted_association_estimate",
-        "adjusted_association_estimates",
-        "adjusted_hr",
-        "adjusted_odds_ratio",
-        "adjusted_odds_ratios",
-        "adjusted_or",
-        "adjusted_rd",
-        "adjusted_rr",
-        "association_estimate",
-        "association_estimates",
-        "causal_effect",
-        "coefficient",
-        "coefficients",
-        "effect_estimate",
-        "effect_estimates", "effect_modification_estimates",
-        "effect_forest",
-        "hazard_ratio",
-        "interaction_pvalue",
-        "odds_ratio",
-        "or_estimate",
-        "or_estimates",
-        "or_forest",
-        "overall_effect",
-        "primary_association",
-        "primary_association_estimate",
-        "primary_effect",
-        "primary_estimate",
-        "primary_hr",
-        "primary_or",
-        "primary_rd",
-        "primary_rr",
-        "relative_risk",
-        "rd_estimate",
-        "rd_estimates",
-        "rd_forest",
-        "rr_estimate",
-        "rr_estimates",
-        "rr_forest",
-        "risk_difference",
-        "risk_ratio",
-        "hr_estimate",
-        "hr_estimates",
-        "hr_forest",
-        "subgroup_effect",
-        "subgroup_effects",
-        "treatment_effect",
-        "adjusted_logistic_regression_primary",
-    }
-)
 
 _PRODUCT_SLOT_SUFFIXES: Mapping[str, tuple[tuple[str, ...], ...]] = {
     "absolute_risk": (("absolute", "risk"),),
