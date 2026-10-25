@@ -2461,8 +2461,7 @@ class ResearchAgentPipeline:
         else:
             progressive = self._planner_strategy in PROGRESSIVE_PLANNER_STRATEGIES
             plan_generation_mode = "llm_progressive_v2" if progressive else "llm"
-            planner_class = ProgressivePlannerAgent if progressive else PlannerAgent
-            planner = planner_class(
+            planner = (ProgressivePlannerAgent if progressive else PlannerAgent)(
                 wrap_planner_efficiency_budget(
                     budgeted_role_client(
                         role_resolver,
@@ -2481,7 +2480,7 @@ class ResearchAgentPipeline:
                     max_wall_seconds=(
                         self._config.development_planner_efficiency_max_wall_seconds
                     ),
-                )
+                ), scientific_authorities=self._scientific_runtime_authorities,
             )
             dropped_plan_keys: Mapping[str, Sequence[str]] = {}
 

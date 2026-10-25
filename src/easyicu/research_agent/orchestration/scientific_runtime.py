@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
-from ..authority.baseline_association_runtime import BaselineAssociationRuntimeAuthority
+from ..authority.baseline_association_runtime import BaselineAssociationRuntimeAuthority, BaselineAssociationAuthorityError
 from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificAuthorityError,
     CurrentCaseScientificRuntimeAuthority,
@@ -14,6 +15,9 @@ from ..authority.current_case_scientific_runtime import (
     load_current_case_scientific_runtime_authority,
 )
 from ..contracts.endpoint import EndpointSpec
+from ..contracts.association_execution import ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+from ..contracts.functional_form import RCS_LINEAR_SENSITIVITY_METHODS
+from ..planning.progressive_contract import ProgressiveOutlineStep, ProgressivePlanCompileError, ProgressivePlanOutline
 from ..contracts.phenotype_comparison import (
     COMPARISON_ACTION,
     COMPARISON_PRODUCT,
@@ -558,6 +562,16 @@ class ScientificRuntimeAuthorities:
                 disclosures.append(text)
         return "\n\n".join(disclosures)
 
+    def check_planner_plan(self, plan: AnalysisPlan, context: ResearchContext | None = None) -> AnalysisPlan:
+        return check_authority_plan(self, plan, context)
+
+    def check_planner_outline(self, outline: ProgressivePlanOutline) -> None:
+        check_authority_outline(self.current_case, outline)
+
+    @staticmethod
+    def planner_retryable_error(error: Exception) -> bool:
+        return retryable_planner_error(error)
+
     def seal_for_plan(self, plan: AnalysisPlan) -> "ScientificRuntimeAuthorities":
         """Return the authorities with any plan-bound coordinate sealed.
 
@@ -703,3 +717,176 @@ class ScientificRuntimeAuthorities:
 
 
 __all__ = ["ScientificRuntimeAuthorities"]
+
+
+REPAIRABLE_AUTHORITY_REASON = "progressive_scientific_authority_repairable"
+_SPLINE_SUPPORT = (
+    "The landmark spline family supports the signed complete-case robustness replay "
+    "and restricted_cubic_spline_vs_linear checks with one functional_form_spec "
+    "targeting the exposure or a continuous governed covariate, using the signed "
+    "knots. It cannot reuse its spline result as a generic binary sensitivity. "
+    "Drop this step only if optional, or re-specify a supported check and its exact "
+    "spec ID, inputs and downstream consumers. Preserve all required analyses and "
+    "the approved exposure, outcome, population, landmark and estimand."
+)
+
+
+class ScientificAuthorityRepairError(ProgressivePlanCompileError):
+    """An authority refusal localized to a Planner-owned implementation choice."""
+
+    def __init__(
+        self, *, authority: CurrentCaseScientificRuntimeAuthority,
+        step: AnalysisStep | ProgressiveOutlineStep, index: int, path: str,
+        cause_code: str, supports: str | dict[str, Any],
+    ) -> None:
+        detail = {
+            "authority_kind": authority.authority_kind,
+            "authority_sha256": authority.execution_contract_sha256,
+            "refused_step_id": step.step_id,
+            "sensitivity_spec_ids": list(getattr(step, "sensitivity_spec_ids", ())),
+            "scientific_capability": getattr(step, "scientific_capability", None),
+            "supported_repair": supports,
+        }
+        super().__init__(
+            REPAIRABLE_AUTHORITY_REASON,
+            f"{cause_code}: {json.dumps(detail, ensure_ascii=False)}",
+            step_id=step.step_id, step_index=index, path=path,
+            cause_code=cause_code, findings=(detail,),
+        )
+
+
+def retryable_planner_error(error: Exception) -> bool:
+    return not isinstance(error, (CurrentCaseScientificAuthorityError, BaselineAssociationAuthorityError))
+
+
+def check_authority_outline(
+    authority: CurrentCaseScientificRuntimeAuthority | None, outline: ProgressivePlanOutline,
+) -> None:
+    """Reject unsupported inherited sensitivities while the outline is editable.
+
+    A custom sensitivity depending on the primary association is compiled to
+    the binary sensitivity capability. Target-bound functional-form checks and
+    the host robustness replay have separate execution owners.
+    """
+    if not isinstance(authority, LandmarkSplineRuntimeAuthority):
+        return
+    primary_ids = {step.step_id for step in outline.steps if step.planned_analysis_role == "primary"}
+    for index, step in enumerate(outline.steps):
+        if (
+            step.module_id == "custom_analysis"
+            and step.planned_analysis_role == "sensitivity"
+            and primary_ids.intersection(step.depends_on)
+            and step.scientific_action_id not in (None, "association.rcs_spline")
+        ):
+            raise ScientificAuthorityRepairError(
+                authority=authority, step=step, index=index, path="steps",
+                cause_code="landmark_spline_binary_sensitivity_unsupported", supports=_SPLINE_SUPPORT,
+            )
+
+
+def _require_approved_variables(
+    authority: CurrentCaseScientificRuntimeAuthority, plan: AnalysisPlan, context: ResearchContext | None,
+) -> None:
+    """Do not let mechanical runtime projection hide a changed primary question."""
+    if not isinstance(authority, (LandmarkSplineRuntimeAuthority, BaselineAssociationRuntimeAuthority)):
+        return
+    for attr, expected in (("primary_exposure", authority.exposure_column), ("target_outcome", authority.outcome_column)):
+        if context is not None and getattr(context, attr, None) not in (None, "", expected):
+            raise CurrentCaseScientificAuthorityError(f"approved {attr} conflicts with the scientific authority")
+    for step in plan.steps:
+        if step.planned_analysis_role != "primary":
+            continue
+        for requirement in step.model_requirements:
+            if requirement.exposure_source != authority.exposure_column or requirement.outcome != authority.outcome_column:
+                raise CurrentCaseScientificAuthorityError("primary exposure or outcome differs from the approved design")
+
+
+def _baseline_coding_repair(
+    authority: CurrentCaseScientificRuntimeAuthority, plan: AnalysisPlan,
+) -> tuple[AnalysisStep, dict[str, Any]] | None:
+    """Prove coding is the only refusal by validating a counterfactual copy.
+
+    The copy is never returned to planning or execution. The Planner must supply
+    the corrected fields itself; any remaining authority refusal stays fatal.
+    """
+    if not isinstance(authority, BaselineAssociationRuntimeAuthority):
+        return None
+    primary = [step for step in plan.steps if step.planned_analysis_role == "primary"]
+    if len(primary) != 1 or len(primary[0].model_requirements) != 1:
+        return None
+    step = primary[0]
+    requirement = step.model_requirements[0]
+    terms = [term for term in requirement.model_terms if term.role == "exposure"]
+    if len(terms) != 1:
+        return None
+    term = terms[0]
+    changes = {"transform": "identity", "coding": "continuous", "levels": None, "reference_level": None}
+    if authority.exposure_encoding == "treatment_contrast":
+        changes = {
+            "transform": "treatment_contrast", "coding": "binary" if len(authority.exposure_levels) == 2 else "categorical",
+            "levels": list(authority.exposure_levels), "reference_level": authority.exposure_reference_level,
+        }
+    corrected_term = term.model_copy(update=changes)
+    corrected = requirement.model_copy(update={
+        "model_terms": [corrected_term if item is term else item for item in requirement.model_terms],
+        "exposure_levels": list(authority.exposure_levels),
+        "exposure_reference_level": authority.exposure_reference_level,
+        "primary_contrast_level": authority.primary_contrast_level,
+    })
+    if corrected == requirement:
+        return None
+    trial = plan.model_copy(update={"steps": [
+        item.model_copy(update={"model_requirements": [corrected]}) if item is step else item
+        for item in plan.steps
+    ]})
+    try:
+        trial = AnalysisPlan.model_validate(trial.model_dump(mode="python"))
+        sealed = authority.seal_adjustment_roster(trial)
+        sealed.validate_plan(sealed.bind_plan(trial))
+    except ValueError:
+        return None
+    return step, {
+        **changes, "primary_contrast_level": authority.primary_contrast_level,
+        "instruction": "Use the authority's exact exposure coding and contrast; preserve all other scientific coordinates.",
+    }
+
+
+def check_authority_plan(
+    authorities: ScientificRuntimeAuthorities, plan: AnalysisPlan, context: ResearchContext | None = None,
+) -> AnalysisPlan:
+    """Validate on a copy before acceptance; leave final host binding unchanged."""
+    authority = authorities.current_case
+    if authority is None:
+        return plan
+    _require_approved_variables(authority, plan, context)
+    try:
+        sealed = authorities.seal_for_plan(plan)
+        bound, _findings = sealed.bind_plan(plan)
+        sealed.current_case.validate_plan(bound)
+    except (CurrentCaseScientificAuthorityError, BaselineAssociationAuthorityError) as error:
+        if isinstance(authority, LandmarkSplineRuntimeAuthority) and error.reason_code == "landmark_spline_binary_sensitivity_unsupported":
+            for index, step in enumerate(plan.steps):
+                if (
+                    step.scientific_capability == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+                    and "table:adjusted_association_estimates" in step.inputs
+                    and step.functional_form_spec is None and step.method not in RCS_LINEAR_SENSITIVITY_METHODS
+                ):
+                    raise ScientificAuthorityRepairError(
+                        authority=authority, step=step, index=index, path="steps",
+                        cause_code=error.reason_code, supports=_SPLINE_SUPPORT,
+                    ) from error
+        repair = _baseline_coding_repair(authority, plan)
+        if repair is not None:
+            step, supports = repair
+            raise ScientificAuthorityRepairError(
+                authority=authority, step=step, index=plan.steps.index(step), path="model_requirements",
+                cause_code=error.reason_code, supports=supports,
+            ) from error
+        raise
+    except ValueError as error:
+        # Some older runtime validators still use ValueError for a signed
+        # population/estimator mismatch. They are not schema-retry permission.
+        raise CurrentCaseScientificAuthorityError(
+            "the current-case authority refused the candidate design"
+        ) from error
+    return plan

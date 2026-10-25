@@ -37,6 +37,7 @@ from ..planning.robustness_contract import (
     RobustnessSpec,
 )
 from ..providers.protocol import StructuredOutputRequest
+from ..providers.structured_retry import safe_structured_attempt_metadata
 from ..providers.strict_json_schema import (
     StrictJsonSchemaError,
     assert_closed_json_schema,
@@ -2124,3 +2125,28 @@ __all__ = [
     "required_method_layers_for_plan",
     "validate_literature_citation_bindings",
 ]
+
+
+def call_planner_with_structured_retry(agent, messages, **kwargs):
+    """Keep authority feedback inside the existing call budget and retry receipt."""
+    from ..providers.structured_retry import call_llm_with_structured_retry
+
+    authorities = agent.scientific_authorities
+    callback = kwargs.pop("progress_callback", None)
+    history = []
+    agent.last_prompt_metrics["structured_retry_history"] = history
+
+    def observe(event):
+        if event.phase == "rejected":
+            history.extend(safe_structured_attempt_metadata([{
+                "attempt": event.attempt, "error_class": event.error_class,
+                "reason_code": event.reason_code, "validation_stage": event.validation_stage,
+                "validation_issues": event.validation_issues, "violation_sha256": event.violation_sha256,
+            }]))
+        if callback is not None:
+            callback(event)
+
+    return call_llm_with_structured_retry(
+        agent.llm, messages, **kwargs, progress_callback=observe,
+        retryable_parse_error=authorities.planner_retryable_error if authorities else None,
+    )

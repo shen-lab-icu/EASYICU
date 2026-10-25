@@ -84,6 +84,18 @@ def test_final_repair_has_a_hard_bound(monkeypatch):
     assert context.model_dump_json() == before
 
 
+def test_located_scientific_implementation_refusal_uses_the_existing_suffix_budget(monkeypatch):
+    agent, llm, context, before, accepted = _run(
+        monkeypatch, failures=1, code="progressive_scientific_authority_repairable",
+    )
+    agent.run(context)
+    assert accepted == [6, 6]
+    assert len(llm.calls) == 13
+    assert context.model_dump_json() == before
+    history = agent.last_result.facts.prompt_metrics["structured_retry_history"]
+    assert history[0]["reason_code"] == "progressive_scientific_authority_repairable"
+
+
 @pytest.mark.parametrize("code", [
     "progressive_design_input_structurally_unavailable",
     "progressive_step_outline_digest_mismatch",

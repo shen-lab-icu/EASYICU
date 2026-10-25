@@ -1,4 +1,4 @@
-"""Dependency-bound development replay for Progressive Planner prefixes.
+"""Whole-plan acceptance and dependency-bound replay for Progressive Planner prefixes.
 
 This module owns deterministic validation and reconstruction of a previously
 materialized prefix.  It does not call a provider, persist evidence, or decide
@@ -9,14 +9,28 @@ with the Planner transport and pipeline configuration owners.
 from __future__ import annotations
 
 import copy
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
 from pydantic import ValidationError
 
-from ..canonical_json import canonical_sha256
+from ..cohort.schema import validate_plan_typed_bindings_against_context
+from ..contracts.primary_cohort import primary_analysis_cohort_plan_findings
+from .method_literature import reporting_method_source_keys_for_guidelines
+from .literature_bindings import validate_literature_citation_bindings
+from .planner_output_contract import validate_fresh_planner_typed_product_specs
+from .preplan_know_how import verify_know_how_decisions
+from .primary_result_contract import validate_required_primary_result
+from .robustness_contract import validate_planner_robustness_specs
+from ..providers.protocol import LLMClient
+from ..providers.llm import llm_is_mockish
+from ..reporting.article_contract import build_article_analysis_contract, validate_plan_against_article_contract
 from ..schema import AnalysisPlan, ResearchContext
+
+
+from ..canonical_json import canonical_sha256
 from .adjustment_authority import (
     AdjustmentAuthorityError,
     AdjustmentSetAuthority,
@@ -77,6 +91,7 @@ def final_acceptance_repair_start(
     require re-materializing the entire sealed outline, never a guessed suffix.
     """
     repairable = {
+        "progressive_scientific_authority_repairable",
         "progressive_article_required_roles_missing",
         "progressive_robustness_specs_invalid",
         "progressive_literature_citation_bindings_invalid",
@@ -827,3 +842,152 @@ __all__ = [
     "validate_progressive_resume_outline_binding",
     "validate_progressive_resume_runtime_dependencies",
 ]
+
+
+def _primary_or_first_step_index(plan: AnalysisPlan) -> int:
+    for index, step in enumerate(plan.steps):
+        if step.planned_analysis_role == "primary":
+            return index
+    return 0
+
+
+def _step_index_from_error(plan: AnalysisPlan, message: str) -> int:
+    for index, step in enumerate(plan.steps):
+        if step.step_id and step.step_id in message:
+            return index
+    return _primary_or_first_step_index(plan)
+
+
+def _article_reporting_source_keys(
+    *,
+    article_context: ResearchContext,
+    analysis_type: str,
+    enforce_article_contract: bool,
+) -> tuple[str, ...]:
+    if not enforce_article_contract:
+        return ()
+    contract = build_article_analysis_contract(
+        article_context,
+        analysis_type=analysis_type,
+    )
+    return reporting_method_source_keys_for_guidelines(contract.reporting_guidelines)
+
+
+def _accept_compiled_plan(
+    *,
+    plan: AnalysisPlan,
+    agent_context: ResearchContext,
+    article_context: ResearchContext,
+    allowed_literature_citation_keys: Sequence[str],
+    direct_comparator_literature_keys: Sequence[str],
+    allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None,
+    enforce_article_contract: bool,
+    llm: LLMClient,
+) -> None:
+    """Apply the same fresh-plan authorities after host compilation."""
+
+    # Retain a closed, host-owned gate coordinate when the lower-level
+    # validator only supplies a ValueError. Its text can contain private
+    # candidate values and must not become the public diagnostic.
+    gate = "robustness_specs"
+    try:
+        if plan.robustness_specs:
+            validate_planner_robustness_specs(plan.robustness_specs)
+        gate = "literature_citation_bindings"
+        validate_literature_citation_bindings(
+            plan,
+            allowed_literature_citation_keys,
+            context=agent_context,
+            direct_comparator_keys=direct_comparator_literature_keys,
+        )
+        if allowed_know_how_decisions is not None:
+            gate = "know_how_decisions"
+            verify_know_how_decisions(
+                plan.know_how_decisions,
+                allowed_know_how_decisions,
+            )
+        if enforce_article_contract:
+            gate = "article_contract"
+            contract = build_article_analysis_contract(
+                article_context,
+                analysis_type=plan.analysis_type,
+            )
+            findings = validate_plan_against_article_contract(
+                plan=plan,
+                contract=contract,
+            )
+            missing_roles = sorted(
+                {
+                    str(role)
+                    for finding in findings
+                    for role in (finding.detail or {}).get("missing_roles", [])
+                    if str(role).strip()
+                }
+            )
+            if "robustness" in contract.required_roles and not plan.robustness_specs:
+                missing_roles = sorted({*missing_roles, "robustness_specs"})
+            if missing_roles:
+                message = (
+                    "progressive article contract is missing required role(s): "
+                    + ", ".join(missing_roles)
+                )
+                role_owners = article_role_repair_owners(plan, contract, missing_roles)
+                located = all(role_owners.get(role) for role in missing_roles)
+                index = min(i for indices in role_owners.values() for i in indices) if located else 0
+                raise ProgressivePlanCompileError(
+                    "progressive_article_required_roles_missing",
+                    message,
+                    step_id=plan.steps[index].step_id if plan.steps else None,
+                    step_index=index if plan.steps else None,
+                    path=f"article_analysis_contract.{missing_roles[0]}",
+                    findings=({
+                        "missing_roles": missing_roles,
+                        "role_owner_indices": role_owners,
+                        "repair_localization": (
+                            "declared_article_products" if located
+                            else "unlocated_full_materialization"
+                        ),
+                    },),
+                )
+        if not llm_is_mockish(llm):
+            gate = "typed_product_specs"
+            validate_fresh_planner_typed_product_specs(
+                plan,
+                context=agent_context,
+            )
+        gate = "context_bindings"
+        validate_plan_typed_bindings_against_context(
+            plan=plan,
+            context=agent_context,
+        )
+        gate = "adjustment_authority"
+        validate_plan_against_adjustment_authority(
+            plan=plan,
+            context=agent_context,
+        )
+        gate = "primary_cohort"
+        cohort_findings = primary_analysis_cohort_plan_findings(plan=plan)
+        if cohort_findings:
+            raise ValueError(
+                "primary cohort contract findings: "
+                + json.dumps(
+                    [item.detail for item in cohort_findings],
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
+        gate = "primary_result"
+        validate_required_primary_result(plan=plan, context=agent_context)
+    except ProgressivePlanCompileError:
+        raise
+    except ValueError as exc:
+        message = str(exc)
+        index = _step_index_from_error(plan, message)
+        step = plan.steps[index] if plan.steps else None
+        raise ProgressivePlanCompileError(
+            f"progressive_{gate}_invalid",
+            message,
+            step_id=step.step_id if step is not None else None,
+            step_index=index if step is not None else None,
+            path=gate,
+        ) from exc

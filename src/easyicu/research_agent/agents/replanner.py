@@ -147,7 +147,6 @@ class ReplannerAgent(PlannerAgent):
                 "No plan, completed-step evidence, or scientific coordinate was "
                 "truncated; reduce the scoped discovery catalog."
             )
-        from ..providers.structured_retry import call_llm_with_structured_retry
 
         def parse_revised(raw: str) -> AnalysisPlan:
             decision_authority: dict[str, Mapping[str, Any]] = {}
@@ -176,8 +175,8 @@ class ReplannerAgent(PlannerAgent):
                 )
             return candidate
 
-        revised = call_llm_with_structured_retry(
-            self.llm,
+        revised = _payload.call_planner_with_structured_retry(
+            self,
             messages,
             parser=parse_revised,
             role="replanner",

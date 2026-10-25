@@ -77,6 +77,27 @@ class ProgressivePlannerAttemptState:
     question_requirements: list[QuestionRequirement] = field(default_factory=list)
     family_template: bool = False
 
+    def retry_progress_callback(self, callback):
+        def observe(event):
+            if event.phase == "rejected":
+                self.prompt_metrics.setdefault("structured_retry_history", []).extend(
+                    safe_structured_attempt_metadata([{
+                        "attempt": event.attempt, "error_class": event.error_class,
+                        "reason_code": event.reason_code, "validation_stage": event.validation_stage,
+                        "validation_issues": event.validation_issues, "violation_sha256": event.violation_sha256,
+                    }])
+                )
+            if callback is not None:
+                callback(event)
+        return observe
+
+    def record_final_rejection(self, error) -> None:
+        history = self.prompt_metrics.setdefault("structured_retry_history", [])
+        history.extend(safe_structured_attempt_metadata([{
+            "attempt": len(self.prompt_metrics.get("final_acceptance_repairs", [])) + 1,
+            "error_class": type(error).__name__, "reason_code": error.reason_code,
+        }]))
+
     def freeze(self) -> ProgressivePlannerRunFacts:
         return ProgressivePlannerRunFacts(
             prompt_metrics=dict(self.prompt_metrics),
@@ -110,12 +131,14 @@ def bind_progressive_planner_failure_facts(
     # coordinates separately so a later parse/transport failure keeps both
     # histories and no materialization or compiler prose reaches the web.
     error.easyicu_compile_retry_metadata = safe_structured_attempt_metadata([
-        {
+        *facts.prompt_metrics.get("structured_retry_history", []),
+        *[{
             "attempt": attempt.revision + 1,
             "error_class": "ProgressivePlanCompileError",
             "reason_code": attempt.compiler_finding.reason_code,
         }
         for attempt in facts.compile_failure_attempts
+        ],
     ])
 
 
