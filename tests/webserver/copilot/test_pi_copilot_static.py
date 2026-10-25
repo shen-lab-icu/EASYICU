@@ -129,7 +129,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261023-demo-identity1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261024-queue1" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261025-entry-views1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -146,7 +146,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261024-demo-raw-plan1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261024-terminal1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261024-terminal1" in index
-    assert "js/screens-guided-pi.js?v=20261025-help-demo1" in index
+    assert "js/screens-guided-pi.js?v=20261025-entry-views1" in index
     assert "js/screens-guided.js?v=20261022-legacy1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -6553,7 +6553,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261024-terminal1" in index
-    assert "screens-guided-pi.js?v=20261025-help-demo1" in index
+    assert "screens-guided-pi.js?v=20261025-entry-views1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

@@ -19,7 +19,9 @@ def test_contract_failure_keeps_its_typed_reason_and_only_existing_materials(his
         pytest.skip("Node is unavailable")
     script = r"""
 global.window = {};
+require(process.argv[3]);
 require(process.argv[1]);
+require(process.argv[4]);
 const previous = process.argv[2] === 'true' ? [{
   kind: 'agent-run', status: 'done', run_id: 'run_previous', artifact_refs: [
     {artifact: 'agent_plan.json', run_id: 'run_previous'},
@@ -42,16 +44,20 @@ const host = {
   runFailureText: (code, detail) => {seen.push({code, detail}); return 'typed-owner-reason';},
 };
 const card = window.EU_GUIDED_PI_CONFIRMATION.create(host).workflowConfirmation();
-process.stdout.write(JSON.stringify({card, seen}));
+const runStopHtml = window.EasyICU.guidedPi.require('runStop').create(host)
+  .render({savedRuns: host.workflow().runs});
+process.stdout.write(JSON.stringify({card, seen, runStopHtml}));
 """
     result = run_node(
         node, script, str(STATIC / "js/screens-guided-pi-confirmation.js"),
-        str(history).lower(), check=True,
+        str(history).lower(), str(STATIC / "js/html-escape.js"),
+        str(STATIC / "js/screens-guided-pi-run-stop.js"), check=True,
     )
     result = json.loads(result.stdout)
     card = result["card"]
-    assert card["reason"] == "typed-owner-reason"
-    assert result["seen"][0]["detail"]["code"] == "exposure_grouping_unanswered"
+    assert card["reason"] == ""
+    assert result["runStopHtml"].count("typed-owner-reason") == 1
+    assert result["seen"][-1]["detail"]["code"] == "exposure_grouping_unanswered"
     assert card["grants"] == ["provider_run", "literature"]
     assert {row["run_id"] for row in card["reviewResources"]} == (
         {"run_previous"} if history else set()

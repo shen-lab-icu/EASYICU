@@ -253,6 +253,12 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "/api/copilot/pi/sessions/{session_id}/message",
         "post_pi_copilot_message",
     ),
+    ("GET", "/api/copilot/pi/sessions/{session_id}/followups", "get_pi_followups"),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/followups/{item_id}/cancel",
+        "cancel_pi_followup",
+    ),
     (
         "POST",
         "/api/copilot/pi/sessions/{session_id}/cohort-eligibility-selection",

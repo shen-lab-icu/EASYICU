@@ -1,11 +1,11 @@
-"""Dependency-neutral result returned by generated-code runners."""
+"""Dependency-neutral runner results and terminal codes shared with reporting."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 
 class RunnerFailureCode(str, Enum):
@@ -49,4 +49,53 @@ class RunResult:
         )
 
 
-__all__ = ["RunnerFailureCode", "RunResult"]
+class RuntimeFailureClass(str, Enum):
+    """Closed runtime-failure classes that change orchestration."""
+
+    PLAN_DATA_CONTRACT = "plan_data_contract"
+    EXECUTION_TIMEOUT = "execution_timeout"
+    ISOLATION_BACKEND_UNAVAILABLE = "isolation_backend_unavailable"
+    DETERMINISTIC_MODEL_NOT_ESTIMABLE = "deterministic_model_not_estimable"
+
+
+DECLARED_EXPOSURE_LEVEL_EMPTY = "declared_exposure_level_empty"
+
+
+def runtime_failure_codes(record: Mapping[str, Any]) -> dict[str, str]:
+    """Project the host-classified empty-level stop from a failed step record."""
+
+    if (record.get("runtime_failure_class") == RuntimeFailureClass.PLAN_DATA_CONTRACT.value
+            and record.get("runtime_failure_reason") == DECLARED_EXPOSURE_LEVEL_EMPTY
+            and record.get("status") == "contract_failed"):
+        return {"reason_code": DECLARED_EXPOSURE_LEVEL_EMPTY}
+    return {}
+
+
+STANDARD_EXECUTOR_FAILURE_REASONS = frozenset({
+    "executor_runtime_failure", "executor_output_contract_failed", "missing_executor_outputs",
+})
+
+
+def standard_executor_failure_codes(record: Mapping[str, Any]) -> dict[str, str]:
+    """Carry host terminal failures when the executor has no scientific stop.
+
+    These codes describe execution, not a rejected scientific design. Raw
+    exceptions and generated output prose never cross this projection.
+    """
+
+    reason = record.get("standard_executor_terminal_reason")
+    if (
+        record.get("status") == "deterministic_standard_blocked"
+        and record.get("deterministic_standard_analysis")
+        and isinstance(reason, str)
+        and reason in STANDARD_EXECUTOR_FAILURE_REASONS
+    ):
+        return {"reason_code": "deterministic_standard_executor_failed_closed", "cause_code": reason}
+    return {}
+
+
+__all__ = [
+    "RunnerFailureCode", "RunResult", "RuntimeFailureClass",
+    "DECLARED_EXPOSURE_LEVEL_EMPTY", "STANDARD_EXECUTOR_FAILURE_REASONS",
+    "runtime_failure_codes", "standard_executor_failure_codes",
+]

@@ -46,7 +46,7 @@ def _card(*, recommended=None, choices=(), export_ready=False, hosted=True, forb
           }},
         }}),
         session: () => session, projectId: () => 'p1', busy: () => false,
-        messages: () => [{{role: 'user', text: {json.dumps('Use ' + title.split()[0] + ' Demo to describe ICU stays')}}}],
+        messages: () => [{{role: 'user', text: {json.dumps(f'Use {title} v2.0.1 to describe ICU stays')}}}],
         render() {{}}, workflowReceipts: () => [], setWorkflowReceipts() {{}},
         setError: text => errors.push(text), errorText: window.EasyICU.guidedPi.require('errorText')
           .create({{tr: (en, zh) => zh, staticPreview: () => false}}).errorText,

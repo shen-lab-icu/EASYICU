@@ -12,6 +12,7 @@
       accessModeLabel, projectTitle, navigationSessionTitle,
       workflowConfirmationHtml, hostJobs: HOST_JOBS, followUps: FOLLOW_UPS,
       effortMenu: EFFORT_MENU, workflowConfirmation, runFailureText, help: HELP,
+      sessionMatchesUiLanguage, displaySessionTitle, sessionTraceLabel, providerBindingSummary,
     } = deps;
     const modelMenu = MODULES.optional('modelMenu');
     if (modelMenu) modelMenu.bind({
@@ -31,6 +32,73 @@
       resourceButton: RESOURCE_OWNER.button,
     }) : null;
 
+    // Entry views project titles through the shared label owner, retaining the
+    // bounded fallback for bundles that have not loaded that owner yet.
+    function displayProjectTitle(value, fallback) { return window.EU_PRODUCT_LABELS?.projectTitle?.(value, fallback) ?? String(value ?? fallback ?? '').slice(0, 200); }
+
+    function activatePanel() {
+      const saved = state.sessions.filter(sessionMatchesUiLanguage).map(row => `
+      <button class="gpi-session-row" type="button" data-gpi-session="${esc(row.session_id)}">
+        <span><strong>${esc(displaySessionTitle(row.title))}</strong><small>${esc(sessionTraceLabel(row))}</small></span>
+        <span>${row.agent_mode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究')}</span>
+      </button>`).join('');
+      if (state.projectIssue === 'pi_project_study_context_missing') {
+        return `
+        <div class="gpi-activate gpi-project-recovery">
+          <div class="gpi-kicker">${tr('EASYICU COPILOT · PROJECT RECOVERY', 'EASYICU COPILOT · 项目恢复')}</div>
+          <h2>${tr('This old project can no longer be opened', '这个旧项目已无法继续打开')}</h2>
+          <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc(displayProjectTitle(state.project && state.project.title, projectId()))}</strong></div>
+          ${providerBindingSummary()}
+          <div class="gpi-recovery-card" role="alert">
+            <span class="gpi-recovery-icon">${iconHtml('folder', 20)}</span>
+            <div>
+              <strong>${tr('The saved research setup is no longer available', '关联的研究配置已经失效')}</strong>
+              <p>${tr('The project shortcut still exists, but its authoritative study setup was removed. EasyICU will not silently create or attach a different setup.', '项目快捷记录仍然存在，但它原来绑定的权威研究配置已经被移除。EasyICU 不会静默创建或绑定另一份配置。')}</p>
+            </div>
+          </div>
+          <div class="gpi-recovery-actions">
+            <button class="btn primary" type="button" data-newstudy>${tr('Create or open a project', '新建或打开项目')}</button>
+            <button class="btn" type="button" data-refreshdrafts>${tr('Refresh project list', '刷新项目列表')}</button>
+          </div>
+          <div class="gpi-consent">${tr('You can also choose another existing project from the list on the left. Rebinding this old project remains an explicit recovery operation.', '也可以直接从左侧列表选择其他已有项目。若要恢复当前旧项目，仍需执行明确的重新绑定操作。')}</div>
+        </div>`;
+      }
+      return `
+      <div class="gpi-activate">
+        <div class="gpi-kicker">${tr('EASYICU COPILOT · RESEARCH WORKSPACE', 'EASYICU COPILOT · 科研工作区')}</div>
+        <h2>${tr('Start a conversation in this project', '在当前项目中开始对话')}</h2>
+        <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc(displayProjectTitle(state.project && state.project.title, projectId()))}</strong></div>
+        ${providerBindingSummary()}
+        ${state.error ? `<div class="gpi-error" role="alert">${esc(state.error)}</div>` : ''}
+        <button class="btn primary" type="button" data-gpi-create ${state.creating ? 'disabled' : ''}>
+          ${state.creating ? tr('Starting…', '正在启动…') : tr('Start research conversation', '开始研究对话')}
+        </button>
+        <div class="gpi-consent">${iconHtml('shield', 13)}<span>${tr('Study progress is saved automatically. File access can be enabled later and remains limited to this project folder — never patient rows, credentials, or files outside the project.', '研究进度会自动保存；文件操作可稍后开启，且只能访问当前项目目录，不包括患者行级数据、凭据或项目以外的文件。')}</span></div>
+        ${saved ? `<div class="gpi-saved"><div class="gpi-section-title">${tr('Copilot conversations in this project', '当前项目中的研究助手对话')}</div>${saved}</div>` : ''}
+        <div class="gpi-secondary-actions">
+          <button class="gpi-link" type="button" data-gpi-demo>${tr('View workflow demo', '查看流程演示')}</button>
+        </div>
+      </div>`;
+    }
+
+    function projectRequiredPanel() {
+      return `
+      <div class="gpi-activate">
+        <div class="gpi-kicker">EASYICU PROJECT · COPILOT CONVERSATIONS</div>
+        <h2>${tr('Select a research project first', '请先选择研究项目')}</h2>
+        <p>${tr('Use the Research projects list on the left, or create a new project. EasyICU keeps study setup, runs, evidence, and conversation history in that project.', '请从左侧“研究项目”中选择一个项目，或新建项目。EasyICU 会在项目中保存研究配置、运行、证据和对话历史。')}</p>
+        <button class="btn primary gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 16)} ${tr('View the complete research workflow demo', '查看完整科研流程演示')}</button>
+      </div>`;
+    }
+
+    function restoringPanel() {
+      return `
+      <div class="gpi-panel gpi-restoring" aria-busy="true">
+        <header class="gpi-head"><div class="gpi-head-title"><div class="gpi-kicker">EasyICU</div><div class="gpi-title">${esc(displayProjectTitle(state.project && state.project.title, projectId()))}</div></div></header>
+        <div class="gpi-log" data-gpi-log><div class="gpi-restore-message" role="status" aria-live="polite"><span class="gpi-running-spinner" aria-hidden="true"></span>${tr('Loading this project’s conversations…', '正在读取当前项目的对话…')}</div></div>
+        <div class="gpi-compose"><div class="gpi-compose-card"><textarea disabled aria-label="${tr('Message', '消息')}" placeholder="${tr('Continue when the conversation loads', '对话加载后可继续提问')}"></textarea></div></div>
+      </div>`;
+    }
     function messageHtml(row, options) {
       if (row.childJobHandoff) return '';
       if (row.role === 'decision_record') {
@@ -410,7 +478,7 @@
       </div>`;
     }
 
-    return Object.freeze({ messageHtml, workflowHtml, sessionPanel, demoPanel });
+    return Object.freeze({ messageHtml, workflowHtml, sessionPanel, demoPanel, activatePanel, projectRequiredPanel, restoringPanel });
   }
 
   window.EasyICU.guidedPi.declare('sessionView', { create });

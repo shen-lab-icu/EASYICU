@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from ..contracts.execution_result import (
+    STANDARD_EXECUTOR_FAILURE_REASONS, standard_executor_failure_codes,
+)
 from ..contracts.executor_stop import recorded_executor_stop
 from ..schema import ValidationFinding
 
@@ -11,28 +14,6 @@ __all__ = [
     "STANDARD_EXECUTOR_FAILURE_REASONS", "standard_executor_failure_codes",
     "standard_executor_failure_finding",
 ]
-
-STANDARD_EXECUTOR_FAILURE_REASONS = frozenset({
-    "executor_runtime_failure", "executor_output_contract_failed", "missing_executor_outputs",
-})
-
-
-def standard_executor_failure_codes(record: Mapping[str, Any]) -> dict[str, str]:
-    """Carry host terminal failures when the executor has no scientific stop.
-
-    These codes describe execution, not a rejected scientific design. Raw
-    exceptions and generated output prose never cross this projection.
-    """
-
-    reason = record.get("standard_executor_terminal_reason")
-    if (
-        record.get("status") == "deterministic_standard_blocked"
-        and record.get("deterministic_standard_analysis")
-        and isinstance(reason, str)
-        and reason in STANDARD_EXECUTOR_FAILURE_REASONS
-    ):
-        return {"reason_code": "deterministic_standard_executor_failed_closed", "cause_code": reason}
-    return {}
 
 
 def standard_executor_failure_finding(

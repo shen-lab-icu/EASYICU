@@ -21,6 +21,7 @@ def test_pipeline_constructor_has_one_config_and_one_service_source(ra) -> None:
     assert service_fields == {
         "case_plugin_registry",
         "human_review_gate",
+        "plan_revision_guard",
         "llm",
         "llm_concept_auditor_client",
         "provider_hard_stop",

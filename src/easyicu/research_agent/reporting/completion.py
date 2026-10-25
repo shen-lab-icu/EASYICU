@@ -12,8 +12,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 from ..contracts.executor_stop import executor_stop_codes
-from ..execution.failure_classification import runtime_failure_codes
-from ..execution.standard_executor_diagnostics import standard_executor_failure_codes
+from ..contracts.execution_result import runtime_failure_codes, standard_executor_failure_codes
 from ..planning.figure_step_contract import _output_declares_figure
 from ..schema import AnalysisPlan
 from .writer_stop import writer_stop

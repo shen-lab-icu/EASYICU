@@ -390,27 +390,39 @@ def test_a_declaration_survives_a_cohort_that_suggests_otherwise() -> None:
 
 
 def test_the_builder_never_reads_the_cohort_to_fill_the_endpoint() -> None:
-    """Source-level: ``endpoint`` is only ever assigned from the parameter.
+    """Each endpoint binding reads only its owner's declared authority.
 
-    A behavioural test can only show that today's frame is not misread. This
-    shows the builder has no code path that could misread a different one:
-    every assignment of the field is the pass-through of the declared value.
+    The public builder passes its parameter through; the metadata projection
+    reads that existing declaration from its context, without inferring one.
     """
     tree = ast.parse(BUILDER_SOURCE.read_text(encoding="utf-8"))
-
-    assignments: list[ast.AST] = []
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    expected = {
+        "build_research_context": ast.parse("endpoint", mode="eval").body,
+        "_apply_planned_continuous_summary": ast.parse("context.endpoint", mode="eval").body,
+    }
+    assignments: list[tuple[str, ast.AST]] = []
     for node in ast.walk(tree):
+        value = None
         if isinstance(node, ast.keyword) and node.arg == "endpoint":
-            assignments.append(node.value)
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "endpoint":
-                    assignments.append(node.value)
+            value = node.value
+        elif isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "endpoint" for target in node.targets
+        ):
+            value = node.value
+        if value is None:
+            continue
+        owner = parents.get(node)
+        while owner is not None and not isinstance(owner, ast.FunctionDef):
+            owner = parents.get(owner)
+        assignments.append((owner.name if owner is not None else "<module>", value))
 
-    assert assignments, "builder no longer wires the endpoint at all"
-    for value in assignments:
-        assert isinstance(value, ast.Name) and value.id == "endpoint", (
-            "endpoint must be passed through verbatim; "
+    assert {owner for owner, _value in assignments} == set(expected), (
+        "endpoint bindings must remain owned by the builder and its declared projection"
+    )
+    for owner, value in assignments:
+        assert ast.dump(value) == ast.dump(expected[owner]), (
+            f"{owner}: endpoint must be passed through from its declaration; "
             f"found {ast.dump(value)[:120]}"
         )
 
