@@ -149,7 +149,7 @@ def test_pipeline_binds_patient_dependence_before_the_first_roster_seal(tmp_path
 @pytest.mark.parametrize("violation,reason,words,expected_fields", [
     ("omitted_covariate", "baseline_association_roster_mismatch", "调整变量", ["covariates"]),
     ("changed_exposure", "baseline_association_design_mismatch", "暴露", ["exposure_source"]),
-    ("changed_dependence", "baseline_association_design_mismatch", "患者聚类", ["dependence"]),
+    ("changed_dependence", "baseline_association_design_mismatch", "患者内多次 ICU 入住的相关性处理", ["dependence"]),
     ("requested_exposure", "association_adjustment_exposure_conflict", "暴露本身", []),
 ])
 def test_roster_refusal_reaches_record_gate_and_chinese_stop_text(tmp_path, violation, reason, words, expected_fields):
@@ -193,20 +193,36 @@ def test_roster_refusal_reaches_record_gate_and_chinese_stop_text(tmp_path, viol
     assert "BaselineAssociationAuthorityError" in record["exception_types"]
     assert "private synthetic message" not in json.dumps(record)
     gate = json.loads((tmp_path / "quality_gate.json").read_text())["gate"]
-    assert gate_detail_projection(gate["detail"])["gate_detail_code"] == reason
+    projected = gate_detail_projection(gate["detail"])
+    assert projected["gate_detail_code"] == reason
+    assert projected.get("gate_detail_mismatch_fields", []) == expected_fields
     node = shutil.which("node")
     assert node
     script = r"""
 global.window = {EU_HTML: {esc: String}, EasyICU: {guidedPi: {declare: (_name, owner) => {global.owner = owner;}}}};
 require(process.argv[1]);
 const errorText = global.owner.create({tr: (_en, zh) => zh, staticPreview: () => false});
-process.stdout.write(errorText.runFailureText(process.argv[2], {code: process.argv[3]}));
+process.stdout.write(errorText.runFailureText(process.argv[2], {code: process.argv[3], mismatchFields: JSON.parse(process.argv[4])}));
 """
-    result = run_node(node, script, str(Path(web.__file__).parent / "static/js/screens-guided-pi-error-text.js"), code, reason, check=True)
+    result = run_node(node, script, str(Path(web.__file__).parent / "static/js/screens-guided-pi-error-text.js"),
+                      code, reason, json.dumps(projected.get("gate_detail_mismatch_fields", [])), check=True)
     assert words in result.stdout
     assert "分析尚未开始" in result.stdout
     assert "请" in result.stdout
     assert "有一个分析步骤在运行中失败了" not in result.stdout
+
+
+def test_gate_projects_only_known_mismatch_fields():
+    from easyicu.webserver.pi_copilot.projections import gate_detail_projection, project_run_outcome
+
+    detail = {"reason_code": "baseline_association_design_mismatch",
+              "mismatch_fields": ["dependence", "<private coordinate>", "dependence", "exposure_source"]}
+    projected = gate_detail_projection(detail)
+    assert projected["gate_detail_mismatch_fields"] == ["exposure_source", "dependence"]
+    outcome = project_run_outcome({"ok": True, "run_id": "synthetic-run", "gate": {"status": "blocked", "detail": detail}})
+    assert outcome["gate_detail_mismatch_fields"] == projected["gate_detail_mismatch_fields"]
+    for malformed in (None, "dependence", {"dependence": True}, ["<private coordinate>"]):
+        assert "gate_detail_mismatch_fields" not in gate_detail_projection({**detail, "mismatch_fields": malformed})
 
 
 def test_group_sources_are_not_offered_as_adjustment_candidates(tmp_path):

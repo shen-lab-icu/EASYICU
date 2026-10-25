@@ -1056,6 +1056,7 @@ def project_run_outcome(
                 "gate_reason_code",
                 "gate_detail_code",
                 "gate_detail_cause_code",
+                "gate_detail_mismatch_fields",
                 "gate_detail_step_id",
                 "gate_detail_step_title",
                 "gate_transport_retries",
@@ -1735,6 +1736,8 @@ def gate_detail_projection(detail: Any) -> Dict[str, Any]:
     from easyicu.webserver.stop_next_actions import safe_stop_coordinates
 
     counts = safe_stop_coordinates(detail)
+    if "mismatch_fields" in counts:
+        projected["gate_detail_mismatch_fields"] = counts["mismatch_fields"]
     if "transport_retries" in counts:
         projected["gate_transport_retries"] = counts["transport_retries"]
     cause = stable_code(detail.get("cause_code"))

@@ -87,6 +87,7 @@ from .cohort_contract import (
 from .cohort_identity import cohort_identity_columns
 from .dependence_authority import (
     DescriptiveIntervalDecision,
+    context_dependence_authority,
     descriptive_counts_only_required,
     descriptive_interval_decision,
 )
@@ -2057,6 +2058,7 @@ def _compile_adjusted_association(
             exposure_source=exposure,
             analysis_role="primary",
             analysis_set="source_aware",
+            dependence=context_dependence_authority(context),
             required_for_step_success=True,
             covariates=covariates,
             covariate_rationales=covariate_rationales,
@@ -3013,6 +3015,8 @@ def _compile_one_step(
                     str(step.primary_exposure),
                     str(step.outcome),
                     *(item.name for item in step.model_terms),
+                    *(requirement.dependence.group_source for requirement in kwargs["model_requirements"]
+                      if requirement.dependence is not None),
                 ]
             )
         )

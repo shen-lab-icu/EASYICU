@@ -739,6 +739,10 @@ def test_question_roster_seals_into_the_plan_bound_runtime_contract() -> None:
     request = _request(context)
     _, result = _run(context, [json.dumps(_spec_payload(request, adjustment_set=PLANNER_ROSTER))])
     plan = result.output
+    from easyicu.research_agent.planning.dependence_authority import context_dependence_authority
+
+    dependence = context_dependence_authority(context)
+    assert plan.steps[3].model_requirements[0].dependence == dependence
     unsealed = build_current_case_scientific_runtime_authority(
         {
             "schema_version": "easyicu.landmark_categorical_association_runtime_authority/3",
@@ -765,7 +769,7 @@ def test_question_roster_seals_into_the_plan_bound_runtime_contract() -> None:
             "require_alive_at_landmark": True,
             "required_adjustment_columns": [],
             "categorical_adjustment_columns": [],
-            "dependence": None,
+            "dependence": dependence.model_dump(mode="json"),
             "interpretation": "descriptive_prognostic_association_not_causal",
             "association_model_grid": None,
             "plan_bound_adjustment_roster": {

@@ -738,6 +738,7 @@ class ScientificAuthorityRepairError(ProgressivePlanCompileError):
         self, *, authority: CurrentCaseScientificRuntimeAuthority,
         step: AnalysisStep | ProgressiveOutlineStep, index: int, path: str,
         cause_code: str, supports: str | dict[str, Any],
+        mismatch_fields: tuple[str, ...] = (),
     ) -> None:
         detail = {
             "authority_kind": authority.authority_kind,
@@ -753,6 +754,10 @@ class ScientificAuthorityRepairError(ProgressivePlanCompileError):
             step_id=step.step_id, step_index=index, path=path,
             cause_code=cause_code, findings=(detail,),
         )
+        if mismatch_fields:
+            self.easyicu_safe_diagnostic["mismatch_fields"] = [
+                field for field in BaselineAssociationAuthorityError.mismatch_field_names if field in mismatch_fields
+            ]
 
 
 def retryable_planner_error(error: Exception) -> bool:
@@ -851,6 +856,50 @@ def _baseline_coding_repair(
     }
 
 
+def _baseline_dependence_repair(
+    authority: CurrentCaseScientificRuntimeAuthority, plan: AnalysisPlan, context: ResearchContext | None,
+) -> tuple[AnalysisStep, dict[str, Any]] | None:
+    """Offer only a candidate's dependence repair, never a host design change.
+
+    The context and unsealed authority must agree. Validate a counterfactual
+    with only dependence corrected; the caller still returns no repaired plan.
+    """
+    from ..planning.dependence_authority import context_dependence_authority
+
+    if (not isinstance(authority, BaselineAssociationRuntimeAuthority)
+        or authority.model_requirement_sha256 or context is None):
+        return None
+    try:
+        expected = context_dependence_authority(context)
+    except ValueError:
+        return None
+    if expected != authority.dependence:
+        return None
+    primary = [step for step in plan.steps if step.planned_analysis_role == "primary"]
+    if len(primary) != 1 or len(primary[0].model_requirements) != 1:
+        return None
+    step = primary[0]
+    requirement = step.model_requirements[0]
+    if requirement.dependence == authority.dependence:
+        return None
+    corrected = requirement.model_copy(update={"dependence": authority.dependence})
+    trial = plan.model_copy(update={"steps": [
+        item.model_copy(update={"model_requirements": [corrected]}) if item is step else item
+        for item in plan.steps
+    ]})
+    try:
+        trial = AnalysisPlan.model_validate(trial.model_dump(mode="python"))
+        sealed = authority.seal_adjustment_roster(trial)
+        sealed.validate_plan(sealed.bind_plan(trial))
+    except ValueError:
+        return None
+    return step, {
+        "dependence": authority.dependence.model_dump(mode="json") if authority.dependence else None,
+        "instruction": "Copy the host's exact dependence contract for repeated ICU stays within a patient; "
+                       "preserve the population, exposure, outcome, adjustment and all other scientific coordinates.",
+    }
+
+
 def check_authority_plan(
     authorities: ScientificRuntimeAuthorities, plan: AnalysisPlan, context: ResearchContext | None = None,
 ) -> AnalysisPlan:
@@ -875,12 +924,13 @@ def check_authority_plan(
                         authority=authority, step=step, index=index, path="steps",
                         cause_code=error.reason_code, supports=_SPLINE_SUPPORT,
                     ) from error
-        repair = _baseline_coding_repair(authority, plan)
+        repair = _baseline_coding_repair(authority, plan) or _baseline_dependence_repair(authority, plan, context)
         if repair is not None:
             step, supports = repair
             raise ScientificAuthorityRepairError(
                 authority=authority, step=step, index=plan.steps.index(step), path="model_requirements",
                 cause_code=error.reason_code, supports=supports,
+                mismatch_fields=getattr(error, "mismatch_fields", ()),
             ) from error
         raise
     except ValueError as error:

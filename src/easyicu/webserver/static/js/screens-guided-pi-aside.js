@@ -156,7 +156,7 @@
       // A blocked gate that is merely waiting for review is not a failure.
       const failureGate = blocked && /^research_pipeline_|^data_foundation_blocked$|^research_agent_pipeline_failed_closed$/.test(gateReason) ? gateReason : '';
       const failureCode = String(row && (row.error_code || failureGate) || '');
-      const detail = row ? { code: row.gate_detail_code, missing: row.gate_missing_concepts, cause: row.gate_detail_cause_code, statedVariable: row.gate_detail && row.gate_detail.stated_variable } : null;
+      const detail = row ? { code: row.gate_detail_code, missing: row.gate_missing_concepts, cause: row.gate_detail_cause_code, mismatchFields: row.gate_detail_mismatch_fields || (row.gate_detail && row.gate_detail.mismatch_fields), statedVariable: row.gate_detail && row.gate_detail.stated_variable } : null;
       const failure = failureCode
         ? String(typeof host.runFailureText === 'function' ? host.runFailureText(failureCode, detail) || failureCode : failureCode)
         : '';
@@ -211,7 +211,7 @@
         const cause = run.manuscript_outcome && run.manuscript_outcome.status === 'not_passed' && status.key === 'done'
           ? host.manuscriptNotPassedText(run.manuscript_outcome.reason_code)
           : ['failed', 'blocked'].includes(status.key) && run.gate_reason_code && typeof host.runFailureText === 'function'
-          ? String(host.runFailureText(run.gate_reason_code, { code: run.gate_detail_code, missing: run.gate_missing_concepts, cause: run.gate_detail_cause_code, statedVariable: run.gate_detail && run.gate_detail.stated_variable }) || '') : '';
+          ? String(host.runFailureText(run.gate_reason_code, { code: run.gate_detail_code, missing: run.gate_missing_concepts, cause: run.gate_detail_cause_code, mismatchFields: run.gate_detail_mismatch_fields || (run.gate_detail && run.gate_detail.mismatch_fields), statedVariable: run.gate_detail && run.gate_detail.stated_variable }) || '') : '';
         const count = Number(run.artifact_count || 0);
         const title = analysisComplete(run) ? status.label : `${runStage(run)} · ${status.label}`;
         return `<li class="gpi-run-row is-${status.key}${run.authoritative ? ' is-current' : ''}"><span class="gpi-run-mark" aria-hidden="true"></span><div class="gpi-run-copy"><strong>${esc(title)}${run.authoritative ? `<span class="gpi-run-current">${tr('current', '当前')}</span>` : ''}</strong><small>${esc(when(run.updated_at))}${count ? ` · ${count} ${tr('files', '个文件')}` : ''}</small>${cause ? `<small class="gpi-run-cause">${esc(cause)}</small>` : ''}<details data-gpi-run-support><summary>${tr('Technical details', '技术详情')}</summary><code>${esc(run.run_id)}</code></details></div></li>`;
