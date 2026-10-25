@@ -7,9 +7,46 @@ Set-StrictMode -Version Latest
 
 # Each stage names itself and reports its duration, so a timeout says which
 # stage stalled (install, first launch or uninstall) instead of a bare PID.
+# On a timeout, record what the stalled process tree was doing before it is
+# killed: processes and window titles (a modal loader/error dialog shows here),
+# their command lines, and the EasyICU data folder with its logs. The folder is
+# an ASCII path under RUNNER_TEMP so the diagnostics upload can always find it.
+function Save-StallDiagnostics([int]$RootId, [string]$Stage) {
+    $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
+    $out = Join-Path $base 'easyicu-smoke-diag'
+    New-Item -ItemType Directory -Force $out | Out-Null
+    try {
+        $all = @(Get-CimInstance Win32_Process)
+        $ids = @($RootId)
+        for ($round = 0; $round -lt 6; $round++) {
+            $ids = @($ids + @($all | Where-Object { $ids -contains $_.ParentProcessId } | ForEach-Object { $_.ProcessId })) | Select-Object -Unique
+        }
+        $all | Where-Object { $ids -contains $_.ProcessId } |
+            Select-Object ProcessId, ParentProcessId, Name, CreationDate, CommandLine |
+            Format-List | Out-File (Join-Path $out 'process-tree.txt') -Encoding utf8
+        Get-Process | Where-Object { $ids -contains $_.Id -or $_.MainWindowTitle } |
+            Select-Object Id, ProcessName, MainWindowTitle, Responding |
+            Format-Table -AutoSize | Out-File (Join-Path $out 'windows.txt') -Encoding utf8
+        $root = Join-Path $env:LOCALAPPDATA 'EasyICU'
+        if (Test-Path -LiteralPath $root) {
+            Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue |
+                Select-Object FullName, Length, LastWriteTime |
+                Format-Table -AutoSize | Out-File (Join-Path $out 'data-root.txt') -Encoding utf8 -Width 400
+            $logs = Join-Path $root 'logs'
+            if (Test-Path -LiteralPath $logs) { Copy-Item -Path (Join-Path $logs '*') -Destination $out -Force -ErrorAction SilentlyContinue }
+        } else {
+            "No EasyICU data folder at $root" | Out-File (Join-Path $out 'data-root.txt') -Encoding utf8
+        }
+        "$Stage stalled; root process $RootId" | Out-File (Join-Path $out 'stage.txt') -Encoding utf8
+    } catch {
+        "diagnostics failed: $_" | Out-File (Join-Path $out 'diagnostics-error.txt') -Encoding utf8
+    }
+}
+
 function Wait-CheckedProcess($Process, [int]$Timeout, [string]$Stage) {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     if (-not $Process.WaitForExit($Timeout)) {
+        Save-StallDiagnostics $Process.Id $Stage
         & "$env:SystemRoot\System32\taskkill.exe" /PID $Process.Id /T /F | Out-Null
         throw "$Stage timed out after $([int]$clock.Elapsed.TotalSeconds) s (process $($Process.Id))"
     }
