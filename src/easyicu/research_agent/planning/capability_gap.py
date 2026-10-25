@@ -20,7 +20,7 @@ from typing import Any, Callable, Literal, NamedTuple, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..authority.declared_levels import closed_planning_levels_for
-from ..schema import ResearchContext
+from ..schema import ConceptDescriptor, ResearchContext
 from ..trajectory.plan_contract import trajectory_context_is_bound
 from .family_spec.request import sealed_trajectory_suite_coordinates
 from .progressive_contract import (
@@ -160,10 +160,124 @@ def capability_gap_confirmation_facts(
         "temporal_constraints": [item.model_dump(mode="json", exclude={"raw_text", "executable_repr"})
                                  for item in context.temporal_constraints],
         "fixed_window_association": fixed_window_association_facts(context),
+        "stay_level_representation": stay_level_representation_facts(context),
         **{field: [item.model_dump(mode="json") for item in context_stated_variables(context, field)]
            for field in STATED_VARIABLE_FIELDS},
     }
     return "Host facts for capability-gap confirmation:\n" + json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
+
+
+def stay_level_representation_facts(context: ResearchContext) -> dict[str, Any] | None:
+    """Prove the question's required values fit one record per ICU stay.
+
+    Only bound question variables and required adjustment/subgroup receipts
+    participate; an optional roster column does not add a requirement. Read
+    source prohibitions, materialization receipts and stay-value kinds through
+    their owners. Neither a time window in prose nor a summary-like suffix on
+    prepared data establishes a summary. This is representation evidence, not
+    approval of time alignment, prediction eligibility or patient dependence.
+    """
+
+    from ..concept_availability import variable_source_unavailability
+    from ..contracts.concept_values import names_without_values
+    from .adjustment_authority import (
+        AdjustmentSetAuthority, STATED_VARIABLE_FIELDS, context_stated_variables,
+        stated_adjustment_columns,
+    )
+    from .analysis_types import infer_analysis_type, longitudinal_trajectory_requested
+
+    if longitudinal_trajectory_requested(context) or len(context.cohort.id_columns) != 1:
+        return None
+    required = {name for name in (context.primary_exposure, context.target_outcome) if name}
+    if not required:
+        return None
+    authority = AdjustmentSetAuthority.from_context(context)
+    if authority.selection == "exact":
+        required.update(authority.operational_covariates)
+    for field in STATED_VARIABLE_FIELDS:
+        for item in context_stated_variables(context, field):
+            columns = stated_adjustment_columns(context, item)
+            if not columns and item.concept:
+                # Representation sufficiency does not impose model-term
+                # eligibility: a grouping may itself be a stay's outcome.
+                columns = tuple(variable.name for variable in context.variables
+                                if item.concept in {variable.name, variable.source_concept})
+            if item.source_status != "available" or not columns:
+                return None
+            required.update(columns)
+    unavailable = names_without_values(context)
+    stay_values: list[str] = []
+    summaries: list[dict[str, Any]] = []
+    for name in sorted(required):
+        variable = context.variable(name)
+        if (
+            variable is None
+            or variable_source_unavailability(variable, context.cohort.database)
+            or {variable.name, variable.source_concept, *variable.derived_from_concepts} & unavailable
+        ):
+            return None
+        representation = _stay_variable_representation(context, variable)
+        if representation is None:
+            return None
+        if representation:
+            summaries.append(representation)
+        else:
+            stay_values.append(name)
+    family = infer_analysis_type(context).key
+    summary_labels = [
+        f"{item['column']} ({item['summary']} over {item['window_hours'][0]:g}-{item['window_hours'][1]:g} h "
+        f"from {item['anchor']})"
+        for item in summaries
+    ]
+    return {
+        "analysis_family": family,
+        "stay_level_variables": stay_values, "window_summary_variables": summaries,
+        "requires_longitudinal_representation": False,
+        "planning_rule": (
+            f"{family} can use stay-level variables {stay_values} and fixed-window summaries {summary_labels} "
+            "without repeated measurements. Preserve the question's outcome, grouping and predictors. "
+            "Check time alignment, eligibility and patient dependence separately; "
+            "their unresolved status does not establish a longitudinal representation requirement."
+        ),
+    }
+
+
+def _stay_variable_representation(context: ResearchContext, variable: ConceptDescriptor) -> dict[str, Any] | None:
+    """A supplied summary receipt, an empty stay-value receipt, or no proof."""
+
+    from ..cohort.materializer import EVENT_SUMMARIES, summary_column_name
+    from ..research_context.materialization_window import column_materialized_window
+    from ..research_context.stay_events import column_kind, stay_outcome_columns
+    from .exposure_group_compile import grouping_sources, planned_on_metadata
+
+    concept = variable.source_concept or variable.name
+    summary = next((
+        item for item in sorted(EVENT_SUMMARIES)
+        if variable.unit_normalization == f"window_numeric_{item}"
+        or (planned_on_metadata(context) and variable.name == summary_column_name(concept, item))
+    ), None)
+    if summary is not None:
+        window = column_materialized_window(context, variable.name)
+        if (
+            window is None or window.anchor is None
+            or window.start_hours is None or window.end_hours is None
+            or not all(math.isfinite(hour) for hour in (window.start_hours, window.end_hours))
+            or not window.start_hours < window.end_hours
+        ):
+            return None
+        if variable.unit_normalization != f"window_numeric_{summary}" and not any(
+            source.concept == concept and summary in source.summaries
+            and source.window == (window.start_hours, window.end_hours)
+            for source in grouping_sources(context)
+        ):
+            return None
+        return {"column": variable.name, "summary": summary, "anchor": window.anchor,
+                "window_hours": [window.start_hours, window.end_hours]}
+    if variable.unit_normalization == "stay_level_unique_value" or column_kind(
+        variable, column=variable.name, concept=concept, outcomes=stay_outcome_columns(context),
+    ) != "window_summary":
+        return {}
+    return None
 
 
 def fixed_window_association_facts(context: ResearchContext) -> dict[str, Any] | None:
@@ -346,6 +460,8 @@ def check_capability_gap(
             )
         return CapabilityGapCheck("verified", "this study uses one source")
     if gap.requirement == "longitudinal_representation_unavailable":
+        from .analysis_types import longitudinal_trajectory_requested
+
         if (
             trajectory_context_is_bound(context)
             or sealed_trajectory_suite_coordinates(planning_contract_context)
@@ -354,11 +470,21 @@ def check_capability_gap(
             return CapabilityGapCheck(
                 "unverified", "this study has a longitudinal representation"
             )
-        fixed_window = fixed_window_association_facts(context)
-        if fixed_window is not None:
-            return CapabilityGapCheck("unverified", fixed_window["planning_rule"])
+        if longitudinal_trajectory_requested(context):
+            return CapabilityGapCheck(
+                "verified", "the question requests within-stay trajectories or repeated measurements, "
+                "and this study has no longitudinal representation",
+            )
+        scalar = stay_level_representation_facts(context)
+        if scalar is not None:
+            fixed_window = fixed_window_association_facts(context)
+            fact = scalar["planning_rule"]
+            if fixed_window is not None:
+                fact += " " + fixed_window["planning_rule"]
+            return CapabilityGapCheck("unverified", fact)
         return CapabilityGapCheck(
-            "verified", "this study has no longitudinal representation"
+            "unverifiable", "this study has no longitudinal representation, but the host has no evidence "
+            "that the question requires within-stay trajectories or repeated measurements",
         )
     return CapabilityGapCheck(
         "unverifiable", f"the host has no typed evidence about {gap.requirement}"
@@ -374,5 +500,6 @@ __all__ = [
     "capability_gap_stop",
     "check_capability_gap",
     "fixed_window_association_facts",
+    "stay_level_representation_facts",
     "threshold_grouping_expressible",
 ]

@@ -307,7 +307,8 @@ def test_an_outline_without_a_gap_keeps_its_digest() -> None:
             {"cross_database_validation": ["eicu"]},
             "unverified",
         ),
-        ("longitudinal_representation_unavailable", None, {}, "verified"),
+        # Absence of a representation does not prove the question requires it.
+        ("longitudinal_representation_unavailable", None, {}, "unverifiable"),
         ("estimand_unsupported", None, {}, "unverifiable"),
         ("design_element_unsupported", None, {}, "unverifiable"),
     ],
