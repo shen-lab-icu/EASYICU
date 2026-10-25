@@ -83,7 +83,7 @@ def test_historical_engineering_run_fails_closed_for_publication(
         "idea": "not_assessed",
         "literature": "blocked",
         "data": "review_required",
-        "analysis": "blocked",
+        "analysis": "review_required",
         "manuscript": "blocked",
     }
     assert projection.facts["literature"]["search_conducted"] is False

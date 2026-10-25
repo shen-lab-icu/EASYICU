@@ -28,13 +28,10 @@ table carry the locked header. That set is small today because the owner is
 new, and it is every future run: the header is fixed the moment the host does
 the fit.
 
-NOTHING ELSE IS READABLE, SO NOTHING ELSE IS ADMITTED. Three recorded steps
-bind a second table alongside the estimates -- a sensitivity grid, an
-absolute-risk table. Both are Coder-authored and were measured at six distinct
-headers between them, so this renderer cannot draw them, and per
-:class:`TypedInputCapability` an input it cannot read is a refusal rather than
-something to ignore: a step binding a second table is asking for a figure that
-shows it.
+The overview also accepts a registered absolute-risk product when it carries
+the distribution owner's complete schema. Names alone do not authorize a
+second panel: a standardized risk or sensitivity table has a different shape
+and cannot be relabelled as observed group risk.
 """
 
 from __future__ import annotations
@@ -93,6 +90,16 @@ ASSOCIATION_OVERVIEW_FIGURE_INPUTS = (
     "table:exposure_outcome_distribution",
     ADJUSTED_ASSOCIATION_FIGURE_INPUT,
 )
+_OBSERVED_RISK_INPUTS = frozenset({ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0], "table:absolute_risk_context"})
+
+
+def _overview_inputs(step: AnalysisStep) -> tuple[str, str]:
+    """Keep the plan's product identity; ownership also checks its schema."""
+    risks = set(step.inputs) & _OBSERVED_RISK_INPUTS
+    if len(risks) != 1 or len(step.inputs) != 2 or ADJUSTED_ASSOCIATION_FIGURE_INPUT not in step.inputs:
+        raise ValueError("association overview requires one observed-risk product and one estimates product")
+    return next(iter(risks)), ADJUSTED_ASSOCIATION_FIGURE_INPUT
+
 
 #: The producer's own header, imported rather than restated. A second copy here
 #: would be a header this renderer believes in that the producer has stopped
@@ -163,7 +170,11 @@ def _binding_is_host_contract(binding: Any) -> bool:
     return _HOST_CONTRACT_COLUMNS <= set(columns)
 
 
-def _association_panels(planned: Sequence[PlannedFigurePanelSpec | Mapping[str, Any]], *, figure_product: str, overview: bool = False) -> list[PlannedFigurePanelSpec]:
+def _association_panels(
+    planned: Sequence[PlannedFigurePanelSpec | Mapping[str, Any]], *,
+    figure_product: str, overview: bool = False,
+    distribution_input: str = ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0],
+) -> list[PlannedFigurePanelSpec]:
     """Bind only chart/source combinations actually drawn by this renderer."""
     specs = [PlannedFigurePanelSpec.model_validate(panel) for panel in planned]
     presentation_from_panels(specs)
@@ -185,7 +196,7 @@ def _association_panels(planned: Sequence[PlannedFigurePanelSpec | Mapping[str, 
         contracts.insert(
             0,
             (
-                ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0],
+                distribution_input,
                 {"event_rate_panel"},
                 {"absolute_risk_context", "descriptive_result"},
                 "event_rate_panel",
@@ -238,6 +249,7 @@ def association_figure_design_verdict(
             step.figure_panels,
             figure_product=str(step.expected_outputs[0]).partition(":")[2],
             overview=overview,
+            distribution_input=_overview_inputs(step)[0] if overview else ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0],
         )
     except (ValueError, IndexError) as exc:
         return OwnershipVerdict.wrong_shape(kind, reason=str(exc))
@@ -302,15 +314,19 @@ def association_overview_figure_executor_owns_step(
     """Own a two-table overview when both upstream owners are verified."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
+    try:
+        inputs = _overview_inputs(step)
+    except ValueError:
+        return False
     if not (
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
-        and set(step.inputs) == set(ASSOCIATION_OVERVIEW_FIGURE_INPUTS)
-        and len(step.inputs) == len(ASSOCIATION_OVERVIEW_FIGURE_INPUTS)
+        and all(any(contract.input_key == key and contract.mode == "all_rows"
+                    for contract in step.input_consumption_contracts) for key in inputs)
         and len(products) == 1
         and products[0] is not None
         and isinstance(resolved_bindings, Mapping)
-        and set(resolved_bindings) == set(ASSOCIATION_OVERVIEW_FIGURE_INPUTS)
+        and set(resolved_bindings) == set(inputs)
         and _binding_is_host_contract(
             resolved_bindings.get(ADJUSTED_ASSOCIATION_FIGURE_INPUT)
         )
@@ -318,11 +334,11 @@ def association_overview_figure_executor_owns_step(
         return False
     try:
         _association_panels(
-            step.figure_panels, figure_product=products[0], overview=True
+            step.figure_panels, figure_product=products[0], overview=True, distribution_input=inputs[0]
         )
     except ValueError:
         return False
-    distribution = resolved_bindings.get(ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0])
+    distribution = resolved_bindings.get(inputs[0])
     contract = distribution.get("product_contract") if isinstance(distribution, Mapping) else None
     columns = contract.get("columns") if isinstance(contract, Mapping) else None
     return isinstance(columns, list) and set(
@@ -338,8 +354,9 @@ def association_overview_figure_executor_code(
     product = _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
     if product is None:
         raise ValueError("association overview has no canonical figure product")
+    inputs = _overview_inputs(step)
     panels = _association_panels(
-        step.figure_panels, figure_product=product, overview=True
+        step.figure_panels, figure_product=product, overview=True, distribution_input=inputs[0]
     )
     return textwrap.dedent(
         f"""
@@ -355,6 +372,7 @@ def association_overview_figure_executor_code(
             figure_product={product!r},
             panel_specs={[panel.model_dump(mode="json") for panel in panels]!r},
             display_labels={dict(display_labels or {})!r},
+            distribution_input={inputs[0]!r},
         )
         """
     ).strip()
@@ -623,15 +641,19 @@ def run_association_overview_figure(
     figure_product: str,
     panel_specs: list[dict[str, Any]] | None = None,
     display_labels: Mapping[str, str] | None = None,
+    distribution_input: str = ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0],
 ) -> Mapping[str, Any]:
     """Render absolute group outcomes beside the host-owned adjusted effect."""
 
     if not re.fullmatch(r"[a-z][a-z0-9_]*", figure_product or ""):
         raise ValueError("figure product must be one canonical lowercase token")
+    if distribution_input not in _OBSERVED_RISK_INPUTS:
+        raise ValueError("unsupported observed-risk input")
+    inputs = (distribution_input, ADJUSTED_ASSOCIATION_FIGURE_INPUT)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     panels = _association_panels(
-        panel_specs or [], figure_product=figure_product, overview=True
+        panel_specs or [], figure_product=figure_product, overview=True, distribution_input=distribution_input
     )
     estimates, estimate_binding = _load_estimates(
         run_dir=Path(run_dir),
@@ -639,17 +661,20 @@ def run_association_overview_figure(
         step_id=step_id,
     )
     distribution = load_typed_input(
-        input_key=ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0],
+        input_key=distribution_input,
         run_dir=Path(run_dir),
         resolved_inputs=resolved_inputs,
         step_id=step_id,
         expected_declared_kind="table",
         expected_evidence_kind="table",
-        expected_columns=EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS,
         require_consumption_contract=True,
         consumption_mode="all_rows",
         minimum_row_count=2,
     )
+    # Signed producers may append provenance columns. The loader verifies the
+    # complete registered schema against bytes; require every field we read.
+    if not set(EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS).issubset(distribution.columns):
+        raise ValueError("observed-risk product lacks the distribution owner's schema")
     groups = distribution.frame.loc[
         distribution.frame["row_role"].astype(str) == "exposure_level"
     ].copy()
@@ -669,6 +694,16 @@ def run_association_overview_figure(
 
     exposure = _sole(estimates, "exposure")
     outcome = _sole(estimates, "outcome")
+    if distribution_input == "table:absolute_risk_context":
+        overall = distribution.frame.loc[distribution.frame["row_role"].eq("overall")]
+        if (
+            _sole(distribution.frame, "exposure_column") != exposure
+            or _sole(distribution.frame, "outcome_column") != outcome
+            or len(overall) != 1
+            or not estimates["n"].eq(overall["outcome_denominator"].iloc[0]).all()
+            or not estimates["n_events"].eq(overall["outcome_events"].iloc[0]).all()
+        ):
+            raise ValueError("absolute-risk context disagrees with the primary population")
     scale = describe_effect_scale(_sole(estimates, "effect_scale"))
     rows = estimates.copy()
     rows["__estimate"] = [_finite(value) for value in rows["estimate"]]
@@ -745,7 +780,10 @@ def run_association_overview_figure(
         )
         for value in groups["exposure_level"]
     ]
-    ax.set_xticks(positions, group_labels)
+    ax.set_xticks(positions, [
+        f"{label}\n({int(events)}/{int(denominator)})"
+        for label, events, denominator in zip(group_labels, groups["outcome_events"], groups["outcome_denominator"], strict=True)
+    ])
     ax.set_xlabel(_reader_label(exposure))
     ax.set_ylabel("Percent")
     ax.set_title("Absolute prevalence and outcome risk", loc="left", pad=8)
@@ -801,7 +839,7 @@ def run_association_overview_figure(
                 "panel_id": panels[0].panel_id,
                 "title": "Absolute distribution",
                 "role": panels[0].article_role,
-                "claim": "Exposure prevalence and observed outcome risk by declared exposure level.",
+                "claim": "Exposure prevalence and observed outcome risk by declared exposure level, with events/denominator.",
                 "evidence_ids": [evidence_ids[0]],
                 "metadata": {
                     "source_data": [distribution_source.name],
@@ -825,7 +863,7 @@ def run_association_overview_figure(
         source_data=[distribution_source.name, estimate_source.name],
         reader_caption=(
             "(A) Exposure prevalence and observed outcome risk by the declared "
-            "exposure groups. (B) Host-fitted association estimates with their "
+            "exposure groups; labels show events/outcome denominator. (B) Host-fitted association estimates with their "
             f"confidence intervals. {adjustment} "
             "All values and intervals reproduce the bound analysis tables; "
             "the figure does not fit another model."
@@ -854,9 +892,9 @@ def run_association_overview_figure(
         "figure_presentation": presentation.model_dump(mode="json")
         if presentation
         else None,
-        "source_inputs": list(ASSOCIATION_OVERVIEW_FIGURE_INPUTS),
+        "source_inputs": list(inputs),
         "source_evidence_ids": dict(
-            zip(ASSOCIATION_OVERVIEW_FIGURE_INPUTS, evidence_ids, strict=True)
+            zip(inputs, evidence_ids, strict=True)
         ),
         "source_data_files": [distribution_source.name, estimate_source.name],
         "figure_files": [

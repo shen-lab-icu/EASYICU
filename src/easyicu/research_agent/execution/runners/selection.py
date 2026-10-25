@@ -37,7 +37,6 @@ from .adjusted_association_executor import (
 )
 from .adjusted_association_figure_executor import (
     ADJUSTED_ASSOCIATION_FIGURE_INPUT,
-    ASSOCIATION_OVERVIEW_FIGURE_INPUTS,
     association_figure_design_verdict,
     adjusted_association_figure_executor_code,
     adjusted_association_figure_executor_owns_step,
@@ -872,7 +871,7 @@ def _build_registry() -> StepExecutorRegistry:
             analysis_kind="association_overview_figure",
             selection_reason="association_overview_figure_contract_preflight",
             progress_message="Using source-bound association overview renderer",
-            consumed_input_keys=lambda _c: ASSOCIATION_OVERVIEW_FIGURE_INPUTS,
+            consumed_input_keys=lambda c: tuple(c.step.inputs),
             host_sealed_renderer=True,
             blocks_on_plausibility_receipt=True,
         ),

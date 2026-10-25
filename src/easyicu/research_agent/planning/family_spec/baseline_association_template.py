@@ -100,7 +100,8 @@ def build_baseline_association_skeleton(
             " Report stratum estimates and the interaction test from this same model." if subgroups else ""
         ),
         "absolute_risk_context": "Report absolute risks and risk differences in the primary model population, cross-checked against counts.",
-        "visualization": "Present the primary association and any stated stratum estimates in one figure.",
+        "visualization": "Present the primary association and any stated stratum estimates in one figure."
+        + (" Pair them with observed outcome risks and denominators by exposure group." if not continuous else ""),
         "report": "Report sources, cohort flow, denominators, estimates and limitations under the observational conclusion ceiling.",
     }
     dependencies = {
@@ -174,7 +175,8 @@ def build_baseline_association_skeleton(
         ),
         ProgressiveSkeletonStep(
             **common("visualization"), raw_inputs=[],
-            product_inputs=[_ref("adjusted_association", "table:adjusted_association_estimates")],
+            product_inputs=[_ref("adjusted_association", "table:adjusted_association_estimates"),
+                            *([] if continuous else [_ref("absolute_risk_context", "table:absolute_risk_context")])],
             outputs=[ProgressiveOutputIntent(product_id="figure:visualization", semantic_role="figure")],
         ),
         ProgressiveSkeletonStep(
