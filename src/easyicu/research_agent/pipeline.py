@@ -2752,6 +2752,21 @@ class ResearchAgentPipeline:
         plan_generation_mode = generation.plan_generation_mode
         used_mock_llm = generation.used_mock_llm
         planner_prompt_metrics = generation.planner_prompt_metrics
+        # One boundary for every plan source: LLM, deterministic skill and
+        # digest-verified resume. Planner parsing also binds early for prompt
+        # diagnostics, but execution authority cannot depend on which producer
+        # happened to create the plan.
+        bound_dependence_plan = bind_context_dependence_authority(
+            plan=plan,
+            context=agent_context,
+        )
+        if reused_prior_plan and bound_dependence_plan != plan:
+            raise DependenceAuthorityError(
+                "digest-verified resume plan lacks the current repeated-unit "
+                "authority projection; start a fresh plan rather than changing "
+                "a previously executed plan in memory"
+            )
+        plan = bound_dependence_plan
         host_normalization_input = plan.model_copy(deep=True)
         # Skip the plan-shaping transforms when resuming: the saved plan is
         # already in its final, transformed form, and re-running split/cap/
@@ -2773,21 +2788,6 @@ class ResearchAgentPipeline:
                 long_trajectory_bound=long_trajectory_bound,
                 findings=findings,
             )
-        # One boundary for every plan source: LLM, deterministic skill and
-        # digest-verified resume. Planner parsing also binds early for prompt
-        # diagnostics, but execution authority cannot depend on which producer
-        # happened to create the plan.
-        bound_dependence_plan = bind_context_dependence_authority(
-            plan=plan,
-            context=agent_context,
-        )
-        if reused_prior_plan and bound_dependence_plan != plan:
-            raise DependenceAuthorityError(
-                "digest-verified resume plan lacks the current repeated-unit "
-                "authority projection; start a fresh plan rather than changing "
-                "a previously executed plan in memory"
-            )
-        plan = bound_dependence_plan
         # The runtime contract may defer its adjustment roster to the reviewed
         # plan. Seal it here, once, for every plan source, and keep the sealed
         # authorities on the pipeline so validation, execution, review, and
@@ -3107,7 +3107,7 @@ class ResearchAgentPipeline:
         self, *, context: ResearchContext, run_dir: Path, cohort_path: Path, run_id: str,
         emit_progress: Callable[..., None],
     ) -> None:
-        """Yield a source spline authority to the groups this planning run formed."""
+        """Reconcile the source authority with the groups this planning run formed."""
 
         authorities = self._scientific_runtime_authorities.for_planning_context(
             context=context, run_dir=run_dir, cohort_path=cohort_path
@@ -3115,11 +3115,11 @@ class ResearchAgentPipeline:
         if authorities is self._scientific_runtime_authorities:
             return
         self._scientific_runtime_authorities = authorities
-        # The source projection is no longer this plan's runtime contract.
-        self._scientific_runtime_projection_sha256 = None
+        # Re-signing keeps the launch receipt; releasing an authority releases it.
+        self._scientific_runtime_projection_sha256 = self._scientific_runtime_projection_sha256 if authorities.current_case is not None else None
         emit_progress(
             "context",
-            "The grouped primary exposure is planned without the continuous spline authority.",
+            "Reconciled the planning authority with the grouped primary exposure.",
             run_id=run_id,
         )
 

@@ -492,6 +492,18 @@
         );
       }
       const detailCopy = {
+        association_adjustment_exposure_conflict: tr(
+          'The requested adjustment includes the exposure itself or a variable used to form its groups. Planning stopped; analysis has not started. Specify a distinct adjustment variable, or revise the exposure grouping, then generate the plan again.',
+          '要求调整的变量包含暴露本身，或用于形成暴露分组的原始变量。规划已停止，分析尚未开始。请改用与暴露不同的调整变量，或修改暴露分组，再重新生成计划。',
+        ),
+        baseline_association_roster_mismatch: tr(
+          'The plan added, removed or reordered adjustment variables from the confirmed set. Planning stopped; analysis has not started. Check the adjustment variables in the study settings, then generate the plan again.',
+          '计划中的调整变量与已确认的列表不一致，存在增加、遗漏或顺序变化。规划已停止，分析尚未开始。请核对研究设置中的调整变量，再重新生成计划。',
+        ),
+        baseline_association_design_mismatch: tr(
+          'The plan does not match the confirmed exposure, outcome, group comparison or patient-clustering design. Planning stopped; analysis has not started. Check these study settings and generate the plan again; keep the failure record if it stops again.',
+          '计划中的暴露、结局、分组比较或患者聚类设置与已确认的设计不一致。规划已停止，分析尚未开始。请核对这些研究设置后重新生成计划；如再次停止，请保留失败记录供排查。',
+        ),
         declared_exposure_level_empty: tr(
           'A declared group has no analysable stays, so the run stopped; generate a new plan that checks eligibility and preserves every group.',
           '计划中的一个分组没有可分析的住院，因此运行已停止，请重新生成计划，检查入组条件并保留所有分组。',

@@ -910,6 +910,7 @@ _RUNNER_IMAGE_MISMATCH_REASONS = frozenset(
 def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
     """Project one allowlisted owner diagnostic without exception text."""
 
+    from easyicu.research_agent.authority.baseline_association_runtime import BaselineAssociationAuthorityError
     from easyicu.research_agent.authority.current_case_scientific_runtime import (
         CurrentCaseScientificAuthorityError,
     )
@@ -942,15 +943,16 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
         }
 
     for item in _pipeline_exception_chain(exc):
-        if isinstance(item, CurrentCaseScientificAuthorityError):
+        if isinstance(item, (CurrentCaseScientificAuthorityError, BaselineAssociationAuthorityError)):
             return {
                 "owner": "easyicu.current_case_scientific_authority_v1",
                 "reason_code": (
                     item.reason_code
-                    if item.reason_code == "landmark_spline_binary_sensitivity_unsupported"
+                    if item.reason_code in BaselineAssociationAuthorityError.reason_codes
+                    or item.reason_code == "landmark_spline_binary_sensitivity_unsupported"
                     else "current_case_scientific_authority_invalid"
                 ),
-                "exception_type": "CurrentCaseScientificAuthorityError",
+                "exception_type": type(item).__name__,
             }
         if isinstance(item, ValidationError):
             coordinates: List[Dict[str, Any]] = []

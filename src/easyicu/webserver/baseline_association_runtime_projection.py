@@ -25,6 +25,7 @@ def compile_baseline_association_runtime_projection(
     from .research_launch_scientific import launch_materialization_window
     from easyicu.research_agent.research_context.builder import _apply_materialized_column_metadata
     import pyarrow.parquet as pq
+    import pyarrow as pa
     from easyicu.research_agent.planning.analysis_types import canonical_analysis_family
 
     design = study.get("analysis_design") or {}
@@ -32,12 +33,18 @@ def compile_baseline_association_runtime_projection(
         or not primary_exposure or not target_outcome or not target_is_event_status):
         return None
     schema = pq.read_schema(universe_path)
+    grouped = _bound_exposure_group(exposure_groupings, primary_exposure=primary_exposure,
+                                    primary_exposure_source=primary_exposure_source)
+    if grouped and primary_exposure not in schema.names:
+        from easyicu.research_agent.contracts.exposure_group_rules import read_grouping_rules
+
+        if not set(read_grouping_rules(grouped.parameters).read_columns).issubset(schema.names):
+            return None
+        schema = schema.append(pa.field(primary_exposure, pa.int64()))
     if primary_exposure not in schema.names or target_outcome not in schema.names:
         return None
     verified = load_verified_materialized_cohort_authority(universe_path)
     bindings = verified.sidecar.files[0].columns if verified else {}
-    grouped = _bound_exposure_group(exposure_groupings, primary_exposure=primary_exposure,
-                                    primary_exposure_source=primary_exposure_source)
     source = primary_exposure_source or primary_exposure
     variables = []
     for field in schema:

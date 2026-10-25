@@ -2045,16 +2045,26 @@ def _association_adjustment(
     from dataclasses import replace
 
     from ..adjustment_authority import (
-        context_stated_adjustments,
+        context_stated_adjustments, exposure_adjustment_columns,
         host_proven_temporal_roles, stated_adjustment_columns,
     )
+    from ...authority.baseline_association_runtime import BaselineAssociationAuthorityError
 
     available = set(_structurally_available_roster(context, roster))
     adjustment = AdjustmentSetAuthority.from_context(context)
+    forbidden = exposure_adjustment_columns(context)
+    def require_distinct(columns):
+        if forbidden.intersection(columns):
+            raise BaselineAssociationAuthorityError(
+                "The requested adjustment includes the exposure or a source used to form its groups.",
+                reason_code="association_adjustment_exposure_conflict",
+            )
+    require_distinct(adjustment.operational_covariates)
     stated = context_stated_adjustments(context)
     columns = []
     for item in stated:
         matched = [name for name in stated_adjustment_columns(context, item) if name in available]
+        require_distinct(matched)
         if item.source_status != "available" or len(matched) != 1:
             raise FamilySpecError("family_spec_stated_adjustment_unavailable",
                                   f"The question asks to adjust for {item.variable!r}, but the extracted data has no single column for it.",
