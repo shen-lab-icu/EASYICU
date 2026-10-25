@@ -15,18 +15,27 @@ function Save-StallDiagnostics([int]$RootId, [string]$Stage) {
     $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
     $out = Join-Path $base 'easyicu-smoke-diag'
     New-Item -ItemType Directory -Force $out | Out-Null
+    "$Stage stalled; root process $RootId" | Out-File (Join-Path $out 'stage.txt') -Encoding utf8
+    # Each section is independent: one failure must not hide the others.
+    $ids = New-Object 'System.Collections.Generic.HashSet[int]'
+    [void]$ids.Add($RootId)
     try {
         $all = @(Get-CimInstance Win32_Process)
-        $ids = @($RootId)
         for ($round = 0; $round -lt 6; $round++) {
-            $ids = @($ids + @($all | Where-Object { $ids -contains $_.ParentProcessId } | ForEach-Object { $_.ProcessId })) | Select-Object -Unique
+            foreach ($process in $all) {
+                if ($ids.Contains([int]$process.ParentProcessId)) { [void]$ids.Add([int]$process.ProcessId) }
+            }
         }
-        $all | Where-Object { $ids -contains $_.ProcessId } |
+        $all | Where-Object { $ids.Contains([int]$_.ProcessId) } |
             Select-Object ProcessId, ParentProcessId, Name, CreationDate, CommandLine |
             Format-List | Out-File (Join-Path $out 'process-tree.txt') -Encoding utf8
-        Get-Process | Where-Object { $ids -contains $_.Id -or $_.MainWindowTitle } |
+    } catch { "process tree failed: $_" | Out-File (Join-Path $out 'process-tree-error.txt') -Encoding utf8 }
+    try {
+        Get-Process | Where-Object { $ids.Contains($_.Id) -or $_.MainWindowTitle } |
             Select-Object Id, ProcessName, MainWindowTitle, Responding |
-            Format-Table -AutoSize | Out-File (Join-Path $out 'windows.txt') -Encoding utf8
+            Format-Table -AutoSize | Out-File (Join-Path $out 'windows.txt') -Encoding utf8 -Width 300
+    } catch { "windows failed: $_" | Out-File (Join-Path $out 'windows-error.txt') -Encoding utf8 }
+    try {
         $root = Join-Path $env:LOCALAPPDATA 'EasyICU'
         if (Test-Path -LiteralPath $root) {
             Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue |
@@ -37,10 +46,7 @@ function Save-StallDiagnostics([int]$RootId, [string]$Stage) {
         } else {
             "No EasyICU data folder at $root" | Out-File (Join-Path $out 'data-root.txt') -Encoding utf8
         }
-        "$Stage stalled; root process $RootId" | Out-File (Join-Path $out 'stage.txt') -Encoding utf8
-    } catch {
-        "diagnostics failed: $_" | Out-File (Join-Path $out 'diagnostics-error.txt') -Encoding utf8
-    }
+    } catch { "data root failed: $_" | Out-File (Join-Path $out 'data-root-error.txt') -Encoding utf8 }
 }
 
 function Wait-CheckedProcess($Process, [int]$Timeout, [string]$Stage) {
