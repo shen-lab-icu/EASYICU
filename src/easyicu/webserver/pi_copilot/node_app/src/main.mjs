@@ -1410,7 +1410,7 @@ async function createSession(params) {
 }
 
 async function promptSession(requestId, params) {
-  assertExactKeys(params, new Set(["session_id", "message", "streaming_behavior", "intent", "idea_source", "message_origin"]), "pi_prompt_invalid");
+  assertExactKeys(params, new Set(["session_id", "message", "intent", "idea_source", "message_origin"]), "pi_prompt_invalid");
   const sessionId = boundedText(params.session_id, 160).trim();
   const message = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();

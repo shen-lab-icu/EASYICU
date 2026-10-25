@@ -20,7 +20,7 @@
       authorizeDataSource, sendText, continueAfterDataSourceConfirmation,
       governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
       togglePresentationPin, configureProvider, rememberSession, recordHostAction,
-      HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP,
+      HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP, MESSAGE_QUEUE,
     } = options;
 
     // Outside presses, Escape, and opening another menu are handled for every
@@ -450,6 +450,8 @@
           if (input) { input.focus(); input.scrollIntoView({ block: 'nearest' }); }
           return;
         }
+        const queuedCancel = event.target.closest('[data-gpi-cancel-followup]');
+        if (queuedCancel) { MESSAGE_QUEUE.cancel(queuedCancel.dataset.gpiCancelFollowup); return; }
         if (event.target.closest('[data-gpi-send]')) { sendMessage(); return; }
         if (event.target.closest('[data-gpi-stop]')) { stopMessage(); return; }
         const childStop = event.target.closest('[data-gpi-cancel-child-job]');

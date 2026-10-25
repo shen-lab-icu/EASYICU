@@ -1,0 +1,6 @@
+/* Queued text belongs to the conversation composer. */
+.gpi-followup-queue { display: grid; gap: 6px; padding: 10px 12px; }
+.gpi-followup-queue > div { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.gpi-followup-queue span { flex: 1; min-width: 0; }
+.gpi-followup-queue strong, .gpi-followup-queue small { display: block; font-size: 12px; }
+.gpi-followup-queue small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .75; }

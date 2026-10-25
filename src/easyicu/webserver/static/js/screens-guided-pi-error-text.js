@@ -54,6 +54,9 @@
   function create({ tr, staticPreview }) {
     function errorText(error) {
       if (!error) return '';
+      if (error.code === 'pi_followup_queue_full') return tr('Up to four follow-ups can wait. Remove one or wait for the current reply.', '最多排队四条消息，请移除一条或等待当前回复。');
+      if (error.code === 'pi_followup_action_requires_idle' || error.code === 'pi_followup_plain_message_required') return tr('Queue a question or comment here. Send approvals, action requests, and source changes after the reply finishes.', '这里可排队提问或补充说明；请在当前回复结束后发送批准、执行请求或数据源变更。');
+      if (error.code === 'pi_followup_store_unavailable') return tr('The saved message queue could not be read. Wait for the current reply before sending.', '无法读取已保存的消息队列，请等待当前回复结束后再发送。');
       const resumeFailure = developmentResumeFailureText(error.code)
         || developmentResumeFailureText(error.message)
         || developmentResumeFailureText(typeof error === 'string' ? error : '');

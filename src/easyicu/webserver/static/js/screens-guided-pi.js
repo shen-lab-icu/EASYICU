@@ -445,6 +445,9 @@
     resubmitHostGenerated: PLAN_ACTIONS.resubmitHostGenerated,
     host: () => state.host,
   });
+  const MESSAGE_QUEUE = MODULES.require('messageQueue').create({
+    state, api, projectId, render, refreshSession, watchJob, errorText,
+  });
   const EVENTS = MODULES.require('events').create({
     state, RESOURCE_OWNER, RUN_FILES, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
     DATA_CONSENT, RUN_OUTCOME, STUDY_WORKSPACE, ASIDE, render, projectId, previewWorkflowContext,
@@ -459,7 +462,7 @@
     authorizeDataSource, sendText, continueAfterDataSourceConfirmation,
     governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
     togglePresentationPin, configureProvider, rememberSession, recordHostAction,
-    HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP,
+    HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP, MESSAGE_QUEUE,
   });
   const dismissHeaderOverflow = EVENTS.dismissHeaderOverflow;
   const wire = EVENTS.wire;
@@ -729,6 +732,7 @@
       const connectionPage = state.host && state.host.querySelector('[data-gpi-connection-page]');
       if (connectionPage) connectionPage.scrollTop = previousConnectionTop === null ? 0 : previousConnectionTop;
       ACTIVITY.syncLiveClock(state.host, state.busy || Boolean(state.childJobId));
+      MESSAGE_QUEUE.sync();
     });
   }
 
@@ -1364,6 +1368,8 @@
           finishActivity('complete', null, 'settled');
         }
         await refreshSession(!replacedBranch);
+        await MESSAGE_QUEUE.reconcile();
+        if (state.busy) return;
         if (!replacedBranch) adoptPersistedEntryIds();
         state.regenerating = false;
         state.regeneration = null;
@@ -1550,9 +1556,15 @@
     return true;
   }
   async function sendMessage() {
-    if (!state.session || state.projectLoading || state.busy || state.childJobId || sessionIsStale()) return;
+    if (!state.session || state.projectLoading || state.childJobId || sessionIsStale()) return;
     const input = state.host.querySelector('[data-gpi-input]');
     const text = String((input && input.value) || state.draft || '').trim();
+    if (!text) return;
+    if (state.busy) {
+      try { await MESSAGE_QUEUE.send(text); }
+      catch (error) { state.error = errorText(error); render(); }
+      return;
+    }
     const referencing = STUDY_WORKSPACE.hasReference(projectId(), state.session.session_id);
     if (!referencing && await PLAN_ACTIONS.continueUserRequestedSystemProgression(text)) return;
     const intent = referencing ? undefined : state.pendingEntryIntent
@@ -1802,6 +1814,7 @@
   // A hosted clinician lands in a conversation (screens-guided-pi-hosted.js).
   const openHostedConversation = () => { const hosted = MODULES.optional('hosted'); if (hosted) hosted.openConversation(state, connectionReady(), createSession); };
   function unmount() {
+    MESSAGE_QUEUE.stop();
     RUN_FILES.reset();
     document.removeEventListener('click', dismissHeaderOverflow, true);
     stopCodexPoll(); closeSource(); closeChildSource(); if (IDEA_SOURCE) IDEA_SOURCE.reset(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';

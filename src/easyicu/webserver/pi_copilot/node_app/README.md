@@ -104,5 +104,10 @@ invalidated before host mutations, and cleared at the end of a turn. It is not
 stored as a new grant or cross-project memory. Pi's existing compactor continues
 to use the same guarded stream function and cumulative budget accounting.
 
+Busy conversation follow-ups are queued by the Python host and delivered as
+separate turns with fresh authority checks. Native Pi steering is not exposed:
+it would share the active turn's host request and grant scope. Restarted queues
+retain interrupted text for review and never submit it automatically.
+
 See `docs/pi_copilot_integration_architecture.md` for authority, PHI, session,
 failure, and upgrade contracts.
