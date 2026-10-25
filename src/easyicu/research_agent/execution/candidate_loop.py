@@ -28,6 +28,7 @@ from ..contracts.retry_policy import repair_route_for
 from .concept_audit import ConceptQuarantineState
 from .concept_repair import MAX_DETERMINISTIC_CONCEPT_REPAIRS
 from ..authority.plausibility import StepPlausibilityAuthority
+from ..authority.diagnostic_envelope import descriptive_input_diagnostics
 from ..authority.execution_input import ExecutionInputAuthorityState
 from ..contracts.runtime import ValidationFinding
 from ..gates.plausibility_obligation import (
@@ -2395,6 +2396,11 @@ def _candidate_failure_transition(
             with host.shared_lock:
                 host.findings.append(timeout_decision.finding)
         return _CandidateLoopAction.BREAK
+    input_diagnostics = descriptive_input_diagnostics(run_log, context=attempt.coder_context, step=attempt.step)
+    if input_diagnostics:
+        attempt.step_record["runtime_input_diagnostics"] = input_diagnostics
+    else:
+        attempt.step_record.pop("runtime_input_diagnostics", None)
     runtime_failure = classify_runtime_failure(
         run_log=run_log,
         timed_out=bool(state.run_result.timed_out),

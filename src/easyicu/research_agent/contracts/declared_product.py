@@ -162,6 +162,7 @@ _EFFECT_PRODUCT_BASES = frozenset(
         "coefficients",
         "effect_estimate",
         "effect_estimates",
+        "effect_modification_estimates",
         "effect_forest",
         "hazard_ratio",
         "interaction_pvalue",

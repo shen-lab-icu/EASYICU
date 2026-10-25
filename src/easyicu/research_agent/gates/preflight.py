@@ -1441,7 +1441,7 @@ _DESCRIPTIVE_INPUT_HELPER_NAMES = frozenset(
     {
         "closed_categorical_counts",
         "measurement_provenance_receipt",
-        "strict_numeric_input",
+        "strict_numeric_input", "strict_binary_input",
     }
 )
 
@@ -4210,10 +4210,8 @@ _SIGNATURE_DERIVED_HOST_HELPERS: tuple[tuple[str, str], ...] = (
         "easyicu.research_agent.execution.runners.adjusted_association_executor",
         "run_adjusted_association_from_env",
     ),
-    (
-        "easyicu.research_agent.methods.descriptive_inputs",
-        "strict_numeric_input",
-    ),
+    ("easyicu.research_agent.methods.descriptive_inputs", "strict_numeric_input"),
+    ("easyicu.research_agent.methods.descriptive_inputs", "strict_binary_input"),
     (
         "easyicu.research_agent.methods.source_status",
         "reconcile_binary_event_presence",

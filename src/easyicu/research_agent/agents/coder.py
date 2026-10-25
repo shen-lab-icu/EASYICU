@@ -949,7 +949,7 @@ class CoderAgent:
         # candidate stdout/stderr remains local evidence. Mock and genuinely
         # local transports retain the bounded diagnostic for compatibility.
         patch_diagnosis = _outbound_repair_diagnosis(
-            llm=repair_llm,
+            llm=repair_llm, context=scoped_context, step=step,
             run_log=run_log,
             repair_authority=current_repair_authority,
             attempt=attempt,
@@ -960,7 +960,7 @@ class CoderAgent:
             ),
         )
         rewrite_diagnosis = _outbound_repair_diagnosis(
-            llm=repair_llm,
+            llm=repair_llm, context=scoped_context, step=step,
             run_log=run_log,
             repair_authority=current_repair_authority,
             attempt=attempt,

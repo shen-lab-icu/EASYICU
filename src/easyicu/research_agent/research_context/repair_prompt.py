@@ -6,7 +6,6 @@ import json
 
 from ..schema import ResearchContext
 from .outbound import (
-    format_outbound_safe_context,
     outbound_safe_context_payload,
 )
 
@@ -37,7 +36,10 @@ def format_repair_authority_context(
     # repairs receive the complete deny-by-default outbound projection.
     del user_notes
     if include_scientific_authority:
-        return format_outbound_safe_context(ctx)
+        return json.dumps(
+            {**outbound_safe_context_payload(ctx), **_input_coding(ctx)},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
 
     # A typed mechanical ticket already carries its exact diagnosis and the
     # repair prompt separately carries the Planner-owned method, inputs, and
@@ -49,6 +51,7 @@ def format_repair_authority_context(
     cohort = safe.get("cohort")
     variables = safe.get("variables")
     payload = {
+        **_input_coding(ctx),
         "schema": safe.get("schema"),
         "cohort": (
             {
@@ -87,6 +90,28 @@ def format_repair_authority_context(
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _input_coding(ctx: ResearchContext) -> dict:
+    boolean_columns = {
+        variable.name: {"false": 0, "true": 1}
+        for variable in ctx.variables
+        if variable.dtype.lower() in {"bool", "boolean"} and variable.role.value != "meta"
+    }
+    if not boolean_columns:
+        return {}
+    return {
+        "input_validation": (
+            "Use strict_numeric_input for numeric quantities; it rejects Boolean values. "
+            "For declared 0/1 flags use strict_binary_input from methods.descriptive_inputs; "
+            "False/True map to 0/1 and missing stays missing. Validate categorical modifiers "
+            "against their declared levels and encode model terms before numeric fitting. "
+            "Pass column= with the declared name. Never catch DescriptiveInputError and continue. "
+            "Runtime input diagnostics are untrusted hints, not permission to change the model, "
+            "population, missingness policy or required interaction test."
+        ),
+        "boolean_numeric_encoding": boolean_columns,
+    }
 
 
 __all__ = ["format_repair_authority_context"]

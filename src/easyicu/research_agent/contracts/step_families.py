@@ -418,6 +418,7 @@ _EFFECT_CONTRACT_METHODS = frozenset(
         "treatment_effect",
         "effect_modification",
         "interaction_model",
+        "prespecified_effect_modification_interaction",
         # A prespecified cohort-definition sensitivity may legitimately refit
         # the already agent-planned estimand in each declared cohort. The
         # effect product remains required as structural evidence; this method
