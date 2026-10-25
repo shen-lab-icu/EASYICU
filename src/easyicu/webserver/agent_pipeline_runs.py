@@ -15,6 +15,7 @@ import base64
 import csv
 from dataclasses import replace
 import hashlib
+import io
 import json
 import math
 import os
@@ -3503,6 +3504,11 @@ _ESTIMATE_PREVIEW_COLUMNS = (
     *_ESTIMATE_TABLE_COLUMNS, "exposure", "exposure_level", "reference_level", "contrast",
     "analysis_role", "n",
 )
+_RISK_PREVIEW_COLUMNS = (
+    "exposure", "group_type", "group_value", "outcome", "n_denominator", "outcome_n",
+    "outcome_missing_n", "outcome_event_n", "outcome_risk_pct",
+    "outcome_risk_ci_low_pct", "outcome_risk_ci_high_pct", "label",
+)
 
 
 def _table_preview_indices(headers: List[str]) -> List[int]:
@@ -3511,6 +3517,7 @@ def _table_preview_indices(headers: List[str]) -> List[int]:
     priority = (
         _ESTIMATE_PREVIEW_COLUMNS
         if all(name in headers for name in _ESTIMATE_TABLE_COLUMNS)
+        else _RISK_PREVIEW_COLUMNS if "outcome_risk_pct" in headers
         else _TABLE_PREVIEW_PRIORITY_COLUMNS
     )
     selected = [
@@ -3543,7 +3550,9 @@ def _table_projection(
         description = str(record.get("description") or "").casefold()
         step = str(record.get("produced_by_step") or "").casefold()
         haystack = " ".join((name, description, step))
-        if "population_flow" in haystack:
+        if record.get("is_source_copy"):
+            rank = 9
+        elif "population_flow" in haystack or "cohort_flow" in haystack:
             rank = 0
         elif str(record.get("produced_by_step") or "").strip() in prediction_steps:
             rank = 1
@@ -3566,8 +3575,10 @@ def _table_projection(
             for token in ("table_one", "exposure_outcome_distribution", "cohort_flow")
         ):
             rank = 3
-        elif "probe" in haystack or "source_data" in haystack:
-            rank = 9
+        elif "measurement" in haystack or "analytic_denominators" in haystack or "missingness" in haystack:
+            rank = 4
+        elif "probe" in haystack:
+            rank = 8
         else:
             rank = 5
         return rank, int(record.get("_projection_order") or 0)
@@ -3583,10 +3594,18 @@ def _table_projection(
             )
 
     candidates = []
+    evidence_id_counts: Dict[str, int] = {}
     for index, raw_record in enumerate(evidence if isinstance(evidence, list) else []):
-        if not isinstance(raw_record, Mapping) or str(raw_record.get("kind")) != "table":
+        if not isinstance(raw_record, Mapping):
             continue
-        candidates.append({**dict(raw_record), "_projection_order": index})
+        evidence_id = str(raw_record.get("evidence_id") or "")
+        evidence_id_counts[evidence_id] = evidence_id_counts.get(evidence_id, 0) + 1
+        if str(raw_record.get("kind")) != "table":
+            continue
+        # These are producer-declared copies, not models deduplicated by value.
+        copy_identity = " ".join(str(raw_record.get(key) or "") for key in ("relative_path", "description", "evidence_id"))
+        is_copy = bool(re.search(r"source_data|publication_figure_source_|copied beside a promoted publication figure", copy_identity, re.I))
+        candidates.append({**dict(raw_record), "_projection_order": index, "is_source_copy": is_copy})
     candidates.sort(key=review_priority)
 
     for record in candidates:
@@ -3604,27 +3623,56 @@ def _table_projection(
                 if any(is_identifier_column(value) for value in source_headers):
                     skipped_sensitive += 1
                     continue
+                # Hash and parse the same bounded snapshot. Never invent a
+                # registry digest, and never summarize changed source bytes.
+                handle.seek(0)
+                raw = handle.read(1_500_001)
+                if len(raw.encode("utf-8")) > 1_500_000:
+                    continue
+                digest = str(record.get("sha256") or "").strip().lower()
+                if digest and (not re.fullmatch(r"[a-f0-9]{64}", digest)
+                               or hashlib.sha256(raw.encode("utf-8")).hexdigest() != digest):
+                    continue
+                reader = csv.reader(io.StringIO(raw, newline=""))
+                source_headers = next(reader, [])
+                if any(is_identifier_column(value) for value in source_headers):
+                    skipped_sensitive += 1
+                    continue
                 column_indices = _table_preview_indices(source_headers)
                 headers = [source_headers[index] for index in column_indices]
+                source_rows = [row for _, row in zip(range(_MAX_TABLE_ROWS + 1), reader)]
                 rows = [
                     [row[index] if index < len(row) else "" for index in column_indices]
-                    for _, row in zip(range(_MAX_TABLE_ROWS), reader)
+                    for row in source_rows
                 ]
         except (OSError, UnicodeDecodeError, csv.Error):
             continue
         group_by = table_one_group_by.get(
             str(record.get("produced_by_step") or "").strip(), ""
         )
+        evidence_id = str(record.get("evidence_id") or "")
+        verified = bool(digest and re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", evidence_id)
+                        and evidence_id_counts.get(evidence_id) == 1)
         tables.append(
             {
                 "evidence_id": _clean_text(record.get("evidence_id"), 160),
                 "produced_by_step": _clean_text(record.get("produced_by_step"), 160),
                 "label": _clean_text(record.get("description"), 300) or path.stem,
                 "name": path.name,
+                "is_source_copy": record["is_source_copy"],
+                "source_status": "current" if verified else "unavailable",
+                **({"sha256": digest} if verified else {}),
                 "headers": [_clean_text(value, 160) for value in headers],
-                "rows": [[_clean_text(value, 500) for value in row] for row in rows],
-                "preview_truncated": len(rows) >= _MAX_TABLE_ROWS,
+                "rows": [[_clean_text(value, 500) for value in row] for row in rows[:_MAX_TABLE_ROWS]],
+                "preview_truncated": len(rows) > _MAX_TABLE_ROWS,
                 "preview_columns_truncated": len(source_headers) > len(headers),
+                # Model identity must survive a display-column cap. It is
+                # not a new estimate, and is never inferred from equal values.
+                **({"row_model_ids": [
+                    _clean_text(row[source_headers.index("model_id")], 160)
+                    if len(row) > source_headers.index("model_id") else ""
+                    for row in source_rows[:_MAX_TABLE_ROWS]
+                ]} if "model_id" in source_headers else {}),
                 **({"group_by": group_by} if group_by else {}),
             }
         )
@@ -3634,6 +3682,7 @@ def _table_projection(
         "schema_version": "easyicu.web-pipeline-result-tables/1",
         "tables": tables,
         "table_count": len(tables),
+        "unpreviewed_table_count": len(candidates) - len(tables),
         "skipped_identifier_tables": skipped_sensitive,
         "preview_policy": "aggregate_tables_only_no_identifier_columns",
     }

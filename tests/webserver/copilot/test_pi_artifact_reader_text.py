@@ -194,3 +194,45 @@ def test_plan_reader_hides_row_identity_and_states_the_modelled_levels():
     assert "patientunitstayid" not in html
     note = "主模型中的暴露水平：</strong>0、1、2、3（参照 0）；主要对比 3 vs 0。其他取值不进入主模型。"
     assert html.count(note) == 1
+
+
+@pytest.mark.parametrize("lang", ["zh", "en"])
+def test_saved_plan_does_not_invent_a_pre_execution_lifecycle(lang):
+    html = render("agent_plan.json", {
+        "research_question": "Synthetic study", "steps": [],
+        "design_selection": {"candidates": [{"disposition": "selected", "reviewable_plan": ["Recorded setting"] * 6}]},
+    }, lang=lang)
+    assert "尚未开始患者数据分析" not in html
+    assert "No patient-data analysis has started" not in html
+    assert "候选研究计划" not in html and "Candidate research plan" not in html
+    assert "尚未视为研究者确认" not in html and "not yet treated as researcher-confirmed" not in html
+    assert ("研究计划" if lang == "zh" else "Research plan") in html
+
+
+def test_cohort_summary_reads_recorded_concepts_outcome_and_window():
+    html = render("cohort_summary.json", {
+        "cohort": {"criteria": ["Synthetic adults"], "exclusion_criteria": [],
+                   "target_outcome": "death", "time_window_hours": 24},
+        "summary": {"selected_concepts": ["age", "sex", "lact", "death"],
+                    "materialized_concept_count": 1, "coverage_sufficient": True},
+    })
+    for text in ("研究结局", "院内死亡", "时间窗", "24 小时", "年龄", "性别", "乳酸", "Synthetic adults"):
+        assert text in html, text
+    assert "4 字段" not in html and "3 字段" not in html
+    assert "入住数" not in html and "患者数" not in html  # no denominator was recorded
+    missing = render("cohort_summary.json", {"cohort": {}, "summary": {}})
+    assert "未记录" in missing
+    assert "0 小时" not in missing
+
+
+def test_core_estimates_and_bounded_table_omissions_are_named():
+    html = render("result_tables.json", {"unpreviewed_table_count": 3, "tables": [{
+        "name": "adjusted_association_estimates.csv",
+        "label": "Table adjusted_association_estimates from step synthetic.",
+        "headers": ["outcome_n", "outcome_event_n", "outcome_risk_pct"], "rows": [[24, 3, 12.5]],
+        "preview_columns_truncated": True, "preview_truncated": True,
+    }]})
+    assert "没有核心结果表通过预览策略" not in html
+    for text in ("调整后关联估计", "结局分母", "结局事件数", "结局风险 (%)", "部分行", "部分列", "3", "未展示"):
+        assert text in html, text
+    assert "有界预览" in html

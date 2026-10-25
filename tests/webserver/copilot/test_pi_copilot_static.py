@@ -4190,11 +4190,11 @@ process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json
     html = run_node(node, script, check=True).stdout
 
     for text in (
-        "候选研究计划",
+        "研究计划",
         "设计选择",
         "这套设计能回答",
         "这套设计不能证明",
-        "候选计划涉及的变量",
+        "计划涉及的变量",
         "分析路径",
         "EasyICU 需要修订",
         "主要结局尚缺可执行定义",
@@ -4590,7 +4590,7 @@ process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json
     assert '<div class="ag-plan-glance">' in html
     assert "个计划步骤" in html and "个阶段" in html
     # the default reader shows the plan shape before optional long-form detail
-    assert html.index('分析流程') < html.index('候选计划涉及的变量')
+    assert html.index('分析流程') < html.index('计划涉及的变量')
     # the flow styles have one explicit owner
     for selector in (".ag-plan-flow", ".ag-plan-flow-stage", ".ag-plan-glance", ".ag-plan-step-detail"):
         assert selector in plan_css
@@ -4628,8 +4628,8 @@ process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json
     html = run_node(node, script, check=True).stdout
 
     assert '<details class="ag-plan-recommendations">' in html
-    assert "Planner 推荐方案（待审阅）· 6 项具体设定" in html
-    assert html.index("分析流程") < html.index("Planner 推荐方案（待审阅）· 6 项具体设定")
+    assert "已记录的研究设定 · 6 项" in html
+    assert html.index("分析流程") < html.index("已记录的研究设定 · 6 项")
     assert ".ag-plan-recommendations" in plan_css
 
 
@@ -4772,12 +4772,12 @@ process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json
         "变量可用性与缺失情况",
         "报告效应大小与不确定性",
         "校正后关联估计",
-        "Planner 推荐方案（待审阅）",
-        "先给方案，再由你修改或批准",
+        "已记录的研究设定",
+        "以下为本计划记录的研究设定",
         "暴露定义、时间窗与汇总方式",
         "推荐先采用 ICU 入科后 24 小时内首次乳酸作为主要暴露",
         "敏感性分析与数据可行性检查",
-        "以下内容由 EasyICU 先行推荐，尚未视为研究者确认",
+        "批准与执行状态请查看相应记录",
     ):
         assert text in html
     assert "Planner 尚未给出完整、可审阅的推荐方案" not in html
