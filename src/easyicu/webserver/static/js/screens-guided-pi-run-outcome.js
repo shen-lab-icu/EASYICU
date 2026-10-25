@@ -562,10 +562,10 @@
       const answer = ANSWER ? ANSWER.render(latestRun) : '';
       const lead = answer || `<p>${esc(tr(
         validated
-          ? 'Open the study overview, result tables and figures below.'
+          ? 'Analysis complete. A result summary is unavailable; open the result table.'
           : 'The generated results are available below. Review the check records before interpreting them.',
         validated
-          ? '可从下方打开研究总览、结果表和图表。'
+          ? '分析已完成，暂未生成结果摘要。请查看结果表。'
           : '下方可以查看已生成的结果。解读前，请先核对各项检查记录。',
       ))}</p>`;
       const status = validated

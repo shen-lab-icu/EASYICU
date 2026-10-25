@@ -331,10 +331,14 @@
         groupedConcept: grouped ? levels.conceptName(spec.exposure) : '',
         outcomeLabel,
         groups,
+        continuousGroups: (summary.continuousGroups || []).map(row => ({ ...row,
+          label: readerLabel(labels, row.variable) || row.variable })),
+        answerSources: summary.answerSources || [],
         total: total && total.display_value != null ? String(total.display_value) : '',
         overallRisk: overallRisk && overallRisk.display_value != null ? String(overallRisk.display_value) : '',
         estimate: primaryEstimate(summary, claims, labels),
-        primaryModelAmbiguous: summary.primaryModelAmbiguous === true,
+        primaryModelAmbiguous: !PREDICTION_TYPES.has(String(plan.analysis_type || ''))
+          && summary.primaryModelAmbiguous === true,
         estimateExposure: modelledLabel,
         prediction: PREDICTION_TYPES.has(String(plan.analysis_type || ''))
           ? predictionPerformance(payload('result_tables.json').prediction_performance) : null,
@@ -430,6 +434,19 @@
         ));
         return sentences;
       }
+      view.continuousGroups.forEach(row => {
+        const statistics = row.statistics.map(statistic => {
+          const [value, low, high] = statistic.values;
+          return statistic.kind === 'median'
+            ? tr(`median ${value} (IQR ${low}–${high})`, `中位数 ${value}（四分位距 ${low}–${high}）`)
+            : tr(`mean ${value} (SD ${low})`, `均值 ${value}（标准差 ${low}）`);
+        }).join(tr('; ', '；')) || tr('summary unavailable', '暂无可用数值');
+        const unit = row.unit || tr('unit unavailable', '单位未提供');
+        sentences.push(tr(
+          `${row.label}, “${row.group}”: ${statistics} ${unit}; analysed ${count(row.n)} ICU stays.`,
+          `${row.label}，「${row.group}」：${statistics} ${unit}；分析了 ${count(row.n)} 个 ICU 入住记录。`,
+        ));
+      });
       const groups = view.groups;
       const source = view.source || tr('this data source', '本数据源');
       const preparation = view.populationPreparation;
@@ -565,6 +582,30 @@
       )}<figcaption>${esc(tr('Main figure', '主图'))} · ${resourceButton({ ...ref, label }, label)}</figcaption></figure>`;
     }
 
+    function sourceButtons(latestRun, sources, fallback = false) {
+      const ref = runRefs(latestRun).get('result_tables.json');
+      if (!ref || typeof resourceButton !== 'function') return '';
+      const valid = sources.filter(source => source
+        && /^[A-Za-z0-9_.-]{1,160}$/.test(String(source.evidence_id || ''))
+        && /^[a-f0-9]{64}$/.test(String(source.sha256 || '')));
+      return valid.map((source, index) => resourceButton({ ...ref,
+        evidence_id: source.evidence_id, evidence_sha256: source.sha256, evidence_kind: source.kind || 'table',
+      }, fallback ? tr(`View result table${valid.length > 1 ? ` ${index + 1}` : ''}`,
+        `查看结果表${valid.length > 1 ? ` ${index + 1}` : ''}`)
+        : source.kind === 'statistic' ? tr('View source record (file-level)', '查看来源记录（文件级）')
+          : tr('View source table (file-level)', '查看来源表（表级）'))).join(' ')
+        || (fallback ? resourceButton(ref, tr('View result table', '查看结果表')) : '');
+    }
+
+    function unavailable(latestRun, view) {
+      const message = view && view.primaryModelAmbiguous ? tr(
+        'Multiple primary models are recorded; inspect the result tables before selecting a primary estimate.',
+        '记录中有多个主要模型，暂不能唯一确定主要估计；请查看结果表。',
+      ) : tr('Analysis complete. A result summary is unavailable; open the result table.',
+        '分析已完成，暂未生成结果摘要。请查看结果表。');
+      return `<div class="gpi-run-answer is-unavailable" data-gpi-run-answer="${esc(latestRun.run_id)}"><p>${esc(message)}</p>${sourceButtons(latestRun, view ? view.answerSources : [], true)}</div>`;
+    }
+
     function render(latestRun) {
       const key = keyFor(latestRun);
       if (!key || current.key !== key) return '';
@@ -573,7 +614,10 @@
       }
       const view = current.projection;
       const sentences = view ? answerSentences(view) : [];
-      if (!view || !sentences.length) return '';
+      if (!view || view.primaryModelAmbiguous || !sentences.length
+        || !(view.groups.length || view.continuousGroups.length || view.estimate || view.prediction || view.curvePreview.length)) {
+        return unavailable(latestRun, view);
+      }
       // The answer, then the data it rests on, then how to read it: the same
       // order every finished run reads in.
       const data = materials(latestRun);
@@ -581,15 +625,8 @@
         'Literature search is part of a full article run. Novelty and literature comparisons have not been assessed for this first result.',
         '文献检索属于完整论文流程；本次首轮结果未评估新颖性或文献对照。',
       ))}</p>` : '';
-      const source = view.estimate && view.estimate.source;
-      const sourceRef = runRefs(latestRun).get('result_tables.json');
-      const sourceButton = source && sourceRef && typeof resourceButton === 'function'
-        && /^[A-Za-z0-9_.-]{1,160}$/.test(String(source.evidence_id || ''))
-        && /^[a-f0-9]{64}$/.test(String(source.sha256 || ''))
-        ? resourceButton({ ...sourceRef, evidence_id: source.evidence_id, evidence_sha256: source.sha256,
-          evidence_kind: source.kind || 'table' }, source.kind === 'statistic'
-          ? tr('View source record (file-level)', '查看来源记录（文件级）')
-          : tr('View source table (file-level)', '查看来源表（表级）')) : '';
+      const sourceButton = sourceButtons(latestRun, view.continuousGroups.length
+        ? [view.continuousGroups[0].source] : [view.estimate && view.estimate.source]);
       return `<div class="gpi-run-answer" data-gpi-run-answer="${esc(latestRun.run_id)}">
         <div class="gpi-run-answer-text">${sentences.map(text => `<p>${esc(text)}</p>`).join('')}${sourceButton ? `<p>${sourceButton}</p>` : ''}${literatureNote}${data ? `<p class="gpi-run-answer-data"><span>${esc(tr('Data', '数据'))}</span>${esc(data)}</p>` : ''}<p class="gpi-run-answer-caveat"><span>${esc(tr('Keep in mind', '需要注意'))}</span>${esc(caveat(view))}</p></div>
         ${figureButton(latestRun, view)}
@@ -691,7 +728,7 @@
       // A prediction study's limit is stated only beside the model
       // performance it bounds.
       if (PREDICTION_TYPES.has(view.analysisType)) return view.prediction ? caveat(view) : '';
-      return view.groups.length || view.estimate ? caveat(view) : '';
+      return view.groups.length || view.continuousGroups.length || view.estimate ? caveat(view) : '';
     }
 
     return Object.freeze({ load, render, followUps, fileNote, approachSteps, materials, limitation });

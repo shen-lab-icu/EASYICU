@@ -301,6 +301,7 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-modules.js",
         "screens-guided-pi-technical-report.js"
     ],
+    "guided_pi_audit_answer_shapes.test.js": [],
 }
 
 

@@ -7,9 +7,21 @@
 
   function rows(payload) {
     const tables = payload && Array.isArray(payload.tables) ? payload.tables : [];
+    const seen = new Set();
     return tables.filter(table => table && !table.is_source_copy
       && !/source_data|publication_figure_source_|copied beside a promoted publication figure/i.test(`${table.name || ''} ${table.label || ''}`)
-      && (!table.source_status || table.source_status !== 'stale')).flatMap(table => {
+      && (!table.source_status || table.source_status !== 'stale')).filter(table => {
+      // Repeat transport entries are the same evidence only when both their
+      // verified identity and projected contents agree. Equal numbers alone
+      // never merge independent producers, models or conflicting snapshots.
+      const source = tableSource(table);
+      if (!source) return true;
+      const key = JSON.stringify([source, table.produced_by_step, table.headers, table.rows,
+        table.row_model_ids, table.preview_truncated, table.group_by]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).flatMap(table => {
       const headers = Array.isArray(table && table.headers) ? table.headers.map(String) : [];
       if (!headers.length) return [];
       return (Array.isArray(table.rows) ? table.rows : []).map((values, rowIndex) => {
@@ -87,6 +99,58 @@
     return measure === 'RD' ? number.toFixed(3) : number.toFixed(2);
   }
 
+  function primaryRecords(records, plan, requireProducer = false) {
+    const steps = new Map((Array.isArray(plan && plan.steps) ? plan.steps : [])
+      .filter(step => step && step.step_id).map(step => [step.step_id, step.planned_analysis_role]));
+    return records.filter(item => {
+      const role = steps.get(item.table.produced_by_step);
+      return role === 'primary' || (!requireProducer && role == null);
+    });
+  }
+
+  // Only a primary producer's registered aggregate table can answer a
+  // continuous descriptive question. No patient rows, unit conversion,
+  // inferred denominator, or combination of independent tables is involved.
+  function continuousGroups(records, plan) {
+    const candidates = primaryRecords(records, plan, true).filter(item =>
+      tableSource(item.table) && ['variable', 'group'].every(key => item.headers.includes(key))
+      && ['n_nonmissing', 'nonmissing_n', 'n'].some(key => item.headers.includes(key))
+      && (['median', 'q25', 'q75'].every(key => item.headers.includes(key))
+        || ['mean', 'sd'].every(key => item.headers.includes(key))));
+    if (new Set(candidates.map(item => item.table)).size !== 1
+      || candidates.some(item => item.table.preview_truncated)) return [];
+    const partitions = candidates.filter(item => item.record.row_role !== 'overall');
+    const selected = partitions.length ? partitions : candidates;
+    const seen = new Set();
+    const groups = selected.map(item => {
+      const row = item.record;
+      const variable = String(row.variable || '').trim();
+      const group = String(row.group == null ? '' : row.group).trim();
+      const key = JSON.stringify([variable, group]);
+      const countKey = ['n_nonmissing', 'nonmissing_n', 'n'].find(name => item.headers.includes(name));
+      const n = finite(row[countKey]);
+      if (!variable || !group || seen.has(key) || !Number.isSafeInteger(n) || n < 0) return null;
+      seen.add(key);
+      const spec = (plan.steps || []).find(step => step.step_id === item.table.produced_by_step)?.table_one_spec;
+      const declared = (spec && spec.variables || []).find(entry => entry.name === variable);
+      if (declared && declared.variable_kind !== 'continuous') return null;
+      const kinds = declared && declared.summary === 'mean_sd' ? ['mean']
+        : declared && declared.summary === 'median_iqr' ? ['median'] : ['median', 'mean'];
+      const statistics = [];
+      for (const kind of kinds) {
+        const columns = kind === 'median' ? ['median', 'q25', 'q75'] : ['mean', 'sd'];
+        if (!columns.every(name => item.headers.includes(name))) continue;
+        const values = columns.map(name => finite(row[name]));
+        if (values.every(value => value == null)) continue;
+        if (n === 0 || values.some(value => value == null)
+          || (kind === 'median' ? values[1] > values[0] || values[0] > values[2] : values[1] < 0)) return null;
+        statistics.push({ kind, values: columns.map(name => String(row[name]).trim()) });
+      }
+      return { variable, group, n, statistics, unit: String(row.unit || '').trim(), source: tableSource(item.table) };
+    });
+    return groups.every(Boolean) ? groups : [];
+  }
+
   // One registered primary model's contrasts, primary contrast first.  Any
   // doubt -- no primary table, two of them, an unknown effect scale -- returns
   // nothing rather than a guessed headline.
@@ -113,7 +177,7 @@
   }
 
   function estimates(candidates, plan, levels) {
-    if (candidates.length !== 1) return [];
+    if (candidates.length !== 1 || candidates[0].filter(item => isTrue(item.record.is_primary_contrast)).length !== 1) return [];
     const fitted = candidates[0].filter(item => FITTED.has(String(item.record.fit_status || '').trim().toLowerCase())
       && finite(item.record.estimate) != null);
     const scales = new Set(fitted.map(item => String(item.record.effect_scale || '').trim().toLowerCase()));
@@ -176,7 +240,8 @@
 
   function summarize(payload, plan, context) {
     const records = rows(payload);
-    const models = primaryModels(records);
+    const primary = primaryRecords(records, plan);
+    const models = primaryModels(primary);
     const levels = groupLevels(context);
     const candidates = records.filter(item => [
       'row_role', 'n_rows', 'exposure_denominator', 'exposure_pct',
@@ -254,8 +319,14 @@
         )),
       ].filter(Boolean),
       exposureLevels,
+      continuousGroups: continuousGroups(records, plan),
+      answerSources: [...new Set(primaryRecords(records, plan, true).concat(models.flat()).map(item => item.table))]
+        .map(tableSource).filter(Boolean)
+        .filter((source, index, all) => all.findIndex(other => other.evidence_id === source.evidence_id
+          && other.sha256 === source.sha256) === index),
       estimates: estimates(models, plan, levels),
-      primaryModelAmbiguous: models.length > 1,
+      primaryModelAmbiguous: models.length > 1
+        || models.some(items => items.filter(item => isTrue(item.record.is_primary_contrast)).length > 1),
       measurementMissingness: records.filter(item => item.table.evidence_id
         && ['concept', 'n_total', 'value_missing_n'].every(header => item.headers.includes(header)))
         .map(item => ({ concept: String(item.record.concept || ''), total: finite(item.record.n_total),
