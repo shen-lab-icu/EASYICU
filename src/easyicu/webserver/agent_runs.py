@@ -33,6 +33,7 @@ from easyicu.webserver import provider_adapter
 from easyicu.webserver import provider_gate
 from easyicu.webserver import run_artifact_disclosure
 from easyicu.webserver import run_file_guide
+from easyicu.webserver import run_figure_exports
 from easyicu.webserver.research_evidence_preview import (
     EvidencePreviewError,
     build_evidence_preview,
@@ -124,6 +125,7 @@ _SIGNOFF_CONFIRMATIONS = {
 }
 _AGENT_PREFLIGHT_FULL_SCAN_ROW_LIMIT = 1_000_000
 _MAX_RUN_ARTIFACT_BYTES = 2 * 1024 * 1024
+_NO_FIGURE_EXPORT = object()
 
 
 def make_agent_run_runner(
@@ -805,6 +807,7 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
         )
 
         payload = project_figure_source_code(run_dir, payload)
+        payload = run_figure_exports.project_gallery_exports(run_dir, payload)
     privacy_scan = run_artifact_disclosure.scan_artifact_payloads(
         {artifact_path.name: payload}
     )
@@ -858,10 +861,14 @@ def read_run_evidence_preview(
     }
 
 
-def read_run_artifact_bytes(project_dir: str, artifact_name: str) -> Dict[str, Any]:
+def read_run_artifact_bytes(
+    project_dir: str, artifact_name: str, *, figure_export: Any = _NO_FIGURE_EXPORT,
+) -> Dict[str, Any]:
     run_dir = _resolve_run_dir(project_dir)
     if run_dir is None:
         return {"ok": False, "error": "project_dir_required"}
+    if figure_export is not _NO_FIGURE_EXPORT:
+        return run_figure_exports.read_figure_export_bytes(run_dir, figure_export)
     artifact_path, raw, path_error = _read_safe_artifact_bytes(run_dir, artifact_name)
     if artifact_path is None or raw is None:
         return {

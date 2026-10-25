@@ -960,6 +960,19 @@
       }
       const evidenceButton = event.target.closest('[data-gpi-evidence-open]');
       if (evidenceButton) { openEvidence(evidenceButton); return; }
+      const figureDownload = event.target.closest('[data-gpi-figure-download]');
+      if (figureDownload) {
+        const request = window.AGENT_REPORT_READER.figureDownloadRequest(figureDownload);
+        if (request) {
+          const ticket = state.request;
+          void window.EU_API.downloadAgentRunArtifact({ run_ref: request.run_ref }, request.figure_export).catch(() => {
+            if (ticket !== state.request) return;
+            state.error = tr('The figure could not be downloaded. Reopen the gallery and try again.', '图件下载失败，请重新打开画廊后重试。');
+            render();
+          });
+        }
+        return;
+      }
       const sourceButton = event.target.closest('[data-gpi-source-code]');
       if (sourceButton) {
         const sourceView = window.EasyICU.guidedPi.require('sourceView');

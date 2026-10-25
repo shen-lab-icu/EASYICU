@@ -1154,12 +1154,17 @@ def post_agent_run_artifact(body: Dict[str, Any]) -> dict:
 
 @artifact_router.post("/api/agent-runs/download-artifact")
 def post_agent_run_download_artifact(body: Dict[str, Any]) -> Response:
-    """Download one whitelisted artifact as its original local JSON bytes."""
+    """Download one allowed run artifact or registry-validated aggregate figure."""
     project_dir, ref = _run_coordinate(body)
-    result = agent_runs.read_run_artifact_bytes(
-        project_dir,
-        str(body.get("artifact") or body.get("name") or ""),
-    )
+    if "figure_export" in body:
+        result = agent_runs.read_run_artifact_bytes(
+            project_dir, "", figure_export=body["figure_export"],
+        )
+    else:
+        result = agent_runs.read_run_artifact_bytes(
+            project_dir,
+            str(body.get("artifact") or body.get("name") or ""),
+        )
     if not result.get("ok"):
         status_code = 409 if result.get("error") == "artifact_privacy_scan_failed" else 400
         raise HTTPException(status_code=status_code, detail=_addressed(result, ref))

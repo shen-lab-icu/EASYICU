@@ -71,6 +71,18 @@
       .map(row => ({ row, imageSource: boundedPngDataUrl(row && (row.data_url || row.image_data_url)) }))
       .filter(item => item.row && item.imageSource);
     if (!visible.length) return '';
+    const downloadControl = row => {
+      const runRef = String(payload.run_ref || '');
+      if (!/^rr_[a-f0-9]{32}$/.test(runRef)) return '';
+      const exports = row.export_locators || {};
+      const formats = ['pdf', 'svg', 'tiff', 'png'].filter(format => validFigureExport(exports[format]));
+      if (!formats.length) return '';
+      const labels = formats.map(format => format.toUpperCase()).join(' · ');
+      return `<details class="ag-figure-download"><summary class="btn sm" aria-label="${escAttr(t('Download figure', '下载图件') + ': ' + labels)}">${icon('download', 13)} ${esc(labels)}</summary><div class="ag-figure-formats">${formats.map(format => {
+        const locator = exports[format];
+        return `<button class="btn sm" type="button" data-gpi-figure-download data-figure-run-ref="${escAttr(runRef)}" data-figure-format="${format}" data-figure-evidence-id="${escAttr(locator.evidence_id)}" data-figure-sha256="${escAttr(locator.sha256)}" aria-label="${escAttr(t('Download ', '下载 ') + format.toUpperCase())}">${format.toUpperCase()}</button>`;
+      }).join('')}</div></details>`;
+    };
     const sourceButton = row => {
       const source = row && row.source_code && typeof row.source_code === 'object' ? row.source_code : {};
       const evidenceId = String(source.evidence_id || '');
@@ -91,10 +103,23 @@
             <label class="ag-figure-image"><input type="checkbox" aria-label="${escAttr(t('Show figure at original size', '按原尺寸查看图件'))}"><span class="ag-figure-zoom-label">${esc(t('Original size', '原尺寸'))}</span><span class="ag-figure-scroll" tabindex="0"><img src="${escAttr(imageSource)}" alt="${escAttr(reading.title)}" /></span></label>
             <figcaption><strong>${esc(reading.title)}</strong>${reading.clinical ? `<p class="ag-figure-caption">${esc(reading.clinical)}</p>` : ''}${reading.scientific ? reading.clinical
               ? `<details class="ag-figure-scientific-caption"><summary>${esc(t('Scientific caption', '英文图注'))}</summary><p>${esc(reading.scientific)}</p></details>`
-              : `<p class="ag-figure-caption">${esc(reading.scientific)}</p>` : ''}${sourceButton(row)}</figcaption>
+              : `<p class="ag-figure-caption">${esc(reading.scientific)}</p>` : ''}${downloadControl(row)}${sourceButton(row)}</figcaption>
           </figure>`;
         }).join('')}
       </div>`;
+  }
+  function validFigureExport(locator) {
+    return locator && typeof locator === 'object'
+      && Object.keys(locator).sort().join(',') === 'evidence_id,kind,sha256'
+      && locator.kind === 'figure' && /^[A-Za-z0-9_.-]{1,160}$/.test(locator.evidence_id || '')
+      && /^[a-f0-9]{64}$/.test(locator.sha256 || '');
+  }
+  function figureDownloadRequest(button) {
+    const data = button && button.dataset || {};
+    const locator = { evidence_id: data.figureEvidenceId, sha256: data.figureSha256, kind: 'figure' };
+    return /^rr_[a-f0-9]{32}$/.test(data.figureRunRef || '')
+      && ['pdf', 'svg', 'tiff', 'png'].includes(data.figureFormat) && validFigureExport(locator)
+      ? { run_ref: data.figureRunRef, figure_export: { format: data.figureFormat, ...locator } } : null;
   }
   function manuscriptProvenanceView(payload, { artifactTable, manuscriptUnavailable }) {
     const p = payload && typeof payload === 'object' ? payload : {};
@@ -244,5 +269,5 @@
     </div>`;
   }
 
-  window.AGENT_REPORT_READER = { figureReading, figureGallery, manuscriptProvenanceView };
+  window.AGENT_REPORT_READER = { figureReading, figureGallery, figureDownloadRequest, manuscriptProvenanceView };
 })();

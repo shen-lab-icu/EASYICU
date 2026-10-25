@@ -161,6 +161,10 @@
 .ag-figure-scientific-caption{font-size:13px;line-height:1.6;overflow-wrap:anywhere}
 .ag-figure-scientific-caption>summary{cursor:pointer;color:var(--ink-2)}
 .ag-figure-scientific-caption>p{margin:6px 0;white-space:pre-line}
+.ag-figure-download{align-self:flex-start;margin-top:8px}
+.ag-figure-download>summary{cursor:pointer;list-style:none}
+.ag-figure-download>summary::-webkit-details-marker{display:none}
+.ag-figure-formats{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
 
 .ag-figure-gallery .ag-figure-caption{
   margin:5px 0;
