@@ -19,6 +19,7 @@ import time
 import uuid
 import zipfile
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Callable, Iterator
@@ -214,6 +215,117 @@ def export_ready(paths: DemoSourcePaths, source: DemoSourceSpec) -> bool:
     )
 
 
+def verified_public_demo_replanning_export(
+    export_path: str | Path,
+) -> tuple[DemoSourceSpec, DemoSourcePaths] | None:
+    """Identify an official historical export for choosing its original raw.
+
+    An upgrade leaves a study bound to its previous producer's export. Its
+    pinned release and producer-bound cache marker can still identify the
+    source to plan from, but do not make the old export ready for reuse. The
+    caller must also verify the manifest's exact raw binding and current raw
+    receipts before offering that source choice.
+    """
+    candidate = Path(export_path).expanduser().absolute()
+    for source in SOURCES:
+        paths = source_paths(source)
+        if candidate.parent != paths.root / "exports" or not source.archive_sha256:
+            continue
+        selected = replace(
+            paths, export=candidate, prepared_marker=candidate / ".easyicu-demo-prepared.json",
+        )
+        try:
+            manifest = candidate / "_manifest.json"
+            if (candidate.resolve() != candidate or not candidate.is_dir()
+                    or manifest.is_symlink() or not manifest.is_file()):
+                return None
+            marker = read_marker(selected.prepared_marker, source)
+            producer = str((marker or {}).get("producer_identity") or "")
+            if (marker is None or marker.get("archive_sha256") != source.archive_sha256
+                    or re.fullmatch(r"sha256:[0-9a-f]{64}", producer) is None
+                    or candidate.name != producer.removeprefix("sha256:")[:16]):
+                return None
+        except OSError:
+            return None
+        return source, selected
+    return None
+
+
+def verified_public_demo_raw(raw_path: str | Path) -> DemoSourceSpec | None:
+    """Recognize a converted official cache from its release-bound receipts.
+
+    Raw schemas cannot distinguish a demo from its parent. Only this owner's
+    exact cache coordinate, pinned archive markers and current conversion
+    inventory may refine that identity. This reads file metadata, not rows,
+    and grants neither extraction nor analysis authority.
+    """
+    from easyicu.databases.profiles import get_database_profile
+    from easyicu.databases.detection import detect_database_identity
+
+    candidate = Path(raw_path).expanduser().absolute()
+    for source in SOURCES:
+        paths = source_paths(source)
+        if candidate != paths.raw or not source.archive_sha256:
+            continue
+        try:
+            if candidate.resolve() != candidate or not parquet_ready(paths, source):
+                return None
+            if not archive_ready(paths, source):
+                return None
+            for marker_path in (paths.extracted_marker, paths.converted_marker):
+                marker = read_marker(marker_path, source)
+                if marker is None or marker.get("archive_sha256") != source.archive_sha256:
+                    return None
+            manifest_path = candidate / "conversion_manifest.json"
+            if (manifest_path.is_symlink() or not manifest_path.is_file()
+                    or manifest_path.stat().st_size > 4 * 1024 * 1024):
+                return None
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if (not isinstance(manifest, dict)
+                    or manifest.get("schema_version") != "easyicu.conversion_manifest/1"
+                    or manifest.get("database") != source.database
+                    or manifest.get("data_path") != str(candidate)):
+                return None
+            tables = manifest.get("tables")
+            if not isinstance(tables, list) or not tables or len(tables) > MAX_ZIP_ENTRIES:
+                return None
+            outputs: set[Path] = set()
+            for table in tables:
+                if (not isinstance(table, dict)
+                        or table.get("status") not in {"completed", "skipped"}
+                        or table.get("data_quality_status") != "clean"
+                        or table.get("bad_rows_skipped") != 0):
+                    return None
+                records = table.get("outputs")
+                if not isinstance(records, list) or not records:
+                    return None
+                for record in [table.get("input"), *records]:
+                    if not isinstance(record, dict) or record.get("exists") is not True:
+                        return None
+                    relative = Path(str(record.get("relative_path") or ""))
+                    member = candidate / relative
+                    if (relative.is_absolute() or ".." in relative.parts
+                            or record.get("path") != str(member)
+                            or member.resolve() != member or not member.is_file()):
+                        return None
+                    current = member.stat()
+                    if (record.get("size_bytes") != current.st_size
+                            or record.get("mtime_ns") != current.st_mtime_ns):
+                        return None
+                outputs.update(candidate / row["relative_path"] for row in records)
+            if outputs != set(candidate.rglob("*.parquet")):
+                return None
+            profile = get_database_profile(source.database)
+            if detect_database_identity(candidate, strict=False) not in {
+                profile.key, profile.parent_key,
+            }:
+                return None
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+        return source
+    return None
+
+
 def _verified_public_demo(export_path: str) -> DemoSourceSpec | None:
     """Identify an app-owned pinned public export using metadata, never labels."""
     if not export_path:
@@ -248,7 +360,7 @@ def egress_source_database(export_path: str, database: str) -> str:
     if credentialed_source(database):
         return database
     profile = get_database_profile(database)
-    source = _verified_public_demo(export_path)
+    source = _verified_public_demo(export_path) or verified_public_demo_raw(export_path)
     if source and source.database == profile.key:
         return profile.key
     try:
@@ -268,7 +380,7 @@ def public_demo_egress_scope(export_path: str):
     """Recheck public provenance inside the job thread and reset at job exit."""
     from easyicu.research_agent.providers.client_trust import public_demo_source_scope
 
-    source = _verified_public_demo(export_path)
+    source = _verified_public_demo(export_path) or verified_public_demo_raw(export_path)
     with public_demo_source_scope(source.database if source else ""):
         yield
 
@@ -1112,5 +1224,6 @@ __all__ = [
     "stream_response",
     "validate_download_response_url",
     "validate_official_response_url",
+    "verified_public_demo_replanning_export",
     "write_marker",
 ]

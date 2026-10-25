@@ -1212,6 +1212,11 @@ def build_research_workflow_snapshot(
         stop_gate.update(status="blocked", reason=next_action)
     if family_gap is not None:
         stop_gate["detail"] = family_gap
+    planning_source = None
+    if next_action == "bound_export_cohort_mismatch":
+        from .demo_planning_source import resolve_demo_planning_source
+
+        planning_source = resolve_demo_planning_source(study_row)
     return ResearchWorkflowSnapshot(
         current_stage=next_stage.id,
         next_action_code=next_action,
@@ -1239,6 +1244,7 @@ def build_research_workflow_snapshot(
             {
                 "code": export_cohort_refusal.code,
                 "reason_codes": list(export_cohort_refusal.reason_codes),
+                **({"planning_source": dict(planning_source.offer)} if planning_source else {}),
             }
             if export_cohort_refusal is not None
             else None

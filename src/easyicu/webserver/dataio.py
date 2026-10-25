@@ -318,6 +318,11 @@ def _detect_database(path: Path) -> str:
             ) from exc
     else:
         detected = detect_database_identity(path, strict=False)
+        from easyicu.webserver.demo_source_storage import verified_public_demo_raw
+
+        official_demo = verified_public_demo_raw(path)
+        if official_demo is not None:
+            detected = official_demo.database
     return {"mimic": "miii", "sic": "sicdb"}.get(detected, detected)
 
 

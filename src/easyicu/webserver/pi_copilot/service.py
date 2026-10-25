@@ -1911,6 +1911,8 @@ class PiCopilotService:
         action: str,
         database: Optional[str] = None,
         source_id: Optional[str] = None,
+        expected_revision: Optional[int] = None,
+        offer_sha256: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Confirm one path-free source choice before a research conversation."""
 
@@ -1922,6 +1924,8 @@ class PiCopilotService:
                 status_code=409,
             )
         clean_action = str(action or "").strip()
+        from .demo_planning_source import ACTION as demo_planning_action, bind_demo_planning_source
+
         if clean_action not in {
             "reuse_project_source",
             "use_study_required_data",
@@ -1930,11 +1934,22 @@ class PiCopilotService:
             "begin_full_data_selection",
             "confirm_selected_source",
             "cancel_local_selection",
+            demo_planning_action,
         }:
             raise PiCopilotError(
                 "pi_session_data_source_action_invalid",
                 "Choose a supported data-source confirmation action.",
                 status_code=422,
+            )
+        if clean_action != demo_planning_action and (expected_revision is not None or offer_sha256 is not None):
+            raise PiCopilotError(
+                "pi_data_source_offer_not_allowed",
+                "A planning-source offer belongs only to its displayed source choice.", status_code=422,
+            )
+        if clean_action == demo_planning_action and (database is not None or source_id is not None):
+            raise PiCopilotError(
+                "pi_data_source_override_not_allowed",
+                "This choice uses only the official Demo source already bound to the study.", status_code=422,
             )
         clean_database = str(database or "").strip()
         expected_database = None
@@ -1987,6 +2002,11 @@ class PiCopilotService:
         if clean_action == "use_registered_source":
             context = bind_offered_registered_source(
                 record, context, database=clean_database, source_id=source_id,
+                stale=self._stale_details(record),
+            )
+        elif clean_action == demo_planning_action:
+            context = bind_demo_planning_source(
+                record, context, expected_revision=expected_revision, offer_sha256=offer_sha256,
                 stale=self._stale_details(record),
             )
 
@@ -2045,9 +2065,11 @@ class PiCopilotService:
                 "Select and validate a local data folder before confirming this conversation.",
                 status_code=409,
             )
-        if clean_action == "use_registered_source":
+        if clean_action in {"use_registered_source", demo_planning_action}:
             record.binding = self._binding_for_context(context, run_id=record.binding.run_id)
-            confirmation_mode = "select_registered_source"
+            confirmation_mode = (
+                "reuse_project_source" if clean_action == demo_planning_action else "select_registered_source"
+            )
             extraction_scope = "study_required"
         elif clean_action == "confirm_selected_source":
             if record.data_source_authorization.status != "selection_in_progress":
