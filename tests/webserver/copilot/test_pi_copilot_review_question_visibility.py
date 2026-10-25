@@ -22,7 +22,10 @@ from tests.support.node import run_node
 STATIC = Path(__file__).parents[3] / "src" / "easyicu" / "webserver" / "static"
 MODULES_SOURCE = (STATIC / "js/screens-guided-pi-modules.js").read_text(encoding="utf-8")
 CONFIRMATION_SOURCE = (STATIC / "js/screens-guided-pi-confirmation.js").read_text(encoding="utf-8")
-RENDERER_SOURCE = (STATIC / "js/screens-agent-render.js").read_text(encoding="utf-8")
+RENDERER_SOURCE = "\n".join(
+    (STATIC / "js" / name).read_text(encoding="utf-8")
+    for name in ("screens-agent-report-reader.js", "screens-agent-render.js")
+)
 SYSTEM_REVIEW_SUMMARY = "项属于系统计划修订"
 
 

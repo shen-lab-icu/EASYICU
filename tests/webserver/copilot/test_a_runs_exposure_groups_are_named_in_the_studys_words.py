@@ -492,7 +492,7 @@ global.window = {{
     return _node(
         script + "".join(f"require({json.dumps(str((JS / file).resolve()))});\n" for file in (
             "screens-agent-reader-vocab.js", "screens-agent-question-requirements.js",
-            "screens-agent-exposure-levels.js", "screens-agent-render.js",
+            "screens-agent-exposure-levels.js", "screens-agent-report-reader.js", "screens-agent-render.js",
         )) + call,
     )
 
@@ -799,7 +799,7 @@ def test_the_card_and_page_load_the_readers() -> None:
     # each carries is the page's cache-busting rule, bumped by every later
     # change to that file, so it is not pinned here.
     for script in (
-        "screens-agent-exposure-levels.js", "screens-agent-render.js", "screens-guided-pi-exposure-groups.js",
+        "screens-agent-exposure-levels.js", "screens-agent-report-reader.js", "screens-agent-render.js", "screens-guided-pi-exposure-groups.js",
         "screens-guided-pi-confirmation.js", "screens-guided-pi-result-summary.js", "screens-guided-pi-run-answer.js",
         "screens-guided-pi-run-files.js", "screens-guided-pi-preview.js", "screens-guided-pi-analysis-report.js",
         "screens-agent-question-requirements.js",

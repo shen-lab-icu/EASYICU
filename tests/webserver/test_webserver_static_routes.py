@@ -836,6 +836,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     """Guided run review uses the shared pure artifact-render owner."""
     fixtures_js = _static_js("screens-agent-fixtures.js")
     render_js = _static_js("screens-agent-render.js")
+    report_js = _static_js("screens-agent-report-reader.js")
     index_html = _static_html("index.html")
 
     # Fixture data + pure renderers are defined in the render file. Copilot
@@ -847,20 +848,26 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert "function runStatusLabel(status)" in render_js
     assert "function thumb(kind)" in render_js
     assert "window.AGENT_RENDER = {" in render_js
+    assert "window.AGENT_REPORT_READER = {" in report_js
+    assert "function figureReading(row)" in report_js
+    assert "function figureGallery(payload)" in report_js
+    assert "function manuscriptProvenanceView(payload, { artifactTable, manuscriptUnavailable })" in report_js
 
     # The renderer must load before the Guided run-file consumer.
     fixtures_pos = index_html.find("screens-agent-fixtures.js")
+    report_pos = index_html.find("screens-agent-report-reader.js")
     render_pos = index_html.find("screens-agent-render.js")
     main_pos = index_html.find("screens-guided-pi-run-files.js?")
     assert fixtures_pos != -1 and render_pos != -1 and main_pos != -1
     assert (
-        fixtures_pos < render_pos < main_pos
+        fixtures_pos < report_pos < render_pos < main_pos
     ), "agent fixtures and renderer must load before screens-guided-pi-run-files.js"
     # Reader vocabulary (review findings, column and table names) is read by
     # the renderer at call time, so it must be defined before it.
     vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261020-prepared-grouping2")
     assert fixtures_pos < vocab_pos < render_pos
-    assert "js/screens-agent-render.js?v=20261022-prose1" in index_html
+    assert "js/screens-agent-report-reader.js?v=20261025-owner-split1" in index_html
+    assert "js/screens-agent-render.js?v=20261025-owner-split1" in index_html
     assert "js/screens-agent-question-requirements.js?v=20261010-exposure-labels1" in index_html
     assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html
 

@@ -11,7 +11,7 @@ const path = require('node:path');
 
 require(path.resolve('tests/js/guided_pi_module_harness.cjs'));
 const files = process.argv.slice(2);
-assert.equal(files.length, 16, 'Run through tools/run_js_contracts.py with all sixteen owners');
+assert.equal(files.length, 17, 'Run through tools/run_js_contracts.py with all seventeen owners');
 let language = 'zh';
 global.window = { EU_LANG: language, document: { addEventListener() {} },
   t: (en, zh) => (language === 'zh' ? zh : en), icon: name => (name ? `<i>${name}</i>` : '') };

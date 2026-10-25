@@ -344,6 +344,7 @@ def test_paused_review_names_clinical_gaps_without_promising_unavailable_repairs
       eval({MODULES_SOURCE!r});
       eval({LABELS_SOURCE!r});
       eval({_read('js/screens-agent-reader-vocab.js')!r});
+      eval({_read('js/screens-agent-report-reader.js')!r});
       eval({_read('js/screens-agent-render.js')!r});
       eval({_read('js/screens-guided-pi-confirmation.js')!r});
       const host = {{

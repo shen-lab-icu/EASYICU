@@ -127,7 +127,9 @@ test('P1-2 restored study text stays literal in the question, plan and JSON prev
 });
 
 test('P2-5 runtime, unclassified and future routes all survive finding lanes', () => {
-  const c = context(); vm.runInContext(read('screens-agent-render.js'), c);
+  const c = context();
+  vm.runInContext(read('screens-agent-report-reader.js'), c);
+  vm.runInContext(read('screens-agent-render.js'), c);
   const findings = ['runtime_capability', 'unclassified', 'future_route'].map((route, i) => ({
     code: `UNKNOWN_${i}`, message: `finding-${i}`, remediation_route: route, requires_user_authorization: false,
   }));

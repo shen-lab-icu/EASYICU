@@ -12,7 +12,7 @@ const path = require('node:path');
 
 require(path.resolve('tests/js/guided_pi_module_harness.cjs'));
 const files = process.argv.slice(2);
-assert.equal(files.length, 11, 'Run through tools/run_js_contracts.py with all eleven owners');
+assert.equal(files.length, 12, 'Run through tools/run_js_contracts.py with all twelve owners');
 let language = 'zh';
 // `t` and `icon` are the page's shared copy and icon helpers, which the
 // run-file reader uses.
