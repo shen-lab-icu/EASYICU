@@ -45,10 +45,10 @@
   function description(level) {
     return {
       off: tr('No effort level is sent; the model service applies its own default (where a model without an effort setting clamps to).', '不向模型指定推理档位，由模型服务按自身默认处理（所选模型不接受推理档位时会收敛到此状态）。'),
-      minimal: tr('The least reasoning this model allows; reached only when the model clamped a request.', '该模型允许的最少推理；仅在模型收敛请求时出现。'),
+      minimal: tr('The model selected this level automatically.', '模型自动采用此档位。'),
       low: tr('Brief reasoning, faster replies; enough for status checks and rewording.', '简短推理，回复更快；查看状态、改措辞时够用。'),
       medium: tr('Default. Routine reasoning for planning research steps and explaining results.', '默认。规划研究步骤、解释结果的常规推理。'),
-      high: tr('Deep reasoning for plan audits and hard questions; each reply is slower and uses more tokens.', '深入推理，审计方案、疑难问题时用；每轮更慢、消耗更多 token。'),
+      high: tr('Deep reasoning for plan reviews and hard questions. Replies may take longer and use more tokens.', '深入思考，用于核对计划和疑难问题。回复可能更慢，用量也会增加。'),
     }[normalize(level)];
   }
 
@@ -57,8 +57,8 @@
     const current = normalize(options.level);
     const rows = LEVELS.includes(current) ? LEVELS : LEVELS.concat(current);
     return `<details class="gpi-effort-menu" data-gpi-effort-menu data-popover-menu>
-      <summary aria-label="${esc(`${tr('Effort', '努力程度')}：${label(current)}`)}" title="${esc(description(current))}" ${disabled ? 'aria-disabled="true"' : ''}>${iconHtml('spark', 14)}<span>${esc(tr('Effort', '努力'))} · ${esc(label(current))}</span><span class="gpi-access-chevron" aria-hidden="true">${iconHtml('chevron', 13)}</span></summary>
-      <div class="gpi-access-popover gpi-effort-popover" role="group" aria-label="${esc(tr('Effort level for this conversation', '本对话的努力程度'))}">
+      <summary aria-label="${esc(`${tr('Reasoning depth', '思考深度')}：${label(current)}`)}" title="${esc(description(current))}" ${disabled ? 'aria-disabled="true"' : ''}>${iconHtml('spark', 14)}<span>${esc(tr('Reasoning depth', '思考深度'))} · ${esc(label(current))}</span><span class="gpi-access-chevron" aria-hidden="true">${iconHtml('chevron', 13)}</span></summary>
+      <div class="gpi-access-popover gpi-effort-popover" role="group" aria-label="${esc(tr('Reasoning depth for this conversation', '本对话的思考深度'))}">
         ${rows.map(key => `<button type="button" data-gpi-effort-level="${key}" aria-pressed="${current === key}" ${disabled ? 'disabled' : ''}><span><strong>${esc(label(key))}</strong><small>${esc(description(key))}</small></span>${current === key ? iconHtml('check', 15) : ''}</button>`).join('')}
       </div>
     </details>`;
@@ -94,7 +94,7 @@
       callbacks.setSession({ ...current, ...(payload && payload.session ? payload.session : {}), thinking_level: applied });
       callbacks.render(true);
     } catch (error) {
-      callbacks.setError(String((error && error.message) || tr('The effort level could not be changed.', '努力程度未能修改。')).slice(0, 240));
+      callbacks.setError(String((error && error.message) || tr('The reasoning depth could not be changed.', '思考深度未能修改。')).slice(0, 240));
       callbacks.render(true);
     }
   }

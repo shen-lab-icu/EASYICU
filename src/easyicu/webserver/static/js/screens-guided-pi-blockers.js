@@ -24,67 +24,43 @@
 (function () {
   const t = (en, zh) => (window.t ? window.t(en, zh) : en);
 
-  /* Keep in sync with MIN_NODE_VERSION in pi_copilot/gateway.py. */
-  const MIN_NODE = '22.19.0';
-  const INSTALL_CMD = 'easyicu-copilot-install';
+  const incomplete = () => t('Copilot components are incomplete. Contact support.', '研究助手组件不完整，请联系技术支持。');
+  const supportFix = () => t(
+    'Open “Having a problem?” and copy the problem reference for support; include “Diagnostic details” from this notice.',
+    '请打开「遇到问题」复制问题编号，并向技术支持提供本提示的「诊断详情」。',
+  );
 
   /* Lower number = fix this first. */
   const CATALOG = {
     node_available: {
       order: 10,
-      title: () => t('Node.js was not found', '未找到 Node.js'),
-      fix: () => t(
-        `The Copilot runtime requires Node.js. Install Node ${MIN_NODE} or newer, then reopen this page.`,
-        `研究助手运行环境依赖 Node.js。请安装 Node ${MIN_NODE} 或更高版本，然后重新打开本页。`,
-      ),
+      title: incomplete,
+      fix: supportFix,
     },
     node_version_supported: {
       order: 20,
-      title: () => t('The installed Node.js is too old', '已安装的 Node.js 版本过低'),
-      fix: (runtime) => {
-        const found = runtime && runtime.node_version;
-        return found
-          ? t(
-            `Found Node ${found}; the Copilot runtime needs ${MIN_NODE} or newer. Upgrade Node, then reopen this page.`,
-            `检测到 Node ${found}，研究助手运行环境需要 ${MIN_NODE} 或更高版本。请升级 Node 后重新打开本页。`,
-          )
-          : t(
-            `The Copilot runtime needs Node ${MIN_NODE} or newer. Upgrade Node, then reopen this page.`,
-            `研究助手运行环境需要 Node ${MIN_NODE} 或更高版本。请升级 Node 后重新打开本页。`,
-          );
-      },
+      title: incomplete,
+      fix: supportFix,
     },
     entrypoint_available: {
       order: 30,
-      title: () => t('The Copilot runtime is not installed yet', '研究助手运行环境尚未安装'),
-      fix: () => t(
-        `Run \`${INSTALL_CMD}\` in your EasyICU environment to install the pinned runtime.`,
-        `在 EasyICU 环境中运行 \`${INSTALL_CMD}\` 安装已固定版本的运行环境。`,
-      ),
+      title: incomplete,
+      fix: supportFix,
     },
     dependency_installed: {
       order: 40,
-      title: () => t('The Copilot runtime files are incomplete', '研究助手运行环境文件不完整'),
-      fix: () => t(
-        `The runtime folder exists but its packages are missing. Run \`${INSTALL_CMD}\` to reinstall.`,
-        `运行环境目录存在但依赖包缺失。请运行 \`${INSTALL_CMD}\` 重新安装。`,
-      ),
+      title: incomplete,
+      fix: supportFix,
     },
     lockfile_present: {
       order: 50,
-      title: () => t('The runtime lockfile is missing', '运行环境 lockfile 缺失'),
-      fix: () => t(
-        `EasyICU pins the Copilot runtime to an exact version set, and that lock is absent. Run \`${INSTALL_CMD}\` to restore it.`,
-        `EasyICU 会把研究助手运行环境固定到确切版本集合，当前缺少该锁定文件。请运行 \`${INSTALL_CMD}\` 恢复。`,
-      ),
+      title: incomplete,
+      fix: supportFix,
     },
     runtime_integrity_verified: {
       order: 60,
-      title: () => t('The runtime files do not match their pinned digests', '运行环境文件与固定摘要不一致'),
-      fix: () => t(
-        `The installed files differ from the version EasyICU pinned. Reinstall with \`${INSTALL_CMD}\` rather than continuing.`,
-        `已安装文件与 EasyICU 固定的版本不一致。请用 \`${INSTALL_CMD}\` 重新安装，不要继续使用。`,
-      ),
+      title: () => t('Copilot component checks failed. Contact support.', '研究助手组件校验未通过，请联系技术支持。'),
+      fix: supportFix,
     },
     base_url_configured: {
       order: 70,

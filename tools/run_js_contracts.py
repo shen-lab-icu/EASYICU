@@ -38,6 +38,7 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_pi_extraction_terminal.test.js": [],
     "guided_pi_source_picker_stability.test.js": [],
     "guided_pi_demo_raw_planning.test.js": [],
+    "guided_pi_audit_desktop_copy.test.js": [],
     "guided_pi_message_queue.test.js": ["screens-guided-pi-message-queue.js"],
     "windowed_summary_copy.test.js": ["screens-guided-pi-error-text.js"],
     "audit_regressions_20260915.test.js": [],

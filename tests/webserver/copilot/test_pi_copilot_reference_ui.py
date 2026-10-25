@@ -1149,10 +1149,10 @@ def test_effort_level_is_a_per_conversation_menu_on_the_composer() -> None:
         rows: (html.match(/data-gpi-effort-level="/g) || []).length,
         noOffChoice: !html.includes('data-gpi-effort-level="off"'),
         pressed: html.includes('data-gpi-effort-level="medium" aria-pressed="true"') && !html.includes('data-gpi-effort-level="high" aria-pressed="true"'),
-        summary: html.includes('<span>努力 · 中</span>') && html.includes('<i>spark</i>'),
+        summary: html.includes('<span>思考深度 · 中</span>') && html.includes('<i>spark</i>'),
         noFootnote: !html.includes('<p>') && html.includes('data-popover-menu'),
         clampedRow: clamped.includes('data-gpi-effort-level="minimal" aria-pressed="true"') && clamped.includes('aria-disabled="true"') && (clamped.match(/data-gpi-effort-level="/g) || []).length === 4,
-        offState: clampedOff.includes('<span>努力 · 未指定</span>') && clampedOff.includes('data-gpi-effort-level="off" aria-pressed="true"') && clampedOff.includes('不向模型指定推理档位') && !clampedOff.includes('菜单出现前'),
+        offState: clampedOff.includes('<span>思考深度 · 未指定</span>') && clampedOff.includes('data-gpi-effort-level="off" aria-pressed="true"') && clampedOff.includes('不向模型指定推理档位') && !clampedOff.includes('菜单出现前'),
         same, changed, ignored, calls, sessionLevel: session.thinking_level, sessionTitle: session.title,
         remembered: stored['easyicu.pi.thinkingLevel.v1'], preferred: owner.preferred(), rendered, error, menuClosed: menu.removed,
       }})), 0);

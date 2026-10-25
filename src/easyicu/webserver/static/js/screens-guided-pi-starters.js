@@ -130,10 +130,13 @@
     }, true);
   }
   function entryNotes(tr) {
+    const workflow = window.EasyICU.guidedPi.optional('hosted')?.active()
+      ? tr('Confirm the data and review the analysis plan. After approval, analysis runs on the server.', '先确认数据，再核对分析计划。批准后在服务器上运行分析。')
+      : tr('Confirm the data and review the analysis plan. After approval, analysis runs on this computer.', '先确认数据，再核对分析计划。批准后在本机运行分析。');
     const lines = [
       [tr('Can do', '能做'), tr('descriptive, association, prediction, survival, subtyping and causal studies on MIMIC-IV; descriptive, association and prediction studies on eICU.', 'MIMIC-IV 上的描述、关联、预测、生存、亚型与因果分析；eICU 上的描述、关联与预测分析。')],
       [tr('Not supported', '不做'), tr('HiRID, AUMC and SICdb, and survival, causal or subtyping studies on eICU. EasyICU says why when it declines.', 'HiRID、AUMC、SICdb 数据库，以及 eICU 上的生存、因果与亚型分析。遇到这类问题会说明原因。')],
-      [tr('How it works', '流程'), tr('you confirm the data and then review the plan; analysis starts only after both. It runs on the server, so you can close the page.', '先确认数据、再审阅计划，两次确认后才开始分析。分析在服务器上运行，可以关闭页面。')],
+      [tr('How it works', '流程'), workflow],
       [tr('Results', '结果'), tr('analysis-level evidence; review them before any publication use.', '分析级证据。用于发表前需要人工复核。')],
     ];
     return `<details class="gpi-entry-notes" data-gpi-entry-notes${notesClosed() ? '' : ' open'}>
@@ -198,7 +201,7 @@
     return `<section class="gpi-research-start gpi-entry-home" aria-label="${esc(tr('Start a research conversation', '开始研究对话'))}">
       <header class="gpi-entry-intro">
         <div class="gpi-entry-title"><h2>${esc(tr('Start an ICU research task', '开始一项 ICU 研究'))}</h2></div>
-        <p>${esc(tr('Write your clinical question in your own words. EasyICU drafts a complete study plan; once you confirm it, the analysis runs on the server.', '用自己的话写下临床问题。EasyICU 先给出完整的研究计划，经你确认后在服务器上完成分析。'))}</p>
+        <p>${esc(tr('Describe your clinical question, choose the data, then review the analysis plan.', '写下你的临床问题，选择数据，再核对分析计划。'))}</p>
       </header>
       ${options.composer || ''}
       ${offersDemo() ? demoCard(disabled, tr) : ''}
