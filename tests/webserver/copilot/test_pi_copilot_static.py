@@ -527,7 +527,8 @@ def test_new_research_conversation_keeps_chat_open_until_data_is_needed() -> Non
     assert '<div class="gpi-compose-card${activeChild || starting ? \' is-running\' : \'\'}">' in session_panel
     assert "dataConsentRequired ? '' : `<div class=\"gpi-compose\">" not in session_panel
     assert "DATA_CONSENT.requiresConfirmation" not in send_text
-    assert "Reviewer demo" in header
+    assert "Reviewer demo" not in header
+    assert "查看完整科研流程演示" in shell
     assert "Full demo" not in header
 
 
@@ -1274,17 +1275,18 @@ def test_guided_header_and_progress_keep_secondary_controls_available() -> None:
     # The chip is a menu now, but the full connection page must stay reachable
     # as one row inside it rather than being the only thing it can do.
     assert 'data-gpi-config' in header
-    # The switch is live, so the chip must not promise a new conversation.
-    assert "变更将在新会话中生效" not in header
-    assert "在当前连接上切换模型" in header
+    # The saved session has no connection-bound model switch endpoint.
+    assert "查看本对话的模型连接" in header
+    assert "在当前连接上切换模型" not in header
     assert "gpi-head-overflow-menu" in header
     for selector in (
         "data-gpi-study-setup",
         "data-gpi-config",
-        "data-gpi-presentation-pin",
-        "data-gpi-demo",
     ):
         assert selector in header
+    for selector in ("data-gpi-presentation-pin", "data-gpi-demo"):
+        assert selector not in header
+    assert "查看完整科研流程演示" in shell
     assert "HEADER.render(headerOptions)" in shell
     assert "HEADER.renderModelControl(headerOptions)" in shell
     assert "function dismissHeaderOverflow(event)" in events

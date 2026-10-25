@@ -18,14 +18,9 @@
 
   function renderModelControl(options) {
     const { tr, esc, icon } = options;
-    // D-P3-3: truncated model label keeps its full text in title (summary title
-    // stays the help copy; the inner span carries the connection label).
-    //
-    // This used to be a button that threw the whole composer away and opened
-    // the connection page. It is now a menu: the model rows are filled by the
-    // model-menu owner when the details opens, so switching needs no composer
-    // re-render, and the connection settings stay reachable as one row inside.
-    return `<details class="gpi-model-control" data-popover-menu><summary class="gpi-model-binding" title="${esc(tr('Switch model on this connection', '在当前连接上切换模型'))}" aria-label="${esc(tr('Available models', '可用模型'))}"><span title="${esc(options.connectionLabel)}">${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</summary><div class="gpi-model-popover" role="group" aria-label="${esc(tr('Models on this connection', '当前连接的模型'))}" data-gpi-model-popover>${options.hosted ? '' : `<button type="button" class="gpi-model-settings" data-gpi-config>${esc(tr('Connection settings', '连接设置'))}</button>`}</div></details>`;
+    // The session binding is fixed; connection settings own future choices.
+    // Carry its identity independently of the translated, truncated label.
+    return `<details class="gpi-model-control" data-popover-menu><summary class="gpi-model-binding" title="${esc(tr('View this conversation’s model connection', '查看本对话的模型连接'))}" aria-label="${esc(tr('Model connection', '模型连接'))}"><span title="${esc(options.connectionLabel)}">${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</summary><div class="gpi-model-popover" role="group" aria-label="${esc(tr('Model connection', '模型连接'))}" data-gpi-model-popover data-gpi-model-key="${esc(options.modelBindingKey || '')}">${options.hosted ? '' : `<button type="button" class="gpi-model-settings" data-gpi-config>${esc(tr('Connection settings', '连接设置'))}</button>`}</div></details>`;
   }
 
   /* While a server job runs the top bar says so with its elapsed time; the
@@ -66,8 +61,6 @@
               <button type="button" data-gpi-mode-switch="workspace" aria-pressed="${options.workspace}">${tr('Workspace', '工作区')}</button>
             </div>
             <button type="button" role="menuitem" data-gpi-study-setup>${tr('Study setup', '研究配置')}</button>
-            <button type="button" role="menuitem" data-gpi-presentation-pin aria-pressed="${options.pinned ? 'true' : 'false'}">${options.pinned ? tr('Remove from presentation', '取消保留演示') : tr('Save for presentation', '保留演示')}</button>
-            <button type="button" role="menuitem" data-gpi-demo>${icon('play', 13)} ${tr('Reviewer demo', '审稿流程演示')}</button>
           </div>
         </details>`}
       </div>
