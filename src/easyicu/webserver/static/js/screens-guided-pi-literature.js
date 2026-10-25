@@ -29,48 +29,29 @@
     if (!notices.length) return '';
     return `<section class="gpi-lit-notices" role="note"><strong>${esc(tr('Source corrections and notices', '来源勘误与声明'))}</strong>${notices.map(value => `<p>${esc(value)}</p>`).join('')}</section>`;
   }
-  function semanticIntentKey(value) {
-    const intent = String(value || '');
-    const normalized = intent.toLowerCase();
-    if (/cohort|eligib|population|account|人群|队列|纳入|排除|分母/.test(normalized)) return 'population';
-    if (/nonlinear|spline|functional|dose|form|非线性|样条|函数形式|阈值/.test(normalized)) return 'functional_form';
-    if (/exposure|lactate|measurement|time|window|暴露|乳酸|测量|时间窗|时间对齐/.test(normalized)) return 'exposure_timing';
-    if (/outcome|mortality|death|结局|死亡/.test(normalized)) return 'outcome';
-    if (/missing|imput|缺失|插补/.test(normalized)) return 'missingness';
-    if (/confound|adjust|covariat|model|混杂|调整|协变量|模型/.test(normalized)) return 'adjustment_model';
-    if (/sensitivity|robust|敏感|稳健/.test(normalized)) return 'robustness';
-    if (/report|quality|summary|报告|质量|汇总/.test(normalized)) return 'reporting';
-    return normalized || 'plan_decision';
-  }
-  function displayIntent(value) {
-    const intent = String(value || '');
-    if (window.EU_LANG !== 'zh') return intent || 'Plan decision';
-    const functionalFormLabel = /lactate|乳酸/i.test(intent)
-      ? '检验乳酸与死亡是否为非线性关系'
-      : '检验连续研究因素与结局是否为非线性关系';
+  function designLabel(element) {
     const labels = {
-      population: '确定研究人群与纳排标准',
-      functional_form: functionalFormLabel,
-      exposure_timing: '确定研究因素的测量方式与时间窗',
-      outcome: '明确研究结局',
-      missingness: '处理缺失数据',
-      adjustment_model: '确定混杂因素与统计模型',
-      robustness: '安排敏感性分析',
-      reporting: '规范结果与研究流程的报告',
+      population: ['Population and eligibility', '确定研究人群与纳排标准'],
+      exposure: ['Research factor definition', '定义研究因素'],
+      measurement: ['Measurement definition', '定义测量方式'],
+      time_zero: ['Time origin and observation window', '确定时间起点与观察窗'],
+      outcome: ['Outcome definition', '明确研究结局'],
+      estimand: ['Target quantity and comparison', '明确估计目标与比较'],
+      adjustment: ['Covariate adjustment', '确定混杂因素调整'],
+      dependence: ['Dependence between observations', '处理观测间的相关性'],
+      missing_data: ['Missing data', '处理缺失数据'],
+      robustness: ['Sensitivity analyses', '安排敏感性分析'],
+      reporting: ['Transparent reporting', '规范研究报告'],
+      model: ['Statistical model', '确定统计模型'],
+      functional_form: ['Functional form', '确定函数形式'],
     };
-    return labels[semanticIntentKey(intent)] || '计划中的科学设计决定';
+    return labels[element] ? tr(...labels[element]) : '';
   }
-  function displayApplication(source) {
-    const application = String((source && source.application) || '');
-    if (window.EU_LANG !== 'zh') return application;
-    const haystack = `${source && source.key || ''} ${source && source.title || ''} ${application}`.toLowerCase();
-    if (/strobe/.test(haystack)) return '用于检查观察性研究是否完整报告研究对象、变量定义、偏倚、统计方法和结果。它规范报告方式，不证明当前研究因素与结局有关。';
-    if (/record/.test(haystack)) return '用于补充说明常规医疗数据的来源、筛选和处理过程。它规范数据透明度，不证明当前研究因素与结局有关。';
-    if (/missing|imput|sterne/.test(haystack)) return '用于预先规定研究因素和协变量缺失时的处理与敏感性分析，避免只分析完整病例造成偏倚。';
-    if (/spline|nonlinear|durrleman/.test(haystack)) return '用于检验连续研究因素与结局是否存在弯曲或阈值关系，避免武断地假设每升高 1 单位风险都等比例变化。';
-    if (/mimic[-_ ]?iv|johnson_mimic/.test(haystack)) return '用于说明本研究数据库的来源、覆盖范围和可复现引用，不作为当前研究因素与结局关联的直接证据。';
-    if (/direct|compar|lactate|mortality|death|icu/.test(haystack)) return '用于对照相近 ICU 人群中研究因素、结局和分析策略的定义；本计划只借鉴设计，不复制文献中的效应值。';
-    return application ? '这篇文献与该设计决定有关；下方保留原始绑定，仍需研究者核对其适用性。' : '';
+  function retainedDetail(label, text, extra = '') {
+    const value = String(text || '').trim();
+    if (value.length <= 180 && !extra) return `<p class="gpi-lit-why"><strong>${esc(label)}</strong>${esc(value)}</p>`;
+    const concise = value.length > 180 ? value.slice(0, 180) + '…' : value;
+    return `<details class="gpi-lit-source-detail"><summary>${esc(label)}${esc(concise)}</summary>${value.length > 180 ? `<p>${esc(value)}</p>` : ''}${extra}</details>`;
   }
   function sourceKey(source) {
     const row = source && typeof source === 'object' ? source : {};
@@ -93,12 +74,11 @@
         if (!key) return;
         if (!usage.has(key)) usage.set(key, []);
         const next = {
-          key: semanticIntentKey(step.intent),
-          intent: displayIntent(step.intent),
-          application: displayApplication(binding),
-          designElements: Array.from(bindingElements(binding)),
+          application: String(binding.application || '').trim(),
+          divergence: String(binding.divergence || '').trim(),
+          designElements: Array.from(bindingElements(binding)).sort(),
         };
-        const duplicate = usage.get(key).some(row => row.intent === next.intent && row.application === next.application);
+        const duplicate = usage.get(key).some(row => JSON.stringify(row) === JSON.stringify(next));
         if (!duplicate) usage.get(key).push(next);
       });
     });
@@ -153,8 +133,8 @@
     const reportingBindings = buckets.reporting.length;
     const directCount = Number(payload.direct_comparator_count || 0);
     const incomplete = directCount === 0 || scientificBindings === 0;
-    return `<section class="gpi-lit-coverage ${incomplete ? 'incomplete' : 'supported'}">
-      <header><h3>${esc(tr('What the literature currently supports', '当前文献实际支撑了什么'))}</h3><span>${esc(incomplete ? tr('Incomplete', '依据不完整') : tr('Mapped', '已有科学依据'))}</span></header>
+    return `<section class="gpi-lit-coverage ${incomplete ? 'incomplete' : 'pending'}">
+      <header><h3>${esc(tr('Literature bindings awaiting appraisal', '文献绑定与待核对用途'))}</h3><span>${esc(incomplete ? tr('Incomplete bindings', '文献绑定不完整') : tr('Bound, pending appraisal', '已绑定文献，待核对'))}</span></header>
       <div class="gpi-lit-coverage-grid">
         <div><span>${esc(tr('Direct question studies', '研究问题直接相关'))}</span><strong>${esc(tr(`${buckets.direct.length || directCount} source(s)`, `${buckets.direct.length || directCount} 篇`))}</strong></div>
         <div><span>${esc(tr('Variables and covariates', '变量与协变量依据'))}</span><strong>${esc(tr(`${buckets.variables.length} source(s)`, `${buckets.variables.length} 篇`))}</strong></div>
@@ -224,6 +204,8 @@
         ? tr('Not accepted as direct evidence because it does not establish: ', '未作为直接依据，因为它没有同时证明：') + missing.join(tr(', ', '、')) + '。'
         : tr('Retrieved, but not accepted as direct evidence for this exact question.', '检索到了，但没有被接受为这个具体问题的直接依据。');
     }
+    if (screening && screening.disposition === 'include') return tr('Candidate retained; inclusion rationale not recorded.', '已保留候选，未记录具体纳入理由。');
+    if (usages.length) return tr('Bound to the plan; selection rationale not recorded.', '已绑定到计划，未记录具体收录理由。');
     return tr(
       'This is a system reference and was not used as direct evidence for the current question.',
       '这是系统参考资料，没有被当作当前问题的直接依据。'
@@ -322,18 +304,31 @@
     const key = row.key || '';
     const kind = config.kind || 'reference';
     const usages = Array.isArray(config.usages) ? config.usages : [];
-    const genericIntent = tr('Plan decision', '计划中的科学设计决定');
-    const useLabels = Array.from(new Set(usages.map(item => item.intent).filter(value => value && value !== genericIntent)));
-    const excludedReason = kind === 'excluded' ? reasonFor(row, kind, usages) : '';
+    const useLabels = Array.from(new Set(usages.flatMap(item => item.designElements.map(designLabel)).filter(Boolean)));
+    const screening = row.screening && typeof row.screening === 'object' ? row.screening : {};
+    const reasonLabel = screening.disposition === 'include'
+      ? tr('Candidate inclusion reason: ', '候选纳入理由：')
+      : screening.disposition === 'exclude'
+        ? tr('Reason not used as direct evidence: ', '未作为直接依据的原因：')
+        : tr('Selection record: ', '收录记录：');
+    const reason = screening.rationale || reasonFor(row, kind, usages);
+    const sourceExcerpt = row.relevance_kind === 'source_excerpt'
+      || (!row.relevance_kind && /^(Study-design excerpt:|Source excerpt:)/.test(relevance));
+    const applications = usages.length ? `<details class="gpi-lit-source-detail"><summary>${esc(tr('Used for the plan (pending appraisal): ', '用于计划（待核对）：'))}${esc(useLabels.join(tr(', ', '、')) || tr('Specific use not recorded', '尚未记录具体用途'))}</summary>${usages.map(item =>
+      `<p>${esc(item.application || tr('No specific application recorded', '尚未记录具体应用'))}</p><p>${esc(item.divergence
+        ? tr('Recorded difference: ', '已记录差异：') + item.divergence
+        : tr('Differences not yet appraised', '差异尚未核对'))}</p>`
+    ).join('')}</details>` : '';
     if (key && indexByKey) indexByKey.set(String(key), row);
     return `<article class="gpi-lit-card ${esc(kind)}">
       <div class="gpi-lit-card-head"><span class="gpi-lit-kind">${esc(kindLabel(kind))}</span></div>
       <h4>${esc(title)}</h4>
       ${sourceMeta(row) ? `<div class="gpi-lit-meta">${sourceMeta(row)}</div>` : ''}
       ${sourceNotices(row)}
-      ${useLabels.length ? `<div class="gpi-lit-use"><strong>${esc(tr('Used for: ', '用于计划：'))}</strong>${useLabels.map(label => `<span>${esc(label)}</span>`).join('')}</div>` : ''}
-      ${excludedReason ? `<p class="gpi-lit-why"><strong>${esc(tr('Why it was not accepted: ', '未采用原因：'))}</strong>${esc(excludedReason)}</p>` : ''}
-      ${relevance ? `<details class="gpi-lit-source-detail"><summary>${esc(tr('View retained source excerpt', '查看系统保留的摘要片段'))}</summary><p>${esc(relevance)}</p></details>` : ''}
+      ${applications || `<p class="gpi-lit-use">${esc(tr('No specific application recorded', '尚未记录具体应用'))}</p>`}
+      ${retainedDetail(reasonLabel, reason, screening.disposition === 'exclude'
+        ? `<p>${esc(reasonFor(row, 'excluded', usages))}</p>` : '')}
+      ${relevance ? `<details class="gpi-lit-source-detail"><summary>${esc(sourceExcerpt ? tr('View retained source passage', '查看保留的来源片段') : tr('System reference note (not an abstract)', '系统参考说明（非原文摘要）'))}</summary><p>${esc(relevance)}</p></details>` : ''}
       ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(tr('Open source record', '打开来源页面'))}<span aria-hidden="true">↗</span></a>` : `<span class="gpi-lit-no-link">${esc(tr('No verified source link in this artifact', '该产物没有已核验的来源链接'))}</span>`}
     </article>`;
   }
@@ -348,8 +343,11 @@
         : tr('No question-specific literature search was run', '尚未执行针对这个问题的文献检索');
     const sources = Array.isArray(search.sources_returning) ? search.sources_returning : [];
     const prisma = search.prisma && typeof search.prisma === 'object' ? search.prisma : null;
-    const identified = Number((prisma || {}).identified || 0);
-    const screened = Number((prisma || {}).screened || 0);
+    const count = value => Number.isInteger(value) && value >= 0 ? value : tr('Not recorded', '未记录');
+    const identified = count(prisma && prisma.identified);
+    const screened = count(prisma && prisma.screened);
+    const curated = count(search.curated_seed_count);
+    const searchedAt = String(search.searched_at || '').trim();
     const queries = search.queries && typeof search.queries === 'object' ? search.queries : {};
     const queryRows = Object.entries(queries).flatMap(([source, rows]) => (Array.isArray(rows) ? rows : []).map(query => ({ source, query })));
     return `<section class="gpi-lit-search ${searched ? 'searched' : 'curated'}">
@@ -360,7 +358,8 @@
         : searched
           ? tr(`${identified} record(s) were retrieved and ${screened} screened; none matched all parts of the question. The plan must not claim direct literature support.`, `共检索到 ${identified} 篇候选、完成 ${screened} 篇筛选；没有一篇同时匹配问题的全部要素。当前计划不能声称有同题文献直接支持。`)
           : tr('Only general definitions or reporting guidance may be present.', '当前最多只有通用定义或报告规范，不能当作同题研究证据。'))}</p>
-      <div class="gpi-lit-counts"><span>${esc(tr('Retrieved', '检索到'))}<strong>${identified}</strong></span><span>${esc(tr('Screened', '已筛选'))}<strong>${screened}</strong></span><span>${esc(tr('Direct matches', '直接匹配'))}<strong>${directCount}</strong></span></div>
+      <div class="gpi-lit-counts"><span>${esc(tr('Retrieved this search', '本次检索'))}<strong>${esc(identified)}</strong></span><span>${esc(tr('Preset references', '系统预置参考'))}<strong>${esc(curated)}</strong></span><span>${esc(tr('Screened', '已筛选'))}<strong>${esc(screened)}</strong></span><span>${esc(tr('Direct matches', '直接匹配'))}<strong>${directCount}</strong></span></div>
+      <small>${esc(searchedAt ? tr('Search recorded at: ', '检索时间：') + searchedAt : tr('Search time not recorded', '检索时间未记录'))}</small>
       ${sources.length ? `<small>${esc(tr('Literature database: ', '检索来源：'))}${sources.map(esc).join(', ')}</small>` : ''}
       ${queryRows.length ? `<details class="gpi-lit-queries"><summary>${esc(tr('Technical search query (for audit)', '专业检索式（供复核）'))}</summary>${queryRows.map(row => `<div><strong>${esc(row.source)}</strong><code>${esc(row.query)}</code></div>`).join('')}</details>` : ''}
     </section>`;
@@ -401,6 +400,9 @@
       ${searchSummary(p)}
       <div class="gpi-lit-boundary" role="note"><strong>${esc(tr('How to read this page', '这一页怎么看'))}</strong><span>${esc(tr('Only the direct-match group addresses the user question. Reporting standards and variable definitions can shape a plan, but they cannot prove an association between the declared exposure and outcome.', '只有“直接相关候选”能回答用户的问题。报告规范和变量定义可以帮助制定计划，但不能证明用户指定的研究因素与结局有关。'))}</span></div>
       ${evidenceCoverage(p)}
+      <p class="gpi-lit-why" role="status">${esc(tr('Novelty comparison: not verified here', '创新性比较：尚未核验'))} · ${meta && meta.reviewAvailable === true
+        ? `<button type="button" data-gpi-literature-review>${esc(tr('Open scientific review', '查看科学审阅'))}</button>`
+        : esc(tr('Scientific review record unavailable here', '科学审阅记录暂不可用'))}</p>
       ${planMap(p)}
       ${articleGroup(tr('Retrieved articles not accepted as direct evidence', '检索到但未作为直接依据的文章'), excluded, 'excluded', usage, indexByKey, { collapsed: true, note: tr('Open only when reviewing why candidates were rejected.', '需要核对筛选原因时再展开。') })}
       ${articleGroup(tr('Other system references not used as direct evidence', '系统参考库里的其他资料'), reference, 'reference', usage, indexByKey, { collapsed: true, note: tr('Older definition or method papers may appear here. They are not direct evidence for the current research question and are collapsed by default.', '这里可能包含较早的定义或方法文献；它们不是当前研究问题的直接证据，默认收起。') })}

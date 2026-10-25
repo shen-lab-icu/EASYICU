@@ -94,18 +94,22 @@ def _citation_projection(
     screening = screening if isinstance(screening, Mapping) else {}
     notices = row.get("bibliographic_notices")
     notices = notices if isinstance(notices, list) else []
+    relevance = _text(
+        row.get("relevance") or row.get("evidence_quote") or row.get("evidence_sentence"),
+        1_200,
+    )
+    # The literature owner prefixes retained passages; a general applicability
+    # note (including curated methodology prompts) is not a source abstract.
+    source_excerpt = relevance.startswith(("Study-design excerpt:", "Source excerpt:"))
+    if not row.get("relevance") and (row.get("evidence_quote") or row.get("evidence_sentence")):
+        source_excerpt = True
     return {
         "key": _text(row.get("key") or row.get("citation_key"), 120),
         "title": _text(row.get("title"), 500),
         "year": _text(row.get("year"), 16) or None,
         "venue": _text(row.get("venue") or row.get("journal"), 240) or None,
-        "relevance": _text(
-            row.get("relevance")
-            or row.get("evidence_quote")
-            or row.get("evidence_sentence"),
-            1_200,
-        )
-        or None,
+        "relevance": relevance or None,
+        "relevance_kind": "source_excerpt" if source_excerpt else "reference_note",
         "doi": _text(row.get("doi"), 240) or None,
         "pmid": _text(row.get("pmid"), 32) or None,
         "publication_types": [
@@ -337,7 +341,10 @@ def project_run_literature(
         "search": {
             "search_conducted": searched,
             "searched_at": _text(provenance.get("searched_at"), 80) or None,
-            "curated_seed_count": int(provenance.get("curated_seed_count") or 0),
+            "curated_seed_count": (
+                int(provenance["curated_seed_count"])
+                if provenance.get("curated_seed_count") is not None else None
+            ),
             "sources_enabled": [
                 _text(value, 80)
                 for value in list(provenance.get("sources_enabled") or [])[:12]

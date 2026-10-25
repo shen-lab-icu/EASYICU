@@ -15,6 +15,177 @@ from tests.support.node import run_node
 _MODULE_OWNER = _read("js/screens-guided-pi-modules.js")
 
 
+def _render_literature(payload, *, language="zh", meta=None):
+    source = _read("js/screens-guided-pi-literature.js")
+    script = f"""
+      global.window = {{ EU_LANG: {json.dumps(language)} }};
+      eval({_ESCAPE_OWNER!r}); eval({_MODULE_OWNER!r}); eval({source!r});
+      process.stdout.write(window.EasyICU.guidedPi.require('literature')
+        .renderArtifact({json.dumps(payload)}, {json.dumps(meta or {})}));
+    """
+    return run_node("node", script, check=True).stdout
+
+
+@pytest.mark.parametrize("projected", [False, True])
+def test_curated_guidance_is_not_a_source_abstract(projected):
+    rows = [
+        {"key": "guide", "title": "Reporting checklist",
+         "relevance": "Methodology: Describe exclusions and missing values."},
+        {"key": "paper", "title": "Synthetic marker study",
+         "relevance": "Study-design excerpt: Marker alpha was measured at admission."},
+        {"key": "note", "title": "Background reference",
+         "relevance": "A planning note, with no retained source passage.",
+         "screening": {"disposition": "exclude", "design_excerpt_available": False}},
+    ]
+    payload = {"citations": rows}
+    if projected:
+        payload = project_run_literature(run_id="run_notes", bundle=payload, plan={})
+    html = _render_literature(payload)
+    cards = html.split('<article class="gpi-lit-card ')[1:]
+    by_title = {row["title"]: next(card.split("</article>")[0] for card in cards
+                                  if row["title"] in card) for row in rows}
+    assert "系统参考说明（非原文摘要）" in by_title["Reporting checklist"]
+    assert "查看保留的来源片段" not in by_title["Reporting checklist"]
+    assert "查看保留的来源片段" in by_title["Synthetic marker study"]
+    assert "查看保留的来源片段" not in by_title["Background reference"]
+    assert "查看系统保留的摘要片段" not in html
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_paper_use_comes_from_binding_and_keeps_actual_application(language):
+    payload = {
+        "citations": [{"key": "guide", "title": "A neutral checklist"}],
+        "step_citation_map": [{
+            "intent": "Fit an adjusted model in the eligible population",
+            "citation_bindings": [{
+                "key": "guide", "title": "A neutral checklist",
+                "design_elements": ["reporting"],
+                "application": "Report each exclusion and its recorded reason <exactly>.",
+                "divergence": None,
+            }],
+        }],
+    }
+    html = _render_literature(payload, language=language)
+    card = html.split('<article class="gpi-lit-card ')[1].split("</article>")[0]
+    assert "Report each exclusion and its recorded reason &lt;exactly&gt;." in card
+    assert "Fit an adjusted model" not in card
+    assert "确定研究人群与纳排标准" not in card
+    assert "确定混杂因素与统计模型" not in card
+    assert ("规范研究报告" if language == "zh" else "Transparent reporting") in card
+    assert ("差异尚未核对" if language == "zh" else "Differences not yet appraised") in card
+
+
+@pytest.mark.parametrize("disposition,bound", [("include", False), ("exclude", False), ("exclude", True)])
+def test_retained_paper_shows_recorded_screening_reason(disposition, bound):
+    payload = {
+        "direct_comparator_count": int(disposition == "include"),
+        "direct_comparator_keys": ["paper"] if disposition == "include" else [],
+        "citations": [{"key": "paper", "title": "Marker alpha study",
+                       "screening": {"disposition": disposition,
+                                     "rationale": "Recorded decision: <scope differs>.",
+                                     "population_match": True, "exposure_match": False}}],
+        "step_citation_map": [{"intent": "Model choice", "citation_bindings": [{
+            "key": "paper", "design_elements": ["exposure"],
+            "application": "Compare the marker definition only.",
+            "divergence": "Admission measurement differs from the planned window.",
+        }]}] if bound else [],
+    }
+    html = _render_literature(payload)
+    assert "Recorded decision: &lt;scope differs&gt;." in html
+    assert ("候选纳入理由" if disposition == "include" else "未作为直接依据的原因") in html
+    if bound:
+        assert "Admission measurement differs from the planned window." in html
+    else:
+        assert "尚未记录具体应用" in html
+
+
+def test_search_summary_distinguishes_search_receipt_from_preset_references():
+    html = _render_literature({"search": {
+        "search_conducted": True, "searched_at": "2026-09-03T04:05:06+00:00",
+        "curated_seed_count": 3, "prisma": {"identified": 2, "screened": 1},
+    }})
+    assert "2026-09-03T04:05:06+00:00" in html
+    assert "本次检索" in html and "<strong>2</strong>" in html
+    assert "系统预置参考" in html and "<strong>3</strong>" in html
+    unknown = _render_literature({"search": {"search_conducted": True}})
+    assert "检索时间未记录" in unknown
+    assert "<strong>未记录</strong>" in unknown
+
+
+def test_citation_membership_is_not_reviewed_support_or_novelty():
+    payload = {
+        "direct_comparator_count": 1, "direct_comparator_keys": ["paper"],
+        "citations": [{"key": "paper", "title": "Marker alpha study"}],
+        "step_citation_map": [{"intent": "Adjusted model", "citation_bindings": [{
+            "key": "method", "title": "Method reference", "design_elements": ["adjustment"],
+        }]}],
+        "novelty_positioning": {"status": "review_required", "review_disposition": "not_available",
+                                "reviewer_owner": None, "reviewed_at": None},
+    }
+    html = _render_literature(payload)
+    assert "已绑定文献，待核对" in html
+    assert "已有科学依据" not in html
+    assert "gpi-lit-coverage supported" not in html
+    assert "创新性比较：尚未核验" in html
+    assert "data-gpi-literature-review" not in html
+    linked = _render_literature(payload, meta={"reviewAvailable": True})
+    assert "data-gpi-literature-review" in linked and "查看科学审阅" in linked
+
+
+@pytest.mark.parametrize("artifact", ["scientific_readiness.json", "scientific_plan_review.json"])
+def test_literature_review_entry_uses_only_same_run_digest_bound_catalog(artifact):
+    preview = _read("js/screens-guided-pi-preview.js")
+    literature = _read("js/screens-guided-pi-literature.js")
+    script = f"""
+      const assert = require('node:assert/strict');
+      global.window = {{ EU_LANG: 'zh' }};
+      global.document = {{ getElementById: () => null }};
+      eval({_ESCAPE_OWNER!r}); eval({_MODULE_OWNER!r}); eval({literature!r});
+      window.EasyICU.guidedPi.declare('resources', {{ create: () => ({{key: r => JSON.stringify(r)}}) }});
+      eval({preview!r});
+      let handler, content = '', renders = 0; const opened = [];
+      const host = {{ get innerHTML() {{ return content; }},
+        set innerHTML(value) {{ content = value; renders++; }},
+        addEventListener: (_t, fn) => {{ handler = fn; }},
+        querySelector: () => null, querySelectorAll: () => [], replaceChildren: () => {{}} }};
+      const owner = window.EasyICU.guidedPi.require('preview');
+      const review = {{kind: 'research_artifact', run_id: 'run_current',
+        artifact: {json.dumps(artifact)}, sha256: 'b'.repeat(64), label: '科学审阅'}};
+      const loads = [];
+      window.EU_API = {{ loadPiCopilotResearchArtifact: async (...args) => {{
+        loads.push(args); return {{payload: {{citations: []}}}};
+      }} }};
+      owner.mount(host);
+      owner.setStudyResources([review], 'project_current', r => opened.push(r));
+      owner.open({{kind: 'research_artifact', run_id: 'run_current',
+        artifact: 'literature_evidence.json', sha256: 'a'.repeat(64)}}, 'project_current');
+      const click = () => handler({{target: {{ closest: s => s === '[data-gpi-literature-review]' ? {{}} : null }} }});
+      setImmediate(() => {{
+        assert.match(host.innerHTML, /data-gpi-literature-review/);
+        click(); assert.equal(opened.length, 1); assert.equal(opened[0].sha256, review.sha256);
+        const stableRenders = renders;
+        owner.setStudyResources([review], 'project_current', r => opened.push(r));
+        assert.equal(renders, stableRenders, 'Polling must preserve expanded literature details');
+        for (const [r, project] of [
+          [{{...review, run_id: 'run_old'}}, 'project_current'],
+          [{{...review, sha256: ''}}, 'project_current'],
+          [{{...review, artifact: 'unavailable.json'}}, 'project_current'],
+          [review, 'project_other'],
+        ]) {{
+          owner.setStudyResources([r], project, r => opened.push(r));
+          assert.doesNotMatch(host.innerHTML, /data-gpi-literature-review/);
+          click(); assert.equal(opened.length, 1);
+        }}
+        assert.equal(loads.length, 1, 'No speculative review fetch');
+        owner.setStudyResources([review], 'project_current');
+        click();
+        assert.deepEqual(loads[1], ['project_current', 'run_current', review.artifact, review.sha256]);
+        process.stdout.write('ok');
+      }});
+    """
+    assert run_node("node", script, check=True).stdout == "ok"
+
+
 @pytest.mark.parametrize("renderer", ["renderSource", "renderArtifact"])
 @pytest.mark.parametrize("title", [
     "Robustness of sepsis-3 criteria in critically ill patients",

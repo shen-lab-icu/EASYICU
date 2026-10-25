@@ -68,3 +68,31 @@ process.stdout.write(html);
     assert html.count("Unique reporting guide") == 1
     assert "2 source(s)" in html
     assert "1 decision(s)" not in html
+
+
+def test_one_card_keeps_distinct_binding_applications_and_differences() -> None:
+    first = {"key": "paper", "title": "One methodological source",
+             "design_elements": ["time_zero"], "application": "Anchor follow-up at entry.",
+             "divergence": "Source follow-up starts later."}
+    second = {**first, "application": "Check the alternate entry definition.",
+              "divergence": "Source uses a different entry rule."}
+    payload = {"step_citation_map": [
+        {"intent": intent, "citation_bindings": [binding]}
+        for intent, binding in [("Describe the cohort", first), ("Fit a model", first),
+                                ("Sensitivity analysis", second)]
+    ]}
+    js_root = Path("src/easyicu/webserver/static/js").resolve()
+    script = f"""
+global.window = {{ EU_LANG: 'zh' }};
+const root = {json.dumps(str(js_root))};
+require(root + '/html-escape.js');
+require(root + '/screens-guided-pi-modules.js');
+require(root + '/screens-guided-pi-literature.js');
+process.stdout.write(window.EasyICU.guidedPi.require('literature').renderArtifact({json.dumps(payload)}));
+"""
+    html = run_node("node", script, check=True).stdout
+    assert html.count("One methodological source") == 1
+    assert html.count("Anchor follow-up at entry.") == 1
+    assert html.count("Check the alternate entry definition.") == 1
+    assert html.count("Source follow-up starts later.") == 1
+    assert html.count("Source uses a different entry rule.") == 1
