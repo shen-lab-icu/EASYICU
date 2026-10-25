@@ -307,7 +307,7 @@ def test_repeated_stay_runtime_gap_stays_blocked_without_a_method_question(
 
     assert result["spec"]["nonApprovable"] is True
     assert "暂不能执行" in rendered
-    assert "1 项运行时合同仍被阻断" in rendered
+    assert "1 项分析或数据条件尚未落实" in rendered
     assert "不需要再次回答科学设定问题" in rendered
     assert "数据合同或独立证据缺口会保持阻断" in rendered
     assert "打开完整计划" in rendered
@@ -318,3 +318,48 @@ def test_repeated_stay_runtime_gap_stays_blocked_without_a_method_question(
     assert 'data-gpi-confirm-edit' not in rendered
     assert 'class="gpi-plan-conversation"' in rendered
     assert '<details class="gpi-plan-conversation-summary" open>' in rendered
+
+
+@pytest.mark.parametrize("chinese", [True, False])
+def test_paused_review_names_clinical_gaps_without_promising_unavailable_repairs(chinese):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    codes = [
+        "SCIENTIFIC_CAPABILITY_NOT_REPORTABLE", "TOP_JOURNAL_LITERATURE_SEARCH_NOT_ESTABLISHED",
+        "DESIGN_ANALOGUE_NOT_ESTABLISHED", "REPEATED_STAY_METHOD_NOT_DECLARED",
+        "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED", "NOVELTY_NOT_ESTABLISHED",
+    ]
+    review = {
+        "run_id": "synthetic-review", "finding_codes": codes,
+        "automatic_revision_blockers": [codes[3]],
+        "remediation_buckets": {
+            "agent_plan_revision": [codes[0]], "runtime_capability": codes[3:5],
+            "external_evidence": [codes[1], codes[2], codes[5]], "independent_review": [],
+        },
+    }
+    script = f"""
+      global.window = {{t: (en, zh) => {str(chinese).lower()} ? zh : en,
+        EU_HTML: {{esc: value => String(value), escAttr: value => String(value)}}}};
+      eval({MODULES_SOURCE!r});
+      eval({LABELS_SOURCE!r});
+      eval({_read('js/screens-agent-reader-vocab.js')!r});
+      eval({_read('js/screens-agent-render.js')!r});
+      eval({_read('js/screens-guided-pi-confirmation.js')!r});
+      const host = {{
+        tr: window.t, esc: value => String(value), iconHtml: () => '',
+        resourceButton: () => '', sessionIsStale: () => false, busy: () => false,
+        workflow: () => ({{next_action_code: 'plan_scientific_changes_required', plan_review_summary: {json.dumps(review)}}}),
+        session: () => ({{archived_child_jobs: []}}),
+      }};
+      process.stdout.write(window.EasyICU.guidedPi.require('confirmation').create(host).workflowConfirmationHtml());
+    """
+    html = run_node(node, script, check=True).stdout
+    for phrase in (["主要结果", "文献检索", "研究设计", "同一患者", "敏感性", "创新性"]
+                   if chinese else ["primary result", "literature", "study design", "same patient", "sensitivity", "novelty"]):
+        assert phrase in html
+    assert html.count('data-gpi-review-finding=') == 6
+    assert "运行时合同仍被阻断" not in html
+    assert "会改用经过正式验证的分析能力" not in html
+    assert "Planner 将提出敏感性分析" not in html
+    assert "data-gpi-confirm-action" not in html

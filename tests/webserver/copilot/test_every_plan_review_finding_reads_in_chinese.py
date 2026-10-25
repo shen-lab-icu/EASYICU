@@ -92,6 +92,18 @@ def test_a_requested_variable_without_data_has_the_reviewed_next_step() -> None:
     ) in html
 
 
+def test_unimplemented_sensitivity_is_shown_in_the_runtime_lane() -> None:
+    html = _render_zh([{
+        "code": "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED", "severity": "major",
+        "remediation_route": "runtime_capability", "requires_user_authorization": False,
+    }])
+    lanes = re.findall(r"<article>(.*?)</article>", html, re.S)
+    assert "敏感性检验尚不能执行" not in lanes[0]
+    assert "敏感性检验尚不能执行" in lanes[2]
+    assert "单纯重新生成计划不能补足这项能力" in html
+    assert "Planner 将提出敏感性分析" not in html
+
+
 @pytest.mark.parametrize(
     "reason",
     [

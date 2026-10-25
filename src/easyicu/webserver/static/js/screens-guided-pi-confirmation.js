@@ -670,15 +670,26 @@
       const firstDecisionCopy = firstDecisionItem
         ? localizedAuthorizationDecisionCopy(firstDecisionItem)
         : null;
+      const reviewFindings = confirmation.code === 'plan_scientific_changes_required'
+        && review && window.AGENT_RENDER && window.AGENT_RENDER.scientificFindingCopy
+        ? [...new Set([
+          ...(Array.isArray(review.finding_codes) ? review.finding_codes : []),
+          ...Object.values(review.remediation_buckets || {}).flatMap(codes => Array.isArray(codes) ? codes : []),
+        ])].slice(0, 40).map(code => {
+          const route = Object.entries(review.remediation_buckets || {})
+            .find(([, codes]) => Array.isArray(codes) && codes.includes(code));
+          const copy = window.AGENT_RENDER.scientificFindingCopy({ code, remediation_route: route && route[0] });
+          return `<li data-gpi-review-finding="${esc(code)}"><strong>${esc(copy.title)}</strong><span>${esc(copy.detail)}</span></li>`;
+        }).join('') : '';
       const reviewStatus = confirmation.code === 'plan_scientific_changes_required'
         ? firstDecisionCopy
           ? `<div class="gpi-decision-evidence"><span>${esc(firstDecisionCopy.evidenceLabel)}</span><strong>${esc(firstDecisionCopy.evidenceStatus)}</strong><small>${esc(firstDecisionCopy.evidenceDetail)}</small></div><p class="gpi-decision-guidance">${esc(firstDecisionCopy.guidance)}</p>`
           : `<div class="gpi-confirmation-review-status"><strong>${esc(revisionBlocked
             ? tr('Candidate plan revision is blocked', '候选计划修订已暂停')
             : tr('EasyICU will revise the candidate plan before analysis', 'EasyICU 将在分析前修订候选计划'))}</strong><span>${esc(tr(
-            `${remediationCounts.automatic + remediationCounts.evidence} plan and evidence items are system-owned; ${remediationCounts.runtime} runtime-contract items remain blocked without asking for another scientific setup answer.`,
-            `${remediationCounts.automatic + remediationCounts.evidence} 项计划修订与补证由系统负责；另有 ${remediationCounts.runtime} 项运行时合同仍被阻断，但不需要再次回答科学设定问题。`,
-          ))}</span>${revisionBlocked ? `<p>${esc(tr(
+            `${remediationCounts.automatic + remediationCounts.evidence} plan and evidence items need system follow-up; ${remediationCounts.runtime} analysis or data conditions remain unresolved without asking for another scientific setup answer.`,
+            `${remediationCounts.automatic + remediationCounts.evidence} 项计划修订与补证由系统负责；另有 ${remediationCounts.runtime} 项分析或数据条件尚未落实，但不需要再次回答科学设定问题。`,
+          ))}</span>${reviewFindings ? `<ul>${reviewFindings}</ul>` : ''}${revisionBlocked ? `<p>${esc(tr(
             'Open the review details below to see what is unresolved. To change the study, describe the change in the conversation; otherwise send the review and failure receipt to support. Analysis stays paused.',
             '请打开下方审阅详情查看未解决的问题。如需修改研究，请在对话中说明；否则请把审阅记录和失败回执发给支持人员。分析保持暂停。',
           ))}</p>` : ''}</div>`

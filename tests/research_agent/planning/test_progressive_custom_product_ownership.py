@@ -1,6 +1,8 @@
 """Custom products retain one producer across full and incremental compilation."""
 
 from collections import Counter
+from copy import deepcopy
+import json
 
 import pytest
 
@@ -28,6 +30,13 @@ from easyicu.research_agent.schema import (
     UserPreferences,
 )
 
+
+from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent
+from easyicu.research_agent.planning.scientific_review import build_plan_scientific_review
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from .progressive_planner_fixtures import (
+    _foundation_payload, _materialization_payloads, _outline_payload,
+)
 
 def _context() -> ResearchContext:
     return ResearchContext(
@@ -245,3 +254,115 @@ def test_incremental_replay_preserves_the_accepted_prefix_and_distinct_custom_ou
             assert ("baseline", "table:cohort_summary") not in state.available_product_refs
     assert state.plan is not None
     assert len(state.materializations) == 5
+
+
+def _context_with_patients():
+    context = _context()
+    context.cohort.provenance.update({
+        "analysis_unit": "icu_stay", "patient_identity_available": True,
+        "evidence_stage": "metadata_only_planning", "patient_rows_read": False,
+        "replacement_row_identity": {
+            "output_identity_column": "stay_id", "mapping_file_sha256": "a" * 64,
+            "patient_group_derivation": {"algorithm": "prefix_before_:s", "delimiter": ":s"},
+        },
+    })
+    return context
+
+
+@pytest.mark.parametrize("products", [
+    ["table:invented_distribution"],
+    ["table:cohort_summary"],
+    ["table:distribution_summary", "table:cohort_summary"],
+    ["table:cohort_summary", "table:distribution_summary", "table:extra"],
+])
+def test_primary_product_mismatch_names_the_step_and_exact_repair(products):
+    payload = _skeleton().model_dump(mode="json")
+    payload["steps"][1]["outputs"] = [
+        {"product_id": product, "semantic_role": "custom"} for product in products
+    ]
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload), context=_context(),
+        )
+    error = caught.value
+    assert error.reason_code == "progressive_scientific_action_outputs_mismatch"
+    assert error.step_id == "primary_summary" and error.step_index == 1
+    assert error.path == "outputs"
+    assert "table:cohort_summary" in str(error)
+    assert "table:distribution_summary" in str(error)
+
+
+@pytest.mark.parametrize("invalid_attempts", [1, 3])
+def test_primary_product_repair_preserves_the_question_and_locked_prefix(invalid_attempts):
+    payload = _skeleton().model_dump(mode="json")
+    materializations = _materialization_payloads(payload)
+    outline = _outline_payload(payload)
+    for candidate in outline["design_selection"]["candidates"]:
+        candidate["required_variables"] = ["measurement", "category"]
+        candidate["estimand"] = ("The pooled empirical distribution of the recorded measurement."
+                                 if candidate["disposition"] == "selected"
+                                 else "The empirical measurement distribution within each category.")
+        candidate["primary_method"] = "Empirical summary with observed denominators."
+        candidate["figure_role"] = "Display the empirical measurement distribution."
+        candidate["supports"] = "Stay-level empirical descriptions."
+        candidate["cannot_prove"] = "Patient-level inference or causal effects."
+    for step, source in zip(outline["steps"], payload["steps"], strict=True):
+        step["variable_names"] = source["raw_inputs"] or ["measurement"]
+    validated = ProgressivePlanOutline.model_validate(outline)
+    for response, step in zip(materializations, validated.steps, strict=True):
+        response["outline_step_sha256"] = canonical_sha256(step.model_dump(mode="json"))
+    foundation = _foundation_payload(payload)
+    foundation["outline_sha256"] = canonical_sha256(validated.model_dump(mode="json"))
+    invalid = deepcopy(materializations[1])
+    invalid["step"]["outputs"] = [
+        {"product_id": "table:invented_distribution", "semantic_role": "custom"},
+    ]
+    responses = [
+        outline, foundation, materializations[0],
+        *[deepcopy(invalid) for _ in range(invalid_attempts)], *materializations[1:],
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+    context = _context_with_patients()
+    context.cohort.provenance.update({
+        "analysis_unit": "icu_stay", "patient_identity_available": True,
+        "patient_id_columns": ["person_id"],
+        "evidence_stage": "metadata_only_planning", "patient_rows_read": False,
+    })
+    original = context.model_dump_json()
+    checkpoints = []
+    if invalid_attempts == 1:
+        plan = agent.run(context, checkpoint_callback=checkpoints.append)
+        assert len(llm.calls) == 8
+        assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 1
+        assert agent.last_result.facts.prompt_metrics["full_revision_count"] == 0
+        assert plan.steps[1].expected_outputs == ["table:cohort_summary", "table:distribution_summary"]
+        review = build_plan_scientific_review(context=context, plan=plan, require_reportable_capability=True)
+        assert review.facts["repeat_units_possible"] and review.facts["patient_identity_available"]
+        assert not {"SCIENTIFIC_CAPABILITY_NOT_REPORTABLE", "REPEATED_STAY_METHOD_NOT_DECLARED"} & {
+            finding.code for finding in review.findings
+        }
+        prefixes = [cp.materializations[:1] for cp in checkpoints if cp.materializations]
+        assert prefixes and all(prefix == prefixes[0] for prefix in prefixes)
+    else:
+        with pytest.raises(ProgressivePlanCompileError) as caught:
+            agent.run(context, checkpoint_callback=checkpoints.append)
+        assert caught.value.reason_code == "progressive_scientific_action_outputs_mismatch"
+        assert len(llm.calls) == 6  # Three attempts, never an unbounded retry.
+    assert context.model_dump_json() == original
+    prompt = llm.calls[4][0][-1].content
+    assert "HOST COMPILER OBSERVATION FOR THIS CURRENT STEP" in prompt
+    assert "progressive_scientific_action_outputs_mismatch" in prompt
+    assert "table:cohort_summary" in prompt and "table:distribution_summary" in prompt
+
+
+def test_an_unrepaired_archived_plan_still_fails_closed_at_review():
+    context = _context_with_patients()
+    plan, _ = compile_progressive_plan(skeleton=_skeleton(), context=context)
+    plan.steps[1] = plan.steps[1].model_copy(update={"expected_outputs": ["table:invented_distribution"]})
+    review = build_plan_scientific_review(context=context, plan=plan, require_reportable_capability=True)
+    assert {"SCIENTIFIC_CAPABILITY_NOT_REPORTABLE", "REPEATED_STAY_METHOD_NOT_DECLARED"} <= {
+        finding.code for finding in review.findings if finding.severity == "blocker"
+    }
+    assert review.approval_allowed is False
