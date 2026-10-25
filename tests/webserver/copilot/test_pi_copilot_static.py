@@ -1170,7 +1170,7 @@ def test_new_research_session_starters_minimize_interaction_cost() -> None:
     """
     completed = run_node(node, script, check=True)
     assert "开始一项 ICU 研究" in completed.stdout
-    assert "用自己的话写下临床问题" in completed.stdout
+    assert "写下你的临床问题，选择数据，再核对分析计划。" in completed.stdout
     assert "试试这些问题" in completed.stdout
     assert "血糖分组与院内死亡" in completed.stdout
     assert "浏览全部技能与方法" in completed.stdout
