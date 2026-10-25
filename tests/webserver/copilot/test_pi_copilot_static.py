@@ -6250,11 +6250,11 @@ def test_literature_reader_translates_plan_bindings_for_chinese_readers() -> Non
     """
     completed = run_node(node, script, check=True)
     html = completed.stdout
-    assert "检验乳酸与死亡是否为非线性关系" in html
+    assert "检验乳酸与死亡是否为非线性关系" not in html
     assert "统计方法依据" in html
-    assert "用于计划：" in html
+    assert "用于计划（待核对）：" in html
     assert "nonlinear lactate functional form" not in html
-    assert "Use restricted cubic splines" not in html
+    assert "Use restricted cubic splines" in html
 
 
 def test_assistant_message_renderer_makes_https_citations_clickable_and_safe() -> None:

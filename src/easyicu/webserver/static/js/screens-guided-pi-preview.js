@@ -419,7 +419,17 @@
       `<button type="button" data-gpi-study-resource="${index}" aria-current="${resourceKey(resource) === resourceKey(state.resource) ? 'true' : 'false'}">${esc(resource.label)}</button>`).join('');
   }
 
+  function literatureReviewResource() {
+    if (state.projectId !== state.studyProjectId || !isResearchArtifact()
+      || state.resource.artifact !== 'literature_evidence.json') return null;
+    return state.studyResources.find(row => row.kind === 'research_artifact'
+      && row.run_id === state.resource.run_id
+      && ['scientific_readiness.json', 'scientific_plan_review.json'].includes(row.artifact)
+      && /^[a-f0-9]{64}$/.test(String(row.sha256 || ''))) || null;
+  }
+
   function setStudyResources(resources, projectId, opener, context = {}) {
+    const hadLiteratureReview = Boolean(literatureReviewResource());
     state.studyProjectId = String(projectId || '');
     state.studyResources = (Array.isArray(resources) ? resources : []).map(safeResource).filter(Boolean);
     state.openStudyResource = typeof opener === 'function' ? opener : null;
@@ -433,6 +443,7 @@
     // Workflow polling can update the shelf without replacing the open report.
     const nav = state.host && state.host.querySelector('[data-gpi-study-resources]');
     if (nav) { nav.innerHTML = studyResourcesHtml(); nav.hidden = !nav.innerHTML; }
+    if (hadLiteratureReview !== Boolean(literatureReviewResource())) render();
   }
 
   function toggleFocus(button) {
@@ -546,6 +557,7 @@
         ? literature.renderArtifact(state.payload || {}, {
           ...state.workflowContext,
           runId: state.resource.run_id,
+          reviewAvailable: Boolean(literatureReviewResource()),
         })
         : renderer && typeof renderer.artifactStructuredView === 'function'
           ? renderer.artifactStructuredView(state.resource.artifact, state.payload || {}, state.runContext)
@@ -894,6 +906,15 @@
       const focus = event.target.closest('[data-gpi-preview-focus]');
       if (focus) { toggleFocus(focus); return; }
       const studyResource = event.target.closest('[data-gpi-study-resource]');
+      if (event.target.closest('[data-gpi-literature-review]')) {
+        // Recheck the catalog on click; never manufacture a review locator.
+        const review = literatureReviewResource();
+        if (review) {
+          if (state.openStudyResource) state.openStudyResource(review);
+          else open(review, state.projectId, state.workflowContext);
+        }
+        return;
+      }
       if (studyResource) {
         const resource = state.studyResources[Number(studyResource.dataset.gpiStudyResource)];
         if (resource && state.resource && state.projectId === state.studyProjectId && resource.run_id === state.resource.run_id) {

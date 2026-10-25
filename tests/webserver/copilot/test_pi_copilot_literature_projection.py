@@ -552,3 +552,24 @@ def test_literature_source_resource_rejects_unverified_or_unsafe_links() -> None
         is None
     )
     assert literature_source_resource({"title": "No identifier"}) is None
+
+
+@pytest.mark.parametrize("relevance,kind", [
+    ("Methodology: Explain each exclusion.", "reference_note"),
+    ("Study-design excerpt: Marker alpha was recorded before follow-up.", "source_excerpt"),
+    ("Source excerpt: Enrollment used a fixed entry window.", "source_excerpt"),
+    ("Relevant to planning, without a retained passage.", "reference_note"),
+])
+def test_projection_marks_retained_text_provenance_without_inventing_an_abstract(relevance, kind):
+    payload = project_run_literature(
+        run_id="run_provenance", plan={},
+        bundle={"citations": [{"key": "paper", "title": "Synthetic reference", "relevance": relevance}]},
+    )
+    assert payload["citations"][0]["relevance_kind"] == kind
+    assert payload["citations"][0]["relevance"] == relevance
+
+
+def test_projection_does_not_invent_missing_curated_counts():
+    payload = project_run_literature(run_id="run_unknown", plan={}, bundle={})
+    assert payload["search"]["curated_seed_count"] is None
+    assert payload["search"]["searched_at"] is None
