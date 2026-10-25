@@ -167,11 +167,29 @@
     // newest first, as facts (type, outcome, time, file count, cause) — the
     // results shelf above shows only the run that currently owns the
     // workflow. Rows are informational; historical artifacts stay closed.
+    function planPending(run) {
+      return run.run_status === 'human_review_pending' || run.gate_reason_code === 'human_plan_review_required';
+    }
+    function analysisComplete(run) {
+      return !planPending(run) && (run.analysis_outcome
+        ? run.analysis_outcome.status === 'completed'
+        : run.gate_status === 'analysis_only' && run.gate_reason_code === 'research_agent_pipeline_complete_human_interpretation_required');
+    }
+    // Read reached-stage receipts, never the requested run_type or filenames:
+    // result files can be placeholders even before a plan is approved.
+    function runStage(run) {
+      if (planPending(run)) return tr('Plan generation', '计划生成');
+      const codes = [run.gate_reason_code, run.gate_detail_code, run.gate_detail_cause_code];
+      if (analysisComplete(run) || codes.includes('research_pipeline_execution_failed')) return tr('Analysis', '分析');
+      if (codes.includes('data_foundation_blocked')) return tr('Data preparation', '数据准备');
+      if (codes.some(code => /^research_pipeline_(?:plan_|planner_|planning_|progressive_compile_failed$)/.test(String(code || '')))) return tr('Plan generation', '计划生成');
+      return tr('Research task', '研究任务');
+    }
     function runStatus(run) {
-      if (run.analysis_outcome && run.analysis_outcome.status === 'completed') return { key: 'done', label: tr('Analysis complete', '分析已完成') };
+      if (planPending(run)) return { key: 'review', label: tr('Awaiting review', '待审阅') };
+      if (analysisComplete(run)) return { key: 'done', label: tr('Analysis complete', '分析完成') };
       const status = String(run.run_status || '');
       const gate = String(run.gate_status || '');
-      if (status === 'human_review_pending') return { key: 'review', label: tr('Awaiting review', '待审阅') };
       if (status === 'failed') return { key: 'failed', label: tr('Failed', '失败') };
       if (status === 'cancelled') return { key: 'cancelled', label: tr('Cancelled', '已取消') };
       if (status === 'running') return { key: 'running', label: tr('Running', '运行中') };
@@ -188,8 +206,6 @@
       if (!runs.length) return '';
       const contracts = window.EU_GUIDED_CONTRACTS || {};
       const when = typeof contracts.fmtRunTime === 'function' ? contracts.fmtRunTime : value => String(value || '');
-      const kind = run => run.run_type === 'full'
-        ? tr('Full analysis', '完整分析') : run.plan_available ? tr('Candidate plan', '候选计划') : tr('Run', '运行');
       const rows = runs.map(run => {
         const status = runStatus(run);
         const cause = run.manuscript_outcome && run.manuscript_outcome.status === 'not_passed' && status.key === 'done'
@@ -197,7 +213,8 @@
           : ['failed', 'blocked'].includes(status.key) && run.gate_reason_code && typeof host.runFailureText === 'function'
           ? String(host.runFailureText(run.gate_reason_code, { code: run.gate_detail_code, missing: run.gate_missing_concepts, cause: run.gate_detail_cause_code }) || '') : '';
         const count = Number(run.artifact_count || 0);
-        return `<li class="gpi-run-row is-${status.key}${run.authoritative ? ' is-current' : ''}"><span class="gpi-run-mark" aria-hidden="true"></span><div class="gpi-run-copy"><strong>${esc(kind(run))} · ${esc(status.label)}${run.authoritative ? `<span class="gpi-run-current">${tr('current', '当前')}</span>` : ''}</strong><small>${esc(when(run.updated_at))}${count ? ` · ${count} ${tr('files', '个文件')}` : ''}</small>${cause ? `<small class="gpi-run-cause">${esc(cause)}</small>` : ''}<code>${esc(run.run_id)}</code></div></li>`;
+        const title = analysisComplete(run) ? status.label : `${runStage(run)} · ${status.label}`;
+        return `<li class="gpi-run-row is-${status.key}${run.authoritative ? ' is-current' : ''}"><span class="gpi-run-mark" aria-hidden="true"></span><div class="gpi-run-copy"><strong>${esc(title)}${run.authoritative ? `<span class="gpi-run-current">${tr('current', '当前')}</span>` : ''}</strong><small>${esc(when(run.updated_at))}${count ? ` · ${count} ${tr('files', '个文件')}` : ''}</small>${cause ? `<small class="gpi-run-cause">${esc(cause)}</small>` : ''}<details data-gpi-run-support><summary>${tr('Technical details', '技术详情')}</summary><code>${esc(run.run_id)}</code></details></div></li>`;
       }).join('');
       return `<details class="gpi-run-history" data-gpi-run-history${open ? ' open' : ''}><summary>${tr('Run record', '运行记录')}<small class="gpi-aside-count">${runs.length}</small></summary><ol>${rows}</ol></details>`;
     }
@@ -239,14 +256,13 @@
         return;
       }
       const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
-      const reviewerDemo = workflow.kind === 'reviewer_validation_demo';
       const names = {
-        question: reviewerDemo ? tr('Reviewer protocol', '审稿协议') : tr('Scientific question', '科学问题'),
-        idea: reviewerDemo ? tr('Validation scope', '验证范围') : tr('Idea mining', '想法发掘'),
-        setup: reviewerDemo ? tr('Data contract', '数据合同') : tr('Study setup', '研究配置'),
-        extraction: reviewerDemo ? tr('Safe projection', '安全投影') : tr('Research data preparation', '研究数据准备'),
+        question: tr('Scientific question', '科学问题'),
+        idea: tr('Idea mining', '想法发掘'),
+        setup: tr('Study setup', '研究配置'),
+        extraction: tr('Research data preparation', '研究数据准备'),
         plan: tr('Analysis plan', '分析计划'), analysis: tr('Analysis and validation', '分析与验证'),
-        interpretation: tr('Result interpretation', '结果解读'), manuscript: reviewerDemo ? tr('Reviewer dossier', '审稿报告') : tr('Manuscript', '稿件'),
+        interpretation: tr('Result interpretation', '结果解读'), manuscript: tr('Manuscript', '稿件'),
       };
       const reasons = {
         question_bound: tr('Question is bound to this project', '科学问题已绑定到当前项目'),
@@ -329,7 +345,7 @@
       const reasonText = stage => (stage && stage.reason_code === 'study_setup_incomplete' && missingSetup.includes('data_source')
         ? tr('Choose the data source for this study', '请为这项研究选择数据源')
         : reasons[stage && stage.reason_code])
-        || tr('Waiting for the preceding governed stage', '等待前一受治理阶段完成');
+        || tr('Waiting for the previous step', '等待上一步完成');
       // Once a plan exists, the setup fields it covers are written back when
       // the plan is confirmed; missing inclusion criteria get their own card
       // before approval. Say so, so the open setup row is not read as a

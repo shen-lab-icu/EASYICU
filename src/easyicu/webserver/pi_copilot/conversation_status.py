@@ -11,7 +11,8 @@ latest job          rail state
 running             ``running``     (进行中 / Running)
 waiting for you     ``needs_user``  (待确认 / Needs you)
 failed / stopped    ``stopped``     (已停止 / Stopped)
-completed           ``done``        (已完成 / Done)
+completed reply     ``replied``     (已回复 / Replied)
+completed task      ``done``        (任务已结束 / Task ended)
 ==================  =====================================
 
 A research job waits for the researcher when it paused for plan review; a
@@ -20,6 +21,9 @@ finished reply neither clears a plan review the researcher still owes nor
 reopens a research job that stopped: only the next research job does.  The
 rail is a metadata-only index, so the research job's state is persisted on the
 session record when the job starts and settles (``latest_research_job``).
+Its legacy ``done`` state contains no phase receipt: it must not be presented
+as analysis completion. ``replied`` is a display projection, not a new stored
+research-job state.
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Literal, Mapping, Optional
 
-ConversationStatus = Literal["running", "needs_user", "stopped", "done"]
+ConversationStatus = Literal["running", "needs_user", "stopped", "done", "replied"]
 
 _STOPPED = frozenset({"failed", "cancelled", "interrupted"})
 _DATA_CHOICE_PENDING = frozenset({"pending", "selection_in_progress"})
@@ -72,7 +76,7 @@ def conversation_status(
         message_state = "stopped"
     elif message_status == "done":
         message_state = (
-            "needs_user" if data_choice_status in _DATA_CHOICE_PENDING else "done"
+            "needs_user" if data_choice_status in _DATA_CHOICE_PENDING else "replied"
         )
     research: Optional[ConversationStatus] = (
         research_state  # type: ignore[assignment]
@@ -85,7 +89,7 @@ def conversation_status(
         return research
     # A reply (say, asking why the run failed) does not settle the study's
     # research job; the rail keeps its state until the next research job.
-    if research in {"needs_user", "stopped"} and message_state == "done":
+    if message_state == "replied":
         return research
     # ISO-8601 UTC stamps of one writer compare as text.
     return research if str(research_at or "") >= str(message_at or "") else message_state
