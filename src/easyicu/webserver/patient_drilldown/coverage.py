@@ -21,6 +21,7 @@ from typing import Any, Dict, Iterable, Mapping
 
 from easyicu.concept import catalog as concept_catalog
 from easyicu.webserver import review_labels
+from easyicu.webserver.source_cache_identity import source_file_identity
 
 
 SCHEMA_VERSION = "easyicu.patient_feature_coverage/1"
@@ -331,17 +332,9 @@ def _source_signature(
 
 def _file_signature(path: Path) -> tuple[Any, ...]:
     try:
-        stat = path.stat()
-        return (
-            path.name,
-            int(stat.st_size),
-            int(stat.st_mtime_ns),
-            int(stat.st_ctime_ns),
-            int(stat.st_dev),
-            int(stat.st_ino),
-        )
+        return (path.name, *source_file_identity(path))
     except OSError:
-        return (path.name, None, None, None, None, None)
+        return (path.name, None, None, None, None, None, None)
 
 
 __all__ = [

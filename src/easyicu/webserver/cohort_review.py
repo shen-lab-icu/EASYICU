@@ -23,6 +23,7 @@ from easyicu.webserver import review_labels
 from easyicu.webserver import catalog_metadata
 from easyicu.webserver import prepared_frames
 from easyicu.webserver import cohort_parquet
+from easyicu.webserver.source_cache_identity import source_file_identity
 
 _READ_MODULES = (
     "demographics",
@@ -680,16 +681,8 @@ def _summary_cache_key(
         manifest_path = path / name
         if manifest_path.exists():
             try:
-                stat = manifest_path.stat()
                 manifest_identities.append(
-                    (
-                        name,
-                        int(stat.st_size),
-                        int(stat.st_mtime_ns),
-                        int(stat.st_ctime_ns),
-                        int(stat.st_dev),
-                        int(stat.st_ino),
-                    )
+                    (name, *source_file_identity(manifest_path))
                 )
             except OSError:
                 manifest_identities.append((name, "unreadable"))
@@ -700,15 +693,10 @@ def _summary_cache_key(
         relative = str(item["file"])
         source_file = path / relative
         try:
-            stat = source_file.stat()
             file_identities.append(
                 (
                     relative,
-                    int(stat.st_size),
-                    int(stat.st_mtime_ns),
-                    int(stat.st_ctime_ns),
-                    int(stat.st_dev),
-                    int(stat.st_ino),
+                    *source_file_identity(source_file),
                     str(item.get("parquet_sha256") or ""),
                 )
             )

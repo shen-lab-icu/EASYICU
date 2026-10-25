@@ -26,6 +26,9 @@ from easyicu.research_agent.research_context.builder import build_research_conte
 from easyicu.research_agent.research_context.concept_population import context_data_constraints
 from easyicu.research_agent.research_context.outbound import outbound_safe_context_payload
 from easyicu.research_agent.research_context.typed import parse_research_context_json
+from easyicu.research_agent.schema import (
+    CohortDescriptor, ConceptDescriptor, ResearchContext, UserPreferences,
+)
 from easyicu.webserver import agent_pipeline_runs, primary_cohort
 from easyicu.webserver.research_launch_scientific import (
     _require_export_holds_study_cohort,
@@ -160,6 +163,40 @@ def test_an_ordinary_population_is_transported_without_elision() -> None:
     assert agent_pipeline_runs._compile_data_constraints(constraints) == expected
 
 
+@pytest.mark.parametrize(
+    ("preferences", "expected"),
+    [
+        (None, None),
+        (UserPreferences(), None),
+        (
+            UserPreferences(data_constraints="Retain eligible adult stays."),
+            {"data_constraints": "Retain eligible adult stays."},
+        ),
+        (
+            UserPreferences(covariate_selection="exact", covariates=[]),
+            {"covariate_selection": "exact", "covariates": []},
+        ),
+    ],
+    ids=["absent", "no-choices", "constraints", "explicitly-unadjusted"],
+)
+def test_outline_prompt_preserves_preference_presence(preferences, expected) -> None:
+    context = ResearchContext(
+        research_question="Describe the age distribution of eligible adult stays.",
+        cohort=CohortDescriptor(cohort_name="synthetic", database="synthetic", n_stays=12),
+        variables=[ConceptDescriptor(name="age", role="demographic", dtype="float64")],
+        user_preferences=preferences,
+    )
+    content = ProgressivePlannerAgent.request_messages(context)[-1].content
+    anchors, _ = json.JSONDecoder().raw_decode(
+        content.split("Research question and sealed study anchors:\n", 1)[1]
+    )
+    if expected is None:
+        assert "study_preferences" not in anchors
+    else:
+        assert "study_preferences" in anchors
+        assert anchors["study_preferences"] == expected
+
+
 @pytest.mark.parametrize("size", [4_000, 4_096])
 @pytest.mark.parametrize("language", ["english", "chinese"])
 def test_complete_web_constraints_reach_planner_context_and_sealed_run_inputs(
@@ -287,6 +324,7 @@ def test_complete_web_constraints_reach_planner_context_and_sealed_run_inputs(
         client = budgeted_client(transport, "planner", "planner_plan_generation")
         assert client.complete(messages, structured_output=schema) == "captured"
         content = transport.messages[-1].content
+        assert '"study_preferences":' in content, planner.__name__
         assert '"data_constraints":' in content, planner.__name__
         received, _ = json.JSONDecoder().raw_decode(
             content.split('"data_constraints":', 1)[1].lstrip()
