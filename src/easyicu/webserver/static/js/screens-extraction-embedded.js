@@ -104,6 +104,10 @@
   function projectSourceBinding(root) {
     const owner = window.EU_EXTRACTION_NATIVE_OWNER;
     if (!owner || typeof owner.sourceBindingSnapshot !== 'function') return;
+    // This panel binds an actual data source. The native extraction Demo
+    // toggle selects synthetic UI examples, not an official public demo;
+    // official demos are chosen by the conversation's source cards instead.
+    root.querySelectorAll('[data-datamode-switch]').forEach(node => node.remove());
     const snapshot = owner.sourceBindingSnapshot();
     // The owner renders its data-workspace page header (`.eudata-head`); the
     // reader retitles it as the source-binding step and drops the dictionary
