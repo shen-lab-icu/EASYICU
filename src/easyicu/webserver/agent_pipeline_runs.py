@@ -3394,6 +3394,61 @@ def _manuscript_provenance_projection(run_dir: Path) -> Dict[str, Any]:
     return payload
 
 
+def _figure_export_locators(run_dir: Path, row: Mapping[str, Any]) -> Dict[str, Any]:
+    """Retain only existing, registry-bound formats, without browser paths.
+
+    A locator is evidence identity, not download authority. The download
+    owner must support that identity before the gallery can offer an action.
+    """
+    from easyicu.webserver.research_evidence_preview import (
+        EvidencePreviewError,
+        _load_records,
+        _read_regular_file,
+        _record_path,
+    )
+
+    exports = row.get("exports")
+    if not isinstance(exports, Mapping):
+        return {}
+    try:
+        records = _load_records(run_dir)
+        image = _record_path(run_dir, row.get("relative_path"))
+    except (EvidencePreviewError, OSError, ValueError):
+        return {}
+    locators: Dict[str, Any] = {}
+    for fmt in ("pdf", "svg", "tiff"):
+        relative = exports.get(fmt)
+        if not isinstance(relative, str) or any(
+            part in {"", ".", ".."} for part in relative.split("/")
+        ):
+            continue
+        try:
+            path = _record_path(run_dir, relative)
+            if path.suffix.lower() != f".{fmt}" or path.with_suffix(".png") != image:
+                continue
+            raw = _read_regular_file(path, max_bytes=16 * 1024 * 1024)
+            if not raw:
+                continue
+            digest = hashlib.sha256(raw).hexdigest()
+            for record in records:
+                evidence_id = str(record.get("evidence_id") or "")
+                if (record.get("kind") != "figure" or record.get("sha256") != digest
+                        or not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", evidence_id)):
+                    continue
+                registered = _record_path(run_dir, record.get("relative_path"))
+                if registered.suffix.lower() != path.suffix.lower():
+                    continue
+                verified = _read_regular_file(registered, max_bytes=16 * 1024 * 1024)
+                if hashlib.sha256(verified).hexdigest() == digest:
+                    locators[fmt] = {
+                        "evidence_id": evidence_id, "sha256": digest, "kind": "figure",
+                    }
+                    break
+        except (EvidencePreviewError, OSError, ValueError):
+            continue
+    return locators
+
+
 def _figure_projection(run_dir: Path) -> Dict[str, Any]:
     canonical_source = _read_json(run_dir / "figure_gallery.json", {})
     source = (
@@ -3410,7 +3465,8 @@ def _figure_projection(run_dir: Path) -> Dict[str, Any]:
         relative = _clean_text(row.get("relative_path"), 300)
         item: Dict[str, Any] = {
             "label": _clean_text(row.get("label") or row.get("figure_id"), 240),
-            "caption": _clean_text(row.get("caption"), 4000),
+            "caption": str(row.get("caption") or "").strip(),
+            "export_locators": _figure_export_locators(run_dir, row),
             "name": Path(relative).name if relative else "figure",
             "relative_path": relative,
             "status": _clean_text(row.get("status"), 120) or "available",
