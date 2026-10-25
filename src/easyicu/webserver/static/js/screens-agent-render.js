@@ -117,8 +117,14 @@
     if (n.includes('calib')) return 'calib';
     return 'file';
   }
-  function artifactTitle(name) {
+  function manuscriptUnavailable(opening) {
+    return /^#?\s*Manuscript scaffold not generated\s*(?:\n|$)/i.test(opening)
+      || /<!--\s*easyicu:manuscript-state\s+kind=(?:blocked|paused|probe)\b/.test(opening);
+  }
+  function artifactTitle(name, manuscript) {
     const n = String(name || '');
+    const pendingReview = manuscript && manuscript.status === 'locked_pending_human_review'
+      && !manuscriptUnavailable(String(manuscript.markdown_preview || '').slice(0, 600));
     const labels = {
       'manuscript_revision.pdf': t('Current report revision (PDF)', '当前报告修订（PDF）'),
       'manuscript_scaffold.pdf': t('Original run report (PDF)', '原运行报告（历史 PDF）'),
@@ -130,11 +136,15 @@
       'calibration_curve.json': t('Calibration curve', '校准曲线'),
       'quality_gate.json': t('Evidence check', '证据核验'),
       'evidence_ledger.json': t('Evidence ledger', '证据账本'),
-      'agent_plan.json': t('Agent plan', 'Agent 计划'),
+      'agent_plan.json': t('Analysis plan', '分析计划'),
       'literature_evidence.json': t('Literature evidence', '文献证据'),
       'scientific_plan_review.json': t('Scientific plan review', '科学计划审阅'),
-      'scientific_readiness.json': t('Scientific readiness', '科学就绪情况'),
-      'manuscript_draft.json': t('Locked manuscript draft', '锁定论文草稿'),
+      'scientific_readiness.json': t('Study review', '研究审阅'),
+      'manuscript_draft.json': pendingReview
+        ? t('Manuscript draft (for review)', '论文草稿（待审阅）') : t('Manuscript draft', '论文草稿'),
+      'full_analysis_report.json': t('Research results and interpretation', '研究结果与解读'),
+      'article_report.json': t('Manuscript draft', '论文草稿'),
+      'technical_report.json': t('Technical report', '技术报告'),
       'manuscript_provenance.json': t('Evidence-bound manuscript reader', '证据绑定论文阅读器'),
       'benchmark_scorecard.json': t('Evaluation scorecard', '评估记分卡'),
       'workflow_graph.json': t('Workflow graph', '工作流图谱'),
@@ -440,8 +450,7 @@
     const blocks = Array.isArray(p.article_blocks) ? p.article_blocks.slice(0, 240) : [];
     const opening = blocks.slice(0, 4).flatMap(block => Array.isArray(block && block.segments) ? block.segments : [])
       .map(segment => String(segment && segment.text || '')).join('\n').slice(0, 600);
-    if (/^Manuscript scaffold not generated\s*(?:\n|$)/i.test(opening)
-      || /<!--\s*easyicu:manuscript-state\s+kind=(?:blocked|paused|probe)\b/.test(opening)) {
+    if (manuscriptUnavailable(opening)) {
       return `<div class="ag-artifact-readable"><div class="ag-artifact-section"><div class="ag-artifact-section-title">${esc(t('Manuscript unavailable', '文章尚未生成'))}</div><p>${esc(t('This run has no readable manuscript. Review the run status and scientific review records for the reason; existing results remain available in the result tables and evidence records.', '本次运行没有可阅读的文章。请在运行状态与科学审阅记录中查看原因；已有结果仍可从结果表与证据记录查看。'))}</p></div></div>`;
     }
     const references = Array.isArray(p.references) ? p.references.slice(0, 120) : [];
@@ -1526,7 +1535,7 @@
     if (n.includes('draft')) {
       const claims = Array.isArray(p.claims) ? p.claims : (Array.isArray(p.sentences) ? p.sentences : []);
       sections.push(artifactTable(
-        t('Locked claims', '锁定论断'),
+        artifactTitle(n, p),
         [t('Claim', '论断'), t('Evidence IDs', '证据 ID'), t('Status', '状态')],
         claims.map(row => [row.text || row.claim || row.sentence || '', Array.isArray(row.evidence_ids) ? row.evidence_ids.join(', ') : '', row.status || p.status || 'locked']),
         t('No claims are present.', '没有论断。')
