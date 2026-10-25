@@ -757,7 +757,7 @@ def test_agent_report_reader_owns_figures_and_manuscript_with_explicit_helpers()
         assert f"function {name}(" in reader
         assert f"function {name}(" not in renderer
     assert "function manuscriptProvenanceView(payload, { artifactTable, manuscriptUnavailable })" in reader
-    assert "window.AGENT_REPORT_READER = { figureReading, figureGallery, manuscriptProvenanceView };" in reader
+    assert "window.AGENT_REPORT_READER = { figureReading, figureGallery, figureDownloadRequest, manuscriptProvenanceView };" in reader
     assert "const { figureReading, figureGallery } = window.AGENT_REPORT_READER;" in renderer
     assert "window.AGENT_REPORT_READER.manuscriptProvenanceView(payload, { artifactTable, manuscriptUnavailable })" in renderer
     assert "window.AGENT_RENDER" not in reader

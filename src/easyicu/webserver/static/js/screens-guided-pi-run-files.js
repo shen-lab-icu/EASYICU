@@ -156,7 +156,7 @@
     async function download(name) {
       const review = state.review;
       if (!review || state.loading || state.signing) return;
-      if (name && !rows(review.artifacts).some(item => item.name === name)) return;
+      if (typeof name === 'string' && !rows(review.artifacts).some(item => item.name === name)) return;
       const ticket = revision;
       try {
         if (name) await api.downloadAgentRunArtifact({ run_ref: review.run_ref }, name);
@@ -367,6 +367,12 @@
       if (!section) return false;
       const ref = section.dataset.runFiles;
       const entry = entries.get(ref);
+      const figureDownload = target.closest('[data-gpi-figure-download]');
+      if (figureDownload) {
+        const request = window.AGENT_REPORT_READER.figureDownloadRequest(figureDownload);
+        if (entry && request && request.run_ref === ref) entry.controller.download(request.figure_export);
+        return true;
+      }
       const evidence = target.closest('[data-gpi-evidence-open]');
       if (evidence) {
         event.preventDefault();

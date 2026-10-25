@@ -742,7 +742,8 @@
     return postJSON('/api/agent-runs/artifact', Object.assign(runCoordinate(run), { artifact: artifact }));
   }
   async function downloadAgentRunArtifact(run, artifact) {
-    const file = await postBlob('/api/agent-runs/download-artifact', Object.assign(runCoordinate(run), { artifact: artifact }));
+    const selection = artifact && typeof artifact === 'object' ? { figure_export: artifact } : { artifact: artifact };
+    const file = await postBlob('/api/agent-runs/download-artifact', Object.assign(runCoordinate(run), selection));
     triggerDownload(file.blob, file.filename);
     return file;
   }
