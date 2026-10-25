@@ -404,3 +404,29 @@ def test_only_a_paused_projection_is_closed(tmp_path: Path) -> None:
     assert recorded is False
     assert json.loads((wrapper / "quality_gate.json").read_text(encoding="utf-8")) == gate
     assert json.loads((wrapper / "source_run_manifest.json").read_text(encoding="utf-8")) == manifest
+
+
+def test_an_approved_resume_keeps_the_active_step_through_its_wrapper(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    class Pipeline:
+        _config = SimpleNamespace(runner_kind="host")
+        has_resumable_human_review = False
+
+        def resume_human_review(self, decisions, *, run_id, progress_callback):
+            progress_callback({"phase": "execute", "step_id": "absolute_risk_context", "status": "running"})
+            raise KeyError("synthetic private column")
+
+    root, wrapper, study = _paused(tmp_path, monkeypatch, Pipeline())
+    error = _approve(study)
+    assert error.code == "research_pipeline_approved_run_failed"
+    receipt = json.loads((wrapper / error.details["diagnostic"]).read_text())
+    assert receipt["typed_failure"] == {
+        "owner": "easyicu.execution.pipeline_v1", "reason_code": "execution_step_raised",
+        "step_id": "absolute_risk_context", "phase": "execute", "runner_kind": "host", "exception_type": "KeyError",
+    }
+    from easyicu.webserver.pi_copilot.projections import gate_detail_projection
+    detail = gate_detail_projection(_row(root, study)["gate_detail"])
+    assert detail["gate_detail_step_id"] == "absolute_risk_context"
+    assert detail["gate_detail_code"] == "execution_step_raised"
+    assert json.loads((wrapper / "source_run_manifest.json").read_text())["analysis_started"] is True

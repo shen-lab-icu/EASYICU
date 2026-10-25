@@ -17,6 +17,7 @@ from ..contracts.association_execution import association_execution_verdict, sol
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..contracts.dependence import PlannedDependenceRequirement
 from ..contracts.exposure_group_rules import PlannedGroupColumn, read_grouping_rules
+from ..contracts.figure_plan import COHORT_FLOW_FIGURE_PANELS, DATA_QUALITY_FIGURE_PANELS
 from ..contracts.model_terms import ModelTermSpec
 from ..contracts.runtime_outcomes import RuntimeOutcomeContract
 from ..schema import AnalysisPlan, AnalysisStep, ArtifactConsumptionContract
@@ -32,6 +33,7 @@ AssociationAuthorityReason = Literal[
     "association_adjustment_exposure_conflict",
     "baseline_association_roster_mismatch",
     "baseline_association_design_mismatch",
+    "baseline_association_step_roster_mismatch",
 ]
 
 
@@ -45,13 +47,16 @@ class BaselineAssociationAuthorityError(ValueError):
         "exposure_reference_level", "primary_contrast_level", "exposure_encoding",
         "scientific_action_id", "inputs", "effect_modifiers",
         "grouping.source_columns", "grouping.window",
+        "step_roster", "scientific_capability", "signed_reference", "expected_outputs",
+        "runtime_outcome_contract", "input_consumption_contracts",
     )
 
     def __init__(self, message: str, *, reason_code: AssociationAuthorityReason = "baseline_association_design_mismatch",
-                 mismatch_fields: tuple[str, ...] = ()):
+                 mismatch_fields: tuple[str, ...] = (), step_id: str = "adjusted_association"):
         super().__init__(message)
         self.reason_code = reason_code
         self._mismatch_fields = tuple(mismatch_fields)
+        self.step_id = step_id if step_id in (*BASELINE_STEPS, "plan") else "plan"
 
     @property
     def mismatch_fields(self) -> tuple[str, ...]:
@@ -59,8 +64,37 @@ class BaselineAssociationAuthorityError(ValueError):
         return tuple(field for field in self.mismatch_field_names if field in self._mismatch_fields)
 
 
-def _refusal(message, *, reason_code="baseline_association_design_mismatch", mismatch_fields=()):
-    return BaselineAssociationAuthorityError(message, reason_code=reason_code, mismatch_fields=mismatch_fields)
+def _refusal(message, *, reason_code="baseline_association_design_mismatch", mismatch_fields=(), step_id="adjusted_association"):
+    return BaselineAssociationAuthorityError(message, reason_code=reason_code, mismatch_fields=mismatch_fields, step_id=step_id)
+
+
+def _article_display_profile(step, core):
+    """Recognize only the two source-bound article companions; never new fits.
+
+    The seven scientific owners keep their order. A companion may render an
+    existing product exactly once, with the same panels and all-row contract
+    as its deterministic renderer. No raw input or scientific contract enters.
+    """
+    profiles = (
+        ("figure:cohort_flow", ("table:cohort_flow",), COHORT_FLOW_FIGURE_PANELS),
+        ("figure:data_quality", ("table:measurement_audit_missingness", "table:measurement_audit_process"), DATA_QUALITY_FIGURE_PANELS),
+    )
+    display_fields = {"step_id", "intent", "inputs", "expected_outputs", "method", "icu_rule_refs",
+                      "input_consumption_contracts", "figure_panels"}
+    if step.method != "visualization" or step.model_dump(exclude=display_fields, exclude_defaults=True, exclude_none=True):
+        return None
+    for output, sources, templates in profiles:
+        if step.expected_outputs != [output] or tuple(step.inputs) != sources:
+            continue
+        if any(sum(source in owner.expected_outputs for owner in core) != 1 for source in sources):
+            return None
+        if step.input_consumption_contracts != [ArtifactConsumptionContract(input_key=source, mode="all_rows") for source in sources]:
+            return None
+        panels = [(panel.panel_id, panel.article_role, panel.chart_type, tuple(panel.source_products)) for panel in step.figure_panels]
+        expected = [(panel.panel_id, panel.article_role, panel.chart_type, (source,)) for panel, source in zip(templates, sources)]
+        if panels == expected and all(panel.figure_output == output and not panel.policy_alternative_chart_types for panel in step.figure_panels):
+            return output
+    return None
 
 
 class BaselineAssociationRuntimeAuthority(BaseModel):
@@ -206,7 +240,7 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
 
     def bind_plan(self, plan: AnalysisPlan):
         if not self.model_requirement_sha256:
-            raise ValueError("baseline model must be sealed from the reviewed plan")
+            raise _refusal("baseline model must be sealed from the reviewed plan", mismatch_fields=("signed_reference",))
         if self._primary(plan).scientific_capability == BASELINE_CAPABILITY:
             self.validate_plan(plan)
             return plan
@@ -236,36 +270,42 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
     def governed_primary_step(self, plan: AnalysisPlan):
         primary = self._primary(plan)
         if primary.method != BASELINE_METHOD:
-            raise ValueError("baseline signed primary is absent")
+            raise _refusal("baseline signed primary is absent", mismatch_fields=("method",))
         if primary.scientific_capability != BASELINE_CAPABILITY:
-            raise ValueError("baseline primary capability drifted")
+            raise _refusal("baseline primary capability drifted", mismatch_fields=("scientific_capability",))
         self._requirement(primary)
         if self.plan_rule_ref not in primary.icu_rule_refs or not self.model_requirement_sha256:
-            raise ValueError("baseline signed reference is absent")
+            raise _refusal("baseline signed reference is absent", mismatch_fields=("signed_reference",))
         return primary
 
     def validate_plan(self, plan: AnalysisPlan):
         required_steps = BASELINE_STEPS
         if getattr(plan.design_selection, "execution_tier", "article") == "first_result":
             required_steps = BASELINE_STEPS[:6] if any(step.step_id == "visualization" for step in plan.steps) else BASELINE_STEPS[:5]
-        if tuple(step.step_id for step in plan.steps) != required_steps:
-            raise ValueError("baseline template step roster drifted")
+        core, companions = plan.steps[:len(required_steps)], plan.steps[len(required_steps):]
+        profiles = [_article_display_profile(step, core) for step in companions]
+        if (tuple(step.step_id for step in core) != required_steps
+            or (companions and required_steps != BASELINE_STEPS)
+            or None in profiles or len(profiles) != len(set(profiles))
+            or len({step.step_id for step in plan.steps}) != len(plan.steps)):
+            raise _refusal("baseline template step roster drifted", reason_code="baseline_association_step_roster_mismatch",
+                           mismatch_fields=("step_roster",), step_id="plan")
         primary = self.governed_primary_step(plan)
         if sole_typed_cohort_input(primary) != "artifact:analysis_cohort" or primary.expected_outputs != ["table:adjusted_association_estimates"]:
-            raise ValueError("baseline primary product or cohort drifted")
+            raise _refusal("baseline primary product or cohort drifted", mismatch_fields=("expected_outputs", "inputs"))
         if primary.inputs != ["artifact:analysis_cohort", *self.required_columns]:
-            raise ValueError("baseline primary input roster drifted")
+            raise _refusal("baseline primary input roster drifted", mismatch_fields=("inputs",))
         risk = plan.steps[4]
         if (risk.method != BASELINE_RISK_METHOD or self.plan_rule_ref not in risk.icu_rule_refs
             or risk.expected_outputs != ["table:absolute_risk_context"]
             or risk.inputs != ["artifact:analysis_cohort", *self.required_columns, "table:adjusted_association_estimates"]):
-            raise ValueError("baseline absolute-risk binding drifted")
+            raise _refusal("baseline absolute-risk binding drifted", mismatch_fields=("inputs", "expected_outputs", "signed_reference"), step_id=risk.step_id)
         for step in (primary, risk):
             if step.runtime_outcome_contract != RuntimeOutcomeContract(owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)):
-                raise ValueError("baseline runtime outcome binding drifted")
+                raise _refusal("baseline runtime outcome binding drifted", mismatch_fields=("runtime_outcome_contract",), step_id=step.step_id)
             for key in (key for key in step.inputs if ":" in key):
                 if not any(contract.input_key == key and contract.mode == "all_rows" for contract in step.input_consumption_contracts):
-                    raise ValueError("baseline evidence consumption binding drifted")
+                    raise _refusal("baseline evidence consumption binding drifted", mismatch_fields=("input_consumption_contracts",), step_id=step.step_id)
 
     def planner_disclosure(self):
         return "BASELINE ASSOCIATION: preserve the signed exposure, outcome, adjustment and subgroup rosters.\n" + self.model_dump_json()

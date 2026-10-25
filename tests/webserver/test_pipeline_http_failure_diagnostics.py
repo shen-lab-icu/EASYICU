@@ -171,6 +171,7 @@ def test_pipeline_failure_keeps_typed_http_status_across_exception_chain(tmp_pat
         "owner": "easyicu.providers.http_transport_v1",
         "reason_code": "provider_http_error",
         "status_code": status,
+        "step_id": "unknown", "phase": "unknown", "runner_kind": "unknown", "exception_type": "RuntimeError",
     }
     rendered = json.dumps(payload)
     assert secret not in rendered
@@ -206,6 +207,7 @@ def test_a_scientific_authority_plan_failure_keeps_its_typed_cause(tmp_path, lin
         "owner": "easyicu.current_case_scientific_authority_v1",
         "reason_code": "current_case_scientific_authority_invalid",
         "exception_type": "CurrentCaseScientificAuthorityError",
+        "step_id": "unknown", "phase": "unknown", "runner_kind": "unknown",
     }
     assert private not in json.dumps(payload)
     assert agent_pipeline_runs._safe_pipeline_typed_failure(ValueError(private)) == {}
@@ -296,7 +298,9 @@ def test_a_typed_compile_stop_reaches_the_run_record_as_its_gate_detail(tmp_path
         "gate_missing_concepts": [],
     }
     assert "no host owner" not in json.dumps(gate)
-    assert "detail" not in json.loads((untyped_dir / "quality_gate.json").read_text())["gate"]
+    assert json.loads((untyped_dir / "quality_gate.json").read_text())["gate"]["detail"] == {
+        "reason_code": "pipeline_operation_raised",
+    }
     assert "planning stopped before its analysis steps were drafted" in (
         agent_pipeline_runs._progressive_compile_failure_message(stop)
     )

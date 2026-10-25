@@ -14,86 +14,12 @@ import pytest
 
 from easyicu.research_agent.authority.baseline_association_runtime import build_baseline_authority
 from easyicu.research_agent.authority.baseline_association_runtime import BaselineAssociationAuthorityError
-from easyicu.research_agent.orchestration.exposure_grouping_phase import _declare_on_metadata, planning_run_groupings
+from easyicu.research_agent.orchestration.exposure_grouping_phase import planning_run_groupings
 from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
 from easyicu.research_agent.planning.dependence_authority import bind_context_dependence_authority, context_dependence_authority
-from easyicu.research_agent.planning.exposure_group_compile import CompiledGrouping, CompiledGroupings
-from easyicu.research_agent.planning.exposure_group_spec import read_stated_exposure_groupings
 from easyicu.research_agent.planning.family_spec import build_family_spec_request
-from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
-from tests.support.baseline_association import baseline_context, baseline_plan_attempt, baseline_runtime
+from tests.support.baseline_association import baseline_context, baseline_plan_attempt, baseline_runtime, grouped_case
 from tests.support.node import run_node
-
-
-def grouped_case(tmp_path, source="bmi", *, covariates=("sex",), clustered=False, middle_band=True):
-    context = baseline_context("age", covariates=covariates)
-    context.variables[1] = context.variables[1].model_copy(update={
-        "name": source, "source_concept": source, "unit": None,
-        "role": VariableRole.LAB if source == "assay" else VariableRole.DEMOGRAPHIC,
-        "analysis_window": "icu_admission[0,0]h" if source == "assay" else None,
-    })
-    context = context.model_copy(update={"primary_exposure": source})
-    constraints = {"stated_adjustments": [
-        {"variable": name, "concept": name, "words": f"adjust for {name}", "source_status": "available"}
-        for name in covariates
-    ]}
-    if clustered:
-        constraints["analysis_design"] = {"analysis_family": "association_study", "analysis_unit": "icu_stay",
-                                           "cluster_unit": "patient", "variance_estimator": "cluster_robust"}
-        constraints["verified_patient_grouping"] = {
-            "authority_ref": "synthetic/grouping", "coordinate": "stay_id", "group_derivation": "prefix_before_:s",
-            "mapping_sha256": "a" * 64, "provider_visible_values": False,
-        }
-        context.cohort.provenance["replacement_row_identity"] = {
-            "output_identity_column": "stay_id", "mapping_file_sha256": "a" * 64,
-            "patient_group_derivation": {"algorithm": "prefix_before_:s", "delimiter": ":s"},
-        }
-    context.user_preferences.data_constraints = json.dumps(constraints)
-    authority = build_baseline_authority(
-        protocol_content_sha256="a" * 64, exposure_column=source, outcome_column="death",
-        required_adjustment_columns=covariates, exposure_encoding="restricted_cubic_spline",
-        dependence=context_dependence_authority(context),
-    )
-    groups = [
-        {"id": "g3", "label": "Upper", "rule": {"summary": "value", "op": ">=", "value": 30}},
-        {"id": "g1", "label": "Lower", "rule": {"summary": "value", "op": "<", "value": 20}},
-        {"id": "g2", "label": "Middle", "rule": "otherwise"},
-    ]
-    reference, contrast = ("g1", "g2") if source == "assay" else ("g2", "g1")
-    if not middle_band:
-        groups = [
-            {"id": "g2", "label": "Upper", "rule": {"summary": "value", "op": ">=", "value": 20}},
-            {"id": "g1", "label": "Lower", "rule": {"summary": "value", "op": "<", "value": 20}},
-        ]
-    if source == "assay":
-        groups = groups[1:]
-    stated = read_stated_exposure_groupings({"groupings": [{
-        "id": "x1", "concept": source, "window": None, "scale": "ordinal",
-        "groups": groups, "unmeasured": {"handling": "exclude"}, "reference": reference, "contrast": contrast,
-        "quote": "Compare synthetic measurement bands", "source": "question",
-    }]})
-    compiled = CompiledGroupings((CompiledGrouping(stated.groupings[0], "applied", None, "Synthetic source", {"value": source}),))
-    record = {"schema_version": "easyicu.exposure_groupings_record/1", "planner": {"stated": stated.model_dump(mode="json")},
-              "compiled": compiled.record()}
-    raw = json.dumps(record).encode()
-    (tmp_path / "exposure_groupings.json").write_bytes(raw)
-    catalog = tmp_path / "cohort.parquet"
-    frame = pd.DataFrame({v.name: pd.Series(dtype=v.dtype) for v in context.variables})
-    frame.attrs["easyicu_planning_authority"] = {"kind": "metadata_only_planning_catalog", "patient_rows_read": False}
-    frame.to_parquet(catalog, index=False)
-    _declare_on_metadata(catalog, compiled.applied, groupings_record_sha256=hashlib.sha256(raw).hexdigest())
-    group = compiled.applied[0].variable
-    context.variables.append(ConceptDescriptor(
-        name=group, role="other", dtype="int64", derived_from_concepts=[source],
-        unit_normalization="exposure_group_ordinal", ordinal_levels=list(range(1, len(groups) + 1)), is_ordinal=True,
-        analysis_window="icu_admission[0,0]h" if source == "assay" else None,
-    ))
-    context = context.model_copy(update={"primary_exposure": group})
-    context.cohort.provenance.update({
-        "evidence_stage": "metadata_only_planning",
-        "exposure_group_contrasts": [{"variable": group, "reference": int(reference[1:]), "contrast": int(contrast[1:]), "stated": ["reference", "contrast"]}],
-    })
-    return context, ScientificRuntimeAuthorities(trajectory=None, current_case=authority), catalog
 
 
 @pytest.mark.parametrize("source", ["age", "bmi", "assay"])

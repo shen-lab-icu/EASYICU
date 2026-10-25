@@ -31,6 +31,7 @@ from pydantic import ValidationError
 
 from easyicu.webserver import planning_coordinate_readings
 from easyicu.webserver.descriptive_result_projection import bound_descriptive_variables, descriptive_summary_projection
+from easyicu.webserver.execution_failure import EXECUTION_FAILURE_CODES, call_with_failure_location, execution_failure_diagnostic, track_failure_location
 
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.authority.run_input import (
@@ -973,7 +974,10 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
                     else "current_case_scientific_authority_invalid"
                 ),
                 "exception_type": type(item).__name__,
-                **({"mismatch_fields": list(item.mismatch_fields)} if isinstance(item, BaselineAssociationAuthorityError) else {}),
+                **({"mismatch_fields": list(item.mismatch_fields),
+                    "step_id": item.step_id if item.step_id in {"plan", "cohort_definition", "table_one", "measurement_audit", "adjusted_association", "absolute_risk_context", "visualization", "report"} else "plan",
+                    "phase": "plan_validation", "runner_kind": "not_started"}
+                   if isinstance(item, BaselineAssociationAuthorityError) else {}),
             }
         if revision_diagnostic := revision_scope_diagnostic(item):
             return revision_diagnostic
@@ -1212,6 +1216,13 @@ def _pipeline_failure_category(exc: BaseException) -> str:
     return "error"
 
 
+def _receipt_typed_failure(exc: BaseException, code: str) -> Dict[str, Any]:
+    typed = _safe_pipeline_typed_failure(exc)
+    if code in EXECUTION_FAILURE_CODES:
+        return {**execution_failure_diagnostic(_pipeline_exception_chain(exc)), **typed}
+    return typed
+
+
 def _write_pipeline_failure_diagnostic(
     *,
     wrapper_dir: Path,
@@ -1227,6 +1238,10 @@ def _write_pipeline_failure_diagnostic(
     """
 
     attempts = _safe_pipeline_attempt_metadata(exc)
+    typed = _receipt_typed_failure(exc, code)
+    exception_types = [name for item in _pipeline_exception_chain(exc) if (name := _recorded_exception_type(item)) is not None]
+    if code in EXECUTION_FAILURE_CODES and not exception_types:
+        exception_types.append(typed["exception_type"])
     diagnostic_message = "The governed Research Agent operation failed."
     message_sha256 = hashlib.sha256(
         f"{type(exc).__name__}: {exc}".encode("utf-8")
@@ -1252,12 +1267,8 @@ def _write_pipeline_failure_diagnostic(
         "status": "failed",
         "code": code,
         "failure_type": _pipeline_failure_category(exc),
-        "typed_failure": _safe_pipeline_typed_failure(exc),
-        "exception_types": [
-            name
-            for item in _pipeline_exception_chain(exc)
-            if (name := _recorded_exception_type(item)) is not None
-        ],
+        "typed_failure": typed,
+        "exception_types": exception_types,
         # Bounded code coordinates make an otherwise generic RuntimeError
         # attributable without persisting exception messages, prompts, paths,
         # provider output, or patient data.
@@ -1330,6 +1341,7 @@ def _write_pipeline_failure_projection(
     detail_cause_code: Optional[str] = None,
     detail_concepts: Sequence[str] = (),
     detail_action_coordinates: Mapping[str, Any] | None = None,
+    analysis_started: bool = False,
 ) -> bool:
     """Write a fail-closed terminal receipt that Project Monitor can index.
 
@@ -1389,7 +1401,7 @@ def _write_pipeline_failure_projection(
             "engine": "easyicu.research_agent.pipeline",
             "summary": {
                 "execution_complete": False,
-                "analysis_started": False,
+                "analysis_started": analysis_started,
             },
             "local_first": {"uploads": 0},
         },
@@ -1405,7 +1417,7 @@ def _write_pipeline_failure_projection(
             "provider_usage": _provider_usage_projection(wrapper_dir),
             "provider": provider_public,
             "path_values_returned": False,
-            "analysis_started": False,
+            "analysis_started": analysis_started,
             "publication_authorized": False,
         },
     }
@@ -1462,10 +1474,10 @@ def _record_pipeline_failure(
     )
     if execution_retry_id is None:
         # The allowlisted owner projection has already validated the code.
-        typed = _safe_pipeline_typed_failure(exc)
+        typed = _receipt_typed_failure(exc, code)
         reason_code = typed.get("reason_code")
         cause_code = typed.get("cause_code")
-        coordinates = safe_stop_coordinates(typed)
+        coordinates = {key: value for key, value in safe_stop_coordinates(typed).items() if not (key == "step_id" and value == "unknown")}
         if code == "research_pipeline_provider_timeout":
             coordinates.update(provider_timeout_coordinates(_safe_pipeline_attempt_metadata(exc)))
             reason_code = reason_code or code
@@ -1484,6 +1496,7 @@ def _record_pipeline_failure(
             detail_cause_code=cause_code if isinstance(cause_code, str) else None,
             detail_concepts=_typed_failure_concepts(typed),
             detail_action_coordinates=coordinates,
+            analysis_started=typed.get("phase") in {"execute", "write", "finalise"},
         )
     return diagnostic
 
@@ -1512,7 +1525,7 @@ def _write_review_resume_failure_diagnostic(
         "code": code,
         "failure_type": _pipeline_failure_category(exc),
         "exception_type": exception_type,
-        "typed_failure": _safe_pipeline_typed_failure(exc),
+        "typed_failure": _receipt_typed_failure(exc, code),
         "review_resumable": bool(review_resumable),
         "message_sha256": hashlib.sha256(
             f"{type(exc).__name__}: {exc}".encode("utf-8")
@@ -1541,6 +1554,8 @@ def _record_unresumable_review_failure(
     detail_reason_code: Optional[str] = None,
     detail_cause_code: Optional[str] = None,
     detail_concepts: Sequence[str] = (),
+    detail_action_coordinates: Mapping[str, Any] | None = None,
+    analysis_started: bool = False,
 ) -> bool:
     """Record a paused run whose approved resume failed and cannot resume.
 
@@ -1568,7 +1583,7 @@ def _record_unresumable_review_failure(
     gate.update(status="blocked", reason=code, reportable=False, draft_unlocked=False)
     if detail_reason_code:
         gate["detail"] = _failure_gate_detail(
-            detail_reason_code, detail_cause_code, detail_concepts
+            detail_reason_code, detail_cause_code, detail_concepts, action_coordinates=detail_action_coordinates,
         )
     payloads: Dict[str, Dict[str, Any]] = {
         "quality_gate.json": {**quality, "gate": gate},
@@ -1578,6 +1593,7 @@ def _record_unresumable_review_failure(
             "failure_code": code,
             "failure_type": failure_type,
             "diagnostic_available": bool(diagnostic),
+            "analysis_started": analysis_started,
             "pending_reviews": [],
             "plan_approval_allowed": False,
         },
@@ -7628,7 +7644,7 @@ def make_research_pipeline_run_runner(
                 run_arguments["user_preferences"] = sealed_preferences
             if grouped_continuation is not None:
                 run_arguments.update(grouped_continuation.run_arguments())
-            outcome = pipeline.run(**run_arguments)
+            outcome = call_with_failure_location(pipeline.run, runner_kind=execution.runner_kind, **run_arguments)
             if execution_resume_target is not None and isinstance(
                 outcome, HumanReviewPending
             ):
@@ -8030,13 +8046,14 @@ def resume_research_pipeline(
 
     bind_review_recovery(job, entry, provider_environment)
     try:
-        resume_result = resume_pending_review(
-            _PENDING_REVIEWS,
-            entry,
-            decisions,
-            run_id=key,
+        with track_failure_location(
+            runner_kind=getattr(getattr(entry.pipeline, "_config", None), "runner_kind", None),
             progress_callback=lambda event: _pipeline_progress(job, event),
-        )
+        ) as progress_callback:
+            resume_result = resume_pending_review(
+                _PENDING_REVIEWS, entry, decisions, run_id=key,
+                progress_callback=progress_callback,
+            )
     except PendingReviewResumeInProgress as exc:
         raise ResearchPipelineRunError(
             "research_pipeline_review_resume_in_progress",
@@ -8065,6 +8082,7 @@ def resume_research_pipeline(
             if remains_resumable
             else "research_pipeline_approved_run_failed"
         )
+        typed_failure = _receipt_typed_failure(exc, code)
         diagnostic = _write_review_resume_failure_diagnostic(
             wrapper_dir=entry.wrapper_dir,
             exc=exc,
@@ -8096,6 +8114,8 @@ def resume_research_pipeline(
                     else None
                 ),
                 detail_concepts=_typed_failure_concepts(typed_failure),
+                detail_action_coordinates={key: value for key, value in safe_stop_coordinates(typed_failure).items() if not (key == "step_id" and value == "unknown")},
+                analysis_started=typed_failure.get("phase") in {"execute", "write", "finalise"},
             )
         next_step = "resume again" if remains_resumable else "generate a fresh plan"
         raise ResearchPipelineRunError(
