@@ -491,6 +491,20 @@
       }
       const missing = Array.isArray(detail && detail.missing) ? detail.missing.map(String).filter(Boolean) : [];
       const list = missing.length ? missing.join(', ') : '';
+      if (code === 'execution_step_raised') {
+        const step = String(detail && detail.step || '').trim();
+        const name = {
+          cohort_definition: tr('cohort selection', '研究人群筛选'),
+          table_one: tr('baseline characteristics', '基线特征汇总'),
+          measurement_audit: tr('data completeness checks', '数据完整性检查'),
+          adjusted_association: tr('adjusted association analysis', '调整后的关联分析'),
+          absolute_risk_context: tr('absolute risk comparison', '绝对风险比较'),
+          visualization: tr('result figures', '结果绘图'),
+          report: tr('report preparation', '报告生成'),
+        }[step] || String(detail && detail.stepTitle || '').trim() || step || tr('analysis', '分析');
+        return tr(`The “${name}” step stopped on a calculation error. Send the failure receipt to support, then retry the approved plan once it is fixed.`,
+          `「${name}」步骤计算出错，已停止。请把失败回执发给支持人员，修复后按已批准的计划重试。`);
+      }
       if (code === 'deterministic_standard_executor_failed_closed') {
         const title = String(detail && detail.stepTitle || '').trim();
         const step = title || String(detail && detail.step || '').trim();
@@ -626,6 +640,14 @@
         baseline_association_design_mismatch: tr(
           'The plan does not match the confirmed exposure, outcome, group comparison or patient-clustering design. Planning stopped; analysis has not started. Check these study settings and generate the plan again; keep the failure record if it stops again.',
           '计划中的暴露、结局、分组比较或患者聚类设置与已确认的设计不一致。规划已停止，分析尚未开始。请核对这些研究设置后重新生成计划；如再次停止，请保留失败记录供排查。',
+        ),
+        baseline_association_step_roster_mismatch: tr(
+          'Analysis-plan validation failed and analysis has not started: the plan EasyICU assembled has steps that differ from the confirmed association design. This is an EasyICU error. Send the failure receipt to support; after the fix, generate and review a new plan.',
+          '分析计划校验未通过，分析尚未开始：EasyICU 组装的计划步骤与已确认的关联分析设计不一致，这是 EasyICU 的错误。请把失败回执发给支持人员，修复后重新生成并审阅计划。',
+        ),
+        pipeline_operation_raised: tr(
+          'The run stopped on an internal error. The failure receipt records where it failed and the error type; send it to support and retry after the fix.',
+          '运行因内部错误停止。失败回执记录了出错位置和异常类型，请发给支持人员，修复后再重试。',
         ),
         declared_exposure_level_empty: tr(
           'A declared group has no analysable stays, so the run stopped; generate a new plan that checks eligibility and preserves every group.',
@@ -933,8 +955,8 @@
           '修订后的计划多加了一项你的问题和审查都没有要求的分析，已保留修订前的计划。请先审阅这份计划；如有「生成修订版候选计划」按钮可点击重试，若没有或再次停止，请把失败回执发给支持人员。',
         ),
         research_pipeline_execution_failed: tr(
-          'An analysis step failed while running.',
-          '有一个分析步骤在运行中失败了。',
+          'The run stopped before finishing. Send the failure receipt to support and retry once the cause is found.',
+          '本次运行未完成。请把失败回执发给支持人员，查明原因后再重试。',
         ),
         research_pipeline_provider_budget_exhausted: tr(
           'The run used up its model budget before it finished, and repeated connection failures count against that budget; try again once the connection is stable.',
@@ -987,7 +1009,7 @@
         ),
       };
       // A typed reason already explains these stops and supplies recovery copy.
-      if (['research_pipeline_progressive_compile_failed', 'research_pipeline_scientific_authority_refused'].includes(value) && suffix) return suffix;
+      if (['research_pipeline_progressive_compile_failed', 'research_pipeline_scientific_authority_refused', 'research_pipeline_execution_failed', 'research_pipeline_approved_run_failed'].includes(value) && suffix) return suffix;
       if (known[value]) return withDetail(known[value]);
       // An unlisted code stays visible for diagnosis, after a plain sentence.
       return withDetail(tr(`The run stopped before finishing (code: ${value}).`, `运行在完成前停止（代码：${value}）。`));

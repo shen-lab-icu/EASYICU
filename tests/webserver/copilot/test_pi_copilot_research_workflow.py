@@ -8008,7 +8008,7 @@ def test_pipeline_failure_type_is_a_closed_nonsecret_category(tmp_path: Path) ->
 
     payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
     assert payload["failure_type"] == "error"
-    assert payload["typed_failure"] == {}
+    assert payload["typed_failure"]["exception_type"] == "UnclassifiedError"
     assert "sk_secret" not in json.dumps(payload)
 
 
