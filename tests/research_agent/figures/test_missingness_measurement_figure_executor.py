@@ -594,6 +594,94 @@ def test_runner_renders_complete_source_backed_bundle(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.parametrize("different_process_variables", [False, True])
+def test_panels_share_missingness_rank_without_reassigning_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, different_process_variables: bool,
+) -> None:
+    from easyicu.research_agent.execution.runners import (
+        missingness_measurement_figure_executor as owner,
+    )
+
+    # Neither source row order nor alphabetical order is the missingness rank.
+    audit = pd.DataFrame([
+        _audit_row("marker_alpha", missing=200),
+        _audit_row("event_beta", missing=50, not_applicable=700),
+        _audit_row("marker_zeta", missing=600),
+    ], columns=_AUDIT_COLUMNS)
+    process = pd.DataFrame([
+        _process_row("marker_zeta", measured=400, repeat=100),
+        _process_row("event_beta", measured=250, repeat=0, not_applicable=700),
+        _process_row("marker_alpha", measured=800, repeat=200),
+    ], columns=_PROCESS_COLUMNS)
+    process["indicator_semantics"] = [
+        "measurement_availability", "conditional_event_time", "measurement_availability",
+    ]
+    process["measurement_count_column"] = [None, None, "alpha_count"]
+    if different_process_variables:
+        # No process row for alpha; an extra process-only row must not vanish
+        # or become an invented missingness bar.
+        process.loc[2, ["variable", "concept", "value_column"]] = [
+            "process_delta", "process_delta", "process_delta_value",
+        ]
+
+    rendered = {}
+
+    def capture_figure(fig, _stem, *, contract, **_kwargs):
+        # Inspect the displayed positions, not just the order of set_yticks:
+        # a reversed image origin or axis would also break panel comparison.
+        fig.canvas.draw()
+        ax_a, ax_b = fig.axes[:2]
+        for key, axis in (("bar_labels", ax_a), ("grid_labels", ax_b)):
+            rendered[key] = [
+                " ".join(label.get_text().split())
+                for label in sorted(
+                    axis.get_yticklabels(),
+                    key=lambda label: label.get_window_extent().y0,
+                    reverse=True,
+                )
+            ]
+        rendered["bars"] = [bar.get_width() for bar in ax_a.patches]
+        rendered["counts"] = [text.get_text() for text in ax_a.texts if "n=" in text.get_text()]
+        rendered["matrix"] = ax_b.images[0].get_array().tolist()
+        rendered["cells"] = {
+            text.get_position(): text.get_text()
+            for text in ax_b.texts if text.get_position()[0] >= 0
+        }
+        rendered["caption"] = contract.reader_caption
+        return {}  # No figure export is needed for this rendering regression.
+
+    monkeypatch.setattr(owner, "save_publication_figure", capture_figure)
+    run_dir, manifest = _binding(tmp_path, audit=audit, process=process)
+    out_dir, summary = _run(run_dir, manifest)
+
+    ranked_labels = ["Marker Zeta", "Marker Alpha", "Event Beta"]
+    assert rendered["bar_labels"] == [*ranked_labels[:2], "Event Beta †"]
+    assert rendered["grid_labels"] == ranked_labels + (
+        ["Process Delta"] if different_process_variables else []
+    )
+    assert rendered["bars"] == [60.0, 20.0, 5.0]
+    assert rendered["counts"] == ["60.0%  n=600", "20.0%  n=200", "5.0%  n=50"]
+    assert rendered["matrix"] == [
+        [100.0, 40.0, None],
+        [None, None, None] if different_process_variables else [100.0, 80.0, 20.0],
+        [30.0, 25.0, None],
+    ] + ([[100.0, 80.0, 20.0]] if different_process_variables else [])
+    assert rendered["cells"][(2, 0)] == "Unknown"
+    assert rendered["cells"][(2, 2)] == "N/A"
+    if different_process_variables:
+        assert [rendered["cells"][(column, 1)] for column in range(3)] == ["Unknown"] * 3
+    assert "No inferential uncertainty is shown." in rendered["caption"]
+    assert "Source completeness is not event prevalence" in rendered["caption"]
+    assert "repeated records are not independent measurements" in rendered["caption"]
+    panel = pd.read_csv(out_dir / f"{PRODUCT}_source_missingness_panel_source_data.csv")
+    assert panel["variable"].tolist() == ["marker_zeta", "marker_alpha", "event_beta"]
+    assert panel["source_row_index"].tolist() == [2, 0, 1]
+    assert summary["source_rows_consumed"] == {
+        MISSINGNESS_MEASUREMENT_AUDIT_INPUT: 3,
+        MEASUREMENT_PROCESS_AUDIT_INPUT: 3,
+    }
+
+
 def test_a_planner_label_in_another_script_is_drawn_as_its_english_description(
     tmp_path: Path,
 ) -> None:
