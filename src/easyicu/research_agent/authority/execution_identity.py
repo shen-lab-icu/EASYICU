@@ -205,6 +205,7 @@ def _paper_eligible(payload: Mapping[str, Any]) -> bool:
     provider_bound = bool(clients) and all(
         isinstance(item, Mapping)
         and item.get("authorization_mode") not in {None, "unmanaged", "mock_exempt"}
+        and item.get("provider_kind") != "replay"
         for item in clients
     )
     image_hex = (

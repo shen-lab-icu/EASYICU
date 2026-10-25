@@ -51,6 +51,7 @@ from .client_trust import (  # noqa: F401  (re-exported for existing callers)
     _refresh_reviewed_transport_dispatch,
     _register_external_capture_test_client,
     _register_loopback_provider_client,
+    _register_provider_wrapper,
     _remember_trusted_client,
     register_offline_test_client,
     ProviderConfigurationError,
@@ -230,28 +231,6 @@ def provider_client_is_mockish(client: Any) -> bool:
 
 
 
-
-def _register_provider_wrapper(
-    wrapper: Any,
-    *,
-    children_getter: Callable[[], Sequence[Any]],
-) -> Any:
-    """Register one reviewed wrapper and bind its complete child graph."""
-
-    children = tuple(children_getter())
-    if not children or any(child is None or child is wrapper for child in children):
-        raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, type(wrapper).__name__)
-    _remember_trusted_client(
-        wrapper,
-        _new_trusted_record(
-            wrapper,
-            kind="wrapper",
-            authorization=None,
-            child_ids=tuple(id(child) for child in children),
-            children_getter=children_getter,
-        ),
-    )
-    return wrapper
 
 
 def _openrouter_reasoning_extra_body(model: str) -> Optional[dict[str, Any]]:

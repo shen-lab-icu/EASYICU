@@ -1227,3 +1227,35 @@ __all__ = [
     "verified_public_demo_replanning_export",
     "write_marker",
 ]
+
+
+@contextmanager
+def public_demo_replay_scope(*, export_path: Path, database: str, profile_ref: str):
+    """Use the egress owner's manifest/pinned-release proof, never a label."""
+    from easyicu.research_agent.providers.client_trust import (
+        ACCEPTANCE_PROFILE_REF, TEST_PROFILE_REF, ReplayScope,
+        _bind_public_demo_replay_scope, _reset_public_demo_replay_scope,
+        _require_replay_deployment,
+    )
+    from easyicu.research_agent.providers.protocol import PublicDemoIdentity, ReplayError
+
+    _require_replay_deployment()
+
+    if profile_ref not in {ACCEPTANCE_PROFILE_REF, TEST_PROFILE_REF}:
+        raise ReplayError("model_replay_profile_forbidden")
+    source = next((item for item in SOURCES if item.database == database), None)
+    if source is None:
+        raise ReplayError("model_replay_source_forbidden")
+    # MIMIC's public demo deliberately shares the miiv database profile. Only
+    # the pinned export owner can attest this exception, never the caller.
+    if database == "miiv" and _verified_public_demo(str(export_path)) != source:
+        raise ReplayError("model_replay_source_forbidden")
+    egress_source_database(str(export_path), database)
+    scope = ReplayScope(PublicDemoIdentity(source_id=source.id, database=database,
+        version=source.version, archive_sha256=source.archive_sha256), profile_ref, Path(export_path).resolve())
+    token = _bind_public_demo_replay_scope(scope)
+    try:
+        with public_demo_egress_scope(str(export_path)):
+            yield scope
+    finally:
+        _reset_public_demo_replay_scope(token)

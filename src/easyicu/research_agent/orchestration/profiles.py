@@ -1179,7 +1179,13 @@ DESKTOP_FIRST_RESULT_LIVE_PUBMED = replace(
     DESKTOP_FIRST_RESULT,
     name="desktop_first_result_live_pubmed_dev", enable_pubmed=True,
 )
+PUBLIC_DEMO_ACCEPTANCE = replace(
+    DESKTOP_FIRST_RESULT,
+    name="public_demo_acceptance_dev", version="20261025",
+    locked_at="2026-10-25T00:00:00Z", requires_real_provider=False,
+)
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
+    PUBLIC_DEMO_ACCEPTANCE.ref: PUBLIC_DEMO_ACCEPTANCE,
     DESKTOP_FIRST_RESULT.ref: DESKTOP_FIRST_RESULT,
     DESKTOP_FIRST_RESULT_LIVE_PUBMED.ref: DESKTOP_FIRST_RESULT_LIVE_PUBMED,
     NPJ_DM_2026_05.ref: NPJ_DM_2026_05,

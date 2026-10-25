@@ -11,6 +11,10 @@ on:
         description: Branch, tag or commit to accept (blank uses the dispatched ref)
         type: string
         default: ""
+      model_cassette:
+        description: Optional reviewed public-demo model cassette path in the repository
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -95,6 +99,7 @@ jobs:
       - name: Install and accept the public demos through the desktop M1 boundary
         env:
           MEMORY_PRESSURE_GB: ${{ inputs.memory_pressure_gb }}
+          MODEL_CASSETTE_PATH: ${{ inputs.model_cassette }}
         run: |
           $ErrorActionPreference = 'Stop'
           $runtime = "$env:EASYICU_DESKTOP_BUILD_DIR\venv\Scripts\python.exe"
@@ -113,12 +118,16 @@ jobs:
             # occur during acceptance. No provider configuration or Docker.
             $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
             Remove-Item Env:PYTHONPATH, Env:PYTHONHOME -ErrorAction SilentlyContinue
+            $replayArgs = @()
+            if (-not [string]::IsNullOrWhiteSpace($env:MODEL_CASSETTE_PATH)) {
+              $replayArgs = @('--model-cassette', $env:MODEL_CASSETTE_PATH)
+            }
             & $runtime -I tools/windows_laptop_acceptance.py `
               --memory-pressure-gb "$env:MEMORY_PRESSURE_GB" `
               --work-dir "$env:RUNNER_TEMP\EasyICU 数据" `
               --output-dir "$env:GITHUB_WORKSPACE\acceptance-results" `
               --desktop-backend "$installDir\resources\backend\easyicu-backend.exe" `
-              --desktop-first-result
+              --desktop-first-result @replayArgs
             $result = $LASTEXITCODE
           } finally {
             $uninstaller = Join-Path $installDir 'uninstall.exe'

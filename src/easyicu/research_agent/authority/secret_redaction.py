@@ -62,7 +62,7 @@ _NAMED_SECRET_RE = re.compile(
     r"(?i)\b("
     r"api[_-]?key|password|passwd|token|secret|session[_-]?id|dsn|"
     r"connection[_-]?string|database[_-]?(?:url|uri)"
-    r")\s*[:=]\s*[^\s,;}\]\"']{4,}"
+    r")\s*[:=]\s*(?:\[REDACTED\]|\"[^\"\r\n]{4,}\"|'[^'\r\n]{4,}'|[^\s,;}\]\"']{4,})"
 )
 
 
@@ -70,13 +70,19 @@ def _normalise_key(name: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(name).casefold()).strip("_")
 
 
-def is_sensitive_key(name: Any) -> bool:
-    """Classify exact credential keys and underscore-delimited suffixes."""
+def is_sensitive_key(name: Any, *, include_generic_key: bool = True) -> bool:
+    """Classify credential fields; model answers may use ordinary scientific keys.
+
+    Configuration/debug callers retain the conservative generic ``key`` rule.
+    Response-only recording can omit that one ambiguous suffix; ``api_key``,
+    ``private_key`` and every other credential suffix remain sensitive.
+    """
 
     normalized = _normalise_key(name)
     return any(
         normalized == suffix or normalized.endswith(f"_{suffix}")
         for suffix in _SENSITIVE_KEY_SUFFIXES
+        if include_generic_key or suffix != "key"
     )
 
 

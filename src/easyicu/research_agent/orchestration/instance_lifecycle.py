@@ -218,6 +218,9 @@ def pipeline_instance_lifecycle(
     def decorate(method: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(method)
         def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+            from ..providers.clients import require_replay_pipeline
+
+            require_replay_pipeline(self)
             # ``setdefault`` keeps legacy ``__new__``-constructed test doubles
             # compatible without creating two owners for concurrent callers.
             lease = self.__dict__.setdefault(

@@ -28,7 +28,8 @@ def test_windows_workflow_uses_the_desktop_build_and_only_publishes_aggregates()
     triggers = workflow.get("on", workflow.get(True))
     assert set(triggers) == {"workflow_dispatch"}
     inputs = triggers["workflow_dispatch"]["inputs"]
-    assert set(inputs) == {"memory_pressure_gb", "ref"}
+    assert set(inputs) == {"memory_pressure_gb", "ref", "model_cassette"}
+    assert inputs["model_cassette"]["default"] == ""
     assert inputs["memory_pressure_gb"]["default"] == 8
     job = workflow["jobs"]["acceptance"]
     assert job["runs-on"] == "windows-latest"
@@ -38,10 +39,15 @@ def test_windows_workflow_uses_the_desktop_build_and_only_publishes_aggregates()
     setup = next(step for step in steps if "actions/setup-python@" in step.get("uses", ""))
     assert setup["with"]["python-version"] == "3.11"
     commands = "\n".join(step.get("run", "") for step in steps)
+    install_step = next(step for step in steps if "Install and accept" in step.get("name", ""))
+    assert install_step["env"]["MODEL_CASSETTE_PATH"] == "${{ inputs.model_cassette }}"
     assert "python desktop/scripts/build_windows.py" in commands
     assert "pip install" not in commands
     assert "--desktop-backend" in commands
     assert "--desktop-first-result" in commands
+    assert "--model-cassette" in commands
+    assert "${{ inputs.model_cassette }}" not in commands
+    assert "$env:MODEL_CASSETTE_PATH" in commands
     assert "-I tools/windows_laptop_acceptance.py" in commands
     assert "Start-Process" in commands and "/S /D=$installDir" in commands
     assert "uninstall.exe" in commands
