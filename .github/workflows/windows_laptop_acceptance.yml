@@ -1,0 +1,152 @@
+name: Windows laptop acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      memory_pressure_gb:
+        description: GiB allocated by a resident helper (0 disables pressure)
+        type: number
+        default: 8
+      ref:
+        description: Branch, tag or commit to accept (blank uses the dispatched ref)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-laptop-acceptance-${{ inputs.ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: EasyICU 数据
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      EASYICU_VERBOSE: "0"
+      EASYICU_DISABLE_PROVIDER_ENV_FILE: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out the selected candidate in a clinician-like folder
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          path: EasyICU 数据
+          persist-credentials: false
+
+      - name: Initialize aggregate receipts for setup failures
+        run: |
+          $receipts = "$env:GITHUB_WORKSPACE\acceptance-results"
+          New-Item -ItemType Directory -Force $receipts | Out-Null
+          @{
+            schema_version = "easyicu_laptop_acceptance_v1"
+            status = "failed"
+            failures = @(@{reason_code = "acceptance_driver_not_started"; exception_type = "WorkflowStepFailed"})
+          } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 "$receipts\acceptance.json"
+          "Windows laptop acceptance: driver did not start; inspect the setup step." | Set-Content -Encoding utf8 "$receipts\summary.md"
+
+      - name: Set up the desktop-supported Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          architecture: x64
+
+      # The newer desktop requirement supersedes the editable BAT install.
+      # Its build owner installs the same [webapp] extra with the Windows hash
+      # lock, then freezes that installed wheel. Do not invent a second pip line.
+      - name: Set up the desktop Node toolchain
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.19.0"
+          architecture: x64
+
+      - name: Build the candidate desktop installer
+        run: |
+          $env:EASYICU_DESKTOP_BUILD_DIR = "$env:RUNNER_TEMP\easyicu-build"
+          $env:CARGO_TARGET_DIR = "$env:RUNNER_TEMP\easyicu-cargo"
+          "EASYICU_DESKTOP_BUILD_DIR=$env:EASYICU_DESKTOP_BUILD_DIR" >> $env:GITHUB_ENV
+          "CARGO_TARGET_DIR=$env:CARGO_TARGET_DIR" >> $env:GITHUB_ENV
+          rustup default stable-x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python desktop/scripts/build_windows.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Read official demo versions and checksums from their owner
+        id: demo-cache
+        run: |
+          $runtime = "$env:EASYICU_DESKTOP_BUILD_DIR\venv\Scripts\python.exe"
+          $key = & $runtime -I tools/windows_laptop_acceptance.py --cache-key
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "key=$key" >> $env:GITHUB_OUTPUT
+
+      - name: Cache only pinned public demo archives
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/EasyICU 数据/demo-cache/*/*.zip
+          key: public-demo-${{ steps.demo-cache.outputs.key }}
+
+      - name: Install and accept the public demos through the desktop M1 boundary
+        env:
+          MEMORY_PRESSURE_GB: ${{ inputs.memory_pressure_gb }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtime = "$env:EASYICU_DESKTOP_BUILD_DIR\venv\Scripts\python.exe"
+          $installers = @(Get-ChildItem "$env:CARGO_TARGET_DIR\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe")
+          if ($installers.Count -ne 1) { throw 'Expected exactly one installer' }
+          $installDir = "$env:RUNNER_TEMP\EasyICU 数据\installed app"
+          $install = Start-Process -FilePath $installers[0].FullName -ArgumentList "/S /D=$installDir" -PassThru
+          if (-not $install.WaitForExit(180000)) {
+            & "$env:SystemRoot\System32\taskkill.exe" /PID $install.Id /T /F | Out-Null
+            throw 'Installer timed out'
+          }
+          if ($install.ExitCode -ne 0) { throw 'Installer failed' }
+          $result = 1
+          try {
+            # Only loopback reads and the owner's pinned public-demo downloads
+            # occur during acceptance. No provider configuration or Docker.
+            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+            Remove-Item Env:PYTHONPATH, Env:PYTHONHOME -ErrorAction SilentlyContinue
+            & $runtime -I tools/windows_laptop_acceptance.py `
+              --memory-pressure-gb "$env:MEMORY_PRESSURE_GB" `
+              --work-dir "$env:RUNNER_TEMP\EasyICU 数据" `
+              --output-dir "$env:GITHUB_WORKSPACE\acceptance-results" `
+              --desktop-backend "$installDir\resources\backend\easyicu-backend.exe" `
+              --desktop-first-result
+            $result = $LASTEXITCODE
+          } finally {
+            $uninstaller = Join-Path $installDir 'uninstall.exe'
+            if (Test-Path -LiteralPath $uninstaller) {
+              $cleanup = Start-Process -FilePath $uninstaller -ArgumentList "/S _?=$installDir" -PassThru
+              if (-not $cleanup.WaitForExit(120000)) {
+                & "$env:SystemRoot\System32\taskkill.exe" /PID $cleanup.Id /T /F | Out-Null
+                throw 'Uninstaller timed out'
+              }
+              if ($cleanup.ExitCode -ne 0) { throw 'Uninstaller failed' }
+            }
+          }
+          # Exit 2 retains a red lane when M1 cannot be proven without a model.
+          exit $result
+
+      - name: Publish the short summary
+        if: ${{ always() }}
+        run: |
+          $summary = "$env:GITHUB_WORKSPACE\acceptance-results\summary.md"
+          if (Test-Path $summary) { Get-Content -Raw -Encoding utf8 $summary >> $env:GITHUB_STEP_SUMMARY }
+
+      - name: Upload aggregate acceptance receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-laptop-acceptance-${{ github.run_id }}
+          path: |
+            acceptance-results/acceptance.json
+            acceptance-results/summary.md
+          if-no-files-found: error
+          retention-days: 30

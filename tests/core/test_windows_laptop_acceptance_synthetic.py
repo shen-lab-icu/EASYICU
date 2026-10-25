@@ -59,8 +59,15 @@ def test_synthetic_conversion_export_and_read_owners(tmp_path: Path, monkeypatch
 
         records = []
         acceptance.probe_read_paths(request, exports, records)
+        with acceptance.laptop_environment(work, work / "cache", desktop_first_result=True):
+            research = acceptance.probe_desktop_first_result(exports)
     assert len(records) == 7
     assert all(record["passed"] for record in records)
+    assert research["source_validated"] is True
+    assert research["runner_kind"] == "host"
+    assert research["docker_reason_code"] == "docker_executable_missing"
+    assert research["first_result"]["status"] == "blocked"
+    assert research["provider_calls"] == 0
     for measurements in phases:
         assert measurements["convert"]["file_count"] > 0
         assert measurements["export"]["rows"] > 0

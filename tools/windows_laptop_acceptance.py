@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Opt-in public-demo laptop acceptance; receipts contain aggregates only.
 
-Install with ``python scripts/launch_easyicu.py install``, then use that
-launcher's runtime Python to run this file. No credentialed input, custom URL,
+Use the Windows desktop build's installed wheel Python in CI, or the
+``scripts/launch_easyicu.py install`` runtime for portable checks. No credentialed input, custom URL,
 Docker installation, provider call, or change to production policy is needed.
 The dictionary screen reads /api/catalog; its dictionary is checked separately.
 Local logs and exports stay in the work directory and are never artifacts.
@@ -21,6 +21,7 @@ import math
 import os
 from pathlib import Path
 import re
+import secrets
 import signal
 import socket
 import subprocess
@@ -45,10 +46,11 @@ class AcceptanceFailure(RuntimeError):
 
 def failure_receipt(exc: Exception) -> dict[str, str]:
     """Keep typed codes, never exception text, paths, URLs, rows or identifiers."""
-    detail = getattr(exc, "detail", None)
-    code = getattr(exc, "reason_code", None) or getattr(exc, "code", None)
+    detail = getattr(exc, "detail", None) or getattr(exc, "details", None)
+    code = getattr(exc, "reason_code", None)
     if not code and isinstance(detail, dict):
         code = detail.get("reason_code") or detail.get("error")
+    code = code or getattr(exc, "code", None)
     if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,100}", code):
         code = "acceptance_phase_failed"
     return {"reason_code": code, "exception_type": type(exc).__name__}
@@ -336,9 +338,9 @@ def prepare_dataset(source: Any, paths: Any, phases: dict, *, excluded_pids=(), 
     return paths.export
 
 
-def request_json(base_url: str, method: str, path: str, body: dict | None, *, timeout=120) -> tuple[int, dict]:
+def request_json(base_url: str, method: str, path: str, body: dict | None, *, timeout=120, headers=None) -> tuple[int, dict]:
     data = None if body is None else json.dumps(body).encode("utf-8")
-    request = Request(base_url + path, data=data, method=method, headers={"Content-Type": "application/json"})
+    request = Request(base_url + path, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})})
     # A clinician's proxy variables should not send loopback payloads elsewhere.
     opener = build_opener(ProxyHandler({}))
     try:
@@ -393,14 +395,16 @@ def check_server_log(path: Path) -> None:
 
 
 class LocalWebServer:
-    def __init__(self, work_dir: Path, *, startup_timeout: float = 120) -> None:
+    def __init__(self, work_dir: Path, *, startup_timeout: float = 120, desktop_backend: Path | None = None) -> None:
         self.work_dir = work_dir
         self.startup_timeout = startup_timeout
         self.log_path = work_dir / "webserver.log"
         self.children: dict[int, Any] = {}
+        self.desktop_backend = desktop_backend
+        self.headers = {"X-EasyICU-Desktop-Token": secrets.token_hex(32)} if desktop_backend else {}
 
     def request(self, method, path, body):
-        return request_json(self.base_url, method, path, body)
+        return request_json(self.base_url, method, path, body, headers=self.headers)
 
     def __enter__(self) -> LocalWebServer:
         with socket.socket() as sock:
@@ -408,9 +412,20 @@ class LocalWebServer:
             port = sock.getsockname()[1]
         self.base_url = f"http://127.0.0.1:{port}"
         self.log = self.log_path.open("w", encoding="utf-8")
+        command = [sys.executable, "-m", "easyicu.webserver", "run", "--host", "127.0.0.1", "--port", str(port)]
+        environment = dict(os.environ)
+        if self.desktop_backend:
+            command = [
+                str(self.desktop_backend), "--port", str(port),
+                "--state-dir", str(self.work_dir / "home"),
+                "--runtime-dir", str(self.work_dir / "runtime"),
+                "--parent-pid", str(os.getpid()),
+                "--node-bin", str(self.desktop_backend.parent.parent / "node.exe"),
+            ]
+            environment["EASYICU_DESKTOP_SESSION_TOKEN"] = self.headers["X-EasyICU-Desktop-Token"]
         try:
             self.process = subprocess.Popen(
-                [sys.executable, "-m", "easyicu.webserver", "run", "--host", "127.0.0.1", "--port", str(port)],
+                command, env=environment,
                 cwd=self.work_dir, stdout=self.log, stderr=subprocess.STDOUT,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
             )
@@ -427,7 +442,7 @@ class LocalWebServer:
                 if self.process.poll() is not None:
                     raise AcceptanceFailure("webserver_exited_before_health")
                 try:
-                    status, _ = request_json(self.base_url, "GET", "/api/health", None, timeout=2)
+                    status, _ = request_json(self.base_url, "GET", "/api/health", None, timeout=2, headers=self.headers)
                     if status == 200:
                         return self
                 except OSError:
@@ -445,10 +460,10 @@ class LocalWebServer:
             self.log.close()
 
 
-def probe_web(work_dir: Path, exports: list[Path], metrics: dict) -> None:
+def probe_web(work_dir: Path, exports: list[Path], metrics: dict, *, desktop_backend: Path | None = None) -> None:
     metrics["reads"] = []
     try:
-        with LocalWebServer(work_dir) as server:
+        with LocalWebServer(work_dir, desktop_backend=desktop_backend) as server:
             probe_read_paths(server.request, exports, metrics["reads"])
     finally:
         log = work_dir / "webserver.log"
@@ -491,6 +506,68 @@ def probe_research() -> dict:
     return result
 
 
+def verify_desktop_build(backend: Path) -> dict:
+    """Bind direct owner checks to the same installed sources as the sidecar."""
+    import easyicu
+    from easyicu.research_agent.execution.kernel_identity import build_execution_kernel_identity
+
+    if not backend.is_file():
+        raise AcceptanceFailure("desktop_backend_missing")
+    installed = build_execution_kernel_identity(Path(easyicu.__file__).parent)
+    frozen = build_execution_kernel_identity(backend.parent / "_internal" / "easyicu")
+    if installed != frozen:
+        raise AcceptanceFailure("desktop_kernel_identity_mismatch")
+    return {"installed_backend": True, "kernel_identity_matches": True}
+
+
+def probe_desktop_first_result(exports: list[Path]) -> dict:
+    """Stop at the existing model boundary; never manufacture an M1 result.
+
+    The baseline template projects a validated FamilyPlanSpec, but obtaining
+    that spec still calls a model. ScriptedMockLLMClient is a test fixture, not
+    a recorded, public-demo-bound response accepted by this desktop profile.
+    """
+    from easyicu.research_agent.execution import runner
+    from easyicu.research_agent.orchestration.profiles import DESKTOP_FIRST_RESULT, get_submission_profile
+    from easyicu.webserver import dataio
+    from easyicu.webserver.demo_source_contracts import SOURCES
+    from easyicu.webserver.research_launch_runtime import _require_execution_runtime, _submission_profile_ref
+
+    docker = runner.probe_runner_availability("docker")
+    kind = _require_execution_runtime(budget_mode="full_reviewed", runner_image="")
+    if kind != "host":
+        raise AcceptanceFailure("desktop_host_runner_required")
+    profile = get_submission_profile(_submission_profile_ref(
+        budget_mode="full_reviewed", live_pubmed=False, runner_kind=kind,
+    ))
+    if profile != DESKTOP_FIRST_RESULT or profile.requires_runner != "host":
+        raise AcceptanceFailure("desktop_first_result_profile_mismatch")
+    if len(exports) != len(SOURCES):
+        raise AcceptanceFailure("demo_exports_unavailable_for_research")
+    source, eicu = next((source, path) for source, path in zip(SOURCES, exports) if source.database == "eicu_demo")
+    # Do not publish source paths, per-file seals, or any rows from the binding.
+    dataio.validate_research_pipeline_source(str(eicu), database=source.database)
+    return {
+        "owner": "easyicu.webserver.research_launch_runtime._require_execution_runtime",
+        "available": True, "reason_code": "ready", "runner_kind": kind,
+        "docker_reason_code": docker.reason_code, "profile_ref": profile.ref,
+        "docker_executable_policy": "intentionally_unavailable",
+        "deterministic_analysis_without_docker": "yes",
+        "deterministic_analysis_owner": "easyicu.research_agent.orchestration.profiles.DESKTOP_FIRST_RESULT",
+        "source_validated": True, "source_owner": "easyicu.webserver.dataio.validate_research_pipeline_source",
+        "analysis_executed": False, "provider_calls": 0,
+        "first_result": {
+            "status": "blocked", "reason_code": "desktop_first_result_model_replay_unavailable",
+            "question": "In the public eICU demo, is age associated with hospital mortality after adjustment for sex?",
+            "last_completed_step": "registered_export_validation_and_host_runtime_preflight",
+            "boundary_owner": "easyicu.research_agent.agents.family_spec_planner.run_family_spec_attempt",
+            "requires_real_provider": profile.requires_real_provider,
+            "deterministic_planner_fallback": profile.enable_deterministic_planner_fallback,
+            "evidence_bound_result": False, "seconds_to_first_result": None, "budget_met": None,
+        },
+    }
+
+
 def validate_work_dir(work_dir: Path) -> None:
     path = str(work_dir)
     if " " not in path or not re.search(r"[\u4e00-\u9fff]", path):
@@ -519,13 +596,16 @@ def write_reports(report: dict, output_dir: Path) -> None:
     if research:
         code = research.get("reason_code") or (research.get("failure") or {}).get("reason_code")
         lines.append(f"\nResearch preflight: {code}; governed deterministic analysis without Docker: {research.get('deterministic_analysis_without_docker', 'not_completed')}; local summary preflight: {research.get('local_preflight_without_docker', 'not_completed')}.")
+        first = research.get("first_result")
+        if first:
+            lines.append(f"\nM1: **{first['status']}** (`{first['reason_code']}`). Elapsed to boundary: {first['elapsed_to_boundary_seconds']:.2f} s / {first['budget_seconds']} s budget. No evidence-bound result; time to first result and budget attainment remain unmeasured.")
     for failure in report.get("failures", []):
         lines.append(f"\nFailure: `{failure['reason_code']}` ({failure['exception_type']}).")
     (output_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 @contextmanager
-def laptop_environment(work_dir: Path, cache_dir: Path):
+def laptop_environment(work_dir: Path, cache_dir: Path, *, desktop_first_result=False):
     """Keep CLI state in the test folder and restore embedding callers' state."""
     values = {
         "EASYICU_HOME": str(work_dir / "home"),
@@ -534,6 +614,11 @@ def laptop_environment(work_dir: Path, cache_dir: Path):
         "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1", "EASYICU_VERBOSE": "0",
         "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
     }
+    if desktop_first_result:
+        values["EASYICU_DEPLOYMENT"] = "desktop"
+        # Hosted runners can have Docker preinstalled. Use the existing explicit
+        # executable setting to exercise a clinician's absent-Docker case.
+        values["EASYICU_DOCKER_EXECUTABLE"] = str(work_dir / "docker-not-installed" / "docker.exe")
     previous = {key: os.environ.get(key) for key in values}
     previous_dir = Path.cwd()
     try:
@@ -565,7 +650,9 @@ def private_owner_logs(log):
         handler.close()
 
 
-def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_pressure_gb=8, fetch=None) -> dict:
+def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_pressure_gb=8, fetch=None,
+                   desktop_first_result=False, desktop_backend: Path | None = None) -> dict:
+    started = time.monotonic()
     report: dict[str, Any] = {
         "schema_version": "easyicu_laptop_acceptance_v1", "status": "failed",
         "platform": sys.platform, "python": sys.version.split()[0],
@@ -574,9 +661,13 @@ def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_
     output_dir = output_dir.resolve()
     try:
         work_dir, cache_dir = work_dir.resolve(), cache_dir.resolve()
+        if desktop_backend is not None:
+            desktop_backend = desktop_backend.resolve()
         validate_work_dir(work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
-        with laptop_environment(work_dir, cache_dir):
+        with laptop_environment(work_dir, cache_dir, desktop_first_result=desktop_first_result):
+            if desktop_backend is not None:
+                report["desktop"] = verify_desktop_build(desktop_backend)
             # Set the isolated state root before importing owners with path constants.
             from easyicu.webserver import demo_source_storage as storage
             from easyicu.webserver.demo_source_contracts import SOURCES
@@ -598,15 +689,26 @@ def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_
                     with phase("web", report, excluded) as metrics:
                         if len(exports) != len(SOURCES):
                             raise AcceptanceFailure("demo_exports_unavailable_for_web")
-                        probe_web(work_dir, exports, metrics)
+                        if desktop_backend is None:
+                            probe_web(work_dir, exports, metrics)
+                        else:
+                            probe_web(work_dir, exports, metrics, desktop_backend=desktop_backend)
                 except Exception as exc:
                     report["failures"].append(failure_receipt(exc))
                 try:
                     with phase("research", report, excluded) as metrics:
-                        metrics.update(probe_research())
+                        metrics.update(probe_desktop_first_result(exports) if desktop_first_result else probe_research())
+                        if desktop_first_result:
+                            elapsed = round(time.monotonic() - started, 4)
+                            metrics["first_result"].update(
+                                elapsed_to_boundary_seconds=elapsed, budget_seconds=900,
+                                boundary_within_budget=elapsed <= 900,
+                            )
                 except Exception as exc:
                     report["failures"].append(failure_receipt(exc))
         report["status"] = "failed" if report["failures"] else "passed"
+        if not report["failures"] and desktop_first_result:
+            report["status"] = report["research"]["first_result"]["status"]
     except Exception as exc:
         report["failures"].append(failure_receipt(exc))
     finally:
@@ -621,6 +723,8 @@ def main(argv=None) -> int:
     parser.add_argument("--cache-dir", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path.cwd() / "acceptance-results")
     parser.add_argument("--cache-key", action="store_true")
+    parser.add_argument("--desktop-first-result", action="store_true", help="Probe the desktop M1 path; exit 2 at its model boundary.")
+    parser.add_argument("--desktop-backend", type=Path, help="Installed desktop sidecar from the same build as this interpreter's wheel.")
     parser.add_argument("--hold-memory-bytes", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.hold_memory_bytes is not None:
@@ -633,9 +737,10 @@ def main(argv=None) -> int:
     report = run_acceptance(
         args.work_dir, args.cache_dir or args.work_dir / "demo-cache", args.output_dir,
         memory_pressure_gb=args.memory_pressure_gb,
+        desktop_first_result=args.desktop_first_result, desktop_backend=args.desktop_backend,
     )
     print(f"Laptop acceptance: {report['status']}")
-    return 0 if report["status"] == "passed" else 1
+    return {"passed": 0, "blocked": 2}.get(report["status"], 1)
 
 
 if __name__ == "__main__":
