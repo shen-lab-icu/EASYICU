@@ -10,6 +10,20 @@ from ..literature import LiteratureBundle, build_preplan_literature_bundle
 from ..schema import ResearchContext
 
 
+def load_registered_preplan_literature(
+    *, context: ResearchContext, run_dir: Path, evidence: Any,
+) -> LiteratureBundle:
+    """Read an approved run's exact bundle without retrieval or regeneration."""
+    record = evidence.get("preplan_literature_bundle")
+    verified = verified_run_evidence_path(run_dir, record) if record is not None else None
+    if verified is None:
+        raise ValueError("exact literature resume requires registered digest-verified evidence")
+    bundle = LiteratureBundle.model_validate_json(verified.read_bytes())
+    if bundle.research_question.strip() != context.research_question.strip():
+        raise ValueError("exact literature resume requires question-matched evidence")
+    return bundle
+
+
 def prepare_preplan_literature(
     *,
     context: ResearchContext,
@@ -28,21 +42,7 @@ def prepare_preplan_literature(
 ) -> LiteratureBundle:
     """Retrieve, persist, and register the pre-plan literature authority."""
     if reuse_registered_exact:
-        record = evidence.get("preplan_literature_bundle")
-        verified = (
-            verified_run_evidence_path(run_dir, record)
-            if record is not None
-            else None
-        )
-        if verified is None:
-            raise ValueError(
-                "exact literature resume requires registered digest-verified evidence"
-            )
-        bundle = LiteratureBundle.model_validate_json(verified.read_bytes())
-        if bundle.research_question.strip() != context.research_question.strip():
-            raise ValueError(
-                "exact literature resume requires question-matched evidence"
-            )
+        bundle = load_registered_preplan_literature(context=context, run_dir=run_dir, evidence=evidence)
     elif reuse_bound_seed_exact:
         if bound_seed is None or (
             bound_seed.research_question.strip()
@@ -81,4 +81,4 @@ def prepare_preplan_literature(
     return bundle
 
 
-__all__ = ["prepare_preplan_literature"]
+__all__ = ["load_registered_preplan_literature", "prepare_preplan_literature"]

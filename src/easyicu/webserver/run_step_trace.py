@@ -138,6 +138,7 @@ _PLAN_READY = re.compile(r"Analysis plan ready with (?P<count>\d{1,4}) step\(s\)
 _FIXED_ACTIONS = {
     ("context", "Research context built."): "context_built",
     ("hypothesis", "Building pre-plan literature and hypothesis blueprint."): "literature_build",
+    ("hypothesis", "Literature is deferred to a full article run."): "literature_deferred",
     ("cohort", "Cohort materialised to parquet."): "cohort_materialized",
     ("cohort", "Verified immutable staged cohort for resume."): "cohort_verified",
     ("cohort", "Trajectory staged with exact input authority."): "trajectory_staged",

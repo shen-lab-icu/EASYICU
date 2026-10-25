@@ -53,6 +53,23 @@ def test_pipeline_transport_retains_typed_timing_and_step_coordinates():
         assert projected[key] == event[key]
 
 
+def test_first_result_literature_deferral_survives_live_and_finished_replay(tmp_path):
+    message = "Literature is deferred to a full article run."
+    event = {"stage": "hypothesis", "message": message, "status": "skipped",
+             "timestamp": "2026-01-01T00:00:01+00:00"}
+    job = Job("synthetic", "agent-run")
+    agent_pipeline_runs._pipeline_progress(job, event)
+    live = project_job(job.snapshot())["progress"][0]
+    assert live["action"] == "literature_deferred"
+    assert live["status"] == "skipped"
+    (tmp_path / "audit_log.jsonl").write_text(json.dumps({
+        "phase": event["stage"], "event": message, "status": "skipped", "timestamp": event["timestamp"],
+    }) + "\n")
+    replay = agent_pipeline_runs._trace_timings_projection(tmp_path)
+    assert replay[0]["action"] == live["action"]
+    assert replay[0]["status"] == "skipped"
+
+
 @pytest.mark.parametrize("ticks", [8, 24])
 def test_projection_keeps_early_steps_when_later_events_fill_the_tail(ticks):
     job = Job("synthetic", "agent-run")

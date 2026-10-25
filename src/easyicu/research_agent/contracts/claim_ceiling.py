@@ -97,7 +97,9 @@ def first_result_instructions() -> str:
         "every question-stated outcome, adjustment, subgroup and sensitivity; if no "
         "typed owner can answer one, state the capability gap before approval. "
         "Optional article figures, robustness axes and covariate RCS checks are not "
-        "required. An article needs a separate run and approval."
+        "required. Literature search and literature-based hypothesis generation are "
+        "deferred to an article run. Do not claim novelty, literature comparisons or "
+        "citation support in this result. An article needs a separate run and approval."
     )
 
 

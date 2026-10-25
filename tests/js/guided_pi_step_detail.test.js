@@ -98,6 +98,17 @@ const stepPayloads = {
     const turn = { status: 'running', steps: [] };
     events.forEach(row => activity.notePipelineEvent(turn, row));
     const rows = turn.steps;
+    const firstResult = { status: 'running', steps: [] };
+    activity.notePipelineEvent(firstResult, event(1, 'hypothesis', '', {
+      action: 'literature_deferred', status: 'skipped',
+    }));
+    assert.equal(firstResult.steps.length, 1);
+    assert.equal(firstResult.steps[0].status, 'complete', 'deferral is terminal even before planning starts');
+    assert.equal(firstResult.steps[0].durationKnown, false, 'no search duration is fabricated');
+    assert.equal(activity.stepLabel(firstResult.steps[0]), tr(
+      'Literature is part of a full article run; skipped for this first result',
+      '文献检索属于完整论文流程，本次首轮结果已跳过',
+    ));
     const plans = rows.filter(row => row.step === 'plan_step');
     assert.deepEqual(plans.map(row => row.stepId), ['cohort_accounting', 'baseline_table', 'outcome_distribution', 'running_step']);
     const baseline = plans[1];
