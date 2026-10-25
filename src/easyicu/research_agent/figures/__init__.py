@@ -26,28 +26,44 @@ association-family run regresses.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from ..authority.evidence_store import EvidenceStore
-from ..schema import AnalysisPlan, ResearchContext
-from ..planning.study_design_playbook import StudyDesignFamily
-from .base import RenderedFigure
-from .association import render_continuous_association_figure
-from .causal import render_causal_figure
-from .phenotype import render_phenotype_figure
-from .prediction import render_prediction_figure
-from .survival import render_survival_figure
+if TYPE_CHECKING:
+    from ..authority.evidence_store import EvidenceStore
+    from ..schema import AnalysisPlan, ResearchContext
+    from ..planning.study_design_playbook import StudyDesignFamily
+    from .base import RenderedFigure
 
-# Families whose deterministic renderer lives here. ``descriptive`` remains
-# excluded; association falls through to the base renderer when no registered
-# continuous effect grid is available.
-FAMILY_RENDERERS = {
-    "association": render_continuous_association_figure,
-    "time_to_event": render_survival_figure,
-    "prediction": render_prediction_figure,
-    "phenotyping": render_phenotype_figure,
-    "causal_emulation": render_causal_figure,
-}
+
+def __getattr__(name: str):
+    """Load family renderers only when their public facade is requested.
+
+    Every executor importing a style or contract helper initializes this
+    package first. Those helpers do not need the family renderers or their
+    evidence-store dependencies in each fresh interpreter.
+    """
+    if name not in __all__:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    from .base import RenderedFigure
+    from .association import render_continuous_association_figure
+    from .causal import render_causal_figure
+    from .phenotype import render_phenotype_figure
+    from .prediction import render_prediction_figure
+    from .survival import render_survival_figure
+
+    # Keep the existing callable identities and mutable dispatch dictionary.
+    renderers = {
+        "association": render_continuous_association_figure,
+        "time_to_event": render_survival_figure,
+        "prediction": render_prediction_figure,
+        "phenotyping": render_phenotype_figure,
+        "causal_emulation": render_causal_figure,
+    }
+    exports = {renderer.__name__: renderer for renderer in renderers.values()}
+    exports.update(FAMILY_RENDERERS=renderers, RenderedFigure=RenderedFigure)
+    globals().update(exports)
+    return exports[name]
 
 
 def render_family_figure(
@@ -66,7 +82,10 @@ def render_family_figure(
     association/promotion/skip ladder".
     """
 
-    renderer = FAMILY_RENDERERS.get(str(family))
+    renderers = globals().get("FAMILY_RENDERERS")
+    if renderers is None:
+        renderers = __getattr__("FAMILY_RENDERERS")
+    renderer = renderers.get(str(family))
     if renderer is None:
         return None
     try:
