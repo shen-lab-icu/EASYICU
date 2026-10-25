@@ -47,6 +47,10 @@ from ...robustness.membership import (
 )
 from ...robustness.panel import (
     PRIMARY_SPEC_ID,
+    ROBUSTNESS_MATRIX_COLUMNS as _MATRIX_COLUMNS,
+    ROBUSTNESS_IDENTITY_COLUMNS,
+    matrix_effect_identity,
+    matrix_panel_rows,
     RobustnessPanelRow,
     RobustnessSpec,
     _assert_lock_matches_evidence_anchor,
@@ -466,39 +470,6 @@ def robustness_replay_declaration_verdict(step: AnalysisStep) -> OwnershipVerdic
     )
 
 
-_MATRIX_COLUMNS = [
-    "spec_id",
-    "effect_scale",
-    "point_estimate",
-    "ci_low",
-    "ci_high",
-    "modeled_analytic_n",
-    "axis",
-    "converged",
-    "model_contract_n",
-    "event_n",
-    "model_id",
-    "source_model_id",
-    "exposure_source",
-    "exposure_expression",
-    "exposure_role",
-    "analysis_role",
-    "analysis_set",
-    "baseline_missing_policy",
-    "fit_status",
-    "fit_method",
-    "replay_mode",
-    "coefficient_source_table",
-    "coefficient_term",
-    "model_contract_source",
-    "source_script_sha256",
-    "estimability_status",
-    "membership_n",
-    "membership_executable",
-    "outcome_executable",
-    "independent_variant",
-    "notes",
-]
 #: The flat columns ``sensitivity_specification_grid.csv`` always carries.
 #:
 #: The grid is ``RobustnessSpec.to_dict()`` run through ``json_normalize``, so
@@ -1075,6 +1046,8 @@ def _run_robustness_preflight(
                 # when a fit genuinely failed to converge.
                 "modeled_analytic_n": int(row.n) if row.n and row.n > 0 else None,
                 **model_trace,
+                **(matrix_effect_identity(spec_id, model_trace, structured_source, structured_replay)
+                   if converged else {}),
                 "axis": axis,
                 "converged": converged,
                 "estimability_status": estimability_status,
@@ -1092,7 +1065,11 @@ def _run_robustness_preflight(
     for column in _MATRIX_COLUMNS:
         if column not in matrix.columns:
             matrix[column] = None
-    matrix = matrix[[*_MATRIX_COLUMNS, "se", "evidence_id"]]
+    matrix = matrix[[
+        *_MATRIX_COLUMNS,
+        *[key for key in ROBUSTNESS_IDENTITY_COLUMNS if key in matrix],
+        "se", "evidence_id",
+    ]]
     for count_column in (
         "modeled_analytic_n",
         "model_contract_n",
@@ -1225,21 +1202,7 @@ def _run_robustness_preflight(
         ),
         encoding="utf-8",
     )
-    robustness_rows = [
-        {
-            "spec_id": row["spec_id"],
-            "axis": row["axis"],
-            "n": row["modeled_analytic_n"],
-            "point_estimate": row["point_estimate"],
-            "ci_low": row["ci_low"],
-            "ci_high": row["ci_high"],
-            "se": row["se"],
-            "evidence_id": row["evidence_id"],
-            "converged": row["converged"],
-            "notes": row["notes"],
-        }
-        for row in matrix_rows
-    ]
+    robustness_rows = matrix_panel_rows(matrix_rows)
     product_files = {
         "robustness_matrix": "robustness_matrix.csv",
         "sensitivity_comparison": "sensitivity_comparison.csv",

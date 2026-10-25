@@ -19,7 +19,7 @@ import math
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from ..authority.lock_contract import (
     LockAuthorityError,
@@ -38,6 +38,130 @@ from ..planning.robustness_contract import (
 PRIMARY_SPEC_ID = "primary"
 LOCK_FILENAME = "robustness_specs_locked.json"
 PANEL_FILENAME = "robustness_panel.json"
+
+
+# Keep the legacy producer signature stable for already-bound matrices.
+ROBUSTNESS_MATRIX_COLUMNS = [
+    "spec_id",
+    "effect_scale",
+    "point_estimate",
+    "ci_low",
+    "ci_high",
+    "modeled_analytic_n",
+    "axis",
+    "converged",
+    "model_contract_n",
+    "event_n",
+    "model_id",
+    "source_model_id",
+    "exposure_source",
+    "exposure_expression",
+    "exposure_role",
+    "analysis_role",
+    "analysis_set",
+    "baseline_missing_policy",
+    "fit_status",
+    "fit_method",
+    "replay_mode",
+    "coefficient_source_table",
+    "coefficient_term",
+    "model_contract_source",
+    "source_script_sha256",
+    "estimability_status",
+    "membership_n",
+    "membership_executable",
+    "outcome_executable",
+    "independent_variant",
+    "notes",
+]
+
+ROBUSTNESS_IDENTITY_COLUMNS = (
+    "estimand_id", "estimand_label", "contrast_id", "contrast_label", "effect_unit",
+    "ci_method", "confidence_level", "variance_estimator", "cluster_unit", "cluster_count",
+)
+
+
+def matrix_effect_identity(
+    spec_id: str,
+    trace: Mapping[str, Any],
+    source: Optional[Mapping[str, Any]],
+    replay: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Carry metadata from the exact verified model selected for this row.
+
+    The caller has verified the source digests, scalar coefficient and model
+    trace. A shared scale or outcome never supplies an undeclared estimand.
+    Variant metadata belongs to its own replay contract, not the primary's.
+    """
+    if source is None or not trace.get("coefficient_term"):
+        return {}
+    candidates = (
+        [source.get("primary_contract")]
+        if spec_id == PRIMARY_SPEC_ID
+        else [item for item in replay.get("variant_contracts") or ()
+              if isinstance(item, Mapping) and item.get("spec_id") == spec_id]
+    )
+    contracts = [
+        item for item in candidates if isinstance(item, Mapping)
+        and all(item.get(key) == trace.get(key) for key in (
+            "model_id", "exposure_source", "exposure_expression", "analysis_set",
+        ))
+        and item.get("n") == trace.get("model_contract_n")
+        and item.get("exposure_expression") == trace.get("coefficient_term")
+    ]
+    if len(contracts) != 1:
+        return {}
+    contract = contracts[0]
+    identity = {
+        key: contract[key] for key in ROBUSTNESS_IDENTITY_COLUMNS
+        if contract.get(key) is not None and str(contract[key]).strip()
+    }
+    exposure = str(contract.get("exposure_source") or "")
+    terms = [item for item in contract.get("model_terms") or ()
+             if isinstance(item, Mapping) and item.get("name") == exposure
+             and item.get("role") == "exposure"]
+    if len(terms) == 1:
+        term = terms[0]
+        reference = term.get("reference_level")
+        levels = [str(level) for level in term.get("levels") or ()]
+        selected = [level for level in levels
+                    if f"{exposure}__is_{level}" == trace["coefficient_term"]]
+        if (term.get("coding") == "categorical"
+                and term.get("transform") == "treatment_contrast"
+                and reference is not None and str(reference) in levels
+                and len(selected) == 1 and selected[0] != str(reference)):
+            level = selected[0]
+            identity.setdefault("contrast_id", json.dumps(
+                [exposure, level, str(reference)], ensure_ascii=False, separators=(",", ":"),
+            ))
+            identity.setdefault(
+                "contrast_label", f"Exposure level {level} vs reference level {reference}",
+            )
+            identity.setdefault("effect_unit", "category contrast")
+    dependence = contract.get("dependence")
+    if isinstance(dependence, Mapping):
+        for key in ("variance_estimator", "cluster_unit"):
+            if dependence.get(key) is not None:
+                identity.setdefault(key, dependence[key])
+    return identity
+
+
+def matrix_panel_rows(matrix_rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """Publish the same identity and equivalence status in the panel summary."""
+    return [
+        {
+            **{key: row[key] for key in (
+                "spec_id", "axis", "point_estimate", "ci_low", "ci_high", "se",
+                "evidence_id", "converged", "notes", "effect_scale",
+                *ROBUSTNESS_IDENTITY_COLUMNS,
+            ) if key in row},
+            "n": row["modeled_analytic_n"],
+            # Panel rows use a boolean; the matrix's blank retains its legacy
+            # default, while a proved restatement must stay non-independent.
+            "independent_variant": row.get("independent_variant") is not False,
+        }
+        for row in matrix_rows
+    ]
 
 
 def _assert_lock_matches_evidence_anchor(*, run_dir: Path, lock_path: Path) -> bool:
