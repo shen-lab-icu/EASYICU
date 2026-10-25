@@ -1182,7 +1182,11 @@ def run_missingness_measurement_figure(
     # Declared order, not alphabetical: applicability precedes source presence
     # and repetition. Event/status rows do not imply a measurement funnel.
     columns = [label for _column, label in _PROCESS_MEASURES]
-    grid_variables = sorted({str(cell["variable"]) for cell in process_cells})
+    # Both panels follow the missingness rank. Keep process-only variables at
+    # the end; absent process rows use the existing Unknown cells, not zeros.
+    grid_variables = variables + sorted(
+        {str(cell["variable"]) for cell in process_cells} - set(variables)
+    )
     height_mm = max(86.0, 26.0 + 5.4 * max(len(variables), len(grid_variables)))
     fig, (ax_a, ax_b) = plt.subplots(
         1,
