@@ -53,11 +53,35 @@
     return row && row.display_value != null ? String(row.display_value) : (fallback || '—');
   }
   function evidenceAttributes(row) {
+    if (!row || (row.status && row.status !== 'current')) return '';
     const evidence = row && row.evidence && typeof row.evidence === 'object' ? row.evidence : {};
+    if (evidence.status && evidence.status !== 'current') return '';
     const evidenceId = String(evidence.evidence_id || '');
     const sha256 = String(evidence.sha256 || '').toLowerCase();
     if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) return '';
-    return ` data-gpi-evidence-open data-evidence-id="${esc(evidenceId)}" data-evidence-sha256="${esc(sha256)}" data-evidence-kind="${esc(evidence.kind || 'statistic')}" data-evidence-label="${esc(evidence.description || evidenceId)}" data-evidence-pointer="${esc(row.source_json_pointer || '')}" data-evidence-source-value="${esc(row.source_value || row.display_value || '')}"`;
+    // As in the manuscript reader, source_value is a rounded lexical label;
+    // canonical_value is the scalar used by the exact evidence comparison.
+    const sourceValue = row.canonical_value == null ? row.source_value
+      : (typeof row.canonical_value === 'number' && Number.isFinite(row.canonical_value) ? row.canonical_value : '');
+    if (sourceValue == null || String(sourceValue).trim() === '' || !Number.isFinite(Number(sourceValue))
+        || !String(row.source_json_pointer || '').startsWith('/')) return '';
+    return ` data-gpi-evidence-open data-evidence-id="${esc(evidenceId)}" data-evidence-sha256="${esc(sha256)}" data-evidence-kind="${esc(evidence.kind || 'statistic')}" data-evidence-label="${esc(evidence.description || evidenceId)}" data-evidence-pointer="${esc(row.source_json_pointer)}" data-evidence-source-value="${esc(sourceValue)}"`;
+  }
+  function primaryInterval(rows, effect) {
+    if (!evidenceAttributes(effect) || effect.source_json_pointer !== '/primary_or') return [null, null];
+    const source = effect.evidence;
+    for (const fields of [
+      ['primary_or_ci[0]', 'primary_or_ci[1]'],
+      ['primary_or_ci_low', 'primary_or_ci_high'],
+      ['primary_ci_low', 'primary_ci_high'],
+    ]) {
+      const pair = fields.map(field => rows.find(row => row && row.source_field === field
+        && row.source_json_pointer === `/${field.replace(/\[(\d+)\]/g, '/$1')}`
+        && evidenceAttributes(row) && row.evidence.evidence_id === source.evidence_id
+        && String(row.evidence.sha256).toLowerCase() === String(source.sha256).toLowerCase()));
+      if (pair.every(Boolean)) return pair;
+    }
+    return [null, null];
   }
   // Display precision only: registered values keep their full precision in
   // the source JSON the evidence button opens.
@@ -135,15 +159,17 @@
     const estimateRows = Array.isArray(registeredSummary.estimates) ? registeredSummary.estimates : [];
     const headline = estimateRows[0] || null;
     const effect = findClaim(rows, [/^primary_or$/]);
-    const low = findClaim(rows, [/^primary_or_ci\[0\]$/, /^primary_or_ci_low$/]);
-    const high = findClaim(rows, [/^primary_or_ci\[1\]$/, /^primary_or_ci_high$/]);
+    const [low, high] = primaryInterval(rows, effect);
     const primaryParts = headline
       ? { measure: headline.measure, value: headline.display.value, low: headline.display.low, high: headline.display.high }
-      : (effect && low && high ? { measure: 'OR', value: display(effect), low: display(low), high: display(high) } : null);
-    const primaryText = primaryParts ? tr(
+      : (effect ? { measure: 'OR', value: display(effect), low: low && display(low), high: high && display(high) } : null);
+    const primaryText = !primaryParts ? '' : (primaryParts.low && primaryParts.high ? tr(
       `${primaryParts.measure} ${primaryParts.value} (95% CI ${primaryParts.low}–${primaryParts.high})`,
       `${primaryParts.measure} ${primaryParts.value}（95% CI ${primaryParts.low}–${primaryParts.high}）`,
-    ) : '';
+    ) : tr(
+      `${primaryParts.measure} ${primaryParts.value} (no matching primary confidence interval is available in this view)`,
+      `${primaryParts.measure} ${primaryParts.value}（当前视图缺少与主要估计匹配的置信区间）`,
+    ));
     const discussion = sectionParagraphs(provenance, 'Discussion', 2);
     const limitations = sectionParagraphs(provenance, 'Limitations', 2);
     const gallery = window.AGENT_RENDER && typeof window.AGENT_RENDER.figureGallery === 'function'
@@ -183,7 +209,7 @@
       primaryText ? tr(
         'Primary and sensitivity estimates may answer different estimand questions. Their numerical values must be interpreted using their registered definitions rather than treated as interchangeable.',
         '主要估计与敏感性估计可能回答不同的 estimand 问题；必须依据各自登记的定义解读，不能把数值视为可以互换。',
-      ) : tr('The table describes observed groups. It does not estimate an adjusted association or establish an exposure effect.', '上表描述各组实际观察到的分布，没有估计调整后的关联，也不能证明暴露造成了结局差异。'),
+      ) : tr('No compatible primary estimate is available in this view; consult the registered result tables for the analysis performed.', '当前视图暂无匹配的主要估计；请查看已登记的结果表，确认实际完成的分析。'),
     ].filter(Boolean);
     return `<div class="gpi-analysis-report ag-artifact-readable">
       <header class="gpi-analysis-hero"><div><h2>${esc(tr('Research results and interpretation', '研究结果与解读'))}</h2><details class="gpi-analysis-question"><summary>${esc(tr('Research question and requested deliverables', '研究问题与交付要求'))}</summary><p>${esc(context.question || tr('Research question not recorded', '尚未记录研究问题'))}</p></details></div><em>ANALYSIS ONLY</em></header>
