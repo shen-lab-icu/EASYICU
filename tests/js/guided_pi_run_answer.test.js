@@ -127,6 +127,68 @@ const outcome = modules.require('runOutcome').create({
   const savedContext = payloads['run_context.json'];
   payloads['run_context.json'] = { question: 'Association of a synthetic attribute with a binary outcome.', source: { label: 'Synthetic' } };
   payloads['manuscript_provenance.json'] = {};
+  const primary = { ...table('adjusted_association_estimates.csv',
+    ['fit_status', 'estimate', 'ci_low', 'ci_high', 'effect_scale', 'is_primary_contrast', 'n', 'contrast'],
+    [['fitted', 1.23456789, 1.01, 1.55, 'odds_ratio', true, 24, 'B vs A']]), sha256: sha('a') };
+  const sourceCopy = { ...primary, name: 'adjusted_association_estimates_source_data.csv',
+    label: 'Table adjusted_association_estimates_source_data from step figure.', evidence_id: 'copy' };
+  const promotedCopy = { ...primary, name: 'promoted.csv',
+    label: 'Source data copied beside a promoted publication figure.', evidence_id: 'promoted' };
+  const summarize = tables => modules.require('resultSummary').summarize({ tables }, {}, {});
+  assert.equal(summarize([primary, sourceCopy, promotedCopy]).estimates.length, 1,
+    'documented figure copies are not additional primary models');
+  assert.equal(summarize([primary, { ...primary, name: 'copy.csv', label: '', is_source_copy: true }]).estimates.length, 1);
+  const estimate = summarize([primary, sourceCopy]).estimates[0];
+  assert.equal(estimate.source.sha256, sha('a'));
+  assert.equal(estimate.source.evidence_id, primary.evidence_id);
+  assert.equal(summarize([sourceCopy, promotedCopy]).estimates.length, 0, 'copies alone cannot supply a primary model');
+  const otherModel = { ...primary, name: 'other_model.csv', label: 'Table other_model from step other.', evidence_id: 'other' };
+  assert.equal(summarize([primary, otherModel]).estimates.length, 0,
+    'equal numeric values do not prove two real models are the same');
+  const sharedTable = { ...primary, headers: [...primary.headers, 'model_id'],
+    rows: [[...primary.rows[0], 'model_a'], [...primary.rows[0], 'model_b']] };
+  assert.equal(summarize([sharedTable]).estimates.length, 0, 'two models in one table are still ambiguous');
+  assert.equal(summarize([{ ...primary, rows: [primary.rows[0], primary.rows[0]],
+    row_model_ids: ['model_a', 'model_b'] }]).estimates.length, 0, 'a column cap cannot erase model identity');
+  const flowClaim = summarize([{ ...table('flow.csv', ['n_before', 'n_remaining'], [[24, 20]]), sha256: sha('c') }]).claims[0];
+  assert.equal(flowClaim.evidence.sha256, sha('c'));
+  assert.equal(flowClaim.source_json_pointer, '', 'CSV row coordinates must never masquerade as JSON pointers');
+  payloads['result_tables.json'] = { tables: [primary, sourceCopy, promotedCopy] };
+  const restored = await reread({ analysis_type: 'association_study', steps: [] });
+  assert.match(restored.html, /主要估计（B vs A）：OR 1\.23（95% CI 1\.01–1\.55）/);
+  assert.match(restored.html, /data-gpi-resource-run="run_e1_variant_\d+"/);
+  assert.match(restored.html, /data-gpi-evidence-open[^>]*data-evidence-id="adjusted_association_estimates.csv"[^>]*data-evidence-sha256="a{64}"/);
+  assert.match(restored.html, /查看来源表/);
+  assert.doesNotMatch(restored.html, /data-evidence-pointer="\/tables\//);
+  // Follow the rendered action through the existing resource/preview owners.
+  const sourceTag = restored.html.match(/<button[^>]*data-gpi-evidence-open[^>]*>/)[0];
+  const dataset = Object.fromEntries([...sourceTag.matchAll(/data-([a-z0-9-]+)="([^"]*)"/g)].map(([, key, value]) => [
+    key.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), value,
+  ]));
+  const resource = resources.fromButton({ dataset });
+  const sourceCalls = [];
+  const savedApi = global.EU_API;
+  global.EU_API = {
+    loadPiCopilotResearchArtifact: async () => ({ payload: {} }),
+    loadPiCopilotResearchEvidence: async (...args) => { sourceCalls.push(args); return { payload: { renderer: 'table' } }; },
+  };
+  const jsDir = path.dirname(path.resolve(process.argv[2]));
+  require(path.join(jsDir, 'screens-guided-pi-evidence-preview.js'));
+  require(path.join(jsDir, 'screens-guided-pi-preview.js'));
+  await modules.require('preview').openRunEvidence(resource, 'project_e1', { dataset });
+  assert.deepEqual(sourceCalls, [['project_e1', resource.run_id, primary.evidence_id, sha('a')]]);
+  global.EU_API = savedApi;
+  for (const invalid of [{ sha256: '' }, { sha256: 'bad' }, { evidence_id: '../bad' }, { source_status: 'stale' }]) {
+    payloads['result_tables.json'] = { tables: [{ ...primary, ...invalid }] };
+    assert.ok(!summarize(payloads['result_tables.json'].tables).estimates[0]?.source);
+    assert.doesNotMatch((await reread({ steps: [] })).html, /data-gpi-evidence-open/);
+  }
+  payloads['result_tables.json'] = { tables: [primary, otherModel] };
+  payloads['manuscript_provenance.json'] = { claims: [{ source_field: 'primary_or', display_value: '9.99' }] };
+  const ambiguous = await reread({ steps: [] });
+  assert.match(ambiguous.html, /多个主要模型/);
+  assert.doesNotMatch(ambiguous.html, /OR 1\.23|OR 9\.99/, 'a fallback claim cannot bypass ambiguity');
+  payloads['manuscript_provenance.json'] = {};
   payloads['result_tables.json'] = { tables: [
     table('primary.csv', ['fit_status', 'estimate', 'ci_low', 'ci_high', 'effect_scale', 'is_primary_contrast', 'n', 'contrast'],
       [['fitted', 1.25, 1.01, 1.55, 'odds_ratio', true, 14, 'B vs A']]),

@@ -186,13 +186,14 @@
     // estimate (a covariate's, a sensitivity analysis') is not this run's
     // answer, so without a primary one the answer names none.
     function primaryEstimate(summary, claims, labels) {
+      if (summary.primaryModelAmbiguous) return null;
       const typed = Array.isArray(summary && summary.estimates)
         ? summary.estimates.find(row => row && row.primary === true) : null;
       if (typed && typed.display && typed.display.value) {
         return {
           measure: String(typed.measure || ''), label: String(typed.label || typed.contrast || ''),
           value: String(typed.display.value), low: String(typed.display.low || ''), high: String(typed.display.high || ''),
-          n: typed.n, evidenceId: typed.evidenceId,
+          n: typed.n, evidenceId: typed.evidenceId, source: typed.source,
         };
       }
       const find = patterns => claims.find(row => patterns.some(pattern => pattern.test(String(row && row.source_field || '')))) || null;
@@ -206,6 +207,7 @@
       }
       return {
         measure: 'OR', label: '', value: String(effect.display_value),
+        source: !effect.status || effect.status === 'current' ? effect.evidence : null,
         low: low && low.display_value != null ? String(low.display_value) : '',
         high: high && high.display_value != null ? String(high.display_value) : '',
       };
@@ -332,6 +334,7 @@
         total: total && total.display_value != null ? String(total.display_value) : '',
         overallRisk: overallRisk && overallRisk.display_value != null ? String(overallRisk.display_value) : '',
         estimate: primaryEstimate(summary, claims, labels),
+        primaryModelAmbiguous: summary.primaryModelAmbiguous === true,
         estimateExposure: modelledLabel,
         prediction: PREDICTION_TYPES.has(String(plan.analysis_type || ''))
           ? predictionPerformance(payload('result_tables.json').prediction_performance) : null,
@@ -508,6 +511,10 @@
           sentences.push(tr(`Model sample size: n = ${count(view.estimate.n)}.`, `模型样本量：n = ${count(view.estimate.n)}。`));
         }
       }
+      if (view.primaryModelAmbiguous) sentences.push(tr(
+        'Multiple primary models are recorded; inspect the result tables before selecting a primary estimate.',
+        '记录中有多个主要模型，暂不能唯一确定主要估计；请查看结果表。',
+      ));
       if (view.firstResult && view.missingness.length) {
         const missing = view.missingness.map(row => `${row.label}: ${count(row.missing)}/${count(row.total)}`);
         sentences.push(tr(`Missing measurements / audited denominator: ${missing.join('; ')}.`,
@@ -574,8 +581,17 @@
         'Literature search is part of a full article run. Novelty and literature comparisons have not been assessed for this first result.',
         '文献检索属于完整论文流程；本次首轮结果未评估新颖性或文献对照。',
       ))}</p>` : '';
+      const source = view.estimate && view.estimate.source;
+      const sourceRef = runRefs(latestRun).get('result_tables.json');
+      const sourceButton = source && sourceRef && typeof resourceButton === 'function'
+        && /^[A-Za-z0-9_.-]{1,160}$/.test(String(source.evidence_id || ''))
+        && /^[a-f0-9]{64}$/.test(String(source.sha256 || ''))
+        ? resourceButton({ ...sourceRef, evidence_id: source.evidence_id, evidence_sha256: source.sha256,
+          evidence_kind: source.kind || 'table' }, source.kind === 'statistic'
+          ? tr('View source record (file-level)', '查看来源记录（文件级）')
+          : tr('View source table (file-level)', '查看来源表（表级）')) : '';
       return `<div class="gpi-run-answer" data-gpi-run-answer="${esc(latestRun.run_id)}">
-        <div class="gpi-run-answer-text">${sentences.map(text => `<p>${esc(text)}</p>`).join('')}${literatureNote}${data ? `<p class="gpi-run-answer-data"><span>${esc(tr('Data', '数据'))}</span>${esc(data)}</p>` : ''}<p class="gpi-run-answer-caveat"><span>${esc(tr('Keep in mind', '需要注意'))}</span>${esc(caveat(view))}</p></div>
+        <div class="gpi-run-answer-text">${sentences.map(text => `<p>${esc(text)}</p>`).join('')}${sourceButton ? `<p>${sourceButton}</p>` : ''}${literatureNote}${data ? `<p class="gpi-run-answer-data"><span>${esc(tr('Data', '数据'))}</span>${esc(data)}</p>` : ''}<p class="gpi-run-answer-caveat"><span>${esc(tr('Keep in mind', '需要注意'))}</span>${esc(caveat(view))}</p></div>
         ${figureButton(latestRun, view)}
         ${view.firstResult ? resourceButton(runRefs(latestRun).get('result_tables.json'), tr('View this run’s evidence tables', '查看本次运行的证据表')) : ''}
       </div>`;

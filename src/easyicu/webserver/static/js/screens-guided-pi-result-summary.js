@@ -7,12 +7,15 @@
 
   function rows(payload) {
     const tables = payload && Array.isArray(payload.tables) ? payload.tables : [];
-    return tables.flatMap(table => {
+    return tables.filter(table => table && !table.is_source_copy
+      && !/source_data|publication_figure_source_|copied beside a promoted publication figure/i.test(`${table.name || ''} ${table.label || ''}`)
+      && (!table.source_status || table.source_status !== 'stale')).flatMap(table => {
       const headers = Array.isArray(table && table.headers) ? table.headers.map(String) : [];
       if (!headers.length) return [];
       return (Array.isArray(table.rows) ? table.rows : []).map((values, rowIndex) => {
         const record = {};
         headers.forEach((header, index) => { record[header] = Array.isArray(values) ? values[index] : null; });
+        if (!headers.includes('model_id') && Array.isArray(table.row_model_ids)) record.model_id = table.row_model_ids[rowIndex];
         return { record, headers, table, rowIndex };
       });
     });
@@ -50,11 +53,19 @@
       source_field: sourceField,
       canonical_value: value,
       display_value: displayValue,
-      source_json_pointer: table && table.name
-        ? `/tables/${String(table.name)}/rows/${Number(source.rowIndex || 0)}`
-        : '',
-      evidence: table && table.evidence_id ? { evidence_id: String(table.evidence_id) } : {},
+      // A CSV file is the verified destination. No scalar JSON mapping was
+      // recorded, so a fabricated pointer must not enter exact-value checks.
+      source_json_pointer: '',
+      evidence: tableSource(table) || {},
     };
+  }
+
+  function tableSource(table) {
+    if (!table || (table.source_status && table.source_status !== 'current')) return null;
+    const evidenceId = String(table.evidence_id || '');
+    const digest = String(table.sha256 || '').toLowerCase();
+    return /^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) && /^[a-f0-9]{64}$/.test(digest)
+      ? { evidence_id: evidenceId, sha256: digest, kind: 'table' } : null;
   }
 
   // The adjusted-association producer's typed estimate table.  Only its own
@@ -79,7 +90,7 @@
   // One registered primary model's contrasts, primary contrast first.  Any
   // doubt -- no primary table, two of them, an unknown effect scale -- returns
   // nothing rather than a guessed headline.
-  function estimates(records, plan, levels) {
+  function primaryModels(records) {
     const byTable = new Map();
     records.filter(item => ESTIMATE_COLUMNS.every(header => item.headers.includes(header))).forEach(item => {
       if (!byTable.has(item.table)) byTable.set(item.table, []);
@@ -87,9 +98,21 @@
     });
     const primaryRows = items => items.filter(item => !item.headers.includes('analysis_role')
       || String(item.record.analysis_role || '').trim().toLowerCase() === 'primary');
-    const candidates = [...byTable.values()]
+    return [...byTable.values()]
       .map(primaryRows)
+      .flatMap(items => {
+        const models = new Map();
+        items.forEach(item => {
+          const id = String(item.record.model_id || '');
+          if (!models.has(id)) models.set(id, []);
+          models.get(id).push(item);
+        });
+        return [...models.values()];
+      })
       .filter(items => items.some(item => isTrue(item.record.is_primary_contrast)));
+  }
+
+  function estimates(candidates, plan, levels) {
     if (candidates.length !== 1) return [];
     const fitted = candidates[0].filter(item => FITTED.has(String(item.record.fit_status || '').trim().toLowerCase())
       && finite(item.record.estimate) != null);
@@ -121,6 +144,7 @@
         return {
           label, contrast, measure, value, low, high, n: finite(record.n),
           evidenceId: String(item.table.evidence_id || ''),
+          source: tableSource(item.table),
           primary: isTrue(record.is_primary_contrast),
           display: { value: ratioDisplay(value, measure), low: ratioDisplay(low, measure), high: ratioDisplay(high, measure) },
         };
@@ -152,6 +176,7 @@
 
   function summarize(payload, plan, context) {
     const records = rows(payload);
+    const models = primaryModels(records);
     const levels = groupLevels(context);
     const candidates = records.filter(item => [
       'row_role', 'n_rows', 'exposure_denominator', 'exposure_pct',
@@ -229,7 +254,8 @@
         )),
       ].filter(Boolean),
       exposureLevels,
-      estimates: estimates(records, plan, levels),
+      estimates: estimates(models, plan, levels),
+      primaryModelAmbiguous: models.length > 1,
       measurementMissingness: records.filter(item => item.table.evidence_id
         && ['concept', 'n_total', 'value_missing_n'].every(header => item.headers.includes(header)))
         .map(item => ({ concept: String(item.record.concept || ''), total: finite(item.record.n_total),

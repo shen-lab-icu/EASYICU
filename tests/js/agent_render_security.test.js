@@ -17,8 +17,46 @@ const sandbox = {
 const escapeOwner = path.join(path.dirname(path.resolve(process.argv[2])), 'html-escape.js');
 const context = vm.createContext(sandbox);
 vm.runInNewContext(fs.readFileSync(escapeOwner, 'utf8'), context, { filename: escapeOwner });
+const vocabOwner = path.join(path.dirname(path.resolve(process.argv[2])), 'screens-agent-reader-vocab.js');
+vm.runInNewContext(fs.readFileSync(vocabOwner, 'utf8'), context, { filename: vocabOwner });
 vm.runInNewContext(source, context, { filename: process.argv[2] });
 const renderer = sandbox.window.AGENT_RENDER;
+
+const sourceTable = {
+  name: 'adjusted_association_estimates.csv', label: 'Table adjusted_association_estimates from step synthetic.',
+  evidence_id: 'synthetic_table', sha256: 'a'.repeat(64), source_status: 'current',
+  headers: ['contrast', 'estimate', 'n'], rows: [['B vs A <img src=x>', '1.23456789', '24']],
+  preview_columns_truncated: true, preview_truncated: true,
+};
+const renderTable = table => renderer.artifactStructuredView('result_tables.json', { tables: [table] });
+const sourced = renderTable(sourceTable);
+assert.match(sourced, /data-gpi-evidence-open[^>]*data-evidence-id="synthetic_table"[^>]*data-evidence-sha256="a{64}"/);
+assert.match(sourced, /View source table/);
+assert.match(sourced, /<td><button[^>]*data-gpi-evidence-open[^>]*>1\.23<\/button><\/td>/,
+  'a numeric result cell opens its file-level source');
+assert.match(sourced, /file-level|whole table/);
+assert.doesNotMatch(sourced, /data-evidence-pointer="[^\"]+"|data-evidence-source-value="[^\"]+"/,
+  'a CSV source action does not assert a scalar JSON locator');
+assert.doesNotMatch(sourced, /<img/);
+assert.match(sourced, /Some rows|some rows/);
+assert.match(sourced, /Some columns|some columns/);
+assert.doesNotMatch(sourced, /No core result table/);
+for (const invalid of [{ sha256: '' }, { sha256: 'bad' }, { evidence_id: '../bad' }, { source_status: 'stale' }]) {
+  assert.doesNotMatch(renderTable({ ...sourceTable, ...invalid }), /data-gpi-evidence-open/);
+}
+const copied = renderer.artifactStructuredView('result_tables.json', { tables: [sourceTable, {
+  ...sourceTable, name: 'adjusted_association_estimates_source_data.csv', label: '',
+}] });
+assert.match(copied, /<b>1<\/b><span>source copies kept for audit/);
+
+const failedReader = renderer.manuscriptProvenanceView({ claims: [], article_blocks: [
+  { kind: 'heading', segments: [{ kind: 'text', text: 'Manuscript scaffold not generated' }] },
+  { kind: 'paragraph', segments: [{ kind: 'text', text: '<!-- easyicu:manuscript-state kind=blocked reason_code=writer_failed_before_draft -->' }] },
+  { kind: 'paragraph', segments: [{ kind: 'text', text: 'Internal writer failure.' }] },
+] });
+assert.match(failedReader, /Manuscript unavailable/);
+assert.match(failedReader, /review|evidence/);
+assert.doesNotMatch(failedReader, /Evidence-bound article|highlighted number|gpi-manuscript-article|manuscript-state|Internal writer failure/);
 
 const hostileLabel = 'figure" onerror="globalThis.pwned=1';
 const safePng = 'data:image/png;base64,iVBORw0KGgo=';
