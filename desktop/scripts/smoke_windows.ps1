@@ -5,14 +5,18 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-function Wait-CheckedProcess($Process, [int]$Timeout) {
+# Each stage names itself and reports its duration, so a timeout says which
+# stage stalled (install, first launch or uninstall) instead of a bare PID.
+function Wait-CheckedProcess($Process, [int]$Timeout, [string]$Stage) {
+    $clock = [Diagnostics.Stopwatch]::StartNew()
     if (-not $Process.WaitForExit($Timeout)) {
         & "$env:SystemRoot\System32\taskkill.exe" /PID $Process.Id /T /F | Out-Null
-        throw "Process timed out: $($Process.Id)"
+        throw "$Stage timed out after $([int]$clock.Elapsed.TotalSeconds) s (process $($Process.Id))"
     }
     if ($Process.ExitCode -ne 0) {
-        throw "Process failed with exit code $($Process.ExitCode)"
+        throw "$Stage failed with exit code $($Process.ExitCode) after $([int]$clock.Elapsed.TotalSeconds) s"
     }
+    Write-Host "$Stage finished in $([int]$clock.Elapsed.TotalSeconds) s"
 }
 
 # The hosted runner remains the OS user. Its temporary application-data profile
@@ -31,7 +35,9 @@ try {
     New-Item -ItemType Directory -Force $env:LOCALAPPDATA, $env:APPDATA | Out-Null
     # NSIS requires /D last and unquoted, including when the value has spaces.
     $install = Start-Process -FilePath $Installer -ArgumentList "/S /D=$installDir" -PassThru
-    Wait-CheckedProcess $install 180000
+    # A per-user NSIS install writes thousands of runtime files; on a scanned
+    # Windows disk this takes minutes, not seconds.
+    Wait-CheckedProcess $install 600000 'Install'
     $installed = $true
     $executable = Join-Path $installDir 'easyicu-desktop.exe'
     if (-not (Test-Path -LiteralPath $executable)) { throw "Missing installed app: $executable" }
@@ -40,7 +46,8 @@ try {
     $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
     Remove-Item Env:PYTHONPATH, Env:PYTHONHOME -ErrorAction SilentlyContinue
     $app = Start-Process -FilePath $executable -ArgumentList '--smoke-test' -PassThru
-    Wait-CheckedProcess $app 150000
+    # The first launch also unpacks nothing but is scanned file by file.
+    Wait-CheckedProcess $app 300000 'First launch smoke test'
     $dataRoot = Join-Path $env:LOCALAPPDATA 'EasyICU'
     $result = Get-Content -LiteralPath (Join-Path $dataRoot 'runtime\desktop-smoke-result.json') -Raw | ConvertFrom-Json
     if (-not $result.healthy -or -not $result.unauthenticated_rejected) {
@@ -56,7 +63,7 @@ try {
     Set-Content -LiteralPath $exportSentinel -Value 'synthetic export'
     # _?= keeps the uninstaller in place so WaitForExit tracks real completion.
     $uninstall = Start-Process -FilePath (Join-Path $installDir 'uninstall.exe') -ArgumentList "/S _?=$installDir" -PassThru
-    Wait-CheckedProcess $uninstall 120000
+    Wait-CheckedProcess $uninstall 300000 'Uninstall'
     $installed = $false
     if ((Test-Path -LiteralPath $executable) -or
         -not (Test-Path -LiteralPath $stateSentinel) -or
@@ -71,7 +78,7 @@ try {
         $uninstaller = Join-Path $installDir 'uninstall.exe'
         if (Test-Path -LiteralPath $uninstaller) {
             $cleanup = Start-Process -FilePath $uninstaller -ArgumentList "/S _?=$installDir" -PassThru
-            Wait-CheckedProcess $cleanup 120000
+            Wait-CheckedProcess $cleanup 300000 'Cleanup uninstall'
         }
     }
     foreach ($name in $saved.Keys) {
