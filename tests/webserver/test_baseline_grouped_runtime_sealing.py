@@ -25,7 +25,7 @@ from tests.support.baseline_association import baseline_context, baseline_plan_a
 from tests.support.node import run_node
 
 
-def grouped_case(tmp_path, source="bmi", *, covariates=("sex",), clustered=False):
+def grouped_case(tmp_path, source="bmi", *, covariates=("sex",), clustered=False, middle_band=True):
     context = baseline_context("age", covariates=covariates)
     context.variables[1] = context.variables[1].model_copy(update={
         "name": source, "source_concept": source, "unit": None,
@@ -60,6 +60,11 @@ def grouped_case(tmp_path, source="bmi", *, covariates=("sex",), clustered=False
         {"id": "g2", "label": "Middle", "rule": "otherwise"},
     ]
     reference, contrast = ("g1", "g2") if source == "assay" else ("g2", "g1")
+    if not middle_band:
+        groups = [
+            {"id": "g2", "label": "Upper", "rule": {"summary": "value", "op": ">=", "value": 20}},
+            {"id": "g1", "label": "Lower", "rule": {"summary": "value", "op": "<", "value": 20}},
+        ]
     if source == "assay":
         groups = groups[1:]
     stated = read_stated_exposure_groupings({"groupings": [{
@@ -149,14 +154,20 @@ def test_group_rebinding_checks_the_record_against_the_empty_input(tmp_path):
         runtime.for_planning_context(context=context, run_dir=tmp_path, cohort_path=catalog)
 
 
-@pytest.mark.parametrize("conflict", ["window", "adjustment"])
-def test_group_binding_cannot_change_timing_or_absorb_an_adjustment(tmp_path, conflict):
+@pytest.mark.parametrize("conflict,field", [("window", "grouping.window"), ("source", "grouping.source_columns"), ("adjustment", "covariates")])
+def test_group_binding_cannot_change_timing_or_absorb_an_adjustment(tmp_path, conflict, field):
     context, runtime, catalog = grouped_case(tmp_path)
     column = planning_run_groupings(tmp_path, cohort_sha256=hashlib.sha256(catalog.read_bytes()).hexdigest()).columns[0]
     authority = runtime.current_case
     reason = "baseline_association_design_mismatch"
     if conflict == "window":
         column = replace(column, window=(0, 24))
+    elif conflict == "source":
+        column = replace(column, parameters={
+            **column.parameters, "source_columns": {"value": "bmi", "max": "other"},
+            "groups": [{**group, "rule": {**group["rule"], "summary": "max"}} if group["id"] == "g3" else group
+                       for group in column.parameters["groups"]],
+        })
     else:
         coordinates = authority.model_dump(mode="python", exclude={"execution_contract_sha256"})
         authority = build_baseline_authority(**{**coordinates, "required_adjustment_columns": (context.primary_exposure,)})
@@ -164,6 +175,7 @@ def test_group_binding_cannot_change_timing_or_absorb_an_adjustment(tmp_path, co
     with pytest.raises(BaselineAssociationAuthorityError) as caught:
         authority.for_grouped_exposure(column)
     assert caught.value.reason_code == reason
+    assert caught.value.mismatch_fields == (field,)
 
 
 @pytest.mark.parametrize("requested", ["exposure", "source"])
@@ -208,13 +220,13 @@ def test_pipeline_binds_patient_dependence_before_the_first_roster_seal(tmp_path
         owner.ResearchAgentPipeline._validate_and_persist_plan(pipeline, **arguments)
 
 
-@pytest.mark.parametrize("violation,reason,words", [
-    ("omitted_covariate", "baseline_association_roster_mismatch", "调整变量"),
-    ("changed_exposure", "baseline_association_design_mismatch", "暴露"),
-    ("changed_dependence", "baseline_association_design_mismatch", "患者聚类"),
-    ("requested_exposure", "association_adjustment_exposure_conflict", "暴露本身"),
+@pytest.mark.parametrize("violation,reason,words,expected_fields", [
+    ("omitted_covariate", "baseline_association_roster_mismatch", "调整变量", ["covariates"]),
+    ("changed_exposure", "baseline_association_design_mismatch", "暴露", ["exposure_source"]),
+    ("changed_dependence", "baseline_association_design_mismatch", "患者聚类", ["dependence"]),
+    ("requested_exposure", "association_adjustment_exposure_conflict", "暴露本身", []),
 ])
-def test_roster_refusal_reaches_record_gate_and_chinese_stop_text(tmp_path, violation, reason, words):
+def test_roster_refusal_reaches_record_gate_and_chinese_stop_text(tmp_path, violation, reason, words, expected_fields):
     from easyicu.webserver import agent_pipeline_runs as web
     from easyicu.webserver.pi_copilot.projections import gate_detail_projection
 
@@ -251,6 +263,7 @@ def test_roster_refusal_reaches_record_gate_and_chinese_stop_text(tmp_path, viol
                                         exc=wrapper, code=code, execution_retry_id=None)
     record = json.loads((tmp_path / path).read_text())
     assert record["typed_failure"]["reason_code"] == reason
+    assert record["typed_failure"].get("mismatch_fields", []) == expected_fields
     assert "BaselineAssociationAuthorityError" in record["exception_types"]
     assert "private synthetic message" not in json.dumps(record)
     gate = json.loads((tmp_path / "quality_gate.json").read_text())["gate"]
@@ -300,10 +313,13 @@ def test_rebinding_keeps_the_launch_receipt_needed_to_render_the_host_executor(t
 
 
 @pytest.mark.parametrize("source_present", [True, False])
-def test_accepted_grouped_plan_projects_from_the_source_only_universe(tmp_path, source_present):
+@pytest.mark.parametrize("binding", ["source", "group"])
+@pytest.mark.parametrize("middle_band", [False, True])
+@pytest.mark.parametrize("source_hint", [None, "age"])
+def test_accepted_grouped_plan_projects_from_the_source_only_universe(tmp_path, source_present, binding, middle_band, source_hint):
     from easyicu.webserver.scientific_runtime_projection import compile_web_scientific_runtime_projection
 
-    context, _, catalog = grouped_case(tmp_path, source="age", clustered=True)
+    context, _, catalog = grouped_case(tmp_path, source="age", clustered=True, middle_band=middle_band)
     groups = planning_run_groupings(tmp_path, cohort_sha256=hashlib.sha256(catalog.read_bytes()).hexdigest())
     source = tmp_path / "source.parquet"
     frame = pd.DataFrame({"age": pd.Series(dtype="float64"), "sex": pd.Series(dtype="bool"),
@@ -313,7 +329,7 @@ def test_accepted_grouped_plan_projects_from_the_source_only_universe(tmp_path, 
     frame.to_parquet(source, index=False)
     projection = compile_web_scientific_runtime_projection(
         study={**json.loads(context.user_preferences.data_constraints), "covariate_selection": "exact"},
-        sensitivity_specs=(), primary_exposure=context.primary_exposure, primary_exposure_source="age",
+        sensitivity_specs=(), primary_exposure="age" if binding == "source" else context.primary_exposure, primary_exposure_source=source_hint,
         target_outcome="death", declared_covariates=("sex",), covariate_operationalizations={},
         target_is_event_status=True, universe_path=source, scientific_configuration_sha256="a" * 64,
         dependence=context_dependence_authority(context), exposure_groupings=groups,
@@ -323,9 +339,100 @@ def test_accepted_grouped_plan_projects_from_the_source_only_universe(tmp_path, 
         return
     assert projection is not None
     runtime = ScientificRuntimeAuthorities.load(trajectory=None, current_case=projection.authority)
+    authority = runtime.current_case
+    assert authority.exposure_column == context.primary_exposure
+    assert authority.exposure_encoding == "treatment_contrast"
+    assert authority.exposure_levels == (("1", "2", "3") if middle_band else ("1", "2"))
+    assert authority.exposure_reference_level == "2"
+    assert authority.primary_contrast_level == "1"
+    assert authority.dependence == context_dependence_authority(context)
     attempt, _ = baseline_plan_attempt(context)
     draft = bind_context_dependence_authority(plan=attempt.output, context=context)
     sealed = runtime.seal_for_plan(draft)
     bound, _ = sealed.bind_plan(draft)
     sealed.validate_plan(bound)
     assert bound.steps[3].model_requirements[0].covariates == ["sex"]
+
+
+@pytest.mark.parametrize("field", [
+    "primary_model", "method", "model_requirements", "outcome_type", "outcome", "exposure_levels",
+    "exposure_reference_level", "primary_contrast_level", "exposure_encoding", "scientific_action_id",
+    "inputs", "effect_modifiers", "reviewed_requirement",
+])
+def test_design_refusal_names_its_coordinate_without_weakening_the_check(tmp_path, field):
+    context, runtime, catalog = grouped_case(tmp_path)
+    authority = runtime.for_planning_context(context=context, run_dir=tmp_path, cohort_path=catalog).current_case
+    plan = baseline_plan_attempt(context)[0].output
+    primary = plan.steps[3]
+    requirement = primary.model_requirements[0]
+    if field == "primary_model":
+        primary.planned_analysis_role = "secondary"
+    elif field == "method":
+        primary.method = "synthetic_wrong_method"
+    elif field == "model_requirements":
+        primary.model_requirements = []
+    elif field == "outcome_type":
+        primary.model_requirements = [requirement.model_copy(update={
+            "outcome_type": "continuous", "method_family": "linear_regression", "estimator": "ols",
+        })]
+    elif field in {"outcome", "exposure_levels", "exposure_reference_level", "primary_contrast_level", "exposure_encoding"}:
+        updates = {
+            "outcome": {"outcome_column": "synthetic_other_outcome"},
+            "exposure_levels": {"exposure_levels": ("3", "2", "1")},
+            "exposure_reference_level": {"exposure_reference_level": "3"},
+            "primary_contrast_level": {"primary_contrast_level": "3"},
+            "exposure_encoding": {"exposure_encoding": "restricted_cubic_spline", "exposure_levels": (),
+                                  "exposure_reference_level": None, "primary_contrast_level": None},
+        }[field]
+        authority = build_baseline_authority(**{
+            **authority.model_dump(mode="python", exclude={"execution_contract_sha256"}), **updates,
+        })
+    elif field == "scientific_action_id":
+        primary.scientific_action_id = "association.effect_modification"
+    elif field == "inputs":
+        primary.inputs = [name for name in primary.inputs if name != "sex"]
+    else:
+        authority = authority.seal_adjustment_roster(plan)
+        plan = authority.bind_plan(plan)
+        primary = plan.steps[3]
+        requirement = primary.model_requirements[0]
+        change = {"covariate_rationales": {"sex": "Changed reviewed rationale"}} if field == "reviewed_requirement" else {
+            "effect_modifiers": [next(term for term in requirement.model_terms if term.role == "covariate")],
+        }
+        primary.model_requirements = [requirement.model_copy(update=change)]
+    with pytest.raises(BaselineAssociationAuthorityError) as caught:
+        authority.seal_adjustment_roster(plan)
+    assert caught.value.mismatch_fields == ("model_requirements" if field == "reviewed_requirement" else field,)
+
+
+def test_a_group_without_a_source_hint_cannot_adjust_for_its_source(tmp_path):
+    from easyicu.webserver.scientific_runtime_projection import compile_web_scientific_runtime_projection, WebScientificRuntimeProjectionError
+
+    context, _, catalog = grouped_case(tmp_path, source="age")
+    groups = planning_run_groupings(tmp_path, cohort_sha256=hashlib.sha256(catalog.read_bytes()).hexdigest())
+    with pytest.raises(WebScientificRuntimeProjectionError) as caught:
+        compile_web_scientific_runtime_projection(
+            study={"analysis_design": {"analysis_family": "association_study"}, "covariate_selection": "exact"},
+            sensitivity_specs=(), primary_exposure=context.primary_exposure, primary_exposure_source=None,
+            target_outcome="death", declared_covariates=("age",), covariate_operationalizations={},
+            target_is_event_status=True, universe_path=catalog, scientific_configuration_sha256="a" * 64,
+            exposure_groupings=groups,
+        )
+    assert caught.value.code == "web_baseline_association_incomplete"
+    assert caught.value.__cause__.reason_code == "association_adjustment_exposure_conflict"
+
+
+def test_diagnostic_fields_are_bounded_and_do_not_copy_exception_values(tmp_path):
+    from easyicu.webserver.agent_pipeline_runs import _record_pipeline_failure, _safe_pipeline_typed_failure
+
+    private = "synthetic-private-value"
+    error = BaselineAssociationAuthorityError(private, mismatch_fields=(private, "exposure_source", "exposure_source", "dependence"))
+    wrapper = RuntimeError(private)
+    wrapper.__cause__ = error
+    typed = _safe_pipeline_typed_failure(wrapper)
+    assert typed["mismatch_fields"] == ["exposure_source", "dependence"]
+    path = _record_pipeline_failure(wrapper_dir=tmp_path, study={"id": "synthetic"}, provider={}, exc=wrapper,
+                                    code="research_pipeline_scientific_authority_refused", execution_retry_id=None)
+    receipt = json.loads((tmp_path / path).read_text())
+    assert receipt["typed_failure"] == typed
+    assert private not in json.dumps(receipt)

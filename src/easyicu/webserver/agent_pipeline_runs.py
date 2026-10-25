@@ -973,6 +973,7 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
                     else "current_case_scientific_authority_invalid"
                 ),
                 "exception_type": type(item).__name__,
+                **({"mismatch_fields": list(item.mismatch_fields)} if isinstance(item, BaselineAssociationAuthorityError) else {}),
             }
         if isinstance(item, ValidationError):
             coordinates: List[Dict[str, Any]] = []

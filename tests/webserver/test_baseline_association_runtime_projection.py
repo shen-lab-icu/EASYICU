@@ -47,6 +47,28 @@ def test_baseline_projection_is_signed_without_a_landmark(tmp_path, exposure):
         load_current_case_scientific_runtime_authority({**projection.authority, "outcome_column": "tampered"})
 
 
+def test_ungrouped_continuous_exposure_keeps_its_spline_authority(tmp_path):
+    from tests.support.baseline_association import baseline_context, baseline_plan_attempt
+
+    path = tmp_path / "continuous.parquet"
+    pd.DataFrame({"age": pd.Series(dtype="float64"), "sex": pd.Series(dtype="bool"),
+                  "death": pd.Series(dtype="bool")}).to_parquet(path, index=False)
+    projection = compile_web_scientific_runtime_projection(
+        study={"analysis_design": {"analysis_family": "association_study"}, "covariate_selection": "exact"},
+        sensitivity_specs=(), primary_exposure="age", primary_exposure_source="age", target_outcome="death",
+        declared_covariates=("sex",), covariate_operationalizations={}, target_is_event_status=True,
+        universe_path=path, scientific_configuration_sha256="b" * 64,
+    )
+    authority = load_current_case_scientific_runtime_authority(projection.authority)
+    assert authority.exposure_column == "age"
+    assert authority.exposure_encoding == "restricted_cubic_spline"
+    assert authority.exposure_levels == ()
+    assert authority.exposure_reference_level is authority.primary_contrast_level is None
+    plan = baseline_plan_attempt(baseline_context("age", covariates=("sex",)))[0].output
+    sealed = authority.seal_adjustment_roster(plan)
+    sealed.validate_plan(sealed.bind_plan(plan))
+
+
 @pytest.mark.parametrize("exposure,covariates,subgroup", [
     ("sex", (), None), ("adm", ("age",), "sex"),
     ("chronic_flag", ("age", "sex", "weight"), "sex"), ("age", ("sex",), None),
