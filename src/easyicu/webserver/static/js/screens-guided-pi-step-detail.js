@@ -293,9 +293,9 @@
       ? `<span>${esc(tr(`Step ${operation.stepIndex}/${operation.stepTotal}`, `第 ${operation.stepIndex}/${operation.stepTotal} 步`))}</span>` : '';
     return `<div class="gpi-source-document gpi-operation-document gpi-step-document">
       <header class="gpi-source-title gpi-operation-title"><span class="gpi-operation-title-icon" aria-hidden="true">${operation.icon ? icon(operation.icon, 18) : ''}</span><div><h2>${esc(operation.title)}</h2><p>${position}<b class="gpi-status-chip status-${esc(status)}">${esc(statusText)}</b>${duration ? `<span>${icon('clock', 12)}${esc(duration)}</span>` : ''}</p></div></header>
-      ${renderExtraction(tab.stepDetail)}
       ${outputSection(tab)}
       ${inputSection(tab, helpers.codeRows)}
+      ${renderExtraction(tab.stepDetail)}
     </div>`;
   }
 

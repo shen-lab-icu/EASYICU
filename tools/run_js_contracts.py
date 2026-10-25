@@ -40,6 +40,7 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_pi_clinical_card.test.js": [
         "html-escape.js", "product-labels.js", "screens-guided-pi-confirmation.js",
     ],
+    "guided_pi_audit_detail_copy.test.js": [],
     "guided_pi_extraction_terminal.test.js": [],
     "guided_pi_source_picker_stability.test.js": [],
     "guided_pi_demo_raw_planning.test.js": [],

@@ -5632,7 +5632,7 @@ def test_data_package_opens_in_a_route_owned_read_only_workbench() -> None:
     assert "批准后才会执行" in workbench
     assert "计划直接输入的非空覆盖" in workbench
     assert "全部分析记录均有值" in workbench
-    assert "存在物理空值；不等同临床缺失" in workbench
+    assert "有空白记录，需按变量定义判断是否缺失。" in workbench
     assert ".gpi-wb" in css
     assert ".gpi-wb-pending" in css
     assert ".gpi-wb-coverage-chart" in css
@@ -6004,7 +6004,7 @@ def test_evidence_bound_manuscript_reader_stays_in_its_preview_owner() -> None:
     assert "loadPiCopilotResearchEvidence" in preview
     assert "data-gpi-evidence-tab" in preview
     assert "patient_level_rows_withheld" in evidence_preview
-    assert "Code is displayed, never executed" in evidence_preview
+    assert "Code is displayed, never executed" not in evidence_preview  # C33: no repeated boundary footer
     assert "Registered source record" in evidence_preview
     assert "Registry digest verified" in evidence_preview
     assert "Reproduction path" in evidence_preview

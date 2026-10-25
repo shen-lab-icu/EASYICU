@@ -205,7 +205,7 @@
     const renderer = window.EasyICU.guidedPi.optional('evidencePreview');
     const body = tab.loading ? `<div class="gpi-source-loading" role="status">${esc(tr('Loading registered evidence…', '正在读取已登记证据…'))}</div>`
       : tab.error ? `<div class="gpi-source-error" role="alert"><strong>${esc(tr('Evidence unavailable', '证据暂不可用'))}</strong><p>${esc(tab.error)}</p></div>`
-        : renderer ? renderer.render(tab.payload || {}) : '';
+        : renderer ? renderer.render(tab.payload || {}) : `<p class="gpi-source-error" role="status">${esc(tr('The evidence preview could not be displayed.', '暂时无法显示证据预览。'))}</p>`;
     return `<div class="gpi-source-document"><header class="gpi-source-title"><h2>${esc(tab.title)}</h2></header>${body}</div>`;
   }
   function render() {

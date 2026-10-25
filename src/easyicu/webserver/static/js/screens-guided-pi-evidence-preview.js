@@ -76,6 +76,7 @@
       [tr('Analysis step', '生成步骤'), p.role],
       [tr('Producer', '生成 owner'), p.producer],
       [tr('Generation mode', '生成方式'), p.generation_mode],
+      [tr('Preview status', '预览状态'), p.withheld_reason],
     ].filter(([, value]) => value !== '' && value != null);
     const rows = Array.isArray(p.declared_lineage) ? p.declared_lineage : [];
     const hasCode = rows.some(row => row && row.relation === 'analysis_code' && row.status === 'registered');
@@ -90,7 +91,7 @@
   function runAuthorityView(payload) {
     const authority = payload && payload.run_authority && typeof payload.run_authority === 'object' ? payload.run_authority : {};
     if (authority.status !== 'recorded') {
-      return `<details class="gpi-evidence-authority is-missing"><summary>${esc(tr('Upstream run provenance', '上层运行溯源'))}</summary><p>${esc(tr('No valid run manifest was recorded for this evidence.', '该证据没有可用的运行清单记录。'))}</p></details>`;
+      return `<details class="gpi-evidence-authority is-missing"><summary>${esc(tr('Source records for this analysis', '本次分析的来源记录'))}</summary><p>${esc(tr('No valid run manifest was recorded for this evidence.', '该证据没有可用的运行清单记录。'))}</p></details>`;
     }
     const facts = [
       [tr('Run', '运行'), authority.run_id],
@@ -101,7 +102,7 @@
       [tr('Execution identity', '执行身份'), authority.execution_identity_sha256],
     ].filter(([, value]) => value !== '' && value != null);
     const links = Array.isArray(authority.links) ? authority.links : [];
-    return `<details class="gpi-evidence-authority"><summary>${esc(tr('Continue to upstream run provenance', '继续查看上层运行溯源'))}</summary><div class="gpi-evidence-authority-body"><p>${esc(tr('These are run-level authority anchors, not inferred direct parents of the current file.', '这些是同一运行的权威锚点，不会被冒充为当前文件的直接父证据。'))}</p><dl>${facts.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd><code>${esc(text(value, 500))}</code></dd></div>`).join('')}</dl>${links.length ? `<div class="gpi-evidence-lineage-list">${links.map(evidenceLink).join('')}</div>` : `<p>${esc(tr('No clickable run-authority evidence was registered.', '没有登记可点击的运行权威证据。'))}</p>`}</div></details>`;
+    return `<details class="gpi-evidence-authority" title="${esc(tr('Continue to upstream run provenance', '查看这次分析的运行来源'))}"><summary>${esc(tr('Source records for this analysis', '本次分析的来源记录'))}</summary><div class="gpi-evidence-authority-body"><dl>${facts.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd><code>${esc(text(value, 500))}</code></dd></div>`).join('')}</dl>${links.length ? `<div class="gpi-evidence-lineage-list">${links.map(evidenceLink).join('')}</div>` : `<p>${esc(tr('No source files were registered for this analysis.', '本次分析未登记可查看的来源文件。'))}</p>`}</div></details>`;
   }
   function codeView(payload) {
     const lines = text(payload.text, 600000).split('\n');
@@ -381,10 +382,10 @@
       preview_size_limit: tr('The file exceeds the bounded preview size.', '文件太大，无法预览。'),
       evidence_preview_host_path_detected: tr('The text contains a host path and was withheld.', '文本包含主机路径，已隐藏。'),
       evidence_preview_encoding_unsupported: tr('The text encoding is not supported for safe preview.', '文本编码不符合安全预览要求。'),
-      unsupported_evidence_type: tr('This registered evidence type has no browser renderer yet.', '该已登记证据类型暂没有浏览器渲染器。'),
+      unsupported_evidence_type: tr('Preview is unavailable for this file.', '此文件暂不支持预览。'),
     };
     const reason = String(payload.withheld_reason || 'unsupported_evidence_type');
-    return `<div class="gpi-evidence-withheld"><strong>${esc(tr('Metadata-only preview', '仅元数据预览'))}</strong><p>${esc(reasons[reason] || reason)}</p>${payload.bytes != null ? `<span>${esc(String(payload.bytes))} bytes</span>` : ''}</div>`;
+    return `<div class="gpi-evidence-withheld"><strong>${esc(tr('File information', '文件信息'))}</strong><p>${esc(reasons[reason] || reasons.unsupported_evidence_type)}</p>${payload.bytes != null ? `<span>${esc(String(payload.bytes))} bytes</span>` : ''}</div>`;
   }
   function render(payload, locator) {
     const p = payload && typeof payload === 'object' ? payload : {};
@@ -402,7 +403,7 @@
     else if (p.previewable && p.renderer === 'json') body = reviewRecordView(p);
     else if (p.previewable && p.renderer === 'table') body = tableView(p);
     const summaryFirst = p.previewable && p.renderer === 'json';
-    return `<div class="gpi-evidence-view">${summaryFirst ? body : ''}${recordView(p)}${declaredLineageView(p)}${fileAuditView(p, locator)}${runAuthorityView(p)}${summaryFirst ? '' : body}<p class="gpi-evidence-readonly">${esc(tr('Read-only preview. Code is displayed, never executed; raw patient rows and absolute host paths remain outside the browser boundary.', '只读预览。代码只展示、不执行；原始患者行和主机绝对路径不会进入浏览器边界。'))}</p></div>`;
+    return `<div class="gpi-evidence-view">${summaryFirst ? body : ''}${recordView(p)}${declaredLineageView(p)}${fileAuditView(p, locator)}${runAuthorityView(p)}${summaryFirst ? '' : body}</div>`;
   }
 
   window.EasyICU.guidedPi.declare('evidencePreview', { render, title, kindLabel });
