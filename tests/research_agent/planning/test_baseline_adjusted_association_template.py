@@ -344,11 +344,6 @@ def test_seven_step_template_compiles(exposure, outcome, covariates, subgroup, t
     ) == []
     assert summary["n_total"] == (396 if subgroup else 400) and len(summary["model_contracts"]) == 1
     estimates = pd.read_csv(tmp_path / "primary" / "adjusted_association_estimates.csv")
-    figure = resolve_standard_executor(
-        bound.steps[5], plan=bound,
-        resolved_bindings={"table:adjusted_association_estimates": {"product_contract": {"columns": list(estimates.columns)}}},
-    )
-    assert figure.claimed_by, figure
     if subgroup:
         assert set(estimates["stratum"].dropna().astype(int)) == {0, 1}
         assert estimates.loc[estimates["subgroup"].notna(), "interaction_p_value"].nunique() == 1
@@ -368,6 +363,11 @@ def test_seven_step_template_compiles(exposure, outcome, covariates, subgroup, t
     # The figure owner receives the schema of the actual upstream product,
     # exactly as execution's typed-input resolver supplies it.
     bindings = {"table:adjusted_association_estimates": {"product_contract": {"columns": list(estimates.columns)}}}
+    if "table:absolute_risk_context" in bound.steps[5].inputs:
+        risk_table = pd.read_csv(tmp_path / "risk" / "absolute_risk_context.csv")
+        bindings["table:absolute_risk_context"] = {"product_contract": {"columns": list(risk_table.columns)}}
+    figure = resolve_standard_executor(bound.steps[5], plan=bound, resolved_bindings=bindings)
+    assert figure.claimed_by == ("adjusted_association_figure" if exposure == "age" else "association_overview_figure")
     for step in bound.steps:
         decision = resolve_standard_executor(
             step, plan=bound, current_case_scientific_runtime_authority=sealed,

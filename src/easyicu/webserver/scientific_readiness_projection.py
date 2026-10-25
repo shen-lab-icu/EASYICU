@@ -473,11 +473,11 @@ def _analysis_status(
         findings.append(
             ScientificReadinessFinding(
                 code="SCIENTIFIC_REVIEW_MAJOR_REVISION_OPEN",
-                domain="analysis",
+                domain="manuscript",
                 severity="blocker",
                 message=(
-                    "The persisted independent reviewer package still contains an "
-                    "open major-revision or reject-level scientific finding."
+                    "The persisted manuscript reviewer package still contains an "
+                    "open major-revision or reject-level finding."
                 ),
                 evidence_refs=["reviewer_report.json"],
                 remediation=(
@@ -503,6 +503,9 @@ def _analysis_status(
         "ARTICLE_DISPLAY_SUITE_INCOMPLETE",
         "INDEPENDENT_SCIENTIFIC_REVIEW_NOT_CLOSED",
     }
+    # These findings limit publication authority, not the validity of the
+    # executed, authorized estimand. Unknown scientific defects stay in analysis.
+    paper_codes = {"FORMAL_PREREGISTRATION_NOT_ESTABLISHED", "ROBUSTNESS_AXES_TOO_NARROW"}
     for item in raw_maturity_findings[:30]:
         if not isinstance(item, Mapping):
             continue
@@ -518,7 +521,7 @@ def _analysis_status(
         findings.append(
             ScientificReadinessFinding(
                 code=code or "SCIENTIFIC_MATURITY_FINDING",
-                domain="analysis",
+                domain="manuscript" if item.get("dimension") in {"novelty", "manuscript"} or code in paper_codes else "analysis",
                 severity=severity,
                 message=_text(item.get("message"), 1_000),
                 evidence_refs=evidence_refs,
@@ -531,11 +534,11 @@ def _analysis_status(
                 ),
             )
         )
-    maturity_blocker = any(finding.severity == "blocker" for finding in findings)
-    maturity_major = any(finding.severity == "major" for finding in findings)
+    analysis_findings = [finding for finding in findings if finding.domain == "analysis"]
+    maturity_blocker = any(finding.severity == "blocker" for finding in analysis_findings)
+    maturity_major = any(finding.severity == "major" for finding in analysis_findings)
     blocked = (
         not analysis_validated
-        or bool(recommendation in {"major_revision", "reject"} or major_count)
         or maturity_blocker
     )
     domain_state: DomainState = (
@@ -545,7 +548,7 @@ def _analysis_status(
         domain="analysis",
         status=domain_state,
         summary=(
-            "Automated validation and the article-maturity audit passed."
+            "Automated analysis validation passed with no open analysis findings."
             if domain_state == "passed"
             else (
                 "The analysis is technically valid but requires major scientific revision."
@@ -577,7 +580,7 @@ def _analysis_status(
                     "question": finding.authorization_question,
                 }
                 for finding in findings
-                if finding.requires_user_authorization
+                if finding.domain == "analysis" and finding.requires_user_authorization
                 and finding.authorization_question
             ],
         },
@@ -679,9 +682,22 @@ def build_scientific_readiness_projection(
     ]
     domains = [piece[0] for piece in pieces]
     findings = [finding for piece in pieces for finding in piece[1]]
+    # A manuscript receipt cannot hide paper findings projected from maturity
+    # or reviewer artifacts, even if the supplied axes say it is ready.
+    manuscript_findings = [finding for finding in findings if finding.domain == "manuscript"]
+    if manuscript_findings and domains[-1].status == "passed":
+        domains[-1] = domains[-1].model_copy(update={
+            "status": "blocked" if any(finding.severity == "blocker" for finding in manuscript_findings) else "review_required",
+            "summary": "Paper review findings remain open.",
+        })
     facts = {
         domain.domain: piece[2] for domain, piece in zip(domains, pieces, strict=True)
     }
+    facts["manuscript"]["user_authorization_requests"] = [
+        {"code": finding.code, "question": finding.authorization_question}
+        for finding in manuscript_findings
+        if finding.requires_user_authorization and finding.authorization_question
+    ]
     publication_ready = bool(axes.get("publication_ready"))
     paper_authorized = bool(axes.get("paper_authorized"))
     analysis_validated = bool(axes.get("analysis_validated"))

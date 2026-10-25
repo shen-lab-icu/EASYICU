@@ -2225,6 +2225,8 @@ def _inspect_validation(
     scientific_facts = scientific_facts if isinstance(scientific_facts, Mapping) else {}
     analysis_facts = scientific_facts.get("analysis")
     analysis_facts = analysis_facts if isinstance(analysis_facts, Mapping) else {}
+    manuscript_facts = scientific_facts.get("manuscript")
+    manuscript_facts = manuscript_facts if isinstance(manuscript_facts, Mapping) else {}
     gate_checks = {
         str(check.get("id") or "").strip(): bool(check.get("passed"))
         for check in checks
@@ -2275,9 +2277,10 @@ def _inspect_validation(
                     "scientific_maturity_dimension_scores"
                 ),
                 "findings": scientific_findings,
-                "user_authorization_requests": list(
-                    analysis_facts.get("user_authorization_requests") or []
-                )[:20],
+                "user_authorization_requests": [
+                    *list(analysis_facts.get("user_authorization_requests") or []),
+                    *list(manuscript_facts.get("user_authorization_requests") or []),
+                ][:20],
                 "resource": _artifact_resource(
                     row.get("run_id"), "scientific_readiness.json"
                 ),
