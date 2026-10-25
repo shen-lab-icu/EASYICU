@@ -29,6 +29,7 @@ from ..contracts.association_execution import (
 )
 from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
 from ..contracts.cohort_summary_products import auxiliary_summary_product
+from ..contracts.cohort_summary import DESCRIPTIVE_SUMMARY_ACTION, DESCRIPTIVE_SUMMARY_OUTPUTS
 from ..contracts.claim_ceiling import DescriptiveClaimContract
 from ..contracts.model_terms import AdjustmentProposal, ModelTermSpec, level_spelling
 from ..contracts.functional_form import RCS_LINEAR_SENSITIVITY_METHODS
@@ -1136,6 +1137,18 @@ def _validate_scientific_action_runtime_contract(
 ) -> None:
     """Enforce the exact product boundary published by the action owner."""
 
+    if (step.module_id == "custom_analysis" and step.planned_analysis_role == "primary"
+            and step.scientific_action_id == DESCRIPTIVE_SUMMARY_ACTION
+            and tuple(outputs) != tuple((product, "custom") for product in DESCRIPTIVE_SUMMARY_OUTPUTS)):
+        # This action also labels the separate typed distribution module;
+        # only its empirical-summary owner publishes these two products.
+        raise _fail(
+            "progressive_scientific_action_outputs_mismatch",
+            f"{DESCRIPTIVE_SUMMARY_ACTION} primary summary requires exact outputs "
+            f"{list(DESCRIPTIVE_SUMMARY_OUTPUTS)!r}, each with semantic_role='custom'. "
+            "Preserve the question, variables and population; repair the output declarations.",
+            step=step, step_index=step_index, path="outputs",
+        )
     contract = action.runtime_contract if action is not None else None
     if contract is None:
         return

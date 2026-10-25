@@ -567,11 +567,28 @@
   }
   function scientificFindingCopy(row) {
     const code = String(row && row.code || '');
+    if (code === 'ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED' && row.remediation_route === 'runtime_capability') {
+      return {
+        title: t('Sensitivity checks are not yet executable', '敏感性检验尚不能执行'),
+        detail: t('The selected analysis cannot yet run the required sensitivity checks. This limits publication readiness; another plan revision alone cannot supply that capability.',
+          '当前分析方法尚不能执行所需的敏感性检验。这会限制发表就绪情况，单纯重新生成计划不能补足这项能力。'),
+      };
+    }
     const known = {
       SCIENTIFIC_CAPABILITY_NOT_REPORTABLE: [
-        'Upgrade the analysis method', '升级分析方法',
-        'The current diagnostic-only capability will be replaced by a formally validated analysis capability.',
-        '当前计划仅支持诊断性描述，EasyICU 会改用经过正式验证的分析能力。',
+        'The primary result lacks a validated calculation', '主要结果尚无可核验的计算方法',
+        'The plan must bind its primary result to a supported calculation and result check while preserving the research question.',
+        '计划需要为主要结果补全可执行的计算与结果校验设置，并保留原研究问题。',
+      ],
+      TOP_JOURNAL_LITERATURE_SEARCH_NOT_ESTABLISHED: [
+        'Current literature search is missing', '尚缺可追溯的文献检索',
+        'A dated, source-backed literature search is needed before claiming article-level coverage.',
+        '尚未保留有日期及来源依据的文献检索，暂不能声称已充分覆盖相关研究。',
+      ],
+      REPEATED_STAY_METHOD_NOT_DECLARED: [
+        'Repeat ICU stays need an executable analysis plan', '同一患者多次 ICU 住院的处理尚未落实',
+        'The plan has not established how its results handle repeat ICU stays from the same patient. The system must check the summary or dependence method before execution.',
+        '计划尚未落实如何处理同一患者多次 ICU 住院。系统需核对结果汇总方式或相关性处理方法后再执行。',
       ],
       DESIGN_ANALOGUE_NOT_ESTABLISHED: [
         'Find a comparable ICU study design', '补充可参照的 ICU 研究设计',
@@ -642,13 +659,14 @@
     };
     return known[code] || scientificFindingCopy(row).title;
   }
-  // Sensitivity design is always Planner work.  The endpoint belongs to the
+  // A missing sensitivity implementation belongs to the runtime owner.
+  // Legacy sensitivity design is Planner work. The endpoint belongs to the
   // estimand: a review that routes it to the user asks the user, and only a
   // legacy finding without a route is read as a Planner proposal, as the
   // workflow projection does.
   function plannerOwnedScientificFinding(row) {
     const code = String(row && row.code || '');
-    return code === 'ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED'
+    return (code === 'ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED' && row.remediation_route !== 'runtime_capability')
       || (code === 'OUTCOME_DEFINITION_UNRESOLVED' && !(row && row.remediation_route));
   }
   function scientificPlanReviewView(payload) {
@@ -1491,6 +1509,7 @@
   }
 
   window.AGENT_RENDER = {
+    scientificFindingCopy,
     DEMO_STUDIES,
     runStatusLabel, runStatusHint, gateCheckLabel, readableArtifactText, firstValue, fmtCount,
     artifactKind, artifactTitle, artifactCategory, artifactSummary, artifactRank, defaultArtifactName,
