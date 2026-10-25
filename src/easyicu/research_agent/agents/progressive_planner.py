@@ -68,6 +68,7 @@ from ..planning.progressive_compiler import (
     progressive_cohort_concept_ids,
     progressive_population_concept_ids,
     progressive_output_roles_for_module,
+    progressive_module_selection_contract,
     required_binary_display_label_scopes,
     required_reader_display_label_keys,
     validate_progressive_foundation,
@@ -2419,7 +2420,8 @@ class ProgressivePlannerAgent:
                 raise ProgressivePlanCompileError(
                     "progressive_outline_module_unavailable",
                     f"outline module {step.module_id!r} is unavailable for "
-                    f"analysis type {outline.analysis_type!r}",
+                    f"analysis type {outline.analysis_type!r}. "
+                    + progressive_module_selection_contract(outline.analysis_type, step),
                     step_id=step.step_id,
                     step_index=index,
                     path="module_id",
@@ -2858,6 +2860,7 @@ class ProgressivePlannerAgent:
         blocks = [
             "PROGRESSIVE CURRENT-STEP MATERIALIZATION AUTHORITY",
             "Selected analysis family:\n" + outline.analysis_type,
+            progressive_module_selection_contract(outline.analysis_type, outline_step),
             "High-level cohort objective:\n" + outline.cohort_objective,
             "Current outline step and host digest:\n"
             + json.dumps(
@@ -3854,7 +3857,7 @@ class ProgressivePlannerAgent:
                                 }
                             ],
                         ) from exc
-                    if exc.reason_code in _NON_REPAIRABLE_COORDINATE_FINDINGS:
+                    if exc.reason_code in _NON_REPAIRABLE_COORDINATE_FINDINGS or exc.details.get("repair_scope") == "outline_required":
                         raise
                     if revision >= _MAX_COMPILE_REVISIONS:
                         raise

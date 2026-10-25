@@ -238,6 +238,7 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-aside.js",
     ],
     "guided_side_panels.test.js": ["screens-guided-panels.js"],
+    "progressive_compile_stop_copy.test.js": [],
     # Reads the whole js/ directory itself; takes no arguments.
     "job_continuity_404.test.js": [],
     "guided_pi_audit_stage_labels.test.js": [],

@@ -14,6 +14,7 @@ from ..planning.progressive_contract import (
     ProgressiveStepMaterialization,
 )
 from ..planning.question_requirements import QuestionRequirement
+from ..providers.structured_retry import safe_structured_attempt_metadata
 from ..schema import AnalysisPlan
 
 
@@ -105,6 +106,17 @@ def bind_progressive_planner_failure_facts(
     """Bind same-attempt facts without replacing the original exception type."""
 
     setattr(error, _FAILURE_FACTS_ATTRIBUTE, facts)
+    # Compile revisions happen after structured parsing. Preserve their safe
+    # coordinates separately so a later parse/transport failure keeps both
+    # histories and no materialization or compiler prose reaches the web.
+    error.easyicu_compile_retry_metadata = safe_structured_attempt_metadata([
+        {
+            "attempt": attempt.revision + 1,
+            "error_class": "ProgressivePlanCompileError",
+            "reason_code": attempt.compiler_finding.reason_code,
+        }
+        for attempt in facts.compile_failure_attempts
+    ])
 
 
 def progressive_planner_failure_facts(error: BaseException) -> ProgressivePlannerRunFacts:
