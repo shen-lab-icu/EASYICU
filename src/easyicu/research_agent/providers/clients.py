@@ -54,7 +54,10 @@ from .client_trust import (
     require_provider_client_authorization,
     require_replay_scope,
 )
-from .transport_retry import TransportRetrySchedule, mark_retry_exhausted
+from .transport_retry import (
+    PLANNING_EMPTY_RESPONSE_RETRY, PLANNING_RECOVERY_TIMEOUT_SECONDS,
+    TransportRetrySchedule, empty_planning_response, mark_retry_exhausted,
+)
 from .protocol import (
     LLMClient,
     LLMMessage,
@@ -109,6 +112,7 @@ class ProviderCallReceipt:
     finish_reason: Optional[str]
     usage_summary: Tuple[Tuple[str, int], ...]
     transport_attempts: int
+    transport_retry_reasons: Tuple[str, ...] = ()
 
 
 def clear_provider_call_receipt() -> None:
@@ -128,6 +132,7 @@ def _record_provider_call_receipt(
     finish_reason: Any,
     usage: Optional[Dict[str, Any]],
     transport_attempts: int,
+    transport_retry_reasons: Tuple[str, ...] = (),
 ) -> None:
     safe_usage: list[tuple[str, int]] = []
     for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
@@ -139,6 +144,7 @@ def _record_provider_call_receipt(
             finish_reason=safe_provider_finish_reason(finish_reason),
             usage_summary=tuple(safe_usage),
             transport_attempts=max(1, int(transport_attempts)),
+            transport_retry_reasons=transport_retry_reasons,
         )
     )
 
@@ -450,8 +456,10 @@ def _response_namespace_from_stream(stream: Any) -> Any:
     usage = None
     response_model = None
     saw_choice = False
+    response_started = False
     try:
         for chunk in stream:
+            response_started = True
             chunk_model = getattr(chunk, "model", None)
             if isinstance(chunk_model, str) and chunk_model.strip():
                 response_model = chunk_model.strip()
@@ -477,6 +485,9 @@ def _response_namespace_from_stream(stream: Any) -> Any:
                     if isinstance(value, str):
                         reasoning_parts.append(value)
                         break
+    except Exception as exc:
+        exc.easyicu_response_started = response_started
+        raise
     finally:
         close = getattr(stream, "close", None)
         if callable(close):
@@ -888,11 +899,20 @@ class OpenAIClient:
 
         retry_started = _time.monotonic()
         reservation: Dict[str, Any] = {"remaining": None, "at": retry_started}
+        recovery_reasons: Tuple[str, ...] = ()
+        dispatched_attempts = 0
 
         def _do_call():
+            nonlocal dispatched_attempts
             hard_stop_remaining = consume_active_transport_attempt()
+            dispatched_attempts += 1
+            self.last_transport_attempts = dispatched_attempts
             reservation.update(remaining=hard_stop_remaining, at=_time.monotonic())
             transport_kwargs = dict(create_kwargs)
+            if recovery_reasons:
+                transport_kwargs["timeout"] = min(
+                    float(transport_kwargs["timeout"]), PLANNING_RECOVERY_TIMEOUT_SECONDS,
+                )
             if hard_stop_remaining is not None:
                 transport_kwargs["timeout"] = min(
                     float(transport_kwargs["timeout"]),
@@ -918,7 +938,7 @@ class OpenAIClient:
                 if self._extra_body:
                     payload.update(self._extra_body)
                 post_kwargs: Dict[str, Any] = {"json": payload}
-                if hard_stop_remaining is not None:
+                if hard_stop_remaining is not None or recovery_reasons:
                     post_kwargs["timeout"] = transport_kwargs["timeout"]
                 resp = self._local_http_client.post(
                     "/chat/completions",
@@ -973,6 +993,10 @@ class OpenAIClient:
         def _record_transport_failure(exc: BaseException, attempts: int) -> None:
             record_active_provider_transport_failure(type(exc).__name__)
             self.last_transport_attempts = int(attempts)
+            _record_provider_call_receipt(
+                finish_reason=None, usage=None, transport_attempts=attempts,
+                transport_retry_reasons=recovery_reasons,
+            )
             # The structured-retry owner may receive this exception instead of
             # a response.  Attach only a count -- never request/response data.
             try:
@@ -982,9 +1006,9 @@ class OpenAIClient:
 
         def _retryable_for_this_client(exc: Exception) -> bool:
             # When a caller supplies a status allowlist (the Web Research Agent
-            # does), it is the whole retry policy: connection errors, malformed
-            # envelopes, 408/409/429, and message-text guesses do not get an
-            # implicit retry.  The default preserves the broader CLI policy.
+            # does), it owns ordinary retries. The explicit, unanswered
+            # planning recovery runs before this check; malformed envelopes,
+            # 408/409/429 and message-text guesses gain no implicit retry.
             if self._retryable_http_status_codes is not None:
                 return (
                     _structured_provider_http_status_code(exc)
@@ -1003,7 +1027,6 @@ class OpenAIClient:
                 _time.sleep(seconds)
 
         for attempt in range(manual_attempts):
-            self.last_transport_attempts = attempt + 1
             try:
                 resp = _do_call()
                 break
@@ -1014,14 +1037,41 @@ class OpenAIClient:
                 # as transient: short backoff, retry. Pilot run
                 # run_20260516T123840_cc32d5 lost step 08_model_validation to
                 # exactly this.
-                _record_transport_failure(exc, attempt + 1)
+                _record_transport_failure(exc, dispatched_attempts)
                 if self._retryable_http_status_codes is not None:
                     raise
                 last_exc = exc
                 _sleep_before_retry(2.0 * (attempt + 1), attempt)
                 continue
             except Exception as exc:  # noqa: BLE001
-                _record_transport_failure(exc, attempt + 1)
+                _record_transport_failure(exc, dispatched_attempts)
+                if empty_planning_response(exc):
+                    if recovery_reasons or attempt + 1 >= manual_attempts:
+                        mark_retry_exhausted(exc, "transport_retry_attempts_exhausted")
+                        raise
+                    # This recovery starts after an unanswered request (which
+                    # may have spent 480 s). It has one short wait and a capped
+                    # request, within the SAME transport and hard-stop budgets.
+                    now = _time.monotonic()
+                    wait, stopped = TransportRetrySchedule((2.0,)).next_wait(
+                        retry_index=0, since_start=0.0,
+                        since_reservation=now - reservation["at"],
+                        wall_clock_remaining=reservation["remaining"],
+                        retry_after=None, draw=self._retry_random,
+                    )
+                    if wait is None:
+                        mark_retry_exhausted(exc, stopped)
+                        raise
+                    transport_attribute = (
+                        "_local_http_client" if self._local_noauth_mode else "_client"
+                    )
+                    old_transport = getattr(self, transport_attribute)
+                    self._rebuild_openai_client()
+                    if getattr(self, transport_attribute) is old_transport:
+                        raise
+                    recovery_reasons = (PLANNING_EMPTY_RESPONSE_RETRY,)
+                    _time.sleep(wait)
+                    continue
                 msg = str(exc).lower()
                 transient_proxy_auth = "invalid proxy api key" in msg or (
                     "401" in msg and "proxy" in msg
@@ -1149,6 +1199,7 @@ class OpenAIClient:
                 finish_reason=self.last_finish_reason,
                 usage=call_usage,
                 transport_attempts=self.last_transport_attempts,
+                transport_retry_reasons=recovery_reasons,
             )
             receipt = current_provider_call_receipt()
             raise ProviderRefusal(
@@ -1265,6 +1316,7 @@ class OpenAIClient:
             finish_reason=self.last_finish_reason,
             usage=call_usage,
             transport_attempts=self.last_transport_attempts,
+            transport_retry_reasons=recovery_reasons,
         )
         return content, call_usage
 

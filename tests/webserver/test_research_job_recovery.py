@@ -43,6 +43,7 @@ def test_planner_resume_uses_the_offer_owner_and_normal_launch_without_approval(
     resumed = research_job_recovery._continuation(state, launch)
     assert resumed.run(None) == {"pending_review": True}
     assert offers and resumed.checkpoint["kind"] == "planner"
+    assert resumed.checkpoint.get("restart_stage") == (None if approved_preparation else "metadata_planning")
     assert resumed.checkpoint["path"].endswith("checkpoint_002.json")
     assert launches[0]["development_resume_source_job_id"] == "prior"
     assert launches[0]["plan_revision_source_run_id"] == ""

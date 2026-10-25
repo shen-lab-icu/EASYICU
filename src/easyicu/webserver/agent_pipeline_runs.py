@@ -141,6 +141,7 @@ from easyicu.webserver.research_evidence_preview import is_identifier_column
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 from easyicu.webserver.stop_next_actions import (
     project_stop_next_actions, safe_stop_coordinates, source_stop_coordinates,
+    provider_timeout_coordinates,
 )
 from easyicu.webserver.research_input_progress import (
     project_research_input_state,
@@ -1435,6 +1436,9 @@ def _record_pipeline_failure(
         reason_code = typed.get("reason_code")
         cause_code = typed.get("cause_code")
         coordinates = safe_stop_coordinates(typed)
+        if code == "research_pipeline_provider_timeout":
+            coordinates.update(provider_timeout_coordinates(_safe_pipeline_attempt_metadata(exc)))
+            reason_code = reason_code or code
         if isinstance(exc, ResearchPipelineRunError):
             coordinates.update(source_stop_coordinates(exc.details))
             if coordinates and reason_code is None:

@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
 import inspect
+import hashlib
+import json
 
 import pytest
 
 from easyicu.webserver import agent_pipeline_runs
+from easyicu.webserver import research_pipeline_run_preparation as owner
+from easyicu.webserver.research_launch_resume import _DevelopmentResumeLaunchScope
+from tests.support.provider_recovery import recovery as recovery_fixture
+
+recovery = recovery_fixture
 from easyicu.webserver.research_pipeline_run_preparation import (
     PreparedLaunchAuthority,
     PreparedLaunchExecution,
@@ -486,3 +493,138 @@ def test_pipeline_factory_delegates_launch_policy_to_preparation_owner() -> None
         "research_pipeline_runner_image_invalid",
     ):
         assert policy_reason not in preparation
+
+
+@pytest.fixture
+def source(tmp_path, monkeypatch):
+    run = tmp_path / "study-1/run_prior/pipeline/run_synthetic"
+    run.mkdir(parents=True)
+    checkpoint = run / "progressive_planner_checkpoint_002.json"
+    checkpoint.write_text("synthetic checkpoint; integrity checked by the binding owner")
+    scope = _DevelopmentResumeLaunchScope(
+        "planner_canary", "Retain the reviewed synthetic question.",
+        {"required_primary_cohort_selection_mode": "all_input_rows"},
+    )
+    monkeypatch.setattr(owner, "_development_progressive_resume_binding", lambda **kw: (checkpoint, "a" * 64))
+    monkeypatch.setattr(owner, "_development_resume_launch_scope", lambda **kw: scope)
+    monkeypatch.setattr(owner, "_development_resume_literature_bundle", lambda **kw: {"synthetic": True})
+    monkeypatch.setattr(owner, "_require_execution_runtime", lambda **kw: "synthetic")
+    monkeypatch.setattr(owner, "_require_profile_dictionaries", lambda **kw: None)
+    request = replace(_request(), project_root=str(tmp_path), development_resume_source_job_id="prior")
+    scientific = replace(_scientific(), foundation_profile={
+        "outcome_concepts": (), "static_concepts": (), "required_feature_concepts": (),
+    })
+
+    def prepare(mode="planner_canary", metadata=True):
+        return owner._prepare_launch_execution(
+            replace(request, budget_mode=mode),
+            replace(scientific, metadata_only_planning=metadata),
+            owner._authorize_launch_provider(request),
+        )[1]
+
+    return checkpoint, scope, prepare
+
+
+def test_missing_first_pass_catalog_restarts_planning_with_the_same_scope(source):
+    checkpoint, scope, prepare = source
+    prepared = prepare()
+    assert prepared.development_resume_binding is None
+    assert prepared.development_resume_acquisition is None
+    assert prepared.development_resume_scope == scope
+    assert prepared.development_resume_literature == {"synthetic": True}
+    assert prepared.budget_mode == "planner_canary"
+    assert not (checkpoint.parents[2] / "pipeline_input").exists()
+    assert not prepared.execution_resume_source_run_id
+
+
+@pytest.mark.parametrize("mode,metadata", [("full_reviewed", False), ("planner_canary", False)])
+def test_later_stages_cannot_restart_without_prepared_input(source, mode, metadata):
+    _, _, prepare = source
+    with pytest.raises(owner.ResearchPipelineRunError):
+        prepare(mode, metadata)
+
+
+@pytest.mark.parametrize("name", [
+    "planner_catalog.parquet", "planner_catalog_receipt.json",
+    "web_research_universe.parquet", "web_research_universe_provenance.json",
+    "universe.parquet",
+])
+def test_partial_or_unverifiable_input_never_triggers_a_fresh_restart(source, name):
+    checkpoint, _, prepare = source
+    inputs = checkpoint.parents[2] / "pipeline_input"
+    inputs.mkdir()
+    (inputs / name).write_text("unverifiable synthetic artifact")
+    with pytest.raises(owner.ResearchPipelineRunError):
+        prepare()
+
+
+def test_linked_input_directory_never_triggers_a_restart(source, tmp_path):
+    checkpoint, scope, prepare = source
+    other = tmp_path / "synthetic-other"
+    other.mkdir()
+    (checkpoint.parents[2] / "pipeline_input").symlink_to(other, target_is_directory=True)
+    assert not owner.metadata_planning_restart_allowed(checkpoint_path=checkpoint, scope=scope)
+    with pytest.raises(owner.ResearchPipelineRunError):
+        prepare()
+
+
+@pytest.mark.parametrize("scope_change", [{"budget_mode": "full_reviewed"}, {"prepared_grouping": object()}])
+def test_verified_prepared_scope_is_never_a_metadata_restart(source, scope_change):
+    checkpoint, scope, _ = source
+    assert not owner.metadata_planning_restart_allowed(
+        checkpoint_path=checkpoint, scope=replace(scope, **scope_change),
+    )
+
+
+def test_available_zero_row_catalog_keeps_checkpoint_replay(source):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    checkpoint, scope, prepare = source
+    inputs = checkpoint.parents[2] / "pipeline_input"
+    inputs.mkdir()
+    pq.write_table(pa.table({"stay_id": pa.array([], type=pa.int64()),
+                             "age": pa.array([], type=pa.float64())}), inputs / "planner_catalog.parquet")
+    (inputs / "planner_catalog_receipt.json").write_text(json.dumps({
+        "schema_version": "easyicu.metadata-only-planning-catalog/1",
+        "database": "miiv", "selected_concepts": ["age"],
+        "selected_concepts_sha256": hashlib.sha256(b'["age"]').hexdigest(),
+        "patient_rows_read": False, "patient_rows_written": False,
+        "observed_feasibility_claims": False, "execution_authorized": False,
+        "row_identity_column": "stay_id",
+    }))
+    prepared = prepare()
+    assert prepared.development_resume_binding == (checkpoint, "a" * 64)
+    assert prepared.development_resume_acquisition.kind == "metadata_only_planning_catalog"
+    assert prepared.development_resume_acquisition.selected_concepts == ("age",)
+    assert prepared.development_resume_scope == scope
+
+
+def test_planning_restart_spends_the_existing_automatic_resume_budget(source, recovery):
+    _, scope, prepare = source
+    recovery.clock.recover_at = 0
+    continued = []
+
+    def interrupted(job):
+        raise TimeoutError("synthetic stalled planner")
+
+    def select(error):
+        prepared = prepare()
+        assert prepared.development_resume_scope == scope
+        assert prepared.development_resume_binding is None
+        return recovery.owner.CheckpointContinuation(
+            {"kind": "planner", "restart_stage": "metadata_planning"},
+            lambda job: continued.append(job.id) or interrupted(job),
+        )
+
+    with pytest.raises(recovery.owner.ProviderRecoveryExhausted):
+        recovery.state.run(interrupted, select)
+    assert len(continued) == len(recovery.state.resumes) == 2
+    assert all(row["checkpoint"]["restart_stage"] == "metadata_planning" for row in recovery.state.resumes)
+    assert all(row["cause_code"] == "provider_timeout" for row in recovery.state.resumes)
+    from easyicu.webserver.pi_copilot.projections import project_job
+
+    events = project_job({"id": "synthetic", "status": "failed", "events": recovery.job.events})["progress"]
+    resumes = [event for event in events if event.get("step") == "provider_auto_resume"]
+    assert len(resumes) == 2
+    assert all(event["restart_stage"] == "metadata_planning" for event in resumes)

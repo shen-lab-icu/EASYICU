@@ -55,6 +55,7 @@ from ..contracts.control_signals import ProgressControlSignal
 from .protocol import LLMMessage
 from .clients import safe_provider_http_status_code
 from .factory import authorized_complete
+from .transport_retry import planning_transport_scope
 from .llm import (
     clear_provider_call_receipt,
     current_provider_call_receipt,
@@ -732,7 +733,8 @@ def call_llm_with_structured_retry(
             }
             if structured_output is not None:
                 complete_kwargs["structured_output"] = structured_output
-            raw = authorized_complete(llm, current, **complete_kwargs)
+            with planning_transport_scope(role):
+                raw = authorized_complete(llm, current, **complete_kwargs)
         except BaseException as exc:
             # Transport failures abort the loop here, outside the parser
             # guard below. Carry the attempts recorded so far out with the
@@ -751,6 +753,7 @@ def call_llm_with_structured_retry(
                 exception_transport_attempts,
             )
             terminal_reason_code = str(getattr(exc, "reason_code", "") or "").strip()
+            receipt = current_provider_call_receipt()
             terminal_attempt = StructuredAttempt(
                 attempt=call_index,
                 raw_head="",
@@ -763,6 +766,10 @@ def call_llm_with_structured_retry(
                 finish_reason=finish_reason,
                 usage_summary=usage_summary,
                 transport_attempts=transport_attempts,
+                reason_code=(
+                    receipt.transport_retry_reasons[-1]
+                    if receipt is not None and receipt.transport_retry_reasons else None
+                ),
             )
             all_attempts = [*attempts, terminal_attempt]
             # Keep the human note's established meaning: when parser failures
@@ -779,6 +786,11 @@ def call_llm_with_structured_retry(
         head = (raw or "").strip().replace("\n", " ⏎ ")[:400]
         finish_reason, usage_summary, transport_attempts = _safe_provider_call_metadata(
             llm
+        )
+        receipt = current_provider_call_receipt()
+        recovery_reason = (
+            receipt.transport_retry_reasons[-1]
+            if receipt is not None and receipt.transport_retry_reasons else None
         )
         try:
             value = parser(raw)
@@ -952,6 +964,7 @@ def call_llm_with_structured_retry(
                     phase="accepted",
                     attempt=call_index + 1,
                     total_attempts=total_attempts,
+                    reason_code=recovery_reason,
                 ),
             )
             return value

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+import pytest
 import pandas as pd
 from easyicu.webserver import dataio
 from easyicu.webserver.agent_review_recovery import WebReviewRecoveryRecord
@@ -98,3 +100,43 @@ def _recoverable_package_record(tmp_path: Path) -> tuple[WebReviewRecoveryRecord
         created_at=1.0,
     )
     return record, Path(study["data_source"]["path"])
+
+
+@pytest.fixture
+def recovery(tmp_path, monkeypatch):
+    from easyicu.webserver import provider_job_recovery as owner
+    from easyicu.webserver.jobs import Job
+    from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopLedger, ProviderHardStopLimits
+
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr(owner.time, "monotonic", lambda: clock.now)
+    monkeypatch.setattr(owner.time, "sleep", lambda seconds: setattr(clock, "now", clock.now + seconds))
+    task = ProviderHardStopLedger(
+        path=tmp_path / "ledger.json", task_ids=("synthetic",),
+        limits=ProviderHardStopLimits(
+            max_provider_attempts_per_run=100, max_provider_attempts_per_batch=100,
+            max_total_tokens_per_run=2_000_000, max_total_tokens_per_batch=2_000_000,
+            max_estimated_cost_usd_per_batch=100, max_wall_clock_seconds_per_task=7200,
+            input_cost_usd_per_million_tokens=10, output_cost_usd_per_million_tokens=30,
+        ), batch_id="synthetic", declaration_sha256="a" * 64,
+    ).start_task("synthetic")
+    job = Job("outage", "agent-run")
+    state = owner.ProviderJobRecovery(job)
+    probes = []
+    requests = []
+
+    class Provider:
+        name = "synthetic"
+
+        def complete_with_usage(self, messages, **kwargs):
+            probes.append(clock.now)
+            requests.append((messages, kwargs))
+            if clock.now < clock.recover_at:
+                error = RuntimeError("private provider response")
+                error.status_code = 500
+                raise error
+            return "OK", {"prompt_tokens": 8, "completion_tokens": 1, "total_tokens": 9}
+
+    clock.recover_at = 1300.0
+    state.bind(wrapper_dir=tmp_path, task=task, client=Provider())
+    return SimpleNamespace(owner=owner, state=state, clock=clock, task=task, job=job, probes=probes, requests=requests, root=tmp_path)

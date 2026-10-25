@@ -665,6 +665,8 @@ def test_factory_authorization_records_exact_nonsecret_endpoint():
                 "transport": "openai_compatible",
                 "request_timeout_seconds": 120.0,
                 "transport_max_attempts": 9,
+                "planning_empty_response_max_retries": 1,
+                "planning_recovery_request_timeout_seconds": 120.0,
                 "retryable_http_status_codes": None,
                 "stream_enabled": False,
                 "strict_json_schema_enabled": False,

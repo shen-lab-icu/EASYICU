@@ -639,6 +639,13 @@
     }
 
     function runFailureText(code, detail) {
+      if (code === 'research_pipeline_provider_timeout' && detail
+        && Number.isInteger(detail.transportRetries) && detail.transportRetries >= 0 && detail.transportRetries <= 32) {
+        return tr(
+          `The model service did not return a result in time. EasyICU retried ${detail.transportRetries} times, but this attempt still stopped. You can retry when the service recovers.`,
+          `模型服务未及时返回结果。系统已自动重试 ${detail.transportRetries} 次，这次尝试仍未完成。可在服务恢复后重试。`,
+        );
+      }
       const value = String(code || '').trim();
       if (!value) return '';
       const resumeFailure = developmentResumeFailureText(value);
@@ -803,8 +810,8 @@
           '模型服务自动恢复已达到上限，已保留验证通过的检查点。',
         ),
         research_pipeline_provider_timeout: tr(
-          'The model service did not answer in time. Try again shortly.',
-          '模型服务响应超时，请稍后重试。',
+          'The model service did not return a result in time. See the run record for automatic retries and recovery.',
+          '模型服务未及时返回结果。自动重试和恢复进展可在运行记录中查看。',
         ),
         research_pipeline_time_window_invalid: tr(
           'The study time window is not valid for this data.',

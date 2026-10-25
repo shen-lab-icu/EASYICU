@@ -551,6 +551,9 @@ def _project_job(
             }
             | {
                 **({"label": label} if label else {}),
+                **({"restart_stage": "metadata_planning"}
+                   if event.get("step") == "provider_auto_resume"
+                   and event.get("restart_stage") == "metadata_planning" else {}),
                 **({"reason_code": code} if (code := stable_code(
                     event.get("reason") or event.get("reason_code")
                 )) else {}),
@@ -1055,6 +1058,7 @@ def project_run_outcome(
                 "gate_detail_cause_code",
                 "gate_detail_step_id",
                 "gate_detail_step_title",
+                "gate_transport_retries",
                 "gate_missing_concepts",
                 "next_actions",
                 "execution_complete",
@@ -1728,6 +1732,11 @@ def gate_detail_projection(detail: Any) -> Dict[str, Any]:
         if concept
     ][:16]
     projected: Dict[str, Any] = {"gate_detail_code": code, "gate_missing_concepts": missing}
+    from easyicu.webserver.stop_next_actions import safe_stop_coordinates
+
+    counts = safe_stop_coordinates(detail)
+    if "transport_retries" in counts:
+        projected["gate_transport_retries"] = counts["transport_retries"]
     cause = stable_code(detail.get("cause_code"))
     if cause:
         projected["gate_detail_cause_code"] = cause

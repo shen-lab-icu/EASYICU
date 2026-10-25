@@ -107,6 +107,7 @@
         cause: detail.cause_code || run.gate_detail_cause_code,
         step: detail.step_id || run.gate_detail_step_id,
         stepTitle: detail.step_title || run.gate_detail_step_title,
+        transportRetries: detail.transport_retries ?? run.gate_transport_retries,
       }) || '').trim() : '';
       return text || tr('This run stopped before it finished.', '这次运行在完成前停止。');
     }

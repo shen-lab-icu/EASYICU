@@ -225,6 +225,8 @@ class ProviderJobRecovery:
                         "type": "progress", "step": "provider_auto_resume",
                         "actor": "system", "reason": cause,
                         "current": event["number"], "total": MAX_AUTOMATIC_RESUMES,
+                        **({"restart_stage": "metadata_planning"}
+                           if current.checkpoint.get("restart_stage") == "metadata_planning" else {}),
                     })
                     operation = current.run
         except BaseException as exc:

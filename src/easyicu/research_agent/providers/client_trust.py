@@ -37,7 +37,9 @@ from .capabilities import (
     user_account_profile,
 )
 from .protocol import PublicDemoIdentity, ReplayError
-from .transport_retry import TRANSPORT_RETRY_POLICY_SCHEMA, TransportRetrySchedule
+from .transport_retry import (
+    PLANNING_RECOVERY_TIMEOUT_SECONDS, TRANSPORT_RETRY_POLICY_SCHEMA, TransportRetrySchedule,
+)
 
 
 # Provider configuration error vocabulary, owned here with the exception
@@ -414,6 +416,11 @@ def _configured_transport_policy(
             raise ValueError("transport retry schedule does not match its attempts")
         policy.update(retry_schedule.policy_fields())
         policy["schema_version"] = TRANSPORT_RETRY_POLICY_SCHEMA
+    if transport == "openai_compatible":
+        policy.update(
+            planning_empty_response_max_retries=min(1, total_attempts - 1),
+            planning_recovery_request_timeout_seconds=min(timeout, PLANNING_RECOVERY_TIMEOUT_SECONDS),
+        )
     return policy
 
 

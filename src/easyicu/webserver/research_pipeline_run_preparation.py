@@ -51,6 +51,7 @@ from easyicu.webserver.research_launch_resume import (
     _development_resume_literature_bundle,
     _development_resume_launch_scope,
     _DevelopmentResumeLaunchScope,
+    metadata_planning_restart_allowed,
 )
 from easyicu.webserver.research_launch_runtime import (
     _require_execution_runtime,
@@ -652,27 +653,41 @@ def _prepare_launch_execution(
         )
         if development_resume_binding is not None else None
     )
-    development_resume_acquisition = (
-        _development_resume_acquisition_profile(
-            checkpoint_path=development_resume_binding[0],
-            database=scientific.database,
-            cohort_window=scientific.cohort_window,
-            outcome_concepts=scientific.foundation_profile["outcome_concepts"],
-            static_concepts=scientific.foundation_profile["static_concepts"],
-            required_feature_concepts=scientific.foundation_profile[
-                "required_feature_concepts"
-            ],
-            planning_target_outcome=scientific.metadata_planning_coordinates.get(
-                "target_outcome"
-            ),
-            planning_endpoint=scientific.metadata_planning_coordinates.get("endpoint"),
-            planning_operationalized_columns=(
-                scientific.metadata_operationalized_columns
-            ),
+    restart_metadata_planning = False
+    try:
+        development_resume_acquisition = (
+            _development_resume_acquisition_profile(
+                checkpoint_path=development_resume_binding[0],
+                database=scientific.database,
+                cohort_window=scientific.cohort_window,
+                outcome_concepts=scientific.foundation_profile["outcome_concepts"],
+                static_concepts=scientific.foundation_profile["static_concepts"],
+                required_feature_concepts=scientific.foundation_profile[
+                    "required_feature_concepts"
+                ],
+                planning_target_outcome=scientific.metadata_planning_coordinates.get(
+                    "target_outcome"
+                ),
+                planning_endpoint=scientific.metadata_planning_coordinates.get("endpoint"),
+                planning_operationalized_columns=(
+                    scientific.metadata_operationalized_columns
+                ),
+            )
+            if development_resume_binding is not None and development_resume_scope.prepared_grouping is None
+            else None
         )
-        if development_resume_binding is not None and development_resume_scope.prepared_grouping is None
-        else None
-    )
+    except ResearchPipelineRunError as exc:
+        if (
+            exc.code != "research_pipeline_development_resume_acquisition_missing"
+            or not scientific.metadata_only_planning
+            or budget_mode != "planner_canary"
+            or not metadata_planning_restart_allowed(
+                checkpoint_path=development_resume_binding[0], scope=development_resume_scope,
+            )
+        ):
+            raise
+        development_resume_acquisition = None
+        restart_metadata_planning = True
     development_resume_literature = (
         _development_resume_literature_bundle(
             checkpoint_path=development_resume_binding[0]
@@ -685,6 +700,12 @@ def _prepare_launch_execution(
             "research_pipeline_development_resume_scope_mismatch",
             "The Planner continuation must retain its sealed launch scope.",
         )
+
+    if restart_metadata_planning:
+        # Keep the sealed candidate contract, requirements and literature. The
+        # normal metadata acquisition and Planner run again; no old checkpoint
+        # is replayed against a newly selected catalog.
+        development_resume_binding = None
 
     capability_settings = capability_policy.capability_settings()
     publication_skill_flags = publication_skill_flags_from_settings(capability_settings)
