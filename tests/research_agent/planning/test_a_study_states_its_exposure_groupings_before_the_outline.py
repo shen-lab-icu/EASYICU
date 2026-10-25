@@ -363,8 +363,9 @@ def _between(low: float, high: float) -> list[dict[str, Any]]:
 
     return [
         below(low, f"lactate below {low}", "g1"),
-        below(high, f"lactate {low} to {high}", "g2"),
-        {"id": "g3", "label": f"lactate {high} or above", "rule": "otherwise"},
+        {"id": "g3", "label": f"lactate {high} or above",
+         "rule": {"summary": "max", "op": ">=", "value": high, "unit": "mmol/L"}},
+        {"id": "g2", "label": f"lactate {low} to {high}", "rule": "otherwise"},
     ]
 
 

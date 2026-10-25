@@ -46,6 +46,8 @@ from ..contracts.exposure_group_rules import (
     EXPOSURE_GROUP_CONTRASTS_KEY,
     EXPOSURE_GROUP_LABELS_KEY,
     GroupContrast,
+    ExposureGroupPartitionError,
+    GroupInterval,
 )
 from ..research_context.materialization_window import (
     context_column_windows,
@@ -64,8 +66,10 @@ from .exposure_group_spec import (
     grouping_labels,
     grouping_levels,
     grouping_rules,
+    grouping_partition,
 )
 from .population_compile import read_threshold
+from .population_spec import quote_written_in
 
 EXPOSURE_GROUP_COMPILE_SCHEMA_VERSION = "easyicu.exposure_group_compile/1"
 
@@ -79,6 +83,10 @@ REQUIRES_EXTRACTION_REASONS = (
 )
 #: Why a grouping is not applied.  Stable: a published code never changes.
 NOT_APPLIED_REASONS = (
+    "exposure_group_rules_overlap",
+    "exposure_group_rules_not_exhaustive",
+    "exposure_group_rule_unreachable",
+    "exposure_group_label_rule_mismatch",
     "exposure_group_concept_unavailable",
     "exposure_group_source_column_unreadable",
     "exposure_group_unit_mismatch",
@@ -320,6 +328,7 @@ class CompiledGrouping:
     source_columns: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({})
     )
+    excluded_ranges: tuple[GroupInterval, ...] = ()
 
     @property
     def applied(self) -> bool:
@@ -354,6 +363,8 @@ class CompiledGrouping:
             ],
             "unmeasured": grouping.unmeasured.handling,
             "source_columns": dict(sorted(self.source_columns.items())),
+            **({"excluded_ranges": [item.record() for item in self.excluded_ranges]}
+               if self.excluded_ranges else {}),
         }
 
     def derivation_sha256(self) -> str:
@@ -593,10 +604,19 @@ def _compile(
                 "exposure_group_name_taken",
                 f"The input already holds a variable named {name!r}.",
             )
+        excluded_ranges = grouping_partition(grouping)
+        if excluded_ranges and not quote_written_in(
+            grouping.quote, grouping.source,
+            [context.research_question, *context.cohort.inclusion_criteria, *context.cohort.exclusion_criteria],
+        ):
+            raise _Unread(
+                "exposure_group_rules_not_exhaustive",
+                f"{grouping.id}: the quoted exclusion is not written in the study; no range may be dropped",
+            )
         columns: dict[str, str] = {}
         for rule in grouping_rules(grouping):
             columns[rule.summary] = _read(grouping, rule, context)
-    except _Unread as found:
+    except (_Unread, ExposureGroupPartitionError) as found:
         return CompiledGrouping(
             grouping=grouping,
             disposition=(
@@ -605,7 +625,7 @@ def _compile(
                 else "not_applied"
             ),
             reason=found.reason,
-            detail=found.detail,
+            detail=found.detail if isinstance(found, _Unread) else str(found),
         )
     read = ", ".join(
         f"{summary} from {column!r}" for summary, column in columns.items()
@@ -616,6 +636,7 @@ def _compile(
         reason=None,
         detail=f"{len(grouping_levels(grouping))} levels; reads {read}.",
         source_columns=MappingProxyType(columns),
+        excluded_ranges=excluded_ranges,
     )
 
 

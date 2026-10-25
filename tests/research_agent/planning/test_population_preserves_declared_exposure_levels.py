@@ -149,18 +149,18 @@ def test_only_the_same_summary_window_and_concept_prove_an_empty_level(changes, 
     assert bool(found) is empty
 
 
-def test_first_match_priority_is_part_of_the_level_rule():
+def test_a_between_level_is_the_complement_of_disjoint_outer_rules():
     context, plan = _study()
     context = deepcopy(context)
     parameters = context.cohort.provenance[EXPOSURE_GROUP_LABELS_KEY][0]["parameters"]
     parameters["groups"] = [
         {"id": "g1", "rule": {"summary": "value", "op": "<", "value": 23}},
-        {"id": "g2", "rule": {"summary": "value", "op": "<", "value": 47}},
-        {"id": "g3", "rule": "otherwise"},
+        {"id": "g3", "rule": {"summary": "value", "op": ">=", "value": 47}},
+        {"id": "g2", "rule": "otherwise"},
     ]
-    # The first rule alone allows g2 below 23; priority removes those values.
+    # The middle band is [23, 47), so a population below 23 loses both higher bands.
     found = population_emptied_exposure_levels(context, _restrict(plan, op="<", value=23))
-    assert [item.level for item in found] == ["g2", "g3"]
+    assert {item.level for item in found} == {"g2", "g3"}
     found = population_emptied_exposure_levels(context, _restrict(plan, op=">=", value=23))
     assert [item.level for item in found] == ["g1"]  # Two remaining levels do not excuse losing one.
 

@@ -34,6 +34,7 @@ from ..planning.exposure_group_spec import (
     GroupOp,
     GroupSummary,
     read_stated_exposure_groupings,
+    grouping_partition,
     unquoted_groupings,
 )
 from ..planning.population_spec import STUDY_WORDING_SOURCES
@@ -71,20 +72,27 @@ be named, and the host reports the extraction it needs.
 is summarized over; null for a value recorded once per stay.
 - groups: two to six, ids g1 to g6, each with a short label and a rule \
 {summary, op, value, unit}, or the rule "otherwise" for the last group.  \
-Groups are matched in the order listed: a stay takes the first group whose \
-rule it meets, and "otherwise" takes every measured stay no earlier group \
-took.  summary is min, max, mean or first over the window, or value when \
+Explicit rules must be disjoint: each measured value takes exactly one \
+group. "otherwise" takes the complement of the explicit rules; for a middle \
+band, state the two outer bounds and use otherwise for the between range. \
+Never encode bands as overlapping cumulative thresholds. summary is min, max, mean or first over the window, or value when \
 there is no window.  unit is the unit the study writes the threshold in, \
 or null when it writes none.
 - scale: ordinal only when every threshold rule reads the same summary \
 and the groups lie along that summary's scale, numbered g1 lowest. A \
 grouping that mixes summaries (for example a minimum and a maximum) is \
-nominal, even when its labels sound ordered. Matching priority is not \
-ordinal rank. Preserve the study's measurement summaries and thresholds; \
+nominal, even when its labels sound ordered. Preserve the study's measurement summaries and thresholds; \
 never change them just to make an ordinal scale pass validation. For an \
 ordinal grouping, assign ids by value range, including an otherwise group \
-whose range may lie between two earlier rules; list order is still the \
-priority in which rules are matched.
+whose range may lie between two explicit rules.
+- Boundary wording: "X 以下 / below X" paired with "X 及以上 / X or above" \
+means strict < X for the lower group and >= X for the upper group. The label \
+and rule must agree. Never put a shared boundary in both groups.
+- Cover every measured value unless the study explicitly excludes a range. \
+Keep that exclusion verbatim in quote, including its inclusive/exclusive \
+bounds (for example "exclude [a, b)" or "排除 [a, b)"); do not invent an \
+exclusion or use unmeasured handling to hide a gap. If these rules cannot \
+express the stated bands without overlap, do not silently approximate them.
 - unmeasured: {"handling": "exclude"} when stays without a measurement leave \
 the study; {"handling": "own_group", "label": ...} when they form a group of \
 their own, which only a nominal grouping can have.
@@ -277,6 +285,8 @@ def parse_exposure_groupings(
             "exactly as the study writes them, in their own language; never "
             "paraphrase or translate them"
         )
+    for item in groupings.groupings:
+        grouping_partition(item)
     return groupings
 
 

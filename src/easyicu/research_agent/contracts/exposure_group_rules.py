@@ -13,9 +13,9 @@ authority vouches for are computed by the same code.  It reads the parameters
 as a plain mapping and imports no planning owner, so no host module joins the
 execution kernel through it; it reads no file.
 
-The groups are matched in their stated order: a measured stay takes the first
-group whose threshold its summary meets, and ``otherwise`` takes every measured
-stay no earlier group took.  A stay is measured when every summary the rules
+The explicit rules must not overlap: a measured stay takes its unique matching
+group, and ``otherwise`` takes every measured stay no explicit rule took.
+Stated excluded ranges take no level. A stay is measured when every summary the rules
 read holds a value.  An unmeasured stay is never ``otherwise``: it takes the
 unmeasured level when unmeasured stays form their own group, and no level when
 they leave the study.
@@ -58,7 +58,7 @@ EXPOSURE_GROUP_TRANSFORMS = frozenset(
 )
 #: The level of the stays with no measurement, when they form their own group.
 UNMEASURED_GROUP_ID = "gU"
-#: Every key of a grouping's derivation parameters.
+#: Required keys of a grouping's derivation parameters; excluded_ranges is optional.
 GROUPING_PARAMETER_KEYS = frozenset(
     {"concept", "window", "scale", "groups", "unmeasured", "source_columns"}
 )
@@ -115,6 +115,108 @@ _MAX_LEVELS = 7
 
 class ExposureGroupRuleError(ValueError):
     """The parameters, or the columns they read, do not decide each stay's level."""
+
+
+class ExposureGroupPartitionError(ExposureGroupRuleError):
+    """A partition refusal with a stable code and the exact conflicting groups."""
+
+    def __init__(self, reason: str, detail: str, groups: tuple[str, ...] = ()):
+        self.reason = reason
+        self.groups = groups
+        super().__init__(f"{reason}: {detail}")
+
+
+@dataclass(frozen=True)
+class GroupInterval:
+    """Host interval over one summary/unit; the grouping owns its window."""
+
+    summary: str
+    unit: Optional[str]
+    lower: float = -math.inf
+    upper: float = math.inf
+    lower_inclusive: bool = False
+    upper_inclusive: bool = False
+
+    def record(self) -> dict[str, Any]:
+        return {
+            "summary": self.summary, "unit": self.unit,
+            "lower": self.lower if math.isfinite(self.lower) else None,
+            "upper": self.upper if math.isfinite(self.upper) else None,
+            "lower_inclusive": self.lower_inclusive,
+            "upper_inclusive": self.upper_inclusive,
+        }
+
+    def text(self) -> str:
+        return (
+            f"{'[' if self.lower_inclusive else '('}{self.lower:g}, "
+            f"{self.upper:g}{']' if self.upper_inclusive else ')'}"
+        )
+
+
+def threshold_interval(rule: Mapping[str, Any]) -> GroupInterval:
+    """Read a half-line without inferring a bound from another group's priority."""
+
+    lower = rule["op"] in {">", ">="}
+    return GroupInterval(
+        summary=rule["summary"], unit=rule.get("unit"),
+        lower=float(rule["value"]) if lower else -math.inf,
+        upper=math.inf if lower else float(rule["value"]),
+        lower_inclusive=rule["op"] == ">=",
+        upper_inclusive=rule["op"] == "<=",
+    )
+
+
+def partition_intervals(
+    groups: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, GroupInterval], tuple[GroupInterval, ...]]:
+    """Check pairwise bounds, then find the complement, including singleton gaps.
+
+    ``otherwise`` represents the complement, including a between interval. Rules
+    on different summaries have no common one-dimensional domain; row evaluation
+    still refuses simultaneous matches. No rows or planning owners are read here.
+    """
+
+    intervals = {group["id"]: threshold_interval(group["rule"])
+                 for group in groups if group["rule"] != "otherwise"}
+    entries = list(intervals.items())
+    for index, (left_id, left) in enumerate(entries):
+        for right_id, right in entries[index + 1:]:
+            if (left.summary, left.unit) != (right.summary, right.unit):
+                continue
+            low = max((left.lower, not left.lower_inclusive),
+                      (right.lower, not right.lower_inclusive))
+            high = min((left.upper, left.upper_inclusive),
+                       (right.upper, right.upper_inclusive))
+            if low[0] < high[0] or (low[0] == high[0] and not low[1] and high[1]):
+                raise ExposureGroupPartitionError(
+                    "exposure_group_rules_overlap",
+                    f"{left_id} {left.text()} and {right_id} {right.text()} overlap "
+                    f"on {left.summary} in {left.unit or 'the recorded unit'}",
+                    (left_id, right_id),
+                )
+    if len({(item.summary, item.unit) for item in intervals.values()}) != 1:
+        return intervals, ()
+    ordered = sorted(intervals.values(), key=lambda item: item.lower)
+    first = ordered[0]
+    gaps = []
+    lower, inclusive = -math.inf, False
+    for item in ordered:
+        if lower < item.lower or (lower == item.lower and inclusive and not item.lower_inclusive):
+            gaps.append(GroupInterval(first.summary, first.unit, lower, item.lower,
+                                      inclusive, not item.lower_inclusive))
+        lower, inclusive = item.upper, not item.upper_inclusive
+    if lower < math.inf:
+        gaps.append(GroupInterval(first.summary, first.unit, lower, math.inf, inclusive, False))
+    otherwise = next((group["id"] for group in groups if group["rule"] == "otherwise"), None)
+    if otherwise is not None:
+        if not gaps:
+            raise ExposureGroupPartitionError(
+                "exposure_group_rule_unreachable", f"{otherwise} otherwise takes no value", (otherwise,),
+            )
+        if len(gaps) == 1:
+            intervals[otherwise] = gaps[0]
+        return intervals, ()
+    return intervals, tuple(gaps)
 
 
 @dataclass(frozen=True)
@@ -200,6 +302,8 @@ class GroupingRules:
     unmeasured: str
     #: The column each summary the rules read is taken from.
     source_columns: Mapping[str, str]
+    #: Host-only provenance for measured values the study explicitly excludes.
+    excluded_ranges: tuple[GroupInterval, ...] = ()
 
     @property
     def levels(self) -> tuple[str, ...]:
@@ -239,7 +343,7 @@ def read_grouping_rules(parameters: Mapping[str, Any]) -> GroupingRules:
 
     if not isinstance(parameters, Mapping):
         raise ExposureGroupRuleError("a grouping's parameters are an object")
-    if set(parameters) != GROUPING_PARAMETER_KEYS:
+    if set(parameters) not in (GROUPING_PARAMETER_KEYS, GROUPING_PARAMETER_KEYS | {"excluded_ranges"}):
         raise ExposureGroupRuleError(
             "a grouping's parameters hold exactly "
             + ", ".join(sorted(GROUPING_PARAMETER_KEYS))
@@ -261,6 +365,12 @@ def read_grouping_rules(parameters: Mapping[str, Any]) -> GroupingRules:
     _window(parameters["window"])
     columns = _source_columns(parameters["source_columns"])
     groups = _groups(parameters["groups"], columns)
+    excluded = parameters.get("excluded_ranges", [])
+    if not isinstance(excluded, list):
+        raise ExposureGroupRuleError("excluded_ranges must be a list")
+    gaps = partition_intervals(parameters["groups"])[1] if excluded else ()
+    if excluded != [gap.record() for gap in gaps]:
+        raise ExposureGroupRuleError("excluded_ranges must record exactly the grouping's gaps")
     read = {rule.summary for _group_id, rule in groups if rule is not None}
     if read != set(columns):
         raise ExposureGroupRuleError(
@@ -272,6 +382,7 @@ def read_grouping_rules(parameters: Mapping[str, Any]) -> GroupingRules:
         groups=groups,
         unmeasured=unmeasured,
         source_columns=MappingProxyType(dict(sorted(columns.items()))),
+        excluded_ranges=gaps if excluded else (),
     )
 
 
@@ -786,6 +897,13 @@ def _planned_parameters_agree(
 def evaluate_grouping(rules: GroupingRules, table: pa.Table) -> pa.Array:
     """Each row's level code; null for an unmeasured stay that leaves the study."""
 
+    # Historical receipts remain readable for display. Executing any receipt
+    # requires a partition, even when no current row lies on its shared bound.
+    partition_intervals([
+        {"id": group_id, "rule": "otherwise" if rule is None else {
+            "summary": rule.summary, "op": rule.op, "value": rule.value,
+        }} for group_id, rule in rules.groups
+    ])
     values = {
         summary: _numbers(table, column)
         for summary, column in rules.source_columns.items()
@@ -801,17 +919,31 @@ def evaluate_grouping(rules: GroupingRules, table: pa.Table) -> pa.Array:
             taken = unassigned
         else:
             with np.errstate(invalid="ignore"):
-                taken = unassigned & _COMPARE[rule.op](values[rule.summary], rule.value)
+                taken = measured & _COMPARE[rule.op](values[rule.summary], rule.value)
+            if (taken & ~unassigned).any():
+                earlier = tuple(key for key, _ in rules.groups
+                                if key != group_id and (levels[taken] == codes[key]).any())
+                raise ExposureGroupPartitionError(
+                    "exposure_group_rules_overlap", f"{', '.join(earlier)} and {group_id} match the same rows",
+                    (*earlier, group_id),
+                )
         levels[taken] = codes[group_id]
         unassigned &= ~taken
-    if unassigned.any():
+    excluded = np.zeros(table.num_rows, dtype=bool)
+    for interval in rules.excluded_ranges:
+        array = values[interval.summary]
+        excluded |= measured & (
+            (array >= interval.lower if interval.lower_inclusive else array > interval.lower)
+            & (array <= interval.upper if interval.upper_inclusive else array < interval.upper)
+        )
+    if (unassigned & ~excluded).any():
         raise ExposureGroupRuleError(
             f"{int(unassigned.sum())} measured stays meet no group of the grouping"
         )
     if rules.unmeasured == "own_group":
         levels[~measured] = codes[UNMEASURED_GROUP_ID]
-        return pa.array(levels, type=pa.int64())
-    return pa.array(levels, type=pa.int64(), mask=~measured)
+        return pa.array(levels, type=pa.int64(), mask=excluded)
+    return pa.array(levels, type=pa.int64(), mask=~measured | excluded)
 
 
 def _numbers(table: pa.Table, column: str) -> np.ndarray:
@@ -844,7 +976,9 @@ __all__ = [
     "PLANNED_GROUP_COLUMN_KEYS",
     "UNMEASURED_GROUP_ID",
     "ExposureGroupRuleError",
+    "ExposureGroupPartitionError",
     "GroupContrast",
+    "GroupInterval",
     "GroupThreshold",
     "GroupingRules",
     "PlannedGroupColumn",
@@ -858,6 +992,8 @@ __all__ = [
     "grouping_measure_description",
     "grouping_rule_values",
     "planned_group_column",
+    "partition_intervals",
+    "threshold_interval",
     "read_group_contrast",
     "read_grouping_rules",
     "read_level_labels",

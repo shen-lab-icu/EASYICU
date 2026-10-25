@@ -187,7 +187,7 @@ def test_each_grouping_adds_its_codes_beside_every_source_column(
     assert again is not None and again.reference == staged.reference
 
 
-def test_a_stay_takes_the_first_group_whose_rule_it_meets() -> None:
+def test_a_stay_matching_two_summaries_stops_instead_of_taking_the_first() -> None:
     table = pa.table(
         {
             "lact_min": [0.5, 0.5, 2.0, None, 1.5],
@@ -200,17 +200,20 @@ def test_a_stay_takes_the_first_group_whose_rule_it_meets() -> None:
         {**_nominal()["parameters"], "unmeasured": "exclude"}
     )
 
-    # Low wins over high; otherwise takes the measured rest; an unmeasured
-    # stay is its own level, or none when it leaves the study.
-    assert evaluate_grouping(own, table).to_pylist() == [1, 1, 2, 4, 3]
-    assert evaluate_grouping(excluded, table).to_pylist() == [1, 1, 2, None, 3]
+    # A minimum below the low cut and a maximum above the high cut cannot be
+    # silently classified by rule order, regardless of missing-value handling.
+    for rules in (own, excluded):
+        with pytest.raises(ExposureGroupRuleError, match="exposure_group_rules_overlap"):
+            evaluate_grouping(rules, table)
+    assert evaluate_grouping(own, table.slice(1)).to_pylist() == [1, 2, 4, 3]
+    assert evaluate_grouping(excluded, table.slice(1)).to_pylist() == [1, 2, None, 3]
     assert dict(own.codes) == {"g1": 1, "g2": 2, "g3": 3, "gU": 4}
 
 
 def test_a_nominal_grouping_codes_its_groups_in_the_order_stated() -> None:
     table = pa.table(
         {
-            "lact_min": [0.5, 0.5, 2.0, None, 1.5],
+            "lact_min": [2.0, 0.5, 2.0, None, 1.5],
             "lact_max": [3.0, 0.9, 3.0, None, 2.0],
         }
     )
