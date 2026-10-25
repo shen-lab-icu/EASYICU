@@ -13,6 +13,7 @@ one confirmation against typed host facts before it stops as unverifiable.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, NamedTuple, Sequence
 
@@ -97,6 +98,15 @@ def capability_gap_stop(
     gap = outline.declared_capability_gap()
     if gap is None:
         raise ValueError("a capability-gap stop requires a declared gap")
+    if check.verification == "unverified":
+        # A saved outline bypasses response parsing. It must still never turn
+        # a contradicted claim into a terminal capability-gap receipt.
+        raise ProgressivePlanCompileError(
+            "progressive_capability_gap_claim_unverified",
+            f"the declared capability gap does not hold: {check.fact}; "
+            "draft the steps the offered families can express, or declare a gap the study shows",
+            path="capability_gap", cause_code=gap.requirement,
+        )
     diagnostic = CapabilityGapDiagnostic(
         requirement=gap.requirement, concept=gap.concept,
         verification=check.verification, fact=check.fact, rationale=outline.rationale,
@@ -149,10 +159,87 @@ def capability_gap_confirmation_facts(
         "time_windows": [window.model_dump(mode="json", exclude={"rationale"}) for window in context.time_windows],
         "temporal_constraints": [item.model_dump(mode="json", exclude={"raw_text", "executable_repr"})
                                  for item in context.temporal_constraints],
+        "fixed_window_association": fixed_window_association_facts(context),
         **{field: [item.model_dump(mode="json") for item in context_stated_variables(context, field)]
            for field in STATED_VARIABLE_FIELDS},
     }
     return "Host facts for capability-gap confirmation:\n" + json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
+
+
+def fixed_window_association_facts(context: ResearchContext) -> dict[str, Any] | None:
+    """A window summary can propose a landmark without a trajectory.
+
+    This proves representation sufficiency, not a runnable risk set. Read the
+    materialization/grouping owners, including their metadata-only projection;
+    a suggestive column suffix or a time window in prose proves nothing. Keep
+    death timing and patient grouping separate from measurement representation.
+    Neither a missing death time nor an unbound patient identifier establishes
+    that the question requires repeated measurements.
+    """
+
+    from ..cohort.materializer import summary_column_name
+    from ..concept_availability import variable_source_unavailability
+    from ..contracts.concept_values import names_without_values
+    from ..contracts.patient_grouping_need import PATIENT_GROUPING_STATUSES, PATIENT_GROUPING_STATUS_KEY
+    from ..research_context.event_time_semantics import recorded_event_time_semantics
+    from ..research_context.materialization_window import column_materialized_window
+    from .analysis_types import infer_analysis_type, longitudinal_trajectory_requested
+    from .exposure_group_compile import grouping_sources, planned_on_metadata
+
+    if longitudinal_trajectory_requested(context) or infer_analysis_type(context).key != "association_study":
+        return None
+    exposure = context.variable(context.primary_exposure) if context.primary_exposure else None
+    outcome = context.variable(context.target_outcome) if context.target_outcome else None
+    if exposure is None or outcome is None or len(context.cohort.id_columns) != 1:
+        return None
+    if any(variable_source_unavailability(item, context.cohort.database) for item in (exposure, outcome)):
+        return None
+    unavailable = names_without_values(context)
+    if any({item.name, item.source_concept, *item.derived_from_concepts} & unavailable for item in (exposure, outcome)):
+        return None
+    variables = {item.name: item for item in context.variables}
+    levels = closed_planning_levels_for(name=outcome.name, variables=variables)
+    endpoint = context.endpoint
+    if len(levels) != 2 and not (endpoint and endpoint.name == outcome.name and endpoint.kind == "binary"):
+        return None
+    window = column_materialized_window(context, exposure.name)
+    if (
+        window is None or window.anchor != "icu_admission"
+        or window.start_hours is None or window.end_hours is None
+        or not all(math.isfinite(hour) for hour in (window.start_hours, window.end_hours))
+        or not 0 <= window.start_hours < window.end_hours
+    ):
+        return None
+    concept = exposure.source_concept or exposure.name
+    summary = next((
+        summary for source in grouping_sources(context)
+        if source.concept == concept and source.window == (window.start_hours, window.end_hours)
+        for summary in source.summaries
+        if exposure.unit_normalization == f"window_numeric_{summary}"
+        or (planned_on_metadata(context) and exposure.name == summary_column_name(concept, summary))
+    ), None)
+    if summary is None:
+        return None
+    semantics = recorded_event_time_semantics(context) or {}
+    grouping = (context.cohort.provenance or {}).get(PATIENT_GROUPING_STATUS_KEY)
+    return {
+        "analysis_family": "association_study", "exposure": exposure.name, "summary": summary,
+        "window_hours": [window.start_hours, window.end_hours],
+        "proposed_time_zero_hours": window.end_hours,
+        "requires_longitudinal_representation": False,
+        "death_time_semantics": semantics.get("death_time"),
+        "patient_grouping_status": grouping if grouping in PATIENT_GROUPING_STATUSES else None,
+        "planning_rule": (
+            f"association_study can propose a fixed-landmark association for {exposure.name}, "
+            f"a {summary} summary over {window.start_hours:g}-{window.end_hours:g} h after ICU admission; "
+            "it does not require repeated measurements. "
+            f"Explicitly propose time zero at {window.end_hours:g} h, with deaths before the landmark excluded "
+            "and rows still under observation. Preserve the outcome, subgroup and adjustment requirements. "
+            "Verify landmark eligibility separately before execution; do not invent death times or "
+            "equate ICU length of stay with survival. If eligibility cannot be established, name that "
+            "design_element_unsupported gap. Never silently substitute an admission-time estimand."
+        ),
+    }
 
 
 def threshold_grouping_expressible(context: ResearchContext, concept: str) -> bool:
@@ -267,6 +354,9 @@ def check_capability_gap(
             return CapabilityGapCheck(
                 "unverified", "this study has a longitudinal representation"
             )
+        fixed_window = fixed_window_association_facts(context)
+        if fixed_window is not None:
+            return CapabilityGapCheck("unverified", fixed_window["planning_rule"])
         return CapabilityGapCheck(
             "verified", "this study has no longitudinal representation"
         )
@@ -283,5 +373,6 @@ __all__ = [
     "capability_gap_confirmation_facts",
     "capability_gap_stop",
     "check_capability_gap",
+    "fixed_window_association_facts",
     "threshold_grouping_expressible",
 ]

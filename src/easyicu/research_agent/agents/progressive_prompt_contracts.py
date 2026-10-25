@@ -20,6 +20,7 @@ from ..planning.progressive_contract import (
 )
 from ..contracts.trajectory_design import TRAJECTORY_OWNER_PLANNER_RULE
 from ..planning.outline_action_rules import replay_producer_rule_text
+from ..planning.capability_gap import fixed_window_association_facts
 from ..planning.literature_design_authority import LITERATURE_DESIGN_DIMENSIONS
 from .population_spec_transport import population_spec_contract, population_spec_shape
 
@@ -35,11 +36,13 @@ def outline_study_anchors(context: ResearchContext) -> str:
     """
 
     study_preferences = outbound_safe_context_payload(context).get("study_preferences")
+    fixed_window = fixed_window_association_facts(context)
     return json.dumps(
         {
             "research_question": context.research_question,
             "primary_exposure": context.primary_exposure,
             "target_outcome": context.target_outcome,
+            **({"fixed_window_association": fixed_window} if fixed_window is not None else {}),
             "cohort": context.cohort.model_dump(
                 mode="json",
                 include={
