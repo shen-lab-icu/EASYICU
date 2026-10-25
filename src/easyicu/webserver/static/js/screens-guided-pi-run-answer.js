@@ -444,6 +444,11 @@
         total: total && total.display_value != null ? String(total.display_value) : '',
         overallRisk: overallRisk && overallRisk.display_value != null ? String(overallRisk.display_value) : '',
         estimate: primaryEstimate(summary, claims, labels),
+        stratified: summary.stratified ? { ...summary.stratified,
+          label: readerLabel(labels, summary.stratified.variable) || conceptName(summary.stratified.variable) || summary.stratified.variable,
+          strata: summary.stratified.strata.map(row => ({ ...row,
+            level: levelName(summary.stratified.variable, labels[`${summary.stratified.variable}=${JSON.stringify(row.level)}`] || row.level) })),
+        } : null,
         primaryModelAmbiguous: !PREDICTION_TYPES.has(String(plan.analysis_type || ''))
           && summary.primaryModelAmbiguous === true,
         estimateExposure: modelledLabel,
@@ -619,6 +624,18 @@
           `Primary estimate${contrast}: ${view.estimate.measure} ${view.estimate.value}${interval}.`,
           `主要估计${contrast}：${view.estimate.measure} ${view.estimate.value}${interval}。`,
         ));
+        if (view.stratified) {
+          const result = view.stratified;
+          const strata = result.strata.map(row => tr(
+            `${row.level} ${result.measure} ${row.value} (95% CI ${row.low}–${row.high})`,
+            `${row.level} ${result.measure} ${row.value}（95% CI ${row.low}–${row.high}）`,
+          ));
+          const p = result.p.startsWith('<') ? result.p : `= ${result.p}`;
+          sentences.push(tr(
+            `Stratified by ${result.label} (${result.contrast}): ${strata.join('; ')}; interaction p ${p}.`,
+            `按 ${result.label} 分层（${result.contrast}）：${strata.join('；')}；交互作用 p ${p}。`,
+          ));
+        }
         if (view.firstResult && Number.isSafeInteger(view.estimate.n) && view.estimate.n >= 0) {
           sentences.push(tr(`Model sample size: n = ${count(view.estimate.n)}.`, `模型样本量：n = ${count(view.estimate.n)}。`));
         }
@@ -722,8 +739,9 @@
         '文献检索属于完整论文流程；本次首轮结果未评估新颖性或文献对照。',
       ))}</p>` : '';
       const descriptiveSource = view.continuousGroups[0] || view.categoricalGroups[0];
-      const sourceButton = sourceButtons(latestRun, descriptiveSource
-        ? [descriptiveSource.source] : [view.estimate && view.estimate.source]);
+      const sources = descriptiveSource ? [descriptiveSource.source] : [view.estimate && view.estimate.source];
+      if (view.estimate && view.stratified) sources.push(view.stratified.source);
+      const sourceButton = sourceButtons(latestRun, sources);
       return `<div class="gpi-run-answer" data-gpi-run-answer="${esc(latestRun.run_id)}">
         <div class="gpi-run-answer-text">${sentences.map(text => `<p>${esc(text)}</p>`).join('')}${sourceButton ? `<p>${sourceButton}</p>` : ''}${literatureNote}${data ? `<p class="gpi-run-answer-data"><span>${esc(tr('Data', '数据'))}</span>${esc(data)}</p>` : ''}<p class="gpi-run-answer-caveat"><span>${esc(tr('Keep in mind', '需要注意'))}</span>${esc(caveat(view))}</p></div>
         ${figureButton(latestRun, view)}

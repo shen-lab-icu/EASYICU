@@ -111,6 +111,41 @@
     return measure === 'RD' ? number.toFixed(3) : number.toFixed(2);
   }
 
+  // Only the host's complete, current secondary-product binding supplies
+  // stratum estimates. A raw preview, filename or primary-model row cannot.
+  function stratifiedResult(payload, plan) {
+    const tables = (Array.isArray(payload?.tables) ? payload.tables : [])
+      .filter(table => table && table.stratified_summary && !table.is_source_copy
+        && table.source_status === 'current' && tableSource(table));
+    if (tables.length !== 1) return null;
+    const table = tables[0], block = table.stratified_summary;
+    const owners = (plan?.steps || []).filter(step => step.step_id === table.produced_by_step);
+    if (owners.length !== 1) return null;
+    const step = owners[0];
+    if (step.planned_analysis_role !== 'secondary'
+      || !['association.effect_modification', 'time_to_event.subgroup_hr'].includes(step.scientific_action_id)
+      || !(step.expected_outputs || []).includes(block.product)
+      || !(step.inputs || []).includes(block.subgroup_column)
+      || block.schema_version !== 'easyicu.web-stratified-summary/1'
+      || !block.contrast || !Array.isArray(block.strata) || block.strata.length < 2 || block.strata.length > 6) return null;
+    const measure = MEASURES[block.effect_scale], p = finite(block.interaction_p_value);
+    if (!measure || p == null || p < 0 || p > 1) return null;
+    const seen = new Set();
+    const strata = block.strata.map(row => {
+      if (!row || !row.level || seen.has(row.level)) return null;
+      seen.add(row.level);
+      const values = [row.estimate, row.ci_low, row.ci_high].map(finite);
+      if (values.some(value => value == null) || values[1] > values[0] || values[0] > values[2]
+        || (measure !== 'RD' && values[1] <= 0)) return null;
+      return { level: String(row.level), value: ratioDisplay(values[0], measure),
+        low: ratioDisplay(values[1], measure), high: ratioDisplay(values[2], measure) };
+    });
+    const displayP = window.EU_GUIDED_CONTRACTS?.fmtP;
+    return strata.every(Boolean) ? { variable: block.subgroup_column, contrast: block.contrast,
+      measure, strata, p: displayP ? displayP(p) : p < 0.001 ? '<0.001'
+        : p.toFixed(3).replace(/0+$/, '').replace(/\.$/, ''), source: tableSource(table) } : null;
+  }
+
   function primaryRecords(records, plan, requireProducer = false) {
     const steps = new Map((Array.isArray(plan && plan.steps) ? plan.steps : [])
       .filter(step => step && step.step_id).map(step => [step.step_id, step.planned_analysis_role]));
@@ -383,6 +418,7 @@
         .filter((source, index, all) => all.findIndex(other => other.evidence_id === source.evidence_id
           && other.sha256 === source.sha256) === index),
       estimates: estimates(models, plan, levels),
+      stratified: stratifiedResult(payload, plan),
       primaryModelAmbiguous: models.length > 1
         || models.some(items => items.filter(item => isTrue(item.record.is_primary_contrast)).length > 1),
       measurementMissingness: records.filter(item => item.table.evidence_id

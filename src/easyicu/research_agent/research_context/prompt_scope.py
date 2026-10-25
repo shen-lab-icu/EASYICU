@@ -19,6 +19,7 @@ from ..contracts.step_families import (
     clustering_contract_applies,
     cohort_change_contract_applies,
     effect_output_authorized,
+    secondary_effect_table_products,
     prediction_contract_applies,
 )
 from ..schema import (
@@ -662,6 +663,21 @@ def coder_guide_for_step(
         parts.append(_TABLE_ONE_SDK_GUIDANCE)
     if compact_adjusted_clinical:
         parts.append(_COMPACT_ADJUSTED_CLINICAL_GUIDANCE)
+    if secondary_effect_table_products(step):
+        parts.append(
+            "SECONDARY STRATUM RESULTS: Register the exact declared table in "
+            "step_summary.output_files. Report one row per prespecified stratum "
+            "with subgroup_column (a planned input), subgroup_value, contrast "
+            "(the exposure comparison, including units), effect_scale, estimate, "
+            "ci_low, ci_high (95% CI), fit_status, and interaction_p_value. "
+            "effect_scale is odds_ratio, hazard_ratio, risk_ratio, relative_risk "
+            "or risk_difference. "
+            "Use the same contrast and effect scale across strata. Repeat the "
+            "same fitted model's omnibus interaction p-value on each row; for "
+            "three or more strata do not substitute a single interaction-term "
+            "p-value. Preserve failed fits as unavailable; never replace missing "
+            "estimates with descriptive rates or invented numbers."
+        )
     return "\n\n".join(parts).strip()
 
 

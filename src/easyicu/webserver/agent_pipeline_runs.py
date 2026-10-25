@@ -31,6 +31,7 @@ from pydantic import ValidationError
 
 from easyicu.webserver import planning_coordinate_readings
 from easyicu.webserver.descriptive_result_projection import bound_descriptive_variables, descriptive_summary_projection
+from easyicu.webserver.stratified_result_projection import requested_secondary_step_ids, requested_secondary_tables, stratified_summary
 from easyicu.webserver.execution_failure import EXECUTION_FAILURE_CODES, call_with_failure_location, execution_failure_diagnostic, track_failure_location
 
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
@@ -3589,6 +3590,8 @@ def _table_projection(
     run_dir: Path, *, plan: Optional[Mapping[str, Any]] = None
 ) -> Dict[str, Any]:
     evidence = _read_json(run_dir / "evidence" / "evidence_index.json", [])
+    secondary_tables = requested_secondary_tables(run_dir, plan or {}, evidence)
+    secondary_steps = requested_secondary_step_ids(plan or {})
     tables: List[Dict[str, Any]] = []
     skipped_sensitive = 0
     # In a prediction study the model's own result tables follow the
@@ -3608,6 +3611,8 @@ def _table_projection(
         haystack = " ".join((name, description, step))
         if record.get("is_source_copy"):
             rank = 9
+        elif str(record.get("evidence_id") or "") in secondary_tables:
+            rank = -1  # The requested comparison must survive the table cap.
         elif "population_flow" in haystack or "cohort_flow" in haystack:
             rank = 0
         elif str(record.get("produced_by_step") or "").strip() in prediction_steps | primary_steps:
@@ -3665,6 +3670,9 @@ def _table_projection(
     candidates.sort(key=review_priority)
 
     for record in candidates:
+        if (str(record.get("produced_by_step") or "") in secondary_steps
+                and str(record.get("evidence_id") or "") not in secondary_tables):
+            continue
         path = _safe_relative(run_dir, record.get("relative_path"))
         if path is None or path.suffix.lower() != ".csv":
             continue
@@ -3718,6 +3726,12 @@ def _table_projection(
             ) else None
         except csv.Error:
             summary = None
+        try:
+            stratified = stratified_summary(raw, secondary_tables[evidence_id]) if (
+                verified and not record["is_source_copy"] and evidence_id in secondary_tables
+            ) else None
+        except csv.Error:
+            stratified = None
         if summary is not None:
             summary["variable_display"] = bound_descriptive_variables(
                 run_dir, str(record.get("produced_by_step") or ""), summary,
@@ -3732,6 +3746,7 @@ def _table_projection(
                 "source_status": "current" if verified else "unavailable",
                 **({"sha256": digest} if verified else {}),
                 **({"descriptive_summary": summary} if summary is not None else {}),
+                **({"stratified_summary": stratified} if stratified is not None else {}),
                 "headers": [_clean_text(value, 160) for value in headers],
                 "rows": [[_clean_text(value, 500) for value in row] for row in rows[:_MAX_TABLE_ROWS]],
                 "preview_truncated": len(rows) > _MAX_TABLE_ROWS,
