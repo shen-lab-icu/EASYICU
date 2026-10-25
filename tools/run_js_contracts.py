@@ -81,6 +81,7 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-extraction-embedded.js",
     ],
     "extraction_icd_source_binding.test.js": ["screens-icd.js"],
+    "guided_pi_audit_report_labels.test.js": [],
     "evidence_preview_security.test.js": [
         "screens-guided-pi-modules.js",
         "screens-guided-pi-evidence-preview.js",

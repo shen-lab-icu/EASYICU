@@ -11,7 +11,7 @@
     if (workbench && typeof workbench.render === 'function') {
       return workbench.render(payload || {}, String(view || 'cohort_summary'), {});
     }
-    return '<div class="gpi-preview-state error">Native Data Workbench renderer unavailable.</div>';
+    return `<div class="gpi-preview-state error">${window.EU_LANG === 'zh' ? '暂时无法显示数据预览，请重试。' : 'The data preview could not be displayed. Please retry.'}</div>`;
   }
 
   function mount(host, payload, view) {

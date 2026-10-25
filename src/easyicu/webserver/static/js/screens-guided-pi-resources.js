@@ -35,8 +35,8 @@
         return demo.artifactLabel(resource.artifact || resource.label || '');
       }
       const titled = window.AGENT_RENDER && typeof window.AGENT_RENDER.artifactTitle === 'function';
-      if (resource.kind === 'research_artifact' && titled) {
-        return window.AGENT_RENDER.artifactTitle(resource.artifact || resource.label || '');
+      if (['research_artifact', 'research_report'].includes(resource.kind) && titled) {
+        return window.AGENT_RENDER.artifactTitle(resource.artifact || resource.label || '', { status: resource.state });
       }
       // Research documents arrive with the host's English label; a Chinese
       // reader gets the reader title when one exists for that file.
@@ -149,7 +149,7 @@
       const cards = resources => `<div class="gpi-file-cards">${resources.map(resource => {
         const title = label(resource).replace(/^(?:打开|查看|预览)\s*|^(?:Open|View|Preview)\s+/i, '');
         const filename = String(resource.artifact || resource.file || '').split(/[\\/]/).pop();
-        return `<div class="gpi-file-card"><div>${button(resource, title)}<span>${esc(filename || title)}</span></div></div>`;
+        return `<div class="gpi-file-card"><div>${button(resource, title)}<details><summary>${esc(zh ? '文件详情' : 'File details')}</summary><span>${esc(filename || title)}</span></details></div></div>`;
       }).join('')}</div>`;
       const numberedLiteratureList = resources => `<ol class="gpi-resource-list gpi-literature-resource-list">${resources.map(resource => `<li>${button(resource)}</li>`).join('')}</ol>`;
       const sections = [];

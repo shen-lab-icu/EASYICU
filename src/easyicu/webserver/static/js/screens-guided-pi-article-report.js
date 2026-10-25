@@ -33,7 +33,7 @@
   function render(payload) {
     const renderer = window.AGENT_RENDER;
     if (!renderer || typeof renderer.manuscriptProvenanceView !== 'function') {
-      throw new Error(tr('The evidence-bound article renderer is unavailable.', '证据绑定文章渲染器不可用。'));
+      throw new Error(tr('The manuscript preview could not be displayed. Please retry.', '暂时无法显示论文草稿，请重试。'));
     }
     return renderer.manuscriptProvenanceView(payload || {});
   }
