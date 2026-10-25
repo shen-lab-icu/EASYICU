@@ -22,7 +22,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...figures.display_labels import (
-    concise_clinical_level, display_label, label_lookup, scoped_label_lookup,
+    concise_clinical_level, display_label, grouped_axis_labels, label_lookup, scoped_label_lookup,
     wrap_axis_tick_labels,
 )
 from ...figures.robustness import (
@@ -120,6 +120,7 @@ def _forest(
     title: str,
     color: str,
     label_formatter: Any | None = None,
+    reference_label: str | None = None,
 ) -> None:
     """Point estimates with their intervals, each row labelled with its values.
 
@@ -127,7 +128,10 @@ def _forest(
     equal distances and the null line sits at 1.
     """
 
-    positions = np.arange(len(frame))
+    scales = {str(value).strip().lower() for value in frame["effect_scale"]}
+    ratio = bool(scales) and scales <= set(_RATIO_SCALE_NAMES)
+    reference_label = reference_label if ratio else None
+    positions = np.arange(len(frame)) + bool(reference_label)
     estimates = frame[estimate_column].to_numpy(dtype=float)
     lows = frame["ci_low"].to_numpy(dtype=float)
     highs = frame["ci_high"].to_numpy(dtype=float)
@@ -137,12 +141,18 @@ def _forest(
         markersize=4.0, elinewidth=1.0,
     )
     formatter = label_formatter or (lambda value: display_label(value))
-    ax.set_yticks(
-        positions, [formatter(value) for value in frame[label_column]], fontsize=7.5
-    )
-    ax.set_ylim(len(frame) - 0.4, -0.75)
-    scales = {str(value).strip().lower() for value in frame["effect_scale"]}
-    ratio = bool(scales) and scales <= set(_RATIO_SCALE_NAMES)
+    row_labels = [formatter(value) for value in frame[label_column]]
+    if reference_label:
+        # A categorical ratio's reference is an identity, not a fitted interval.
+        ax.plot([1.0], [0], "o", color=color, markersize=4.0)
+        ax.annotate(
+            "1.00", xy=(1.0, 0), xycoords=("axes fraction", "data"),
+            xytext=(0, 3.5), textcoords="offset points", ha="right", va="bottom",
+            fontsize=7.5, color="#333333",
+        )
+        row_labels.insert(0, f"{reference_label} (reference)")
+    ax.set_yticks(np.arange(len(row_labels)), row_labels, fontsize=7.5)
+    ax.set_ylim(len(row_labels) - 0.4, -0.9)
     if ratio:
         if (frame[[estimate_column, "ci_low", "ci_high"]] <= 0).any().any():
             raise ValueError("ratio-scale estimates and intervals must be positive")
@@ -173,6 +183,47 @@ def _forest(
             fontsize=7.5, color="#333333",
         )
     ax.set_title(title, loc="left", pad=7)
+
+
+def _forest_reference_label(frame: pd.DataFrame, labels: Mapping[str, str]) -> str | None:
+    """A single reference shared by the displayed, typed categorical contrasts."""
+    columns = ["exposure", "reference_level", "exposure_level"]
+    if not set(columns) <= set(frame) or frame[columns].isna().any().any():
+        return None
+    references = frame[["exposure", "reference_level"]].drop_duplicates()
+    if len(references) != 1:
+        return None
+    scope, value = references.iloc[0]
+    declared = scoped_label_lookup(scope, value, labels)
+    token = f"{value:g}" if isinstance(value, (int, float, np.number)) else str(value)
+    return declared or f"{display_label(scope, labels)} {token}"
+
+
+def _inset_forest_row_labels(ax: Any) -> None:
+    """Give contrasts their own text column above each forest row's interval.
+
+    Both stacked panels retain the same plot bounds; long forest labels no
+    longer reserve a left gutter for the risk panel. The right text column
+    remains available for estimates and intervals.
+    """
+    from ...figures.presentation import wrap_figure_label
+
+    ticks = ax.get_yticks()
+    labels = [label.get_text() for label in ax.get_yticklabels()]
+    ax.set_yticks(ticks, [""] * len(ticks))
+    ax.tick_params(axis="y", left=False)
+    ax.figure.canvas.draw()
+    renderer = ax.figure.canvas.get_renderer()
+    for position, label in zip(ticks, labels):
+        text = ax.annotate(
+            label, xy=(0, position), xycoords=("axes fraction", "data"),
+            xytext=(2, 6), textcoords="offset points", ha="left", va="bottom", fontsize=7.5,
+            bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.2},
+        )
+        text.set_text(wrap_figure_label(
+            label, renderer=renderer, font=text.get_fontproperties(),
+            width=ax.get_window_extent(renderer).width * 0.58,
+        ))
 
 
 def _reader_contrast_labels(
@@ -322,6 +373,7 @@ def _draw_absolute_risk_points(
     color: str,
     neutral: str,
     level_label: Any,
+    wrap_labels: bool = True,
 ) -> str:
     """Observed risk per group as a point with its 95% CI; returns the title.
 
@@ -373,7 +425,8 @@ def _draw_absolute_risk_points(
     ax.set_xticks(np.arange(len(groups)), labels, fontsize=7.5)
     ax.set_xlim(-0.6, len(groups) - 0.4)
     ax.set_ylim(0.0, 100.0 * float(frame["ci_high"].max()) * 1.12)
-    wrap_axis_tick_labels(ax, "x")
+    if wrap_labels:
+        wrap_axis_tick_labels(ax, "x")
     # The article strategy reads a risk panel by its reader-facing term.
     return (
         "Absolute risk by exposure level"
@@ -1364,6 +1417,9 @@ def render_association_publication_figure(
         key: concise_clinical_level(value) if "=" in key else value
         for key, value in (display_labels or {}).items()
     }
+    context = _caption_context(bound, step_id)
+    for grouping in context.get("cohort", {}).get("provenance", {}).get("exposure_group_labels", []):
+        labels.update(grouped_axis_labels(grouping, labels))
     palette = apply_publication_style(font_size=7.5)
     placements = dict(panel_placements or {})
     # Coverage still needs drawing when its declared destination is the audit
@@ -1447,6 +1503,7 @@ def render_association_publication_figure(
             color=palette["orange"],
             neutral="#6F6F6F",
             level_label=level_label,
+            wrap_labels=False,
         )
         if risk_exposure:
             ax.set_xlabel(display_label(risk_exposure, labels))
@@ -1470,7 +1527,7 @@ def render_association_publication_figure(
             capsize=2.5,
             label="Outcome risk",
         )
-        ax.legend(frameon=False, fontsize=5.8)
+        ax.legend(frameon=False, fontsize=7.5)
         rotate_levels = (
             len(level_labels) > 3 or max(map(len, level_labels), default=0) > 18
         )
@@ -1479,8 +1536,9 @@ def render_association_publication_figure(
             level_labels,
             rotation=20 if rotate_levels else 0,
             ha="right" if rotate_levels else "center",
-            fontsize=6.2 if rotate_levels else None,
+            fontsize=7.5,
         )
+        ax.set_xlabel(display_label(exposure_name, labels))
         ax.set_ylabel("Percent")
     else:
         outcomes = (
@@ -1522,6 +1580,7 @@ def render_association_publication_figure(
         label_column=adjusted_label,
         title="Primary adjusted association",
         color=palette["blue"],
+        reference_label=_forest_reference_label(adjusted, labels),
         label_formatter=(lambda value: str(value))
         if adjusted_label == "_reader_contrast"
         else _label
@@ -1530,7 +1589,7 @@ def render_association_publication_figure(
     )
     contrast_exposures = (
         adjusted["exposure"].dropna().astype(str).unique()
-        if adjusted_label == "contrast" and "exposure" in adjusted.columns
+        if "exposure" in adjusted.columns
         else ()
     )
     if len(contrast_exposures) == 1:
@@ -1757,9 +1816,18 @@ def render_association_publication_figure(
             for text in axis.texts:
                 if text.get_text() in tuple("abcd"):
                     text.set_text("abcd"[index])
-        fig.set_size_inches(7.2, 5.4)
+        fig.set_size_inches(183 / 25.4, 137 / 25.4)
+    if len(fig.axes) == 2:
+        _inset_forest_row_labels(axes[0, 1])
+    else:
+        wrap_axis_tick_labels(axes[0, 1], "y", width=fig.bbox.width * 0.32)
     wrap_axis_tick_labels(axes[0, 0], "x")
-    wrap_axis_tick_labels(axes[0, 1], "y", width=fig.bbox.width * 0.32)
+    # Keep the declared physical canvas through the shared tight-crop exporter.
+    from matplotlib.patches import Rectangle
+
+    fig.set_figwidth(183 / 25.4)
+    fig.add_artist(Rectangle((0, 0), 1, 1, transform=fig.transFigure,
+                             facecolor="none", edgecolor="none"))
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
@@ -1768,7 +1836,7 @@ def render_association_publication_figure(
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=132.0,
+        height_mm=float(fig.get_figheight() * 25.4),
         panels=[
             {
                 "panel_id": panel_id,
@@ -1801,6 +1869,7 @@ def render_association_publication_figure(
         contract=contract,
         formats=("png", "svg", "pdf", "tiff"),
         dpi=300,
+        pad_inches=0,
     )
     plt.close(fig)
 
