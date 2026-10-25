@@ -9,6 +9,7 @@ from functools import lru_cache
 from typing import Any, Mapping, Sequence, get_args
 
 from ..planning.method_literature import METHOD_CARDS
+from ..planning.preplan_know_how import bind_live_know_how_identity
 from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
 from ..planning.progressive_contract import (
     COORDINATE_OWNED_STEP_FIELDS,
@@ -228,6 +229,8 @@ def parse_progressive_foundation_materialization(
         payload["outline_sha256"] = outline_sha256
     foundation = payload.get("foundation")
     if isinstance(foundation, dict):
+        foundation = bind_live_know_how_identity(foundation, allowed_know_how_decisions)
+        payload = {**payload, "foundation": foundation}
         decisions = foundation.get("know_how_decisions")
         if isinstance(decisions, list):
             # An exact duplicate carries no additional scientific choice and is
@@ -306,6 +309,15 @@ def parse_progressive_step_materialization(
         # choice for the model to reproduce.
         payload = dict(payload)
         payload["outline_step_sha256"] = outline_step_sha256
+    if outline_step is not None and isinstance(payload.get("step"), dict):
+        # These identities were selected in the validated outline. Keep the
+        # module tags on the wire for schema dispatch, but bind before reading
+        # any module-specific fields on routes that cannot enforce that schema.
+        payload = {**payload, "step": {
+            **payload["step"], "step_id": outline_step.step_id,
+            "module_id": outline_step.module_id,
+            "scientific_action_id": outline_step.scientific_action_id,
+        }}
 
     step = payload.get("step")
     raw_inputs = step.get("raw_inputs") if isinstance(step, dict) else None
@@ -587,7 +599,7 @@ def _bind_step_module_shape(
         standard["required"] = [name for name in standard["required"] if name != custom_field]
 
     custom_fields = (
-        "step_id",
+        *(("step_id",) if "step_id" in properties else ()),
         "planned_analysis_role",
         "objective",
         "depends_on",
@@ -898,8 +910,6 @@ def _bind_foundation_authorities(
             _closed_object(
                 {
                     "card_id": {"type": "string", "const": card_id},
-                    "card_version": {"type": "string", "const": version},
-                    "card_sha256": {"type": "string", "const": sha256},
                     "claim_id": {"type": "string", "const": claim_id},
                     "disposition": copy.deepcopy(source["disposition"]),
                     "reason_code": copy.deepcopy(source["reason_code"]),
@@ -930,15 +940,9 @@ def _bind_materialization_coordinate(
         raise ProgressiveTransportSchemaError(
             "progressive materialization step properties are unavailable"
         )
-    properties["outline_step_sha256"] = {
-        "type": "string",
-        "const": outline_step_sha256,
-    }
+    properties.pop("outline_step_sha256")
     properties["foundation"] = {"type": "null"}
-    step_properties["step_id"] = {
-        "type": "string",
-        "const": outline_step.step_id,
-    }
+    step_properties.pop("step_id")
     step_properties["planned_analysis_role"] = {
         "type": "string",
         "const": outline_step.planned_analysis_role,
@@ -1349,10 +1353,7 @@ def progressive_foundation_structured_output_request(
         raise ProgressiveTransportSchemaError(
             "progressive foundation schema properties are unavailable"
         )
-    properties["outline_sha256"] = {
-        "type": "string",
-        "const": str(outline_sha256),
-    }
+    properties.pop("outline_sha256")
     label_keys = list(dict.fromkeys([
         *required_reader_display_label_keys,
         *(f"{scope}={level}" for scope in required_binary_display_label_scopes for level in (0, 1)),

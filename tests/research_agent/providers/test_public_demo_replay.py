@@ -55,6 +55,46 @@ def test_exact_hit_and_receipt(tmp_path, monkeypatch):
         assert receipt["publishable"] is False
 
 
+def test_family_cassette_matches_the_whole_request_without_a_response_digest(tmp_path, monkeypatch):
+    from easyicu.research_agent.agents.family_spec_planner import (
+        family_spec_structured_output_request, family_spec_user_prompt, parse_family_plan_spec,
+    )
+    from easyicu.research_agent.providers.clients import ReplayLLMClient
+    from easyicu.research_agent.providers.protocol import (
+        ModelIdentity, RecordedResponse, ReplayCassette, ReplayError, request_digest,
+    )
+    from tests.research_agent.planning.family_spec_fixtures import (
+        _descriptive_context, _descriptive_payload, _request,
+    )
+
+    request = _request(_descriptive_context(), cohort_mode="all_input_rows")
+    changed = type(request).model_validate({
+        **request.model_dump(mode="json"),
+        "allowed_literature_citation_keys": [*request.allowed_literature_citation_keys, "method_beta"],
+    })
+    assert request.request_sha256 != changed.request_sha256
+    messages = [LLMMessage("user", family_spec_user_prompt(request, variable_descriptions={}))]
+    other_messages = [LLMMessage("user", family_spec_user_prompt(changed, variable_descriptions={}))]
+    schema = family_spec_structured_output_request(request)
+    assert schema == family_spec_structured_output_request(changed)
+    payload = _descriptive_payload(request, baseline_variables=[])
+    payload.pop("request_sha256")
+    model = ModelIdentity(provider="synthetic", model="synthetic-model")
+    with public_scope(tmp_path, monkeypatch) as scope:
+        cassette = ReplayCassette.create(
+            source=scope.source, model=model,
+            entries=(RecordedResponse(
+                request_sha256=request_digest(model, messages, structured_output=schema),
+                response=json.dumps(payload),
+            ),),
+        )
+        client = ReplayLLMClient(cassette)
+        raw = authorized_complete(client, messages, structured_output=schema)
+        assert parse_family_plan_spec(raw, request).request_sha256 == request.request_sha256
+        with pytest.raises(ReplayError, match="model_replay_request_missing"):
+            authorized_complete(client, other_messages, structured_output=schema)
+
+
 @pytest.mark.parametrize("change", ["message", "temperature", "max_tokens", "schema", "model"])
 def test_miss_names_the_exact_digest_and_never_falls_back(tmp_path, monkeypatch, change):
     from easyicu.research_agent.providers.clients import ReplayLLMClient

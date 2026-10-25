@@ -156,9 +156,16 @@ def test_progressive_success_replans_agent_steps_not_fixed_host_steps() -> None:
     )
 
 
-def test_replanner_returns_only_unexecuted_suffix_and_merges_host_side() -> None:
+@pytest.mark.parametrize("echo", ["02_summary", None, "wrong_step", {"invalid": "id"}])
+def test_replanner_returns_only_unexecuted_suffix_and_merges_host_side(echo) -> None:
     plan = _plan()
     response = _revision(plan).model_dump(mode="json")
+    if echo is None:
+        response.pop("replace_from_step_id")
+        response["replacement_step"].pop("step_id")
+    else:
+        response["replace_from_step_id"] = echo
+        response["replacement_step"]["step_id"] = echo
     llm = ScriptedMockLLMClient([json.dumps(response)])
     capsule_sha256 = "a" * 64
     agent = ReplannerAgent(llm)
@@ -195,6 +202,19 @@ def test_replanner_returns_only_unexecuted_suffix_and_merges_host_side() -> None
     assert "Return a RuntimePlanSuffixRevision beginning at '02_summary'" in prompt
 
 
+def test_saved_runtime_suffix_still_rejects_a_different_step() -> None:
+    from easyicu.research_agent.agents.plan_payload import parse_runtime_plan_suffix
+
+    plan = _plan()
+    response = _revision(plan).model_dump(mode="json")
+    response["replace_from_step_id"] = "03_report"
+    response["replacement_step"]["step_id"] = "03_report"
+    saved = parse_runtime_plan_suffix(json.dumps(response))
+    assert saved.replace_from_step_id == "03_report"
+    with pytest.raises(RuntimePlanSuffixError, match="runtime_suffix_coordinate_mismatch"):
+        merge_runtime_plan_suffix(current_plan=plan, completed_step_ids=["01_cohort"], revision=saved)
+
+
 def test_runtime_suffix_strict_schema_binds_only_the_next_coordinate() -> None:
     plan = _plan()
     response = _revision(plan).model_dump(mode="json")
@@ -223,9 +243,9 @@ def test_runtime_suffix_strict_schema_binds_only_the_next_coordinate() -> None:
     request = llm.calls[0][1]["structured_output"]
     assert request.name == "easyicu_runtime_plan_suffix_revision_v1"
     schema = json.loads(request.schema_json)
-    assert schema["properties"]["replace_from_step_id"]["const"] == "02_summary"
+    assert "replace_from_step_id" not in schema["properties"]
     step = schema["$defs"]["AnalysisStep"]["properties"]
-    assert step["step_id"]["const"] == "02_summary"
+    assert "step_id" not in step
     assert step["planned_analysis_role"]["const"] == "auxiliary"
     assert step["expected_outputs"]["items"] == {
         "type": "string",
