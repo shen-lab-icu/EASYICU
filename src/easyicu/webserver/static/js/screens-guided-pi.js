@@ -1797,6 +1797,13 @@
     // Capabilities first: the status read needs to know a hosted instance.
     state.startupPromise = capabilitiesReady.then(() => loadStatus()).then(async () => {
       if (state.host) render(true);
+      // Get Started's workflow demo asks once for the read-only replay (screens-help.js).
+      let helpDemo = false;
+      try {
+        helpDemo = window.sessionStorage.getItem('easyicu.help.workflowDemo') === '1';
+        window.sessionStorage.removeItem('easyicu.help.workflowDemo');
+      } catch (_) {}
+      if (helpDemo) { openDemo(); return; }
       openHostedConversation();
       const hubIntent = STUDY_WORKSPACE.hasHubIntent(), previousSessionId = state.session && state.session.session_id;
       if (hubIntent && projectId() && state.session && !state.creating) await createSession();

@@ -112,6 +112,130 @@
       </div>`;
   }
 
+  /* ---------------- GET STARTED on a local install ----------------
+     The clinician's own computer: their model, their PhysioNet data and the
+     public demos. Conversation first; the data workspace modules stay in the
+     rail. Facts come from their owners: the demo catalogue
+     (demo_source_contracts.py), the model connection and its credentialed-data
+     declaration (screens-guided-pi-provider*.js), the conversation's source
+     offer (screens-guided-pi-data-consent.js). */
+  const LOCAL_EXAMPLES = Object.freeze([
+    ['In the eICU demo, how does ICU length of stay differ across ICU types?',
+      '在 eICU demo 中，不同 ICU 类型的患者，ICU 住院时长有什么差别？'],
+    ['In the eICU demo, how much higher is the in-hospital mortality risk of patients whose highest lactate in the first 24 ICU hours is 4 mmol/L or more, compared with below 2 mmol/L? Adjust for age.',
+      'eICU demo 中，入 ICU 24 小时内最高乳酸 ≥4 mmol/L 与 <2 mmol/L 的患者相比，院内死亡风险高多少？调整年龄。'],
+    ['Across all ICU stays in the eICU demo, what is the in-hospital mortality of men and of women?',
+      '在 eICU demo 全部 ICU 入住中，男性和女性的院内死亡率分别是多少？'],
+  ]);
+  function localRender() {
+    const setup = [
+      [t('Connect a model', '连接模型'),
+        t('The research conversation uses the model you connect to read your question and draft the plan. The first time you open it, choose a service, such as DeepSeek, an OpenAI-compatible service or a model running on this computer, and paste its API key. Data extraction, patient review, cohort statistics and cross-database comparison need no model.',
+          '研究对话用你连接的模型来理解问题、拟定计划。第一次打开研究对话时，选择一个模型服务（如 DeepSeek、OpenAI 兼容服务，或在本机运行的模型），填入它的 API 凭据。数据抽取、患者审阅、队列统计和跨库对比不需要模型。')],
+      [t('Try it on the public demo', '先用公开 Demo 试一遍'),
+        t('Name the “eICU demo” in your question. EasyICU offers to download the official eICU demo (130.6 MB) from PhysioNet, checks it and prepares it on this computer. The public demo needs no data use agreement. Click a question below to start a conversation with it.',
+          '在问题里写上「eICU demo」，EasyICU 会提出从 PhysioNet 下载官方 eICU Demo（130.6 MB），校验后在本机准备好。公开 Demo 不需要签数据使用协议。点下面的问题，会用它开始一次对话。')],
+      [t('Use your own database', '接入你自己的数据库'),
+        t('If you have access to MIMIC-IV or eICU-CRD, choose that database in the conversation and select the folder you downloaded from PhysioNet; EasyICU prepares it on this computer. The first preparation of a full database takes a while; later studies reuse it. Before the conversation works on these data, declare under “Credentialed data” in the model connection that the model runs on this computer or that its service keeps no data. The PhysioNet data use agreement requires it, and without it EasyICU does not use the model for these data.',
+          '已获得 MIMIC-IV 或 eICU-CRD 使用资格的，在研究对话里选择这个数据库，再选中你从 PhysioNet 下载的文件夹，EasyICU 会在本机准备好。完整数据库第一次准备要花较长时间，之后的研究会复用。让研究对话处理这些数据之前，请在模型连接的「需授权的数据」里声明：模型在本机运行，或服务不保留数据。这是 PhysioNet 数据使用协议的要求；没有声明时，EasyICU 不会用这个模型处理这些数据。')],
+    ];
+    const steps = [
+      [t('Say what you want to study', '说出研究问题'), t('Describe the patients, the factor you care about and the outcome, in your own words. If something is missing, EasyICU asks.', '用自己的话说出研究人群、关心的因素和结局。缺什么，EasyICU 会问你。')],
+      [t('Confirm the data', '确认数据'), t('EasyICU proposes the data for the question and asks you to confirm it; data for the study is prepared only after you do.', 'EasyICU 会为问题选出数据并请你确认；确认后才准备这项研究要用的数据。')],
+      [t('Review the analysis plan', '审阅分析计划'), t('Before any analysis runs you see the whole plan: the study population, the variables and the statistical methods. It runs only after you approve it.', '分析开始前，你会看到完整的计划：研究人群、变量和统计方法。你批准后才会运行。')],
+      [t('Read the results', '查看结果'), t('Results come as tables, figures and a written explanation, and every number comes from the run\'s own record. Ask follow-up questions in the same conversation.', '结果以表格、图和文字说明呈现，每个数字都来自这次运行的记录。可以在同一个对话里继续追问。')],
+    ];
+    const questions = [
+      [
+        t('Is any patient data uploaded?', '会上传患者数据吗？'),
+        t(
+          'Extraction, review, and analysis run on your machine. If you enable model calls, your messages, analysis plans and code, variable names, error details, and summary statistics with very small counts hidden may be sent to the configured model. The data tools block patient-level rows from model requests. Do not paste patient records into messages.',
+          '抽取、审阅和分析在本机运行。开启模型调用后，你的消息、分析计划及代码、变量名称、错误详情，以及隐藏了极小计数的汇总统计可能发送给已配置的模型。数据工具会阻止患者逐行记录进入模型请求；请勿在消息中粘贴患者记录。',
+        ),
+      ],
+      [
+        t('Which studies does this version run?', '这个版本能做哪些研究？'),
+        t(
+          'On MIMIC-IV: descriptive, association, prediction, survival, subtype or trajectory, and causal studies (target trial emulation). On eICU: descriptive, association and prediction studies. The conversation says so before planning when a question falls outside this. HiRID, AmsterdamUMCdb and SICdb can be extracted and compared in the data workspace.',
+          'MIMIC-IV：描述、关联、预测、生存分析、亚型或轨迹，以及因果研究（目标试验模拟）。eICU：描述、关联和预测研究。超出范围的问题，对话会在拟定计划前直接说明。HiRID、AmsterdamUMCdb 和 SICdb 可以在数据工作台里抽取和比较。',
+        ),
+      ],
+      [
+        t('Can the results guide a patient\'s treatment?', '结果可以用于临床诊疗吗？'),
+        t('No. EasyICU results are for research. They do not replace clinical judgement for an individual patient.', '不能。EasyICU 的结果用于科研，不能替代对个体患者的临床判断。'),
+      ],
+      [
+        t('What is Demo mode in the data workspace?', '数据工作台里的「演示」是什么？'),
+        t(
+          'A reproducible synthetic dataset of 10 ICU stays for learning the extraction and review screens. Its numbers are seeded placeholders and support no finding. For a whole study on real records, use the public eICU demo.',
+          '一份可复现的合成数据（10 个 ICU stay），用来熟悉数据抽取和审阅界面。里面的数字都是占位值，不支持任何结论。想在真实记录上完整做一项研究，请用公开 eICU Demo。',
+        ),
+      ],
+      [
+        t('What if something goes wrong?', '遇到问题怎么办？'),
+        t(
+          'At the top of the research conversation, open “Having a problem?” and copy the problem reference; under Settings → About you can export diagnostics. Send them to the colleague who gave you EasyICU.',
+          '在研究对话顶部打开「遇到问题」，复制问题编号；在「设置 → 关于」里可以导出诊断。把它们发给为你提供 EasyICU 的同事。',
+        ),
+      ],
+    ];
+    return `
+      <div class="page-head" style="margin-bottom:18px;">
+        <div class="eyebrow">${t('Get started', '快速上手')}</div>
+        <h1 style="margin-top:6px;">${t('One conversation, one ICU study', '用一次对话完成一项 ICU 研究')}</h1>
+        <p class="lead">${t('EasyICU runs on your computer, with your model and your data. Say what you want to study; the conversation takes you through the rest, step by step.', 'EasyICU 在你的电脑上运行，用你连接的模型和你的数据。说出想研究的问题，对话会一步步带你完成后面的事。')}</p>
+      </div>
+      <div class="guide-hero">
+        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;">
+          <div style="max-width:60ch;">
+            <div class="row gap-10" style="align-items:center;">
+              <div class="mode-mark accent" style="width:34px;height:34px;">${icon('agent', 17)}</div>
+              <div style="font-size:17px;font-weight:600;letter-spacing:-0.01em;">${t('See a whole study first', '先看一项完整的研究')}</div>
+            </div>
+            <p style="font-size:12.75px;color:var(--ink-3);line-height:1.6;margin:12px 0 0;">${t('A read-only replay of a real MIMIC-IV run, from the question to the results. It needs no model and changes nothing.', '回放一次真实的 MIMIC-IV 运行，从提问到结果。只读，不需要模型，也不会改动你的项目。')}</p>
+          </div>
+          <div class="col gap-8" style="flex:none;">
+            <button class="btn primary lg" data-help-workflow-demo type="button">${icon('play', 15)} ${t('View the workflow demo', '查看流程演示')}</button>
+          </div>
+        </div>
+      </div>
+      <div class="sec-stack"><div class="lbl">${t('First time', '第一次使用')}</div><h2>${t('Three things to set up', '三件事')}</h2></div>
+      <div class="card pad">
+        <div class="guide-steps">
+          ${setup.map(([title, desc], i) => `
+            <div class="guide-step ${i === 0 ? 'accent' : ''}">
+              <div class="gs-num">${i + 1}</div>
+              <div>
+                <div class="gs-t">${title}</div>
+                <div class="gs-d">${desc}</div>
+                ${i === 0 ? `<div class="gs-actions"><button class="btn primary sm" data-nav="guided" type="button">${t('Open conversation', '打开研究对话')} ${icon('arrow', 13)}</button></div>` : ''}
+                ${i === 1 ? `<div class="gs-actions" style="flex-direction:column;align-items:flex-start;">${LOCAL_EXAMPLES.map(([en, zh]) => `<button class="btn sm" data-help-question="${esc(t(en, zh))}" type="button">${esc(t(en, zh))}</button>`).join('')}</div>` : ''}
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>
+      <div class="sec-stack"><div class="lbl">${t('Four steps', '四个步骤')}</div><h2>${t('How a study moves forward', '一项研究怎样推进')}</h2></div>
+      <div class="card pad">
+        <div class="guide-steps">
+          ${steps.map(([title, desc], i) => `
+            <div class="guide-step">
+              <div class="gs-num">${i + 1}</div>
+              <div>
+                <div class="gs-t">${title}</div>
+                <div class="gs-d">${desc}</div>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>
+      <div class="sec-stack"><div class="lbl">${t('Good to know', '你可能关心')}</div><h2>${t('Common questions', '常见问题')}</h2></div>
+      <div class="faq">
+        ${questions.map(([q, a], i) => `
+          <div class="faq-item ${i === 0 ? 'open' : ''}">
+            <button class="faq-q">${q}<span class="fq-chev">${icon('chevron', 14)}</span></button>
+            <div class="faq-a">${esc(a)}</div>
+          </div>`).join('')}
+      </div>`;
+  }
   /* ---------------- GET STARTED ---------------- */
   S.tutorial = {
     section: 'tutorial', nav: 'tutorial',
@@ -124,7 +248,7 @@
     },
     actionHtml() {
       if (hostedOwner()) return `<button class="btn primary" data-nav="guided" type="button">${t('Start a research conversation', '开始研究对话')}</button>`;
-      return `<button class="btn primary" data-help-startdemo type="button">${icon('play', 13)} ${t('Start demo', '开始演示')}</button>`;
+      return `<button class="btn primary" data-nav="guided" type="button">${t('Start a research conversation', '开始研究对话')}</button>`;
     },
     rail() {
       const hosted = hostedOwner();
@@ -154,146 +278,23 @@
     render() {
       const hosted = hostedOwner();
       if (hosted) return hostedRender(hosted);
-      const steps = [
-        [
-          '1',
-          t('Frame the question', '确定研究问题'),
-          t(
-            'Pick a data mode — Demo generates reproducible mock data, Real connects a local export folder (nothing is ever uploaded) — then pin down what you’re asking: an outcome, a time window, and a comparator.',
-            '先选择数据模式：演示模式生成可复现的模拟数据，真实模式连接本地导出文件夹（不会上传任何内容）；然后确定结局、时间窗和比较对象。',
-          ),
-          [[t('Configure source', '配置数据源'), 'extraction'], [t('Talk it through', '对话式引导'), 'guided']],
-          true,
-        ],
-        [
-          '2',
-          t('Extract & verify the data', '抽取并核验数据'),
-          t(
-            'One click runs the recommended extraction — cohort, coverage-audited feature modules, and a reproducible export. Need more control? Open Customize to set every detail. Nothing runs on incomplete data.',
-            '一键运行推荐抽取：队列、覆盖率审计过的特征模块和可复现导出。需要更多控制时，可以进入自定义配置；数据不完整时不会继续运行。',
-          ),
-          [[t('Open extraction', '打开数据抽取'), 'extraction']],
-          false,
-        ],
-        [
-          '3',
-          t('Review & explore', '审阅与探索'),
-          t(
-            'Inspect patient-level tables and time series, step up to cohort contrasts and SOFA reclassification, then benchmark one cohort definition across two or more ICU databases.',
-            '查看单患者表格和时间序列，再做队列对比、SOFA 重分类，并把同一个队列定义放到两个或更多 ICU 数据库中做基准比较。',
-          ),
-          [[t('Patient Review', '患者审阅'), 'patient'], [t('Cohort Statistics', '队列统计'), 'cohort'], [t('Cross-database comparison', '跨库对比'), 'crossdb']],
-          false,
-        ],
-        [
-          '4',
-          t('Analyze & draft', '分析与撰稿'),
-          t(
-            'Plan, run, and review an auditable pipeline with the Research Agent. The manuscript draft stays locked until every evidence check passes and you confirm.',
-            '使用 Research Agent 规划、运行并审阅可审计流程。只有证据检查全部通过并由你确认后，手稿草稿才会进入下一步。',
-          ),
-          [[t('Open conversation', '打开研究对话'), 'agent'], [t('Start Guided Copilot', '开始研究引导'), 'guided']],
-          false,
-        ],
-      ];
-      const questions = [
-        [
-          t('Is any patient data uploaded?', '会上传患者数据吗？'),
-          t(
-            'Extraction, review, and analysis run on your machine. If you enable model calls, your messages, analysis plans and code, variable names, error details, and summary statistics with very small counts hidden may be sent to the configured model. The data tools block patient-level rows from model requests. Do not paste patient records into messages.',
-            '抽取、审阅和分析在本机运行。开启模型调用后，你的消息、分析计划及代码、变量名称、错误详情，以及隐藏了极小计数的汇总统计可能发送给已配置的模型。数据工具会阻止患者逐行记录进入模型请求；请勿在消息中粘贴患者记录。',
-          ),
-        ],
-        [
-          t('What exactly is Demo Mode?', '演示模式是什么？'),
-          t(
-            'A reproducible synthetic dataset — by default 10 ICU stays over 24 hours across 19 feature modules. It produces no scientific findings; every number is a seeded placeholder so you can learn the interface safely.',
-            '一个可复现的合成数据集：默认 10 个 ICU stay、24 小时、19 个特征模块。它不产生科学发现，所有数字都是带种子的占位结果，方便你安全熟悉界面。',
-          ),
-        ],
-        [
-          t('Why is the manuscript draft locked?', '为什么手稿草稿是锁定的？'),
-          t(
-            'Drafting is a deliberate second stage. The agent only writes after each evidence check passes — denominators resolved, coverage above threshold, tables reproducing from the manifest — and after a reviewer signs off. Claims stay traceable to logged artifacts.',
-            '撰稿是明确的第二阶段。只有分母、覆盖率、表格复现等证据检查通过，并且人工确认后，Agent 才会继续写作。每个 claim 都要能追溯到日志化 artifact。',
-          ),
-        ],
-        [
-          t('Which databases are supported?', '支持哪些数据库？'),
-          t(
-            'Six standardized ICU sources: MIMIC-IV, eICU-CRD, AmsterdamUMCdb, HiRID, MIMIC-III, and SICdb. EasyICU detects known export layouts when you select a local folder.',
-            '目前支持六个标准化 ICU 数据源：MIMIC-IV、eICU-CRD、AmsterdamUMCdb、HiRID、MIMIC-III 和 SICdb。选择本地文件夹后，EasyICU 会识别已知导出布局。',
-          ),
-        ],
-        [
-          t('Do I need API tokens?', '需要 API token 吗？'),
-          t(
-            'Not for Demo Mode or any extraction, review, or benchmark work — those never call a model. Tokens only apply if you connect an external model endpoint for the Research Agent.',
-            '演示模式、数据抽取、审阅和跨库对比都不需要 token，这些不会调用模型。只有你为 Research Agent 连接外部模型端点时才需要 token。',
-          ),
-        ],
-      ];
-      return `
-      <div class="page-head" style="margin-bottom:18px;">
-        <div class="eyebrow">${t('Get started', '快速上手')}</div>
-        <h1 style="margin-top:6px;">${t('A quiet, reviewable path from data to draft', '从数据到草稿，一条安静、可审阅的路径')}</h1>
-        <p class="lead">${t('EasyICU runs entirely on your machine. Start with reproducible demo data to learn the flow, then point it at local ICU exports when you’re ready.', 'EasyICU 完全在你的机器上运行。你可以先用可复现的演示数据熟悉流程，准备好后再连接本地 ICU 导出。')}</p>
-      </div>
-
-      <div class="guide-hero">
-        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;">
-          <div style="max-width:60ch;">
-            <div class="row gap-10" style="align-items:center;">
-              <div class="mode-mark accent" style="width:34px;height:34px;">${icon('flask', 17)}</div>
-              <div style="font-size:17px;font-weight:600;letter-spacing:-0.01em;">${t('New here? Take the 2-minute demo tour', '第一次使用？先跑 2 分钟演示')}</div>
-            </div>
-            <p style="font-size:12.75px;color:var(--ink-3);line-height:1.6;margin:12px 0 0;">${t('No tokens, no setup, no patient data. The demo generates 10 mock ICU stays so every screen, table, and review check is fully explorable before you connect anything real.', '不需要 token、不需要配置、不需要患者数据。演示会生成 10 个模拟 ICU stay，让你在连接真实数据前先完整探索每个页面、表格和审阅检查。')}</p>
-          </div>
-          <div class="col gap-8" style="flex:none;">
-            <button class="btn primary lg" data-help-startdemo type="button">${icon('play', 15)} ${t('Start demo', '开始演示')}</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="sec-stack"><div class="lbl">${t('The four stages', '四个阶段')}</div><h2>${t('How a study moves through EasyICU', '一个研究如何在 EasyICU 中推进')}</h2></div>
-      <div class="card pad">
-        <div class="guide-steps">
-          ${steps.map(([n, title, desc, actions, acc]) => `
-            <div class="guide-step ${acc ? 'accent' : ''}">
-              <div class="gs-num">${n}</div>
-              <div>
-                <div class="gs-t">${title}</div>
-                <div class="gs-d">${desc}</div>
-                <div class="gs-actions">
-                  ${actions.map(([lab, nav], i) => `<button class="btn ${i === 0 ? 'primary' : ''} sm" data-nav="${nav}">${lab} ${icon('arrow', 13)}</button>`).join('')}
-                </div>
-              </div>
-            </div>`).join('')}
-        </div>
-      </div>
-
-      <div class="sec-stack"><div class="lbl">${t('Good to know', '你可能关心')}</div><h2>${t('Common questions', '常见问题')}</h2></div>
-      <div class="faq">
-        ${questions.map(([q, a], i) => `
-          <div class="faq-item ${i === 0 ? 'open' : ''}">
-            <button class="faq-q">${q}<span class="fq-chev">${icon('chevron', 14)}</span></button>
-            <div class="faq-a">${a}</div>
-          </div>`).join('')}
-      </div>`;
+      return localRender();
     },
     afterRender(root) {
       root.querySelectorAll('.faq-q').forEach(q => {
         q.addEventListener('click', () => q.closest('.faq-item').classList.toggle('open'));
       });
-      // 'Start demo' must deliver a demo: switch the data mode first (with the
-      // usual work-protection confirm), and only navigate once the switch
-      // actually applied — a cancelled confirm stays on Get Started.
-      root.querySelectorAll('[data-help-startdemo]').forEach(b => b.addEventListener('click', () => {
-        if (window.EU_DATA !== 'demo' && window.setDataMode) {
-          window.setDataMode('demo', { onapply: () => { location.hash = '#extraction'; } });
-          return;
-        }
-        location.hash = '#extraction';
+      // The workflow replay and the example questions open in the research
+      // conversation. Each leaves a one-shot request it reads on mount: the
+      // replay (screens-guided-pi.js) and the question draft it already takes
+      // from the Skill Hub.
+      root.querySelectorAll('[data-help-workflow-demo]').forEach(b => b.addEventListener('click', () => {
+        try { window.sessionStorage.setItem('easyicu.help.workflowDemo', '1'); } catch (_) {}
+        location.hash = '#guided';
+      }));
+      root.querySelectorAll('[data-help-question]').forEach(b => b.addEventListener('click', () => {
+        try { window.sessionStorage.setItem('easyicu.skillHub.question', b.getAttribute('data-help-question') || ''); } catch (_) {}
+        location.hash = '#guided';
       }));
     },
   };

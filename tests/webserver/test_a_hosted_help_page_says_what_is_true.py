@@ -103,11 +103,30 @@ def test_the_hosted_page_names_the_server_the_prepared_data_and_the_administrato
 @pytest.mark.requires_node
 def test_the_local_page_keeps_desktop_guidance_and_entry_points() -> None:
     page = _page("local")
+    body = page["body"]
 
-    assert "抽取、审阅和分析在本机运行" in page["body"]
-    assert "data-help-startdemo" in page["action"]
+    assert "抽取、审阅和分析在本机运行" in body
+    # Conversation first: the replay, the model, the public demo, own data.
+    assert "data-help-workflow-demo" in body
+    assert "第一次打开研究对话时，选择一个模型服务" in body
+    assert "从 PhysioNet 下载官方 eICU Demo（130.6 MB）" in body
+    assert 'data-help-question="在 eICU demo 中，不同 ICU 类型的患者，ICU 住院时长有什么差别？"' in body
+    # Credentialed data needs the model connection's declaration first.
+    assert "在模型连接的「需授权的数据」里声明：模型在本机运行，或服务不保留数据" in body
+    assert "eICU：描述、关联和预测研究" in body
+    # The hosted page's server and administrator claims are not made here.
+    for hosted_claim in ("医院服务器", "管理员"):
+        assert hosted_claim not in body
+    assert 'data-nav="guided"' in page["action"]
+    assert "data-help-startdemo" not in page["action"]
     assert "快捷键" in page["rail"]
     assert page["aside"] == ""
+    # The replay request is one-shot: Help sets it, the conversation consumes it on mount.
+    guided = (STATIC / "js" / "screens-guided-pi.js").read_text(encoding="utf-8")
+    help_js = (STATIC / "js" / "screens-help.js").read_text(encoding="utf-8")
+    assert "window.sessionStorage.setItem('easyicu.help.workflowDemo', '1')" in help_js
+    assert "window.sessionStorage.removeItem('easyicu.help.workflowDemo');" in guided
+    assert "if (helpDemo) { openDemo(); return; }" in guided
 
 
 def test_a_hosted_instance_drops_single_key_shortcuts_and_the_states_catalogue() -> None:

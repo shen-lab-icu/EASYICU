@@ -189,7 +189,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/screens-extraction.js?v=20261023-demo-identity1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261023-stop-attribution1" in index_html
-    assert "js/screens-help.js?v=20261023-desktop-egress1" in index_html
+    assert "js/screens-help.js?v=20261025-local-start1" in index_html
 
 
 def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
@@ -322,13 +322,13 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert "crumbLabel(scr.crumbs[scr.crumbs.length - 1])" in app_js
 
     assert "actionHtml() {" in help_js
-    assert "t('Start demo', '开始演示')" in help_js
+    assert "t('Start a research conversation', '开始研究对话')" in help_js
     assert "t('Get started', '快速上手')" in help_js
-    assert (
-        "t('A quiet, reviewable path from data to draft', '从数据到草稿，一条安静、可审阅的路径')"
-        in help_js
-    )
-    assert "t('The four stages', '四个阶段')" in help_js
+    assert "t('One conversation, one ICU study', '用一次对话完成一项 ICU 研究')" in help_js
+    assert "t('Three things to set up', '三件事')" in help_js
+    # The local page no longer leads with the synthetic Demo mode tour.
+    assert "t('Start demo', '开始演示')" not in help_js
+    assert "t('A quiet, reviewable path from data to draft'" not in help_js
     assert "t('Common questions', '常见问题')" in help_js
 
     assert "Get started · 快速上手" not in help_js
@@ -337,7 +337,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert "How a study moves through EasyICU</h2>" not in help_js
 
     assert "js/app.js?v=20261022-help1" in index_html
-    assert "js/screens-help.js?v=20261023-desktop-egress1" in index_html
+    assert "js/screens-help.js?v=20261025-local-start1" in index_html
 
 
 def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
@@ -2388,7 +2388,8 @@ def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations(
         ]
     )
 
-    assert "抽取并核验数据" in ui_text
+    # The Get Started page that said "抽取并核验数据" now leads with the conversation;
+    # the retired gate wording below must still not come back anywhere.
     assert "证据核验" in ui_text
     assert "在研究对话中继续" in ui_text
     for old_term in [
