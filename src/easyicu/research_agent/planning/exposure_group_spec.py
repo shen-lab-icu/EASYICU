@@ -8,9 +8,9 @@ each group names a threshold rule or ``otherwise``, and the host decides
 which column a summary is read from and derives the group column
 (:mod:`.exposure_group_compile`).  Nothing here reads a row.
 
-The groups are matched in the order they are listed: a stay belongs to the
-first group whose rule it meets, and ``otherwise`` takes every measured stay
-no earlier group took.  Listing order is a priority, not a scale.  An ordinal
+The compiler requires disjoint rules: a stay belongs to its unique matching
+group, and ``otherwise`` takes every measured stay no explicit rule took.
+An ordinal
 grouping's groups are numbered along its scale, ``g1`` lowest -- the owner
 renumbers stated ids that do not follow it, and the reference and contrast
 follow their groups -- and its level codes follow its scale; a nominal
@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Annotated, Any, Literal, Mapping, Optional, Sequence, Union
 
 from pydantic import (
@@ -52,6 +53,12 @@ from pydantic import (
     model_validator,
 )
 
+from ..contracts.exposure_group_rules import (
+    ExposureGroupPartitionError,
+    GroupInterval,
+    partition_intervals,
+    threshold_interval,
+)
 from .population_spec import CriterionSource, SpecWindow, quote_written_in
 
 EXPOSURE_GROUP_SPEC_SCHEMA_VERSION = "easyicu.exposure_group_spec/1"
@@ -83,7 +90,7 @@ class GroupRule(BaseModel):
 
 
 class ExposureGroup(BaseModel):
-    """One level: the stays meeting ``rule`` that no earlier group took."""
+    """One level: the stays uniquely meeting ``rule``."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -262,6 +269,10 @@ def _satisfiable(rules: Sequence[GroupRule]) -> bool:
 
 
 def _reachable(spec: ExposureGroupSpec) -> None:
+    # One-dimensional partition checks belong to the compiler, so refusals are
+    # recorded and the structured retry receives the exact conflicting groups.
+    if len({rule.summary for rule in grouping_rules(spec)}) == 1:
+        return
     earlier: list[GroupRule] = []
     for group in spec.groups:
         if group.rule == "otherwise":
@@ -282,6 +293,95 @@ def _reachable(spec: ExposureGroupSpec) -> None:
             "exposure_group_rules_not_exhaustive: a measured stay can meet no "
             "group; end with an otherwise group or cover the remaining values"
         )
+
+
+def grouping_partition(spec: ExposureGroupSpec) -> tuple[GroupInterval, ...]:
+    """Prove the partition and retain only exclusions stated in its quoted words.
+
+    The Planner shape is unchanged. A between band is the complement of two
+    disjoint outer rules; an explicit exclusion is quoted as an interval or a
+    one-sided inequality, never inferred from unmeasured handling.
+    """
+
+    try:
+        intervals, gaps = partition_intervals([group.model_dump() for group in spec.groups])
+    except ExposureGroupPartitionError as exc:
+        labels = ", ".join(f"{group.id} ({group.label})" for group in spec.groups if group.id in exc.groups)
+        raise ExposureGroupPartitionError(exc.reason, f"{spec.id}: {labels}; {exc}", exc.groups) from exc
+    for gap in gaps:
+        if not _stated_exclusion(spec.quote, gap) or spec.source not in {"question", "study_wording"}:
+            raise ExposureGroupPartitionError(
+                "exposure_group_rules_not_exhaustive",
+                f"{spec.id}: no group takes {gap.text()} of {gap.summary}; "
+                "cover it or quote the study's explicit exclusion with its exact bounds",
+            )
+    for group in spec.groups:
+        actual = intervals.get(group.id)
+        if actual is None:
+            continue
+        named = _label_interval(group.label, actual.summary, actual.unit)
+        if named is not None and named != actual:
+            raise ExposureGroupPartitionError(
+                "exposure_group_label_rule_mismatch",
+                f"{spec.id}: {group.id} label {group.label!r} means {named.text()}, "
+                f"but its rule takes {actual.text()}; make label and rule agree",
+                (group.id,),
+            )
+    return gaps
+
+
+_NUMBER = r"-?\d+(?:\.\d+)?"
+_BRACKET_RANGE = re.compile(rf"([\[(])\s*({_NUMBER}|-inf)\s*,\s*({_NUMBER}|inf)\s*([\])])")
+
+
+def _label_interval(label: str, summary: str, unit: Optional[str]) -> Optional[GroupInterval]:
+    """Read unambiguous numeric labels; free-text category names remain names."""
+
+    text = label.strip().casefold()
+    bracket = _BRACKET_RANGE.search(text)
+    if bracket:
+        opening, lower, upper, closing = bracket.groups()
+        return GroupInterval(summary, unit, float(lower), float(upper), opening == "[", closing == "]")
+    between = re.search(rf"({_NUMBER})\s*(?:–|—|-|to|至)\s*<\s*({_NUMBER})", text)
+    if between:
+        return GroupInterval(summary, unit, float(between[1]), float(between[2]), True, False)
+    patterns = (
+        (rf"(?:<=|≤)\s*({_NUMBER})|({_NUMBER})\s*(?:岁|years?)?\s*及以下", "<="),
+        (rf"(?:>=|≥|at least)\s*({_NUMBER})|({_NUMBER})\s*(?:岁|years?)?\s*(?:及以上|以上|(?:or|and) (?:above|more|older))", ">="),
+        (rf"(?:<|below|under|less than)\s*({_NUMBER})|({_NUMBER})\s*(?:岁|years?)?\s*以下", "<"),
+        (rf"(?:>|above|over|greater than)\s*({_NUMBER})|({_NUMBER})\s*(?:岁|years?)?\s*以上且不含", ">"),
+    )
+    # Compound bounds are not half-lines (for example "≥2, <4 mmol/L").
+    matches = []
+    for pattern, op in patterns:
+        found = re.search(pattern, text)
+        if found:
+            matches.append((found, op))
+    # Prefer inclusive spellings over their contained '<' / 'below' fragments.
+    chosen = []
+    for found, op in matches:
+        if any(other.start() <= found.start() and other.end() >= found.end() for other, _ in chosen):
+            continue
+        chosen.append((found, op))
+    if not chosen:
+        return None
+    bounds = [threshold_interval({"summary": summary, "unit": unit, "op": op,
+                                  "value": next(value for value in found.groups() if value is not None)})
+              for found, op in chosen]
+    lower = max((bound.lower, not bound.lower_inclusive) for bound in bounds)
+    upper = min((bound.upper, bound.upper_inclusive) for bound in bounds)
+    return GroupInterval(summary, unit, lower[0], upper[0], not lower[1], upper[1])
+
+
+def _stated_exclusion(quote: str, gap: GroupInterval) -> bool:
+    # Require a positive exclusion clause, so "do not exclude" cannot authorize
+    # removing values. Unsupported prose is returned to the Planner to clarify.
+    clauses = re.split(r"[;；。\n]", quote.casefold())
+    for clause in clauses:
+        match = re.match(r"\s*(?:exclude|excluding|排除)\s*(?:values?\s*)?(.+)", clause)
+        if match and _label_interval(match[1], gap.summary, gap.unit) == gap:
+            return True
+    return False
 
 
 def _numbered_along_the_scale(spec: ExposureGroupSpec) -> None:
@@ -545,6 +645,7 @@ __all__ = [
     "grouping_labels",
     "grouping_levels",
     "grouping_rules",
+    "grouping_partition",
     "read_stated_exposure_groupings",
     "unquoted_groupings",
 ]

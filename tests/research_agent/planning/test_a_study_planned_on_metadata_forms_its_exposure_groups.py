@@ -215,6 +215,8 @@ def _binding_phase(root: Path, *, declared=None, count=1, candidate=None):
         second = json.loads(_ANSWER)["groupings"][0]
         second["id"] = "x2"
         second["groups"][0]["rule"]["value"] = 4.5
+        second["groups"][0]["label"] = "lactate below 4.5"
+        second["groups"][1]["label"] = "lactate 4.5 or above"
         answer["groupings"].append(second)
     kwargs = {"primary_exposure": declared}
     built = []
@@ -519,9 +521,9 @@ def test_a_candidates_group_no_prepared_stay_falls_in_stops_planning(
     low, rest = answer["groupings"][0]["groups"]
     low["label"], low["rule"]["value"] = "lactate below 2.2", 2.2
     # Between the prepared data's maxima, but none lies between 2.2 and 2.8.
-    middle = {"id": "g2", "label": "lactate 2.2 to 2.8", "rule": {**low["rule"]}}
-    middle["rule"]["value"] = 2.8
-    rest.update(id="g3", label="lactate 2.8 or above")
+    middle = {"id": "g3", "label": "lactate 2.8 or above",
+              "rule": {**low["rule"], "op": ">=", "value": 2.8}}
+    rest.update(id="g2", label="lactate 2.2 to 2.8")
     answer["groupings"][0]["groups"] = [low, middle, rest]
     answer["groupings"][0]["contrast"] = "g3"
     cohort = _catalog(tmp_path / "candidate", "lact", "age")

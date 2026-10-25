@@ -162,7 +162,7 @@ def test_a_study_states_a_coarse_and_a_fine_ordinal_grouping_of_one_value() -> N
                 _group("g2", "lower", _rule("min", "<", 60)),
                 _group("g3", "rest", "otherwise"),
             ],
-            "exposure_group_rule_unreachable",
+            "exposure_group_rules_overlap",
             id="taken-by-an-earlier-group",
         ),
         pytest.param(
@@ -222,6 +222,13 @@ def test_a_study_states_a_coarse_and_a_fine_ordinal_grouping_of_one_value() -> N
 def test_a_grouping_that_cannot_work_as_stated_is_refused(
     groups: list, found: str
 ) -> None:
+    if len({group["rule"]["summary"] for group in groups if group["rule"] != "otherwise"}) == 1 and found in {
+        "exposure_group_rules_overlap", "exposure_group_rule_unreachable", "exposure_group_rules_not_exhaustive",
+    }:
+        (compiled,) = _compiled(_context(_lab("glu_min", "min")), _glucose(groups=groups))
+        assert compiled.reason == found
+        assert not compiled.applied
+        return
     assert found in _refusal(_glucose(groups=groups))
 
 
@@ -496,17 +503,34 @@ def _compiled(context: ResearchContext, *specs: dict):
     return compile_exposure_groupings(_read(*specs), context).groupings
 
 
+def _partition_bmi(**changes: Any) -> dict:
+    return _coarse_bmi(
+        groups=[
+            _group("g1", "under 18.5", _rule("value", "<", 18.5)),
+            _group("g3", "30 or more", _rule("value", ">=", 30)),
+            _group("g2", "18.5–<30", "otherwise"),
+        ],
+        contrast="g3", **changes,
+    )
+
+
+def test_cumulative_bmi_rules_cannot_be_applied_as_disjoint_bands() -> None:
+    for compiled in _compiled(_context(_BMI), _coarse_bmi(), _fine_bmi()):
+        assert compiled.reason == "exposure_group_rules_overlap"
+        assert compiled.variable is None
+
+
 def test_the_host_reads_every_rule_and_declares_one_variable_per_grouping() -> None:
     context = _context(_lab("glu_min", "min"), _lab("glu_max", "max"), _BMI)
 
-    glucose, coarse, fine = _compiled(context, _glucose(), _coarse_bmi(), _fine_bmi())
+    glucose, coarse = _compiled(context, _glucose(), _partition_bmi())
 
     assert (glucose.disposition, glucose.variable) == ("applied", "glu_group_x1")
     assert dict(glucose.source_columns) == {"min": "glu_min", "max": "glu_max"}
-    assert (coarse.variable, fine.variable) == ("bmi_group_x2", "bmi_group_x3")
+    assert coarse.variable == "bmi_group_x2"
     assert dict(coarse.source_columns) == {"value": "bmi"}
     record = coarse.record()
-    assert record["levels"] == ["g1", "g2", "g3", "g4"]
+    assert record["levels"] == ["g1", "g2", "g3"]
     assert record["reference"] == "g2"
     assert record["derivation"]["unmeasured"] == "exclude"
 
@@ -514,27 +538,28 @@ def test_the_host_reads_every_rule_and_declares_one_variable_per_grouping() -> N
 def test_a_grouping_compares_two_of_its_groups_never_the_unmeasured_level() -> None:
     context = _context(_lab("glu_min", "min"), _lab("glu_max", "max"), _BMI)
 
-    glucose, coarse = _compiled(context, _glucose(), _coarse_bmi())
+    glucose, coarse = _compiled(context, _glucose(), _partition_bmi())
     (last_is_reference,) = _compiled(context, _glucose(reference="g3"))
 
     # Unstated: the first and the last group in code order, not gU (code 4).
     assert glucose.record()["compared"] == {"reference": 1, "contrast": 3, "stated": []}
-    assert coarse.record()["compared"] == {"reference": 2, "contrast": 4, "stated": ["reference", "contrast"]}
+    assert coarse.record()["compared"] == {"reference": 2, "contrast": 3, "stated": ["reference", "contrast"]}
     assert last_is_reference.record()["compared"] == {"reference": 3, "contrast": 2, "stated": ["reference"]}
 
 
 def test_the_derivation_digest_follows_the_levels_not_the_wording() -> None:
     context = _context(_BMI)
-    (stated,) = _compiled(context, _coarse_bmi())
-    (requoted,) = _compiled(context, _coarse_bmi(quote="BMI class at admission"))
-    moved = _coarse_bmi()
+    (stated,) = _compiled(context, _partition_bmi())
+    (requoted,) = _compiled(context, _partition_bmi(quote="BMI class at admission"))
+    moved = _partition_bmi()
     moved["groups"] = [
-        *moved["groups"][:2],
-        _group("g3", "26 to 29.9", _rule("value", ">=", 26)),
-        moved["groups"][3],
+        _group("g1", "under 19", _rule("value", "<", 19)),
+        moved["groups"][1],
+        _group("g2", "19–<30", "otherwise"),
     ]
     (rethresholded,) = _compiled(context, moved)
 
+    assert stated.applied and requoted.applied and rethresholded.applied
     assert stated.derivation_sha256() == requoted.derivation_sha256()
     assert stated.derivation_sha256() != rethresholded.derivation_sha256()
 
