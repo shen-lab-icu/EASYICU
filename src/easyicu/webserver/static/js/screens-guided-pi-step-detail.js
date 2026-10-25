@@ -42,6 +42,69 @@
     return Number.isFinite(at) ? at : null;
   }
 
+  const units = {
+    icu_stay: ['ICU stays', '次 ICU 入住'], patient: ['patients', '位患者'],
+    rows: ['rows', '行'], observations: ['observations', '个观测'], events: ['events', '个事件'],
+  };
+  const knownUnit = value => typeof value === 'string' && Object.prototype.hasOwnProperty.call(units, value);
+  const receiptCount = value => typeof value === 'number' ? bounded(value, 10000000) : null;
+  const receiptText = value => typeof value === 'string' ? value.slice(0, 240) : '';
+  const items = value => Array.isArray(value) ? value : [];
+  function validExtraction(raw) {
+    const r = raw && typeof raw === 'object' ? raw : {};
+    return {
+      status: ['recorded', 'partial'].includes(r.status) ? r.status : 'unrecorded',
+      analysisUnit: knownUnit(r.analysis_unit) ? r.analysis_unit : '',
+      extracted: receiptCount(r.extracted), retained: receiptCount(r.retained),
+      sourcePatients: receiptCount(r.source_patient_count), sourceStays: receiptCount(r.source_stay_count),
+      omitted: receiptCount(r.omitted_concepts) || 0,
+      omittedSteps: receiptCount(r.omitted_steps) || 0,
+      identifiers: items(r.identifiers).slice(0, 8).filter(Boolean).map(row => ({ name: receiptText(row.name), role: receiptText(row.role) })),
+      concepts: items(r.concepts).slice(0, 32).filter(Boolean).map(row => ({
+        ...Object.fromEntries(['column', 'concept', 'table', 'selector', 'selector_regex', 'value_column', 'time_column', 'unit_column', 'unit', 'aggregation', 'transform', 'callback'].map(key => [key, receiptText(row[key])])),
+        items: items(row.items).slice(0, 16).map(receiptText).filter(Boolean),
+        window: row.window && typeof row.window.start_hours === 'number' && Number.isFinite(row.window.start_hours)
+          && typeof row.window.end_hours === 'number' && Number.isFinite(row.window.end_hours)
+          ? { origin: receiptText(row.window.origin), start: row.window.start_hours, end: row.window.end_hours } : null,
+      })),
+      steps: items(r.steps).slice(0, 24).filter(row => row && STEP_ID.test(String(row.step_id || ''))).map(row => ({
+        stepId: row.step_id, index: receiptCount(row.index), before: receiptCount(row.before), after: receiptCount(row.after),
+        beforeUnit: knownUnit(row.before_unit) ? row.before_unit : 'rows', unit: knownUnit(row.unit) ? row.unit : 'observations',
+        events: receiptCount(row.events), model: row.model === true,
+      })),
+    };
+  }
+  const missing = () => tr('Not recorded', '未记录');
+  const recordedText = value => esc(value == null || value === '' ? missing() : value);
+  function counted(value, unit) {
+    return value == null ? missing() : `${value.toLocaleString('en-US')} ${tr(...units[unit])}`;
+  }
+  function countTable(steps) {
+    if (!steps.length) return note(tr('Step counts: Not recorded', '步骤计数：未记录'));
+    return `<table class="gpi-run-file-list"><thead><tr>${[
+      tr('Step', '步骤'), tr('Before', '处理前'), tr('After', '处理后'), tr('Events', '事件数'),
+    ].map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${steps.map(row => `<tr><th scope="row">${esc(tr(`Step ${row.index || '—'}`, `第 ${row.index || '—'} 步`))}${row.model ? ` · ${tr('Model sample', '模型样本')}` : ''}</th><td>${esc(counted(row.before, row.beforeUnit))}</td><td>${esc(counted(row.after, row.unit))}</td><td>${esc(counted(row.events, 'events'))}</td></tr>`).join('')}</tbody></table>`;
+  }
+  function renderExtraction(detail, open = false) {
+    const r = detail && detail.extraction || validExtraction(null);
+    const status = r.status === 'recorded' ? tr('Recorded', '已记录') : r.status === 'partial' ? tr('Partially recorded', '部分记录') : missing();
+    const title = tr('Extraction record: ', '提取记录：') + status;
+    if (r.status === 'unrecorded') return note(title);
+    const windowText = row => row.window ? `${row.window.origin === 'icu_admission' ? tr('ICU admission', 'ICU 入住') : row.window.origin || missing()} · ${row.window.start}–${row.window.end} ${tr('hours', '小时')}` : missing();
+    const table = r.concepts.length ? `<table class="gpi-run-file-list"><thead><tr>${[
+      tr('Concept / column', '概念／变量'), tr('Source table', '来源表'), tr('Selector', '筛选条件'), tr('Window', '时间窗'), tr('Unit', '单位'),
+    ].map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${r.concepts.map(row => `<tr><td>${recordedText(row.concept)} · ${recordedText(row.column)}</td><td>${recordedText(row.table)}</td><td>${recordedText(row.selector)} · ${recordedText(row.items.join(', ') || row.selector_regex)}</td><td>${esc(windowText(row))}</td><td>${recordedText(row.unit)}</td></tr>`).join('')}</tbody></table>` : note(tr('Concept sources: Not recorded', '概念来源：未记录'));
+    const roles = { analysis_key: ['Analysis key', '分析标识列'], stay_key: ['Stay key', '入住标识列'], patient_group: ['Patient grouping key', '患者分组列'], patient_source: ['Patient identifier source', '患者标识来源列'] };
+    const identity = r.identifiers.filter(row => Object.prototype.hasOwnProperty.call(roles, row.role)).map(row => `<div><dt>${tr(...roles[row.role])}</dt><dd>${recordedText(row.name)}</dd></div>`).join('');
+    const columns = r.concepts.map(row => `<tr><td>${recordedText(row.column)}</td>${['value_column', 'time_column', 'unit_column', 'aggregation', 'transform', 'callback'].map(key => `<td>${recordedText(row[key])}</td>`).join('')}</tr>`).join('');
+    return `<details class="gpi-extraction-record" ${open ? 'open' : ''}><summary>${esc(title)} · ${tr('View record', '查看记录')}</summary>${table}
+      <dl class="gpi-operation-facts"><div><dt>${tr('Analysis unit', '分析单位')}</dt><dd>${r.analysisUnit ? tr(...units[r.analysisUnit]) : missing()}</dd></div>${identity}</dl>
+      ${note(tr('Extraction', '提取') + ': ' + counted(r.extracted, 'icu_stay') + ' → ' + counted(r.retained, 'icu_stay'))}
+      ${r.sourcePatients != null || r.sourceStays != null ? note(tr('Source population', '来源总体') + ': ' + counted(r.sourceStays, 'icu_stay') + ' / ' + counted(r.sourcePatients, 'patient')) : ''}
+      ${countTable(r.steps)}${r.omitted ? note(tr(`${r.omitted} source entries exceed the display limit.`, `另有 ${r.omitted} 条来源记录超出展示上限。`)) : ''}${r.omittedSteps ? note(tr(`${r.omittedSteps} steps exceed the display limit.`, `另有 ${r.omittedSteps} 个步骤超出展示上限。`)) : ''}
+      <details><summary>${tr('Source columns and transformations', '来源列与转换记录')}</summary><table class="gpi-run-file-list"><thead><tr>${[tr('Column', '变量'), tr('Value column', '数值列'), tr('Time column', '时间列'), tr('Unit column', '单位列'), tr('Aggregation', '汇总方式'), tr('Transformation', '转换方法'), tr('Source callback', '来源转换函数')].map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${columns}</tbody></table></details></details>`;
+  }
+
   /* Accept only the step route's fixed shape; anything else is dropped. */
   function validDetail(raw) {
     if (!raw || typeof raw !== 'object' || !STEP_ID.test(String(raw.step_id || ''))) return null;
@@ -74,6 +137,7 @@
         lineCount: count(code.line_count), truncated: code.truncated === true,
       } : null,
       outputs,
+      extraction: validExtraction(raw.extraction_record),
       withheld: count(raw.withheld_output_count),
       more: count(raw.more_output_count),
       headline: { en: String(headline.en || '').slice(0, 240), zh: String(headline.zh || '').slice(0, 240) },
@@ -90,14 +154,13 @@
     };
   }
 
-  async function load(projectId, runId, stepId) {
-    const api = window.EU_API || {};
+  async function load(projectId, runId, stepId, api = window.EU_API || {}) {
     if (typeof api.loadPiCopilotRunStep !== 'function') {
       throw new Error(tr('The step detail API is unavailable.', '步骤详情接口不可用。'));
     }
     const response = await api.loadPiCopilotRunStep(projectId, runId, stepId);
     const detail = validDetail(response && response.step);
-    if (!detail || detail.stepId !== stepId) throw new Error(tr('This step cannot be displayed safely.', '这一步无法安全展示。'));
+    if (!response || response.ok === false || response.run_id !== runId || !detail || detail.stepId !== stepId) throw new Error(tr('This step cannot be displayed safely.', '这一步无法安全展示。'));
     return detail;
   }
 
@@ -136,7 +199,7 @@
     const add = (label, value) => { if (value != null && value !== '') facts.push([label, String(value)]); };
     const inputs = detail ? detail.inputs : {};
     add(tr('Data source', '数据源'), [inputs.sourceLabel, inputs.sourceDatabase ? `(${inputs.sourceDatabase})` : ''].filter(Boolean).join(' '));
-    add(tr('ICU stays in the research cohort', '研究队列 ICU 入住数'), inputs.stayCount);
+    add(tr('Prepared ICU stays for this run', '本次运行准备后的 ICU 入住数'), inputs.stayCount);
     add(tr('Input variables listed in the plan', '计划列出的输入变量数'), inputs.variableCount);
     const index = (inputs && inputs.stepIndex) || operation.stepIndex;
     const total = (inputs && inputs.stepTotal) || operation.stepTotal;
@@ -167,13 +230,15 @@
     const truncated = code.truncated
       ? note(tr(`Only the first ${code.lineCount} lines are shown.`, `仅显示前 ${code.lineCount} 行`)) : '';
     return `<section class="gpi-source-block">${head}${facts}
-      <div class="gpi-source-cell-meta"><span>${esc(code.displayName)}</span><div><b>${esc(language)}</b><button type="button" data-gpi-step-copy>${icon('copy', 13)} ${esc(tr('Copy code', '复制代码'))}</button></div></div>
-      <pre class="gpi-source-code" tabindex="0">${codeRows(code.text, code.language)}</pre>${truncated}
+      <details><summary>${tr('Analysis code', '分析代码')}</summary><div class="gpi-source-cell-meta"><span>${esc(code.displayName)}</span><div><b>${esc(language)}</b><button type="button" data-gpi-step-copy>${icon('copy', 13)} ${esc(tr('Copy code', '复制代码'))}</button></div></div>
+      <pre class="gpi-source-code" tabindex="0">${codeRows(code.text, code.language)}</pre>${truncated}</details>
     </section>`;
   }
 
   function outputFile(row, index) {
-    const label = `${row.name} · ${bytesText(row.bytes)}`;
+    const title = row.name === 'step_summary.json' ? tr('Step results', '步骤结果')
+      : row.name === 'critique_report.json' ? tr('Step checks', '步骤检查') : row.name;
+    const label = `${title} · ${bytesText(row.bytes)}`;
     if (row.thumbnail) {
       return `<figure class="gpi-step-figure"><img src="${esc(row.thumbnail)}" alt="${esc(row.name)}" loading="lazy"><figcaption>${esc(label)}</figcaption></figure>`;
     }
@@ -191,6 +256,7 @@
       return `<section class="gpi-source-block is-output">${head}${note(tr('The output appears when this step finishes.', '这一步完成后显示输出。'))}</section>`;
     }
     const parts = [];
+    parts.push(countTable(detail.extraction.steps.filter(row => row.stepId === detail.stepId)));
     // A failed step shows its error in a red box, with the stop's cause
     // from the error-text owner when the trace row carried one.
     if (detail.state === 'failed') {
@@ -199,7 +265,10 @@
     if (detail.state === 'skipped') parts.push(note(tr('Skipped because a step it depends on failed.', '所依赖的步骤失败，这一步已跳过。')));
     const headline = tr(detail.headline.en || '', detail.headline.zh || '');
     if (headline) parts.push(`<p class="gpi-operation-detail">${esc(headline)}</p>`);
-    const files = detail.outputs.map(outputFile).join('');
+    const technical = row => /^runner_|\.lock\./.test(row.name);
+    const indexed = detail.outputs.map((row, index) => ({ row, index }));
+    const priority = row => row.kind === 'summary' ? 0 : row.name === 'critique_report.json' ? 1 : 2;
+    const files = indexed.filter(({ row }) => !technical(row)).sort((a, b) => priority(a.row) - priority(b.row)).map(({ row, index }) => outputFile(row, index)).join('');
     if (files) parts.push(`<div class="gpi-step-files">${files}</div>`);
     const hidden = detail.withheld + detail.more;
     if (!files && !hidden && detail.state === 'complete') {
@@ -209,7 +278,7 @@
       parts.push(note(tr(`${hidden} more file(s) are not listed: patient-level data, unsupported formats or over the list limit.`,
         `另有 ${hidden} 个文件未列出：患者级数据、不支持的格式或超出列表上限。`)));
     }
-    parts.push(note(tr('The run log stays in the run record and is not shown here.', '运行日志保存在运行记录中，不在这里显示。')));
+    parts.push(`<details class="gpi-step-technical"><summary>${tr('Technical details', '技术详情')}</summary>${indexed.filter(({ row }) => technical(row)).map(({ row, index }) => outputFile(row, index)).join('')}${note(tr('The run log stays in the run record and is not shown here.', '运行日志保存在运行记录中，不在这里显示。'))}</details>`);
     return `<section class="gpi-source-block is-output">${head}${parts.join('')}</section>`;
   }
 
@@ -224,8 +293,9 @@
       ? `<span>${esc(tr(`Step ${operation.stepIndex}/${operation.stepTotal}`, `第 ${operation.stepIndex}/${operation.stepTotal} 步`))}</span>` : '';
     return `<div class="gpi-source-document gpi-operation-document gpi-step-document">
       <header class="gpi-source-title gpi-operation-title"><span class="gpi-operation-title-icon" aria-hidden="true">${operation.icon ? icon(operation.icon, 18) : ''}</span><div><h2>${esc(operation.title)}</h2><p>${position}<b class="gpi-status-chip status-${esc(status)}">${esc(statusText)}</b>${duration ? `<span>${icon('clock', 12)}${esc(duration)}</span>` : ''}</p></div></header>
-      ${inputSection(tab, helpers.codeRows)}
+      ${renderExtraction(tab.stepDetail)}
       ${outputSection(tab)}
+      ${inputSection(tab, helpers.codeRows)}
     </div>`;
   }
 
@@ -234,5 +304,5 @@
     return row && row.evidence ? { id: row.evidence.id, sha256: row.evidence.sha256, title: row.name } : null;
   }
 
-  window.EasyICU.guidedPi.declare('stepDetail', { coordinates, evidenceAt, load, render, validDetail });
+  window.EasyICU.guidedPi.declare('stepDetail', { coordinates, evidenceAt, load, render, renderExtraction, validDetail });
 })();

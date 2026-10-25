@@ -471,3 +471,257 @@ def test_browser_rows_and_step_panel_contract() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "step detail contracts passed" in result.stdout
+
+
+def _extraction_run(root: Path, *, source_field: Any = None, extracted: Any = 30,
+                    analysis_unit: Any = "icu_stay") -> Path:
+    """Small metadata receipts only; no patient rows or database files."""
+    run = _synthetic_run(root)
+    records = json.loads((run / "evidence/evidence_index.json").read_text())
+
+    def reference(prefix: str, payload: dict) -> dict:
+        raw = json.dumps(payload).encode()
+        name = f"{prefix}.sha256-{_sha(raw)}.json"
+        _write(run / name, raw)
+        return {"file": name, "sha256": _sha(raw), "size": len(raw)}
+
+    sidecar = reference("cohort_column_metadata", {
+        "schema_version": "easyicu.column_metadata_sidecar/1",
+        "files": [{"columns": {"marker_peak": {
+            "metadata": {"source_concept": "marker", "canonical_unit": "mg/L",
+                         "aggregation": "max", "source_lineage": [{
+                             "table": "assay", "selector_variable": "test_name",
+                             "item_ids": ["marker"], "value_variable": source_field,
+                             "time_variable": "sample_hour", "unit_variable": "unit",
+                         }]},
+            "derivation_window": {"origin": "icu_admission", "start_hours": 0, "end_hours": 6},
+            "representation_transform": "window_numeric_max",
+        }}}],
+    })
+    authority = reference("cohort_authority", {
+        "schema_version": "easyicu.materialized_cohort_authority/1",
+        "cohort_sha256": "b" * 64, "column_metadata": sidecar,
+        "identity_column": "patient_stay_id",
+        "semantic_provenance": {
+            "n_stays_extracted": extracted, "n_stays_after_inclusion_exclusion": 24,
+            "hospital_followup_materialization": {"followup": {"analysis_unit": analysis_unit}},
+            "replacement_row_identity": {
+                "mapping_stay_column": "stay_id", "mapping_patient_column": "patient_key",
+                "output_identity_column": "patient_stay_id",
+                "authority_coordinates": {"identity_table": "person", "patient_identifier_column": "person_key",
+                                          "patients": 20, "stays": 30},
+            },
+        },
+    })
+
+    def register(name: str, payload: dict, step: str | None = None) -> None:
+        eid = f"receipt_{step}" if step else "run_input_capsule"
+        raw = _write(run / name if step is None else run / "steps" / step / "outputs" / name,
+                     json.dumps(payload))
+        relative = f"evidence/{eid}__{name}"
+        _write(run / relative, raw)
+        records.append({"evidence_id": eid, "kind": "statistic" if step else "log",
+                        "relative_path": relative, "sha256": _sha(raw), "produced_by_step": step})
+
+    register("run_input_capsule.json", {"schema_version": "easyicu.run_input_capsule/2",
+             "materialized_cohort_authority_ref": authority, "cohort_sha256": "b" * 64})
+    register("step_summary.json", {"n_source": 24, "n_analysis_cohort": 18,
+             "analysis_unit": analysis_unit}, "cohort_accounting")
+    binding = [{"input_key": "artifact:analysis_cohort", "loaded": True, "row_count": 18}]
+    register("step_summary.json", {"cohort_n": 18, "input_bindings": binding}, "baseline_table")
+    register("step_summary.json", {"n_total": 9, "n_events": 2, "estimator_kind": "logistic",
+             "input_bindings": binding}, "outcome_distribution")
+    register("step_summary.json", {"n_total": 77}, "running_step")
+    _write(run / "evidence/evidence_index.json", json.dumps(records))
+    return run
+
+
+def test_extraction_receipt_keeps_each_step_denominator_and_null_source(tmp_path: Path) -> None:
+    run = _extraction_run(tmp_path / RUN_ID)
+    detail = run_step_trace.project_step_detail(run, "outcome_distribution")
+    receipt = detail["extraction_record"]
+    assert receipt["status"] == "partial"
+    assert receipt["analysis_unit"] == "icu_stay"
+    assert receipt["extracted"] == 30 and receipt["retained"] == 24
+    assert receipt["source_patient_count"] == 20
+    assert receipt["concepts"][0]["value_column"] is None
+    assert receipt["concepts"][0]["table"] == "assay"
+    assert receipt["concepts"][0]["selector"] == "test_name"
+    assert receipt["concepts"][0]["items"] == ["marker"]
+    assert receipt["concepts"][0]["window"] == {"origin": "icu_admission", "start_hours": 0, "end_hours": 6}
+    assert {row["name"] for row in receipt["identifiers"]} >= {"stay_id", "patient_stay_id", "patient_key", "person.person_key"}
+    counts = {row["step_id"]: row for row in receipt["steps"]}
+    assert [(counts[s]["before"], counts[s]["after"]) for s in
+            ("cohort_accounting", "baseline_table", "outcome_distribution")] == [(24, 18), (18, 18), (18, 9)]
+    assert counts["outcome_distribution"]["events"] == 2
+    assert counts["outcome_distribution"]["unit"] == "observations"
+    assert counts["cohort_accounting"]["unit"] == "icu_stay"
+    assert counts["outcome_distribution"]["model"] is True
+    assert not any(row["step_id"] == "running_step" for row in receipt["steps"])
+
+
+def test_complete_receipt_and_no_execution_receipt_are_distinct(tmp_path: Path) -> None:
+    run = _extraction_run(tmp_path / RUN_ID, source_field="measurement")
+    assert run_step_trace.project_step_detail(run, "baseline_table")["extraction_record"]["status"] == "recorded"
+    planned = _synthetic_run(tmp_path / "planned")
+    _write(planned / "progressive_step_materializations.json", json.dumps({"extraction_completed": True, "n_total": 77}))
+    receipt = run_step_trace.project_step_detail(planned, "planned_later")["extraction_record"]
+    assert receipt["status"] == "unrecorded" and receipt["concepts"] == []
+    assert receipt["steps"] == []
+
+
+@pytest.mark.parametrize("damage", ["missing", "digest", "size", "traversal", "private", "symlink", "wrong_run", "cohort"])
+def test_extraction_authority_must_be_current_run_owned_and_verified(tmp_path: Path, damage: str) -> None:
+    run = _extraction_run(tmp_path / RUN_ID)
+    capsule = json.loads((run / "run_input_capsule.json").read_text())
+    ref = capsule["materialized_cohort_authority_ref"]
+    authority = run / ref["file"]
+    if damage == "missing":
+        authority.unlink()
+    elif damage == "digest":
+        authority.write_text(authority.read_text().replace('"n_stays_extracted": 30', '"n_stays_extracted": 31'))
+    elif damage == "size":
+        ref["size"] += 1
+    elif damage == "traversal":
+        _write(tmp_path / ref["file"], authority.read_bytes())
+        ref["file"] = "../" + ref["file"]
+    elif damage == "private":
+        ref["file"] = ".runtime/table_one_private_checkpoint.json"
+    elif damage == "symlink":
+        other = tmp_path / "other.json"
+        authority.rename(other)
+        authority.symlink_to(other)
+    elif damage == "wrong_run":
+        capsule["run_id"] = "run_elsewhere"
+    elif damage == "cohort":
+        capsule["cohort_sha256"] = "c" * 64
+    raw = _write(run / "run_input_capsule.json", json.dumps(capsule))
+    _write(run / "evidence/run_input_capsule__run_input_capsule.json", raw)
+    records = json.loads((run / "evidence/evidence_index.json").read_text())
+    next(row for row in records if row["evidence_id"] == "run_input_capsule")["sha256"] = _sha(raw)
+    _write(run / "evidence/evidence_index.json", json.dumps(records))
+    receipt = run_step_trace.project_step_detail(run, "baseline_table")["extraction_record"]
+    assert receipt["status"] == "partial", "verified step counts remain independently readable"
+    assert receipt["concepts"] == [] and receipt["extracted"] is None
+
+
+@pytest.mark.parametrize("value", [None, True, 1.5, -1, "9", 10_000_001, 0])
+def test_step_counts_do_not_coerce_missing_or_invalid_values(tmp_path: Path, value: Any) -> None:
+    run = _extraction_run(tmp_path / RUN_ID)
+    path = run / "steps/outcome_distribution/outputs/step_summary.json"
+    summary = json.loads(path.read_text())
+    summary["n_total"] = value
+    raw = _write(path, json.dumps(summary))
+    _write(run / "evidence/receipt_outcome_distribution__step_summary.json", raw)
+    records = json.loads((run / "evidence/evidence_index.json").read_text())
+    next(row for row in records if row["evidence_id"] == "receipt_outcome_distribution")["sha256"] = _sha(raw)
+    _write(run / "evidence/evidence_index.json", json.dumps(records))
+    receipt = run_step_trace.project_step_detail(run, "outcome_distribution")["extraction_record"]
+    count = next(row for row in receipt["steps"] if row["step_id"] == "outcome_distribution")
+    assert count["after"] == (0 if type(value) is int and value == 0 else None)
+
+
+def test_changed_summary_is_not_replaced_by_run_cohort_count(tmp_path: Path) -> None:
+    run = _extraction_run(tmp_path / RUN_ID)
+    _write(run / "steps/outcome_distribution/outputs/step_summary.json", '{"n_total": 24}')
+    receipt = run_step_trace.project_step_detail(run, "outcome_distribution")["extraction_record"]
+    assert not any(row["step_id"] == "outcome_distribution" for row in receipt["steps"])
+
+
+@pytest.mark.parametrize("source_field", [{"patient_rows": [{"stay_id": "synthetic-secret"}]}, "token=synthetic-secret", "/home/private/source", "stay_id=synthetic-secret"])
+def test_receipt_never_projects_rows_secrets_or_opens_private_checkpoints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_field: Any,
+) -> None:
+    run = _extraction_run(tmp_path / RUN_ID, source_field=source_field)
+    _write(run / "steps/baseline_table/outputs/table_one_private_checkpoint.json", "synthetic private sentinel")
+    original = run_step_trace._read_bounded
+
+    def guarded(path: Path, limit: int) -> bytes | None:
+        assert "private_checkpoint" not in path.name and ".runtime" not in path.parts
+        return original(path, limit)
+
+    monkeypatch.setattr(run_step_trace, "_read_bounded", guarded)
+    detail = run_step_trace.project_step_detail(run, "baseline_table")
+    assert detail["extraction_record"]["concepts"][0]["value_column"] is None
+    encoded = json.dumps(detail)
+    for forbidden in ("synthetic-secret", "patient_rows", "private_checkpoint", "/home/private"):
+        assert forbidden not in encoded
+
+
+def test_a_descriptive_total_is_not_a_model_sample(tmp_path: Path) -> None:
+    run = _extraction_run(tmp_path / RUN_ID)
+    path = run / "steps/outcome_distribution/outputs/step_summary.json"
+    summary = json.loads(path.read_text())
+    summary.pop("estimator_kind")
+    raw = _write(path, json.dumps(summary))
+    _write(run / "evidence/receipt_outcome_distribution__step_summary.json", raw)
+    records = json.loads((run / "evidence/evidence_index.json").read_text())
+    next(row for row in records if row["evidence_id"] == "receipt_outcome_distribution")["sha256"] = _sha(raw)
+    _write(run / "evidence/evidence_index.json", json.dumps(records))
+    receipt = run_step_trace.project_step_detail(run, "outcome_distribution")["extraction_record"]
+    row = next(row for row in receipt["steps"] if row["step_id"] == "outcome_distribution")
+    assert row["after"] == 9 and row["model"] is False
+
+
+@pytest.mark.parametrize("damage", ["capsule_digest", "sidecar_digest", "summary_step", "duplicate_summary"])
+def test_each_receipt_binding_is_checked_independently(tmp_path: Path, damage: str) -> None:
+    run = _extraction_run(tmp_path / RUN_ID)
+    records = json.loads((run / "evidence/evidence_index.json").read_text())
+    if damage == "capsule_digest":
+        next(row for row in records if row["evidence_id"] == "run_input_capsule")["sha256"] = "d" * 64
+    elif damage == "sidecar_digest":
+        capsule = json.loads((run / "run_input_capsule.json").read_text())
+        authority = json.loads((run / capsule["materialized_cohort_authority_ref"]["file"]).read_text())
+        path = run / authority["column_metadata"]["file"]
+        path.write_text(path.read_text().replace('"assay"', '"other"'))
+    elif damage == "summary_step":
+        path = run / "steps/outcome_distribution/outputs/step_summary.json"
+        summary = {**json.loads(path.read_text()), "step_id": "baseline_table"}
+        raw = _write(path, json.dumps(summary))
+        _write(run / "evidence/receipt_outcome_distribution__step_summary.json", raw)
+        next(row for row in records if row["evidence_id"] == "receipt_outcome_distribution")["sha256"] = _sha(raw)
+    else:
+        records.append(next(row for row in records if row["evidence_id"] == "receipt_outcome_distribution"))
+    _write(run / "evidence/evidence_index.json", json.dumps(records))
+    receipt = run_step_trace.project_step_detail(run, "outcome_distribution")["extraction_record"]
+    if damage in {"capsule_digest", "sidecar_digest"}:
+        assert receipt["concepts"] == []
+    else:
+        assert not any(row["step_id"] == "outcome_distribution" for row in receipt["steps"])
+
+
+def test_receipt_limits_are_explicit(tmp_path: Path) -> None:
+    run = _extraction_run(tmp_path / RUN_ID)
+    plan = json.loads((run / "analysis_plan.json").read_text())
+    plan["steps"] += [{"step_id": f"extra_{n}"} for n in range(30)]
+    _write(run / "analysis_plan.json", json.dumps(plan))
+    receipt = run_step_trace.project_step_detail(run, "baseline_table")["extraction_record"]
+    assert receipt["omitted_steps"] == 11
+    concepts, omitted = run_step_trace._receipt_concepts({"files": [{"columns": {
+        f"marker_{n}": {"metadata": {"source_concept": "marker"}} for n in range(35)
+    }}]})
+    assert len(concepts) == 32 and omitted == 3
+
+
+def test_missing_extraction_count_is_a_partial_record(tmp_path: Path) -> None:
+    run = _extraction_run(tmp_path / RUN_ID, source_field="measurement", extracted=None)
+    receipt = run_step_trace.project_step_detail(run, "baseline_table")["extraction_record"]
+    assert receipt["status"] == "partial" and receipt["extracted"] is None
+
+
+@pytest.mark.parametrize("unit", [{"name": "icu_stay"}, ["patient"], "unknown"])
+def test_unknown_unit_is_unrecorded_without_rejecting_other_facts(tmp_path: Path, unit: Any) -> None:
+    run = _extraction_run(tmp_path / RUN_ID, analysis_unit=unit)
+    receipt = run_step_trace.project_step_detail(run, "baseline_table")["extraction_record"]
+    assert receipt["analysis_unit"] is None and receipt["retained"] == 24
+    assert receipt["steps"][0]["unit"] == "observations"
+
+
+def test_runner_records_do_not_displace_results_at_the_output_cap(run_dir: Path) -> None:
+    for index in range(run_step_trace.MAX_OUTPUT_FILES):
+        _write(run_dir / f"steps/baseline_table/outputs/runner_{index}.json", "{}")
+    detail = run_step_trace.project_step_detail(run_dir, "baseline_table")
+    names = [row["name"] for row in detail["outputs"]]
+    assert names[0] == "step_summary.json"
+    assert "table_one.csv" in names and "figure.png" in names
+    assert len(names) == run_step_trace.MAX_OUTPUT_FILES and detail["more_output_count"] > 0

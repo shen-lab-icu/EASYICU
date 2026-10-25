@@ -31,7 +31,7 @@
 
   function createController(api, changed) {
     const state = { projects: [], drafts: [], selected: null, runs: [], count: 0,
-      review: null, artifact: null, loading: false, error: '', warning: '', signing: false };
+      review: null, artifact: null, extraction: null, extractionError: '', loading: false, error: '', warning: '', signing: false };
     let revision = 0;
     function update() { if (changed) changed(state); }
     function checked(value) {
@@ -102,6 +102,7 @@
     }
     async function openRun(run) {
       const ticket = ++revision;
+      state.extraction = null; state.extractionError = '';
       state.review = null; state.artifact = null; state.error = ''; state.loading = true; update();
       try {
         const review = checked(await api.loadAgentRunReview({ run_ref: run.run_ref }));
@@ -110,6 +111,30 @@
         state.review = review;
       } catch (error) { if (ticket === revision) state.error = String(error.message || error); }
       finally { if (ticket === revision) { state.loading = false; update(); } }
+    }
+    async function readExtraction(projectId, runId) {
+      const review = state.review;
+      const owner = modules.optional('stepDetail');
+      const plan = rows(review && review.artifacts).find(item => item.name === 'agent_plan.json');
+      if (!review || review.engine !== 'easyicu.research_agent.pipeline' || !projectId || !plan || !owner
+        || typeof api.loadAgentRunArtifact !== 'function' || typeof api.loadPiCopilotRunStep !== 'function') return;
+      const ticket = ++revision;
+      state.loading = true; state.extraction = null; state.extractionError = ''; update();
+      try {
+        if (review.run_id !== runId) throw new Error('Run identity mismatch');
+        const data = checked(await api.loadAgentRunArtifact({ run_ref: review.run_ref }, 'agent_plan.json'));
+        if (ticket !== revision) return;
+        if (data.run_ref !== review.run_ref || !/^[a-f0-9]{64}$/.test(String(plan.sha256 || ''))
+          || !data.artifact || data.artifact.name !== plan.name || data.artifact.sha256 !== plan.sha256) throw new Error('Receipt identity mismatch');
+        // A verified saved plan supplies the coordinate only. It does not
+        // establish extraction; the existing step route reads executed receipts.
+        const first = rows(data.payload && data.payload.steps)[0];
+        if (!first || !owner.coordinates(review.run_id, first.step_id)) throw new Error('Step coordinate unavailable');
+        const detail = await owner.load(projectId, review.run_id, first.step_id, api);
+        if (ticket === revision) state.extraction = detail;
+      } catch (_) {
+        if (ticket === revision) state.extractionError = tr('The extraction record could not be verified.', '提取记录未能核对。');
+      } finally { if (ticket === revision) { state.loading = false; update(); } }
     }
     async function artifact(name) {
       const review = state.review;
@@ -154,7 +179,7 @@
       finally { state.signing = false; if (ticket === revision) update(); }
     }
     function invalidate() { revision += 1; }
-    return { state, catalog, select, openRun, artifact, download, sign, invalidate };
+    return { state, catalog, select, openRun, readExtraction, artifact, download, sign, invalidate };
   }
 
   function runIds(row) {
@@ -275,7 +300,12 @@
       const primary = primaryNames.map(name => artifacts.findIndex(item => item.name === name)).filter(index => index >= 0).map(index => file(artifacts[index], index)).join('');
       const other = artifacts.map((item, index) => primaryNames.includes(item.name) ? '' : file(item, index)).join('');
       const signable = review.readiness && review.readiness.signable === true && !review.signed && !state.selected.readOnly;
+      const extractionOwner = modules.optional('stepDetail');
+      const extraction = state.extractionError ? `<p>${esc(state.extractionError)}</p>`
+        : state.loading && !state.extraction ? `<p>${tr('Reading extraction record…', '正在读取提取记录…')}</p>`
+          : extractionOwner ? extractionOwner.renderExtraction(state.extraction) : `<p>${tr('Extraction record: Not recorded', '提取记录：未记录')}</p>`;
       return `${error}<div class="gpi-run-files-actions"><button type="button" data-run-files-bundle ${disabled || !artifacts.length ? 'disabled' : ''}>${tr('Download all files', '下载全部文件')}</button><button type="button" data-run-files-reload ${disabled ? 'disabled' : ''}>${tr('Refresh status', '刷新状态')}</button></div>
+        ${extraction}
         ${primary ? table(primary) : ''}${other ? `<details class="gpi-run-extra" ${entry.extraOpen ? 'open' : ''}><summary>${tr('More files & provenance', '更多文件与溯源')}</summary>${table(other)}</details>` : ''}
         ${review.signoff_stale ? `<p class="gpi-run-files-error">${tr('Review is stale: files changed or are missing.', '审阅已失效：文件发生变化或缺失。')}</p>` : review.signed ? `<p role="status">${tr('Local review recorded.', '已记录本地审阅。')}</p>` : ''}
         ${signable ? `<details class="gpi-run-signoff" ${entry.reviewOpen ? 'open' : ''}><summary>${tr('Record my review', '记录我的审阅')}</summary><p>${tr('Local review does not grant publication authority.', '本地审阅不授予发表权限。')}</p><fieldset>${confirmations.map(([id, en, zh]) => `<label><input type="checkbox" data-run-files-confirm="${id}" ${entry.checks.has(id) ? 'checked' : ''} ${disabled ? 'disabled' : ''}>${tr(en, zh)}</label>`).join('')}<button type="button" data-run-files-sign ${disabled || entry.checks.size !== confirmations.length ? 'disabled' : ''}>${tr('Sign reviewed run', '签署本次审阅')}</button></fieldset></details>` : ''}
@@ -329,6 +359,7 @@
       }
       entry.open = true; entry.checks.clear();
       await entry.controller.openRun(run);
+      if (ticket === generation) await entry.controller.readExtraction(context().projectId, run.run_id);
     }
     function handleClick(event) {
       const target = event.target;

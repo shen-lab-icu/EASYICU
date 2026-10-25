@@ -30,6 +30,7 @@ from easyicu.runtime.platform_compat import open_nofollow
 import base64
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -791,7 +792,13 @@ def _outputs(
         if str(record.get("produced_by_step") or "") == step_id:
             by_name.setdefault(_record_name(record), []).append(record)
     try:
-        entries = sorted(os.scandir(outputs_dir), key=lambda entry: entry.name)
+        # Apply clinical priority before the cap, so runner records cannot
+        # displace the summary or result tables from the bounded list.
+        entries = sorted(os.scandir(outputs_dir), key=lambda entry: (
+            entry.name != "step_summary.json",
+            entry.name.startswith("runner_") or ".lock." in entry.name,
+            entry.name,
+        ))
     except OSError:
         return [], 0, 0
     listed: List[Dict[str, Any]] = []
@@ -808,7 +815,7 @@ def _outputs(
             continue
         name = entry.name
         kind = _OUTPUT_KINDS.get(Path(name).suffix.lower())
-        if kind is None or not _FILE_NAME.fullmatch(name):
+        if kind is None or not _FILE_NAME.fullmatch(name) or name == "table_one_private_checkpoint.json":
             # Row-level and unknown formats are never named or served.
             withheld += 1
             continue
@@ -950,6 +957,207 @@ def wrapper_source(project_dir: str) -> Optional[Dict[str, Any]]:
     return dict(source) if isinstance(source, Mapping) else None
 
 
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _list(value: Any) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _receipt_count(value: Any) -> Optional[int]:
+    return value if type(value) is int and 0 <= value <= MAX_STAY_COUNT else None
+
+
+def _receipt_text(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip() or len(value) > 240:
+        return None
+    return value if run_artifact_disclosure.scan_browser_projection({"text": value})["passed"] else None
+
+
+def _receipt_name(value: Any) -> Optional[str]:
+    text = _receipt_text(value)
+    return text if text and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,159}", text) else None
+
+
+def _verified_receipt(
+    root: Path, records: List[Mapping[str, Any]], name: str, step: Optional[str] = None,
+) -> Mapping[str, Any]:
+    """Only a unique, current registered receipt, never an arbitrary JSON file."""
+    matches = [r for r in records if _record_name(r) == name
+               and r.get("produced_by_step") == step
+               and r.get("kind") == ("statistic" if step else "log")]
+    if len(matches) != 1 or not (identity := _registered(matches[0])):
+        return {}
+    path = _record_file(root, matches[0])
+    raw = _read_bounded(path, MAX_SUMMARY_BYTES) if path else None
+    original = _child(root, "steps", step, "outputs", name) if step else _child(root, name)
+    current = _read_bounded(original, MAX_SUMMARY_BYTES) if original else None
+    if raw is None or raw != current or hashlib.sha256(raw).hexdigest() != identity[1]:
+        return {}
+    try:
+        value = _mapping(json.loads(raw))
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    if value.get("run_id", root.name) != root.name or (step and value.get("step_id", step) != step):
+        return {}
+    return value
+
+
+def _receipt_reference(root: Path, reference: Any, prefix: str) -> Mapping[str, Any]:
+    """Allow only the two immutable metadata families in this run's root.
+
+    Do not use the materialized-cohort loader: that owner opens row data.
+    Neither a client path nor any private checkpoint is an admitted reference.
+    """
+    ref = _mapping(reference)
+    digest = str(ref.get("sha256") or "")
+    if not _SHA256.fullmatch(digest) or ref.get("file") != f"{prefix}.sha256-{digest}.json":
+        return {}
+    path = _child(root, ref["file"])
+    raw = _read_bounded(path, MAX_SUMMARY_BYTES) if path else None
+    if raw is None or type(ref.get("size")) is not int or len(raw) != ref["size"]:
+        return {}
+    if hashlib.sha256(raw).hexdigest() != digest:
+        return {}
+    try:
+        return _mapping(json.loads(raw))
+    except (ValueError, UnicodeDecodeError):
+        return {}
+
+
+def _receipt_concepts(sidecar: Mapping[str, Any]) -> Tuple[List[Dict[str, Any]], int]:
+    concepts: List[Dict[str, Any]] = []
+    omitted = 0
+    for file in _list(sidecar.get("files")):
+        for column, binding in _mapping(_mapping(file).get("columns")).items():
+            entry = _mapping(binding)
+            metadata = _mapping(entry.get("metadata"))
+            if not _receipt_name(column) or not metadata:
+                continue
+            window = _mapping(entry.get("derivation_window"))
+            bounds = [window.get(key) for key in ("start_hours", "end_hours")]
+            timed = all(type(n) in {float, int} and math.isfinite(n) for n in bounds)
+            for source in _list(metadata.get("source_lineage")) or [{}]:
+                if len(concepts) >= 32:
+                    omitted += 1
+                    continue
+                lineage = _mapping(source)
+                concepts.append({
+                    "column": column, "concept": _receipt_name(metadata.get("source_concept")),
+                    "table": _receipt_name(lineage.get("table")),
+                    "selector": _receipt_name(lineage.get("selector_variable")),
+                    "items": [text for item in _list(lineage.get("item_ids"))[:16]
+                              if (text := _receipt_text(item))],
+                    "selector_regex": _receipt_text(lineage.get("selector_regex")),
+                    "value_column": _receipt_name(lineage.get("value_variable")),
+                    "time_column": _receipt_name(lineage.get("time_variable")),
+                    "unit_column": _receipt_name(lineage.get("unit_variable")),
+                    "unit": _receipt_text(metadata.get("canonical_unit")),
+                    "aggregation": _receipt_name(metadata.get("aggregation")),
+                    "transform": _receipt_text(entry.get("representation_transform")),
+                    "callback": _receipt_text(lineage.get("callback")),
+                    "window": {"origin": _receipt_name(window.get("origin")),
+                               "start_hours": bounds[0], "end_hours": bounds[1]} if timed else None,
+                })
+    return concepts, omitted
+
+
+def _receipt_step_counts(
+    root: Path, records: List[Mapping[str, Any]], run_rows: List[Mapping[str, Any]],
+    authority: Mapping[str, Any], analysis_unit: Optional[str],
+) -> List[Dict[str, Any]]:
+    counts = []
+    for index, planned in enumerate(_planned_steps(root)[:24], 1):
+        step = str(planned.get("step_id") or "")
+        if not _STEP_ID.fullmatch(step):
+            continue
+        state = _step_state(r for r in run_rows if r.get("step_id") == step)
+        if state in {"running", "not_started", "skipped"}:
+            continue
+        summary = _verified_receipt(root, records, "step_summary.json", step)
+        if not summary:
+            continue
+        binding_key = summary.get("cohort_input_key") or summary.get("typed_cohort_input")
+        inputs = [_mapping(row) for row in _list(summary.get("input_bindings"))
+                  if _mapping(row).get("loaded") is True
+                  and (not binding_key or _mapping(row).get("input_key") == binding_key)]
+        before = _receipt_count(summary.get("n_source"))
+        if "n_source" not in summary and len(inputs) == 1:
+            before = _receipt_count(inputs[0].get("row_count"))
+        model = "n_total" in summary and bool(summary.get("estimator_kind") or summary.get("model_contracts"))
+        after_key = next((key for key in ("n_total", "n_analysis_cohort", "analysis_cohort_n", "cohort_n")
+                          if key in summary), "")
+        unit = summary.get("analysis_unit")
+        landmark = _mapping(summary.get("landmark_runtime_receipt"))
+        if (landmark.get("schema_version") == "easyicu.landmark_categorical_cohort_runtime_receipt/1"
+                and landmark.get("source_sha256") == authority.get("cohort_sha256")):
+            unit = analysis_unit
+        unit = unit if isinstance(unit, str) and unit in {"icu_stay", "patient"} else "observations"
+        counts.append({"step_id": step, "index": index, "before": before,
+                       "before_unit": unit if "n_source" in summary else "rows",
+                       "after": _receipt_count(summary.get(after_key)), "unit": unit,
+                       "events": _receipt_count(summary.get("n_events")), "model": model})
+    return counts
+
+
+def _extraction_record(
+    root: Path, records: List[Mapping[str, Any]], run_rows: List[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Bounded, allowlisted facts from the registered run input and step receipts.
+
+    The capsule's current authority (not its earlier scientific-input snapshot)
+    binds the sidecar. Null coordinates remain null; no dictionary is consulted.
+    Patient grouping counts describe the source universe, never a model cohort.
+    """
+    capsule = _verified_receipt(root, records, "run_input_capsule.json")
+    authority = _receipt_reference(root, capsule.get("materialized_cohort_authority_ref"), "cohort_authority")
+    if (capsule.get("schema_version") != "easyicu.run_input_capsule/2"
+            or authority.get("schema_version") != "easyicu.materialized_cohort_authority/1"
+            or not capsule.get("cohort_sha256")
+            or authority.get("cohort_sha256") != capsule["cohort_sha256"]):
+        authority = {}
+    sidecar = _receipt_reference(root, authority.get("column_metadata"), "cohort_column_metadata")
+    if sidecar.get("schema_version") != "easyicu.column_metadata_sidecar/1":
+        sidecar = {}
+    provenance = _mapping(authority.get("semantic_provenance"))
+    followup = _mapping(_mapping(provenance.get("hospital_followup_materialization")).get("followup"))
+    unit = followup.get("analysis_unit")
+    unit = unit if isinstance(unit, str) and unit in {"icu_stay", "patient"} else None
+    replacement = _mapping(provenance.get("replacement_row_identity"))
+    grouping = _mapping(replacement.get("authority_coordinates"))
+    identifiers = []
+    for name, role in ((authority.get("identity_column"), "analysis_key"),
+                       (replacement.get("mapping_stay_column"), "stay_key"),
+                       (replacement.get("mapping_patient_column"), "patient_group")):
+        if clean := _receipt_name(name):
+            identifiers.append({"name": clean, "role": role})
+    table = _receipt_name(grouping.get("identity_table"))
+    column = _receipt_name(grouping.get("patient_identifier_column"))
+    if table and column:
+        identifiers.append({"name": f"{table}.{column}", "role": "patient_source"})
+    concepts, omitted = _receipt_concepts(sidecar)
+    steps = _receipt_step_counts(root, records, run_rows, authority, unit)
+    omitted_steps = max(0, len(_planned_steps(root)) - 24)
+    extracted = _receipt_count(provenance.get("n_stays_extracted"))
+    retained = _receipt_count(provenance.get("n_stays_after_inclusion_exclusion"))
+    complete = (
+        bool(concepts and unit and identifiers and steps and not omitted and not omitted_steps)
+        and all(row.get(key) is not None for row in concepts
+                for key in ("concept", "table", "value_column", "time_column", "unit_column", "unit", "window"))
+        and all(row["before"] is not None and row["after"] is not None for row in steps)
+        and extracted is not None and retained is not None
+    )
+    return {
+        "status": "recorded" if complete else "partial" if authority or steps else "unrecorded",
+        "analysis_unit": unit, "identifiers": identifiers, "concepts": concepts,
+        "omitted_concepts": omitted, "omitted_steps": omitted_steps, "steps": steps,
+        "extracted": extracted, "retained": retained,
+        "source_patient_count": _receipt_count(grouping.get("patients")),
+        "source_stay_count": _receipt_count(grouping.get("stays")),
+    }
+
+
 def project_step_detail(
     run_dir: Path, step_id: str, *, source: Optional[Mapping[str, Any]] = None
 ) -> Dict[str, Any]:
@@ -1006,6 +1214,7 @@ def project_step_detail(
         "withheld_output_count": withheld,
         "more_output_count": more,
         "inputs": _step_inputs(root, clean, run_rows, source),
+        "extraction_record": _extraction_record(root, records, run_rows),
         "timing": _step_timing(rows),
     }
     headline = _headline(summary) if finished else None

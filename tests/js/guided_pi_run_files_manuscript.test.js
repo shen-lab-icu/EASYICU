@@ -13,20 +13,35 @@ global.t = (en, zh) => zh;
 global.icon = () => '';
 global.document = { addEventListener() {} };
 for (const file of process.argv.slice(2)) require(path.resolve(file));
+require(path.resolve('src/easyicu/webserver/static/js/screens-guided-pi-step-detail.js'));
 const modules = global.EasyICU.guidedPi;
 const runFiles = modules.require('runFiles');
 const resources = modules.require('resources').create({ esc: global.EU_HTML.esc });
 
 const REF = 'rr_' + 'f'.repeat(32);
 const run = { run_id: 'run_flagship', study_id: 'a', run_ref: REF };
-function listFor(names, readiness, fileGuide) {
+function listFor(names, readiness, fileGuide, receipts = {}) {
+  const calls = [];
   const api = {
     listStudyContexts: async () => ({ contexts: [{ id: 'a', title: 'A' }] }),
     loadIdeaAgentProjects: async () => ({ projects: [] }),
     loadGuidedDrafts: async () => ({ drafts: [] }),
     loadAgentRunHistory: async () => ({ ok: true, runs: [run], count: 1 }),
     loadAgentRunReview: async () => ({ ok: true, ...run, engine: 'easyicu.research_agent.pipeline', signed: false, readiness,
-      artifacts: names.map(name => ({ name, sha256: 'a'.repeat(64) })), ...(fileGuide ? { file_guide: fileGuide } : {}) }),
+      artifacts: names.map(name => ({ name, sha256: 'a'.repeat(64) })), ...(fileGuide ? { file_guide: fileGuide } : {}), ...receipts.review }),
+    loadAgentRunArtifact: async (identity, name) => {
+      calls.push(['artifact', identity, name]);
+      return { ok: true, run_ref: REF, artifact: { name, sha256: 'a'.repeat(64) },
+        payload: { steps: [{ step_id: 'summary_step' }] }, ...receipts.plan };
+    },
+    loadPiCopilotRunStep: async (...args) => {
+      calls.push(['step', ...args]);
+      return { ok: true, run_id: run.run_id, step: { step_id: 'summary_step', state: 'complete',
+        extraction_record: { status: 'partial', extracted: 30, retained: 24, analysis_unit: 'icu_stay',
+          concepts: [{ column: 'marker_peak', concept: 'marker', table: 'assay', selector: 'test_name', items: ['marker'], unit: 'mg/L' }],
+          steps: [{ step_id: 'summary_step', index: 1, before: 24, after: 18, before_unit: 'rows', unit: 'observations' }],
+        } }, ...receipts.step };
+    },
   };
   const view = runFiles.create({
     api: () => api, changed() {}, resourceButton: resources.button,
@@ -40,7 +55,7 @@ function listFor(names, readiness, fileGuide) {
     await view.open(REF);
     const html = view.render({ savedRuns: [run] });
     const [primary, extra = ''] = html.split('<details class="gpi-run-extra"');
-    return { primary, extra };
+    return { primary, extra, calls };
   })();
 }
 // The button a file renders as: its visible text and the title the reader opens with.
@@ -106,6 +121,28 @@ const names = ['manuscript_provenance.json', 'manuscript_scaffold.pdf', 'result_
   list = await listFor(names, { signable: false, non_human_failures: ['analysis_validated'] });
   assert.match(list.primary, /原运行：已阻断/);
   assert.doesNotMatch(list.primary, /data-manuscript-outcome="not_passed"|分析已完成；只有论文稿未通过检查/);
+  list = await listFor(names.concat('agent_plan.json'), executed);
+  assert.match(list.primary, /提取记录：部分记录/);
+  assert.match(list.primary, /查看记录/);
+  assert.match(list.primary, /assay/);
+  assert.match(list.primary, /30 次 ICU 入住 → 24 次 ICU 入住/);
+  assert.match(list.primary, /18 个观测/);
+  assert.deepEqual(list.calls, [['artifact', { run_ref: REF }, 'agent_plan.json'], ['step', 'draft_a', run.run_id, 'summary_step']]);
+  for (const receipts of [
+    { review: { run_id: 'run_elsewhere' }, step: { run_id: 'run_elsewhere' } },
+    { plan: { run_ref: 'rr_other' } },
+    { plan: { artifact: { name: 'agent_plan.json', sha256: 'b'.repeat(64) } } },
+    { plan: { payload: { steps: [{ step_id: '../private' }] } } },
+    { step: { run_id: 'run_elsewhere' } },
+    { step: { ok: false } },
+  ]) {
+    list = await listFor(names.concat('agent_plan.json'), executed, null, receipts);
+    assert.match(list.primary, /提取记录未能核对/);
+    assert.doesNotMatch(list.primary, /查看记录|assay|18 个观测/);
+  }
+  list = await listFor(names, executed);
+  assert.match(list.primary, /提取记录：未记录/);
+  assert.equal(list.calls.length, 0, 'a missing plan is never replaced by a guessed step');
   process.stdout.write('A run\'s only report leads its files under the guide\'s name.\n');
 })().catch(error => {
   console.error(error);
