@@ -2,11 +2,13 @@
 
 Owner
 -----
-This module owns one transport rule: after a failure the client's status
-allowlist retries, how long a reviewed client waits before its next attempt,
-and when it stops waiting.  The allowlist still decides which failures are
-retried; a schedule decides only the waits.  A client given no schedule keeps
-its historical backoff.
+This module owns scheduled HTTP retry waits and the scope of unanswered
+structured-planning recovery. Ordinary retries follow the client's HTTP
+allowlist; the OpenAI-compatible transport may additionally retry one typed
+connection/read failure in that scope, on a fresh pool, within its attempt
+budget. The recovery request has a shorter ceiling. Non-streaming transports
+cannot distinguish first-byte idle time from legitimate model computation,
+so the initial request retains its reviewed timeout.
 
 A schedule names one wait per retry, each drawn within ``±jitter_fraction``
 of its delay; a provider's Retry-After lengthens a wait, never shortens it.
@@ -23,8 +25,10 @@ The client records why it stopped on the raised exception
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
 import math
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 
 RETRY_ATTEMPTS_EXHAUSTED = "transport_retry_attempts_exhausted"
 RETRY_WINDOW_EXHAUSTED = "transport_retry_window_exhausted"
@@ -34,6 +38,51 @@ RETRY_STOP_REASONS = frozenset(
     {RETRY_ATTEMPTS_EXHAUSTED, RETRY_WINDOW_EXHAUSTED, RETRY_WALL_CLOCK_EXHAUSTED}
 )
 TRANSPORT_RETRY_POLICY_SCHEMA = "easyicu.provider_transport_policy/4"
+PLANNING_EMPTY_RESPONSE_RETRY = "planning_empty_response_retry"
+PLANNING_RECOVERY_TIMEOUT_SECONDS = 120.0
+_PLANNING_CALL: ContextVar[bool] = ContextVar("structured_planning_transport", default=False)
+
+
+@contextmanager
+def planning_transport_scope(role: str) -> Iterator[None]:
+    """Only idempotent structured planning may recover an unanswered request."""
+    token = _PLANNING_CALL.set(role in {
+        "planner", "replanner", "progressive_planner_outline",
+        "progressive_planner_foundation", "progressive_planner_step_materialization",
+    })
+    try:
+        yield
+    finally:
+        _PLANNING_CALL.reset(token)
+
+
+def empty_planning_response(exc: BaseException) -> bool:
+    """Typed transport failure before a response, never HTTP/text-based policy.
+
+    SDKs wrap httpx failures. A response or any received stream chunk excludes
+    this recovery; no partial answer is sent back to the model.
+    """
+    if not _PLANNING_CALL.get():
+        return False
+    seen: set[int] = set()
+    typed = False
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if (getattr(exc, "response", None) is not None
+                or getattr(exc, "status_code", None) is not None
+                or getattr(exc, "easyicu_response_started", False)):
+            return False
+        sdk = type(exc).__module__.split(".")[0] in {"httpx", "httpcore", "openai"}
+        if sdk and type(exc).__name__ in {"WriteTimeout", "PoolTimeout"}:
+            return False
+        typed = typed or isinstance(exc, (TimeoutError, ConnectionError)) or (
+            sdk and type(exc).__name__ in {
+                "ReadTimeout", "ConnectTimeout", "APITimeoutError",
+                "ConnectError", "APIConnectionError", "RemoteProtocolError",
+            }
+        )
+        exc = exc.__cause__
+    return typed
 
 
 @dataclass(frozen=True)

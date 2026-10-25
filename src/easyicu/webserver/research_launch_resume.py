@@ -427,6 +427,8 @@ def development_resume_checkpoint(
     *, wrapper_dir: Path, study_id: str, scientific_configuration_sha256: str,
 ) -> Dict[str, Any] | None:
     """The same offer/launch verdict, with its verified audit coordinates."""
+    from easyicu.webserver.agent_review_recovery import load_recovery_seed
+
     if not development_resume_available(
         wrapper_dir=wrapper_dir, study_id=study_id,
         scientific_configuration_sha256=scientific_configuration_sha256,
@@ -437,8 +439,43 @@ def development_resume_checkpoint(
         project_root=str(wrapper_dir.parent.parent), study_id=study_id,
         source_job_id=wrapper_dir.name.removeprefix("run_"), budget_mode="planner_canary",
     )
+    seed = load_recovery_seed(wrapper_dir)
+    if seed is None:
+        return None
+    scope = _development_resume_launch_scope(
+        project_root=str(wrapper_dir.parent.parent), study=seed.study,
+        source_job_id=wrapper_dir.name.removeprefix("run_"),
+    )
     return {"kind": "planner", "source_job_id": wrapper_dir.name.removeprefix("run_"),
-            "path": path.relative_to(wrapper_dir).as_posix(), "sha256": digest}
+            "path": path.relative_to(wrapper_dir).as_posix(), "sha256": digest,
+            **({"restart_stage": "metadata_planning"} if metadata_planning_restart_allowed(
+                checkpoint_path=path, scope=scope,
+            ) else {})}
+
+
+def metadata_planning_restart_allowed(
+    *, checkpoint_path: Path, scope: _DevelopmentResumeLaunchScope,
+) -> bool:
+    """A verified metadata launch may start planning again when ALL input is absent.
+
+    A partial, corrupt or linked input is never a reason to bypass validation.
+    The original scope/requirements survive; only the checkpoint replay is
+    dropped. This does not provide acquisition or execution authority.
+    """
+    if scope.budget_mode != "planner_canary" or scope.prepared_grouping is not None:
+        return False
+    wrapper = checkpoint_path.parents[2]
+    directory = wrapper / "pipeline_input"
+    try:
+        if directory.is_symlink() or (directory.exists() and (
+            not directory.is_dir() or next(directory.iterdir(), None) is not None
+        )):
+            return False
+    except OSError:
+        return False
+    return _inherited_metadata_planning_input(
+        checkpoint_path=checkpoint_path, wrapper_dir=wrapper,
+    ) is None
 
 
 def _development_resume_literature_bundle(*, checkpoint_path: Path) -> Dict[str, Any]:

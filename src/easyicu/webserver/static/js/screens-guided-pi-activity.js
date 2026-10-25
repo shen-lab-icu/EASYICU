@@ -763,13 +763,17 @@
         && !['provider_continuation_refused', 'provider_auto_resume', 'provider_recovery_wait'].includes(event.step))
         return tr('Research-task status updated', '研究任务状态已更新');
       if (event && event.step === 'provider_continuation_refused') return host.runFailureText(event.reason || event.reason_code);
+      if (event && event.step === 'provider_auto_resume' && event.restart_stage === 'metadata_planning') return tr(
+        'System action: provider recovered; regenerating the candidate plan with the saved study requirements',
+        '系统操作：模型服务已恢复，正在按已保存的研究要求重新生成候选计划',
+      );
       if (event && event.step === 'provider_auto_resume') return tr(
         'System action: provider recovered; automatically continuing from the verified checkpoint',
         '系统操作：模型服务已恢复，正在从已验证的检查点自动继续',
       );
       if (event && event.step === 'provider_recovery_wait') return tr(
-        'System action: waiting for the model provider to recover within the job budget',
-        '系统操作：正在任务预算内等待模型服务恢复',
+        'System action: waiting for the model provider to recover within the job budget; then the run will continue automatically',
+        '系统操作：正在任务预算内等待模型服务恢复，恢复后将自动继续',
       );
       if (type === 'start') return tr('EasyICU research pipeline started', 'EasyICU 科研流程已启动');
       if (type === 'cancel_requested') return tr('Cancellation requested', '已请求取消任务');

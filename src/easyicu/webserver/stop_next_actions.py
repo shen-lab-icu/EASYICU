@@ -395,12 +395,23 @@ def safe_stop_coordinates(payload: Any) -> dict[str, Any]:
         result["step_id"] = step
     if type(payload.get("question_required")) is bool:
         result["question_required"] = payload["question_required"]
+    retries = payload.get("transport_retries")
+    if type(retries) is int and 0 <= retries <= 32:
+        result["transport_retries"] = retries
     for key in ("missing_concepts", "available_concepts"):
         if key in payload:
             result[key] = list(
                 _codes(payload[key], 1024 if key == "available_concepts" else 16)
             )
     return result
+
+
+def provider_timeout_coordinates(attempts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Count recorded transport retries without inferring unrecorded actions."""
+    counts = [row.get("transport_attempts") for row in attempts]
+    if not counts or any(type(count) is not int or not 1 <= count <= 33 for count in counts):
+        return {}
+    return safe_stop_coordinates({"transport_retries": sum(count - 1 for count in counts)})
 
 
 def source_stop_coordinates(payload: Any) -> dict[str, Any]:
