@@ -26,6 +26,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
@@ -35,6 +36,7 @@ from .capabilities import (
     provider_profile,
     user_account_profile,
 )
+from .protocol import PublicDemoIdentity, ReplayError
 from .transport_retry import TRANSPORT_RETRY_POLICY_SCHEMA, TransportRetrySchedule
 
 
@@ -116,6 +118,7 @@ def require_data_handling(source: str, data_handling: DataHandling | str) -> Non
 
 def require_credentialed_data_clearance(client: Any, source: str) -> None:
     """Check every possible provider leaf before deriving a credentialed prompt."""
+    _require_replay_source(client, source)
     if not source_requires_clearance(source):
         return
     stack = [client]
@@ -153,6 +156,22 @@ def require_run_clearance(database: str, additional_sources: Sequence[str] | Non
                 require_credentialed_data_clearance(client, source)
 
 
+def _require_replay_source(client: Any, source: str) -> None:
+    stack, seen = [client], set()
+    while stack:
+        item = stack.pop()
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
+        record = _trusted_client_record(item)
+        if record is not None and record.replay_scope is not None:
+            require_replay_scope(record.replay_scope)
+            if source != record.replay_scope.source.database:
+                raise ReplayError("model_replay_source_forbidden")
+        if record is not None and record.kind == "wrapper" and record.children_getter:
+            stack.extend(record.children_getter())
+
+
 def require_context_clearance(context: Any, *clients: Any) -> None:
     require_run_clearance(context.cohort.database, context.cross_database_validation, *clients)
 
@@ -180,6 +199,7 @@ class _TrustedClientRecord:
     constructor_impl: object | None = None
     callable_contract: _CallableContract | None = None
     dispatch_identity: tuple[Any, ...] = ()
+    replay_scope: ReplayScope | None = None
 
 
 _TRUSTED_CLIENTS: dict[
@@ -531,6 +551,9 @@ def provider_authorization_manifest(client: Any) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     for item in clients:
         record = _trusted_client_record(item)
+        if record is not None and record.kind == "replay":
+            records.append(item.receipt())
+            continue
         authorization = record.authorization if record is not None else None
         transport_policy = _provider_transport_policy(item, record=record)
         if isinstance(authorization, ProviderAuthorization):
@@ -915,6 +938,7 @@ def require_provider_client_authorization(client: Any) -> None:
 
     stack = [client]
     seen: set[int] = set()
+    leaf_kinds: set[str] = set()
     while stack:
         current = stack.pop()
         if current is None or id(current) in seen:
@@ -933,6 +957,12 @@ def require_provider_client_authorization(client: Any) -> None:
                 EXTERNAL_LLM_NOT_AUTHORIZED,
                 type(current).__name__,
             )
+        if record.replay_scope is not None:
+            require_replay_scope(record.replay_scope)
+        if record.kind != "wrapper":
+            leaf_kinds.add(record.kind)
+        if record.kind == "replay":
+            continue
         if record.kind in {"offline", "external_capture"}:
             continue
         if (
@@ -960,6 +990,8 @@ def require_provider_client_authorization(client: Any) -> None:
             EXTERNAL_LLM_NOT_AUTHORIZED,
             str(getattr(current, "name", type(current).__name__)),
         )
+    if "replay" in leaf_kinds and leaf_kinds != {"replay"}:
+        raise ReplayError("model_replay_mixed_provider_forbidden")
 
 
 def authorized_complete(client: Any, messages: Any, **kwargs: Any) -> str:
@@ -1254,6 +1286,26 @@ def register_offline_test_client(client: Any) -> Any:
     return client
 
 
+def _register_replay_client(client: Any) -> None:
+    module = sys.modules.get("easyicu.research_agent.providers.clients")
+    if type(client) is not getattr(module, "ReplayLLMClient", None) or not _caller_is_exact_constructor(client, skip=1):
+        raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, "replay")
+    require_replay_scope(client._scope)
+    record = _new_trusted_record(client, kind="replay", authorization=None)
+    _remember_trusted_client(client, replace(record, replay_scope=client._scope))
+
+
+def _register_recording_scope(client: Any, scope: ReplayScope) -> None:
+    module = sys.modules.get("easyicu.research_agent.providers.clients")
+    if type(client) is not getattr(module, "RecordingLLMClient", None) or not _caller_is_exact_constructor(client, skip=1):
+        raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, "recorder")
+    require_replay_scope(scope)
+    record = _trusted_client_record(client)
+    if record is None or record.kind != "wrapper":
+        raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, "recorder")
+    _remember_trusted_client(client, replace(record, replay_scope=scope))
+
+
 def _register_external_capture_test_client(client: Any) -> Any:
     """Register the exact built-in non-network external capture mock."""
 
@@ -1362,3 +1414,73 @@ def _attach_provider_authorization(
         ),
     )
     return client
+
+
+def _register_provider_wrapper(
+    wrapper: Any,
+    *,
+    children_getter: Callable[[], Sequence[Any]],
+) -> Any:
+    """Register one reviewed wrapper and bind its complete child graph."""
+
+    children = tuple(children_getter())
+    if not children or any(child is None or child is wrapper for child in children):
+        raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, type(wrapper).__name__)
+    _remember_trusted_client(
+        wrapper,
+        _new_trusted_record(
+            wrapper,
+            kind="wrapper",
+            authorization=None,
+            child_ids=tuple(id(child) for child in children),
+            children_getter=children_getter,
+        ),
+    )
+    return wrapper
+
+ACCEPTANCE_PROFILE_REF = "public_demo_acceptance_dev/20261025"
+TEST_PROFILE_REF = "public_demo_replay_test/1"
+
+
+@dataclass(frozen=True)
+class ReplayScope:
+    source: PublicDemoIdentity
+    profile_ref: str
+    export_path: Path
+
+
+_SCOPE: ContextVar[ReplayScope | None] = ContextVar("public_demo_replay", default=None)
+
+
+def _require_replay_deployment() -> None:
+    if os.environ.get("EASYICU_HOSTED") == "1" or os.environ.get("EASYICU_DEPLOYMENT", "").lower() == "hosted":
+        raise ReplayError("model_replay_hosted_forbidden")
+
+
+def _require_scope() -> ReplayScope:
+    _require_replay_deployment()
+    scope = _SCOPE.get()
+    if scope is None:
+        raise ReplayError("model_replay_scope_required")
+    return scope
+
+
+def require_replay_scope(expected: ReplayScope) -> None:
+    scope = _require_scope()
+    if expected != scope:
+        raise ReplayError("model_replay_source_mismatch")
+
+
+def _bind_public_demo_replay_scope(scope: ReplayScope):
+    """Only the reviewed public-source owner may attest a replay source."""
+    module = sys.modules.get("easyicu.webserver.demo_source_storage")
+    owner = getattr(getattr(module, "public_demo_replay_scope", None), "__wrapped__", None)
+    caller = inspect.currentframe().f_back
+    if owner is None or caller is None or caller.f_code is not owner.__code__:
+        raise ReplayError("model_replay_source_authority_required")
+    _require_replay_deployment()
+    return _SCOPE.set(scope)
+
+
+def _reset_public_demo_replay_scope(token) -> None:
+    _SCOPE.reset(token)

@@ -520,13 +520,8 @@ def verify_desktop_build(backend: Path) -> dict:
     return {"installed_backend": True, "kernel_identity_matches": True}
 
 
-def probe_desktop_first_result(exports: list[Path]) -> dict:
-    """Stop at the existing model boundary; never manufacture an M1 result.
-
-    The baseline template projects a validated FamilyPlanSpec, but obtaining
-    that spec still calls a model. ScriptedMockLLMClient is a test fixture, not
-    a recorded, public-demo-bound response accepted by this desktop profile.
-    """
+def probe_desktop_first_result(exports: list[Path], *, cassette_path: Path | None = None) -> dict:
+    """Use reviewed replay when supplied; otherwise keep the honest model stop."""
     from easyicu.research_agent.execution import runner
     from easyicu.research_agent.orchestration.profiles import DESKTOP_FIRST_RESULT, get_submission_profile
     from easyicu.webserver import dataio
@@ -547,7 +542,7 @@ def probe_desktop_first_result(exports: list[Path]) -> dict:
     source, eicu = next((source, path) for source, path in zip(SOURCES, exports) if source.database == "eicu_demo")
     # Do not publish source paths, per-file seals, or any rows from the binding.
     dataio.validate_research_pipeline_source(str(eicu), database=source.database)
-    return {
+    result = {
         "owner": "easyicu.webserver.research_launch_runtime._require_execution_runtime",
         "available": True, "reason_code": "ready", "runner_kind": kind,
         "docker_reason_code": docker.reason_code, "profile_ref": profile.ref,
@@ -566,6 +561,29 @@ def probe_desktop_first_result(exports: list[Path]) -> dict:
             "evidence_bound_result": False, "seconds_to_first_result": None, "budget_met": None,
         },
     }
+    if cassette_path is not None:
+        from easyicu.research_agent.facade import replay_public_demo
+        from easyicu.research_agent.orchestration.profiles import PUBLIC_DEMO_ACCEPTANCE
+
+        replay = replay_public_demo(cassette_path=cassette_path, export_path=eicu,
+            database=source.database, work_dir=Path.cwd() / "model-replay",
+            question=result["first_result"]["question"], primary_exposure="age",
+            target_outcome="death", covariates=("sex",))
+        result["first_result"].update(replay)
+        result.update(provider_kind=replay["provider_kind"], cassette_sha256=replay["cassette_sha256"],
+                      profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref,
+                      analysis_executed=replay.get("analysis_executed", replay["evidence_bound_result"]))
+    return result
+
+
+def repository_cassette_path(value: Path, *, root: Path) -> Path:
+    """Workflow input names a checked-out file, never an arbitrary runner path."""
+    if value.is_absolute() or ".." in value.parts:
+        raise AcceptanceFailure("model_replay_cassette_path_forbidden")
+    candidate = (root / value).resolve()
+    if not candidate.is_relative_to(root.resolve()) or not candidate.is_file():
+        raise AcceptanceFailure("model_replay_cassette_path_forbidden")
+    return candidate
 
 
 def validate_work_dir(work_dir: Path) -> None:
@@ -598,7 +616,12 @@ def write_reports(report: dict, output_dir: Path) -> None:
         lines.append(f"\nResearch preflight: {code}; governed deterministic analysis without Docker: {research.get('deterministic_analysis_without_docker', 'not_completed')}; local summary preflight: {research.get('local_preflight_without_docker', 'not_completed')}.")
         first = research.get("first_result")
         if first:
-            lines.append(f"\nM1: **{first['status']}** (`{first['reason_code']}`). Elapsed to boundary: {first['elapsed_to_boundary_seconds']:.2f} s / {first['budget_seconds']} s budget. No evidence-bound result; time to first result and budget attainment remain unmeasured.")
+            timing = (f"Evidence-bound result in {first['seconds_to_first_result']:.2f} s; budget met: {first['budget_met']}."
+                      if first.get("evidence_bound_result") else
+                      "No evidence-bound result; time to first result and budget attainment remain unmeasured.")
+            lines.append(f"\nM1: **{first['status']}** (`{first['reason_code']}`). Elapsed to boundary: {first['elapsed_to_boundary_seconds']:.2f} s / {first['budget_seconds']} s budget. {timing}")
+            if research.get("provider_kind") == "replay":
+                lines.append(f"\nProvider: replay; cassette: `{research['cassette_sha256']}`. Acceptance only; not reportable or publishable as an ordinary study.")
     for failure in report.get("failures", []):
         lines.append(f"\nFailure: `{failure['reason_code']}` ({failure['exception_type']}).")
     (output_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -651,7 +674,8 @@ def private_owner_logs(log):
 
 
 def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_pressure_gb=8, fetch=None,
-                   desktop_first_result=False, desktop_backend: Path | None = None) -> dict:
+                   desktop_first_result=False, desktop_backend: Path | None = None,
+                   cassette_path: Path | None = None) -> dict:
     started = time.monotonic()
     report: dict[str, Any] = {
         "schema_version": "easyicu_laptop_acceptance_v1", "status": "failed",
@@ -661,6 +685,10 @@ def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_
     output_dir = output_dir.resolve()
     try:
         work_dir, cache_dir = work_dir.resolve(), cache_dir.resolve()
+        if cassette_path is not None:
+            if not desktop_first_result:
+                raise AcceptanceFailure("model_replay_requires_desktop_acceptance")
+            cassette_path = cassette_path.resolve()
         if desktop_backend is not None:
             desktop_backend = desktop_backend.resolve()
         validate_work_dir(work_dir)
@@ -697,13 +725,19 @@ def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_
                     report["failures"].append(failure_receipt(exc))
                 try:
                     with phase("research", report, excluded) as metrics:
-                        metrics.update(probe_desktop_first_result(exports) if desktop_first_result else probe_research())
+                        replay_options = {"cassette_path": cassette_path} if cassette_path is not None else {}
+                        metrics.update(probe_desktop_first_result(exports, **replay_options) if desktop_first_result else probe_research())
                         if desktop_first_result:
                             elapsed = round(time.monotonic() - started, 4)
                             metrics["first_result"].update(
                                 elapsed_to_boundary_seconds=elapsed, budget_seconds=900,
                                 boundary_within_budget=elapsed <= 900,
                             )
+                            first = metrics["first_result"]
+                            if first.get("evidence_bound_result") is True:
+                                first.update(seconds_to_first_result=elapsed, budget_met=elapsed <= 900)
+                                if elapsed > 900:
+                                    first.update(status="failed", reason_code="desktop_first_result_budget_exceeded")
                 except Exception as exc:
                     report["failures"].append(failure_receipt(exc))
         report["status"] = "failed" if report["failures"] else "passed"
@@ -725,6 +759,7 @@ def main(argv=None) -> int:
     parser.add_argument("--cache-key", action="store_true")
     parser.add_argument("--desktop-first-result", action="store_true", help="Probe the desktop M1 path; exit 2 at its model boundary.")
     parser.add_argument("--desktop-backend", type=Path, help="Installed desktop sidecar from the same build as this interpreter's wheel.")
+    parser.add_argument("--model-cassette", type=Path, help="Optional reviewed public-demo cassette path relative to this repository.")
     parser.add_argument("--hold-memory-bytes", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.hold_memory_bytes is not None:
@@ -738,6 +773,7 @@ def main(argv=None) -> int:
         args.work_dir, args.cache_dir or args.work_dir / "demo-cache", args.output_dir,
         memory_pressure_gb=args.memory_pressure_gb,
         desktop_first_result=args.desktop_first_result, desktop_backend=args.desktop_backend,
+        cassette_path=repository_cassette_path(args.model_cassette, root=Path(__file__).resolve().parents[1]) if args.model_cassette else None,
     )
     print(f"Laptop acceptance: {report['status']}")
     return {"passed": 0, "blocked": 2}.get(report["status"], 1)

@@ -256,6 +256,7 @@ def test_provider_trust_registration_is_confined_to_reviewed_owners() -> None:
             "src/easyicu/research_agent/providers/prompt_budget.py",
             "src/easyicu/research_agent/providers/hard_stop.py",
             "src/easyicu/research_agent/providers/efficiency_budget.py",
+            "src/easyicu/research_agent/providers/clients.py",
             "src/easyicu/research_agent/replication/envelope.py",
             "tools/run_research_know_how_planner_ab.py",
         },
@@ -263,6 +264,9 @@ def test_provider_trust_registration_is_confined_to_reviewed_owners() -> None:
             "src/easyicu/research_agent/providers/mocks.py",
             "src/easyicu/research_agent/discovery/idea_mining_data_first_route.py",
         },
+        "_register_replay_client": {"src/easyicu/research_agent/providers/clients.py"},
+        "_register_recording_scope": {"src/easyicu/research_agent/providers/clients.py"},
+        "_bind_public_demo_replay_scope": {"src/easyicu/webserver/demo_source_storage.py"},
     }
     violations: list[str] = []
     for target in targets:

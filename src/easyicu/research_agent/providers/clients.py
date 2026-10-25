@@ -9,6 +9,9 @@ on it without depending on each other.
 Split out of ``llm.py`` in 2026-08: ``factory`` needed these classes as its
 defaults, which made ``factory`` import ``llm`` and closed an import cycle
 through the offline mock floor.
+
+Acceptance-only replay and recording adapters share this concrete delivery
+owner and the same provider trust boundary.
 """
 
 from __future__ import annotations
@@ -35,15 +38,36 @@ from ..authority.secret_redaction import (
     redact_debug_value,
     redact_text_secrets,
 )
+from ..canonical_json import canonical_json
 from .capabilities import (
     model_looks_vision_capable,
 )
+from .client_trust import (
+    ReplayScope,
+    _register_provider_wrapper,
+    _register_recording_scope,
+    _register_replay_client,
+    _require_scope,
+    _trusted_client_record,
+    authorized_complete,
+    provider_authorization_manifest,
+    require_provider_client_authorization,
+    require_replay_scope,
+)
 from .transport_retry import TransportRetrySchedule, mark_retry_exhausted
 from .protocol import (
+    LLMClient,
     LLMMessage,
+    ModelIdentity,
     ProviderRefusal,
+    RecordedApproval,
+    RecordedResponse,
+    ReplayCassette,
+    ReplayError,
     StructuredOutputCapabilityError,
     StructuredOutputRequest,
+    request_digest,
+    scrub_response,
 )
 
 
@@ -1670,3 +1694,149 @@ def openrouter_reasoning_extra_body(model: str) -> Optional[Dict[str, Any]]:
     if any(token in lowered for token in ("glm", "qwen", "deepseek", "r1")):
         return {"reasoning": {"effort": "none", "exclude": True}}
     return None
+
+
+def require_replay_client_scope(client) -> None:
+    require_replay_scope(client._scope)
+
+
+def replay_clients(client):
+    """Walk only identity-bound trusted wrapper edges, including recorders."""
+    pending, seen = [client], set()
+    while pending:
+        item = pending.pop()
+        if item is None or id(item) in seen:
+            continue
+        seen.add(id(item))
+        record = _trusted_client_record(item)
+        if record is not None and record.kind == "replay":
+            yield item
+        elif record is not None and record.kind == "wrapper" and record.children_getter:
+            if type(item) is RecordingLLMClient:
+                yield item
+            pending.extend(record.children_getter())
+
+
+def require_replay_pipeline(pipeline) -> None:
+    for client in (getattr(pipeline, "_llm", None), getattr(pipeline, "_llm_concept_auditor_client", None)):
+        for replay in replay_clients(client):
+            require_replay_client_scope(replay)
+            config = pipeline._config
+            if f"{config.submission_profile_name}/{config.submission_profile_version}" != replay._scope.profile_ref:
+                raise ReplayError("model_replay_profile_forbidden")
+            if not config.development_diagnostic or not config.require_human_plan_review or config.generate_manuscript is not False:
+                raise ReplayError("model_replay_run_policy_forbidden")
+
+
+@dataclass(frozen=True, init=False)
+class ReplayLLMClient:
+    """Exact immutable cassette lookup; no live client or fallback exists."""
+
+    _cassette: ReplayCassette
+    _scope: ReplayScope
+    name = "replay"
+
+    def __init__(self, cassette: ReplayCassette):
+        scope = _require_scope()
+        # Revalidate even model_copy/model_construct inputs before trusting bytes.
+        cassette = ReplayCassette.model_validate_json(cassette.model_dump_json())
+        if cassette.source != scope.source:
+            raise ReplayError("model_replay_source_mismatch")
+        object.__setattr__(self, "_cassette", cassette)
+        object.__setattr__(self, "_scope", scope)
+        _register_replay_client(self)
+
+    @property
+    def _model(self):
+        return self._cassette.model.model
+
+    @property
+    def supports_strict_json_schema(self):
+        return self._cassette.model.supports_strict_json_schema
+
+    def complete(self, messages: Sequence[LLMMessage], *, max_tokens: int = 2048,
+                 temperature: float = 0.2, structured_output: StructuredOutputRequest | None = None,
+                 seed: int | None = None, top_p: float | None = None) -> str:
+        require_provider_client_authorization(self)
+        key = request_digest(self._cassette.model, messages, max_tokens=max_tokens,
+            temperature=temperature, structured_output=structured_output, seed=seed, top_p=top_p)
+        for entry in self._cassette.entries:
+            if entry.request_sha256 == key:
+                _PROVIDER_CALL_RECEIPT.set(ProviderCallReceipt(
+                    finish_reason=entry.finish_reason, usage_summary=(), transport_attempts=0,
+                ))
+                return entry.response
+        raise ReplayError("model_replay_request_missing", request_sha256=key)
+
+    def receipt(self):
+        return {"provider": "replay", "provider_kind": "replay", "model": self._model,
+                "cassette_sha256": self._cassette.cassette_sha256, "destination": "replay",
+                "authorization_mode": "public_demo_acceptance", "reportable": False, "publishable": False}
+
+
+class RecordingLLMClient:
+    """Transparent authorized wrapper capturing only sanitized model answers."""
+
+    name = "public_demo_recorder"
+
+    def __init__(self, inner: LLMClient, *, model: ModelIdentity):
+        self._scope = _require_scope()
+        require_provider_client_authorization(inner)
+        self.inner, self.model = inner, ModelIdentity.model_validate_json(model.model_dump_json())
+        self._validate_model()
+        self._model = model.model
+        self.supports_strict_json_schema = model.supports_strict_json_schema
+        self.entries: dict[str, RecordedResponse] = {}
+        self.approvals: dict[str, RecordedApproval] = {}
+        _register_provider_wrapper(self, children_getter=lambda: (self.inner,))
+        _register_recording_scope(self, self._scope)
+
+    def _validate_model(self):
+        record = _trusted_client_record(self.inner)
+        if record is not None and record.kind == "offline" and self.model.provider == "synthetic":
+            return
+        if recording_model_identity(self.inner) != self.model:
+            raise ReplayError("model_replay_recording_model_mismatch")
+
+    def complete(self, messages: Sequence[LLMMessage], *, max_tokens: int = 2048,
+                 temperature: float = 0.2, structured_output: StructuredOutputRequest | None = None,
+                 seed: int | None = None, top_p: float | None = None) -> str:
+        require_provider_client_authorization(self)
+        require_replay_client_scope(self)
+        self._validate_model()
+        options = {"max_tokens": max_tokens, "temperature": temperature}
+        if structured_output is not None:
+            options["structured_output"] = structured_output
+        if seed is not None:
+            options["seed"] = seed
+        if top_p is not None:
+            options["top_p"] = top_p
+        key = request_digest(self.model, messages, **options)
+        clear_provider_call_receipt()
+        response = scrub_response(authorized_complete(self.inner, messages, **options))
+        receipt = current_provider_call_receipt()
+        entry = RecordedResponse(request_sha256=key, response=response,
+            finish_reason=receipt.finish_reason if receipt else None)
+        if key in self.entries and self.entries[key] != entry:
+            raise ReplayError("model_replay_request_conflict", request_sha256=key)
+        self.entries[key] = entry
+        return response
+
+    def cassette(self) -> ReplayCassette:
+        require_replay_client_scope(self)
+        return ReplayCassette.create(source=self._scope.source, model=self.model,
+            entries=tuple(self.entries.values()), approvals=tuple(self.approvals.values()))
+
+
+def recording_model_identity(client) -> ModelIdentity:
+    """Capture one reviewed transport's output settings; refuse routers."""
+    require_provider_client_authorization(client)
+    record = _trusted_client_record(client)
+    if record is None or record.kind != "transport":
+        raise ReplayError("model_replay_recording_transport_required")
+    manifest = provider_authorization_manifest(client)["clients"]
+    if len(manifest) != 1:
+        raise ReplayError("model_replay_recording_transport_required")
+    return ModelIdentity(provider=manifest[0]["provider"], model=manifest[0]["model"],
+        supports_strict_json_schema=bool(getattr(client, "supports_strict_json_schema", False)),
+        extra_body_json=canonical_json(getattr(client, "_extra_body", {})))
