@@ -790,6 +790,50 @@ def _declared_identity_present(rows: pd.DataFrame) -> bool:
     return False
 
 
+def _bound_identity_legend(rows: pd.DataFrame) -> list[str]:
+    """Describe only the contrast and interval metadata the producer supplied."""
+    descriptions: dict[str, list[str]] = {}
+    for _, row in rows.iterrows():
+        if not row["__drawable"]:
+            continue
+        parts = []
+        contrast = _declared_label(row, "contrast_label", "")
+        unit = _declared_label(row, "effect_unit", "")
+        if contrast:
+            parts.append(contrast + (f" ({_reader_label(unit)})" if unit else "") + ".")
+        estimand = _declared_label(row, "estimand_label", "")
+        if estimand:
+            parts.append(f"Estimand: {estimand}.")
+        method = _declared_label(row, "ci_method", "")
+        level = _finite(row.get("confidence_level"))
+        variance = _declared_label(row, "variance_estimator", "")
+        if method or level is not None or variance:
+            interval = f"{100 * level:g}% " if level is not None and 0 < level < 1 else ""
+            interval += f"{_reader_label(method)} " if method else ""
+            interval += "confidence intervals"
+            if variance:
+                cluster_unit = _declared_label(row, "cluster_unit", "")
+                variance_label = (
+                    (f"{_reader_label(cluster_unit)}-" if cluster_unit else "") + "cluster-robust"
+                    if variance == "cluster_robust" else _reader_label(variance)
+                )
+                interval += f" using {variance_label} covariance"
+                count = _finite(row.get("cluster_count"))
+                if variance == "cluster_robust" and count is not None and count > 0 and count.is_integer():
+                    interval += f" ({int(count)} clusters)"
+            parts.append(interval[:1].upper() + interval[1:] + ".")
+            if level is None or not 0 < level < 1:
+                parts.append("Confidence level not declared.")
+        if parts:
+            label = _declared_label(row, "spec_label", {
+                "primary": "Primary analysis", "missing": "Missing-data specification",
+                "cohort": "Cohort specification", "outcome": "Outcome specification",
+            }.get(str(row.get("axis")), "Specification"))
+            descriptions.setdefault(_plain_legend(parts), []).append(_reader_label(label))
+    return [f"{', '.join(dict.fromkeys(labels))}: {description}"
+            for description, labels in descriptions.items()]
+
+
 def _reader_legend(
     *,
     panel_title: str,
@@ -804,6 +848,7 @@ def _reader_legend(
     narrow_rows: Sequence[str],
     axis_authorized: bool,
     complete_case_n: Any,
+    rows: pd.DataFrame,
 ) -> str:
     """State the reader-facing legend from what this renderer actually drew.
 
@@ -877,6 +922,9 @@ def _reader_legend(
         "every value is reproduced from the bound robustness matrix without "
         "recomputation."
     )
+    parts.extend(_bound_identity_legend(rows))
+    if primary_restatement_rows(rows).any():
+        parts.append("Rows marked 'not an independent variant' restate the primary analysis.")
     return _plain_legend(parts)
 
 
@@ -889,16 +937,14 @@ def _anchor_already_shown(rows, anchor_value) -> bool:
     "Primary estimate: 2.09106 (contrast not declared)" beneath the very row
     that shows ``2.091`` with its declared contrast.  The reader-facing
     question is whether that number is already visible, so compare what the
-    table displays, at the row's own precision.
+    table displays, at the row's own precision. Undeclared contrast metadata
+    stays visible on that row; repeating the same scalar adds no information.
     """
 
     if anchor_value is None or "axis" not in rows:
         return False
     for _, row in rows.loc[rows["axis"].eq("primary")].iterrows():
         if not bool(row["__drawable"]):
-            continue
-        contrast = _declared_label(row, "contrast_label", "")
-        if not contrast or contrast.lower() == "nan":
             continue
         shown, _, _ = _interval_parts(row["__estimate"], row["__low"], row["__high"])
         anchor, _, _ = _interval_parts(anchor_value, row["__low"], row["__high"])
@@ -962,9 +1008,9 @@ def _draw_specification_table(ax, rows, effect_scale, anchor_bound, anchor_value
             ax.text(x, y, value, va="top", fontsize=7, linespacing=1.25)
         y += lines + 0.6
     if anchor_bound:
-        value = f"{anchor_value:.6g}" if anchor_value is not None else "not reported"
+        value = f"{anchor_value:.4g}" if anchor_value is not None else "not reported"
         # Do not add a detached scalar when its value is already shown by a
-        # primary row with the producer's declared contrast.
+        # primary row, including one that discloses missing contrast metadata.
         if not _anchor_already_shown(rows, anchor_value):
             ax.text(columns[0], y, f"Primary estimate: {value} (contrast not declared)",
                     va="top", fontsize=7)
@@ -994,7 +1040,11 @@ def run_robustness_figure(
     )
     rows, effect_scale, has_gap = _validated_rows(frame)
     variant_evidence = _variant_evidence_shown(rows)
-    comparability = assess_robustness_effect_comparability(frame)
+    # CSV blanks become NaN; the identity assessor must see absence, never the
+    # shared string "nan" as a declared estimand, contrast or unit.
+    comparability = assess_robustness_effect_comparability(frame.assign(**{
+        key: frame[key].fillna("") for key in ("estimand_id", "contrast_id", "effect_unit") if key in frame
+    }))
     if chart_type == "sensitivity_forest" and not comparability.authorized:
         raise ValueError("common robustness effect axis is not authorized: " + comparability.message)
     scale_contract = describe_effect_scale(effect_scale)
@@ -1256,6 +1306,7 @@ def run_robustness_figure(
             narrow_rows=narrow_rows,
             axis_authorized=bool(comparability.authorized),
             complete_case_n=complete_case_n,
+            rows=rows,
         ),
         statistics_note=[
             (

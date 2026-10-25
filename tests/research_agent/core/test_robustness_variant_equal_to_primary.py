@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.execution.runners.deterministic_robustness import (
     _find_structured_primary_model_source,
@@ -20,6 +21,7 @@ from easyicu.research_agent.execution.runners.deterministic_robustness import (
 from easyicu.research_agent.robustness.panel import (
     RobustnessPanel,
     RobustnessPanelRow,
+    matrix_effect_identity,
 )
 from easyicu.research_agent.schema import RobustnessSpec
 from tests.support.robustness_sources import write_structured_source_authority
@@ -119,6 +121,78 @@ def test_the_panel_counts_no_variant_when_only_the_primary_is_documented() -> No
     panel = RobustnessPanel.from_rows([primary, identical], primary_spec_id="primary")
 
     assert panel.n_variants == 0
+
+
+def _categorical_identity_source():
+    contract = {
+        "model_id": "synthetic_model", "exposure_source": "marker_band",
+        "exposure_expression": "marker_band__is_raised", "n": 40,
+        "analysis_set": "source_aware",
+        "model_terms": [{
+            "name": "marker_band", "role": "exposure", "coding": "categorical",
+            "transform": "treatment_contrast", "levels": ["usual", "raised", "very_raised"],
+            "reference_level": "usual",
+        }],
+        "dependence": {"variance_estimator": "cluster_robust", "cluster_unit": "patient"},
+        "cluster_count": 30,
+    }
+    trace = {**contract, "model_contract_n": 40, "coefficient_term": "marker_band__is_raised"}
+    return contract, trace
+
+
+def test_declared_categorical_term_identifies_only_its_selected_contrast():
+    contract, trace = _categorical_identity_source()
+    identity = matrix_effect_identity("primary", trace, {"primary_contract": contract}, {})
+    assert identity["contrast_label"] == "Exposure level raised vs reference level usual"
+    assert identity["contrast_id"] == '["marker_band","raised","usual"]'
+    assert identity["effect_unit"] == "category contrast"
+    assert identity["variance_estimator"] == "cluster_robust"
+    assert identity["cluster_unit"] == "patient"
+    # Neither the OR scale nor cluster-robust covariance declares a confidence
+    # level or a shared scientific estimand.
+    assert "estimand_id" not in identity and "confidence_level" not in identity
+
+
+@pytest.mark.parametrize("mutation", ["model", "coefficient", "denominator", "duplicate", "no_source"])
+def test_identity_requires_one_matching_model_trace(mutation):
+    contract, trace = _categorical_identity_source()
+    spec_id = "complete_case"
+    contract["spec_id"] = spec_id
+    replay = {"variant_contracts": [contract]}
+    source = {"primary_contract": contract}
+    if mutation == "model":
+        trace["model_id"] = "other_model"
+    elif mutation == "coefficient":
+        trace["coefficient_term"] = "marker_band__is_very_raised"
+    elif mutation == "denominator":
+        trace["model_contract_n"] = 41
+    elif mutation == "duplicate":
+        replay["variant_contracts"].append(dict(contract))
+    else:
+        source = None
+    assert matrix_effect_identity(spec_id, trace, source, replay) == {}
+
+
+@pytest.mark.parametrize("change", [
+    {"reference_level": None}, {"reference_level": "unknown"}, {"transform": "unknown"},
+    {"levels": ["usual", "very_raised"]}, {"coding": "continuous"},
+])
+def test_an_indicator_name_alone_does_not_declare_a_categorical_comparison(change):
+    contract, trace = _categorical_identity_source()
+    contract["model_terms"][0].update(change)
+    identity = matrix_effect_identity("primary", trace, {"primary_contract": contract}, {})
+    assert "contrast_id" not in identity and "effect_unit" not in identity
+
+
+def test_null_model_terms_leave_contrast_unavailable():
+    contract, trace = _categorical_identity_source()
+    contract["model_terms"] = None
+    identity = matrix_effect_identity("primary", trace, {"primary_contract": contract}, {})
+    assert "contrast_id" not in identity and "effect_unit" not in identity
+    assert identity["cluster_unit"] == "patient"
+    assert matrix_effect_identity("variant", trace, {"primary_contract": contract}, {
+        "variant_contracts": None,
+    }) == {}
 
 
 def _matrix(*variants: dict) -> pd.DataFrame:

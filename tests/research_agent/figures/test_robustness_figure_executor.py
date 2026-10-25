@@ -548,7 +548,7 @@ def test_it_renders_the_normalized_primary_effect_anchor(tmp_path):
 
     assert summary["anchor_input_bound"] is True
     assert summary["anchor_line_drawn"] is False
-    assert "Primary estimate: 1.566 (contrast not declared)" in (tmp_path / "out" / "robustness_plot.svg").read_text()
+    assert "Primary estimate:" not in (tmp_path / "out" / "robustness_plot.svg").read_text()
     source = pd.read_csv(
         tmp_path / "out" / "robustness_plot_bound_statistics_source_data.csv"
     )
@@ -835,6 +835,75 @@ def test_a_primary_estimate_already_in_the_table_is_not_repeated_below_it():
         assert 'not declared' not in rendered
     finally:
         plt.close(fig)
+
+
+@pytest.mark.parametrize("anchor, repeated", [(1.4, False), (2.0910632, True)])
+def test_primary_anchor_is_not_duplicated_when_its_contrast_is_unavailable(anchor, repeated):
+    import matplotlib.pyplot as plt
+    from easyicu.research_agent.execution.runners.robustness_figure_executor import (
+        _draw_specification_table,
+        _validated_rows,
+    )
+
+    rows, scale, _ = _validated_rows(pd.DataFrame([{
+        "spec_id": "primary", "axis": "primary", "effect_scale": "OR",
+        "point_estimate": 1.4, "ci_low": 1.1, "ci_high": 1.8, "converged": True,
+    }]))
+    fig, ax = plt.subplots()
+    try:
+        _draw_specification_table(ax, rows, scale, True, anchor)
+        texts = [text.get_text() for text in ax.texts]
+        assert any("Primary estimate:" in text for text in texts) is repeated
+        if repeated:
+            assert "Primary estimate: 2.091 (contrast not declared)" in texts
+        assert "1.4 [1.1, 1.8]" in texts
+        assert any("Contrast / unit not declared" in text for text in texts)
+    finally:
+        plt.close(fig)
+
+
+@pytest.mark.parametrize("missing", ["estimand_id", "contrast_id", "effect_unit"])
+def test_csv_blank_identity_cannot_authorize_a_forest(tmp_path, monkeypatch, missing):
+    from easyicu.research_agent.execution.runners import robustness_figure_executor as owner
+
+    monkeypatch.setattr(owner, "save_publication_figure", lambda *a, **k: pytest.fail(
+        "An undeclared comparison reached figure export",
+    ))
+    identity = dict(estimand_id="endpoint_odds", contrast_id="raised_vs_usual",
+                    effect_unit="category contrast", independent_variant=True)
+    identity[missing] = None
+    rows = [dict(_REAL_ROWS[0], **identity),
+            dict(_REAL_ROWS[0], spec_id="variant", axis="cohort", **identity)]
+    run_dir, manifest = _write_bound_matrix(
+        tmp_path, rows, columns=list(dict.fromkeys([*_MATRIX_COLUMNS, *identity])),
+    )
+    with pytest.raises(ValueError, match="common robustness effect axis is not authorized"):
+        run_robustness_figure(
+            out_dir=tmp_path / "out", run_dir=run_dir, resolved_inputs=manifest,
+            step_id="07_robustness_sensitivity_figure", figure_product="robustness_plot",
+            chart_type="sensitivity_forest",
+        )
+
+
+@pytest.mark.parametrize("level", [None, 0.9])
+def test_caption_reports_the_supplied_confidence_level_only(level):
+    from easyicu.research_agent.execution.runners.robustness_figure_executor import (
+        _bound_identity_legend,
+        _validated_rows,
+    )
+    rows, _, _ = _validated_rows(pd.DataFrame([dict(
+        _REAL_ROWS[0], contrast_label="Raised vs usual marker", effect_unit="category contrast",
+        variance_estimator="cluster_robust", cluster_unit="patient", cluster_count=30,
+        confidence_level=level,
+    )]))
+    caption = " ".join(_bound_identity_legend(rows))
+    assert "patient-cluster-robust covariance (30 clusters)" in caption
+    if level is None:
+        assert "Confidence level not declared" in caption
+        assert "%" not in caption
+    else:
+        assert "90% confidence intervals" in caption
+        assert "Confidence level not declared" not in caption
 
 
 def test_a_specification_reporting_two_contrasts_names_each_row():

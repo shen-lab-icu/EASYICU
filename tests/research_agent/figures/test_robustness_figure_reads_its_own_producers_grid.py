@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -354,3 +356,166 @@ def test_the_grid_is_read_not_waved_through(tmp_path: Path) -> None:
     note = str(contract["statistics_note"])
     assert _REAL_GRID_ROW["description"] in note
     assert "complete case required variables" in note
+
+
+def _publish_synthetic_replay(
+    tmp_path, monkeypatch, *, declared_identity=True, contract_updates=None, variant_updates=None,
+):
+    """Exercise publication with aggregate fits; never fit or read cohort rows."""
+    from easyicu.research_agent.execution.runners import deterministic_robustness as owner
+    from easyicu.research_agent.schema import RobustnessSpec
+    from tests.support.robustness_sources import write_structured_source_authority
+
+    run_dir = tmp_path / "run"
+    record, evidence, _script = write_structured_source_authority(run_dir)
+    summary = record["step_summary"]
+    contract = summary["model_contracts"][0]
+    if declared_identity:
+        contract.update(
+            estimand_id="synthetic_endpoint_adjusted_odds",
+            estimand_label="Adjusted odds of the recorded endpoint",
+            contrast_id="raised_vs_usual",
+            contrast_label="Raised marker vs usual marker",
+            effect_unit="category contrast",
+            ci_method="Wald",
+            confidence_level=0.95,
+            dependence={"variance_estimator": "cluster_robust", "cluster_unit": "patient"},
+            cluster_count=80,
+        )
+    contract.update(contract_updates or {})
+    # Keep the actual source resolver and its digest checks in this test.
+    summary_path = run_dir / "steps/01_primary_model/outputs/step_summary.json"
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    receipt = next(item for item in evidence if item["evidence_id"] == "stat_primary")
+    (run_dir / receipt["relative_path"]).write_bytes(summary_path.read_bytes())
+    receipt["sha256"] = hashlib.sha256(summary_path.read_bytes()).hexdigest()
+    source = owner._find_structured_primary_model_source(
+        records=[record], evidence_records=evidence, run_dir=run_dir,
+    )
+    assert source is not None
+    primary, coefficients, _, error = owner._structured_model_row(
+        spec_id="primary", axis="primary", outputs_dir=source["outputs_dir"],
+        coefficient_path=source["coefficient_path"], contract=contract,
+        evidence_id=source["coefficient_evidence_id"], note_prefix="Synthetic aggregate fit.",
+    )
+    assert error is None
+    spec = RobustnessSpec(
+        spec_id="complete_case", axis="missing", description="Complete-case specification",
+        missing_override={"strategy": "complete_case", "variables": ["exposure", "outcome"]},
+    )
+    variant = replace(primary, spec_id=spec.spec_id, axis=spec.axis, independent_variant=False)
+    replay = {
+        "variant_contracts": [{**contract, "spec_id": spec.spec_id,
+                               "analysis_set": "complete_case", "analysis_role": "sensitivity",
+                               **(variant_updates or {})}],
+        "variant_coefficients": [{**row, "spec_id": spec.spec_id} for row in coefficients],
+    }
+    monkeypatch.setattr(owner, "_load_locked_specs", lambda *a, **k: ([spec], "2026-01-01"))
+    monkeypatch.setattr(owner, "_load_json_object", lambda *a: {
+        "primary_exposure": "exposure", "target_outcome": "outcome",
+    })
+    monkeypatch.setattr(owner, "_load_frame", lambda *a: pd.DataFrame())
+    monkeypatch.setattr(owner, "_load_primary_cohort", lambda *a: None)
+    monkeypatch.setattr(owner, "_membership_audit", lambda **k: [])
+    monkeypatch.setattr(owner, "_fit_structured_robustness_rows", lambda **k: (
+        [primary, variant], [], replay,
+    ))
+    out = run_dir / "steps/replay/outputs"
+    owner._run_robustness_preflight(
+        out_dir=out, run_dir=run_dir,
+        authority_payload={"per_step_records": [record], "evidence": evidence},
+        authority_error="", context_path=run_dir / "context.json",
+        lock_path=run_dir / "lock.json", cohort_path=run_dir / "unused.parquet",
+        universe_path=None,
+    )
+    return out, pd.read_csv(out / "robustness_matrix.csv")
+
+
+def test_replay_publishes_the_bound_models_identity_and_interval_semantics(tmp_path, monkeypatch):
+    out, matrix = _publish_synthetic_replay(tmp_path, monkeypatch)
+    for key, value in {
+        "estimand_id": "synthetic_endpoint_adjusted_odds",
+        "estimand_label": "Adjusted odds of the recorded endpoint",
+        "contrast_id": "raised_vs_usual",
+        "contrast_label": "Raised marker vs usual marker",
+        "effect_unit": "category contrast",
+        "ci_method": "Wald", "confidence_level": 0.95,
+        "variance_estimator": "cluster_robust", "cluster_unit": "patient", "cluster_count": 80,
+    }.items():
+        assert key in matrix, f"The replay dropped {key} from its verified model contract"
+        assert matrix[key].tolist() == [value, value]
+    assert matrix["point_estimate"].tolist() == [1.4, 1.4]
+    assert matrix["ci_low"].tolist() == [1.1, 1.1]
+    assert matrix["ci_high"].tolist() == [1.8, 1.8]
+    assert matrix.loc[1, "independent_variant"] == False  # noqa: E712
+    assert (out / "sensitivity_comparison.csv").read_bytes() == (out / "robustness_matrix.csv").read_bytes()
+
+
+def test_replay_summary_preserves_the_documented_equivalence(tmp_path, monkeypatch):
+    out, _matrix = _publish_synthetic_replay(tmp_path, monkeypatch)
+    summary = json.loads((out / "step_summary.json").read_text())
+    variant = summary["robustness_rows"][1]
+    assert variant["independent_variant"] is False
+    assert variant["contrast_id"] == "raised_vs_usual"
+
+
+def test_figure_carries_published_identity_into_its_caption_without_export(tmp_path, monkeypatch):
+    from easyicu.research_agent.execution.runners import robustness_figure_executor as figure
+
+    out, matrix = _publish_synthetic_replay(tmp_path, monkeypatch)
+    run_dir = tmp_path / "figure_run"
+    binding = _matrix_binding(run_dir)
+    matrix_path = run_dir / binding["relative_path"]
+    matrix_path.write_bytes((out / "robustness_matrix.csv").read_bytes())
+    digest = hashlib.sha256(matrix_path.read_bytes()).hexdigest()
+    binding["sha256"] = digest
+    binding["identity_row"]["sha256"] = digest
+    binding["consumption_contract"]["artifact_sha256"] = digest
+    binding["product_contract"]["columns"] = list(matrix.columns)
+    captured = {}
+
+    def capture(fig, path, *, contract, **kwargs):
+        captured["contract"] = contract.to_dict()
+        captured["texts"] = " ".join(text.get_text() for ax in fig.axes for text in ax.texts)
+        return {}
+
+    monkeypatch.setattr(figure, "save_publication_figure", capture)
+    figure.run_robustness_figure(
+        out_dir=tmp_path / "figure_out", run_dir=run_dir,
+        resolved_inputs={"step_id": "figure", "inputs": {ROBUSTNESS_FIGURE_INPUT: binding}},
+        step_id="figure", figure_product="robustness_plot",
+    )
+    caption = captured["contract"]["reader_caption"]
+    assert "Raised marker vs usual marker" in caption
+    assert "Adjusted odds of the recorded endpoint" in caption
+    assert "95% Wald confidence intervals" in caption
+    assert "patient-cluster-robust" in caption and "80 clusters" in caption
+    assert "not an independent variant" in captured["texts"].replace("\n", " ")
+    assert "not authorized as directly comparable" in caption
+    assert "Contrast / unit not declared" not in captured["texts"]
+
+
+def test_or_scale_alone_does_not_supply_missing_identity(tmp_path, monkeypatch):
+    from easyicu.research_agent.figures.robustness import assess_robustness_effect_comparability
+
+    _out, matrix = _publish_synthetic_replay(tmp_path, monkeypatch, declared_identity=False)
+    for key in ("estimand_id", "contrast_id", "contrast_label", "effect_unit", "confidence_level"):
+        assert key not in matrix
+    # Isolate identity from independence: even otherwise independent OR rows
+    # are insufficient to authorize a common effect axis.
+    matrix["independent_variant"] = True
+    assert not assess_robustness_effect_comparability(matrix).authorized
+
+
+def test_variant_keeps_its_own_estimand_and_interval_metadata(tmp_path, monkeypatch):
+    _out, matrix = _publish_synthetic_replay(tmp_path, monkeypatch, variant_updates={
+        "estimand_id": "secondary_endpoint", "ci_method": "Percentile bootstrap",
+        "confidence_level": 0.9, "dependence": None,
+        "variance_estimator": "bootstrap", "cluster_count": None,
+    })
+    assert matrix["estimand_id"].tolist() == ["synthetic_endpoint_adjusted_odds", "secondary_endpoint"]
+    assert matrix["ci_method"].tolist() == ["Wald", "Percentile bootstrap"]
+    assert matrix["confidence_level"].tolist() == [0.95, 0.9]
+    assert matrix["variance_estimator"].tolist() == ["cluster_robust", "bootstrap"]
+    assert pd.isna(matrix.loc[1, "cluster_count"])
+    assert pd.isna(matrix.loc[1, "cluster_unit"])
