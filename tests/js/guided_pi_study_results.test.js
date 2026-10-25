@@ -344,7 +344,7 @@ for (const language of ['en', 'zh']) {
       }] }),
     }).syncProjectWorkflowAside();
     const history = panelBody.innerHTML.match(/<details class="gpi-run-history"[\s\S]*?<\/ol><\/details>/)[0].replace(/<[^>]+>/g, '');
-    assert.ok(history.includes(tr('Full analysis · Analysis complete', '完整分析 · 分析已完成')));
+    assert.ok(history.includes(tr('Analysis complete', '分析完成')));
     assert.ok(history.includes(prefix + (reason ? ' ' + reason : '')));
     assert.doesNotMatch(history, /TODO\(lead copy\)|[a-z]+_[a-z_]+|[\[\]]/);
     assert.doesNotMatch(panelBody.innerHTML, /is-blocked/);

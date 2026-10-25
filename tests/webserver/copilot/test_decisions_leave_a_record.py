@@ -440,7 +440,7 @@ def test_the_rail_follows_the_latest_jobs_state(conversation: Conversation) -> N
         update={"status": "not_required"}
     )
     service._save_record(record)
-    assert conversation.rail() == "done"
+    assert conversation.rail() == "replied"
 
     prepare = conversation.start("prepare_analysis_data", PREPARE, lambda: {"human_review_pending": True})
     assert conversation.rail() == "running"

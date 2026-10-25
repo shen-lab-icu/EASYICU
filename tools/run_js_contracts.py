@@ -237,6 +237,7 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_side_panels.test.js": ["screens-guided-panels.js"],
     # Reads the whole js/ directory itself; takes no arguments.
     "job_continuity_404.test.js": [],
+    "guided_pi_audit_stage_labels.test.js": [],
     "manuscript_reader_navigation.test.js": ["screens-guided-pi-preview.js"],
     "method_skills_hub.test.js": ["screens-skills.js"],
     "method_skill_package_view.test.js": ["screens-skills.js"],
