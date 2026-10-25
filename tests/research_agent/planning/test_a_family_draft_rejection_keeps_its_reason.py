@@ -32,10 +32,13 @@ from tests.research_agent.planning.family_spec_fixtures import (
 
 
 def test_a_family_draft_records_the_same_reason_in_attempts_and_the_rejected_audit(monkeypatch):
+    """The host can bind a digest, but cannot supply comparator reasoning."""
+
     monkeypatch.setattr(progressive_planner, "_MAX_STEP_PARSE_RETRIES", 0)
     context = _context(exact=True)
     payload = _spec_payload(_request(context))
     payload["request_sha256"] = "0" * 64
+    payload["comparator_applications"] = []
     llm = ScriptedMockLLMClient([json.dumps(payload)])
     audit = []
     channel = ResumableProgressChannel()
@@ -55,9 +58,9 @@ def test_a_family_draft_records_the_same_reason_in_attempts_and_the_rejected_aud
     rejected = [event["detail"] for event in audit if event["detail"]["retry_phase"] == "rejected"]
     assert len(rejected) == 1
     for diagnostic in [record, rejected[0]]:
-        assert diagnostic["reason_code"] == cause.reason_code == "family_spec_request_digest_mismatch"
+        assert diagnostic["reason_code"] == cause.reason_code == "family_spec_comparator_application_missing"
         assert diagnostic["validation_issues"] == [
-            {"location": ["request_sha256"], "issue_type": "value_error"}
+            {"location": ["comparator_applications"], "issue_type": "value_error"}
         ]
         assert str(cause) not in json.dumps(diagnostic)
         assert payload["request_sha256"] not in json.dumps(diagnostic)
