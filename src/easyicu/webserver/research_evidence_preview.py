@@ -11,6 +11,7 @@ from __future__ import annotations
 from easyicu.runtime.platform_compat import open_nofollow
 
 import csv
+import base64
 import hashlib
 import json
 import os
@@ -255,11 +256,19 @@ def project_review_evidence_refs(
             continue
         file_name = match.group(1)
         pointer_suffix = str(match.group(2) or "").strip(".")
-        record = next(
-            (row for row, published in candidates if published == file_name),
-            None,
-        )
-        if record is None:
+        # Markdown review receipts use their registered JSON sibling; Markdown
+        # itself is not admitted as browser content by this owner.
+        if file_name in {"reviewer_report.md", "reviewer_report_post_readiness.md"}:
+            file_name = file_name.removesuffix(".md") + ".json"
+        matches = [row for row, published in candidates if published == file_name]
+        if len(matches) != 1:
+            continue
+        record = matches[0]
+        try:
+            path = _record_path(root, record.get("relative_path"))
+            if _sha256_file(path) != str(record.get("sha256") or "").lower():
+                continue
+        except EvidencePreviewError:
             continue
         seen.add(reference)
         evidence_id = str(record.get("evidence_id") or "")
@@ -344,6 +353,8 @@ def project_figure_source_code(
     The persisted gallery remains unchanged.  Supporting figures bind through
     their exact ``steps/<step_id>/outputs`` directory; promoted publication
     figures bind through the registered renderer's ``metadata.figure_id``.
+    A gallery without identifiers can bind through identical bytes in one
+    registered manuscript figure and that figure's explicit script parent.
     Ambiguous, missing, or digest-mismatched code fails closed by omitting the
     browser action.
     """
@@ -356,8 +367,7 @@ def project_figure_source_code(
     try:
         records = _load_records(root)
     except EvidencePreviewError:
-        projected["figures"] = [dict(row) if isinstance(row, Mapping) else row for row in figures]
-        return projected
+        records = []
 
     def code_for_figure_records(
         figure_records: list[Mapping[str, Any]],
@@ -376,6 +386,8 @@ def project_figure_source_code(
             if str(value or "").strip()
         }
         if script_ids:
+            if len(script_ids) != 1:
+                return []
             return [
                 record
                 for record in records
@@ -439,6 +451,43 @@ def project_figure_source_code(
                             and str(record.get("relative_path") or "").lower().endswith(".png")
                         ]
                     )
+            elif relative_path:
+                # The gallery path is run-owned, but its basename is not an
+                # evidence identity. Match the actual bytes to a unique export
+                # record before following its declared renderer parent.
+                try:
+                    image = _record_path(root, relative_path)
+                    if image.suffix.lower() != ".png":
+                        return None
+                    digest = _sha256_file(image)
+                    if "sha256" in row and row["sha256"] != digest:
+                        return None
+                    embedded = row.get("data_url")
+                    if embedded is not None:
+                        prefix = "data:image/png;base64,"
+                        if not isinstance(embedded, str) or not embedded.startswith(prefix):
+                            return None
+                        try:
+                            displayed = base64.b64decode(embedded[len(prefix):], validate=True)
+                        except ValueError:
+                            return None
+                        if hashlib.sha256(displayed).hexdigest() != digest:
+                            return None
+                    matches = [
+                        record for record in records
+                        if record.get("kind") == "figure"
+                        and record.get("sha256") == digest
+                        and isinstance(record.get("metadata"), Mapping)
+                        and record["metadata"].get("artifact_role") == "manuscript_figure"
+                    ]
+                    if len(matches) != 1 or not matches[0].get("script_evidence_id"):
+                        return None
+                    registered = _record_path(root, matches[0].get("relative_path"))
+                    if registered.suffix.lower() != ".png" or _sha256_file(registered) != digest:
+                        return None
+                    candidates = code_for_figure_records(matches)
+                except EvidencePreviewError:
+                    return None
         if len(candidates) != 1:
             return None
         candidate = candidates[0]
@@ -474,6 +523,7 @@ def project_figure_source_code(
             projected_figures.append(item)
             continue
         row = dict(item)
+        row.pop("source_code", None)
         source = source_for(item)
         if source:
             row["source_code"] = source
