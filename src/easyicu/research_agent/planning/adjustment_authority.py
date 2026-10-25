@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from ..authority.declared_levels import observed_levels_for
 from ..contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORMS, read_grouping_rules
-from ..research_context.materialization_window import bound_feature_window_end_hours
+from ..research_context.materialization_window import bound_feature_window_end_hours, context_column_windows
 from ..research_context.stay_events import (
     column_kind,
     stay_outcome_columns,
@@ -286,11 +286,14 @@ def host_window_bound_roles(
     reading the materialization owner gives it): a stay-level value, an
     outcome, an event's time or an event status recorded over the whole stay
     does not, whatever its role.
+    A native score with a source-specific definition window is known only
+    once that window ends, including legacy descriptors with role ``other``.
     Every other variable is absent from the mapping. With no reference time
     only the demographics are provable.
     """
 
     outer_end = host_outer_feature_window_end_hours(context)
+    windows = context_column_windows(context)
     outcomes = stay_outcome_columns(context)
     whole_stay = whole_stay_event_columns(context)
     roles: dict[str, HostTemporalRole] = {}
@@ -301,6 +304,11 @@ def host_window_bound_roles(
             continue
         if owner_declared_baseline_static(variable):
             roles[name] = "baseline_static"
+            continue
+        native = windows.get(name)
+        if native is not None and native.source == "concept":
+            if reference_hours is not None and native.end_hours <= reference_hours:
+                roles[name] = "at_or_before_time_zero"
             continue
         if role not in dynamic_roles or reference_hours is None:
             continue

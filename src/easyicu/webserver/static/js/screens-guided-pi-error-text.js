@@ -476,6 +476,19 @@
     function runFailureDetailText(detail) {
       const code = String(detail && detail.code || '').trim();
       const cause = String(detail && detail.cause || '').trim();
+      const statedVariable = String(detail && detail.statedVariable || '').trim();
+      if (code === 'progressive_family_spec_stated_adjustment_unavailable' && statedVariable) {
+        const why = cause === 'stated_adjustment_name_unresolved'
+          ? tr(`EasyICU could not identify the stated adjustment “${statedVariable}”. Give its exact name, or remove it from the question.`,
+            `EasyICU 无法识别问题中的调整变量「${statedVariable}」。请写明它的准确名称，或在问题中去掉它。`)
+          : cause === 'stated_adjustment_column_ambiguous'
+            ? tr(`The adjustment “${statedVariable}” matches several columns. State which value and time window to use, or remove it from the question.`,
+              `调整变量「${statedVariable}」在数据中对应多列。请写明使用哪个数值和时间窗，或在问题中去掉它。`)
+            : tr(`This data has no usable column for the adjustment “${statedVariable}”. Use data that includes it, or remove it from the question.`,
+              `这份数据里没有可用的调整变量「${statedVariable}」。请改用包含它的数据，或在问题中去掉它。`);
+        return why + tr(' Planning stopped and no analysis was run. Generate the plan again after that change.',
+          ' 规划已停止，没有运行分析。修改后请重新生成计划。');
+      }
       const missing = Array.isArray(detail && detail.missing) ? detail.missing.map(String).filter(Boolean) : [];
       const list = missing.length ? missing.join(', ') : '';
       if (code === 'deterministic_standard_executor_failed_closed') {

@@ -12,8 +12,9 @@ bind the run; the windows the context builder synthesized bind nothing
 (:func:`bound_feature_window_end_hours`).
 
 Each column holds what it was summarized over (:func:`context_column_windows`):
-its own ``analysis_window`` label, else, for a time-varying column, the host's
-materialization window.  A cohort predicate filters the column as it was
+its own ``analysis_window`` label, else a native concept's declared definition
+window, else, for a time-varying column, the host's materialization window.
+A cohort predicate filters the column as it was
 summarized, whatever window the predicate states, so the cohort builder reads
 a predicate only over its column's window (``cohort.schema``).
 """
@@ -38,6 +39,14 @@ from .temporal_semantics import TemporalAlignmentEngine, normalise_time_anchor
 #: Spellings of the admissions a window counts from, as plans and labels write
 #: them, beyond those ``normalise_time_anchor`` already collapses.
 _ANCHOR_ALIASES = {"icu_admit": "icu_admission", "hospital_admit": "hospital_admission"}
+# Native definition windows, independent of an extraction's outer window.
+# The dictionary declares apache_iv as the eICU IVa score over the first ICU
+# day. Other stay-level severity scores have no such declaration here; their
+# category or a clinician's wording cannot manufacture measurement timing.
+_NATIVE_SCORE_WINDOWS = {
+    ("eicu", "apache_iv"): (0.0, 24.0),
+    ("eicu_demo", "apache_iv"): (0.0, 24.0),
+}
 #: A column's own window label: ``<anchor>[<start>,<end>]h``, the form the
 #: research context writes, or ``<anchor>_<start>_<end>h``.
 _WINDOW_LABEL = re.compile(
@@ -65,8 +74,9 @@ class ColumnWindow:
 
     ``anchor`` is ``None`` when the column's own label names no window this
     owner reads (``entire_stay``): such a column is read over no window a
-    predicate can state.  ``source`` is ``"column"`` for the column's own
-    label and ``"host"`` for the window the host materialized it over.
+    predicate can state. ``source`` is ``"column"`` for the column's own label,
+    ``"concept"`` for a native score's definition, and ``"host"`` for the
+    window the host materialized it over.
     """
 
     label: str
@@ -209,8 +219,9 @@ def bound_feature_window_end_hours(context: Any) -> float | None:
 def context_column_windows(context: Any) -> dict[str, ColumnWindow]:
     """The window each column of ``context`` was summarized over, by column name.
 
-    A column's own ``analysis_window`` label names it.  A column without one is
-    summarized over the host's materialization window when it holds a summary
+    A column's own ``analysis_window`` label names it. Without one, a native
+    score may have a source-specific definition window. Other columns are
+    summarized over the host's materialization window when they hold a summary
     of observations over a window (``stay_events.column_kind``, read through
     its source concept, the reading the time-zero rule shares): not the ICU
     length of stay, an outcome, a value fixed at admission, another
@@ -240,6 +251,15 @@ def context_column_windows(context: Any) -> dict[str, ColumnWindow]:
             windows[name] = own
             continue
         source = str(getattr(variable, "source_concept", "") or "").strip()
+        database = str(getattr(getattr(context, "cohort", None), "database", "") or "")
+        native = _NATIVE_SCORE_WINDOWS.get((database, source or name))
+        role = str(getattr(getattr(variable, "role", None), "value", getattr(variable, "role", "")))
+        if native is not None and role in {"other", "composite_score", "ordinal_score"}:
+            start, end = native
+            windows[name] = ColumnWindow(
+                f"icu_admission[{start:g},{end:g}]h", "icu_admission", start, end, "concept",
+            )
+            continue
         if (
             hours is None
             or name in whole_stay

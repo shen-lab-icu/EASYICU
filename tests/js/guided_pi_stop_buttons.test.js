@@ -17,6 +17,15 @@ const owner = modules.require('runStop').create({ tr, runFailureText: () => tr('
   workflow: () => workflow, latestRun: () => workflow.runs.find(row => row.authoritative),
   resourceButton: (resource, label) => `<button data-resource="${resource.artifact}">${label}</button>`,
   canAct: () => true, canPreview: () => true, hasRecovery: () => true });
+let statedDetail;
+modules.require('runStop').create({ tr, runFailureText: (_code, detail) => {
+  statedDetail = detail;
+  return detail.statedVariable;
+} }).render({ savedRuns: [{ ...run, gate_reason_code: 'research_pipeline_progressive_compile_failed',
+  gate_detail: { reason_code: 'progressive_family_spec_stated_adjustment_unavailable',
+    cause_code: 'stated_adjustment_name_unresolved', stated_variable: '试验量表甲' } }] });
+assert.equal(statedDetail.statedVariable, '试验量表甲');
+assert.equal(statedDetail.cause, 'stated_adjustment_name_unresolved');
 const events = {};
 const calls = [];
 const recovery = { scrollIntoView() { calls.push('reveal'); }, setAttribute() {}, focus() {} };

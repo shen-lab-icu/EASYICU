@@ -823,6 +823,21 @@ def _progressive_compile_failure_message(exc: BaseException) -> str:
     """Say what stopped planning; the typed reason decides which sentence is true."""
 
     typed = _safe_pipeline_typed_failure(exc)
+    if (typed.get("reason_code") == "progressive_family_spec_stated_adjustment_unavailable"
+            and typed.get("stated_variable")):
+        variable = typed["stated_variable"]
+        cause = typed.get("cause_code")
+        why = (
+            f"EasyICU could not identify the stated adjustment “{variable}”. "
+            "Give its exact name, or remove it from the question."
+            if cause == "stated_adjustment_name_unresolved" else
+            f"The adjustment “{variable}” matches several columns. State which value and "
+            "time window to use, or remove it from the question."
+            if cause == "stated_adjustment_column_ambiguous" else
+            f"This data has no usable column for the adjustment “{variable}”. "
+            "Use data that includes it, or remove it from the question."
+        )
+        return f"{why} Planning stopped and no analysis was run. Generate the plan again after that change."
     sentence = _PLANNING_STOP_SENTENCES.get(str(typed.get("reason_code") or ""))
     if sentence:
         return sentence

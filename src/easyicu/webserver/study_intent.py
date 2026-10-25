@@ -250,7 +250,7 @@ _FAMILY_PATTERNS: Tuple[Tuple[str, str], ...] = (
 # "I am NOT studying death, my outcome is AKI" must not read `death`. Without
 # this, a user's correction becomes the very thing they corrected.
 _NEGATION_CUE = (
-    r"(?:\bnot\b|\bno\b|\bnever\b|\bisn't\b|\baren't\b|\bdon't\b|\bdoesn't\b|\brather than\b|\binstead of\b|不是|不要|不想|不(?:研究|分析|考虑|比较)|并非|而非|非|无关|(?<![\u3400-\u9fff])(?:请)?别(?:研究|分析|考虑|比较|描述|把|将|选|用))"
+    r"(?:\bnot\b|\bno\b|\bnever\b|\bisn't\b|\baren't\b|\bdon't\b|\bdoesn't\b|\brather than\b|\binstead of\b|不是|不要|不想|不(?:研究|分析|考虑|比较|调整|控制)|并非|而非|非|无关|(?<![\u3400-\u9fff])(?:请)?别(?:研究|分析|考虑|比较|描述|把|将|选|用))"
 )
 _NEGATION = re.compile(
     _NEGATION_CUE + r"[\s\S]{0,16}$",
@@ -994,6 +994,20 @@ _NAME_TO_JOIN = r"(?:[\s\-‐–]+to[\s\-‐–]+|\s*[/／:]\s*)"
 _NAME_CJK_SEPARATOR = r"(?:[\s\-‐–/／]+|与|和)?"
 _CJK = re.compile(r"[\u3400-\u9fff]")
 
+# Versioned score names used alongside the catalog's full display labels.
+# Keep versions explicit: APACHE II/III, SAPS II and OASIS are not these
+# concepts. The longest catalog name still distinguishes a score from its
+# predicted risk or a component. These aliases name concepts, never roles.
+_SCORE_NAME_ALIASES = {
+    "apache_iv": ("APACHE IV", "APACHE IVa"),
+    "apache_iv_pred_hosp_mort": (
+        "APACHE IV Predicted Hospital Mortality", "APACHE IV 预测院内死亡率",
+    ),
+    "sofa": ("SOFA",),
+    "sofa2": ("SOFA-2", "SOFA2"),
+    "saps3": ("SAPS 3", "SAPS3"),
+}
+
 
 def _catalog_name_regex(name: str) -> str:
     """One catalog name as a phrase: its words in order, however they are joined."""
@@ -1036,9 +1050,12 @@ def _concept_name_pattern(concept_id: str) -> Optional[str]:
     ]
     if not names:
         return None
-    return "|".join(
-        rf"(?<![a-z0-9]){_catalog_name_regex(name)}(?![a-z0-9])" for name in names
+    patterns = [rf"(?<![a-z0-9]){_catalog_name_regex(name)}(?![a-z0-9])" for name in names]
+    patterns.extend(
+        rf"(?<![a-z0-9]){_catalog_name_regex(name)}(?![a-z0-9]|[\s\-‐–]*\d)"
+        for name in _SCORE_NAME_ALIASES.get(concept_id, ())
     )
+    return "|".join(patterns)
 
 
 def explicit_exposure_aggregation(

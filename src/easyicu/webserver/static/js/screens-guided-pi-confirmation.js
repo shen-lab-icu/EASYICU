@@ -128,7 +128,7 @@
       const failureReason = typeof host.runFailureText !== 'function'
         ? ''
         : failedRun
-          ? String(host.runFailureText(failedRun.gate_reason_code, { code: failedRun.gate_detail_code, missing: failedRun.gate_missing_concepts, cause: failedRun.gate_detail_cause_code }) || '')
+          ? String(host.runFailureText(failedRun.gate_reason_code, { code: failedRun.gate_detail_code, missing: failedRun.gate_missing_concepts, cause: failedRun.gate_detail_cause_code, statedVariable: failedRun.gate_detail && failedRun.gate_detail.stated_variable }) || '')
           : latestFailedAgentJob ? String(host.runFailureText(latestFailedAgentJob.error_code) || '') : '';
       const providerFailure = ['research_pipeline_provider_timeout', 'research_pipeline_planner_provider_unavailable']
         .includes(String(failedRun && failedRun.gate_reason_code || latestFailedAgentJob && latestFailedAgentJob.error_code || ''));

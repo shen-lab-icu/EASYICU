@@ -1234,11 +1234,18 @@ def checked_stated_variables(
     )
     from easyicu.research_agent.planning.adjustment_authority import normalize_stated_variables
     from easyicu.webserver.study_intent import catalog_named_concepts
+    from easyicu.webserver.demo_source_storage import verified_public_demo_raw
 
     if not isinstance(statements, list) or len(statements) > 16:
         raise ValueError("stated variables must be a list of at most 16 readings")
     path = str(source.get("path") or "").strip()
+    # A verified raw demo is preparation input, not an exported concept table.
+    # Its capability menu lets the plan request a later extraction. Final
+    # prepared inputs retain their physical catalog and cannot borrow this menu.
+    raw_demo = verified_public_demo_raw(Path(path)) if path else None
     available = (
+        {item.concept_id for item in build_database_capability_catalog(raw_demo.database).concepts}
+        if raw_demo is not None else
         {item.concept_id for item in build_available_catalog(Path(path)).concepts}
         if path else set()
     )
