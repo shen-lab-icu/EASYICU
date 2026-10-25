@@ -2066,9 +2066,13 @@ def _association_adjustment(
         matched = [name for name in stated_adjustment_columns(context, item) if name in available]
         require_distinct(matched)
         if item.source_status != "available" or len(matched) != 1:
+            cause = ("name_unresolved" if item.concept is None else
+                     "source_unavailable" if item.source_status != "available" else
+                     "column_ambiguous" if len(matched) > 1 else "column_unavailable")
             raise FamilySpecError("family_spec_stated_adjustment_unavailable",
                                   f"The question asks to adjust for {item.variable!r}, but the extracted data has no single column for it.",
-                                  path="adjustment_set")
+                                  path="adjustment_set", stated_variable=item.variable,
+                                  cause_code=f"stated_adjustment_{cause}")
         columns.extend(matched)
     timed = host_proven_temporal_roles(context)
     if adjustment.selection != "exact":

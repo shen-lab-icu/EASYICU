@@ -105,6 +105,7 @@
         code: detail.reason_code || run.gate_detail_code,
         missing: detail.missing_concepts || run.gate_missing_concepts,
         cause: detail.cause_code || run.gate_detail_cause_code,
+        statedVariable: detail.stated_variable,
         step: detail.step_id || run.gate_detail_step_id,
         stepTitle: detail.step_title || run.gate_detail_step_title,
         transportRetries: detail.transport_retries ?? run.gate_transport_retries,

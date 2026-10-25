@@ -18,6 +18,98 @@ from easyicu.webserver import agent_pipeline_runs
 from .family_spec_fixtures import LABELS, _context, _request, _run, _spec_payload
 
 
+@pytest.mark.parametrize("concept,status,cause", [
+    (None, "unresolved", "stated_adjustment_name_unresolved"),
+    ("unprovided_score", "unavailable", "stated_adjustment_source_unavailable"),
+    ("unprovided_score", "available", "stated_adjustment_column_unavailable"),
+])
+def test_unavailable_adjustment_stop_carries_the_researchers_variable(concept, status, cause):
+    context = _study(())
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints["stated_adjustments"] = [{
+        "variable": "试验量表甲", "words": "调整试验量表甲后", "concept": concept,
+        "source_status": status,
+    }]
+    context.user_preferences.data_constraints = json.dumps(constraints)
+    with pytest.raises(ProgressivePlanCompileError) as stopped:
+        _run(context, [])
+    diagnostic = agent_pipeline_runs._safe_pipeline_typed_failure(stopped.value)
+    assert diagnostic["stated_variable"] == "试验量表甲"
+    assert diagnostic["cause_code"] == cause
+    detail = agent_pipeline_runs._failure_gate_detail(
+        diagnostic["reason_code"], diagnostic["cause_code"], action_coordinates=diagnostic,
+    )
+    assert detail["stated_variable"] == "试验量表甲"
+    message = agent_pipeline_runs._progressive_compile_failure_message(stopped.value)
+    assert "试验量表甲" in message
+    assert "remove" in message and "no analysis was run" in message
+    if status == "unresolved":
+        assert "could not identify" in message
+    else:
+        assert "source" in message or "data" in message
+
+
+@pytest.mark.parametrize("database,landmark,window,allowed", [
+    ("eicu", 24, None, True), ("eicu_demo", 36, None, True),
+    ("eicu", 12, None, False), ("miiv", 24, None, False),
+    ("eicu", 24, "icu_admission[0,48]h", False),
+])
+def test_native_first_day_score_uses_its_definition_not_the_outer_window(database, landmark, window, allowed):
+    context = _study(())
+    context.cohort.database = database
+    context.user_preferences.landmark_hours = landmark
+    context.variables.append(ConceptDescriptor(
+        name="apache_iv", source_concept="apache_iv", role=VariableRole.OTHER,
+        dtype="float64", analysis_window=window,
+    ))
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints["stated_adjustments"] = [{
+        "variable": "APACHE IV 评分", "words": "调整APACHE IV 评分后",
+        "concept": "apache_iv", "source_status": "available",
+    }]
+    context.user_preferences.data_constraints = json.dumps(constraints)
+    if allowed:
+        request = _request(context)
+        assert request.exact_roster == ["apache_iv"]
+        from easyicu.research_agent.planning.adjustment_authority import host_proven_temporal_roles
+        from easyicu.research_agent.planning.association_scope import post_baseline_exposure
+        assert host_proven_temporal_roles(context)["apache_iv"] == "at_or_before_time_zero"
+        assert post_baseline_exposure(context, "apache_iv") == (True, "icu_admission[0,24]h")
+    else:
+        with pytest.raises(FamilySpecError, match="covariate_timing_unproven"):
+            _request(context)
+
+
+@pytest.mark.parametrize("role", ["id", "meta", "time", "outcome"])
+def test_a_score_companion_never_inherits_the_native_value_window(role):
+    from easyicu.research_agent.research_context.materialization_window import context_column_windows
+
+    context = _study(())
+    context.cohort.database = "eicu"
+    context.variables.append(ConceptDescriptor(
+        name="score_receipt", source_concept="apache_iv", role=role, dtype="int64",
+    ))
+    assert "score_receipt" not in context_column_windows(context)
+
+
+def test_multiple_score_summaries_remain_an_explicit_adjustment_choice():
+    context = _study(())
+    context.variables.extend(ConceptDescriptor(name=name, role="composite_score", dtype="float64")
+                             for name in ("trial_score_first", "trial_score_mean"))
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints["stated_adjustments"] = [{
+        "variable": "试验量表甲", "words": "调整试验量表甲后",
+        "concept": "trial_score", "source_status": "available",
+    }]
+    context.user_preferences.data_constraints = json.dumps(constraints)
+    with pytest.raises(ProgressivePlanCompileError) as stopped:
+        _run(context, [])
+    diagnostic = agent_pipeline_runs._safe_pipeline_typed_failure(stopped.value)
+    assert diagnostic["cause_code"] == "stated_adjustment_column_ambiguous"
+    assert diagnostic["stated_variable"] == "试验量表甲"
+    assert "several columns" in agent_pipeline_runs._progressive_compile_failure_message(stopped.value)
+
+
 def _study(roster=("sex",)):
     context = _context(exact=False)
     constraints = json.loads(context.user_preferences.data_constraints)
@@ -131,9 +223,9 @@ def test_unavailable_stated_covariate_stops_before_planning():
 @pytest.mark.parametrize("code,sentence,detail", [
     (
         "family_spec_stated_adjustment_unavailable",
-        "The question asks to adjust for a variable that the extracted data does not provide, "
-        "so planning stopped and no analysis was run. Choose data that includes it, or remove "
-        "it from the adjustment variables, then generate the plan again.",
+        "This data has no usable column for the adjustment “missing_covariate”. "
+        "Use data that includes it, or remove it from the question. "
+        "Planning stopped and no analysis was run. Generate the plan again after that change.",
         "The question asks to adjust for 'missing_covariate', but the extracted data has no single column for it.",
     ),
     (

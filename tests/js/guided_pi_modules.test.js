@@ -159,6 +159,23 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
     assert.equal(runFailure('research_pipeline_progressive_compile_failed', { code }), en);
     assert.equal(runFailureZh('research_pipeline_progressive_compile_failed', { code }), zh);
   }
+  for (const cause of ['stated_adjustment_name_unresolved', 'stated_adjustment_source_unavailable',
+    'stated_adjustment_column_unavailable', 'stated_adjustment_column_ambiguous']) {
+    const detail = { code: 'progressive_family_spec_stated_adjustment_unavailable',
+      cause, statedVariable: '试验量表甲' };
+    const en = runFailure('research_pipeline_progressive_compile_failed', detail);
+    const zh = runFailureZh('research_pipeline_progressive_compile_failed', detail);
+    assert.match(en, /试验量表甲/);
+    assert.match(zh, /试验量表甲/);
+    assert.match(en, /remove/);
+    assert.match(zh, /去掉/);
+    if (cause === 'stated_adjustment_name_unresolved') {
+      assert.match(en, /could not identify/);
+      assert.match(zh, /无法识别/);
+    } else {
+      assert.match(zh, /数据/);
+    }
+  }
   ['progressive_unknown_variable', 'progressive_model_levels_unavailable'].forEach(code => {
     assert.match(runFailure('research_pipeline_progressive_compile_failed', { code }), /variable level or model term/);
   });

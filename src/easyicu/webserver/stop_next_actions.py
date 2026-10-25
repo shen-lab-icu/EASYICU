@@ -382,7 +382,11 @@ def _step_id(value: Any) -> str | None:
 
 
 def safe_stop_coordinates(payload: Any) -> dict[str, Any]:
-    """Keep bounded typed coordinates; messages and candidate values stay out."""
+    """Keep bounded coordinates, including a host-checked stated variable name.
+
+    Exception messages and model candidate values stay out. A stated variable
+    is the researcher's own wording from a checked question receipt.
+    """
 
     if not isinstance(payload, Mapping):
         return {}
@@ -391,6 +395,10 @@ def safe_stop_coordinates(payload: Any) -> dict[str, Any]:
         for key in ("element", "concept", "database", "family")
         if (code := _code(payload.get(key))) is not None
     }
+    variable = payload.get("stated_variable")
+    if (isinstance(variable, str) and 0 < len(variable.strip()) <= 160
+            and not any(ord(char) < 32 or ord(char) == 127 for char in variable)):
+        result["stated_variable"] = variable.strip()
     if (step := _step_id(payload.get("step_id"))) is not None:
         result["step_id"] = step
     if type(payload.get("question_required")) is bool:

@@ -77,10 +77,10 @@ def _metadata_pipeline(tmp_path, *, revision=False, grouped=True):
             {"id": "g3", "label": "Upper band", "rule": {
                 "summary": "max", "op": ">=", "value": 110,
             }},
-            {"id": "g2", "label": "Reference band", "rule": {
-                "summary": "max", "op": ">=", "value": 70,
+            {"id": "g1", "label": "Lower band", "rule": {
+                "summary": "max", "op": "<", "value": 70,
             }},
-            {"id": "g1", "label": "Remaining band", "rule": "otherwise"},
+            {"id": "g2", "label": "Reference band", "rule": "otherwise"},
         ],
         "unmeasured": {"handling": "exclude"},
         "reference": "g2", "contrast": "g3",

@@ -119,10 +119,15 @@ _APPLICATION_MAX = 1200
 class FamilySpecError(ValueError):
     """A spec, request, or template projection violated its typed contract."""
 
-    def __init__(self, reason_code: str, message: str, *, path: str = "") -> None:
+    def __init__(
+        self, reason_code: str, message: str, *, path: str = "",
+        stated_variable: str | None = None, cause_code: str | None = None,
+    ) -> None:
         super().__init__(f"{reason_code}: {message}")
         self.reason_code = reason_code
         self.path = path
+        self.stated_variable = stated_variable
+        self.cause_code = cause_code
         self.easyicu_safe_diagnostic = {
             "owner": "easyicu.planning.family_spec_v1",
             "reason_code": reason_code,

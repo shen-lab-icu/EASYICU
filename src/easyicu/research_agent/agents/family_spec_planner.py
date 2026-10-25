@@ -1068,10 +1068,13 @@ def run_family_spec_attempt(
             cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
         )
     except FamilySpecError as exc:
-        raise ProgressivePlanCompileError(
+        error = ProgressivePlanCompileError(
             f"progressive_{exc.reason_code}", str(exc), path=exc.path or "family_spec",
-            metrics={"planner_provider_calls": 0},
-        ) from exc
+            metrics={"planner_provider_calls": 0}, cause_code=exc.cause_code,
+        )
+        if exc.stated_variable is not None:
+            error.easyicu_safe_diagnostic["stated_variable"] = exc.stated_variable
+        raise error from exc
     descriptions = {
         name: " ".join(
             part

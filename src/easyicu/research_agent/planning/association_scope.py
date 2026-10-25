@@ -5,7 +5,10 @@ from typing import Optional
 from ..authority.declared_levels import closed_planning_levels_for
 from ..contracts.model_terms import level_spelling
 from ..schema import ResearchContext, VariableRole
-from ..research_context.materialization_window import host_materialization_window_hours
+from ..research_context.materialization_window import (
+    column_materialized_window,
+    host_materialization_window_hours,
+)
 from ..research_context.temporal_semantics import window_extends_after_anchor
 from .adjustment_authority import (
     baseline_static_grouping, owner_declared_baseline_static, primary_landmark_hours,
@@ -61,6 +64,9 @@ def post_baseline_exposure(
     window = str(getattr(descriptor, "analysis_window", "") or "").strip()
     if window:
         return window_extends_after_anchor(window), window
+    native = column_materialized_window(context, exposure)
+    if native is not None and native.source == "concept":
+        return window_extends_after_anchor(native.label), native.label
     if descriptor is not None and (
         owner_declared_baseline_static(descriptor)
         or baseline_static_grouping(descriptor, context)
