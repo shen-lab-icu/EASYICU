@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from ..contracts.cohort_summary import is_primary_descriptive_summary_step
+from ..contracts.continuous_outcome_summary import continuous_outcome_summary_verdict
 from ..contracts.ordered_stratified import (
     has_fixed_ordered_stratified_input_roster,
 )
@@ -113,12 +115,14 @@ def close_measurement_companion_inputs(
     additions_by_step: Dict[str, List[str]] = {}
     for step in plan.steps or []:
         inputs = [str(value) for value in (step.inputs or [])]
-        # This host-owned contract already fixes the exact exposure/outcome
-        # roster. Suffix closure would infer new mandatory scientific inputs
-        # that its executor neither selected nor consumes.
+        # These owners fix their scientific rosters. Appending audit fields
+        # would turn provenance into additional outcomes. Measurement-audit
+        # steps still receive their companions through the closure below.
         if has_fixed_ordered_stratified_input_roster(
             step
-        ) or has_scientific_runtime_owner(step):
+        ) or has_scientific_runtime_owner(step) or is_primary_descriptive_summary_step(
+            step
+        ) or continuous_outcome_summary_verdict(step).claimed:
             revised_steps.append(step)
             continue
         seen = set(inputs)

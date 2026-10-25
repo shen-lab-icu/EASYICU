@@ -17,6 +17,9 @@ from typing import Any, Mapping
 
 from easyicu.research_agent.authority.run_input import load_verified_run_input_capsule
 from easyicu.research_agent.canonical_json import canonical_sha256
+from easyicu.research_agent.contracts.cohort_summary import (
+    DESCRIPTIVE_SUMMARY_ACTION, is_primary_descriptive_summary_step,
+)
 from easyicu.research_agent.contracts.frozen_payload import thaw_payload
 from easyicu.research_agent.planning.accepted_analysis_inputs import AcceptedAnalysisInputs
 from easyicu.research_agent.planning.baseline_requirements import (
@@ -37,7 +40,7 @@ from easyicu.research_agent.planning.scientific_review import (
 from easyicu.research_agent.planning.requirement_coverage import SUBGROUP_ACTIONS, concept_relatives, stated_subgroup_coverage
 from easyicu.research_agent.planning.sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
 from easyicu.research_agent.planning.robustness_contract import complete_case_variables
-from easyicu.research_agent.schema import AnalysisPlan, ResearchContext
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, ResearchContext
 from easyicu.webserver import agent_runs, dataio, study_contexts
 from easyicu.webserver.agent_review_recovery import load_recovery_seed
 from easyicu.webserver.research_input_progress import research_input_state
@@ -93,6 +96,16 @@ def _step_coordinate(step: Mapping[str, Any], plan: Mapping[str, Any]) -> tuple[
         bindings["columns"] = sorted(value for value in step.get("inputs", ()) if ":" not in value)
     method = str(step.get("method") or "").strip().casefold().split("(", 1)[0].strip()
     bindings["method"] = method
+    try:
+        typed_step = AnalysisStep.model_validate(step)
+    except ValueError:
+        typed_step = None
+    if typed_step is not None and is_primary_descriptive_summary_step(typed_step):
+        # Review and execution identify this calculation by its closed action
+        # and products; the Planner's free-text method is only a description.
+        # Keep a shape marker so an unowned step cannot borrow that identity.
+        bindings["method"] = DESCRIPTIVE_SUMMARY_ACTION
+        bindings["primary_descriptive_summary"] = True
     if step.get("robustness_replay_spec"):
         bindings["robustness_specs"] = plan.get("robustness_specs", ())
     if method in {"subgroup_analysis", "effect_modification"} or _module(step) in SUBGROUP_ACTIONS:
@@ -109,9 +122,10 @@ def _repair_inputs_within_source(
     source: Mapping[str, Any], step: Mapping[str, Any], *,
     source_columns: set[str], revised_references: set[str],
 ) -> bool:
-    """New input bindings must name an existing variable or revised producer."""
+    """Bind existing variables, the declared cohort identity, or revised products."""
+    identity = (source.get("cohort_definition_spec") or {}).get("identity_column")
     return all(
-        value in revised_references or (":" not in value and value in source_columns)
+        value in revised_references or (":" not in value and (value in source_columns or value == identity))
         for value in set(step.get("inputs", ())) - set(source.get("inputs", ()))
     )
 
@@ -119,7 +133,7 @@ def _repair_inputs_within_source(
 def _existing_step_binding_repair(
     source: Mapping[str, Any], step: Mapping[str, Any], *,
     source_coordinate: tuple[str, str, str], coordinate: tuple[str, str, str],
-    revised_references: set[str],
+    revised_references: set[str], non_scientific_columns: set[str],
 ) -> bool:
     """Ignore transport and display repairs, retaining exact scientific specs.
 
@@ -129,6 +143,12 @@ def _existing_step_binding_repair(
     if source.get("step_id") != step.get("step_id") or source_coordinate[:2] != coordinate[:2]:
         return False
     before, after = (json.loads(item[2]) for item in (source_coordinate, coordinate))
+    if before.get("primary_descriptive_summary"):
+        old_columns, new_columns = set(before.get("columns", ())), set(after.get("columns", ()))
+        # Only typed provenance/identity inputs can be removed here. Retain
+        # the measurement and grouping, and never borrow another step's variable.
+        if not new_columns <= old_columns or not old_columns - new_columns <= non_scientific_columns:
+            return False
     before.pop("columns", None)
     after.pop("columns", None)
     old_panels = before.pop("figure_panels", ())
@@ -195,6 +215,7 @@ class PlanRevisionGuard:
         revised = plan.model_dump(mode="json")
         remaining = [(step, _step_coordinate(step, previous)) for step in previous["steps"]]
         source_columns = {value for step in previous["steps"] for value in step.get("inputs", ()) if ":" not in value}
+        non_scientific_columns = {v.name for v in context.variables if v.role.value in {"id", "index", "meta"}}
         revised_references = {value for step in revised["steps"] for value in (
             step["step_id"], *step.get("expected_outputs", ()),
         )}
@@ -207,7 +228,7 @@ class PlanRevisionGuard:
                            old, raw, source_columns=source_columns, revised_references=revised_references,
                        ) and (bound == coordinate or _existing_step_binding_repair(
                            old, raw, source_coordinate=bound, coordinate=coordinate,
-                           revised_references=revised_references,
+                           revised_references=revised_references, non_scientific_columns=non_scientific_columns,
                        ))]
             if matches:
                 match = next((index for index in matches if remaining[index][0]["step_id"] == step.step_id), matches[0])
