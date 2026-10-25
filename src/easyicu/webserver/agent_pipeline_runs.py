@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 from pydantic import ValidationError
 
 from easyicu.webserver import planning_coordinate_readings
+from easyicu.webserver.descriptive_result_projection import bound_descriptive_variables, descriptive_summary_projection
 
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.authority.run_input import (
@@ -3623,6 +3624,10 @@ def _table_projection(
     # In a prediction study the model's own result tables follow the
     # population flow, so supporting audits cannot take their places.
     prediction_steps = prediction_result_step_ids(plan or {})
+    primary_steps = {
+        str(step.get("step_id") or "") for step in (plan or {}).get("steps") or ()
+        if isinstance(step, Mapping) and step.get("planned_analysis_role") == "primary"
+    }
 
     def review_priority(record: Mapping[str, Any]) -> tuple[int, int]:
         """Rank semantic result tables before bounded support/audit previews."""
@@ -3635,7 +3640,7 @@ def _table_projection(
             rank = 9
         elif "population_flow" in haystack or "cohort_flow" in haystack:
             rank = 0
-        elif str(record.get("produced_by_step") or "").strip() in prediction_steps:
+        elif str(record.get("produced_by_step") or "").strip() in prediction_steps | primary_steps:
             rank = 1
         elif any(
             token in haystack
@@ -3734,6 +3739,19 @@ def _table_projection(
         evidence_id = str(record.get("evidence_id") or "")
         verified = bool(digest and re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", evidence_id)
                         and evidence_id_counts.get(evidence_id) == 1)
+        # Answer aggregates come from the complete verified snapshot, not a
+        # display preview that may stop before later groups or their units.
+        try:
+            summary = descriptive_summary_projection(raw) if (
+                verified and not record["is_source_copy"]
+                and str(record.get("produced_by_step") or "") in primary_steps
+            ) else None
+        except csv.Error:
+            summary = None
+        if summary is not None:
+            summary["variable_display"] = bound_descriptive_variables(
+                run_dir, str(record.get("produced_by_step") or ""), summary,
+            )
         tables.append(
             {
                 "evidence_id": _clean_text(record.get("evidence_id"), 160),
@@ -3743,6 +3761,7 @@ def _table_projection(
                 "is_source_copy": record["is_source_copy"],
                 "source_status": "current" if verified else "unavailable",
                 **({"sha256": digest} if verified else {}),
+                **({"descriptive_summary": summary} if summary is not None else {}),
                 "headers": [_clean_text(value, 160) for value in headers],
                 "rows": [[_clean_text(value, 500) for value in row] for row in rows[:_MAX_TABLE_ROWS]],
                 "preview_truncated": len(rows) > _MAX_TABLE_ROWS,

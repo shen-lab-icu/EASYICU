@@ -167,7 +167,7 @@ CONCEPT_DICTIONARY = {
     'height': ('Height', '身高', 'cm'),
     'sex': ('Sex', '性别', ''),
     'weight': ('Weight', '体重', 'kg'),
-    'icu_unit_type': ('ICU Unit Type', 'ICU单元类型', 'category'),
+    'icu_unit_type': ('ICU Unit Type', 'ICU 类型', 'category'),
 
     # SOFA-1 评分
     'sofa': ('SOFA Score (Total)', 'SOFA总分', '0-24'),

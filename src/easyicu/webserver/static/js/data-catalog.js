@@ -195,7 +195,7 @@
     height: ["Height", "身高", "cm"],
     sex: ["Sex", "性别", ""],
     weight: ["Weight", "体重", "kg"],
-    icu_unit_type: ["ICU Unit Type", "ICU单元类型", "category"],
+    icu_unit_type: ["ICU Unit Type", "ICU 类型", "category"],
     sofa: ["SOFA Score (Total)", "SOFA总分", "0-24"],
     sofa_resp: ["SOFA Respiratory", "SOFA呼吸评分", "0-4"],
     sofa_coag: ["SOFA Coagulation", "SOFA凝血评分", "0-4"],
