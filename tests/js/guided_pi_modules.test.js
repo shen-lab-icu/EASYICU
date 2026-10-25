@@ -236,17 +236,24 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
     const errors = guided.require('errorText').create({
       tr: (en, zh) => language === 'zh' ? zh : en, staticPreview: () => false,
     });
-    const prefix = language === 'zh' ? '分析已完成；只有论文稿未通过检查。'
-      : 'The analysis finished; only the manuscript draft did not pass its checks. ';
+    // One notice: the analysis status once, then only a distinct manuscript reason.
+    const lead = language === 'zh' ? '分析已完成。论文草稿仍需修改。'
+      : 'Analysis complete. The manuscript draft still needs revision.';
+    const distinct = {
+      evidence_complete_not_satisfied: manuscriptReasons.evidence_complete_not_satisfied,
+      numeric_verified_not_satisfied: manuscriptReasons.numeric_verified_not_satisfied,
+      writer_provider_transport_unavailable: ['The model service was unavailable while writing the draft. Try again later.', '撰写草稿时无法连接模型服务，请稍后重试。'],
+    };
     for (const [code, translations] of Object.entries(manuscriptReasons)) {
       const sentence = translations[language === 'zh' ? 1 : 0];
       assert.equal(errors.runFailureText(failedClosed, { code }), sentence);
       const notice = errors.manuscriptNotPassedText(code);
-      assert.equal(notice, prefix + sentence);
+      const reason = distinct[code] ? distinct[code][language === 'zh' ? 1 : 0] : '';
+      assert.equal(notice, lead + (reason ? ' ' + reason : ''));
       assert.doesNotMatch(notice, /TODO\(lead copy\)|[a-z]+_[a-z_]+|[\[\]]/);
     }
     for (const code of [undefined, null, '', 'unknown_manuscript_reason', 'analysis_validated_not_satisfied', 'toString']) {
-      assert.equal(errors.manuscriptNotPassedText(code), prefix + manuscriptReasons.manuscript_checks_not_passed[language === 'zh' ? 1 : 0]);
+      assert.equal(errors.manuscriptNotPassedText(code), lead);
     }
   }
   const intervalStop = 'continuous_survival_interval_result_not_estimable';

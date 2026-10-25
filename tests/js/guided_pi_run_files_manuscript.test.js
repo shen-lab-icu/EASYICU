@@ -106,13 +106,8 @@ const names = ['manuscript_provenance.json', 'manuscript_scaffold.pdf', 'result_
       run.manuscript_outcome.reason_code = code;
       list = await listFor(names, { signable: false, non_human_failures: ['manuscript_ready'] });
       const summary = list.primary.match(/<summary>(.*?)<\/summary>/s)[1].replace(/<[^>]+>/g, '');
-      const prefix = language === 'zh' ? '分析已完成；只有论文稿未通过检查。'
-        : 'The analysis finished; only the manuscript draft did not pass its checks. ';
-      const reason = code === 'numeric_verified_not_satisfied'
-        ? (language === 'zh' ? '论文稿中有部分数字与分析结果不一致。' : 'Some numbers in the manuscript draft do not match the analysis results.')
-        : (language === 'zh' ? '论文稿没有通过自动检查。' : 'The manuscript draft did not pass its automated checks.');
       assert.ok(summary.includes(language === 'zh' ? '原运行：分析已完成' : 'Original run: Analysis complete'));
-      assert.ok(summary.includes(prefix + reason));
+      assert.doesNotMatch(list.primary, /data-manuscript-outcome="not_passed"/);
       assert.doesNotMatch(summary, /TODO\(lead copy\)|[a-z]+_[a-z_]+|[\[\]]|已阻断/);
     }
   }

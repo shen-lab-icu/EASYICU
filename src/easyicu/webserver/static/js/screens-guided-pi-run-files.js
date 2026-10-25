@@ -210,7 +210,7 @@
     return projected;
   }
 
-  function create({ api, context, changed, resourceButton, manuscriptNotPassedText }) {
+  function create({ api, context, changed, resourceButton }) {
     let identity = '';
     let catalog = null;
     let pending = null;
@@ -339,10 +339,9 @@
         const entry = entries.get(run.run_ref);
         const status = runStatus(run);
         const when = runTime(run);
-        const manuscript = run.manuscript_outcome;
-        const notice = run.analysis_outcome && run.analysis_outcome.status === 'completed' && manuscript && manuscript.status === 'not_passed'
-          ? `<small data-manuscript-outcome="not_passed">${esc(manuscriptNotPassedText(manuscript.reason_code))}</small>` : '';
-        return `<details class="gpi-run-files" data-run-files="${esc(run.run_ref)}" ${entry && entry.open ? 'open' : ''}><summary><span>${tr('Run files & review', '本次运行文件与审阅')}</span><small>${when ? `${esc(when)} · ` : ''}${esc(tr('Original run: ', '原运行：') + status)}</small>${notice}</summary>${entry && entry.open ? detail(entry) : ''}</details>`;
+        // The result card owns the run's manuscript notice. File guides and
+        // review readiness still describe these files without repeating it.
+        return `<details class="gpi-run-files" data-run-files="${esc(run.run_ref)}" ${entry && entry.open ? 'open' : ''}><summary><span>${tr('Run files & review', '本次运行文件与审阅')}</span><small>${when ? `${esc(when)} · ` : ''}${esc(tr('Original run: ', '原运行：') + status)}</small></summary>${entry && entry.open ? detail(entry) : ''}</details>`;
       }).join('');
     }
     async function open(ref) {

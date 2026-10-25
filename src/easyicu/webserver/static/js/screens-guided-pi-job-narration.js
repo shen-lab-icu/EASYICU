@@ -45,8 +45,8 @@
       'I will extract the study data from the source as configured and check its quality.',
       '我按确认的研究配置从数据源提取数据，并核查质量。'],
     [['easyicu_target_trial_compile_submitted', 'target-trial-compile'],
-      'I will compile the target trial on this study’s data.',
-      '我用这项研究的数据编译目标试验。'],
+      'I am preparing the analysis from the target-trial protocol.',
+      '我正在按目标试验方案准备分析。'],
   ];
 
   function translate(tr) {

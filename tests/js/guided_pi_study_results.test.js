@@ -53,7 +53,7 @@ const shortManuscript = {
 };
 const shortHtml = outcome.render(shortManuscript, workflow);
 assert.match(shortHtml, /Analysis complete/);
-assert.ok(shortHtml.includes('The analysis finished; only the manuscript draft did not pass its checks. The manuscript draft did not pass its automated checks.'));
+assert.ok(shortHtml.includes('Analysis complete. The manuscript draft still needs revision.'));
 assert.doesNotMatch(shortHtml, /data-gpi-run-outcome-retry/);
 assert.ok(outcome.collection(shortManuscript, workflow).some(row => row.artifact === 'result_tables.json'));
 assert.ok(!outcome.collection(shortManuscript, workflow).some(row => row.artifact === 'article_report.json'));
@@ -325,15 +325,15 @@ for (const language of ['en', 'zh']) {
   for (const code of ['manuscript_checks_not_passed', 'evidence_complete_not_satisfied', 'writer_provider_transport_unavailable', 'unknown_manuscript_reason', undefined]) {
     const run = { ...shortManuscript, manuscript_outcome: { status: 'not_passed', reason_code: code } };
     const html = translatedOutcome.render(run, workflow);
-    const notice = html.match(/<p data-manuscript-outcome="not_passed">([^<]*)<\/p>/)[1];
-    const prefix = language === 'zh' ? '分析已完成；只有论文稿未通过检查。'
-      : 'The analysis finished; only the manuscript draft did not pass its checks. ';
+    const notice = html.match(/<p data-manuscript-outcome="not_passed"[^>]*>([^<]*)<\/p>/)[1];
+    const prefix = language === 'zh' ? '分析已完成。论文草稿仍需修改。'
+      : 'Analysis complete. The manuscript draft still needs revision.';
     const reason = code === 'evidence_complete_not_satisfied'
       ? tr('Some statements in the manuscript draft are not linked to a result from this analysis.', '论文稿中有部分表述没有对应到本次分析的结果。')
       : code === 'writer_provider_transport_unavailable'
-        ? tr('Every analysis step finished, but the model service could not be reached while the manuscript draft was being written. Try again later.', '所有分析步骤都已完成，但撰写论文稿时一直无法连接模型服务。请稍后重试。')
-        : tr('The manuscript draft did not pass its automated checks.', '论文稿没有通过自动检查。');
-    assert.equal(notice, prefix + reason);
+        ? tr('The model service was unavailable while writing the draft. Try again later.', '撰写草稿时无法连接模型服务，请稍后重试。')
+        : '';
+    assert.equal(notice, prefix + (reason ? ' ' + reason : ''));
     assert.doesNotMatch(notice, /TODO\(lead copy\)|[a-z]+_[a-z_]+|[\[\]]/);
     modules.require('aside').create({
       tr, esc: EU_HTML.esc, iconHtml: () => '', projectId: () => 'project_current', manuscriptNotPassedText,
@@ -345,7 +345,7 @@ for (const language of ['en', 'zh']) {
     }).syncProjectWorkflowAside();
     const history = panelBody.innerHTML.match(/<details class="gpi-run-history"[\s\S]*?<\/ol><\/details>/)[0].replace(/<[^>]+>/g, '');
     assert.ok(history.includes(tr('Full analysis · Analysis complete', '完整分析 · 分析已完成')));
-    assert.ok(history.includes(prefix + reason));
+    assert.ok(history.includes(prefix + (reason ? ' ' + reason : '')));
     assert.doesNotMatch(history, /TODO\(lead copy\)|[a-z]+_[a-z_]+|[\[\]]/);
     assert.doesNotMatch(panelBody.innerHTML, /is-blocked/);
   }
@@ -675,10 +675,10 @@ detailedOutcome.loadScientificReview(latest, workflow).then(async () => {
     } }) }),
   });
   await zhOutcome.loadScientificReview(latest, workflow);
-  assert.match(zhReviewNode.outerHTML, /预先设定的模型尚未完成/);
+  assert.match(zhReviewNode.outerHTML, /<details class="gpi-review-original">/);
   assert.match(zhReviewNode.outerHTML, /预设模型尚未完成/);
-  assert.match(zhReviewNode.outerHTML, /缺少一项必需模型/);
-  assert.match(zhReviewNode.outerHTML, /完成该模型并重新审阅/);
+  assert.match(zhReviewNode.outerHTML, /A required model is missing/);
+  assert.match(zhReviewNode.outerHTML, /核对缺少的模型，修订分析计划，经确认后再运行/);
   assert.match(zhReviewNode.outerHTML, /data-review-code="MODEL_INCOMPLETE"/);
   assert.doesNotMatch(zhReviewNode.outerHTML, /记录代码/);
   process.stdout.write('Digest-bound scientific review and PDF download passed.\n');

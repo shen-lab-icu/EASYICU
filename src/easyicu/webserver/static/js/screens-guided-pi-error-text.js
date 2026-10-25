@@ -873,13 +873,13 @@
 
     function manuscriptNotPassedText(reasonCode) {
       const code = String(reasonCode || '').trim();
-      // Only manuscript reasons belong in a completed analysis notice.
-      const reason = [
-        'manuscript_checks_not_passed', 'evidence_complete_not_satisfied',
-        'numeric_verified_not_satisfied', 'writer_provider_transport_unavailable',
-      ].includes(code) ? code : 'manuscript_checks_not_passed';
-      return tr('The analysis finished; only the manuscript draft did not pass its checks. ', '分析已完成；只有论文稿未通过检查。')
-        + runFailureDetailText({ code: reason });
+      const lead = tr('Analysis complete. The manuscript draft still needs revision.', '分析已完成。论文草稿仍需修改。');
+      // Append only a distinct manuscript reason, never the generic failure again.
+      const reason = code === 'writer_provider_transport_unavailable'
+        ? tr('The model service was unavailable while writing the draft. Try again later.', '撰写草稿时无法连接模型服务，请稍后重试。')
+        : ['evidence_complete_not_satisfied', 'numeric_verified_not_satisfied'].includes(code)
+          ? runFailureDetailText({ code }) : '';
+      return lead + (reason ? ' ' + reason : '');
     }
 
     return Object.freeze({ errorText, jobErrorText, modelErrorText, providerPreset, option, runFailureText, studyFamilyGapText, manuscriptNotPassedText });
