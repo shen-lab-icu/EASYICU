@@ -81,6 +81,8 @@ def _typed_association():
     exposure = context.variables[0].model_copy(update={
         "role": VariableRole.LAB, "dtype": "float64", "observed_domain": None,
         "source_concept": "synthetic_signal", "aggregation_default": AggregationRule.NONE,
+        "analysis_window": "icu_admission[0,24]h",
+        "analysis_window_role": "outer_observation_window",
         "allowed_aggregations": [AggregationRule.NONE], "unit_normalization": "window_numeric_max",
     })
     return context.model_copy(update={
@@ -217,6 +219,7 @@ def test_confirmation_projects_metadata_and_outer_windows_without_patient_summar
     context = context.model_copy(update={
         "notes": "PRIVATE_NOTES_SENTINEL", "cohort_parquet": "PRIVATE_PATH_SENTINEL",
         "variables": [context.variables[0].model_copy(update={
+            "analysis_window": None, "analysis_window_role": None,
             "observed_domain": {"levels": ["PRIVATE_OBSERVATION_SENTINEL"]},
             "description": "PRIVATE_DESCRIPTION_SENTINEL", "source_files": ["PRIVATE_SOURCE_SENTINEL"],
         }), *context.variables[1:]],

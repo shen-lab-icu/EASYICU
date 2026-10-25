@@ -308,8 +308,10 @@ test('the everyday header omits presentation controls and the stale reviewer bra
     assert.ok(workflow.includes(h.tr('Research workflow', '科研流程')));
     assert.ok(workflow.includes(h.tr('Question', '问题')));
     assert.doesNotMatch(workflow, /Reviewer workflow|审稿协议|数据合同|审稿报告/);
+    assert.match(h.view.projectRequiredPanel(), language === 'zh'
+      ? /data-gpi-demo>.*查看完整科研流程演示/
+      : /data-gpi-demo>.*View the complete research workflow demo/);
   }
   const jsRoot = path.dirname(owners[0]);
-  assert.match(fs.readFileSync(path.join(jsRoot, 'screens-guided-pi.js'), 'utf8'), /data-gpi-demo>.*查看完整科研流程演示/);
   assert.match(fs.readFileSync(path.join(jsRoot, 'screens-guided-pi-demo.js'), 'utf8'), /research_workflow_demo/);
 });

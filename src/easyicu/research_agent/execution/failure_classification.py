@@ -24,20 +24,13 @@ different, and both stop the step without spending an LLM code-repair attempt:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any, Mapping
 
 from ..contracts.runtime import ValidationFinding
-from ..contracts.execution_result import RunnerFailureCode
-
-
-class RuntimeFailureClass(str, Enum):
-    """Closed runtime-failure classes that change orchestration."""
-
-    PLAN_DATA_CONTRACT = "plan_data_contract"
-    EXECUTION_TIMEOUT = "execution_timeout"
-    ISOLATION_BACKEND_UNAVAILABLE = "isolation_backend_unavailable"
-    DETERMINISTIC_MODEL_NOT_ESTIMABLE = "deterministic_model_not_estimable"
+from ..contracts.execution_result import (
+    DECLARED_EXPOSURE_LEVEL_EMPTY, RunnerFailureCode, RuntimeFailureClass,
+    runtime_failure_codes as runtime_failure_codes,
+)
 
 
 _EMPTY_CLOSED_COMPARISON_SIGNATURES = (
@@ -47,17 +40,6 @@ _EMPTY_CLOSED_COMPARISON_SIGNATURES = (
     "both the declared reference and comparison levels",
 )
 
-DECLARED_EXPOSURE_LEVEL_EMPTY = "declared_exposure_level_empty"
-
-
-def runtime_failure_codes(record: Mapping[str, Any]) -> dict[str, str]:
-    """Project the host-classified empty-level stop from a failed step record."""
-
-    if (record.get("runtime_failure_class") == RuntimeFailureClass.PLAN_DATA_CONTRACT.value
-            and record.get("runtime_failure_reason") == DECLARED_EXPOSURE_LEVEL_EMPTY
-            and record.get("status") == "contract_failed"):
-        return {"reason_code": DECLARED_EXPOSURE_LEVEL_EMPTY}
-    return {}
 
 #: The host's OWN model fitter reporting that the declared model cannot be
 #: estimated on this data. Both halves are required: the typed error the

@@ -102,6 +102,8 @@ def test_adapter_contracts_project_into_the_planner_action_surface() -> None:
     assert support_only == {
         "association.multiple_testing",
         "association.evalue",
+        # The signed baseline family owns this supporting interaction analysis.
+        "association.effect_modification",
         "prediction.subgroup_fairness",
         # Computed by the prediction executor, with no method adapter of its own.
         "prediction.benchmark_comparison",
