@@ -15,6 +15,7 @@ from easyicu.research_agent.publication_skills import (
 )
 from easyicu.webserver import agent_runs, capabilities
 from easyicu.webserver.ideas import mining as idea_mining_web
+from easyicu.webserver.run_file_guide import run_file_guide
 
 
 SCHEMA_VERSION = "easyicu.science_workbench/1"
@@ -1403,24 +1404,10 @@ def _evidence_ids(name: str, payload: Dict[str, Any]) -> List[str]:
 
 
 def _artifact_title(name: str) -> str:
-    labels = {
-        "run_context.json": "Run context",
-        "cohort_summary.json": "Cohort summary",
-        "table1_summary.json": "Table 1 summary",
-        "missingness_audit.json": "Missingness audit",
-        "roc_curve.json": "ROC curve",
-        "calibration_curve.json": "Calibration curve",
-        "quality_gate.json": "Quality gate",
-        "evidence_ledger.json": "Evidence ledger",
-        "agent_plan.json": "Agent plan",
-        "manuscript_draft.json": "Locked manuscript draft",
-        "benchmark_scorecard.json": "Benchmark scorecard",
-        "workflow_graph.json": "Workflow graph",
-        "figure_gallery.json": "Figure gallery",
-        "source_run_manifest.json": "Source run manifest",
-        "human_signoff.json": "Human sign-off",
-    }
-    return labels.get(name, name.replace("_", " ").replace(".json", "").title())
+    guide = run_file_guide([name], gate_checks=[])
+    if guide and guide[0].title_en != name:
+        return guide[0].title_en
+    return name.replace("_", " ").replace(".json", "").title()
 
 
 def _artifact_category(name: str) -> str:

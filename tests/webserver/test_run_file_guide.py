@@ -13,7 +13,7 @@ import re
 import zipfile
 from pathlib import Path
 
-from easyicu.webserver import agent_runs
+from easyicu.webserver import agent_runs, run_file_guide as guide_owner, science_workbench
 from easyicu.webserver.run_file_guide import bundle_files, run_file_guide
 
 _PNG = b"\x89PNG\r\n\x1a\n" + bytes(16)
@@ -107,6 +107,7 @@ def test_the_bundle_folders_each_file_and_adds_reader_copies() -> None:
 
     readme = files["README.md"].decode()
     assert "- `manuscript_scaffold.pdf` — Report draft (PDF) · 报告草稿（PDF）" in readme
+    assert "- `agent_plan.json` — Analysis plan · 分析计划" in readme
     assert "- `figures/cohort_flow.png` — Cohort flow · 图件" in readme
     assert "- `tables/absolute_risk.csv` — Absolute risk · 结果表 CSV" in readme
     assert "Some columns omitted" in readme
@@ -120,6 +121,7 @@ def test_the_download_and_the_review_read_one_report_rule(tmp_path) -> None:
     (tmp_path / "quality_gate.json").write_bytes(_gate(("manuscript_ready", True)))
     (tmp_path / "evidence_ledger.json").write_text(json.dumps({"run_id": "run_fixture"}))
     (tmp_path / "manuscript_scaffold.pdf").write_bytes(b"%PDF-1.7 fixture")
+    (tmp_path / "agent_plan.json").write_text("{}")
 
     bundle = agent_runs.build_run_bundle(str(tmp_path))
     review = agent_runs.read_run_review(str(tmp_path))
@@ -130,6 +132,28 @@ def test_the_download_and_the_review_read_one_report_rule(tmp_path) -> None:
     [report] = [row for row in review["file_guide"] if row["name"] == "manuscript_scaffold.pdf"]
     assert report["title"] == {"en": "Manuscript PDF", "zh": "稿件 PDF"}
     assert report["bundle_path"] == "manuscript/manuscript_scaffold.pdf"
+    [plan] = [row for row in review["file_guide"] if row["name"] == "agent_plan.json"]
+    assert plan["title"] == {"en": "Analysis plan", "zh": "分析计划"}
+    assert plan["bundle_path"] == "plan/agent_plan.json"
+
+
+def test_the_workbench_reads_titles_from_the_guide(monkeypatch) -> None:
+    def titles():
+        history = science_workbench._artifact_history(
+            artifacts=[{"name": "agent_plan.json"}, {"name": "future_summary.json"}],
+            payloads={}, ledger={}, project_dir=None,
+        )
+        return {row["name"]: row["title"] for row in history["items"]}
+
+    assert titles() == {
+        "agent_plan.json": "Analysis plan", "future_summary.json": "Future Summary",
+    }
+    assert science_workbench._artifact_title("") == ""
+    monkeypatch.setitem(
+        guide_owner._FILES, "agent_plan.json",
+        ("plan", "Synthetic owner title", "合成标题", "", ""),
+    )
+    assert titles()["agent_plan.json"] == "Synthetic owner title"
 
 
 _JS_ENTRY = re.compile(r"'([^']+)': t\('((?:[^'\\]|\\.)*)', '((?:[^'\\]|\\.)*)'\)")
