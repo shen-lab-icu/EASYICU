@@ -539,6 +539,31 @@ def test_native_static_assets_revalidate_with_etag_and_support_gzip() -> None:
     assert unchanged.status_code == 304
 
 
+def test_static_etag_cache_refreshes_for_same_size_rewrite(tmp_path: Path) -> None:
+    """Exercise the cache owner directly, without an ASGI transport."""
+    static_root = tmp_path / "static"
+    static_root.mkdir()
+    asset = static_root / "asset.css"
+    asset.write_text("a{color:red}", encoding="utf-8")
+    static_files = ContentHashedStaticFiles(directory=str(static_root), html=False)
+    first = static_files.file_response(str(asset), asset.stat(), {"headers": []})
+    conditional_scope = {"headers": [(b"if-none-match", first.headers["etag"].encode())]}
+    assert static_files.file_response(str(asset), asset.stat(), conditional_scope).status_code == 304
+
+    original_stat = asset.stat()
+    asset.write_text("a{color:tan}", encoding="utf-8")
+    # The cache uses size and mtime; equal-length edits need an explicit tick.
+    os.utime(asset, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns + 1_000_000_000))
+    assert asset.stat().st_size == original_stat.st_size
+    changed = static_files.file_response(
+        str(asset), asset.stat(), conditional_scope,
+    )
+
+    assert changed.status_code == 200
+    assert changed.headers["etag"] != first.headers["etag"]
+    assert changed.headers["etag"] == f'"{hashlib.sha256(asset.read_bytes()).hexdigest()}"'
+
+
 def test_static_etag_refreshes_when_file_changes_while_server_is_running(
     tmp_path: Path,
 ) -> None:
@@ -555,7 +580,11 @@ def test_static_etag_refreshes_when_file_changes_while_server_is_running(
     client = TestClient(static_app)
 
     first = client.get("/asset.css")
+    original_stat = asset.stat()
     asset.write_text("a{color:tan}", encoding="utf-8")
+    # Advance the cache identity even when both writes share a filesystem tick.
+    os.utime(asset, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns + 1_000_000_000))
+    assert asset.stat().st_size == original_stat.st_size
     changed = client.get(
         "/asset.css",
         headers={"If-None-Match": first.headers["etag"]},
@@ -3355,9 +3384,12 @@ def test_cohort_summary_cache_identity_changes_after_same_size_restored_mtime(
 
     source.write_bytes(b"stay_id,death\n1,1\n")
     os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+    assert source.stat().st_size == original.st_size
+    assert source.stat().st_mtime_ns == original.st_mtime_ns
     after = cohort_review._summary_cache_key(tmp_path, description, None)
 
     assert after != before
+    assert cohort_review._summary_cache_key(tmp_path, description, None) == after
 
 
 def test_cohort_review_presence_rate_modules_are_not_low_coverage(

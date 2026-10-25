@@ -30,8 +30,11 @@ def outline_study_anchors(context: ResearchContext) -> str:
     Use the outbound owner's preference projection, as foundation and step
     requests do. No per-field bound or clipping may narrow the web transport;
     the assembled request's existing budget refuses an oversized prompt.
+    Keep an absent preference projection absent, including when no choices
+    were supplied; an exact empty adjustment roster remains explicit.
     """
 
+    study_preferences = outbound_safe_context_payload(context).get("study_preferences")
     return json.dumps(
         {
             "research_question": context.research_question,
@@ -44,8 +47,9 @@ def outline_study_anchors(context: ResearchContext) -> str:
                     "outcome_columns", "requested_outcome_columns",
                 },
             ),
-            "study_preferences": outbound_safe_context_payload(context).get(
-                "study_preferences"
+            **(
+                {"study_preferences": study_preferences}
+                if study_preferences is not None else {}
             ),
         },
         ensure_ascii=False,

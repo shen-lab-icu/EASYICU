@@ -237,10 +237,14 @@ def test_feature_coverage_cache_invalidates_same_size_restored_mtime(
 
     monkeypatch.setattr(coverage, "_build_feature_coverage", fake_build)
     assert coverage.build_feature_coverage(export, description)["call"] == 1
+    assert coverage.build_feature_coverage(export, description)["call"] == 1
 
     source.write_bytes(b"new-content")
     os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
 
+    assert source.stat().st_size == original.st_size
+    assert source.stat().st_mtime_ns == original.st_mtime_ns
+    assert coverage.build_feature_coverage(export, description)["call"] == 2
     assert coverage.build_feature_coverage(export, description)["call"] == 2
     assert len(calls) == 2
 
