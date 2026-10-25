@@ -10,7 +10,7 @@ from easyicu.concept.catalog import CONCEPT_DICTIONARY
 def test_icu_unit_type_is_a_demographics_export_concept():
     assert CONCEPT_DICTIONARY["icu_unit_type"] == (
         "ICU Unit Type",
-        "ICU单元类型",
+        "ICU 类型",
         "category",
     )
     assert "icu_unit_type" in EXTRACT_MODULES["demographics"]

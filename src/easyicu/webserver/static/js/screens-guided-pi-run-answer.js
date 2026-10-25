@@ -108,6 +108,100 @@
       return Array.isArray(row) ? tr(String(row[0] || base), String(row[1] || row[0] || base)) : '';
     }
 
+    // Descriptive variables can be aggregates of a catalog concept. Their
+    // bound context states the summary and window; English plan descriptions
+    // alone never become names inside a Chinese sentence.
+    function descriptiveLabel(labels, column, display = {}) {
+      const registered = typeof labels[column] === 'string' ? labels[column].trim() : '';
+      const dict = window.EU_CATALOG?.dict || {};
+      const concept = dict[column] || dict[display.source_concept] || dict[String(column).replace(AGGREGATE_SUFFIX, '')];
+      const localized = Array.isArray(concept) ? tr(concept[0], concept[1]) : '';
+      const aggregation = /^window_numeric_(max|min|mean|median|first|last)$/.exec(display.unit_normalization || '')?.[1];
+      const summaries = { max: ['Maximum', '最高'], min: ['Minimum', '最低'], mean: ['Mean', '平均'],
+        median: ['Median', '中位'], first: ['First', '首次'], last: ['Last', '末次'] };
+      const windowMatch = /^(icu_admission|hospital_admission)\[(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\]h$/.exec(display.analysis_window || '');
+      if (localized && aggregation && windowMatch && Number(windowMatch[3]) > Number(windowMatch[2])) {
+        const [, origin, start, end] = windowMatch;
+        const anchor = origin === 'icu_admission' ? tr('ICU', '入 ICU') : tr('hospital', '入院');
+        const windowEn = Number(start) === 0 ? `in the first ${Number(end)} h of ${anchor}`
+          : `${Number(start)}–${Number(end)} h after ${anchor} admission`;
+        const windowZh = `${anchor} ${Number(start) === 0 ? Number(end) : `${Number(start)}–${Number(end)}`} 小时内`;
+        const english = localized.replace(/^[A-Z][a-z]+(?=\s|$)/, word => word.toLowerCase());
+        return tr(`${summaries[aggregation][0]} ${english} ${windowEn}`,
+          `${windowZh}${summaries[aggregation][1]}${localized}`);
+      }
+      return tr((registered && !CJK.test(registered) ? registered : '') || localized || display.description || column,
+        (CJK.test(registered) ? registered : '') || localized || column);
+    }
+
+    // Pick the largest observed groups, then read them in registered order.
+    function displayedGroups(rows, sizeOf) {
+      const largest = new Set(rows.map((row, index) => ({ index, n: sizeOf(row) }))
+        .sort((a, b) => b.n - a.n || a.index - b.index).slice(0, 12).map(row => row.index));
+      return { rows: rows.filter((row, index) => largest.has(index)), omitted: Math.max(0, rows.length - 12) };
+    }
+
+    function descriptiveLead(row, statistic, unit = '') {
+      const group = row.group && row.groupVariable ? row.groupLabel : '';
+      const measured = unit ? tr(` (${unit})`, `（${unit}）`) : '';
+      return tr(`${row.label}${measured}${group ? ` by ${group}` : ''}, ${statistic}: `,
+        `${group ? `各${/^[A-Za-z0-9]/.test(group) ? ' ' : ''}${group}` : ''}${row.label}${measured}，${statistic}：`);
+    }
+
+    function groupTail(omitted) {
+      return omitted ? tr(`; ${omitted} more groups in the result table`, `；另有 ${omitted} 组见结果表`) : '';
+    }
+
+    function descriptiveSentences(view) {
+      const byVariable = new Map();
+      view.continuousGroups.forEach(row => {
+        if (!byVariable.has(row.variable)) byVariable.set(row.variable, []);
+        byVariable.get(row.variable).push(row);
+      });
+      const sentences = [];
+      byVariable.forEach(rows => {
+        const kind = rows.some(row => row.statistics.some(stat => stat.kind === 'median')) ? 'median' : 'mean';
+        const statistic = row => row.statistics.find(stat => stat.kind === kind);
+        const magnitude = Math.max(...rows.map(row => Math.abs(Number(statistic(row)?.values[0] || 0))));
+        const decimals = magnitude < 10 ? 2 : magnitude < 100 ? 1 : 0;
+        const format = value => {
+          const rounded = Number(value).toFixed(decimals);
+          return Number(rounded) === 0 ? (0).toFixed(decimals) : rounded;
+        };
+        const spread = rows.some(row => (statistic(row)?.values.length || 0) > 1);
+        const title = kind === 'median' ? tr(`median${spread ? ' [IQR]' : ''}`, `中位数${spread ? '［四分位距］' : ''}`)
+          : tr(`mean${spread ? ' [SD]' : ''}`, `均值${spread ? '［标准差］' : ''}`);
+        const displayed = displayedGroups(rows, row => row.n);
+        const units = [...new Set(rows.map(row => row.unit))];
+        const sharedUnit = units.length === 1 ? units[0] || tr('unit unavailable', '单位未提供') : '';
+        const parts = displayed.rows.map(row => {
+          const values = statistic(row)?.values;
+          const value = values ? `${format(values[0])}${values.length < 2 ? '' : tr(
+            ` [${values.slice(1).map(format).join('–')}]`, `［${values.slice(1).map(format).join('–')}］`)}`
+            : tr('summary unavailable', '暂无可用数值');
+          const unit = sharedUnit ? '' : ` ${row.unit || tr('unit unavailable', '单位未提供')}`;
+          return `${row.group ? `${row.group} ` : ''}${value}${unit}${tr(', ', '，')}n=${count(row.n)}`;
+        });
+        sentences.push(`${descriptiveLead(rows[0], title, sharedUnit)}${parts.join(tr('; ', '；'))}${groupTail(displayed.omitted)}${tr('.', '。')}`);
+      });
+      const categories = new Map();
+      view.categoricalGroups.forEach(row => {
+        const key = JSON.stringify([row.variable, row.level]);
+        if (!categories.has(key)) categories.set(key, []);
+        categories.get(key).push(row);
+      });
+      categories.forEach(rows => {
+        const first = rows[0];
+        const displayed = displayedGroups(rows, row => row.denominator);
+        const parts = displayed.rows.map(row => `${row.group ? `${row.group} ` : ''}${Number(row.percentage).toFixed(1)}%${tr(
+          ` (${count(row.numerator)}/${count(row.denominator)})`, `（${count(row.numerator)}/${count(row.denominator)}）`)}`);
+        const label = first.label === first.levelLabel ? first.label
+          : tr(`${first.label} (${first.levelLabel})`, `${first.label}（${first.levelLabel}）`);
+        sentences.push(`${descriptiveLead({ ...first, label }, tr('proportion', '比例'))}${parts.join(tr('; ', '；'))}${groupTail(displayed.omitted)}${tr('.', '。')}`);
+      });
+      return sentences;
+    }
+
     // A step of a typed kind, read in Chinese from its typed fields; any other
     // step, and every step on an English page, keeps the plan's own words
     // (the family templates write them in English).
@@ -334,7 +428,12 @@
         outcomeLabel,
         groups,
         continuousGroups: (summary.continuousGroups || []).map(row => ({ ...row,
-          label: readerLabel(labels, row.variable) || row.variable })),
+          label: descriptiveLabel(labels, row.variable, row.display),
+          groupLabel: descriptiveLabel(labels, row.groupVariable, row.groupDisplay) })),
+        categoricalGroups: (summary.categoricalGroups || []).map(row => ({ ...row,
+          label: descriptiveLabel(labels, row.variable, row.display),
+          groupLabel: descriptiveLabel(labels, row.groupVariable, row.groupDisplay),
+          levelLabel: labels[`${row.variable}=${JSON.stringify(row.level)}`] || row.level })),
         answerSources: summary.answerSources || [],
         total: total && total.display_value != null ? String(total.display_value) : '',
         overallRisk: overallRisk && overallRisk.display_value != null ? String(overallRisk.display_value) : '',
@@ -436,19 +535,7 @@
         ));
         return sentences;
       }
-      view.continuousGroups.forEach(row => {
-        const statistics = row.statistics.map(statistic => {
-          const [value, low, high] = statistic.values;
-          return statistic.kind === 'median'
-            ? tr(`median ${value} (IQR ${low}–${high})`, `中位数 ${value}（四分位距 ${low}–${high}）`)
-            : tr(`mean ${value} (SD ${low})`, `均值 ${value}（标准差 ${low}）`);
-        }).join(tr('; ', '；')) || tr('summary unavailable', '暂无可用数值');
-        const unit = row.unit || tr('unit unavailable', '单位未提供');
-        sentences.push(tr(
-          `${row.label}, “${row.group}”: ${statistics} ${unit}; analysed ${count(row.n)} ICU stays.`,
-          `${row.label}，「${row.group}」：${statistics} ${unit}；分析了 ${count(row.n)} 个 ICU 入住记录。`,
-        ));
-      });
+      sentences.push(...descriptiveSentences(view));
       const groups = view.groups;
       const source = view.source || tr('this data source', '本数据源');
       const preparation = view.populationPreparation;
@@ -617,7 +704,8 @@
       const view = current.projection;
       const sentences = view ? answerSentences(view) : [];
       if (!view || view.primaryModelAmbiguous || !sentences.length
-        || !(view.groups.length || view.continuousGroups.length || view.estimate || view.prediction || view.curvePreview.length)) {
+        || !(view.groups.length || view.continuousGroups.length || view.categoricalGroups.length
+          || view.estimate || view.prediction || view.curvePreview.length)) {
         return unavailable(latestRun, view);
       }
       // The answer, then the data it rests on, then how to read it: the same
@@ -627,8 +715,9 @@
         'Literature search is part of a full article run. Novelty and literature comparisons have not been assessed for this first result.',
         '文献检索属于完整论文流程；本次首轮结果未评估新颖性或文献对照。',
       ))}</p>` : '';
-      const sourceButton = sourceButtons(latestRun, view.continuousGroups.length
-        ? [view.continuousGroups[0].source] : [view.estimate && view.estimate.source]);
+      const descriptiveSource = view.continuousGroups[0] || view.categoricalGroups[0];
+      const sourceButton = sourceButtons(latestRun, descriptiveSource
+        ? [descriptiveSource.source] : [view.estimate && view.estimate.source]);
       return `<div class="gpi-run-answer" data-gpi-run-answer="${esc(latestRun.run_id)}">
         <div class="gpi-run-answer-text">${sentences.map(text => `<p>${esc(text)}</p>`).join('')}${sourceButton ? `<p>${sourceButton}</p>` : ''}${literatureNote}${data ? `<p class="gpi-run-answer-data"><span>${esc(tr('Data', '数据'))}</span>${esc(data)}</p>` : ''}<p class="gpi-run-answer-caveat"><span>${esc(tr('Keep in mind', '需要注意'))}</span>${esc(caveat(view))}</p></div>
         ${figureButton(latestRun, view)}
@@ -730,7 +819,7 @@
       // A prediction study's limit is stated only beside the model
       // performance it bounds.
       if (PREDICTION_TYPES.has(view.analysisType)) return view.prediction ? caveat(view) : '';
-      return view.groups.length || view.continuousGroups.length || view.estimate ? caveat(view) : '';
+      return view.groups.length || view.continuousGroups.length || view.categoricalGroups.length || view.estimate ? caveat(view) : '';
     }
 
     return Object.freeze({ load, render, followUps, fileNote, approachSteps, materials, limitation });

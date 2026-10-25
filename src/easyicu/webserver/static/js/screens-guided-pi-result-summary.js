@@ -17,11 +17,23 @@
       const source = tableSource(table);
       if (!source) return true;
       const key = JSON.stringify([source, table.produced_by_step, table.headers, table.rows,
-        table.row_model_ids, table.preview_truncated, table.group_by]);
+        table.row_model_ids, table.preview_truncated, table.group_by, table.descriptive_summary]);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     }).flatMap(table => {
+      const compact = table.descriptive_summary;
+      if (tableSource(table) && compact && compact.schema_version === 'easyicu.web-descriptive-summary/1'
+        && Array.isArray(compact.continuous) && Array.isArray(compact.categorical)
+        && compact.continuous.length + compact.categorical.length <= 64
+        && compact.continuous.concat(compact.categorical)
+          .every(record => record && typeof record === 'object' && !Array.isArray(record))) {
+        // This block covers the full verified aggregate, independently of
+        // the display preview. Keep its original evidence/table identity.
+        const complete = { ...table, preview_truncated: false };
+        return compact.continuous.concat(compact.categorical)
+          .map((record, rowIndex) => ({ record, headers: Object.keys(record), table: complete, rowIndex }));
+      }
       const headers = Array.isArray(table && table.headers) ? table.headers.map(String) : [];
       if (!headers.length) return [];
       return (Array.isArray(table.rows) ? table.rows : []).map((values, rowIndex) => {
@@ -111,16 +123,26 @@
   // Only a primary producer's registered aggregate table can answer a
   // continuous descriptive question. No patient rows, unit conversion,
   // inferred denominator, or combination of independent tables is involved.
+  function descriptivePartitions(candidates) {
+    const overall = item => item.record.row_role === 'overall'
+      || String(item.record.group || '').trim().toLowerCase() === 'overall';
+    const grouped = new Set(candidates.filter(item => !overall(item)).map(item => item.record.variable));
+    return candidates.filter(item => !overall(item) || !grouped.has(item.record.variable));
+  }
+
+  function descriptiveDisplay(item, variable) {
+    const display = item.table.descriptive_summary?.variable_display?.[variable];
+    return display && typeof display === 'object' && !Array.isArray(display) ? display : {};
+  }
+
   function continuousGroups(records, plan) {
     const candidates = primaryRecords(records, plan, true).filter(item =>
       tableSource(item.table) && ['variable', 'group'].every(key => item.headers.includes(key))
       && ['n_nonmissing', 'nonmissing_n', 'n'].some(key => item.headers.includes(key))
-      && (['median', 'q25', 'q75'].every(key => item.headers.includes(key))
-        || ['mean', 'sd'].every(key => item.headers.includes(key))));
+      && ['median', 'mean'].some(key => item.headers.includes(key)));
     if (new Set(candidates.map(item => item.table)).size !== 1
       || candidates.some(item => item.table.preview_truncated)) return [];
-    const partitions = candidates.filter(item => item.record.row_role !== 'overall');
-    const selected = partitions.length ? partitions : candidates;
+    const selected = descriptivePartitions(candidates);
     const seen = new Set();
     const groups = selected.map(item => {
       const row = item.record;
@@ -129,24 +151,59 @@
       const key = JSON.stringify([variable, group]);
       const countKey = ['n_nonmissing', 'nonmissing_n', 'n'].find(name => item.headers.includes(name));
       const n = finite(row[countKey]);
-      if (!variable || !group || seen.has(key) || !Number.isSafeInteger(n) || n < 0) return null;
+      if (!variable || (!group && row.row_role !== 'overall') || seen.has(key) || !Number.isSafeInteger(n) || n < 0) return null;
       seen.add(key);
       const spec = (plan.steps || []).find(step => step.step_id === item.table.produced_by_step)?.table_one_spec;
       const declared = (spec && spec.variables || []).find(entry => entry.name === variable);
       if (declared && declared.variable_kind !== 'continuous') return null;
-      const kinds = declared && declared.summary === 'mean_sd' ? ['mean']
-        : declared && declared.summary === 'median_iqr' ? ['median'] : ['median', 'mean'];
+      const kinds = ['median', 'mean'];
       const statistics = [];
       for (const kind of kinds) {
         const columns = kind === 'median' ? ['median', 'q25', 'q75'] : ['mean', 'sd'];
-        if (!columns.every(name => item.headers.includes(name))) continue;
+        if (!item.headers.includes(columns[0])) continue;
         const values = columns.map(name => finite(row[name]));
         if (values.every(value => value == null)) continue;
-        if (n === 0 || values.some(value => value == null)
-          || (kind === 'median' ? values[1] > values[0] || values[0] > values[2] : values[1] < 0)) return null;
-        statistics.push({ kind, values: columns.map(name => String(row[name]).trim()) });
+        const spread = columns.slice(1).some(name => values[columns.indexOf(name)] != null
+          || ![null, undefined, '', 'NA'].includes(row[name]));
+        if (n === 0 || values[0] == null || (spread && (values.some(value => value == null)
+          || (kind === 'median' ? values[1] > values[0] || values[0] > values[2] : values[1] < 0)))) return null;
+        statistics.push({ kind, values: (spread ? columns : columns.slice(0, 1))
+          .map(name => String(row[name]).trim()) });
       }
-      return { variable, group, n, statistics, unit: String(row.unit || '').trim(), source: tableSource(item.table) };
+      const groupVariable = String(row.group_variable || item.table.group_by || '').trim();
+      return { variable, group: row.row_role === 'overall' || group.toLowerCase() === 'overall' ? '' : group,
+        groupVariable, display: descriptiveDisplay(item, variable), groupDisplay: descriptiveDisplay(item, groupVariable),
+        n, statistics, unit: String(row.unit || '').trim(), source: tableSource(item.table) };
+    });
+    return groups.every(Boolean) && groups.some(row => row.statistics.length) ? groups : [];
+  }
+
+  function categoricalGroups(records, plan) {
+    const candidates = primaryRecords(records, plan, true).filter(item => tableSource(item.table)
+      && ['variable', 'group', 'level', 'numerator', 'denominator', 'percentage']
+        .every(key => item.headers.includes(key)));
+    if (new Set(candidates.map(item => item.table)).size !== 1
+      || candidates.some(item => item.table.preview_truncated)) return [];
+    const seen = new Set();
+    const groups = descriptivePartitions(candidates).map(item => {
+      const row = item.record;
+      const variable = String(row.variable || '').trim();
+      const group = String(row.group == null ? '' : row.group).trim();
+      const level = String(row.level == null ? '' : row.level).trim();
+      const numerator = finite(row.numerator);
+      const denominator = finite(row.denominator);
+      const percentage = finite(row.percentage);
+      const key = JSON.stringify([variable, group, level]);
+      if (!variable || (!group && row.row_role !== 'overall') || !level || seen.has(key)
+        || !Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator)
+        || numerator < 0 || denominator <= 0 || numerator > denominator
+        || percentage == null || percentage < 0 || percentage > 100) return null;
+      seen.add(key);
+      const groupVariable = String(row.group_variable || item.table.group_by || '').trim();
+      return { variable, group: row.row_role === 'overall' || group.toLowerCase() === 'overall' ? '' : group,
+        groupVariable, display: descriptiveDisplay(item, variable), groupDisplay: descriptiveDisplay(item, groupVariable),
+        level, numerator, denominator,
+        percentage: String(row.percentage).trim(), source: tableSource(item.table) };
     });
     return groups.every(Boolean) ? groups : [];
   }
@@ -320,6 +377,7 @@
       ].filter(Boolean),
       exposureLevels,
       continuousGroups: continuousGroups(records, plan),
+      categoricalGroups: categoricalGroups(records, plan),
       answerSources: [...new Set(primaryRecords(records, plan, true).concat(models.flat()).map(item => item.table))]
         .map(tableSource).filter(Boolean)
         .filter((source, index, all) => all.findIndex(other => other.evidence_id === source.evidence_id
