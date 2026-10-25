@@ -667,6 +667,29 @@ def _signed_landmark_spline_effect_output_authorized(
     )
 
 
+SECONDARY_EFFECT_ACTIONS = frozenset({
+    "association.effect_modification", "time_to_event.subgroup_hr",
+})
+
+
+def secondary_effect_table_products(step: AnalysisStep | Mapping[str, Any]) -> tuple[str, ...]:
+    """Exact table identities owned by an explicit secondary effect action.
+
+    The action and role are Planner-owned authority. A model-written method
+    or product need not use a host vocabulary alias; intent text alone never
+    grants this authority. Figures, diagnostics and primary steps stay outside.
+    """
+
+    def field(name: str) -> Any:
+        return step.get(name) if isinstance(step, Mapping) else getattr(step, name, None)
+
+    if (field("scientific_action_id") not in SECONDARY_EFFECT_ACTIONS
+            or field("planned_analysis_role") != "secondary"):
+        return ()
+    return tuple(value for value in field("expected_outputs") or ()
+                 if isinstance(value, str) and re.fullmatch(r"table:[a-z][a-z0-9_]*", value))
+
+
 def effect_output_authorized(
     step: AnalysisStep,
     *,
@@ -677,13 +700,14 @@ def effect_output_authorized(
     This is the single authorization predicate shared by pre-execution coder
     prompts and post-execution product validation.  Authority requires an exact
     effect-method head *and* a closed, typed effect product, or a non-empty
-    planner-owned model-requirement roster (whose schema already fixes both the
-    method and product). Free-text intent and inferred analysis-family labels
-    never grant authority.
+    planner-owned model-requirement roster, or an explicit secondary effect
+    action declaring a table. Free-text intent and inferred analysis-family
+    labels never grant authority.
     """
 
     return (
         _effect_contract_applies(step)
+        or bool(secondary_effect_table_products(step))
         or bool(getattr(step, "model_requirements", None))
         or association_binary_sensitivity_contract(step) is not None
         or _signed_standard_effect_output_authorized(step, step_record)
