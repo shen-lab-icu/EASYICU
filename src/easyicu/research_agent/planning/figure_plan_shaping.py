@@ -28,6 +28,7 @@ from ..contracts.figure_plan import (
     CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS,
     DATA_QUALITY_AUDIT_ROLES,
     DATA_QUALITY_FIGURE_PANELS,
+    DeterministicFigurePanelTemplate,
     EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS,
     CANONICAL_MEASUREMENT_PROCESS_PRODUCT_IDS,
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS,
@@ -1188,6 +1189,39 @@ def _complete_typed_data_quality_audit_pair(
     ]
 
 
+def _association_coverage_surface_templates(
+    source_products: Sequence[str],
+) -> tuple[DeterministicFigurePanelTemplate, ...]:
+    """The risk/association compositor exports coverage on its `_audit` surface.
+
+    Match the full typed profile, never the broad robustness role: scientific
+    sensitivity forests and other single-surface composites keep their owners.
+    """
+    distribution_inputs = (
+        EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,
+        *ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS[1:],
+    )
+    inputs = tuple(source_products)
+    if len(inputs) != 4 or set(inputs) not in (
+        set(ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS), set(distribution_inputs),
+    ):
+        return ()
+    templates = absolute_risk_association_composite_panels(
+        ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
+    )
+    if EXPOSURE_OUTCOME_DISTRIBUTION_INPUT in inputs:
+        templates = tuple(
+            panel.model_copy(update={
+                "panel_id": "ABCD"[index],
+                **({"source_products": (EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,),
+                    "chart_type": "event_rate_panel"} if index == 0 else {}),
+            }) for index, panel in enumerate(templates)
+        )
+    return tuple(panel.model_copy(update={
+        "placement": "supplementary", "separable_display": True,
+    }) if panel.article_role == "robustness" else panel for panel in templates)
+
+
 def bind_deterministic_figure_panels(
     *,
     plan: AnalysisPlan,
@@ -1403,6 +1437,9 @@ def bind_deterministic_figure_panels(
             templates = cohort_balance_association_composite_panels(step.inputs)
         if input_set == frozenset(ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS):
             templates = absolute_risk_association_composite_panels(step.inputs)
+        coverage_templates = _association_coverage_surface_templates(step.inputs)
+        if coverage_templates:
+            templates = coverage_templates
         if input_set == frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_INPUT}):
             producers = [
                 candidate
@@ -1687,6 +1724,18 @@ def _resolve_unseparable_placement_splits(
                 for source in panels[index].source_products
             ),
         )
+        coverage_templates = _association_coverage_surface_templates(step.inputs)
+        # A partial or differently sourced declaration cannot prove a split.
+        def signature(panel: Any) -> tuple[Any, ...]:
+            return (panel.panel_id, panel.article_role, panel.chart_type,
+                    tuple(panel.source_products))
+
+        if coverage_templates and {signature(panels[index]) for index in indexes} == {
+            signature(panel) for panel in coverage_templates
+        }:
+            separable = frozenset(
+                panel.panel_id for panel in coverage_templates if panel.separable_display
+            )
         stuck = [
             index
             for index in indexes
@@ -1728,6 +1777,7 @@ def apply_article_figure_strategy_placements(
     # strategy above.
     audit_only_chart_types = {
         "sensitivity_coverage_matrix",
+        "sensitivity_specification_status",
         "status_matrix",
     }
     audit_only_source_products = {

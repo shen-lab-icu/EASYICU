@@ -21,15 +21,19 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
-from ...figures.display_labels import display_label, label_lookup, scoped_label_lookup
+from ...figures.display_labels import (
+    concise_clinical_level, display_label, label_lookup, scoped_label_lookup,
+    wrap_axis_tick_labels,
+)
 from ...figures.robustness import (
     ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED,
     assess_robustness_effect_comparability,
     draw_robustness_coverage,
     robustness_matrix_to_coverage,
+    save_association_coverage_audit,
 )
 from .cohort_flow_figure_executor import render_cohort_flow_axis
-from .typed_input_binding import BoundTypedInput, sha256_file
+from .typed_input_binding import BoundTypedInput, contained_regular_file, sha256_file
 
 
 def _association_finite_series(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -134,7 +138,7 @@ def _forest(
     )
     formatter = label_formatter or (lambda value: display_label(value))
     ax.set_yticks(
-        positions, [formatter(value) for value in frame[label_column]], fontsize=6.3
+        positions, [formatter(value) for value in frame[label_column]], fontsize=7.5
     )
     ax.set_ylim(len(frame) - 0.4, -0.75)
     scales = {str(value).strip().lower() for value in frame["effect_scale"]}
@@ -166,7 +170,7 @@ def _forest(
         ax.annotate(
             text, xy=(1.0, position), xycoords=("axes fraction", "data"),
             xytext=(0, 3.5), textcoords="offset points", ha="right", va="bottom",
-            fontsize=5.8, color="#333333",
+            fontsize=7.5, color="#333333",
         )
     ax.set_title(title, loc="left", pad=7)
 
@@ -179,13 +183,15 @@ def _reader_contrast_labels(
 ) -> pd.Series | None:
     """Build reader-facing contrasts from typed levels without changing rows."""
 
-    if not exposure_name or not {"exposure_level", "reference_level"} <= set(
-        frame.columns
-    ):
+    if not {"exposure_level", "reference_level"} <= set(frame.columns):
         return None
     labels: list[str] = []
-    ordinal_scope = re.sub(r"_(max|min|first|last)$", "", exposure_name)
     for row in frame.itertuples(index=False):
+        scope_name = getattr(row, "exposure", exposure_name)
+        if pd.isna(scope_name) or not scope_name:
+            return None
+        exposure_name = str(scope_name)
+        ordinal_scope = re.sub(r"_(max|min|first|last)$", "", exposure_name)
         comparison_value = row.exposure_level
         reference_value = row.reference_level
         comparison = scoped_label_lookup(
@@ -203,7 +209,7 @@ def _reader_contrast_labels(
                 else str(value)
             )
             declared = label_lookup(f"{ordinal_scope}_{level_token}", display_labels)
-            if declared:
+            if declared and current is None:
                 concise = declared.split(":", 1)[0].strip()
                 if side == "comparison":
                     comparison = concise
@@ -224,7 +230,9 @@ def _reader_contrast_labels(
                 else str(reference_value)
             )
             reference = f"{scope} {reference_token}"
-        labels.append(f"{comparison} vs {reference}")
+        labels.append(
+            f"{concise_clinical_level(comparison)} vs {concise_clinical_level(reference)}"
+        )
     return pd.Series(labels, index=frame.index, dtype="string")
 
 
@@ -362,9 +370,10 @@ def _draw_absolute_risk_points(
     for boundary in range(1, len(kinds)):
         if kinds[boundary] != kinds[boundary - 1]:
             ax.axvline(boundary - 0.5, color="#CCCCCC", linewidth=0.6, linestyle=":")
-    ax.set_xticks(np.arange(len(groups)), labels, fontsize=6.0)
+    ax.set_xticks(np.arange(len(groups)), labels, fontsize=7.5)
     ax.set_xlim(-0.6, len(groups) - 0.4)
     ax.set_ylim(0.0, 100.0 * float(frame["ci_high"].max()) * 1.12)
+    wrap_axis_tick_labels(ax, "x")
     # The article strategy reads a risk panel by its reader-facing term.
     return (
         "Absolute risk by exposure level"
@@ -559,6 +568,188 @@ def _reader_caption(panels: Any, *, letters: str) -> str:
             "model and applies no further selection.",
         ]
     )
+
+
+def _caption_run_root(item: BoundTypedInput) -> Path | None:
+    relative = Path(str(item.binding.get("relative_path") or ""))
+    if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+        return None
+    root = item.path.absolute().parents[len(relative.parts) - 1]
+    return root if contained_regular_file(root / relative, root) == item.path.resolve() else None
+
+
+def _caption_producer_receipt(item: BoundTypedInput) -> dict[str, Any]:
+    """Read a producer receipt linked to the bound output by its result sidecar.
+
+    A summary alone cannot authorize a caption: the retained result sidecar
+    must bind both its bytes and the displayed aggregate. No cohort or
+    patient-level artifact is read.
+    """
+    root = _caption_run_root(item)
+    producer = item.binding.get("produced_by_step")
+    if root is None or not isinstance(producer, str) or not re.fullmatch(r"[\w-]+", producer):
+        return {}
+    path = contained_regular_file(root / "steps" / producer / "outputs/step_summary.json", root)
+    if path is None:
+        return {}
+    digest = sha256_file(path)
+    receipt = json.loads(path.read_text(encoding="utf-8"))
+    name = receipt.get("output_files", {}).get(item.input_key)
+    # Some producers name the step only in the result sidecar, which also
+    # pins this summary's bytes. An explicit conflicting identity still fails.
+    if receipt.get("step_id", producer) != producer or not isinstance(name, str) or Path(name).name != name:
+        raise ValueError("caption producer receipt does not name the bound aggregate")
+    sidecars = list((root / "evidence").glob(
+        f"log_result_envelope_sidecar_*__result_envelope_sidecar__{producer}.json"
+    ))
+    if not sidecars:
+        return {}
+    if len(sidecars) != 1 or contained_regular_file(sidecars[0], root) is None:
+        raise ValueError("caption producer sidecar is ambiguous or unsafe")
+    sidecar_digest = sha256_file(sidecars[0])
+    sidecar = json.loads(sidecars[0].read_text(encoding="utf-8"))
+    linked = any(
+        artifact.get("product_id") == item.input_key
+        and artifact.get("sha256") == item.sha256
+        and artifact.get("relative_path") == name
+        for artifact in sidecar.get("artifacts", [])
+    )
+    if (
+        sidecar.get("step_id") != producer or not linked
+        or sidecar.get("raw_summary_artifact_sha256") != digest
+        or sha256_file(item.path) != item.sha256 or sha256_file(path) != digest
+        or sha256_file(sidecars[0]) != sidecar_digest
+    ):
+        raise ValueError("caption producer receipt has stale aggregate evidence")
+    return receipt
+
+
+def _caption_context(bound: Mapping[str, BoundTypedInput], step_id: str) -> dict[str, Any]:
+    """Read the context pinned by the same manifest as every displayed input."""
+    root = _caption_run_root(next(iter(bound.values())))
+    if root is None or not re.fullmatch(r"[\w-]+", step_id):
+        return {}
+    path = contained_regular_file(root / "resolved_inputs" / f"{step_id}.json", root)
+    if path is None:
+        return {}
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("step_id") != step_id:
+        raise ValueError("caption manifest belongs to a different step")
+    for key, item in bound.items():
+        entry = manifest.get("inputs", {}).get(key, {})
+        if any(entry.get(field) != item.binding.get(field) for field in (
+            "sha256", "relative_path", "evidence_id",
+        )):
+            raise ValueError("caption manifest does not bind the displayed input")
+    entry = manifest.get("context")
+    if not entry:
+        return {}
+    relative = Path(str(entry.get("relative_path") or ""))
+    context = None if relative.is_absolute() else contained_regular_file(root / relative, root)
+    if context is None or sha256_file(context) != entry.get("sha256"):
+        raise ValueError("caption context digest mismatch")
+    payload = json.loads(context.read_text(encoding="utf-8"))
+    if sha256_file(context) != entry.get("sha256"):
+        raise ValueError("caption context changed while reading")
+    return payload
+
+
+def _association_caption(
+    panels: Any, *, bound: Mapping[str, BoundTypedInput], labels: Mapping[str, str],
+    step_id: str,
+) -> str:
+    """State only observed aggregate facts and their current producer definitions."""
+    model_input = bound["table:adjusted_association_estimates"]
+    model = model_input.frame
+    receipt = _caption_producer_receipt(model_input)
+    context = _caption_context(bound, step_id)
+
+    def shared(column: str) -> Any:
+        if column not in model:
+            return None
+        values = model[column].dropna().unique()
+        return values[0] if len(values) == 1 else None
+
+    clauses = []
+    outcome, exposure = shared("outcome"), shared("exposure")
+    if outcome is not None and exposure is not None:
+        clauses.append(f"{display_label(exposure, labels)} and {display_label(outcome, labels)}.")
+    cohort = context.get("cohort", {})
+    unit = shared("analysis_unit") or cohort.get("provenance", {}).get("analysis_unit")
+    unit_name = {"icu_stay": "ICU stays", "patient": "patients"}.get(unit, "analysis records")
+    n = shared("n")
+    for column in ("n", "cluster_count"):
+        if shared(column) is not None and (_integers(model, column) <= 0).any():
+            raise ValueError("caption denominators must be positive counts")
+    contracts = [
+        item for item in receipt.get("model_contracts", [])
+        if item.get("model_id") == shared("model_id")
+    ]
+    dependence = contracts[0].get("dependence", {}) if len(contracts) == 1 else {}
+    cluster_unit = shared("cluster_unit") or dependence.get("cluster_unit")
+    clusters = shared("cluster_count")
+    if n is not None and clusters is not None and clusters > n:
+        raise ValueError("caption cluster count exceeds the analysed denominator")
+    if receipt and n is not None and receipt.get("n_total", n) != n:
+        raise ValueError("caption producer denominator differs from the bound model")
+    if n is not None:
+        population = f"Analysed population: {int(n):,} {unit_name}"
+        if clusters is not None and cluster_unit == "patient":
+            population += f" from {int(clusters):,} patient clusters"
+        clauses.append(population + ".")
+    else:
+        clauses.append("The model's analysed denominator is not reported in the bound table.")
+    landmark = receipt.get("landmark_runtime_receipt", {}).get("landmark_hours")
+    if landmark is not None:
+        clauses.append(f"The population was alive and observed at the {float(landmark):g} h landmark.")
+    windows = [
+        item for item in cohort.get("provenance", {}).get("exposure_group_labels", [])
+        if item.get("variable") == exposure
+    ]
+    if len(windows) == 1:
+        window = windows[0].get("parameters", {}).get("window", {})
+        source_windows = context.get("time_windows", [])
+        origins = {
+            item.get("anchor") for item in source_windows
+            if item.get("start_hours") == window.get("start_hours")
+            and item.get("end_hours") == window.get("end_hours")
+        }
+        if len(origins) == 1 and None not in origins and window:
+            origin = display_label(next(iter(origins)), labels)
+            clauses.append(
+                f"Exposure was measured {float(window['start_hours']):g}–"
+                f"{float(window['end_hours']):g} h after {origin}."
+            )
+    risk_input = bound.get("table:absolute_risk_context")
+    method = None
+    if risk_input is not None:
+        if "ci_method" in risk_input.frame:
+            methods = risk_input.frame["ci_method"].dropna().astype(str).str.lower().unique()
+            if len(methods) == 1 and methods[0] == "wilson":
+                method = "Wilson"
+        risk_receipt = _caption_producer_receipt(risk_input)
+        if "Wilson 95% confidence intervals" in str(risk_receipt.get("method", "")):
+            method = "Wilson"
+    clauses.append(
+        "Absolute-risk intervals are Wilson 95% confidence intervals."
+        if method == "Wilson" else "Absolute-risk interval construction is not reported."
+    )
+    adjustment = shared("covariates")
+    if adjustment is not None:
+        covariates = [display_label(value.strip(), labels) for value in str(adjustment).split(";") if value.strip()]
+        clauses.append("Adjustment set: " + (", ".join(covariates) or "none") + ".")
+    else:
+        clauses.append("The adjustment set is not reported.")
+    variance = shared("variance_estimator")
+    if variance == "cluster_robust":
+        prefix = "patient-cluster-robust" if cluster_unit == "patient" else "cluster-robust"
+        clauses.append(f"Model 95% confidence intervals use {prefix} covariance.")
+    else:
+        clauses.append("Model interval construction is not reported.")
+    if shared("effect_scale") in {"odds_ratio", "OR"}:
+        clauses.append("The model estimates odds ratios, which are distinct from risk ratios.")
+    clauses.append("These are observational associations, not causal effects.")
+    return " ".join([*clauses, _reader_caption(panels, letters="abcd")])
 
 
 def _render_cohort_balance_association_figure(
@@ -1169,10 +1360,15 @@ def render_association_publication_figure(
 
     source_files = [_source_copy(bound[key], out_dir) for key in input_keys]
     evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
-    labels = dict(display_labels or {})
-    palette = apply_publication_style(font_size=7.0)
+    labels = {
+        key: concise_clinical_level(value) if "=" in key else value
+        for key, value in (display_labels or {}).items()
+    }
+    palette = apply_publication_style(font_size=7.5)
     placements = dict(panel_placements or {})
-    show_panel_d = placements.get("D", "main") == "main"
+    # Coverage still needs drawing when its declared destination is the audit
+    # surface; it is removed from the main canvas below, never discarded.
+    show_panel_d = robustness_summary is not None or placements.get("D", "main") == "main"
     if show_panel_d:
         fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0), constrained_layout=True)
     else:
@@ -1238,18 +1434,12 @@ def render_association_publication_figure(
         )
 
         def level_label(value: Any) -> str:
-            numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-            token = (
-                str(int(numeric))
-                if pd.notna(numeric) and float(numeric).is_integer()
-                else str(value)
-            )
             declared = (
-                scoped_label_lookup(risk_exposure, token, labels)
+                scoped_label_lookup(risk_exposure, value, labels)
                 if risk_exposure
                 else None
             )
-            return declared or token
+            return declared or str(value)
 
         absolute_title = _draw_absolute_risk_points(
             ax,
@@ -1542,12 +1732,39 @@ def render_association_publication_figure(
                     panel_specs,
                 )
             )
+    audit_specs = [
+        spec for spec in panel_specs
+        if spec[3] in {"sensitivity_coverage_matrix", "sensitivity_specification_status"}
+    ]
+    audit_outputs = {}
+    if audit_specs:
+        audit_outputs = save_association_coverage_audit(
+            out_path=out_dir / f"{figure_product}_audit", panels=audit_specs,
+            frames={key: item.frame for key, item in bound.items()},
+            evidence=evidence, color=palette["blue_soft"],
+        )
+        main_axes = []
+        for spec, axis in zip(panel_specs, axes.flat):
+            if spec in audit_specs:
+                fig.delaxes(axis)
+            else:
+                main_axes.append(axis)
+        panel_specs = tuple(spec for spec in panel_specs if spec not in audit_specs)
+        columns = 1 if len(main_axes) == 2 else 2
+        grid = fig.add_gridspec((len(main_axes) + columns - 1) // columns, columns)
+        for index, axis in enumerate(main_axes):
+            axis.set_subplotspec(grid[index])
+            for text in axis.texts:
+                if text.get_text() in tuple("abcd"):
+                    text.set_text("abcd"[index])
+        fig.set_size_inches(7.2, 5.4)
+    wrap_axis_tick_labels(axes[0, 0], "x")
+    wrap_axis_tick_labels(axes[0, 1], "y", width=fig.bbox.width * 0.32)
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
             "The bound tables jointly show observed absolute risk, the primary "
-            "adjusted association, and the exact supporting context declared "
-            "by the Planner's four-table figure contract."
+            "adjusted association, and their declared supporting context."
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
@@ -1570,7 +1787,9 @@ def render_association_publication_figure(
             for panel_id, title, role, chart_type, source in panel_specs
         ],
         source_data=source_files,
-        reader_caption=_reader_caption(panel_specs, letters="abcd"),
+        reader_caption=_association_caption(
+            panel_specs, bound=bound, labels=labels, step_id=step_id,
+        ),
         statistics_note=(
             "All source rows and original columns are preserved in source-data files. "
             "The renderer performs no model fitting or scientific row selection."
@@ -1608,17 +1827,19 @@ def render_association_publication_figure(
             for key, item in bound.items()
         ],
         "source_data_files": source_files,
-        "supplementary_panel_ids": sorted(
-            panel_id
-            for panel_id, placement in placements.items()
-            if placement == "supplementary"
-        ),
+        "supplementary_panel_ids": [spec[0] for spec in audit_specs],
+        **({"supplementary_output_files": {
+            f"figure:{figure_product}": f"{figure_product}_audit.png",
+        }} if audit_specs else {}),
         "figure_files": [
-            path.name for key, path in outputs.items() if key != "contract"
+            path.name for exports in (outputs, audit_outputs)
+            for key, path in exports.items() if key != "contract"
         ],
         "figure_path": f"{figure_product}.png",
         "figure_contract": f"{figure_product}.figure_contract.json",
-        "contract_files": [f"{figure_product}.figure_contract.json"],
+        "contract_files": [f"{figure_product}.figure_contract.json"] + (
+            [f"{figure_product}_audit.figure_contract.json"] if audit_specs else []
+        ),
         "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
     }
     (out_dir / "step_summary.json").write_text(
