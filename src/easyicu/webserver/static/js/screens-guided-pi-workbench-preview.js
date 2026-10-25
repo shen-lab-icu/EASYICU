@@ -31,7 +31,7 @@
       ready: tr('Ready', '可用'),
       partial: tr('Partial', '部分可用'),
       not_extracted: tr('Not extracted', '未提取'),
-      semantic_review_required: tr('Review required', '需要语义审阅'),
+      semantic_review_required: tr('Check the variable definition', '需核对变量含义'),
       structurally_unavailable: tr('Source unsupported', '来源不支持'),
     };
     return labels[String(value || '')] || String(value || tr('Unknown', '未知'));
@@ -46,18 +46,18 @@
       outcome: tr('Outcome', '结局'),
       plan_input: tr('Plan input', '计划变量'),
       supporting_variable: tr('Supporting variable', '辅助变量'),
-      other_materialized_column: tr('Other materialized column; not a direct Plan input', '其他物化字段；非计划直接输入'),
+      other_materialized_column: tr('Other prepared variable; not a direct plan input', '其他已准备的变量；非计划直接输入'),
     };
     return labels[String(value || '')] || String(value || '');
   }
   function reasonLabel(value) {
     const labels = {
       plan_bound_column_complete: tr('Complete for all analysis rows', '全部分析记录均有值'),
-      plan_bound_column_has_missing_values: tr('Physical nulls are present; not necessarily clinical missingness', '存在物理空值；不等同临床缺失'),
+      plan_bound_column_has_missing_values: tr('Some records are blank; interpret missingness using the variable definition.', '有空白记录，需按变量定义判断是否缺失。'),
       plan_bound_null_count_unavailable: tr('Missingness requires review', '缺失情况需要进一步检查'),
       plan_bound_conditional_scope_complete: tr('Complete within the applicable scope; event-linked coverage is withheld', '适用范围内完整；隐藏可反映事件率的覆盖数'),
       plan_bound_conditional_scope_missing: tr('Missing values within the applicable scope; event-linked coverage is withheld', '适用范围内仍有缺失；隐藏可反映事件率的覆盖数'),
-      plan_bound_source_structurally_unavailable: tr('The source owner does not support this concept; a non-null column is not availability', '来源 owner 不支持此概念；列非空不代表可用'),
+      plan_bound_source_structurally_unavailable: tr('This source does not support this variable for analysis, even if records are present.', '当前数据源尚不支持这一变量；有记录也不能直接用于分析。'),
     };
     return labels[String(value || '')] || String(value || '');
   }
@@ -93,16 +93,16 @@
   }
   function conceptTable(payload) {
     const rows = conceptRows(payload);
-    if (!rows.length) return `<div class="gpi-wb-empty">${esc(tr('No execution concept matches this view.', '当前筛选下没有执行概念。'))}</div>`;
-    return `<div class="gpi-wb-table" role="table" aria-label="${esc(tr('Execution concept availability', '执行概念可用性'))}">
-      <div class="gpi-wb-row head" role="row"><span>${esc(tr('Role / concept', '角色 / 概念'))}</span><span>${esc(tr('Availability', '可用性'))}</span><span>${esc(tr('Observed coverage', '观测覆盖'))}</span></div>
+    if (!rows.length) return `<div class="gpi-wb-empty">${esc(tr('No variables match these filters.', '没有符合筛选条件的变量。'))}</div>`;
+    return `<div class="gpi-wb-table" role="table" aria-label="${esc(tr('Variable availability', '变量可用性'))}">
+      <div class="gpi-wb-row head" role="row"><span>${esc(tr('Role / variable', '用途 / 变量'))}</span><span>${esc(tr('Availability', '可用性'))}</span><span>${esc(tr('Observed coverage', '观测覆盖'))}</span></div>
       ${rows.map(row => {
         const denominator = number(row.denominator_count);
         const evaluable = number(row.evaluable_count);
         const pct = denominator && evaluable != null ? percent(evaluable / denominator * 100) : percent(row.physical_coverage_pct);
         const coverage = pct == null ? tr('Not shown', '不展示') : displayPercent(pct);
         return `<div class="gpi-wb-row" role="row">
-          <span><strong>${esc(row.concept_id || tr('Unnamed concept', '未命名概念'))}</strong><small>${esc(roleLabel(row.study_role))}${row.module ? ` · ${esc(row.module)}` : ''}</small></span>
+          <span><strong>${esc(row.concept_id || tr('Unnamed variable', '未命名变量'))}</strong><small>${esc(roleLabel(row.study_role))}${row.module ? ` · ${esc(row.module)}` : ''}</small></span>
           <span><em class="gpi-wb-status ${statusClass(row.availability_status)}">${esc(statusLabel(row.availability_status))}</em><small>${esc(reasonLabel(row.reason_code))}</small></span>
           <span><b>${esc(coverage)}</b>${pct == null ? '' : `<i class="gpi-wb-meter"><u style="width:${pct.toFixed(2)}%"></u></i>`}</span>
         </div>`;
@@ -128,9 +128,9 @@
       .filter(item => item.coverage != null)
       .sort((left, right) => left.coverage - right.coverage)
       .slice(0, 8);
-    if (!rows.length) return `<p class="gpi-wb-muted">${esc(tr('Coverage will appear after the source owner publishes aggregate receipts.', '数据源 owner 发布聚合回执后，这里会显示覆盖情况。'))}</p>`;
+    if (!rows.length) return `<p class="gpi-wb-muted">${esc(tr('Coverage has not been recorded.', '覆盖情况暂未记录。'))}</p>`;
     return `<div class="gpi-wb-coverage-chart" role="img" aria-label="${esc(tr('Lowest observed coverage among planned variables', '计划变量中覆盖率最低的字段'))}">
-      ${rows.map(item => `<div class="gpi-wb-coverage-row"><span title="${esc(item.row.concept_id || '')}">${esc(item.row.concept_id || tr('Unnamed concept', '未命名概念'))}</span><i><u style="width:${item.coverage.toFixed(2)}%"></u></i><strong>${esc(displayPercent(item.coverage))}</strong></div>`).join('')}
+      ${rows.map(item => `<div class="gpi-wb-coverage-row"><span title="${esc(item.row.concept_id || '')}">${esc(item.row.concept_id || tr('Unnamed variable', '未命名变量'))}</span><i><u style="width:${item.coverage.toFixed(2)}%"></u></i><strong>${esc(displayPercent(item.coverage))}</strong></div>`).join('')}
     </div>`;
   }
   function pendingAnalysisSteps() {
@@ -159,14 +159,14 @@
       <div class="gpi-wb-cards">
         ${summaryCard(postPlan ? tr('Source denominator', '来源分母') : tr('Registered denominator', '登记分母'), denominator == null ? '—' : denominator.toLocaleString(), payload && payload.denominator && payload.denominator.analysis_unit)}
         ${summaryCard(postPlan ? tr('Bound source modules', '已绑定数据模块') : tr('Configured modules', '已配置模块'), modules.length, modules.filter(row => row && row.availability_status === 'ready').length + ' ' + tr('ready', '可用'))}
-        ${summaryCard(postPlan ? tr('Direct Plan inputs', '计划直接输入') : tr('Execution concepts', '执行概念'), `${readyCount}/${conceptCount}`, postPlan ? tr('complete records within applicable scope; not clinical approval', '非空或适用范围内完整；非临床审批') : tr('fully available', '完全可用'))}
+        ${summaryCard(postPlan ? tr('Direct Plan inputs', '计划直接输入') : tr('Variables', '变量'), `${readyCount}/${conceptCount}`, postPlan ? tr('complete records within applicable scope; not clinical approval', '非空或适用范围内完整；非临床审批') : tr('fully available', '完全可用'))}
         ${summaryCard(tr('Quality watchlist', '质量关注项'), Number(quality.watchlist_count || 0), quality.median_coverage_pct == null ? '' : `${tr('median coverage', '中位覆盖')} ${quality.median_coverage_pct}%`)}
       </div>
       <div class="gpi-wb-context"><div><span>${esc(tr('Registered source', '已登记数据源'))}</span><strong>${esc(source.label || source.database || 'EasyICU')}</strong></div><div><span>${esc(postPlan ? tr('Source population', '来源人群') : tr('Cohort', '队列'))}</span><strong>${esc(cohort.label || tr('Bound StudyContext cohort', 'StudyContext 已绑定队列'))}</strong></div></div>
       ${postPlan ? pendingAnalysisSteps() : ''}
       <section class="gpi-wb-section"><div class="gpi-wb-section-head"><div><h4>${esc(postPlan ? tr('Direct-input non-null coverage', '计划直接输入的非空覆盖') : tr('Module quality', '模块质量'))}</h4><p>${esc(tr('Aggregate metadata only; no event rates or effect estimates. Conditional-time coverage is withheld.', '仅展示聚合元数据，不展示事件率或效应量；条件时间的覆盖数不展示。'))}</p></div></div>${postPlan ? readinessChart(payload) : ''}${qualityStrip(payload)}${moduleList(payload)}</section>
-      <section class="gpi-wb-section"><div class="gpi-wb-section-head"><div><h4>${esc(tr('Execution-concept screening', '执行概念筛选'))}</h4><p>${esc(tr('Filter this view locally. Scientific filter changes must be proposed and confirmed in chat.', '此处筛选只改变视图；科学筛选修改必须回到对话提出并确认。'))}</p></div></div>
-        <div class="gpi-wb-controls"><label><span>${esc(tr('Find concept', '查找概念'))}</span><input type="search" data-gpi-wb-query value="${esc(view.query)}" placeholder="${esc(tr('Role, concept, module…', '角色、概念、模块…'))}" /></label><label><span>${esc(tr('Status', '状态'))}</span><select data-gpi-wb-status><option value="all">${esc(tr('All', '全部'))}</option>${['ready', 'partial', 'semantic_review_required', 'not_extracted', 'structurally_unavailable'].map(value => `<option value="${value}" ${view.status === value ? 'selected' : ''}>${esc(statusLabel(value))}</option>`).join('')}</select></label></div>
+      <section class="gpi-wb-section"><div class="gpi-wb-section-head"><div><h4>${esc(tr('Variable screening', '变量筛选'))}</h4><p>${esc(tr('Filter this view locally. Scientific filter changes must be proposed and confirmed in chat.', '此处筛选只改变视图；科学筛选修改必须回到对话提出并确认。'))}</p></div></div>
+        <div class="gpi-wb-controls"><label><span>${esc(tr('Find variable', '查找变量'))}</span><input type="search" data-gpi-wb-query value="${esc(view.query)}" placeholder="${esc(tr('Role, variable, module…', '用途、变量、模块…'))}" /></label><label><span>${esc(tr('Status', '状态'))}</span><select data-gpi-wb-status><option value="all">${esc(tr('All', '全部'))}</option>${['ready', 'partial', 'semantic_review_required', 'not_extracted', 'structurally_unavailable'].map(value => `<option value="${value}" ${view.status === value ? 'selected' : ''}>${esc(statusLabel(value))}</option>`).join('')}</select></label></div>
         <div data-gpi-wb-results>${conceptTable(payload)}</div>
       </section>
       <footer class="gpi-wb-foot"><strong>${esc(tr('Want to change the cohort or filters?', '需要修改队列或筛选条件？'))}</strong><span>${esc(tr('Describe the change in the conversation. EasyICU will create a typed proposal and ask for confirmation before updating StudyContext or extracting data.', '请在对话中描述修改。EasyICU 会生成结构化提案，并在更新 StudyContext 或提取数据前请求确认。'))}</span></footer>

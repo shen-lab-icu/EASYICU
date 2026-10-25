@@ -284,8 +284,6 @@
       if (stage === 'progress') return done
         ? tr('Research-task progress updated', '研究任务进度已更新')
         : tr('Research task is progressing', '研究任务正在推进');
-      // TODO(copy): dedicated pause/action-gap detail; reuse the existing
-      // attention label until the coordinator supplies the wording.
       if (stage === 'attention') return fallback || tr('Needs attention', '需处理');
       return String(fallback || tr('Research-task status updated', '研究任务状态已更新'));
     }
@@ -757,11 +755,12 @@
 
     function pipelineEventLabel(event) {
       const type = String((event && event.type) || '');
-      // TODO(copy): specialized copy for the remaining provider lifecycle codes.
-      // Existing localized status wording is the safe fallback.
       if (event && String(event.step || '').startsWith('provider_')
         && !['provider_continuation_refused', 'provider_auto_resume', 'provider_recovery_wait'].includes(event.step))
-        return tr('Research-task status updated', '研究任务状态已更新');
+        return ['error', 'failed', 'cancelled', 'blocked'].includes(event.status)
+          ? tr('The model service reported a problem. Review the failure details.', '模型服务出现问题，请查看失败原因。')
+          : event.status === 'running' ? tr('Checking the model service.', '正在检查模型服务。')
+            : tr('Model service status updated.', '模型服务状态已更新。');
       if (event && event.step === 'provider_continuation_refused') return host.runFailureText(event.reason || event.reason_code);
       if (event && event.step === 'provider_auto_resume' && event.restart_stage === 'metadata_planning') return tr(
         'System action: provider recovered; regenerating the candidate plan with the saved study requirements',
@@ -776,7 +775,10 @@
         '系统操作：正在任务预算内等待模型服务恢复，恢复后将自动继续',
       );
       if (type === 'start') return tr('EasyICU research pipeline started', 'EasyICU 科研流程已启动');
-      if (type === 'cancel_requested') return tr('Cancellation requested', '已请求取消任务');
+      if (type === 'cancel_requested' || event && event.step === 'cancel_requested') return tr('Cancellation requested; waiting for the task to stop.', '已请求取消，正在等待任务停止。');
+      if (event && event.step === 'pause') return tr('The task is paused.', '任务已暂停。');
+      if (event && event.step === 'human_review') return tr('The study needs manual review.', '这项研究需要人工核对。');
+      if (event && event.step === 'scientific_action_gap') return tr('The study cannot continue with the current settings. Review the outstanding issues.', '当前设置下研究无法继续，请查看待处理问题。');
       const stage = pipelineStage(event && event.step);
       if (stage === 'plan') {
         const current = Number(event && event.current);
@@ -1055,8 +1057,10 @@
           if (words) return tr(`Saved the study configuration: a descriptive study, as the question asks ('${words}')`,
             `保存了研究配置：按题目定为描述性研究（题目问“${words}”）`);
         }
-        // TODO(copy): detailed receipts for other study families and partial saves.
-        // The existing completed/error tool label is their host receipt.
+        // Other families and partial updates have no public field-level receipt.
+        if (step.status === 'complete' && step.toolName === 'easyicu_update_study_context') return step.code === 'study_context_updated'
+          ? tr('This update is saved. Review the study setup for any remaining fields.', '本次修改已保存；请在研究设置中核对仍需填写的内容。')
+          : tr('Review the study setup; this record does not list the updated fields.', '请核对研究设置；这条记录未列出修改的具体内容。');
         return '';
       }
       const value = String(step && step.text || '').trim();
