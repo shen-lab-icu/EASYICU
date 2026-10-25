@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+import json
 import re
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Sequence
 
@@ -25,13 +26,31 @@ _NUMERIC_CATEGORY_STRING = re.compile(
     r"[+-]?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?\Z"
 )
 
+DESCRIPTIVE_INPUT_MARKER = "EASYICU_DESCRIPTIVE_INPUT_ERROR "
+DESCRIPTIVE_INPUT_REASON_CODES = frozenset({
+    "boolean_not_numeric", "numeric_conversion_loss", "semantic_numeric_input",
+    "nonfinite_numeric_input", "binary_domain_invalid",
+})
+
 
 class DescriptiveInputError(ValueError):
     """Raised when a descriptive input cannot satisfy its declared contract."""
 
-    def __init__(self, message: str, *, audit: dict[str, Any]) -> None:
+    def __init__(self, message: str, *, audit: dict[str, Any],
+                 column: str | None = None, reason_codes: Sequence[str] = ()) -> None:
         super().__init__(message)
         self.audit = dict(audit)
+        self.column = column
+        self.reason_codes = tuple(sorted(set(reason_codes)))
+        if not set(self.reason_codes) <= DESCRIPTIVE_INPUT_REASON_CODES:
+            raise ValueError("unknown descriptive input reason")
+        if self.reason_codes:
+            # A separate message line survives tracebacks on Python 3.10 too.
+            # No values, indices or counts enter this diagnostic coordinate.
+            self.args = (message + "\n" + DESCRIPTIVE_INPUT_MARKER + json.dumps({
+                "schema_version": "easyicu.descriptive_input_error/1",
+                "column": column, "reason_codes": self.reason_codes,
+            }, ensure_ascii=True, sort_keys=True),)
 
 
 @dataclass(frozen=True)
@@ -136,17 +155,55 @@ def strict_numeric_input(
         or audit["semantic_invalid_n"]
         or audit["nonfinite_n"]
     ):
+        reasons = []
+        if audit["coercion_invalid_n"]:
+            reasons.append("numeric_conversion_loss")
+        if audit["semantic_invalid_n"]:
+            reasons.append("boolean_not_numeric" if bool(series.dropna().map(pd.api.types.is_bool).all())
+                           else "semantic_numeric_input")
+        if audit["nonfinite_n"]:
+            reasons.append("nonfinite_numeric_input")
         label = f" {diagnostic_label!r}" if diagnostic_label is not None else ""
         raise DescriptiveInputError(
             f"numeric input{label} contains unconvertible, semantically invalid, or "
             "nonfinite values",
             audit=audit,
+            column=diagnostic_label or (series.name if isinstance(series.name, str) else None),
+            reason_codes=reasons,
         )
 
     values = numeric.copy()
     values.loc[raw_missing] = np.nan
     values.name = series.name
     return StrictNumericInput(values=values, audit=audit)
+
+
+def strict_binary_input(series: pd.Series, *, name: str | None = None,
+                        column: str | None = None) -> StrictNumericInput:
+    """Validate a declared 0/1 flag, including Boolean storage, without dropping rows.
+
+    False/True encode as 0/1. Missing stays missing; arbitrary categories,
+    fractional values, timestamps and infinities cannot become outcomes.
+    Selecting a binary scientific role remains the caller's decision.
+    """
+    if not isinstance(series, pd.Series):
+        raise TypeError("strict_binary_input requires a pandas Series")
+    # Only Boolean scalars are recoded. Other values retain their types so the
+    # numeric helper can still reject semantic laundering and conversion loss.
+    encoded = series.astype(object).map(
+        lambda value: int(value) if pd.api.types.is_bool(value) else value
+    )
+    encoded.name = series.name
+    result = strict_numeric_input(encoded, name=name, column=column)
+    invalid = result.values.notna() & ~result.values.isin([0, 1])
+    if bool(invalid.any()):
+        raise DescriptiveInputError(
+            "binary input contains values outside the declared 0/1 domain",
+            audit={**result.audit, "binary_invalid_n": int(invalid.sum())},
+            column=name or column or (series.name if isinstance(series.name, str) else None),
+            reason_codes=("binary_domain_invalid",),
+        )
+    return result
 
 
 def _canonical_level(value: Any) -> tuple[str, str]:
@@ -436,4 +493,5 @@ __all__ = [
     "closed_categorical_counts",
     "measurement_provenance_receipt",
     "strict_numeric_input",
+    "strict_binary_input",
 ]

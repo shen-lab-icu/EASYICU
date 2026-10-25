@@ -976,7 +976,10 @@ def _legacy_raw_input_contract(variable: ConceptDescriptor) -> Dict[str, Any]:
     fact: Dict[str, Any] = {
         "column": variable.name,
         "dtype": variable.dtype,
+        "role": variable.role.value,
     }
+    if variable.dtype.lower() in {"bool", "boolean"}:
+        fact["boolean_numeric_encoding"] = {"false": 0, "true": 1}
     if variable.unit:
         fact["unit"] = variable.unit
     if variable.valid_range is not None:
@@ -1304,6 +1307,10 @@ def resolved_raw_input_contracts(
             **_column_prompt_fact(name, binding),
             "binding_sha256": binding.binding_sha256,
         }
+        if variable is not None:
+            fact.update(dtype=variable.dtype, role=variable.role.value)
+            if variable.dtype.lower() in {"bool", "boolean"}:
+                fact["boolean_numeric_encoding"] = {"false": 0, "true": 1}
         domain = (
             variable.observed_domain
             if variable is not None and isinstance(variable.observed_domain, Mapping)

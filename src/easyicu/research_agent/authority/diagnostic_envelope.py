@@ -1,18 +1,21 @@
 """Host-owned diagnostic payloads safe for external repair providers.
 
-Raw candidate stdout/stderr is deliberately not an input to the envelope
-projection. It remains local evidence. The external payload is derived only
-from the validated :class:`RepairPromptAuthority` and closed host coordinates.
+Raw candidate stdout/stderr remains local evidence. The external payload uses
+validated repair authority and, separately, bounded untrusted input-error codes
+whose column identities and dtypes are resolved from the declared context.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
 from ..repairs.reasons import RepairPromptAuthority
+from ..methods.descriptive_inputs import DESCRIPTIVE_INPUT_MARKER, DESCRIPTIVE_INPUT_REASON_CODES
 
 
 _SCHEMA = "easyicu.diagnostic_envelope/1"
@@ -22,6 +25,55 @@ _ALLOWED_FAILURE_KINDS = frozenset(
 _CODE_KEYS = frozenset(
     {"issue_code", "reason", "structured_reason", "validator"}
 )
+
+
+def descriptive_input_diagnostics(run_log: str, *, context: Any, step: Any) -> list[dict[str, Any]]:
+    """Project untrusted helper notes onto declared columns and closed codes.
+
+    These are candidate hints, never host findings or retry authority. Column
+    identity and dtype come from the sealed context/step; no runtime dtype,
+    count, value, path, arbitrary text or extra field can cross this boundary.
+    """
+    if context is None or step is None:
+        return []
+    declared = set(step.inputs)
+    variables = {v.name: v for v in context.variables if v.name in declared}
+    result = []
+    for line in str(run_log or "")[-16000:].splitlines():
+        if not line.startswith(DESCRIPTIVE_INPUT_MARKER) or len(line) > 1024:
+            continue
+        try:
+            payload = json.loads(line[len(DESCRIPTIVE_INPUT_MARKER):])
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(payload, dict) or payload.get("schema_version") != "easyicu.descriptive_input_error/1":
+            continue
+        column, codes = payload.get("column"), payload.get("reason_codes")
+        if not isinstance(column, str) or column not in variables or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", column):
+            continue
+        if not isinstance(codes, list) or not codes or any(not isinstance(code, str) or code not in DESCRIPTIVE_INPUT_REASON_CODES for code in codes):
+            continue
+        item = {"column": column, "reason_codes": sorted(set(codes)),
+                "dtype": variables[column].dtype, "provenance": "untrusted_runtime"}
+        if item not in result:
+            result.append(item)
+        if len(result) == 8:
+            break
+    return result
+
+
+def render_repair_diagnostic(*, llm, run_log, repair_authority, attempt,
+                            byte_limit, context, step, local_excerpt) -> str:
+    """Keep runtime hints separate from trusted repair and routing authority."""
+    from ..providers.factory import provider_transport_destination
+
+    hosted = os.environ.get("EASYICU_HOSTED") == "1"
+    if hosted or provider_transport_destination(llm) == "external":
+        return DiagnosticEnvelope.from_repair_authority(
+            repair_authority, attempt=attempt, hosted=hosted,
+            input_diagnostics=descriptive_input_diagnostics(run_log, context=context, step=step),
+        ).render()
+    return local_excerpt(run_log, byte_limit=byte_limit)
 
 
 def _canonical_json(value: Any) -> str:
@@ -74,7 +126,7 @@ class DiagnosticEnvelope:
             payload = json.loads(self.canonical_json)
         except (json.JSONDecodeError, TypeError) as exc:
             raise ValueError("diagnostic envelope is not valid JSON") from exc
-        if not isinstance(payload, dict) or set(payload) != {
+        if not isinstance(payload, dict) or set(payload) - {"input_diagnostics"} != {
             "schema_version",
             "failure_kind",
             "error_codes",
@@ -84,6 +136,19 @@ class DiagnosticEnvelope:
             "repair_authority_sha256",
         }:
             raise ValueError("diagnostic envelope has an invalid schema")
+        input_diagnostics = payload.get("input_diagnostics", [])
+        if not isinstance(input_diagnostics, list) or len(input_diagnostics) > 8:
+            raise ValueError("diagnostic envelope input diagnostics are invalid")
+        for item in input_diagnostics:
+            if (not isinstance(item, dict) or set(item) != {"column", "reason_codes", "dtype", "provenance"}
+                    or item["provenance"] != "untrusted_runtime"
+                    or not isinstance(item["column"], str)
+                    or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", item["column"])
+                    or not isinstance(item["dtype"], str)
+                    or not isinstance(item["reason_codes"], list)
+                    or not item["reason_codes"]
+                    or any(not isinstance(code, str) or code not in DESCRIPTIVE_INPUT_REASON_CODES for code in item["reason_codes"])):
+                raise ValueError("diagnostic envelope input diagnostics are invalid")
         if payload["schema_version"] != _SCHEMA:
             raise ValueError("diagnostic envelope has an unsupported version")
         if payload["failure_kind"] not in _ALLOWED_FAILURE_KINDS:
@@ -123,6 +188,7 @@ class DiagnosticEnvelope:
         *,
         attempt: int,
         hosted: bool = False,
+        input_diagnostics: list[dict[str, Any]] | None = None,
     ) -> "DiagnosticEnvelope":
         """Project validated authority without accepting any runtime log."""
 
@@ -155,6 +221,8 @@ class DiagnosticEnvelope:
                 authority.canonical_json.encode("utf-8")
             ).hexdigest(),
         }
+        if input_diagnostics:
+            payload["input_diagnostics"] = input_diagnostics
         return cls(canonical_json=_canonical_json(payload))
 
     def payload(self) -> dict[str, Any]:
