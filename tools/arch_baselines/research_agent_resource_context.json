@@ -1,9 +1,18 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/planning/study_design.py"
+      "src/easyicu/research_agent/agents/planner.py"
     ],
-    "summary_changes": {}
+    "summary_changes": {
+      "max_planner_with_resources_bytes": {
+        "now": 64109,
+        "was": 64201
+      },
+      "max_resource_added_bytes": {
+        "now": 4565,
+        "was": 4657
+      }
+    }
   },
   "baseline_history": [
     {
@@ -822,9 +831,25 @@
         "src/easyicu/research_agent/planning/study_design.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Bind live planner response identities on the host and remove redundant digest/version echoes from transport. Refresh exact source and schema identities; all measured sizes are unchanged or smaller, with no raised budget, provider call, or patient-data read.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/agents/planner.py"
+      ],
+      "summary_changes": {
+        "max_planner_with_resources_bytes": {
+          "now": 64109,
+          "was": 64201
+        },
+        "max_resource_added_bytes": {
+          "now": 4565,
+          "was": 4657
+        }
+      }
     }
   ],
-  "baseline_reason": "Bind the tier-aware study-design source identity; article prompt and resource measurements are unchanged.",
+  "baseline_reason": "Bind live planner response identities on the host and remove redundant digest/version echoes from transport. Refresh exact source and schema identities; all measured sizes are unchanged or smaller, with no raised budget, provider call, or patient-data read.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -837,7 +862,7 @@
     "src/easyicu/data/concept-dict.json": "ab4edb8a79388ccbd902001ad6b733d063042a423d7b6507ad0dd3dd3b04b720",
     "src/easyicu/data/sofa2-dict.json": "c53b7d1c5eda51c9e88727e75eebbd93f579d0a297a5fa6f49b646032dc4faa3",
     "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",
-    "src/easyicu/research_agent/agents/planner.py": "66b55d9b759802cf5023a81ce5446e11cb1577ea1c784c65ec6701f34603205c",
+    "src/easyicu/research_agent/agents/planner.py": "97b3a41991cb898c29b1728a4a829c6462c209198b7f3e93590636cd2a692ee3",
     "src/easyicu/research_agent/graph.py": "7582775c2f126b72ef6b444edcbe35750c3c309c1e459b878e12bba9eb9933b5",
     "src/easyicu/research_agent/know_how/registry.py": "d0e0f233d8f22e76351da6057adde8ca6b87ebdc2ca7c703224716c18c6a72ee",
     "src/easyicu/research_agent/learning/runtime.py": "87743106defc0df92c826bcc5a16e9156c89877517ce1d29ce5be9654840925a",
@@ -864,9 +889,9 @@
   "summary": {
     "coder_resource_provider_calls": 0,
     "max_coder_resource_prompt_bytes": 2255,
-    "max_planner_with_resources_bytes": 64201,
+    "max_planner_with_resources_bytes": 64109,
     "max_planner_without_resources_bytes": 59701,
-    "max_resource_added_bytes": 4657,
+    "max_resource_added_bytes": 4565,
     "selected_resource_count": 7,
     "task_count": 9
   },
@@ -918,7 +943,7 @@
       "know_how_prompt_bytes": 4029,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14681,
+        "approx_input_tokens": 14658,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
@@ -930,16 +955,16 @@
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
-            "bytes": 4657,
+            "bytes": 4565,
             "included": true,
             "required": true,
-            "sha256": "b170df71aca19069218182603164f90342f29f660fd1739ac54a919fd2d2e56f"
+            "sha256": "e5c2cd39d87e51925f55d4569a9b2d74e09afeebc75f5e445c41917ece35114a"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 58721,
+        "total_bytes": 58629,
         "truncated_strings": false,
-        "user_bytes": 50277
+        "user_bytes": 50185
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
@@ -962,7 +987,7 @@
       "planning_contract_bytes": 6128,
       "planning_contract_sha256": "703681b904a34c690aacf7f56dedb766cf1d8f311dabbc8988ef54d93dfb9d4f",
       "question": "Estimate Sepsis-3 prevalence and mortality association.",
-      "resource_added_bytes": 4657,
+      "resource_added_bytes": 4565,
       "resource_allowlist_sha256": "8adc13a12942ac73918005d454a567e8477bbc5f25682e947d60e4e800ddf855",
       "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
@@ -1032,7 +1057,7 @@
       "know_how_prompt_bytes": 3791,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15045,
+        "approx_input_tokens": 15022,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
@@ -1044,16 +1069,16 @@
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
-            "bytes": 4419,
+            "bytes": 4327,
             "included": true,
             "required": true,
-            "sha256": "4976d3d22b218491ced190ba390dbde6c44242d02dad3fe9b8d7c3b4e51e0717"
+            "sha256": "0c198d2ec9238f4dea3ef3c7573aa83f53feae4abdcfdc1400814181d5c6bfb3"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60178,
+        "total_bytes": 60086,
         "truncated_strings": false,
-        "user_bytes": 51734
+        "user_bytes": 51642
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
@@ -1076,7 +1101,7 @@
       "planning_contract_bytes": 7541,
       "planning_contract_sha256": "50e21b7661aafd128d44ec79f5ee5b0828e92a427a3c6c505273ad900529caa3",
       "question": "Estimate the association of first-24-hour peak lactate with in-hospital mortality.",
-      "resource_added_bytes": 4419,
+      "resource_added_bytes": 4327,
       "resource_allowlist_sha256": "72a487e695a508647cde784bdca0ad51f2135e64885bdeba1f91da1d89095e12",
       "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
@@ -1347,7 +1372,7 @@
       "know_how_prompt_bytes": 4012,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15392,
+        "approx_input_tokens": 15369,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
@@ -1359,16 +1384,16 @@
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
-            "bytes": 4640,
+            "bytes": 4548,
             "included": true,
             "required": true,
-            "sha256": "5df7907d56d4a8386480890f1df9af1db127d4b2b4664c32145eeb7884bde161"
+            "sha256": "7543259224c9c5efc1684c9c751285ac6f3255c7252df0fbbfb3399eea32a5e0"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 61567,
+        "total_bytes": 61475,
         "truncated_strings": false,
-        "user_bytes": 53123
+        "user_bytes": 53031
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
@@ -1391,7 +1416,7 @@
       "planning_contract_bytes": 7361,
       "planning_contract_sha256": "bfe258634fb7add9efb0ddfc113cde254a7772148b59c47af0f3f0182c0cc8bc",
       "question": "Build a first-24-hour mortality risk prediction model.",
-      "resource_added_bytes": 4640,
+      "resource_added_bytes": 4548,
       "resource_allowlist_sha256": "a555fc5c589dbc20a2f3ccada523c79ada2ae697f4b009e477022b7bf09cee81",
       "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
@@ -1456,7 +1481,7 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 16051,
+        "approx_input_tokens": 16028,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
@@ -1468,16 +1493,16 @@
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
-            "bytes": 4500,
+            "bytes": 4408,
             "included": true,
             "required": true,
-            "sha256": "a280aa3e1242ab4b34e5ccd73abdf3b9b751cc5f99b0a979115c411d45413e74"
+            "sha256": "05092c1bdbed9b524dbff9c759f6264b3ee7a80dd055e43c36668bbbe3bb5352"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 64201,
+        "total_bytes": 64109,
         "truncated_strings": false,
-        "user_bytes": 55757
+        "user_bytes": 55665
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
@@ -1500,7 +1525,7 @@
       "planning_contract_bytes": 6797,
       "planning_contract_sha256": "e004ee08cb5fce9b9e1486479caf6db5074f9447cb5585bc479936bd53464d7d",
       "question": "Discover candidate sepsis subphenotypes from labs and vital signs.",
-      "resource_added_bytes": 4500,
+      "resource_added_bytes": 4408,
       "resource_allowlist_sha256": "c1e182996b78b356bf511ddf1473ab457bbb70cfb6ff490fe1bcc71047e38cab",
       "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
@@ -1570,7 +1595,7 @@
       "know_how_prompt_bytes": 4015,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14831,
+        "approx_input_tokens": 14808,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
@@ -1582,16 +1607,16 @@
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
-            "bytes": 4643,
+            "bytes": 4551,
             "included": true,
             "required": true,
-            "sha256": "b1ab9d351b6d8ed0103e390e368bf769304cf7eda4bf8437aedeb359b19632ee"
+            "sha256": "e1f151510373ea69f66ea9cfe8d6e0f39a6980bdb6b61ddd0841843d2fd6baa7"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 59323,
+        "total_bytes": 59231,
         "truncated_strings": false,
-        "user_bytes": 50879
+        "user_bytes": 50787
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
@@ -1614,7 +1639,7 @@
       "planning_contract_bytes": 6777,
       "planning_contract_sha256": "7426aa9258538c2435537b62ad55d33c38c7c0acffa9624978eddce8b2f6dd06",
       "question": "Estimate mechanical ventilation survival and 28-day mortality.",
-      "resource_added_bytes": 4643,
+      "resource_added_bytes": 4551,
       "resource_allowlist_sha256": "9fdb53508a14f7aeee8455163b7c328ee6430d83fb990fee9173a5719d84d7aa",
       "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
@@ -1685,7 +1710,7 @@
       "know_how_prompt_bytes": 3905,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15017,
+        "approx_input_tokens": 14994,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
@@ -1697,16 +1722,16 @@
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
-            "bytes": 4533,
+            "bytes": 4441,
             "included": true,
             "required": true,
-            "sha256": "5e855c4a9111e140154120e10325778b23e9fc23301730e44dbd548ab8f7713c"
+            "sha256": "56b237a0cc9cd2ece23be88abc4170427bf10992196db6ba9356c5a0e1fdf96a"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60067,
+        "total_bytes": 59975,
         "truncated_strings": false,
-        "user_bytes": 51623
+        "user_bytes": 51531
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
@@ -1729,7 +1754,7 @@
       "planning_contract_bytes": 7064,
       "planning_contract_sha256": "aafe0c660d3095ecd5bb1da2d748f729f6bb180d98012f6af64edc302a9de199",
       "question": "Compare vasopressor strategies with a confounding-aware causal analysis.",
-      "resource_added_bytes": 4533,
+      "resource_added_bytes": 4441,
       "resource_allowlist_sha256": "2acd291bd3a92bcc1d6ac991e2af1e269e7f1a5db76a9c2f1a22b921f6e9dd29",
       "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
@@ -1792,7 +1817,7 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15116,
+        "approx_input_tokens": 15093,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
@@ -1804,16 +1829,16 @@
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
-            "bytes": 4500,
+            "bytes": 4408,
             "included": true,
             "required": true,
-            "sha256": "a280aa3e1242ab4b34e5ccd73abdf3b9b751cc5f99b0a979115c411d45413e74"
+            "sha256": "05092c1bdbed9b524dbff9c759f6264b3ee7a80dd055e43c36668bbbe3bb5352"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60462,
+        "total_bytes": 60370,
         "truncated_strings": false,
-        "user_bytes": 52018
+        "user_bytes": 51926
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
@@ -1836,7 +1861,7 @@
       "planning_contract_bytes": 6791,
       "planning_contract_sha256": "62e1d3ad93ceab51cf7fcb9c872658398efcd2b4de7fe3d55fe660a6d87aaeb2",
       "question": "Cluster longitudinal ICU trajectories into stable subphenotypes.",
-      "resource_added_bytes": 4500,
+      "resource_added_bytes": 4408,
       "resource_allowlist_sha256": "c1e182996b78b356bf511ddf1473ab457bbb70cfb6ff490fe1bcc71047e38cab",
       "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,

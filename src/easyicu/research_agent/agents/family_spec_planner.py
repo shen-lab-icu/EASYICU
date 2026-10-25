@@ -140,7 +140,7 @@ For a population restriction expressed by a typed kind, use population.populatio
     + QUESTION_REQUIREMENTS_GUIDE
     + """
 
-Return exactly one JSON object and nothing else, in the response contract attached to the request: the provided schema, or the written response shape when no schema is attached. Copy request_sha256 exactly. Never invent variables, citations, results, or significance.
+Return exactly one JSON object and nothing else, in the response contract attached to the request: the provided schema, or the written response shape when no schema is attached. Never invent variables, citations, results, or significance.
 """
 )
 
@@ -412,7 +412,8 @@ def family_spec_user_prompt(
         sections.append("Planning contract context:\n" + planning_contract_context)
     if response_shape:
         sections.append("Response shape (no schema is attached on this route):\n" + response_shape)
-    sections.append("request_sha256: " + request.request_sha256)
+    # Retain the complete request identity in cassette lookup, without an echo.
+    sections.append("Host request identity (bound by caller): " + request.request_sha256)
     return "\n\n".join(sections)
 
 
@@ -662,7 +663,6 @@ def family_spec_structured_output_request(
         "required": [
             "schema_version",
             "family_id",
-            "request_sha256",
             "adjustment_set",
             *(["baseline_variables"] if descriptive or phenotyping else []),
             *(["distribution_missing_policies"] if descriptive else []),
@@ -678,7 +678,6 @@ def family_spec_structured_output_request(
         "properties": {
             "schema_version": {"type": "string", "enum": [FAMILY_SPEC_SCHEMA_VERSION]},
             "family_id": {"type": "string", "enum": [request.family_id]},
-            "request_sha256": {"type": "string", "enum": [request.request_sha256]},
             "adjustment_set": {
                 "type": "array",
                 "items": {
@@ -806,10 +805,9 @@ def family_spec_structured_output_request(
 def parse_family_plan_spec(raw: str, request: FamilySpecRequest) -> FamilyPlanSpec:
     """Parse one provider response and validate it against the sealed request.
 
-    ``schema_version`` and ``family_id`` are fixed by the host and the sealed
-    request, so the host writes them instead of rejecting an otherwise valid
-    answer over an echo. ``request_sha256`` remains the response's binding to
-    that request and must be copied exactly.
+    The host binds the envelope to the request sent in this call; copying an
+    identity adds no authority. Saved specs use ``spec_from_mapping`` and
+    ``validate_family_plan_spec`` instead, retaining their original binding.
     """
 
     payload = json.loads(str(raw or "").strip())
@@ -820,6 +818,7 @@ def parse_family_plan_spec(raw: str, request: FamilySpecRequest) -> FamilyPlanSp
             **payload,
             "schema_version": FAMILY_SPEC_SCHEMA_VERSION,
             "family_id": request.family_id,
+            "request_sha256": request.request_sha256,
         }
     )
     validate_family_plan_spec(spec, request)
@@ -873,7 +872,6 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
         "Exactly one JSON object with only these keys:",
         f'- "schema_version": "{FAMILY_SPEC_SCHEMA_VERSION}"',
         f'- "family_id": "{request.family_id}"',
-        f'- "request_sha256": "{request.request_sha256}" (copy exactly)',
     ]
     planner_roster = planner_selects_adjustment(request)
     # A proposed survival suite adjusts like a landmark association family.

@@ -102,7 +102,6 @@ def _criterion(index: int, kind: str, **fields) -> dict:
 def _reply(spec: Any) -> dict:
     return {
         "schema_version": "easyicu.progressive_plan_foundation/1",
-        "outline_sha256": "a" * 64,
         "foundation": {
             "cohort": {
                 "name": "every input stay",

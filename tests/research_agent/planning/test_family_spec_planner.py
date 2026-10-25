@@ -42,7 +42,9 @@ from easyicu.research_agent.planning.family_spec import (
     FamilySpecError,
     build_family_spec_request,
     family_template_id_for_context,
+    validate_family_plan_spec,
 )
+from easyicu.research_agent.planning.family_spec.contract import spec_from_mapping
 from easyicu.research_agent.planning.preplan_know_how import PlannerKnowHowBinding
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import (
@@ -363,7 +365,7 @@ def test_spec_validation_fails_closed(override, reason_code) -> None:
     context = _context(exact=True)
     request = _request(context)
     with pytest.raises(FamilySpecError) as caught:
-        parse_family_plan_spec(json.dumps(_spec_payload(request, **override)), request)
+        validate_family_plan_spec(spec_from_mapping(_spec_payload(request, **override)), request)
     assert caught.value.reason_code == reason_code
 
 
@@ -373,7 +375,7 @@ def test_strict_schema_is_closed_and_run_bound() -> None:
     assert schema["additionalProperties"] is False
     names = schema["properties"]["adjustment_set"]["items"]["properties"]["name"]["enum"]
     assert set(names) == {"age", "sex", "severity_score_24h"}
-    assert schema["properties"]["request_sha256"]["enum"] == [request.request_sha256]
+    assert "request_sha256" not in schema["properties"]
     prompt = family_spec_user_prompt(request, variable_descriptions={"age": "patient age"})
     assert '"exact_roster"' in prompt and "severity_score_24h" in prompt
     assert request.request_sha256 in prompt
@@ -399,7 +401,6 @@ def test_route_without_strict_schema_gets_the_written_shape_on_the_first_request
     for fragment in (
         '"schema_version": "easyicu.family_plan_spec/1"',
         f'"family_id": "{request.family_id}"',
-        f'"request_sha256": "{request.request_sha256}"',
         '"name" (exactly ["age", "sex", "severity_score_24h"] in this order',
         "null for continuous coding",
         '["comparator_alpha_2020_1"]',
@@ -452,7 +453,7 @@ def test_written_shape_and_strict_schema_name_the_same_keys() -> None:
         assert set(written) == set(schema["properties"]), request.family_id
 
 
-def test_host_writes_the_envelope_and_the_request_digest_still_binds() -> None:
+def test_host_writes_the_live_envelope_including_the_request_digest() -> None:
     request = _request(_context(exact=True))
     for envelope in (
         {"schema_version": "1.0", "family_id": "landmark association"},
@@ -467,13 +468,11 @@ def test_host_writes_the_envelope_and_the_request_digest_still_binds() -> None:
     assert parse_family_plan_spec(json.dumps(omitted), request).family_id == request.family_id
     unbound = _spec_payload(request)
     del unbound["request_sha256"]
-    with pytest.raises(ValidationError):
-        parse_family_plan_spec(json.dumps(unbound), request)
-    with pytest.raises(FamilySpecError) as caught:
-        parse_family_plan_spec(
-            json.dumps(_spec_payload(request, request_sha256="f" * 64)), request
-        )
-    assert caught.value.reason_code == "family_spec_request_digest_mismatch"
+    assert parse_family_plan_spec(json.dumps(unbound), request).request_sha256 == request.request_sha256
+    bound = parse_family_plan_spec(
+        json.dumps(_spec_payload(request, request_sha256="f" * 64)), request
+    )
+    assert bound.request_sha256 == request.request_sha256
 
 
 def test_retry_shows_the_rejected_answer_beside_the_reason_and_the_shape() -> None:

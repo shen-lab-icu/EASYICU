@@ -2070,7 +2070,11 @@ def _validate_literature_design_decisions(
 
 
 def spec_from_mapping(payload: Mapping[str, Any]) -> FamilyPlanSpec:
-    """Parse one provider payload into the typed spec (pydantic errors propagate)."""
+    """Load a spec with its original identity; validate it against its request.
+
+    Saved/replayed specs must not pass through the live-response binder.
+    Pydantic errors propagate, including missing or malformed digests.
+    """
 
     return FamilyPlanSpec.model_validate(dict(payload))
 

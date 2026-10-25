@@ -1918,11 +1918,11 @@ def test_step_parser_binds_host_digest_without_rewriting_scientific_coordinates(
 
     assert parsed.outline_step_sha256 == "a" * 64
     assert parsed.foundation is None
-    assert parsed.step.step_id == "wrong"
+    assert parsed.step.step_id == outline_step.step_id
     assert parsed.step.module_id == outline_step.module_id
     assert parsed.step.objective == "A different model-written objective."
     assert parsed.step.depends_on == ["wrong"]
-    assert parsed.step.scientific_action_id == "descriptive.table_one"
+    assert parsed.step.scientific_action_id == outline_step.scientific_action_id
     assert parsed.step.raw_inputs == ["age_years"]
 
 
@@ -2211,7 +2211,7 @@ def test_progressive_foundation_schema_is_outline_bound_and_has_no_step_fields()
     schema = json.loads(request.schema_json)
 
     assert request.name == "easyicu_progressive_plan_foundation_v1"
-    assert schema["properties"]["outline_sha256"]["const"] == outline_sha256
+    assert "outline_sha256" not in schema["properties"]
     assert "step" not in schema["properties"]
     assert "ProgressiveSkeletonStep" not in request.schema_json
     for object_schema in _walk_objects(schema):
@@ -2356,10 +2356,10 @@ def test_current_step_schema_locks_outline_coordinate_and_product_registry() -> 
     schema = json.loads(request.schema_json)
 
     assert request.name == "easyicu_progressive_step_materialization_v1"
-    assert schema["properties"]["outline_step_sha256"]["const"] == outline_sha256
+    assert "outline_step_sha256" not in schema["properties"]
     assert schema["properties"]["foundation"] == {"type": "null"}
     step = schema["$defs"]["ProgressiveSkeletonStep"]["properties"]
-    assert step["step_id"]["const"] == "05_primary"
+    assert "step_id" not in step
     assert step["planned_analysis_role"]["const"] == "primary"
     assert step["module_id"]["const"] == "adjusted_association"
     assert step["objective"]["const"] == outline_step.objective
@@ -4801,7 +4801,7 @@ def test_predicate_filtered_foundation_contract_projects_nested_item_shapes() ->
     assert '"value":{"mode":' in contract
     assert "value object must preserve all six displayed keys" in contract
     assert 'each nonempty item has exactly {"key":' in contract
-    assert '"card_sha256":"<authorized 64-char digest>"' in contract
+    assert '"card_sha256"' not in contract
 
 
 def test_foundation_contract_projects_required_reader_label_keys() -> None:
@@ -4857,9 +4857,9 @@ def test_step_materialization_contract_projects_closed_envelope() -> None:
     )
 
     assert '"schema_version":"easyicu.progressive_step_materialization/1"' in contract
-    assert '"outline_step_sha256":"' + "b" * 64 + '"' in contract
+    assert '"outline_step_sha256"' not in contract
     assert '"foundation":null,"step":{' in contract
-    assert '"step_id":"01_cohort"' in contract
+    assert '"step_id"' not in contract
     assert '"raw_inputs":[]' in contract
     assert '"literature_bindings":[]' in contract
     assert "Never return variable_names" in contract
@@ -7200,7 +7200,7 @@ def test_agent_stops_after_two_host_compile_repairs_and_keeps_attempts() -> None
 def test_agent_repairs_current_step_coordinate_drift_without_full_rewrite() -> None:
     materializations = _materialization_payloads()
     drifted = json.loads(json.dumps(materializations[3]))
-    drifted["step"]["scientific_action_id"] = "association.missingness_audit"
+    drifted["step"]["objective"] = "Change the scientific purpose of the requested step."
     responses = [
         _outline_payload(),
         _foundation_payload(),
@@ -7220,7 +7220,7 @@ def test_agent_repairs_current_step_coordinate_drift_without_full_rewrite() -> N
     assert agent.last_result.facts.prompt_metrics["full_revision_count"] == 0
     repair_prompt = llm.calls[6][0][-1].content
     assert "progressive_step_materialization_mismatch" in repair_prompt
-    assert '"path":"scientific_action_id"' in repair_prompt
+    assert '"path":"objective"' in repair_prompt
 
 
 def test_agent_carries_two_distinct_step_schema_failures_into_final_retry() -> None:

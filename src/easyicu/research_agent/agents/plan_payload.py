@@ -23,6 +23,7 @@ from ..contracts.declared_product import (
 from ..contracts.product_identity import CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN
 from ..contracts.capability_ids import CAPABILITY_FAMILIES
 from ..planning.method_literature import METHOD_CARDS
+from ..planning.preplan_know_how import bind_live_know_how_identity
 from ..planning.literature_bindings import (
     allowed_method_source_keys,
     normalize_literature_citation_keys,
@@ -436,6 +437,8 @@ def _planner_transport_schema(
         definitions.pop("ResearchDesignSelection", None)
         definitions.pop("ResearchDesignCandidate", None)
         definitions.pop("CandidateLiteratureDesignDecision", None)
+        for field in ("card_version", "card_sha256"):
+            definitions["KnowHowDecision"]["properties"].pop(field)
         # The population criteria a plan states and no predicate applies
         # are compiled by the host from the criteria no allowed cohort
         # concept expresses; the Planner never writes them.
@@ -640,10 +643,7 @@ def _runtime_suffix_structured_output_request_cached(
             "runtime suffix AnalysisStep schema is unavailable"
         )
     step_properties = analysis_step["properties"]
-    step_properties["step_id"] = {
-        "type": "string",
-        "const": replace_from_step_id,
-    }
+    step_properties.pop("step_id")
     step_properties["planned_analysis_role"] = {
         "type": "string",
         "const": planned_analysis_role,
@@ -698,10 +698,7 @@ def _runtime_suffix_structured_output_request_cached(
         raise PlannerStructuredOutputSchemaError(
             "runtime suffix root schema has no properties"
         )
-    properties["replace_from_step_id"] = {
-        "type": "string",
-        "const": replace_from_step_id,
-    }
+    properties.pop("replace_from_step_id")
     properties["replacement_step"] = {"$ref": "#/$defs/AnalysisStep"}
     _strictify_planner_transport_schema(schema)
     _assert_closed_planner_transport_schema(schema)
@@ -755,10 +752,11 @@ def runtime_suffix_structured_output_request(
 
 def decode_planner_transport_payload(
     data: Mapping[str, Any], *, host_owned_plan: Mapping[str, Any] | None = None,
+    allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     """Compile the Planner wire representation before authority validation."""
 
-    decoded: Dict[str, Any] = copy.deepcopy(dict(data))
+    decoded = bind_live_know_how_identity(copy.deepcopy(dict(data)), allowed_know_how_decisions)
     trusted = host_owned_plan or {}
     _restore_host_owned_transport_field(decoded, "execution_tier", trusted, path="plan")
     trusted_selection = trusted.get("design_selection") or {}
@@ -886,11 +884,16 @@ def _restore_host_owned_transport_field(
         payload[field] = copy.deepcopy(prior)
 
 
-def parse_runtime_plan_suffix(raw: str) -> RuntimePlanSuffixRevision:
-    """Parse a suffix through the same scientific transport boundary as a plan."""
+def parse_runtime_plan_suffix(
+    raw: str, *, replace_from_step_id: str | None = None,
+) -> RuntimePlanSuffixRevision:
+    """Bind a live suffix's step identity; keep stored revisions strict by default."""
 
     payload = json.loads(str(raw or "").strip())
     if isinstance(payload, dict) and isinstance(payload.get("replacement_step"), dict):
+        if replace_from_step_id is not None:
+            payload["replace_from_step_id"] = replace_from_step_id
+            payload["replacement_step"]["step_id"] = replace_from_step_id
         payload["replacement_step"] = decode_planner_transport_payload(
             {"steps": [payload["replacement_step"]]}
         )["steps"][0]

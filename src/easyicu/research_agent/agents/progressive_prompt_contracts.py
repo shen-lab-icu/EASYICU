@@ -555,7 +555,6 @@ def foundation_shape_contract(
     ]
     template = {
         "schema_version": "easyicu.progressive_plan_foundation/1",
-        "outline_sha256": outline_sha256,
         "foundation": {
             "cohort": cohort,
             "display_labels": (
@@ -580,7 +579,7 @@ def foundation_shape_contract(
         "Exact ProgressiveFoundationMaterialization JSON shape (preserve the "
         "root foundation wrapper and every displayed key; add no other keys):\n"
         + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
-        + "\nCopy schema_version and outline_sha256 exactly. "
+        + "\nCopy schema_version exactly. The host binds the outline digest. "
         + cohort_instruction
         + (
             "\nThe input rows are every row of the source cohort in the data "
@@ -657,8 +656,7 @@ def foundation_shape_contract(
         '"description":"<8-600 characters>","missing_strategy":"<none|complete_case>",'
         '"complete_case_variables":[]}. '
         "If know_how_decisions is nonempty, each item has exactly "
-        '{"card_id":"<authorized id>","card_version":"<authorized version>",'
-        '"card_sha256":"<authorized 64-char digest>","claim_id":"<authorized id>",'
+        '{"card_id":"<authorized id>","claim_id":"<authorized id>",'
         '"disposition":"<adopted|rejected|unresolved|requires_confirmation>",'
         '"reason_code":"<lowercase id>","rationale":"<1-500 characters>",'
         '"citation_ids":["<authorized id>"]}. '
@@ -785,7 +783,6 @@ def step_materialization_shape_contract(
     """
 
     step = {
-        "step_id": outline_step.step_id,
         "planned_analysis_role": outline_step.planned_analysis_role,
         "module_id": outline_step.module_id,
         "objective": outline_step.objective,
@@ -821,14 +818,13 @@ def step_materialization_shape_contract(
         step["population_scope_change_reason"] = outline_step.population_scope_change_reason
     template = {
         "schema_version": "easyicu.progressive_step_materialization/1",
-        "outline_step_sha256": outline_step_sha256,
         "foundation": None,
         "step": step,
     }
     return (
         "ProgressiveStepMaterialization shape template (preserve this root wrapper; emit only the step keys permitted by the current structured schema):\n"
         + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
-        + "\nCopy schema_version, outline_step_sha256, foundation=null, and the outline-owned step coordinates exactly, including an explicit outline population_scope and its population_scope_change_reason. Do not re-decide or erase these scientific choices. Replace only the module-specific executable null/empty defaults required by the current method card. Inapplicable keys omitted from the current structured schema retain their host defaults; do not add them back from this template. Never return variable_names, literature_citation_keys, literature_design_bindings, cohort, or expected_outputs inside step. raw_inputs may contain only sealed variable names, never kind:product tokens; governed products belong only in product_inputs.\n"
+        + "\nCopy schema_version, foundation=null, and the outline-owned scientific coordinates exactly, including an explicit outline population_scope and its population_scope_change_reason. The host binds the current step ID and digest. Do not re-decide or erase these scientific choices. Replace only the module-specific executable null/empty defaults required by the current method card. Inapplicable keys omitted from the current structured schema retain their host defaults; do not add them back from this template. Never return variable_names, literature_citation_keys, literature_design_bindings, cohort, or expected_outputs inside step. raw_inputs may contain only sealed variable names, never kind:product tokens; governed products belong only in product_inputs.\n"
         "population_scope belongs exclusively to module_id='absolute_risk_context': that module must choose analysis_cohort or primary_model. Omit this field for every other module_id, whatever the step_id is called; primary-model eligibility is governed by its cohort and method contracts, not this descriptive-table selector.\n"
         "Nested item shapes, when used: product_inputs items are exactly "
         '{"producer_step_id":"<preceding step id>","product_id":"<kind:product>"}; outputs items are exactly '
