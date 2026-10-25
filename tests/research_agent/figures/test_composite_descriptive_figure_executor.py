@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -30,6 +31,7 @@ from easyicu.research_agent.execution.figure_plan_binding import (
     validate_step_planned_figure_contract_binding,
 )
 from easyicu.research_agent.planning.figure_plan_shaping import (
+    apply_article_figure_strategy_placements,
     bind_deterministic_figure_panels,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -636,6 +638,13 @@ def test_association_scientific_sensitivity_contract_shapes_and_renders(
         )
     )
     shaped_figure = shaped.steps[2]
+    # A composite with real sensitivity estimates has no coverage-only surface.
+    strategy = SimpleNamespace(role_strategies=[
+        SimpleNamespace(role=role, placement="main") for role in (
+            "descriptive_result", "primary_estimand", "robustness", "data_quality",
+        )
+    ])
+    assert apply_article_figure_strategy_placements(plan=shaped, strategy=strategy) == shaped
     expected_inputs = [
         *core_inputs,
         "table:scientific_sensitivity",
@@ -671,6 +680,7 @@ def test_association_scientific_sensitivity_contract_shapes_and_renders(
         input_keys=tuple(expected_inputs),
     )
     assert summary["status"] == "ok"
+    assert "supplementary_output_files" not in summary
     contract = json.loads(
         (out_dir / "primary_figure_suite.figure_contract.json").read_text()
     )
@@ -919,8 +929,18 @@ def test_absolute_risk_association_profile_covers_article_roles(
     assert [panel["role"] for panel in contract["panels"]] == [
         "descriptive_result",
         "primary_estimand",
-        "robustness",
-        "robustness",
+    ]
+    # A locked four-panel single surface must be rebound, not silently claimed
+    # satisfied by a two-panel image. The existing placement contract can
+    # describe both independently exported surfaces without a schema change.
+    stale_step = step.model_copy(update={"figure_panels": [
+        panel.model_copy(update={"placement": "main"}) for panel in step.figure_panels
+    ]})
+    mismatch = validate_step_planned_figure_contract_binding(
+        step=stale_step, out_dir=out_dir, step_summary=summary,
+    )
+    assert [finding.detail["reason"] for finding in mismatch] == [
+        "runtime_panel_contract_mismatch",
     ]
     assert (
         validate_step_planned_figure_contract_binding(
@@ -930,6 +950,109 @@ def test_absolute_risk_association_profile_covers_article_roles(
         )
         == []
     )
+
+
+@pytest.mark.parametrize("risk_path", ["absolute", "distribution"])
+def test_compiled_association_plan_exports_main_and_audit_surfaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, risk_path: str,
+) -> None:
+    frames = _absolute_risk_frames() if risk_path == "absolute" else _association_frames()
+    if risk_path == "distribution":
+        frames.pop("table:measurement_missingness")
+        frames["table:robustness_summary"] = _association_summary_frames()["table:robustness_summary"]
+    inputs = (ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS if risk_path == "absolute"
+              else COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS)
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    step = _step().model_copy(update={
+        "inputs": list(inputs),
+        "input_consumption_contracts": [
+            _step().input_consumption_contracts[0].model_copy(update={"input_key": key})
+            for key in inputs
+        ],
+    })
+    plan, _ = bind_deterministic_figure_panels(plan=AnalysisPlan(
+        research_question="Is marker category associated with ICU readmission?", steps=[step],
+    ))
+    expected = ["main", "main", "supplementary", "supplementary"]
+    assert [panel.placement for panel in plan.steps[0].figure_panels] == expected
+    strategy = SimpleNamespace(role_strategies=[
+        SimpleNamespace(role=role, placement="main")
+        for role in ("descriptive_result", "primary_estimand", "robustness")
+    ])
+    plan = apply_article_figure_strategy_placements(plan=plan, strategy=strategy)
+    step = plan.steps[0]
+    assert [panel.placement for panel in step.figure_panels] == expected
+    assert apply_article_figure_strategy_placements(plan=plan, strategy=strategy) == plan
+    selection = select_standard_executor(step, plan=plan, resolved_bindings=bindings)
+    assert selection is not None
+    manifest = tmp_path / "inputs.json"
+    manifest.write_text(json.dumps({"step_id": step.step_id, "inputs": bindings}))
+    out_dir = tmp_path / "outputs"
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    monkeypatch.setenv("EASYICU_RUN_DIR", str(tmp_path))
+    monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(manifest))
+    exec(selection.code, {"__name__": "__main__"})
+    summary = json.loads((out_dir / "step_summary.json").read_text())
+    main = json.loads((out_dir / "primary_publication_figure.figure_contract.json").read_text())
+    audit = json.loads((out_dir / "primary_publication_figure_audit.figure_contract.json").read_text())
+    assert [panel["panel_id"] for panel in main["panels"]] == [p.panel_id for p in step.figure_panels[:2]]
+    assert [panel["panel_id"] for panel in audit["panels"]] == [p.panel_id for p in step.figure_panels[2:]]
+    assert summary["supplementary_output_files"] == {
+        "figure:primary_publication_figure": "primary_publication_figure_audit.png",
+    }
+    assert validate_step_planned_figure_contract_binding(
+        step=step, out_dir=out_dir, step_summary=summary,
+    ) == []
+    # A stale plan promising either a merged main or a merged supplement must
+    # still fail. Execution must never repair a sealed declaration silently.
+    for placement in ("main", "supplementary"):
+        stale = step.model_copy(update={"figure_panels": [
+            panel.model_copy(update={"placement": placement}) for panel in step.figure_panels
+        ]})
+        findings = validate_step_planned_figure_contract_binding(
+            step=stale, out_dir=out_dir, step_summary=summary,
+        )
+        assert [item.detail["reason"] for item in findings] == ["runtime_panel_contract_mismatch"]
+
+
+@pytest.mark.parametrize("changed", ["source", "role", "chart", "id", "partial", "profile"])
+def test_unknown_association_contract_cannot_authorize_a_surface_split(changed):
+    step = _step().model_copy(update={
+        "inputs": list(ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS),
+        "input_consumption_contracts": [
+            _step().input_consumption_contracts[0].model_copy(update={"input_key": key})
+            for key in ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS
+        ],
+    })
+    plan, _ = bind_deterministic_figure_panels(plan=AnalysisPlan(
+        research_question="Describe an association.", steps=[step],
+    ))
+    step = plan.steps[0]
+    panels = list(step.figure_panels)
+    replacements = {
+        "source": {"source_products": ["table:unbound_context"]},
+        "role": {"article_role": "different_role"},
+        "chart": {"chart_type": "different_chart"},
+        "id": {"panel_id": "different_panel"},
+    }
+    if changed in replacements:
+        panels[0] = panels[0].model_copy(update=replacements[changed])
+    elif changed == "partial":
+        panels.pop(0)
+    inputs = list(step.inputs)
+    if changed == "profile":
+        inputs[0] = "table:unbound_context"
+    plan = plan.model_copy(update={"steps": [step.model_copy(update={
+        "inputs": inputs, "figure_panels": panels,
+    })]})
+    shaped = apply_article_figure_strategy_placements(
+        plan=plan, strategy=SimpleNamespace(role_strategies=[]),
+    )
+    assert all(panel.placement == "supplementary" for panel in shaped.steps[0].figure_panels)
 
 
 def test_association_summary_contract_renders_ranges_without_point_estimates(
@@ -978,14 +1101,16 @@ def test_association_summary_contract_renders_ranges_without_point_estimates(
     contract = json.loads(
         (out_dir / "publication_figure_suite.figure_contract.json").read_text()
     )
-    panel_c = next(panel for panel in contract["panels"] if panel["panel_id"] == "C")
+    assert all(panel["role"] != "robustness" for panel in contract["panels"])
+    audit = json.loads((out_dir / "publication_figure_suite_audit.figure_contract.json").read_text())
+    panel_c = next(panel for panel in audit["panels"] if panel["panel_id"] == "C")
     assert panel_c["title"] == "Sensitivity-analysis coverage"
     assert panel_c["role"] == "robustness"
     assert panel_c["metadata"]["chart_type"] == "sensitivity_coverage_matrix"
     assert panel_c["metadata"]["source_products"] == ["table:robustness_summary"]
 
 
-def test_association_matrix_and_summary_contract_has_two_robustness_panels(
+def test_association_matrix_and_summary_contract_keeps_coverage_in_a_separate_audit(
     tmp_path: Path,
 ) -> None:
     frames = _association_frames()
@@ -1039,10 +1164,13 @@ def test_association_matrix_and_summary_contract_has_two_robustness_panels(
     assert panels["A"]["metadata"]["source_products"] == [
         "table:exposure_outcome_distribution"
     ]
-    assert panels["C"]["role"] == "robustness"
-    assert panels["D"]["role"] == "robustness"
-    assert panels["C"]["metadata"]["source_products"] == ["table:robustness_matrix"]
-    assert panels["D"]["metadata"]["source_products"] == ["table:robustness_summary"]
+    assert set(panels) == {"A", "B"}
+    audit = json.loads((out_dir / "publication_figure_suite_audit.figure_contract.json").read_text())
+    audit_panels = {panel["panel_id"]: panel for panel in audit["panels"]}
+    assert audit_panels["C"]["role"] == "robustness"
+    assert audit_panels["D"]["role"] == "robustness"
+    assert audit_panels["C"]["metadata"]["source_products"] == ["table:robustness_matrix"]
+    assert audit_panels["D"]["metadata"]["source_products"] == ["table:robustness_summary"]
 
 
 def test_association_measurement_contract_selects_and_renders_all_four_tables(
@@ -1182,7 +1310,6 @@ def test_source_aware_association_contract_uses_eligible_availability(
     assert [panel["role"] for panel in contract["panels"]] == [
         "descriptive_result",
         "primary_estimand",
-        "robustness",
         "data_quality",
     ]
     panel_d = next(panel for panel in contract["panels"] if panel["panel_id"] == "D")

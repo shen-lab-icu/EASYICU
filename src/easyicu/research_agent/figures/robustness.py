@@ -13,6 +13,7 @@ quantitative sensitivity forest plot.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import re
 from typing import Any, Callable
 
@@ -351,6 +352,65 @@ def draw_robustness_coverage(
         "reason_code": ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED,
         "display_authority": "audit_only",
     }
+
+
+def save_association_coverage_audit(
+    *, out_path: Path, panels: list[tuple], frames: dict[str, pd.DataFrame],
+    evidence: dict[str, str], color: str,
+) -> dict[str, Path]:
+    """Keep the association's coverage in a separate supplementary surface.
+
+    The input rows and independence flags are retained. This never upgrades a
+    specification status or an interval envelope to sensitivity-effect evidence.
+    """
+    import matplotlib.pyplot as plt
+    from .publication import add_panel_label, make_figure_contract, save_publication_figure
+
+    fig, axes = plt.subplots(
+        1, len(panels), figsize=(7.2, 2.5), squeeze=False, layout="constrained",
+    )
+    contracts = []
+    try:
+        for letter, ax, (panel_id, title, role, chart, source) in zip(
+            "abcd", axes.flat, panels,
+        ):
+            frame = frames[source]
+            matrix = source == "table:robustness_matrix"
+            coverage = robustness_matrix_to_coverage(frame) if matrix else frame
+            metadata = draw_robustness_coverage(ax, coverage, color=color, title=title)
+            metadata.update({
+                "source_products": [source],
+                "source_data": [f"{source.partition(':')[2]}_source_data.csv"],
+                "display_authority": "specification_status_only" if matrix else "audit_only",
+                "placement": "supplementary",
+            })
+            if matrix:
+                assessment = assess_robustness_effect_comparability(frame)
+                metadata["comparability_message"] = assessment.message
+                metadata["missing_identity_columns"] = list(assessment.missing_columns)
+            add_panel_label(ax, letter, x=-0.12, y=1.04, fontsize=8.0)
+            contracts.append({
+                "panel_id": panel_id, "title": title, "role": role, "article_role": role,
+                "chart_type": chart, "claim": "Registered sensitivity specification status.",
+                "evidence_ids": [evidence[source]], "metadata": metadata,
+            })
+        contract = make_figure_contract(
+            figure_id=f"figure:{out_path.name}", core_claim="Sensitivity execution coverage only.",
+            archetype="quantitative_grid", width_mm=183, height_mm=64,
+            panels=contracts,
+            source_data=[f"{source.partition(':')[2]}_source_data.csv" for *_, source in panels],
+            reader_caption=(
+                "Sensitivity-analysis audit. Counts describe registered, converged and "
+                "independent specifications. A refit documented as equivalent to the primary "
+                "analysis is not independent sensitivity evidence. No effect comparison or "
+                "confidence interval is inferred from coverage counts."
+            ),
+        )
+        return save_publication_figure(
+            fig, out_path, contract=contract, formats=("png", "svg", "pdf", "tiff"), dpi=300,
+        )
+    finally:
+        plt.close(fig)
 
 
 __all__ = [

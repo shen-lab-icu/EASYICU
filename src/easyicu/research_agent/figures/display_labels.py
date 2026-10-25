@@ -10,9 +10,93 @@ from __future__ import annotations
 import math
 import numbers
 import re
+from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Mapping, Optional
 
 _FOREIGN_SCRIPT_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯豈-﫿]")
+
+
+@dataclass(frozen=True)
+class _ClinicalBound:
+    measure: str
+    operator: str
+    value: Decimal
+    unit: str
+
+
+def concise_clinical_level(label: str) -> str:
+    """Shorten only the host's exact scalar-predicate grammar.
+
+    Intersect typed bounds on the same summary and unit. Different summaries,
+    units, arbitrary prose and empty intersections retain their full wording.
+    In particular, a minimum/maximum combination is not a numeric interval.
+    """
+    operators = {"below": "<", "at most": "≤", "above": ">", "at least": "≥"}
+    inverse = {"<": "≥", "≤": ">", ">": "≤", "≥": "<"}
+    text = " ".join(label.split())
+    if text.startswith("Neither ") and " nor " in text:
+        clauses = [(part, True) for part in text[8:].split(" nor ")]
+    elif ", without " in text:
+        first, second = text.split(", without ", 1)
+        clauses = [(first, False), (second, True)]
+    else:
+        clauses = [(text, False)]
+    bounds = []
+    for clause, negate in clauses:
+        match = re.fullmatch(
+            r"(maximum|minimum|first|last|mean|median) "
+            r"(below|at most|above|at least) (-?\d+(?:\.\d+)?) ([^,]+)",
+            clause, re.IGNORECASE,
+        )
+        if match is None:
+            return label
+        measure, operator, value, unit = match.groups()
+        op = operators[operator.lower()]
+        bounds.append(_ClinicalBound(
+            measure.capitalize(), inverse[op] if negate else op, Decimal(value), unit,
+        ))
+    if len({(bound.measure, bound.unit) for bound in bounds}) != 1:
+        return label
+    lower = max(
+        (b for b in bounds if b.operator in {">", "≥"}),
+        key=lambda b: (b.value, b.operator == ">"), default=None,
+    )
+    upper = min(
+        (b for b in bounds if b.operator in {"<", "≤"}),
+        key=lambda b: (b.value, b.operator != "<"), default=None,
+    )
+    if lower and upper:
+        if lower.value >= upper.value:
+            return label
+        interval = (
+            f"{lower.operator if lower.operator == '>' else ''}{lower.value}"
+            f"–{upper.operator}{upper.value}"
+        )
+    else:
+        bound = lower or upper
+        interval = f"{bound.operator}{bound.value}"
+    return f"{bounds[0].measure} {interval} {bounds[0].unit}"
+
+
+def wrap_axis_tick_labels(ax: Any, coordinate: str, *, width: float | None = None) -> None:
+    """Wrap complete labels at measured pixel widths, without reducing type."""
+    from .presentation import wrap_figure_label
+
+    ticks = ax.get_xticklabels() if coordinate == "x" else ax.get_yticklabels()
+    ax.figure.canvas.draw()
+    renderer = ax.figure.canvas.get_renderer()
+    if width is None:
+        width = ax.get_window_extent(renderer).width / max(len(ticks), 1) - 12
+    for tick in ticks:
+        tick.set_fontsize(max(7.5, tick.get_fontsize()))
+        tick.set_text(wrap_figure_label(
+            tick.get_text(), renderer=renderer, font=tick.get_fontproperties(),
+            width=max(width, 24),
+        ))
+    locations = ax.get_xticks() if coordinate == "x" else ax.get_yticks()
+    setter = ax.set_xticks if coordinate == "x" else ax.set_yticks
+    setter(locations, [tick.get_text() for tick in ticks], fontsize=7.5)
 
 
 def _normalise_display_key(value: Any) -> str:
