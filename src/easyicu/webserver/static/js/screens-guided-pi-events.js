@@ -88,6 +88,10 @@
       if (action.method) STUDY_WORKSPACE.selectMethodTemplate(projectId(), state.session, action.method);
       state.draft = action.text;
       state.pendingEntryIntent = action.intent;
+      state.followUpDraft = action.origin ? {
+        origin: action.origin, projectId: projectId ? projectId() : '', sessionId: state.session.session_id,
+        selectionRevision: state.sessionSelectionRevision,
+      } : null;
       render();
       window.requestAnimationFrame(() => {
         const input = state.host && state.host.querySelector('[data-gpi-input]');
@@ -106,6 +110,7 @@
       state.messages = [];
       state.editingMessageId = '';
       state.pendingEntryIntent = '';
+      state.followUpDraft = null;
       STUDY_WORKSPACE.removeReference();
       STUDY_WORKSPACE.removeSkill();
       STUDY_WORKSPACE.removeMethod();
@@ -115,11 +120,16 @@
     }
 
     async function prepareNewTaskFollowUp(prompt) {
-      if (!prompt || state.busy || state.childJobId || state.session?.stale?.stale || !projectId()) return;
+      if (!prompt || !state.session || state.busy || state.childJobId || state.session.stale?.stale || !projectId()) return;
+      const expectedProjectId = projectId();
       clearSessionSelection();
       render();
-      await createSession();
-      if (state.session) prepareEntryCompose({ text: prompt, intent: '' });
+      const pending = createSession();
+      const selectionRevision = state.sessionSelectionRevision;
+      await pending;
+      if (projectId() !== expectedProjectId || state.sessionSelectionRevision !== selectionRevision
+        || !state.session || state.busy || state.childJobId || state.session.stale?.stale) return;
+      prepareEntryCompose({ text: prompt, intent: '', origin: 'host_prompt' });
     }
 
     function wire() {
@@ -144,28 +154,6 @@
           if (route === 'edit' && typeof editWorkflow === 'function') editWorkflow();
           return;
         }
-        const filePill = event.target.closest('[data-gpi-file]');
-        if (filePill) {
-          event.preventDefault();
-          event.stopPropagation();
-          const filename = filePill.dataset.gpiFile;
-          const collection = RUN_OUTCOME.collection(state.latestRun, state.workflow);
-          const found = collection.find(r => r.artifact === filename || r.filename === filename || (r.title && r.title.includes(filename)));
-          if (found) {
-            openResource(found);
-          } else {
-            const preview = window.EasyICU.guidedPi.optional('preview');
-            if (preview && preview.open) {
-              preview.open({
-                kind: filename.endsWith('.png') ? 'figure' : filename.endsWith('.csv') ? 'data_table' : 'document',
-                artifact: filename,
-                title: filename,
-                filename: filename,
-              }, projectId(), previewWorkflowContext());
-            }
-          }
-          return;
-        }
         const layoutToggle = event.target.closest('[data-gpi-layout-toggle]');
         if (layoutToggle && ASIDE) {
           const enabled = ASIDE.togglePanel(layoutToggle.dataset.gpiLayoutToggle);
@@ -188,16 +176,16 @@
         if (modelFollowUp) {
           if (state.busy || state.childJobId || !state.session || state.session.stale?.stale) return;
           const question = String(modelFollowUp.dataset.gpiModelFollowup || '').trim();
-          // The model wrote this question: it continues the conversation but,
-          // like a clicked model option, never mints a privileged grant.
-          if (question) sendText(question, [], undefined, true, 'model_option');
+          // Both suggestion owners draft first. Preserve the model origin
+          // through editing and explicit send without adding approval grants.
+          if (question) prepareEntryCompose({ text: question, intent: '', origin: 'model_option' });
           return;
         }
         const followUp = event.target.closest('[data-gpi-followup]');
         if (followUp) {
           if (state.busy || state.childJobId || !state.session || state.session.stale?.stale) return;
           const prompt = RUN_OUTCOME.followUps(state.latestRun, state.workflow)[Number(followUp.dataset.gpiFollowup)];
-          if (prompt) prepareEntryCompose({ text: prompt, intent: '' });
+          if (prompt) prepareEntryCompose({ text: prompt, intent: '', origin: 'host_prompt' });
           return;
         }
         const reviewTab = event.target.closest('[data-gpi-review-tab]');
@@ -487,6 +475,7 @@
       state.host.addEventListener('input', event => {
         if (event.target.matches('[data-gpi-input]')) {
           state.draft = event.target.value;
+          if (!String(state.draft || '').trim()) state.followUpDraft = null;
           // "@" opens the project-resource picker and "/" the Skill picker
           // when typed at the start of the message or after a space — the
           // same two drawers the + menu opens; the trigger character is

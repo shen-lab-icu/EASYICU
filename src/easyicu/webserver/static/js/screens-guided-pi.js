@@ -28,7 +28,7 @@
     demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
     workflowReceipts: [], editingMessageId: '', sessionSelectionRevision: 0,
     pendingLanguageReload: false, pendingEntryIntent: '', regenerating: false, regeneration: null,
-    openingQuestion: null,
+    openingQuestion: null, followUpDraft: null,
     startupPromise: null, projectPreparePromise: null, projectPrepareId: '',
   };
   const ACCESS_MODE_GRANTS = Object.freeze({
@@ -67,23 +67,13 @@
       .replace(/[，,;；]?\s*SHA-?256\s*[:：]\s*`?[a-f0-9]{64}`?/gi, '')
       .replace(/`[a-f0-9]{64}`/gi, '');
   }
-  function enhanceWithInteractiveFilePills(html) {
-    if (!html) return '';
-    return html.replace(/<code>\s*([a-zA-Z0-9_\-\u4e00-\u9fa5]+\.(?:csv|tsv|parquet|png|jpg|jpeg|pdf|json|md|py|sh))\s*<\/code>/gi, (match, filename) => {
-      const isImg = /\.(png|jpg|jpeg|svg|gif)$/i.test(filename);
-      const iconSvg = isImg
-        ? '<svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>'
-        : '<svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
-      return `<button type="button" class="gpi-file-pill" data-gpi-file="${esc(filename)}" title="${tr('Click to open in workbench', '点击在工作台预览')} ${esc(filename)}" aria-label="Open ${esc(filename)}">${iconSvg}<span class="pill-name">${esc(filename)}</span><svg class="pill-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>`;
-    });
-  }
-
   function assistantTextHtml(value) {
     const renderer = MODULES.require('markdown');
-    const raw = renderer && typeof renderer.render === 'function'
+    // A filename in prose has no resource identity. Attached message resources
+    // already provide buttons with their own run/file coordinates and digest.
+    return renderer && typeof renderer.render === 'function'
       ? renderer.render(value)
       : esc(value).replace(/\n/g, '<br>');
-    return enhanceWithInteractiveFilePills(raw);
   }
   function api() { return window.EU_API || {}; }
   function isStaticPreview() { return window.location && window.location.protocol === 'file:'; }
@@ -178,8 +168,8 @@
   }
   function accessModeLabel(mode) {
     if (mode === 'ask') return tr('Ask first', '请求访问');
-    if (mode === 'full') return tr('Full access', '完全访问');
-    return tr('Auto-approve', '自动审批');
+    if (mode === 'full') return tr('Allow additional actions', '允许更多操作');
+    return tr('Confirm routine actions automatically', '常规操作自动确认');
   }
   function turnGrants() {
     const grants = ACCESS_MODE_GRANTS[state.accessMode] || ACCESS_MODE_GRANTS.assist;
@@ -421,7 +411,7 @@
     // confirmation and cohort owners read this to offer the researcher's
     // decision instead of leaving a bare error banner.
     setPlanConfigurationError: value => { state.planConfigurationError = String(value || ''); },
-    setDraft: value => { state.draft = String(value || ''); },
+    setDraft: value => { state.draft = String(value || ''); state.followUpDraft = null; },
     appendMessage: value => { state.messages.push(value); },
     truncateMessagesAt: id => {
       const at = state.messages.findIndex(item => String((item && item.id) || '') === id);
@@ -765,6 +755,7 @@
 
   async function createSession() {
     if (state.creating || state.projectLoading || !projectId()) return;
+    if (state.followUpDraft) { state.draft = ''; state.followUpDraft = null; }
     closeSourceView();
     const expectedProjectId = projectId();
     const selectionRevision = ++state.sessionSelectionRevision;
@@ -867,6 +858,7 @@
   async function openSession(sessionId, selectionRevision, refreshWorkflow) {
     const expectedProjectId = projectId();
     if (!expectedProjectId) return;
+    if (state.followUpDraft) { state.draft = ''; state.followUpDraft = null; }
     closeSourceView();
     const preview = MODULES.optional('preview');
     const previewParams = typeof window !== 'undefined' && window.location
@@ -1290,6 +1282,7 @@
     state.sessions = [];
     state.messages = [];
     state.draft = '';
+    state.followUpDraft = null;
     if (IDEA_SOURCE) IDEA_SOURCE.reset();
     state.pendingEntryIntent = '';
     state.currentTurnResources = [];
@@ -1454,7 +1447,7 @@
     if (visibleUserMessage && openingQuestion) state.openingQuestion = { sessionId: state.session.session_id, text: openingQuestion };
     const activity = ensureActivity(new Date(submittedAt).toISOString());
     upsertActivityStep(activity, { id: 'submitted', kind: 'submitted', status: 'complete', at: submittedAt });
-    if (visibleUserMessage) { state.draft = ''; STUDY_WORKSPACE.consume(expectedProjectId, expectedSessionId); STUDY_WORKSPACE.consumeSkill(expectedProjectId, state.session); }
+    if (visibleUserMessage) { state.draft = ''; state.followUpDraft = null; STUDY_WORKSPACE.consume(expectedProjectId, expectedSessionId); STUDY_WORKSPACE.consumeSkill(expectedProjectId, state.session); }
     state.busy = true; state.error = ''; render();
     try {
       const payload = await api().sendPiCopilotMessage(state.session.session_id, {
@@ -1564,6 +1557,19 @@
     const input = state.host.querySelector('[data-gpi-input]');
     const text = String((input && input.value) || state.draft || '').trim();
     if (!text) return;
+    const followUp = state.followUpDraft;
+    if (followUp) {
+      // Editing a suggested question does not grant research approval or turn
+      // it into the user's opening question. The typed-only queue cannot carry
+      // its origin, so leave this draft for an explicit send after work ends.
+      if (state.busy || followUp.sessionId !== state.session.session_id
+        || followUp.projectId !== projectId() || followUp.selectionRevision !== state.sessionSelectionRevision) return;
+      const prompt = STUDY_WORKSPACE.decorateMessage(
+        STUDY_WORKSPACE.decorateSkillMessage(text, projectId(), state.session), projectId(), state.session.session_id,
+      );
+      await sendText(prompt, [], undefined, true, followUp.origin);
+      return;
+    }
     if (state.busy) {
       try { await MESSAGE_QUEUE.send(text); }
       catch (error) { state.error = errorText(error); render(); }
@@ -1639,6 +1645,7 @@
     }
   }
   function editWorkflow() {
+    state.followUpDraft = null;
     const workflow = state.workflow || {};
     const code = String(workflow.next_action_code || '');
     if (code === 'failed_pipeline_execution_retry_available') {
@@ -1702,6 +1709,7 @@
     state.session = null;
     state.messages = [];
     state.draft = '';
+    state.followUpDraft = null;
     state.editingMessageId = '';
     state.pendingEntryIntent = '';
     state.error = '';

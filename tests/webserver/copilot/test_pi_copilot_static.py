@@ -2305,8 +2305,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "ACCESS_MODE_GRANTS" in pi_owner
     assert "data-gpi-access-mode" in events_owner
     assert "Ask first" in pi_owner
-    assert "Auto-approve" in pi_owner
-    assert "Full access" in pi_owner
+    assert "Confirm routine actions automatically" in pi_owner
+    assert "Allow additional actions" in pi_owner
     assert "data-gpi-grant" not in pi_owner
     assert "data-gpi-resource-file" in resource_owner
     assert "data-gpi-resource-run" in resource_owner
