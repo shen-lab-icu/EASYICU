@@ -132,6 +132,21 @@
 
   function render(session, ctx) {
     const current = authorization(session);
+    // Research-entry scope (screens-guided-pi-starters), before installation
+    // state: even a registered export cannot enable these research paths.
+    const scopeSource = current.reason === 'project_source_confirmation_required'
+      ? current.source : ctx.namedDemo || ctx.namedDatabase;
+    const scopeKey = String(scopeSource && (scopeSource.database || scopeSource.key) || '').replace(/_demo$/, '');
+    if (current.status === 'pending' && ['hirid', 'aumc', 'sic'].includes(scopeKey)) {
+      const label = scopeSource.label || { hirid: 'HiRID', aumc: 'AmsterdamUMCdb', sic: 'SICdb' }[scopeKey];
+      return `<section class="gpi-data-consent" aria-label="${ctx.tr('Research scope', '研究支持范围')}"><div class="gpi-data-consent-body">
+        <strong>${ctx.esc(ctx.tr(`This version does not support this study with ${label}.`, `本版本暂不支持使用 ${label} 完成这项研究。`))}</strong>
+        <p>${ctx.tr('Please choose another supported data source.', '请选择其他受支持的数据源。')}</p>
+        <div class="gpi-data-consent-actions">
+          <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
+        </div>
+      </div></section>`;
+    }
     if (current.status === 'pending' && current.reason === 'project_source_confirmation_required') {
       const label = sourceLabel(current);
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Confirm data source', '确认数据源')}">
@@ -236,7 +251,7 @@
       // that cannot offer it.
       const contact = hosted.supportContact();
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
-        <strong>${ctx.esc(ctx.tr(`This server has no ${database.label} data`, `这台服务器上还没有 ${database.label} 数据`))}</strong>
+        <strong>${ctx.esc(ctx.tr(`${database.label} data have not been added.`, `尚未添加 ${database.label} 数据。`))}</strong>
         <p>${ctx.esc(ctx.tr(`This conversation cannot use ${database.label}. Ask the question of a database this server holds, or ask ${contact || 'the administrator'} to add ${database.label} data.`, `本次会话无法使用 ${database.label}。可以把问题改到这台服务器上已有的数据库，或请${contact || '管理员'}添加 ${database.label} 数据。`))}</p>
         <div class="gpi-data-consent-actions">
           <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
@@ -246,8 +261,11 @@
     if (database) {
       // The question already names this database: open its source selection
       // directly instead of asking which database to use.
+      const heading = offer && offer.state === 'ready'
+        ? ctx.tr(`${database.label} data have not been added.`, `尚未添加 ${database.label} 数据。`)
+        : ctx.tr(`Your question names ${database.label}`, `你的问题指定了 ${database.label}`);
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
-        <strong>${ctx.tr('Your question names ', '你的问题指定了 ')}${ctx.esc(database.label)}</strong>
+        <strong>${ctx.esc(heading)}</strong>
         <p>${ctx.tr(`Choose the ${database.label} data for this conversation. EasyICU then proposes the research plan; no analysis starts yet.`, `选择本次会话要用的 ${database.label} 数据，EasyICU 随后拟定研究计划，此时不会开始分析。`)}</p>
         <div class="gpi-data-consent-actions">
           <button class="btn primary" type="button" data-gpi-data-source-action="begin_local_selection" data-gpi-data-source-database="${ctx.esc(database.key)}">${ctx.tr(`Choose ${database.label} data`, `选择 ${database.label} 数据`)}</button>

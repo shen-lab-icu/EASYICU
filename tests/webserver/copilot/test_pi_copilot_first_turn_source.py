@@ -160,7 +160,7 @@ def test_a_named_database_without_an_export_points_to_the_source_card() -> None:
     text = _finalize_initial_question_with_preloaded_catalog(
         "用 MIMIC-IV 研究乳酸与院内死亡", selected_database=MIMIC_IV, recommended_source=None,
     )
-    assert "你的问题指定了 MIMIC-IV v3.1，但 EasyICU 里还没有登记这份数据" in text
+    assert "尚未添加 MIMIC-IV v3.1 数据。" in text
     assert "\n- " not in text
 
 
