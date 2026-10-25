@@ -56,11 +56,35 @@
     return row && row.display_value != null ? String(row.display_value) : (fallback || '—');
   }
   function evidenceAttributes(row) {
+    if (!row || (row.status && row.status !== 'current')) return '';
     const evidence = row && row.evidence && typeof row.evidence === 'object' ? row.evidence : {};
+    if (evidence.status && evidence.status !== 'current') return '';
     const evidenceId = String(evidence.evidence_id || '');
     const sha256 = String(evidence.sha256 || '').toLowerCase();
     if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) return '';
-    return ` data-gpi-evidence-open data-evidence-id="${esc(evidenceId)}" data-evidence-sha256="${esc(sha256)}" data-evidence-kind="${esc(evidence.kind || 'statistic')}" data-evidence-label="${esc(evidence.description || evidenceId)}" data-evidence-pointer="${esc(row.source_json_pointer || '')}" data-evidence-source-value="${esc(row.source_value || row.display_value || '')}"`;
+    // As in the manuscript reader, source_value is a rounded lexical label;
+    // canonical_value is the scalar used by the exact evidence comparison.
+    const sourceValue = row.canonical_value == null ? row.source_value
+      : (typeof row.canonical_value === 'number' && Number.isFinite(row.canonical_value) ? row.canonical_value : '');
+    if (sourceValue == null || String(sourceValue).trim() === '' || !Number.isFinite(Number(sourceValue))
+        || !String(row.source_json_pointer || '').startsWith('/')) return '';
+    return ` data-gpi-evidence-open data-evidence-id="${esc(evidenceId)}" data-evidence-sha256="${esc(sha256)}" data-evidence-kind="${esc(evidence.kind || 'statistic')}" data-evidence-label="${esc(evidence.description || evidenceId)}" data-evidence-pointer="${esc(row.source_json_pointer)}" data-evidence-source-value="${esc(sourceValue)}"`;
+  }
+  function primaryInterval(claims, effect) {
+    if (!evidenceAttributes(effect) || effect.source_json_pointer !== '/primary_or') return [null, null];
+    const source = effect.evidence;
+    for (const fields of [
+      ['primary_or_ci[0]', 'primary_or_ci[1]'],
+      ['primary_or_ci_low', 'primary_or_ci_high'],
+      ['primary_ci_low', 'primary_ci_high'],
+    ]) {
+      const pair = fields.map(field => claims.find(row => row && row.source_field === field
+        && row.source_json_pointer === `/${field.replace(/\[(\d+)\]/g, '/$1')}`
+        && evidenceAttributes(row) && row.evidence.evidence_id === source.evidence_id
+        && String(row.evidence.sha256).toLowerCase() === String(source.sha256).toLowerCase()));
+      if (pair.every(Boolean)) return pair;
+    }
+    return [null, null];
   }
   function metric(label, value, note, row) {
     const tag = evidenceAttributes(row) ? 'button' : 'article';
@@ -112,8 +136,7 @@
     const complete = claimByField(claims, [/^n_complete_case$/, /complete_case_n$/]);
     const risk = claimByField(claims, [/overall_outcome\.risk_pct$/]);
     const effect = claimByField(claims, [/^primary_or$/]);
-    const effectLow = claimByField(claims, [/^primary_or_ci\[0\]$/, /^primary_or_ci_low$/]);
-    const effectHigh = claimByField(claims, [/^primary_or_ci\[1\]$/, /^primary_or_ci_high$/]);
+    const [effectLow, effectHigh] = primaryInterval(claims, effect);
     const measuredRisk = claimByField(claims, [/exposures\[0\]\.groups\[0\]\.outcome_risk_pct$/]);
     const unmeasuredRisk = claimByField(claims, [/exposures\[0\]\.groups\[1\]\.outcome_risk_pct$/]);
     const registeredLevels = Array.isArray(registeredSummary.exposureLevels)
@@ -153,13 +176,13 @@
         ${metric(tr('Cohort', '研究队列'), display(total), tr('ICU stays', '次 ICU 住院'), total)}
         ${metric(tr('Complete-data rows', '完整变量行'), display(complete), tr('All requested variables complete', '所有请求变量完整'), complete)}
         ${metric(tr('Overall outcome risk', '总体结局风险'), display(risk), tr('Registered descriptive result', '已登记描述性结果'), risk)}
-        ${metric(tr('Primary association', '主要关联'), effect ? `OR ${display(effect)}` : tr('Descriptive only', '仅描述性'), effectLow && effectHigh ? `95% CI ${display(effectLow)}–${display(effectHigh)}` : tr('No adjusted effect was authorized', '未授权调整后效应估计'), effect)}
+        ${metric(tr('Primary association', '主要关联'), effect ? `OR ${display(effect)}` : tr('Unavailable', '暂无可展示估计'), effectLow && effectHigh ? `95% CI ${display(effectLow)}–${display(effectHigh)}` : (effect ? tr('No matching primary confidence interval is available in this view.', '当前视图缺少与主要估计匹配的置信区间。') : tr('No compatible primary estimate is available in this view.', '当前视图暂无匹配的主要估计。')), effect)}
       </section>
       <div class="gpi-tech-grid">
         <section class="gpi-tech-panel"><div class="gpi-tech-section-head"><span>01</span><div><small>${esc(tr('Population', '样本构成'))}</small><h3>${esc(tr('How the analysis denominator narrows', '分析分母如何收窄'))}</h3></div></div>${bar(tr('Registered cohort', '登记队列'), total, totalN)}${bar(registeredLevels.length ? tr('Rows in registered distribution', '进入登记分布表的记录') : tr('Exposure measured', '具有暴露测量'), measured, totalN)}${bar(effect ? tr('Complete-case model', '完整病例模型') : tr('Complete-data rows', '完整变量行'), complete, totalN)}</section>
         <section class="gpi-tech-panel"><div class="gpi-tech-section-head"><span>02</span><div><small>${esc(tr('Outcome context', '结局背景'))}</small><h3>${esc(registeredLevels.length ? tr('Outcome rates by registered exposure level', '按登记暴露层级展示结局率') : tr('Measured versus unmeasured source states', '有测量与无测量记录比较'))}</h3></div></div>${measuredRisk && unmeasuredRisk ? `${riskBar(registeredLevels[0] ? tr(`Exposure level ${registeredLevels[0].level}`, `暴露层级 ${registeredLevels[0].level}`) : tr('Measured', '有测量记录'), measuredRisk, maxRisk)}${riskBar(registeredLevels[1] ? tr(`Exposure level ${registeredLevels[1].level}`, `暴露层级 ${registeredLevels[1].level}`) : tr('Not measured', '无测量记录'), unmeasuredRisk, maxRisk)}` : `<p class="gpi-tech-empty">${esc(tr('This run did not register a two-state outcome comparison.', '本次运行未登记两种状态的结局比较。'))}</p>`}</section>
       </div>
-      <section class="gpi-tech-panel is-effect"><div class="gpi-tech-section-head"><span>03</span><div><small>${esc(tr('Primary estimate', '主要估计'))}</small><h3>${esc(tr('Association and uncertainty', '关联强度及不确定性'))}</h3></div></div>${effectPlot(effect, effectLow, effectHigh) || `<p class="gpi-tech-empty">${esc(tr('A bounded primary effect was not available.', '没有可展示的主要效应估计。'))}</p>`}</section>
+      <section class="gpi-tech-panel is-effect"><div class="gpi-tech-section-head"><span>03</span><div><small>${esc(tr('Primary estimate', '主要估计'))}</small><h3>${esc(tr('Association and uncertainty', '关联强度及不确定性'))}</h3></div></div>${effectPlot(effect, effectLow, effectHigh) || `<p class="gpi-tech-empty">${esc(effect ? tr('No matching primary confidence interval is available in this view.', '当前视图缺少与主要估计匹配的置信区间。') : tr('No compatible primary estimate is available in this view.', '当前视图暂无匹配的主要估计。'))}</p>`}</section>
       <section class="gpi-tech-findings"><div><small>${esc(tr('What the run found', '本次分析发现'))}</small><h3>${esc(tr('Core findings', '核心发现'))}</h3></div><ol>${findings.map(value => `<li>${esc(value)}</li>`).join('')}</ol></section>
       ${gallery ? `<section class="gpi-tech-figures"><div><small>${esc(tr('Registered figures', '已登记图件'))}</small><h3>${esc(tr('Visual results from this run', '本次运行的可视化结果'))}</h3></div>${presentationNote}${gallery}</section>` : ''}
       <section class="gpi-tech-limit"><div><small>${esc(tr('Interpretation boundary', '解释边界'))}</small><h3>${esc(tr('Read before using the result', '使用结果前请注意'))}</h3></div><ul>${limitations.map(value => `<li>${esc(value)}</li>`).join('')}</ul></section>
