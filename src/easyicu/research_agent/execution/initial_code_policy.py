@@ -9,7 +9,13 @@ from __future__ import annotations
 from typing import Any, Callable, ContextManager
 
 from ..contracts.runtime import ValidationFinding
+from ..contracts.claim_ceiling import first_result
 from .failure_classification import record_host_code_refusal
+
+
+def code_policy_runner_kind(pipeline: Any, plan: Any = None) -> str:
+    """First-result code remains host-owned even when Docker is available."""
+    return "host" if first_result(plan) or first_result(getattr(pipeline, "_config", None)) else getattr(pipeline, "_runner_kind", "")
 
 
 def resolve_initial_code_origin(

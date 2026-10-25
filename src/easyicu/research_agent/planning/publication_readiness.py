@@ -15,6 +15,7 @@ from ..reporting.article_contract import (
     roles_covered_by_plan,
 )
 from ..schema import AnalysisPlan, ResearchContext
+from ..contracts.claim_ceiling import first_result
 from .analysis_types import canonical_analysis_family
 from .figure_strategy import (
     ArticleFigureStrategy,
@@ -42,7 +43,7 @@ def _robustness_readiness(
     family_requirements: list[str],
     sensitivity: Mapping[str, Any],
 ) -> dict[str, Any]:
-    required_axis_count = min(2, len(family_requirements))
+    required_axis_count = 0 if getattr(plan.design_selection, "execution_tier", "article") == "first_result" else min(2, len(family_requirements))
     executable_axes = sorted(set(sensitivity.get("typed_executable") or ()))
     declared_authority_ids = sorted(
         _context_sensitivity_spec_ids(context)
@@ -80,7 +81,7 @@ def _robustness_readiness(
         "required_axis_count": required_axis_count,
         "executable_axes": executable_axes,
         "declared_authority_ids": declared_authority_ids,
-        "effect_style_grid_required": family != "descriptive",
+        "effect_style_grid_required": family != "descriptive" and getattr(plan.design_selection, "execution_tier", "article") == "article",
         "planner_revision_supported": planner_revision_supported,
     }
 
@@ -171,14 +172,14 @@ def build_publication_readiness_facts(
 ) -> dict[str, Any]:
     """Compile all publication-readiness facts from their typed owners."""
 
-    brief = build_study_design_brief(context, analysis_type=plan.analysis_type)
+    brief = build_study_design_brief(context, analysis_type=plan.analysis_type, execution_tier=getattr(plan.design_selection, "execution_tier", "article"))
     article_contract = build_article_analysis_contract(
         context,
         brief=brief,
         analysis_type=plan.analysis_type,
     )
     covered = roles_covered_by_plan(plan, article_contract)
-    required = set(article_contract.required_roles)
+    required = set(article_contract.required_roles) if getattr(plan.design_selection, "execution_tier", "article") == "article" else set()
     return {
         "robustness": _robustness_readiness(
             context=context,
@@ -187,7 +188,7 @@ def build_publication_readiness_facts(
             family_requirements=[str(value) for value in brief.sensitivity_requirements],
             sensitivity=sensitivity,
         ),
-        "figure_roles": _figure_role_facts(plan, figure_strategy),
+        "figure_roles": _figure_role_facts(plan, figure_strategy if getattr(plan.design_selection, "execution_tier", "article") == "article" else None),
         "content_roles": {
             "analysis_family": article_contract.analysis_family,
             "source_analysis_type": article_contract.source_analysis_type,
@@ -199,3 +200,15 @@ def build_publication_readiness_facts(
 
 
 __all__ = ["build_publication_readiness_facts"]
+
+
+_ARTICLE_ONLY_FINDINGS = frozenset({
+    "TOP_JOURNAL_LITERATURE_SEARCH_NOT_ESTABLISHED",
+    "NOVELTY_NOT_ESTABLISHED", "NOVELTY_POSITIONING_REVIEW_REQUIRED",
+})
+
+
+def tier_review_findings(plan, findings):
+    if not first_result(plan):
+        return findings
+    return [finding for finding in findings if finding.code not in _ARTICLE_ONLY_FINDINGS]

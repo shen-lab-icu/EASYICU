@@ -122,6 +122,47 @@ const outcome = modules.require('runOutcome').create({
     return { html, followUps: outcome.followUps(run, workflow) };
   }
   const plan = payloads['agent_plan.json'];
+  const savedResultTables = payloads['result_tables.json'];
+  const savedProvenance = payloads['manuscript_provenance.json'];
+  const savedContext = payloads['run_context.json'];
+  payloads['run_context.json'] = { question: 'Association of a synthetic attribute with a binary outcome.', source: { label: 'Synthetic' } };
+  payloads['manuscript_provenance.json'] = {};
+  payloads['result_tables.json'] = { tables: [
+    table('primary.csv', ['fit_status', 'estimate', 'ci_low', 'ci_high', 'effect_scale', 'is_primary_contrast', 'n', 'contrast'],
+      [['fitted', 1.25, 1.01, 1.55, 'odds_ratio', true, 14, 'B vs A']]),
+    table('measurement.csv', ['concept', 'n_total', 'value_missing_n'], [
+      ['synthetic_marker', 16, 2], ['negative_count', 16, -1], ['excess_count', 16, 17], ['fraction_count', 16, 0.5],
+    ]),
+    { ...table('unregistered.csv', ['concept', 'n_total', 'value_missing_n'], [['unregistered_count', 16, 2]]), evidence_id: '' },
+  ] };
+  const firstResult = await reread({ design_selection: { execution_tier: 'first_result' }, analysis_type: 'association_study',
+    display_labels: { synthetic_marker: '合成指标' }, steps: [] });
+  assert.match(firstResult.html, /1\.25.*1\.01.*1\.55/);
+  assert.match(firstResult.html, /模型样本量.*14/);
+  assert.match(firstResult.html, /合成指标.*2\/16/);
+  assert.match(firstResult.html, /仅供分析.*不是论文/);
+  assert.match(firstResult.html, /查看本次运行的证据表/);
+  assert.match(firstResult.html, /data-gpi-resource-artifact="result_tables\.json"[^>]*>查看本次运行的证据表/);
+  assert.doesNotMatch(firstResult.html, /negative_count|excess_count|fraction_count|unregistered_count/);
+  const curveHeaders = ['exposure', 'exposure_value', 'reference_exposure_value', 'adjusted_odds_ratio',
+    'ci_low', 'ci_high', 'exposure_density_population_n'];
+  payloads['result_tables.json'] = { tables: [
+    { ...table('synthetic_curve.csv', curveHeaders, [['synthetic_marker', 2, 1, 1.4, 1.1, 1.8, 18]]), produced_by_step: 'synthetic_primary' },
+    { ...table('sensitivity_curve.csv', curveHeaders, [['sensitivity_marker', 4, 1, 9, 8, 10, 20]]), produced_by_step: 'synthetic_sensitivity' },
+    table('unbound_curve.csv', curveHeaders, [['unbound_marker', 4, 1, 8, 7, 9, 20]]),
+  ] };
+  const curvePlan = { design_selection: { execution_tier: 'first_result' }, analysis_type: 'association_study',
+    display_labels: { synthetic_marker: '合成指标' },
+    steps: [{ step_id: 'synthetic_primary', planned_analysis_role: 'primary' },
+      { step_id: 'synthetic_sensitivity', planned_analysis_role: 'sensitivity' }] };
+  const curveBrief = await reread(curvePlan);
+  assert.match(curveBrief.html, /曲线表预览.*合成指标.*2 vs 1.*OR 1\.40.*1\.10.*1\.80.*n = 18/);
+  assert.match(curveBrief.html, /观察性关联估计/);
+  assert.doesNotMatch(curveBrief.html, /sensitivity_marker|unbound_marker/);
+  assert.doesNotMatch((await reread({ ...curvePlan, design_selection: { execution_tier: 'article' } })).html, /曲线表预览/);
+  payloads['result_tables.json'] = savedResultTables;
+  payloads['manuscript_provenance.json'] = savedProvenance;
+  payloads['run_context.json'] = savedContext;
   payloads['run_context.json'].population_preparation = {
     schema_version: 'easyicu.prepared_population_summary/1',
     selection: 'first_icu_stay_per_hospitalization',

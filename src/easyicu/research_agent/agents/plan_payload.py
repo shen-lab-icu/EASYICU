@@ -425,6 +425,7 @@ def _planner_transport_schema(
         # time from the Planner's own model requirement; it is never a Planner
         # transport field.
         schema["properties"].pop("adjustment_proposal", None)
+        schema["properties"].pop("execution_tier", None)
         definitions.pop("AdjustmentProposal", None)
         # Policy-dependent chart alternatives are declared only by a sealed
         # runtime authority for its own renderer; the Planner never writes
@@ -759,6 +760,13 @@ def decode_planner_transport_payload(
 
     decoded: Dict[str, Any] = copy.deepcopy(dict(data))
     trusted = host_owned_plan or {}
+    _restore_host_owned_transport_field(decoded, "execution_tier", trusted, path="plan")
+    trusted_selection = trusted.get("design_selection") or {}
+    if not isinstance(decoded.get("design_selection"), dict) and trusted_selection.get("execution_tier") == "first_result":
+        decoded["design_selection"] = copy.deepcopy(trusted_selection)
+    selection = decoded.get("design_selection")
+    if isinstance(selection, dict):
+        _restore_host_owned_transport_field(selection, "execution_tier", trusted_selection, path="design_selection")
     _restore_host_owned_transport_field(
         decoded, "adjustment_proposal", trusted, path="plan",
     )

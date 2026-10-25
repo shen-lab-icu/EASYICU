@@ -1,10 +1,11 @@
-"""Typed claim ceilings for plans that intentionally remain descriptive."""
+"""Typed scientific claim ceilings and run-owned delivery scope."""
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 
 DescriptiveLimitation = Literal[
@@ -54,3 +55,60 @@ __all__ = [
     "DescriptiveLimitation",
     "EXPOSURE_OBSERVED_ANALYSIS_SET",
 ]
+
+
+ExecutionTier = Literal["first_result", "article"]
+FIRST_RESULT_MARKER = "[easyicu.run-tier:first_result]"
+
+
+class RunTierPlan(BaseModel):
+    """Host-owned delivery scope carried by the run's frozen design contract."""
+
+    execution_tier: SkipJsonSchema[ExecutionTier] = Field(
+        default="article", frozen=True, exclude_if=lambda value: value == "article",
+        description="Host-bound run delivery scope; immutable after approval.",
+    )
+
+
+def first_result(value: Any) -> bool:
+    return getattr(value, "execution_tier", getattr(getattr(value, "design_selection", None), "execution_tier", None)) == "first_result"
+
+
+def bind_plan_tier(plan: Any, tier: ExecutionTier) -> Any:
+    selection = plan.design_selection
+    if selection is None:
+        if tier == "first_result":
+            raise ValueError("first_result requires the run's reviewed design selection before approval")
+        return plan
+    return plan.model_copy(update={"design_selection": selection.model_copy(update={"execution_tier": tier})})
+
+
+def tier_from_planning_contract(text: str) -> ExecutionTier:
+    return "first_result" if FIRST_RESULT_MARKER in text.splitlines() else "article"
+
+
+def first_result_instructions() -> str:
+    return (
+        FIRST_RESULT_MARKER + "\n"
+        "This run delivers analysis-only first evidence, never a paper. Use only typed "
+        "host-owned executors. No coder, free-form figure/report code, manuscript, "
+        "Writer or LaTeX is permitted. Keep measurement_audit, cohort counts, primary "
+        "estimates with confidence intervals, denominators and missingness. Preserve "
+        "every question-stated outcome, adjustment, subgroup and sensitivity; if no "
+        "typed owner can answer one, state the capability gap before approval. "
+        "Optional article figures, robustness axes and covariate RCS checks are not "
+        "required. An article needs a separate run and approval."
+    )
+
+
+def manuscript_disabled(pipeline: Any, *results: Any) -> bool:
+    return (
+        first_result(getattr(pipeline, "_config", None))
+        or getattr(getattr(pipeline, "_config", None), "generate_manuscript", None) is False
+        or any(first_result(getattr(result, "plan", None)) for result in results)
+    )
+
+
+def require_article_tier(plan: Any) -> None:
+    if first_result(plan):
+        raise ValueError("first_result cannot be revised or published as a manuscript; start an article run")

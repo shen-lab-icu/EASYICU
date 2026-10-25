@@ -174,7 +174,10 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
         return primary
 
     def validate_plan(self, plan: AnalysisPlan):
-        if tuple(step.step_id for step in plan.steps) != BASELINE_STEPS:
+        required_steps = BASELINE_STEPS
+        if getattr(plan.design_selection, "execution_tier", "article") == "first_result":
+            required_steps = BASELINE_STEPS[:6] if any(step.step_id == "visualization" for step in plan.steps) else BASELINE_STEPS[:5]
+        if tuple(step.step_id for step in plan.steps) != required_steps:
             raise ValueError("baseline template step roster drifted")
         primary = self.governed_primary_step(plan)
         if sole_typed_cohort_input(primary) != "artifact:analysis_cohort" or primary.expected_outputs != ["table:adjusted_association_estimates"]:

@@ -54,6 +54,7 @@ from .runners.selection import (
 )
 from .step_executor_registry import StepExecutorDecision
 from ..schema import ValidationFinding
+from ..contracts.claim_ceiling import first_result
 
 __all__ = [
     "execution_declaration_refusal",
@@ -96,7 +97,9 @@ def require_host_plan_before_review(
     pipeline: Any, plan: Any, *, run_dir: Path | None = None
 ) -> None:
     """Apply the desktop ownership boundary before creating any approval."""
-    if getattr(pipeline, "_runner_kind", None) == "host":
+    if first_result(plan):
+        require_first_result_steps(plan)
+    if first_result(plan) or getattr(pipeline, "_runner_kind", None) == "host":
         require_host_rendered_plan(
             plan=plan,
             run_dir=run_dir,
@@ -158,6 +161,8 @@ def require_host_rendered_plan(
     # The plan-phase host materializer is script-free; Execute adopts these
     # exact verified products before scheduling steps. Product names alone are
     # not proof, and every other step must still have its typed executor.
+    if first_result(plan):
+        require_first_result_steps(plan)
     host_cohort_step = _verified_host_cohort_step(plan, run_dir)
     for step in plan.steps:
         if step.step_id == host_cohort_step:
@@ -171,6 +176,15 @@ def require_host_rendered_plan(
             raise HostPlanStepNeedsSandbox(step.step_id) from exc
         if not owned:
             raise HostPlanStepNeedsSandbox(step.step_id)
+
+
+def require_first_result_steps(plan: Any) -> None:
+    """A report/coder step cannot sneak into an analysis-only approval."""
+    for step in plan.steps:
+        if any(str(output).startswith(("report:", "manuscript:", "latex:")) for output in step.expected_outputs):
+            raise ValueError(f"first_result forbids article-only step {step.step_id!r}; start an article run")
+    if not any(step.measurement_audit_spec is not None for step in plan.steps):
+        raise ValueError("first_result requires measurement_audit before approval")
 
 
 def _declared_host_figure(

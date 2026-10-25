@@ -72,7 +72,9 @@ def test_desktop_profile_selected_only_without_docker(monkeypatch, docker_ready)
         "typed_preflight_no_code",
     ],
 )
-def test_initial_model_entrypoints_stop_before_coder_or_capsule(entrypoint):
+@pytest.mark.parametrize("runner_kind", ["host", "docker"])
+@pytest.mark.parametrize("tier_source", ["configuration", "approved_plan"])
+def test_initial_model_entrypoints_stop_before_coder_or_capsule(entrypoint, runner_kind, tier_source):
     import inspect
     from easyicu.research_agent.execution.phase_support import (
         _step_resolve_initial_code,
@@ -82,7 +84,10 @@ def test_initial_model_entrypoints_stop_before_coder_or_capsule(entrypoint):
     args = dict.fromkeys(inspect.signature(_step_resolve_initial_code).parameters)
     flushed = []
     args.update(
-        pipeline=SimpleNamespace(_runner_kind="host"),
+        pipeline=SimpleNamespace(_runner_kind=runner_kind, _config=SimpleNamespace(
+            execution_tier="first_result" if tier_source == "configuration" else "article")),
+        plan_result=SimpleNamespace(plan=SimpleNamespace(design_selection=SimpleNamespace(
+            execution_tier="first_result" if tier_source == "approved_plan" else "article"))),
         step=SimpleNamespace(step_id="synthetic"),
         step_record={"step_id": "synthetic"},
         shared_lock=nullcontext(), findings=[], per_step_records=[],
@@ -152,7 +157,9 @@ def test_fresh_typed_code_preserves_provenance_through_candidate_construction():
         ("host_rendered_executor", True),
     ],
 )
-def test_candidate_refusal_precedes_execution_and_capsule_replay(origin, mutated):
+@pytest.mark.parametrize("runner_kind", ["host", "docker"])
+@pytest.mark.parametrize("tier_source", ["configuration", "approved_plan"])
+def test_candidate_refusal_precedes_execution_and_capsule_replay(origin, mutated, runner_kind, tier_source):
     from contextlib import nullcontext
     from easyicu.research_agent.execution.candidate_loop import (
         _CandidateLoopState,
@@ -162,7 +169,9 @@ def test_candidate_refusal_precedes_execution_and_capsule_replay(origin, mutated
     from easyicu.research_agent.execution.step_execution import CodeOrigin
 
     host = SimpleNamespace(
-        pipeline=SimpleNamespace(_runner_kind="host"),
+        pipeline=SimpleNamespace(_runner_kind=runner_kind, _config=SimpleNamespace(
+            execution_tier="first_result" if tier_source == "configuration" else "article")),
+        plan=SimpleNamespace(design_selection=SimpleNamespace(execution_tier="first_result" if tier_source == "approved_plan" else "article")),
         shared_lock=nullcontext(),
         findings=[],
         per_step_records=[],

@@ -20,6 +20,7 @@ from .contract import (
     BASELINE_ASSOCIATION_FAMILY_ID, FamilyPlanSpec, FamilySpecError, FamilySpecRequest,
     table_one_group_column,
 )
+from .contract import first_result_subset
 from .landmark_categorical_template import (
     FamilySkeletonDraft, _cohort_intent, _covariate_terms, _label,
     _materialization, _MEASUREMENT_AUDIT_OUTPUTS, _method_card_elements,
@@ -186,7 +187,7 @@ def build_baseline_association_skeleton(
             outputs=[ProgressiveOutputIntent(product_id="report:report", semantic_role="report")],
         ),
     ]
-    return FamilySkeletonDraft(
+    return first_result_subset(FamilySkeletonDraft(
         outline=outline,
         foundation=ProgressiveFoundationMaterialization(
             outline_sha256=canonical_sha256(outline.model_dump(mode="json")),
@@ -197,4 +198,4 @@ def build_baseline_association_skeleton(
             ),
         ),
         materializations=tuple(_materialization(bound[step.step_id], step) for step in steps),
-    )
+    ), request)

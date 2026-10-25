@@ -192,6 +192,7 @@
         return {
           measure: String(typed.measure || ''), label: String(typed.label || typed.contrast || ''),
           value: String(typed.display.value), low: String(typed.display.low || ''), high: String(typed.display.high || ''),
+          n: typed.n, evidenceId: typed.evidenceId,
         };
       }
       const find = patterns => claims.find(row => patterns.some(pattern => pattern.test(String(row && row.source_field || '')))) || null;
@@ -308,11 +309,20 @@
       // beside the registered label; that label can carry an export id.
       const source = context.source && typeof context.source === 'object'
         ? String(context.source.reader_label || context.source.label || context.source.database || '') : '';
+      const primarySteps = new Set((plan.steps || []).filter(step => step.planned_analysis_role === 'primary').map(step => step.step_id));
       return {
         source,
         question: String(context.question || plan.research_question || ''),
         populationPreparation: context.population_preparation,
         analysisType: String(plan.analysis_type || ''),
+        firstResult: plan.design_selection && plan.design_selection.execution_tier === 'first_result',
+        missingness: (summary.measurementMissingness || []).map(row => ({ ...row,
+          label: readerLabel(labels, row.concept) || row.concept })),
+        // A spline need not designate a single headline contrast. Show a bounded
+        // preview from its primary producer, without inventing that designation.
+        curvePreview: plan.design_selection && plan.design_selection.execution_tier === 'first_result' ? (summary.curveContrasts || [])
+          .filter(row => primarySteps.has(row.producerStep)).slice(0, 3)
+          .map(row => ({ ...row, label: readerLabel(labels, row.exposure) || row.exposure })) : [],
         exposureLabel,
         // What a grouped exposure's groups are groups of ("Glucose" / "血糖").
         groupedConcept: grouped ? levels.conceptName(spec.exposure) : '',
@@ -493,7 +503,22 @@
           `Primary estimate${contrast}: ${view.estimate.measure} ${view.estimate.value}${interval}.`,
           `主要估计${contrast}：${view.estimate.measure} ${view.estimate.value}${interval}。`,
         ));
+        if (view.firstResult && Number.isSafeInteger(view.estimate.n) && view.estimate.n >= 0) {
+          sentences.push(tr(`Model sample size: n = ${count(view.estimate.n)}.`, `模型样本量：n = ${count(view.estimate.n)}。`));
+        }
       }
+      if (view.firstResult && view.missingness.length) {
+        const missing = view.missingness.map(row => `${row.label}: ${count(row.missing)}/${count(row.total)}`);
+        sentences.push(tr(`Missing measurements / audited denominator: ${missing.join('; ')}.`,
+          `测量缺失数／审计分母：${missing.join('；')}。`));
+      }
+      if (!view.estimate && view.curvePreview.length) {
+        const curves = view.curvePreview.map(row => `${row.label} ${row.value} vs ${row.reference}: OR ${row.ratio.toFixed(2)}`
+          + ` (95% CI ${row.low.toFixed(2)}–${row.high.toFixed(2)})`
+          + (Number.isSafeInteger(row.n) && row.n >= 0 ? `, n = ${count(row.n)}` : ''));
+        sentences.push(tr(`Curve table preview: ${curves.join('; ')}.`, `曲线表预览：${curves.join('；')}。`));
+      }
+      if (view.firstResult) sentences.push(tr('First result: analysis only; this is not a paper.', '首轮结果仅供分析，不是论文。'));
       return sentences;
     }
 
@@ -511,7 +536,7 @@
           `这是同一数据库内部验证的模型表现，${scope}${paper}；用于其他数据库前需要外部验证，也不说明因果。统计单位是分析记录（ICU 入住），不一定对应独立患者。`,
         );
       }
-      return view.estimate
+      return view.estimate || view.curvePreview.length
         ? tr('An observational association estimate; it does not establish cause and effect. Each row is an analysis record (ICU stay), not necessarily an independent patient.',
           '这是观察性关联估计，不能据此推断因果；统计单位是分析记录（ICU 入住），不一定对应独立患者。')
         : tr('A descriptive comparison without adjustment; it does not show cause and effect. Each row is an analysis record (ICU stay), not necessarily an independent patient.',
@@ -547,6 +572,7 @@
       return `<div class="gpi-run-answer" data-gpi-run-answer="${esc(latestRun.run_id)}">
         <div class="gpi-run-answer-text">${sentences.map(text => `<p>${esc(text)}</p>`).join('')}${data ? `<p class="gpi-run-answer-data"><span>${esc(tr('Data', '数据'))}</span>${esc(data)}</p>` : ''}<p class="gpi-run-answer-caveat"><span>${esc(tr('Keep in mind', '需要注意'))}</span>${esc(caveat(view))}</p></div>
         ${figureButton(latestRun, view)}
+        ${view.firstResult ? resourceButton(runRefs(latestRun).get('result_tables.json'), tr('View this run’s evidence tables', '查看本次运行的证据表')) : ''}
       </div>`;
     }
 
