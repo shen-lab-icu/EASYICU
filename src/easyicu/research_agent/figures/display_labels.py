@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Mapping, Optional
 
+from ..contracts.exposure_group_rules import ExposureGroupRuleError, read_grouping_rules
+
 _FOREIGN_SCRIPT_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯豈-﫿]")
 
 
@@ -23,6 +25,85 @@ class _ClinicalBound:
     operator: str
     value: Decimal
     unit: str
+
+
+def _clinical_interval(bounds: list[_ClinicalBound]) -> str | None:
+    if not bounds or len({(bound.measure, bound.unit) for bound in bounds}) != 1:
+        return None
+    lower = max(
+        (b for b in bounds if b.operator in {">", "≥"}),
+        key=lambda b: (b.value, b.operator == ">"), default=None,
+    )
+    upper = min(
+        (b for b in bounds if b.operator in {"<", "≤"}),
+        key=lambda b: (b.value, b.operator != "<"), default=None,
+    )
+    if lower and upper:
+        if lower.value >= upper.value:
+            return None
+        return (
+            f"{lower.operator if lower.operator == '>' else ''}{lower.value.normalize():f}"
+            f"–{upper.operator}{upper.value.normalize():f}"
+        )
+    bound = lower or upper
+    return f"{bound.operator}{bound.value.normalize():f}"
+
+
+def grouped_axis_labels(
+    grouping: Mapping[str, Any], labels: Mapping[str, str],
+) -> dict[str, str]:
+    """Factor a shared measure only from the pinned, ordered grouping rules.
+
+    Each level intersects its threshold with the complements of *all* earlier
+    thresholds. Mixed summaries/units, unmeasured levels and empty intervals
+    keep their full labels; matching prose alone never authorizes factoring.
+    """
+    parameters = grouping.get("parameters", {})
+    try:
+        rules = read_grouping_rules(parameters)
+    except ExposureGroupRuleError:
+        return {}
+    levels = grouping.get("levels", [])
+    if (
+        rules.concept != grouping.get("concept")
+        or rules.scale != grouping.get("scale")
+        or rules.unmeasured != "exclude"
+        or len(levels) != len(rules.codes)
+        or {level["group"]: level["code"] for level in levels} != dict(rules.codes)
+    ):
+        return {}
+    identities = {
+        (group["rule"]["summary"], group["rule"].get("unit"))
+        for group in parameters["groups"] if isinstance(group["rule"], Mapping)
+    }
+    if len(identities) != 1:
+        return {}
+    summary, unit = next(iter(identities))
+    if not isinstance(unit, str) or not unit.strip():
+        return {}
+    operators = {"<": "<", "<=": "≤", ">": ">", ">=": "≥"}
+    inverse = {"<": "≥", "≤": ">", ">": "≤", "≥": "<"}
+    earlier: list[_ClinicalBound] = []
+    result = {}
+    scope = grouping["variable"]
+    for group in parameters["groups"]:
+        rule = group["rule"]
+        current = ([] if rule == "otherwise" else [_ClinicalBound(
+            summary, operators[rule["op"]], Decimal(str(rule["value"])), unit,
+        )])
+        interval = _clinical_interval([*earlier, *current])
+        if interval is None:
+            return {}
+        result[f"{scope}={rules.codes[group['id']]}"] = interval
+        if current:
+            bound = current[0]
+            earlier.append(_ClinicalBound(summary, inverse[bound.operator], bound.value, unit))
+    measure = {"max": "Maximum", "min": "Minimum", "mean": "Mean", "first": "First", "value": "Value"}[summary]
+    name = display_label(rules.concept, labels)
+    if not name[:2].isupper():
+        name = name[:1].lower() + name[1:]
+    result[scope] = f"{measure} {name} ({unit})"
+    return result
 
 
 def concise_clinical_level(label: str) -> str:
@@ -56,27 +137,8 @@ def concise_clinical_level(label: str) -> str:
         bounds.append(_ClinicalBound(
             measure.capitalize(), inverse[op] if negate else op, Decimal(value), unit,
         ))
-    if len({(bound.measure, bound.unit) for bound in bounds}) != 1:
-        return label
-    lower = max(
-        (b for b in bounds if b.operator in {">", "≥"}),
-        key=lambda b: (b.value, b.operator == ">"), default=None,
-    )
-    upper = min(
-        (b for b in bounds if b.operator in {"<", "≤"}),
-        key=lambda b: (b.value, b.operator != "<"), default=None,
-    )
-    if lower and upper:
-        if lower.value >= upper.value:
-            return label
-        interval = (
-            f"{lower.operator if lower.operator == '>' else ''}{lower.value}"
-            f"–{upper.operator}{upper.value}"
-        )
-    else:
-        bound = lower or upper
-        interval = f"{bound.operator}{bound.value}"
-    return f"{bounds[0].measure} {interval} {bounds[0].unit}"
+    interval = _clinical_interval(bounds)
+    return f"{bounds[0].measure} {interval} {bounds[0].unit}" if interval else label
 
 
 def wrap_axis_tick_labels(ax: Any, coordinate: str, *, width: float | None = None) -> None:
@@ -107,7 +169,9 @@ def _figure_text(label: Any) -> Optional[str]:
     text = str(label or "").strip()
     if not text or _FOREIGN_SCRIPT_RE.search(text):
         return None
-    return text
+    return "In-hospital mortality" if text.casefold() in {
+        "in hospital mortality", "in-hospital mortality",
+    } else text
 
 
 def figure_language_labels(
@@ -320,6 +384,7 @@ __all__ = [
     "binary_scope_label",
     "display_label",
     "figure_language_labels",
+    "grouped_axis_labels",
     "label_lookup",
     "scoped_label_lookup",
 ]

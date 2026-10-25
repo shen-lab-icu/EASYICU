@@ -267,6 +267,9 @@ def test_the_rendered_figure_names_exposure_and_outcome_in_english(tmp_path: Pat
     assert " Vs " not in svg
     assert contract["panels"][0]["title"] == "Absolute risk by exposure level"
     assert "events/n" in contract["reader_caption"]
+    width_pt = float(ElementTree.fromstring(svg).attrib["width"].removesuffix("pt"))
+    assert width_pt / 72 * 25.4 == pytest.approx(183, abs=0.01)
+    assert mpimg.imread(out_dir / "readmission_figure.png").shape[1] == 2161
 
 
 def test_audit_status_strips_do_not_take_a_result_panel_height(tmp_path: Path) -> None:
@@ -535,3 +538,227 @@ def test_caption_context_must_be_pinned_to_the_displayed_inputs(tmp_path, mutati
         manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="digest mismatch|does not bind"):
         _caption_context({key: bound}, "figure")
+
+
+def _threshold_grouping(*, upper_unit="mg/L", upper_summary="max"):
+    upper = f"{'Minimum' if upper_summary == 'min' else 'Maximum'} at least 9 {upper_unit}"
+    names = (f"Maximum below 5 mg/L, without {upper.lower()}",
+             f"Neither {upper.lower()} nor maximum below 5 mg/L", upper)
+    return {
+        "variable": "lactate_tertile", "concept": "lact", "scale": "ordinal",
+        "levels": [
+            {"code": code, "group": f"g{code}", "label": name}
+            for code, name in enumerate(names, 1)
+        ],
+        "parameters": {
+            "concept": "lact", "window": {"start_hours": 0, "end_hours": 8},
+            "source_columns": {summary: f"marker_{summary}" for summary in {"max", upper_summary}},
+            "scale": "ordinal", "unmeasured": "exclude",
+            "groups": [
+                {"id": "g3", "rule": {"op": ">=", "summary": upper_summary,
+                                       "value": 9, "unit": upper_unit}},
+                {"id": "g1", "rule": {"op": "<", "summary": "max", "value": 5, "unit": "mg/L"}},
+                {"id": "g2", "rule": "otherwise"},
+            ],
+        },
+    }
+
+
+@pytest.fixture
+def captured_main(monkeypatch):
+    from easyicu.research_agent.execution.runners import association_publication_figure_renderer as owner
+
+    figures = []
+
+    def capture(fig, *args, **kwargs):
+        fig.canvas.draw()
+        figures.append(fig)
+        return {}
+
+    monkeypatch.setattr(owner, "save_publication_figure", capture)
+    monkeypatch.setattr(owner, "save_association_coverage_audit", lambda **kwargs: {})
+    yield figures
+    for fig in figures:
+        plt.close(fig)
+
+
+def _figure_words(fig):
+    from matplotlib.text import Text
+
+    return [" ".join(text.get_text().split()) for text in fig.findobj(Text)
+            if text.get_visible() and text.get_text()]
+
+
+def test_shared_typed_measure_moves_to_axes_and_leaves_exact_ranges(tmp_path, captured_main):
+    _render(tmp_path, provenance={"exposure_group_labels": [_threshold_grouping()]})
+    [fig] = captured_main
+    risk, forest = fig.axes
+    assert risk.get_xlabel() == "Maximum lactate (mg/L)"
+    assert forest.get_ylabel() == "Maximum lactate (mg/L)"
+    assert [" ".join(t.get_text().split()) for t in risk.get_xticklabels()] == [
+        "All measured 37/412", "<5 8/140", "5–<9 12/136", "≥9 17/136",
+    ]
+    assert {"5–<9 vs <5", "≥9 vs <5"} <= set(_figure_words(fig))
+
+
+def test_forest_adds_one_typed_reference_without_an_interval_or_source_row(tmp_path, captured_main):
+    frames = _frames()
+    original = frames["table:adjusted_association_estimates"].copy(deep=True)
+    out = _render(tmp_path, frames=frames,
+                  provenance={"exposure_group_labels": [_threshold_grouping()]})
+    [fig] = captured_main
+    forest = fig.axes[1]
+    assert _figure_words(fig).count("<5 (reference)") == 1
+    markers = [(float(x), float(y)) for line in forest.lines if line.get_marker() == "o"
+               for x, y in zip(line.get_xdata(), line.get_ydata())]
+    assert markers == [(1.4, 1.0), (2.2, 2.0), (1.0, 0.0)]
+    segments = [segment for collection in forest.collections for segment in collection.get_segments()]
+    assert len(segments) == 2
+    assert all(segment[0, 1] != 0 for segment in segments)
+    assert "1.00" in _figure_words(fig)
+    assert "1.00 (1.00–1.00)" not in _figure_words(fig)
+    pd.testing.assert_frame_equal(frames["table:adjusted_association_estimates"], original)
+    saved = pd.read_csv(out / "adjusted_association_estimates_source_data.csv")
+    pd.testing.assert_frame_equal(saved[original.columns], original)
+
+
+@pytest.mark.parametrize(("label", "expected"), [
+    ("In hospital mortality", "In-hospital mortality (%)"),
+    ("In-hospital mortality", "In-hospital mortality (%)"),
+    ("ICU mortality", "ICU mortality (%)"),
+    ("28-day mortality", "28-day mortality (%)"),
+])
+def test_outcome_grammar_preserves_the_bound_identity(tmp_path, captured_main, label, expected):
+    frames = _frames()
+    frames["table:adjusted_association_estimates"]["outcome"] = "event_flag"
+    _render(tmp_path, frames=frames, labels={"event_flag": label})
+    assert captured_main[0].axes[0].get_ylabel() == expected
+    assert frames["table:adjusted_association_estimates"]["outcome"].eq("event_flag").all()
+
+
+@pytest.mark.parametrize(("unit", "summary", "words"), [
+    ("mg/dL", "max", ("mg/L", "mg/dL", "Maximum")),
+    ("mg/L", "min", ("Minimum", "Maximum", "mg/L")),
+])
+def test_different_typed_units_or_summaries_keep_full_level_labels(
+    tmp_path, captured_main, unit, summary, words,
+):
+    _render(tmp_path, provenance={"exposure_group_labels": [
+        _threshold_grouping(upper_unit=unit, upper_summary=summary),
+    ]})
+    [fig] = captured_main
+    ticks = " ".join(t.get_text() for t in fig.axes[0].get_xticklabels())
+    assert all(word in ticks for word in words), repr(ticks)
+    assert "Maximum" not in fig.axes[0].get_xlabel()
+    assert "5–<9 vs <5" not in _figure_words(fig)
+
+
+def test_matching_prose_alone_does_not_authorize_a_shared_measure(tmp_path, captured_main):
+    _render(tmp_path, labels={
+        "lactate_tertile": "Marker band",
+        "lactate_tertile=1": "Maximum below 5 mg/L",
+        "lactate_tertile=2": "Neither maximum below 5 mg/L nor maximum at least 9 mg/L",
+        "lactate_tertile=3": "Maximum at least 9 mg/L",
+    })
+    [fig] = captured_main
+    assert fig.axes[0].get_xlabel() == "Marker band"
+    assert "Maximum 5–<9 mg/L vs Maximum <5 mg/L" in _figure_words(fig)
+
+
+@pytest.mark.parametrize("mixed_units", [False, True])
+def test_stacked_panels_use_the_page_width_without_borrowing_contrast_margins(
+    tmp_path, captured_main, mixed_units,
+):
+    from matplotlib.text import Text
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    _render(tmp_path, provenance={"exposure_group_labels": [
+        _threshold_grouping(upper_unit="mg/dL" if mixed_units else "mg/L"),
+    ]})
+    [fig] = captured_main
+    FigureCanvasAgg(fig)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    risk, forest = fig.axes
+    assert risk.get_position().x0 < 0.16
+    assert risk.get_position().width > 0.80
+    assert risk.get_position().width == pytest.approx(forest.get_position().width, abs=0.005)
+    assert risk.get_position().x0 == pytest.approx(forest.get_position().x0, abs=0.005)
+    assert fig.get_tightbbox(renderer).width * 25.4 == pytest.approx(183, abs=0.1)
+    texts = [t for t in fig.findobj(Text) if t.get_visible() and t.get_text()]
+    assert min(t.get_fontsize() for t in texts) >= 7
+    for text in texts:
+        box = text.get_window_extent(renderer)
+        assert box.x0 >= -0.5 and box.x1 <= fig.bbox.width + 0.5, text.get_text()
+        assert box.y0 >= -0.5 and box.y1 <= fig.bbox.height + 0.5, text.get_text()
+    ticks = [t.get_window_extent(renderer) for t in risk.get_xticklabels()]
+    assert all(a.x1 < b.x0 for a, b in zip(ticks, ticks[1:]))
+    row_texts = [t for t in forest.texts if "vs" in t.get_text() or "reference" in t.get_text()]
+    estimates = [t for t in forest.texts if re.match(r"\d", t.get_text()) and t not in row_texts]
+    assert row_texts
+    assert all(not left.get_window_extent(renderer).overlaps(right.get_window_extent(renderer))
+               for left in row_texts for right in estimates)
+
+
+@pytest.mark.parametrize(("upper_op", "lower_op", "expected"), [
+    (">=", "<", ("<5", "5–<9", "≥9")),
+    (">", "<=", ("≤5", ">5–≤9", ">9")),
+])
+@pytest.mark.parametrize("low_first", [False, True])
+def test_factored_ranges_preserve_typed_boundary_inclusion(upper_op, lower_op, expected, low_first):
+    from easyicu.research_agent.figures.display_labels import grouped_axis_labels
+
+    grouping = _threshold_grouping()
+    high, low, otherwise = grouping["parameters"]["groups"]
+    high["rule"]["op"], low["rule"]["op"] = upper_op, lower_op
+    grouping["parameters"]["groups"] = [low, high, otherwise] if low_first else [high, low, otherwise]
+    result = grouped_axis_labels(grouping, {})
+    assert tuple(result[f"lactate_tertile={code}"] for code in (1, 2, 3)) == expected
+
+
+@pytest.mark.parametrize("defect", ["missing_unit", "empty_interval", "wrong_code", "wrong_concept"])
+def test_incomplete_or_conflicting_typed_groups_cannot_factor_an_axis(defect):
+    from easyicu.research_agent.figures.display_labels import grouped_axis_labels
+
+    grouping = _threshold_grouping()
+    groups = grouping["parameters"]["groups"]
+    if defect == "missing_unit":
+        for group in groups[:2]:
+            group["rule"].pop("unit")
+    elif defect == "empty_interval":
+        groups[0]["rule"]["value"] = 4
+    elif defect == "wrong_code":
+        grouping["levels"][0]["code"] = 9
+    else:
+        grouping["concept"] = "another_marker"
+    assert grouped_axis_labels(grouping, {}) == {}
+
+
+@pytest.mark.parametrize("ambiguity", ["reference", "exposure", "missing"])
+def test_a_forest_reference_requires_one_explicit_typed_identity(ambiguity):
+    from easyicu.research_agent.execution.runners.association_publication_figure_renderer import (
+        _forest_reference_label,
+    )
+
+    frame = _frames()["table:adjusted_association_estimates"]
+    if ambiguity == "reference":
+        frame.loc[1, "reference_level"] = 2
+    elif ambiguity == "exposure":
+        frame.loc[1, "exposure"] = "another_marker"
+    else:
+        frame = frame.drop(columns="reference_level")
+    assert _forest_reference_label(frame, {}) is None
+
+
+def test_a_nonratio_forest_does_not_gain_a_ratio_reference():
+    frame = _frames()["table:adjusted_association_estimates"]
+    frame["effect_scale"] = "mean_difference"
+    fig, ax = plt.subplots()
+    try:
+        _forest(ax, frame, estimate_column="estimate", label_column="contrast",
+                title="Difference", color="blue", reference_label="Lower")
+        assert len(ax.get_yticks()) == 2
+        assert "Lower (reference)" not in _figure_words(fig)
+        assert ax.get_xscale() == "linear"
+    finally:
+        plt.close(fig)
