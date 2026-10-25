@@ -801,24 +801,10 @@
     }
 
     function planConversationHtml(preview) {
-      const rows = Array.isArray(preview && preview.items) ? preview.items.slice(0, 6) : [];
-      if (!rows.length) return '';
-      const labels = {
-        population_and_unit: tr('Population and unit', '研究人群与分析单位'),
-        exposure_and_timing: tr('Exposure and timing', '暴露定义与时间窗'),
-        outcome_and_followup: tr('Outcome and follow-up', '结局与随访'),
-        adjustment_and_model: tr('Adjustment and model', '调整变量与模型'),
-        missing_data: tr('Missing data', '缺失数据处理'),
-        sensitivity_and_feasibility: tr('Checks and sensitivity', '执行前检查与敏感性分析'),
-      };
-      const counts = [
-        preview.analysis_step_count
-          ? `${preview.analysis_step_count} ${tr('analysis steps', '个分析步骤')}`
-          : preview.step_count ? `${preview.step_count} ${tr('steps', '个步骤')}` : '',
-        preview.output_step_count ? `${preview.output_step_count} ${tr('output steps', '个产物生成步骤')}` : '',
-        preview.table_count ? `${preview.table_count} ${tr('tables', '张表')}` : '',
-        preview.figure_count ? `${preview.figure_count} ${tr('figures', '张图')}` : '',
-      ].filter(Boolean).join(' · ');
+      const labels = window.EU_PRODUCT_LABELS;
+      if (!labels || typeof labels.clinicalPlan !== 'function') return '';
+      const summary = labels.clinicalPlan(preview && preview.clinical_summary, tr);
+      const rows = summary.lines;
       const design = preview && preview.design && typeof preview.design === 'object' ? preview.design : {};
       // The planner's sentences quote column ids (「按sex分层」); the prose
       // owner names them for a Chinese reader.
@@ -837,10 +823,9 @@
       const designDisclosure = designHtml
         ? `<details class="gpi-plan-design-disclosure"><summary>${esc(tr('View exact model and variable settings', '查看精确模型与变量设置'))}</summary>${designHtml}</details>`
         : '';
-      const rowHtml = row => `<li><span>${rows.indexOf(row) + 1}</span><div><b>${esc(labels[String(row && row.key || '')] || tr('Plan item', '计划内容'))}</b><em>${esc(named(row && row.text))}</em></div></li>`;
+      const rowHtml = row => `<li><b>${esc(row.label)}</b><em>${esc(row.text)}</em></li>`;
       return `<article class="gpi-plan-conversation" aria-label="${esc(tr('Candidate research plan summary', '候选研究计划摘要'))}">
-        <p><strong>${esc(tr('I have generated a candidate plan from your research question.', '我已经根据你的研究问题生成了一份候选计划。'))}</strong><span>${esc(tr('Here is the core plan for your review. No analysis has started yet.', '核心方案直接列在下面，方便你先审阅；目前还没有开始分析。'))}</span></p>
-        <details class="gpi-plan-conversation-summary" open><summary>${esc(tr(`${rows.length} candidate plan items`, `${rows.length} 项候选计划摘要`))}</summary><ol>${rows.map(rowHtml).join('')}</ol>${designDisclosure}${counts ? `<footer>${esc(tr('Planned scope: ', '计划规模：'))}${esc(counts)} · ${esc(tr('Complete steps and evidence bindings remain available below.', '完整步骤与证据绑定可在下方继续查看。'))}</footer>` : ''}</details>
+        <details class="gpi-plan-conversation-summary" open><summary>${esc(tr('Candidate plan summary', '候选计划摘要'))}</summary><ol class="gpi-clinical-lines">${rows.map(rowHtml).join('')}</ol>${summary.timing ? `<p class="gpi-plan-timing">${esc(summary.timing)}</p>` : ''}${designDisclosure}</details>
       </article>`;
     }
 

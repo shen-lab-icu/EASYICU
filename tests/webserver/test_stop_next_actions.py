@@ -93,6 +93,18 @@ def test_a_provider_stop_offers_retry_in_the_run_and_conversation(tmp_path) -> N
     assert outcome["next_actions"] == gate["next_actions"]
 
 
+@pytest.mark.parametrize("reason", ["research_pipeline_execution_failed", "research_agent_pipeline_failed_closed"])
+def test_only_the_workflow_retry_owner_can_offer_retry_of_failed_execution(reason):
+    gate = {"status": "blocked", "reason": reason}
+    assert [row["kind"] for row in owner.project_stop_next_actions(gate)] == ["edit_plan"]
+    assert [row["kind"] for row in owner.project_stop_next_actions(
+        gate, execution_retry_available=True,
+    )] == ["retry", "edit_plan"]
+    assert [row["kind"] for row in owner.project_stop_next_actions(
+        {**gate, "reason": "data_foundation_blocked"}, execution_retry_available=True,
+    )] == ["edit_plan"]
+
+
 def test_a_required_design_gap_offers_plan_edit_without_dropping_it(tmp_path) -> None:
     stop = ProgressivePlanCompileError(
         "progressive_capability_gap",

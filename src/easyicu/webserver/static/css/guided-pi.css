@@ -593,3 +593,11 @@
 .gpi-error>span{flex:1 1 auto;min-width:0}
 .gpi-error-close{flex:0 0 auto;width:24px;height:24px;margin:-3px -6px 0 0;padding:0;border:0;border-radius:6px;background:transparent;color:inherit;font-size:17px;line-height:1;cursor:pointer}
 .gpi-error-close:hover,.gpi-error-close:focus-visible{background:rgba(186,70,61,0.12);outline:0}
+
+/* Five clinical sentences; no clipped uncertainty or numbered tiles. */
+.gpi-plan-conversation-summary>ol.gpi-clinical-lines{display:grid;grid-template-columns:1fr;gap:0;padding:0 12px 8px}
+.gpi-clinical-lines>li{display:grid;grid-template-columns:6em minmax(0,1fr);gap:10px;padding:6px 0;border:0;border-radius:0;background:none}
+.gpi-clinical-lines>li:first-child{border:0}
+.gpi-clinical-lines>li>em{display:block;overflow:visible;margin:0;-webkit-line-clamp:unset;color:var(--ink-2)}
+.gpi-plan-timing{margin:0;padding:0 12px 10px;font-size:12px;line-height:1.5;color:var(--ink-2)}
+.gpi-run-stop-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}

@@ -87,15 +87,18 @@ def test_every_plan_step_reader_uses_the_owner_after_it_loads():
         assert "AGENT_PLAN_PROSE" in (STATIC / "js" / reader).read_text(encoding="utf-8")
 
 
-def test_the_plan_summary_names_the_columns_its_items_quote():
-    # pilot1 round 3 (10-22): the conversation's six-item summary read
-    # 「推荐将hgb定义为…并按sex分层」 and 「采用age和adm作为…调整集合」.
+def test_the_plan_summary_reads_facts_and_keeps_exact_prose_in_the_disclosure():
+    # The compact card consumes typed facts; the exact model keeps its prose reader.
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js unavailable")
     catalog = {**CATALOG, "hgb": ["Hemoglobin", "血红蛋白", "g/dL"], "age": ["Age", "年龄", "years"],
                "adm": ["Admission Type", "入院类型", ""]}
     preview = {
+        "clinical_summary": {"lines": [
+            {"key": "comparison", "mode": "descriptive", "variables": [{"concept": "sex"}]},
+            {"key": "adjustment", "mode": "adjusted", "variables": [{"concept": "age"}, {"concept": "adm"}]},
+        ]},
         "items": [
             {"key": "exposure_and_timing", "text": "推荐将hgb定义为入ICU后24小时内可用测量的最低值，并按sex分层。"},
             {"key": "adjustment_and_model", "text": "推荐采用age和adm作为调整集合。"},
@@ -108,6 +111,7 @@ window.EU_LANG = 'zh';
 window.EU_CATALOG = {{ dict: {json.dumps(catalog)} }};
 require({json.dumps(str(STATIC / "js/screens-agent-plan-prose.js"))});
 require({json.dumps(str(STATIC / "js/screens-guided-pi-modules.js"))});
+require({json.dumps(str(STATIC / "js/product-labels.js"))});
 require({json.dumps(str(STATIC / "js/screens-guided-pi-confirmation.js"))});
 const workflow = {{ next_action_code: 'operator_plan_approval_required', plan_conversation_preview: {json.dumps(preview, ensure_ascii=False)} }};
 const host = {{
@@ -122,7 +126,8 @@ process.stdout.write(window.EasyICU.guidedPi.require('confirmation').create(host
     assert result.returncode == 0, result.stderr
     rendered = result.stdout
 
-    assert "推荐将血红蛋白定义为入ICU后24小时内可用测量的最低值，并按性别分层。" in rendered
-    assert "推荐采用年龄和入院类型作为调整集合。" in rendered
+    assert "<b>分组</b><em>按性别分层</em>" in rendered
+    assert "推荐将hgb" not in rendered
+    assert "<b>调整</b><em>年龄、入院类型</em>" in rendered
     assert "估计血红蛋白与院内死亡的关联。" in rendered
     assert "需要的变量：血红蛋白、性别、院内死亡" in rendered

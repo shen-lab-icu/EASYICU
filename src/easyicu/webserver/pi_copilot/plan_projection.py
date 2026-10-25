@@ -25,6 +25,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Mapping, Optional
 
+from .plan_clinical_summary import project_clinical_summary
+
 
 PLAN_ARTIFACT_NAME = "agent_plan.json"
 
@@ -34,6 +36,7 @@ PLAN_ARTIFACT_NAME = "agent_plan.json"
 # as row-identifier vocabulary.  Project the closed set to semantic roles at
 # this owner boundary; never relax the global PHI guard.
 _IDENTITY_VARIABLE_LABELS = {
+    "patient_stay_id": "ICU stay grouping key",
     "stay_id": "ICU stay grouping key",
     "icustay_id": "ICU stay grouping key",
     "hadm_id": "hospital admission grouping key",
@@ -63,12 +66,15 @@ def _project_required_variable(value: Any) -> str:
     return _IDENTITY_VARIABLE_LABELS.get(text.lower(), text)[:120]
 
 
-def project_plan_conversation_preview(payload: Any) -> Optional[Dict[str, Any]]:
-    """Project the selected design's six review items into the conversation.
+def project_plan_conversation_preview(
+    payload: Any, *, study: Any = None, exposure_groups: Any = None,
+    review_summary: Any = None,
+) -> Optional[Dict[str, Any]]:
+    """Project five clinical fact records and preserve the complete design.
 
-    The research-agent design contract owns both the item order and wording.
-    Copilot only supplies bounded, path-free display coordinates; it never
-    invents a cohort, exposure, endpoint, method, or preprocessing step.
+    Legacy review items remain available for artifact consumers. The short
+    card reads only clinical_summary, compiled from typed plan coordinates;
+    product-labels owns its bilingual sentences and catalog names.
     """
 
     if not isinstance(payload, Mapping):
@@ -91,18 +97,16 @@ def project_plan_conversation_preview(payload: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(selected, Mapping):
         return None
     reviewable = selected.get("reviewable_plan")
-    if not isinstance(reviewable, list):
-        return None
 
     from easyicu.research_agent.planning.design_selection import (
         REVIEWABLE_PLAN_ITEM_ORDER,
     )
 
-    if len(reviewable) != len(REVIEWABLE_PLAN_ITEM_ORDER):
-        return None
-    texts = [_project_plan_text(value, limit=800) for value in reviewable]
-    if any(not value for value in texts):
-        return None
+    texts = (
+        [_project_plan_text(value, limit=800) for value in reviewable]
+        if isinstance(reviewable, list) and len(reviewable) == len(REVIEWABLE_PLAN_ITEM_ORDER)
+        else []
+    )
 
     steps = payload.get("steps")
     steps = steps if isinstance(steps, list) else []
@@ -146,13 +150,17 @@ def project_plan_conversation_preview(payload: Any) -> Optional[Dict[str, Any]]:
     if required_variables:
         design["required_variables"] = required_variables
     return {
+        "clinical_summary": project_clinical_summary(
+            payload, study=study, exposure_groups=exposure_groups,
+            review_summary=review_summary,
+        ),
         "research_question": _project_plan_text(
             payload.get("research_question"), limit=500
         ),
         "analysis_type": str(payload.get("analysis_type") or "")[:120],
         "items": [
             {"key": key, "text": text}
-            for key, text in zip(REVIEWABLE_PLAN_ITEM_ORDER, texts, strict=True)
+            for key, text in zip(REVIEWABLE_PLAN_ITEM_ORDER, texts)
         ],
         "step_count": len(steps),
         "analysis_step_count": analysis_step_count,

@@ -534,6 +534,7 @@ def project_stop_next_actions(
     *,
     pending_reason_codes: Sequence[str] = (),
     database: str | None = None,
+    execution_retry_available: bool = False,
 ) -> list[dict[str, Any]]:
     """The same additive field for status, jobs and conversation run history."""
 
@@ -569,13 +570,16 @@ def project_stop_next_actions(
             ),
             "",
         )
+    actions = next_actions_for_stop(reason, gate.get("detail"), database=database)
+    # Only the workflow's existing retry assessment can add this offer; a
+    # persisted stop record or model suggestion cannot authorize a retry.
+    if execution_retry_available and reason in {
+        "research_pipeline_execution_failed", "research_agent_pipeline_failed_closed",
+    }:
+        actions = [_action("retry", RetryParams()), *actions]
     return [
         action.model_dump(mode="json", exclude_none=True)
-        for action in next_actions_for_stop(
-            reason,
-            gate.get("detail"),
-            database=database,
-        )
+        for action in actions
     ]
 
 

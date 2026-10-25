@@ -17,6 +17,7 @@ def _read(relative: str) -> str:
 
 
 MODULES_SOURCE = _read("js/screens-guided-pi-modules.js")
+LABELS_SOURCE = _read("js/product-labels.js")
 
 
 def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> None:
@@ -28,6 +29,7 @@ def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> N
     script = f"""
       global.window = {{}};
       eval({MODULES_SOURCE!r});
+      eval({LABELS_SOURCE!r});
       eval({owner!r});
       const host = {{
         tr: (en, zh) => zh || en,
@@ -111,6 +113,7 @@ def test_executable_plan_review_is_expanded_and_has_two_primary_choices() -> Non
     script = f"""
       global.window = {{}};
       eval({MODULES_SOURCE!r});
+      eval({LABELS_SOURCE!r});
       eval({owner!r});
       const host = {{
         tr: (en, zh) => zh || en,
@@ -161,6 +164,7 @@ def test_executable_plan_review_keeps_plan_details_in_one_disclosure() -> None:
     script = f"""
       global.window = {{}};
       eval({MODULES_SOURCE!r});
+      eval({LABELS_SOURCE!r});
       eval({owner!r});
       const workflow = {{
         next_action_code: 'operator_plan_approval_required',
@@ -197,14 +201,14 @@ def test_executable_plan_review_keeps_plan_details_in_one_disclosure() -> None:
     completed = run_node(node, script, check=True)
     rendered = completed.stdout
 
-    assert "我已经根据你的研究问题生成了一份候选计划" in rendered
-    assert "目前还没有开始分析" in rendered
-    assert "研究人群与分析单位" in rendered
-    assert "暴露定义与时间窗" in rendered
-    assert "6 项候选计划摘要" in rendered
+    assert "候选计划摘要" in rendered
+    assert "核心方案直接列在下面" not in rendered
+    assert "研究人群" in rendered
+    assert "比较" in rendered
+    assert rendered.count("<li><b>") == 5
     assert '<details class="gpi-plan-conversation-summary" open>' in rendered
-    assert "缺失数据处理" in rendered
-    assert "9 个步骤 · 4 张表 · 3 张图" in rendered
+    assert "数据检查" in rendered
+    assert "9 个步骤 · 4 张表 · 3 张图" not in rendered
     assert rendered.index('class="gpi-plan-conversation"') < rendered.index(
         'class="gpi-confirmation'
     )
@@ -219,6 +223,7 @@ def test_scientific_plan_review_separates_summary_from_complete_evidence() -> No
     script = f"""
       global.window = {{}};
       eval({MODULES_SOURCE!r});
+      eval({LABELS_SOURCE!r});
       eval({owner!r});
       const workflow = {{
         next_action_code: 'plan_scientific_changes_required',
@@ -240,9 +245,9 @@ def test_scientific_plan_review_separates_summary_from_complete_evidence() -> No
     """
     rendered = run_node(node, script, check=True).stdout
 
-    assert "我已经根据你的研究问题生成了一份候选计划" in rendered
+    assert "候选计划摘要" in rendered
     assert '<details class="gpi-plan-conversation-summary" open>' in rendered
-    assert "1 项候选计划摘要" in rendered
+    assert rendered.count("<li><b>") == 5
     assert '<details class="gpi-confirmation-resources">' in rendered
     assert 'class="gpi-confirmation-resources is-expanded"' not in rendered
     assert "打开完整计划" in rendered
@@ -265,6 +270,7 @@ def test_repeated_stay_runtime_gap_stays_blocked_without_a_method_question(
     script = f"""
       global.window = {{}};
       eval({MODULES_SOURCE!r});
+      eval({LABELS_SOURCE!r});
       eval({owner!r});
       const workflow = {{
         next_action_code: 'plan_scientific_changes_required',
