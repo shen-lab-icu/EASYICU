@@ -146,7 +146,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261024-demo-raw-plan1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261024-queue1" in index
-    assert "js/screens-guided-pi.js?v=20261024-queue1" in index
+    assert "js/screens-guided-pi.js?v=20261024-source-picker1" in index
     assert "js/screens-guided.js?v=20261022-legacy1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -4009,7 +4009,7 @@ def test_empty_research_session_prioritizes_the_conversation_entry() -> None:
     open_session = owner.split("async function openSession(", 1)[1].split(
         "async function switchMode(", 1
     )[0]
-    assert "if (preview && preview.close) preview.close({ preserveLocation: preservePreviewLocation });" in open_session
+    assert "if (!sameSession && preview && preview.close) preview.close({ preserveLocation: preservePreviewLocation });" in open_session
     assert "gpi-workspace.gpi-empty-session-focus" in workspace_css
     assert "gpi-empty-session-focus:not(.gpi-preview-open):not(.gpi-source-open)>.gd-aside{display:none}" in workspace_css
     assert "max-width:1060px" in workspace_css
@@ -6548,7 +6548,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261021-turn-layout1" in index
-    assert "screens-guided-pi.js?v=20261024-queue1" in index
+    assert "screens-guided-pi.js?v=20261024-source-picker1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

@@ -874,7 +874,11 @@
     const preservePreviewLocation = Boolean(previewParams
       && previewParams.get('pi_session') === String(sessionId || '')
       && ['artifact', 'evidence'].includes(previewParams.get('pi_view')));
-    if (preview && preview.close) preview.close({ preserveLocation: preservePreviewLocation });
+    // Entering real-data mode remounts the shell and restores this same
+    // conversation. Its open source picker still belongs to it; close the
+    // preview only when the researcher actually selects another conversation.
+    const sameSession = state.session && state.session.session_id === sessionId;
+    if (!sameSession && preview && preview.close) preview.close({ preserveLocation: preservePreviewLocation });
     const expectedSelectionRevision = selectionRevision == null
       ? ++state.sessionSelectionRevision : selectionRevision;
     closeChildSource();

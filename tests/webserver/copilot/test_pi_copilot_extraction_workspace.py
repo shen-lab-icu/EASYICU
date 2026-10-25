@@ -19,6 +19,40 @@ from easyicu.webserver.pi_copilot.contracts import (
 )
 
 from tests.support.node import run_node
+from tests.webserver.copilot.pi_copilot_contract_fixtures import (
+    FakeGateway,
+    study_state as study_state,
+)
+
+
+def test_source_picker_reload_keeps_the_host_selection(tmp_path, study_state, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from easyicu.webserver.pi_copilot.service import PiCopilotService
+    from easyicu.webserver.routes import pi_copilot as routes
+
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=FakeGateway())
+    monkeypatch.setattr(routes, "get_pi_copilot_service", lambda: service)
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    try:
+        session = service.create_session(project_id="picker-project", external_llm_opt_in=True)["session"]
+        endpoint = f"/api/copilot/pi/sessions/{session['session_id']}"
+        selected = client.post(endpoint + "/data-source-authorization", json={
+            "project_id": "picker-project", "action": "begin_local_selection",
+        })
+        assert selected.status_code == 200
+        assert selected.json()["resource"]["entry_mode"] == "source_binding"
+        assert selected.json()["session"]["data_source_authorization"]["status"] == "selection_in_progress"
+        for _ in range(2):
+            reloaded = client.get(endpoint, params={"project_id": "picker-project"})
+            assert reloaded.status_code == 200
+            assert reloaded.json()["session"]["binding"] == session["binding"]
+            assert reloaded.json()["session"]["data_source_authorization"]["status"] == "selection_in_progress"
+        assert not [call for call in service.gateway.calls if call[0] == "session.prompt"]
+    finally:
+        service.close()
 
 
 def _context(user_message: str = "") -> ToolExecutionContext:
@@ -413,7 +447,7 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     assert "'/api/workspaces/download'" in api
 
     index = (static_root / "index.html").read_text()
-    assert 'screens-extraction-embedded.js?v=20261021-where1' in index
+    assert 'screens-extraction-embedded.js?v=20261024-source-picker1' in index
     assert index.index("screens-extraction.js") < index.index("screens-extraction-embedded.js")
 
     node_main = (
