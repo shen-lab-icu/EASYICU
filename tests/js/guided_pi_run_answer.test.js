@@ -141,9 +141,20 @@ const outcome = modules.require('runOutcome').create({
   assert.match(firstResult.html, /模型样本量.*14/);
   assert.match(firstResult.html, /合成指标.*2\/16/);
   assert.match(firstResult.html, /仅供分析.*不是论文/);
+  assert.match(firstResult.html, /文献检索.*完整论文.*未评估新颖性.*文献对照/);
   assert.match(firstResult.html, /查看本次运行的证据表/);
   assert.match(firstResult.html, /data-gpi-resource-artifact="result_tables\.json"[^>]*>查看本次运行的证据表/);
   assert.doesNotMatch(firstResult.html, /negative_count|excess_count|fraction_count|unregistered_count/);
+  payloads['manuscript_provenance.json'] = { claims: [
+    { source_field: 'primary_or', canonical_value: '99', display_value: '99', rendered: 'Novel literature-supported estimate 99 [synthetic_citation]' },
+    { source_field: 'n_total', canonical_value: '999', display_value: '999', rendered: '999 literature-supported observations' },
+    { source_field: 'novelty', rendered: 'This is the first study [synthetic_citation]' },
+  ] };
+  const noLiteratureClaims = await reread({ design_selection: { execution_tier: 'first_result' },
+    analysis_type: 'association_study', steps: [] });
+  assert.doesNotMatch(noLiteratureClaims.html, /Novel|literature-supported|synthetic_citation|first study|999/);
+  assert.match(noLiteratureClaims.html, /1\.25.*1\.01.*1\.55/);
+  payloads['manuscript_provenance.json'] = {};
   const curveHeaders = ['exposure', 'exposure_value', 'reference_exposure_value', 'adjusted_odds_ratio',
     'ci_low', 'ci_high', 'exposure_density_population_n'];
   payloads['result_tables.json'] = { tables: [

@@ -547,6 +547,7 @@
       runtime_validated: 'setup', context_built: 'inputs', exposure_groups_staged: 'inputs',
       cohort_materialized: 'inputs', cohort_verified: 'inputs', trajectory_staged: 'inputs',
       cohort_audit: 'inputs', literature_build: 'evidence', plan_validation: 'plan', plan_ready: 'plan',
+      literature_deferred: 'evidence',
       repair: 'analysis', repair_retry: 'analysis', deterministic_repair: 'analysis',
       repair_failed: 'analysis', step_error: 'analysis', figure_audit: 'figure',
     };
@@ -554,6 +555,7 @@
     const ACTION_ICONS = {
       runtime_validated: 'gear', context_built: 'file', exposure_groups_staged: 'layers', cohort_materialized: 'db',
       cohort_verified: 'db', trajectory_staged: 'db', cohort_audit: 'shield', literature_build: 'search',
+      literature_deferred: 'search',
       plan_validation: 'shield', plan_ready: 'list', repair: 'refresh', repair_retry: 'refresh',
       deterministic_repair: 'refresh', repair_failed: 'alert', step_error: 'alert', figure_audit: 'eye',
     };
@@ -635,6 +637,8 @@
         trajectory_staged: tr('Prepare the trajectory input', '准备轨迹输入'),
         cohort_audit: tr('Check the initial cohort', '核查初始队列'),
         literature_build: tr('Search the literature and build the hypotheses', '检索文献并构建研究假设'),
+        literature_deferred: tr('Literature is part of a full article run; skipped for this first result',
+          '文献检索属于完整论文流程，本次首轮结果已跳过'),
         plan_ready: Number(row.planStepCount) > 0
           ? tr(`Analysis plan ready: ${row.planStepCount} steps`, `分析计划就绪：共 ${row.planStepCount} 步`)
           : tr('Analysis plan ready', '分析计划就绪'),

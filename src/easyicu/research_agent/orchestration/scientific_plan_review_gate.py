@@ -11,15 +11,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificRuntimeAuthority,
 )
 from ..authority.evidence_store import EvidenceStore
+from ..contracts.claim_ceiling import first_result
 from ..contracts.model_retention import PrimaryModelRetentionEvidence
 from ..contracts.runtime import PlanPhaseResult
-from ..literature import LiteratureBundle
+from ..gates.literature_retrieval_gate import literature_retrieval_findings
+from ..literature import LiteratureBundle, manuscript_citable_keys
 from ..planning.figure_strategy import ArticleFigureStrategy
 from ..planning.scientific_review import (
     PlanScientificReview,
@@ -29,9 +31,14 @@ from ..planning.literature_design_authority import (
     LiteratureDesignAuthorityError,
     validate_selected_design_against_literature,
 )
+from ..planning.literature_retrieval_contract import contract_for_plan_finalization
+from ..planning.preplan_literature import load_registered_preplan_literature
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from ..providers.llm import resolve_role_client
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
+
+if TYPE_CHECKING:
+    from .config import PipelineConfig
 
 SCIENTIFIC_PLAN_REVIEW_EVIDENCE_ID = "scientific_plan_review"
 SCIENTIFIC_PLAN_REVIEW_FILENAME = "scientific_plan_review.json"
@@ -108,6 +115,57 @@ def require_strict_planner_route(enabled: bool, skill_obj: Any) -> None:
             "strict literature-to-design authority cannot be bypassed by a fixed skill plan",
             path="pipeline.skill",
         )
+
+
+def defer_preplan_literature(
+    config: PipelineConfig, skill_obj: Any, emit_progress: Any, run_id: str,
+) -> bool:
+    """Defer article positioning using the run input that will seal the plan.
+
+    No background task or study-level cache is created: a later article run
+    enters the normal literature owner and its evidence gates independently.
+    """
+    if first_result(config):
+        emit_progress(
+            "hypothesis", "Literature is deferred to a full article run.",
+            status="skipped", run_id=run_id,
+        )
+        return True
+    require_strict_planner_route(config.require_literature_design_authority, skill_obj)
+    return False
+
+
+def append_required_literature_findings(
+    config: PipelineConfig, findings: list[ValidationFinding],
+    plan: AnalysisPlan, literature: Optional[LiteratureBundle],
+) -> None:
+    """After sealing, only the plan's tier can defer article evidence gates."""
+    if first_result(plan):
+        return
+    if config.require_literature_design_authority:
+        append_literature_design_authority_finding(findings, plan, literature)
+    if config.require_literature_retrieval_evidence:
+        findings.extend(literature_retrieval_findings(
+            plan=plan,
+            contract=contract_for_plan_finalization(plan=plan, preplan_literature=literature),
+        ))
+
+
+def deferred_preplan_result(
+    context: ResearchContext, run_dir: Path, evidence: EvidenceStore, resume_state: Any,
+) -> tuple[None, ResearchContext, list[str], list[str], Optional[LiteratureBundle]]:
+    """Preserve an older approval's local literature digest without searching.
+
+    New first-result runs carry no literature authority. An older approved run
+    may bind a bundle in its scientific review; dropping it would invalidate
+    that exact review on resume. Only its registered, verified bytes can recur.
+    """
+    if resume_state is None or evidence.get("preplan_literature_bundle") is None:
+        return None, context, [], [], None
+    bundle = load_registered_preplan_literature(context=context, run_dir=run_dir, evidence=evidence)
+    comparisons = [decision.citation_key for decision in bundle.screening_decisions
+                   if decision.disposition == "include" and decision.evidence_role == "direct_comparator"]
+    return None, context, list(manuscript_citable_keys(bundle)), comparisons, bundle
 
 
 def record_literature_authority_abort(
@@ -371,6 +429,9 @@ __all__ = [
     "SCIENTIFIC_PLAN_REVIEW_FILENAME",
     "PreplanAbortContext",
     "append_literature_design_authority_finding",
+    "append_required_literature_findings",
+    "defer_preplan_literature",
+    "deferred_preplan_result",
     "ScientificPlanReviewArtifactError",
     "ScientificPlanReviewGate",
     "literature_design_authority_finding",

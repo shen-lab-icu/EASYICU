@@ -159,7 +159,6 @@ from .research_context.builder import (
 )
 from .research_context.typed import parse_research_context_json
 from .gates.preplan import preplan_data_failure_reason, preplan_data_findings
-from .gates.literature_retrieval_gate import literature_retrieval_findings
 from .authority.context_numeric_claims import register_context_numeric_claims
 from .authority.declared_levels import bind_step_declared_levels
 from .authority.plan_input_closure import close_measurement_companion_inputs
@@ -429,7 +428,6 @@ from .literature import (
     render_hypothesis_blueprint_for_prompt,
 )
 from .planning.preplan_literature import prepare_preplan_literature
-from .planning.literature_retrieval_contract import contract_for_plan_finalization
 from .planning import literature_design_authority as _literature_design
 from .planning.analysis_family_trace import traced_analysis_type_key
 from .planning.preplan_know_how import (
@@ -1129,9 +1127,8 @@ def _run_preplan_literature_and_hypothesis(
     llm: Any,
     resume_state: Any,
 ) -> Tuple[Optional[Any], Any, list[str], list[str], Any]:
-    _scientific_plan_gate.require_strict_planner_route(
-        self._config.require_literature_design_authority, skill_obj
-    )
+    if _scientific_plan_gate.defer_preplan_literature(self._config, skill_obj, emit_progress, run_id):
+        return _scientific_plan_gate.deferred_preplan_result(agent_context, run_dir, evidence, resume_state)
     allowed_literature_citation_keys: list[str] = []
     direct_comparator_literature_keys: list[str] = []
     preplan_literature: Optional[LiteratureBundle] = None
@@ -3036,20 +3033,9 @@ class ResearchAgentPipeline:
         # The scientific review runs on the cohort execution will bind, so it
         # can count the rows the primary model would fit (not just its labels).
         if self._config.require_human_plan_review:
-            if self._config.require_literature_design_authority:
-                _scientific_plan_gate.append_literature_design_authority_finding(
-                    findings, plan, preplan_literature
-                )
-            if self._config.require_literature_retrieval_evidence:
-                findings.extend(
-                    literature_retrieval_findings(
-                        plan=plan,
-                        contract=contract_for_plan_finalization(
-                            plan=plan,
-                            preplan_literature=preplan_literature,
-                        ),
-                    )
-                )
+            _scientific_plan_gate.append_required_literature_findings(
+                self._config, findings, plan, preplan_literature
+            )
             review_gate = _scientific_plan_gate.prepare_scientific_plan_review_gate(
                 context=context,
                 plan=plan,

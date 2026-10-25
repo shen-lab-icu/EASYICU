@@ -273,6 +273,7 @@
       const payload = name => (rows[name] && rows[name].payload && typeof rows[name].payload === 'object')
         ? rows[name].payload : {};
       const plan = payload('agent_plan.json');
+      const firstResult = plan.design_selection && plan.design_selection.execution_tier === 'first_result';
       const context = payload('run_context.json');
       const provenance = payload('manuscript_provenance.json');
       const summarizer = window.EasyICU.guidedPi.optional('resultSummary');
@@ -282,7 +283,7 @@
       // record, in the page's language (screens-agent-exposure-levels.js),
       // never by a plan label that restates the grouping's codes.
       const levels = window.AGENT_EXPOSURE_LEVELS ? window.AGENT_EXPOSURE_LEVELS.reader(context, tr) : null;
-      const claims = (Array.isArray(provenance.claims) ? provenance.claims : [])
+      const claims = (!firstResult && Array.isArray(provenance.claims) ? provenance.claims : [])
         .concat(Array.isArray(summary.claims) ? summary.claims : []);
       const claim = field => claims.find(row => row && row.source_field === field) || null;
       const spec = primarySpec(plan);
@@ -315,12 +316,12 @@
         question: String(context.question || plan.research_question || ''),
         populationPreparation: context.population_preparation,
         analysisType: String(plan.analysis_type || ''),
-        firstResult: plan.design_selection && plan.design_selection.execution_tier === 'first_result',
+        firstResult,
         missingness: (summary.measurementMissingness || []).map(row => ({ ...row,
           label: readerLabel(labels, row.concept) || row.concept })),
         // A spline need not designate a single headline contrast. Show a bounded
         // preview from its primary producer, without inventing that designation.
-        curvePreview: plan.design_selection && plan.design_selection.execution_tier === 'first_result' ? (summary.curveContrasts || [])
+        curvePreview: firstResult ? (summary.curveContrasts || [])
           .filter(row => primarySteps.has(row.producerStep)).slice(0, 3)
           .map(row => ({ ...row, label: readerLabel(labels, row.exposure) || row.exposure })) : [],
         exposureLabel,
@@ -569,8 +570,12 @@
       // The answer, then the data it rests on, then how to read it: the same
       // order every finished run reads in.
       const data = materials(latestRun);
+      const literatureNote = view.firstResult ? `<p>${esc(tr(
+        'Literature search is part of a full article run. Novelty and literature comparisons have not been assessed for this first result.',
+        '文献检索属于完整论文流程；本次首轮结果未评估新颖性或文献对照。',
+      ))}</p>` : '';
       return `<div class="gpi-run-answer" data-gpi-run-answer="${esc(latestRun.run_id)}">
-        <div class="gpi-run-answer-text">${sentences.map(text => `<p>${esc(text)}</p>`).join('')}${data ? `<p class="gpi-run-answer-data"><span>${esc(tr('Data', '数据'))}</span>${esc(data)}</p>` : ''}<p class="gpi-run-answer-caveat"><span>${esc(tr('Keep in mind', '需要注意'))}</span>${esc(caveat(view))}</p></div>
+        <div class="gpi-run-answer-text">${sentences.map(text => `<p>${esc(text)}</p>`).join('')}${literatureNote}${data ? `<p class="gpi-run-answer-data"><span>${esc(tr('Data', '数据'))}</span>${esc(data)}</p>` : ''}<p class="gpi-run-answer-caveat"><span>${esc(tr('Keep in mind', '需要注意'))}</span>${esc(caveat(view))}</p></div>
         ${figureButton(latestRun, view)}
         ${view.firstResult ? resourceButton(runRefs(latestRun).get('result_tables.json'), tr('View this run’s evidence tables', '查看本次运行的证据表')) : ''}
       </div>`;
