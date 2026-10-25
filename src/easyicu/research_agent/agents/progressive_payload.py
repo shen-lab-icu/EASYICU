@@ -227,6 +227,9 @@ def parse_progressive_foundation_materialization(
         # cohort, label, robustness, and know-how decision in the foundation.
         payload = dict(payload)
         payload["outline_sha256"] = outline_sha256
+        # A live reply with retrieval disabled has an empty card roster. Reject
+        # invented selections before asking for metadata only the host owns.
+        allowed_know_how_decisions = allowed_know_how_decisions or {}
     foundation = payload.get("foundation")
     if isinstance(foundation, dict):
         foundation = bind_live_know_how_identity(foundation, allowed_know_how_decisions)

@@ -11,6 +11,7 @@ from ..know_how import KnowHowHit, KnowHowIntegrityError, KnowHowRegistry
 from ..resources import ResourceScheduler, ResourceSelectionQuery
 from ..schema import ResearchContext
 from .analysis_types import infer_analysis_type
+from .progressive_contract import ProgressivePlanCompileError
 
 _RETRIEVAL_FAMILY = {
     "descriptive_epidemiology": "descriptive",
@@ -172,23 +173,35 @@ def bind_live_know_how_identity(
 
     Card/claim selection and citation membership remain model decisions.
     Only the host knows the retrieved version and digest for that selection;
-    these are transport metadata, verified unchanged on resume.
+    these are transport metadata, verified unchanged on resume. An explicit
+    empty authority permits no cards; None leaves stored identities untouched.
     """
 
     bound = dict(payload)
     decisions = payload.get("know_how_decisions")
-    if not authority or not isinstance(decisions, list):
+    if authority is None or not isinstance(decisions, list):
         return bound
     bound_decisions = []
-    for decision in decisions:
+    for index, decision in enumerate(decisions):
         if isinstance(decision, dict) and isinstance(decision.get("card_id"), str):
             card = authority.get(decision["card_id"])
-            if card is not None:
-                decision = {
-                    **decision,
-                    "card_version": card["version"],
-                    "card_sha256": card["file_sha256"],
-                }
+            if card is None:
+                raise ProgressivePlanCompileError(
+                    "progressive_know_how_card_unretrieved",
+                    "know-how decision references an unretrieved card. "
+                    + (
+                        "Use only card_id values from Retrieved Research Know-How; "
+                        "the host supplies their card_version and card_sha256."
+                        if authority else
+                        "No know-how cards were retrieved; return know_how_decisions=[]."
+                    ),
+                    path=f"know_how_decisions.{index}.card_id",
+                )
+            decision = {
+                **decision,
+                "card_version": card["version"],
+                "card_sha256": card["file_sha256"],
+            }
         bound_decisions.append(decision)
     bound["know_how_decisions"] = bound_decisions
     return bound

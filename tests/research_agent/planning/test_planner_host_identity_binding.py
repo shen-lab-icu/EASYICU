@@ -33,10 +33,18 @@ from easyicu.research_agent.planning.preplan_know_how import verify_know_how_dec
 from easyicu.research_agent.planning.progressive_compiler import compile_progressive_plan
 from easyicu.research_agent.planning.progressive_contract import (
     ProgressiveFoundationMaterialization,
+    ProgressivePlanCompileError,
     ProgressivePlanOutline,
     ProgressivePlanSkeleton,
 )
 from easyicu.research_agent.planning.progressive_resume import validate_progressive_materialization_coordinate
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.providers.protocol import LLMMessage
+from easyicu.research_agent.providers.structured_retry import (
+    StructuredResponseFailure,
+    call_llm_with_structured_retry,
+    safe_structured_attempt_metadata,
+)
 
 from .family_spec_fixtures import _descriptive_context, _descriptive_payload, _request, _run
 from .progressive_planner_fixtures import (
@@ -220,7 +228,7 @@ def test_live_step_uses_the_module_and_action_selected_in_its_outline(field, val
     assert parsed.step.primary_exposure == payload["step"]["primary_exposure"]
 
 
-@pytest.mark.parametrize("field,value", [("card_id", "unretrieved"), ("claim_id", "unknown_claim"), ("citation_ids", ["unretrieved"])])
+@pytest.mark.parametrize("field,value", [("claim_id", "unknown_claim"), ("citation_ids", ["unretrieved"])])
 def test_live_know_how_binding_does_not_replace_selected_references(field, value) -> None:
     authority, decision = _know_how()
     decision[field] = value
@@ -259,3 +267,119 @@ def test_live_schemas_request_choices_without_host_identity_metadata() -> None:
     ).schema_json)
     assert "outline_step_sha256" not in step["properties"]
     assert "step_id" not in step["$defs"]["ProgressiveSkeletonStep"]["properties"]
+
+
+def _several_cards():
+    authority, template = _know_how()
+    cards, decisions = {}, []
+    for index, suffix in enumerate(("alpha", "beta", "gamma"), start=1):
+        card_id = f"card_{suffix}"
+        cards[card_id] = {
+            **authority["card_alpha"],
+            "version": f"{index}.2.3",
+            "file_sha256": "abc"[index - 1] * 64,
+        }
+        decisions.append({**template, "card_id": card_id})
+    return cards, decisions
+
+
+@pytest.mark.parametrize("echo", ["omitted", "matched", None, "v1", "99.0.0", 123, {"version": "wrong"}])
+def test_each_retrieved_card_binds_its_own_version_before_validation(echo) -> None:
+    authority, decisions = _several_cards()
+    for decision in decisions:
+        if echo == "omitted":
+            decision.pop("card_version")
+            decision.pop("card_sha256")
+        elif echo == "matched":
+            card = authority[decision["card_id"]]
+            decision.update(card_version=card["version"], card_sha256=card["file_sha256"])
+        else:
+            decision.update(card_version=echo, card_sha256=echo)
+    payload = _foundation_payload()
+    payload["foundation"]["know_how_decisions"] = decisions
+    parsed = parse_progressive_foundation_materialization(
+        json.dumps(payload), host_cohort=None, outline_sha256="b" * 64,
+        allowed_know_how_decisions=authority,
+    ).foundation
+    verify_know_how_decisions(parsed.know_how_decisions, authority)
+    for bound, original in zip(parsed.know_how_decisions, decisions, strict=True):
+        assert bound.card_version == authority[bound.card_id]["version"]
+        assert bound.card_sha256 == authority[bound.card_id]["file_sha256"]
+        for field in ("card_id", "claim_id", "citation_ids", "disposition", "reason_code", "rationale"):
+            assert getattr(bound, field) == original[field]
+
+
+@pytest.mark.parametrize("retrieval", ["selected", "empty", "disabled"])
+@pytest.mark.parametrize("echo", ["omitted", "v1", "1.0.0"])
+def test_unretrieved_cards_are_refused_before_their_identity_echoes(retrieval, echo) -> None:
+    authority, decisions = _several_cards()
+    unknown = {**decisions[-1], "card_id": "unretrieved_synthetic_card"}
+    if echo == "omitted":
+        unknown.pop("card_version")
+        unknown.pop("card_sha256")
+    else:
+        unknown["card_version"] = echo
+    payload = _foundation_payload()
+    payload["foundation"]["know_how_decisions"] = [*decisions[:2], unknown]
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        parse_progressive_foundation_materialization(
+            json.dumps(payload), host_cohort=None, outline_sha256="b" * 64,
+            allowed_know_how_decisions=authority if retrieval == "selected" else {} if retrieval == "empty" else None,
+        )
+    error = caught.value
+    assert error.reason_code == "progressive_know_how_card_unretrieved"
+    assert error.path == f"know_how_decisions.{2 if retrieval == 'selected' else 0}.card_id"
+    assert "unretrieved_synthetic_card" not in json.dumps(error.easyicu_safe_diagnostic)
+    if retrieval != "selected":
+        assert "know_how_decisions=[]" in str(error)
+
+
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_foundation_retry_repairs_the_card_selection_instead_of_inventing_metadata(exhausted) -> None:
+    _, decisions = _several_cards()
+    bad = _foundation_payload()
+    for decision in decisions:
+        decision.pop("card_version")
+        decision.pop("card_sha256")
+    bad["foundation"]["know_how_decisions"] = decisions
+    corrected = _foundation_payload()
+    llm = ScriptedMockLLMClient([json.dumps(bad), json.dumps(bad if exhausted else corrected)])
+
+    def run():
+        return call_llm_with_structured_retry(
+            llm, [LLMMessage(role="user", content="State rules for the synthetic study.")],
+            parser=lambda raw: parse_progressive_foundation_materialization(
+                raw, host_cohort=None, outline_sha256="b" * 64,
+            ),
+            role="progressive_planner_foundation", max_retries=1,
+            include_failed_response_on_retry=False,
+        )
+
+    if exhausted:
+        from easyicu.webserver.agent_pipeline_runs import _safe_pipeline_typed_failure
+
+        with pytest.raises(StructuredResponseFailure) as caught:
+            run()
+        rows = safe_structured_attempt_metadata(caught.value.attempts)
+        assert len(rows) == 2
+        assert all(row["reason_code"] == "progressive_know_how_card_unretrieved" for row in rows)
+        diagnostic = _safe_pipeline_typed_failure(caught.value)
+        assert diagnostic["reason_code"] == "progressive_know_how_card_unretrieved"
+        assert diagnostic["path"] == "know_how_decisions.0.card_id"
+        assert "card_alpha" not in json.dumps(diagnostic)
+    else:
+        assert run().foundation.know_how_decisions == []
+    assert len(llm.calls) == 2
+    retry = "\n".join(message.content for message in llm.calls[1][0])
+    assert "know_how_decisions=[]" in retry
+    assert "Field required" not in retry
+
+
+@pytest.mark.parametrize("field", ["card_version", "card_sha256"])
+def test_saved_card_identity_must_still_be_well_formed(field) -> None:
+    _, decision = _know_how()
+    decision[field] = "malformed"
+    payload = _foundation_payload()
+    payload["foundation"]["know_how_decisions"] = [decision]
+    with pytest.raises(ValidationError):
+        parse_progressive_foundation_materialization(json.dumps(payload), host_cohort=None)
