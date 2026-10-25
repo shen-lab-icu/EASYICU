@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
+from ..authority.baseline_association_runtime import BaselineAssociationRuntimeAuthority
 from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificAuthorityError,
     CurrentCaseScientificRuntimeAuthority,
@@ -445,13 +446,14 @@ class ScientificRuntimeAuthorities:
     def for_planning_context(
         self, *, context: ResearchContext, run_dir: Path, cohort_path: Path
     ) -> "ScientificRuntimeAuthorities":
-        """Yield a source spline when this planning run formed its primary groups.
+        """Reconcile a source authority with this planning run's verified groups.
 
         Web metadata planning selects a source authority before the grouping
         phase. Its spline cannot govern the grouped primary exposure. The
         grouping owner verifies the run's record against its empty input; only
-        that exact primary column, derived from the signed source, can release
-        this authority. Normal grouped-plan contracts still govern the plan.
+        that exact primary column, derived from the signed source, can change
+        this authority. Baseline designs re-sign the grouping while retaining
+        adjustment and dependence; landmark splines yield to grouped contracts.
         Execution on an accepted candidate already has its categorical
         authority and never takes this path.
         """
@@ -462,7 +464,11 @@ class ScientificRuntimeAuthorities:
         from .exposure_grouping_phase import planning_run_groupings
 
         authority = self.current_case
-        if not isinstance(authority, LandmarkSplineRuntimeAuthority) or not planned_on_metadata(context):
+        if not isinstance(authority, (LandmarkSplineRuntimeAuthority, BaselineAssociationRuntimeAuthority)) or not planned_on_metadata(context):
+            return self
+        if isinstance(authority, BaselineAssociationRuntimeAuthority) and (
+            authority.model_requirement_sha256 or authority.exposure_column == context.primary_exposure
+        ):
             return self
         groupings = planning_run_groupings(
             run_dir, cohort_sha256=sha256_of_file(cohort_path)
@@ -472,6 +478,9 @@ class ScientificRuntimeAuthorities:
         for column in groupings.columns:
             if column.variable != context.primary_exposure:
                 continue
+            if isinstance(authority, BaselineAssociationRuntimeAuthority):
+                rebound = authority.for_grouped_exposure(column)
+                return self if rebound is authority else replace(self, current_case=rebound)
             sources = (column.concept, *read_grouping_rules(column.parameters).read_columns)
             if authority.exposure_column in sources:
                 return replace(self, current_case=None)

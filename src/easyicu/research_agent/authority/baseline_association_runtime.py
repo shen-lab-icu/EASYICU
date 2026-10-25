@@ -8,7 +8,7 @@ the same digest used by the deterministic executor.
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -16,6 +16,7 @@ from ..canonical_json import canonical_sha256
 from ..contracts.association_execution import association_execution_verdict, sole_primary_model_requirement
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..contracts.dependence import PlannedDependenceRequirement
+from ..contracts.exposure_group_rules import PlannedGroupColumn, read_grouping_rules
 from ..contracts.model_terms import ModelTermSpec
 from ..contracts.runtime_outcomes import RuntimeOutcomeContract
 from ..schema import AnalysisPlan, AnalysisStep, ArtifactConsumptionContract
@@ -25,6 +26,27 @@ BASELINE_RISK_METHOD = "signed_baseline_absolute_risk"
 BASELINE_CAPABILITY = "association_baseline_adjusted_v1"
 BASELINE_STEPS = ("cohort_definition", "table_one", "measurement_audit", "adjusted_association",
                   "absolute_risk_context", "visualization", "report")
+
+
+AssociationAuthorityReason = Literal[
+    "association_adjustment_exposure_conflict",
+    "baseline_association_roster_mismatch",
+    "baseline_association_design_mismatch",
+]
+
+
+class BaselineAssociationAuthorityError(ValueError):
+    """A signed association refused a plan; only its fixed code may leave the owner."""
+
+    reason_codes = frozenset(get_args(AssociationAuthorityReason))
+
+    def __init__(self, message: str, *, reason_code: AssociationAuthorityReason = "baseline_association_design_mismatch"):
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+def _refusal(message, *, reason_code="baseline_association_design_mismatch"):
+    return BaselineAssociationAuthorityError(message, reason_code=reason_code)
 
 
 class BaselineAssociationRuntimeAuthority(BaseModel):
@@ -82,15 +104,35 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
                                    *(term.name for term in self.subgroup_terms),
                                    *((self.dependence.group_source,) if self.dependence else ()))))
 
+    def for_grouped_exposure(self, column: PlannedGroupColumn):
+        """Re-sign an unreviewed source exposure from a run-verified grouping."""
+        if self.model_requirement_sha256 or self.exposure_encoding != "restricted_cubic_spline":
+            return self
+        sources = set(read_grouping_rules(column.parameters).read_columns)
+        if self.exposure_column not in sources:
+            return self
+        if sources != {self.exposure_column} or (column.window and column.window[1] > 0):
+            raise _refusal("baseline grouping changes the signed source or observation window")
+        if {column.variable, *sources} & set(self.required_adjustment_columns):
+            raise _refusal("baseline adjustment includes the exposure or its source",
+                           reason_code="association_adjustment_exposure_conflict")
+        return build_baseline_authority(**{
+            **self.model_dump(mode="python", exclude={"execution_contract_sha256"}),
+            "exposure_column": column.variable, "exposure_encoding": "treatment_contrast",
+            "exposure_levels": tuple(str(code) for code in range(1, column.levels + 1)),
+            "exposure_reference_level": str(column.contrast.reference),
+            "primary_contrast_level": str(column.contrast.contrast),
+        })
+
     def _primary(self, plan: AnalysisPlan):
         primary = [step for step in plan.steps if step.planned_analysis_role == "primary"]
         if len(primary) != 1:
-            raise ValueError("baseline authority requires exactly one primary model")
+            raise _refusal("baseline authority requires exactly one primary model")
         return primary[0]
 
     def _requirement(self, primary: AnalysisStep):
         if primary.method != BASELINE_METHOD:
-            raise ValueError("baseline primary estimator method drifted")
+            raise _refusal("baseline primary estimator method drifted")
         requirement = sole_primary_model_requirement(primary)
         unsigned = primary.model_copy(update={
             "method": "adjusted_association_models",
@@ -100,28 +142,31 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
         })
         verdict = association_execution_verdict(unsigned)
         if not verdict.claimed or requirement is None:
-            raise ValueError("baseline primary model is incomplete: " + verdict.reason)
+            raise _refusal("baseline primary model is incomplete: " + verdict.reason)
+        if tuple(requirement.covariates or ()) != self.required_adjustment_columns:
+            raise _refusal("baseline adjustment roster drifted from signed coordinates",
+                           reason_code="baseline_association_roster_mismatch")
         if (requirement.outcome_type != "binary" or requirement.exposure_source != self.exposure_column
-            or requirement.outcome != self.outcome_column or tuple(requirement.covariates or ()) != self.required_adjustment_columns
+            or requirement.outcome != self.outcome_column
             or requirement.dependence != self.dependence):
-            raise ValueError("baseline primary model drifted from signed coordinates")
+            raise _refusal("baseline primary model drifted from signed coordinates")
         exposure = next(term for term in requirement.model_terms if term.role == "exposure")
         if self.exposure_encoding == "treatment_contrast":
             if (tuple(exposure.levels or ()) != self.exposure_levels or exposure.reference_level != self.exposure_reference_level
                 or requirement.primary_contrast_level != self.primary_contrast_level):
-                raise ValueError("baseline exposure contrast drifted")
+                raise _refusal("baseline exposure contrast drifted")
         elif exposure.coding != "continuous" or exposure.transform != "identity":
-            raise ValueError("baseline spline requires the continuous primary term intent")
+            raise _refusal("baseline spline requires the continuous primary term intent")
         expected_action = "association.effect_modification" if self.subgroup_terms and primary.scientific_capability == BASELINE_CAPABILITY else "association.adjusted_association"
         if primary.scientific_action_id != expected_action or not set(self.required_columns).issubset(primary.inputs):
-            raise ValueError("baseline subgroup parameter or input roster drifted")
+            raise _refusal("baseline subgroup parameter or input roster drifted")
         if primary.scientific_capability == BASELINE_CAPABILITY and tuple(requirement.effect_modifiers) != self.subgroup_terms:
-            raise ValueError("baseline subgroup parameter drifted")
+            raise _refusal("baseline subgroup parameter drifted")
         requirement = type(requirement).model_validate({
             **requirement.model_dump(mode="python"), "effect_modifiers": list(self.subgroup_terms),
         })
         if self.model_requirement_sha256 and canonical_sha256(requirement.model_dump(mode="json")) != self.model_requirement_sha256:
-            raise ValueError("baseline reviewed model terms drifted")
+            raise _refusal("baseline reviewed model terms drifted")
         return requirement
 
     def seal_adjustment_roster(self, plan: AnalysisPlan):

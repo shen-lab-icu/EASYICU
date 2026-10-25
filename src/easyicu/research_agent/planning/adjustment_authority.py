@@ -30,7 +30,7 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from ..authority.declared_levels import observed_levels_for
-from ..contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORMS
+from ..contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORMS, read_grouping_rules
 from ..research_context.materialization_window import bound_feature_window_end_hours
 from ..research_context.stay_events import (
     column_kind,
@@ -251,6 +251,20 @@ def baseline_static_grouping(variable: Any, context: Any) -> bool:
     return bool(sources) and all(
         owner_declared_baseline_static(context.variable(name)) for name in sources
     )
+
+
+def exposure_adjustment_columns(context: Any) -> frozenset[str]:
+    """The exposure and the input columns of its declared grouping are not adjustments."""
+    exposure = str(context.primary_exposure or "")
+    variable = context.variable(exposure)
+    columns = {exposure}
+    if variable is not None and variable.unit_normalization in EXPOSURE_GROUP_TRANSFORMS:
+        concepts = set(variable.derived_from_concepts)
+        columns.update(v.name for v in context.variables if v.name in concepts or v.source_concept in concepts)
+        for group in (context.cohort.provenance or {}).get("exposure_groups", ()):
+            if group.get("variable") == exposure and group.get("parameters"):
+                columns.update(read_grouping_rules(group["parameters"]).read_columns)
+    return frozenset(columns)
 
 
 def host_window_bound_roles(
@@ -519,6 +533,7 @@ def adjusted_model_term_planning_authority(
         and temporal_roles.get(name) in {"baseline_static", "at_or_before_time_zero"}
     )
     primary_exposure = str(context.primary_exposure or "").strip()
+    exposure_columns = exposure_adjustment_columns(context)
     outcome = str(context.target_outcome or "").strip()
     variables = {item.name: item for item in context.variables}
     host_timed: Mapping[str, HostTemporalRole] = host_proven_temporal_roles(
@@ -528,6 +543,9 @@ def adjusted_model_term_planning_authority(
     excluded: list[dict[str, str]] = []
     for name in dict.fromkeys(str(value or "").strip() for value in variable_names):
         if not name or name in {primary_exposure, outcome}:
+            continue
+        if name in exposure_columns:
+            excluded.append({"name": name, "reason": "exposure_group_source"})
             continue
         variable = variables.get(name)
         if variable is None:
