@@ -1476,8 +1476,8 @@ def test_association_frame_rejects_context_rates_and_labels_continuous_contrasts
 
     assert context_rates.empty
     assert contrasts["label"].tolist() == [
-        "Biomarker Mmol L: 1 vs 2.1",
-        "Biomarker Mmol L: 5 vs 2.1",
+        "Biomarker mmol l: 1 vs 2.1",
+        "Biomarker mmol l: 5 vs 2.1",
     ]
     assert contrasts.attrs["xlabel"] == "Odds ratio"
 
@@ -2482,7 +2482,7 @@ def test_missingness_frame_deduplicates_variable_labels(ra):
         display_labels={"lact": "Lactate", "temp": "Temperature"},
     )
 
-    assert frame["variable"].tolist() == ["Lactate Max", "BUN Max"]
+    assert frame["variable"].tolist() == ["Lactate max", "BUN max"]
 
 
 def test_missingness_frame_groups_measurement_summary_features(ra):
@@ -2604,8 +2604,8 @@ def test_association_frame_uses_model_label_for_row_labels(ra):
         )
     )
     assert frame["label"].tolist() == [
-        "Primary Imputed Analytic Cohort",
-        "Complete Case Comparator",
+        "Primary imputed analytic cohort",
+        "Complete case comparator",
     ]
 
 

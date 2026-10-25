@@ -246,6 +246,61 @@ def test_a_ratio_forest_is_logarithmic_and_prints_each_estimate() -> None:
         plt.close(fig)
 
 
+@pytest.mark.parametrize(("low", "high", "first_tick", "last_tick"), [
+    (0.4, 1.2, 0.5, 1.1),
+    (0.8, 3.1, 0.8, 3.0),
+    (1.1, 12.0, 1.0, 10.0),
+])
+def test_ratio_forest_ticks_span_the_intervals_without_changing_marks(
+    low, high, first_tick, last_tick,
+):
+    frame = pd.DataFrame({
+        "estimate": [(low * high) ** 0.5], "ci_low": [low], "ci_high": [high],
+        "effect_scale": ["odds_ratio"], "contrast": ["Synthetic contrast"],
+    })
+    original = frame.copy(deep=True)
+    fig, ax = plt.subplots(figsize=(7.2, 2.5))
+    try:
+        _forest(
+            ax, frame, estimate_column="estimate", label_column="contrast",
+            title="Synthetic association", color="#0F4D92", label_formatter=_label,
+        )
+        fig.canvas.draw()
+        ticks = ax.get_xticks().tolist()
+        assert ax.get_xscale() == "log"
+        assert 1.0 in ticks
+        assert 3 <= len(ticks) <= 5
+        assert ticks[0] == first_tick
+        assert ticks[-1] == last_tick
+        assert all(min(low, 1.0) * 0.97 <= tick <= max(high, 1.0) * 1.03 for tick in ticks)
+        texts = ax.get_xticklabels()
+        assert [text.get_text() for text in texts] == [f"{tick:g}" for tick in ticks]
+        boxes = [text.get_window_extent() for text in texts]
+        assert all(left.x1 < right.x0 for left, right in zip(boxes, boxes[1:]))
+        assert ax.get_xlim() == pytest.approx((min(low, 1.0) / 1.3, max(high, 1.0) * 1.3))
+        markers = [line for line in ax.lines if line.get_marker() == "o"]
+        assert len(markers) == 1
+        assert markers[0].get_xdata().tolist() == original["estimate"].tolist()
+        segments = [segment for collection in ax.collections for segment in collection.get_segments()]
+        assert len(segments) == 1
+        assert segments[0][:, 0].tolist() == pytest.approx([low, high])
+        pd.testing.assert_frame_equal(frame, original)
+    finally:
+        plt.close(fig)
+
+
+def test_full_forest_row_labels_make_the_group_axis_title_redundant(tmp_path, captured_main):
+    _render(tmp_path)
+    [fig] = captured_main
+    risk, forest = fig.axes
+    assert risk.get_xlabel() == "Lactate tertile"
+    assert forest.get_ylabel() == ""
+    words = _figure_words(fig)
+    assert "Lactate tertile 1 (reference)" in words
+    assert "Lactate tertile 2 vs Lactate tertile 1" in words
+    assert "Lactate tertile 3 vs Lactate tertile 1" in words
+
+
 def test_the_rendered_figure_names_exposure_and_outcome_in_english(tmp_path: Path) -> None:
     out_dir = _render(tmp_path)
     svg = (out_dir / "readmission_figure.svg").read_text(encoding="utf-8")
@@ -454,7 +509,7 @@ def test_caption_binds_the_actual_landmark_and_exposure_time_origin(tmp_path, ho
     caption = json.loads((out / "readmission_figure.figure_contract.json").read_text())["reader_caption"]
     for text in (
         "Wilson", "patient-cluster-robust", "412 ICU stays", "380 patient clusters",
-        f"alive and observed at the {hours} h landmark", f"0–{hours} h after ICU Admission",
+        f"alive and observed at the {hours} h landmark", f"0–{hours} h after ICU admission",
     ):
         assert text in caption
 

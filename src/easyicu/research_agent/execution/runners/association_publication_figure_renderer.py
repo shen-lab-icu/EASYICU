@@ -18,6 +18,7 @@ from ...contracts.figure_plan import (
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
+    configure_ratio_axis,
     make_figure_contract,
     save_publication_figure,
 )
@@ -108,7 +109,6 @@ _RATIO_SCALE_NAMES = {
     "rr": "Risk ratio",
     "risk_ratio": "Risk ratio",
 }
-_RATIO_TICKS = (0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0)
 
 
 def _forest(
@@ -159,11 +159,8 @@ def _forest(
         ax.axvline(1.0, color="#777777", linewidth=0.8, linestyle="--")
         low = min(float(lows.min()), 1.0) / 1.3
         high = max(float(highs.max()), 1.0) * 1.3
-        ax.set_xscale("log")
+        configure_ratio_axis(ax, lows=lows, highs=highs)
         ax.set_xlim(low, high)
-        ticks = [tick for tick in _RATIO_TICKS if low <= tick <= high]
-        ax.set_xticks(ticks, [f"{tick:g}" for tick in ticks])
-        ax.minorticks_off()
         names = {_RATIO_SCALE_NAMES[scale] for scale in scales}
         name = names.pop() if len(names) == 1 else "Ratio"
         ax.set_xlabel(f"{name} (95% CI, log scale)")
@@ -1593,7 +1590,10 @@ def render_association_publication_figure(
         else ()
     )
     if len(contrast_exposures) == 1:
-        axes[0, 1].set_ylabel(display_label(contrast_exposures[0], labels))
+        exposure_label = display_label(contrast_exposures[0], labels)
+        scope_pattern = re.compile(rf"(?<!\w){re.escape(exposure_label)}(?!\w)", re.IGNORECASE)
+        if not all(scope_pattern.search(tick.get_text()) for tick in axes[0, 1].get_yticklabels()):
+            axes[0, 1].set_ylabel(exposure_label)
     add_panel_label(axes[0, 1], "b", x=-0.12, y=1.04, fontsize=8.0)
 
     if scientific_sensitivity is not None and scientific_sensitivity_key is not None:
