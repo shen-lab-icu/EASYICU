@@ -137,7 +137,9 @@
         const gate = event.result && event.result.gate;
         const pending = Boolean(event.result && event.result.human_review_pending);
         const replayOwner = window.EasyICU.guidedPi.require('replay');
-        const errorCode = String(event.error || '').split(':', 1)[0].trim();
+        const error = String(event.error || '').trim();
+        const errorCode = /^不支持的数据库: (eicu_demo|mimic_demo)$/.test(error)
+          ? 'extraction_database_filter_unsupported' : error.split(':', 1)[0].trim();
         const presentation = replayOwner && typeof replayOwner.childJobPresentation === 'function'
           ? replayOwner.childJobPresentation({
             status: event.status,
@@ -173,7 +175,11 @@
         activity.failureCode = failed ? (errorCode || String(gate && gate.reason || '')) : '';
         if (presentation.title) activity.displayTitle = presentation.title;
         activity.endedAt = endedAt;
+        activity.runningNote = '';
         closeChildSource();
+        // A job may fail before the model's tool turn has ended. Display the
+        // terminal state now; refreshing the transcript is asynchronous.
+        render();
         archiveChildJob(jobId)
           .catch(() => null)
           .then(() => refreshSession(true))
@@ -290,6 +296,7 @@
         if (planRow) planRow.text = replayedProgress;
       }
       if (settled) {
+        activity.runningNote = '';
         const blocked = Boolean(presentation.blocked);
         completeRunningPipelineSteps(activity, presentation.endedAt, job.status === 'done' ? 'complete' : 'error');
         upsertActivityStep(activity, {

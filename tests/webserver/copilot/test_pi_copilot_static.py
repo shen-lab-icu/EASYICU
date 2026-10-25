@@ -114,7 +114,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20261021-turn-layout1" in index
-    assert "js/screens-guided-pi-activity.js?v=20261021-named-steps1" in index
+    assert "js/screens-guided-pi-activity.js?v=20261024-terminal1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20261021-hosted1"
         in index
@@ -144,8 +144,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-confirmation.js?v=20261024-demo-raw-plan1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261024-demo-raw-plan1" in index
-    assert "js/screens-guided-pi-childjob.js?v=20261021-turn-layout1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261024-queue1" in index
+    assert "js/screens-guided-pi-childjob.js?v=20261024-terminal1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261024-terminal1" in index
     assert "js/screens-guided-pi.js?v=20261024-source-picker1" in index
     assert "js/screens-guided.js?v=20261022-legacy1" in index
     assert (
@@ -6547,7 +6547,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20261021-turn-layout1" in index
+    assert "screens-guided-pi-transcript.js?v=20261024-terminal1" in index
     assert "screens-guided-pi.js?v=20261024-source-picker1" in index
 
 

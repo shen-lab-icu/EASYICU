@@ -1699,7 +1699,12 @@ def ensure_safe_projection(
 
 
 def _safe_error_code(value: Any) -> Optional[str]:
-    return stable_code(str(value or "").split(":", 1)[0])
+    text = str(value or "").strip()
+    # Legacy cohort filtering raises a localized exception. Project only this
+    # known failure, never an arbitrary exception or its local data path.
+    if text in {"不支持的数据库: eicu_demo", "不支持的数据库: mimic_demo"}:
+        return "extraction_database_filter_unsupported"
+    return stable_code(text.split(":", 1)[0])
 
 
 def gate_detail_projection(detail: Any) -> Dict[str, Any]:

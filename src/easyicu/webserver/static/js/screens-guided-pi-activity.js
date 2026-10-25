@@ -253,6 +253,7 @@
 
     function pipelineStageLabel(stage, status, fallback) {
       const done = status === 'complete';
+      if (status === 'error') return tr('Research task stopped; review the failure details', '研究任务已停止，请查看失败原因');
       if (stage === 'setup') return done
         ? tr('Research-task setup is ready', '研究计划生成环境已准备')
         : tr('Preparing the research-task setup', '正在准备研究计划生成环境');
