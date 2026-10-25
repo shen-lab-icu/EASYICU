@@ -13,6 +13,14 @@
       workflowConfirmationHtml, hostJobs: HOST_JOBS, followUps: FOLLOW_UPS,
       effortMenu: EFFORT_MENU, workflowConfirmation, runFailureText, help: HELP,
     } = deps;
+    const modelMenu = MODULES.optional('modelMenu');
+    if (modelMenu) modelMenu.bind({
+      session: () => state.session, projectId,
+      locked: () => Boolean(state.busy || state.childJobId || state.projectLoading || state.planStarting
+        || (state.session && state.session.streaming) || sessionIsStale()
+        || (state.workflow && state.workflow.active_job && state.workflow.active_job.present)),
+      hosted: () => { const owner = MODULES.optional('hosted'); return Boolean(owner && owner.active()); },
+    });
     // A stopped run's block (owner: screens-guided-pi-run-stop.js).
     const stopOwner = MODULES.optional('runStop');
     const RUN_STOP = stopOwner ? stopOwner.create({ tr, runFailureText,
@@ -167,17 +175,16 @@
       const workflow = workflowOverride || state.workflow || {};
       const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
       if (!stages.length) return '';
-      const reviewerDemo = workflow.kind === 'reviewer_validation_demo';
       const names = {
-        question: reviewerDemo ? tr('Protocol', '审稿协议') : tr('Question', '问题'),
-        idea: reviewerDemo ? tr('Validation scope', '验证范围') : tr('Ideas + literature', '选题与文献'),
-        setup: reviewerDemo ? tr('Data contract', '数据合同') : tr('Study design', '研究设计'),
-        extraction: reviewerDemo ? tr('Projection', '安全投影') : tr('Extract + review', '提取与审阅'),
+        question: tr('Question', '问题'),
+        idea: tr('Ideas + literature', '选题与文献'),
+        setup: tr('Study design', '研究设计'),
+        extraction: tr('Extract + review', '提取与审阅'),
         plan: tr('Plan + evidence', '计划与证据'), analysis: tr('Analyze + figures', '分析与图表'),
-        interpretation: tr('Interpret', '结果解读'), manuscript: reviewerDemo ? tr('Dossier', '审稿报告') : tr('Paper', '论文'),
+        interpretation: tr('Interpret', '结果解读'), manuscript: tr('Paper', '论文'),
       };
       return `<nav class="gpi-workflow" aria-label="${tr('EasyICU research workflow', 'EasyICU 科研流程')}">
-        <div class="gpi-workflow-meta"><strong>${reviewerDemo ? tr('Reviewer workflow', '审稿流程') : tr('Research workflow', '科研流程')}</strong><span class="shell-sr-only">${esc(workflow.completed_required_stages || 0)}/${esc(workflow.required_stage_count || 7)} ${tr('required stages complete', '个必需阶段已完成')}</span></div>
+        <div class="gpi-workflow-meta"><strong>${tr('Research workflow', '科研流程')}</strong><span class="shell-sr-only">${esc(workflow.completed_required_stages || 0)}/${esc(workflow.required_stage_count || 7)} ${tr('required stages complete', '个必需阶段已完成')}</span></div>
         <ol>${stages.map(stage => `<li class="${esc(stage.status || 'blocked')}" title="${esc(names[stage.id] || stage.label || stage.id)}" aria-current="${stage.id === workflow.current_stage ? 'step' : 'false'}"><i></i><span>${esc(names[stage.id] || stage.label || stage.id)}</span></li>`).join('')}</ol>
       </nav>`;
     }
@@ -204,6 +211,8 @@
       const model = session.model || {};
       const research = session.research_provider || {};
       const connection = session.model_connection || null;
+      const researchLabel = [(connection || research).provider, (connection || research).model].filter(Boolean).join(' · ');
+      const separateModels = !connection || (model.id && model.id !== connection.model);
       const stale = sessionIsStale();
       const workspace = agentMode() === 'workspace';
       const freshTask = !state.messages.length;
@@ -313,11 +322,12 @@
         runningSince: activeChild && Number.isFinite(Number(activeChild.startedAt)) ? Number(activeChild.startedAt) : null,
         runningElapsed: activeChild && ACTIVITY.durationText ? ACTIVITY.durationText(activeChild.startedAt) : '',
         workspace,
-        pinned: Boolean(session.pinned_for_presentation),
+        modelBindingKey: modelMenu ? modelMenu.bindingKey(session, projectId()) : '',
         layout: ASIDE.layoutOptions(),
-        connectionLabel: connection
-          ? ([connection.provider, connection.model].filter(Boolean).join(' · ') || 'model')
-          : ([model.id || (state.runtime && state.runtime.model), research.provider, research.model].filter(Boolean).join(' / ') || 'legacy model binding'),
+        connectionLabel: (separateModels
+          ? [model.id ? tr(`Conversation: ${model.id}`, `对话：${model.id}`) : '',
+            researchLabel ? tr(`Analysis: ${researchLabel}`, `分析：${researchLabel}`) : ''].filter(Boolean).join(' / ')
+          : researchLabel) || tr('Model connection unavailable', '模型连接暂不可用'),
         connectionTitle: connection
           ? tr('One model connection for conversation and analysis', '对话与分析共用的一套模型连接')
           : tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定'),
