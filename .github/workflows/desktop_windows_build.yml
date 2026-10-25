@@ -62,3 +62,4 @@ jobs:
             ${{ runner.temp }}/EasyICU 临床 profile/AppData/Local/EasyICU/logs/desktop-smoke.log
             ${{ runner.temp }}/EasyICU 临床 profile/AppData/Local/EasyICU/runtime/desktop-smoke-result.json
             ${{ env.EASYICU_DESKTOP_BUILD_DIR }}/longest-paths.json
+            ${{ runner.temp }}/easyicu-smoke-diag/
