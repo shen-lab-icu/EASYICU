@@ -986,9 +986,8 @@
           '新版本报告没有通过数字与证据校验，保留原版本。',
         ),
       };
-      // A typed compile reason explains the stop itself; the generic compile
-      // sentence would name a cause that did not happen.
-      if (value === 'research_pipeline_progressive_compile_failed' && suffix) return suffix;
+      // A typed reason already explains these stops and supplies recovery copy.
+      if (['research_pipeline_progressive_compile_failed', 'research_pipeline_scientific_authority_refused'].includes(value) && suffix) return suffix;
       if (known[value]) return withDetail(known[value]);
       // An unlisted code stays visible for diagnosis, after a plain sentence.
       return withDetail(tr(`The run stopped before finishing (code: ${value}).`, `运行在完成前停止（代码：${value}）。`));

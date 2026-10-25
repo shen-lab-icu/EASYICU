@@ -257,7 +257,20 @@ const runFilesApi = {
   const stop = modules.require('runStop').create({ tr, runFailureText });
   for (language of ['zh', 'en']) {
     window.EU_LANG = language;
+    const authorityGate = 'research_pipeline_scientific_authority_refused';
+    const specific = tr(
+      'The plan does not match the confirmed exposure, outcome, group comparison or patient-clustering design. Planning stopped; analysis has not started. Check these study settings and generate the plan again; keep the failure record if it stops again.',
+      '计划中的暴露、结局、分组比较或患者聚类设置与已确认的设计不一致。规划已停止，分析尚未开始。请核对这些研究设置后重新生成计划；如再次停止，请保留失败记录供排查。',
+    );
+    const generic = runFailureText(authorityGate);
+    assert.ok(generic && generic !== specific, 'an authority stop without a typed reason keeps its fallback');
+    assert.equal(runFailureText(authorityGate, { code: 'unknown_synthetic_reason' }), generic);
     for (const flattened of [false, true]) {
+      const authorityStop = stop.render({ savedRuns: [{ ...savedRun, run_status: 'blocked', gate_reason: authorityGate,
+        ...(flattened ? { gate_detail_code: 'baseline_association_design_mismatch' }
+          : { gate_detail: { reason_code: 'baseline_association_design_mismatch' } }) }] });
+      assert.equal(visible(authorityStop).trim(), specific, 'the specific authority reason replaces the generic gate sentence');
+      assert.equal(count(authorityStop, '<p>'), 1);
       for (const [cause, sentence] of [
         ['executor_runtime_failure', tr('the built-in calculation failed', '内置计算执行失败')],
         ['executor_output_contract_failed', tr('its output did not pass validation', '输出未通过校验')],

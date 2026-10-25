@@ -36,17 +36,31 @@ AssociationAuthorityReason = Literal[
 
 
 class BaselineAssociationAuthorityError(ValueError):
-    """A signed association refused a plan; only its fixed code may leave the owner."""
+    """A signed association refused a plan; only fixed codes and fields leave it."""
 
     reason_codes = frozenset(get_args(AssociationAuthorityReason))
+    mismatch_field_names = (
+        "primary_model", "method", "model_requirements", "covariates", "outcome_type",
+        "exposure_source", "outcome", "dependence", "exposure_levels",
+        "exposure_reference_level", "primary_contrast_level", "exposure_encoding",
+        "scientific_action_id", "inputs", "effect_modifiers",
+        "grouping.source_columns", "grouping.window",
+    )
 
-    def __init__(self, message: str, *, reason_code: AssociationAuthorityReason = "baseline_association_design_mismatch"):
+    def __init__(self, message: str, *, reason_code: AssociationAuthorityReason = "baseline_association_design_mismatch",
+                 mismatch_fields: tuple[str, ...] = ()):
         super().__init__(message)
         self.reason_code = reason_code
+        self._mismatch_fields = tuple(mismatch_fields)
+
+    @property
+    def mismatch_fields(self) -> tuple[str, ...]:
+        """Bounded coordinate names, never exception text or compared values."""
+        return tuple(field for field in self.mismatch_field_names if field in self._mismatch_fields)
 
 
-def _refusal(message, *, reason_code="baseline_association_design_mismatch"):
-    return BaselineAssociationAuthorityError(message, reason_code=reason_code)
+def _refusal(message, *, reason_code="baseline_association_design_mismatch", mismatch_fields=()):
+    return BaselineAssociationAuthorityError(message, reason_code=reason_code, mismatch_fields=mismatch_fields)
 
 
 class BaselineAssociationRuntimeAuthority(BaseModel):
@@ -112,10 +126,12 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
         if self.exposure_column not in sources:
             return self
         if sources != {self.exposure_column} or (column.window and column.window[1] > 0):
-            raise _refusal("baseline grouping changes the signed source or observation window")
+            raise _refusal("baseline grouping changes the signed source or observation window", mismatch_fields=tuple(
+                field for field, differs in (("grouping.source_columns", sources != {self.exposure_column}),
+                                            ("grouping.window", bool(column.window and column.window[1] > 0))) if differs))
         if {column.variable, *sources} & set(self.required_adjustment_columns):
             raise _refusal("baseline adjustment includes the exposure or its source",
-                           reason_code="association_adjustment_exposure_conflict")
+                           reason_code="association_adjustment_exposure_conflict", mismatch_fields=("covariates",))
         return build_baseline_authority(**{
             **self.model_dump(mode="python", exclude={"execution_contract_sha256"}),
             "exposure_column": column.variable, "exposure_encoding": "treatment_contrast",
@@ -127,12 +143,12 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
     def _primary(self, plan: AnalysisPlan):
         primary = [step for step in plan.steps if step.planned_analysis_role == "primary"]
         if len(primary) != 1:
-            raise _refusal("baseline authority requires exactly one primary model")
+            raise _refusal("baseline authority requires exactly one primary model", mismatch_fields=("primary_model",))
         return primary[0]
 
     def _requirement(self, primary: AnalysisStep):
         if primary.method != BASELINE_METHOD:
-            raise _refusal("baseline primary estimator method drifted")
+            raise _refusal("baseline primary estimator method drifted", mismatch_fields=("method",))
         requirement = sole_primary_model_requirement(primary)
         unsigned = primary.model_copy(update={
             "method": "adjusted_association_models",
@@ -142,31 +158,41 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
         })
         verdict = association_execution_verdict(unsigned)
         if not verdict.claimed or requirement is None:
-            raise _refusal("baseline primary model is incomplete: " + verdict.reason)
+            raise _refusal("baseline primary model is incomplete: " + verdict.reason, mismatch_fields=("model_requirements",))
         if tuple(requirement.covariates or ()) != self.required_adjustment_columns:
             raise _refusal("baseline adjustment roster drifted from signed coordinates",
-                           reason_code="baseline_association_roster_mismatch")
-        if (requirement.outcome_type != "binary" or requirement.exposure_source != self.exposure_column
-            or requirement.outcome != self.outcome_column
-            or requirement.dependence != self.dependence):
-            raise _refusal("baseline primary model drifted from signed coordinates")
+                           reason_code="baseline_association_roster_mismatch", mismatch_fields=("covariates",))
+        mismatches = tuple(field for field, actual, expected in (
+            ("outcome_type", requirement.outcome_type, "binary"),
+            ("exposure_source", requirement.exposure_source, self.exposure_column),
+            ("outcome", requirement.outcome, self.outcome_column),
+            ("dependence", requirement.dependence, self.dependence),
+        ) if actual != expected)
+        if mismatches:
+            raise _refusal("baseline primary model drifted from signed coordinates", mismatch_fields=mismatches)
         exposure = next(term for term in requirement.model_terms if term.role == "exposure")
         if self.exposure_encoding == "treatment_contrast":
-            if (tuple(exposure.levels or ()) != self.exposure_levels or exposure.reference_level != self.exposure_reference_level
-                or requirement.primary_contrast_level != self.primary_contrast_level):
-                raise _refusal("baseline exposure contrast drifted")
+            mismatches = tuple(field for field, actual, expected in (
+                ("exposure_levels", tuple(exposure.levels or ()), self.exposure_levels),
+                ("exposure_reference_level", exposure.reference_level, self.exposure_reference_level),
+                ("primary_contrast_level", requirement.primary_contrast_level, self.primary_contrast_level),
+            ) if actual != expected)
+            if mismatches:
+                raise _refusal("baseline exposure contrast drifted", mismatch_fields=mismatches)
         elif exposure.coding != "continuous" or exposure.transform != "identity":
-            raise _refusal("baseline spline requires the continuous primary term intent")
+            raise _refusal("baseline spline requires the continuous primary term intent", mismatch_fields=("exposure_encoding",))
         expected_action = "association.effect_modification" if self.subgroup_terms and primary.scientific_capability == BASELINE_CAPABILITY else "association.adjusted_association"
         if primary.scientific_action_id != expected_action or not set(self.required_columns).issubset(primary.inputs):
-            raise _refusal("baseline subgroup parameter or input roster drifted")
+            raise _refusal("baseline subgroup parameter or input roster drifted", mismatch_fields=tuple(
+                field for field, differs in (("scientific_action_id", primary.scientific_action_id != expected_action),
+                                            ("inputs", not set(self.required_columns).issubset(primary.inputs))) if differs))
         if primary.scientific_capability == BASELINE_CAPABILITY and tuple(requirement.effect_modifiers) != self.subgroup_terms:
-            raise _refusal("baseline subgroup parameter drifted")
+            raise _refusal("baseline subgroup parameter drifted", mismatch_fields=("effect_modifiers",))
         requirement = type(requirement).model_validate({
             **requirement.model_dump(mode="python"), "effect_modifiers": list(self.subgroup_terms),
         })
         if self.model_requirement_sha256 and canonical_sha256(requirement.model_dump(mode="json")) != self.model_requirement_sha256:
-            raise _refusal("baseline reviewed model terms drifted")
+            raise _refusal("baseline reviewed model terms drifted", mismatch_fields=("model_requirements",))
         return requirement
 
     def seal_adjustment_roster(self, plan: AnalysisPlan):

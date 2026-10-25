@@ -35,6 +35,11 @@ def compile_baseline_association_runtime_projection(
     schema = pq.read_schema(universe_path)
     grouped = _bound_exposure_group(exposure_groupings, primary_exposure=primary_exposure,
                                     primary_exposure_source=primary_exposure_source)
+    if grouped:
+        # A configured study can still name the source while its reviewed
+        # grouping already names the executable column. Never give group
+        # codes to that source column when signing the runtime design.
+        primary_exposure = grouped.variable
     if grouped and primary_exposure not in schema.names:
         from easyicu.research_agent.contracts.exposure_group_rules import read_grouping_rules
 
@@ -45,7 +50,7 @@ def compile_baseline_association_runtime_projection(
         return None
     verified = load_verified_materialized_cohort_authority(universe_path)
     bindings = verified.sidecar.files[0].columns if verified else {}
-    source = primary_exposure_source or primary_exposure
+    source = primary_exposure_source or (grouped.concept if grouped else primary_exposure)
     variables = []
     for field in schema:
         name = field.name
