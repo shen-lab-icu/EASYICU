@@ -126,11 +126,21 @@
        and no host action records it, so without this message a reloaded
        conversation shows the researcher's request with no answer at all. */
     function submittedJobOutcome(job) {
-      if (!job || String(job.kind || '') !== 'agent-run') return null;
+      if (!job || !['agent-run', 'extract'].includes(String(job.kind || ''))) return null;
       const status = String(job.status || '');
       if (!['done', 'failed', 'cancelled', 'interrupted'].includes(status)) return null;
       const refs = Array.isArray(job.artifact_refs) ? job.artifact_refs : [];
       const reason = String(runFailureText(job.error_code || job.gate_reason_code || '') || '').replace(/[。.]\s*$/, '');
+      if (job.kind === 'extract') {
+        return {
+          text: status === 'done'
+            ? tr('Data extraction completed. Review the prepared data and complete analysis plan before approving analysis.', '数据提取已完成。请核对准备的数据和完整分析计划，再批准分析。')
+            : status === 'cancelled'
+              ? tr('Data extraction was cancelled.', '数据提取已取消。')
+              : tr(`Data extraction did not complete${reason ? `: ${reason}` : ''}.`, `数据提取没有完成${reason ? `：${reason}` : ''}。`),
+          resources: [],
+        };
+      }
       if (job.report_only === true) {
         if (status === 'done' && job.report_revision_ready === true) {
           const pdf = refs.find(ref => ref && ref.artifact === 'manuscript_revision.pdf');

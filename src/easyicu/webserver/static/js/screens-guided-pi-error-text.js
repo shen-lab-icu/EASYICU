@@ -653,6 +653,10 @@
         return suffix || tr('The run did not pass EasyICU\'s checks, so its results cannot be reported.', '这次运行没有通过 EasyICU 的检查，结果不能报告。');
       }
       const known = {
+        extraction_database_filter_unsupported: tr(
+          'The data filter could not process this official Demo; update EasyICU before retrying extraction.',
+          '数据筛选器无法处理这份官方 Demo，请更新 EasyICU 后重新提取。',
+        ),
         windowed_summary_statistic_unresolved: tr(
           'The question names a measurement but not which summary to report, such as its highest, lowest or mean value over a time window. State it, for example the highest lactate in the first 24 hours after ICU admission, then generate the plan again.',
           '问题提到了一项测量，但没有说明要报告哪种汇总值，例如某个时间窗内的最高值、最低值或平均值。请写明，例如入 ICU 后最初 24 小时内的最高乳酸，然后重新生成计划。',
