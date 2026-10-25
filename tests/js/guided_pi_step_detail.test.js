@@ -20,6 +20,18 @@ const event = (seconds, step, label, extra) => ({ type: 'progress', step, label,
 const plan = (seconds, phase, current, extra) => event(seconds, 'planning', '', { action: 'plan_validation',
   planning_unit: 'structure', retry_phase: phase, current, total: 3, ...extra });
 const PNG = 'data:image/png;base64,iVBORw0KGgo=';
+const extraction = {
+  status: 'partial', analysis_unit: 'icu_stay', extracted: 30, retained: 24,
+  source_patient_count: 20, source_stay_count: 30,
+  identifiers: [{ name: 'stay_id', role: 'stay_key' }, { name: 'person_key', role: 'patient_group' }],
+  concepts: [{ column: 'marker_peak', concept: 'marker', table: 'assay', selector: 'test_name', items: ['marker'],
+    value_column: null, time_column: null, unit_column: null, unit: 'mg/L',
+    window: { origin: 'icu_admission', start_hours: 0, end_hours: 6 } }],
+  steps: [
+    { step_id: 'cohort_accounting', index: 1, before: 24, after: 18, before_unit: 'icu_stay', unit: 'icu_stay', events: null, model: false },
+    { step_id: 'baseline_table', index: 2, before: 18, after: 9, before_unit: 'rows', unit: 'observations', events: 2, model: true },
+  ],
+};
 
 const events = [
   event(0, 'runtime', '', { action: 'runtime_validated', status: 'complete' }),
@@ -55,7 +67,11 @@ const stepPayloads = {
       { name: 'step_summary.json', kind: 'summary', bytes: 300 },
       { name: 'table_one.csv', kind: 'table', bytes: 900, evidence: { id: 'table_baseline', sha256: 'a'.repeat(64) } },
       { name: '../escape.csv', kind: 'table', bytes: 1 },
+      { name: 'runner_provenance.json', kind: 'record', bytes: 20 },
+      { name: 'runner_requirements.lock.txt', kind: 'document', bytes: 20 },
+      { name: 'critique_report.json', kind: 'record', bytes: 20 },
     ],
+    extraction_record: extraction,
     withheld_output_count: 1, more_output_count: 0,
     headline: { en: 'Baseline table built for 3 groups.', zh: '已生成 3 组的基线特征表。' } },
   running_step: { schema_version: 'easyicu.web-run-step-detail/1', step_id: 'running_step', state: 'running',
@@ -207,6 +223,18 @@ const stepPayloads = {
     assert.ok(html.includes(tr('Baseline table built for 3 groups.', '已生成 3 组的基线特征表。')));
     assert.ok(html.includes(tr('The run log stays in the run record and is not shown here.', '运行日志保存在运行记录中，不在这里显示。')));
     assert.ok(html.includes(tr('1 more file(s) are not listed', '另有 1 个文件未列出')));
+    assert.ok(html.includes(tr('Extraction record: Partially recorded', '提取记录：部分记录')));
+    assert.ok(html.includes(tr('View record', '查看记录')));
+    assert.ok(html.includes('assay') && html.includes('test_name') && html.includes('mg/L'));
+    assert.ok(html.includes(tr('Not recorded', '未记录')), 'null source coordinates stay missing');
+    assert.ok(html.includes(tr('9 observations', '9 个观测')));
+    assert.ok(html.includes(tr('2 events', '2 个事件')));
+    assert.ok(html.indexOf(tr('9 observations', '9 个观测')) < html.indexOf('gpi-source-code'));
+    assert.ok(html.indexOf('class="gpi-source-block is-output"') < html.indexOf('gpi-source-code'));
+    const technical = html.match(/<details class="gpi-step-technical">([\s\S]*?)<\/details>/);
+    assert.ok(technical && technical[1].includes('runner_provenance.json') && technical[1].includes('runner_requirements.lock.txt'));
+    assert.doesNotMatch(html.replace(technical[0], ''), /runner_provenance|runner_requirements/);
+    assert.ok(html.includes(tr('Step checks', '步骤检查')));
     assert.doesNotMatch(html, /parquet|\/Users|\/private|run\.log/);
     listener({ target: { closest: selector => (selector === '[data-gpi-step-evidence]' ? { dataset: { gpiStepEvidence: '3' } } : null) } });
     for (let i = 0; i < 4; i += 1) await new Promise(resolve => setImmediate(resolve));
@@ -226,6 +254,26 @@ const stepPayloads = {
     sourceView.openOperation(button({ ...baselineOp, id: 'other', step: 'mismatched' }), 'project_1', '', () => {});
     for (let i = 0; i < 4; i += 1) await new Promise(resolve => setImmediate(resolve));
     assert.ok(html.includes(tr('This step cannot be displayed safely.', '这一步无法安全展示。')));
+    const detailOwner = window.EasyICU.guidedPi.require('stepDetail');
+    await assert.rejects(() => detailOwner.load('project_1', RUN, 'baseline_table', {
+      loadPiCopilotRunStep: async () => ({ ok: true, run_id: 'run_another', step: stepPayloads.baseline_table }),
+    }));
+    const missing = detailOwner.validDetail({ ...stepPayloads.baseline_table, extraction_record: {
+      ...extraction, steps: [{ ...extraction.steps[1], after: null, events: 0 }],
+    } });
+    const missingHtml = detailOwner.renderExtraction(missing, true);
+    assert.ok(missingHtml.includes(tr('Not recorded', '未记录')));
+    assert.ok(missingHtml.includes(tr('0 events', '0 个事件')));
+    assert.ok(!missingHtml.includes(tr('0 observations', '0 个观测')));
+    const unsafe = detailOwner.validDetail({ ...stepPayloads.baseline_table, extraction_record: {
+      ...extraction, concepts: [{ ...extraction.concepts[0], concept: '<img src=x onerror=alert(1)>' }],
+    } });
+    assert.doesNotMatch(detailOwner.renderExtraction(unsafe, true), /<img src=x/);
+    const unknownUnit = detailOwner.validDetail({ ...stepPayloads.baseline_table, extraction_record: {
+      ...extraction, analysis_unit: 'constructor', identifiers: [{ name: 'key', role: '__proto__' }],
+      steps: [{ ...extraction.steps[1], unit: '__proto__' }],
+    } });
+    assert.ok(detailOwner.renderExtraction(unknownUnit, true).includes(tr('Not recorded', '未记录')));
     // A host action shows its typed inputs.
     sourceView.openOperation(button(literatureOp), 'project_1', '', () => {});
     assert.ok(html.includes(tr('Records found', '检索到的记录')) && html.includes('sepsis glucose mortality'));
