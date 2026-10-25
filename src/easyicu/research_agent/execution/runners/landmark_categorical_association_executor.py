@@ -203,6 +203,7 @@ def run_landmark_categorical_cohort(
                 "n_before": before,
                 "n_excluded": before - remaining,
                 "n_remaining": remaining,
+                "landmark_hours": float(sealed.landmark_hours),
             }
         )
     if not bool(mask.any()):
@@ -224,6 +225,8 @@ def run_landmark_categorical_cohort(
             LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND
         ),
         "n_source": int(len(frame)),
+        "cohort_flow_scope": "eligibility_only",
+        "n_eligible": int(mask.sum()),
         "n_analysis_cohort": int(mask.sum()),
         "analysis_cohort_n": int(mask.sum()),
         "landmark_hours": float(sealed.landmark_hours),
@@ -382,6 +385,8 @@ def run_landmark_categorical_primary(
         "schema_version": (
             "easyicu.landmark_categorical_association_runtime_receipt/1"
         ),
+        "n_eligible": int(len(frame)),
+        "n_analyzed": int(summary["n_total"]),
         "execution_contract_sha256": sealed.execution_contract_sha256,
         "runtime_projection_sha256": runtime_projection_sha256,
         "landmark_hours": float(sealed.landmark_hours),
