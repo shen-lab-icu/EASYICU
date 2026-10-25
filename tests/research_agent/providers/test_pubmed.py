@@ -2284,7 +2284,7 @@ def test_icu_transfer_outcome_does_not_make_ward_cohort_an_icu_comparator(ra):
         query="focused query",
     )
 
-    assert decision.exposure_match is True
+    assert decision.exposure_match is False
     assert decision.outcome_match is True
     assert decision.population_match is False
     assert decision.disposition == "exclude"

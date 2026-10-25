@@ -1648,6 +1648,10 @@ def screen_source_backed_direct_comparator(
         and design_excerpt
         and publication_type_eligible
     )
+    exposure_difference = (
+        _exposure_difference_rationale(exposure, record.title, source_excerpt)
+        if not exposure_match else ""
+    )
     return LiteratureScreeningDecision(
         citation_key=record.key,
         source=source,
@@ -1661,7 +1665,7 @@ def screen_source_backed_direct_comparator(
             "review must still "
             "confirm time zero, estimand, and adjustment comparability."
             if direct
-            else (
+            else exposure_difference or (
                 "Excluded from direct-comparator authority because the retained "
                 "title/source excerpt does not establish all declared ICU population, "
                 "exposure-role, and outcome axes, no source-backed abstract excerpt was "
@@ -2055,6 +2059,88 @@ _EXPOSURE_ROLE_MARKERS = (
 )
 
 
+def _normalise_exposure_role_text(value: str) -> str:
+    # A slash between marker names carries identity; ordinary punctuation does not.
+    return _normalise_clinical_text(value.replace("/", " to "))
+
+
+def _mask_non_studied_exposure(exposure: str, text: str) -> tuple[str, set[str]]:
+    """Mask component/covariate mentions, leaving independent analyses intact.
+
+    Match bounded noun phrases, not every occurrence of 'ratio' or 'change' in
+    a paper. Effect measures and unrelated endpoints do not redefine exposure.
+    A complete declared ratio/composite/trajectory still matches itself.
+    """
+
+    if not exposure:
+        return text, set()
+    escaped = re.escape(exposure)
+    noun = (
+        r"(?!(?:predict\w*|associat\w*|evaluat\w*|assess\w*|compar\w*|"
+        r"mortality|death|outcome\w*|odds|hazard|risk|ratio\w*|"
+        r"was|were|is|are|for|with|after|adjust\w*)\b)[a-z0-9]+"
+    )
+    modifiers = rf"(?:\s+{noun}){{0,5}}"
+    dynamics = r"trajector(?:y|ies)|kinetics|clearance|variability|changes?|slopes?"
+    patterns = {
+        "ratio": (
+            rf"\b{escaped}{modifiers}\s+ratios?\b",
+            rf"(?<!odds )(?<!hazard )(?<!risk )\bratios?\s+(?:of|between)"
+            rf"{modifiers}\s+{escaped}\b",
+            rf"\b{escaped}\s+to\s+{noun}{modifiers}\b",
+            rf"\b{noun}{modifiers}\s+to\s+{escaped}\b",
+        ),
+        "composite": (
+            rf"\b{escaped}(?:\s+{noun}){{1,5}}\s+(?:score|index|measure)\b",
+            rf"\b{escaped}{modifiers}\s+composite\b",
+            rf"\b(?:composite|combination of){modifiers}\s+{escaped}\b",
+            rf"\b{escaped}\s+(?:combined|combined together)\s+with\s+{noun}",
+        ),
+        "trajectory": (
+            rf"\b{escaped}\s+(?:{dynamics})\b",
+            rf"\b(?:{dynamics})\s+(?:of|in){modifiers}\s+{escaped}\b",
+        ),
+        "adjustment": (
+            rf"\b(?:adjust(?:ed|ing|ment)?|controll(?:ed|ing)?)\s+for"
+            rf"(?:\s+{noun}){{0,14}}\s+{escaped}\b"
+            r"(?!\s+(?:predict\w*|was|were|is|are)\b)",
+            rf"\b{escaped}\s+(?:(?:was|were|is|are|included|used|only)\s+)*as\s+"
+            r"(?:an?\s+)?(?:covariate|confounder|adjustment variable)\b",
+            rf"\b(?:covariates?|confounders?|adjustment variables?)\s+"
+            rf"(?:included|including|were|are)(?:\s+{noun}){{0,14}}\s+{escaped}\b",
+            rf"\b{escaped}\s+adjusted\b",
+        ),
+    }
+    differences: set[str] = set()
+    for kind, expressions in patterns.items():
+        for expression in expressions:
+            text, count = re.subn(expression, " ; ", text)
+            if count:
+                differences.add(kind)
+    return text, differences
+
+
+def _exposure_difference_rationale(exposure: str, title: str, excerpt: str) -> str:
+    differences: set[str] = set()
+    for sentence in (title, *re.split(r"(?<=[.!?;])\s+", excerpt)):
+        _, found = _mask_non_studied_exposure(
+            _normalise_exposure_role_text(exposure),
+            _normalise_exposure_role_text(sentence),
+        )
+        differences.update(found)
+    if not differences:
+        return ""
+    labels = {"ratio": "比值", "composite": "复合指标", "trajectory": "动态变化", "adjustment": "调整变量"}
+    return (
+        "保留为相关背景：该指标用于"
+        + "、".join(labels[kind] for kind in labels if kind in differences)
+        + "，尚未确认与所声明研究因素相符的独立分析。 "
+        "Retained as related context: the marker appears in a "
+        + ", ".join(kind for kind in labels if kind in differences)
+        + " role; an independent analysis of the declared exposure is not established."
+    )
+
+
 def _clinical_exposure_role_matches(
     *,
     exposure: str,
@@ -2072,10 +2158,10 @@ def _clinical_exposure_role_matches(
     Broader papers remain visible as related context.
     """
 
-    normalized_exposure = _normalise_clinical_text(exposure)
+    normalized_exposure = _normalise_exposure_role_text(exposure)
     if not normalized_exposure:
         return False
-    normalized_title = _normalise_clinical_text(title)
+    normalized_title = _normalise_exposure_role_text(title)
     normalized_blob = _normalise_clinical_text(" ".join((title, source_excerpt)))
     if not all(
         _clinical_axis_matches(term, normalized_blob, axis="exposure")
@@ -2092,7 +2178,7 @@ def _clinical_exposure_role_matches(
         return True
 
     for sentence in re.split(r"(?<=[.!?;])\s+", str(source_excerpt or "")):
-        normalized = _normalise_clinical_text(sentence)
+        normalized = _normalise_exposure_role_text(sentence)
         if not normalized:
             continue
         if _text_assigns_studied_exposure(normalized_exposure, normalized):
@@ -2141,7 +2227,7 @@ def _text_assigns_studied_exposure(exposure: str, text: str) -> bool:
     # the same title (for example, "biomarker predicts mortality in patients
     # meeting Sepsis-3 criteria") can accidentally promote the eligibility
     # label to the studied exposure.
-    analytic_text = text
+    analytic_text, _ = _mask_non_studied_exposure(exposure, text)
     eligibility_patterns = (
         rf"\b(?:patients?|participants?|subjects?|cohort)\b.{{0,40}}\b(?:meeting|met|fulfilling|satisfying)\b\s+(?:the\s+)?{escaped}(?:\s+(?:criteria|definition))?",
         rf"\b(?:defined|diagnosed|classified)\b.{{0,30}}\b(?:according\s+to|using|by)\b\s+(?:the\s+)?{escaped}(?:\s+(?:criteria|definition))?",
@@ -2151,10 +2237,6 @@ def _text_assigns_studied_exposure(exposure: str, text: str) -> bool:
         # Model validation within that population does not study the disease
         # contrast. Retain an explicit comparison immediately after the noun.
         rf"\b{escaped}\s+(?:patients?|participants?|subjects?|cohorts?|populations?)\b(?!\s+(?:versus|vs|compared\s+(?:with|to)|and\s+without))",
-        # Mentioning an exposure as an adjustment variable does not study its
-        # association with the outcome.  For example, a urine-output model may
-        # adjust for AKI while studying urine output itself.
-        rf"\b(?:adjust(?:ed|ing)?|controll(?:ed|ing)?)\s+for\b[^.;:]{{0,100}}\b{escaped}\b",
     )
     for pattern in eligibility_patterns:
         analytic_text = re.sub(pattern, " ", analytic_text)
