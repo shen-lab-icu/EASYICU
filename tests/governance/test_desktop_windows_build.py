@@ -301,6 +301,10 @@ def test_windows_packaging_and_smoke_workflow_are_opt_in_and_per_user():
     manifest = ET.fromstring((DESKTOP / "windows-backend.manifest").read_text())
     assert manifest.find(".//{*}requestedExecutionLevel").attrib["level"] == "asInvoker"
     assert manifest.find(".//{*}longPathAware").text == "true"
+    controls = manifest.find(".//{*}dependentAssembly/{*}assemblyIdentity")
+    assert controls is not None
+    assert controls.attrib["name"] == "Microsoft.Windows.Common-Controls"
+    assert controls.attrib["version"] == "6.0.0.0"
     build_rs = (DESKTOP / "src-tauri/build.rs").read_text()
     assert 'include_str!("../windows-backend.manifest")' in build_rs
     workflow = yaml.safe_load((ROOT / ".github/workflows/desktop_windows_build.yml").read_text())
