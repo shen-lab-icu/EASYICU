@@ -439,6 +439,13 @@ function namedDatabaseText(language, catalog, text) {
     .filter(Boolean).join(" ");
   if (!label) return "";
   const zh = language === "zh";
+  // Same research-entry scope as the source card and recommendation owner.
+  // A cataloged database or installed export is not research support.
+  if (["hirid", "aumc", "sic"].includes(String(selected.database).replace(/_demo$/, ""))) {
+    return zh
+      ? `研究问题已保存。本版本暂不支持使用 ${label} 完成这项研究。请在下方选择其他受支持的数据源。`
+      : `The research question is saved. This version does not support this study with ${label}. Choose another supported data source below.`;
+  }
   const recommended = catalog?.recommended_source && typeof catalog.recommended_source === "object"
     ? catalog.recommended_source : null;
   if (recommended && recommended.availability === "available_in_easyicu") {
@@ -481,12 +488,12 @@ function namedDatabaseText(language, catalog, text) {
   // what can be done instead.
   if (catalog?.local_folder_selection_available === false) {
     return zh
-      ? `研究问题已保存。这台服务器上还没有 ${label} 数据。`
-      : `The research question is saved. This server has no ${label} data.`;
+      ? `研究问题已保存。尚未添加 ${label} 数据。`
+      : `The research question is saved. ${label} data have not been added.`;
   }
   return zh
-    ? `研究问题已保存。你的问题指定了 ${label}，但 EasyICU 里还没有登记这份数据。\n\n**下一步：**在下方数据源卡片选择本机的 ${label} 数据目录；EasyICU 登记后会拟定研究计划。`
-    : `The research question is saved. Your question names ${label}, but EasyICU has no registered copy of it yet.\n\n**Next step:** Choose your local ${label} folder in the data-source card below; EasyICU registers it and then proposes the research plan.`;
+    ? `研究问题已保存。尚未添加 ${label} 数据。\n\n**下一步：**在下方数据源卡片选择本机的 ${label} 数据目录；EasyICU 登记后会拟定研究计划。`
+    : `The research question is saved. ${label} data have not been added.\n\n**Next step:** Choose your local ${label} folder in the data-source card below; EasyICU registers it and then proposes the research plan.`;
 }
 
 function dataSourceSelectionText(language, catalog, text = "") {

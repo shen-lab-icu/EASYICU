@@ -21,7 +21,10 @@ import pytest
 
 from easyicu.webserver.pi_copilot import tools as tool_module
 from easyicu.webserver.pi_copilot.contracts import PiSessionRecord, ToolExecutionContext
-from easyicu.webserver.pi_copilot.source_recommendation import recommend_registered_export
+from easyicu.webserver.pi_copilot.source_recommendation import (
+    recommend_registered_export,
+    registered_sources_for_database,
+)
 from easyicu.webserver.pi_copilot.turn_authority import (
     explicitly_confirms_easyicu_registered_source,
 )
@@ -288,7 +291,7 @@ def test_only_a_database_without_exports_is_called_unregistered() -> None:
         selected_database=MIMIC_IV, recommended_source=None, registered_source_choices=[],
     )
 
-    assert "但 EasyICU 里还没有登记这份数据" in text
+    assert "尚未添加 MIMIC-IV v3.1 数据。" in text
     assert "第 1 份" not in text
 
 
@@ -307,22 +310,57 @@ HIRID = {"database": "hirid", "label": "HiRID", "reference_release": "1.1.1"}
 
 @pytest.mark.parametrize("language", ["zh", "en"])
 def test_a_hosted_server_without_the_database_offers_no_local_folder(language: str) -> None:
-    """pilot1 10-22 (R4): the reply told a hospital researcher to choose a
-    local HiRID folder beside the card saying the server has none."""
+    """An unsupported database has the same scope limit on both deployments."""
 
     text = _first_reply(
-        "在 HiRID 数据库中，入 ICU 24 小时内最高乳酸与 ICU 死亡有关吗？", language,
+        "在 HiRID 数据库中描述体温记录的分布。", language,
         selected_database=HIRID, recommended_source=None, registered_source_choices=[],
         local_folder_selection_available=False,
     )
 
     assert text == (
-        "研究问题已保存。这台服务器上还没有 HiRID v1.1.1 数据。"
+        "研究问题已保存。本版本暂不支持使用 HiRID v1.1.1 完成这项研究。请在下方选择其他受支持的数据源。"
         if language == "zh"
-        else "The research question is saved. This server has no HiRID v1.1.1 data."
+        else "The research question is saved. This version does not support this study with HiRID v1.1.1. Choose another supported data source below."
     )
     local = _first_reply(
-        "在 HiRID 数据库中，入 ICU 24 小时内最高乳酸与 ICU 死亡有关吗？", "zh",
+        "在 HiRID 数据库中描述体温记录的分布。", "zh",
         selected_database=HIRID, recommended_source=None, registered_source_choices=[],
     )
-    assert "数据目录" in local
+    assert "本版本暂不支持使用 HiRID v1.1.1 完成这项研究。" in local
+    assert "数据目录" not in local
+
+
+def _synthetic_catalog(database: str) -> dict[str, Any]:
+    return {"sources": [{
+        "id": "src_synthetic", "database": database, "ok": True, "path": "/synthetic/never-open",
+        "label": "Synthetic", "modules": ["demographics", "outcome"], "summary": {"stays": 12},
+    }]}
+
+
+@pytest.mark.parametrize(
+    ("database", "alias"), [("hirid", "HiRID"), ("aumc", "AmsterdamUMCdb"), ("sic", "SICdb")],
+)
+def test_an_unsupported_database_keeps_its_export_listed_but_not_recommended(
+    database: str, alias: str,
+) -> None:
+    """Physical availability stays distinct from research scope (audit F07)."""
+
+    choices, recommendation = registered_sources_for_database(_synthetic_catalog(database), alias)
+
+    assert len(choices) == 1
+    assert choices[0]["availability"] == "available_in_easyicu"
+    assert recommendation.source is None
+    assert not recommendation.choices
+    assert recommendation.reason is None
+    assert "/synthetic/" not in json.dumps(choices)
+
+
+@pytest.mark.parametrize(
+    ("database", "alias"), [("eicu", "eicu"), ("miiv", "MIMIC-IV"), ("eicu_demo", "eicu_demo")],
+)
+def test_a_supported_database_still_recommends_its_registered_export(database: str, alias: str) -> None:
+    _, recommendation = registered_sources_for_database(_synthetic_catalog(database), alias)
+
+    assert recommendation.source["source_id"] == "src_synthetic"
+    assert recommendation.source["database"] == database

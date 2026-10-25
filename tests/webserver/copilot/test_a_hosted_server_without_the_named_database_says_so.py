@@ -1,11 +1,7 @@
-"""A hosted clinician naming a database the server does not hold is told so.
+"""Unsupported research scope is distinct from missing hosted or desktop data.
 
-On a hospital server the administrator prepares every source and there is no
-folder to choose.  「在 HiRID 数据库中…」 on pilot1 (fixed set R4, 10-22) was
-offered 「选择 HiRID 数据」, a selection that could not offer it.  When the
-host's offer for the named database is empty, the hosted card says the server
-has no such data and offers only another source; a local install keeps the
-folder selection, and an export the server holds is still offered.
+An installed export cannot enable a research path this version does not offer.
+Supported missing and registered sources are covered by the source-scope JS contract.
 """
 
 from __future__ import annotations
@@ -44,7 +40,7 @@ def _card(*, hosted: bool, reply: dict, contact: str = "") -> str:
         }}),
         dataConsent: consent,
         session: () => session, projectId: () => 'proj-1',
-        messages: () => [{{ role: 'user', text: '在 HiRID 数据库中，入 ICU 24 小时内最高乳酸与 ICU 死亡有关吗？' }}],
+        messages: () => [{{ role: 'user', text: '在 HiRID 数据库中描述体温记录的分布。' }}],
         render() {{}}, busy: () => false,
         workflowReceipts: () => [], setWorkflowReceipts() {{}}, setError() {{}}, errorText: e => String(e),
       }};
@@ -72,30 +68,32 @@ _EMPTY = {"database": "hirid", "recommended": None, "choices": []}
 
 @pytest.mark.requires_node
 @pytest.mark.usefixtures("_load_guided_pi_module_harness")
-def test_a_hosted_server_without_the_database_says_so() -> None:
+def test_a_hosted_unsupported_database_explains_scope() -> None:
     html = _card(hosted=True, reply=_EMPTY, contact="信息科 <8888>")
 
-    assert "这台服务器上还没有 HiRID 数据" in html
-    assert "请信息科 &lt;8888&gt;添加 HiRID 数据" in html
+    assert "本版本暂不支持使用 HiRID 完成这项研究。" in html
+    assert "信息科" not in html and "添加 HiRID 数据" not in html
     assert 'data-gpi-data-source-action="begin_local_selection">选择其他数据源</button>' in html
     assert "选择 HiRID 数据" not in html and "data-gpi-data-source-database" not in html
 
 
 @pytest.mark.requires_node
 @pytest.mark.usefixtures("_load_guided_pi_module_harness")
-def test_a_local_install_keeps_the_folder_selection() -> None:
+def test_a_local_install_explains_the_same_scope_limit() -> None:
     html = _card(hosted=False, reply=_EMPTY)
 
-    assert "选择 HiRID 数据" in html
+    assert "本版本暂不支持使用 HiRID 完成这项研究。" in html
+    assert "选择 HiRID 数据" not in html
     assert "这台服务器上还没有" not in html
 
 
 @pytest.mark.requires_node
 @pytest.mark.usefixtures("_load_guided_pi_module_harness")
-def test_an_export_the_server_holds_is_still_offered() -> None:
+def test_an_unsupported_export_is_not_offered_for_research() -> None:
     held = {"source_id": "src_hirid", "label": "HiRID v1.1", "stays": 33905,
             "module_count": 10, "generated_date": "2026-10-19"}
     html = _card(hosted=True, reply={"database": "hirid", "recommended": held, "choices": []})
 
-    assert 'data-gpi-data-source-id="src_hirid">使用这份数据</button>' in html
+    assert "本版本暂不支持使用 HiRID 完成这项研究。" in html
+    assert "data-gpi-data-source-id" not in html
     assert "这台服务器上还没有" not in html
