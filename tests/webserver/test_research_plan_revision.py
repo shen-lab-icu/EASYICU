@@ -594,11 +594,12 @@ def test_revision_rejects_growth_before_authority_or_any_plan_write(tmp_path):
     guard = _revision_guard(previous)
     pipeline = SimpleNamespace(
         _services=PipelineServices(plan_revision_guard=guard),
+        _config=SimpleNamespace(execution_tier=None),
         _scientific_runtime_authorities=SimpleNamespace(current_case=None, trajectory=None),
     )
     method = ResearchAgentPipeline._validate_and_persist_plan
     kwargs = {name: None for name in inspect.signature(method).parameters if name != "self"}
-    kwargs.update(generation=SimpleNamespace(plan=_revision_plan(_revision_step())), agent_context=_context())
+    kwargs.update(generation=SimpleNamespace(plan=_revision_plan(_revision_step()), reused_prior_plan=False), agent_context=_context())
     with pytest.raises(owner.ResearchPipelineRunError) as raised:
         method(pipeline, **kwargs)
     assert raised.value.code == "revision_added_unrequested_analysis"
@@ -738,6 +739,7 @@ def test_revision_refuses_an_optional_analysis_added_by_host_shaping(monkeypatch
             return plan, []
 
     pipeline = SimpleNamespace(_services=PipelineServices(plan_revision_guard=_revision_guard(previous)),
+                               _config=SimpleNamespace(execution_tier=None),
                                _scientific_runtime_authorities=Runtime())
     monkeypatch.setattr(module, "_shape_fresh_plan", lambda **kw: _revision_plan(_revision_step()))
     method = module.ResearchAgentPipeline._validate_and_persist_plan
@@ -808,6 +810,7 @@ def test_revision_compares_the_runtime_bound_plan_before_persisting(
     monkeypatch.setattr(module._final_plan, "endpoint_contract_findings", next_validation)
     pipeline = SimpleNamespace(
         _services=PipelineServices(plan_revision_guard=guard),
+        _config=SimpleNamespace(execution_tier=None),
         _scientific_runtime_authorities=Runtime(),
     )
     method = module.ResearchAgentPipeline._validate_and_persist_plan
