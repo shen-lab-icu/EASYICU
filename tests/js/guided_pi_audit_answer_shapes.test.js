@@ -8,7 +8,7 @@ global.window = global;
 global.EU_LANG = 'zh';
 const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 global.EU_HTML = { esc };
-for (const file of ['data-catalog.js', 'screens-guided-pi-modules.js', 'screens-guided-pi-resources.js',
+for (const file of ['data-catalog.js', 'screens-viz-demo.js', 'screens-guided-pi-modules.js', 'screens-guided-pi-resources.js',
   'screens-guided-pi-result-summary.js', 'screens-guided-pi-run-answer.js', 'screens-guided-pi-run-outcome.js']) {
   require(path.join(root, 'src/easyicu/webserver/static/js', file));
 }
@@ -246,6 +246,85 @@ const compactRow = (group, extra = {}) => ({ variable: 'chloride', group, group_
   row_role: 'exposure_level', n_nonmissing: '6', unit: 'mmol/L',
   median: '104.250', q25: '101.125', q75: '107.875', ...extra });
 const answerText = html => html.match(/<div class="gpi-run-answer-text"><p>(.*?)<\/p>/)?.[1] || '';
+
+for (const [variable, unit, chineseUnit, chineseLabel, englishLabel] of [
+  ['los_icu', 'days', '天', 'ICU住院时长', 'ICU length of stay'],
+  ['vent_duration', 'hours', '小时', '通气时长', 'Ventilation duration'],
+  ['wait_duration', 'minutes', '分钟', '等待时长', 'Waiting duration'],
+  ['age', 'years', '岁', '年龄', 'Age'],
+  ['followup', 'years', '年', '随访时长', 'Follow-up duration'],
+  ['chloride', 'mmol/L', 'mmol/L', '氯离子', 'Chloride'],
+  ['map', 'mmHg', 'mmHg', '平均动脉压', 'Mean arterial pressure'],
+  ['spo2', '%', '%', '血氧饱和度', 'Oxygen saturation'],
+]) {
+  test(`descriptive ${variable} units read in Chinese and retain the English answer`, async () => {
+    const table = compact([compactRow('试验ICU2组', { variable, unit, group_variable: 'synthetic_group',
+      median: '2.5699999', q25: '1.4', q75: '3.05' })]);
+    table.descriptive_summary.variable_display = { synthetic_group: { source_concept: 'icu_unit_type' } };
+    const original = JSON.stringify(table);
+    const label = chineseLabel === 'ICU住院时长' ? 'ICU 住院时长' : chineseLabel;
+    for (const lang of ['zh', 'en']) {
+      const selectedPlan = { ...plan, display_labels: { [variable]: lang === 'zh' ? chineseLabel : englishLabel } };
+      const text = answerText((await answer([table], { lang, plan: selectedPlan })).html);
+      assert.equal(text, lang === 'zh'
+        ? `各 ICU 类型${variable === 'los_icu' ? ' ' : ''}${label}（${chineseUnit}），中位数［四分位距］：试验ICU2组 2.57［1.40–3.05］，n=6。`
+        : `${englishLabel} (${unit}) by ICU Unit Type, median [IQR]: 试验ICU2组 2.57 [1.40–3.05], n=6.`);
+    }
+    assert.equal(summary([table]).continuousGroups[0].unit, unit);
+    assert.equal(JSON.stringify(table), original);
+  });
+}
+
+test('Chinese label joins space CJK beside Latin letters or digits without changing group values', async () => {
+  for (const [groupLabel, variableLabel, expected] of [
+    ['ICU类型', 'ICU住院时长', '各 ICU 类型 ICU 住院时长'],
+    ['ICU 类型', 'ICU 住院时长', '各 ICU 类型 ICU 住院时长'],
+    ['分组2型', '指标3项', '各分组 2 型指标 3 项'],
+    ['分组', '2项指标', '各分组 2 项指标'],
+    ['', 'ICU住院时长', 'ICU 住院时长'],
+  ]) {
+    const table = compact([compactRow(groupLabel ? '试验ICU2组' : '', { variable: 'synthetic_value',
+      group_variable: groupLabel ? 'synthetic_group' : '', row_role: groupLabel ? 'exposure_level' : 'overall' })]);
+    const selectedPlan = { ...plan, display_labels: { synthetic_value: variableLabel, synthetic_group: groupLabel } };
+    const text = answerText((await answer([table], { plan: selectedPlan })).html);
+    assert.equal(text, `${expected}（mmol/L），中位数［四分位距］：${groupLabel ? '试验ICU2组 ' : ''}104［101–108］，n=6。`);
+  }
+  const table = compact([], [{ variable: 'status', group: '试验ICU2组', group_variable: 'synthetic_group',
+    row_role: 'exposure_level', level: 'yes', numerator: '1', denominator: '4', percentage: '25' }]);
+  const selectedPlan = { ...plan, display_labels: { status: 'ICU结局', synthetic_group: 'ICU类型', 'status="yes"': '阳性' } };
+  assert.equal(answerText((await answer([table], { plan: selectedPlan })).html),
+    '各 ICU 类型 ICU 结局（阳性），比例：试验ICU2组 25.0%（1/4）。');
+});
+
+test('year wording follows the bound age concept rather than the variable label', async () => {
+  for (const [variable, sourceConcept, expected] of [
+    ['recorded_age', 'age', '岁'], ['age_max', '', '岁'], ['age', 'followup', '年'], ['followup', '', '年'],
+  ]) {
+    const table = compact([compactRow('试验组', { variable, unit: 'years', group_variable: '' })]);
+    table.descriptive_summary.variable_display = { [variable]: { source_concept: sourceConcept } };
+    const selectedPlan = { ...plan, display_labels: { [variable]: '年龄相关时长' } };
+    assert.ok(answerText((await answer([table], { plan: selectedPlan })).html).startsWith(`年龄相关时长（${expected}）`));
+  }
+});
+
+test('mixed duration units are localized on each group and leave registered units exact', async () => {
+  const table = compact([compactRow('试验ICU2组', { variable: 'los_icu', unit: 'days', group_variable: '' }),
+    compactRow('对照ICU3组', { variable: 'los_icu', unit: 'hours', group_variable: '' })]);
+  assert.equal(answerText((await answer([table])).html),
+    'ICU 住院时长，中位数［四分位距］：试验ICU2组 104［101–108］ 天，n=6；对照ICU3组 104［101–108］ 小时，n=6。');
+  assert.deepEqual(summary([table]).continuousGroups.map(row => row.unit), ['days', 'hours']);
+});
+
+test('the shared unit formatter retains legacy callers and English unit strings', () => {
+  global.EU_LANG = 'zh';
+  assert.equal(global.VIZ_DEMO.catalogUnitText('years'), '岁');
+  assert.equal(global.VIZ_DEMO.catalogUnitText('years', 'followup'), '年');
+  assert.equal(global.VIZ_DEMO.catalogUnitText('minutes', 'wait_duration'), '分钟');
+  global.EU_LANG = 'en';
+  for (const unit of ['days', 'hours', 'minutes', 'years', 'mmol/L', 'mmHg', '%']) {
+    assert.equal(global.VIZ_DEMO.catalogUnitText(unit, 'age'), unit);
+  }
+});
 
 test('continuous display precision follows the variable location magnitude and leaves registered strings exact', async () => {
   for (const [value, expected] of [['2.5699999', '2.57'], ['87.04', '87.0'], ['1234.6', '1235']]) {

@@ -41,12 +41,16 @@
   }
   // Catalog units that are English words; measurement units (mmHg, mg/dL) stay as they are.
   const UNIT_WORDS_ZH = {
-    points: '分', days: '天', hours: '小时', years: '岁', sec: '秒', count: '次',
+    points: '分', days: '天', hours: '小时', minutes: '分钟', years: '岁', sec: '秒', count: '次',
     boolean: '是/否', category: '分类', state: '状态', ratio: '比值', fraction: '比例', datetime: '日期时间',
   };
-  function catalogUnitText(unit) {
+  // A bound concept distinguishes age from other durations in years; legacy
+  // one-argument visualization callers keep their existing catalog wording.
+  function catalogUnitText(unit, concept) {
     const raw = String(unit == null ? '' : unit);
-    return (window.EU_LANG === 'zh' && UNIT_WORDS_ZH[raw]) || raw;
+    if (window.EU_LANG !== 'zh') return raw;
+    if (raw === 'years' && concept !== undefined) return concept === 'age' ? '岁' : '年';
+    return UNIT_WORDS_ZH[raw] || raw;
   }
   function catalogModuleText(key, fallback) {
     const known = ((window.EU_CATALOG || {}).groups || []).some(row => row[0] === key);

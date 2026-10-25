@@ -144,8 +144,12 @@
     function descriptiveLead(row, statistic, unit = '') {
       const group = row.group && row.groupVariable ? row.groupLabel : '';
       const measured = unit ? tr(` (${unit})`, `（${unit}）`) : '';
+      // Space only the sentence's labels, never its registered group values.
+      const chineseLabel = `${group ? `各${group}` : ''}${row.label}`
+        .replace(/([\u3400-\u9fff])([A-Za-z0-9])/g, '$1 $2')
+        .replace(/([A-Za-z0-9])([\u3400-\u9fff])/g, '$1 $2');
       return tr(`${row.label}${measured}${group ? ` by ${group}` : ''}, ${statistic}: `,
-        `${group ? `各${/^[A-Za-z0-9]/.test(group) ? ' ' : ''}${group}` : ''}${row.label}${measured}，${statistic}：`);
+        `${chineseLabel}${measured}，${statistic}：`);
     }
 
     function groupTail(omitted) {
@@ -428,6 +432,8 @@
         outcomeLabel,
         groups,
         continuousGroups: (summary.continuousGroups || []).map(row => ({ ...row,
+          unit: window.VIZ_DEMO?.catalogUnitText?.(row.unit,
+            row.display?.source_concept || String(row.variable).replace(AGGREGATE_SUFFIX, '')) ?? row.unit,
           label: descriptiveLabel(labels, row.variable, row.display),
           groupLabel: descriptiveLabel(labels, row.groupVariable, row.groupDisplay) })),
         categoricalGroups: (summary.categoricalGroups || []).map(row => ({ ...row,
