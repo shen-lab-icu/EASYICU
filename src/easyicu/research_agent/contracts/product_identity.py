@@ -15,6 +15,66 @@ CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN = (
 )
 
 
+#: Exact base names recognized as scientific effect products.
+EFFECT_PRODUCT_BASES = frozenset(
+    {
+        "adjusted_effect",
+        "adjusted_effect_estimate",
+        "adjusted_effect_estimates",
+        "adjusted_association",
+        "adjusted_associations",
+        "adjusted_association_estimate",
+        "adjusted_association_estimates",
+        "adjusted_hr",
+        "adjusted_odds_ratio",
+        "adjusted_odds_ratios",
+        "adjusted_or",
+        "adjusted_rd",
+        "adjusted_rr",
+        "association_estimate",
+        "association_estimates",
+        "causal_effect",
+        "coefficient",
+        "coefficients",
+        "effect_estimate",
+        "effect_estimates",
+        "effect_modification_estimates",
+        "effect_forest",
+        "hazard_ratio",
+        "interaction_pvalue",
+        "odds_ratio",
+        "or_estimate",
+        "or_estimates",
+        "or_forest",
+        "overall_effect",
+        "primary_association",
+        "primary_association_estimate",
+        "primary_effect",
+        "primary_estimate",
+        "primary_hr",
+        "primary_or",
+        "primary_rd",
+        "primary_rr",
+        "relative_risk",
+        "rd_estimate",
+        "rd_estimates",
+        "rd_forest",
+        "rr_estimate",
+        "rr_estimates",
+        "rr_forest",
+        "risk_difference",
+        "risk_ratio",
+        "hr_estimate",
+        "hr_estimates",
+        "hr_forest",
+        "subgroup_effect",
+        "subgroup_effects",
+        "treatment_effect",
+        "adjusted_logistic_regression_primary",
+    }
+)
+
+
 def is_canonical_typed_product_token(value: object) -> bool:
     """Return whether *value* already uses the exact wire identity grammar."""
 

@@ -266,6 +266,26 @@ const runFilesApi = {
     assert.ok(generic && generic !== specific, 'an authority stop without a typed reason keeps its fallback');
     assert.equal(runFailureText(authorityGate, { code: 'unknown_synthetic_reason' }), generic);
     for (const flattened of [false, true]) {
+      for (const [stepTitle, stepId, name] of [
+        ['Synthetic primary comparison', 'adjusted_association', 'Synthetic primary comparison'],
+        ['', 'adjusted_association', tr('adjusted association analysis', '调整后的关联分析')],
+        ['', 'synthetic_step', 'synthetic_step'],
+        ['', '', ''],
+      ]) {
+        for (const gate of ['research_pipeline_progressive_compile_failed', 'research_pipeline_plan_contract_exhausted']) {
+          const detail = { reason_code: 'progressive_context_bindings_invalid', step_id: stepId, step_title: stepTitle };
+          const bindingStop = stop.render({ savedRuns: [{ ...savedRun, run_status: 'blocked', gate_reason: gate,
+            ...(flattened ? { gate_detail_code: detail.reason_code, gate_detail_step_id: stepId, gate_detail_step_title: stepTitle }
+              : { gate_detail: detail }) }] });
+          const text = visible(bindingStop);
+          if (name) assert.ok(text.includes(name), 'the binding stop names the affected step');
+          assert.ok(text.includes(tr('prepared data', '准备好的数据')));
+          assert.ok(text.includes(tr('analysis has not started', '分析尚未开始')));
+          assert.ok(text.includes(tr('Generate the plan again', '重新生成计划')));
+          assert.ok(!text.includes('progressive_context_bindings_invalid'));
+          assert.equal(count(bindingStop, '<p>'), 1);
+        }
+      }
       const authorityStop = stop.render({ savedRuns: [{ ...savedRun, run_status: 'blocked', gate_reason: authorityGate,
         ...(flattened ? { gate_detail_code: 'baseline_association_design_mismatch' }
           : { gate_detail: { reason_code: 'baseline_association_design_mismatch' } }) }] });

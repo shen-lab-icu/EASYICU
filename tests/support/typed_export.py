@@ -30,7 +30,7 @@ from easyicu.resources import load_dictionary
 
 
 def metadata_binding(
-    concept: str, column: str, role: ConceptColumnRole
+    concept: str, column: str, role: ConceptColumnRole, *, database: str = "miiv"
 ) -> ColumnMetadataBinding:
     definition = load_dictionary(include_sofa2=True).get(concept)
     assert definition is not None
@@ -42,7 +42,7 @@ def metadata_binding(
                 source_concept=concept,
                 role=role,
             ),
-            source_database="miiv",
+            source_database=database,
         )
     )
 
@@ -50,6 +50,7 @@ def metadata_binding(
 def typed_export(
     root: Path,
     *,
+    database: str = "miiv",
     roles: dict[str, ConceptColumnRole] | None = None,
     labs: pd.DataFrame | None = None,
     outcomes: pd.DataFrame | None = None,
@@ -92,14 +93,15 @@ def typed_export(
         ),
         columns={
             "age": binding_overrides.get("age")
-            or metadata_binding("age", "age", roles.get("age", ConceptColumnRole.VALUE)),
+            or metadata_binding("age", "age", roles.get("age", ConceptColumnRole.VALUE), database=database),
             "lact": binding_overrides.get("lact")
-            or metadata_binding("lact", "lact", roles.get("lact", ConceptColumnRole.VALUE)),
+            or metadata_binding("lact", "lact", roles.get("lact", ConceptColumnRole.VALUE), database=database),
             "mech_vent": binding_overrides.get("mech_vent")
             or metadata_binding(
                 "mech_vent",
                 "mech_vent",
                 roles.get("mech_vent", ConceptColumnRole.EVENT_STATUS),
+                database=database,
             ),
             **{
                 concept: binding_overrides.get(concept)
@@ -107,6 +109,7 @@ def typed_export(
                     concept,
                     concept,
                     roles.get(concept, ConceptColumnRole.EVENT_STATUS),
+                    database=database,
                 )
                 for concept in event_concepts
             },
@@ -120,12 +123,13 @@ def typed_export(
         columns={
             "death": binding_overrides.get("death")
             or metadata_binding(
-                "death", "death", roles.get("death", ConceptColumnRole.EVENT_STATUS)
+                "death", "death", roles.get("death", ConceptColumnRole.EVENT_STATUS),
+                database=database,
             )
         },
     )
     sidecar = ColumnMetadataSidecar(
-        source_database="miiv",
+        source_database=database,
         source_database_class_prefixes=(),
         scope=EXPORT_PHYSICAL_SCOPE,
         files=(lab_binding, outcome_binding),
@@ -139,7 +143,7 @@ def typed_export(
                     "required": True, "source": "outcome.los_icu",
                     "bounded_stays": int(labs["stay_id"].nunique()),
                 },
-                "database": "miiv",
+                "database": database,
                 "format": "parquet",
                 "concept_selection": {
                     "mode": "explicit",

@@ -709,6 +709,7 @@ def analysis_cohort_authority_coordinates(
 def _raw_typed_plan_reference_issues(
     *,
     plan: Any,
+    context: Any,
     columns: tuple[str, ...],
     reserved_coordinates: tuple[str, ...] = (),
 ) -> list[str]:
@@ -722,6 +723,17 @@ def _raw_typed_plan_reference_issues(
     available = set(columns)
     reserved = set(reserved_coordinates)
     invalid_locations: dict[str, list[str]] = {}
+    from ..planning.dependence_authority import context_dependence_authority
+
+    host_dependence = (
+        context_dependence_authority(context)
+        if getattr(context, "user_preferences", None) is not None
+        and any(getattr(requirement, "dependence", None) is not None
+                for step in getattr(plan, "steps", ()) or ()
+                for requirement in getattr(step, "model_requirements", ()) or ())
+        else None
+    )
+    identity = getattr(context.materialized_inputs.cohort, "identity_column", None)
 
     def require_column(label: str, value: Any) -> None:
         name = str(value or "").strip()
@@ -730,15 +742,22 @@ def _raw_typed_plan_reference_issues(
 
     for step_index, step in enumerate(getattr(plan, "steps", ()) or ()):
         step_id = str(getattr(step, "step_id", "") or step_index)
-        # An outcome-by-cluster comparison names its row identity among its
-        # inputs and reads it from the typed cohort product: the one reserved
-        # navigation coordinate a step may declare, and only as that identity.
+        # A verified grouping reads the sealed row identity for covariance,
+        # just as a phenotype comparison reads it for row alignment. Neither
+        # use promotes that navigation coordinate to a clinical model term.
+        grouping_identity = (
+            identity if host_dependence is not None
+            and host_dependence.group_source == identity
+            and any(getattr(requirement, "dependence", None) == host_dependence
+                    for requirement in getattr(step, "model_requirements", ()) or ())
+            else None
+        )
         comparison_spec = getattr(step, "phenotype_comparison_spec", None)
         comparison_identity = str(
             getattr(comparison_spec, "identity_column", "") or ""
         )
         for input_index, value in enumerate(getattr(step, "inputs", ()) or ()):
-            if comparison_identity and value == comparison_identity and value in reserved:
+            if value in reserved and value in {comparison_identity, grouping_identity}:
                 continue
             require_column(f"steps[{step_id}].inputs[{input_index}]", value)
         for requirement_index, requirement in enumerate(
@@ -753,6 +772,13 @@ def _raw_typed_plan_reference_issues(
                 f"[{requirement_index}].exposure_source",
                 getattr(requirement, "exposure_source", None),
             )
+            for name in getattr(requirement, "covariates", ()) or ():
+                if name in reserved:
+                    require_column(f"steps[{step_id}].model_requirements[{requirement_index}].covariates", name)
+            for field in ("model_terms", "effect_modifiers"):
+                for term in getattr(requirement, field, ()) or ():
+                    if term.name in reserved:
+                        require_column(f"steps[{step_id}].model_requirements[{requirement_index}].{field}", term.name)
 
     for spec_index, spec in enumerate(getattr(plan, "robustness_specs", ()) or ()):
         spec_id = str(getattr(spec, "spec_id", "") or spec_index)
@@ -789,7 +815,8 @@ def _raw_typed_plan_reference_issues(
                 category = (
                     "model outcomes"
                     if location.endswith(".outcome")
-                    else "model exposures"
+                    else "model exposures" if location.endswith(".exposure_source")
+                    else "model terms"
                 )
             elif ".missing_override.variables" in location:
                 category = "robustness missing variables"
@@ -1022,12 +1049,13 @@ def validate_plan_typed_bindings_against_context(
             )
 
     # Identity/time coordinates are navigation metadata, not executable
-    # analysis variables. Runtime raw-input contracts intentionally omit them,
-    # so reject them while the Planner still has structured-retry authority.
+    # analysis variables. Only a typed identity consumer may declare one as a
+    # navigation input; model variables must still have concept bindings.
     executable_columns = column_authority.executable_columns
     reserved_coordinates = column_authority.reserved_navigation_coordinates
     raw_issues = _raw_typed_plan_reference_issues(
         plan=plan,
+        context=context,
         columns=executable_columns,
         reserved_coordinates=reserved_coordinates,
     )
@@ -1117,9 +1145,10 @@ def validate_plan_typed_bindings_against_context(
         correction = (
             "For raw step inputs, Table 1, model requirements, and robustness "
             "fields, copy exact names from the executable materialized-input "
-            "roster in the original prompt. Never list cohort id/time "
-            "coordinates as analysis inputs; the host owns row navigation and "
-            "cohort accounting. Concept ids are only valid inside typed cohort "
+            "roster in the original prompt. Cohort id/time coordinates are "
+            "not clinical variables; only a verified patient-dependence "
+            "contract or typed row-alignment consumer may name the sealed "
+            "identity as an input. Concept ids are only valid inside typed cohort "
             "predicates, and kind:name is only valid for an explicit upstream "
             "product."
         )
