@@ -120,6 +120,7 @@
         const high = finite(record.ci_high);
         return {
           label, contrast, measure, value, low, high, n: finite(record.n),
+          evidenceId: String(item.table.evidence_id || ''),
           primary: isTrue(record.is_primary_contrast),
           display: { value: ratioDisplay(value, measure), low: ratioDisplay(low, measure), high: ratioDisplay(high, measure) },
         };
@@ -136,6 +137,8 @@
     return records.filter(item => CURVE_CONTRAST_COLUMNS.every(header => item.headers.includes(header)))
       .map(item => ({
         evidenceId: String(item.table && item.table.evidence_id || ''),
+        producerStep: String(item.table && item.table.produced_by_step || ''),
+        n: finite(item.record.exposure_density_population_n),
         exposure: String(item.record.exposure || ''),
         value: finite(item.record.exposure_value),
         reference: finite(item.record.reference_exposure_value),
@@ -227,6 +230,12 @@
       ].filter(Boolean),
       exposureLevels,
       estimates: estimates(records, plan, levels),
+      measurementMissingness: records.filter(item => item.table.evidence_id
+        && ['concept', 'n_total', 'value_missing_n'].every(header => item.headers.includes(header)))
+        .map(item => ({ concept: String(item.record.concept || ''), total: finite(item.record.n_total),
+          missing: finite(item.record.value_missing_n), evidenceId: String(item.table.evidence_id) }))
+        .filter(row => row.concept && Number.isSafeInteger(row.total) && row.total >= 0
+          && Number.isSafeInteger(row.missing) && row.missing >= 0 && row.missing <= row.total),
       curveContrasts: curveContrasts(records),
       // The groups are shown by their codes because their record cannot be read.
       groupsUnreadable: !!(levels && levels.unreadable),

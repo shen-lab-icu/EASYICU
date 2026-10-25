@@ -1874,10 +1874,13 @@ def _clinical_definition_facts(context: ResearchContext) -> dict[str, Any]:
     }
 
 
-def render_plan_scientific_guardrails(context: ResearchContext) -> str:
+def render_plan_scientific_guardrails(context: ResearchContext, *, execution_tier: str | None = None) -> str:
     """Render case-neutral, context-derived guardrails before Planner generation."""
 
     lines = ["PRE-APPROVAL SCIENTIFIC PLAN GUARDRAILS (host-derived):"]
+    if execution_tier == "first_result":
+        from ..contracts.claim_ceiling import first_result_instructions
+        lines.append(first_result_instructions())
     from .adjustment_authority import context_stated_adjustments, context_stated_variables
 
     subgroups = context_stated_variables(context, "stated_subgroups")
@@ -1972,7 +1975,7 @@ def render_plan_scientific_guardrails(context: ResearchContext) -> str:
             + "."
         )
     question = str(context.research_question or "").casefold()
-    if any(
+    if execution_tier != "first_result" and any(
         token in question
         for token in (
             "association",
@@ -3755,6 +3758,7 @@ def build_plan_scientific_review(
         )
     if (
         require_reportable_capability
+        and getattr(plan.design_selection, "execution_tier", "article") == "article"
         and not capability_assessment.claim_ceiling_allows_reportable
     ):
         findings.append(
@@ -4630,7 +4634,7 @@ def build_plan_scientific_review(
                 ),
             )
         )
-    if linearity["linear_identity_terms"] and not linearity["functional_form_sensitivity_executable"]:
+    if getattr(plan.design_selection, "execution_tier", "article") == "article" and linearity["linear_identity_terms"] and not linearity["functional_form_sensitivity_executable"]:
         findings.append(
             PlanScientificFinding(
                 code="CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED",
@@ -4899,6 +4903,8 @@ def build_plan_scientific_review(
     findings.extend(primary_model_retention_findings(model_retention))
     findings.extend(_missing_category_complete_case_findings(plan))
     findings.extend(_complete_case_repeats_primary_findings(plan))
+    from .publication_readiness import tier_review_findings
+    findings = tier_review_findings(plan, findings)
     routed_findings = [
         finding.model_copy(
             update={"remediation_route": remediation_route_for_finding(finding)}
@@ -4941,7 +4947,7 @@ def build_plan_scientific_review(
     status: Literal["changes_required", "analysis_only", "ready_for_approval"] = (
         "changes_required"
         if blockers
-        else ("analysis_only" if majors else "ready_for_approval")
+        else ("analysis_only" if majors or getattr(plan.design_selection, "execution_tier", "article") == "first_result" else "ready_for_approval")
     )
     context_payload = context.model_dump(mode="json")
     plan_payload = plan.model_dump(mode="json")
@@ -4950,7 +4956,7 @@ def build_plan_scientific_review(
     return PlanScientificReview(
         status=status,
         approval_allowed=not blockers,
-        top_journal_candidate=not blockers and not majors,
+        top_journal_candidate=not blockers and not majors and getattr(plan.design_selection, "execution_tier", "article") == "article",
         score=score,
         dimension_scores=dimensions,
         findings=findings,
@@ -4970,7 +4976,7 @@ def build_plan_scientific_review(
                 accepted_baseline.model_dump(mode="json") if accepted_baseline else None
             ),
             "scientific_capability": capability_assessment.to_dict(),
-            "reportable_capability_required": bool(require_reportable_capability),
+            "reportable_capability_required": bool(require_reportable_capability and getattr(plan.design_selection, "execution_tier", "article") == "article"),
             "score_interpretation": {
                 "scope": "pre_execution_plan",
                 "figures": (

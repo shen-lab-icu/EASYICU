@@ -38,6 +38,8 @@ from ...research_context.event_time_semantics import recorded_event_time_semanti
 from ...research_context.export_selection import export_applied_selection
 from ...research_context.minimum_stay import minimum_icu_stay_hours
 from ...schema import ResearchContext
+from ...contracts.claim_ceiling import tier_from_planning_contract
+from ..figure_plan_mutation import requires_visualization_step
 from ...trajectory.plan_contract import trajectory_context_is_bound
 from ..accepted_analysis_inputs import analysis_input_value_columns
 from ..analysis_types import (
@@ -1244,7 +1246,11 @@ def build_family_spec_request(
     request = _bind_question_named_concepts(context, request)
     _refuse_unfilterable_cohort(request)
     _refuse_eligibility_after_time_zero(request)
-    return request
+    tier = tier_from_planning_contract(planning_contract_context)
+    return request.model_copy(update={
+        "execution_tier": tier,
+        "requires_visualization": tier == "first_result" and requires_visualization_step(context),
+    })
 
 
 #: The study's own cohort wording the Planner reads as a population source.

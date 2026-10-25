@@ -1,6 +1,8 @@
 {
   "baseline_change_summary": {
-    "source_digest_changes": [],
+    "source_digest_changes": [
+      "src/easyicu/research_agent/planning/study_design.py"
+    ],
     "summary_changes": {}
   },
   "baseline_history": [
@@ -813,9 +815,16 @@
       "reason": "Verify ported population contracts and share dense-status lineage semantics; refresh import and resource provenance after scoped review fixes.",
       "source_digest_changes": [],
       "summary_changes": {}
+    },
+    {
+      "reason": "Bind the tier-aware study-design source identity; article prompt and resource measurements are unchanged.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/study_design.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Verify ported population contracts and share dense-status lineage semantics; refresh import and resource provenance after scoped review fixes.",
+  "baseline_reason": "Bind the tier-aware study-design source identity; article prompt and resource measurements are unchanged.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -837,7 +846,7 @@
     "src/easyicu/research_agent/planning/analysis_types.py": "28b56d39001150fb1839e840ca2f0898c967f3e25642b18b2eedc15a250cd8f9",
     "src/easyicu/research_agent/planning/cohort_contract.py": "e043ca40d59f613031a1b41f9280152ac3c58cefcc86e877d466d5142496899a",
     "src/easyicu/research_agent/planning/figure_strategy.py": "42b617ad40d993c585df27598613731ceedc2e4645f197a2cb96c54645f7cec2",
-    "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
+    "src/easyicu/research_agent/planning/study_design.py": "5135af91b92fc8f19e9a38223c37be51b351ea6c8a5e72ab189b1fed6d9d978d",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
     "src/easyicu/research_agent/reporting/article_contract.py": "d413f456385f195233ca8b2148c6a43e194fad534475e785215f3165f2a7f095",

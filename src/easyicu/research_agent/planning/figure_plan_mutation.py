@@ -839,7 +839,7 @@ def _ensure_publication_figure_step_in_plan(
     where the plan that actually runs is the replanner's — which the
     plan-phase, question-gated guard never sees.
     """
-    if any(step_produces_figure(step) for step in plan.steps or []):
+    if getattr(plan.design_selection, "execution_tier", "article") == "first_result" or any(step_produces_figure(step) for step in plan.steps or []):
         return plan, []
     if not force and not _research_question_implies_figure(
         context.research_question or ""

@@ -28,7 +28,7 @@ from typing import (
 
 from ..audits.step_summary_integrity import StepSummaryIntegrityValidator
 from .article_audit import RunArticleAuditResult, collect_run_article_audits
-from .initial_code_policy import resolve_initial_code_origin, standard_executor_finding
+from .initial_code_policy import code_policy_runner_kind, resolve_initial_code_origin, standard_executor_finding
 from .step_execution import CodeOrigin
 from ..gates.concept import (
     deterministic_gate_stamp as _deterministic_gate_stamp,
@@ -2182,7 +2182,7 @@ def _step_resolve_initial_code(
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     """Return initial code, or a terminal failure record for immediate return."""
     if not resolve_initial_code_origin(
-        runner_kind=getattr(pipeline, "_runner_kind", ""), host_code=preflight_standard_code,
+        runner_kind=code_policy_runner_kind(pipeline, getattr(plan_result, "plan", None)), host_code=preflight_standard_code,
         step_id=step.step_id, step_record=step_record, findings=findings,
         shared_lock=shared_lock, per_step_records=per_step_records,
         append_terminal=_append_terminal_step_record, flush_manifest=_flush_partial_manifest,

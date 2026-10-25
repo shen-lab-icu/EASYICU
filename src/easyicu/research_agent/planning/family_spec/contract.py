@@ -12,6 +12,8 @@ from them and cites only a card that states that dimension.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import re
 from typing import Any, Literal, Mapping, Optional, Sequence, Union
 
@@ -661,6 +663,10 @@ class FamilySpecRequest(BaseModel):
         FAMILY_SPEC_REQUEST_SCHEMA_VERSION
     )
     family_id: FamilyId
+    execution_tier: Literal["first_result", "article"] = Field(
+        default="article", exclude_if=lambda value: value == "article",
+    )
+    requires_visualization: bool = Field(default=False, exclude_if=lambda value: not value)
     analysis_type: Literal[
         "association_study",
         "descriptive_epidemiology",
@@ -2112,3 +2118,73 @@ __all__ = [
     "table_one_group_column",
     "validate_family_plan_spec",
 ]
+
+
+def first_result_subset(draft, request):
+    """Drop only article defaults, retaining declared outcomes and sensitivities.
+
+    This projection never drops a question requirement to fit a budget. Missing
+    required science still stops at the existing question/sensitivity review.
+    """
+    if request.execution_tier != "first_result":
+        return draft
+    omitted = {"report"}
+    if not request.requires_visualization:
+        omitted.add("visualization")
+    if not (request.complete_case_spec_id or request.alternate_exposures or request.first_stay):
+        omitted.add("robustness_replay")
+    omitted.update(
+        step.step_id for step in draft.outline.steps
+        if step.step_id.endswith("_functional_form")
+        and step.step_id.removesuffix("_functional_form") not in request.functional_form_spec_ids
+    )
+    steps = [step for step in draft.outline.steps if step.step_id not in omitted]
+    steps = [step.model_copy(update={
+        "depends_on": [key for key in step.depends_on if key not in omitted],
+        "objective": "Render the retained typed results with their registered uncertainty and denominators.",
+    }) if step.module_id == "visualization" else step for step in steps]
+    if any(set(step.depends_on) & omitted for step in steps):
+        raise ValueError("first_result subset cannot remove a retained step's dependency")
+    design = draft.outline.design_selection
+    if design is not None:
+        design = design.model_copy(update={"candidates": [
+            candidate.model_copy(update={
+                "reviewable_plan": [
+                    next(step.objective for step in steps if step.module_id == "cohort_definition"),
+                    candidate.time_zero, candidate.observation_window,
+                    next(step.objective for step in steps if step.step_id == "adjusted_association"),
+                    next(step.objective for step in steps if step.module_id == "measurement_audit"),
+                    "Keep every question-stated sensitivity and secondary outcome; optional article checks are deferred.",
+                ],
+                "figure_role": "The run's typed result brief presents estimates, intervals, denominators and missingness.",
+            })
+            if candidate.disposition == "selected" else candidate
+            for candidate in design.candidates
+        ]})
+    outline = draft.outline.model_copy(update={
+        "steps": steps, "design_selection": design,
+        "rationale": "First-result typed analysis subset; an article requires a new run and approval.",
+    })
+    foundation = draft.foundation.foundation
+    if "robustness_replay" in omitted:
+        foundation = foundation.model_copy(update={"robustness_intents": []})
+    return replace(
+        draft, outline=outline,
+        foundation=draft.foundation.model_copy(update={
+            "outline_sha256": canonical_sha256(outline.model_dump(mode="json")), "foundation": foundation,
+        }),
+        materializations=tuple(_retain_materialization(item, steps, omitted)
+                               for item in draft.materializations if item.step.step_id not in omitted),
+    )
+
+
+def _retain_materialization(item, steps, omitted):
+    outline_step = next(step for step in steps if step.step_id == item.step.step_id)
+    step = item.step
+    if step.module_id == "visualization":
+        step = step.model_copy(update={
+            "depends_on": outline_step.depends_on, "objective": outline_step.objective,
+            "product_inputs": [ref for ref in step.product_inputs if ref.producer_step_id not in omitted],
+        })
+    return item.model_copy(update={"step": step,
+        "outline_step_sha256": canonical_sha256(outline_step.model_dump(mode="json"))})

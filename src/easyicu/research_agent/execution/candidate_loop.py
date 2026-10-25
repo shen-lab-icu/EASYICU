@@ -730,7 +730,8 @@ def _candidate_concept_audit_transition(
 
 
 def _refuse_non_host_candidate(host, attempt, state) -> bool:
-    if host.pipeline._runner_kind == "host" and state.execution_code_origin() != CodeOrigin.HOST_RENDERED_EXECUTOR:
+    from .initial_code_policy import code_policy_runner_kind
+    if code_policy_runner_kind(host.pipeline, getattr(host, "plan", None)) == "host" and state.execution_code_origin() != CodeOrigin.HOST_RENDERED_EXECUTOR:
         # Refuse before capsule replay as well as before subprocess execution.
         # A recovered execution result cannot launder a repaired candidate.
         record_host_code_refusal(

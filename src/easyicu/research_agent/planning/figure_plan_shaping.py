@@ -815,6 +815,8 @@ def select_deterministic_result_renderers(
     re-stating the sequence at its call site.
     """
 
+    if getattr(plan.design_selection, "execution_tier", "article") == "first_result":
+        return plan, []
     findings: list[ValidationFinding] = []
     for select in (
         ensure_primary_result_figure_step,
@@ -839,6 +841,8 @@ def ensure_descriptive_context_figure_step(
     it does not promote that descriptive table to the primary analysis.
     """
 
+    if getattr(plan.design_selection, "execution_tier", "article") == "first_result":
+        return plan, []
     source = EXPOSURE_OUTCOME_DISTRIBUTION_INPUT
     owners = [
         str(step.step_id)
@@ -893,7 +897,8 @@ def ensure_cohort_accounting_figure_step(
     plan: AnalysisPlan,
 ) -> tuple[AnalysisPlan, list[ValidationFinding]]:
     """Append the deterministic cohort-flow renderer when its source is closed."""
-
+    if getattr(plan.design_selection, "execution_tier", "article") == "first_result":
+        return plan, []
     steps = list(plan.steps or [])
     primary_population_sources = [
         (str(output), str(step.step_id))
@@ -1026,6 +1031,8 @@ def ensure_data_quality_figure_step(
     current typed rule is case-neutral and needs no context fields.
     """
 
+    if getattr(plan.design_selection, "execution_tier", "article") == "first_result":
+        return plan, []
     del context
     plan, audit_pair_findings = _complete_typed_data_quality_audit_pair(plan)
     steps = list(plan.steps or [])

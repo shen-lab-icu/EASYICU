@@ -476,6 +476,9 @@ def prepare_writer_only_migration(
             code="WRITER_ONLY_SOURCE_NOT_DIRECTORY",
             detail=str(source),
         )
+    tier_payload = json.loads(_read_regular(source / "analysis_plan.json"))
+    if isinstance(tier_payload, dict) and (tier_payload.get("design_selection") or {}).get("execution_tier") == "first_result":
+        raise ValueError("first_result cannot be revised or published as a manuscript; start an article run")
     hashes = _input_hashes(source)
     original_manuscript = (source / "manuscript_scaffold.md").read_text(
         encoding="utf-8"
@@ -702,7 +705,8 @@ def repair_writer_only(
     writer: Any,
 ) -> WriterOnlyMigrationResult:
     """Repair only deterministic Writer section owners in memory."""
-
+    from ..contracts.claim_ceiling import require_article_tier
+    require_article_tier(prepared.plan)
     if (
         prepared.plan is None
         and prepared.plan_validation_status
@@ -1077,7 +1081,8 @@ def publish_writer_only_result(
     provider_ledger: str,
 ) -> dict[str, Any]:
     """Publish one successful migration outside the sealed run."""
-
+    from ..contracts.claim_ceiling import require_article_tier
+    require_article_tier(prepared.plan)
     output = Path(output_dir).expanduser().resolve()
     try:
         output.relative_to(prepared.source_run_dir)

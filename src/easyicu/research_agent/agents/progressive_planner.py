@@ -73,6 +73,7 @@ from ..planning.progressive_compiler import (
     validate_progressive_foundation,
 )
 from ..planning.figure_plan_mutation import requires_visualization_step as _requires_visualization_step
+from ..contracts.claim_ceiling import bind_plan_tier, tier_from_planning_contract
 from ..planning.family_spec import sealed_result_families
 from ..planning.dependence_authority import (
     context_counts_only_authority,
@@ -1384,7 +1385,7 @@ class ProgressivePlannerAgent:
             for dimension in LITERATURE_DESIGN_DIMENSIONS
         }
         article_contracts = []
-        for analysis_type in analysis_types:
+        for analysis_type in (analysis_types if tier_from_planning_contract(planning_contract_context) == "article" else ()):
             contract = build_article_analysis_contract(
                 contract_context,
                 analysis_type=analysis_type,
@@ -1879,6 +1880,7 @@ class ProgressivePlannerAgent:
         comparison_literature_keys: Sequence[str] = (),
         direct_comparator_literature_keys: Sequence[str] = (),
         article_context: ResearchContext | None = None,
+        execution_tier: str = "article",
     ) -> None:
         if outline.analysis_type not in set(analysis_types):
             raise ProgressivePlanCompileError(
@@ -2069,7 +2071,7 @@ class ProgressivePlannerAgent:
         allowed_modules = set(
             progressive_module_ids_for_analysis_types((outline.analysis_type,))
         )
-        if article_context is not None:
+        if article_context is not None and execution_tier == "article":
             article_contract = build_article_analysis_contract(
                 article_context,
                 analysis_type=outline.analysis_type,
@@ -2928,7 +2930,7 @@ class ProgressivePlannerAgent:
             )
         if know_how_context:
             blocks.append("Retrieved protocol know-how (binding):\n" + know_how_context)
-        if outline_step.module_id == "custom_analysis":
+        if outline_step.module_id == "custom_analysis" and tier_from_planning_contract(planning_contract_context) == "article":
             article_contract = build_article_analysis_contract(
                 context, analysis_type=outline.analysis_type,
             )
@@ -3342,6 +3344,7 @@ class ProgressivePlannerAgent:
         allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None,
         enforce_article_contract: bool,
         adjustment_proposal: Any = None,
+        execution_tier: str = "article",
     ) -> tuple[AnalysisPlan, ProgressivePlanCompileReceipt]:
         from ..execution.owner_declaration import resolve_standard_executor
 
@@ -3360,6 +3363,8 @@ class ProgressivePlannerAgent:
             required_visualization_step=_requires_visualization_step(article_context),
             resolve_executor=resolve_standard_executor,
         )
+        plan = bind_plan_tier(plan, execution_tier)
+        receipt = receipt.model_copy(update={"analysis_plan_sha256": canonical_sha256(plan.model_dump(mode="json"))})
         _accept_compiled_plan(
             plan=plan,
             agent_context=agent_context,
@@ -3397,7 +3402,7 @@ class ProgressivePlannerAgent:
             )
             try:
                 plan, receipt = self._compile_and_accept(
-                    skeleton,
+                    skeleton, execution_tier=tier_from_planning_contract(planning_contract_context),
                     agent_context=context,
                     article_context=article_context,
                     allowed_literature_citation_keys=allowed_literature_citation_keys,
@@ -3934,7 +3939,7 @@ class ProgressivePlannerAgent:
 
         from ..planning.family_spec import BASELINE_ASSOCIATION_FAMILY_ID, family_template_id_for_context
 
-        if family_template_id_for_context(context, analysis_types=analysis_types) == BASELINE_ASSOCIATION_FAMILY_ID:
+        if tier_from_planning_contract(planning_contract_context) == "first_result" or family_template_id_for_context(context, analysis_types=analysis_types) == BASELINE_ASSOCIATION_FAMILY_ID:
             # The minimal family promises no additional functional-form steps.
             # Progressive v2 and other templates keep their existing obligations.
             required_functional_form_targets = ()
@@ -3955,6 +3960,7 @@ class ProgressivePlannerAgent:
         def validate_outline(outline: ProgressivePlanOutline) -> None:
             self._validate_outline_authority(
                 outline,
+                execution_tier=tier_from_planning_contract(planning_contract_context),
                 analysis_types=analysis_types,
                 variable_names=variables,
                 allowed_literature_citation_keys=allowed_citations,
@@ -3979,6 +3985,7 @@ class ProgressivePlannerAgent:
         def compile_and_accept(skeleton: ProgressivePlanSkeleton, adjustment_proposal=None):
             return self._compile_and_accept(
                 skeleton, adjustment_proposal=adjustment_proposal,
+                execution_tier=tier_from_planning_contract(planning_contract_context),
                 agent_context=context,
                 article_context=article_context,
                 allowed_literature_citation_keys=allowed_citations,
@@ -4079,6 +4086,7 @@ class ProgressivePlannerAgent:
         planner_strategy: str = "progressive_v2",
     ) -> AnalysisPlan | ProgressivePlanOutline:
         self._attempt.resume_validated = False
+        enforce_article_contract = enforce_article_contract and tier_from_planning_contract(planning_contract_context) == "article"
         self._attempt.compile_failure_attempts = []
         if planner_strategy not in {"progressive_v2", FAMILY_SPEC_STRATEGY}:
             raise ValueError(f"unsupported planner_strategy {planner_strategy!r}")
@@ -4135,7 +4143,7 @@ class ProgressivePlannerAgent:
             if adjustment_authority.selection == "exact"
             else ()
         )
-        required_functional_form_targets = _continuous_adjustment_targets(context)
+        required_functional_form_targets = _continuous_adjustment_targets(context) if tier_from_planning_contract(planning_contract_context) == "article" else ()
         context_variable_map = {
             variable.name: variable for variable in context.variables
         }
@@ -4529,6 +4537,7 @@ class ProgressivePlannerAgent:
                     return parsed
                 self._validate_outline_authority(
                     parsed,
+                    execution_tier=tier_from_planning_contract(planning_contract_context),
                     analysis_types=analysis_types,
                     variable_names=variables,
                     allowed_literature_citation_keys=allowed_citations,
@@ -4629,6 +4638,7 @@ class ProgressivePlannerAgent:
             raise stop
         self._validate_outline_authority(
             outline,
+            execution_tier=tier_from_planning_contract(planning_contract_context),
             analysis_types=analysis_types,
             variable_names=variables,
             allowed_literature_citation_keys=allowed_citations,

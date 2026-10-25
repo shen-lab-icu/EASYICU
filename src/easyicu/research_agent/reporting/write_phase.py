@@ -3642,7 +3642,8 @@ def run_write_phase(
     force_writer_probe: bool = False,
 ) -> WritePhaseResult:
     """Draft manuscript-facing outputs after analysis is complete."""
-    if getattr(getattr(pipeline, "_config", None), "generate_manuscript", None) is False:
+    from ..contracts.claim_ceiling import manuscript_disabled
+    if manuscript_disabled(pipeline, plan_result, execute_result):
         # Typed tables/figures and results_report are the desktop deliverable.
         # Return before figure publication, Writer/Critic, BibTeX or LaTeX.
         bound_path = run_dir / "manuscript_scaffold_bound.md"

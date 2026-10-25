@@ -1959,6 +1959,7 @@ def _compute_readiness_gates(
     execution = execution_gate_status(
         plan=plan, per_step_records=per_step_records, run_dir=run_dir, context=context
     )
+    stop_after_analysis = stop_after_analysis or getattr(getattr(plan, "design_selection", None), "execution_tier", None) == "first_result"
     manuscript_text = ""
     if manuscript_path.exists():
         try:
@@ -2236,7 +2237,7 @@ def _compute_readiness_gates(
             administrative_metadata_verified=administrative_metadata_verified,
         ),
         forced_diagnostic_only=force_diagnostic_only,
-        execution_paper_eligible=execution_paper_eligible,
+        execution_paper_eligible=execution_paper_eligible and getattr(getattr(plan, "design_selection", None), "execution_tier", None) != "first_result",
         plan_authority_verified=plan_authority_verified,
         plan_authority_sha256=plan_authority_sha256,
     )
@@ -2345,7 +2346,7 @@ def write_readiness_artifacts(
     run_status_path = run_dir / "run_status.json"
     run_status_payload = build_run_status_payload(
         gates=gates, research_question=context.research_question,
-        code_version=capture_code_version(), stop_after_analysis=stop_after_analysis,
+        code_version=capture_code_version(), stop_after_analysis=stop_after_analysis or getattr(getattr(plan, "design_selection", None), "execution_tier", None) == "first_result",
         writer_probe_mode=writer_probe_mode,
         writer_probe_failed_steps=writer_probe_failed_steps,
         force_diagnostic_only=force_diagnostic_only,

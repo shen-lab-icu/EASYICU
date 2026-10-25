@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from typing import Literal, Sequence
 
+from ..contracts.claim_ceiling import RunTierPlan
+
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from .literature_design_authority import CandidateLiteratureDesignDecision
@@ -101,7 +103,7 @@ class ResearchDesignCandidate(BaseModel):
         return cleaned
 
 
-class ResearchDesignSelection(BaseModel):
+class ResearchDesignSelection(RunTierPlan):
     """Auditable comparison and choice among two to four candidate designs."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)

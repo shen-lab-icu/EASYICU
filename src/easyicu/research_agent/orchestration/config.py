@@ -698,6 +698,8 @@ class PipelineConfig:
         return cls(**kwargs)
 
     def __post_init__(self) -> None:
+        if self.execution_tier not in (None, "article", "first_result"):
+            raise ValueError("execution_tier must be first_result or article")
         from .profiles import is_paper_facing_profile
 
         if self.runner_kind == "host":

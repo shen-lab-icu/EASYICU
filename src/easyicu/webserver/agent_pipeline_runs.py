@@ -3614,6 +3614,7 @@ def _table_projection(
         tables.append(
             {
                 "evidence_id": _clean_text(record.get("evidence_id"), 160),
+                "produced_by_step": _clean_text(record.get("produced_by_step"), 160),
                 "label": _clean_text(record.get("description"), 300) or path.stem,
                 "name": path.name,
                 "headers": [_clean_text(value, 160) for value in headers],

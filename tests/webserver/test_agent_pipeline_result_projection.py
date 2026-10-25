@@ -53,6 +53,7 @@ def test_result_table_projection_keeps_primary_population_and_effect_tables(
     assert "time_varying_cox_estimates.csv" in names
     assert "landmark_rcs_contrasts.csv" in names
     assert "robustness_matrix.csv" in names
+    assert next(table for table in projection["tables"] if table["name"] == "landmark_rcs_contrasts.csv")["produced_by_step"] == "primary_model"
 
 
 def test_a_prediction_run_projects_its_model_tables_before_supporting_audits(

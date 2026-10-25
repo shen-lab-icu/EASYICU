@@ -220,10 +220,11 @@ def test_the_minimal_family_does_not_satisfy_an_unexecuted_typed_sensitivity():
     assert finding.requires_user_authorization
 
 
-def baseline_plan_attempt(context):
+def baseline_plan_attempt(context, *, planning_contract_context=""):
     request = build_family_spec_request(
         context, analysis_types=("association_study",), variable_roster=[v.name for v in context.variables],
         allowed_literature_citation_keys=(), required_primary_cohort_selection_mode="all_input_rows",
+        planning_contract_context=planning_contract_context,
     )
     payload = {
         "schema_version": "easyicu.family_plan_spec/1", "family_id": request.family_id,
@@ -235,8 +236,54 @@ def baseline_plan_attempt(context):
     result = ProgressivePlannerAgent(llm).run_attempt(
         context, planner_strategy=FAMILY_SPEC_STRATEGY, allowed_literature_citation_keys=(),
         required_primary_cohort_selection_mode="all_input_rows",
+        planning_contract_context=planning_contract_context,
     )
     return result, llm
+
+
+def test_first_result_template_has_no_article_steps(monkeypatch):
+    from easyicu.research_agent.contracts.claim_ceiling import first_result_instructions
+    from easyicu.research_agent.execution import owner_declaration
+
+    context = baseline_context("sex", covariates=("age",))
+    attempt, _ = baseline_plan_attempt(
+        context,
+        planning_contract_context=first_result_instructions(),
+    )
+    assert attempt.output.design_selection.execution_tier == "first_result"
+    assert [step.step_id for step in attempt.output.steps] == [
+        "cohort_definition", "table_one", "measurement_audit", "adjusted_association", "absolute_risk_context",
+    ]
+    runtime = baseline_runtime(context, attempt.output).seal_for_plan(attempt.output)
+    from types import SimpleNamespace
+    from easyicu.research_agent.pipeline import _shape_fresh_plan
+
+    shaped = _shape_fresh_plan(
+        SimpleNamespace(_scientific_runtime_authorities=runtime, _enable_publication_figure_skill=True, _max_total_steps=8),
+        plan=attempt.output, context=context, agent_context=context, long_trajectory_bound=False, findings=[],
+    )
+    assert [step.step_id for step in shaped.steps] == [step.step_id for step in attempt.output.steps]
+    bound, _ = runtime.bind_plan(attempt.output)
+    monkeypatch.setattr(owner_declaration, "_verified_host_cohort_step", lambda *args: "cohort_definition")
+    owner_declaration.require_host_rendered_plan(plan=bound, current_case_scientific_runtime_authority=runtime.current_case)
+    from easyicu.research_agent.planning.scientific_review import build_plan_scientific_review
+
+    review = build_plan_scientific_review(context=context, plan=bound, runtime_authority=runtime.current_case, require_reportable_capability=True)
+    assert not {"ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED", "CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED",
+                "FIGURE_ROLE_COVERAGE_INCOMPLETE", "ARTICLE_CONTENT_ROLES_INCOMPLETE"} & {item.code for item in review.findings}
+    assert review.status == "analysis_only" and review.approval_allowed
+    assert not review.top_journal_candidate
+
+
+def test_first_result_keeps_a_question_requested_figure():
+    from easyicu.research_agent.contracts.claim_ceiling import first_result_instructions
+
+    context = baseline_context("sex", covariates=("age",))
+    context.user_preferences.must_have_outputs = "Generate a figure for the primary association."
+    attempt, _ = baseline_plan_attempt(context, planning_contract_context=first_result_instructions())
+    assert "visualization" in {step.step_id for step in attempt.output.steps}
+    runtime = baseline_runtime(context, attempt.output).seal_for_plan(attempt.output)
+    runtime.bind_plan(attempt.output)
 
 
 def baseline_runtime(context, plan):

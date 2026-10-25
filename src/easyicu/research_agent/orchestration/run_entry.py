@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Optional, Protocol, Tuple
 
 from .config import PipelineConfig
+from ..contracts.claim_ceiling import bind_plan_tier, first_result
 
 
 class RunEntryRuntime(Protocol):
@@ -35,4 +36,14 @@ def analysis_only_after_input_validation(
 ) -> bool:
     """Preserve checkpoint stops and enforce profiles that omit a manuscript."""
     _validate_resume_session_key(resume_session_key)
-    return True if pipeline._config.generate_manuscript is False else requested
+    return True if first_result(pipeline._config) or pipeline._config.generate_manuscript is False else requested
+
+
+def seal_plan_tier(plan, config: PipelineConfig, *, resumed: bool):
+    """Bind new plans; never rewrite a digest-verified approval on resume."""
+    tier = config.execution_tier or "article"
+    if resumed:
+        if getattr(plan.design_selection, "execution_tier", "article") != tier:
+            raise ValueError("An approved run's execution_tier cannot change; start a new run.")
+        return plan
+    return bind_plan_tier(plan, tier)

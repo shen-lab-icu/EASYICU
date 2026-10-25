@@ -460,7 +460,7 @@ from .execution.host_runner import HostRunner
 from .execution.owner_declaration import host_plan_review_root, require_host_plan_before_review
 from .orchestration.run_entry import (
     _validate_resume_session_key,
-    analysis_only_after_input_validation,
+    analysis_only_after_input_validation, seal_plan_tier,
 )
 from .execution.method_capabilities import (
     runtime_capability_job_scope,
@@ -2495,7 +2495,7 @@ class ResearchAgentPipeline:
                     direct_comparator_literature_keys=(
                         direct_comparator_literature_keys
                     ),
-                    enforce_article_contract=True,
+                    enforce_article_contract=self._config.execution_tier != "first_result",
                     article_contract_context=context,
                     planning_contract_context=planning_contract_context,
                     progress_callback=planner_retry_progress_callback(
@@ -2747,7 +2747,7 @@ class ResearchAgentPipeline:
                 generation, run_id, run_dir, evidence, cost_meter,
                 self._provider_hard_stop, prompt_version, emit_progress,
             )
-        plan = generation.plan
+        plan = seal_plan_tier(generation.plan, self._config, resumed=generation.reused_prior_plan)
         self._services.validate_plan_revision(plan=plan, context=agent_context, before_runtime_binding=self._scientific_runtime_authorities)
         reused_prior_plan = generation.reused_prior_plan
         reused_plan_path = generation.reused_plan_path
@@ -2818,7 +2818,7 @@ class ResearchAgentPipeline:
         # plan (for example a visualization step whose sole figure declaration
         # was moved away during de-duplication).
         _final_plan.validate_final_plan_shape(plan)
-        if study_design_brief is not None:
+        if study_design_brief is not None and getattr(plan.design_selection, "execution_tier", "article") == "article":
             if (
                 plan.analysis_type
                 and article_contract is not None
@@ -2849,14 +2849,14 @@ class ResearchAgentPipeline:
                     brief=study_design_brief,
                 )
             )
-        if article_contract is not None:
+        if article_contract is not None and getattr(plan.design_selection, "execution_tier", "article") == "article":
             findings.extend(
                 validate_plan_against_article_contract(
                     plan=plan,
                     contract=article_contract,
                 )
             )
-        if analysis_blueprint is not None:
+        if analysis_blueprint is not None and getattr(plan.design_selection, "execution_tier", "article") == "article":
             findings.extend(
                 validate_plan_against_analysis_blueprint(
                     plan=plan,
@@ -3547,7 +3547,7 @@ class ResearchAgentPipeline:
             # "external validation" and "transportability"; feeding those
             # generated notes back into adaptive trigger inference would
             # silently widen a single-database study.
-            study_design_brief = build_study_design_brief(context)
+            study_design_brief = build_study_design_brief(context, execution_tier=self._config.execution_tier)
             study_design_path = run_dir / "study_design_brief.json"
             study_design_path.write_text(
                 study_design_brief.model_dump_json(indent=2),
@@ -3631,7 +3631,7 @@ class ResearchAgentPipeline:
                     producer="study_design_scout",
                     generation_mode="deterministic_skill",
                 )
-            design_note = render_analysis_blueprint_for_prompt(analysis_blueprint)
+            design_note = "\n".join(study_design_brief.planner_instructions) if self._config.execution_tier == "first_result" else render_analysis_blueprint_for_prompt(analysis_blueprint)
             planning_contract_context = design_note
             agent_notes = (
                 f"{agent_context.notes}\n\n{design_note}"
@@ -3650,7 +3650,7 @@ class ResearchAgentPipeline:
                     ),
                 )
             )
-        scientific_plan_guardrails = render_plan_scientific_guardrails(agent_context)
+        scientific_plan_guardrails = render_plan_scientific_guardrails(agent_context, execution_tier=self._config.execution_tier)
         planning_contract_context = "\n\n".join(
             value
             for value in (

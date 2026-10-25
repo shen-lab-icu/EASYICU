@@ -1589,9 +1589,10 @@ def build_landmark_categorical_skeleton(
     materializations = tuple(
         _materialization(bound[step.step_id], step) for step in steps
     )
-    return FamilySkeletonDraft(
+    from .contract import first_result_subset
+    return first_result_subset(FamilySkeletonDraft(
         outline=outline, foundation=foundation, materializations=materializations
-    )
+    ), request)
 
 
 #: The one projection entry point for both landmark association families; the

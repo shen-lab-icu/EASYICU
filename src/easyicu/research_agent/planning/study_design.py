@@ -273,6 +273,7 @@ def build_study_design_brief(
     context: ResearchContext,
     *,
     analysis_type: str | None = None,
+    execution_tier: str | None = None,
 ) -> StudyDesignBrief:
     family = (
         study_design_family_for_analysis_type(analysis_type)
@@ -305,7 +306,7 @@ def build_study_design_brief(
         "Keep routine missingness and measurement-process detail in supplementary material unless it is itself the scientific question or changes interpretation of the primary result.",
         "Before defaulting to a forest plot, ask whether the question needs cohort, missingness, calibration, survival, phenotype, causal, or transportability displays.",
     ]
-    return StudyDesignBrief(
+    brief = StudyDesignBrief(
         analysis_family=family,
         rationale=rationale,
         reporting_guidelines=list(template["reporting_guidelines"]),
@@ -329,6 +330,14 @@ def build_study_design_brief(
         ],
         planner_instructions=planner_instructions,
     )
+    if execution_tier == "first_result":
+        from ..contracts.claim_ceiling import first_result_instructions
+        return brief.model_copy(update={
+            "required_methods": ["Typed primary estimator", "measurement_audit and analytic denominators"],
+            "main_text_displays": [], "supplementary_displays": [], "display_modules": [],
+            "sensitivity_requirements": [], "planner_instructions": [first_result_instructions()],
+        })
+    return brief
 
 
 def render_study_design_brief_for_prompt(brief: StudyDesignBrief) -> str:
