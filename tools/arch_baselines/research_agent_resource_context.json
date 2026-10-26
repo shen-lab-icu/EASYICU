@@ -1,7 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/agents/planner.py"
+      "src/easyicu/research_agent/research_context/outbound.py"
     ],
     "summary_changes": {}
   },
@@ -852,9 +852,16 @@
         "src/easyicu/research_agent/agents/planner.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Refresh only the outbound.py source identity after projecting bound family adjustment rosters; all offline task measurements, summary sizes, and budgets remain unchanged.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/research_context/outbound.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Record the Planner source identity for repairable scientific authority feedback on 790cbf09d; preserve the descriptive-review history, all task measurements, budgets, and summary metrics.",
+  "baseline_reason": "Refresh only the outbound.py source identity after projecting bound family adjustment rosters; all offline task measurements, summary sizes, and budgets remain unchanged.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -880,7 +887,7 @@
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fe0a69d8e150e028bce72fb651e97167725404e60137072aa93d0300aaf83d10",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
     "src/easyicu/research_agent/reporting/article_contract.py": "d413f456385f195233ca8b2148c6a43e194fad534475e785215f3165f2a7f095",
-    "src/easyicu/research_agent/research_context/outbound.py": "c578ef462f5f0d1cd33400e639d70d481914fb78248d614ee485f0c471360c68",
+    "src/easyicu/research_agent/research_context/outbound.py": "1d5706a7504a722a62375b53ca6626abedfb1afc6332af4d59ce89119ddc6fa5",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "037224b99bddde4ef37cf2119fc708ca33a932b274e932ba6cb902e689f8bd75",
     "src/easyicu/research_agent/resources/catalog.py": "d1df9901759c3a323ac6a9bb4998cefa7ca2deb978ddd8409851a68f2beeff2f",

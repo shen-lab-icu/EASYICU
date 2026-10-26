@@ -430,6 +430,30 @@ FAMILY_MINIMAL_ADJUSTMENTS = {
     "ordinal_dose_response": ("age", "sex"),
 }
 
+ADJUSTED_ASSOCIATION_SUBGROUP_GUIDANCE = (
+    "For adjusted_association, model_terms encode the exposure and adjustment "
+    "covariates only; they do not express stratified/subgroup analysis. Keep a "
+    "stated modifier or stratifier outside the adjustment set unless it is "
+    "explicitly in the bound roster. Plan its analysis in a separate "
+    "custom_analysis step with scientific_action_id=association.effect_modification, "
+    "an analysis role such as secondary, and the stratifier in raw_inputs, "
+    "together with the exposure, outcome and bound covariates. Preserve that "
+    "subgroup step when repairing model_terms; if it is absent, the outline "
+    "needs a subgroup owner. Table 1 grouping or a covariate term does not "
+    "satisfy the subgroup requirement."
+)
+
+
+def stated_subgroup_columns(context: Any) -> frozenset[str]:
+    """Resolve stated modifiers to analysis columns through concept lineage."""
+    relatives = concept_relatives(context)
+    return frozenset(
+        name
+        for item in context_stated_variables(context, "stated_subgroups")
+        if item.concept
+        for name in relatives(item.concept)
+    )
+
 
 def _family_default_adjustment(context: Any) -> "AdjustmentSetAuthority | None":
     """Bind the same minimal roster for family templates and general planning.
@@ -575,6 +599,14 @@ class AdjustmentSetAuthority:
             "operational_covariates": list(self.operational_covariates),
             "operationalizations": dict(self.operationalizations),
             "authorship_boundary": boundary + " This binding is not a plan-approval receipt.",
+            "covariate_roster_rule": (
+                "Include every bound covariate in order: model covariates must equal "
+                "operational_covariates, including [] for no adjustment. The host "
+                "will not add, drop or reorder a Planner term."
+                if self.selection == "exact" else
+                "Choose justified covariates from the eligible variables."
+            ),
+            "adjusted_association_subgroups": ADJUSTED_ASSOCIATION_SUBGROUP_GUIDANCE,
             **({"selection_rule": self.rule} if self.rule else {}),
         }
 
@@ -699,6 +731,9 @@ def adjusted_model_term_planning_authority(
             and host_timed.get(name) != "at_or_before_time_zero"
         ):
             excluded.append({"name": name, "reason": "time_zero_authority_missing"})
+            continue
+        if adjustment.selection == "exact" and name not in adjustment.operational_covariates:
+            excluded.append({"name": name, "reason": "outside_bound_adjustment_roster"})
             continue
         observed = observed_levels_for(name=name, variables=variables)
         declared, declared_basis = declared_domain_for_variable(variable)

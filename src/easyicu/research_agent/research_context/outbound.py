@@ -374,11 +374,6 @@ def outbound_safe_context_payload(
             # Persisted preferences can contain Agent proposals. Calling the
             # entire object explicit user choices fabricates their authorship.
             "study_preferences": study_preferences,
-            "adjustment_authority": (
-                AdjustmentSetAuthority.from_context(context).prompt_projection()
-                if preferences is not None and preferences.covariate_selection == "exact"
-                else None
-            ),
             "variables": variables,
         }
     )
@@ -395,6 +390,11 @@ def outbound_safe_context_payload(
         payload["study_preferences"]["covariates"] = list(
             preferences.covariates
         )
+    adjustment = AdjustmentSetAuthority.from_context(context)
+    if adjustment.selection == "exact":
+        # Family defaults bind even when saved preferences remain selectable.
+        # Project after compaction so the explicit empty roster survives too.
+        payload["adjustment_authority"] = adjustment.prompt_projection()
     return project_outbound_counts(payload)
 
 

@@ -2986,9 +2986,9 @@ class ProgressivePlannerAgent:
                 "Host model-term planning authority (binding): model_terms may "
                 "select covariates only from eligible_covariates and must use "
                 "one exact allowed_codings value. Variables under "
-                "excluded_covariates must not appear in model_terms. This "
-                "metadata authority constrains proposals; it does not require "
-                "including every eligible covariate.\n"
+                "excluded_covariates must not appear in model_terms. Under exact "
+                "selection include every bound covariate in order. Only "
+                "planner_selectable permits choosing a subset.\n"
                 + json.dumps(
                     adjusted_model_term_planning_authority(context, variables),
                     ensure_ascii=False,

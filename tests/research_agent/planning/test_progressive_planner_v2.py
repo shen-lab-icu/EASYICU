@@ -6938,13 +6938,14 @@ def test_agent_repairs_primary_model_to_the_exact_adjustment_roster() -> None:
         if "HOST COMPILER OBSERVATION" in messages[-1].content
     ]
     assert any(
-        "progressive_adjustment_authority_mismatch" in prompt
+        "progressive_adjustment_roster_mismatch" in prompt
         for prompt in repair_prompts
     )
     assert any(
-        '"required_covariates":["age_years","sex_code"]' in prompt
+        '"bound_covariates":["age_years","sex_code"]' in prompt
         for prompt in repair_prompts
     )
+    assert any('"missing_covariates":["sex_code"]' in prompt for prompt in repair_prompts)
     assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 1
 
 
