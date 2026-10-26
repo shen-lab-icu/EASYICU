@@ -1155,6 +1155,20 @@
     "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
+    "method": "POST",
+    "route": "/api/extensions/skills/copy",
+    "fields": [
+      "body:builtin_id",
+      "body:name",
+      "body:stages",
+      "body:expected_sha256"
+    ],
+    "reaches": "ExtensionRegistry.copy_builtin_skill -> disabled personal Skill under the instance extension root",
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
+  },
+  {
     "method": "GET",
     "route": "/api/extensions/skills/{name}",
     "fields": [

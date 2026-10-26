@@ -64,7 +64,7 @@
 .eusk-mode-tabs button[aria-selected=true] span{background:var(--skin-ink);color:var(--skin-paper)}
 .eusk-filters{border-bottom:1px solid rgba(42,38,34,.5)}
 .eusk-filter-label{color:var(--skin-muted);font:500 10px/15px var(--skin-font);letter-spacing:.5px}
-.eusk-pill,.eusk-category select,.eusk-state,.eusk-state-button,.eusk-actions-menu>summary{border:1px solid var(--skin-ink);border-radius:6px;background:var(--skin-paper);color:var(--skin-ink)}
+.eusk-pill,.eusk-category select,.eusk-state,.eusk-state-button,.eusk-copy,.eusk-actions-menu>summary{border:1px solid var(--skin-ink);border-radius:6px;background:var(--skin-paper);color:var(--skin-ink)}
 .eusk-pill.active,.eusk-state.on,.eusk-state-button.on{border-color:var(--skin-ink);background:var(--skin-primary-soft);color:var(--skin-ink)}
 .eusk-catalog-summary{color:var(--skin-muted)}
 

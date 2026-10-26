@@ -116,7 +116,7 @@ def unavailable(*, status_code: int = 403) -> None:
 _ADMIN_ROUTES = frozenset({
     "/api/fs/mkdir", "/api/jobs/convert", "/api/jobs/demo-source-prepare",
     "/api/settings/reset",
-    "/api/extensions/skills/install", "/api/extensions/mcp/install",
+    "/api/extensions/skills/install", "/api/extensions/skills/copy", "/api/extensions/mcp/install",
     "/api/extensions/state", "/api/extensions/remove", "/api/extensions/mcp/test",
     "/api/copilot/pi/provider-config", "/api/copilot/pi/provider-config/models",
     "/api/copilot/pi/provider-config/declaration",

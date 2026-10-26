@@ -1,6 +1,6 @@
 """HTTP adapters for the user Skill and MCP extension registry.
 
-D-P2-7 exact-edit confirmation: installing, overwriting, or removing an
+D-P2-7 exact-edit confirmation: installing, copying, overwriting, or removing an
 extension can point a later Copilot session or Agent run at an external MCP
 endpoint, so install/overwrite/remove calls must prove they read the current
 activation
@@ -30,7 +30,7 @@ from easyicu.webserver import settings as settings_store
 router = APIRouter()
 
 #: Shared exact-edit confirmation field: the activation revision the caller
-#: saw on GET /api/extensions. Required on install, overwrite, remove, and
+#: saw on GET /api/extensions. Required on install, copy, overwrite, remove, and
 #: enable/disable state changes.
 ExpectedRevision = Field(
     min_length=64,
@@ -47,6 +47,17 @@ class SkillInstallRequest(BaseModel):
         default_factory=lambda: ["conversation"], min_length=1, max_length=2
     )
     enabled: StrictBool = True
+    expected_sha256: str = ExpectedRevision
+
+
+class SkillCopyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    builtin_id: str = Field(min_length=1, max_length=128)
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    stages: list[Literal["conversation", "writing"]] = Field(
+        default_factory=lambda: ["conversation"], min_length=1, max_length=2
+    )
     expected_sha256: str = ExpectedRevision
 
 
@@ -93,6 +104,8 @@ def _raise_extension_error(exc: ExtensionRegistryError) -> None:
         current = exc.details.get("activation_sha256")
         detail["activation_sha256"] = current
         raise HTTPException(status_code=409, detail=detail) from exc
+    if exc.code == "extension_skill_name_conflict":
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     raise HTTPException(status_code=400, detail=exc.detail) from exc
 
 
@@ -143,6 +156,21 @@ def post_install_mcp(body: McpInstallRequest) -> Dict[str, Any]:
             expected_activation_sha256=body.expected_sha256,
         )
         return {"ok": True, "mcp_server": installed, "extensions": get_extensions()}
+    except ExtensionRegistryError as exc:
+        _raise_extension_error(exc)
+
+
+@router.post("/api/extensions/skills/copy")
+def post_copy_skill(body: SkillCopyRequest) -> Dict[str, Any]:
+    """Copy reviewed built-in documentation into a disabled personal Skill."""
+    try:
+        installed = _registry().copy_builtin_skill(
+            body.builtin_id,
+            name=body.name,
+            stages=body.stages,
+            expected_activation_sha256=body.expected_sha256,
+        )
+        return {"ok": True, "skill": installed, "extensions": get_extensions()}
     except ExtensionRegistryError as exc:
         _raise_extension_error(exc)
 

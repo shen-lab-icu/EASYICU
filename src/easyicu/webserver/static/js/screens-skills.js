@@ -68,10 +68,15 @@
   }));
   const builtins = () => [...methodSkills(), ...methodComponents(), ...publicationSkills()];
   const userSkills = () => (Array.isArray(registry().skills) ? registry().skills : []).map(row => ({
-    ...row, id: `user:${row.name}`, title: row.name, category: row.category || ((row.stages || []).includes('writing')
+    ...row, id: `user:${row.name}`, title: row.name,
+    copiedFrom: row.source && typeof row.source === 'object' ? String(row.source.builtin_id || '') : '',
+    sourceUpdated: row.source_updated === true, category: row.category || ((row.stages || []).includes('writing')
       ? tr('Writing', '写作') : tr('Conversation', '对话')), source: 'user', skillLayer: 'analysis_module',
   }));
   const allSkills = () => [...builtins(), ...userSkills()];
+  // A copied Skill names the built-in it came from by that Skill's current title.
+  const copiedFromTitle = skill => (methodSkills().concat(methodComponents()).find(row => row.name === skill.copiedFrom) || {}).title || skill.copiedFrom;
+  const copiedFromLabel = skill => tr(`Copied from ${copiedFromTitle(skill)}`, `复制自「${copiedFromTitle(skill)}」`);
   const selectedSkill = () => allSkills().find(item => item.id === ui.selected);
   const date = value => value ? new Date(value).toLocaleDateString(window.EU_LANG === 'zh' ? 'zh-CN' : 'en-US') : '';
   const list = values => `<ul>${(values || []).map(value => `<li>${esc(value)}</li>`).join('')}</ul>`;
@@ -148,7 +153,7 @@
         <div class="eusk-grid">${rows.map(item => `<article class="eusk-card ${item.enabled ? '' : 'disabled'}">
           <button type="button" class="eusk-card-open" data-sk-open="${esc(item.id)}" aria-label="${tr('Inspect skill', '查看技能')} ${esc(item.title)}">
             <strong>${esc(item.title)}</strong><small>${esc(item.category)}</small><p>${esc(item.description)}</p>
-          </button><div class="eusk-card-foot"><span>${esc(source === 'user' ? date(item.updated_at) : item.kind === 'method' ? ceilingLabel(item) : item.kind === 'method_component' ? tierLabel(item) : '')}</span>
+          </button><div class="eusk-card-foot"><span>${esc(source === 'user' ? (item.copiedFrom ? copiedFromLabel(item) + (item.sourceUpdated ? tr(' · source updated', ' · 原技能已更新') : '') : date(item.updated_at)) : item.kind === 'method' ? ceilingLabel(item) : item.kind === 'method_component' ? tierLabel(item) : '')}</span>
           <span class="eusk-state ${item.enabled ? 'on' : ''}">${item.enabled ? tr('Enabled', '已启用') : tr('Off', '未启用')}</span></div>
         </article>`).join('')}</div></section>`;
     }).join('');
@@ -186,12 +191,13 @@
     // The administrator owns skill state on a hosted instance: show it, offer no toggle.
     const stateOnly = method || Boolean(window.EasyICU?.guidedPi?.optional('hosted')?.active());
     return `<button type="button" class="eusk-back" data-sk-back>← ${skill.kind === 'method_component' ? tr('Back to method library', '返回方法库') : tr('Back to skills', '返回技能目录')}</button>
-      <div class="eusk-detail-head"><div><span class="eusk-eyebrow">${esc(skill.category)} · ${skill.kind === 'method' ? layerLabel(skill) : skill.kind === 'method_component' ? tr('Method library', '方法库') : sourceLabel(skill.source)}</span>
-      <h1>${esc(skill.title)}</h1><p>${esc(skill.description)}</p><small>${esc(user ? date(skill.updated_at) : skill.version)}</small></div>
+      <div class="eusk-detail-head"><div><span class="eusk-eyebrow">${esc(skill.category)} · ${skill.kind === 'method' ? layerLabel(skill) : skill.kind === 'method_component' ? tr('Method library', '方法库') : user && skill.copiedFrom ? copiedFromLabel(skill) : sourceLabel(skill.source)}</span>
+      <h1>${esc(skill.title)}</h1><p>${esc(skill.description)}</p><small>${esc(user ? date(skill.updated_at) : skill.version)}</small>${user && skill.sourceUpdated ? `<p class="eusk-source-note">${tr('The original Skill has changed; your copy stays as it is.', '原技能已更新，你的副本保持不变。')} <button type="button" data-sk-open="builtin:${esc(skill.copiedFrom)}">${tr('View the original', '查看原技能')}</button></p>` : ''}</div>
       <div class="eusk-detail-actions">${stateOnly
         ? `<span class="eusk-state-button ${skill.enabled ? 'on' : ''}" aria-label="${skill.enabled ? tr('Available', '可用') : tr('Unavailable', '不可用')}">${skill.enabled ? '✓ ' + tr('Available', '可用') : tr('Unavailable', '不可用')}</span>`
         : `<button type="button" class="eusk-state-button ${skill.enabled ? 'on' : ''}" data-sk-toggle="${esc(skill.id)}" ${ui.busy || masterOff ? 'disabled' : ''}>${skill.enabled ? '✓ ' + tr('Enabled', '已启用') : tr('Enable', '启用')}</button>`}
       <button type="button" class="eusk-use" data-sk-use="${esc(skill.id)}" ${skill.enabled ? '' : 'disabled'}>${workflow ? tr('Start workflow', '启动工作流') : method || (user && skill.enabled && skill.stages.includes('conversation')) ? tr('Use in new task', '在新任务中使用') : tr('Ask in new task', '在新任务中询问')} ↗</button>
+      ${method && !window.EasyICU?.guidedPi?.optional('hosted')?.active() ? `<button type="button" class="eusk-copy" data-sk-copy="${esc(skill.id)}" ${ui.busy ? 'disabled' : ''}>${tr('Copy to my skills', '复制为我的技能')}</button>` : ''}
       ${user ? `<details class="eusk-actions-menu" data-popover-menu><summary aria-label="${tr('Skill actions', '技能操作')}">···</summary><div><button type="button" data-sk-edit-with aria-label="${tr('Edit with EasyICU', '使用 EasyICU 修订')}">${tr('Edit with EasyICU', '使用 EasyICU 修订')}</button><button type="button" data-sk-edit aria-label="${tr('Edit SKILL.md directly', '直接编辑 SKILL.md')}">${tr('Edit SKILL.md', '直接编辑 SKILL.md')}</button><button type="button" data-sk-download aria-label="${tr('Download SKILL.md', '下载 SKILL.md')}">${tr('Download SKILL.md', '下载 SKILL.md')}</button><button type="button" data-sk-remove aria-label="${tr('Remove skill', '移除技能')}">${tr('Remove skill', '移除技能')}</button></div></details>` : ''}</div></div>
       <div class="eusk-tabs" role="tablist"><button type="button" role="tab" aria-selected="${ui.tab === 'overview'}" data-sk-tab="overview">${tr('Overview', '概览')}</button><button type="button" role="tab" aria-selected="${ui.tab === 'files'}" data-sk-tab="files">${tr('Files', '文件')}</button></div>
       ${ui.tab === 'files' ? `<div class="eusk-detail-body">${method ? methodPackage(skill, component) : user ? `<div class="eusk-file-row">${icon('file', 15)} SKILL.md <small>${skill.size_bytes || 0} B</small></div>
@@ -411,6 +417,7 @@
       }
       if (target.dataset.skPackageFile) { ui.packageFile = target.dataset.skPackageFile; rerender(); return; }
       if (target.dataset.skToggle) { void toggle(target.dataset.skToggle); return; }
+      if (target.dataset.skCopy) { void copySkill(target.dataset.skCopy); return; }
       if (target.dataset.skEditWith !== undefined) { void editWithEasyICU(); return; }
       if (target.dataset.skEdit !== undefined) { void editSkill(); return; }
       if (target.dataset.skDownload !== undefined) { void downloadSkill(); return; }
@@ -508,6 +515,34 @@
       document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) { ui.error = String(error && error.message || error); rerender(); }
+  }
+  // A copy is a personal, instructions-only Skill that starts off; a taken name gets the next free suffix.
+  async function copySkill(id) {
+    const skill = allSkills().find(item => item.id === id);
+    if (!skill || skill.source !== 'builtin' || ui.busy || !api().postJSON) return;
+    ui.busy = true; ui.error = ''; ui.notice = ''; rerender();
+    const base = skill.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+    let copied = null;
+    try {
+      for (let n = 1; n <= 9 && !copied; n += 1) {
+        try {
+          copied = await api().postJSON('/api/extensions/skills/copy', { builtin_id: skill.name,
+            name: n === 1 ? base : `${base}-${n}`, expected_sha256: registry().activation_sha256 });
+        } catch (error) {
+          if (!error || error.code !== 'extension_skill_name_conflict') throw error;
+        }
+      }
+      if (!copied) throw new Error(tr('You already have several copies of this Skill. Remove one you no longer use first.', '这个技能你已经复制了多份，请先删除不用的副本。'));
+      if (copied.extensions) window.EU_EXTENSIONS = copied.extensions;
+      ui.notice = tr('Copied to your skills. The copy starts off: edit it, then enable it.', '已复制到「我的技能」，副本默认未启用：修改后再启用。');
+    } catch (error) {
+      ui.error = error && error.code === 'extension_revision_mismatch'
+        ? tr('Skills changed in another window. Try again.', '技能在其他窗口中有改动，请再试一次。')
+        : String(error && error.message || error);
+      if (api().loadExtensions) await api().loadExtensions().catch(() => {});
+    } finally { ui.busy = false; }
+    if (copied && copied.skill) { const notice = ui.notice; await openSkill(`user:${copied.skill.name}`); ui.notice = notice; }
+    rerender();
   }
   async function removeSkill() {
     const skill = selectedSkill();

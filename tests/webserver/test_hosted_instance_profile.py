@@ -12,7 +12,7 @@ from tests.support.hosted_http import stub_route
 
 
 ADMIN_ROUTES = [
-    "/api/settings/reset", "/api/extensions/skills/install", "/api/extensions/mcp/install",
+    "/api/settings/reset", "/api/extensions/skills/install", "/api/extensions/skills/copy", "/api/extensions/mcp/install",
     "/api/extensions/state", "/api/extensions/remove", "/api/extensions/mcp/test",
     "/api/copilot/pi/provider-config", "/api/copilot/pi/provider-config/models",
     "/api/agent-runs/provider-config", "/api/agent-runs/codex-auth/login",
