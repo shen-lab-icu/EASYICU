@@ -83,21 +83,22 @@
   };
   const sourceLabel = source => source === 'user' ? tr('Created by you', '我创建的') : tr('Verified by EasyICU', 'EasyICU 已验证');
   const executionLabel = skill => skill.executionMode === 'deterministic_host'
-    ? tr('Host executed', '主机确定性执行') : tr('Agent coded + host gates', 'Agent 编码 + 主机门禁');
+    ? tr('Computed by EasyICU', '由 EasyICU 直接计算') : tr('Model-written code, checked by EasyICU', '模型编写代码，EasyICU 核验');
   const ceilingLabel = skill => skill.claimCeiling === 'reportable'
-    ? tr('Reportable contract', '可报告契约') : tr('Analysis only', '仅分析');
+    ? tr('Report-ready', '可写入报告') : tr('Analysis only', '仅分析级');
   const tierLabel = skill => ({ primary: tr('Primary method', '主要方法'),
     standard_supporting: tr('Supporting method', '配套方法'), exploratory: tr('Exploratory method', '探索方法') }[skill.tier] || skill.tier || '');
   const methodFamilySpecs = () => [
-    ['descriptive', tr('Descriptive and measurement', '描述性与测量')],
-    ['association', tr('Association analysis', '关联分析')],
-    ['time_to_event', tr('Survival and time-to-event', '生存与时间结局')],
-    ['prediction', tr('Prediction and validation', '预测与验证')],
+    ['descriptive', tr('Descriptive', '描述性研究')],
+    ['association', tr('Association', '关联分析')],
+    ['time_to_event', tr('Survival', '生存分析')],
+    ['prediction', tr('Prediction', '预测模型')],
     ['causal_emulation', tr('Causal inference', '因果推断')],
-    ['phenotyping', tr('Phenotyping and trajectories', '表型与轨迹')],
+    ['phenotyping', tr('Phenotyping', '表型与亚型')],
   ];
+  const familyName = family => (methodFamilySpecs().find(([key]) => key === family) || [])[1] || family;
   const layerLabel = skill => skill.skillLayer === 'analysis_module'
-    ? tr('Reusable module', '可复用模块') : tr('Research workflow', '研究工作流');
+    ? tr('Single analysis', '单项分析') : tr('Complete study', '完整研究');
 
   function rail() {
     if (window.EU_DESKTOP_MODULE_SHELL) return window.EU_DESKTOP_MODULE_SHELL.rail('skills');
@@ -116,7 +117,7 @@
     const publicationEntries = publicationSkills();
     const personalEntries = userSkills();
     const methodEntries = methodComponents();
-    const skillEntries = [...workflowEntries, ...analysisModuleEntries, ...methodEntries, ...publicationEntries, ...personalEntries];
+    const skillEntries = [...workflowEntries, ...analysisModuleEntries, ...publicationEntries, ...personalEntries];
     const all = ui.catalogMode === 'methods' ? methodEntries : skillEntries;
     const categories = [...new Set(all.map(item => item.category))].sort((a, b) => a.localeCompare(b));
     const query = ui.query.trim().toLocaleLowerCase();
@@ -126,15 +127,10 @@
       && (!query || [item.name, item.title, item.description, item.category, item.scope].some(value => String(value || '').toLocaleLowerCase().includes(query))));
     const counts = { all: all.length, user: all.filter(item => item.source === 'user').length,
       builtin: all.filter(item => item.source === 'builtin').length };
-    const workflowCount = workflowEntries.length;
-    const moduleCount = analysisModuleEntries.length;
-    const componentCount = methodEntries.length;
     const plannedCount = Number(methodCapabilities().planned_method_count || 0);
-    const publicationCount = publicationEntries.length;
     const builtinGroups = [
-      ['workflow', 'builtin', tr('Complete research workflows', '完整研究工作流')],
-      ['module', 'builtin', tr('Reusable analysis modules', '可复用分析模块')],
-      ...methodFamilySpecs().map(([family, heading]) => [`component:${family}`, 'builtin', heading]),
+      ['workflow', 'builtin', tr('Complete studies', '完整研究')],
+      ['module', 'builtin', tr('Single analyses', '单项分析')],
       ['publication', 'builtin', tr('Writing and figures', '写作与图件')],
     ];
     const groupSpecs = ui.catalogMode === 'methods'
@@ -152,8 +148,8 @@
         <div class="eusk-grid">${rows.map(item => `<article class="eusk-card ${item.enabled ? '' : 'disabled'}">
           <button type="button" class="eusk-card-open" data-sk-open="${esc(item.id)}" aria-label="${tr('Inspect skill', '查看技能')} ${esc(item.title)}">
             <strong>${esc(item.title)}</strong><small>${esc(item.category)}</small><p>${esc(item.description)}</p>
-          </button><div class="eusk-card-foot"><span>${esc(source === 'user' ? date(item.updated_at) : item.kind === 'method' ? ceilingLabel(item) : item.kind === 'method_component' ? tierLabel(item) : (item.version || ''))}</span>
-          <span class="eusk-source">${item.kind === 'method_component' ? tr('Method component', '方法组件') : item.kind === 'method' ? layerLabel(item) : sourceLabel(source)}</span><span class="eusk-state ${item.enabled ? 'on' : ''}">${item.enabled ? tr('Enabled', '已启用') : tr('Off', '未启用')}</span></div>
+          </button><div class="eusk-card-foot"><span>${esc(source === 'user' ? date(item.updated_at) : item.kind === 'method' ? ceilingLabel(item) : item.kind === 'method_component' ? tierLabel(item) : '')}</span>
+          <span class="eusk-state ${item.enabled ? 'on' : ''}">${item.enabled ? tr('Enabled', '已启用') : tr('Off', '未启用')}</span></div>
         </article>`).join('')}</div></section>`;
     }).join('');
     // A hosted instance's skills are installed by the administrator
@@ -167,19 +163,15 @@
     return `<div class="eusk-head"><div><span class="eusk-eyebrow">SKILL HUB</span><h1>${tr('Skills', '技能')}</h1></div>${createMenu}</div>
       <label class="eusk-search">${icon('search', 17)}<input data-sk-search type="search" placeholder="${ui.catalogMode === 'methods' ? tr('Search the method library…', '搜索方法库…') : tr('Search research skills…', '搜索研究技能…')}" value="${esc(ui.query)}" autocomplete="off"></label>
       <div class="eusk-mode-tabs" role="tablist" aria-label="${tr('Catalog level', '目录层级')}">
-        <button type="button" role="tab" aria-selected="${ui.catalogMode === 'skills'}" data-sk-mode="skills">${tr('Skills', '技能')} <span>${skillEntries.length}</span><small>${tr('All loadable packages', '全部可加载包')}</small></button>
-        <button type="button" role="tab" aria-selected="${ui.catalogMode === 'methods'}" data-sk-mode="methods">${tr('Method library', '方法库')} <span>${methodEntries.length}</span><small>${tr('Statistical components', '统计方法组件')}</small></button>
+        <button type="button" role="tab" aria-selected="${ui.catalogMode === 'skills'}" data-sk-mode="skills">${tr('Skills', '技能')} <span>${skillEntries.length}</span></button>
+        <button type="button" role="tab" aria-selected="${ui.catalogMode === 'methods'}" data-sk-mode="methods">${tr('Method library', '方法库')} <span>${methodEntries.length}</span></button>
       </div>
       <div class="eusk-filters"><span class="eusk-filter-label">${tr('SOURCE', '来源')}</span>
       ${[['all', tr('All', '全部')], ['user', tr('Mine', '我的')], ['builtin', tr('EasyICU', 'EasyICU')]].map(([key, label]) =>
         `<button type="button" class="eusk-pill ${ui.source === key ? 'active' : ''}" data-sk-source="${key}" aria-pressed="${ui.source === key}">${label} <span>${counts[key]}</span></button>`).join('')}
       <label class="eusk-category"><span class="shell-sr-only">${tr('Category', '类别')}</span><select data-sk-category><option value="all">${tr('All categories', '全部类别')}</option>${categories.map(category => `<option value="${esc(category)}" ${ui.category === category ? 'selected' : ''}>${esc(category)}</option>`).join('')}</select></label>
       <label class="eusk-hide"><input type="checkbox" data-sk-hide ${ui.hideDisabled ? 'checked' : ''}> ${tr('Hide disabled', '隐藏未启用')}</label></div>
-      <div class="eusk-catalog-summary" aria-label="${tr('Capability catalogue summary', '能力目录摘要')}">
-        ${ui.catalogMode === 'methods'
-          ? `<span>${tr(`${componentCount} available methods in six families.`, `${componentCount} 个可用方法，分为六个方法族。`)}</span>${plannedCount ? `<small>${tr(`${plannedCount} planned methods are not listed.`, `另有 ${plannedCount} 个规划中方法未上架。`)}</small>` : ''}`
-          : `<span>${tr(`${workflowCount + moduleCount + componentCount + publicationCount} built-in skill packages: ${workflowCount} complete workflows, ${moduleCount} reusable analysis modules, ${componentCount} method packages, and ${publicationCount} writing or figure modules.`, `${workflowCount + moduleCount + componentCount + publicationCount} 个内置技能包：${workflowCount} 个完整项目流程、${moduleCount} 个可复用分析模块、${componentCount} 个方法包、${publicationCount} 个写作或图件模块。`)}</span>${personalEntries.length ? `<small>${tr(`${personalEntries.length} skills created by you.`, `另有 ${personalEntries.length} 个你创建的技能。`)}</small>` : ''}`}
-      </div>
+      ${ui.catalogMode === 'methods' && plannedCount ? `<p class="eusk-catalog-summary">${tr(`${plannedCount} planned methods are not listed yet.`, `另有 ${plannedCount} 个规划中的方法尚未上架。`)}</p>` : ''}
       ${cards || `<div class="eusk-empty"><strong>${tr('Nothing matches', '没有匹配的技能')}</strong><p>${tr('Try a different source, category, or search term.', '试试其他来源、类别或关键词。')}</p></div>`}`;
   }
   function detail() {
@@ -193,8 +185,8 @@
     const masterOff = !user && (method ? methodCapabilities().enabled === false : publicationCapabilities().enabled === false);
     // The administrator owns skill state on a hosted instance: show it, offer no toggle.
     const stateOnly = method || Boolean(window.EasyICU?.guidedPi?.optional('hosted')?.active());
-    return `<button type="button" class="eusk-back" data-sk-back>← ${tr('Back to skills', '返回技能目录')}</button>
-      <div class="eusk-detail-head"><div><span class="eusk-eyebrow">${esc(skill.category)} · ${skill.kind === 'method' ? layerLabel(skill) : sourceLabel(skill.source)}</span>
+    return `<button type="button" class="eusk-back" data-sk-back>← ${skill.kind === 'method_component' ? tr('Back to method library', '返回方法库') : tr('Back to skills', '返回技能目录')}</button>
+      <div class="eusk-detail-head"><div><span class="eusk-eyebrow">${esc(skill.category)} · ${skill.kind === 'method' ? layerLabel(skill) : skill.kind === 'method_component' ? tr('Method library', '方法库') : sourceLabel(skill.source)}</span>
       <h1>${esc(skill.title)}</h1><p>${esc(skill.description)}</p><small>${esc(user ? date(skill.updated_at) : skill.version)}</small></div>
       <div class="eusk-detail-actions">${stateOnly
         ? `<span class="eusk-state-button ${skill.enabled ? 'on' : ''}" aria-label="${skill.enabled ? tr('Available', '可用') : tr('Unavailable', '不可用')}">${skill.enabled ? '✓ ' + tr('Available', '可用') : tr('Unavailable', '不可用')}</span>`
@@ -227,9 +219,9 @@
     return `<article class="eusk-rendered-markdown eusk-overview-document" data-sk-overview-source="SKILL.md">${instructionHtml(packageMarkdown(main.content))}</article>`;
   }
   function methodContract(skill, component) {
-    return `<div class="eusk-method-summary"><div><span>${component ? tr('Method family', '方法族') : tr('Capability', '能力契约')}</span><code>${esc(component ? skill.methodFamily : skill.capabilityId)}</code></div><div><span>${tr('Execution', '执行方式')}</span><strong>${esc(executionLabel(skill))}</strong></div><div><span>${component ? tr('Method tier', '方法层级') : tr('Claim ceiling', '论断上限')}</span><strong>${esc(component ? tierLabel(skill) : ceilingLabel(skill))}</strong></div></div>
-      <h2>${component ? tr('Reviewed implementation', '审阅实现') : tr('Registered method actions', '已登记的方法动作')}</h2>${component ? list([...new Set([skill.methodKey, ...skill.kernelModules])]) : skill.actionIds.length ? list(skill.actionIds) : `<p>${tr('This workflow binds directly to its capability owner.', '此工作流直接绑定能力所有者。')}</p>`}
-      <h2>${component ? tr('Reporting bindings', '报告规范') : tr('Required diagnostics', '必要诊断')}</h2>${list(component ? skill.reportingItems : skill.diagnostics)}${skill.skillLayer === 'research_workflow' ? `<h2>${tr('Included reusable modules', '包含的可复用模块')}</h2>${skill.includedModuleIds.length ? list(skill.includedModuleIds) : `<p>${tr('No default modules.', '没有默认模块。')}</p>`}` : ''}<h2>${tr('Registered output', '登记产物')}</h2>${list(skill.outputs)}`;
+    return `<div class="eusk-method-summary"><div><span>${component ? tr('Method family', '方法族') : tr('Capability', '能力')}</span>${component ? `<strong>${esc(familyName(skill.methodFamily))}</strong>` : `<code>${esc(skill.capabilityId)}</code>`}</div><div><span>${tr('Execution', '执行方式')}</span><strong>${esc(executionLabel(skill))}</strong></div><div><span>${component ? tr('Method role', '方法角色') : tr('Use of results', '结果用途')}</span><strong>${esc(component ? tierLabel(skill) : ceilingLabel(skill))}</strong></div></div>
+      <h2>${component ? tr('Implementation', '实现') : tr('Methods used', '使用的方法')}</h2>${component ? list([...new Set([skill.methodKey, ...skill.kernelModules])]) : skill.actionIds.length ? list(skill.actionIds) : `<p>${tr('This study runs through its own EasyICU capability.', '这项研究由 EasyICU 的对应能力直接运行。')}</p>`}
+      <h2>${component ? tr('Reporting items', '报告规范条目') : tr('Required checks', '必做检查')}</h2>${list(component ? skill.reportingItems : skill.diagnostics)}${skill.skillLayer === 'research_workflow' ? `<h2>${tr('Included single analyses', '包含的单项分析')}</h2>${skill.includedModuleIds.length ? list(skill.includedModuleIds.map(id => (methodSkills().find(row => row.id === `builtin:${id}`) || {}).title || id)) : `<p>${tr('None by default.', '默认不包含。')}</p>`}` : ''}<h2>${tr('Outputs', '产出')}</h2>${list(skill.outputs)}`;
   }
   function methodPackage(skill, component) {
     if (ui.loadingPackage) return `<p>${tr('Loading the reviewed package…', '正在读取已审阅技能包…')}</p>`;

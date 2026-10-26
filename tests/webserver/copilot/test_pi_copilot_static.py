@@ -92,7 +92,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-next-actions.js?v=20261022-nofiller1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2" in index
-    assert "js/screens-guided-pi-starters.js?v=20261021-entry-examples1" in index
+    assert "js/screens-guided-pi-starters.js?v=20261026-skills1" in index
     assert "js/screens-guided-pi-idea-source.js?v=20260922-popover1" in index
     assert "js/screens-guided-pi-header.js?v=20261021-help1" in index
     assert "js/screens-guided-pi-model-menu.js?v=20260923-keep-open1" in index

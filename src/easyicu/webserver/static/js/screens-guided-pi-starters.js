@@ -12,8 +12,8 @@
       {
         id: 'cohort-characterization-table-one',
         title: tr('Cohort characterization and Table 1', '队列描述与 Table 1'),
-        category: tr('Descriptive epidemiology', '描述性流行病学'),
-        description: tr('Build a grouped baseline table from one typed, source-bound cohort.', '基于来源绑定的队列生成分组基线特征表。'),
+        category: tr('Descriptive', '描述性研究'),
+        description: tr('Describe the study population\'s baseline characteristics by group as a Table 1, with each variable\'s true denominator.', '按分组描述研究人群的基线特征，生成 Table 1，并保留每个变量的真实分母。'),
         prompt: tr(
           'Use the Cohort characterization and Table 1 method. The research plan proposes the grouping levels, summarized variables, units, and summary rules; I review them together in the plan, and nothing runs before that review. My research question: ',
           '请使用“队列描述与 Table 1”方法。分组水平、汇总变量、单位与汇总规则由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：',
@@ -22,23 +22,23 @@
       },
       {
         id: 'exposure-outcome-distribution',
-        title: tr('Exposure and outcome distribution', '研究因素与结局分布'),
-        category: tr('Descriptive epidemiology', '描述性流行病学'),
-        description: tr('Estimate typed absolute risks and denominators without causal language.', '计算类型明确的绝对风险与分母，并保持描述性解释。'),
+        title: tr('Exposure and outcome distribution', '暴露与结局分布'),
+        category: tr('Descriptive', '描述性研究'),
+        description: tr('Report outcome risks and denominators for each exposure group; descriptive only, with no causal wording.', '按暴露分组计算结局的发生率和分母，只做描述，不作因果解释。'),
         prompt: tr(
           'Use the Exposure and outcome distribution method. The research plan proposes the exposure levels, outcome definition, denominators, and interval method; I review them together in the plan, and nothing runs before that review. Interpretation stays descriptive. My research question: ',
-          '请使用“研究因素与结局分布”方法。研究因素水平、结局定义、分母与区间方法由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。解释保持描述性，不作因果推断。我的研究问题是：',
+          '请使用“暴露与结局分布”方法。暴露水平、结局定义、分母与区间方法由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。解释保持描述性，不作因果推断。我的研究问题是：',
         ),
         capabilityId: 'descriptive_exposure_outcome_distribution_v1', actionIds: [], claimCeiling: 'reportable',
       },
       {
         id: 'survival-time-to-event',
-        title: tr('Survival and time-to-event analysis', '生存与时间结局分析'),
-        category: tr('Survival analysis', '生存分析'),
-        description: tr('Run a contract-bound Cox analysis with KM, log-rank, and PH diagnostics.', '运行契约绑定的 Cox 分析，并提供 KM、log-rank 与 PH 诊断。'),
+        title: tr('Survival analysis (time to event)', '生存分析（时间到事件）'),
+        category: tr('Survival', '生存分析'),
+        description: tr('Compare survival across groups: Kaplan–Meier curves, log-rank test, adjusted Cox hazard ratios and a proportional-hazards check.', '比较不同分组的生存：Kaplan–Meier 曲线、log-rank 检验、调整后的 Cox 风险比，并检查比例风险假设。'),
         prompt: tr(
-          'Use the Survival and time-to-event analysis method. The research plan proposes the time origin, event and censoring rules, reference level, covariates, follow-up horizon, and proportional-hazards check; I review them together in the plan, and nothing runs before that review. My research question: ',
-          '请使用“生存与时间结局分析”方法。时间起点、事件与删失规则、参照水平、协变量、观察期限与比例风险检验由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：',
+          'Use the Survival analysis (time to event) method. The research plan proposes the time origin, event and censoring rules, reference level, covariates, follow-up horizon, and proportional-hazards check; I review them together in the plan, and nothing runs before that review. My research question: ',
+          '请使用“生存分析（时间到事件）”方法。时间起点、事件与删失规则、参照水平、协变量、观察期限与比例风险检验由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：',
         ),
         capabilityId: 'survival_time_to_event_v1',
         actionIds: ['time_to_event.cox_hr', 'time_to_event.km_logrank', 'time_to_event.ph_check'],
