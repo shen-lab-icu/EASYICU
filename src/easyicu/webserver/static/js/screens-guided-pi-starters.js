@@ -57,11 +57,11 @@
     return [
       {
         id: 'example-quick-lactate', database: 'HiRID', kind: tr('Quick answer', '快速回答'),
-        title: tr('First-day lactate by sex', '首日乳酸的男女差别'),
-        gets: tr('One answer card: median and quartiles per group, patients and missing; it can grow into a full study', '一张回答卡：各组中位数与四分位数、人数与缺失，可再展开为完整研究'),
+        title: tr('Highest first-day lactate', '首日最高乳酸'),
+        gets: tr('One answer card: median and quartiles, patients and missing; it can grow into a full study', '一张回答卡：中位数与四分位数、人数与缺失，可再展开为完整研究'),
         prompt: tr(
-          'In HiRID, what is the median of the highest lactate on the first ICU day, and does it differ between men and women?',
-          '在 HiRID 中，入 ICU 第一天最高乳酸的中位数是多少？男女之间有差别吗？',
+          'In HiRID, what are the median and quartiles of the highest lactate on the first ICU day?',
+          '在 HiRID 中，入 ICU 第一天最高乳酸的中位数和四分位数是多少？',
         ),
       },
       {
