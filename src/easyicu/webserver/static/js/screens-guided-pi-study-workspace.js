@@ -385,8 +385,7 @@
       const locked = ctx.loading || ctx.disabled;
       const materials = (Array.isArray(ctx.resources) ? ctx.resources : []).filter(canReference).slice(0, 12);
       const materialsInteractive = ctx.materialsInteractive !== false;
-      const markup = `<div class="gpi-conversations-main"><div class="gpi-conversations-heading"><strong>${tr('Conversations', '对话')}</strong><span class="gpi-conversations-heading-actions"><button type="button" data-gpi-rail-task-search-toggle aria-label="${tr('Search conversations', '搜索对话')}" title="${tr('Search', '搜索')}">${iconHtml('search', 15)}</button><button type="button" data-gpi-rail-new ${locked ? 'disabled' : ''} aria-label="${tr('New conversation in this project', '在当前项目新建对话')}">${iconHtml('plus', 14)}<span>${tr('Conversation', '对话')}</span></button></span></div>
-        <label class="gpi-conversation-search" hidden><span class="shell-sr-only">${tr('Search conversations', '搜索对话')}</span><input type="search" data-gpi-rail-task-search placeholder="${tr('Search conversations…', '搜索对话…')}" autocomplete="off"></label>
+      const markup = `<div class="gpi-conversations-main"><div class="gpi-conversations-heading"><strong>${tr('Conversations', '对话')}</strong><span class="gpi-conversations-heading-actions"><button type="button" data-gpi-rail-task-search-toggle aria-label="${tr('Search all projects', '搜索全部项目')}" title="${tr('Search', '搜索')}">${iconHtml('search', 15)}</button><button type="button" data-gpi-rail-new ${locked ? 'disabled' : ''} aria-label="${tr('New conversation in this project', '在当前项目新建对话')}">${iconHtml('plus', 14)}<span>${tr('Conversation', '对话')}</span></button></span></div>
         <nav aria-label="${tr('Conversations in this project', '当前项目中的对话')}">${ctx.loading
           ? `<p role="status">${tr('Loading conversations…', '正在读取对话…')}</p>`
           : ctx.sessions.length ? (() => {
@@ -406,7 +405,7 @@
         <section class="gpi-project-materials" aria-label="${tr('Drive', '资料')}"><div class="gpi-conversations-heading"><strong>${tr('Drive', '资料')}</strong><button type="button" data-gpi-rail-material-search-toggle aria-label="${tr('Search Drive', '搜索资料')}" title="${tr('Search', '搜索')}">${iconHtml('search', 15)}</button></div>
           <label class="gpi-project-material-search" hidden><span class="shell-sr-only">${tr('Search Drive', '搜索资料')}</span><input type="search" data-gpi-rail-material-search placeholder="${tr('Filter files…', '筛选文件…')}" autocomplete="off"></label>
           ${materials.length ? `<div class="gpi-project-material-list">${materials.map((row, i) => materialsInteractive
-            ? `<button type="button" data-gpi-rail-material="${i}" data-gpi-rail-material-text="${esc(String(row.label || row.artifact).toLowerCase())}" title="${esc(row.label || row.artifact)}"><span aria-hidden="true">${iconHtml('file', 14)}</span>${esc(row.label || row.artifact)}</button>`
+            ? `<button type="button" data-gpi-rail-material="${i}" data-gpi-rail-material-key="${esc(`${row.run_id}/${row.artifact}`)}" data-gpi-rail-material-text="${esc(String(row.label || row.artifact).toLowerCase())}" title="${esc(row.label || row.artifact)}"><span aria-hidden="true">${iconHtml('file', 14)}</span>${esc(row.label || row.artifact)}</button>`
             : `<div class="gpi-project-material-row" data-gpi-rail-material-text="${esc(String(row.label || row.artifact).toLowerCase())}"><span aria-hidden="true">${iconHtml('file', 14)}</span>${esc(row.label || row.artifact)}</div>`).join('')}</div>` : `<p>${tr('No project results yet', '暂无可引用成果')}</p>`}
         </section>`;
       // A conversation's open ••• menu survives the repaint.
@@ -416,11 +415,7 @@
       rail.onclick = event => {
         const taskSearchToggle = event.target.closest('[data-gpi-rail-task-search-toggle]');
         if (taskSearchToggle) {
-          const label = rail.querySelector('.gpi-conversation-search');
-          if (label) {
-            label.hidden = !label.hidden;
-            if (!label.hidden) label.querySelector('input').focus();
-          }
+          if (typeof ctx.search === 'function') ctx.search();
           return;
         }
         const searchToggle = event.target.closest('[data-gpi-rail-material-search-toggle]');
@@ -465,17 +460,6 @@
         else if (event.target.closest('[data-gpi-rail-new]')) ctx.create();
       };
       rail.oninput = event => {
-        if (event.target.matches('[data-gpi-rail-task-search]')) {
-          const query = event.target.value.trim().toLowerCase();
-          rail.querySelectorAll('[data-gpi-rail-session-row]').forEach(row => {
-            row.hidden = Boolean(query && !row.dataset.gpiRailSessionText.includes(query));
-          });
-          // Grouped rows stay unreachable while the group is closed, so a live
-          // query opens it and clearing the query collapses it again.
-          const emptyGroup = rail.querySelector('[data-gpi-rail-empty-group]');
-          if (emptyGroup) emptyGroup.open = Boolean(query);
-          return;
-        }
         if (!event.target.matches('[data-gpi-rail-material-search]')) return;
         const query = event.target.value.trim().toLowerCase();
         rail.querySelectorAll('[data-gpi-rail-material-text]').forEach(row => {

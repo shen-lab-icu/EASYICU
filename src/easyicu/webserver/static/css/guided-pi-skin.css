@@ -79,7 +79,7 @@
 .gpi-conversations-heading button{border-radius:6px;color:var(--skin-ink)}
 .gpi-conversations-heading button:hover,.gpi-conversations-heading button:focus-visible{background:rgba(var(--skin-primary-rgb),.45)}
 .gpi-conversations-heading-actions [data-gpi-rail-new]{height:24px;padding:0 8px;font:500 13px/1 var(--skin-font)}
-.gpi-conversation-search input,.gpi-project-material-search input,.gpi-results-search input{border:1px solid var(--skin-border);border-radius:6px;background:var(--skin-paper);color:var(--skin-ink)}
+.gpi-project-material-search input,.gpi-results-search input{border:1px solid var(--skin-border);border-radius:6px;background:var(--skin-paper);color:var(--skin-ink)}
 .gpi-conversation-item{min-height:32px;margin-left:8px;padding:6px 12px;border-left:2px solid transparent;border-radius:6px;color:var(--skin-ink);font-size:14px}
 .gpi-conversation-item:hover{background:var(--skin-sunken)}
 .gpi-conversation-item[aria-current]{border-left-color:var(--skin-primary);background:var(--skin-primary-soft);color:var(--skin-ink);font-weight:500}

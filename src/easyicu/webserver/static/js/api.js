@@ -571,6 +571,14 @@
   function cancelPiCopilotFollowup(sessionId, itemId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/followups/' + encodeURIComponent(itemId) + '/cancel', body || {});
   }
+  // One search over this instance's projects, conversations, runs and files.
+  function searchWorkspace(params) {
+    const query = new URLSearchParams({ q: String(params && params.q || '').slice(0, 200) });
+    if (params && params.scope) query.set('scope', params.scope);
+    if (params && params.project) query.set('project', params.project);
+    if (params && params.limit) query.set('limit', String(params.limit));
+    return getJSON('/api/search?' + query.toString());
+  }
   // Skills attached to a conversation's next message, and a project's defaults.
   function loadPiSessionSkills(sessionId, projectId) {
     return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/skills?project_id=' + encodeURIComponent(projectId));
@@ -916,6 +924,7 @@
   window.EU_API.deleteEmptyPiCopilotSession = deleteEmptyPiCopilotSession;
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
   window.EU_API.loadPiSessionSkills = loadPiSessionSkills;
+  window.EU_API.searchWorkspace = searchWorkspace;
   window.EU_API.setPiDraftSkills = setPiDraftSkills;
   window.EU_API.loadProjectDefaultSkills = loadProjectDefaultSkills;
   window.EU_API.setProjectDefaultSkills = setProjectDefaultSkills;
