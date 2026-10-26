@@ -110,3 +110,17 @@
 .gpi-preview-inspector>summary{padding:8px 18px;color:var(--ink-3);font-size:12px;cursor:pointer}
 .gpi-preview-inspector>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .gpi-preview-reference{display:block;padding:5px 18px 10px;color:var(--ink-4);font-size:11px;overflow-wrap:anywhere}
+.gpi-lineage-wrap{padding:12px 14px 4px}.gpi-lineage-wrap h3{margin:0 0 10px;color:var(--ink-2);font-size:13px;font-weight:650}
+.gpi-lineage{list-style:none;margin:0;padding:0}
+.gpi-lineage li{position:relative;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:0 0 14px 22px;animation:gpi-lineage-in .3s ease-out both;animation-delay:calc(var(--i, 0) * 80ms)}
+.gpi-lineage li::before{content:"";position:absolute;left:3px;top:4px;width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
+.gpi-lineage li::after{content:"";position:absolute;left:7px;top:17px;bottom:1px;width:1px;background:var(--hair-2)}
+.gpi-lineage li:last-child{padding-bottom:4px}.gpi-lineage li:last-child::after{display:none}
+.gpi-lineage li.is-stale::before{background:var(--warn);box-shadow:0 0 0 3px var(--warn-soft)}
+.gpi-lineage li.is-missing::before{background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--hair-3)}
+.gpi-lineage li>div{min-width:0}.gpi-lineage strong{color:var(--ink);font-size:12.5px;font-weight:650}.gpi-lineage li.is-missing strong{color:var(--ink-3)}
+.gpi-lineage p{margin:2px 0 0;color:var(--ink-3);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.gpi-lineage li.is-missing p{color:var(--ink-4)}
+.gpi-lineage p a{color:var(--accent)}.gpi-lineage .is-warn{color:#81520a}.gpi-lineage .gpi-evidence-open{flex:0 0 auto;padding:2px 6px;border-color:transparent;background:transparent}.gpi-lineage .gpi-evidence-open:hover,.gpi-lineage .gpi-evidence-open:focus-visible{background:color-mix(in srgb,var(--accent) 10%,var(--surface))}
+@keyframes gpi-lineage-in{from{opacity:0;transform:translateY(-4px)}}
+@media (prefers-reduced-motion:reduce){.gpi-lineage li{animation:none}}
+.gpi-claim-technical{margin:4px 0 0;border-top:1px solid var(--hair)}.gpi-claim-technical>summary{padding:10px 14px;color:var(--ink-3);font-size:12px;cursor:pointer}

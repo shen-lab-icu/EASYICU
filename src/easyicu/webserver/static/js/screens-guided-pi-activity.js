@@ -954,7 +954,7 @@
       if (step.kind === 'retry') {
         if (step.label) return String(step.label);
         if (step.attempt != null && step.maxAttempts != null) {
-          return tr(`Retrying (${step.attempt}/${step.maxAttempts})`, `正在重试（${step.attempt}/${step.maxAttempts}）`);
+          return tr(`Model service unavailable; retrying (${step.attempt}/${step.maxAttempts})`, `模型服务暂时不可用，正在重试（${step.attempt}/${step.maxAttempts}）`);
         }
         return tr('Retrying after a failed attempt', '上一步未通过，正在重试');
       }

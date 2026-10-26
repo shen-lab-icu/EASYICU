@@ -79,7 +79,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert _read("css/guided-pi-header.css").startswith("/* Owner: Guided Copilot conversation header")
     assert "css/guided-pi-idea-source.css?v=20260922-connectors1" in index
     assert "css/guided-pi-demo.css?v=20260922-demo-rewrite1" in index
-    assert "css/guided-pi-preview.css?v=20260916-study-workspace3" in index
+    assert "css/guided-pi-preview.css?v=20261026-lineage1" in index
     assert "css/guided-pi-technical-report.css?v=20260830-technical-report1" in index
     assert "css/guided-pi-analysis-report.css?v=20260916-study-workspace3" in index
     assert "css/guided-pi-article-report.css?v=20260830-e2-report1" in index
@@ -118,7 +118,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20261021-turn-layout1" in index
-    assert "js/screens-guided-pi-activity.js?v=20261024-terminal1" in index
+    assert "js/screens-guided-pi-activity.js?v=20261026-retry1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20261026-ask-on-use1"
         in index

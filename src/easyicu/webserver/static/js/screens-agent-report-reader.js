@@ -121,6 +121,94 @@
       && ['pdf', 'svg', 'tiff', 'png'].includes(data.figureFormat) && validFigureExport(locator)
       ? { run_ref: data.figureRunRef, figure_export: { format: data.figureFormat, ...locator } } : null;
   }
+  // One row per lineage node the provenance owner emits, in its fixed order
+  // from the reported number back to the data source. Facts arrive as typed
+  // counts and identifiers; this owner only words them.
+  const LINEAGE_LABELS = {
+    statistic: ['Result', '统计结果'],
+    analysis_input: ['Analysis table', '分析数据表'],
+    cohort: ['Study population', '研究人群'],
+    column_definitions: ['Variable definitions', '变量定义'],
+    concept_dictionary: ['Concept dictionary', '概念字典'],
+    data_source: ['Data source', '数据来源'],
+  };
+  const LINEAGE_REASONS = {
+    upstream_unproven: ['Not checked: the step above could not be verified', '上一环未能核实，这一环无法确认'],
+    artifact_unregistered: ['This run did not register the record', '本次运行没有登记这份记录'],
+    artifact_unavailable: ['The record is not in this run', '记录文件不在本次运行中'],
+    artifact_digest_mismatch: ['The record changed after it was registered', '记录登记后被改动过'],
+    artifact_json_too_large: ['The record is too large to read here', '记录过大，无法在此读取'],
+    artifact_json_invalid: ['The record could not be read', '记录无法读取'],
+    analysis_input_ambiguous: ['More than one analysis table could have been used', '无法确定用的是哪一份分析数据'],
+    analysis_input_not_recorded: ['The run did not record which analysis table it used', '运行没有记录所用的分析数据'],
+    analysis_input_not_loaded: ['The run did not record reading the analysis table', '运行没有记录读取了分析数据'],
+    analysis_input_not_table: ['The registered input is not a data table', '登记的分析输入不是数据表'],
+    input_digest_not_recorded: ['The run did not record a checksum for the analysis table', '运行没有记录分析数据的校验值'],
+    input_digest_mismatch: ['The table the analysis read differs from the registered one', '分析读取的数据与登记的数据表不一致'],
+    cohort_input_unlinked: ['No registered link from the analysis table to the study population', '分析数据与研究人群之间没有登记的关联'],
+    context_digest_mismatch: ['The population record differs from the run registration', '研究人群记录与运行登记不一致'],
+    cohort_digest_mismatch: ['The population record differs from the run registration', '研究人群记录与运行登记不一致'],
+    column_definitions_not_recorded: ['The run did not record its variable definitions', '运行没有记录变量定义'],
+    dictionary_digest_not_recorded: ['The run did not record a checksum for the dictionary', '运行没有记录所用字典的校验值'],
+    source_identity_not_recorded: ['The run did not record its data source', '运行没有记录数据来源'],
+  };
+  const DATABASE_NAMES = {
+    miiv: 'MIMIC-IV', miiv_demo: 'MIMIC-IV Demo', eicu: 'eICU-CRD', eicu_demo: 'eICU-CRD Demo',
+    mimic: 'MIMIC-III', mimic_demo: 'MIMIC-III Demo', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sic: 'SICdb',
+  };
+  function lineageCount(value) {
+    return Number.isSafeInteger(value) && value >= 0 ? new Intl.NumberFormat().format(value) : '';
+  }
+  function lineageFacts(node) {
+    const facts = node.facts && typeof node.facts === 'object' ? node.facts : {};
+    const rows = lineageCount(facts.rows);
+    const parts = [];
+    if (node.kind === 'statistic' && typeof facts.method === 'string') parts.push(esc(facts.method));
+    if (node.kind === 'analysis_input' && rows) parts.push(esc(t(`${rows} rows`, `${rows} 行`)));
+    if (node.kind === 'cohort') {
+      if (rows) parts.push(esc(t(`${rows} included`, `纳入 ${rows} 例`)));
+      const start = facts.window_start_hours;
+      const end = facts.window_end_hours;
+      if (Number.isFinite(start) && Number.isFinite(end)) parts.push(esc(t(`window ${start}–${end} h`, `时间窗 ${start}–${end} 小时`)));
+    }
+    if (node.kind === 'column_definitions' && lineageCount(facts.count)) {
+      parts.push(esc(t(`${lineageCount(facts.count)} variables`, `${lineageCount(facts.count)} 个变量`)));
+    }
+    if (node.kind === 'concept_dictionary' && lineageCount(facts.concept_count)) {
+      parts.push(esc(t(`${lineageCount(facts.concept_count)} concepts`, `${lineageCount(facts.concept_count)} 个概念`)));
+    }
+    if (node.kind === 'data_source') {
+      const database = typeof facts.database === 'string' ? (DATABASE_NAMES[facts.database] || facts.database) : '';
+      const name = [database, facts.version].filter(value => typeof value === 'string' && value).join(' ');
+      if (name) parts.push(esc(name));
+      const doi = String(facts.doi || '');
+      if (facts.official_sha256_matches === true) {
+        const label = esc(t('matches the official PhysioNet release', '与 PhysioNet 官方发布一致'));
+        parts.push(/^10\.\d{4,9}\/[A-Za-z0-9._;()/:-]{1,120}$/.test(doi)
+          ? `<a href="https://doi.org/${escAttr(doi)}" target="_blank" rel="noopener noreferrer">${label}</a>` : label);
+      } else if (facts.official_sha256_matches === false) {
+        parts.push(`<span class="is-warn">${esc(t('does not match the official release', '与官方发布不一致'))}</span>`);
+      }
+    }
+    return parts.join(' · ');
+  }
+  function lineageChain(lineage, evidenceButton) {
+    const nodes = (Array.isArray(lineage) ? lineage : [])
+      .filter(node => node && Object.prototype.hasOwnProperty.call(LINEAGE_LABELS, node.kind)).slice(0, 6);
+    if (!nodes.length) return '';
+    // A break is explained once; the unverified steps after it show only
+    // their hollow marker.
+    const firstUnproven = nodes.findIndex(node => node.missing_reason === 'upstream_unproven');
+    return `<section class="gpi-lineage-wrap"><h3>${esc(t('Where this number comes from', '这个数字的来源'))}</h3><ol class="gpi-lineage">${nodes.map((node, index) => {
+      const status = ['current', 'stale'].includes(node.status) ? node.status : 'missing';
+      const [en, zh] = LINEAGE_LABELS[node.kind];
+      const reason = LINEAGE_REASONS[node.missing_reason] || ['Not recorded', '未记录'];
+      const repeated = node.missing_reason === 'upstream_unproven' && index > firstUnproven;
+      const detail = status === 'current' ? lineageFacts(node) : (repeated ? '' : esc(t(reason[0], reason[1])));
+      const open = status === 'current' ? evidenceButton(node, t(en, zh)) : '';
+      return `<li class="is-${status}" style="--i:${index}"><div><strong>${esc(t(en, zh))}</strong>${status === 'stale' ? ` <span class="pill warn">${esc(t('changed', '已变更'))}</span>` : ''}${detail ? `<p>${detail}</p>` : ''}</div>${/<button/.test(open) ? open : ''}</li>`;
+    }).join('')}</ol></section>`;
+  }
   function manuscriptProvenanceView(payload, { artifactTable, manuscriptUnavailable }) {
     const p = payload && typeof payload === 'object' ? payload : {};
     const claims = Array.isArray(p.claims) ? p.claims.slice(0, 240) : [];
@@ -220,13 +308,13 @@
     }).join('')}</ol></section>` : '';
     const revision = p.report_revision && p.report_revision.status === 'pass'
       ? `<p class="gpi-reader-revision">${esc(t('Report revision', '报告修订'))}: ${esc(p.report_revision.revision_id || '')} · ${esc(t('Source analysis unchanged; not publication authorization.', '源分析不变；不代表发表授权。'))}</p>` : '';
-    const evidenceButton = (row, label, pointer, sourceValue) => {
+    const evidenceButton = (row, label, pointer, sourceValue, text) => {
       const evidenceId = String(row && row.evidence_id || '').trim();
       const sha256 = String(row && row.sha256 || '').trim().toLowerCase();
       if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) {
         return esc(label || evidenceId || t('Unavailable', '不可用'));
       }
-      return `<button type="button" class="gpi-evidence-open" data-gpi-evidence-open data-evidence-id="${escAttr(evidenceId)}" data-evidence-sha256="${escAttr(sha256)}" data-evidence-kind="${escAttr(String(row.kind || 'artifact'))}" data-evidence-role="${escAttr(String(row.role || ''))}" data-evidence-label="${escAttr(String(label || evidenceId))}" data-evidence-pointer="${escAttr(String(pointer || ''))}" data-evidence-source-value="${escAttr(String(sourceValue == null ? '' : sourceValue))}">${esc(label || evidenceId)}</button>`;
+      return `<button type="button" class="gpi-evidence-open" data-gpi-evidence-open data-evidence-id="${escAttr(evidenceId)}" data-evidence-sha256="${escAttr(sha256)}" data-evidence-kind="${escAttr(String(row.kind || 'artifact'))}" data-evidence-role="${escAttr(String(row.role || ''))}" data-evidence-label="${escAttr(String(label || evidenceId))}" data-evidence-pointer="${escAttr(String(pointer || ''))}" data-evidence-source-value="${escAttr(String(sourceValue == null ? '' : sourceValue))}">${esc(text || label || evidenceId)}</button>`;
     };
     const lineageTable = (source, rows, pointer, sourceValue) => {
       const entries = [];
@@ -248,9 +336,12 @@
         ? Object.entries(claim.method_summary).slice(0, 6).map(([key, value]) => [
           String(key).replace(/_/g, ' '), String(value == null ? '' : value),
         ]) : [];
-      return `<section class="gpi-claim-panel" id="gpi-claim-detail-${escAttr(claimId)}" data-gpi-claim-panel="${escAttr(claimId)}" hidden>
-        <div class="gpi-claim-panel-head"><div><span>${esc(t('Bound number', '绑定数字'))}</span><strong>${esc(claim.display_value || '')}</strong>${statusChip}</div><button type="button" data-gpi-claim-close aria-label="${escAttr(t('Close evidence detail', '关闭证据详情'))}">${esc(t('Close', '关闭'))}</button></div>
-        ${artifactTable(t('Exact result source', '准确结果来源'), [t('Item', '项目'), t('Value', '值')], [
+      // The preview tab is named after the node; its renderer follows the
+      // record's evidence kind, not the lineage step.
+      const chain = lineageChain(claim && claim.lineage, (node, name) => evidenceButton({
+        ...node, kind: node.kind === 'analysis_input' ? 'table' : (node.kind === 'statistic' ? 'statistic' : 'artifact'),
+      }, name, '', '', t('Open', '打开')));
+      const technical = `${artifactTable(t('Exact result source', '准确结果来源'), [t('Item', '项目'), t('Value', '值')], [
           [t('JSON field', 'JSON 字段'), claim.source_field || ''],
           [t('JSON pointer', 'JSON 指针'), claim.source_json_pointer || ''],
           [t('Source value', '源数值'), claimSourceValue(claim)],
@@ -260,7 +351,11 @@
           ...methodRows,
         ])}
         ${lineageTable(evidence, artifacts, claim.source_json_pointer, claimSourceValue(claim))}
-        <p class="gpi-claim-boundary">${esc(t('This view exposes immutable IDs and digests, not patient rows or host file paths. Scientific authority remains analysis-only until Host gates and human review permit more.', '此视图只显示不可变 ID 与摘要，不暴露患者行或主机文件路径。除非 Host 闸门与人工审阅另行许可，科学权限仍为 analysis-only。'))}</p>
+        <p class="gpi-claim-boundary">${esc(t('This view exposes immutable IDs and digests, not patient rows or host file paths. Scientific authority remains analysis-only until Host gates and human review permit more.', '此视图只显示不可变 ID 与摘要，不暴露患者行或主机文件路径。除非 Host 闸门与人工审阅另行许可，科学权限仍为 analysis-only。'))}</p>`;
+      // Readers saved before lineage existed keep their tables in view.
+      return `<section class="gpi-claim-panel" id="gpi-claim-detail-${escAttr(claimId)}" data-gpi-claim-panel="${escAttr(claimId)}" hidden>
+        <div class="gpi-claim-panel-head"><div><span>${esc(t('Bound number', '绑定数字'))}</span><strong>${esc(claim.display_value || '')}</strong>${statusChip}</div><button type="button" data-gpi-claim-close aria-label="${escAttr(t('Close evidence detail', '关闭证据详情'))}">${esc(t('Close', '关闭'))}</button></div>
+        ${chain ? `${chain}<details class="gpi-claim-technical"><summary>${esc(t('IDs and checksums', 'ID 与校验值'))}</summary>${technical}</details>` : technical}
       </section>`;
     }).join('');
     return `<div class="ag-artifact-readable ag-manuscript-reader">
