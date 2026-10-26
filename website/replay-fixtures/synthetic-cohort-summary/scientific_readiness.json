@@ -1,0 +1,11 @@
+{
+  "claim_ceiling": "analysis_only",
+  "domains": [],
+  "findings": [],
+  "human_review_required": true,
+  "paper_authorized": false,
+  "publication_ready": false,
+  "run_id": "synthetic-cohort-summary",
+  "schema_version": "easyicu.web-scientific-readiness/1",
+  "status": "analysis_only"
+}

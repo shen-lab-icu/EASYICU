@@ -41,6 +41,11 @@
           "en": "Settings take standing instructions for Copilot; the model menu shows usage for this conversation and the latest analysis."
         },
         {
+          "code": "study_replay",
+          "zh": "可以下载一项研究的回放，发给导师或合作者：问题、计划、结果和汇总图表，只含汇总数据；有少于 20 人的分组时不会生成。",
+          "en": "Download a study's replay to send to a supervisor or co-author: question, plan, results and aggregate figures only; it is not made when a group has fewer than 20 patients."
+        },
+        {
           "code": "model_request_records",
           "zh": "每次运行和每段对话都能查看发送给模型的记录：用途、服务商、内容类型和大小，不显示发出的原文。",
           "en": "Every run and conversation shows what was sent to the model: purpose, provider, kind of content and size, never the text sent."
