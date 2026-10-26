@@ -12,6 +12,7 @@ all phase modules share one handoff vocabulary.
 """
 
 from __future__ import annotations
+from easyicu.synthetic_source_provenance import write_report
 
 import json
 import re
@@ -2617,7 +2618,7 @@ def _bind_and_review_manuscript(
     )
     if writer_probe_mode:
         bound = _writer_probe_banner(writer_probe_failed_steps) + "\n\n" + bound
-    bound_path.write_text(bound, encoding="utf-8")
+    bound = write_report(bound_path, bound, context.cohort.provenance if context is not None else None)
     bound_record = evidence.register_file(
         kind="log",
         description=(

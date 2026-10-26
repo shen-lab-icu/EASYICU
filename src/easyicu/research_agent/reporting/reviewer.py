@@ -48,6 +48,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from easyicu.synthetic_source_provenance import active_provenance, mark_report
 
 from ..authority.planned_role import unique_verified_primary_record
 from ..authority.runtime_artifacts import (
@@ -170,6 +171,7 @@ class ReviewerReport:
     def to_json(self) -> Dict[str, Any]:
         return {
             "round": self.round_index,
+            **active_provenance(),
             "summary": self.summary(),
             "critiques": [
                 {
@@ -215,7 +217,7 @@ class ReviewerReport:
                         ev=ev,
                     )
                 )
-        return "\n".join(lines) + "\n"
+        return mark_report("\n".join(lines) + "\n")
 
 
 # ---------------------------------------------------------------------------

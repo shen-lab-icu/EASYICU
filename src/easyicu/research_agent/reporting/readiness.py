@@ -39,6 +39,7 @@ import csv
 import json
 import re
 import textwrap
+from easyicu.synthetic_source_provenance import mark_report
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 from ..contracts.capability_ids import (
@@ -2993,7 +2994,7 @@ def _render_author_review_note(
             continue
         lines.append(f"- `{step_id}`: `{record.get('status', '?')}`")
     lines.append("")
-    return "\n".join(lines)
+    return mark_report("\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -3020,8 +3021,7 @@ def render_report(
     paused_after_analysis: bool = False,
     readiness: Optional[Dict[str, Any]] = None,
 ) -> str:
-    parts: List[str] = []
-    parts.append("# Research-agent results report")
+    parts: List[str] = ["# Research-agent results report"]
     parts.append("")
     parts.append(f"- Research question: {context.research_question}")
     parts.append(f"- Cohort: {context.cohort.cohort_name} ({context.cohort.database})")
@@ -3133,7 +3133,7 @@ def render_report(
         matches the `sha256` recorded here.
     """).strip()
     )
-    return "\n".join(parts) + "\n"
+    return mark_report("\n".join(parts) + "\n", context.cohort.provenance)
 
 
 __all__ = [

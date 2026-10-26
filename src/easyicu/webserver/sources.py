@@ -232,6 +232,8 @@ def _source_from_path(
                 "modules": desc.get("modules", []),
                 "summary": desc.get("summary", {}),
                 "file_count": len(desc.get("files", [])),
+                **({"source_kind": "synthetic", "provenance": desc["provenance"]}
+                   if desc.get("source_kind") == "synthetic" else {}),
             }
         )
     else:
@@ -395,7 +397,7 @@ def is_demo_source(source: Mapping[str, Any]) -> bool:
     """A profiled demo or a legacy official demo with a full loader key."""
     from easyicu.databases.profiles import get_database_profile
 
-    if is_official_demo_source(source):
+    if source.get("source_kind") == "synthetic" or is_official_demo_source(source):
         return True
     try:
         return not get_database_profile(str(source.get("database") or "")).is_public
@@ -411,6 +413,8 @@ def source_reader_label(source: Mapping[str, Any]) -> str:
         profile = get_database_profile(str(source.get("database") or ""))
     except KeyError:
         return ""
+    if source.get("source_kind") == "synthetic":
+        return f"Synthetic {profile.display_name} — test data"
     if profile.is_public and is_official_demo_source(source):
         return str(source.get("label") or "").strip()
     if profile.reference_release:
@@ -440,7 +444,7 @@ def registered_source_counts() -> Dict[str, Dict[str, int]]:
             profile = get_database_profile(str(row.get("database") or ""))
         except KeyError:
             continue
-        if profile.is_public and not is_official_demo_source(row):
+        if profile.is_public and not is_demo_source(row):
             counts[profile.key] += 1
     return {"by_database": counts}
 
