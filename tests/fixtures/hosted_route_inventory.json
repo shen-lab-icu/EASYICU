@@ -745,6 +745,35 @@
     "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
+    "method": "GET",
+    "route": "/api/copilot/pi/sessions/{session_id}/followups",
+    "fields": [
+      "query:project_id",
+      "path:session_id"
+    ],
+    "reaches": "PiCopilotService.followup_messages -> _scoped_record + FollowupQueue.snapshot; session-filtered in-memory queue with saved binding omitted",
+    "protection": "hosted.guard_request + owner check: _scoped_record verifies session/project and StudyContext registry binding; identifiers are lookup keys, not client paths",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Snapshot is read-only; lazy PiCopilotService initialization may reconcile interrupted follow-ups via FollowupQueue._save/_write_store at state_paths.state_root()/pi_copilot_sessions.followups.json. The server chooses the destination; no request identifier forms a path."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/followups/{item_id}/cancel",
+    "fields": [
+      "body:project_id",
+      "path:session_id",
+      "path:item_id"
+    ],
+    "reaches": "PiCopilotService.cancel_followup -> _scoped_record -> FollowupQueue.cancel -> _save/_write_store; returns the session-filtered queue snapshot",
+    "protection": "hosted.guard_request + owner check: _scoped_record verifies session/project and StudyContext registry binding; FollowupQueue.cancel matches both session_id and item_id before changing a queued/interrupted item",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "FollowupQueue atomically replaces state_paths.state_root()/pi_copilot_sessions.followups.json via a temporary file in the same server-owned directory; project/session/item identifiers never select the destination."
+  },
+  {
     "method": "POST",
     "route": "/api/copilot/pi/sessions/{session_id}/host-actions",
     "fields": [
