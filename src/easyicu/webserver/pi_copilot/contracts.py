@@ -153,9 +153,9 @@ class AuthorityBinding(BaseModel):
 class ResearchProviderBinding(BaseModel):
     """Immutable model connection selected before a Copilot session starts.
 
-    Session schema v2 uses this one binding for both the conversational shell
-    and governed Research Agent calls.  The historical class/field name remains
-    readable so v1 sessions keep their original two-provider semantics.
+    Session schema v2 initially shares this binding with the conversational
+    shell. Later conversation-model choices do not rewrite scientific authority.
+    V1 sessions keep their original two-provider semantics.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -316,6 +316,9 @@ class PiSessionRecord(BaseModel):
         default_factory=ResearchProviderBinding,
         frozen=True,
     )
+    # Conversation choices are mutable; scientific provider authority stays frozen.
+    conversation_model: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    conversation_connection_sha256: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     binding: AuthorityBinding = Field(default_factory=AuthorityBinding)
     # Historical sessions default to legacy_confirmed so this addition does not
     # retroactively lock existing conversations. New research sessions always
@@ -347,8 +350,14 @@ class PiSessionRecord(BaseModel):
     pinned_for_presentation: bool = False
 
     @property
+    def conversation_provider(self) -> ResearchProviderBinding:
+        return self.research_provider.model_copy(update={
+            "model": self.conversation_model or self.research_provider.model,
+        })
+
+    @property
     def uses_unified_model_connection(self) -> bool:
-        """Whether the frozen provider powers both Copilot and analysis."""
+        """Whether conversation and analysis originated on one connection."""
 
         return self.schema_version == SESSION_SCHEMA_VERSION
 

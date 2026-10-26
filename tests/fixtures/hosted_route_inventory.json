@@ -536,7 +536,13 @@
   {
     "method": "POST",
     "route": "/api/copilot/pi/provider-config/declaration",
-    "fields": ["body:connection", "body:value", "body:notice_key", "body:notice_version", "body:channel"],
+    "fields": [
+      "body:connection",
+      "body:value",
+      "body:notice_key",
+      "body:notice_version",
+      "body:channel"
+    ],
     "reaches": "PiProviderConfigStore.declare_data_handling; exact active connection comparison, no network access",
     "protection": "refused route: pi_provider_declaration_admin_required",
     "writes": "refused on hosted",
@@ -816,6 +822,35 @@
     "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
     "writes": "instance home",
     "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/model",
+    "fields": [
+      "body:project_id",
+      "path:session_id",
+      "body:model"
+    ],
+    "reaches": "PiCopilotService.set_conversation_model -> _scoped_record -> pinned connection catalog and data clearance -> session.set_model; scientific provider binding stays frozen",
+    "protection": "hosted.guard_request + owner check: _scoped_record verifies session/project and StudyContext registry binding; the saved connection fingerprint or account identity confines model access",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "PiCopilotService._save_record writes the server-owned session registry; ConversationReplayStore records the model-change action/event under the instance replay root; the gateway writes the bound instance session file. Request identifiers never select a destination."
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/sessions/{session_id}/models",
+    "fields": [
+      "query:project_id",
+      "path:session_id"
+    ],
+    "reaches": "PiCopilotService.conversation_models -> _scoped_record -> pinned API endpoint discovery or saved account model cache; no client-selected endpoint or credential",
+    "protection": "hosted.guard_request + owner check: _scoped_record verifies session/project and StudyContext registry binding; the saved connection fingerprint or account identity confines model access",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Catalog lookup is read-only except provider declaration reconciliation and lazy PiCopilotService initialization, which may reconcile interrupted follow-ups. Provider journal, account cache and session/follow-up stores use server-owned state_paths roots; request identifiers never form paths."
   },
   {
     "method": "POST",

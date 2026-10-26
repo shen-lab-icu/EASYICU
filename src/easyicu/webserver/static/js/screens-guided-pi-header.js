@@ -18,9 +18,9 @@
 
   function renderModelControl(options) {
     const { tr, esc, icon } = options;
-    // The session binding is fixed; connection settings own future choices.
+    // The host owns model selection within this conversation’s saved connection.
     // Carry its identity independently of the translated, truncated label.
-    return `<details class="gpi-model-control" data-popover-menu><summary class="gpi-model-binding" title="${esc(tr('View this conversation’s model connection', '查看本对话的模型连接'))}" aria-label="${esc(tr('Model connection', '模型连接'))}"><span title="${esc(options.connectionLabel)}">${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</summary><div class="gpi-model-popover" role="group" aria-label="${esc(tr('Model connection', '模型连接'))}" data-gpi-model-popover data-gpi-model-key="${esc(options.modelBindingKey || '')}">${options.hosted ? '' : `<button type="button" class="gpi-model-settings" data-gpi-config>${esc(tr('Connection settings', '连接设置'))}</button>`}</div></details>`;
+    return `<details class="gpi-model-control" data-popover-menu><summary class="gpi-model-binding" title="${esc(tr('Choose conversation model', '选择对话模型'))}" aria-label="${esc(tr('Model connection', '模型连接'))}"><span title="${esc(options.connectionLabel)}">${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</summary><div class="gpi-model-popover" role="group" aria-label="${esc(tr('Model connection', '模型连接'))}" data-gpi-model-popover data-gpi-model-key="${esc(options.modelBindingKey || '')}">${options.hosted ? '' : `<button type="button" class="gpi-model-settings" data-gpi-config>${esc(tr('Connection settings', '连接设置'))}</button>`}</div></details>`;
   }
 
   /* While a server job runs the top bar says so with its elapsed time; the

@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 from starlette.requests import Request
+from starlette.responses import Response
 
 from easyicu.research_agent.providers.client_trust import (
     ProviderConfigurationError,
@@ -346,7 +347,9 @@ def test_the_old_connection_route_cannot_bypass_the_declaration_record(monkeypat
     monkeypatch.setattr(routes, "get_pi_copilot_service", ForbiddenService)
     body = routes.PiProviderConfigRequest(api_key="synthetic", data_handling="on_device")
     with pytest.raises(HTTPException) as error:
-        routes.post_pi_copilot_provider_config(body)
+        routes.post_pi_copilot_provider_config(
+            body, Request({"type": "http", "headers": []}), Response(),
+        )
     assert error.value.detail["error"] == "pi_provider_declaration_settings_only"
 
 

@@ -532,7 +532,7 @@ class PiCopilotService:
             )
         return record
 
-    def _save_record(self, record: PiSessionRecord) -> PiSessionRecord:
+    def _save_record(self, record: PiSessionRecord, *, model_change: bool = False) -> PiSessionRecord:
         record.updated_at = utc_now()
         with self._lock:
             rows = []
@@ -543,6 +543,9 @@ class PiCopilotService:
                     # ``_note_research_job`` owns this field; a record read
                     # before its last note must not erase it.
                     record.latest_research_job = row.latest_research_job
+                    if not model_change:
+                        record.conversation_model = row.conversation_model
+                        record.conversation_connection_sha256 = row.conversation_connection_sha256
                     if row.credentialed_data_in_history:
                         record.credentialed_data_in_history = True
             rows.insert(0, record)
@@ -1611,6 +1614,7 @@ class PiCopilotService:
                 credentialed_data_in_history=False,
                 extension_activation=extension_activation,
                 research_provider=selected_model_connection,
+                conversation_connection_sha256=self._conversation_connection_sha256(conversation_gateway),
                 binding=binding,
                 data_source_authorization=self._new_session_data_authorization(
                     context,
@@ -1634,6 +1638,74 @@ class PiCopilotService:
             "ok": True,
             "session": self._public_session(record, gateway_state=state),
         }
+
+    def _conversation_connection_sha256(self, gateway: Any) -> Optional[str]:
+        return self.provider_store.conversation_connection_sha256(
+            getattr(gateway, "environ", {}),
+        )
+
+    def _conversation_model_catalog(self, record: PiSessionRecord) -> list[str]:
+        if not record.uses_unified_model_connection:
+            raise PiCopilotError("pi_session_connection_unpinned", "This conversation has no saved model connection.", status_code=409)
+        if record.research_provider.provider == "codex":
+            from easyicu.webserver import codex_account_sessions
+
+            try:
+                return codex_account_sessions.discovered_models_for_binding(
+                    str(record.research_provider.account_session_sha256),
+                )
+            except codex_account_sessions.CodexAccountSessionError as exc:
+                raise PiCopilotError(exc.code, "The saved account's models are unavailable.", status_code=409) from exc
+        fingerprint = record.conversation_connection_sha256
+        if not fingerprint:
+            raise PiCopilotError("pi_session_connection_unpinned", "This conversation has no saved model connection.", status_code=409)
+        if fingerprint != self._conversation_connection_sha256(self.gateway):
+            raise PiCopilotError("pi_session_connection_changed", "The saved model connection has changed.", status_code=409)
+        config = self.provider_store.conversation_config(
+            record.conversation_provider.model, connection_sha256=fingerprint,
+        )
+        return discover_provider_models(config)
+
+    def conversation_models(self, session_id: str, *, project_id: str) -> Dict[str, Any]:
+        with self._lock:
+            record = self._scoped_record(session_id, project_id=project_id)
+            return {"models": self._conversation_model_catalog(record),
+                    "model_connection": record.conversation_provider.public_projection()}
+
+    def set_conversation_model(self, session_id: str, *, project_id: str, model: str) -> Dict[str, Any]:
+        """Select future conversation turns without changing scientific authority."""
+        from .tools import require_copilot_data_clearance
+
+        with self._lock:
+            record = self._scoped_record(session_id, project_id=project_id)
+            if session_id in self._busy_sessions or session_id in self._dispatching_followups or record.active_message_job_id:
+                raise PiCopilotError("pi_session_busy", "Wait for the current reply to finish before changing models.", status_code=409)
+            models = self._conversation_model_catalog(record)
+            if model not in models:
+                raise PiCopilotError("pi_session_model_unavailable", "Choose a model discovered by this connection.", status_code=422)
+            state = self._ensure_open(record)
+            if state.get("streaming"):
+                raise PiCopilotError("pi_session_busy", "Wait for the current reply to finish before changing models.", status_code=409)
+            candidate = record.model_copy(update={"conversation_model": model})
+            require_copilot_data_clearance(ToolExecutionContext(
+                session=candidate, data_handling=self._data_handling_for_session(candidate),
+            ))
+            previous = record.conversation_provider.model
+            if previous != model:
+                state = self._conversation_gateway(record).request(
+                    "session.set_model", {"session_id": session_id, "model": model}, timeout=10,
+                )
+                self._save_record(candidate, model_change=True)
+                action_id = f"model_{secrets.token_hex(10)}"
+                self.replay_store.record_host_action(
+                    session_id=session_id, project_id=project_id, action_id=action_id,
+                    action_code="conversation_model_changed", status="done",
+                )
+                self.replay_store.append_event(
+                    session_id=session_id, project_id=project_id, job_id=action_id,
+                    event={"type": "model_changed", "previous_model": previous, "model": model},
+                )
+            return {"ok": True, "session": self._public_session(candidate, gateway_state=state)}
 
     def _ensure_open(
         self,
@@ -1663,6 +1735,7 @@ class PiCopilotService:
             {
                 "session_id": record.session_id,
                 "session_file": record.pi_session_file,
+                **({"model": record.conversation_model} if record.conversation_model else {}),
                 "thinking_level": resolve_thinking_level(record.thinking_level),
                 "agent_mode": record.agent_mode,
                 "language": record.language,
@@ -2333,6 +2406,11 @@ class PiCopilotService:
             return "unspecified"
         from easyicu.research_agent.providers.client_trust import DataHandling
 
+        if record.conversation_model:
+            return self.provider_store.conversation_config(
+                record.conversation_model,
+                connection_sha256=str(record.conversation_connection_sha256 or ""),
+            ).data_handling.value
         journal = getattr(self.provider_store, "declaration_path", None)
         if journal is not None and journal.exists():
             state = self.provider_store.declaration_status()
@@ -2444,6 +2522,7 @@ class PiCopilotService:
             if session_id in self._dispatching_followups and self._dispatching_followups[session_id] is not _followup_delivery:
                 raise PiCopilotError("pi_session_busy", "This session is delivering a queued message.", status_code=409)
         record = self._scoped_record(session_id, project_id=project_id)
+        prepared_model = record.conversation_provider.model
         self._provider_gate(
             external_llm_opt_in=record.external_llm_opt_in,
             provider=record.research_provider.provider,
@@ -2633,6 +2712,8 @@ class PiCopilotService:
                     "This EasyICU Copilot session already has an active message.",
                     status_code=409,
                 )
+            if self._get_record(session_id).conversation_provider.model != prepared_model:
+                raise PiCopilotError("pi_session_model_changed", "The conversation model changed. Send the message again.", status_code=409)
             self._busy_sessions.add(record.session_id)
 
         start_gate = threading.Event()
@@ -3490,6 +3571,7 @@ class PiCopilotService:
                     row.data_source_authorization.model_dump(mode="json")
                 ),
                 "research_provider": row.research_provider.public_projection(),
+                "model_connection": row.conversation_provider.public_projection() if row.uses_unified_model_connection else None,
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "last_message_job_id": row.last_message_job_id,
@@ -4331,6 +4413,12 @@ class PiCopilotService:
             "ok": True,
             "project_id": clean,
             **projection.model_dump(mode="json"),
+            # Project memory derives connection state from persisted session records.
+            "connection_state": {
+                row.session_id: row.conversation_provider.public_projection()
+                for row in self._read_records()
+                if row.project_id == clean and row.uses_unified_model_connection
+            },
         }
 
     def get_workspace_preview(
@@ -5259,7 +5347,7 @@ class PiCopilotService:
             ),
             "research_provider": record.research_provider.public_projection(),
             "model_connection": (
-                record.research_provider.public_projection()
+                record.conversation_provider.public_projection()
                 if record.uses_unified_model_connection
                 else None
             ),

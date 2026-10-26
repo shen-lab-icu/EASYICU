@@ -247,6 +247,8 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "/api/copilot/pi/sessions/{session_id}/rename",
         "post_pi_copilot_session_rename",
     ),
+    ("GET", "/api/copilot/pi/sessions/{session_id}/models", "get_pi_copilot_session_models"),
+    ("POST", "/api/copilot/pi/sessions/{session_id}/model", "post_pi_copilot_session_model"),
     # Per-session effort (thinking) level, changed between turns.
     (
         "POST",
