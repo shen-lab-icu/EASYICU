@@ -3213,7 +3213,7 @@ def _apply_callback(
             except Exception:
                 pass
         
-        # Convert rate: multiply by 10^6 / weight (mg -> mcg/kg)
+        # Convert source grams/min to mcg/kg/min using the weight concept's kg.
         if 'weight' in frame.columns and val_var in frame.columns:
             frame = frame.copy()
             frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
@@ -3231,6 +3231,18 @@ def _apply_callback(
                     break
         
         if stop_var and stop_var in frame.columns and index_var and index_var in frame.columns:
+            # Offset and OffsetDrugEnd share the primary-admission origin.
+            # Subtract ICUOffset before hourly expansion, including fractional
+            # origins; absolute hour bins shift or lose real ICU records.
+            cases = data_source.load_table("cases", columns=["CaseID", "ICUOffset"], verbose=False)
+            cases = cases.data if hasattr(cases, "data") else cases
+            frame = frame.drop(columns=["ICUOffset"], errors="ignore").merge(
+                cases[["CaseID", "ICUOffset"]], on="CaseID", how="left", validate="many_to_one",
+            )
+            if frame["ICUOffset"].isna().any():
+                raise ValueError("SICdb medication rates require cases.ICUOffset for every case")
+            for column in (index_var, stop_var):
+                frame[column] = pd.to_numeric(frame[column], errors="coerce") - frame["ICUOffset"]
             # R ricu expand(): generate hourly observations between start and stop
             # Use standard patient-level ID columns only
             _PATIENT_ID_COLS_E = ['CaseID', 'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
@@ -3256,6 +3268,7 @@ def _apply_callback(
             
             if expanded_rows:
                 frame = pd.DataFrame(expanded_rows)
+                frame.attrs["easyicu_time_columns"] = {index_var: "icu_relative_hours"}
                 # 🔧 FIX 2026-03-11: Do NOT hardcode median aggregation here!
                 # Previously this did groupby(...).agg({val_var: 'median'}) which pre-aggregated
                 # the expanded rates. This prevents vaso60 callback from getting raw per-interval
@@ -3390,7 +3403,11 @@ def _apply_callback(
             ).max(axis=1, skipna=True)
 
         volume_unit_col = source.unit_var or unit_column
-        if volume_unit_col and volume_unit_col in frame.columns:
+        native_aumc_volume = (
+            db_name == "aumc" and source.table == "drugitems"
+            and source.value_var in {"fluidin", "solutionadministered"}
+        )
+        if not native_aumc_volume and volume_unit_col and volume_unit_col in frame.columns:
             frame = frame.copy()
             frame[concept_name] = normalize_volume_to_ml(
                 frame[concept_name], frame[volume_unit_col]

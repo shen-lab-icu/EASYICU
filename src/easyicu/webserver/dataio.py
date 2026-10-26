@@ -514,6 +514,8 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
     }
     if source == "raw":
         result["size_hint"] = _estimate_size(path)
+    from easyicu.synthetic_source_provenance import source_fields
+    result.update(source_fields(path))
     return result
 
 
@@ -1046,7 +1048,8 @@ def _render_export_readme(
             f"- `{metadata_descriptor.get('file')}` — typed physical-column metadata, records `{metadata_descriptor.get('record_count', '')}`"
         )
     lines.append("")
-    return "\n".join(lines)
+    from easyicu.synthetic_source_provenance import mark_report
+    return mark_report("\n".join(lines), manifest.get("provenance"))
 
 
 def _normalize_export_concepts(
@@ -2524,6 +2527,8 @@ def make_export_runner(
         import time
 
         require_path(data_path)
+        from easyicu.synthetic_sources import verify_source
+        synthetic_input_proof = verify_source(data_path)
         if is_hosted():
             _resolve_export_out_dir(
                 out_dir=out_dir, database=database, export_format=export_format, create_run_subdir=False,
@@ -2915,8 +2920,10 @@ def make_export_runner(
         )
         metadata_ref = write_content_addressed_sidecar(out, metadata_sidecar)
 
+        from easyicu.synthetic_source_provenance import source_fields
         manifest = {
             "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
+            **source_fields(data_path),
             "export_kind": "web_module_extraction",
             "time_window_authority": extraction._native_export_time_window_authority(
                 modules=sel, stay_time_upper_bounds=stay_time_upper_bounds or {},
@@ -2972,6 +2979,8 @@ def make_export_runner(
             ),
             encoding="utf-8",
         )
+        from easyicu.synthetic_exports import record_generated_export
+        record_generated_export(data_path, out, source_proof=synthetic_input_proof)
         return {
             "out_dir": str(out),
             "files": files,
@@ -3426,6 +3435,10 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
 
+    from easyicu.synthetic_source_provenance import source_description, source_fields
+    synthetic = source_description(path)
+    if synthetic is not None:
+        return synthetic
     manifest = _read_export_manifest(path)
 
     files = _export_file_inventory(path, manifest)
@@ -3451,6 +3464,7 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
         "path": str(path),
         "label": label,
         "database": manifest.get("database"),
+        **source_fields(path),
         "generated": manifest.get("generated") or manifest.get("exported_at"),
         "modules": modules,
         "files": files,

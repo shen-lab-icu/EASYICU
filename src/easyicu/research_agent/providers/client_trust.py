@@ -110,7 +110,11 @@ def public_demo_source_scope(database: str):
 
 
 def source_requires_clearance(source: str) -> bool:
-    return credentialed_source(source) and source != _PUBLIC_DEMO_DATABASE.get()
+    from easyicu.databases.profiles import get_database_profile
+    from easyicu.synthetic_source_provenance import active_provenance
+
+    return (credentialed_source(source) and source != _PUBLIC_DEMO_DATABASE.get()
+            and get_database_profile(source).key != active_provenance().get("source_database"))
 
 
 def require_data_handling(source: str, data_handling: DataHandling | str) -> None:

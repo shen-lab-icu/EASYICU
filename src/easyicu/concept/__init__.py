@@ -6242,6 +6242,8 @@ class ConceptResolver:
 
             second_valued_cols = []
             for col in cols_to_convert:
+                if data.attrs.get("easyicu_time_columns", {}).get(col) == "icu_relative_hours":
+                    continue
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
                     max_abs = data[col].abs().max()
                     if pd.notna(max_abs) and max_abs > 5000:

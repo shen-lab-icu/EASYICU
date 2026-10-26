@@ -7,6 +7,7 @@ another.
 """
 
 import re
+from easyicu.synthetic_source_provenance import mark_report
 from typing import Any, Mapping, Sequence
 
 from ..contracts.manuscript_sentence_context import (
@@ -69,7 +70,7 @@ def render_reader_manuscript(bound_text: str) -> str:
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    return cleaned.strip() + "\n"
+    return mark_report(cleaned.strip() + "\n")
 
 
 def manuscript_section_prose_metrics(manuscript: str) -> dict[str, dict[str, int]]:

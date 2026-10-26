@@ -33,6 +33,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from easyicu.synthetic_source_provenance import active_provenance, mark_report
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +98,7 @@ class ChecklistReport:
     def to_json(self) -> Dict[str, Any]:
         return {
             "name": self.name,
+            **active_provenance(),
             "version": self.version,
             "summary": self.summary(),
             "items": [i.to_json() for i in self.items],
@@ -129,7 +131,7 @@ class ChecklistReport:
                 )
             )
         lines.append("")
-        return "\n".join(lines) + "\n"
+        return mark_report("\n".join(lines) + "\n")
 
 
 # ---------------------------------------------------------------------------

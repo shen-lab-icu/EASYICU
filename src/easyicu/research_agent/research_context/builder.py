@@ -287,15 +287,18 @@ def _planning_concepts_without_values(authority: Dict[str, Any]) -> Dict[str, An
 
 
 def _planning_catalog_provenance(frame: pd.DataFrame) -> Dict[str, Any]:
+    from easyicu.synthetic_source_provenance import active_provenance
+
     authority = frame.attrs.get("easyicu_planning_authority")
     if not isinstance(authority, dict):
-        return {}
+        return active_provenance()
     if (
         authority.get("kind") != "metadata_only_planning_catalog"
         or authority.get("patient_rows_read") is not False
     ):
-        return {}
+        return active_provenance()
     projected = {
+        **active_provenance(),
         "evidence_stage": "metadata_only_planning",
         "patient_rows_read": False,
         **_planned_exposure_groups(authority, frame),

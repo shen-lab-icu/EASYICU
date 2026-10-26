@@ -10,6 +10,7 @@ import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
+from easyicu.synthetic_source_provenance import active_provenance
 
 from ..contracts.executor_stop import executor_stop_codes
 from ..contracts.execution_result import runtime_failure_codes, standard_executor_failure_codes
@@ -101,6 +102,7 @@ def run_status_payload(
     gates.update(completion_outcomes(gates))
     return {
         "schema_version": "easyicu.run_status/2",
+        **active_provenance(),
         "status": gates["completion_status"],
         "analysis_outcome": gates["analysis_outcome"],
         "manuscript_outcome": gates["manuscript_outcome"],

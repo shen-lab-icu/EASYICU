@@ -377,11 +377,12 @@ def egress_source_database(export_path: str, database: str) -> str:
 
 @contextmanager
 def public_demo_egress_scope(export_path: str):
-    """Recheck public provenance inside the job thread and reset at job exit."""
+    """Recheck pinned-demo or generated non-patient proof in the job thread."""
     from easyicu.research_agent.providers.client_trust import public_demo_source_scope
+    from easyicu.synthetic_source_provenance import synthetic_source_scope
 
     source = _verified_public_demo(export_path) or verified_public_demo_raw(export_path)
-    with public_demo_source_scope(source.database if source else ""):
+    with public_demo_source_scope(source.database if source else ""), synthetic_source_scope(export_path):
         yield
 
 

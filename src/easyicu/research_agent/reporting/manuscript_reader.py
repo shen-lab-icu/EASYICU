@@ -53,6 +53,8 @@ def build_manuscript_reader(
     payload = build_manuscript_provenance(
         manuscript=manuscript, evidence=evidence, binding_map=binding_map,
     )
+    from easyicu.synthetic_source_provenance import report_disclosure
+    payload.update(report_disclosure(manuscript))
     try:
         tables = build_manuscript_tables(
             plan=plan,
