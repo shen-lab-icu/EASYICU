@@ -26,7 +26,7 @@ def test_windows_workflow_uses_the_desktop_build_and_only_publishes_aggregates()
         (ROOT / ".github/workflows/windows_laptop_acceptance.yml").read_text("utf-8"),
     )
     triggers = workflow.get("on", workflow.get(True))
-    assert set(triggers) == {"workflow_dispatch"}
+    assert set(triggers) == {"workflow_dispatch", "workflow_run", "workflow_call"}
     inputs = triggers["workflow_dispatch"]["inputs"]
     assert set(inputs) == {"memory_pressure_gb", "ref", "model_cassette"}
     assert inputs["model_cassette"]["default"] == ""
@@ -35,7 +35,7 @@ def test_windows_workflow_uses_the_desktop_build_and_only_publishes_aggregates()
     assert job["runs-on"] == "windows-latest"
     steps = job["steps"]
     checkout = next(step for step in steps if "actions/checkout@" in step.get("uses", ""))
-    assert checkout["with"]["ref"] == "${{ inputs.ref || github.ref }}"
+    assert checkout["with"]["ref"] == "${{ github.event.workflow_run.head_sha || inputs.ref || github.sha }}"
     setup = next(step for step in steps if "actions/setup-python@" in step.get("uses", ""))
     assert setup["with"]["python-version"] == "3.11"
     commands = "\n".join(step.get("run", "") for step in steps)

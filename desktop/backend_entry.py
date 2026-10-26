@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import ntpath
 import os
 from pathlib import Path
@@ -104,6 +105,22 @@ def _watch_parent_process(parent_pid: int, *, interval: float = 1.0,
     return stop
 
 
+def _verify_durable_startup() -> None:
+    """Exercise the running dispatcher in the sidecar, without submitting work."""
+    from easyicu.webserver.durable_research import current_service
+    from easyicu.webserver.durable_workflows import DurableWorkflowError
+
+    service = current_service()
+    if service is None:
+        raise DurableWorkflowError("durable_executor_unavailable")
+    # status requires a launched dispatcher and queries its actual DBOS store.
+    # A fresh profile has no such workflow; no callback or model runs here.
+    service.dispatcher.status("desktop-startup-probe")
+    logging.getLogger("uvicorn.error").info(
+        "Durable dispatcher started (frozen=%s)", bool(getattr(sys, "frozen", False)),
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments[:1] == ["--easyicu-host-worker"]:
@@ -129,6 +146,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     from easyicu.webserver.app import app
 
+    app.add_event_handler("startup", _verify_durable_startup)
     server = uvicorn.Server(uvicorn.Config(
         app,
         host="127.0.0.1",

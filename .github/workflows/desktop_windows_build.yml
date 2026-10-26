@@ -2,6 +2,14 @@ name: Windows desktop installer (opt-in)
 
 on:
   workflow_dispatch:
+    inputs:
+      model_cassette:
+        description: Optional reviewed public-demo cassette for the dev9 acceptance job
+        type: string
+        default: ""
+  push:
+    branches: [codex/dev9-expansion-20260917]
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -23,6 +31,8 @@ jobs:
           "EASYICU_DESKTOP_BUILD_DIR=$env:RUNNER_TEMP\easyicu-build" >> $env:GITHUB_ENV
           "CARGO_TARGET_DIR=$env:RUNNER_TEMP\easyicu-cargo" >> $env:GITHUB_ENV
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
@@ -39,7 +49,11 @@ jobs:
         run: |
           python desktop/scripts/build_windows.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Install, launch headlessly, check readiness, stop and uninstall
+      - name: Windows Authenticode signing hook (disabled until a certificate is available)
+        if: ${{ false }}
+        run: |
+          throw 'Signing is not configured; implement signing and refresh the installer digest before enabling this hook.'
+      - name: Prove frozen durable startup, check readiness, stop and uninstall
         run: |
           $installers = @(Get-ChildItem "$env:CARGO_TARGET_DIR\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe")
           if ($installers.Count -ne 1) { throw 'Expected exactly one installer' }
@@ -63,3 +77,51 @@ jobs:
             ${{ runner.temp }}/EasyICU 临床 profile/AppData/Local/EasyICU/runtime/desktop-smoke-result.json
             ${{ env.EASYICU_DESKTOP_BUILD_DIR }}/longest-paths.json
             ${{ runner.temp }}/easyicu-smoke-diag/
+
+  acceptance:
+    needs: installer
+    if: github.ref == 'refs/heads/codex/dev9-expansion-20260917'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/windows_laptop_acceptance.yml
+    with:
+      installer_run_id: ${{ format('{0}', github.run_id) }}
+      ref: ${{ github.sha }}
+      model_cassette: ${{ inputs.model_cassette || '' }}
+
+  release:
+    needs: installer
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: Download this tag build's smoked installer
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: EasyICU-windows-x64
+          path: ${{ runner.temp }}/windows-installer
+      - name: Verify provenance, compute SHA-256 and create a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseDir = "$env:RUNNER_TEMP\windows-release"
+          $installer = python -I desktop/scripts/verify_windows_artifact.py "$env:RUNNER_TEMP\windows-installer" --source-commit "$env:GITHUB_SHA" --release-dir "$releaseDir"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release create "$env:RELEASE_TAG" "$installer" "$releaseDir\SHA256SUMS.txt" --draft --verify-tag --generate-notes --target "$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

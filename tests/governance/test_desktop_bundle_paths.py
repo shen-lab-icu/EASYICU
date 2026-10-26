@@ -268,7 +268,8 @@ def test_workflow_retains_path_report_when_build_fails():
     import yaml
 
     workflow = yaml.safe_load((ROOT / ".github/workflows/desktop_windows_build.yml").read_text())
-    assert (workflow.get("on") or workflow.get(True)) == {"workflow_dispatch": None}
+    triggers = workflow.get("on") or workflow.get(True)
+    assert set(triggers) == {"workflow_dispatch", "push"}
     steps = workflow["jobs"]["installer"]["steps"]
     diagnostics = next(step for step in steps if step.get("with", {}).get("name") == "EasyICU-windows-smoke-diagnostics")
     assert diagnostics["if"] == "always()"

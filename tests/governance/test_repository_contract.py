@@ -390,8 +390,23 @@ def test_workflows_default_to_read_only_repository_access() -> None:
         top_level = workflow.split("\njobs:", maxsplit=1)[0]
         if "\npermissions:\n  contents: read\n" not in f"\n{top_level}\n":
             violations.append(workflow_path.name)
-        if write_permission.search(workflow):
+        if write_permission.search(top_level):
             violations.append(f"{workflow_path.name} declares a write permission")
+        for name, job in yaml.safe_load(workflow).get("jobs", {}).items():
+            permissions = job.get("permissions", {})
+            writes = permissions == "write-all" or (
+                isinstance(permissions, dict) and "write" in permissions.values()
+            )
+            # Only the tag-bound Windows draft job may write repository content.
+            # All build/acceptance jobs and every other workflow stay read-only.
+            draft_release = (
+                workflow_path.name == "desktop_windows_build.yml" and name == "release"
+                and permissions == {"contents": "write"}
+                and job.get("needs") == "installer"
+                and job.get("if") == "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
+            )
+            if writes and not draft_release:
+                violations.append(f"{workflow_path.name}:{name} declares a write permission")
 
     assert not violations, (
         "Workflows must declare top-level read-only repository access: "

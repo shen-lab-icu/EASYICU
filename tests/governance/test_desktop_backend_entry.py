@@ -139,3 +139,48 @@ def test_spawn_freeze_support_precedes_application_argument_parsing(monkeypatch)
     path = Path(__file__).parents[2] / "desktop/backend_entry.py"
     with pytest.raises(SpawnChildDispatched):
         runpy.run_path(str(path), run_name="__main__")
+
+
+@pytest.mark.parametrize("frozen", [False, True])
+def test_desktop_startup_proves_a_running_dispatcher_before_logging(monkeypatch, caplog, frozen):
+    from easyicu.webserver import durable_research
+
+    module = _backend_entry_module()
+    monkeypatch.setattr(module.sys, "frozen", frozen, raising=False)
+    calls = []
+
+    def status(identity):
+        assert "Durable dispatcher started" not in caplog.text
+        calls.append(identity)
+        return None
+
+    monkeypatch.setattr(durable_research, "current_service", lambda: SimpleNamespace(
+        dispatcher=SimpleNamespace(status=status),
+    ))
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        module._verify_durable_startup()
+    assert calls == ["desktop-startup-probe"]
+    assert f"Durable dispatcher started (frozen={frozen})" in caplog.text
+
+
+@pytest.mark.parametrize("reason", ["missing_service", "durable_dependency_unavailable", "durable_launch_failed"])
+def test_desktop_startup_retains_typed_durable_failure(monkeypatch, caplog, reason):
+    from easyicu.webserver import durable_research
+    from easyicu.webserver.durable_workflows import DurableWorkflowError
+
+    def fail(identity):
+        raise DurableWorkflowError(reason)
+
+    service = None if reason == "missing_service" else SimpleNamespace(dispatcher=SimpleNamespace(status=fail))
+    monkeypatch.setattr(durable_research, "current_service", lambda: service)
+    expected = "durable_executor_unavailable" if service is None else reason
+    with pytest.raises(DurableWorkflowError, match=expected):
+        _backend_entry_module()._verify_durable_startup()
+    assert "Durable dispatcher started" not in caplog.text
+
+
+def test_desktop_registers_durable_probe_after_the_web_startup_handlers():
+    source = (Path(__file__).parents[2] / "desktop/backend_entry.py").read_text()
+    imported = source.index("from easyicu.webserver.app import app")
+    probe = source.index('app.add_event_handler("startup", _verify_durable_startup)')
+    assert imported < probe < source.index("server.run()")

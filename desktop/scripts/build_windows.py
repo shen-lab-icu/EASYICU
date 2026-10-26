@@ -93,13 +93,13 @@ def _build_tauri(node: Path) -> Path:
     return installers[0]
 
 
-def _plan(backend_only: bool) -> dict:
+def _plan(backend_only: bool, runtime_only: bool = False) -> dict:
     try:
         _require_lock()
         status = "present (pip will verify every hash)"
     except RuntimeError:
         status = "pending"
-    return {
+    plan = {
         "target": TARGET,
         "installer": "nsis/currentUser",
         "lock_status": status,
@@ -115,15 +115,20 @@ def _plan(backend_only: bool) -> dict:
             "Write build-inputs.json with versions, lock hashes, kernel identity, pruning counts/bytes, paths and installer digest",
         ],
     }
+    if runtime_only:
+        plan["steps"] = plan["steps"][:2]
+    return plan
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--backend-only", action="store_true")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--backend-only", action="store_true")
+    scope.add_argument("--runtime-only", action="store_true", help="Prepare only the acceptance driver's installed wheel runtime.")
     parser.add_argument("--dry-run", action="store_true", help="Print the plan without running tools or writing files.")
     args = parser.parse_args(argv)
     if args.dry_run:
-        print(json.dumps(_plan(args.backend_only), indent=2))
+        print(json.dumps(_plan(args.backend_only, args.runtime_only), indent=2))
         return 0
     _require_lock()
     if sys.platform != "win32":
@@ -137,6 +142,9 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["EASYICU_HOME"] = str(BUILD_ROOT / "build-state")
     python = _prepare_python_runtime(selected_python)
     _check_target(str(python), node)
+    if args.runtime_only:
+        print(f"Acceptance driver runtime: {python}")
+        return 0
     common.prepare_node_runtime(
         node, python, build_root=BUILD_ROOT, desktop_root=DESKTOP_ROOT, run=_run, windows=True,
     )

@@ -182,7 +182,8 @@ def test_frozen_backend_preserves_installed_sources_and_kernel_identity(tmp_path
     assert ("--copy-metadata", "dbos") in options
     assert ("--collect-all", "psycopg_binary") in options
     hidden = {value for flag, value in options if flag == "--hidden-import"}
-    assert "sqlalchemy.dialects.sqlite" in hidden
+    assert {"dbos", "sqlalchemy.dialects.sqlite", "sqlalchemy.dialects.sqlite.pysqlite"} <= hidden
+    assert "pyinstaller==6.22.2" in (DESKTOP / "requirements-windows-x64-py311.lock").read_text()
     # Validate the execution owner's current baseline, so adding a required
     # package cannot leave the frozen child unable to run a typed script.
     assert set(BASELINE_PACKAGES) <= {name.split(".")[0] for name in hidden}
@@ -308,7 +309,7 @@ def test_installed_package_probe_ignores_source_checkout_and_preserves_unicode(t
     assert calls[0][1]["cwd"] == tmp_path
 
 
-def test_windows_packaging_and_smoke_workflow_are_opt_in_and_per_user():
+def test_windows_packaging_and_smoke_workflow_are_per_user():
     import xml.etree.ElementTree as ET
     import yaml
 
@@ -330,7 +331,9 @@ def test_windows_packaging_and_smoke_workflow_are_opt_in_and_per_user():
     assert 'include_str!("../windows-backend.manifest")' in build_rs
     workflow = yaml.safe_load((ROOT / ".github/workflows/desktop_windows_build.yml").read_text())
     # PyYAML's YAML 1.1 resolver reads GitHub's 'on' as boolean True.
-    assert (workflow.get("on") or workflow.get(True)) == {"workflow_dispatch": None}
+    triggers = workflow.get("on") or workflow.get(True)
+    assert triggers["push"] == {"branches": ["codex/dev9-expansion-20260917"], "tags": ["v*"]}
+    assert "workflow_dispatch" in triggers
     job = workflow["jobs"]["installer"]
     assert job["runs-on"] == "windows-latest"
     # GitHub refuses to parse a workflow whose job-level env reads a context
@@ -343,6 +346,48 @@ def test_windows_packaging_and_smoke_workflow_are_opt_in_and_per_user():
     assert "build-inputs.json" in artifact["with"]["path"]
     assert "nsis/*.exe" in artifact["with"]["path"]
     assert artifact.get("if", "success()") == "success()"
+
+
+def test_acceptance_runtime_preparation_never_freezes_or_builds_an_installer(tmp_path, monkeypatch):
+    module = load_script("build_windows")
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setattr(module, "BUILD_ROOT", tmp_path)
+    monkeypatch.setattr(module, "_require_lock", lambda: None)
+    monkeypatch.setattr(module.common, "select_python", lambda *a: "python.exe")
+    monkeypatch.setattr(module.common, "select_node", lambda: Path("node.exe"))
+    monkeypatch.setattr(module, "_check_target", lambda *a: None)
+    calls = []
+    monkeypatch.setattr(module, "_prepare_python_runtime", lambda *a: calls.append(a) or Path("python.exe"))
+    monkeypatch.setenv("EASYICU_HOME", str(tmp_path))
+    for name in ("prepare_node_runtime", "build_backend", "prepare_bundle", "build_inputs"):
+        monkeypatch.setattr(module.common, name, lambda *a, **k: pytest.fail("artifact rebuilt"))
+    monkeypatch.setattr(module, "_build_tauri", lambda *a: pytest.fail("installer rebuilt"))
+    assert module.main(["--runtime-only"]) == 0
+    assert calls == [("python.exe",)]
+    assert not (tmp_path / "build-inputs.json").exists()
+
+
+def test_smoke_requires_frozen_durable_startup_even_when_the_launcher_fails():
+    smoke = (DESKTOP / "scripts/smoke_windows.ps1").read_text()
+    assert "function Assert-FrozenBackendStartup" in smoke
+    assertion = smoke.split("function Assert-FrozenBackendStartup", 1)[1].split("\n# The hosted runner", 1)[0]
+    assert "if (-not $log.Contains('Application startup complete.'))" in assertion
+    assert "if (-not $log.Contains('Durable dispatcher started (frozen=True)'))" in assertion
+    assert "if ($failure.Success) { throw $failure.Value }" in assertion
+    assert "throw 'desktop_backend_startup_incomplete'" in assertion
+    assert "throw 'durable_executor_unavailable'" in assertion
+    assert "finally {\n        Assert-FrozenBackendStartup" in smoke
+    assert smoke.index("Assert-FrozenBackendStartup (Join-Path") < smoke.index("if (-not $result.healthy")
+
+
+@pytest.mark.parametrize("code", ["durable_dependency_unavailable", "durable_launch_failed", "durable_executor_unavailable"])
+def test_smoke_extracts_the_typed_failure_instead_of_the_traceback_module_name(code):
+    smoke = (DESKTOP / "scripts/smoke_windows.ps1").read_text()
+    pattern = re.search(r"\[regex\]::Match\(\$log, '([^']+)'\)", smoke).group(1)
+    traceback = ('File "easyicu/webserver/durable_workflows.py", line 1, in launch\n'
+                 f"easyicu.webserver.durable_workflows.DurableWorkflowError: {code}\n")
+    assert re.search(pattern, traceback).group() == code
+    assert re.search(pattern, "Application startup complete.\nDurable dispatcher started (frozen=True)") is None
 
 
 def test_windows_headless_launch_checks_health_and_preserves_data_after_uninstall():

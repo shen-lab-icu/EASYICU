@@ -1,6 +1,27 @@
 name: Windows laptop acceptance
 
 on:
+  workflow_run:
+    workflows: ["Windows desktop installer (opt-in)"]
+    types: [completed]
+    branches: [codex/dev9-expansion-20260917]
+  # workflow_run, like workflow_dispatch, is discovered on the default branch.
+  # The dev9 build also calls this workflow at its own commit, so acceptance
+  # works before this file is present on main. No second installer is built.
+  workflow_call:
+    inputs:
+      installer_run_id:
+        type: string
+        required: true
+      ref:
+        type: string
+        required: true
+      memory_pressure_gb:
+        type: number
+        default: 8
+      model_cassette:
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       memory_pressure_gb:
@@ -18,13 +39,19 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: windows-laptop-acceptance-${{ inputs.ref || github.ref }}
+  group: windows-laptop-acceptance-${{ github.event.workflow_run.head_sha || inputs.ref || github.sha }}
   cancel-in-progress: false
 
 jobs:
   acceptance:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'codex/dev9-expansion-20260917' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: windows-latest
     timeout-minutes: 120
     defaults:
@@ -41,7 +68,7 @@ jobs:
       - name: Check out the selected candidate in a clinician-like folder
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ github.event.workflow_run.head_sha || inputs.ref || github.sha }}
           path: EasyICU 数据
           persist-credentials: false
 
@@ -55,6 +82,16 @@ jobs:
             failures = @(@{reason_code = "acceptance_driver_not_started"; exception_type = "WorkflowStepFailed"})
           } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 "$receipts\acceptance.json"
           "Windows laptop acceptance: driver did not start; inspect the setup step." | Set-Content -Encoding utf8 "$receipts\summary.md"
+
+      - name: Record the candidate commit and select build directories
+        id: candidate
+        run: |
+          $sha = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "EASYICU_DESKTOP_BUILD_DIR=$env:RUNNER_TEMP\easyicu-build" >> $env:GITHUB_ENV
+          "CARGO_TARGET_DIR=$env:RUNNER_TEMP\easyicu-cargo" >> $env:GITHUB_ENV
+          "WINDOWS_INSTALLER_DIR=$env:RUNNER_TEMP\windows-installer" >> $env:GITHUB_ENV
 
       - name: Set up the desktop-supported Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -72,14 +109,29 @@ jobs:
           architecture: x64
 
       - name: Build the candidate desktop installer
+        if: github.event_name != 'workflow_run' && inputs.installer_run_id == ''
         run: |
-          $env:EASYICU_DESKTOP_BUILD_DIR = "$env:RUNNER_TEMP\easyicu-build"
-          $env:CARGO_TARGET_DIR = "$env:RUNNER_TEMP\easyicu-cargo"
-          "EASYICU_DESKTOP_BUILD_DIR=$env:EASYICU_DESKTOP_BUILD_DIR" >> $env:GITHUB_ENV
-          "CARGO_TARGET_DIR=$env:CARGO_TARGET_DIR" >> $env:GITHUB_ENV
           rustup default stable-x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python desktop/scripts/build_windows.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force $env:WINDOWS_INSTALLER_DIR | Out-Null
+          Copy-Item "$env:CARGO_TARGET_DIR\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe" $env:WINDOWS_INSTALLER_DIR
+          Copy-Item "$env:EASYICU_DESKTOP_BUILD_DIR\build-inputs.json" $env:WINDOWS_INSTALLER_DIR
+
+      - name: Download the completed build's installer and receipt
+        if: github.event_name == 'workflow_run' || inputs.installer_run_id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: EasyICU-windows-x64
+          run-id: ${{ github.event.workflow_run.id || inputs.installer_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/windows-installer
+
+      - name: Prepare only the acceptance driver's locked wheel runtime
+        if: github.event_name == 'workflow_run' || inputs.installer_run_id != ''
+        run: |
+          python desktop/scripts/build_windows.py --runtime-only
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Read official demo versions and checksums from their owner
@@ -98,15 +150,16 @@ jobs:
 
       - name: Install and accept the public demos through the desktop M1 boundary
         env:
-          MEMORY_PRESSURE_GB: ${{ inputs.memory_pressure_gb }}
+          MEMORY_PRESSURE_GB: ${{ github.event_name == 'workflow_run' && 8 || inputs.memory_pressure_gb }}
           MODEL_CASSETTE_PATH: ${{ inputs.model_cassette }}
+          SOURCE_COMMIT: ${{ steps.candidate.outputs.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
           $runtime = "$env:EASYICU_DESKTOP_BUILD_DIR\venv\Scripts\python.exe"
-          $installers = @(Get-ChildItem "$env:CARGO_TARGET_DIR\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe")
-          if ($installers.Count -ne 1) { throw 'Expected exactly one installer' }
+          $installer = & $runtime -I desktop/scripts/verify_windows_artifact.py "$env:WINDOWS_INSTALLER_DIR" --source-commit "$env:SOURCE_COMMIT"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $installDir = "$env:RUNNER_TEMP\EasyICU 数据\installed app"
-          $install = Start-Process -FilePath $installers[0].FullName -ArgumentList "/S /D=$installDir" -PassThru
+          $install = Start-Process -FilePath $installer -ArgumentList "/S /D=$installDir" -PassThru
           if (-not $install.WaitForExit(180000)) {
             & "$env:SystemRoot\System32\taskkill.exe" /PID $install.Id /T /F | Out-Null
             throw 'Installer timed out'
