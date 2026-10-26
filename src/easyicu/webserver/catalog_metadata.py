@@ -29,6 +29,30 @@ _HELPER_ROLES = frozenset(
 )
 
 
+#: One dictionary entry per clinical concept: its other definitions and
+#: component criteria fold under it.  Display only -- every column is still
+#: extracted, exported and selectable by its own name.
+CONCEPT_VARIANTS: Mapping[str, tuple[str, ...]] = {
+    "aki_stage_reference": (
+        "aki_reference", "aki_severe_reference",
+        "aki_stage_creat_reference", "aki_stage_uo_reference",
+        "aki_stage_rrt_reference", "aki_stage_reference_smoothed_6h",
+        "aki_stage_source_native", "aki_source_native",
+        "aki_severe_source_native", "aki_stage_creat_source_native",
+        "aki_stage_uo_source_native", "aki_stage_crrt_source_native",
+        "aki_stage_source_native_smoothed",
+    ),
+}
+_VARIANT_PRIMARY = {
+    variant: primary for primary, variants in CONCEPT_VARIANTS.items() for variant in variants
+}
+
+
+def variant_primary(concept_id: str) -> str | None:
+    """The entry a folded variant belongs to, or None for an entry itself."""
+    return _VARIANT_PRIMARY.get(concept_id)
+
+
 def concept_audience(concept_id: str, definition: Mapping[str, Any]) -> str:
     """Return a display audience without changing extraction or selection.
 

@@ -34,12 +34,24 @@ class MentionService:
         if type(limit) is not int or not 1 <= limit <= 40:
             raise _error("mention_search_invalid")
         if kind == "concept":
-            from easyicu.concept.catalog import CONCEPT_DICTIONARY
+            from easyicu.concept.catalog import CONCEPT_DICTIONARY, HIDDEN_DICTIONARY_CONCEPTS
             from easyicu.resources import load_dictionary
+            from easyicu.webserver.catalog_metadata import catalog_definitions, concept_audience, variant_primary
             dictionary = load_dictionary(include_sofa2=True)
+            definitions = catalog_definitions()
+            # Bookkeeping columns and loader entry points answer only their
+            # exact name, as in the data dictionary; a folded variant follows
+            # the entry it belongs to.
+            names = sorted(
+                (name for name in set(dictionary.keys()) | set(CONCEPT_DICTIONARY)
+                 if name == query.strip() or (
+                     name not in HIDDEN_DICTIONARY_CONCEPTS
+                     and concept_audience(name, definitions.get(name, {})) != "internal")),
+                key=lambda name: (variant_primary(name) is not None, name),
+            )
             rows = [{"kind": kind, "id": name, "label": (
                 CONCEPT_DICTIONARY[name][0] if name in CONCEPT_DICTIONARY else dictionary.get(name).description or name
-            )} for name in sorted(set(dictionary.keys()) | set(CONCEPT_DICTIONARY))]
+            ), "_terms": (CONCEPT_DICTIONARY.get(name) or ("", ""))[1]} for name in names]
         elif kind == "database":
             from easyicu.databases.profiles import iter_database_profiles
             rows = [{"kind": kind, "id": profile.key, "source": "database", "label": profile.display_name}
@@ -58,9 +70,12 @@ class MentionService:
         else:
             rows = [{"kind": kind, "id": row["id"], "source": row["source"], "label": row["title"]}
                     for row in self.attachable_skills(record.session_id, project_id=project_id)["items"] if row["enabled"]]
+        # A concept also answers to its Chinese name, which the client shows.
         terms = query.casefold().split()
-        matches = [row for row in rows if all(term in f"{row['id']} {row['label']}".casefold() for term in terms)]
-        return {"items": [{**row, "label": row["label"][:240]} for row in matches[:limit]],
+        matches = [row for row in rows
+                   if all(term in f"{row['id']} {row['label']} {row.get('_terms', '')}".casefold() for term in terms)]
+        return {"items": [{**{key: value for key, value in row.items() if key != "_terms"}, "label": row["label"][:240]}
+                          for row in matches[:limit]],
                 "has_more": len(matches) > limit, "limit": limit, "max_mentions": 16}
 
     def resolve_mention(self, session_id: str, *, project_id: str, kind: str, id: str,

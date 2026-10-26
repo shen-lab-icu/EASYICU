@@ -534,3 +534,24 @@ def test_a_long_project_file_uses_an_explicit_excerpt_with_its_full_digest(host)
     assert material["text"] == body[:2000]
     assert material["truncated"] is True
     assert material["sha256"] == written["sha256"]
+
+
+def test_concept_search_offers_the_entry_first_and_keeps_bookkeeping_to_its_exact_name(service):
+    sid = session(service)
+
+    def ids(query, limit=40):
+        return [row["id"] for row in service.search_mentions(
+            sid, project_id="synthetic-project", kind="concept", query=query, limit=limit)["items"]]
+
+    found = ids("aki")
+    assert found[0] == "aki_stage_reference"
+    assert "aki_reference" in found and "aki_stage_source_native" in found
+    assert not {"aki_reference_status", "aki_source_native_authority", "kdigo_aki"} & set(found)
+    # A bookkeeping column or loader entry point answers its exact name.
+    assert ids("aki_reference_status") == ["aki_reference_status"]
+    assert "kdigo_aki" in ids("kdigo_aki")
+    # The client shows Chinese names, so a Chinese query finds the concept.
+    assert "lact" in ids("乳酸")
+    assert "aki_stage_rrt_reference" in ids("肾脏替代治疗")
+    assert all("_terms" not in row for row in service.search_mentions(
+        sid, project_id="synthetic-project", kind="concept", query="乳酸")["items"])
