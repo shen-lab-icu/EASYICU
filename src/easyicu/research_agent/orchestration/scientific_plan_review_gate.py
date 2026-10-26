@@ -302,7 +302,7 @@ def persist_or_validate_scientific_plan_review(
             for field in binding_fields
         ) or _retention_cohort_sha256(existing_review) != _retention_cohort_sha256(
             current_review
-        ):
+        ) or existing_review.facts.get("database_capability_review") != current_review.facts.get("database_capability_review"):
             raise ScientificPlanReviewArtifactError(
                 code="scientific_plan_review_binding_drift",
                 path=path,
@@ -411,6 +411,9 @@ def prepare_scientific_plan_review_gate(
         runtime_authority=runtime_authority,
         model_retention=model_retention,
     )
+    from easyicu.databases.research_approval import bind_database_capability_review
+
+    current_review = bind_database_capability_review(current_review, context=context, plan=plan)
     review, artifact_path = persist_or_validate_scientific_plan_review(
         run_dir=run_dir,
         evidence=evidence,

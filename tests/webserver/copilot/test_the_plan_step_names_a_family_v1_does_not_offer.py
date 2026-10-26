@@ -47,7 +47,7 @@ def _plan_stage(snapshot: Any) -> Any:
 
 
 @pytest.mark.parametrize(
-    "question, family", [(_COX, "survival"), (_SUBTYPES, "trajectory_clustering")],
+    "question, family", [(_COX, "survival")],
 )
 def test_an_eicu_study_of_a_family_v1_does_not_offer_there_is_not_offered_a_plan(
     question: str, family: str
@@ -62,17 +62,14 @@ def test_an_eicu_study_of_a_family_v1_does_not_offer_there_is_not_offered_a_plan
     # The gap the launch would raise, codes only.
     assert snapshot.study_family_gap == study_family_database_gap(
         study, question=question, database="eicu"
-    ) == {
-        "code": STUDY_FAMILY_DATABASE_OUT_OF_SCOPE,
-        "family": family,
-        "database": "eicu",
-        "supported_databases": ["miiv"],
-    }
+    )
+    assert snapshot.study_family_gap["family"] == family
+    assert "event_time" in {item["capability"] for item in snapshot.study_family_gap["missing_capabilities"]}
 
 
 @pytest.mark.parametrize(
     "question, database",
-    [(_COX, "miiv"), (_SUBTYPES, "miiv"), (_ASSOCIATION, "eicu")],
+    [(_COX, "miiv"), (_SUBTYPES, "miiv"), (_SUBTYPES, "eicu"), (_ASSOCIATION, "eicu")],
 )
 def test_a_family_offered_on_its_database_is_offered_its_plan(
     question: str, database: str
@@ -85,7 +82,7 @@ def test_a_family_offered_on_its_database_is_offered_its_plan(
 
 
 def test_the_recorded_design_is_the_family_the_plan_step_checks() -> None:
-    study = {**_study(_COX, "eicu"), "analysis_design": {
+    study = {**_study(_ASSOCIATION, "eicu"), "analysis_design": {
         "analysis_family": "association_study",
         "analysis_unit": "icu_stay",
         "variance_estimator": "model_based",

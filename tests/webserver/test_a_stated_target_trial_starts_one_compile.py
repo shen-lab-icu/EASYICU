@@ -206,7 +206,7 @@ def test_a_statement_the_study_can_compile_is_checked_without_holding_the_gate(
     assert _gate_free(seconds=0.0)
 
 
-def test_a_compile_in_another_database_stops_before_it_reads_data(
+def test_a_compile_on_eicu_reaches_the_same_study_readiness_gate(
     tmp_path: Path,
 ) -> None:
     study = _study(
@@ -220,7 +220,7 @@ def test_a_compile_in_another_database_stops_before_it_reads_data(
     result = job.result["target_trial_compile"]
     assert (result["status"], result["reason_code"]) == (
         "stopped",
-        "target_trial_database_out_of_scope",
+        "target_trial_study_not_ready",
     )
     kept = setup.target_trial_job_record(STUDY_ID, job.id)
     assert kept["request"] == statement.request()
@@ -229,13 +229,13 @@ def test_a_compile_in_another_database_stops_before_it_reads_data(
     assert (latest["job_id"], latest["status"], latest["reason_code"]) == (
         job.id,
         "stopped",
-        "target_trial_database_out_of_scope",
+        "target_trial_study_not_ready",
     )
     assert latest["detail"] == result["detail"]
     shown = setup.project_target_trial_compile(result)
     assert (shown["status"], shown["reason_code"]) == (
         "stopped",
-        "target_trial_database_out_of_scope",
+        "target_trial_study_not_ready",
     )
     after = context_store.get_context(STUDY_ID)
     assert after["active_job_id"] is None

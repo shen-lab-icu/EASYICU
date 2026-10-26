@@ -55,6 +55,7 @@ from easyicu.research_agent.planning.population_spec import PopulationSpec
 from easyicu.research_agent.planning.target_trial_spec import TargetTrialSpec
 from easyicu.webserver import dataio, jobs, study_contexts
 from easyicu.webserver.target_trial_records import keep_target_trial_record, records_root
+from easyicu.webserver.research_capability_scope import capability_scope_gap, eligible_family_databases
 
 #: The Copilot tool that states the trial; the conversation's tool catalog lists it.
 TARGET_TRIAL_STATE_TOOL = "easyicu_state_target_trial"
@@ -84,7 +85,7 @@ TARGET_TRIAL_COMPILE_FAILED = "target_trial_compile_failed"
 #: stopped while it ran.  Stable.
 TARGET_TRIAL_COMPILE_INTERRUPTED = "target_trial_compile_interrupted"
 #: The databases v1 emulates trials in.
-TARGET_TRIAL_DATABASES = frozenset({"miiv"})
+TARGET_TRIAL_DATABASES = frozenset(eligible_family_databases("causal_inference"))
 #: A study bound to a database v1 does not emulate trials in.  Stable.
 TARGET_TRIAL_DATABASE_OUT_OF_SCOPE = "target_trial_database_out_of_scope"
 _CAUSAL_FAMILY = "causal_inference"
@@ -341,16 +342,11 @@ def target_trial_database_gap(study: Mapping[str, Any]) -> Optional[dict[str, An
     it is bound.  The compile refuses a bound database with the same code.
     """
 
-    from easyicu.webserver.study_family_scope import scope_database_key
-
     database = _study_database(study)
-    if not database or scope_database_key(database) in TARGET_TRIAL_DATABASES:
+    if not database:
         return None
-    return {
-        "code": TARGET_TRIAL_DATABASE_OUT_OF_SCOPE,
-        "database": database,
-        "supported_databases": sorted(TARGET_TRIAL_DATABASES),
-    }
+    return capability_scope_gap(study, family=_CAUSAL_FAMILY, database=database,
+                                code=TARGET_TRIAL_DATABASE_OUT_OF_SCOPE)
 
 
 def _bound_export(study: Mapping[str, Any]) -> tuple[str, str]:
