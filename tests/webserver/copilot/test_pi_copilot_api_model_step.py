@@ -248,7 +248,8 @@ def test_every_connection_error_reads_in_the_interface_language() -> None:
         "pi_provider_verification_failed", "pi_provider_models_response_invalid",
         "pi_provider_base_url_rejected", "pi_provider_api_transport_unsupported",
         "external_llm_opt_in_required", "pi_provider_auth_failed",
-        "pi_provider_connection_failed",
+        "pi_provider_connection_failed", "pi_provider_inference_verification_failed",
+        "pi_provider_inference_response_invalid", "pi_provider_response_too_large",
     ):
         branch = copy.split(f"error.code === '{code}'", 1)
         assert len(branch) == 2, code

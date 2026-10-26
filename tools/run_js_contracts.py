@@ -209,6 +209,7 @@ CONTRACTS: dict[str, list[str]] = {
     ],
     "guided_pi_run_answer_group_names.test.js": [],
     "guided_pi_provider_stop_copy.test.js": [],
+    "guided_pi_connection_test_message_copy.test.js": [],
     "guided_pi_stratified_answer_labels.test.js": [],
     "guided_pi_run_answer.test.js": [
         "screens-agent-reader-vocab.js",

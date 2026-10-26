@@ -139,6 +139,23 @@
         const suffix = Number.isFinite(status) && status > 0 ? tr(` (status ${status})`, `（状态码 ${status}）`) : '';
         return tr('The model service did not accept the request. Check the address and protocol.', '模型服务没有接受这次请求，请检查地址和兼容协议。') + suffix;
       }
+      // The one test message sent before saving (provider_config.verify_provider_connection).
+      if (error.code === 'pi_provider_inference_verification_failed') {
+        const status = Number(error.details && error.details.status_code);
+        const known = Number.isFinite(status) && status > 0;
+        if (known && (status >= 500 || status === 429)) {
+          return tr(`The model service is temporarily unavailable (status ${status}). Try again in a moment.`, `模型服务暂时不可用（状态码 ${status}），请稍后重试。`);
+        }
+        const suffix = known ? tr(` (status ${status})`, `（状态码 ${status}）`) : '';
+        return tr('The selected model did not answer a test message', '所选模型没有回应测试消息') + suffix
+          + tr('. Check the model name or choose another model.', '，请检查模型名或换一个模型。');
+      }
+      if (error.code === 'pi_provider_inference_response_invalid') {
+        return tr('The model replied in a format EasyICU cannot read. Check the protocol under Advanced settings.', '模型的回复格式无法读取，请在高级设置中检查兼容协议。');
+      }
+      if (error.code === 'pi_provider_response_too_large') {
+        return tr('The model service sent a reply too large to check. Check the address.', '模型服务返回的内容过大，无法核对，请检查服务地址。');
+      }
       if (error.code === 'pi_provider_models_response_invalid') {
         return tr('This service did not return a model list EasyICU can read. Check the protocol under Advanced settings.', '该服务返回的模型列表无法读取，请在高级设置中检查兼容协议。');
       }
