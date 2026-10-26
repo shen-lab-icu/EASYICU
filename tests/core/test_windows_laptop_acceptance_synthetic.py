@@ -45,6 +45,10 @@ def test_synthetic_conversion_export_and_read_owners(tmp_path: Path, monkeypatch
             exports.append(acceptance.prepare_dataset(
                 source, isolated_demo_paths(work, source), measurements, fetch=synthetic_demo_download,
             ))
+        from easyicu.webserver import dataio
+        for source, path in zip(SOURCES, exports):
+            validated = dataio.validate_research_pipeline_source(str(path), database=source.database)
+            assert validated["ok"] is True
         from easyicu.webserver import catalog, cohort_review, crossdb_review, patient_drilldown
 
         def request(method, path, body):
@@ -61,7 +65,7 @@ def test_synthetic_conversion_export_and_read_owners(tmp_path: Path, monkeypatch
         acceptance.probe_read_paths(request, exports, records)
         with acceptance.laptop_environment(work, work / "cache", desktop_first_result=True):
             research = acceptance.probe_desktop_first_result(exports)
-    assert len(records) == 7
+    assert len(records) == 9
     assert all(record["passed"] for record in records)
     assert research["source_validated"] is True
     assert research["runner_kind"] == "host"
@@ -85,7 +89,7 @@ def test_sparse_synthetic_run_registers_complete_exports_and_keeps_receipts_priv
     work = tmp_path / "EasyICU 数据"
     monkeypatch.setattr(sources, "_CONFIG_PATH", work / "home" / "sources.json")
     def complete_exports(_work, exports, metrics):
-        assert len(exports) == 2
+        assert len(exports) == 3
         assert all((path / "_manifest.json").is_file() for path in exports)
         metrics["export_count"] = len(exports)
 
@@ -97,7 +101,7 @@ def test_sparse_synthetic_run_registers_complete_exports_and_keeps_receipts_priv
     report = acceptance.run_acceptance(work, work / "cache", tmp_path / "receipts", memory_pressure_gb=0, fetch=synthetic_demo_download)
     assert report["status"] == "passed"
     assert report["failures"] == []
-    assert report["web"]["export_count"] == 2
+    assert report["web"]["export_count"] == 3
     assert report["memory"]["requested_bytes"] == 0
     assert report["memory"]["released"]["available_bytes"] > 0
     for dataset in report["datasets"]:

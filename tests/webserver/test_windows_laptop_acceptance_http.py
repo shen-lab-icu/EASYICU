@@ -49,7 +49,10 @@ def test_synthetic_laptop_acceptance_over_http(tmp_path: Path, monkeypatch, desk
         assert report["research"]["runner_kind"] == "host"
         assert report["research"]["first_result"]["evidence_bound_result"] is False
         assert report["research"]["first_result"]["elapsed_to_boundary_seconds"] > 0
-    assert len(report["web"]["reads"]) == 7
+    from easyicu.webserver.demo_source_contracts import SOURCES
+
+    # catalog, dictionary and the cross-database read, plus a cohort and a patient read per demo source
+    assert len(report["web"]["reads"]) == 3 + 2 * len(SOURCES)
     assert all(read["status_code"] == 200 for read in report["web"]["reads"])
     assert report["web"]["traceback_found"] is False
     artifact = json.loads((tmp_path / "receipts" / "acceptance.json").read_text("utf-8"))

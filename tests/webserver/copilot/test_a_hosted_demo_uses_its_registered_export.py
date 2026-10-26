@@ -15,7 +15,8 @@ from tests.webserver.copilot.pi_copilot_static_fixtures import (
 
 
 def _card(*, recommended=None, choices=(), export_ready=False, hosted=True, forbidden=False,
-          database="eicu_demo", title="eICU Demo", reader_label=None, stays=12):
+          database="eicu_demo", title="eICU Demo", reader_label=None, stays=12,
+          source_id="eicu_demo_v2_0_1", version="2.0.1"):
     script = f"""
       global.window = global;
       window.EU_CAPABILITIES = {{deployment: {{hosted: {json.dumps(hosted)}}}}};
@@ -30,14 +31,14 @@ def _card(*, recommended=None, choices=(), export_ready=False, hosted=True, forb
       const host = {{tr: (en, zh) => zh, dataConsent: consent,
         api: () => ({{
           loadOfficialDemoSources: async () => ({{sources: [{{
-            id: 'eicu_demo_v2_0_1', database: {json.dumps(database)}, title: {json.dumps(title)}, version: '2.0.1',
+            id: {json.dumps(source_id)}, database: {json.dumps(database)}, title: {json.dumps(title)}, version: {json.dumps(version)},
             scope: {{icu_stays: {json.dumps(stays)}}},
             reader_label: {json.dumps(reader_label)},
             status: {{export_ready: {json.dumps(export_ready)}}}
           }}]}}),
           loadPiCopilotRegisteredSourceOffer: async (...args) => {{
             requested.push(args);
-            return {{database: 'eicu_demo', recommended: {json.dumps(recommended)}, choices: {json.dumps(choices)}}};
+            return {{database: {json.dumps(database)}, recommended: {json.dumps(recommended)}, choices: {json.dumps(choices)}}};
           }},
           startOfficialDemoSourcePrepare: async id => {{
             prepared.push(id);
@@ -46,7 +47,7 @@ def _card(*, recommended=None, choices=(), export_ready=False, hosted=True, forb
           }},
         }}),
         session: () => session, projectId: () => 'p1', busy: () => false,
-        messages: () => [{{role: 'user', text: {json.dumps(f'Use {title} v2.0.1 to describe ICU stays')}}}],
+        messages: () => [{{role: 'user', text: {json.dumps(f'Use {title} v{version} to describe ICU stays')}}}],
         render() {{}}, workflowReceipts: () => [], setWorkflowReceipts() {{}},
         setError: text => errors.push(text), errorText: window.EasyICU.guidedPi.require('errorText')
           .create({{tr: (en, zh) => zh, staticPreview: () => false}}).errorText,
@@ -57,7 +58,7 @@ def _card(*, recommended=None, choices=(), export_ready=False, hosted=True, forb
         owner.namedDemo(); await tick(); owner.namedDemo(); await tick();
         const named = owner.namedDemo();
         const html = consent.render(session, {{tr: host.tr, esc: EU_HTML.esc, icon: () => '', namedDemo: named}});
-        const used = await owner.useNamedDemo('eicu_demo_v2_0_1');
+        const used = await owner.useNamedDemo({json.dumps(source_id)});
         owner.stopAll();
         console.log(JSON.stringify({{named, html, requested, prepared, used, errors}}));
       }})().catch(error => {{console.error(error); process.exitCode = 1;}});
@@ -67,19 +68,26 @@ def _card(*, recommended=None, choices=(), export_ready=False, hosted=True, forb
 
 @pytest.mark.requires_node
 @pytest.mark.usefixtures("_load_guided_pi_module_harness")
-def test_a_hosted_demo_uses_the_exact_registered_export_even_if_the_catalog_is_not_ready():
-    result = _card(recommended={
-        "source_id": "src_demo", "database": "eicu_demo", "label": "eICU Demo v2.0.1", "stays": 12,
+@pytest.mark.parametrize("source_id,database,title,version", [
+    ("eicu_demo_v2_0_1", "eicu_demo", "eICU Demo", "2.0.1"),
+    ("mimic_iii_demo_v1_4", "mimic_demo", "MIMIC-III Clinical Database Demo", "1.4"),
+])
+def test_a_hosted_demo_uses_the_exact_registered_export_even_if_the_catalog_is_not_ready(
+    source_id, database, title, version,
+):
+    label = f"{title} v{version}"
+    result = _card(source_id=source_id, database=database, title=title, version=version, recommended={
+        "source_id": "src_demo", "database": database, "label": label, "stays": 12,
     })
-    assert result["requested"] == [["s1", "p1", "eicu_demo"]]
+    assert result["requested"] == [["s1", "p1", database]]
     assert result["named"]["prepared"] is True
-    assert "eICU Demo v2.0.1" in result["html"]
+    assert label in result["html"]
     assert "12 例 ICU 住院" in result["html"]
     assert 'data-gpi-data-source-action="use_registered_source"' in result["html"]
-    assert 'data-gpi-data-source-database="eicu_demo"' in result["html"]
+    assert f'data-gpi-data-source-database="{database}"' in result["html"]
     assert 'data-gpi-data-source-id="src_demo"' in result["html"]
     assert "data-gpi-named-demo" not in result["html"]
-    assert 'begin_local_selection" data-gpi-data-source-database="eicu_demo"' not in result["html"]
+    assert f'begin_local_selection" data-gpi-data-source-database="{database}"' not in result["html"]
     assert result["prepared"] == []
     assert result["used"] is False
 

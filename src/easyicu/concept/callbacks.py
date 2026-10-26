@@ -4134,8 +4134,8 @@ def _match_fio2(
             fio2_subset = _standardize_fio2_units(fio2_subset, fio2_col, database)
 
         # dropna + sort
-        o2_subset = o2_subset.dropna(subset=[unified_time_col])
-        fio2_subset = fio2_subset.dropna(subset=[unified_time_col])
+        o2_subset = o2_subset.dropna(subset=[unified_time_col]) if not o2_subset.empty else o2_subset
+        fio2_subset = fio2_subset.dropna(subset=[unified_time_col]) if not fio2_subset.empty else fio2_subset
 
         if o2_subset.empty:
             return pd.DataFrame(columns=id_columns + [index_column]), id_columns, index_column
@@ -7442,7 +7442,7 @@ def _callback_uo_window(
             id_cols = ['patientunitstayid']
         else:
             try:
-                id_candidate = getattr(ctx.data_source, 'id_cfg', None)
+                id_candidate = getattr(getattr(ctx.data_source, 'config', None), 'id_configs', {}).get('icustay')
                 if hasattr(id_candidate, 'id'):
                     id_cols = [id_candidate.id]
             except Exception:
