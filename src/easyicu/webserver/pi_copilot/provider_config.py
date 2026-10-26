@@ -923,6 +923,14 @@ def _request_model_identities(
             "pi_provider_auth_failed",
             "The model service rejected this API credential.",
         )
+    if status_code in {404, 405}:
+        # Some OpenAI-compatible services answer chat requests but publish no
+        # model list; the researcher then names the model.
+        raise PiCopilotError(
+            "pi_provider_model_list_unavailable",
+            "This model service does not list its models; enter the model name.",
+            details={"status_code": int(status_code)},
+        )
     if status_code < 200 or status_code >= 300:
         raise PiCopilotError(
             "pi_provider_verification_failed",
@@ -990,16 +998,27 @@ def verify_provider_connection(
     """
 
     verifier = transport or _default_verification_transport
-    identifiers = _request_model_identities(
-        config,
-        verifier=verifier,
-        timeout=timeout,
-    )
+    try:
+        identifiers: Optional[list[str]] = _request_model_identities(
+            config,
+            verifier=verifier,
+            timeout=timeout,
+        )
+    except PiCopilotError as exc:
+        # Without a catalog the bounded Chat Completions probe below is the
+        # only proof that the named model answers, so only that wire may skip
+        # the membership check.
+        if (
+            exc.code != "pi_provider_model_list_unavailable"
+            or config.api_transport != "openai-completions"
+        ):
+            raise
+        identifiers = None
     # The bounded inference probe below authenticates the same way discovery
     # does, so rebuild the wire headers rather than carry them out of the
     # catalog request.
     _, headers = _discovery_request(config)
-    if config.model not in identifiers:
+    if identifiers is not None and config.model not in identifiers:
         raise PiCopilotError(
             "pi_provider_model_unavailable",
             "The selected model was not reported by this model service.",
@@ -1062,7 +1081,8 @@ def verify_provider_connection(
         "connection_verified": True,
         "model_available": True,
         "inference_verified": inference_verified,
-        "models_reported": len(identifiers),
+        "models_reported": len(identifiers) if identifiers is not None else 0,
+        "catalog_status": "endpoint_reported" if identifiers is not None else "endpoint_unavailable",
         "secrets_returned": False,
     }
 

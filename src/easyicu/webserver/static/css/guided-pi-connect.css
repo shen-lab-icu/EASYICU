@@ -42,3 +42,6 @@
   .gpi-connect-dialog>.gpi-error.inline{margin:0 18px 12px}
   .gpi-hosted-notice{padding:10px 18px 4px}
 }
+/* The OpenRouter sign-in row and its signed-in note span the API form. */
+.gpi-provider-shell .gpi-setup-grid>.wide{grid-column:1/-1}
+.gpi-provider-shell .gpi-provider-login{display:flex}

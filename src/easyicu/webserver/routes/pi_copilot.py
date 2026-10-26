@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints, field_validator, model_validator
 
@@ -29,6 +29,7 @@ from easyicu.webserver.pi_copilot.provider_config import (
     declaration_error,
 )
 from easyicu.webserver import codex_account_sessions
+from easyicu.webserver.pi_copilot import openrouter_login
 
 router = APIRouter()
 
@@ -409,6 +410,7 @@ class PiProviderConfigRequest(BaseModel):
     enable_ai: StrictBool = False
     data_handling: Literal["on_device", "zero_retention_declared", "unspecified"] = "unspecified"
     inference_location: Literal["on_device", "unspecified"] = "unspecified"
+    credential_source: Literal["typed", "openrouter_login"] = "typed"
 
 
 class PiProviderModelsRequest(BaseModel):
@@ -420,6 +422,12 @@ class PiProviderModelsRequest(BaseModel):
     api_key: str = ""
     base_url: EndpointText = DEFAULT_BASE_URL
     api_transport: str = DEFAULT_API_TRANSPORT
+    enable_ai: StrictBool = False
+    credential_source: Literal["typed", "openrouter_login"] = "typed"
+
+
+class PiOpenRouterLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     enable_ai: StrictBool = False
 
 
@@ -556,13 +564,27 @@ def post_pi_copilot_session_maintenance(
         _raise_http(exc)
 
 
-def post_pi_copilot_provider_config(body: PiProviderConfigRequest) -> dict:
+def _connection_api_key(body, request: Request) -> str:
+    """The typed credential, or this browser's OpenRouter sign-in for OpenRouter."""
+
+    return openrouter_login.login_store().resolve_api_key(
+        request.cookies.get(openrouter_login.COOKIE_NAME, ""),
+        credential_source=body.credential_source,
+        provider=body.provider,
+        base_url=body.base_url,
+        api_key=body.api_key,
+    )
+
+
+def post_pi_copilot_provider_config(
+    body: PiProviderConfigRequest, request: Request, response: Response
+) -> dict:
     try:
         if body.data_handling != "unspecified" or body.inference_location != "unspecified":
             raise declaration_error("settings_only")
-        return get_pi_copilot_service().configure_provider(
+        result = get_pi_copilot_service().configure_provider(
             provider=body.provider,
-            api_key=body.api_key,
+            api_key=_connection_api_key(body, request),
             base_url=body.base_url,
             model=body.model,
             api_transport=body.api_transport,
@@ -572,6 +594,11 @@ def post_pi_copilot_provider_config(body: PiProviderConfigRequest) -> dict:
         )
     except PiCopilotError as exc:
         _raise_http(exc)
+    if body.credential_source == openrouter_login.CREDENTIAL_SOURCE:
+        # The connection store now holds the key; the sign-in has done its job.
+        openrouter_login.login_store().finish(request.cookies.get(openrouter_login.COOKIE_NAME, ""))
+        response.delete_cookie(openrouter_login.COOKIE_NAME, path=openrouter_login.COOKIE_PATH)
+    return result
 
 
 router.add_api_route(
@@ -598,11 +625,11 @@ def post_pi_copilot_provider_declaration(body: PiProviderDeclarationRequest) -> 
         _raise_http(exc)
 
 
-def post_pi_copilot_provider_models(body: PiProviderModelsRequest) -> dict:
+def post_pi_copilot_provider_models(body: PiProviderModelsRequest, request: Request) -> dict:
     try:
         return get_pi_copilot_service().discover_provider_models(
             provider=body.provider,
-            api_key=body.api_key,
+            api_key=_connection_api_key(body, request),
             base_url=body.base_url,
             api_transport=body.api_transport,
             enable_ai=body.enable_ai,
@@ -617,6 +644,46 @@ router.add_api_route(
     methods=["POST"],
     route_class_override=_PrivateProviderModelsRoute,
 )
+
+
+@router.post("/api/copilot/pi/provider-config/openrouter/login")
+def post_pi_copilot_openrouter_login(
+    body: PiOpenRouterLoginRequest, request: Request, response: Response
+) -> dict:
+    """Start OpenRouter's PKCE sign-in; the key will come back to this host only."""
+
+    if not body.enable_ai:
+        _raise_http(PiCopilotError(
+            "external_llm_opt_in_required",
+            "Confirm external AI use before verifying the model service.",
+            status_code=403,
+        ))
+    callback_url = str(request.base_url).rstrip("/") + openrouter_login.CALLBACK_PATH
+    token, auth_url = openrouter_login.login_store().start(callback_url)
+    response.set_cookie(
+        openrouter_login.COOKIE_NAME,
+        token,
+        max_age=openrouter_login.LOGIN_TTL_SECONDS,
+        path=openrouter_login.COOKIE_PATH,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+    )
+    return {"ok": True, "auth_url": auth_url, "secrets_returned": False}
+
+
+@router.get(openrouter_login.CALLBACK_PATH)
+def get_pi_copilot_openrouter_callback(request: Request) -> Response:
+    """OpenRouter returns here with a code; the browser goes back to the form."""
+
+    token = request.cookies.get(openrouter_login.COOKIE_NAME, "")
+    try:
+        openrouter_login.login_store().complete(token, request.query_params.get("code", ""))
+    except PiCopilotError as exc:
+        redirect = RedirectResponse(f"/?openrouter_login=failed&reason={exc.code}#guided", status_code=303)
+        redirect.delete_cookie(openrouter_login.COOKIE_NAME, path=openrouter_login.COOKIE_PATH)
+        return redirect
+    return RedirectResponse("/?openrouter_login=signed_in#guided", status_code=303)
 
 
 @router.post("/api/copilot/pi/sessions")

@@ -120,7 +120,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20261021-lang1" in index_html
-    assert "js/api.js?v=20261024-queue1" in index_html
+    assert "js/api.js?v=20261026-openrouter1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -399,7 +399,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20261024-queue1" in index_html
+    assert "js/api.js?v=20261026-openrouter1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -555,7 +555,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20261022-legacy1" in index_html
     assert "css/guided-projects.css?v=20261020-project-root1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20261024-queue1" in index_html
+    assert "js/api.js?v=20261026-openrouter1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20261022-keepfiles1" in index_html
     )
@@ -921,7 +921,7 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     assert provider_pos != -1 and control_pos != -1 and main_pos != -1
     assert provider_pos < control_pos < main_pos
     assert (
-        "js/screens-guided-pi-provider.js?v=20261026-presets2"
+        "js/screens-guided-pi-provider.js?v=20261026-openrouter1"
         in index_html
     )
 
@@ -2366,7 +2366,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20261024-queue1" in index_html
+    assert "api.js?v=20261026-openrouter1" in index_html
     assert "screens-dict.js?v=20261022-audience1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
@@ -2681,7 +2681,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20261024-queue1" in index_html
+    assert "api.js?v=20261026-openrouter1" in index_html
     assert "screens-guided-projects.js?v=20261022-keepfiles1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"

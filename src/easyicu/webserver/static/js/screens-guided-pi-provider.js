@@ -52,31 +52,47 @@
   // official service keeps it under Advanced. Models are never preset: the
   // service lists them after connecting, and the host recommends one.
   const PRESETS = Object.freeze({
-    deepseek: { label: 'DeepSeek API', provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_transport: 'openai-completions' },
-    openai: { label: 'OpenAI API', provider: 'openai', base_url: 'https://api.openai.com/v1', api_transport: 'openai-responses' },
-    anthropic: { label: 'Anthropic / Claude API', provider: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_transport: 'anthropic-messages' },
-    google: { label: 'Google Gemini API', provider: 'google', base_url: 'https://generativelanguage.googleapis.com/v1beta', api_transport: 'google-generative-ai' },
-    openrouter: { label: 'OpenRouter API', provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1', api_transport: 'openai-completions' },
+    deepseek: { label: 'DeepSeek API', provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_transport: 'openai-completions', group: 'cn' },
+    qwen: { label: 'Qwen (Alibaba Cloud Model Studio)', zh: '通义千问（阿里云百炼）', provider: 'dashscope', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', api_transport: 'openai-completions', group: 'cn' },
+    zhipu: { label: 'Zhipu GLM', zh: '智谱 GLM', provider: 'zhipu', base_url: 'https://open.bigmodel.cn/api/paas/v4', api_transport: 'openai-completions', group: 'cn' },
+    moonshot: { label: 'Kimi (Moonshot AI)', zh: 'Kimi（月之暗面）', provider: 'moonshot', base_url: 'https://api.moonshot.cn/v1', api_transport: 'openai-completions', group: 'cn' },
+    doubao: { label: 'Doubao (Volcengine Ark)', zh: '豆包（火山方舟）', provider: 'volcengine-ark', base_url: 'https://ark.cn-beijing.volces.com/api/v3', api_transport: 'openai-completions', group: 'cn' },
+    siliconflow: { label: 'SiliconFlow', zh: '硅基流动', provider: 'siliconflow', base_url: 'https://api.siliconflow.cn/v1', api_transport: 'openai-completions', group: 'cn' },
+    minimax: { label: 'MiniMax', provider: 'minimax', base_url: 'https://api.minimaxi.com/v1', api_transport: 'openai-completions', group: 'cn' },
+    openai: { label: 'OpenAI API', provider: 'openai', base_url: 'https://api.openai.com/v1', api_transport: 'openai-responses', group: 'intl' },
+    anthropic: { label: 'Anthropic / Claude API', provider: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_transport: 'anthropic-messages', group: 'intl' },
+    google: { label: 'Google Gemini API', provider: 'google', base_url: 'https://generativelanguage.googleapis.com/v1beta', api_transport: 'google-generative-ai', group: 'intl' },
+    // OpenRouter also signs in with its own account (OAuth PKCE); the key
+    // stays on this computer (pi_copilot/openrouter_login.py).
+    openrouter: { label: 'OpenRouter API', provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1', api_transport: 'openai-completions', group: 'intl', login: true },
     // Institutional clouds: the address names the researcher's own resource
     // or region, so it starts empty like the custom gateway.
-    azure: { label: 'Azure OpenAI', provider: 'azure-openai', base_url: '', api_transport: 'openai-completions',
+    azure: { label: 'Azure OpenAI', provider: 'azure-openai', base_url: '', api_transport: 'openai-completions', group: 'cloud',
       hint: ['Your resource’s v1 address: https://<resource>.openai.azure.com/openai/v1. Choose your deployment name as the model.', '填写资源的 v1 地址：https://<资源名>.openai.azure.com/openai/v1。模型请选择你的部署名。'] },
-    bedrock: { label: 'Amazon Bedrock', provider: 'amazon-bedrock', base_url: '', api_transport: 'openai-completions',
+    bedrock: { label: 'Amazon Bedrock', provider: 'amazon-bedrock', base_url: '', api_transport: 'openai-completions', group: 'cloud',
       hint: ['Bedrock’s OpenAI-compatible address: https://bedrock-mantle.<region>.api.aws/v1, with a Bedrock API key.', '填写 Bedrock 的 OpenAI 兼容地址：https://bedrock-mantle.<区域>.api.aws/v1，凭据用 Bedrock API 密钥。'] },
     // Models on this computer. These services do not check the credential.
-    ollama: { label: 'Ollama (this computer)', zh: 'Ollama（本机）', provider: 'ollama', base_url: 'http://127.0.0.1:11434/v1', api_transport: 'openai-completions',
+    ollama: { label: 'Ollama (this computer)', zh: 'Ollama（本机）', provider: 'ollama', base_url: 'http://127.0.0.1:11434/v1', api_transport: 'openai-completions', group: 'local',
       hint: ['Ollama listens on http://127.0.0.1:11434/v1 by default. It does not check the credential; enter any text, such as ollama.', 'Ollama 默认地址为 http://127.0.0.1:11434/v1。它不校验凭据，填任意文字即可，例如 ollama。'] },
-    lmstudio: { label: 'LM Studio (this computer)', zh: 'LM Studio（本机）', provider: 'lmstudio', base_url: 'http://127.0.0.1:1234/v1', api_transport: 'openai-completions',
+    lmstudio: { label: 'LM Studio (this computer)', zh: 'LM Studio（本机）', provider: 'lmstudio', base_url: 'http://127.0.0.1:1234/v1', api_transport: 'openai-completions', group: 'local',
       hint: ['LM Studio’s local server listens on http://127.0.0.1:1234/v1 by default. It does not check the credential; enter any text, such as lmstudio.', 'LM Studio 本地服务默认地址为 http://127.0.0.1:1234/v1。它不校验凭据，填任意文字即可，例如 lmstudio。'] },
-    cliproxyapi: { label: 'CLIProxyAPI / Local proxy', provider: 'easyicu-local', base_url: 'http://127.0.0.1:8317/v1', api_transport: 'openai-completions',
+    cliproxyapi: { label: 'CLIProxyAPI / Local proxy', provider: 'easyicu-local', base_url: 'http://127.0.0.1:8317/v1', api_transport: 'openai-completions', group: 'gateway',
       hint: ['CLIProxyAPI listens on http://127.0.0.1:8317/v1 by default. Change the port if yours differs.', 'CLIProxyAPI 默认地址为 http://127.0.0.1:8317/v1，端口不同请修改。'] },
     // D-P2-4: the custom gateway ships an EMPTY address on purpose. The
     // example domain is placeholder text only and must never be a
     // submittable value: the credential would reach a stand-in host. The
     // control refuses empty and example.* addresses, and so does the backend.
-    'custom-openai': { label: 'OpenAI-compatible gateway', provider: 'custom-openai', base_url: '', api_transport: 'openai-completions',
+    'custom-openai': { label: 'OpenAI-compatible gateway', provider: 'custom-openai', base_url: '', api_transport: 'openai-completions', group: 'gateway',
       hint: ['The gateway’s OpenAI-compatible address, usually ending in /v1.', '填写网关的 OpenAI 兼容地址，通常以 /v1 结尾。'] },
   });
+
+  const PRESET_GROUPS = Object.freeze([
+    ['cn', 'Services in China', '国内服务'],
+    ['intl', 'International services', '国际服务'],
+    ['cloud', 'Institutional cloud', '机构云'],
+    ['local', 'This computer', '本机'],
+    ['gateway', 'Proxy and gateway', '代理与网关'],
+  ]);
 
   // A first visit, with no saved connection, starts on the first service.
   const DEFAULT_PRESET = 'deepseek';
@@ -107,7 +123,13 @@
   }
 
   function modelStep(options, values, catalog) {
-    const { tr, option } = options;
+    const { tr, option, esc } = options;
+    if (catalog.manual) {
+      return `
+        <div class="gpi-setup-grid gpi-api-model-step">
+          <label class="wide"><span>${tr('Model', '模型')}</span><input name="model" maxlength="256" value="${esc(values.model)}" spellcheck="false" autocomplete="off" required><small class="gpi-field-hint">${tr('This service does not list its models. Enter the model name; saving asks it for one short reply.', '该服务不提供模型列表。请填写模型名，保存时会让它试答一句。')}</small></label>
+        </div>`;
+    }
     if (!catalog.models.length) {
       return `<div class="gpi-config-note warn"><span class="gpi-dot"></span>${tr('This service reported no models. Check the address and credential, then connect again.', '该服务没有返回任何模型。请检查地址和凭据后重新连接。')}</div>`;
     }
@@ -124,21 +146,25 @@
     const values = apiFormValues(options);
     const preset = PRESETS[values.preset];
     const catalog = state.modelCatalog && state.modelCatalog.signature === connectionSignature(values) ? state.modelCatalog : null;
-    const busy = state.setupSaving || state.modelDiscovering;
+    const busy = state.setupSaving || state.modelDiscovering || state.openrouterStarting;
+    // After an OpenRouter sign-in the host holds the key; the form asks for none.
+    const signedIn = preset.login && state.openrouterLogin === 'signed_in';
     const addressField = `<label class="wide"><span>${tr('Service address', '服务地址')}</span><input name="base_url" maxlength="2048" value="${esc(values.base_url)}" inputmode="url" spellcheck="false" required placeholder="https://llm-gateway.example/v1">${preset.hint ? `<small class="gpi-field-hint">${tr(preset.hint[0], preset.hint[1])}</small>` : ''}</label>`;
     const savedModel = !catalog && config.connection_verified === true && config.model
       ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Current model:', '当前模型：')} ${esc(config.model)}</div>` : '';
     const submitLabel = state.modelDiscovering ? tr('Connecting…', '正在连接…')
       : state.setupSaving ? tr('Verifying…', '正在验证…')
-      : catalog && catalog.models.length ? tr('Verify and save', '验证并保存') : tr('Connect and list models', '连接并读取模型');
+      : catalog && (catalog.models.length || catalog.manual) ? tr('Verify and save', '验证并保存') : tr('Connect and list models', '连接并读取模型');
     return `
       <form class="gpi-provider-section gpi-api-form" data-gpi-provider-form autocomplete="off">
         <div class="gpi-provider-heading"><h3>${tr('Connect an API service', '连接 API 服务')}</h3></div>
         ${options.staticPreview ? `<div class="gpi-preview-note"><span aria-hidden="true">i</span><span>${tr('Open EasyICU from the local service to configure this connection.', '请从 EasyICU 本地服务打开后配置连接。')}</span></div>` : ''}
         <div class="gpi-setup-grid">
-          <label class="wide"><span>${tr('Service', '服务')}</span><select data-gpi-provider-preset>${Object.keys(PRESETS).map(key => option(key, values.preset, PRESETS[key].zh ? tr(PRESETS[key].label, PRESETS[key].zh) : PRESETS[key].label)).join('')}</select></label>
+          <label class="wide"><span>${tr('Service', '服务')}</span><select data-gpi-provider-preset>${PRESET_GROUPS.map(([group, en, zh]) => `<optgroup label="${esc(tr(en, zh))}">${Object.keys(PRESETS).filter(key => PRESETS[key].group === group).map(key => option(key, values.preset, PRESETS[key].zh ? tr(PRESETS[key].label, PRESETS[key].zh) : PRESETS[key].label)).join('')}</optgroup>`).join('')}</select></label>
           ${preset.hint ? addressField : ''}
-          <label class="wide"><span>${tr('API credential', 'API 凭据')}</span><input name="api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="${savedCredential ? tr('Leave blank to use the saved credential', '留空则沿用已保存的凭据') : tr('Paste once; it will not be shown again', '仅粘贴一次，之后不再显示')}"></label>
+          ${signedIn ? `<div class="wide gpi-config-note ok"><span class="gpi-dot"></span>${tr('Signed in with OpenRouter. The key stays on this computer.', '已用 OpenRouter 账户登录，密钥只保存在本机。')}</div>` : `
+          ${preset.login ? `<div class="wide gpi-provider-login"><button class="btn" type="button" data-gpi-openrouter-login ${busy || options.staticPreview ? 'disabled' : ''}>${tr('Sign in with OpenRouter', '用 OpenRouter 账户登录')}</button></div>` : ''}
+          <label class="wide"><span>${tr('API credential', 'API 凭据')}</span><input name="api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="${savedCredential ? tr('Leave blank to use the saved credential', '留空则沿用已保存的凭据') : tr('Paste once; it will not be shown again', '仅粘贴一次，之后不再显示')}"></label>`}
         </div>
         <details class="gpi-api-advanced">
           <summary>${tr('Advanced settings', '高级设置')}</summary>
@@ -220,5 +246,5 @@
     return `<div class="gpi-provider-summary ${ready ? 'ready' : 'warn'}"><span class="gpi-dot"></span><div><strong>${tr('Copilot + Research Agent', 'Copilot + Research Agent')}</strong><small>${esc(label)}</small></div><button class="gpi-link" type="button" data-gpi-config>${tr('Change', '更改')}</button></div>`;
   }
 
-  window.EasyICU.guidedPi.declare('provider', { renderSetup, renderConnectionBody, renderBindingSummary, PRESETS, DEFAULT_PRESET, connectionSignature });
+  window.EasyICU.guidedPi.declare('provider', { renderSetup, renderConnectionBody, renderBindingSummary, PRESETS, PRESET_GROUPS, DEFAULT_PRESET, connectionSignature });
 })();

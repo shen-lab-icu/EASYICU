@@ -73,7 +73,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi.css?v=20261025-owner-split1" in index
     assert "css/guided-pi-clinical-card.css?v=20261025-owner-split1" in index
     # The connection dialog sheet reads the provider tokens the base sheet defines.
-    assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261021-hosted1") < index.index("css/guided-pi-header.css?v=")
+    assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261026-openrouter1") < index.index("css/guided-pi-header.css?v=")
     # The header's narrow-width layout is its own owner, loaded right after the base sheet.
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-header.css?v=20261009-header-owner1") < index.index("css/guided-pi-composer-menus.css?v=")
     assert _read("css/guided-pi-header.css").startswith("/* Owner: Guided Copilot conversation header")
@@ -117,10 +117,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-run-outcome.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-activity.js?v=20261024-terminal1" in index
     assert (
-        "js/screens-guided-pi-provider.js?v=20261026-presets2"
+        "js/screens-guided-pi-provider.js?v=20261026-openrouter1"
         in index
     )
-    assert "js/screens-guided-pi-provider-control.js?v=20261026-presets2" in index
+    assert "js/screens-guided-pi-provider-control.js?v=20261026-openrouter1" in index
     assert "js/screens-guided-pi-connect.js?v=20261021-hosted1" in index
     assert index.index("js/screens-guided-pi-provider-control.js") < index.index(
         "js/screens-guided-pi-connect.js"
@@ -146,14 +146,14 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-confirmation.js?v=20261024-demo-raw-plan1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261024-demo-raw-plan1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261026-presets2" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261026-openrouter1" in index
     assert "js/screens-guided-pi.js?v=20261025-entry-views1" in index
     assert "js/screens-guided.js?v=20261022-legacy1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20261024-queue1" in index
+    assert "js/api.js?v=20261026-openrouter1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"

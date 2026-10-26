@@ -142,6 +142,21 @@
       if (error.code === 'pi_provider_models_response_invalid') {
         return tr('This service did not return a model list EasyICU can read. Check the protocol under Advanced settings.', '该服务返回的模型列表无法读取，请在高级设置中检查兼容协议。');
       }
+      if (error.code === 'pi_provider_model_list_unavailable') {
+        return tr('This service does not list its models. Enter the model name below.', '该服务不提供模型列表，请在下面填写模型名。');
+      }
+      if (error.code === 'openrouter_login_not_started' || error.code === 'openrouter_login_not_signed_in') {
+        return tr('The OpenRouter sign-in expired. Sign in again.', 'OpenRouter 登录已过期，请重新登录。');
+      }
+      if (error.code === 'openrouter_login_denied') {
+        return tr('OpenRouter did not complete the sign-in.', 'OpenRouter 没有完成登录。');
+      }
+      if (error.code === 'openrouter_login_exchange_failed' || error.code === 'openrouter_login_unreachable') {
+        return tr('OpenRouter did not issue a key for this sign-in. Try again, or paste an API key.', 'OpenRouter 没有为这次登录签发密钥。请重试，或直接粘贴 API 凭据。');
+      }
+      if (error.code === 'openrouter_login_wrong_service' || error.code === 'openrouter_auth_url_invalid') {
+        return tr('An OpenRouter sign-in can only connect OpenRouter.', 'OpenRouter 登录只能用于连接 OpenRouter。');
+      }
       if (error.code === 'pi_provider_base_url_rejected') {
         return tr('This computer’s security policy does not allow this service address. Use another address.', '本机安全策略不允许使用这个服务地址，请换一个地址。');
       }
@@ -347,6 +362,12 @@
       if (hostnameMatches(host, 'api.openai.com')) return 'openai';
       if (hostnameMatches(host, 'openrouter.ai')) return 'openrouter';
       if (hostnameMatches(host, 'api.deepseek.com')) return 'deepseek';
+      if (hostnameMatches(host, 'dashscope.aliyuncs.com') || /\.maas\.aliyuncs\.com$/.test(host)) return 'qwen';
+      if (hostnameMatches(host, 'open.bigmodel.cn')) return 'zhipu';
+      if (hostnameMatches(host, 'api.moonshot.cn')) return 'moonshot';
+      if (/^ark\.[a-z0-9-]+\.volces\.com$/.test(host)) return 'doubao';
+      if (hostnameMatches(host, 'api.siliconflow.cn')) return 'siliconflow';
+      if (hostnameMatches(host, 'api.minimaxi.com')) return 'minimax';
       if (hostnameMatches(host, 'openai.azure.com') || hostnameMatches(host, 'services.ai.azure.com')) return 'azure';
       if (/^bedrock-(mantle\.[a-z0-9-]+\.api\.aws|runtime\.[a-z0-9-]+\.amazonaws\.com)$/.test(host)) return 'bedrock';
       // Local services are loopback-only: exact host plus their pinned port,

@@ -555,6 +555,24 @@
     "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
   },
   {
+    "method": "POST",
+    "route": "/api/copilot/pi/provider-config/openrouter/login",
+    "fields": [],
+    "reaches": "OpenRouter sign-in start: in-memory PKCE verifier and an HttpOnly cookie; no network access",
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/provider-config/openrouter/callback",
+    "fields": [],
+    "reaches": "fixed OpenRouter key-exchange request; the key stays in process memory",
+    "protection": "refused route: unavailable_when_hosted",
+    "writes": "refused on hosted",
+    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
+  },
+  {
     "method": "GET",
     "route": "/api/copilot/pi/research-provider/api/models",
     "fields": [],
