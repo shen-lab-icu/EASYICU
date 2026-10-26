@@ -110,6 +110,25 @@ def test_html_escaping_has_exactly_one_implementation() -> None:
     )
 
 
+def test_every_icon_a_screen_names_is_drawn_by_the_icon_owner() -> None:
+    # icons.js draws an unknown name as a filled dot, so a misspelt or missing
+    # icon renders as a stray bullet beside "上一页" instead of failing.
+    registry = (STATIC / "js" / "icons.js").read_text(encoding="utf-8")
+    drawn = set(re.findall(r"^\s+'?([a-z0-9_-]+)'?:\s*'<", registry, re.M))
+    missing = {}
+    for path in sorted((STATIC / "js").glob("*.js")):
+        if path.name == "icons.js":
+            continue
+        source = path.read_text(encoding="utf-8")
+        names = set(re.findall(r"\bicon\(\s*'([a-z0-9_-]+)'", source))
+        # Tab tables name their icon as the third item: ['id', t(...), 'chart'].
+        names |= set(re.findall(r"\[\s*'[a-z_]+'\s*,\s*t\([^)]*\)\s*,\s*'([a-z0-9_-]+)'\s*\]", source))
+        unknown = sorted(names - drawn)
+        if unknown:
+            missing[path.name] = unknown
+    assert missing == {}, f"icon names with no drawing in js/icons.js: {missing}"
+
+
 def test_escaping_owner_loads_before_every_consumer() -> None:
     """The consumers destructure at IIFE top, so load order is load-bearing."""
 

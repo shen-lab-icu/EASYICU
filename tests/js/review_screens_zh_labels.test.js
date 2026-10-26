@@ -185,7 +185,7 @@ for (const word of ['Entity 1', 'Female', 'Deceased', 'Negative', 'blood_gas', '
 assert(!EMOJI.test(zhText), 'module headings must not carry the catalog picker emoji');
 // Patient-level rows are not downloadable on a hosted instance (user decision 2026-10-22).
 assert(!zh.page.includes('data-patient-export'), 'a hosted Patient Review offers no patient-level Export');
-for (const word of ['病例 1（当前）', '病例 2', '女', '死亡', '阴性', '5.6 天', '血气分析', '本次核查的特征', '匿名编号', 'ICU 入科后小时 (h)']) {
+for (const word of ['病例 1（当前）', '病例 2', '女', '死亡', '阴性', '5.6 天', '血气分析', '表格预览', '匿名编号', 'ICU 入科后小时 (h)']) {
   assert(zhText.includes(word), `Chinese Patient Review should show "${word}"`);
 }
 
@@ -194,7 +194,7 @@ context.EU_LANG = 'en';
 context.EU_CAPABILITIES = { deployment: { hosted: false } };
 const en = renderPatientTabs();
 const enText = Object.values(en).map(visible).join(' ');
-for (const word of ['Heart Rate', 'Entity 1', '72 / Female', 'Deceased', 'Local export patient drilldown ready', 'Bounded local table previews']) {
+for (const word of ['Heart Rate', 'Entity 1', '72 / Female', 'Deceased', 'Local export patient drilldown ready', 'pseudonymous entity tokens']) {
   assert(enText.includes(word), `English Patient Review should keep "${word}"`);
 }
 assert(en.page.includes('data-patient-export'), 'a local Patient Review keeps its Export');

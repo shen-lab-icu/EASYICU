@@ -113,7 +113,7 @@ assert.match(demoHtml, /eICU Collaborative Research Database Demo/);
 assert.match(demoHtml, /2 \/ 2 ready/);
 assert.doesNotMatch(demoHtml, /data-demo-source-prepare/);
 assert.match(demoHtml, /data-crossdb-synthetic-fallback/);
-assert.match(demoHtml, /UI rehearsal only/);
+assert.match(demoHtml, /Not real records/);
 
 const readyButton = fakeButton(false);
 const readyRoot = { querySelectorAll: () => [readyButton] };

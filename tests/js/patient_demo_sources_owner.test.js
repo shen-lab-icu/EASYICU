@@ -135,10 +135,16 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   assert.match(html, /mimic_iv_demo_v2_2/);
   assert.match(html, /eicu_demo_v2_0_1/);
   assert.match(html, /Official dataset page/);
-  assert.match(html, /deidentified real records/);
+  assert.match(html, /Deidentified real records/);
+  // Descriptions come from the owner's own copy, not the English release text.
+  assert.match(html, /Deidentified MIMIC-IV demonstration release/);
+  assert.doesNotMatch(html, /100 deidentified patients/);
+  assert.doesNotMatch(html, />miiv<|>eicu_demo</);
   assert.match(html, /Download paused/);
   assert.match(html, /Resume download and prepare/);
-  assert.match(html, /GitHub fast mirror · PhysioNet fallback/);
+  // The download transport is the host's concern, not the researcher's.
+  assert.doesNotMatch(html, /GitHub fast mirror/);
+  assert.match(html, /Use synthetic data/);
   assert.match(html, /4\.0 MB saved/);
   assert.match(html, /data-gen/);
   assert.match(html, /data-demo-source-prepare="eicu_demo_v2_0_1"/);

@@ -52,10 +52,6 @@
     return helpers && helpers.valueText ? helpers.valueText(value) : value;
   }
 
-  function hostedServer() {
-    return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true;
-  }
-
   function overviewText(value, helpers) {
     const map = {
       'Age / sex': hT(helpers, 'Age / sex', '年龄 / 性别'),
@@ -247,7 +243,6 @@
             <h2>${hEsc(helpers, hT(helpers, 'Clinical case overview', '病例画像工作台'))} · ${hEsc(helpers, hEntity(helpers, selected && selected.label) || hT(helpers, 'Selected entity', '所选病例'))}</h2>
             <p>${hEsc(helpers, hT(helpers, 'Snapshot-level clinical interpretation for one pseudonymous entity. Use Time Series only when you need trajectories.', '单个匿名病例的临床概况；需要看变化趋势时再进入时间序列页。'))}</p>
           </div>
-          <span class="pill ${drill && drill.demo ? 'demo' : 'ok'}">${drill && drill.demo ? hT(helpers, 'demo workspace', '演示工作区') : (hostedServer() ? hT(helpers, 'prepared data', '已准备的数据') : hT(helpers, 'local export', '本地导出'))}</span>
         </div>
         <div class="pt-overview-stat-grid">
           ${(summaryCards || []).map(card => `
@@ -265,10 +260,6 @@
             <span>${hEsc(helpers, hT(helpers, 'Clinical modules represented', '有值的临床模块'))}</span>
             <b>${hFmtInt(helpers, activeSections.length)}</b>
           </div>
-          <div>
-            <span>${hEsc(helpers, hT(helpers, 'Source-row policy', '原始记录行'))}</span>
-            <b>${hEsc(helpers, hT(helpers, 'bounded summary only', '不显示，只显示汇总'))}</b>
-          </div>
         </div>
       </section>`;
   }
@@ -283,20 +274,25 @@
       .filter(row => row.missing != null && Number.isFinite(row.records));
     if (!rows.length) return '';
     const maxLog = Math.max(1, ...rows.map(row => Math.log10(row.records)));
-    const labelled = rows.slice().sort((a, b) => b.missing - a.missing).slice(0, 8);
     const width = 860; const height = 390; const left = 70; const right = 28; const top = 28; const bottom = 56;
     const x = value => left + value / 100 * (width - left - right);
     const y = records => top + (1 - Math.log10(records) / maxLog) * (height - top - bottom);
+    // Label the most-missing features, skipping one whose label would land on a label already placed.
+    const labelled = [];
+    rows.slice().sort((a, b) => b.missing - a.missing).forEach(row => {
+      if (labelled.length >= 8) return;
+      const clash = labelled.some(other => Math.abs(y(other.records) - y(row.records)) < 16 && Math.abs(x(other.missing) - x(row.missing)) < 150);
+      if (!clash) labelled.push(row);
+    });
     return `<section class="pt-missingness-workbench mt-16" data-patient-missing-record-scatter>
       <div class="pt-missingness-head"><div><div class="eyebrow">${hEsc(helpers, hT(helpers, 'Missingness · record volume', '缺失—记录散点'))}</div><h2>${hEsc(helpers, hT(helpers, 'Feature-level missingness and observation volume', '特征层面的缺失率与记录量'))}</h2><p>${hEsc(helpers, hT(helpers, 'Each point is a measured feature from the active export. Event and exposure prevalence are excluded because absence of an event is not missing data.', '每个点都是当前导出中的实测特征；事件与暴露发生率被排除，因为“事件未发生”不等于数据缺失。'))}</p></div><span class="pill ok">${hFmtInt(helpers, rows.length)} ${hEsc(helpers, hT(helpers, 'features', '个特征'))}</span></div>
       <div class="pt-missing-scatter"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${hEsc(helpers, hT(helpers, 'Missingness by record count', '缺失率与记录量散点图'))}">
         ${[0,25,50,75,100].map(tick => `<line x1="${x(tick)}" x2="${x(tick)}" y1="${top}" y2="${height-bottom}" class="grid"></line><text x="${x(tick)}" y="${height-25}" class="axis" text-anchor="middle">${tick}%</text>`).join('')}
         ${Array.from({length:Math.floor(maxLog)+1},(_,tick)=>`<line x1="${left}" x2="${width-right}" y1="${y(10 ** tick)}" y2="${y(10 ** tick)}" class="grid"></line><text x="${left-12}" y="${y(10 ** tick)+4}" class="axis" text-anchor="end">10${tick ? `<tspan baseline-shift="super" font-size="12">${tick}</tspan>` : ''}</text>`).join('')}
-        ${rows.map(row => { const show = labelled.includes(row); const label = hConcept(helpers, row.feature, row.name || row.feature); return `<g><circle cx="${x(row.missing).toFixed(1)}" cy="${y(row.records).toFixed(1)}" r="${show ? 6 : 4}" class="${row.missing >= 30 ? 'bad' : row.missing >= 10 ? 'warn' : 'ok'}"><title>${hEsc(helpers, `${label}: ${row.missing}% missing, ${row.records} records`)}</title></circle>${show ? `<text x="${(x(row.missing)+8).toFixed(1)}" y="${(y(row.records)-7).toFixed(1)}" class="point-label">${hEsc(helpers, label)}</text>` : ''}</g>`; }).join('')}
+        ${rows.map(row => { const show = labelled.includes(row); const label = hConcept(helpers, row.feature, row.name || row.feature); return `<g><circle cx="${x(row.missing).toFixed(1)}" cy="${y(row.records).toFixed(1)}" r="${show ? 6 : 4}" class="${row.missing >= 30 ? 'bad' : row.missing >= 10 ? 'warn' : 'ok'}"><title>${hEsc(helpers, `${label}: ${row.missing}% missing, ${row.records} records`)}</title></circle>${show ? `<text x="${(x(row.missing) + (row.missing > 60 ? -8 : 8)).toFixed(1)}" y="${(y(row.records)-7).toFixed(1)}" class="point-label" text-anchor="${row.missing > 60 ? 'end' : 'start'}">${hEsc(helpers, label)}</text>` : ''}</g>`; }).join('')}
         <text x="${(left+width-right)/2}" y="${height-5}" class="axis-title" text-anchor="middle">${hEsc(helpers, hT(helpers, 'Missing values (%)', '缺失率 (%)'))}</text><text x="16" y="${(top+height-bottom)/2}" class="axis-title" text-anchor="middle" transform="rotate(-90 16 ${(top+height-bottom)/2})">${hEsc(helpers, hT(helpers, 'Records (log scale)', '记录数（对数尺度）'))}</text>
       </svg></div>
-      <div class="pt-cleaning-receipt" data-patient-cleaning-receipt><div><span>${hEsc(helpers, hT(helpers, 'Cleaning receipt', '清洗结果'))}</span><b>${hFmtInt(helpers, summary.total_records || 0)} ${hEsc(helpers, hT(helpers, 'records audited', '条记录已核查'))}</b></div><div><span>${hEsc(helpers, hT(helpers, 'Post-cleaning duplicate-time rate', '清洗后重复时间戳率'))}</span><b>${hFmtPct(helpers, summary.weighted_duplicate_time_pct || 0)}</b></div><div><span>${hEsc(helpers, hT(helpers, 'Post-rule out-of-range rate', '规则处理后越界率'))}</span><b>${hFmtPct(helpers, summary.weighted_out_of_physio_pct || 0)}</b></div></div>
-      <p class="pt-missingness-note">${hEsc(helpers, hT(helpers, 'The receipt verifies the configured post-cleaning state; it does not re-label resolved duplicates or out-of-range source values as new problems.', '以上数字反映清洗后的数据；已经处理过的重复时间和超范围原始值不会再被算作新问题。'))}</p>
+      <p class="pt-missingness-note" data-patient-cleaning-receipt>${hEsc(helpers, hT(helpers, 'The summary above is the post-cleaning state: resolved duplicate times and out-of-range source values are not counted again as new problems.', '上方数字反映清洗后的数据；已经处理过的重复时间和超范围原始值不会再被算作新问题。'))}</p>
     </section>`;
   }
 

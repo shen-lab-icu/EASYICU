@@ -186,7 +186,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261022-help1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261023-demo-identity1" in index_html
+    assert "js/screens-extraction.js?v=20261026-data1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261023-stop-attribution1" in index_html
     assert "js/screens-help.js?v=20261026-ask-on-use1" in index_html
@@ -1201,7 +1201,7 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/extraction.css?v=20261022-wrap1" in index_html
+    assert "css/extraction.css?v=20261026-data1" in index_html
     assert "data-ex-analyze" in extraction_js
     assert "Choose folder and identify" in extraction_js
     assert "function copilotPrefillSummary()" in extraction_js
@@ -1548,7 +1548,7 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     assert "wsi-sub" in app_js
     assert "css/ideas.css?v=20261022-legacy1" in index_html
     assert "css/shell.css?v=20261022-legacy1" in index_html
-    assert "js/icons.js?v=20260901-composer-plus1" in index_html
+    assert "js/icons.js?v=20261026-data1" in index_html
     assert "js/app.js?v=20261022-help1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
@@ -2142,9 +2142,9 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
 
     assert "js/screens-viz-crossdb-setup.js?v=20261022-copy1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz-crossdb-results.js?v=20261022-plain3" in index_html
-    assert "js/screens-viz.js?v=20261022-lean2" in index_html
-    assert "css/crossdb.css?v=20261022-progress1" in index_html
+    assert "js/screens-viz-crossdb-results.js?v=20261026-data1" in index_html
+    assert "js/screens-viz.js?v=20261026-data1" in index_html
+    assert "css/crossdb.css?v=20261026-data1" in index_html
     for selector in (
         ".crossdb-method-grid",
         ".xdb-result-tabs",
@@ -2190,7 +2190,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20261022-lean2" in index_html
+    assert "js/screens-viz.js?v=20261026-data1" in index_html
 
 
 def test_native_cohort_groups_render_table_one_without_legacy_bars() -> None:
@@ -2236,8 +2236,8 @@ def test_native_patient_time_series_uses_module_grouped_single_feature_charts() 
     assert (
         index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
         < index_html.index("js/screens-viz-echarts.js?v=20261022-winfont1")
-        < index_html.index("js/screens-viz-patient-charts.js?v=20261022-lean1")
-        < index_html.index("js/screens-viz-patient-series.js?v=20261022-lean1")
+        < index_html.index("js/screens-viz-patient-charts.js?v=20261026-data1")
+        < index_html.index("js/screens-viz-patient-series.js?v=20261026-data1")
     )
     assert ".pt-module-card" in patient_css
     assert ".pt-matrix-details .table-scroll" in patient_css
@@ -2788,7 +2788,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "patientColumnLabel(c, activePreview)" in patient_domain_js
     assert "Module table overview" in patient_domain_js
     assert "模块表格概览" in patient_domain_js
-    assert "Direct clinical identifiers stay on disk." in patient_domain_js
+    assert "never reach the browser" in patient_domain_js
     assert "data-patient-table-preview" in patient_domain_js
     assert "data-patient-feature-matrix" in patient_domain_js
     assert "patientFeatureMatrix" in patient_domain_js
@@ -2829,8 +2829,9 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "特征层面的缺失率与记录量" in patient_overview_js
     assert "Event and exposure prevalence are excluded" in patient_overview_js
     assert "事件与暴露发生率被排除" in patient_overview_js
-    assert "Post-cleaning duplicate-time rate" in patient_overview_js
-    assert "清洗后重复时间戳率" in patient_overview_js
+    # The cleaning numbers are the summary tiles; the overview only states what they mean.
+    assert "data-patient-cleaning-receipt" in patient_overview_js
+    assert "清洗后的数据" in patient_overview_js
     assert "renderQualityAudit" in patient_overview_js
     assert "renderQualityAudit" in patient_domain_js
     assert "value == null || value === '' || typeof value === 'boolean'" in patient_overview_js
@@ -2882,16 +2883,16 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert ".patient-flow-card" not in _static_css("cohort.css")
     assert "css/pages.css?v=20261022-legacy1" in index_html
     assert "css/patient-navigation.css?v=20260710-bounded-pages" in index_html
-    assert "css/patient-tables.css?v=20260830-viz-final1" in index_html
-    assert "css/patient.css?v=20260830-viz-final1" in index_html
+    assert "css/patient-tables.css?v=20261026-data1" in index_html
+    assert "css/patient.css?v=20261026-data1" in index_html
     assert "css/patient-series.css?v=20261022-legacy1" in index_html
     assert "js/screens-viz-demo.js?v=20261022-zhlabels1" in index_html
     assert "js/screens-viz-demo-drilldown.js?v=20260727-owner-split" in index_html
     assert "js/screens-viz-patient-features.js?v=20261022-zhlabels1" in index_html
-    assert "js/screens-viz-patient-charts.js?v=20261022-lean1" in index_html
-    assert "js/screens-viz-patient-series.js?v=20261022-lean1" in index_html
+    assert "js/screens-viz-patient-charts.js?v=20261026-data1" in index_html
+    assert "js/screens-viz-patient-series.js?v=20261026-data1" in index_html
     assert (
-        "js/screens-viz-patient-demo-sources.js?v=20261022-plain3"
+        "js/screens-viz-patient-demo-sources.js?v=20261026-data1"
         in index_html
     )
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
@@ -2899,9 +2900,9 @@ def test_native_patient_source_radios_are_real_controls() -> None:
         "js/screens-viz-patient-navigation.js?v=20261022-lean1"
         in index_html
     )
-    assert "js/screens-viz-patient-tables.js?v=20261022-zhlabels1" in index_html
-    assert "js/screens-viz-patient-overview.js?v=20261022-zhlabels1" in index_html
-    assert "js/screens-viz-patient.js?v=20261022-lean2" in index_html
+    assert "js/screens-viz-patient-tables.js?v=20261026-data1" in index_html
+    assert "js/screens-viz-patient-overview.js?v=20261026-data1" in index_html
+    assert "js/screens-viz-patient.js?v=20261026-data1" in index_html
     assert index_html.index("js/screens-viz-patient-navigation.js?") < index_html.index(
         "js/screens-viz.js?"
     )
@@ -2911,7 +2912,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20261022-lean2" in index_html
+    assert "js/screens-viz.js?v=20261026-data1" in index_html
     assert "bounded browser review', '本页审阅" in patient_domain_js
     assert "function buildPatientDrilldown" in demo_drilldown_js
     assert "function demoTablePreviewRowContext" in demo_drilldown_js
@@ -2988,7 +2989,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
         "payload_scope: 'clinically_constrained_synthetic_demo_no_real_patient_rows'"
         in demo_drilldown_js
     )
-    assert "Clinically constrained synthetic fallback ready" in patient_domain_js
+    assert "Synthetic example data ready" in patient_domain_js
     assert "synthetic entities" in patient_domain_js
     assert "10 stays · 19 modules · 0 errors" not in viz_js
     assert "Fast demo profile" not in viz_js
@@ -3083,9 +3084,9 @@ def test_native_cohort_real_page_is_backend_backed_and_bilingual() -> None:
     assert "Object.prototype.hasOwnProperty.call(map, raw)" in cohort_view_js
     assert "'Not manuscript-ready by itself': '不能单独用于稿件结论'" in cohort_view_js
     assert "choosing a source immediately recomputes the backend summary" not in cohort_js
-    assert "function cohortRealModuleSummary" in cohort_view_js
-    assert "data-cohort-real-modules" in cohort_view_js
-    assert "Open coverage audit" in cohort_view_js
+    # Module coverage is read in its own tab; the comparison tab no longer repeats it as chips.
+    assert "data-cohort-real-modules" not in cohort_view_js
+    assert "SPLIT_DEFINING_METRIC" in cohort_view_js
     assert "function cohortRealFeaturePicker" in cohort_view_js
     assert "data-cohort-feature-picker" in cohort_view_js
     assert "data-cohort-feature-toggle" in cohort_view_js
@@ -3119,8 +3120,8 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/cohort.css?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz.js?v=20261022-lean2" in index_html
+    assert "css/cohort.css?v=20261026-data1" in index_html
+    assert "js/screens-viz.js?v=20261026-data1" in index_html
     assert "view: 'idle'," in cohort_js
     assert "featureScope: 'recommended'," in cohort_js
     assert 'data-cohort-config-required="true"' in cohort_js
@@ -3231,7 +3232,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     assert "screens-audit.js" not in index_html
     assert not (STATIC_DIR / "js" / "screens-audit.js").exists()
     assert "Aggregate-only group characteristics" in cohort_view_js
-    assert "profileRows.map" in cohort_view_js
+    assert "shownRows.map" in cohort_view_js
     assert "active.profile" in cohort_view_js
     assert "SOFA-1 to SOFA-2 movement" in cohort_view_js
     assert "Worst-ICU severity transition matrix" in cohort_view_js
@@ -3290,7 +3291,7 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert "compactOfficialPair" in crossdb_source_js
     assert "Start consistency check" in crossdb_source_js
     assert "data-crossdb-synthetic-fallback" in crossdb_source_js
-    assert "UI rehearsal only" in crossdb_source_js
+    assert "Not real records" in crossdb_source_js
     assert "officialPaths()" in viz_js
     assert "runOfficial()" in viz_js
     assert "owner.rememberPair(registrySources())" in viz_js
@@ -3298,7 +3299,7 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert ".crossdb-offline-fallback" in crossdb_css
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
     assert "js/screens-viz-crossdb-setup.js?v=20261022-copy1" in index_html
-    assert "js/screens-viz-crossdb-source.js?v=20261022-plain3" in index_html
+    assert "js/screens-viz-crossdb-source.js?v=20261026-data1" in index_html
 
 
 def test_native_webapp_foreground_interrupt_returns_shell_status(monkeypatch) -> None:
@@ -3539,7 +3540,7 @@ def test_review_routes_share_echarts_theme_without_cross_route_owner_leaks() -> 
 
     vendor = index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
     shared = index_html.index("js/screens-viz-echarts.js?v=20261022-winfont1")
-    patient = index_html.index("js/screens-viz-patient-charts.js?v=20261022-lean1")
+    patient = index_html.index("js/screens-viz-patient-charts.js?v=20261026-data1")
     cohort = index_html.index("js/screens-viz-cohort-charts.js?v=20261022-winfont1")
     crossdb = index_html.index("js/screens-viz-crossdb-charts.js?v=20260830-viz-final1")
     assert vendor < shared < patient < cohort < crossdb
@@ -3803,9 +3804,10 @@ def test_demo_mode_is_unmistakable_and_single_source_of_truth() -> None:
     patient_domain_js = _static_js("screens-viz-patient.js")
     demo_sources_js = _static_js("screens-viz-patient-demo-sources.js")
     assert "数据时长（小时）" not in patient_domain_js
-    assert "选择官方去标识化 ICU 演示数据" in patient_domain_js
-    assert "官方公开 ICU 演示数据" in demo_sources_js
-    assert "加载合成兜底" in demo_sources_js
+    assert "打开一份官方去标识化演示数据" in patient_domain_js
+    assert "官方公开演示数据" in demo_sources_js
+    assert "使用合成数据" in demo_sources_js
+    assert "兜底" not in demo_sources_js
     assert "processing_mode: 'real'" in demo_sources_js
     assert "const realMode = dataMode === 'real';" in patient_domain_js
     assert "localStorage.setItem('easyicu_home_data', 'real')" not in patient_domain_js[

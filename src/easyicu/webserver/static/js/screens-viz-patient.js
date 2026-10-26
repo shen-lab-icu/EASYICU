@@ -127,6 +127,7 @@
   function patientEligibilityFlow(flow) {
     const steps = Array.isArray(flow && flow.steps) ? flow.steps.filter(s => s && s.count != null) : [];
     if (!steps.length) return '';
+    if (!steps.some(step => Number(step.excluded) > 0)) return '';
     const title = flow.title_i18n ? patientI18nLabel(flow.title_i18n, flow.title) : (flow.title || t('Eligibility flow (ICU stays)', '入组筛选流程（ICU 住院）'));
     const subtitle = flow.has_stepwise_report
       ? t('Computed from the export cohort report; no patient rows are returned to the browser.', '来自导出 cohort report；浏览器不返回患者行。')
@@ -170,12 +171,6 @@
           }).join('')}
         </div>
       </div>`;
-  }
-  function patientShapeLabel(module) {
-    const shape = module && module.shape;
-    if (shape === 'time_indexed') return t('time indexed', '时序');
-    if (shape === 'static') return t('static', '静态');
-    return shape || (module && module.time_indexed ? t('time indexed', '时序') : t('static', '静态'));
   }
   function patientSignalLabel(signal) {
     const label = (signal && (signal.label || signal.name || signal.feature || signal.key)) || 'signal';
@@ -543,7 +538,6 @@
       const s = drill.summary || {};
       const dt = drill.data_tables || {};
       const loaded = dt.loaded_summary || {};
-      const detailGate = dt.detail_gate || {};
       const picker = dt.module_picker || {};
       const modules = drill.module_profiles || [];
       const activePreview = activePatientTablePreview(drill);
@@ -561,35 +555,17 @@
       const hasPrevious = Boolean(previewPage.has_previous || activePreview && activePreview.has_previous);
       const hasNext = Boolean(previewPage.has_next || activePreview && activePreview.has_next);
       const pageSize = Number(previewPage.page_size || activePreview && activePreview.page_size || tableState.pageSize || 24);
-      /* Labels and provenance captions both go through t(): this table is the
-         only place in Patient Review that still rendered bare English in the
-         Chinese locale. The caption states what each number is computed from,
-         so it has to read in the user's language, not just the label. */
-      const basisScope = drill.demo
-        ? t('clinically constrained synthetic aggregate', '临床约束合成汇总值')
-        : t('demographics aggregate', '人口学汇总');
       const rows = [
-        [t('Entities', '病例数'), fmtInt(s.entities), drill.demo
-          ? t('synthetic fallback denominator', '合成兜底分母')
-          : t('cohort denominator from active export', '来自当前导出的队列分母')],
-        [t('Mean age', '平均年龄'), fmtNum(s.mean_age, 1), basisScope],
-        [t('Female', '女性'), fmtPct(s.female_pct), basisScope],
-        [t('Mortality', '病死率'), fmtPct(s.mortality), drill.demo
-          ? t('synthetic fallback outcome', '合成兜底结局')
-          : t('outcome aggregate', '结局汇总')],
-        [t('Median SOFA-2', 'SOFA-2 中位数'), fmtNum(s.median_sofa2, 1), drill.demo
-          ? t('synthetic fallback score', '合成兜底评分')
-          : t('score aggregate', '评分汇总')],
-        [t('Sepsis-3 positive', 'Sepsis-3 阳性'), fmtPct(s.sepsis_pct), drill.demo
-          ? t('synthetic fallback event', '合成兜底事件')
-          : t('event aggregate', '事件汇总')],
+        [t('Entities', '病例数'), fmtInt(s.entities)],
+        [t('Mean age', '平均年龄'), fmtNum(s.mean_age, 1)],
+        [t('Female', '女性'), fmtPct(s.female_pct)],
+        [t('Mortality', '病死率'), fmtPct(s.mortality)],
+        [t('Median SOFA-2', 'SOFA-2 中位数'), fmtNum(s.median_sofa2, 1)],
+        [t('Sepsis-3 positive', 'Sepsis-3 阳性'), fmtPct(s.sepsis_pct)],
       ];
       const reviewModules = (dt.modules && dt.modules.length ? dt.modules : modules).slice(0, drill.demo ? 32 : 64);
       const activeModule = reviewModules.find(m => m.module === tableState.module) || reviewModules[0] || {};
       const previewFeatures = activeModule.preview_features || [];
-      const workspaceCopy = drill.demo
-        ? t('Clinically constrained synthetic fallback: modules and feature names come from the EasyICU catalog; modeled values share one deterministic phenotype model and are for UI rehearsal only.', '临床约束合成兜底：模块和特征名来自 EasyICU 目录；建模数值共享同一个确定性表型模型，仅用于界面演练。')
-        : t('module table previews, feature counts, source scope and optional detail gate are computed from the active export.', '模块表格预览、特征数量、来源范围和详情边界都从当前导出计算。');
       return `
       <div class="st-stats mt-16">
         ${[
@@ -600,26 +576,17 @@
         ].map(([l, v, c]) => `<div class="stat ${c}"><div class="label">${l}</div><div class="val">${v}</div></div>`).join('')}
       </div>
       ${workspaceSamplingNote(s)}
-      <div class="note ok mt-16">
-        <div class="ico">${icon('rows', 16)}</div>
-        <div class="body"><span class="t">${t('Table preview', '表格预览')}</span> <span class="d" style="display:inline;">— ${drill.demo ? t('Seeded demo rows for UI preview.', '演示行仅用于界面预览。') : t('Capped local rows from the active export; identifiers are replaced by pseudonymous entity tokens.', '当前数据的部分行预览（有行数上限）；身份标识已替换为匿名编号。')}</span></div>
-      </div>
       ${patientEligibilityFlow(drill.eligibility_flow)}
       ${reviewModules.length ? `
       <div class="row wrap gap-6 mt-12" data-pt-table-picker>
         ${reviewModules.map(module => {
           const active = module.module === tableState.module;
-          const status = tableOwner && typeof tableOwner.moduleStatus === 'function'
-            ? tableOwner.moduleStatus(module, activePreview, { t })
-            : (module.review_status === 'inventory_only'
-              ? t('available · load', '可用 · 按需加载')
-              : t('reviewed', '已审阅'));
-          return `<button type="button" class="chip ${active ? 'solid' : ''}" data-pt-table-module="${esc(module.module)}" aria-pressed="${active ? 'true' : 'false'}">${esc(patientModuleLabel(module))} <span class="mono" style="font-size:10.5px;color:var(--ink-4);">${fmtInt(module.rows)} ${t('rows', '行')} · ${status}</span></button>`;
+          return `<button type="button" class="chip ${active ? 'solid' : ''}" data-pt-table-module="${esc(module.module)}" aria-pressed="${active ? 'true' : 'false'}">${esc(patientModuleLabel(module))} <span style="font-size:11px;color:var(--ink-4);font-variant-numeric:tabular-nums;">${fmtInt(module.rows)}</span></button>`;
         }).join('')}
       </div>
       ${tableOwner && tableOwner.statusHtml ? tableOwner.statusHtml({ t, esc, icon }) : ''}
       <div class="patient-table-frame mt-12">
-        <div class="patient-id-note">${drill.demo ? t('Synthetic entity tokens are UI-only references.', '演示病例编号只用于界面展示。') : t('Entity tokens are local pseudonymous references. Direct clinical identifiers stay on disk.', '病例以匿名编号显示；病历号等可识别信息不会发送到浏览器。')}</div>
+        <div class="patient-id-note">${drill.demo ? t('Table preview of synthetic rows.', '表格预览：合成示例行。') : t('Table preview of capped rows; identifiers are replaced by pseudonymous entity tokens and never reach the browser.', '表格预览：只显示部分行，病例以匿名编号显示，病历号等标识不会发送到浏览器。')}</div>
         <div class="patient-table-scroll" data-patient-table-preview style="--pt-cols:${Math.max(6, previewColumns.length)};">
         <table class="eu-table patient-preview-table" aria-label="${esc(`${patientModuleLabel(activeModule)} ${t('bounded table preview', '表格预览（部分行）')}`)}">
           <thead><tr>${previewColumns.map(c => `<th${c === 'entity' ? ' class="patient-entity-col"' : ' class="num"'}>${esc(patientColumnLabel(c, activePreview))}</th>`).join('')}</tr></thead>
@@ -643,21 +610,13 @@
         </label>
         <button type="button" class="btn sm" data-pt-page-next ${hasNext ? '' : 'disabled'}>${t('Next', '下一页')} ${icon('arrow', 13)}</button>
       </div>
-      <div class="row wrap gap-6 mt-8" style="font-size:11.5px;color:var(--ink-4);">
-        <span>${fmtInt(previewColumns.length)} / ${fmtInt(activePreview && activePreview.columns_total)} ${t('columns', '列')}</span>
-        ${(activePreview && activePreview.truncated_rows) ? `<span>${t('server-paged preview', '服务端分页预览')}</span>` : ''}
-        ${(activePreview && activePreview.truncated_columns) ? `<span>${t('column preview capped', '列预览已截断')}</span>` : ''}
-      </div>` : `
+      ${(activePreview && activePreview.truncated_columns) ? `<div class="mt-8" style="font-size:11.5px;color:var(--ink-4);">${t(`Showing ${fmtInt(previewColumns.length)} of ${fmtInt(activePreview.columns_total)} columns`, `显示 ${fmtInt(previewColumns.length)} / ${fmtInt(activePreview.columns_total)} 列`)}</div>` : ''}` : `
       <div class="empty mt-16"><div class="glyph">${icon('rows', 22)}</div><div class="t">${t('No table preview available', '暂无表格预览')}</div><div class="d">${t('This export has module metadata but no displayable table columns after identifier removal.', '这个导出有模块元数据，但去除标识符后没有可显示的表格列。')}</div></div>`}
-      <div class="note info mt-16">
-        <div class="ico">${icon('rows', 16)}</div>
-        <div class="body"><span class="t">${t('Review workspace summary', '审阅工作区摘要')}</span> <span class="d" style="display:inline;">— ${esc(workspaceCopy)}</span></div>
-      </div>
-      <div class="table-wrap table-scroll mt-12">
+      <div class="table-wrap table-scroll mt-16">
         <table class="eu-table">
-          <thead><tr><th>${t('Aggregate', '汇总项')}</th><th class="num">${t('Value', '数值')}</th><th>${t('Basis', '依据')}</th></tr></thead>
+          <thead><tr><th>${t('Cohort summary', '队列汇总')}</th><th class="num">${t('Value', '数值')}</th></tr></thead>
           <tbody>
-            ${rows.map(r => `<tr><td class="key">${esc(r[0])}</td><td class="num">${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join('')}
+            ${rows.map(r => `<tr><td class="key">${esc(r[0])}</td><td class="num">${esc(r[1])}</td></tr>`).join('')}
           </tbody>
         </table>
       </div>
@@ -665,9 +624,9 @@
       <div class="split-320 mt-16" style="grid-template-columns:1fr 310px;">
         <div class="table-wrap table-scroll">
         <table class="eu-table">
-          <thead><tr><th>${t('Module table overview', '模块表格概览')}</th><th class="num">${t('Features', '特征')}</th><th class="num">${t('Rows', '行')}</th><th class="num">${t('Entities', '病例数')}</th><th class="num">${t('Coverage', '覆盖率')}</th><th>${t('Shape', '形态')}</th></tr></thead>
+          <thead><tr><th>${t('Module table overview', '模块表格概览')}</th><th class="num">${t('Features', '特征')}</th><th class="num">${t('Rows', '行')}</th><th class="num">${t('Entities', '病例数')}</th><th class="num">${t('Coverage', '覆盖率')}</th></tr></thead>
           <tbody>
-            ${reviewModules.map(m => `<tr><td class="key">${esc(patientModuleLabel(m))}</td><td class="num">${fmtInt(m.review_features != null ? m.review_features : m.feature_count)}</td><td class="num">${fmtInt(m.rows)}</td><td class="num">${fmtInt(m.entities)}</td><td class="num">${fmtPct(m.coverage_pct)}</td><td>${esc(patientShapeLabel(m))} · ${fmtInt(m.dynamic_features || 0)} ${t('dynamic', '动态')}</td></tr>`).join('')}
+            ${reviewModules.map(m => `<tr><td class="key">${esc(patientModuleLabel(m))}</td><td class="num">${fmtInt(m.review_features != null ? m.review_features : m.feature_count)}</td><td class="num">${fmtInt(m.rows)}</td><td class="num">${fmtInt(m.entities)}</td><td class="num">${fmtPct(m.coverage_pct)}</td></tr>`).join('')}
           </tbody>
         </table>
         </div>
@@ -676,7 +635,7 @@
           <div style="font-weight:600;font-size:15px;margin-top:6px;">${esc(patientModuleLabel(activeModule) || t('Selected module', '已选模块'))}</div>
           <div class="col gap-6 mt-12" style="font-size:12.5px;">
             <div class="setup-row"><span class="k">${t('Review features', '审阅特征')}</span><span class="vv">${fmtInt(activeModule.review_features != null ? activeModule.review_features : activeModule.feature_count)}</span></div>
-            <div class="setup-row"><span class="k">${t('Share', '占比')}</span><span class="vv">${fmtPct(activeModule.share_pct)}</span></div>
+            <div class="setup-row"><span class="k">${t('Share of features', '特征占比')}</span><span class="vv">${fmtPct(activeModule.share_pct)}</span></div>
             <div class="setup-row"><span class="k">${t('Coverage', '覆盖率')}</span><span class="vv">${fmtPct(activeModule.coverage_pct)}</span></div>
           </div>
           <div class="row wrap gap-6 mt-12">
@@ -684,11 +643,7 @@
           </div>
         </div>
       </div>` : ''}
-      ${patientMatrixAudit(drill)}
-      <div class="note info mt-16">
-        <div class="ico">${icon('shield', 16)}</div>
-        <div class="body"><span class="t">${esc(patientI18nLabel(detailGate.title_i18n, t(detailGate.title || 'Source records are optional', '表格只预览部分行')))}</span> <span class="d" style="display:inline;">— ${esc(patientI18nLabel(detailGate.reason_i18n, t(detailGate.reason || 'Native Patient Review exposes cohort aggregates and one pseudonymous entity drilldown. Direct identifier tables stay out of the browser payload.', '浏览器只显示队列汇总和每个模块的部分行，病例以匿名编号显示；病历号等可识别信息和完整表格不会发送到浏览器。')))}</span></div>
-      </div>`;
+      ${patientMatrixAudit(drill)}`;
     }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && ws.tableRows) {
@@ -943,8 +898,9 @@
         : '';
       const boundedTitle = drill.demo ? patientQualityText('Catalog demo bounded review') : patientQualityText('Local export bounded review');
       const boundedDetail = drill.demo
-        ? t('Coverage and quality indicators describe the clinically constrained synthetic fallback only. Load an official demo or local export for source-backed denominators.', '覆盖率和质量指标只描述临床约束合成兜底。请加载官方演示数据或本地导出，以获得有来源支撑的分母。')
+        ? t('Coverage and quality here describe the synthetic example data. Open an official demo or your own export for real denominators.', '这里的覆盖率和质量只描述合成示例数据。打开官方演示数据或你自己的导出后，才是真实分母。')
         : t('Shown coverage, missingness, physiologic-range flags and duplicate timestamp rates are computed over the bounded local review sample. Modules without computed entity coverage remain inventory-only; formal claims stay locked to the evidence-bound agent path.', '这里的覆盖率、缺失率、生理范围标记和重复时间比例按本页审阅样本计算；没有计算覆盖率的模块只显示行数。');
+      // The ledger restates the summary tiles; it stands in only when no tiles are drawn.
       return `
       ${(review.summary_cards || []).length ? `
       <div class="st-stats mt-16">
@@ -958,7 +914,7 @@
           [patientQualityText('Out-of-physio'), fmtPct(qsum.weighted_out_of_physio_pct), qsum.weighted_out_of_physio_pct > 0 ? 'warn' : 'ok'],
         ].map(([l, v, c]) => `<div class="stat ${c}"><div class="label">${esc(l)}</div><div class="val">${v}</div></div>`).join('')}
       </div>` : '')}
-      ${(review.contract || []).length ? `
+      ${(review.contract || []).length && !(review.summary_cards || []).length && qsum.concept_count == null ? `
       <div class="card pad mt-16">
         <div class="eyebrow" style="margin-bottom:8px;">${patientQualityText('QC ledger')}</div>
         <div class="grid cards-4">
@@ -984,7 +940,7 @@
             ? `${fmtPct(coverage)} ${metricLabel}`
             : `${fmtInt(q.rows)} ${t('rows · coverage not computed', '行 · 未计算覆盖率')}`;
           return `
-          <div class="qrow" data-patient-module-coverage="${hasCoverage ? 'computed' : 'not-computed'}"><span title="${esc(q.module)}">${esc(catalogModuleText(q.module))}</span><div class="qbar ${hasCoverage && q.quality_status === 'ok' ? '' : (hasCoverage ? q.quality_status : 'neutral')}">${hasCoverage ? `<span style="width:${coverage}%"></span>` : ''}</div><span class="qv">${metric}</span></div>`;
+          <div class="qrow pt-qrow" data-patient-module-coverage="${hasCoverage ? 'computed' : 'not-computed'}"><span title="${esc(q.module)}">${esc(catalogModuleText(q.module))}</span><div class="qbar ${hasCoverage && q.quality_status === 'ok' ? '' : (hasCoverage ? q.quality_status : 'neutral')}">${hasCoverage ? `<span style="width:${coverage}%"></span>` : ''}</div><span class="qv">${metric}</span></div>`;
         }).join('')}
       </div>
       ${patientQualityWorkbook(review)}
@@ -1015,7 +971,7 @@
           const hasCoverage = q.coverage_pct != null && Number.isFinite(Number(q.coverage_pct));
           const coverage = hasCoverage ? Math.max(0, Math.min(100, Number(q.coverage_pct))) : null;
           return `
-          <div class="qrow" data-patient-module-coverage="${hasCoverage ? 'computed' : 'not-computed'}"><span>${esc(q.module || q.file)}</span><div class="qbar ${hasCoverage && q.status === 'ok' ? '' : (hasCoverage ? q.status : 'neutral')}">${hasCoverage ? `<span style="width:${coverage}%"></span>` : ''}</div><span class="qv">${hasCoverage ? fmtPct(coverage) : `${fmtInt(q.rows)} ${t('rows · coverage not computed', '行 · 未计算覆盖率')}`}</span></div>`;
+          <div class="qrow pt-qrow" data-patient-module-coverage="${hasCoverage ? 'computed' : 'not-computed'}"><span>${esc(q.module || q.file)}</span><div class="qbar ${hasCoverage && q.status === 'ok' ? '' : (hasCoverage ? q.status : 'neutral')}">${hasCoverage ? `<span style="width:${coverage}%"></span>` : ''}</div><span class="qv">${hasCoverage ? fmtPct(coverage) : `${fmtInt(q.rows)} ${t('rows · coverage not computed', '行 · 未计算覆盖率')}`}</span></div>`;
         }).join('')}
       </div>
       <div class="note info mt-16">
@@ -1140,9 +1096,9 @@
           : null;
         const readyTitle = drill
           ? (drill.demo
-            ? t('Clinically constrained synthetic fallback ready', '临床约束合成兜底已就绪')
+            ? t('Synthetic example data ready', '合成示例数据已就绪')
             : (officialDemo
-              ? `${officialDemo.title} ${t('official demo ready', '官方演示已就绪')}`
+              ? `${officialDemo.title} · ${officialDemo.version}`
               : (hostedServer() ? t('Patient review ready', '数据已加载，可以审阅患者') : t('Local export patient drilldown ready', '本地导出数据已加载，可以审阅患者'))))
           : (ws ? t('Local export workspace ready', '本地导出工作区已就绪') : t('Demo review workspace ready', '演示审阅工作区已就绪'));
         const boundedReview = drill && s && s.review_scope === 'browser_bounded_entity_sample';
@@ -1161,32 +1117,25 @@
         <div class="note warn mt-12">
           <div class="ico">${icon('beaker', 16)}</div>
           <div class="body">
-            <div class="t">${t('Clinically constrained synthetic fallback', '临床约束合成兜底')}</div>
-            <div class="d">${t('This offline fallback uses deterministic, correlated ICU trajectories derived from one synthetic phenotype model. It contains no real records and must not be used for clinical inference or manuscript results.', '这个离线兜底使用由同一合成表型模型派生的确定性相关 ICU 轨迹；其中不含真实记录，不得用于临床推断或稿件结果。')}</div>
+            <div class="t">${t('Synthetic example data', '合成示例数据')}</div>
+            <div class="d">${t('These ICU trajectories come from one synthetic model. They are not real records and must not be used for clinical inference or a manuscript.', '这些 ICU 轨迹由同一个合成模型生成，不是真实记录，不能用于临床推断或论文结果。')}</div>
           </div>
           <button class="btn sm" data-patient-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
-        </div>` : officialDemo ? `
-        <div class="note info mt-12" data-patient-official-demo="${esc(officialDemo.source_id)}">
-          <div class="ico">${icon('db', 16)}</div>
-          <div class="body">
-            <div class="t">${esc(officialDemo.title)} · ${esc(officialDemo.version)}</div>
-            <div class="d">${t('This Patient Review is backed by official deidentified demo records processed through the normal EasyICU conversion and concept-mapping pipeline.', '当前患者审阅来自官方去标识化 Demo 记录，并经过 EasyICU 正常的转换与概念映射流程。')} ${esc(officialDemo.provider)} · ${esc(officialDemo.license)}</div>
-          </div>
         </div>` : (!drill && !ws) ? `
         <div class="note warn mt-12">
           <div class="ico">${icon('beaker', 16)}</div>
           <div class="body">
-            <div class="t">${t('Synthetic fallback workspace', '合成兜底工作区')}</div>
-            <div class="d">${t('This tab is showing synthetic UI data. Load an official demo or local export for source-backed module tables, feature matrices, and quality metrics.', '此标签页显示合成界面数据。请加载官方演示数据或本地导出，以查看有来源支撑的模块表、特征矩阵和质量指标。')}</div>
+            <div class="t">${t('Synthetic example data', '合成示例数据')}</div>
+            <div class="d">${t('Open an official demo or your own export to see real module tables, feature matrices and quality metrics.', '打开官方演示数据或你自己的导出，才能看到真实的模块表、特征矩阵和质量指标。')}</div>
           </div>
           <button class="btn sm" data-patient-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
         </div>` : '';
         // Hosted: patient-level rows are not downloadable (user decision 2026-10-22), so no Export.
         return `
         ${patientHeading}
-        <div class="loaded-bar">
+        <div class="loaded-bar"${officialDemo ? ` data-patient-official-demo="${esc(officialDemo.source_id)}"` : ''}>
           <span class="pill ok"><span class="dot"></span>${t('Loaded', '已加载')}</span>
-          <div class="grow"><span style="font-weight:600;font-size:13px;">${readyTitle}</span> <span class="mono" style="font-size:11px;color:var(--ink-4);">${readyStats}</span></div>
+          <div class="grow"><span style="font-weight:600;font-size:13px;">${esc(readyTitle)}</span> <span style="font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums;">${readyStats}</span></div>
           <button class="btn sm" data-viz-reset>${icon('sliders', 13)} ${t('Edit setup', '编辑设置')}</button>
           ${hostedServer() ? '' : `<button class="btn sm" data-patient-export>${icon('download', 13)} ${t('Export', '导出')}</button>`}
         </div>
@@ -1205,7 +1154,7 @@
       const demoSourceOwner = window.EU_PATIENT_DEMO_SOURCES;
       const officialDemoSources = demoSourceOwner && typeof demoSourceOwner.render === 'function'
         ? demoSourceOwner.render({ t, esc })
-        : `<div class="note warn"><div class="body"><div class="d">${t('Official demo-source controls are unavailable; the clinically constrained synthetic fallback remains usable.', '官方演示数据源控件暂不可用；仍可使用带临床约束的合成兜底。')}</div></div><button class="btn sm" data-gen>${t('Load synthetic fallback', '加载合成兜底')}</button></div>`;
+        : `<div class="note warn"><div class="body"><div class="d">${t('The official demo list could not be loaded; synthetic example data is still available.', '官方演示数据列表暂时无法加载；仍可使用合成示例数据。')}</div></div><button class="btn sm" data-gen>${t('Use synthetic data', '使用合成数据')}</button></div>`;
       return `
       ${patientHeading}
       ${guidedNote}
@@ -1216,8 +1165,8 @@
             <!-- h2, not div: this is the section title under the route's h1.
                  margin-bottom is zeroed because there is no global heading
                  reset, and the UA default would otherwise add ~14px here. -->
-            <h2 class="panel-title" style="margin-top:4px;margin-bottom:0;font-size:17px;">${t('Load a review workspace', '加载审阅工作区')}</h2>
-            <div class="panel-sub">${realMode ? (hostedServer() ? t('Load the data the administrator prepared on the server.', '加载管理员在服务器上准备好的数据。') : t('Load a local EasyICU export folder. Nothing is uploaded.', '加载本地 EasyICU 导出文件夹，不上传任何数据。')) : t('Choose an official deidentified ICU demo, or use the offline synthetic fallback for interaction rehearsal only.', '选择官方去标识化 ICU 演示数据，或仅在离线界面演练时使用合成兜底。')}</div>
+            <h2 class="panel-title" style="margin-top:4px;margin-bottom:0;font-size:17px;">${t('Choose data to review', '选择要审阅的数据')}</h2>
+            <div class="panel-sub">${realMode ? (hostedServer() ? t('Load the data the administrator prepared on the server.', '加载管理员在服务器上准备好的数据。') : t('Load a local EasyICU export folder. Nothing is uploaded.', '加载本地 EasyICU 导出文件夹，不上传任何数据。')) : t('Open an official deidentified demo, or learn the screens with synthetic data.', '打开一份官方去标识化演示数据，或先用合成数据熟悉界面。')}</div>
           </div>
         </div>`}
 
@@ -1245,8 +1194,8 @@
 
       <div class="empty mt-16">
         <div class="glyph">${icon('viz', 22)}</div>
-        <div class="t">${hostedServer() ? t('Load data above to review patients here', '加载上方数据后在这里审阅患者') : t('Preview workspace awaits data', '预览工作区等待数据')}</div>
-        ${hostedServer() ? '' : `<div class="d">${t('Generate demo data or load exported files above; the review tabs will appear here as a compact multi-view workspace.', '在上方生成演示数据或加载导出文件；审阅标签页会作为紧凑的多视图工作区出现在这里。')}</div>`}
+        <div class="t">${hostedServer() ? t('Load data above to review patients here', '加载上方数据后在这里审阅患者') : t('No data open yet', '还没有打开数据')}</div>
+        ${hostedServer() ? '' : `<div class="d">${t('Open a dataset above; its tables, time series, case overview and data quality appear here.', '在上方打开一份数据后，这里会显示数据表、时间序列、患者概览和数据质量。')}</div>`}
       </div>`;
     },
     afterRender(root) {

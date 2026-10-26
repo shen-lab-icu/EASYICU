@@ -855,8 +855,8 @@
     return `
     <div class="handoff">
       <span class="ho-ico">${icon('spark', 17)}</span>
-      <div class="ho-body"><b>${t('Prefer to talk it through?', '想用对话完成?')}</b> ${t('Guided Copilot can pick the cohort, modules and export for you in plain conversation — same pipeline, same result.', '研究引导能用对话帮你选好队列、模块和导出 —— 同一条流水线,同样的结果。')}</div>
-      <button class="btn" data-nav="guided">${icon('spark', 13)} ${t('Start Guided Copilot', '开始研究引导')} ${icon('arrow', 13)}</button>
+      <div class="ho-body"><b>${t('Prefer to talk it through?', '想用对话完成？')}</b> ${t('Guided Copilot can pick the cohort, modules and export for you in plain conversation — same pipeline, same result.', '研究对话可以替你选好队列、模块和导出，走同一条流水线，结果相同。')}</div>
+      <button class="btn" data-nav="guided">${icon('spark', 13)} ${t('Start Guided Copilot', '打开研究对话')} ${icon('arrow', 13)}</button>
     </div>`;
   }
 
@@ -1299,7 +1299,8 @@
     const total = moduleConceptCount(m);
     const selected = selectedConceptCount(m);
     const open = exExpandedMod === key;
-    const featureCount = selected === total ? String(total) : `${selected}/${total}`;
+    // A module that is not picked shows its size; "0/7" read like a failed count.
+    const featureCount = selected === total || selected === 0 ? String(total) : `${selected}/${total}`;
     return `
     <article class="modcard ${on ? 'on' : ''} ${open ? 'open' : ''} ${m[4] ? 'core' : ''}" data-ex-mod-card="${i}">
       <div class="modcard-head">

@@ -127,19 +127,30 @@
       : null;
   }
 
+  // What a researcher needs from the status is whether the demo can be opened
+  // and, if not, whether anything is left to download; the cache stages
+  // (downloaded, converted, export from another build) all read as "finish
+  // preparing".
   function stateLabel(source, helpers) {
     const status = sourceStatus(source);
     const value = String(status.state || 'not_downloaded');
-    if (value === 'not_downloaded' && status.resume_available) {
-      return [hT(helpers, 'Download paused', '下载可续传'), 'warn'];
+    if (value === 'prepared' && !status.export_update_required) return [hT(helpers, 'Ready', '已就绪'), 'ok'];
+    if (value === 'not_downloaded') {
+      return status.resume_available
+        ? [hT(helpers, 'Download paused', '下载已暂停'), 'warn']
+        : [hT(helpers, 'Not downloaded', '未下载'), 'neutral'];
     }
-    const labels = {
-      not_downloaded: [hT(helpers, 'Not installed', '尚未安装'), 'neutral'],
-      downloaded: [hT(helpers, 'Downloaded', '已下载'), 'warn'],
-      converted: [hT(helpers, 'Converted', '已转换'), 'warn'],
-      prepared: [hT(helpers, 'Ready', '已就绪'), 'ok'],
-    };
-    return labels[value] || [value, 'neutral'];
+    return [hT(helpers, 'Downloaded · preparation unfinished', '已下载，待完成准备'), 'warn'];
+  }
+
+  // The release's own description is English; the reader's language names it.
+  const DESCRIPTIONS = {
+    mimic_iv_demo_v2_2: ['Deidentified MIMIC-IV demonstration release from PhysioNet; enough to try every step from extraction to figures.', 'PhysioNet 官方发布的去标识化 MIMIC-IV 演示数据，可完整体验从抽取到出图的流程。'],
+    eicu_demo_v2_0_1: ['Deidentified multi-centre eICU demonstration release from PhysioNet.', 'PhysioNet 官方发布的去标识化 eICU 多中心演示数据。'],
+  };
+  function describe(source, helpers) {
+    const row = DESCRIPTIONS[source && source.id];
+    return row ? hT(helpers, row[0], row[1]) : String((source && source.description) || '');
   }
 
   function scopeText(source, helpers) {
@@ -299,20 +310,15 @@
           </div>
           <span class="pill ${tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : ''}">${hEsc(helpers, statusText)}</span>
         </div>
-        <p>${hEsc(helpers, source.description || '')}</p>
+        <p>${hEsc(helpers, describe(source, helpers))}</p>
         <div class="official-demo-source-facts">
           <span>${hEsc(helpers, scopeText(source, helpers))}</span>
           <span>${hEsc(helpers, download.size_label || '')}</span>
-          <span>${hEsc(helpers, source.database || '')}</span>
           ${canResume ? `<span>${hEsc(helpers, hT(helpers, `${formatBytes(status.partial_bytes)} saved`, `已保存 ${formatBytes(status.partial_bytes)}`))}</span>` : ''}
         </div>
         <div class="official-demo-source-provenance">
           <a href="${hEsc(helpers, provenance.landing_page || '#')}" target="_blank" rel="noopener noreferrer">${hEsc(helpers, hT(helpers, 'Official dataset page', '官方数据集页面'))}</a>
           <span>${hEsc(helpers, license.name || 'ODbL 1.0')}</span>
-          <span>${hEsc(helpers, hT(helpers, 'deidentified real records', '去标识化真实记录'))}</span>
-          ${download.preferred_transport === 'github_release'
-            ? `<span>${hEsc(helpers, hT(helpers, 'GitHub fast mirror · PhysioNet fallback', 'GitHub 快速镜像 · PhysioNet 回退'))}</span>`
-            : ''}
         </div>
         ${job ? `
           <div class="official-demo-job" role="status">
@@ -344,12 +350,11 @@
       <div class="official-demo-sources" data-official-demo-sources data-demo-source-scope="${hEsc(helpers, options.scope || 'patient')}">
         <div class="official-demo-sources-head">
           <div>
-            <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Official public ICU demos', '官方公开 ICU 演示数据'))}</div>
-            <div class="official-demo-sources-title">${hEsc(helpers, hT(helpers, 'Use real deidentified records for Demo mode', 'Demo 模式使用真实去标识化记录'))}</div>
+            <div class="official-demo-sources-title">${hEsc(helpers, hT(helpers, 'Official public demo data', '官方公开演示数据'))}</div>
             <p>${hEsc(helpers, hT(
               helpers,
-              'The files stay in the local EasyICU cache and pass through the normal conversion, concept mapping, and export pipeline.',
-              '数据仅保存在本地 EasyICU 缓存中，并经过正常的转换、概念映射和导出流程。',
+              'Deidentified real records. They stay on this computer and go through the same conversion, mapping and export as your own data.',
+              '去标识化的真实记录，只保存在本机，并和你自己的数据走同样的转换、映射和导出流程。',
             ))}</p>
           </div>
         </div>
@@ -359,10 +364,10 @@
         </div>
         ${showFallback ? `<div class="official-demo-fallback">
           <div>
-            <b>${hEsc(helpers, hT(helpers, 'Offline fallback', '离线兜底'))}</b>
-            <span>${hEsc(helpers, hT(helpers, 'A clinically constrained synthetic cohort remains available for UI rehearsal only.', '仍可使用带临床约束的合成队列，仅用于界面演练。'))}</span>
+            <b>${hEsc(helpers, hT(helpers, 'Synthetic example data', '合成示例数据'))}</b>
+            <span>${hEsc(helpers, hT(helpers, 'Without a download, a synthetic cohort lets you learn the screens. It is not real records and gives no research result.', '不下载也可以先用一组合成数据熟悉界面；它不是真实记录，不产生研究结果。'))}</span>
           </div>
-          <button class="btn sm" type="button" ${fallbackAttribute}>${hEsc(helpers, hT(helpers, 'Load synthetic fallback', '加载合成兜底'))}</button>
+          <button class="btn sm" type="button" ${fallbackAttribute}>${hEsc(helpers, hT(helpers, 'Use synthetic data', '使用合成数据'))}</button>
         </div>` : ''}
       </div>`;
   }
@@ -525,6 +530,8 @@
 
   const owner = {
     activeMetadata,
+    describe,
+    stateLabel,
     bind,
     ensureLoaded: loadCatalog,
     rememberOpened,

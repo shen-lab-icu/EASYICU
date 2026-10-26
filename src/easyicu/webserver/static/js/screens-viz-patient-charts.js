@@ -196,10 +196,11 @@
   function xAxisOption(axis, colors, compact) {
     const base = {
       type: axis.kind,
-      name: compact ? '' : axis.label,
+      // Small multiples still name the time axis; "0 1 2 3" alone has no unit.
+      name: axis.label,
       nameLocation: 'middle',
-      nameGap: compact ? 0 : 30,
-      nameTextStyle: { color: colors.muted, fontSize: 12 },
+      nameGap: compact ? 22 : 30,
+      nameTextStyle: { color: colors.muted, fontSize: compact ? 11 : 12 },
       axisLine: { lineStyle: { color: colors.hair } },
       axisTick: { show: false },
       axisLabel: {
@@ -282,7 +283,7 @@
           description: `${label}. ${values.length} bounded observations. The adjacent summary reports the latest value; pointer users can hover for exact plotted values.`,
         },
       },
-      grid: { left: 58, right: 18, top: 16, bottom: 34, containLabel: false },
+      grid: { left: 58, right: 18, top: 16, bottom: axis.label ? 42 : 34, containLabel: false },
       tooltip: {
         trigger: 'axis',
         renderMode: 'richText',

@@ -32,7 +32,7 @@ def test_crossdb_source_choice_owner_is_explicitly_wired() -> None:
     setup = _read("js/screens-viz-crossdb-setup.js")
     owner = _read("js/screens-viz-crossdb-source.js")
 
-    owner_src = "js/screens-viz-crossdb-source.js?v=20261022-plain3"
+    owner_src = "js/screens-viz-crossdb-source.js?v=20261026-data1"
     assert owner_src in index
     assert index.index("js/screens-viz.js?") < index.index(owner_src)
     assert index.index(owner_src) < index.index("js/screens-viz-study-context.js?")

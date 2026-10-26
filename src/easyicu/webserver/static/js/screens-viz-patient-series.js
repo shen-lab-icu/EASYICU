@@ -280,28 +280,21 @@
                     ? hT(helpers, 'Loading module…', '正在加载本模块…')
                     : hT(helpers, `Load module data (${loadableFeatures.length})`, `加载本模块数据（${loadableFeatures.length}）`))}
                 </button>` : ''}
-              <span class="chip">${hFmtInt(helpers, item.features.length)} / ${hFmtInt(helpers, totalFeatures)}</span>
             </div>
           </div>
           ${visibleSignals.length ? `
             <div class="pt-module-grid">
               ${visibleSignals.map((sig, i) => signalCell(sig, i, helpers, xLabels)).join('')}
             </div>
-            ${hidden ? `<div class="pt-feature-overflow-note">${hT(helpers, 'Additional trajectories remain listed in the module inventory.', '其余轨迹仍列在模块特征清单中。')} +${hFmtInt(helpers, hidden)}</div>` : ''}` : `
+            ${hidden ? `<div class="pt-feature-overflow-note">${hT(helpers, 'Additional trajectories remain listed in the module inventory.', '其余轨迹仍列在模块特征清单中。')} +${hFmtInt(helpers, hidden)}</div>` : ''}` : loadableFeatures.length ? '' : `
             <div class="pt-module-no-series">
-              ${loadableFeatures.length
+              ${loadedNonTrajectory
                 ? hT(
                   helpers,
-                  `${loadableFeatures.length} source-backed features can be checked for this entity. Load the module to separate trajectories, single values, categories, and true missingness.`,
-                  `有 ${loadableFeatures.length} 个来源可追溯的特征可核查。加载本模块后会区分轨迹、单点值、分类值和该患者确实缺失。`,
+                  `Module data loaded. No multi-point numeric trajectory exists for this entity; expand the feature list to review ${loadedNonTrajectory} values, categories, or missingness findings.`,
+                  `本模块已加载。该患者没有可绘制的多时点数值轨迹；展开特征清单可查看 ${loadedNonTrajectory} 个单点值、分类值或缺失结论。`,
                 )
-                : loadedNonTrajectory
-                  ? hT(
-                    helpers,
-                    `Module data loaded. No multi-point numeric trajectory exists for this entity; expand the feature list to review ${loadedNonTrajectory} values, categories, or missingness findings.`,
-                    `本模块已加载。该患者没有可绘制的多时点数值轨迹；展开特征清单可查看 ${loadedNonTrajectory} 个单点值、分类值或缺失结论。`,
-                  )
-                  : hT(helpers, 'No bounded numeric trajectory is available for this module in the active payload; catalog metadata remains reviewable.', '这个模块在当前数据里没有可显示的数值轨迹；仍可查看它的目录信息。')}
+                : hT(helpers, 'No bounded numeric trajectory is available for this module in the active payload; catalog metadata remains reviewable.', '这个模块在当前数据里没有可显示的数值轨迹；仍可查看它的目录信息。')}
             </div>`}
           <details class="pt-feature-inventory">
             <summary>

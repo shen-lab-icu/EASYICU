@@ -440,3 +440,9 @@
     width:max-content;
   }
 }
+.cohort-feature-picker > summary{display:flex;align-items:baseline;gap:10px;cursor:pointer;list-style:none}
+.cohort-feature-picker > summary::-webkit-details-marker{display:none}
+.cohort-feature-picker > summary::before{content:"";width:6px;height:6px;border-right:1.5px solid var(--ink-3);border-bottom:1.5px solid var(--ink-3);transform:rotate(-45deg);margin-right:2px;align-self:center;transition:transform .15s}
+.cohort-feature-picker[open] > summary::before{transform:rotate(45deg)}
+.cohort-feature-picker > summary b{font-size:13.5px;color:var(--ink)}
+.cohort-feature-picker > summary span{font-size:12px;color:var(--ink-4);font-variant-numeric:tabular-nums}

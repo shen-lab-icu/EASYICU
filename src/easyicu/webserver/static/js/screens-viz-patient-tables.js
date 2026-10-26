@@ -147,26 +147,26 @@
       .map(row => ({ module: String(row.module), name: moduleName(row), rows: Math.max(0, Number(row.rows || row.records || 0)) }))
       .sort((a, b) => b.rows - a.rows);
     const total = rows.reduce((sum, row) => sum + row.rows, 0) || 1;
-    let cumulative = 0;
+    // Bars are scaled to the largest module so the smaller ones stay legible;
+    // the right column is each module's own share of all records.
+    const largest = rows.length ? rows[0].rows || 1 : 1;
+    const zh = window.EU_LANG === 'zh';
+    const pressed = picker.querySelector('[data-pt-table-module][aria-pressed="true"]');
+    const activeModule = pressed ? pressed.dataset.ptTableModule : '';
     const dashboard = document.createElement('section');
     dashboard.className = 'pt-table-dashboard';
     dashboard.dataset.ptTableDashboard = '';
     dashboard.innerHTML = `
-      <div class="pt-table-search">
-        <div>
-          <b>${window.EU_LANG === 'zh' ? '搜索原始数据表' : 'Search source tables'}</b>
-          <span>${window.EU_LANG === 'zh' ? '按模块名筛选，下面保留原始字段和真实记录。' : 'Filter by module; raw columns and source-backed records remain below.'}</span>
-        </div>
-        <label><span aria-hidden="true">⌕</span><input type="search" data-pt-table-search value="${String(state.query).replace(/"/g, '&quot;')}" placeholder="${window.EU_LANG === 'zh' ? '搜索模块，例如 生命体征' : 'Search modules, e.g. vitals'}"></label>
-      </div>
       <div class="pt-pareto" data-pt-module-pareto>
-        <div class="pt-pareto-head"><div><b>${window.EU_LANG === 'zh' ? '模块观测规模' : 'Module observation volume'}</b><span>${window.EU_LANG === 'zh' ? '柱长为记录数，右侧为累计记录贡献' : 'Bars show records; right labels show cumulative contribution'}</span></div><strong>${numberLabel(total)} ${window.EU_LANG === 'zh' ? '条记录' : 'records'}</strong></div>
+        <div class="pt-pareto-head">
+          <div><b>${zh ? '各模块记录数' : 'Records per module'}</b><span>${numberLabel(total)} ${zh ? '条记录' : 'records'} · ${zh ? '点击一行查看它的表格' : 'Click a row to open its table'}</span></div>
+          <label class="pt-table-search"><span aria-hidden="true">⌕</span><input type="search" data-pt-table-search value="${String(state.query).replace(/"/g, '&quot;')}" placeholder="${zh ? '搜索模块' : 'Search modules'}" aria-label="${zh ? '搜索模块' : 'Search modules'}"></label>
+        </div>
         <div class="pt-pareto-rows">
-          ${rows.slice(0, 12).map(row => {
-            cumulative += row.rows;
+          ${rows.map(row => {
             const share = row.rows / total * 100;
-            const cumulativePct = cumulative / total * 100;
-            return `<button type="button" data-pt-pareto-module="${row.module.replace(/"/g, '&quot;')}"><span class="pt-pareto-name" title="${row.module.replace(/"/g, '&quot;')}">${row.name.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])}</span><span class="pt-pareto-track"><i style="width:${Math.max(1, share).toFixed(1)}%"></i></span><b>${numberLabel(row.rows)}</b><em>${cumulativePct.toFixed(1)}%</em></button>`;
+            const width = row.rows / largest * 100;
+            return `<button type="button" class="${row.module === activeModule ? 'is-active' : ''}" aria-pressed="${row.module === activeModule ? 'true' : 'false'}" data-pt-pareto-module="${row.module.replace(/"/g, '&quot;')}"><span class="pt-pareto-name" title="${row.module.replace(/"/g, '&quot;')}">${row.name.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])}</span><span class="pt-pareto-track"><i style="width:${Math.max(0.5, width).toFixed(1)}%"></i></span><b>${numberLabel(row.rows)}</b><em>${share < 0.1 && share > 0 ? '<0.1' : share.toFixed(1)}%</em></button>`;
           }).join('')}
         </div>
       </div>`;
@@ -174,9 +174,9 @@
     const input = dashboard.querySelector('[data-pt-table-search]');
     const filter = () => {
       state.query = String(input && input.value || '').trim().toLowerCase();
-      picker.querySelectorAll('[data-pt-table-module]').forEach(button => {
-        button.hidden = Boolean(state.query) && !button.textContent.toLowerCase().includes(state.query);
-      });
+      const hide = button => Boolean(state.query) && !button.textContent.toLowerCase().includes(state.query);
+      picker.querySelectorAll('[data-pt-table-module]').forEach(button => { button.hidden = hide(button); });
+      dashboard.querySelectorAll('[data-pt-pareto-module]').forEach(button => { button.hidden = hide(button); });
     };
     if (input) input.addEventListener('input', filter);
     dashboard.querySelectorAll('[data-pt-pareto-module]').forEach(button => button.addEventListener('click', () => {
