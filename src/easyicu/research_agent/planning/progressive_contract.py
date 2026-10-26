@@ -1066,7 +1066,12 @@ class ProgressiveSkeletonStep(BaseModel):
             }
             and not self.outputs
         ):
-            raise ValueError(f"module {self.module_id!r} requires explicit outputs")
+            raise ValueError(
+                f"module {self.module_id!r} requires explicit outputs: replace "
+                "step.outputs=[] with a non-empty array of objects containing "
+                "product_id and semantic_role, using the current module's allowed "
+                "output roles. Do not add a new step key to explain the outputs"
+            )
         return self
 
 
