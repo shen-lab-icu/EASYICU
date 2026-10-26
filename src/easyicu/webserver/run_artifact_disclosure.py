@@ -32,8 +32,13 @@ _UNSAFE_PROJECTION_PATTERNS = (
         re.I,
     ),
     re.compile(
+        # A comma can introduce prose after a column name. Unlike an explicit
+        # assignment, require a quoted/code-like value or a complete delimited
+        # field; an alphabetic word starting a clause is not an identifier.
         r"[\"']?(?:subject_id|stay_id|hadm_id|patient_id|mrn)[\"']?"
-        r"\s*[:,=]\s*[\"']?[A-Za-z0-9-]+",
+        r"\s*(?:[:=]\s*[\"']?[A-Za-z0-9-]+|"
+        r",\s*(?:[\"'][A-Za-z0-9-]+|[A-Za-z0-9_-]*[0-9_-][A-Za-z0-9_-]*|"
+        r"[A-Za-z]+(?=\s*(?:[,;.\r\n]|$))))",
         re.I,
     ),
 )
