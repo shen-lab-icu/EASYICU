@@ -23,7 +23,7 @@ from easyicu.api.extraction import EXTRACT_MODULES
             "outcome",
             [
                 "followup_days_28d", "followup_days_365d", "followup_days_90d",
-                "icu_free_days_28", "icu_readmission",
+                "icu_death", "icu_free_days_28", "icu_readmission",
                 "mort_28d", "mort_365d", "mort_90d", "vent_free_days_28",
             ],
         ),
@@ -68,7 +68,7 @@ def test_special_output_order_is_stable_across_processes(
             "stay_id": [1], "mort_28d": [False], "mort_90d": [False],
             "mort_365d": [False], "followup_days_28d": [28.0],
             "followup_days_90d": [90.0], "followup_days_365d": [365.0],
-            "icu_free_days_28": [27.0], "icu_readmission": [False],
+            "icu_free_days_28": [27.0], "icu_readmission": [False], "icu_death": [False],
             "vent_free_days_28": [28.0],
         })
         microbiology.load_microbiology = lambda *args, **kwargs: pd.DataFrame({

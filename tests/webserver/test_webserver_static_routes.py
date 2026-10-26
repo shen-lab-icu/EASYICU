@@ -186,7 +186,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261026-src1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261026-src1" in index_html
+    assert "js/screens-extraction.js?v=20261026-icudeath1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
     assert "js/screens-help.js?v=20261026-src1" in index_html
@@ -2371,7 +2371,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".dict-catalog-note" in deepdive_css
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
-    assert "data-catalog.js?v=20260727-patient-demo2" in index_html
+    assert "data-catalog.js?v=20261026-icudeath1" in index_html
     assert "api.js?v=20261026-mention1" in index_html
     assert "screens-dict.js?v=20261026-dbnames1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.

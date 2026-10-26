@@ -47,7 +47,7 @@
     circulatory: ["mech_circ_support", "circ_failure", "circ_event", "pap_sys", "pap_dia", "pap_mean", "co", "svo2", "scvo2", "pawp"],
     demographics: ["age", "bmi", "height", "sex", "weight", "adm", "icu_unit_type"],
     other_scores: ["qsofa", "sirs", "mews", "news", "apache_iv", "apache_iv_pred_hosp_mort", "saps3", "charlson", "elixhauser"],
-    outcome: ["death", "los_icu", "los_hosp", "mort_28d", "mort_90d", "mort_365d", "followup_days_28d", "followup_days_90d", "followup_days_365d", "icu_free_days_28", "vent_free_days_28", "icu_readmission", "persistent_critical_illness"],
+    outcome: ["death", "icu_death", "los_icu", "los_hosp", "mort_28d", "mort_90d", "mort_365d", "followup_days_28d", "followup_days_90d", "followup_days_365d", "icu_free_days_28", "vent_free_days_28", "icu_readmission", "persistent_critical_illness"],
   };
 
   // key: [English name, 中文名, unit]
@@ -329,6 +329,7 @@
     saps3: ["SAPS-3 Score", "SAPS-3 评分", "points"],
     charlson: ["Charlson Comorbidity Index", "Charlson 合并症指数", "points"],
     elixhauser: ["Elixhauser (van Walraven) Score", "Elixhauser (van Walraven) 评分", "points"],
+    icu_death: ["ICU death", "ICU内死亡", "boolean"],
     mort_28d: ["28-day Mortality", "28天死亡率", "boolean"],
     mort_90d: ["90-day Mortality", "90天死亡率", "boolean"],
     mort_365d: ["1-year Mortality", "1年死亡率", "boolean"],

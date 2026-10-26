@@ -167,7 +167,8 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # public-reference, source-native, and evidence-receipt fields. 307 -> 323.
     # 2026-09-04: +eICU ICU-unit type as a typed demographics coordinate.
     # 323 -> 324. 2026-09-21: +RRT evidence reason receipt. 324 -> 325.
-    assert len(CONCEPT_DICTIONARY) == 325
+    # 2026-10-26: +icu_death, native ICU mortality (db6g). 325 -> 326.
+    assert len(CONCEPT_DICTIONARY) == 326
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
