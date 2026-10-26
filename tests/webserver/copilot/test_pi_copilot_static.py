@@ -70,7 +70,7 @@ process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20261025-owner-split1" in index
+    assert "css/guided-pi.css?v=20261026-plain-connect1" in index
     assert "css/guided-pi-clinical-card.css?v=20261025-owner-split1" in index
     # The connection dialog sheet reads the provider tokens the base sheet defines.
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261026-openrouter1") < index.index("css/guided-pi-header.css?v=")
@@ -117,7 +117,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-run-outcome.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-activity.js?v=20261024-terminal1" in index
     assert (
-        "js/screens-guided-pi-provider.js?v=20261026-openrouter1"
+        "js/screens-guided-pi-provider.js?v=20261026-plain-connect1"
         in index
     )
     assert "js/screens-guided-pi-provider-control.js?v=20261026-openrouter1" in index
@@ -147,7 +147,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261024-demo-raw-plan1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261026-openrouter1" in index
-    assert "js/screens-guided-pi.js?v=20261025-entry-views1" in index
+    assert "js/screens-guided-pi.js?v=20261026-plain-connect1" in index
     assert "js/screens-guided.js?v=20261022-legacy1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -3986,7 +3986,8 @@ def test_model_connection_setup_owns_the_temporary_focus_layout() -> None:
     assert "Open EasyICU from the local service to configure this connection" in provider
     assert "Fixed per conversation" not in provider
     assert "Local-first research workspace" not in provider
-    assert "gpi-blocker-diagnostic" in provider
+    # Runtime readiness codes are not listed on the connection page.
+    assert "gpi-blocker" not in provider
     assert "previousConnectionTop === null ? 0 : previousConnectionTop" in owner
     assert "gpi-setup-focus" not in projects_css
 
@@ -6554,7 +6555,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261024-terminal1" in index
-    assert "screens-guided-pi.js?v=20261025-entry-views1" in index
+    assert "screens-guided-pi.js?v=20261026-plain-connect1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

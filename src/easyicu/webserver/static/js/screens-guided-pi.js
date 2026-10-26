@@ -523,14 +523,8 @@
     const runtime = state.runtime || {};
     const config = runtime.configuration || {};
     const blockers = runtime.blockers || [];
-    /* screens-guided-pi-blockers.js owns which codes are runtime problems,
-       what each one means in plain language, and what fixes it. This file
-       only lays the result out. */
-    const runtimeMissing = window.EU_PI_BLOCKERS
-      ? window.EU_PI_BLOCKERS.describe(blockers, runtime)
-      : [];
     return {
-      state, runtime, config, blockers, runtimeMissing, tr, esc, option,
+      state, runtime, config, blockers, tr, esc, option,
       providerPreset, runtimeReady: runtimeReady(), apiResearchReady: apiResearchReady(),
       connectionConfigured: connectionConfigured(), connectionReady: connectionReady(),
       staticPreview: isStaticPreview(),

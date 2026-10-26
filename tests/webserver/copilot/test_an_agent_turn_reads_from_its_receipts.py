@@ -179,7 +179,7 @@ def test_the_page_loads_each_turn_owner_before_its_reader():
     assert 0 <= index.find("css/guided-pi-skin.css?") < at("css/guided-pi-turn-layout.css")
     assert at("js/screens-guided-pi-job-narration.js") < at("js/screens-guided-pi-activity.js", "20261024-terminal1")
     assert at("js/screens-guided-pi-run-stop.js") < at("js/screens-guided-pi-session-view.js", "20261025-entry-views1")
-    assert at("js/screens-guided-pi-session-view.js", "20261025-entry-views1") < at("js/screens-guided-pi.js", "20261025-entry-views1")
+    assert at("js/screens-guided-pi-session-view.js", "20261025-entry-views1") < at("js/screens-guided-pi.js", "20261026-plain-connect1")
 
 
 def test_the_trace_window_and_the_run_record_link_have_their_owners():

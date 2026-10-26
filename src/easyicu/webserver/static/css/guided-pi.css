@@ -70,17 +70,6 @@
 .gpi-config-note.warn{background:color-mix(in srgb,#c58a22 9%,var(--paper));color:#805d22}
 .gpi-config-note .gpi-dot{margin-top:4px}
 .gpi-config-note.ok .gpi-dot{background:#2d8a62}.gpi-config-note.warn .gpi-dot{background:#c58a22}
-/* Runtime blockers render as an ordered fix-list, so this variant opts out of
-   the shared note's flex row. Content comes from screens-guided-pi-blockers.js;
-   the raw gateway code stays visible but demoted, so a support conversation can
-   still quote it without the code being the headline. */
-.gpi-config-note.gpi-blockers{display:block}
-.gpi-blocker-lead{font-weight:600;margin-bottom:6px}
-.gpi-blocker-list{margin:0;padding-left:16px;display:grid;gap:7px}
-.gpi-blocker-list li{padding-left:2px}
-.gpi-blocker-title{display:block;font-weight:600}
-.gpi-blocker-fix{display:block;margin-top:2px;opacity:.85}
-.gpi-blocker-code{display:inline-block;margin-top:3px;font-size:11px;letter-spacing:.02em;opacity:.6}
 .gpi-error.inline{margin-top:12px;border:1px solid color-mix(in srgb,#ba463d 30%,var(--line));border-radius:8px}
 .gpi-setup-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px}
 .gpi-setup-actions .btn.primary{min-width:190px;justify-content:center}
@@ -534,7 +523,6 @@
 .gpi-provider-submit:hover{background:#fffef8;border-color:var(--provider-ink)}
 .gpi-provider-submit.primary,.gpi-account-actions .btn.primary{border-color:var(--provider-ink);background:var(--provider-ink);color:#fff}
 .gpi-provider-submit.primary:hover,.gpi-account-actions .btn.primary:hover{border-color:#0f100e;background:#0f100e;color:#fff}
-.gpi-blocker-diagnostic{margin-top:4px;font-size:11px}.gpi-blocker-diagnostic summary{width:max-content;cursor:pointer;opacity:.72}.gpi-blocker-diagnostic code{display:block;margin-top:3px;opacity:.72}
 .gpi-provider-shell>.gpi-setup-actions{margin:0;padding:16px 24px 20px;border-top:1px solid var(--provider-line)}
 .gpi-provider-shell>.gpi-setup-actions .btn.primary{width:100%;min-height:44px;justify-content:center;border-color:var(--provider-ink);border-radius:7px;background:var(--provider-ink);color:#fff;font-size:14px;font-weight:650}
 .gpi-provider-shell>.gpi-setup-actions .btn.primary:hover{border-color:#0f100e;background:#0f100e;color:#fff}

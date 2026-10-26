@@ -141,16 +141,22 @@
   }
 
   function apiConnectionForm(options) {
-    const { state, config, runtimeMissing, tr, esc, option } = options;
-    const savedCredential = !!config.credential_present;
+    const { state, config, tr, esc, option } = options;
     const values = apiFormValues(options);
+    // The saved connection's model and credential belong to it alone; another
+    // service in the form neither shows that model nor can reuse that key.
+    const runtime = options.runtime || {};
+    const savedConnection = config.credential_present === true && connectionSignature(values) === connectionSignature({
+      provider: config.provider || runtime.provider, base_url: config.base_url, api_transport: config.api_transport || runtime.api_transport,
+    });
+    const savedCredential = savedConnection;
     const preset = PRESETS[values.preset];
     const catalog = state.modelCatalog && state.modelCatalog.signature === connectionSignature(values) ? state.modelCatalog : null;
     const busy = state.setupSaving || state.modelDiscovering || state.openrouterStarting;
     // After an OpenRouter sign-in the host holds the key; the form asks for none.
     const signedIn = preset.login && state.openrouterLogin === 'signed_in';
     const addressField = `<label class="wide"><span>${tr('Service address', '服务地址')}</span><input name="base_url" maxlength="2048" value="${esc(values.base_url)}" inputmode="url" spellcheck="false" required placeholder="https://llm-gateway.example/v1">${preset.hint ? `<small class="gpi-field-hint">${tr(preset.hint[0], preset.hint[1])}</small>` : ''}</label>`;
-    const savedModel = !catalog && config.connection_verified === true && config.model
+    const savedModel = !catalog && savedConnection && config.connection_verified === true && config.model
       ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Current model:', '当前模型：')} ${esc(config.model)}</div>` : '';
     const submitLabel = state.modelDiscovering ? tr('Connecting…', '正在连接…')
       : state.setupSaving ? tr('Verifying…', '正在验证…')
@@ -175,7 +181,6 @@
           </div>
         </details>
         ${catalog ? modelStep(options, values, catalog) : savedModel}
-        ${!options.staticPreview && runtimeMissing.length ? `<div class="gpi-config-note warn gpi-blockers"><div class="gpi-blocker-lead">${tr('Before connecting:', '连接前请处理：')}</div><ol class="gpi-blocker-list">${runtimeMissing.map(b => `<li><span class="gpi-blocker-title">${esc(b.title)}</span>${b.fix ? `<span class="gpi-blocker-fix">${esc(b.fix)}</span>` : ''}<details class="gpi-blocker-diagnostic"><summary>${tr('Diagnostic details', '诊断详情')}</summary><code>${esc(b.code)}</code></details></li>`).join('')}</ol></div>` : ''}
         <div class="gpi-connection-notice">${tr('Connecting uses this credential to read the service’s model list. After saving, conversation text and files you choose may be sent to this service.', '连接时会用这个凭据读取该服务的模型列表。保存后，对话内容和你选择的文件可能发送至该服务。')}</div>
         <button class="btn ${options.connectionConfigured ? '' : 'primary'} gpi-provider-submit" type="submit" ${busy || options.staticPreview ? 'disabled' : ''}>${submitLabel}</button>
         ${catalog && !busy ? `<button class="gpi-link gpi-provider-rediscover" type="button" data-gpi-provider-rediscover>${tr('List models again', '重新读取模型')}</button>` : ''}
