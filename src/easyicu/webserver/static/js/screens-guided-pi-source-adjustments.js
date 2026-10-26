@@ -65,6 +65,37 @@
     const operator = { '>=': '≥', '<=': '≤', '!=': '≠' }[value.operator] || String(value.operator || '');
     return `${conceptName(value.concept)} ${operator} ${Number(value.value)}${unit}`;
   }
+  // Who a band-aligned cut-off adds or drops, from the two thresholds alone.
+  // Age is recorded in whole years, so its strict and non-strict forms
+  // normalise to a lower-inclusive cut; other concepts state the interval.
+  function bandShift(original, substitute) {
+    const concept = original && original.concept;
+    const cut = (value, operator) => {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return null;
+      if (operator === '>=' || operator === '<') return { lower: operator === '>=', at: number };
+      if (concept === 'age' && Number.isInteger(number) && (operator === '>' || operator === '<=')) {
+        return { lower: operator === '>', at: number + 1 };
+      }
+      return null;
+    };
+    const from = cut(original && original.value, original && original.operator);
+    const to = cut(substitute && substitute.value, substitute && substitute.operator);
+    if (!from || !to || from.lower !== to.lower || from.at === to.at) return '';
+    const lo = Math.min(from.at, to.at);
+    const hi = Math.max(from.at, to.at);
+    // A higher lower bound, or a lower upper bound, narrows the cohort.
+    const drops = from.lower ? to.at > from.at : to.at < from.at;
+    if (concept === 'age' && Number.isInteger(lo) && Number.isInteger(hi)) {
+      const range = hi - lo === 1 ? `${lo}` : `${lo}–${hi - 1}`;
+      return drops ? tr(`Patients aged ${range} are not included.`, `${range} 岁的患者不纳入。`)
+        : tr(`Patients aged ${range} are also included.`, `${range} 岁的患者也会纳入。`);
+    }
+    const unit = { weight: ' kg' }[concept] || '';
+    const name = conceptName(concept);
+    return drops ? tr(`Patients with ${name} from ${lo} to under ${hi}${unit} are not included.`, `${name}在 ${lo}${unit} 至不满 ${hi}${unit} 的患者不纳入。`)
+      : tr(`Patients with ${name} from ${lo} to under ${hi}${unit} are also included.`, `${name}在 ${lo}${unit} 至不满 ${hi}${unit} 的患者也会纳入。`);
+  }
   function sourceField(field) {
     if (!field || typeof field !== 'object') return '';
     return [field.table, field.column].filter(part => typeof part === 'string' && part).join('.');
@@ -89,6 +120,9 @@
       reason = String(item.substitute || '').startsWith('followup_days_')
         ? tr('Use the stated horizon and documented follow-up; exclude stays without documented horizon support.',
           '使用明确的时间范围和有随访记录的入住；排除无法确认该时间范围生存状态的入住。')
+        : capability === 'censor_time' && item.substitute === 'hospital_discharge'
+          ? tr('In-hospital death includes deaths after ICU discharge, so follow-up ends at hospital discharge instead.',
+            '院内死亡包括出 ICU 后的死亡，所以随访到出院时结束，而不是出 ICU 时。')
         : capability === 'censor_time'
           ? tr('Follow-up ends at ICU discharge; deaths after leaving the ICU are outside this endpoint.',
             '在 ICU 出科时结束随访；出 ICU 后的死亡不计入这一结局。')
@@ -96,8 +130,9 @@
     } else if (capability.startsWith('threshold:')) {
       original = threshold(item.original);
       substitute = threshold(item.substitute);
+      const shift = bandShift(item.original, item.substitute);
       reason = tr(`${database} records ${conceptName(item.original && item.original.concept)} in bands, so the cut-off moves to the nearest band edge.`,
-        `${database} 的${conceptName(item.original && item.original.concept)}按区间记录，切点改为最近的区间边界。`);
+        `${database} 的${conceptName(item.original && item.original.concept)}按区间记录，切点改为最近的区间边界。`) + (shift ? tr(` ${shift}`, shift) : '');
     } else {
       return '';
     }

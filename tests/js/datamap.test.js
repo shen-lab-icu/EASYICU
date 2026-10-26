@@ -38,7 +38,7 @@ function harness(overrides = {}) {
   const window = {
     EU_LANG: overrides.language || 'zh',
     EU_DATABASE_NAMES: { name: key => ({ miiv: 'MIMIC-IV', eicu: 'eICU-CRD', aumc: 'AmsterdamUMCdb' }[key] || ''), abbr: key => ({ miiv: 'M-IV', eicu: 'eICU', aumc: 'AUMC' }[key] || '') },
-    EU_CATALOG: { dict: { age: ['Age', '年龄', 'years'] } },
+    EU_CATALOG: { dict: { age: ['Age', '年龄', 'years'], samp: ['Microbiology sample', '微生物标本', ''] } },
     EU_API: { loadDataMap: async page => { calls.push(JSON.parse(JSON.stringify(page))); if (overrides.failure) throw overrides.failure; return overrides.view || VIEW; } },
   };
   const document = { querySelector: selector => (selector === '[data-dmap-root]' ? host : null) };
@@ -159,5 +159,25 @@ test('supported mortality offers name the endpoint, clock, censoring and require
       assert.ok(host.innerHTML.includes(language === 'zh' ? '需要你确认后才运行' : 'needs your confirmation before it runs'));
       assert.doesNotMatch(host.innerHTML, /icu_death|icu_discharge_proxy|followup_days_|mort_\d+d/);
     }
+  }
+});
+
+test('a binned variable names its band width and top band; a missing derived one names its unavailable inputs', async () => {
+  for (const [language, age, weight, missing] of [
+    ['zh', '每 5 岁记为一段；90 岁及以上为一段', '每 5 kg 记为一段', '缺少的输入：微生物标本、gcs_raw'],
+    ['en', 'Recorded in 5-year bands; 90 and above form one band', 'Recorded in 5-kg bands', 'Missing inputs: Microbiology sample, gcs_raw'],
+  ]) {
+    const concepts = [
+      { concept: 'age', unit: 'years', status: 'substituted', capability: {}, substitute: { kind: 'binned', bin_width: 5, top_code: 90 } },
+      { concept: 'weight', unit: 'kg', status: 'substituted', capability: {}, substitute: { kind: 'binned', bin_width: 5, top_code: null } },
+      { concept: 'susp_inf', unit: 'boolean', status: 'missing', capability: { missing_dependencies: ['samp', 'gcs_raw'] }, substitute: null },
+      { concept: 'lact', unit: 'mmol/L', status: 'missing', capability: { missing_dependencies: [] }, substitute: null },
+    ];
+    const view = { ...VIEW, databases: [{ ...row('hirid', { status: 'exact', decision: {} }), concepts }] };
+    const { screen, root, host } = harness({ view, language });
+    screen.afterRender(root);
+    await settle();
+    const titles = [...host.innerHTML.matchAll(/<td title="([^"]*)"><span class="dmap-chip/g)].map(match => match[1]);
+    assert.deepEqual(titles, [age, weight, missing]);
   }
 });
