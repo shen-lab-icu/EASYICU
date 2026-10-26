@@ -21,6 +21,7 @@ from easyicu.research_agent.planning.cohort_contract import (
     cohort_concept_id_scope,
     cohort_definition_sha,
 )
+from easyicu.webserver.research_evidence_preview import project_review_evidence_refs
 
 
 DomainName = Literal["idea", "literature", "data", "analysis", "manuscript"]
@@ -119,7 +120,7 @@ def _idea_status(
             domain="idea",
             status="passed",
             summary="The selected idea carries an accepted, digest-bound prior-art receipt.",
-            evidence_refs=["StudyContext.idea_handoff"],
+            evidence_refs=[],
         )
     else:
         findings.append(
@@ -131,7 +132,7 @@ def _idea_status(
                     "No accepted, digest-bound prior-art review proves that this "
                     "question is a reliable or sufficiently differentiated research idea."
                 ),
-                evidence_refs=["StudyContext.idea_handoff"],
+                evidence_refs=[],
                 remediation=(
                     "Run Idea Mining prior-art retrieval, inspect same-topic hits, and "
                     "accept the refreshed handoff before treating the idea as publishable."
@@ -142,7 +143,7 @@ def _idea_status(
             domain="idea",
             status="not_assessed",
             summary="Technical executability is not evidence of novelty or publication value.",
-            evidence_refs=["StudyContext.idea_handoff"],
+            evidence_refs=[],
         )
     return (
         domain,
@@ -718,6 +719,19 @@ def build_scientific_readiness_projection(
     else:
         status = "blocked"
         claim_ceiling = "unsupported"
+    # A context label or an unregistered working file is not a reader link.
+    # Use the preview owner's unique, digest-verified join and the consumer's
+    # reference budgets; preserve findings even when no artifact can be cited.
+    references = [ref for row in [*domains, *findings[:40]] for ref in row.evidence_refs[:8]]
+    registered = {
+        row["reference"] for row in project_review_evidence_refs(run_dir, references)[:40]
+    } if run_dir is not None else set()
+    domains = [row.model_copy(update={"evidence_refs": list(dict.fromkeys(
+        ref for ref in row.evidence_refs[:8] if ref in registered
+    ))}) for row in domains]
+    findings = [row.model_copy(update={"evidence_refs": list(dict.fromkeys(
+        ref for ref in row.evidence_refs[:8] if index < 40 and ref in registered
+    ))}) for index, row in enumerate(findings)]
     return ScientificReadinessProjection(
         run_id=_text(run_id, 160) or "unknown_run",
         status=status,
