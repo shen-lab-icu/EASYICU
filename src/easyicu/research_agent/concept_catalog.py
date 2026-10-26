@@ -36,9 +36,9 @@ import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from .concept_availability import normalize_concept_name
+from .concept_availability import explain_concept_availability, normalize_concept_name
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _DEFAULT_DICTS = ("concept-dict.json", "sofa2-dict.json")
@@ -666,7 +666,187 @@ def load_concept_catalog(
     )
 
 
+class DefinitionProjectionError(ValueError):
+    def __init__(self, reason_code: str):
+        self.reason_code = reason_code
+        super().__init__(reason_code)
+
+
+def _json_value(value: Any) -> Any:
+    # Metadata contains Timedelta objects, tuples and other owner scalar types.
+    return json.loads(json.dumps(value, default=str))
+
+
+def _definition_dependencies(names: Sequence[str], dictionary: Any) -> set[str]:
+    """Retain structural score restrictions through owner-declared composites."""
+    seen: set[str] = set()
+    pending = list(names)
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        definition = dictionary.get(name)
+        if definition is not None:
+            pending.extend([*definition.sub_concepts, *definition.depends_on])
+    return seen
+
+
+def _databases(database: str | None) -> tuple[str, ...]:
+    from easyicu.databases.profiles import get_database_profile, iter_database_profiles
+
+    if database is None:
+        return tuple(profile.key for profile in iter_database_profiles(public_only=True))
+    try:
+        profile = get_database_profile(database)
+    except KeyError as exc:
+        raise DefinitionProjectionError("definition.database_unknown") from exc
+    return (profile.key,)
+
+
+def extraction_projection(database: str | None = None) -> dict[str, Any]:
+    """Advertise the exact Data Extraction module roster and mappings per DB."""
+    from easyicu.api.extraction import EXTRACT_MODULES
+    from easyicu.databases.profiles import get_database_profile
+
+    return {
+        "schema_version": "easyicu.extraction_skill_projection/1",
+        "owner": "easyicu.api.extraction.extract_database",
+        "execution": "projection_only",
+        "databases": [
+            {
+                "database": db, "label": get_database_profile(db).display_name,
+                "modules": {
+                    name: {"concepts": list(concepts), "availability": {
+                        concept: explain_concept_availability(concept=concept, database=db).model_dump(mode="json")
+                        for concept in concepts
+                    }} for name, concepts in EXTRACT_MODULES.items()
+                },
+                "use_action": {
+                    "kind": "open_owner", "owner": "data_extraction",
+                    "entry": "/api/jobs/extract", "auto_submit": False,
+                    "prefill": {"database": db, "modules": list(EXTRACT_MODULES),
+                                "format": "parquet", "merge": True,
+                                "include_feature_definitions": True},
+                },
+            } for db in _databases(database)
+        ],
+        "availability_basis": "packaged_mappings_not_patient_coverage",
+    }
+
+
+def _time_defaults(reference: str | None) -> dict[str, Any]:
+    import importlib
+    import inspect
+
+    if not reference or not reference.startswith("easyicu.scores."):
+        return {}
+    module, _, name = reference.rpartition(".")
+    function = getattr(importlib.import_module(module), name, None)
+    if not callable(function):
+        return {}
+    return {
+        key: _json_value(parameter.default)
+        for key, parameter in inspect.signature(function).parameters.items()
+        if parameter.default is not inspect.Parameter.empty
+        and any(token in key for token in ("window", "hours", "lwr", "upr", "lookback"))
+    }
+
+
+def clinical_definitions(concepts: Sequence[str] | None = None,
+                         *, database: str | None = None) -> dict[str, Any]:
+    """Project all registered composites, or an explicit subset, without tables of our own."""
+    from dataclasses import asdict
+
+    from easyicu.clinical_contracts import load_clinical_contracts
+    from easyicu.concept.export_metadata import metadata_definition_for_concept
+    from easyicu.concept_output_sources import COMPOSITE_CONCEPT_OUTPUT_SOURCES, COMPOSITE_LOADER_SUPPORT
+    from easyicu.databases.profiles import get_database_profile
+    from easyicu.resources import load_dictionary
+    from easyicu.scores.aki_profiles import list_aki_profiles
+    from easyicu.scores.sofa2_aggregate import SOFA2_STRUCTURALLY_UNAVAILABLE_COMPONENTS_BY_DATABASE
+
+    dictionary = load_dictionary(include_sofa2=True)
+    contracts = load_clinical_contracts()
+    by_concept = {name: contract for contract in contracts.values() for name in contract.concepts}
+    registered = {
+        name for name, definition in dictionary.items()
+        if definition.sub_concepts or definition.depends_on
+    } | set(by_concept) | set(COMPOSITE_CONCEPT_OUTPUT_SOURCES)
+    if concepts is not None and (isinstance(concepts, (str, bytes)) or not concepts):
+        raise DefinitionProjectionError("definition.concepts_required")
+    names = sorted(registered) if concepts is None else list(dict.fromkeys(concepts))
+    if any(name not in registered for name in names):
+        raise DefinitionProjectionError("definition.concept_unknown")
+    databases = _databases(database)
+    rows = []
+    for name in names:
+        source = COMPOSITE_CONCEPT_OUTPUT_SOURCES.get(name, name)
+        definition = dictionary.get(source) or metadata_definition_for_concept(name, "", dictionary)
+        support = COMPOSITE_LOADER_SUPPORT.get(source)
+        components = list(dict.fromkeys([
+            *definition.sub_concepts, *definition.depends_on,
+            *(support.required_concepts if support else ()),
+            *(support.optional_concepts if support else ()),
+        ]))
+        contract = contracts.get(definition.clinical_contract_id) or by_concept.get(source)
+        defaults = _time_defaults(contract.reference_implementation if contract else None)
+        dependency_closure = _definition_dependencies([source, *components], dictionary)
+        per_database = {}
+        for db in databases:
+            parent = get_database_profile(db).parent_key or db
+            structural = SOFA2_STRUCTURALLY_UNAVAILABLE_COMPONENTS_BY_DATABASE.get(parent, ())
+            unavailable = sorted(dependency_closure & set(structural))
+            availability = explain_concept_availability(concept=name, database=db).model_dump(mode="json")
+            per_database[db] = {
+                "availability": availability,
+                "component_availability": {
+                    component: explain_concept_availability(concept=component, database=db).model_dump(mode="json")
+                    for component in components
+                },
+                "structurally_unavailable_components": unavailable,
+                "usable": availability["available"] and not unavailable,
+                "database_conformance": contract.database_conformance.get(parent) if contract else None,
+                "substitution_policy": "owner_declared_only_no_automatic_substitution",
+                "owner_source_bindings": {
+                    component: _json_value([asdict(item) for item in child.for_data_source(
+                        # The registry supplies inheritance for official demos.
+                        _source_config(db)
+                    )]) for component in [source, *components]
+                    if (child := dictionary.get(component)) is not None
+                },
+                "aki_profiles": [dict(profile.payload, profile_id=profile.profile_id)
+                                 for profile in list_aki_profiles(db)]
+                if source.startswith("kdigo_") else [],
+            }
+        rows.append({
+            "concept": name, "source_concept": source, "description": definition.description,
+            "components": components, "callback": definition.callback,
+            "clinical_contract": _json_value(asdict(contract)) if contract else None,
+            "time_window": {
+                "definition_time_anchor": contract.definition_time_anchor if contract else None,
+                "interval": _json_value(definition.interval),
+                "pre_admission_lookback_hours": definition.pre_admission_lookback_hours,
+                "score_owner_defaults": defaults,
+                "callback": definition.callback,
+                "study_observation_window": "requires_explicit_selection",
+            },
+            "databases": per_database,
+        })
+    return {"schema_version": "easyicu.clinical_definition_projection/1",
+            "availability_basis": "packaged_mappings_not_patient_coverage", "items": rows}
+
+
+def _source_config(database: str):
+    from easyicu.databases.profiles import get_packaged_registry
+
+    return get_packaged_registry().get(database)
+
+
 __all__ = [
+    "clinical_definitions",
+    "extraction_projection",
+    "DefinitionProjectionError",
     "ConceptCatalog",
     "DERIVED_CONCEPT_HINTS",
     "concept_dictionary_ids",

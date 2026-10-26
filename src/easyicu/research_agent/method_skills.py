@@ -36,7 +36,95 @@ REFERENCE_SCRIPTS_BOUNDARY = "host_reference_scripts_executable"
 
 ClaimCeiling = Literal["reportable", "analysis_only"]
 ExecutionMode = Literal["deterministic_host", "agent_coded_with_host_gates"]
-SkillLayer = Literal["research_workflow", "analysis_module"]
+SkillLayer = Literal["research_workflow", "analysis_module", "data_definition", "planning_aid"]
+
+
+OWNER_ENTRIES = {
+    "six-database-cohort-extraction": ("data_definition", "data_extraction", "/api/jobs/extract"),
+    "clinical-concept-definitions": ("data_definition", "concept_catalog",
+                                     "easyicu.research_agent.concept_catalog.clinical_definitions"),
+    "sample-size-and-power": ("planning_aid", "sample_size",
+                              "easyicu.research_agent.skill_packages"),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerSkillSpec:
+    skill_id: str
+    title: str
+    title_zh: str
+    description: str
+    description_zh: str
+    layer: Literal["data_definition", "planning_aid"]
+    category: str
+    category_zh: str
+    owner: str
+    entry: str
+    claim_ceiling: str | None = None
+    capability_id: None = None
+    action_ids: tuple[str, ...] = ()
+    included_module_ids: tuple[str, ...] = ()
+
+    def to_dict(self, *, enabled: bool) -> dict[str, Any]:
+        validate_owner_skill(self)
+        prefill: dict[str, Any] = {}
+        if self.owner == "data_extraction":
+            from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
+
+            prefill = {"modules": list(CONCEPT_GROUPS_INTERNAL), "format": "parquet",
+                       "merge": True, "include_feature_definitions": True}
+        row = {
+            "id": self.skill_id, "title": self.title, "title_zh": self.title_zh,
+            "description": self.description, "description_zh": self.description_zh,
+            "category": self.category, "category_zh": self.category_zh,
+            "layer": self.layer, "enabled": bool(enabled), "version": "easyicu.clinician-skills/1",
+            "capability_id": None, "action_ids": [], "included_module_ids": [],
+            "workflow_steps": [], "execution_mode": (
+                "owner_projection" if self.layer == "data_definition" else "deterministic_host"
+            ),
+            "scope": self.description,
+            "prompt": f"Use {self.title}. My research question: ",
+            "prompt_zh": f"请使用“{self.title_zh}”。我的研究问题是：",
+            "use_action": {"kind": "open_owner", "owner": self.owner, "entry": self.entry,
+                           "enabled": bool(enabled), "auto_submit": False, "prefill": prefill},
+        }
+        if self.claim_ceiling is not None:
+            row["claim_ceiling"] = self.claim_ceiling
+        return row
+
+
+def validate_owner_skill(row: OwnerSkillSpec) -> None:
+    expected = OWNER_ENTRIES.get(row.skill_id)
+    if expected != (row.layer, row.owner, row.entry):
+        raise RuntimeError("skill.owner_binding_invalid")
+    if row.capability_id is not None or row.action_ids or row.included_module_ids:
+        raise RuntimeError("skill.projection_cannot_execute_analysis")
+    if row.layer == "data_definition" and row.claim_ceiling is not None:
+        raise RuntimeError("skill.definition_cannot_claim")
+    if row.layer == "planning_aid" and row.claim_ceiling != "analysis_only":
+        raise RuntimeError("skill.planning_analysis_only")
+
+
+OWNER_SKILLS = (
+    OwnerSkillSpec(
+        "six-database-cohort-extraction", "Six-database cohort extraction", "六数据库队列提取",
+        "Choose a database, cohort and variables to export through Data Extraction.",
+        "选择数据库、队列和变量，通过数据提取导出。", "data_definition", "Data and definitions",
+        "数据与定义", "data_extraction", "/api/jobs/extract",
+    ),
+    OwnerSkillSpec(
+        "clinical-concept-definitions", "Clinical concept definitions", "临床概念定义",
+        "Inspect score components, time windows and database availability before choosing a definition.",
+        "选择定义前查看评分组成、时间窗和各数据库的可用性。", "data_definition", "Data and definitions",
+        "数据与定义", "concept_catalog", OWNER_ENTRIES["clinical-concept-definitions"][2],
+    ),
+    OwnerSkillSpec(
+        "sample-size-and-power", "Sample size and power", "样本量与效能",
+        "Estimate participants or events needed from your study assumptions before analysis.",
+        "分析前根据研究假设估算所需人数或事件数。", "planning_aid", "Study planning", "研究规划",
+        "sample_size", OWNER_ENTRIES["sample-size-and-power"][2], "analysis_only",
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +176,17 @@ class MethodSkillSpec:
         }
 
 
-METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
+METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
+    MethodSkillSpec(
+        "treatment-patterns", "Treatment patterns", "治疗使用模式", "Descriptive", "描述性研究",
+        "Describe drug-class use during the ICU stay and time to first recorded use by group.",
+        "按分组描述 ICU 期间某类药物的使用比例及首次记录用药的时间。",
+        "descriptive_measurement_v1", ("descriptive.table_one", "time_to_event.competing_risks_cif"),
+        "deterministic_host", "analysis_only",
+        "Use Treatment patterns with reviewed class capture, groups and ICU time origin. My research question: ",
+        "请使用“治疗使用模式”，在计划中审阅药物覆盖、分组和 ICU 时间起点。我的研究问题是：",
+        layer="analysis_module",
+    ),
     MethodSkillSpec(
         "cohort-characterization-table-one",
         "Cohort characterization and Table 1",
@@ -463,7 +561,7 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
             "missingness-measurement-audit",
         ),
     ),
-)
+) + OWNER_SKILLS
 
 
 _CAPABILITY_BY_ID = {row.capability_id: row for row in CAPABILITY_REGISTRY}
@@ -590,6 +688,11 @@ def _validate_method_skills() -> None:
         if method.implementation != "planned"
     }
     for row in METHOD_SKILLS:
+        if isinstance(row, OwnerSkillSpec):
+            validate_owner_skill(row)
+            continue
+        if row.layer not in {"research_workflow", "analysis_module"}:
+            raise RuntimeError("skill.analysis_layer_invalid")
         capability = _CAPABILITY_BY_ID.get(row.capability_id)
         if capability is None:
             raise RuntimeError(f"unknown method Skill capability: {row.capability_id}")
@@ -644,6 +747,8 @@ def method_skill_catalog(*, enabled: bool) -> dict[str, Any]:
         "components": components,
         "workflow_count": len(workflows),
         "analysis_module_count": len(modules),
+        "data_definition_count": sum(row["layer"] == "data_definition" for row in items),
+        "planning_aid_count": sum(row["layer"] == "planning_aid" for row in items),
         "builtin_skill_count": len(items),
         "available_method_count": len(components),
         "planned_method_count": planned_count,
@@ -1144,11 +1249,192 @@ def _reference_script_sources(package: str) -> dict[str, str]:
     return sources
 
 
+CLINICIAN_SKILL_IDS = frozenset({
+    "six-database-cohort-extraction", "clinical-concept-definitions",
+    "treatment-patterns", "sample-size-and-power",
+})
+
+_INSTRUCTIONS = {
+    "six-database-cohort-extraction": """
+## When to use
+Choose one of the six registered ICU databases, cohort filters, modules and
+export format in Data Extraction. `extraction_projection(database)` projects
+the existing export roster and each concept's dictionary availability.
+The use action opens that owner with modules, database and Parquet prefilled;
+it never submits a job. Choose a registered source and review filters there.
+The existing entry is POST /api/jobs/extract; easyicu.api.extraction owns export.
+
+## Not for -> sibling
+- Understanding a score or changing a definition -> clinical-concept-definitions.
+- Comparing treatment use -> treatment-patterns, after governed extraction.
+- Evidence synthesis across databases is outside this skill.
+
+## Guardrails
+No new extraction engine, patient read, export, or execution is performed by
+this projection. A mapping does not prove observed coverage. Unknown database
+identities stop. Source permission and cohort validation remain with Data Extraction.
+This layer has no scientific claim ceiling because it produces no finding.
+""",
+    "clinical-concept-definitions": """
+## When to use
+Inspect SOFA-2, canonical Sepsis-3, KDIGO AKI or any other registered composite
+before choosing variables. Call clinical_definitions(concepts, database=...)
+for components, callback, owner time defaults, clinical contract and per-database
+availability. With no concepts it projects all registered composites.
+AKI profile payloads preserve reference/source-native differences and windows.
+Owner source bindings disclose database mappings and alternatives; they do not
+authorize substitution. Definition time anchors and study observation windows
+are separate. Unspecified study windows require explicit selection.
+
+## Not for -> sibling
+- Exporting these variables -> six-database-cohort-extraction.
+- Testing association -> adjusted-exposure-outcome-study.
+- SOFA-2 sepsis sensitivity is not canonical Sepsis-3; inspect its opt-in contract.
+
+## Guardrails
+Metadata comes directly from the dictionary, score and clinical-contract owners.
+Mapping-only conformance is not clinical validation. A structurally absent organ
+domain cannot be imputed into a SOFA-2 total. Missing dependencies and owner
+limitations stay visible. No score is computed and no claim ceiling is assigned.
+""",
+    "treatment-patterns": """
+## When to use
+Describe recorded drug-class exposure during the ICU stay by reviewed groups,
+and time from ICU admission to first recorded use. Bind a governed prepared
+cohort with one row per stay, a reviewed TableOneSpec and a source receipt.
+Confirm class-agent coverage, the meaning of no record and complete ICU follow-up.
+The class membership comes from the treatment capture registry.
+
+## Not for -> sibling
+- Treatment effects or time-dependent confounding -> target-trial-emulation.
+- Exposure-outcome association -> adjusted-exposure-outcome-study.
+- Sample-size planning -> sample-size-and-power.
+
+## Guardrails and output
+Use summarize_treatment_patterns; its Table 1 owner supplies counts/proportions
+and median/IQR, and its existing Aalen-Johansen owner supplies first-use CIF.
+Proportions use all ascertained stays. Timing medians use only exposed stays:
+they are not population time-to-event medians. Death and alive ICU discharge
+before use compete because neither allows later in-ICU use. Incomplete stays,
+conflicting exit flags and use/exit ties stop. A group with no exposures has no
+fitted CIF and an explicit reason.
+Time-zero exposure is first recorded use, not proof of a new treatment start.
+Missing capture never becomes untreated. Duplicate stays, incomplete class
+capture and invalid times stop. Table 1 inferential columns are not returned.
+All products remain analysis_only; no causal or manuscript finding is authorized.
+""",
+    "sample-size-and-power": """
+## When to use
+Use numeric assumptions supplied by the researcher or a governed aggregate with
+its receipt. The host functions accept scalars; no file, database or patient
+loader is accepted. Inputs, method, software version, integer sample sizes and
+analysis_only status travel with every result. Round each group upward.
+
+- two_proportions(p1, p2): independent groups, two-sided Cohen arcsine h normal
+  approximation through statsmodels NormalIndPower. This is not a pooled Wald
+  risk-difference calculation; rare events may need a different design.
+- two_means(difference, standard_deviation): common-SD independent two-sample
+  noncentral t calculation through statsmodels TTestIndPower.
+- survival_events(hazard_ratio): Schoenfeld required events under proportional
+  hazards; total N needs an assumed event fraction reflecting follow-up/attrition.
+- prediction_binary(parameters, cox_snell_r2, prevalence): Riley binary logistic
+  development minimum N. Count predictor coefficients, excluding the intercept.
+
+## Not for -> sibling
+- An observed treatment comparison -> treatment-patterns.
+- Building or validating a fitted model -> clinical-risk-prediction.
+- Paired, cluster, noninferiority, competing-risk or non-PH designs need a separate
+  reviewed planning method. Continuous/survival prediction is outside this port.
+- Post-hoc observed power and manuscript findings are not outputs of this skill.
+
+## Calculation contract
+Alpha and power are probabilities with power > alpha; effect cannot be null.
+For Schoenfeld, D=ceil((z(1-alpha/2)+z(power))² / [q(1-q) log(HR)²]).
+For Riley let R be anticipated adjusted Cox-Snell R², p the candidate parameters,
+S the target shrinkage, and M=1-exp(2*[pi*log(pi)+(1-pi)*log(1-pi)]).
+Criterion 1: n1=p/[(S-1)*log(1-R/S)]. Criterion 2 uses
+S2=R/(R+delta*M) in the same equation, limiting Nagelkerke R² optimism to delta.
+Criterion 3: n3=z((1+confidence)/2)²*pi*(1-pi)/margin², the Wald precision
+criterion for overall risk. Return ceil(max(n1,n2,n3)), each criterion and
+expected events. R must be below M, S and S2; never substitute Nagelkerke R².
+
+## References and validation basis
+Statsmodels stats.power NormalIndPower and TTestIndPower (installed version is
+recorded); Cohen, Statistical Power Analysis for the Behavioral Sciences, 1988.
+Schoenfeld DA, Biometrics 1983;39:499-503, doi:10.2307/2531021.
+Riley RD et al., Stat Med 2019;38:1276-1296, doi:10.1002/sim.7992.
+This reviewed equation-port surface is restricted to binary prediction, with
+the published pmsampsize worked-example inputs pinned in tests. It is not a
+vendored or complete pmsampsize implementation. Planning output is never a
+manuscript finding and does not certify the assumptions or aggregate receipt.
+""",
+}
+
+_EXAMPLES = {
+    "six-database-cohort-extraction": "extraction_projection('eicu_demo') returns the official demo's inherited mappings and an unsubmitted prefill. No demo patient rows are read.",
+    "clinical-concept-definitions": "clinical_definitions(['sofa2', 'sep3', 'kdigo_aki'], database='eicu_demo') shows owner metadata for the public demo schema without opening its patient files.",
+    "treatment-patterns": """Public synthetic demo (eight invented stays, no patient data):
+```python
+from easyicu.research_agent.skill_packages import public_demo, summarize_treatment_patterns
+frame, arguments = public_demo()
+result = summarize_treatment_patterns(frame, **arguments)
+```
+Both groups have 2/4 exposed stays; group A first-use median is 3 h (IQR 2.5-3.5 h).
+The fixture is synthetic and is not an analysis of an official ICU demo release.""",
+    "sample-size-and-power": """Cohen d=.5, alpha=.05, power=.8 gives 64 per arm.
+Probabilities .50 vs .65 give 170 per arm under Cohen's arcsine approximation.
+Schoenfeld HR=.7 with equal allocation gives 247 required events.
+Riley's binary worked example (24 parameters, Cox-Snell R²=.051, prevalence=.174)
+gives n=4115 (criteria: 4115, 763, 221), expected events=716.01.
+```python
+from easyicu.research_agent.skill_packages import prediction_binary
+result = prediction_binary(parameters=24, cox_snell_r2=.051, prevalence=.174)
+```""",
+}
+
+_STOPS = {
+    "six-database-cohort-extraction": ["definition.database_unknown"],
+    "clinical-concept-definitions": ["definition.database_unknown", "definition.concepts_required", "definition.concept_unknown"],
+    "treatment-patterns": ["treatment.class_unknown", "treatment.class_capture_incomplete",
+        "treatment.capture_review_required", "treatment.summary_contract_invalid", "treatment.columns_required",
+        "treatment.one_row_per_stay_required", "treatment.ascertainment_required", "treatment.time_invalid",
+        "treatment.event_order_unresolved", "treatment.no_exposures"],
+    "sample-size-and-power": ["planning.invalid_number", "planning.invalid_probability",
+        "planning.positive_required", "planning.power_not_above_alpha", "planning.null_effect",
+        "planning.assumption_source_required", "planning.aggregate_receipt_required",
+        "planning.assumption_source_mismatch", "planning.numerical_failure",
+        "planning.invalid_parameter_count", "planning.incompatible_r2"],
+}
+
+
+def clinician_package_sources(row: dict) -> dict[str, str]:
+    name = row["id"]
+    sources = {
+        "SKILL.md": (f"---\nname: {name}\ndescription: {json.dumps(row['description'])}\n"
+                     f"category: {json.dumps(row['category'])}\n---\n\n# {row['title']}\n"
+                     + _INSTRUCTIONS[name].strip() + "\n"),
+        "references/example.md": _EXAMPLES[name] + "\n",
+        "references/stops.json": json.dumps({code: code.replace(".", ": ").replace("_", " ")
+                                            for code in _STOPS[name]}, indent=2) + "\n",
+    }
+    if name == "treatment-patterns":
+        sources["scripts/run.py"] = (
+            "from easyicu.research_agent.skill_packages import "
+            "summarize_treatment_patterns as run, public_demo\n"
+        )
+    elif name == "sample-size-and-power":
+        sources["scripts/run.py"] = (
+            "from easyicu.research_agent.skill_packages import "
+            "two_proportions, two_means, survival_events, prediction_binary\n"
+        )
+    return sources
+
+
 def method_skill_package(skill_id: str, *, enabled: bool) -> dict[str, Any]:
     """Return one digest-bound, read-only package grouped by purpose."""
 
     kind, row, catalog_sha256 = _package_entry(skill_id, enabled=enabled)
-    sources = {
+    sources = clinician_package_sources(row) if row["id"] in CLINICIAN_SKILL_IDS else {
         "SKILL.md": _package_skill_markdown(kind, row),
         "references/validation_framework.md": _package_validation_markdown(row),
     }
@@ -1159,13 +1445,18 @@ def method_skill_package(skill_id: str, *, enabled: bool) -> dict[str, Any]:
         if kind == "analysis_module"
         else "method_contract.md"
     )
-    sources[f"references/{contract_name}"] = _package_contract_markdown(kind, row)
+    if row["id"] not in CLINICIAN_SKILL_IDS:
+        sources[f"references/{contract_name}"] = _package_contract_markdown(kind, row)
     if kind == "research_workflow":
         sources["references/composition.md"] = _package_composition_markdown(row)
     if row["id"] == "trajectory-phenotyping":
         sources["references/trajectory_assignment.md"] = _trajectory_assignment_markdown()
         sources["scripts/early_subtype_assignment.py"] = _trajectory_assignment_python()
     execution_boundary = DOCUMENTATION_ONLY_BOUNDARY
+    if kind == "data_definition":
+        execution_boundary = "owner_projection_no_execution"
+    if row["id"] in {"treatment-patterns", "sample-size-and-power"}:
+        execution_boundary = REFERENCE_SCRIPTS_BOUNDARY
     if row["id"] in REFERENCE_SCRIPT_PACKAGES:
         sources.update(_reference_script_sources(REFERENCE_SCRIPT_PACKAGES[row["id"]]))
         execution_boundary = REFERENCE_SCRIPTS_BOUNDARY
@@ -1175,7 +1466,7 @@ def method_skill_package(skill_id: str, *, enabled: bool) -> dict[str, Any]:
         files.append(
             {
                 "path": path,
-                "language": "markdown" if path.endswith(".md") else "python",
+                "language": "markdown" if path.endswith(".md") else "json" if path.endswith(".json") else "python",
                 "size_bytes": len(encoded),
                 "sha256": hashlib.sha256(encoded).hexdigest(),
                 "content": content,
