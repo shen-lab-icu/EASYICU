@@ -120,8 +120,8 @@ def test_owner_context_marker_is_shared_with_the_prompt_builder() -> None:
     assert f"export const OWNER_CONTEXT_MARKER = {marker};" in finalization
     assert f"const OWNER_CONTEXT_MARKER = {marker};" in entrypoint
     assert "`\\n\\n[EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1]\\n${boundedText(JSON.stringify(receipts), 24000)}`" in entrypoint
-    # The researcher's text precedes every host section; attached skills come last.
-    assert "return `${message}${HOST_LANGUAGE_MARKER}${requirement}${currentContext}${sourceContext}${transition}${attachedSkillContext(attachedSkills)}`;" in entrypoint
+    # The researcher's text precedes every host section; attached Skills, then mentioned objects, come last.
+    assert "return `${message}${HOST_LANGUAGE_MARKER}${requirement}${currentContext}${sourceContext}${transition}${attachedSkillContext(attachedSkills)}${mentionedObjectContext(mentionedObjects)}`;" in entrypoint
 
 
 MIMIC_IV = {"database": "miiv", "label": "MIMIC-IV", "reference_release": "3.1"}
