@@ -45,13 +45,16 @@ def study_requirements(study: Mapping, *, family: str, question: str = "") -> St
 
 
 def eligible_family_databases(family: str, *, requirements: StudyRequirements | None = None) -> tuple[str, ...]:
+    # A family-only suggestion probes default mortality and its disclosed
+    # alternatives. A supplied study keeps its named endpoint and requirements.
+    requirements = requirements or StudyRequirements(family=family, outcome="hospital_death")
     eligible = []
     for key in public_database_keys():
         try:
             profile = research_capability_profile(key)
         except KeyError:
             continue
-        if assess_study(profile, requirements or StudyRequirements(family=family)).status != "refusal":
+        if assess_study(profile, requirements).status != "refusal":
             eligible.append(key)
     return tuple(eligible)
 

@@ -34,6 +34,10 @@ def test_sources_are_deterministic_and_have_native_identifiers(tmp_path, databas
     assert pd.api.types.is_integer_dtype(frame[identifier])
     if database == "hirid":
         assert set(frame) == {"patientid", "admissiontime", "sex", "age", "discharge_status"}
+        assert frame.age.mod(5).eq(0).all() and frame.age.le(90).all()
+        observations = pd.read_parquet(tmp_path / "first/observations/1.parquet")
+        weight = observations.loc[observations.variableid.eq(10000400), "value"].dropna()
+        assert not weight.empty and weight.mod(5).eq(0).all()
         assert (tmp_path / "first/observations/1.parquet").is_file()
     elif database == "aumc":
         assert frame.patientid.nunique() < len(frame)
@@ -47,10 +51,13 @@ def test_sources_are_deterministic_and_have_native_identifiers(tmp_path, databas
         assert frame.ICUOffset.gt(0).all()
         assert (frame.TimeOfStay - frame.ICUOffset).min() >= 48 * 3600
         assert frame.OffsetOfDeath.isna().any()
+        assert set(frame.HospitalDischargeType) == {2026, 2028}
         assert ((frame.HospitalDischargeType != 2028) & frame.OffsetOfDeath.notna()).any()
         assert frame.OffsetOfDeath.iloc[0] == frame.TimeOfStay.iloc[0]
         assert frame.OffsetOfDeath.iloc[1] == frame.TimeOfStay.iloc[1] + 240 * 3600
         assert frame.WeightOnAdmission.between(45000, 125000).all()
+        assert frame.WeightOnAdmission.mod(5000).eq(0).all()
+        assert frame.AgeOnAdmission.mod(5).eq(0).all() and frame.AgeOnAdmission.le(90).all()
 
 
 @pytest.mark.parametrize("database", ["hirid", "aumc", "sic"])

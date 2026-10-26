@@ -66,7 +66,7 @@ def test_preplanner_binding_resolves_only_the_requested_recipe(monkeypatch):
 
     def resolve(name, database):
         requested.append(name)
-        return "full", None
+        return "full", None, ()
 
     monkeypatch.setattr(owner, "_derivation_status", resolve)
     assert bind_source_substitutions(ctx) == ctx

@@ -614,6 +614,10 @@ def _explain_concept_availability_cached(
         )
 
     dependencies = _concept_dependencies(definition)
+    from easyicu.concept_output_sources import required_recipe_concepts
+
+    required = required_recipe_concepts(definition.callback, db)
+    dependencies = _unique([*dependencies, *required])
     if not dependencies:
         return ConceptDatabaseAvailability(
             concept=canonical,
@@ -648,7 +652,14 @@ def _explain_concept_availability_cached(
     missing_dependencies = [
         cell.concept for cell in dep_cells if cell.status == "blocked"
     ]
-    if not missing_dependencies and not degraded_dependencies:
+    blocked_required = [cell for cell in dep_cells if cell.concept in required and cell.status == "blocked"]
+    # Name both the intermediate recipe and the actual unavailable input.
+    missing_dependencies = _unique([*missing_dependencies, *(dep for cell in blocked_required
+                                                             for dep in cell.missing_dependencies)])
+    if blocked_required:
+        status = "blocked"
+        reason = "required_dependency_blocked"
+    elif not missing_dependencies and not degraded_dependencies:
         status = "full"
         reason = "all_dependencies_available"
     elif available_dependencies or degraded_dependencies:
@@ -666,6 +677,7 @@ def _explain_concept_availability_cached(
         available=status != "blocked",
         direct_source=False,
         reason=reason,
+        structural_unavailable=any(_cell_is_structural_unavailable(cell) for cell in blocked_required),
         available_dependencies=available_dependencies,
         degraded_dependencies=degraded_dependencies,
         missing_dependencies=missing_dependencies,

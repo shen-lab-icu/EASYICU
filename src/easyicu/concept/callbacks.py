@@ -58,6 +58,8 @@ from ..scores.sepsis import (
     delta_start,
     sep3 as sep3_detector,
     susp_inf as susp_inf_detector,
+    suspected_infection_inputs,
+    suspected_infection_mode,
 )
 from ..scores.sepsis_sofa2 import sep3_sofa2 as sep3_sofa2_detector
 from ..table import ICUTable, WinTbl
@@ -6651,14 +6653,13 @@ def _callback_susp_inf(
         # Database-specific defaults:
         # - eICU: Use "icd_abx" (ICD感染诊断定人 + 抗生素定时) due to sparse microlab (1.5%)
         # - MIMIC-IV/AUMC: Use "and" (ABX + 血培养, Sepsis-3 standard)
-        if ds_name in {"eicu", "eicu_demo"}:
-            si_mode = "icd_abx"
+        si_mode = suspected_infection_mode(ds_name)
+        if si_mode == "icd_abx":
             logger.info(f"susp_inf: Using si_mode='icd_abx' for {ds_name} (ICD感染诊断 + 抗生素)")
         else:
-            si_mode = "and"
             logger.debug(f"susp_inf: Using si_mode='and' for {ds_name}")
 
-    required = ("abx", "infection_icd") if si_mode == "icd_abx" else ("abx", "samp")
+    required = suspected_infection_inputs(si_mode)
     for name in required:
         if name not in tables:
             return _infection_empty_result(

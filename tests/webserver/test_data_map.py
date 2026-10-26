@@ -95,6 +95,29 @@ def test_partial_derivation_is_not_invented_as_an_available_substitute():
     assert cell["substitute"] is None
 
 
+@pytest.mark.parametrize("database", ["hirid", "sic"])
+@pytest.mark.parametrize("concept", ["age", "weight"])
+def test_data_map_discloses_five_unit_bands_and_age_top_coding(database, concept):
+    cell, = build(database=database, concept=concept)["databases"][0]["concepts"]
+    assert cell["status"] == "substituted"
+    assert cell["substitute"]["kind"] == "binned"
+    assert cell["substitute"]["bin_width"] == 5
+    assert cell["substitute"]["top_code"] == (90 if concept == "age" else None)
+
+
+@pytest.mark.parametrize("database,concept,missing", [
+    (database, concept, "samp") for database in ("hirid", "sic")
+    for concept in ("susp_inf", "sep3", "sep3_sofa2")
+] + [("sic", "sofa2_cns", "gcs")])
+def test_data_map_names_the_input_that_blocks_a_recipe(database, concept, missing):
+    concept = "sep3_sofa1" if concept == "sep3" else concept
+    cell, = build(database=database, concept=concept)["databases"][0]["concepts"]
+    assert cell["status"] == "missing"
+    assert cell["capability"]["derivation_status"] == "blocked"
+    assert cell["reason_code"] == "required_dependency_blocked"
+    assert missing in cell["capability"]["missing_dependencies"]
+
+
 def test_study_families_retain_the_owners_decision_and_requirements():
     states = set()
     for row in build(concept="hr")["databases"]:

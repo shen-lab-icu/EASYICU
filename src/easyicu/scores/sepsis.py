@@ -14,6 +14,16 @@ import pandas as pd
 import numpy as np
 
 
+def suspected_infection_mode(database: str) -> str:
+    """The source-native default used by runtime and availability metadata."""
+    return "icd_abx" if database.removesuffix("_demo") == "eicu" else "and"
+
+
+def suspected_infection_inputs(mode: str) -> tuple[str, ...]:
+    """Inputs the callback must load before evaluating the selected mode."""
+    return ("abx", "infection_icd") if mode == "icd_abx" else ("abx", "samp")
+
+
 def delta_cummin(x: pd.Series) -> pd.Series:
     """Calculate delta from cumulative minimum (R ricu delta_cummin).
     

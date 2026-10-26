@@ -175,6 +175,28 @@ def resolve_composite_concept_output(
     return next(iter(outputs)) if len(outputs) == 1 else None
 
 
+def required_recipe_concepts(callback: str | None, database: str) -> tuple[str, ...]:
+    """Project required inputs from the executing recipes, not database lists.
+
+    Dictionary dependencies include optional refinements. For these recipes,
+    a missing required argument prevents evaluation, even when another input
+    is mapped. Keep the infection callback's source-native mode and the score
+    functions' required/optional arguments authoritative.
+    """
+    if callback not in {"susp_inf", "sep3", "sep3_sofa2", "sofa2_cns"}:
+        return ()
+    from inspect import Parameter, signature
+    from easyicu.scores.sepsis import sep3, suspected_infection_inputs, suspected_infection_mode
+    from easyicu.scores.sepsis_sofa2 import sep3_sofa2
+    from easyicu.scores.sofa2 import sofa2_cns
+
+    if callback == "susp_inf":
+        return suspected_infection_inputs(suspected_infection_mode(database))
+    function = {"sep3": sep3, "sep3_sofa2": sep3_sofa2, "sofa2_cns": sofa2_cns}[callback]
+    return tuple(name.removesuffix("_df") for name, parameter in signature(function).parameters.items()
+                 if parameter.default is Parameter.empty and name not in {"id_cols", "index_col"})
+
+
 class ConceptLoadPlanReason(str, Enum):
     INVALID_COLLECTION = "concept_load_plan.invalid_collection"
     EMPTY_REQUEST = "concept_load_plan.empty_request"
