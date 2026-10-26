@@ -289,7 +289,11 @@
         );
       }
       if (error.code === 'target_trial_database_out_of_scope') {
-        return tr('Target-trial emulation is currently supported only for MIMIC-IV. This study’s source is outside that scope, so analysis did not start. Revise the study in the conversation if appropriate.', '当前目标试验模拟只支持 MIMIC-IV。本研究的数据源不在该范围内，分析没有开始；如需修改研究，请在对话中说明。');
+        const gap = studyFamilyGapText({ family: 'causal_inference', ...((error.details && error.details.study_family_gap) || {}) });
+        return tr(
+          `${gap.refusal}, so analysis did not start. ${gap.instead}`,
+          `${gap.refusal}，分析没有开始。${gap.instead}`,
+        );
       }
       // D-P3-5: keep the URL as plain text (no <a>) — errorText() returns RAW
       // copy esc'd by callers per D-P2-2, so embedded HTML would be escaped and
@@ -852,18 +856,32 @@
           instead: '',
         };
       }
-      const family = {
-        survival: ['survival (time-to-event) analysis', '生存分析（时间到事件）'],
-        trajectory_clustering: ['subtype or trajectory clustering', '亚型或轨迹聚类分析'],
-      }[value.family] || ['this kind of study', '这类研究'];
-      const databases = { eicu: 'eICU', eicu_demo: 'eICU demo', miiv: 'MIMIC-IV', miiv_demo: 'MIMIC-IV demo' };
-      const database = databases[value.database] || tr('this database', '这个数据库');
-      const offered = (Array.isArray(value.supported_databases) ? value.supported_databases : ['miiv'])
-        .map(key => databases[key]).filter(Boolean).join(tr(' or ', '或')) || 'MIMIC-IV';
+      // The host compares the study's requirements with the database's
+      // capability profile; the missing capabilities are the reason.
+      const family = STUDY_FAMILY_NAMES[value.family] || ['this kind of study', '这类研究'];
+      // Database names and missing-capability wording: owner sourceAdjustments.
+      const adjustments = window.EasyICU.guidedPi.optional('sourceAdjustments');
+      const nameOf = key => {
+        const name = adjustments && typeof key === 'string' ? adjustments.databaseName(key) : '';
+        return name && name !== key ? name : '';
+      };
+      const database = nameOf(value.database);
+      const reasons = adjustments && Array.isArray(value.missing_capabilities)
+        ? [...new Set(value.missing_capabilities.slice(0, 20).map(adjustments.missingText).filter(Boolean))].slice(0, 4) : [];
+      // A demo is named only when its full database is not.
+      const offeredKeys = Array.isArray(value.supported_databases) ? value.supported_databases.slice(0, 12) : null;
+      const offered = offeredKeys && offeredKeys
+        .filter(key => !(String(key).endsWith('_demo') && offeredKeys.includes(String(key).slice(0, -5))))
+        .map(nameOf).filter(Boolean).join(tr(', ', '、'));
+      // Where it is offered is a fact, not advice: the researcher may not hold that database.
+      const where = offered ? tr(`This version supports it on ${offered}. `, `本版本可在 ${offered} 上做这类研究。`)
+        : offeredKeys && !offeredKeys.length ? tr('No database supports it in this version. ', '本版本还没有能做这类研究的数据库。') : '';
       return {
-        refusal: tr(`This version does not offer ${family[0]} on ${database}`, `本版本在 ${database} 上不支持${family[1]}`),
-        // Where it is offered is a fact, not advice: the researcher may not hold that database.
-        instead: tr(`This version offers it only on ${offered}; you can also ask with another study design.`, `本版本只在 ${offered} 上提供这类分析；也可以换一种研究设计再问。`),
+        refusal: database
+          ? tr(`${database} lacks data that ${family[0]} needs`, `${database} 缺少${family[1]}所需的数据`)
+          : tr(`This database lacks data that ${family[0]} needs`, `这个数据库缺少${family[1]}所需的数据`),
+        instead: `${reasons.length ? tr(`Specifically, ${reasons.join('; ')}. `, `具体是：${reasons.join('；')}。`) : ''}${where}${tr(
+          'You can also ask with another study design.', '也可以换一种研究设计再问。')}`,
       };
     }
 
@@ -960,6 +978,23 @@
         research_pipeline_plan_step_needs_sandbox: tr(
           'One step in this plan needs code written by the model during the run, and the desktop app does not run such code. Remove or change that step, then approve the plan. No analysis has been run.',
           '计划里有一步要靠模型临时写代码才能完成，桌面版不运行这类代码。请删除或修改这一步，再批准计划。尚未运行任何分析。',
+        ),
+        // Database capability gate (host: databases/research_approval.py).
+        study_capability_refused: tr(
+          'The selected database lacks data this study needs, so no analysis has been run. Change the study design or data source in the conversation.',
+          '所选数据库缺少这项研究需要的数据，尚未运行任何分析。请在对话里修改研究设计或数据来源。',
+        ),
+        capability_substitution_approval_required: tr(
+          'On this database the study runs with adjusted definitions, which need your approval in plan review. No analysis has been run.',
+          '在这个数据库上，研究要按调整后的口径进行，需要先在计划审阅里批准。尚未运行任何分析。',
+        ),
+        capability_substitution_not_applied: tr(
+          'The plan does not use the adjusted definitions this database requires, so no analysis has been run. Generate the plan again.',
+          '计划没有按这个数据库要求的口径修改，尚未运行任何分析。请重新生成计划。',
+        ),
+        capability_substitution_review_mismatch: tr(
+          'The approved definitions no longer match this plan, so no analysis has been run. Review and approve the plan again.',
+          '已批准的口径与当前计划不一致，尚未运行任何分析。请重新审阅并批准计划。',
         ),
         research_pipeline_runner_image_mismatch: tr(
           'The analysis runner image did not match this EasyICU version.',
