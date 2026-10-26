@@ -528,6 +528,18 @@
   },
   {
     "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/runs/{run_id}/follow-ups",
+    "fields": [
+      "path:project_id",
+      "path:run_id"
+    ],
+    "reaches": "Pi project binding -> verified completed result -> host family and capability dry compilers",
+    "protection": "owner check: project-scoped run lookup, completed approval, contained evidence paths and result digests; browser disclosure scan",
+    "writes": "instance home",
+    "write_owner": "Pi service initialization may maintain server-owned instance state; follow-up owners only read and dry compile."
+  },
+  {
+    "method": "GET",
     "route": "/api/copilot/pi/projects/{project_id}/runs/{run_id}/artifacts/{artifact_name}",
     "fields": [
       "path:project_id",
@@ -933,7 +945,7 @@
       "path:project_id",
       "path:run_id"
     ],
-    "reaches": "research_append_actions.append_options -> PiCopilotService._research_run_row -> resolve_result_source(recorded project run) -> compile_result_append per offered kind",
+    "reaches": "research_append_actions.append_options -> PiCopilotService._research_run_row -> resolve_result_source(recorded project run) -> compile_result_append per offered kind + result follow-up owners (read and dry compile only)",
     "protection": "hosted.guard_request + owner check: the project registry selects the run row before any read; run_id resolves only among that project's recorded runs and the sealed source",
     "guarded_fields": [],
     "guarded_errors": {},
