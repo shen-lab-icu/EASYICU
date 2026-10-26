@@ -626,6 +626,8 @@ def _pipeline_failure_code(
     if any(isinstance(item, ProviderHardStopExceeded) for item in chain):
         return "research_pipeline_provider_budget_exhausted"
     typed_failure = _safe_pipeline_typed_failure(exc)
+    if typed_failure.get("owner") == "easyicu.databases.research_capabilities_v1":
+        return typed_failure["reason_code"]
     if typed_failure.get("owner") == "easyicu.execution.host_plan_v1":
         return "research_pipeline_plan_step_needs_sandbox"
     if any("timeout" in type(item).__name__.casefold() for item in chain):
@@ -932,6 +934,7 @@ _RUNNER_IMAGE_MISMATCH_REASONS = frozenset(
 def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
     """Project one allowlisted owner diagnostic without exception text."""
 
+    from easyicu.databases.research_approval import CapabilityApprovalError
     from easyicu.research_agent.authority.baseline_association_runtime import BaselineAssociationAuthorityError
     from easyicu.research_agent.authority.current_case_scientific_runtime import (
         CurrentCaseScientificAuthorityError,
@@ -939,6 +942,8 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
     from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopExceeded
 
     for item in _pipeline_exception_chain(exc):
+        if isinstance(item, CapabilityApprovalError):
+            return item.diagnostic()
         if isinstance(item, ProviderHardStopExceeded):
             return {
                 "owner": "easyicu.providers.hard_stop_v1",
@@ -2779,6 +2784,12 @@ def _research_user_preferences(
         constraints["confirmations"] = dict(confirmations)
     if analysis_design:
         constraints["analysis_design"] = dict(analysis_design)
+        if analysis_design.get("analysis_family") and study.get("data_source"):
+            from .research_capability_scope import study_requirements
+
+            constraints["database_study_requirements"] = study_requirements(
+                study, family=analysis_design["analysis_family"], question=str(study.get("question") or ""),
+            ).model_dump(mode="json")
     if patient_grouping is not None:
         coordinates = dict(patient_grouping.authority_coordinates)
         constraints["verified_patient_grouping"] = {

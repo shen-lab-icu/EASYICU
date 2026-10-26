@@ -474,7 +474,7 @@ def plan_value_columns(plan: AnalysisPlan) -> tuple[str, ...]:
             spec = step.exposure_outcome_distribution_spec
             columns.extend((spec.exposure, spec.outcome))
         for requirement in step.model_requirements:
-            columns.extend((requirement.outcome, requirement.exposure_source, *requirement.covariates))
+            columns.extend((requirement.outcome, requirement.exposure_source, *(requirement.covariates or ())))
             columns.extend(term.name for term in requirement.model_terms or ())
         if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}:
             columns.extend(value for value in step.inputs if ":" not in value)

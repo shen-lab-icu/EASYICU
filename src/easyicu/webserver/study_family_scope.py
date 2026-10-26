@@ -1,11 +1,7 @@
-"""Which analysis families v1 offers on the study's bound database.
+"""Compare a study's requirements with its bound source's capabilities.
 
-Product scope U1 (user decision 2026-10-09, ``docs/EASYICU_PRODUCT_AGREEMENT.md``):
-on eICU-CRD the survival, causal-simulation and subtyping/trajectory cells
-are out of scope, and the correct behaviour is to say why and refuse.  The
-causal cell has its own owner (``target_trial_setup.target_trial_database_gap``,
-applied by ``causal_trial_design``).  This owner refuses the other two at the
-research launch, before any model is called (:func:`stop_family_out_of_scope`).
+The 2026-10-26 six-database scope decision replaces whole-source bans with
+evidenced capability checks. Legacy refusal codes remain stable for callers.
 
 The family is the one the study records, else the one the conversation
 stated for the question and the host's check settled (``question_family_check``),
@@ -39,12 +35,6 @@ __all__ = [
 
 STUDY_FAMILY_DATABASE_OUT_OF_SCOPE = "study_family_database_out_of_scope"
 STUDY_FAMILY_GAP_FIELD = "study_family_gap"
-#: Families v1 does not offer on a database; the causal cell is target_trial_setup's.
-_OUT_OF_SCOPE: Dict[str, frozenset[str]] = {
-    "eicu": frozenset({"survival", "trajectory_clustering"}),
-}
-#: Where v1 offers every study family.
-_ALL_FAMILIES_DATABASES = ("miiv",)
 
 
 def v1_scope_description(
@@ -58,9 +48,8 @@ def v1_scope_description(
 
     import re
 
-    from easyicu.webserver.target_trial_setup import (
-        TARGET_TRIAL_DATABASE_OUT_OF_SCOPE, TARGET_TRIAL_DATABASES,
-    )
+    from easyicu.webserver.target_trial_setup import TARGET_TRIAL_DATABASE_OUT_OF_SCOPE
+    from easyicu.webserver.research_capability_scope import eligible_family_databases
 
     trial = reason_code == TARGET_TRIAL_DATABASE_OUT_OF_SCOPE
     source = database or detail.get("database")
@@ -71,7 +60,9 @@ def v1_scope_description(
         ),
         "database": source if isinstance(source, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", source) else None,
         "family": family if isinstance(family, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", family) else None,
-        "supported_databases": tuple(sorted(TARGET_TRIAL_DATABASES)) if trial else _ALL_FAMILIES_DATABASES,
+        "supported_databases": tuple(detail["supported_databases"]) if "supported_databases" in detail
+        else eligible_family_databases("causal_inference" if trial else str(family or "")),
+        **({"missing_capabilities": detail["missing_capabilities"]} if "missing_capabilities" in detail else {}),
     }
 
 
@@ -144,18 +135,13 @@ def study_family_database_gap(
             "database": database,
             "choices": _choices(disagreement),
         }
-    excluded = _OUT_OF_SCOPE.get(scope_database_key(database))
-    if not excluded:
-        return None
     family = _study_family(study, question, database)
-    if family not in excluded:
+    if family is None:
         return None
-    return {
-        "code": STUDY_FAMILY_DATABASE_OUT_OF_SCOPE,
-        "family": family,
-        "database": database,
-        "supported_databases": list(_ALL_FAMILIES_DATABASES),
-    }
+    from easyicu.webserver.research_capability_scope import capability_scope_gap
+
+    return capability_scope_gap(study, family=family, database=database,
+                                code=STUDY_FAMILY_DATABASE_OUT_OF_SCOPE, question=question)
 
 
 def scope_database_key(database: Optional[str]) -> str:

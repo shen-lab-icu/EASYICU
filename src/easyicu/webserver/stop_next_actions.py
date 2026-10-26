@@ -7,6 +7,8 @@ substitutes an input, approves a plan, or starts a run while being projected.
 
 from __future__ import annotations
 
+from easyicu.databases.research_requirements import MissingCapability
+
 import hashlib
 import json
 import re
@@ -82,6 +84,7 @@ class ScopeParams(BaseModel):
     database: Code | None = None
     family: Code | None = None
     supported_databases: tuple[Code, ...] = Field(default=(), max_length=8)
+    missing_capabilities: tuple[MissingCapability, ...] = ()
 
 
 class StopNextAction(BaseModel):

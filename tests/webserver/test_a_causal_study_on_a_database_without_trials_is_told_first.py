@@ -12,7 +12,6 @@ from __future__ import annotations
 from typing import Any
 
 from easyicu.webserver import target_trial_card as card_owner
-from easyicu.webserver.target_trial_setup import TARGET_TRIAL_DATABASE_OUT_OF_SCOPE
 
 _CAUSAL = {"analysis_family": "causal_inference", "analysis_unit": "icu_stay"}
 
@@ -27,16 +26,13 @@ def _study(database: str | None, **fields: Any) -> dict[str, Any]:
     }
 
 
-def test_an_eicu_causal_study_stops_before_a_trial_is_asked_for():
+def test_an_eicu_causal_study_is_asked_to_state_its_trial():
     study = _study("eicu")
 
     card = card_owner.target_trial_card(study, None)
 
-    assert card is not None
-    assert (card["state"], card["reason_code"], card["approvable"]) == (
-        "stopped", TARGET_TRIAL_DATABASE_OUT_OF_SCOPE, False,
-    )
-    assert card_owner.target_trial_next_action(study, None) == "target_trial_review"
+    assert card is None
+    assert card_owner.target_trial_next_action(study, None) == "target_trial_statement_needed"
 
 
 def test_a_mimic_iv_or_unbound_causal_study_is_still_asked_for_its_trial():

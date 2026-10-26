@@ -195,7 +195,7 @@ def test_an_unregistered_treatment_records_no_design_and_says_why(tmp_path, monk
     assert "norepinephrine" in result["summary"]
 
 
-def test_a_database_v1_emulates_no_trial_in_is_a_gap_on_the_first_turn(
+def test_a_database_with_treatment_timing_can_state_its_trial_on_the_first_turn(
     tmp_path, monkeypatch
 ) -> None:
     current = _current(**_bound(tmp_path, "eicu"), analysis_design={})
@@ -203,26 +203,20 @@ def test_a_database_v1_emulates_no_trial_in_is_a_gap_on_the_first_turn(
     result, writes = _update(monkeypatch, current, {"question": _NOREPINEPHRINE}, _NOREPINEPHRINE)
 
     assert result["code"] == "study_context_updated"
-    assert not writes[-1].get("analysis_design")
-    assert "causal_trial_reading" not in writes[-1]
-    # The trial setup's own refusal, by the same stable code.
+    assert writes[-1]["analysis_design"]["analysis_family"] == "causal_inference"
+    assert "causal_trial_reading" in writes[-1]
+    # Keep the legacy code for actual capability gaps, without banning eICU.
     assert TARGET_TRIAL_DATABASE_OUT_OF_SCOPE == "target_trial_database_out_of_scope"
     assert TARGET_TRIAL_DATABASE_OUT_OF_SCOPE in TARGET_TRIAL_COMPILE_STOPS
-    assert result["details"]["causal_trial_gap"] == {
-        "code": TARGET_TRIAL_DATABASE_OUT_OF_SCOPE,
-        "database": "eicu",
-        "supported_databases": ["miiv"],
-    }
-    assert "not in eicu" in result["summary"]
-    assert "not planned as an association" in result["summary"]
+    assert not result["details"].get("causal_trial_gap")
 
 
 @pytest.mark.parametrize(
     ("bound", "out_of_scope"),
     [
-        ("MIMIC-IV", None), ("mimic-iv", None), ("eICU-CRD", "eicu"), ("hirid", "hirid"),
+        ("MIMIC-IV", None), ("mimic-iv", None), ("eICU-CRD", None), ("hirid", None),
         # A public demo has the scope of the database it samples.
-        ("eicu_demo", "eicu_demo"),
+        ("eicu_demo", None),
     ],
 )
 def test_the_bound_database_is_read_by_its_registry_key(bound: str, out_of_scope) -> None:
@@ -309,17 +303,16 @@ def test_the_launch_refuses_an_unregistered_treatment_without_writing(tmp_path, 
     assert writes == []
 
 
-def test_the_launch_refuses_a_trial_in_a_database_v1_emulates_none_in(
+def test_the_launch_requires_a_stated_trial_on_eicu_too(
     tmp_path, monkeypatch
 ) -> None:
     study = {"id": "study-launch", "revision": 5, **_bound(tmp_path, "eicu"), "analysis_design": {}}
 
     stopped, writes = _launch(monkeypatch, study, _NOREPINEPHRINE)
 
-    assert stopped is not None and stopped.code == TARGET_TRIAL_DATABASE_OUT_OF_SCOPE
-    assert stopped.details["causal_trial_gap"]["database"] == "eicu"
+    assert stopped is not None and stopped.code == "study_causal_trial_design_unset"
     assert "causal_trial_reading" in stopped.details
-    assert writes == []
+    assert writes[-1]["analysis_design"]["analysis_family"] == "causal_inference"
 
 
 def test_a_question_only_the_planner_reads_as_causal_still_stops(tmp_path, monkeypatch) -> None:

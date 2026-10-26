@@ -24,6 +24,7 @@ writes inside the original method body.
 """
 
 from __future__ import annotations
+from easyicu.databases.research_approval import require_approved_database_capabilities
 
 import ast
 import copy
@@ -1023,13 +1024,11 @@ def _prepare_execute_phase_authority(
     stop_after_step_id: Optional[str],
 ) -> _ExecutePhasePreparation:
     """Execute probe + per-step analysis loop, with optional replanning."""
+    require_approved_database_capabilities(plan_result, run_dir)
     services = pipeline._execute_phase_services()
     context = plan_result.context
-    # Planner memory, retrieval narration, hypothesis notes, and article
-    # blueprints shaped the typed plan but are not Coder authority.  Preserve
-    # the Planner's selected variable projection while restoring the original
-    # user/run notes. Host execution attachments travel through a separate
-    # typed side channel so user prose can never be elevated to host authority.
+    # Preserve the Planner's variable projection with the original run notes.
+    # Host execution attachments use a separate typed authority channel.
     coder_base_context = plan_result.agent_context.model_copy(
         update={"notes": context.notes}
     )

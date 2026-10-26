@@ -646,7 +646,8 @@ def test_scope_choices_use_the_scope_owner(reason, family, key) -> None:
     assert actions[0].params.scope_owner == "easyicu.webserver.study_family_scope"
     assert actions[0].params.scope_label_key == key
     assert actions[0].params.database == "eicu"
-    assert actions[0].params.supported_databases == ("miiv",)
+    expected = ("miiv", "eicu", "aumc", "hirid", "mimic", "sic") if family == "causal_inference" else ("miiv", "aumc", "mimic", "sic")
+    assert actions[0].params.supported_databases == expected
 
 
 def test_a_scope_refusal_before_any_run_still_offers_a_conversation_choice() -> None:

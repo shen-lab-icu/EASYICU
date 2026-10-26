@@ -56,22 +56,27 @@ def _launch(tmp_path, question: str, database: str = "eicu"):
         budget_mode="planner_canary",
         runner_image=None,
     )
-    with pytest.raises(ResearchPipelineRunError) as stopped:
+    try:
         prepare_research_pipeline_run(request)
-    return stopped.value
+    except ResearchPipelineRunError as stopped:
+        return stopped
+    return None
 
 
 @pytest.mark.parametrize(
-    "question, family", [(_SUBTYPES, "trajectory_clustering"), (_COX, "survival")],
+    "question, family", [(_COX, "survival")],
 )
 def test_an_eicu_launch_stops_before_any_model_is_called(tmp_path, question, family):
     stopped = _launch(tmp_path, question)
 
     assert stopped.code == STUDY_FAMILY_DATABASE_OUT_OF_SCOPE
-    assert stopped.details["study_family_gap"] == {
-        "code": STUDY_FAMILY_DATABASE_OUT_OF_SCOPE, "family": family,
-        "database": "eicu", "supported_databases": ["miiv"],
-    }
+    gap = stopped.details["study_family_gap"]
+    assert (gap["code"], gap["family"], gap["database"]) == (STUDY_FAMILY_DATABASE_OUT_OF_SCOPE, family, "eicu")
+    assert "event_time" in {item["capability"] for item in gap["missing_capabilities"]}
+
+
+def test_eicu_trajectory_launch_is_no_longer_blocked_by_product_scope(tmp_path):
+    assert _launch(tmp_path, _SUBTYPES) is None
 
 
 @pytest.mark.parametrize("question", [_SUBTYPES, _COX])
@@ -88,7 +93,9 @@ def test_the_recorded_design_is_the_family_checked():
     association = {"analysis_design": {"analysis_family": "association_study"}}
     survival = {"analysis_design": {"analysis_family": "survival"}}
 
-    assert study_family_database_gap(association, question=_COX, database="eicu") is None
+    # The recorded family remains authoritative; an unavailable 28-day endpoint
+    # is a source gap even for an association, so use the available status here.
+    assert study_family_database_gap(association, question="Estimate the association with hospital mortality.", database="eicu") is None
     assert study_family_database_gap(
         survival, question="入 ICU 首日最高乳酸与院内死亡有关吗？", database="eicu",
     )["family"] == "survival"
