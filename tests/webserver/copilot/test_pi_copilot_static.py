@@ -99,7 +99,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
     assert "css/guided-pi-workspace.css?v=20261021-entry-examples1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
-    assert "js/screens-guided-pi-demo.js?v=20261026-fig1" in index
+    assert "js/screens-guided-pi-demo.js?v=20261026-fig2" in index
     assert "js/screens-guided-pi-demo-trace.js?v=20261026-demo3" in index
     assert "js/screens-guided-pi-demo-walkthrough.js?v=20261026-demo3" in index
     assert "css/guided-pi-demo-walkthrough.css?v=20261026-demo3" in index
