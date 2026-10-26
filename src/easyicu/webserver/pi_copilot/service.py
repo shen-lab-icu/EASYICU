@@ -3302,6 +3302,12 @@ class PiCopilotService(SkillAttachmentService):
                 details={"session_id": record.session_id},
             )
 
+    @property
+    def result_followup_database_owner(self):
+        from easyicu.webserver.research_multi_followup import RegisteredDatabaseOwner
+
+        return RegisteredDatabaseOwner()
+
     def approve_target_trial(
         self,
         session_id: str,

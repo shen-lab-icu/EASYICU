@@ -11,6 +11,10 @@ from easyicu.webserver.research_followups import result_followups
 
 router = APIRouter()
 
+from .research_multi import router as multi_router  # noqa: E402
+
+router.include_router(multi_router)
+
 
 class AppendRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")

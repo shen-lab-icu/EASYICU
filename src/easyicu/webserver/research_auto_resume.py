@@ -228,6 +228,10 @@ def _original_task(seed: Any) -> Any:
 
 def recover_runner(descriptor: Mapping[str, Any], job: Any) -> Callable[[Any], Any]:
     """Return an exact continuation; no branch may silently launch fresh work."""
+    from .research_multi_actions import SCHEMA as MULTI_SCHEMA, recover_multi_runner
+
+    if descriptor.get("schema_version") == MULTI_SCHEMA:
+        return recover_multi_runner(descriptor, job)
     from .research_append_dispatch import SCHEMA as APPEND_SCHEMA, recover_append_runner
 
     if descriptor.get("schema_version") == APPEND_SCHEMA:

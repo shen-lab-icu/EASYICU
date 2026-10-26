@@ -28,6 +28,29 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 
+def describe_estimate_heterogeneity(estimates: Sequence[float], *, null_value: float) -> dict:
+    """Descriptive range and null-direction agreement, without pooling.
+
+    This deterministic analysis-level comparison makes no sampling or
+    independence assumption and infers no standard errors from intervals.
+    The caller must first verify equal estimands, units and source identities.
+    A range is not an inferential heterogeneity test (Q or I-squared).
+    """
+    if not 2 <= len(estimates) <= 6 or not math.isfinite(null_value):
+        raise ValueError("multi_database_comparison_insufficient")
+    values = tuple(float(value) for value in estimates)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("multi_database_estimate_invalid")
+    directions = {(value > null_value) - (value < null_value) for value in values}
+    minimum, maximum = min(values), max(values)
+    spread = maximum - minimum
+    if not math.isfinite(spread):
+        raise ValueError("multi_database_estimate_invalid")
+    return dict(method="estimate_range_and_null_direction_v1", scope="analysis_level", n_databases=len(values),
+                minimum=minimum, maximum=maximum, spread=spread, null_value=null_value,
+                description_code="directions_differ" if len(directions) > 1 else "directions_agree")
+
+
 # ---------------------------------------------------------------------------
 # E-value
 # ---------------------------------------------------------------------------
