@@ -74,7 +74,7 @@ def _render_with(lang, capabilities):
 
 # What each example asks of its database, as the capability owner reads it.
 _EXAMPLE_REQUIREMENTS = {
-    "example-quick-lactate": ("hirid", "descriptive_epidemiology", {"concepts": ("lact", "sex")}),
+    "example-quick-lactate": ("hirid", "descriptive_epidemiology", {"concepts": ("lact",)}),
     "example-mortality-by-sex": ("mimic", "descriptive_epidemiology", {"outcome": "hospital_death", "concepts": ("sex",)}),
     "example-lactate-death": ("eicu", "association_study", {"outcome": "hospital_death", "concepts": ("lact", "age", "sex", "sofa")}),
     "example-sofa-trend": ("eicu", "ordinal_dose_response", {"outcome": "hospital_death", "concepts": ("sofa", "age", "sex")}),
