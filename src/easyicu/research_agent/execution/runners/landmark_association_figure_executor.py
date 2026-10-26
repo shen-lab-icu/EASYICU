@@ -355,6 +355,30 @@ def _configure_ratio_y_axis(ax: Any, *, lows: np.ndarray, highs: np.ndarray) -> 
     ax.yaxis.set_minor_formatter(NullFormatter())
 
 
+def _published_exposure_distribution(frame: pd.DataFrame) -> tuple[np.ndarray, np.ndarray | None]:
+    """Read an exact producer histogram, or retain a historical grid table."""
+
+    fractions = pd.to_numeric(frame["exposure_density_fraction"]).to_numpy(dtype=float)
+    if "exposure_distribution_json" not in frame:
+        return fractions, None
+    records = frame["exposure_distribution_json"]
+    if records.isna().any() or records.nunique() != 1:
+        raise ValueError("exposure distribution must be identical across curve rows")
+    histogram = json.loads(records.iloc[0])
+    edges = np.asarray(histogram["edges"], dtype=float)
+    counts = np.asarray(histogram["counts"], dtype=float)
+    if (
+        edges.ndim != 1 or counts.ndim != 1 or not counts.size
+        or len(edges) != len(counts) + 1 or not np.isfinite(edges).all()
+        or not (np.diff(edges) > 0).all() or not np.isfinite(counts).all()
+        or (counts < 0).any() or not (counts == np.floor(counts)).all()
+        or counts.sum() <= 0
+        or counts.sum() != pd.to_numeric(frame["exposure_density_n"]).sum()
+    ):
+        raise ValueError("exposure distribution requires ordered edges and conserved counts")
+    return counts / counts.sum(), edges
+
+
 def _draw_exposure_distribution(
     ax: Any,
     *,
@@ -362,18 +386,18 @@ def _draw_exposure_distribution(
     fractions: np.ndarray,
     color: str,
     exposure_label: str,
+    edges: np.ndarray | None = None,
 ) -> None:
-    """Draw the exact published grid-bin distribution as a quiet strip."""
+    """Draw the exact published distribution on the unchanged curve axis."""
 
-    if len(x) != len(fractions) or not len(x):
+    if not len(x) or (edges is None and len(x) != len(fractions)):
         raise ValueError("exposure density must align with the curve grid")
     if (fractions < 0).any() or not np.isfinite(fractions).all():
         raise ValueError("exposure density fractions must be finite and non-negative")
     if not np.isclose(float(fractions.sum()), 1.0, rtol=0.0, atol=1e-8):
         raise ValueError("displayed exposure density fractions must sum to one")
-    # The producer bins at grid midpoints and clips the end bins to the
-    # displayed range. Reuse those edges and the exact published fractions.
-    edges = np.concatenate(([x[0]], (x[:-1] + x[1:]) / 2.0, [x[-1]]))
+    if edges is None:
+        edges = np.concatenate(([x[0]], (x[:-1] + x[1:]) / 2.0, [x[-1]]))
     ax.bar(edges[:-1], 100.0 * fractions, width=np.diff(edges), align="edge",
            color=color, alpha=0.35, linewidth=0)
     ax.set_xlim(float(x.min()), float(x.max()))
@@ -1039,9 +1063,7 @@ def run_landmark_association_figure(
     y = pd.to_numeric(display_curve["adjusted_odds_ratio"]).to_numpy(dtype=float)
     low = pd.to_numeric(display_curve["ci_low"]).to_numpy(dtype=float)
     high = pd.to_numeric(display_curve["ci_high"]).to_numpy(dtype=float)
-    density = pd.to_numeric(
-        display_curve["exposure_density_fraction"]
-    ).to_numpy(dtype=float)
+    density, density_edges = _published_exposure_distribution(display_curve)
     ax.fill_between(
         x,
         low,
@@ -1099,6 +1121,7 @@ def run_landmark_association_figure(
         ax_curve_density,
         x=x,
         fractions=density,
+        edges=density_edges,
         color=palette["blue"],
         exposure_label=exposure_label,
     )
@@ -1115,14 +1138,20 @@ def run_landmark_association_figure(
     ).to_numpy(dtype=float)
     risk_low = 100.0 * pd.to_numeric(display_risk["ci_low"]).to_numpy(dtype=float)
     risk_high = 100.0 * pd.to_numeric(display_risk["ci_high"]).to_numpy(dtype=float)
-    risk_density = pd.to_numeric(
-        display_risk["exposure_density_fraction"]
-    ).to_numpy(dtype=float)
+    risk_density, risk_density_edges = _published_exposure_distribution(display_risk)
     if not np.allclose(risk_x, x, rtol=0.0, atol=1e-10):
         raise ValueError("adjusted association and absolute-risk grids do not align")
     if not np.allclose(risk_reference, reference, rtol=0.0, atol=1e-10):
         raise ValueError("adjusted association and absolute-risk references do not align")
-    if not np.allclose(risk_density, density, rtol=0.0, atol=1e-10):
+    if (
+        (density_edges is None) != (risk_density_edges is None)
+        or (density_edges is not None and (
+            density_edges.shape != risk_density_edges.shape
+            or not np.allclose(density_edges, risk_density_edges, rtol=0.0, atol=1e-10)
+        ))
+        or risk_density.shape != density.shape
+        or not np.allclose(risk_density, density, rtol=0.0, atol=1e-10)
+    ):
         raise ValueError("adjusted association and absolute-risk densities do not align")
     if (risk_low < 0).any() or (risk_high > 100).any():
         raise ValueError("model-standardised absolute-risk intervals must be in [0, 1]")
@@ -1164,6 +1193,7 @@ def run_landmark_association_figure(
         ax_risk_density,
         x=risk_x,
         fractions=risk_density,
+        edges=risk_density_edges,
         color=risk_color,
         exposure_label=exposure_label,
     )
@@ -1285,7 +1315,7 @@ def run_landmark_association_figure(
         ],
         source_data=source_files,
         statistics_note=(
-            "All plotted values and exposure-grid densities are direct projections of registered source rows; no model is fit and no patient rows are read by the renderer. "
+            "All plotted values and exposure distributions are direct projections of registered source rows; no model is fit and no patient rows are read by the renderer. "
             "The two curves share one exposure grid and reference value. "
             + (
                 "The sensitivity forest compares only aligned odds-ratio contrasts from the independent functional-form refit on the same reference and scale. "
@@ -1303,7 +1333,7 @@ def run_landmark_association_figure(
                 else ""
             )
             + "The reference value is marked on the curve panels. "
-            "Exposure-distribution strips show where the complete-case cohort contributes information at each grid value. "
+            "Exposure-distribution strips show where the complete-case cohort contributes information within the displayed exposure range. "
             "All values are direct projections of registered source rows; no model was refit by the renderer. "
             "Robustness summaries are audit-only and do not authorize direct comparisons of heterogeneous specifications."
             + (

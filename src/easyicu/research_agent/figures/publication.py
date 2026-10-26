@@ -138,6 +138,43 @@ def configure_ratio_axis(
     return ticks
 
 
+def exposure_distribution_bin_edges(
+    values: Sequence[float], *, grid: Sequence[float],
+) -> list[float]:
+    """Choose display bins from recorded resolution, without moving the curve.
+
+    Accept an observed spacing only if every distinct value aligns with it.
+    Missing lattice levels can make the smallest observed gap a multiple of
+    the step, so also try its subdivisions down to the narrowest existing
+    bin. Finer, unobserved steps cannot cause structurally empty grid bins;
+    inferring them would also rebin decimal-rounded continuous samples.
+    A directly observed step is eligible at any resolution. Real gaps in
+    observations remain visible; unresolved data retain the midpoint bins.
+    """
+
+    import numpy as np
+
+    grid = np.asarray(grid, dtype=float)
+    observed = np.unique(np.asarray(values, dtype=float))
+    legacy_edges = np.concatenate(([grid[0]], (grid[:-1] + grid[1:]) / 2.0, [grid[-1]]))
+    if len(observed) == 1:
+        return [float(grid[0]), float(grid[-1])]
+    smallest_gap = float(np.min(np.diff(observed)))
+    max_divisor = max(1, math.floor(smallest_gap / np.min(np.diff(legacy_edges))))
+    for divisor in range(1, max_divisor + 1):
+        step = smallest_gap / divisor
+        positions = (observed - observed[0]) / step
+        if np.allclose(positions, np.round(positions), rtol=0.0, atol=1e-7):
+            break
+    else:
+        return legacy_edges.tolist()
+    levels = int(round(float(positions[-1]))) + 1
+    multiple = math.ceil(levels / len(grid))
+    bin_count = math.ceil(levels / multiple)
+    edges = observed[0] - step / 2.0 + np.arange(bin_count + 1) * multiple * step
+    return edges.tolist()
+
+
 FigureArchetype = Literal[
     "quantitative_grid",
     "schematic_led_composite",
@@ -1431,6 +1468,7 @@ __all__ = [
     "audit_figure_contract",
     "apply_publication_style",
     "configure_ratio_axis",
+    "exposure_distribution_bin_edges",
     "add_panel_label",
     "save_publication_figure",
     "audit_publication_exports",
