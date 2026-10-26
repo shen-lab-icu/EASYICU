@@ -112,11 +112,13 @@
     return { top, bottom };
   }
 
+  const panelOf = menu => Array.from(menu.children || []).find(child => child.tagName !== 'SUMMARY');
+
   // A panel that opens below its summary may reach the room's bottom edge, one
   // that opens above it the top edge; past that, it scrolls inside.
   function fit(menu) {
     if (typeof window.getComputedStyle !== 'function') return;
-    const panel = Array.from(menu.children || []).find(child => child.tagName !== 'SUMMARY');
+    const panel = panelOf(menu);
     const summary = menu.querySelector(':scope > summary');
     if (!panel || !summary || typeof panel.getBoundingClientRect !== 'function') return;
     panel.style.removeProperty('max-height');
@@ -130,6 +132,20 @@
     }
   }
 
+  // A panel can grow after it opens (its list arrives from the host), so an
+  // open panel is fitted again whenever its size changes.
+  let resizes = null;
+  function watch(menu) {
+    const panel = panelOf(menu);
+    if (!panel || typeof window.ResizeObserver !== 'function') return;
+    resizes = resizes || new window.ResizeObserver(entries => entries.forEach(entry => {
+      const owner = entry.target.parentElement;
+      if (owner && owner.open) fit(owner);
+      else resizes.unobserve(entry.target);
+    }));
+    resizes.observe(panel);
+  }
+
   // `toggle` does not bubble, so this listens in the capture phase.
   function onToggle(event) {
     const menu = event.target;
@@ -138,6 +154,7 @@
       if (other !== menu && !contains(other, menu) && !contains(menu, other)) close(other);
     });
     fit(menu);
+    watch(menu);
   }
 
   // A press outside closes on the way down, like a native menu; the press

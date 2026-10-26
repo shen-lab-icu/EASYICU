@@ -72,6 +72,28 @@ panel.style.maxHeight = '100px';
 MENUS.fit(details);
 assert.equal(panel.style.maxHeight, undefined);
 
+// A panel that grows after it opens, as the model list arriving from the
+// host does, is fitted again; a closed one is no longer watched.
+const watched = new Set();
+let resized = null;
+global.ResizeObserver = class {
+  constructor(callback) { resized = callback; }
+  observe(node) { watched.add(node); }
+  unobserve(node) { watched.delete(node); }
+};
+let rect = box(450, 120);
+({ details, panel } = menu({ panelRect: box(450, 120) }));
+panel.getBoundingClientRect = () => rect;
+MENUS.onToggle({ target: details });
+assert.equal(panel.style.maxHeight, undefined, 'the loading panel fits');
+assert.ok(watched.has(panel));
+rect = box(450, 312);
+resized([{ target: panel }]);
+assert.equal(panel.style.maxHeight, '222px', 'the grown panel keeps to the room');
+details.open = false;
+resized([{ target: panel }]);
+assert.ok(!watched.has(panel));
+
 // Closing a menu fits nothing.
 ({ details, panel } = menu({ panelRect: box(450, 312) }));
 details.open = false;
