@@ -274,6 +274,15 @@ const cases = [
   [{ base_url: 'http://127.0.0.1:11434/v1' }, {}, 'ollama'],
   [{ base_url: 'http://localhost:1234/v1' }, {}, 'lmstudio'],
   [{ base_url: 'https://127.0.0.1.evil.example:11434/' }, {}, 'custom-openai'],
+  [{ base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' }, {}, 'qwen'],
+  [{ base_url: 'https://ws-1.cn-beijing.maas.aliyuncs.com/compatible-mode/v1' }, {}, 'qwen'],
+  [{ base_url: 'https://evil-aliyuncs.com/compatible-mode/v1' }, {}, 'custom-openai'],
+  [{ base_url: 'https://open.bigmodel.cn/api/paas/v4' }, {}, 'zhipu'],
+  [{ base_url: 'https://api.moonshot.cn/v1' }, {}, 'moonshot'],
+  [{ base_url: 'https://ark.cn-beijing.volces.com/api/v3' }, {}, 'doubao'],
+  [{ base_url: 'https://ark.cn-beijing.volces.com.evil.example/api/v3' }, {}, 'custom-openai'],
+  [{ base_url: 'https://api.siliconflow.cn/v1' }, {}, 'siliconflow'],
+  [{ base_url: 'https://api.minimaxi.com/v1' }, {}, 'minimax'],
 ];
 process.stdout.write(JSON.stringify(cases.map(([c, r]) => providerPreset(c, r))));
 """
@@ -286,4 +295,6 @@ process.stdout.write(JSON.stringify(cases.map(([c, r]) => providerPreset(c, r)))
         "custom-openai", "custom-openai", "anthropic", "google",
         "azure", "azure", "custom-openai", "bedrock", "bedrock", "custom-openai",
         "ollama", "lmstudio", "custom-openai",
+        "qwen", "qwen", "custom-openai", "zhipu", "moonshot", "doubao", "custom-openai",
+        "siliconflow", "minimax",
     ]

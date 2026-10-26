@@ -120,6 +120,8 @@ _ADMIN_ROUTES = frozenset({
     "/api/extensions/state", "/api/extensions/remove", "/api/extensions/mcp/test",
     "/api/copilot/pi/provider-config", "/api/copilot/pi/provider-config/models",
     "/api/copilot/pi/provider-config/declaration",
+    "/api/copilot/pi/provider-config/openrouter/login",
+    "/api/copilot/pi/provider-config/openrouter/callback",
     "/api/agent-runs/provider-config", "/api/agent-runs/codex-auth/login",
     "/api/agent-runs/codex-auth/cancel", "/api/agent-runs/codex-auth/logout",
     "/api/copilot/pi/research-provider/model", "/api/copilot/pi/research-provider/codex/login",

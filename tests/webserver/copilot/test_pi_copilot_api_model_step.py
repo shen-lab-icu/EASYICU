@@ -101,7 +101,7 @@ render();
 // A first visit has no saved connection: the host's built-in proxy default
 // is not the researcher's choice, so the form opens on DeepSeek.
 out.firstVisit = {
-  deepseekFirstAndSelected: /<select data-gpi-provider-preset><option value="deepseek" selected>/.test(markup),
+  deepseekFirstAndSelected: /<select data-gpi-provider-preset><optgroup label="[^"]+"><option value="deepseek" selected>/.test(markup),
   address: current.form.fields.base_url.value,
   provider: current.form.fields.provider.value,
   addressUnderAdvanced: !beforeAdvanced().includes('name="base_url"'),

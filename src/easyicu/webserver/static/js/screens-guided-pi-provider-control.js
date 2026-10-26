@@ -24,6 +24,25 @@
       },
     }) : Object.freeze({ load: async () => {}, handleChange: () => false, handleSubmit: () => false });
 
+    const OPENROUTER = Object.freeze({ provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1' });
+    let openrouterReturn = null;
+    (function landFromOpenRouter() {
+      let params;
+      try { params = new URLSearchParams(window.location.search || ''); } catch (_) { return; }
+      const outcome = params.get('openrouter_login');
+      if (outcome !== 'signed_in' && outcome !== 'failed') return;
+      const reason = String(params.get('reason') || '');
+      params.delete('openrouter_login'); params.delete('reason');
+      try {
+        const query = params.toString();
+        window.history.replaceState(null, '', window.location.pathname + (query ? '?' + query : '') + window.location.hash);
+      } catch (_) { /* the outcome still applies to this page */ }
+      state.researchProvider = 'api'; state.showSetup = true;
+      state.apiDraft = { preset: 'openrouter', provider: OPENROUTER.provider, base_url: OPENROUTER.base_url, api_transport: 'openai-completions' };
+      state.openrouterLogin = outcome === 'signed_in' ? 'signed_in' : null;
+      openrouterReturn = outcome === 'signed_in' ? { error: '' } : { error: /^[a-z_]{1,64}$/.test(reason) ? reason : 'openrouter_login_denied' };
+    })();
+
     function stopCodexPoll() {
       if (state.codexPoll) window.clearTimeout(state.codexPoll);
       state.codexPoll = null;
@@ -203,7 +222,8 @@
     function captureForm(host) {
       const form = providerForm(host);
       // A closed form discards what it held; reopening shows the saved connection.
-      if (!form) { heldKey = ''; state.apiDraft = null; state.modelCatalog = null; return; }
+      // A return from OpenRouter keeps its draft until the form shows it.
+      if (!form) { if (openrouterReturn) return; heldKey = ''; state.apiDraft = null; state.modelCatalog = null; return; }
       const data = new FormData(form);
       const preset = form.querySelector('[data-gpi-provider-preset]');
       const previous = state.apiDraft || {};
@@ -219,11 +239,57 @@
       const form = providerForm(host);
       const input = form && form.querySelector('[name="api_key"]');
       if (input && heldKey) input.value = heldKey;
+      // Back from OpenRouter: report a failed sign-in, or list the models
+      // with the key the host now holds, once the form is on screen.
+      if (form && !state.loading && openrouterReturn) {
+        const landed = openrouterReturn; openrouterReturn = null;
+        if (landed.error) { state.error = errorText({ code: landed.error }); render(); }
+        else discoverModels(form);
+      }
     }
 
     function catalogMatches(values) {
-      return !!(state.modelCatalog && state.modelCatalog.models.length
+      return !!(state.modelCatalog && (state.modelCatalog.models.length || state.modelCatalog.manual)
         && state.modelCatalog.signature === signature(values));
+    }
+
+    // The key from an OpenRouter sign-in is used for OpenRouter only; the
+    // host enforces the same rule (openrouter_login.resolve_api_key).
+    function credentialFields(values, apiKey) {
+      const viaLogin = state.openrouterLogin === 'signed_in' && values.provider === OPENROUTER.provider
+        && values.base_url.replace(/\/+$/, '') === OPENROUTER.base_url;
+      return viaLogin ? { api_key: '', credential_source: 'openrouter_login' } : { api_key: apiKey };
+    }
+
+    function forgetFailedLogin(error) {
+      if (error && (error.code === 'openrouter_login_not_signed_in' || error.code === 'openrouter_login_not_started')) state.openrouterLogin = null;
+    }
+
+    function safeOpenRouterUrl(value) {
+      try {
+        const parsed = new URL(String(value || ''));
+        if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) return '';
+        if (parsed.hostname.toLowerCase() !== 'openrouter.ai' || parsed.pathname !== '/auth') return '';
+        return parsed.href;
+      } catch (_) { return ''; }
+    }
+
+    // OpenRouter's sign-in page returns this window to the host callback,
+    // which comes back here with ?openrouter_login=signed_in|failed.
+    async function startOpenRouterLogin() {
+      if (state.openrouterStarting || !api().startPiCopilotOpenRouterLogin) return;
+      state.openrouterStarting = true; state.error = ''; render();
+      try {
+        const payload = await api().startPiCopilotOpenRouterLogin({ enable_ai: true });
+        const url = safeOpenRouterUrl(payload && payload.auth_url);
+        if (!url) throw { code: 'openrouter_auth_url_invalid' };
+        window.location.assign(url);
+      } catch (error) {
+        state.error = errorText(error);
+      } finally {
+        // The page normally leaves; one restored from history can retry.
+        state.openrouterStarting = false; render();
+      }
     }
 
     function forgetCredential(form) {
@@ -260,6 +326,7 @@
     }
 
     function handleClick(event) {
+      if (event.target.closest && event.target.closest('[data-gpi-openrouter-login]')) { startOpenRouterLogin(); return true; }
       const button = event.target.closest && event.target.closest('[data-gpi-provider-rediscover]');
       if (!button) return false;
       const form = button.closest('[data-gpi-provider-form]');
@@ -290,12 +357,19 @@
       const apiKey = String(new FormData(form).get('api_key') || '').trim();
       state.modelDiscovering = true; state.error = ''; state.modelCatalog = null; render();
       try {
-        const payload = await api().discoverPiCopilotProviderModels({ ...values, api_key: apiKey, enable_ai: true });
+        const payload = await api().discoverPiCopilotProviderModels({ ...values, ...credentialFields(values, apiKey), enable_ai: true });
         const models = Array.isArray(payload && payload.models) ? payload.models.map(String) : [];
         const recommended = String((payload && payload.recommended) || '');
         state.modelCatalog = { signature: signature(values), models, recommended: models.includes(recommended) ? recommended : '' };
       } catch (error) {
-        state.error = errorText(error);
+        // No catalog on this service: the researcher names the model, and
+        // saving proves it answers (provider_config.verify_provider_connection).
+        if (error && error.code === 'pi_provider_model_list_unavailable' && values.api_transport === 'openai-completions') {
+          state.modelCatalog = { signature: signature(values), models: [], recommended: '', manual: true };
+        } else {
+          forgetFailedLogin(error);
+          state.error = errorText(error);
+        }
       } finally {
         state.modelDiscovering = false; render();
       }
@@ -316,11 +390,12 @@
       try {
         const payload = await api().savePiCopilotProviderConfig({
           ...values,
-          api_key: apiKey,
+          ...credentialFields(values, apiKey),
           model: String(data.get('model') || '').trim(),
           enable_ai: true,
         });
         state.runtime = payload && payload.runtime;
+        state.openrouterLogin = null;
         forgetCredential(providerForm(state.host));
         state.apiDraft = null; state.modelCatalog = null;
         // A saved connection carries its own declaration record.
@@ -333,6 +408,7 @@
       } catch (error) {
         const reported = error && error.details && error.details.available_models;
         if (Array.isArray(reported) && state.modelCatalog) state.modelCatalog = { ...state.modelCatalog, models: reported.map(String) };
+        forgetFailedLogin(error);
         state.error = errorText(error);
       } finally {
         state.setupSaving = false; render();

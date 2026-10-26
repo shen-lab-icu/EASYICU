@@ -481,6 +481,9 @@
   function discoverPiCopilotProviderModels(body) {
     return postJSON('/api/copilot/pi/provider-config/models', body || {});
   }
+  function startPiCopilotOpenRouterLogin(body) {
+    return postJSON('/api/copilot/pi/provider-config/openrouter/login', body || {});
+  }
   function loadPiCopilotCodexStatus() {
     return getJSON('/api/copilot/pi/research-provider/codex/status');
   }
@@ -852,6 +855,7 @@
   window.EU_API.discoverPiCopilotProviderModels = discoverPiCopilotProviderModels;
   window.EU_API.loadPiCopilotProviderDeclaration = loadPiCopilotProviderDeclaration;
   window.EU_API.savePiCopilotProviderDeclaration = savePiCopilotProviderDeclaration;
+  window.EU_API.startPiCopilotOpenRouterLogin = startPiCopilotOpenRouterLogin;
   window.EU_API.loadPiCopilotCodexStatus = loadPiCopilotCodexStatus;
   window.EU_API.startPiCopilotCodexLogin = startPiCopilotCodexLogin;
   window.EU_API.cancelPiCopilotCodexLogin = cancelPiCopilotCodexLogin;
