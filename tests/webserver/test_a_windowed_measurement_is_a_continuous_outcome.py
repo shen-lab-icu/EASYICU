@@ -94,8 +94,15 @@ def owners(monkeypatch):
     monkeypatch.setattr(study_intent, "deterministic_intent", read)
     monkeypatch.setattr(study_intent, "named_study_concepts", lambda q: [(("signal",), "signal")])
     monkeypatch.setattr(study_intent, "catalog_named_concepts", lambda q: ["signal", "ward_group"])
+    # The catalog's name readings are cached for the process; the synthetic
+    # name pattern must not stay in them for later tests.
+    caches = (study_intent._catalog_name_patterns, study_intent._catalog_name_readings)
+    for cached in caches:
+        cached.cache_clear()
     monkeypatch.setattr(study_intent, "_concept_name_pattern", lambda name: rf"\b{re.escape(name)}\b")
-    return definitions
+    yield definitions
+    for cached in caches:
+        cached.cache_clear()
 
 
 @pytest.mark.parametrize("statistic", ["max", "min", "mean", "first", "last"])

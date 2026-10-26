@@ -78,6 +78,7 @@ from easyicu.webserver.research_launch_scientific import (
     _validate_analysis_design,
     _validate_primary_concept_selection,
     _validate_trajectory_design,
+    study_design_family,
     target_trial_launch_inputs,
 )
 from easyicu.webserver.scientific_runtime_projection import (
@@ -290,6 +291,7 @@ def _prepare_scientific_launch(
         declared_covariates=covariates,
         stated_adjustments=study.get("stated_adjustments") or (),
         stated_subgroups=study.get("stated_subgroups") or (),
+        analysis_family=study_design_family(study),
     )
     target = configured_target or planning_coordinates.get("target_outcome")
     primary_exposure = configured_primary_exposure or planning_coordinates.get(

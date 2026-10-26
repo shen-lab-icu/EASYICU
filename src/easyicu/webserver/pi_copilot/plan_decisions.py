@@ -667,7 +667,10 @@ _ENDPOINT_DECISION = "OUTCOME_DEFINITION_UNRESOLVED"
 
 
 def _requested_endpoint_coordinates(study: Mapping[str, Any]) -> Dict[str, Any]:
-    from easyicu.webserver.research_launch_scientific import _metadata_only_planning_coordinates
+    from easyicu.webserver.research_launch_scientific import (
+        _metadata_only_planning_coordinates,
+        study_design_family,
+    )
 
     source = study.get("data_source")
     database = str(source.get("database") or "").strip() if isinstance(source, Mapping) else ""
@@ -679,7 +682,7 @@ def _requested_endpoint_coordinates(study: Mapping[str, Any]) -> Dict[str, Any]:
             question=str(study.get("question") or ""), database=database, configured_outcome=configured,
             stated_exposure=str(study.get("primary_exposure") or ""),
             stated_exposure_concept=study.get("primary_exposure_concept"),
-            export_path=source.get("path"),
+            export_path=source.get("path"), analysis_family=study_design_family(study),
         )
     except (KeyError, ValueError):
         return {}

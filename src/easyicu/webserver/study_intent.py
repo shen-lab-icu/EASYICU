@@ -1097,6 +1097,8 @@ def explicit_exposure_aggregation(
         and _resolved_reading(text, concept_id, *span) == (concept_id, *span)
     }
     for begin, finish in sorted(spans):
+        preceding: Dict[str, str] = {}
+        following: Dict[str, str] = {}
         for operation, expression in _MEASUREMENT_OPERATIONS:
             before = re.search(
                 rf"(?:{expression})(?:{join}(?:{operations}))*\s*(?:(?:serum|blood|plasma)\s+|血清|血浆|血)?$",
@@ -1107,13 +1109,15 @@ def explicit_exposure_aggregation(
                 text[finish:], re.IGNORECASE,
             )
             if before is not None:
-                start, end = before.start(), finish
-            elif after is not None:
-                start, end = begin, finish + after.end()
-            else:
-                continue
-            if not _negated(lowered, start):
-                matches[operation] = text[start:end]
+                if not _negated(lowered, before.start()):
+                    preceding[operation] = text[before.start():finish]
+            elif after is not None and not _negated(lowered, begin):
+                following[operation] = text[begin:finish + after.end()]
+        # An operation stated before the measurement is its own reduction; a
+        # statistic after it then summarizes that reduced quantity across the
+        # analysis rows, as "the median of the highest lactate" does
+        # (「最高乳酸的中位数」, pilot1 10-26), not a second reduction.
+        matches.update(preceding or following)
     if len(matches) != 1:
         return None
     operation, evidence = next(iter(matches.items()))

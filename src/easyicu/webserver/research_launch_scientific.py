@@ -401,6 +401,21 @@ def resolve_study_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
     return design
 
 
+def study_design_family(study: Mapping[str, Any]) -> Optional[str]:
+    """The typed family the launch plans ``study`` on, or ``None``.
+
+    The launch writes this family into the run's ``inferred_analysis_family``
+    and the Planner plans on it. A design that does not resolve is refused by
+    the launch's own validation, not here.
+    """
+
+    try:
+        family = resolve_study_analysis_design(study).get("analysis_family")
+    except ResearchPipelineRunError:
+        return None
+    return _clean_text(family, 80) or None
+
+
 def _validate_trajectory_design(
     study: Mapping[str, Any],
 ) -> Optional[FixedWindowTrajectoryDesign]:
@@ -1417,6 +1432,7 @@ def _metadata_only_planning_coordinates(
     declared_covariates: Sequence[str] = (),
     stated_adjustments: Sequence[Mapping[str, Any]] = (),
     stated_subgroups: Sequence[Mapping[str, Any]] = (),
+    analysis_family: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Project only concepts the researcher explicitly named into planning.
 
@@ -1451,7 +1467,12 @@ def _metadata_only_planning_coordinates(
     continuous measurement does not become an exposure. A checked, stated
     grouping can disambiguate the descriptive reader's measurement slot;
     other families retain the conflict rule. The existing
-    host family reading takes precedence over the keyword family hint.
+    host family reading takes precedence over the study's typed design family
+    (``analysis_family``, :func:`study_design_family`), which takes precedence
+    over the keyword family hint: a question whose own words state no family
+    is planned on the study's design, and is read on it here too (pilot1
+    10-26: a descriptive study of 「第一天最高乳酸」 by sex sealed lactate as
+    its exposure and never bound the first-day maximum).
     Every concept the question names besides its outcome and
     the exposure projected here is returned as ``question_named_concepts``:
     the source columns its name can denote and the words that name it, which
@@ -1470,6 +1491,7 @@ def _metadata_only_planning_coordinates(
         named_study_concepts,
         substance_forms,
     )
+    from easyicu.research_agent.planning.analysis_types import canonical_analysis_family
     from easyicu.webserver.study_family_reading import study_family_reading
 
     intent = deterministic_intent(question)
@@ -1509,9 +1531,12 @@ def _metadata_only_planning_coordinates(
         and str(family.get("provenance") or "") == KEYWORD_PROVENANCE
     )
     host_family = study_family_reading(question)
+    design_family = canonical_analysis_family(analysis_family) if analysis_family else None
     descriptive = (
         host_family.family == "descriptive_epidemiology"
         if host_family is not None
+        else design_family == "descriptive_epidemiology"
+        if design_family is not None
         else family.get("value") == "description"
         and family.get("provenance") == KEYWORD_PROVENANCE
     )
