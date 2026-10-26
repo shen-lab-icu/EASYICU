@@ -72,12 +72,18 @@ def test_copy_preserves_reviewed_markdown_and_provenance(
     assert installed["claim_ceiling"] == "analysis_only"
     assert installed["execution_boundary"] == "instructions_only"
     assert metadata["source"] == installed["source"]
+    # A workflow's machine contract is the reference that yields to its reader
+    # guide under the copy budget; the omission is disclosed, never truncated.
+    omitted = installed["source"]["omitted_reference_paths"]
+    assert omitted == (
+        ["references/workflow_contract.md"] if builtin_id == "survival-time-to-event" else []
+    )
     assert installed["source"] == {
         "builtin_id": builtin_id,
         "registry_version": method_skills.METHOD_SKILL_REGISTRY_VERSION,
         "package_sha256": package["package_sha256"],
         "copied_at": installed["installed_at"],
-        "omitted_reference_paths": [],
+        "omitted_reference_paths": omitted,
     }
     for file in package["files"]:
         if file["path"] == "SKILL.md":
@@ -85,7 +91,10 @@ def test_copy_preserves_reviewed_markdown_and_provenance(
                 file["content"].split("---\n", 2)[2].strip() in detail["instructions"]
             )
         elif file["path"].startswith("references/") and file["path"].endswith(".md"):
-            assert file["content"].strip() in detail["instructions"]
+            if file["path"] in omitted:
+                assert f"## Copied reference: {file['path']}" not in detail["instructions"]
+            else:
+                assert file["content"].strip() in detail["instructions"]
     assert (
         "host execution, plan review, method dispatch, evidence binding"
         in detail["instructions"]
@@ -299,7 +308,8 @@ def test_reference_packing_is_stable_and_never_truncates_a_reference(
     first = ExtensionRegistry(tmp_path / "first")
     copied = first.copy_builtin_skill("survival-time-to-event")
     detail = first.current_skill(copied["name"])
-    assert copied["source"]["omitted_reference_paths"] == ["references/large.md"]
+    assert copied["source"]["omitted_reference_paths"] == [
+        "references/large.md", "references/workflow_contract.md"]
     assert "字" not in detail["skill_md"]
     assert detail["size_bytes"] <= 12_000
     package["files"].reverse()
