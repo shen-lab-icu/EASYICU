@@ -2532,6 +2532,7 @@ class PiCopilotService(SkillAttachmentService):
         message_origin: Optional[str] = None,
         queue_if_busy: bool = False,
         attached_skills: Optional[list] = None,
+        mentions: Optional[list] = None,
         _followup_delivery: Optional[object] = None,
     ) -> Dict[str, Any]:
         with self._lock:
@@ -2561,13 +2562,15 @@ class PiCopilotService(SkillAttachmentService):
                 "The EasyICU Copilot message exceeds its bounded contract.",
                 details={"max_chars": MAX_MESSAGE_CHARS},
             )
+        if not regenerate_user_entry_id and (mentions or record.draft_mentions):
+            self._validate_mentions(record, record.draft_mentions if mentions is None else mentions)
         prepared_input = prepare_user_message(
             text,
             registered_sources=sources.load_registry().get("sources") or [],
         )
         provider_text = prepared_input.provider_message
         if queue_if_busy:
-            if message_origin != "typed" or allowed_actions or message_intent or idea_source or regenerate_user_entry_id or attached_skills or record.draft_attached_skills:
+            if message_origin != "typed" or allowed_actions or message_intent or idea_source or regenerate_user_entry_id or attached_skills or record.draft_attached_skills or mentions or record.draft_mentions:
                 raise PiCopilotError("pi_followup_plain_message_required", "Queue only a directly typed message without action grants or attachments.", status_code=400)
             with self._lock:
                 if record.session_id in self._busy_sessions:
@@ -2731,8 +2734,9 @@ class PiCopilotService(SkillAttachmentService):
             if self._get_record(session_id).conversation_provider.model != prepared_model:
                 raise PiCopilotError("pi_session_model_changed", "The conversation model changed. Send the message again.", status_code=409)
             record.draft_attached_skills = self._get_record(session_id).draft_attached_skills
-            turn_skills, loaded_skills = self._prepare_attached_skills(
-                record, attached_skills, regenerate_target,
+            record.draft_mentions = self._get_record(session_id).draft_mentions
+            turn_skills, loaded_skills, turn_mentions, mention_context = self._prepare_attached_skills(
+                record, attached_skills, regenerate_target, mentions,
             )
             self._busy_sessions.add(record.session_id)
 
@@ -2851,6 +2855,7 @@ class PiCopilotService(SkillAttachmentService):
                     user_message=wording_turn["text"],
                     message_origin=wording_origin,
                     attached_skills=turn_skills,
+                    mentioned_objects=turn_mentions,
                 )
                 job.emit(
                     {
@@ -2867,6 +2872,8 @@ class PiCopilotService(SkillAttachmentService):
                 }
                 if loaded_skills:
                     params["attached_skill_context"] = loaded_skills
+                if turn_mentions:
+                    params["mentioned_objects"] = mention_context
                 if idea_source:
                     params["idea_source"] = dict(idea_source)
                 if message_intent:
@@ -3018,7 +3025,7 @@ class PiCopilotService(SkillAttachmentService):
                     regenerate_target,
                 )
             tool_context = ToolExecutionContext(
-                session=self._apply_turn_skills(record, turn_skills).model_copy(deep=True),
+                session=self._apply_turn_skills(record, turn_skills, turn_mentions).model_copy(deep=True),
                 data_handling=self._data_handling_for_session(record),
                 note_credentialed_history=lambda: self._note_credentialed_history(record.session_id),
                 user_message=text,
@@ -5393,6 +5400,8 @@ class PiCopilotService(SkillAttachmentService):
             "default_attached_skills": [ref.model_dump(mode="json", exclude_none=True) for ref in record.default_attached_skills],
             "draft_attached_skills": [ref.model_dump(mode="json", exclude_none=True) for ref in record.draft_attached_skills],
             "last_attached_skills": [ref.model_dump(mode="json", exclude_none=True) for ref in record.last_attached_skills],
+            "draft_mentions": [ref.model_dump(mode="json", exclude_none=True) for ref in record.draft_mentions],
+            "last_mentions": [ref.model_dump(mode="json", exclude_none=True) for ref in record.last_mentions],
             "last_turn_events": list(latest_replay_turn.get("events") or []),
             "conversation_replay": replay,
             "archived_child_jobs": list(replay.get("child_jobs") or []),

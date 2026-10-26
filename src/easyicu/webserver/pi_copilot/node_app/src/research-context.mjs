@@ -1,6 +1,6 @@
 // Ephemeral owner state for Pi's context hook. Session summaries are UX history;
 // only a fresh, bounded host receipt can populate this projection.
-import { ATTACHED_SKILL_MARKER } from "./attached-skills.mjs";
+import { ATTACHED_SKILL_MARKER, MENTION_MARKER } from "./attached-skills.mjs";
 const CUSTOM_TYPE = "easyicu_current_research_state_v1";
 const SCHEMA = "easyicu.pi-current-research-state/1";
 const LANGUAGE_MARKER = "\n\n[EASYICU_INTERNAL_RESPONSE_LANGUAGE_V1]\n";
@@ -31,8 +31,9 @@ function withoutHistoricalOwnerContext(value) {
   // Only strip the host-authored suffix, never matching text in the user's input.
   const languageAt = value.lastIndexOf(LANGUAGE_MARKER);
   if (languageAt < 0) return value;
-  const skillsAt = value.indexOf(ATTACHED_SKILL_MARKER, languageAt + LANGUAGE_MARKER.length);
-  if (skillsAt >= 0) value = value.slice(0, skillsAt);
+  const attachmentOffsets = [ATTACHED_SKILL_MARKER, MENTION_MARKER]
+    .map((marker) => value.indexOf(marker, languageAt + LANGUAGE_MARKER.length)).filter((offset) => offset >= 0);
+  if (attachmentOffsets.length) value = value.slice(0, Math.min(...attachmentOffsets));
   const ownerAt = value.indexOf(OWNER_MARKER, languageAt + LANGUAGE_MARKER.length);
   if (ownerAt < 0) return value;
   const nextAt = value.indexOf("\n\n[EASYICU_", ownerAt + OWNER_MARKER.length);

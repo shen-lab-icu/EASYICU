@@ -104,6 +104,7 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_pi_result_followups.test.js": [],
     "settings_personalization.test.js": [],
     "attached_skills.test.js": [],
+    "turn_mentions.test.js": [],
     "guided_pi_claim_lineage_chain.test.js": [],
     "evidence_preview_security.test.js": [
         "screens-guided-pi-modules.js",

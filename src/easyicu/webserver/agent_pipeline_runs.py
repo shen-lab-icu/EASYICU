@@ -2728,8 +2728,10 @@ def _research_user_preferences(
         preferences["covariates"] = list(covariates)
 
     from easyicu.webserver.skill_setup import skill_planning_constraints
+    from easyicu.webserver.mention_setup import mention_planning_constraints
 
     constraints: Dict[str, Any] = skill_planning_constraints(study)
+    constraints.update(mention_planning_constraints(study))
     if source_identity is not None:
         constraints["source_identity"] = dict(source_identity)
     for field in ("stated_adjustments", "stated_subgroups"):

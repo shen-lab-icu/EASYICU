@@ -579,9 +579,9 @@ const PLAN_LIFECYCLE_WORKFLOW_CODES = new Set([
   "operator_plan_approval_required",
 ]);
 
-import { attachedSkillContext, ATTACHED_SKILL_MARKER } from "./attached-skills.mjs";
+import { attachedSkillContext, ATTACHED_SKILL_MARKER, mentionedObjectContext, MENTION_MARKER } from "./attached-skills.mjs";
 
-function modelPrompt(message, language, ownerContext = [], turnIntent = "", ideaSource = undefined, attachedSkills = undefined) {
+function modelPrompt(message, language, ownerContext = [], turnIntent = "", ideaSource = undefined, attachedSkills = undefined, mentionedObjects = undefined) {
   const explicitChinese = /(?:请|用|改用|使用|以)\s*(?:中文|汉语)(?:回答|回复|说明|输出|翻译)/.test(message)
     || /\b(?:respond|reply|answer|write|translate)(?:\s+\w+){0,6}\s+(?:in|into)\s+(?:simplified\s+)?chinese\b/i.test(message);
   const explicitEnglish = /(?:请|用|改用|使用|以)\s*(?:英文|英语)(?:回答|回复|说明|输出|翻译)/.test(message)
@@ -630,7 +630,7 @@ function modelPrompt(message, language, ownerContext = [], turnIntent = "", idea
     : turnIntent === "clarify_research_entry"
     ? "\n\n[EASYICU_RESEARCH_ENTRY_V1]\nThe researcher bypassed the four explicit starting choices, and this first sentence is only a topic fragment: it does not state a relationship, comparison, effect, or prediction and therefore does not establish whether they want Idea Mining or implementation. Do not call any tool. In Chinese, reply with '我先确认一下你的目标', then ask exactly one question: '你是想先发掘或评估这个方向，还是已经决定研究它并准备往下做？' End with this exact clickable block: '**下一步：**' followed by exactly three hyphen-prefixed choices: '先发掘或评估可能方向', '按当前问题进入研究方案', and '我还不确定，先帮我判断'. Nothing else may follow."
     : "";
-  return `${message}${HOST_LANGUAGE_MARKER}${requirement}${currentContext}${sourceContext}${transition}${attachedSkillContext(attachedSkills)}`;
+  return `${message}${HOST_LANGUAGE_MARKER}${requirement}${currentContext}${sourceContext}${transition}${attachedSkillContext(attachedSkills)}${mentionedObjectContext(mentionedObjects)}`;
 }
 
 function appendPromptOrigin(record, origin) {
@@ -663,7 +663,7 @@ function userPromptStudySnapshot(value) {
   const markerAt = text.lastIndexOf(OWNER_CONTEXT_MARKER);
   if (markerAt < 0) return undefined;
   const payloadStart = markerAt + OWNER_CONTEXT_MARKER.length;
-  const ends = [HOST_TRANSITION_MARKER, ATTACHED_SKILL_MARKER]
+  const ends = [HOST_TRANSITION_MARKER, ATTACHED_SKILL_MARKER, MENTION_MARKER]
     .map((marker) => text.indexOf(marker, payloadStart)).filter((index) => index >= 0);
   const payload = text.slice(
     payloadStart,
@@ -1432,7 +1432,7 @@ async function createSession(params) {
 }
 
 async function promptSession(requestId, params) {
-  assertExactKeys(params, new Set(["session_id", "message", "intent", "idea_source", "message_origin", "attached_skill_context"]), "pi_prompt_invalid");
+  assertExactKeys(params, new Set(["session_id", "message", "intent", "idea_source", "message_origin", "attached_skill_context", "mentioned_objects"]), "pi_prompt_invalid");
   const sessionId = boundedText(params.session_id, 160).trim();
   const message = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();
@@ -1464,7 +1464,7 @@ async function promptSession(requestId, params) {
     }
     const ownerContext = await currentTurnOwnerContext(sessionId);
     record.researchContext.beginTurn(ownerContext);
-    const prompt = modelPrompt(message, record.language, ownerContext, intent, params.idea_source, params.attached_skill_context);
+    const prompt = modelPrompt(message, record.language, ownerContext, intent, params.idea_source, params.attached_skill_context, params.mentioned_objects);
     if (intent === "advance_after_data_source_confirmation") {
       await record.session.sendCustomMessage({
         customType: "easyicu_host_transition",
@@ -1515,7 +1515,7 @@ function regenerateTarget(record, userEntryId) {
 }
 
 async function regenerateSession(requestId, params) {
-  assertExactKeys(params, new Set(["session_id", "user_entry_id", "message", "intent", "turn_intent", "idea_source", "message_origin", "attached_skill_context"]), "pi_regenerate_invalid");
+  assertExactKeys(params, new Set(["session_id", "user_entry_id", "message", "intent", "turn_intent", "idea_source", "message_origin", "attached_skill_context", "mentioned_objects"]), "pi_regenerate_invalid");
   const sessionId = boundedText(params.session_id, 160).trim();
   const record = sessions.get(sessionId);
   if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
@@ -1579,6 +1579,7 @@ async function regenerateSession(requestId, params) {
       turnIntent,
       params.idea_source,
       params.attached_skill_context,
+      params.mentioned_objects,
     ));
     return { ...sessionState(record), replaced_turn_index: target.turnIndex };
   } finally {

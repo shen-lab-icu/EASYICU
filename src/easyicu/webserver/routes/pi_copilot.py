@@ -12,7 +12,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints, field_validator, model_validator
 
 from easyicu.databases.profiles import iter_database_profiles
-from easyicu.extensions.skill_attachments import AttachedSkills
+from easyicu.extensions.skill_attachments import AttachedSkills, Mentions
 from easyicu.webserver.pi_copilot import get_pi_copilot_service
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.pi_copilot.contracts import (
@@ -35,10 +35,12 @@ from .research_append import router as append_router
 from .personal_preferences import router as preferences_router
 from .pi_run_scientific_review import router as scientific_review_router
 from .skill_attachments import router as skill_router
+from .mentions import router as mention_router
 
 router = APIRouter()
 router.include_router(append_router)
 router.include_router(skill_router)
+router.include_router(mention_router)
 router.include_router(preferences_router)
 router.include_router(scientific_review_router)
 
@@ -249,6 +251,7 @@ class PiMessageRequest(BaseModel):
 
     queue_if_busy: StrictBool = False
     attached_skills: AttachedSkills | None = None
+    mentions: Mentions | None = None
 
     project_id: ShortText
     message: MessageText
@@ -1163,6 +1166,7 @@ def post_pi_copilot_message(session_id: ShortText, body: PiMessageRequest) -> di
             message_origin=body.message_origin,
             queue_if_busy=body.queue_if_busy,
             attached_skills=body.attached_skills,
+            mentions=body.mentions,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

@@ -4688,6 +4688,11 @@ def _read_project_file(
         end_line=(int(params["end_line"]) if params.get("end_line") else None),
     )
     # Retain the projection owner's reason and cause on refusal on desktop too.
+    from easyicu.webserver.mention_objects import require_mentioned_file
+    try:
+        require_mentioned_file(context.session.project_id, context.session.last_mentions, payload)
+    except ExtensionRegistryError as exc:
+        raise PiCopilotError(exc.code, exc.code, status_code=409) from exc
     ensure_safe_projection(payload)
     return _workspace_result(
         context,

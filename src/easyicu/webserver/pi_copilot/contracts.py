@@ -24,7 +24,7 @@ from easyicu.extensions.contracts import (
     EMPTY_EXTENSION_ACTIVATION,
     ExtensionActivationSnapshot,
 )
-from easyicu.extensions.skill_attachments import AttachedSkills
+from easyicu.extensions.skill_attachments import AttachedSkills, Mentions
 from easyicu.webserver.personal_preferences import PersonalPreferences
 
 if TYPE_CHECKING:
@@ -317,6 +317,8 @@ class PiSessionRecord(BaseModel):
     default_attached_skills: AttachedSkills = Field(default_factory=list, frozen=True)
     draft_attached_skills: AttachedSkills = Field(default_factory=list)
     last_attached_skills: AttachedSkills = Field(default_factory=list)
+    draft_mentions: Mentions = Field(default_factory=list)
+    last_mentions: Mentions = Field(default_factory=list)
     preferences: PersonalPreferences = Field(default_factory=PersonalPreferences, frozen=True)
     research_provider: ResearchProviderBinding = Field(
         default_factory=ResearchProviderBinding,

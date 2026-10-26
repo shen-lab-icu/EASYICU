@@ -12,13 +12,14 @@ from easyicu.databases.research_requirements import (
 
 def study_requirements(study: Mapping, *, family: str, question: str = "") -> StudyRequirements:
     from .study_intent import explicit_outcome_concepts
+    from .mention_setup import mentioned_concepts
     from .study_scientific_configuration import ScientificConfiguration
 
     configuration = ScientificConfiguration.inspect(study)
     outcome = configuration.executable_target_outcome()
     named = explicit_outcome_concepts(question) if not outcome else ()
     concepts = tuple(dict.fromkeys(filter(None, (
-        outcome, configuration.executable_primary_exposure(), *configuration.covariates(), *named,
+        outcome, configuration.executable_primary_exposure(), *configuration.covariates(), *named, *mentioned_concepts(study),
     ))))
     design = study.get("analysis_design") or {}
     unit = design.get("analysis_unit", "icu_stay")
