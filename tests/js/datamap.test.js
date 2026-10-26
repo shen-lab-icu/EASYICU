@@ -58,7 +58,7 @@ test('the map loads one page and names databases, study types and variables', as
   screen.afterRender(root);
   await settle();
   assert.deepEqual(calls, [{ concept_offset: 0, concept_limit: 40 }]);
-  assert.match(host.innerHTML, /<h3>MIMIC-IV<\/h3>\s*<p>参考版本 3\.1<\/p>\s*<p>本机已登记 2 个<\/p>\s*<span class="dmap-chip is-pending">尚未在真实数据上验收<\/span>/);
+  assert.match(host.innerHTML, /<h3>MIMIC-IV<\/h3>\s*<p>参考版本 3\.1<\/p>\s*<p>本机已登记：自有 1 · 公开 Demo 1 · 合成测试数据 1<\/p>\s*<span class="dmap-chip is-pending">尚未在真实数据上验收<\/span>/);
   assert.match(host.innerHTML, /<p>本机未登记<\/p>/);
   // Known families sort first in the owner's order; the column heads are the databases.
   assert.match(host.innerHTML, /<th scope="row">描述性研究<\/th>.*<th scope="row">生存分析<\/th>/s);

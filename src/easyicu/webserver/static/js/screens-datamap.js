@@ -47,16 +47,30 @@
   }
   function phrase(table, key) { return table[key] ? tr(...table[key]) : key; }
 
+  // The host names each registered source's kind (the official-demo catalogue
+  // decides a public demo); the words are the data pages' own labels.
+  const SOURCE_KINDS = {
+    unrecorded: ['own', '自有'], public_demo: ['public demo', '公开 Demo'], synthetic: ['synthetic test data', '合成测试数据'],
+  };
+  function registeredSources(row) {
+    const counts = {};
+    (Array.isArray(row.sources) ? row.sources : []).forEach(source => {
+      const kind = source && SOURCE_KINDS[source.kind] ? source.kind : 'unrecorded';
+      counts[kind] = (counts[kind] || 0) + 1;
+    });
+    const parts = Object.keys(SOURCE_KINDS).filter(kind => counts[kind])
+      .map(kind => tr(`${counts[kind]} ${SOURCE_KINDS[kind][0]}`, `${SOURCE_KINDS[kind][1]} ${counts[kind]}`));
+    if (!parts.length) return tr('Not registered on this computer', '本机未登记');
+    const total = row.source_next_offset != null ? tr(` (${row.source_total} in all)`, `（共 ${row.source_total} 个）`) : '';
+    return tr(`Registered on this computer: ${parts.join(' · ')}${total}`, `本机已登记：${parts.join(' · ')}${total}`);
+  }
+
   function databaseCards(rows) {
     return `<div class="dmap-dbs">${rows.map(row => {
-      // Synthetic fixtures are test data, not a source a clinician registered.
-      const registered = (Array.isArray(row.sources) ? row.sources : []).filter(source => source && source.kind !== 'synthetic');
-      const sources = registered.length;
-      const more = row.source_next_offset != null;
       const release = row.profile && row.profile.reference_release;
       return `<article class="dmap-db"><h3>${esc(dbName(row.database))}</h3>
         ${release ? `<p>${esc(tr(`Reference release ${release}`, `参考版本 ${release}`))}</p>` : ''}
-        <p>${esc(sources ? tr(`${sources}${more ? '+' : ''} registered on this computer`, `本机已登记 ${sources}${more ? '+' : ''} 个`) : tr('Not registered on this computer', '本机未登记'))}</p>
+        <p>${esc(registeredSources(row))}</p>
         ${row.real_data_acceptance === 'not_accepted' ? `<span class="dmap-chip is-pending">${esc(tr('Not yet accepted on real data', '尚未在真实数据上验收'))}</span>` : ''}</article>`;
     }).join('')}</div>`;
   }
