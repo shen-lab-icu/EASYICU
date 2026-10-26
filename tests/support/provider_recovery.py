@@ -106,11 +106,18 @@ def _recoverable_package_record(tmp_path: Path) -> tuple[WebReviewRecoveryRecord
 def recovery(tmp_path, monkeypatch):
     from easyicu.webserver import provider_job_recovery as owner
     from easyicu.webserver.jobs import Job
+    from easyicu.research_agent.authority import provider_hard_stop
     from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopLedger, ProviderHardStopLimits
 
     clock = SimpleNamespace(now=0.0)
-    monkeypatch.setattr(owner.time, "monotonic", lambda: clock.now)
-    monkeypatch.setattr(owner.time, "sleep", lambda seconds: setattr(clock, "now", clock.now + seconds))
+    # Patch the two clock consumers, not the shared stdlib time module. Other
+    # background job/replay workers must not advance this synthetic task clock.
+    test_time = SimpleNamespace(
+        monotonic=lambda: clock.now,
+        sleep=lambda seconds: setattr(clock, "now", clock.now + seconds),
+    )
+    monkeypatch.setattr(owner, "time", test_time)
+    monkeypatch.setattr(provider_hard_stop, "time", test_time)
     task = ProviderHardStopLedger(
         path=tmp_path / "ledger.json", task_ids=("synthetic",),
         limits=ProviderHardStopLimits(

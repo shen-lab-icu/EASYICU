@@ -729,7 +729,27 @@ def submit_agent_run_review(
             except Exception:
                 pass
 
-    job = submit_job("agent-run", runner)
+    from easyicu.webserver.durable_research import current_service
+    from easyicu.webserver.research_auto_resume import prepare_descriptor
+    from easyicu.webserver.jobs import JobCapacityError
+
+    durable = current_service() if decision == "approved" else None
+    if durable is None:
+        job = submit_job("agent-run", runner)
+    else:
+        try:
+            descriptor = prepare_descriptor(
+                study=study_context,
+                project_root=str(research_pipeline_workspace().project_root(study_context_id)),
+                credential_source=str(pending.get("credential_source") or ""),
+                budget_mode=str(pending.get("budget_mode") or ""),
+                external_llm_opt_in=True,
+                execution_resume_source_run_id=run_id,
+            )
+            job = durable.reserve(descriptor)
+        except JobCapacityError as exc:
+            raise HTTPException(status_code=429, detail={"error": "job_capacity_exceeded",
+                                "running": exc.running, "max_running": exc.max_running}) from exc
     synced_context = None
     try:
         synced_context = context_store.handoff_context(
@@ -739,6 +759,8 @@ def submit_agent_run_review(
             active_job_id=job.id,
             expected_revision=int(study_context.get("revision") or 0),
         )
+        if durable is not None:
+            durable.activate(job.id, runner)
     except context_store.StudyContextError as exc:
         start_abort.update(exc.detail)
     except Exception as exc:
@@ -750,6 +772,8 @@ def submit_agent_run_review(
         )
     finally:
         start_gate.set()
+        if durable is not None and start_abort:
+            durable.abandon(job.id)
     if start_abort:
         error = str(start_abort.get("error") or "study_context_sync_failed")
         raise HTTPException(

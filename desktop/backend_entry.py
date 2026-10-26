@@ -105,7 +105,12 @@ def _watch_parent_process(parent_pid: int, *, interval: float = 1.0,
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ["--easyicu-host-worker"]:
+        from easyicu.runtime.host_worker import main as worker_main
+
+        return worker_main(arguments[1:])
+    args = _parser().parse_args(arguments)
     if not 1024 <= args.port <= 65535:
         raise ValueError("port must be between 1024 and 65535")
     session_token = os.environ.get("EASYICU_DESKTOP_SESSION_TOKEN", "")
@@ -145,4 +150,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # PyInstaller's multiprocessing hook dispatches spawn/resource-tracker
+    # children before our application or analysis-worker argument parser.
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     sys.exit(main())

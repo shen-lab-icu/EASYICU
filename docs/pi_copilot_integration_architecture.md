@@ -1,14 +1,50 @@
 # Pi-based Copilot integration architecture
 
-Status: accepted for the first Web-first vertical slice
+Status: accepted; first-slice decisions below are historical unless superseded
+by the current runtime increment.
 
 Date: 2026-08-08
 
-EasyICU baseline: `a9610bf5dea50dfced80eba804959f8ba0e086f9`
+Original first-slice baseline: `a9610bf5dea50dfced80eba804959f8ba0e086f9`
 
 Pi package: `@earendil-works/pi-coding-agent@0.84.1`
 
 Pi source reviewed at: `9dd90a49711d088b86fdd9b4aea575913a8328a8`
+
+## Current runtime increment (2026-10-23)
+
+The pinned Pi SDK remains unchanged. The discovery-free ResourceLoader now
+loads one in-process host-owned `context` extension. Every active turn starts
+with a fresh workflow receipt. A bounded, non-persisted projection survives
+conversation compaction, rejects foreign or older study revisions, and becomes
+unavailable before a mutating tool starts. A successful setup update can supply
+display state with `rebind_required`; it does not refresh the old turn's grants.
+No extra summarizer or memory-provider call is introduced. Pi's own compaction
+uses the same ShellBudgetGuard stream wrapper.
+
+The Web host supports a bounded FIFO of directly typed conversation follow-ups.
+Each delivered item enters the ordinary message owner as a new turn, with fresh
+provider, source, binding and grant checks. Action/approval messages must be
+sent when idle. Changing the binding, cancelling or failing the preceding turn,
+or restarting the host interrupts pending items. Text remains visible for
+review/removal; persisted messages are never automatically executed on startup.
+Native Pi `steer`/`followUp` are deliberately not used to bypass host turn scope.
+
+After acquiring the existing single-process deployment lease, the Web app opens
+`webserver-jobs.sqlite3` under its private state root. The bounded journal stores
+job identity, lifecycle timestamps, cancellation state and reserved SSE cursors.
+It stores no runner, arguments, credentials, free-form errors, event payloads or
+scientific results. Completed IDs retain terminal receipts; unfinished jobs are
+marked interrupted. Richer conversation evidence already archived is preserved.
+The scientific checkpoint and review owners still decide whether/how to resume.
+This is recovery of job status, not automatic replay of arbitrary Python closures.
+
+No Temporal, Langfuse or Mem0 service is added. Durable dispatch of governed
+research jobs through DBOS is described under the upgrade strategy below.
+Current tool exposure is defined by `pi_copilot/tool_catalog.json`, not the
+original first-slice list below. Validation uses synthetic conversations,
+process-restart fixtures and the real pinned SDK with an offline model stream;
+it does not constitute a new research run or publication evidence.
 
 ## Decision
 
@@ -324,6 +360,12 @@ package versions. Gateway startup re-hashes those files and fails with
   fall back to direct filesystem or process access.
 
 ## Upgrade strategy
+
+Research jobs admitted through the governed submission/review routes now use
+DBOS 3.3.0 for bounded cross-process dispatch. Scientific authority and budgets
+remain with the original EasyICU checkpoint owners; Pi message replay does not
+grant continuation. See [durable research execution](durable_research_execution.md)
+for supported crash boundaries, cancellation and packaging requirements.
 
 Upgrades are deliberate dependency-review changes:
 

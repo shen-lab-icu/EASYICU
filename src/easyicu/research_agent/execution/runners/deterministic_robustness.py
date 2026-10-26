@@ -19,7 +19,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import textwrap
 from collections.abc import Mapping
 from dataclasses import replace
@@ -39,7 +38,7 @@ from ...robustness.primary_effect import (
     _primary_effect_payload_is_complete,
 )
 from .typed_input_binding import contained_regular_file
-from .replay_environment import primary_replay_refusal, replay_environment
+from .replay_environment import primary_replay_refusal, replay_command, replay_environment
 from ...robustness.membership import (
     _identifier_column,
     _membership_audit,
@@ -1997,7 +1996,7 @@ def _replay_primary_model_on_frame(
         env["EASYICU_RESOLVED_INPUTS_JSON"] = str(replay_manifest_path)
     try:
         completed = subprocess.run(
-            [sys.executable, str(source["script_path"])],
+            replay_command(source["script_path"]),
             cwd=str(source["script_path"].parent),
             env=env,
             capture_output=True,

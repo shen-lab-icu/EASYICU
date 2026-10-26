@@ -57,6 +57,7 @@ viz = [
   "kaleido>=0.2.1"
 ]
 webapp = [
+  "dbos==3.3.0",
   "fastapi>=0.115",
   "httpx>=0.27",
   "uvicorn>=0.30",

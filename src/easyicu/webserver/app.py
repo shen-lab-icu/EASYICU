@@ -155,11 +155,21 @@ def _refuse_a_shared_unix_socket() -> None:
 def _acquire_web_deployment_lease() -> None:
     acquire_single_process_lease()
     try:
-        reconcile_review_recovery_records()
-    except WebReviewRecoveryError:
-        # A damaged private index must not make the whole local Web UI
-        # unavailable; individual recovery queries still fail closed.
-        pass
+        from easyicu.webserver import durable_research, jobs, state_paths
+
+        jobs.MANAGER.enable_persistence(state_paths.state_root() / "webserver-jobs.sqlite3")
+        try:
+            reconcile_review_recovery_records()
+        except WebReviewRecoveryError:
+            # Individual review recovery queries still fail closed. The job
+            # journal itself must load successfully before accepting new jobs.
+            pass
+        durable_research.start_service(state_paths.state_root())
+    except BaseException:
+        from easyicu.webserver import durable_research
+        if durable_research.stop_service():
+            release_single_process_lease()
+        raise
     # After the lease: a second process on the same home never warms.
     hosted_warmup.start()
 
@@ -167,11 +177,15 @@ def _acquire_web_deployment_lease() -> None:
 @app.on_event("shutdown")
 def _release_web_deployment_lease() -> None:
     from easyicu.webserver.jobs import MANAGER
+    from easyicu.webserver import durable_research
 
     MANAGER.cancel_all("server_shutdown")
     shutdown_pi_copilot_service()
     shutdown_codex_auth()
-    release_single_process_lease()
+    # A synchronous provider callback may still be draining after cancellation.
+    # Keep the process lease until it exits; a replacement cannot overlap it.
+    if durable_research.stop_service():
+        release_single_process_lease()
 
 
 WEB_ALLOWED_HOSTS = resolve_allowed_hosts()

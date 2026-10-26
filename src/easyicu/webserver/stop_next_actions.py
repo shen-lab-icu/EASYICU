@@ -257,6 +257,7 @@ _EDIT_CODES = frozenset(
         "research_pipeline_provider_recovery_probe_failed",
         "research_pipeline_provider_timeout",
         "research_pipeline_question_required",
+        "research_pipeline_recorded_approval_required",
         "research_pipeline_repeated_stay_dependence_unaddressed",
         "research_pipeline_required_concept_structurally_unavailable",
         "research_pipeline_required_concept_without_values",

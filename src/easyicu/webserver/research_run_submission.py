@@ -609,7 +609,21 @@ def submit_research_run(
             except Exception:
                 pass
 
-    job = _submit_job("agent-run", runner)
+    from easyicu.webserver.durable_research import current_service
+    from easyicu.webserver.research_auto_resume import prepare_descriptor
+
+    durable = current_service()
+    if durable is None or request.report_only:
+        job = _submit_job("agent-run", runner)
+        durable = None
+    else:
+        try:
+            job = durable.reserve(prepare_descriptor(request, study_context, runner_kwargs))
+        except job_store.JobCapacityError as exc:
+            raise ResearchRunSubmissionError(
+                {"error": "job_capacity_exceeded", "running": exc.running,
+                 "max_running": exc.max_running}, status_code=429,
+            ) from exc
     synced_context = None
     authorization_error = None
     start_error_code = "agent_run_authorization_failed"
@@ -627,6 +641,8 @@ def submit_research_run(
             active_job_id=job.id,
             expected_revision=int(study_context.get("revision") or 0),
         )
+        if durable is not None:
+            durable.activate(job.id, runner)
         start_abort.clear()
     except ResearchRunSubmissionError as exc:
         authorization_error = exc
@@ -642,6 +658,8 @@ def submit_research_run(
         )
     finally:
         start_gate.set()
+        if durable is not None and start_abort:
+            durable.abandon(job.id)
 
     if authorization_error is not None:
         raise authorization_error

@@ -499,3 +499,48 @@ def test_submission_keeps_the_pinned_demo_clearance_scope(start_gate_launch, tmp
     assert seen == [source.database]
     with pytest.raises(ValueError):
         require_data_handling("miiv", "unspecified")
+
+
+@pytest.mark.parametrize("authorized", [True, False])
+def test_durable_submission_activates_only_after_original_grant_and_handoff(
+    start_gate_launch, monkeypatch, authorized,
+):
+    from easyicu.webserver import durable_research
+
+    launch = start_gate_launch
+    events = []
+    captured = {}
+    def reserve(payload):
+        events.append("reserve")
+        captured["payload"] = payload
+        return launch.job
+    def activate(identity, runner):
+        events.append("activate")
+        captured["runner"] = runner
+    def authorize():
+        events.append("authorize")
+        if not authorized:
+            raise research_run_submission.ResearchRunSubmissionError({"error": "grant_expired"})
+    def handoff(*args, **kwargs):
+        events.append("handoff")
+        return {"revision": 4}
+    service = SimpleNamespace(reserve=reserve, activate=activate, abandon=lambda identity: events.append("abandon"))
+    monkeypatch.setattr(durable_research, "current_service", lambda: service)
+    launch.callbacks.handoff.side_effect = handoff
+    request = research_run_submission.ResearchRunSubmissionRequest(
+        study_context_id="study-start-gate", provider="mock", credential_source="pi_verified",
+        external_llm_opt_in=True, planner_start_mode="fresh",
+    )
+    if not authorized:
+        with pytest.raises(research_run_submission.ResearchRunSubmissionError, match="grant_expired"):
+            research_run_submission.submit_research_run(request, authorize=authorize)
+        assert events == ["reserve", "authorize", "abandon"]
+        launch.callbacks.base_runner.assert_not_called()
+    else:
+        result = research_run_submission.submit_research_run(request, authorize=authorize)
+        assert events == ["reserve", "authorize", "handoff", "activate"]
+        assert result.job_id == launch.job.id
+        launch.callbacks.base_runner.assert_not_called()
+        captured["runner"](launch.job)
+        launch.callbacks.base_runner.assert_called_once()
+    assert "provider_environment" not in captured["payload"]

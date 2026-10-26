@@ -7810,6 +7810,7 @@ def resume_research_pipeline(
     job: Any,
     current_study_context: Optional[Mapping[str, Any]] = None,
     provider_environment: Optional[Mapping[str, str]] = None,
+    require_recorded_decision: bool = False,
 ) -> Dict[str, Any]:
     """Resume one digest-bound plan review, including after host restart."""
 
@@ -7977,6 +7978,11 @@ def resume_research_pipeline(
                 f"The saved review is in non-resumable phase {checkpoint.state!r}.",
             )
         stored_decisions = [dict(item) for item in checkpoint.approved_decisions]
+    if require_recorded_decision and not stored_decisions:
+        raise ResearchPipelineRunError(
+            "research_pipeline_recorded_approval_required",
+            "Automatic continuation requires the original persisted approval.",
+        )
     if stored_decisions:
         stored_kinds = {str(item.get("decision") or "") for item in stored_decisions}
         if stored_kinds != {resolved}:

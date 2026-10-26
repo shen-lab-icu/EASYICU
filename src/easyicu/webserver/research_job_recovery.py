@@ -72,6 +72,9 @@ def wrap_pipeline_runner(runner: Callable, request: Any) -> Callable:
 
 
 def bind_provider_recovery(job: Any, *, wrapper_dir: Path, task: Any, client: Any) -> None:
+    from easyicu.webserver.durable_research import bind_provider_task
+
+    bind_provider_task(job, wrapper_dir=wrapper_dir, task=task)
     recovery = recovery_for_job(job)
     if recovery is not None:
         from easyicu.webserver.research_run_usage import bind_shared_provider_task
@@ -89,6 +92,8 @@ def recover_review(operation: Callable) -> Callable:
     """An approval is submitted once; any continuation uses execution launch."""
     @wraps(operation)
     def run(*, job: Any, **kwargs: Any) -> Any:
+        if recovery_for_job(job) is not None:
+            return operation(job=job, **kwargs)
         recovery = ProviderJobRecovery(job)
         recovery.review_launch = None
         return recovery.run(
@@ -109,6 +114,9 @@ def bind_review_recovery(job: Any, entry: Any, provider_environment: Any) -> Non
     seed = load_recovery_seed(entry.wrapper_dir)
     if seed is None:
         return
+    from easyicu.webserver.durable_research import bind_provider_task
+
+    bind_provider_task(job, wrapper_dir=entry.wrapper_dir, task=entry.provider_hard_stop)
     recovery.bind(wrapper_dir=entry.wrapper_dir, task=entry.provider_hard_stop, client=client)
     recovery.review_launch = {
         "study_context": entry.study, "project_root": str(entry.wrapper_dir.parent.parent),

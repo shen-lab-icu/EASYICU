@@ -216,16 +216,21 @@ def test_robustness_cannot_replay_non_host_primary(monkeypatch, tmp_path, origin
     assert not (tmp_path / "replay").exists()
 
 
-@pytest.mark.parametrize("desktop", [True, False])
+@pytest.mark.parametrize("desktop,frozen", [(True, True), (True, False), (False, False)])
 def test_robustness_replay_keeps_desktop_cache_and_docker_policy(
-    monkeypatch, tmp_path, desktop
+    monkeypatch, tmp_path, desktop, frozen
 ):
+    import sys
+
     import pandas as pd
     from easyicu.research_agent.execution.runners import (
         deterministic_robustness as owner,
     )
 
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "run-font-cache"))
+    monkeypatch.setattr(sys, "frozen", frozen, raising=False)
+    script = tmp_path / "primary.py"
+    script.write_text("print('typed primary')\n")
     if desktop:
         monkeypatch.setenv("EASYICU_HOST_RENDERED_ONLY", "1")
     else:
@@ -234,7 +239,7 @@ def test_robustness_replay_keeps_desktop_cache_and_docker_policy(
     captured = []
 
     def run(command, **kwargs):
-        captured.append(kwargs["env"])
+        captured.append((command, kwargs["env"]))
         return SimpleNamespace(returncode=1, stdout="", stderr="synthetic failure")
 
     monkeypatch.setattr(owner.subprocess, "run", run)
@@ -246,7 +251,7 @@ def test_robustness_replay_keeps_desktop_cache_and_docker_policy(
                 if desktop
                 else "model_generated"
             },
-            "script_path": tmp_path / "primary.py",
+            "script_path": script,
         },
         variant_cohort=pd.DataFrame({"measurement": [1.0, 2.0]}),
         out_dir=tmp_path,
@@ -255,9 +260,18 @@ def test_robustness_replay_keeps_desktop_cache_and_docker_policy(
     )
     assert result["error"] == "registered primary-model replay returned exit code 1"
     assert len(captured) == 1
-    assert captured[0]["MPLCONFIGDIR"] == str(
+    assert captured[0][1]["MPLCONFIGDIR"] == str(
         tmp_path / ("run-font-cache" if desktop else "replay/matplotlib")
     )
+    if frozen:
+        import hashlib
+
+        assert captured[0][0] == [
+            sys.executable, "--easyicu-host-worker", "replay", "--script", str(script),
+            "--sha256", hashlib.sha256(script.read_bytes()).hexdigest(),
+        ]
+    else:
+        assert captured[0][0] == [sys.executable, str(script)]
 
 
 def test_desktop_write_skips_every_manuscript_service(tmp_path):

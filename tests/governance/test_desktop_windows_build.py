@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 from types import SimpleNamespace
+from typing import get_args
 
 import pytest
 
@@ -136,7 +137,10 @@ def test_pi_is_installed_in_the_wheel_and_bundled_node_has_its_license(tmp_path,
 
 @pytest.mark.parametrize("windows", [False, True])
 def test_frozen_backend_preserves_installed_sources_and_kernel_identity(tmp_path, monkeypatch, windows):
+    from matplotlib.backend_bases import get_registered_canvas_class
+    from easyicu.research_agent.contracts.method_packages import BASELINE_PACKAGES
     from easyicu.research_agent.execution.kernel_identity import build_execution_kernel_identity
+    from easyicu.research_agent.figures.publication import ExportFormat
 
     common = load_script("build_common")
     installed = tmp_path / "installed wheel/easyicu"
@@ -172,7 +176,24 @@ def test_frozen_backend_preserves_installed_sources_and_kernel_identity(tmp_path
     assert build_execution_kernel_identity(installed) == build_execution_kernel_identity(frozen)
     assert "--onedir" in commands[0]
     assert "--paths" not in commands[0]
-    assert "--copy-metadata" in commands[0]
+    options = list(zip(commands[0], commands[0][1:]))
+    assert ("--recursive-copy-metadata", "easyicu") in options
+    assert ("--copy-metadata", "psutil") in options
+    assert ("--copy-metadata", "dbos") in options
+    assert ("--collect-all", "psycopg_binary") in options
+    hidden = {value for flag, value in options if flag == "--hidden-import"}
+    assert "sqlalchemy.dialects.sqlite" in hidden
+    # Validate the execution owner's current baseline, so adding a required
+    # package cannot leave the frozen child unable to run a typed script.
+    assert set(BASELINE_PACKAGES) <= {name.split(".")[0] for name in hidden}
+    assert {"patsy", "psutil", "matplotlib.backends.backend_agg", "statsmodels.formula.api"} <= hidden
+    # Exporters resolve backends dynamically by format, independently of the
+    # active Agg canvas. Cover the figure contract, including PPTX's PNG image.
+    for export_format in get_args(ExportFormat):
+        canvas = get_registered_canvas_class("png" if export_format == "pptx" else export_format)
+        assert canvas is not None
+        assert canvas.__module__ in hidden, f"Missing frozen figure backend for {export_format}"
+    assert "PIL.TiffImagePlugin" in hidden
     assert ("--manifest" in commands[0]) == windows
 
 
