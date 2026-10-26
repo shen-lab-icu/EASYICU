@@ -347,9 +347,12 @@
       if (hostnameMatches(host, 'api.openai.com')) return 'openai';
       if (hostnameMatches(host, 'openrouter.ai')) return 'openrouter';
       if (hostnameMatches(host, 'api.deepseek.com')) return 'deepseek';
-      // The local proxy is loopback-only: exact host plus its pinned port, so
-      // `https://127.0.0.1.evil.example:8317/` cannot borrow the preset.
-      if ((host === '127.0.0.1' || host === 'localhost') && port === '8317') return 'cliproxyapi';
+      if (hostnameMatches(host, 'openai.azure.com') || hostnameMatches(host, 'services.ai.azure.com')) return 'azure';
+      if (/^bedrock-(mantle\.[a-z0-9-]+\.api\.aws|runtime\.[a-z0-9-]+\.amazonaws\.com)$/.test(host)) return 'bedrock';
+      // Local services are loopback-only: exact host plus their pinned port,
+      // so `https://127.0.0.1.evil.example:8317/` cannot borrow a preset.
+      const LOOPBACK_PRESETS = { 8317: 'cliproxyapi', 11434: 'ollama', 1234: 'lmstudio' };
+      if ((host === '127.0.0.1' || host === 'localhost') && LOOPBACK_PRESETS[port]) return LOOPBACK_PRESETS[port];
       return 'custom-openai';
     }
 

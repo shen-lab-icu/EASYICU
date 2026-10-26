@@ -276,8 +276,8 @@
       if (baseUrl && !isExampleHostname(presetHostname(baseUrl))) return false;
       forgetCredential(form);
       state.error = tr(
-        'Enter your gateway address before connecting. The example address is only a placeholder and is never submitted.',
-        '请先填写网关地址再连接。示例地址只是占位文本，不会提交。',
+        'Enter the service address before connecting. The example address is only a placeholder and is never submitted.',
+        '请先填写服务地址再连接。示例地址只是占位文本，不会提交。',
       );
       render();
       return true;

@@ -52,6 +52,22 @@
   // official service keeps it under Advanced. Models are never preset: the
   // service lists them after connecting, and the host recommends one.
   const PRESETS = Object.freeze({
+    deepseek: { label: 'DeepSeek API', provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_transport: 'openai-completions' },
+    openai: { label: 'OpenAI API', provider: 'openai', base_url: 'https://api.openai.com/v1', api_transport: 'openai-responses' },
+    anthropic: { label: 'Anthropic / Claude API', provider: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_transport: 'anthropic-messages' },
+    google: { label: 'Google Gemini API', provider: 'google', base_url: 'https://generativelanguage.googleapis.com/v1beta', api_transport: 'google-generative-ai' },
+    openrouter: { label: 'OpenRouter API', provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1', api_transport: 'openai-completions' },
+    // Institutional clouds: the address names the researcher's own resource
+    // or region, so it starts empty like the custom gateway.
+    azure: { label: 'Azure OpenAI', provider: 'azure-openai', base_url: '', api_transport: 'openai-completions',
+      hint: ['Your resource’s v1 address: https://<resource>.openai.azure.com/openai/v1. Choose your deployment name as the model.', '填写资源的 v1 地址：https://<资源名>.openai.azure.com/openai/v1。模型请选择你的部署名。'] },
+    bedrock: { label: 'Amazon Bedrock', provider: 'amazon-bedrock', base_url: '', api_transport: 'openai-completions',
+      hint: ['Bedrock’s OpenAI-compatible address: https://bedrock-mantle.<region>.api.aws/v1, with a Bedrock API key.', '填写 Bedrock 的 OpenAI 兼容地址：https://bedrock-mantle.<区域>.api.aws/v1，凭据用 Bedrock API 密钥。'] },
+    // Models on this computer. These services do not check the credential.
+    ollama: { label: 'Ollama (this computer)', zh: 'Ollama（本机）', provider: 'ollama', base_url: 'http://127.0.0.1:11434/v1', api_transport: 'openai-completions',
+      hint: ['Ollama listens on http://127.0.0.1:11434/v1 by default. It does not check the credential; enter any text, such as ollama.', 'Ollama 默认地址为 http://127.0.0.1:11434/v1。它不校验凭据，填任意文字即可，例如 ollama。'] },
+    lmstudio: { label: 'LM Studio (this computer)', zh: 'LM Studio（本机）', provider: 'lmstudio', base_url: 'http://127.0.0.1:1234/v1', api_transport: 'openai-completions',
+      hint: ['LM Studio’s local server listens on http://127.0.0.1:1234/v1 by default. It does not check the credential; enter any text, such as lmstudio.', 'LM Studio 本地服务默认地址为 http://127.0.0.1:1234/v1。它不校验凭据，填任意文字即可，例如 lmstudio。'] },
     cliproxyapi: { label: 'CLIProxyAPI / Local proxy', provider: 'easyicu-local', base_url: 'http://127.0.0.1:8317/v1', api_transport: 'openai-completions',
       hint: ['CLIProxyAPI listens on http://127.0.0.1:8317/v1 by default. Change the port if yours differs.', 'CLIProxyAPI 默认地址为 http://127.0.0.1:8317/v1，端口不同请修改。'] },
     // D-P2-4: the custom gateway ships an EMPTY address on purpose. The
@@ -60,12 +76,10 @@
     // control refuses empty and example.* addresses, and so does the backend.
     'custom-openai': { label: 'OpenAI-compatible gateway', provider: 'custom-openai', base_url: '', api_transport: 'openai-completions',
       hint: ['The gateway’s OpenAI-compatible address, usually ending in /v1.', '填写网关的 OpenAI 兼容地址，通常以 /v1 结尾。'] },
-    openai: { label: 'OpenAI API', provider: 'openai', base_url: 'https://api.openai.com/v1', api_transport: 'openai-responses' },
-    openrouter: { label: 'OpenRouter API', provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1', api_transport: 'openai-completions' },
-    deepseek: { label: 'DeepSeek API', provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_transport: 'openai-completions' },
-    anthropic: { label: 'Anthropic / Claude API', provider: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_transport: 'anthropic-messages' },
-    google: { label: 'Google Gemini API', provider: 'google', base_url: 'https://generativelanguage.googleapis.com/v1beta', api_transport: 'google-generative-ai' },
   });
+
+  // A first visit, with no saved connection, starts on the first service.
+  const DEFAULT_PRESET = 'deepseek';
 
   function connectionSignature(values) {
     return ['provider', 'base_url', 'api_transport'].map(name => String((values && values[name]) || '').trim()).join('\n');
@@ -76,13 +90,18 @@
   function apiFormValues(options) {
     const { state, runtime, config, providerPreset } = options;
     const draft = state.apiDraft || {};
-    const preset = PRESETS[draft.preset] ? draft.preset : providerPreset(config, runtime);
+    // Without a saved connection the host reports only its built-in
+    // defaults; those are not the researcher's choice, so the form starts
+    // on DEFAULT_PRESET and takes every connection field from it.
+    const saved = config.credential_present === true;
+    const preset = PRESETS[draft.preset] ? draft.preset : saved ? providerPreset(config, runtime) : DEFAULT_PRESET;
     const pick = (name, fallback) => (Object.prototype.hasOwnProperty.call(draft, name) ? String(draft[name] || '') : fallback);
+    const from = saved ? name => config[name] || (name === 'base_url' ? '' : runtime[name]) || PRESETS[preset][name] : name => PRESETS[preset][name];
     return {
       preset,
-      provider: pick('provider', config.provider || runtime.provider || PRESETS[preset].provider),
-      base_url: pick('base_url', config.base_url || PRESETS[preset].base_url),
-      api_transport: pick('api_transport', config.api_transport || runtime.api_transport || PRESETS[preset].api_transport),
+      provider: pick('provider', from('provider')),
+      base_url: pick('base_url', from('base_url')),
+      api_transport: pick('api_transport', from('api_transport')),
       model: pick('model', config.model || ''),
     };
   }
@@ -117,7 +136,7 @@
         <div class="gpi-provider-heading"><h3>${tr('Connect an API service', '连接 API 服务')}</h3></div>
         ${options.staticPreview ? `<div class="gpi-preview-note"><span aria-hidden="true">i</span><span>${tr('Open EasyICU from the local service to configure this connection.', '请从 EasyICU 本地服务打开后配置连接。')}</span></div>` : ''}
         <div class="gpi-setup-grid">
-          <label class="wide"><span>${tr('Service', '服务')}</span><select data-gpi-provider-preset>${Object.keys(PRESETS).map(key => option(key, values.preset, PRESETS[key].label)).join('')}</select></label>
+          <label class="wide"><span>${tr('Service', '服务')}</span><select data-gpi-provider-preset>${Object.keys(PRESETS).map(key => option(key, values.preset, PRESETS[key].zh ? tr(PRESETS[key].label, PRESETS[key].zh) : PRESETS[key].label)).join('')}</select></label>
           ${preset.hint ? addressField : ''}
           <label class="wide"><span>${tr('API credential', 'API 凭据')}</span><input name="api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="${savedCredential ? tr('Leave blank to use the saved credential', '留空则沿用已保存的凭据') : tr('Paste once; it will not be shown again', '仅粘贴一次，之后不再显示')}"></label>
         </div>
@@ -201,5 +220,5 @@
     return `<div class="gpi-provider-summary ${ready ? 'ready' : 'warn'}"><span class="gpi-dot"></span><div><strong>${tr('Copilot + Research Agent', 'Copilot + Research Agent')}</strong><small>${esc(label)}</small></div><button class="gpi-link" type="button" data-gpi-config>${tr('Change', '更改')}</button></div>`;
   }
 
-  window.EasyICU.guidedPi.declare('provider', { renderSetup, renderConnectionBody, renderBindingSummary, PRESETS, connectionSignature });
+  window.EasyICU.guidedPi.declare('provider', { renderSetup, renderConnectionBody, renderBindingSummary, PRESETS, DEFAULT_PRESET, connectionSignature });
 })();
