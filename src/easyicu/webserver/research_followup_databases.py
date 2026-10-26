@@ -1,10 +1,8 @@
-"""Optional host bridge to db6a decisions and the mdb1 dry compiler.
+"""Host bridge to db6a decisions and the mdb1 dry compiler.
 
-Neither owner exists in this checkout. Without an installed host bridge the
-feature returns multi_database_unavailable, and no database launch is offered.
-The bridge must list currently registered sources, call db6a for the reading,
-and dry compile through mdb1, including any reviewed substitutions. A browser
-or model cannot provide this bridge or its decisions.
+The conversation service installs RegisteredDatabaseOwner. Standalone callers
+without that bridge retain the existing unavailable disposition. A browser or
+model cannot provide the bridge or its decisions.
 """
 from __future__ import annotations
 

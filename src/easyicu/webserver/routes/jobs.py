@@ -186,6 +186,10 @@ def jobs_convert(body: Dict[str, Any]) -> dict:
 
 @submission_router.post("/api/jobs/extract")
 def jobs_extract(body: Dict[str, Any]) -> dict:
+    return submit_extraction(body)
+
+
+def submit_extraction(body: Dict[str, Any], *, submit=None) -> dict:
     """Start a feature-module extraction/export as a background job. Returns
     ``{job_id}``; progress streams from ``/api/jobs/{id}/events``."""
     path = str(body.get("path", ""))
@@ -325,7 +329,7 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
                 except Exception:
                     pass
 
-    job = submit_job("extract", runner)
+    job = (submit or submit_job)("extract", runner)
     synced_context = None
     try:
         if study_context is not None:
