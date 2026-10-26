@@ -133,6 +133,20 @@ def test_owned_schema_names_survive_diagnostic_projection(model):
         assert projected[0]["location"] == [name, "<other>"]
 
 
+@pytest.mark.parametrize("field", ["replicates", "seed"])
+def test_bootstrap_diagnostic_coordinates_survive_without_rejected_values(field):
+    from easyicu.research_agent.contracts.prediction_validation import BootstrapSpec
+
+    with pytest.raises(ValidationError) as raised:
+        BootstrapSpec.model_validate({"replicates": 20, "seed": 17, field: "private-value"})
+    issues = safe_validation_issues(raised.value)
+    assert issues[0]["location"] == [field]
+    issues[0]["location"] = ["steps", 2, "bootstrap_spec", field, "private-key"]
+    projected = safe_projected_validation_issues(issues)
+    assert projected[0]["location"] == ["steps", 2, "bootstrap_spec", field, "<other>"]
+    assert "private" not in json.dumps(projected)
+
+
 def test_non_descriptive_candidate_still_requires_two_variables():
     payload = descriptive_answer()
     for candidate in payload["design_selection"]["candidates"]:
