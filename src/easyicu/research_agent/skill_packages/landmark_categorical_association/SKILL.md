@@ -24,6 +24,28 @@ Among patients still in hospital after the first ICU day, is early lactate group
 
 Start the comparison among patients alive and still observed at the same landmark. Use only measurements obtained before that point to classify exposure. Report unknown exposure separately, and interpret the estimate only for patients eligible at the landmark.
 
+## Methods
+
+EasyICU computes every estimate itself; this package's reference scripts call the same code.
+
+### Estimators
+- Eligibility at the landmark: alive and still observed at the landmark; exposure is classified only from measurements before it, and follow-up starts at the landmark.
+- Primary model: logistic regression with the declared contrasts and covariates, cluster-robust standard errors by patient when repeated stays are declared dependent.
+- Absolute risk per exposure level; unknown exposure is reported as its own state and excluded from the models. Ordered levels add an adjusted per-level trend and Cochran–Armitage / Jonckheere–Terpstra tests with Holm adjustment.
+
+### Reading the results
+- Estimates apply only to patients alive and observed at the landmark; changing the landmark changes the population.
+- An odds ratio overstates the risk ratio when the outcome is common (roughly above 10 %, as ICU mortality often is); read it with the absolute risks and do not report it as a relative risk.
+- Fewer than about 10 outcome events per model parameter makes the estimates unstable; the plan counts parameters, not variables.
+- A large unknown-exposure share is itself a finding; it is flagged above 10 % by default.
+
+### Methodological literature
+- Anderson JR, Cain KC, Gelber RD. Analysis of survival by tumor response. J Clin Oncol. 1983;1:710-719.
+- Dafni U. Landmark analysis at the 25-year landmark point. Circ Cardiovasc Qual Outcomes. 2011;4:363-371.
+- Liang KY, Zeger SL. Longitudinal data analysis using generalized linear models. Biometrika. 1986;73:13-22.
+- von Elm E, et al. The Strengthening the Reporting of Observational Studies in Epidemiology (STROBE) statement. Lancet. 2007;370:1453-1457.
+- Benchimol EI, et al. The REporting of studies Conducted using Observational Routinely-collected health Data (RECORD) statement. PLoS Med. 2015;12:e1001885.
+
 ## What the plan will propose for your review
 
 The plan proposes time zero, landmark and eligibility, exposure window and levels, reference group, outcome horizon, covariates and repeated stays; you review them together before anything runs. Copilot resolves routine configuration and presents a complete plan.

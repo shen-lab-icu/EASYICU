@@ -26,7 +26,7 @@ from .planning.analysis_method_suite import METHOD_SUITE_REGISTRY
 from .planning.method_adapter_catalog import HIGH_FREQUENCY_METHOD_ADAPTERS
 
 METHOD_SKILL_REGISTRY_VERSION = "easyicu.method-skills/3"
-METHOD_SKILL_PACKAGE_VERSION = "easyicu.method-skill-package/4"
+METHOD_SKILL_PACKAGE_VERSION = "easyicu.method-skill-package/5"
 
 #: Workflows whose package ships an executable reference implementation from
 #: ``research_agent/skill_packages/<package>``: real ``scripts/`` that run the
@@ -360,8 +360,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
         "有序暴露剂量反应研究",
         "Association",
         "关联分析",
-        "A complete study of an exposure with three or more ordered levels and the outcome: description, adjusted trend test and non-linearity checks.",
-        "完整研究一个分为三级以上的暴露与结局的趋势关系，包括描述、调整后的趋势检验和非线性检查。",
+        "A complete study of an exposure with three or more ordered levels and the outcome: description, adjusted trend test and non-linearity checks, with analysis code written by the AI from the reviewed plan.",
+        "完整研究一个分为三级以上的暴露与结局的趋势关系，包括描述、调整后的趋势检验和非线性检查；分析代码由 AI 按审阅后的计划编写。",
         "association_ordinal_trend_v1",
         ("association.ordinal_trend",),
         "agent_coded_with_host_gates",
@@ -540,8 +540,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
         "目标试验模拟（因果推断）",
         "Causal inference",
         "因果推断",
-        "State a hypothetical randomized trial (eligibility, treatment strategies, time zero, follow-up), then emulate it with observational data to estimate a treatment's causal effect.",
-        "先写明一个假想的随机试验（纳入标准、治疗策略、时间零点、随访），再用观察数据模拟它，估计治疗的因果效应。",
+        "State a hypothetical randomized trial (eligibility, treatment strategies, time zero, follow-up), then emulate it with observational data to estimate a treatment's causal effect. Starting a treatment within a grace period versus not starting it is computed by EasyICU's own clone-censor-weight estimator.",
+        "先写明一个假想的随机试验（纳入标准、治疗策略、时间零点、随访），再用观察数据模拟它，估计治疗的因果效应。比较宽限期内开始与不开始某治疗时，由 EasyICU 用克隆-删失-加权方法直接计算。",
         "causal_target_trial_v1",
         (),
         "agent_coded_with_host_gates",
@@ -587,8 +587,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
         "轨迹表型发现与早期识别",
         "Phenotyping",
         "表型与亚型",
-        "Group patients by how a measurement evolves over a fixed window, then test whether earlier features can tell which group a new patient belongs to.",
-        "按某项指标在固定时间窗内的变化轨迹给患者分型，再检验更早的临床特征能否判断新患者属于哪一型。",
+        "Group patients by how a measurement evolves over a fixed window, then explore whether earlier features can tell which group a new patient belongs to.",
+        "按某项指标在固定时间窗内的变化轨迹给患者分型，再探索更早的临床特征能否判断新患者属于哪一型。",
         "trajectory_signed_phenotyping_v1",
         (
             "phenotyping.trajectory_feature_clustering",
@@ -984,6 +984,285 @@ WORKFLOW_GUIDES = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class MethodNotes:
+    """What a workflow's estimators are, who computes them, and how to read them.
+
+    Each line restates the owner's implementation; the executors and kernels
+    remain the authority for what is computed.
+    """
+
+    execution: Bilingual
+    estimators: tuple[Bilingual, ...]
+    interpretation: tuple[Bilingual, ...]
+    literature: tuple[str, ...]
+
+
+_OR_COMMON_OUTCOME = (
+    "An odds ratio overstates the risk ratio when the outcome is common (roughly above 10 %, as ICU mortality often is); read it with the absolute risks and do not report it as a relative risk.",
+    "结局常见时（大约高于 10%，ICU 死亡率常如此），比值比会夸大风险比；应结合绝对风险解读，不能当作相对风险报告。",
+)
+_EVENTS_PER_PARAMETER = (
+    "Fewer than about 10 outcome events per model parameter makes the estimates unstable; the plan counts parameters, not variables.",
+    "每个模型参数对应的结局事件少于约 10 个时，估计不稳定；按模型参数计数，而非按变量个数。",
+)
+_STROBE_RECORD = (
+    "von Elm E, et al. The Strengthening the Reporting of Observational Studies in Epidemiology (STROBE) statement. Lancet. 2007;370:1453-1457.",
+    "Benchimol EI, et al. The REporting of studies Conducted using Observational Routinely-collected health Data (RECORD) statement. PLoS Med. 2015;12:e1001885.",
+)
+_CLUSTER_SE = "Liang KY, Zeger SL. Longitudinal data analysis using generalized linear models. Biometrika. 1986;73:13-22."
+_TRIPOD = (
+    "Collins GS, Reitsma JB, Altman DG, Moons KGM. Transparent reporting of a multivariable prediction model for individual prognosis or diagnosis (TRIPOD). BMJ. 2015;350:g7594.",
+    "Collins GS, et al. TRIPOD+AI statement: updated guidance for reporting clinical prediction models that use regression or machine learning methods. BMJ. 2024;385:e078378.",
+)
+
+METHOD_NOTES = {
+    "adjusted-exposure-outcome-study": MethodNotes(
+        ("EasyICU computes the primary model itself; the AI does not write analysis code for it.",
+         "主要模型由 EasyICU 直接计算，不由 AI 编写分析代码。"),
+        (("Binary outcome: logistic regression (statsmodels maximum likelihood), reported as an odds ratio with a 95 % confidence interval. Continuous outcome: linear regression (ordinary least squares), reported as a mean difference.",
+          "二分类结局：logistic 回归（statsmodels 最大似然估计），报告比值比及 95% 置信区间。连续结局：线性回归（最小二乘），报告均值差。"),
+         ("The coding, levels, reference and transform of every model term come from the reviewed plan. A rank-deficient design or a non-binary outcome for a logistic model stops the run; no term is dropped silently.",
+          "每个模型项的编码、水平、参照和变换都来自审阅后的计划。设计矩阵秩不足，或 logistic 模型的结局不是二分类时，运行停止，不会悄悄删除变量。"),
+         ("When the plan declares that repeated ICU stays of one patient are dependent, standard errors are cluster-robust (sandwich) by patient; otherwise they are model-based.",
+          "计划声明同一患者的多次 ICU 住院相互关联时，按患者计算聚类稳健（三明治）标准误；否则使用模型标准误。"),
+         ("Missing data: complete-case fit; the number of rows used and dropped is recorded. The robustness panel reuses the same estimator, so primary and sensitivity estimates differ only by their declared change.",
+          "缺失数据：完整案例拟合，记录纳入和剔除的行数。稳健性分析复用同一估计程序，主分析与敏感性分析只在声明的改动上不同。")),
+        (_OR_COMMON_OUTCOME, _EVENTS_PER_PARAMETER,
+         ("Complete-case estimates can be biased when missingness depends on the outcome; check the complete-case share before interpreting.",
+          "缺失与结局有关时，完整案例估计可能有偏；解读前先查看完整案例所占比例。"),
+         ("Adjustment addresses measured confounders only; the estimate is an association, not a treatment effect.",
+          "调整只处理已测量的混杂；估计值是关联，不是治疗效应。")),
+        (*_STROBE_RECORD, _CLUSTER_SE,
+         "Peduzzi P, et al. A simulation study of the number of events per variable in logistic regression analysis. J Clin Epidemiol. 1996;49:1373-1379.",
+         "Zhang J, Yu KF. What's the relative risk? A method of correcting the odds ratio in cohort studies of common outcomes. JAMA. 1998;280:1690-1691."),
+    ),
+    "ordinal-dose-response-study": MethodNotes(
+        ("The AI writes the analysis code from the reviewed plan. EasyICU supplies validated trend tests for that code to call, checks the declared levels and the result tables, and keeps the result analysis only.",
+         "分析代码由 AI 按审阅后的计划编写。EasyICU 提供经过验证的趋势检验供其调用，核对预设等级和结果表，结果保持仅分析级。"),
+        (("Built-in unadjusted tests: Cochran–Armitage trend test for a binary outcome across ordered levels; Jonckheere–Terpstra test for an ordinal or continuous outcome; Wilson intervals for each level's absolute risk.",
+          "内置的未调整检验：二分类结局用 Cochran–Armitage 趋势检验；有序或连续结局用 Jonckheere–Terpstra 检验；各等级绝对风险用 Wilson 区间。"),
+         ("Adjusted trend: a regression with the level index as one term (trend per level) and, separately, the levels as indicators against the reference (level contrasts), as the plan declares.",
+          "调整后的趋势：按计划在回归中以等级序号作为一个项（每升一级的趋势），并另以各等级相对参照的指示变量估计等级间对比。"),
+         ("Non-linearity: the trend model is compared with the indicator model; sparse levels are reported, not merged after outcomes are seen.",
+          "非线性：比较趋势模型与指示变量模型；人数稀少的等级如实报告，不在查看结局后合并。")),
+        (("A significant trend does not mean that every step raises the risk; read the level-by-level absolute risks.",
+          "趋势显著不代表每升一级风险都升高；应逐级查看绝对风险。"),
+         ("Scoring the levels 1, 2, 3 assumes equal spacing on the model scale; the plan states the scores used.",
+          "把等级记为 1、2、3 相当于假设各级在模型尺度上等距；计划须写明所用分值。"),
+         _OR_COMMON_OUTCOME,
+         ("Cut points must be fixed before outcomes are seen.", "分组界值必须在查看结局前确定。")),
+        ("Cochran WG. Some methods for strengthening the common chi-squared tests. Biometrics. 1954;10:417-451.",
+         "Armitage P. Tests for linear trends in proportions and frequencies. Biometrics. 1955;11:375-386.",
+         "Jonckheere AR. A distribution-free k-sample test against ordered alternatives. Biometrika. 1954;41:133-145.",
+         "Wilson EB. Probable inference, the law of succession, and statistical inference. J Am Stat Assoc. 1927;22:209-212.",
+         *_STROBE_RECORD),
+    ),
+    "fixed-landmark-association-study": MethodNotes(
+        ("EasyICU computes every estimate itself; this package's reference scripts call the same code.",
+         "所有估计都由 EasyICU 直接计算；本包的参考脚本调用同一套代码。"),
+        (("Eligibility at the landmark: alive and still observed at the landmark; exposure is classified only from measurements before it, and follow-up starts at the landmark.",
+          "固定时间点的纳入条件：该时间点仍存活且仍在观察中；只用此前的测量确定暴露分组，随访从该时间点开始。"),
+         ("Primary model: logistic regression with the declared contrasts and covariates, cluster-robust standard errors by patient when repeated stays are declared dependent.",
+          "主要模型：按预设对比和协变量拟合 logistic 回归；声明重复住院相关时按患者计算聚类稳健标准误。"),
+         ("Absolute risk per exposure level; unknown exposure is reported as its own state and excluded from the models. Ordered levels add an adjusted per-level trend and Cochran–Armitage / Jonckheere–Terpstra tests with Holm adjustment.",
+          "报告各暴露等级的绝对风险；暴露不明者单列报告，不进入模型。有序等级另报告调整后的每级趋势，以及经 Holm 校正的 Cochran–Armitage / Jonckheere–Terpstra 检验。")),
+        (("Estimates apply only to patients alive and observed at the landmark; changing the landmark changes the population.",
+          "估计只适用于该时间点仍存活且在观察中的患者；改变时间点就改变了人群。"),
+         _OR_COMMON_OUTCOME, _EVENTS_PER_PARAMETER,
+         ("A large unknown-exposure share is itself a finding; it is flagged above 10 % by default.",
+          "暴露不明比例较高本身就是需要报告的发现；默认超过 10% 时标记。")),
+        ("Anderson JR, Cain KC, Gelber RD. Analysis of survival by tumor response. J Clin Oncol. 1983;1:710-719.",
+         "Dafni U. Landmark analysis at the 25-year landmark point. Circ Cardiovasc Qual Outcomes. 2011;4:363-371.",
+         _CLUSTER_SE, *_STROBE_RECORD),
+    ),
+    "time-varying-exposure-survival-study": MethodNotes(
+        ("EasyICU computes the model itself with the R survival package; results stay analysis only.",
+         "模型由 EasyICU 调用 R survival 包直接计算；结果保持仅分析级。"),
+        (("Counting-process (start, stop] intervals split at each exposure update. Only values already observed are carried forward, and the unmeasured state is kept rather than filled.",
+          "按计数过程把随访切成 (start, stop] 区间，在每次暴露更新时分段。只沿用已观察到的值，未测量状态予以保留而不填补。"),
+         ("Cox model with a time-varying exposure: survival::coxph with Efron ties and a robust sandwich variance clustered by patient.",
+          "含时变暴露的 Cox 模型：survival::coxph，Efron 法处理同时事件，按患者聚类的稳健（三明治）方差。"),
+         ("Checks: early events retained, interval coverage, convergence, finite covariance and alternative update rules.",
+          "检查：早期事件是否保留、区间覆盖、收敛、协方差有限，以及替代更新规则。")),
+        (("Time-dependent confounding (a covariate affected by earlier exposure that also drives later exposure) is not resolved by this model; that requires methods such as marginal structural models.",
+          "本模型不能处理随时间变化的混杂（受此前暴露影响、又影响之后暴露的协变量）；这需要边际结构模型等方法。"),
+         ("The hazard ratio compares current exposure states; it is not a cumulative or causal effect.",
+          "风险比比较的是当前暴露状态，不是累积效应或因果效应。"),
+         ("Measurement frequency can be informative: sicker patients are measured more often.",
+          "测量频率本身可能带有信息：病情越重，测得越频繁。")),
+        ("Andersen PK, Gill RD. Cox's regression model for counting processes: a large sample study. Ann Stat. 1982;10:1100-1120.",
+         "Therneau TM, Grambsch PM. Modeling Survival Data: Extending the Cox Model. Springer; 2000.",
+         "Fisher LD, Lin DY. Time-dependent covariates in the Cox proportional-hazards regression model. Annu Rev Public Health. 1999;20:145-157.",
+         "Lin DY, Wei LJ. The robust inference for the Cox proportional hazards model. J Am Stat Assoc. 1989;84:1074-1078.",
+         "Robins JM, Hernán MA, Brumback B. Marginal structural models and causal inference in epidemiology. Epidemiology. 2000;11:550-560."),
+    ),
+    "survival-time-to-event": MethodNotes(
+        ("EasyICU computes the primary model itself; the AI does not write analysis code for it.",
+         "主要模型由 EasyICU 直接计算，不由 AI 编写分析代码。"),
+        (("Kaplan–Meier survival curves by group.", "按组绘制 Kaplan–Meier 生存曲线。"),
+         ("Cox proportional hazards regression (lifelines, Efron ties) for the adjusted hazard ratio of the declared exposure, with a 95 % confidence interval.",
+          "Cox 比例风险回归（lifelines，Efron 法处理同时事件）估计预设暴露的调整后风险比及 95% 置信区间。"),
+         ("Proportional-hazards check: Schoenfeld-residual test against Kaplan–Meier-transformed time for each model term, with a family-wise global row.",
+          "比例风险检验：对每个模型项做 Schoenfeld 残差检验（时间按 Kaplan–Meier 变换），并给出族系水平的总体结果。")),
+        (("If proportional hazards fail, a single hazard ratio averages a changing effect; consider restricted mean survival time or a time-split estimate.",
+          "比例风险不成立时，单一风险比是对随时间变化效应的平均；可考虑限制性平均生存时间或分时段估计。"),
+         ("Censoring at hospital discharge assumes discharged patients share the future risk of those who stay, which rarely holds; prefer a fixed horizon with known vital status or a competing-risk analysis, and state the choice in the plan.",
+          "在出院时删失，相当于假设出院者此后的风险与仍住院者相同，这很少成立；更宜采用已知生存状态的固定时限，或竞争风险分析，并在计划中写明。"),
+         _EVENTS_PER_PARAMETER,
+         ("A hazard ratio is not a risk ratio; report absolute survival at the horizon as well.",
+          "风险比不是风险之比；还应报告观察期限时的绝对生存率。")),
+        ("Kaplan EL, Meier P. Nonparametric estimation from incomplete observations. J Am Stat Assoc. 1958;53:457-481.",
+         "Cox DR. Regression models and life-tables. J R Stat Soc Series B. 1972;34:187-220.",
+         "Efron B. The efficiency of Cox's likelihood function for censored data. J Am Stat Assoc. 1977;72:557-565.",
+         "Grambsch PM, Therneau TM. Proportional hazards tests and diagnostics based on weighted residuals. Biometrika. 1994;81:515-526.",
+         "Peduzzi P, et al. Importance of events per independent variable in proportional hazards regression analysis. II. Accuracy and precision of regression estimates. J Clin Epidemiol. 1995;48:1503-1510.",
+         "Austin PC, Lee DS, Fine JP. Introduction to the analysis of survival data in the presence of competing risks. Circulation. 2016;133:601-609."),
+    ),
+    "clinical-risk-prediction": MethodNotes(
+        ("EasyICU fits and evaluates the model itself; the AI does not write the model code.",
+         "模型由 EasyICU 直接拟合和评估，不由 AI 编写模型代码。"),
+        (("Logistic regression with an L2 (ridge) penalty, C = 1.0 fixed rather than tuned (scikit-learn).",
+          "带 L2（岭）惩罚的 logistic 回归，C = 1.0 固定、不调参（scikit-learn）。"),
+         ("Preprocessing learned on development patients only: median imputation and standardization for numeric predictors; most-frequent imputation and one-hot coding for categorical predictors.",
+          "预处理只从开发集患者学习：数值预测变量用中位数插补并标准化；分类预测变量用众数插补并独热编码。"),
+         ("Patient-level split: 80 % development and 20 % validation with a fixed seed, so no patient's stays appear in both.",
+          "按患者划分：80% 开发、20% 验证，随机种子固定，同一患者的住院不会同时出现在两边。"),
+         ("Validation: AUROC with a DeLong interval (or a patient-resampling percentile interval); calibration intercept, slope and curve; Brier score; decision-curve net benefit.",
+          "验证：AUROC 及 DeLong 区间（或按患者重抽样的百分位区间）；校准截距、斜率和校准曲线；Brier 分数；决策曲线净获益。")),
+        (("A single split uses data less efficiently than bootstrap optimism correction, especially in small samples; read the interval widths.",
+          "单次划分对数据的利用不如 bootstrap 乐观校正充分，样本小时尤甚；应关注区间宽度。"),
+         ("A calibration slope below 1 indicates overfitting even when the AUROC looks good.",
+          "即使 AUROC 看起来不错，校准斜率小于 1 也提示过拟合。"),
+         ("Check the number of outcome events against published sample-size criteria before trusting performance.",
+          "相信模型性能前，先按已发表的样本量标准核对结局事件数。"),
+         ("Internal validation does not show that the model transports to another hospital or database.",
+          "内部验证不能说明模型可推广到其他医院或数据库。")),
+        (*_TRIPOD,
+         "DeLong ER, DeLong DM, Clarke-Pearson DL. Comparing the areas under two or more correlated receiver operating characteristic curves: a nonparametric approach. Biometrics. 1988;44:837-845.",
+         "Van Calster B, et al. Calibration: the Achilles heel of predictive analytics. BMC Med. 2019;17:230.",
+         "Vickers AJ, Elkin EB. Decision curve analysis: a novel method for evaluating prediction models. Med Decis Making. 2006;26:565-574.",
+         "Steyerberg EW, et al. Internal validation of predictive models: efficiency of some procedures for logistic regression analysis. J Clin Epidemiol. 2001;54:774-781.",
+         "Riley RD, et al. Calculating the sample size required for developing a clinical prediction model. BMJ. 2020;368:m441."),
+    ),
+    "dynamic-landmark-prediction": MethodNotes(
+        ("The AI writes the model code from the reviewed plan. EasyICU supplies validated functions that build the landmark rows, attach outcomes and evaluate predictions, checks the outputs, and keeps the result analysis only.",
+         "模型代码由 AI 按审阅后的计划编写。EasyICU 提供经过验证的函数来构建各时点的数据行、连接结局并评估预测，核对输出，结果保持仅分析级。"),
+        (("Stacked landmark data: one row per patient still at risk at each landmark, predictors from its look-back window, the outcome in the horizon after it.",
+          "堆叠的 landmark 数据：每个时点仍处于风险中的患者各占一行，预测变量取自该时点的回看窗口，结局取该时点之后的期限内。"),
+         ("The plan chooses the model, commonly a logistic model per landmark or one model with landmark terms.",
+          "模型由计划选择，常见做法是每个时点一个 logistic 模型，或一个含时点项的模型。"),
+         ("Evaluation at each landmark: discrimination, calibration and how much follow-up was observable.",
+          "逐时点评估：区分度、校准，以及可观察随访的比例。")),
+        (("Rows from one patient are correlated; keep each patient in one partition and use patient-clustered uncertainty.",
+          "同一患者的多行彼此相关；每位患者只放在一个数据集中，不确定性按患者聚类计算。"),
+         ("Risk is conditional on being alive and in the ICU at the landmark; performance at one landmark does not carry to another.",
+          "风险以在该时点仍存活且在 ICU 为条件；一个时点的性能不能推及其他时点。")),
+        ("van Houwelingen HC. Dynamic prediction by landmarking in event history analysis. Scand J Stat. 2007;34:70-85.",
+         "van Houwelingen HC, Putter H. Dynamic Prediction in Clinical Survival Analysis. CRC Press; 2011.",
+         _TRIPOD[1]),
+    ),
+    "target-trial-emulation": MethodNotes(
+        ("Two routes. A grace-period comparison of starting a treatment within a window versus not starting it, with death by a fixed horizon, runs EasyICU's own clone-censor-weight estimator. Other designs are coded by the AI from the reviewed protocol, checked by EasyICU and kept analysis only.",
+         "分两种情况。比较“在宽限期内开始某治疗”与“不开始”、结局为固定期限内死亡时，由 EasyICU 自己的克隆-删失-加权程序计算。其他设计由 AI 按审阅后的方案编写代码，经 EasyICU 核验，结果保持仅分析级。"),
+        (("Clone-censor-weight: every eligible stay is cloned into both strategies, and a clone is censored when its stay deviates from its strategy.",
+          "克隆-删失-加权：每个符合条件的住院复制到两种策略中，住院偏离所属策略时删失该副本。"),
+         ("Inverse probability of censoring weights from pooled hourly logistic models (statsmodels GLM) for starting the treatment and for leaving the ICU, with stabilized numerators.",
+          "删失的逆概率权重来自按小时汇总的 logistic 模型（statsmodels GLM），分别拟合开始治疗和离开 ICU 的概率，分子做稳定化处理。"),
+         ("Weighted Kaplan–Meier risk of death by the horizon in each arm; risk difference and risk ratio with patient-bootstrap percentile intervals. Sensitivity analyses: weights clipped at the 1st and 99th percentiles, and unweighted.",
+          "每组用加权 Kaplan–Meier 估计期限内死亡风险；报告风险差和风险比及按患者 bootstrap 的百分位区间。敏感性分析：权重截断于第 1 和第 99 百分位，以及不加权。"),
+         ("The run stops on too few events, an unobserved strategy, a positivity violation, extreme weights or an unstable bootstrap.",
+          "事件过少、某策略未被观察到、违反正值性、权重极端或 bootstrap 不稳定时，运行停止。")),
+        (("Validity rests on no unmeasured confounding of treatment start and ICU exit, on positivity and on correct weight models; balance diagnostics cannot prove the first.",
+          "结论成立依赖于：治疗开始和离开 ICU 不存在未测量混杂、满足正值性、权重模型正确；平衡诊断无法证明第一条。"),
+         ("Aligning eligibility, assignment and time zero prevents immortal-time bias.",
+          "让纳入、分组与时间零点对齐，可避免不朽时间偏倚。"),
+         ("The estimand is per protocol (adherence to a strategy), not intention to treat.",
+          "估计目标是按方案（坚持某一策略）的效应，不是意向性治疗效应。")),
+        ("Hernán MA, Robins JM. Using big data to emulate a target trial when a randomized trial is not available. Am J Epidemiol. 2016;183:758-764.",
+         "Hernán MA, Sauer BC, Hernández-Díaz S, Platt R, Shrier I. Specifying a target trial prevents immortal time bias and other self-inflicted injuries in observational analyses. J Clin Epidemiol. 2016;79:70-75.",
+         "Cain LE, et al. When to start treatment? A systematic approach to the comparison of dynamic regimes using observational data. Int J Biostat. 2010;6:Article 18.",
+         "Cole SR, Hernán MA. Constructing inverse probability weights for marginal structural models. Am J Epidemiol. 2008;168:656-664.",
+         "Maringe C, et al. Reflection on modern methods: trial emulation in the presence of immortal-time bias. Int J Epidemiol. 2020;49:1719-1729."),
+    ),
+    "cross-sectional-phenotyping": MethodNotes(
+        ("EasyICU computes the clustering itself; outcomes are never clustering inputs.",
+         "聚类由 EasyICU 直接计算；结局从不作为聚类输入。"),
+        (("Features from the reviewed early window, median-imputed and standardized.",
+          "特征取自审阅后的早期时间窗，经中位数插补并标准化。"),
+         ("k-means (scikit-learn MiniBatchKMeans, 10 starts, fixed seed) over the plan's candidate grid (default k = 2 to 6); k is chosen by the highest silhouette, ties going to the smaller k.",
+          "k-means（scikit-learn MiniBatchKMeans，10 次初始化，固定种子），在计划的候选网格（默认 k = 2 至 6）中按最高轮廓系数选择 k，相同时取较小的 k。"),
+         ("Stability: refits on 80 % subsamples compared with the primary assignment by adjusted Rand index; agreement with a diagonal Gaussian mixture model; a complete-case sensitivity with a bootstrap interval.",
+          "稳定性：在 80% 子样本上重新拟合，用调整兰德指数与主分组比较；与对角协方差高斯混合模型比较一致性；另做完整案例敏感性分析并给出 bootstrap 区间。"),
+         ("Outcomes are described by cluster only after the solution is chosen.",
+          "确定分组后才按组描述结局。")),
+        (("Clusters partition this sample; they are not proven biological entities, and replication in another database is the stronger test.",
+          "聚类只是对本样本的划分，并非已证实的生物学实体；在另一个数据库中重现是更有力的检验。"),
+         ("The silhouette favors compact clusters of similar size; a low value means weak structure.",
+          "轮廓系数偏好紧凑、大小相近的簇；数值低说明结构不明显。"),
+         ("Different outcomes across clusters do not validate the clusters.",
+          "各组结局不同，不能证明分组有效。")),
+        ("Seymour CW, et al. Derivation, validation, and potential treatment implications of novel clinical phenotypes for sepsis. JAMA. 2019;321:2003-2017.",
+         "Calfee CS, et al. Subphenotypes in acute respiratory distress syndrome: latent class analysis of data from two randomised controlled trials. Lancet Respir Med. 2014;2:611-620.",
+         "Rousseeuw PJ. Silhouettes: a graphical aid to the interpretation and validation of cluster analysis. J Comput Appl Math. 1987;20:53-65.",
+         "Hubert L, Arabie P. Comparing partitions. J Classif. 1985;2:193-218.",
+         "Hennig C. Cluster-wise assessment of cluster stability. Comput Stat Data Anal. 2007;52:258-271."),
+    ),
+    "trajectory-phenotyping": MethodNotes(
+        ("Trajectory discovery runs EasyICU's own estimator. The early-assignment classifier is coded by the AI from the reviewed plan and is exploratory, so the workflow as a whole stays analysis only.",
+         "轨迹分型由 EasyICU 自己的程序计算。早期识别分类器由 AI 按审阅后的计划编写，属探索性分析，因此整个流程的结果保持仅分析级。"),
+        (("Fixed-window representation of the measurement, one coordinate per window summary.",
+          "在固定时间窗内表示指标，每个窗口汇总值作为一个坐标。"),
+         ("Mixed-mode latent class model fitted by EM: class-specific Gaussians for continuous coordinates and level probabilities for ordinal ones (such as organ scores); each row contributes its observed coordinates (full-information likelihood under missing at random).",
+          "用 EM 拟合混合型潜类别模型：连续坐标为各类别的高斯分布，有序坐标（如器官评分）为各类别的水平概率；每行只贡献其已观察的坐标（随机缺失假设下的全信息似然）。"),
+         ("The class count is chosen by BIC over the prespecified grid; an optimum on the grid boundary is reported as no solution. Stability is assessed by resampling (100 resamples by default).",
+          "类别数在预设网格中按 BIC 选择；最优值落在网格边界时报告为无解。稳定性通过重抽样评估（默认 100 次）。"),
+         ("Early assignment: a multinomial logistic classifier on features from before the window, with patient-disjoint development and validation sets, reporting balanced accuracy, macro-F1, log loss and multiclass Brier score.",
+          "早期识别：用时间窗之前的特征拟合多分类 logistic 分类器，开发与验证患者不重叠，报告平衡准确率、宏 F1、对数损失和多分类 Brier 分数。")),
+        (("BIC selection depends on the representation; very small classes may be artifacts.",
+          "BIC 的选择取决于表示方法；很小的类别可能是伪影。"),
+         ("Patients must be observed through the window, which conditions on surviving it.",
+          "患者须在整个时间窗内被观察，这相当于以活过该时间窗为条件。"),
+         ("Assignment accuracy does not establish that the groups are biologically meaningful.",
+          "识别准确率不能说明分组具有生物学意义。")),
+        ("Nagin DS. Analyzing developmental trajectories: a semiparametric, group-based approach. Psychol Methods. 1999;4:139-157.",
+         "Dempster AP, Laird NM, Rubin DB. Maximum likelihood from incomplete data via the EM algorithm. J R Stat Soc Series B. 1977;39:1-38.",
+         "Schwarz G. Estimating the dimension of a model. Ann Stat. 1978;6:461-464.",
+         "Vermunt JK, Magidson J. Latent class cluster analysis. In: Hagenaars JA, McCutcheon AL, eds. Applied Latent Class Analysis. Cambridge University Press; 2002:89-106.",
+         "Bhavani SV, et al. Identifying novel sepsis subphenotypes using temperature trajectories. Am J Respir Crit Care Med. 2019;200:327-335.",
+         _TRIPOD[1]),
+    ),
+}
+
+
+def _method_lines(row: dict[str, Any], language: int) -> list[str]:
+    notes = METHOD_NOTES.get(row["id"])
+    if notes is None:
+        return []
+    return [
+        notes.execution[language],
+        "", ("### Estimators", "### 估计方法")[language],
+        *(f"- {line[language]}" for line in notes.estimators),
+        "", ("### Reading the results", "### 解读要点")[language],
+        *(f"- {line[language]}" for line in notes.interpretation),
+        "", ("### Methodological literature", "### 方法学文献")[language],
+        *(f"- {citation}" for citation in notes.literature),
+    ]
+
+
+def _validate_method_notes() -> None:
+    workflows = {row.skill_id for row in METHOD_SKILLS if row.layer == "research_workflow"}
+    if workflows != set(METHOD_NOTES):
+        raise RuntimeError(
+            "method Skill notes drift: "
+            f"missing={sorted(workflows - set(METHOD_NOTES))!r}, "
+            f"unknown={sorted(set(METHOD_NOTES) - workflows)!r}"
+        )
+
+
+_validate_method_notes()
+
+
 # These are translations of named diagnostics, not new validation rules.
 _DIAGNOSTIC_LABELS = {
     "denominators": ("Counts used as denominators", "分母所用人数"),
@@ -1214,7 +1493,8 @@ def _reference_lines(row: dict[str, Any], language: int) -> list[str]:
 
 _PACKAGE_HEADINGS = (
     ("Purpose", "用途"), ("When to use", "何时使用"), ("When not to use", "何时不适用"),
-    ("How it works", "工作原理"), ("What the plan will propose for your review", "计划将提出哪些内容供您审阅"),
+    ("How it works", "工作原理"), ("Methods", "方法"),
+    ("What the plan will propose for your review", "计划将提出哪些内容供您审阅"),
     ("Steps and their checks", "步骤与检查"), ("Outputs", "输出"), ("Per-database notes", "各数据库说明"),
     ("Common stops", "常见停止原因"), ("References", "参考依据"), ("Boundary", "使用边界"),
 )
@@ -1272,24 +1552,25 @@ def _package_skill_markdown(kind: str, row: dict[str, Any], *, language: int = 0
         if kind == "research_workflow" else [description,
          ("Use this as a supporting method in a reviewed study.", "作为已审阅研究中的辅助方法使用。")[language]],
         exclusions or [("- A complete study needs a suitable research workflow around this method.", "- 完整研究需要选择包含此方法的研究流程。")[language]],
-        [philosophy[language]], [decisions, inputs], _step_lines(row, language),
+        [philosophy[language]], _method_lines(row, language), [decisions, inputs], _step_lines(row, language),
         _output_lines(row, language), _database_lines(row, language),
         [f"- **{stop.situation[language]}** {stop.next_step[language]}" for stop in PACKAGE_STOPS],
         _reference_lines(row, language), [boundary, ceiling],
     ]
     if row["id"] in REFERENCE_SCRIPT_PACKAGES:
-        sections[5].extend([
+        sections[6].extend([
             ("### Reference scripts (executable)", "### 参考脚本（可执行）")[language],
             ("The reference implementation loads the cohort, runs the analysis, draws figures and exports a checked report. The existing completion messages include `✓ Analysis completed successfully!` and `=== Export Complete ===`; the latter appears only after export consistency checks pass.",
              "参考实现依次读取队列、分析、绘图并导出经过检查的报告。已有完成消息包括 `✓ Analysis completed successfully!` 和 `=== Export Complete ===`，后者仅在导出一致性检查通过后出现。")[language],
         ])
     if row["id"] == "trajectory-phenotyping":
-        sections[5].append(("### Trajectory discovery and early assignment", "### 轨迹发现与早期识别")[language])
-        sections[5].append(guide.philosophy[language])
+        sections[6].append(("### Trajectory discovery and early assignment", "### 轨迹发现与早期识别")[language])
+        sections[6].append(guide.philosophy[language])
     lines = ["---", f"name: {json.dumps(row['id'])}", f"description: {json.dumps(description, ensure_ascii=False)}",
              f"category: {json.dumps(row['category_zh'] if language else row['category'], ensure_ascii=False)}", "---", "", f"# {title}"]
     for heading, content in zip(_PACKAGE_HEADINGS, sections, strict=True):
-        lines.extend(["", f"## {heading[language]}", "", *content])
+        if content:
+            lines.extend(["", f"## {heading[language]}", "", *content])
     return "\n".join(lines) + "\n"
 
 

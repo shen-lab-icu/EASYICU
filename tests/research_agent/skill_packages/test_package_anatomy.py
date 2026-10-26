@@ -12,12 +12,12 @@ from easyicu.research_agent import method_skills as skills
 
 WORKFLOWS = tuple(row for row in skills.METHOD_SKILLS if row.layer == "research_workflow")
 HEADINGS = (
-    "Purpose", "When to use", "When not to use", "How it works",
+    "Purpose", "When to use", "When not to use", "How it works", "Methods",
     "What the plan will propose for your review", "Steps and their checks",
     "Outputs", "Per-database notes", "Common stops", "References", "Boundary",
 )
 HEADINGS_ZH = (
-    "用途", "何时使用", "何时不适用", "工作原理", "计划将提出哪些内容供您审阅",
+    "用途", "何时使用", "何时不适用", "工作原理", "方法", "计划将提出哪些内容供您审阅",
     "步骤与检查", "输出", "各数据库说明", "常见停止原因", "参考依据", "使用边界",
 )
 
@@ -25,7 +25,7 @@ HEADINGS_ZH = (
 @pytest.mark.parametrize("row", WORKFLOWS, ids=lambda row: row.skill_id)
 def test_workflow_has_clinical_bilingual_task_package(row):
     package = skills.method_skill_package(row.skill_id, enabled=True)
-    assert package["schema_version"] == "easyicu.method-skill-package/4"
+    assert package["schema_version"] == "easyicu.method-skill-package/5"
     files = {item["path"]: item["content"] for item in package["files"]}
     assert row.not_for
     assert "SKILL.zh.md" in files
@@ -260,3 +260,35 @@ def test_supporting_methods_do_not_invent_a_workflow_example_or_database_scope(s
         if item["path"] in {"SKILL.md", "SKILL.zh.md"}:
             assert "examples/public_demo" not in item["content"]
             assert "per-database assessment" in item["content"] or "数据库评估" in item["content"]
+
+
+@pytest.mark.parametrize("row", WORKFLOWS, ids=lambda row: row.skill_id)
+def test_methods_section_names_who_computes_and_matches_the_card(row):
+    notes = skills.METHOD_NOTES[row.skill_id]
+    files = {item["path"]: item["content"] for item in skills.method_skill_package(row.skill_id, enabled=True)["files"]}
+    for language, path, ceiling, heading in ((0, "SKILL.md", "analysis only", "## Methods"),
+                                             (1, "SKILL.zh.md", "仅分析级", "## 方法")):
+        body = files[path]
+        section = body.split(heading + "\n", 1)[1].split("\n## ", 1)[0]
+        assert notes.execution[language] in section
+        assert all(line[language] in section for line in notes.estimators + notes.interpretation)
+        assert (ceiling in notes.execution[language]) == (row.claim_ceiling == "analysis_only")
+        if row.execution_mode != "deterministic_host":
+            assert "AI" in notes.execution[language]
+    assert len(notes.literature) >= 3
+
+
+def test_registry_requires_method_notes_for_every_workflow(monkeypatch):
+    notes = dict(skills.METHOD_NOTES)
+    notes.pop("survival-time-to-event")
+    monkeypatch.setattr(skills, "METHOD_NOTES", notes)
+    with pytest.raises(RuntimeError, match="notes drift"):
+        skills._validate_method_notes()
+
+
+def test_supporting_methods_have_no_methods_heading():
+    for skill_id in ("cohort-characterization-table-one", "prediction.decision_curve"):
+        package = skills.method_skill_package(skill_id, enabled=True)
+        for item in package["files"]:
+            if item["path"] in {"SKILL.md", "SKILL.zh.md"}:
+                assert "\n## Methods\n" not in item["content"] and "\n## 方法\n" not in item["content"]

@@ -24,6 +24,28 @@ category: "关联分析"
 
 在同一固定时间点仍存活且仍在观察中的患者之间开始比较。只用此前获得的测量确定暴露分组。暴露不明者单独报告，估计仅适用于该时间点仍符合条件的人群。
 
+## 方法
+
+所有估计都由 EasyICU 直接计算；本包的参考脚本调用同一套代码。
+
+### 估计方法
+- 固定时间点的纳入条件：该时间点仍存活且仍在观察中；只用此前的测量确定暴露分组，随访从该时间点开始。
+- 主要模型：按预设对比和协变量拟合 logistic 回归；声明重复住院相关时按患者计算聚类稳健标准误。
+- 报告各暴露等级的绝对风险；暴露不明者单列报告，不进入模型。有序等级另报告调整后的每级趋势，以及经 Holm 校正的 Cochran–Armitage / Jonckheere–Terpstra 检验。
+
+### 解读要点
+- 估计只适用于该时间点仍存活且在观察中的患者；改变时间点就改变了人群。
+- 结局常见时（大约高于 10%，ICU 死亡率常如此），比值比会夸大风险比；应结合绝对风险解读，不能当作相对风险报告。
+- 每个模型参数对应的结局事件少于约 10 个时，估计不稳定；按模型参数计数，而非按变量个数。
+- 暴露不明比例较高本身就是需要报告的发现；默认超过 10% 时标记。
+
+### 方法学文献
+- Anderson JR, Cain KC, Gelber RD. Analysis of survival by tumor response. J Clin Oncol. 1983;1:710-719.
+- Dafni U. Landmark analysis at the 25-year landmark point. Circ Cardiovasc Qual Outcomes. 2011;4:363-371.
+- Liang KY, Zeger SL. Longitudinal data analysis using generalized linear models. Biometrika. 1986;73:13-22.
+- von Elm E, et al. The Strengthening the Reporting of Observational Studies in Epidemiology (STROBE) statement. Lancet. 2007;370:1453-1457.
+- Benchimol EI, et al. The REporting of studies Conducted using Observational Routinely-collected health Data (RECORD) statement. PLoS Med. 2015;12:e1001885.
+
 ## 计划将提出哪些内容供您审阅
 
 计划将提出时间零点、固定时间点及纳入条件、暴露时间窗与分组、参照组、结局观察期限、协变量及重复住院处理；您在运行前一次审阅。Copilot 处理常规配置并呈现完整计划。

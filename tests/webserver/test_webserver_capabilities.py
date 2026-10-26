@@ -172,7 +172,7 @@ def test_builtin_method_skill_package_exposes_reviewed_documentation(
 
     assert response.status_code == 200
     package = response.json()
-    assert package["schema_version"] == "easyicu.method-skill-package/4"
+    assert package["schema_version"] == "easyicu.method-skill-package/5"
     assert package["skill_id"] == "survival-time-to-event"
     assert package["kind"] == "research_workflow"
     assert package["read_only"] is True
