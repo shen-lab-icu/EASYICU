@@ -30,6 +30,7 @@ from .contracts import (
     SkillActivation,
     TOOL_PATTERN,
 )
+from .skill_copy import builtin_copy_markdown, builtin_source_status, parse_builtin_source
 
 REGISTRY_SCHEMA = "easyicu.extension-registry/1"
 MAX_REGISTRY_BYTES = 512 * 1024
@@ -38,7 +39,7 @@ MAX_ACTIVE_SKILLS = 8
 MAX_ACTIVE_SKILL_BYTES = 48_000
 MAX_WRITING_ADVISORY_BYTES = 8_000
 _SKILL_FRONTMATTER_KEYS = frozenset(
-    {"name", "description", "category", "disable-model-invocation"}
+    {"name", "description", "category", "disable-model-invocation", "source"}
 )
 _MODEL_VISIBLE_SECRET_OR_HOST_PATH = re.compile(
     r"(?:file://|/(?:Users|home|private|tmp|var|etc|opt|Volumes)/|[A-Za-z]:\\|"
@@ -169,6 +170,7 @@ def parse_skill_markdown(skill_markdown: str) -> Dict[str, Any]:
             "SKILL.md must not contain credentials or absolute host filesystem paths.",
         )
     canonical = text.rstrip() + "\n"
+    source = parse_builtin_source(metadata["source"]) if "source" in metadata else None
     return {
         "name": name,
         "description": description,
@@ -178,6 +180,7 @@ def parse_skill_markdown(skill_markdown: str) -> Dict[str, Any]:
         "canonical_markdown": canonical,
         "digest": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
         "size_bytes": len(canonical.encode("utf-8")),
+        "source": source,
     }
 
 
@@ -330,6 +333,7 @@ class ExtensionRegistry:
         stages: Sequence[str] = ("conversation",),
         enabled: bool = True,
         expected_activation_sha256: str | None = None,
+        overwrite: bool = True,
     ) -> Dict[str, Any]:
         parsed = parse_skill_markdown(skill_markdown)
         clean_stages = _normalise_stages(stages)
@@ -350,6 +354,12 @@ class ExtensionRegistry:
                 ),
                 None,
             )
+            if existing is not None and not overwrite:
+                raise ExtensionRegistryError(
+                    "extension_skill_name_conflict",
+                    "A personal Skill already uses this name. Choose a new name for the copy.",
+                    details={"name": parsed["name"]},
+                )
             self._write_skill_object_unlocked(parsed)
             row = {
                 "name": parsed["name"],
@@ -362,12 +372,31 @@ class ExtensionRegistry:
                 "enabled": bool(enabled),
                 "installed_at": (existing or {}).get("installed_at") or now,
                 "updated_at": now,
+                "source": parsed["source"],
             }
             self._replace_named(state["skills"], row)
             state["revision"] = int(state.get("revision") or 0) + 1
             self._validate_active_limits(state)
             self._write_state_unlocked(state)
         return self._public_skill(row)
+
+    def copy_builtin_skill(
+        self,
+        builtin_id: str,
+        *,
+        name: str | None = None,
+        stages: Sequence[str] = ("conversation",),
+        expected_activation_sha256: str | None = None,
+    ) -> Dict[str, Any]:
+        """Install an instruction-only copy, disabled and without overwriting."""
+        markdown = builtin_copy_markdown(builtin_id, name=name, copied_at=_utc_now())
+        return self.install_skill(
+            markdown,
+            stages=stages,
+            enabled=False,
+            expected_activation_sha256=expected_activation_sha256,
+            overwrite=False,
+        )
 
     def install_mcp_server(
         self,
@@ -506,7 +535,7 @@ class ExtensionRegistry:
 
     @staticmethod
     def _public_skill(row: Mapping[str, Any]) -> Dict[str, Any]:
-        return {
+        public = {
             key: row.get(key)
             for key in (
                 "name",
@@ -520,6 +549,12 @@ class ExtensionRegistry:
                 "installed_at",
                 "updated_at",
             )
+        }
+        return {
+            **public,
+            **builtin_source_status(row.get("source")),
+            "execution_boundary": "instructions_only",
+            "claim_ceiling": "analysis_only",
         }
 
     @staticmethod

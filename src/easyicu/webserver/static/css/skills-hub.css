@@ -79,7 +79,9 @@
 .eusk-detail-head small{display:block;margin-top:12px;color:#8a938d;font-size:12px}
 .eusk-detail-actions{display:flex;align-items:center;gap:8px;white-space:nowrap}
 .eusk-actions-menu{position:relative}.eusk-actions-menu>summary{display:flex;align-items:center;justify-content:center;width:38px;height:38px;border:1px solid var(--sk-line);border-radius:50%;cursor:pointer;list-style:none}.eusk-actions-menu>summary::-webkit-details-marker{display:none}.eusk-actions-menu>div{position:absolute;right:0;top:43px;z-index:5;min-width:180px;padding:6px;border:1px solid var(--sk-line);border-radius:10px;background:var(--sk-surface);box-shadow:0 9px 24px rgba(42,38,34,.11)}.eusk-actions-menu button{display:block;width:100%;padding:9px 10px;border:0;border-radius:6px;background:transparent;color:var(--sk-ink);text-align:left;font-size:12px}.eusk-actions-menu button:hover{background:var(--sk-wash)}
-.eusk-state-button{min-height:38px;padding:0 14px;border:1px solid var(--sk-line);border-radius:999px;background:var(--sk-surface);color:var(--sk-ink-2);font-size:12px}
+.eusk-state-button,.eusk-copy{min-height:38px;padding:0 14px;border:1px solid var(--sk-line);border-radius:999px;background:var(--sk-surface);color:var(--sk-ink-2);font-size:12px}
+.eusk-copy:hover:not(:disabled){color:var(--sk-ink);border-color:var(--sk-ink-2)}
+.eusk-source-note{margin:10px 0 0;color:var(--sk-ink-2);font-size:12.5px}.eusk-source-note button{padding:0;border:0;background:none;color:var(--sk-accent-ink);font-size:inherit;text-decoration:underline;text-underline-offset:2px}
 .eusk-state-button.on{border-color:var(--sk-accent-border,#9bbec0);background:var(--sk-accent-soft);color:var(--sk-accent-ink)}
 .eusk-tabs{display:inline-grid;grid-template-columns:repeat(2,minmax(124px,1fr));gap:3px;margin-top:16px;padding:3px;border:1px solid var(--sk-line);border-radius:10px;background:var(--sk-wash)}
 .eusk-tabs button{min-width:124px;padding:9px 16px;border:0;border-radius:7px;background:transparent;color:#6c776f;font-size:13px;transition:background-color .16s ease,color .16s ease,box-shadow .16s ease}

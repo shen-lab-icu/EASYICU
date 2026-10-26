@@ -27,6 +27,33 @@ def _revision(client) -> str:
     return revision
 
 
+def test_extension_api_copies_a_builtin_disabled_and_refuses_overwrite(tmp_path, monkeypatch):
+    monkeypatch.setenv("EASYICU_EXTENSION_HOME", str(tmp_path / "extensions"))
+    client = TestClient(app)
+    payload = {"builtin_id": "cohort-characterization-table-one", "name": "my-cohort"}
+    assert client.post("/api/extensions/skills/copy", json=payload).status_code == 422
+    payload["expected_sha256"] = _revision(client)
+    assert client.post("/api/extensions/skills/copy", json={**payload, "enabled": True}).status_code == 422
+    response = client.post("/api/extensions/skills/copy", json=payload)
+    assert response.status_code == 200
+    skill = response.json()["skill"]
+    assert skill["enabled"] is False
+    assert skill["source"]["builtin_id"] == payload["builtin_id"]
+    assert skill["source_updated"] is False
+    assert skill["claim_ceiling"] == "analysis_only"
+    detail = client.get("/api/extensions/skills/my-cohort").json()
+    assert "Personal Skill authority boundary" in detail["skill_md"]
+    stale = client.post("/api/extensions/skills/copy", json=payload)
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["error"] == "extension_revision_mismatch"
+    payload["expected_sha256"] = _revision(client)
+    conflict = client.post("/api/extensions/skills/copy", json=payload)
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["error"] == "extension_skill_name_conflict"
+    payload["name"] = "my-second-cohort"
+    assert client.post("/api/extensions/skills/copy", json=payload).status_code == 200
+
+
 def test_extension_api_installs_toggles_and_removes_skill(
     tmp_path, monkeypatch
 ) -> None:
