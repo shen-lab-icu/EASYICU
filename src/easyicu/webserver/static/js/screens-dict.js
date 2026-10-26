@@ -39,7 +39,17 @@
   // the list until asked for; the catalog's audience field decides.
   function isInternal(k) { const meta = (C().conceptCoverage || {})[k]; return !!(meta && meta.audience === 'internal'); }
   function listed(k) { return !!C().dict[k] && (dictShowInternal || !isInternal(k)); }
-  function listedIn(gk) { return (C().groupConcepts[gk] || []).filter(listed); }
+  // A concept's other definitions and component criteria fold under its
+  // entry; the catalog's variants map decides. Selecting the entry or one of
+  // its variants opens the family.
+  function variantsOf(k) { return ((C().variants || {})[k] || []).filter(listed); }
+  function primaryOf(k) {
+    const map = C().variants || {};
+    return Object.keys(map).find(primary => map[primary].includes(k)) || null;
+  }
+  function entry(k) { return listed(k) && !primaryOf(k); }
+  function openFamily() { return dictSelected && (variantsOf(dictSelected).length ? dictSelected : primaryOf(dictSelected)); }
+  function listedIn(gk) { return (C().groupConcepts[gk] || []).filter(entry); }
   function internalCount() { return Object.keys(C().dict || {}).filter(isInternal).length; }
 
   function supportedDbCount() { return (C().supportedDbs || []).length || 6; }
@@ -130,16 +140,18 @@
   function matchedRows() {
     const cat = C();
     const q = dictSearch.trim().toLowerCase();
+    const matches = k => !q || `${k} ${nameOf(k)} ${zhOf(k)} ${descOf(k)}`.toLowerCase().includes(q);
+    const open = openFamily();
     const groupsToScan = dictCat === 'all' ? cat.groups.map(g => g[0]) : [dictCat];
     const rows = [];
     groupsToScan.forEach(gk => {
       (cat.groupConcepts[gk] || []).forEach(k => {
-        if (!listed(k)) return;
-        if (q) {
-          const hay = `${k} ${nameOf(k)} ${zhOf(k)} ${descOf(k)}`.toLowerCase();
-          if (!hay.includes(q)) return;
-        }
-        rows.push({ k, group: gk });
+        if (!entry(k)) return;
+        const variants = variantsOf(k);
+        const hits = q ? variants.filter(matches) : [];
+        if (!matches(k) && !hits.length) return;
+        rows.push({ k, group: gk, variants: variants.length });
+        (k === open ? variants : hits).forEach(v => rows.push({ k: v, group: gk, variantOf: k }));
       });
     });
     return rows;
@@ -148,7 +160,8 @@
   function resultsHtml(rows) {
     const hidden = internalCount();
     const toggle = hidden ? `<button type="button" class="btn sm ghost" data-dict-internal>${dictShowInternal ? L('Hide internal fields', '隐藏内部字段') : L(`Show internal fields (${hidden})`, `显示内部字段（${hidden}）`)}</button>` : '';
-    return `<div class="dict-resultline row" style="justify-content:space-between;align-items:center;"><span>${t(rows.length + ' concept' + (rows.length === 1 ? '' : 's'), rows.length + ' 个概念')}${dictCat !== 'all' ? ` · ${groupNameOf(dictCat)}` : ''}${dictSearch ? ` · "${dictSearch.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}"` : ''}</span>${toggle}</div>${tableHtml(rows)}`;
+    const n = rows.filter(row => !row.variantOf).length;
+    return `<div class="dict-resultline row" style="justify-content:space-between;align-items:center;"><span>${t(n + ' concept' + (n === 1 ? '' : 's'), n + ' 个概念')}${dictCat !== 'all' ? ` · ${groupNameOf(dictCat)}` : ''}${dictSearch ? ` · "${dictSearch.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}"` : ''}</span>${toggle}</div>${tableHtml(rows)}`;
   }
   function tableHtml(rows) {
     if (!rows.length) return `<div class="dict-empty">${icon('search', 22)}<div>${L('No matching concepts.', '未找到匹配的概念。')}</div></div>`;
@@ -161,15 +174,18 @@
         <span class="dc-cov">${coverageLabel}</span>
         ${dictCat === 'all' ? `<span class="dc-cat">${L('Group', '分组')}</span>` : ''}
       </div>`;
-    const body = rows.map(({ k, group }) => {
+    const open = openFamily();
+    const body = rows.map(({ k, group, variants, variantOf }) => {
       const d = descOf(k);
+      const expanded = variants ? ` aria-expanded="${open === k ? 'true' : 'false'}"` : '';
+      const fold = variants ? `<span class="dn-fold">${L(`${variants} related variables`, `${variants} 个相关变量`)}</span>` : '';
       return `
-      <button type="button" class="dict-row dict-concept-row ${dictSelected === k ? 'selected' : ''}" data-dict-concept="${html(k)}" aria-pressed="${dictSelected === k ? 'true' : 'false'}">
+      <button type="button" class="dict-row dict-concept-row${variantOf ? ' is-variant' : ''} ${dictSelected === k ? 'selected' : ''}" data-dict-concept="${html(k)}" aria-pressed="${dictSelected === k ? 'true' : 'false'}"${expanded}>
         <span class="dc-code mono">${k}</span>
-        <span class="dc-name"><span class="dn-t">${window.EU_LANG === 'zh' ? zhOf(k) : nameOf(k)}</span>${d ? `<span class="dn-d">${d}</span>` : ''}</span>
+        <span class="dc-name"><span class="dn-t">${window.EU_LANG === 'zh' ? zhOf(k) : nameOf(k)}</span>${d ? `<span class="dn-d">${d}</span>` : ''}${fold}</span>
         <span class="dc-unit mono">${unitOf(k)}</span>
         <span class="dc-cov">${covBadge(k)}</span>
-        ${dictCat === 'all' ? `<span class="dc-cat">${groupNameOf(group)}</span>` : ''}
+        ${dictCat === 'all' ? `<span class="dc-cat">${variantOf ? '' : groupNameOf(group)}</span>` : ''}
       </button>`;
     }).join('');
     return `<div class="dict-table">${head}${body}</div>`;
@@ -217,7 +233,7 @@
     const cat = C();
     const chip = (key, label, n) => `<button class="dict-chip ${dictCat === key ? 'on' : ''}" data-dict-cat="${key}">${label}${n != null ? ` <span class="dch-n">${n}</span>` : ''}</button>`;
     return `<div class="dict-chips">
-      ${chip('all', L('All', '全部'), Object.keys(cat.dict || {}).filter(listed).length)}
+      ${chip('all', L('All', '全部'), Object.keys(cat.dict || {}).filter(entry).length)}
       ${cat.groups.filter(g => listedIn(g[0]).length).map(g => chip(g[0], groupNameOf(g[0]), listedIn(g[0]).length)).join('')}
     </div>`;
   }
@@ -235,7 +251,7 @@
       <div class="rail-block">
         <div class="rail-head"><span class="t">${t('Catalog', '目录')}</span></div>
         <div class="col gap-6" style="font-size:12px;">
-          <div class="setup-row"><span class="k">${t('Concepts', '概念')}</span><span class="vv">${Object.keys(cat.dict || {}).filter(listed).length}</span></div>
+          <div class="setup-row"><span class="k">${t('Concepts', '概念')}</span><span class="vv">${Object.keys(cat.dict || {}).filter(entry).length}</span></div>
           <div class="setup-row"><span class="k">${t('Databases', '数据库')}</span><span class="vv">${inst.map(dbName).join(' · ')}</span></div>
         </div>
       </div>`;
@@ -326,6 +342,12 @@
         if (dbButton) { dictSelectedDb = dbButton.dataset.dictLineageDb; paintLineage(); return; }
         const conceptButton = event.target.closest('[data-dict-concept]');
         if (!conceptButton) return;
+        // A second press on an open entry folds its variants away again.
+        if (conceptButton.dataset.dictConcept === dictSelected && variantsOf(dictSelected).length) {
+          dictSelected = null; dictLineage = null; dictLineageError = '';
+          paintResults(); paintLineage();
+          return;
+        }
         dictSelected = conceptButton.dataset.dictConcept;
         dictSelectedDb = null;
         dictLineage = null;

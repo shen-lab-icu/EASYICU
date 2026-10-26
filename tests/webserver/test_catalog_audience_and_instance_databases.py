@@ -283,3 +283,36 @@ def test_overlay_definitions_merge_sources_without_changing_the_base(
     assert definition["unit"] == "bpm"
     assert set(definition["sources"]) == {"eicu", "miiv"}
     assert base == {"signal": {"deprecated": True, "sources": {"eicu": [{"table": "base"}]}}}
+
+
+def test_aki_reads_as_one_entry_with_its_definitions_folded_under_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each clinical AKI column has one place: the KDIGO stage entry or a
+    variant under it. Bookkeeping columns stay internal; the catalog serves
+    the folding, and every folded column keeps its own name and label."""
+    from easyicu.scores.aki_profiles import RENAL_AKI_BUNDLE_OUTPUTS
+
+    definitions = catalog_metadata.catalog_definitions()
+    variants = catalog_metadata.CONCEPT_VARIANTS["aki_stage_reference"]
+    renal = cc.CONCEPT_GROUPS_INTERNAL["renal"]
+    assert len(set(variants)) == len(variants)
+    for column in ("aki_stage_reference", *variants):
+        assert column in renal and column in cc.CONCEPT_DICTIONARY
+        assert column in cc.CONCEPT_DESCRIPTIONS
+        assert catalog_metadata.concept_audience(column, definitions.get(column, {})) == "clinical"
+    for column in variants:
+        assert catalog_metadata.variant_primary(column) == "aki_stage_reference"
+    assert catalog_metadata.variant_primary("aki_stage_reference") is None
+    loose = {
+        column for column in RENAL_AKI_BUNDLE_OUTPUTS
+        if column.startswith("aki_")
+        and catalog_metadata.concept_audience(column, definitions.get(column, {})) == "clinical"
+    }
+    assert loose == {"aki_stage_reference", *variants}
+    # Names a reader can place without the folded context.
+    assert cc.CONCEPT_DICTIONARY["aki_stage_reference"][1] == "AKI 分期（KDIGO）"
+    assert not any("口径" in cc.CONCEPT_DICTIONARY[column][1] for column in loose)
+
+    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [], "active_path": None})
+    assert catalog.build_catalog()["variants"] == {"aki_stage_reference": list(variants)}

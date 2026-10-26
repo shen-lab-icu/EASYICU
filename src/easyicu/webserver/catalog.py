@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional
 from easyicu.concept import catalog as cc
 from easyicu.webserver import entity_ids as entity_id_contract
 from easyicu.webserver.catalog_metadata import (
+    CONCEPT_VARIANTS,
     catalog_definitions,
     concept_audience,
     concept_databases,
@@ -524,6 +525,7 @@ def build_catalog() -> Dict[str, Any]:
         "groupConcepts": group_concepts,
         "dict": concept_dict,
         "desc": desc,
+        "variants": {key: list(members) for key, members in CONCEPT_VARIANTS.items()},
         "cov": cov,
         "conceptCoverage": concept_coverage,
         "coverageSummary": coverage_summary,

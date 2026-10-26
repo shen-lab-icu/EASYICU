@@ -175,6 +175,7 @@
     if (real.activeExportCoverage) cat.activeExportCoverage = real.activeExportCoverage;
     else delete cat.activeExportCoverage;
     cat.desc = real.desc;
+    cat.variants = real.variants || {};
     cat.totalConcepts = real.totalConcepts;
     cat.supportedDbs = real.supportedDbs;
     cat.instanceDatabases = real.instance_databases || [];

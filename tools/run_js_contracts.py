@@ -313,6 +313,7 @@ CONTRACTS: dict[str, list[str]] = {
         "../../pi_copilot/node_app/src/provider-retry.mjs",
     ],
     "dictionary_hosted_instance.test.js": ["database-names.js", "screens-dict.js"],
+    "dictionary_variant_fold.test.js": ["database-names.js", "screens-dict.js"],
     "review_echarts_owners.test.js": [
         "screens-viz-echarts.js",
         "screens-viz-crossdb-charts.js",
