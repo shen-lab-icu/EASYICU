@@ -601,6 +601,31 @@
   function loadPiRunScientificReview(projectId, runId, offset) {
     return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/runs/' + encodeURIComponent(runId) + '/scientific-review?offset=' + encodeURIComponent(String(offset || 0)) + '&limit=50');
   }
+  // What each model request carried (purpose, provider, kind and size; never
+  // its text), for one run by its opaque run_ref or for one conversation.
+  function loadRunEgress(runRef) {
+    return getJSON('/api/trust/runs/' + encodeURIComponent(runRef) + '/egress');
+  }
+  function loadConversationEgress(sessionId) {
+    return getJSON('/api/trust/conversations/' + encodeURIComponent(sessionId) + '/egress');
+  }
+  // Release notes newer than the version this browser last acknowledged.
+  function loadWhatsNew(lastSeenVersion) {
+    return getJSON('/api/help/whats-new' + (lastSeenVersion ? '?last_seen_version=' + encodeURIComponent(lastSeenVersion) : ''));
+  }
+  // A local diagnostic zip of one run's states and reason codes; nothing is uploaded.
+  async function downloadProblemBundle(runRef) {
+    const path = '/api/help/runs/' + encodeURIComponent(runRef) + '/problem-bundle';
+    const res = await fetch(path);
+    if (!res.ok) {
+      let d = null;
+      try { const payload = await res.json(); d = payload && payload.detail; } catch (e) {}
+      throw apiError(path, res, d);
+    }
+    const disposition = res.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/i);
+    triggerDownload(await res.blob(), match ? match[1] : 'easyicu-problem.zip');
+  }
   // Runs and plans that need the researcher, per persistent client id.
   function loadAttention(params) {
     const query = new URLSearchParams({ client_id: String(params && params.client_id || ''), after: String(params && params.after || 0), limit: String(params && params.limit || 100) });
@@ -964,6 +989,10 @@
   window.EU_API.loadPiSessionSkills = loadPiSessionSkills;
   window.EU_API.searchWorkspace = searchWorkspace;
   window.EU_API.loadAttention = loadAttention;
+  window.EU_API.loadRunEgress = loadRunEgress;
+  window.EU_API.loadConversationEgress = loadConversationEgress;
+  window.EU_API.loadWhatsNew = loadWhatsNew;
+  window.EU_API.downloadProblemBundle = downloadProblemBundle;
   window.EU_API.loadPiRunScientificReview = loadPiRunScientificReview;
   window.EU_API.acknowledgeAttention = acknowledgeAttention;
   window.EU_API.loadPersonalPreferences = loadPersonalPreferences;

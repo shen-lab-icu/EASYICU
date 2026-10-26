@@ -33,6 +33,7 @@ import {
 import {
   defaultShellSessionTokenBudget,
   ShellBudgetGuard,
+  appendModelRequestReceipt,
 } from "./shell-budget.mjs";
 import { retryTransientProviderStream } from "./provider-retry.mjs";
 import { ShellUsageLedger } from "./shell-usage.mjs";
@@ -1410,6 +1411,7 @@ async function createSession(params) {
             budgetReceipt.schema_version,
             budgetReceipt,
           );
+          appendModelRequestReceipt(SESSION_DIR, externalId, model, context);
           return await record.usageLedger.track(() => originalStreamFunction(model, context, {
             ...options,
             maxRetries: 0,

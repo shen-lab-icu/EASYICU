@@ -1,0 +1,15 @@
+/* Owner: js/help-whats-new.js — release notes after an update and from Settings. */
+.eu-whats-new{box-sizing:border-box;width:min(560px,calc(100vw - 32px));max-height:min(620px,calc(100vh - 96px));margin:72px auto auto;padding:0;border:1px solid var(--line,#deded8);border-radius:8px;background:var(--surface,#fff);color:var(--ink);box-shadow:0 12px 32px rgba(42,38,34,.18);overflow:hidden}
+.eu-whats-new[open]{display:flex;flex-direction:column}
+.eu-whats-new::backdrop{background:rgba(42,38,34,.28)}
+.eu-whats-new>header{display:flex;align-items:center;gap:8px;padding:10px 12px 10px 18px;border-bottom:1px solid var(--line,#deded8)}
+.eu-whats-new h2{flex:1;margin:0;font-size:15px;font-weight:600}
+.eu-whats-new header button{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--ink-3);cursor:pointer}
+.eu-whats-new header button:hover{background:var(--surface-2,#f4f3ef);color:var(--ink)}
+.eu-whats-new-body{min-height:0;overflow:auto;padding:6px 18px 10px}
+.eu-whats-new section+section{margin-top:12px;padding-top:12px;border-top:1px solid var(--line-2,#efefea)}
+.eu-whats-new h3{display:flex;align-items:baseline;gap:8px;margin:8px 0 6px;font-size:13px;font-weight:600}
+.eu-whats-new h3 small{color:var(--ink-3);font-size:12px;font-weight:400}
+.eu-whats-new ul{margin:0;padding-left:18px;font-size:13px;line-height:20px}
+.eu-whats-new li+li{margin-top:4px}
+.eu-whats-new>footer{display:flex;justify-content:flex-end;padding:10px 18px;border-top:1px solid var(--line,#deded8)}

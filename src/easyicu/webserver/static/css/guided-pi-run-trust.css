@@ -1,0 +1,19 @@
+/* Owner: js/screens-guided-pi-run-trust.js — a run's or a conversation's model request records. */
+.gpi-run-trust{margin-top:10px;font-size:12px}
+.gpi-run-trust>summary{cursor:pointer}
+.gpi-trust-note{margin:8px 0;color:var(--ink-3);font-size:12px;line-height:17px;overflow-wrap:anywhere}
+.gpi-trust-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
+.gpi-trust-table th{padding:4px 8px 4px 0;border-bottom:1px solid var(--line,#deded8);color:var(--ink-3);font-weight:500;text-align:left}
+.gpi-trust-table td{padding:5px 8px 5px 0;border-bottom:1px solid var(--line-2,#efefea);vertical-align:top;overflow-wrap:anywhere}
+.gpi-trust-table th:first-child,.gpi-trust-table td:first-child{width:2.4em;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.gpi-trust-table th:nth-child(5),.gpi-trust-table td.gpi-trust-size{width:4.8em;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.gpi-trust-table th:last-child,.gpi-trust-table td:last-child{width:4.6em;padding-right:0;white-space:nowrap}
+.gpi-trust-table tr.is-failed td:last-child{color:var(--danger,#a43525)}
+.gpi-trust-dialog{box-sizing:border-box;width:min(720px,calc(100vw - 32px));max-height:min(640px,calc(100vh - 96px));margin:72px auto auto;padding:0;border:1px solid var(--line,#deded8);border-radius:8px;background:var(--surface,#fff);color:var(--ink);box-shadow:0 12px 32px rgba(42,38,34,.18);overflow:hidden}
+.gpi-trust-dialog[open]{display:flex;flex-direction:column}
+.gpi-trust-dialog::backdrop{background:rgba(42,38,34,.28)}
+.gpi-trust-dialog>header{display:flex;align-items:center;gap:8px;padding:10px 12px 10px 16px;border-bottom:1px solid var(--line,#deded8)}
+.gpi-trust-dialog h2{flex:1;margin:0;font-size:14px;font-weight:600}
+.gpi-trust-dialog header button{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--ink-3);cursor:pointer}
+.gpi-trust-dialog header button:hover{background:var(--surface-2,#f4f3ef);color:var(--ink)}
+.gpi-trust-dialog [data-gpi-trust-body]{min-height:0;overflow:auto;padding:4px 16px 14px}

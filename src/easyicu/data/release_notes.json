@@ -1,0 +1,56 @@
+{
+  "schema_version": "easyicu.release-notes/1",
+  "entries": [
+    {
+      "version": "1.0.0",
+      "date": "2026-10-26",
+      "changes": [
+        {
+          "code": "mimic_iii_demo",
+          "zh": "新增 MIMIC-III 官方演示数据，可以在旧版 MIMIC 结构上从抽取一直做到出图。",
+          "en": "Adds the official MIMIC-III demo, so the whole path from extraction to figures also runs on the older MIMIC structure."
+        },
+        {
+          "code": "workspace_search",
+          "zh": "在对话侧栏点搜索，可以查找所有项目里的对话、计划、结果和文件，点开直接到对应的位置。",
+          "en": "Search from the conversation rail finds conversations, plans, results and files in every project and opens the exact place."
+        },
+        {
+          "code": "attention_marks",
+          "zh": "需要你确认的计划、已完成或失败的运行会在项目和对话旁标出，浏览器标签上显示待处理的数量。",
+          "en": "Plans waiting for you and runs that finished or failed are marked beside their project and conversation, with the count in the browser tab."
+        },
+        {
+          "code": "scientific_review_items",
+          "zh": "科学审阅逐项列出方法、数据与材料、数字核对和局限，每一项都能查看来源；没有证据记录的数字排在最前并标出。",
+          "en": "Scientific review lists the approach, data and materials, number check and limitations item by item, each with its source; numbers without an evidence record come first and are marked."
+        },
+        {
+          "code": "result_followups",
+          "zh": "结果下方会给出可以直接追加的后续分析。",
+          "en": "Results suggest follow-up analyses you can add directly."
+        },
+        {
+          "code": "research_skills",
+          "zh": "在输入框里选研究技能，或设为项目新对话的默认技能；内置技能可以复制成自己的版本再修改。",
+          "en": "Pick a research skill in the composer or make it the project's default for new conversations; copy a built-in skill to edit your own version."
+        },
+        {
+          "code": "personal_instructions",
+          "zh": "设置里可以写给 Copilot 的长期说明；模型菜单里显示本对话和最近一次分析的用量。",
+          "en": "Settings take standing instructions for Copilot; the model menu shows usage for this conversation and the latest analysis."
+        },
+        {
+          "code": "model_request_records",
+          "zh": "每次运行和每段对话都能查看发送给模型的记录：用途、服务商、内容类型和大小，不显示发出的原文。",
+          "en": "Every run and conversation shows what was sent to the model: purpose, provider, kind of content and size, never the text sent."
+        },
+        {
+          "code": "local_problem_bundle",
+          "zh": "运行出问题时可以下载问题报告：只含版本、运行状态和原因代码，不含数据、提示词和对话内容，由你决定是否发给支持人员。",
+          "en": "When a run goes wrong you can download a problem report with versions, run state and reason codes only, no data, prompts or conversation text, and decide yourself whether to send it."
+        }
+      ]
+    }
+  ]
+}

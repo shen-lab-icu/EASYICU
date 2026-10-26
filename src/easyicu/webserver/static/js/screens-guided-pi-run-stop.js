@@ -97,6 +97,10 @@
       if (receipt && typeof deps.resourceButton === 'function' && typeof deps.canPreview === 'function' && deps.canPreview()) {
         controls.push(deps.resourceButton(receipt, labels.stopAction('receipt', tr)));
       }
+      // A local diagnostic zip the researcher can send to support (runTrust).
+      const registry = window.EasyICU && window.EasyICU.guidedPi;
+      const trust = registry && typeof registry.optional === 'function' ? registry.optional('runTrust') : null;
+      if (trust && run.run_ref) controls.push(trust.problemButtonHtml(run.run_ref));
       return controls.filter(Boolean).length ? `<div class="gpi-run-stop-actions">${controls.join('')}</div>` : '';
     }
 

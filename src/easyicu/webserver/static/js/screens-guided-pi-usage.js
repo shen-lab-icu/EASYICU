@@ -3,7 +3,8 @@
    Copilot calls; the run's provider ledger for its analysis). This file reads
    both and says what they record: completed calls with the tokens and cost the
    provider reported, and failed, in-progress or unknown calls counted apart,
-   because those sit at their reservation, not at what was spent. */
+   because those sit at their reservation, not at what was spent. The
+   conversation's request records open from the same box. */
 (function () {
   'use strict';
   const { esc } = window.EU_HTML;
@@ -60,6 +61,11 @@
   function lineHtml(label, text) {
     return text ? `<p><span>${esc(label)}</span>${esc(text)}</p>` : '';
   }
+  // The conversation's request records open from here (runTrust's dialog).
+  function recordsButtonHtml() {
+    const trust = window.EasyICU.guidedPi.optional && window.EasyICU.guidedPi.optional('runTrust');
+    return trust ? `<button type="button" data-gpi-usage-records>${esc(tr('What was sent to the model', '发送给模型的记录'))}</button>` : '';
+  }
   function paint(control, rows) {
     const popover = control.querySelector('[data-gpi-model-popover]');
     if (!popover) return;
@@ -69,8 +75,18 @@
     const box = document.createElement('div');
     box.className = 'gpi-model-usage';
     box.setAttribute('data-gpi-model-usage', '');
-    box.innerHTML = html;
+    box.innerHTML = html + recordsButtonHtml();
     popover.appendChild(box);
+  }
+  function openRecords(event) {
+    const button = event.target && event.target.closest ? event.target.closest('[data-gpi-usage-records]') : null;
+    if (!button || !context) return;
+    const session = context.session();
+    const trust = window.EasyICU.guidedPi.optional('runTrust');
+    const control = button.closest('.gpi-model-control');
+    // An in-menu action closes its menu (popover-menus.js owns other dismissal).
+    if (control) control.open = false;
+    if (trust && session && session.session_id) void trust.openConversation(session.session_id);
   }
 
   async function read(caller) {
@@ -100,6 +116,7 @@
   }
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('toggle', onToggle, true);
+    document.addEventListener('click', openRecords);
   }
   window.EasyICU.guidedPi.declare('usage', { bind, load, summaryText });
 })();

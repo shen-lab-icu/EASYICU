@@ -983,6 +983,7 @@ class ProviderHardStopLedger:
         max_tokens: int,
         prior_attempt_id: Optional[str],
         additional_prompt_payload_bytes: int = 0,
+        provider: str = "unknown",
     ) -> str:
         """Reserve one maximum-cost transport attempt before network delivery."""
 
@@ -1089,6 +1090,9 @@ class ProviderHardStopLedger:
                     "state": "in_progress",
                     "role": str(role) if role else None,
                     "model": str(model),
+                    "provider": provider,
+                    "data_classes": ["text"] + (["schema"] if additional_prompt_payload_bytes else []),
+                    "redaction_status": "not_recorded",
                     "started_at": _utc_now(),
                     "finished_at": None,
                     "prompt_token_reservation": prompt_reserve,
@@ -1449,10 +1453,12 @@ class _ActiveHardStopCall:
         messages: Sequence[Any],
         max_tokens: int,
         additional_prompt_payload_bytes: int = 0,
+        provider: str = "unknown",
     ) -> None:
         self.task = task
         self.role = role
         self.model = str(model)
+        self.provider = provider
         self.messages = tuple(messages)
         self.max_tokens = int(max_tokens)
         self.additional_prompt_payload_bytes = max(
@@ -1462,7 +1468,7 @@ class _ActiveHardStopCall:
         self._active_attempt_id: Optional[str] = None
         self._attempt_started_monotonic: Optional[float] = None
 
-    def reserve_attempt(self) -> float:
+    def reserve_attempt(self, provider: Optional[str] = None) -> float:
         prior = self._active_attempt_id
         # The ledger closes ``prior`` durably before it considers a new
         # reservation. Clear the local pointer first so a denied retry is not
@@ -1477,6 +1483,7 @@ class _ActiveHardStopCall:
             max_tokens=self.max_tokens,
             additional_prompt_payload_bytes=self.additional_prompt_payload_bytes,
             prior_attempt_id=prior,
+            provider=provider or self.provider,
         )
         self.attempt_ids.append(attempt_id)
         self._active_attempt_id = attempt_id
@@ -1529,6 +1536,7 @@ def provider_hard_stop_call_scope(
     messages: Sequence[Any],
     max_tokens: int,
     additional_prompt_payload_bytes: int = 0,
+    provider: str = "unknown",
 ) -> Iterator[_ActiveHardStopCall]:
     """Activate task/batch accounting around one logical Provider call."""
 
@@ -1540,6 +1548,7 @@ def provider_hard_stop_call_scope(
         messages=messages,
         max_tokens=max_tokens,
         additional_prompt_payload_bytes=additional_prompt_payload_bytes,
+        provider=provider,
     )
     token = _ACTIVE_HARD_STOP_CALL.set(state)
     try:
@@ -1548,12 +1557,12 @@ def provider_hard_stop_call_scope(
         _ACTIVE_HARD_STOP_CALL.reset(token)
 
 
-def consume_active_provider_hard_stop_attempt() -> Optional[float]:
+def consume_active_provider_hard_stop_attempt(*, provider: Optional[str] = None) -> Optional[float]:
     """Reserve the active run/batch attempt, if a hard-stop scope is active."""
 
     state = _ACTIVE_HARD_STOP_CALL.get()
     if state is not None:
-        return state.reserve_attempt()
+        return state.reserve_attempt(provider)
     return None
 
 

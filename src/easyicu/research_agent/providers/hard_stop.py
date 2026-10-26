@@ -17,6 +17,8 @@ from .llm import (
 )
 from .protocol import LLMMessage
 from .protocol import StructuredOutputRequest
+from .client_trust import provider_authorization_manifest
+from easyicu.model_request_metadata import provider_name
 
 
 def _model_identity(client: Any) -> str:
@@ -82,6 +84,7 @@ class HardStopClient:
             task=self._task,
             role=self._role,
             model=_model_identity(self._inner),
+            provider=provider_name(provider_authorization_manifest(self._inner)),
             messages=messages,
             max_tokens=max_tokens,
             additional_prompt_payload_bytes=(
@@ -145,6 +148,7 @@ class HardStopClient:
             task=self._task,
             role=self._role,
             model=_model_identity(self._inner),
+            provider=provider_name(provider_authorization_manifest(self._inner)),
             messages=messages,
             max_tokens=max_tokens,
         ) as hard_stop:

@@ -1,5 +1,42 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
+import { join } from "node:path";
+
+const RECEIPT_PROVIDERS = new Set(["openai", "openrouter", "anthropic", "openai-codex", "codex",
+  "ollama", "deepseek", "qwen", "gemini", "mock", "replay", "local", "custom", "claude"]);
+
+export function appendModelRequestReceipt(sessionRoot, sessionId, model, context) {
+  // Never persist context, messages, tool arguments, endpoints or model names.
+  // This precedes each transport attempt, including retries. A reservation is
+  // not proof of delivery, and context bytes are not HTTP wire bytes.
+  const root = join(sessionRoot, ".egress");
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  if (lstatSync(sessionRoot).isSymbolicLink() || lstatSync(root).isSymbolicLink()) {
+    throw new Error("model_request_receipt_path_invalid");
+  }
+  const name = createHash("sha256").update(sessionId, "utf8").digest("hex") + ".jsonl";
+  const row = {
+    schema_version: "easyicu.model-request/1", purpose: "conversation",
+    provider: RECEIPT_PROVIDERS.has(model?.provider) ? model.provider : "unknown",
+    data_classes: ["text", ...(context?.tools?.length ? ["schema"] : [])],
+    byte_size: Buffer.byteLength(JSON.stringify(context ?? {}), "utf8"),
+    byte_size_basis: "context_json_utf8", redaction_status: "not_recorded",
+    state: "in_progress",
+  };
+  const line = Buffer.from(JSON.stringify(row) + "\n", "utf8");
+  const path = join(root, name);
+  if (existsSync(path) && lstatSync(path).isSymbolicLink()) throw new Error("model_request_receipt_path_invalid");
+  const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | (constants.O_NOFOLLOW || 0), 0o600);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size + line.length > 8 * 1024 * 1024) {
+      throw new Error("model_request_receipt_limit");
+    }
+    if (writeSync(fd, line) !== line.length) throw new Error("model_request_receipt_write_failed");
+    fsyncSync(fd);
+  } finally { closeSync(fd); }
+}
 
 const STRUCTURAL_TOKEN_RESERVE = 4096;
 const MIN_SESSION_TOKEN_BUDGET = 1_000_000;
