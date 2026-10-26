@@ -24,7 +24,15 @@
     date_only: ['Date of death only', '只有死亡日期'],
     proxy: ['Discharge time standing in for the time of death', '以出院时间代替死亡时间'],
     discharge_proxy: ['Discharge time standing in for the time of death', '以出院时间代替死亡时间'],
+    hospital_discharge: ['Hospital discharge', '医院出院'],
+    icu_discharge: ['ICU discharge', 'ICU 出科'],
   };
+  for (const days of [28, 90, 365]) {
+    MORTALITY[`mort_${days}d`] = [`Death within ${days} days of ICU admission`, `ICU 入科后 ${days} 天内死亡`];
+    DEATH_TIME[`followup_days_${days}d`] = [
+      `Days from ICU admission to death or censoring at ${days} days`, `从 ICU 入科到死亡或第 ${days} 天删失的天数`,
+    ];
+  }
   // Why the database cannot answer the question as asked, per stable code.
   const MISSING = {
     family_requirements_missing: ['this kind of study has no registered requirements', '这类研究没有登记所需条件'],
@@ -75,10 +83,16 @@
       original = pair(MORTALITY, item.original);
       substitute = pair(MORTALITY, item.substitute);
       reason = tr(`${database} records death differently from the question.`, `${database} 记录的死亡口径与问题不同。`);
-    } else if (capability === 'event_time') {
+    } else if (capability === 'event_time' || capability === 'censor_time') {
       original = pair(DEATH_TIME, item.original);
       substitute = pair(DEATH_TIME, item.substitute);
-      reason = tr(`${database} has no exact time of death.`, `${database} 没有精确的死亡时间。`);
+      reason = String(item.substitute || '').startsWith('followup_days_')
+        ? tr('Use the stated horizon and documented follow-up; exclude stays without documented horizon support.',
+          '使用明确的时间范围和有随访记录的入住；排除无法确认该时间范围生存状态的入住。')
+        : capability === 'censor_time'
+          ? tr('Follow-up ends at ICU discharge; deaths after leaving the ICU are outside this endpoint.',
+            '在 ICU 出科时结束随访；出 ICU 后的死亡不计入这一结局。')
+          : tr(`${database} has no exact time of death.`, `${database} 没有精确的死亡时间。`);
     } else if (capability.startsWith('threshold:')) {
       original = threshold(item.original);
       substitute = threshold(item.substitute);

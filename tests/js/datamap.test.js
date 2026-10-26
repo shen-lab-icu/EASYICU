@@ -134,3 +134,30 @@ test('HiRID default mortality keeps its ICU meaning and observation proxy explic
     assert.doesNotMatch(host.innerHTML, /outcome_meaning|icu_death|last_observation_proxy/);
   }
 });
+
+test('supported mortality offers name the endpoint, clock, censoring and required confirmation', async () => {
+  for (const language of ['en', 'zh']) {
+    for (const [endpoint, timing, censor, labels] of [
+      ['icu_death', 'icu_discharge_proxy', 'icu_discharge', ['death in the ICU', 'ICU 内死亡']],
+      ...[28, 90, 365].map(days => [`mort_${days}d`, `followup_days_${days}d`, `followup_days_${days}d`,
+        [`death within ${days} days`, `${days} 天内死亡`]]),
+    ]) {
+      const view = { ...VIEW, databases: [row('synthetic', { status: 'substitution', decision: {
+        missing: [], substitutions: [
+          { capability: 'outcome_meaning', substitute: endpoint },
+          { capability: 'event_time', substitute: timing, source_field: { table: 'synthetic', column: 'event' } },
+          { capability: 'censor_time', substitute: censor, source_field: { table: 'synthetic', column: 'end' } },
+        ],
+      } })] };
+      const { screen, root, host } = harness({ view, language });
+      screen.afterRender(root);
+      await settle();
+      clickOn(host, 'data-dmap-study', { dmapStudy: 'synthetic|survival' });
+      assert.ok(host.innerHTML.includes(labels[language === 'zh' ? 1 : 0]));
+      assert.ok(host.innerHTML.includes('synthetic.event'));
+      assert.ok(host.innerHTML.includes('synthetic.end'));
+      assert.ok(host.innerHTML.includes(language === 'zh' ? '需要你确认后才运行' : 'needs your confirmation before it runs'));
+      assert.doesNotMatch(host.innerHTML, /icu_death|icu_discharge_proxy|followup_days_|mort_\d+d/);
+    }
+  }
+});

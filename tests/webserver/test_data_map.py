@@ -110,12 +110,12 @@ def test_study_families_retain_the_owners_decision_and_requirements():
             assert study["status"] == ("refused" if expected.status == "refusal" else expected.status)
             assert study["scope"] == "family_minimum_requirements"
             states.add(study["status"])
-    assert states == {"exact", "refused"}
+    assert states == {"exact", "substitution", "refused"}
 
 
 @pytest.mark.parametrize("database,status", [
-    ("mimic", "exact"), ("miiv", "exact"), ("eicu", "refused"),
-    ("hirid", "refused"), ("aumc", "refused"), ("sic", "refused"),
+    ("mimic", "exact"), ("miiv", "exact"), ("eicu", "substitution"),
+    ("hirid", "refused"), ("aumc", "substitution"), ("sic", "substitution"),
 ])
 def test_survival_map_agrees_with_default_death_question_and_plan(database, status):
     from easyicu.databases.research_plan_requirements import plan_capability_decision
@@ -131,6 +131,11 @@ def test_survival_map_agrees_with_default_death_question_and_plan(database, stat
         cohort=CohortDescriptor(cohort_name="synthetic", database=database, n_stays=0), variables=[])
     plan = AnalysisPlan(research_question=question, analysis_type="survival", steps=[])
     assert cell["status"] == status
+    if status == "substitution":
+        proposal = cell["decision"]["substitutions"][0]
+        assert proposal["capability"] == "outcome_meaning"
+        assert proposal["substitute"] == ("mort_28d" if database == "sic" else "icu_death")
+        assert proposal["source_field"]["source"]
     assert cell["decision"] == decision.model_dump(mode="json") == plan_capability_decision(context, plan).model_dump(mode="json")
     gap = study_family_database_gap(study, question=question, database=database)
     assert (gap is not None) == (status == "refused")

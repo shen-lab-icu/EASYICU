@@ -116,3 +116,31 @@ test('ICU discharge and last observation proxies are named before plan approval 
     }
   }
 });
+
+test('mortality alternatives name their horizon and censoring before confirmation', () => {
+  for (const language of ['en', 'zh']) {
+    for (const days of [28, 90, 365]) {
+      const html = owner(language).render(review({ status: 'substitution', database: 'synthetic', missing: [],
+        substitutions: [
+          { capability: 'outcome_meaning', original: 'hospital_death', substitute: `mort_${days}d`,
+            source_field: field('derived_outcomes', `mort_${days}d`) },
+          { capability: 'event_time', original: 'recorded_death_time', substitute: `followup_days_${days}d`,
+            reason_code: 'fixed_horizon_event_and_censor_time', source_field: field('derived_outcomes', `followup_days_${days}d`) },
+          { capability: 'censor_time', original: 'hospital_discharge', substitute: `followup_days_${days}d`,
+            source_field: field('derived_outcomes', `followup_days_${days}d`) },
+        ] }));
+      assert.equal(html.split('<li>').length - 1, 3);
+      assert.ok(html.includes(language === 'zh' ? `${days} 天内死亡` : `Death within ${days} days`));
+      assert.ok(html.includes(language === 'zh' ? 'ICU 入科' : 'ICU admission'));
+      assert.ok(html.includes(language === 'zh' ? '有随访记录' : 'documented follow-up'));
+      assert.ok(html.includes(`<code>derived_outcomes.followup_days_${days}d</code>`));
+      assert.ok(html.includes(language === 'zh' ? '批准计划即同意' : 'Approving the plan accepts'));
+      assert.doesNotMatch(html, /no exact time of death|没有精确的死亡时间/);
+    }
+    const html = owner(language).render(review({ status: 'substitution', database: 'synthetic', missing: [],
+      substitutions: [{ capability: 'censor_time', original: 'hospital_discharge', substitute: 'icu_discharge',
+        source_field: field('stays', 'exit_time') }] }));
+    assert.ok(html.includes(language === 'zh' ? '在 ICU 出科时结束随访' : 'Follow-up ends at ICU discharge'));
+    assert.ok(html.includes('<code>stays.exit_time</code>'));
+  }
+});

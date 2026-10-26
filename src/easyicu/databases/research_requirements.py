@@ -6,6 +6,7 @@ must bind the complete proposal before an execution owner may consume it.
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Literal
 
 from pydantic import Field
@@ -75,6 +76,74 @@ def family_requirements(family: str) -> tuple[str, ...]:
 
 
 def assess_study(profile: ResearchCapabilityProfile, requirements: StudyRequirements) -> CapabilityDecision:
+    """Offer a supported mortality definition, retaining the original request.
+
+    A usable hospital endpoint wins. Only default hospital mortality refused
+    for event/censor timing is eligible for an alternative. Prefer documented
+    fixed-horizon follow-up over ICU-only mortality: it retains deaths after
+    ICU discharge. The shortest supported horizon needs the least follow-up;
+    it is a proposal, never an inferred clinical choice. Next try native ICU
+    mortality with its stated clock and ICU censoring. Named endpoints never
+    enter this search. Every candidate must satisfy the entire study family.
+
+    No hospital status is timed with ICU exit, and no last observation of a
+    decedent supplies survivor censoring. If no complete candidate fits, keep
+    the original refusal. Approval must bind all changes before execution.
+    """
+    decision = _assess_requested_study(profile, requirements)
+    if requirements.outcome != "hospital_death" or not any(
+        item.capability in {"event_time", "censor_time"} for item in decision.missing
+    ):
+        return decision
+    from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
+
+    for outcome, status_field, end_field in _mortality_candidates(profile):
+        endpoint = fixed_horizon_mortality_endpoint(outcome)
+        concepts = tuple(name for name in requirements.concepts if name not in {"death", "hospital_death"})
+        concepts += (outcome,) + ((endpoint.followup_concept,) if endpoint else ())
+        candidate = _assess_requested_study(profile, requirements.model_copy(update={
+            "outcome": outcome, "concepts": tuple(dict.fromkeys(concepts)), "censoring_unit": "icu_stay",
+        }))
+        if candidate.status == "refusal":
+            continue
+        changes = [CapabilitySubstitution(
+            capability="outcome_meaning", original="hospital_death", substitute=outcome,
+            reason_code="mortality_meaning_differs", source_field=status_field,
+        ), *candidate.substitutions]
+        if endpoint:
+            changes.append(CapabilitySubstitution(
+                capability="event_time", original="recorded_death_time", substitute=endpoint.followup_concept,
+                reason_code="fixed_horizon_event_and_censor_time", source_field=end_field,
+            ))
+        changes.append(CapabilitySubstitution(
+            capability="censor_time", original="hospital_discharge",
+            substitute=endpoint.followup_concept if endpoint else "icu_discharge",
+            reason_code="mortality_censoring_differs", source_field=end_field,
+        ))
+        return candidate.model_copy(update={"status": "substitution", "requirements": requirements,
+                                            "substitutions": tuple(changes)})
+    return decision
+
+
+def _mortality_candidates(profile: ResearchCapabilityProfile) -> Iterator[tuple[str, SourceField, SourceField]]:
+    from easyicu.outcome_availability import FIXED_HORIZON_MORTALITY_ENDPOINTS
+
+    for endpoint in sorted(FIXED_HORIZON_MORTALITY_ENDPOINTS.values(), key=lambda item: item.horizon_days):
+        event, followup = (profile.concept(name) for name in (endpoint.event_concept, endpoint.followup_concept))
+        if event.mapped and followup.mapped:
+            # These are materializer output columns, not invented raw columns.
+            # Their registry owns support; the builder excludes undocumented
+            # survivors and measures event/censor days from ICU admission.
+            fields = tuple(SourceField(source=item.source, table="derived_outcomes", column=item.concept,
+                                       interpretation="easyicu.scores.outcomes.load_outcomes")
+                           for item in (event, followup))
+            yield endpoint.event_concept, *fields
+    native = next((item for item in profile.mortality_outcomes if item.meaning == "icu_death"), None)
+    if native is not None and profile.icu_discharge is not None:
+        yield native.meaning, native.status, profile.icu_discharge
+
+
+def _assess_requested_study(profile: ResearchCapabilityProfile, requirements: StudyRequirements) -> CapabilityDecision:
     """Return exactly one disposition; missing facts dominate proposals.
 
     Prefer the named native mortality, including its stated ICU-discharge

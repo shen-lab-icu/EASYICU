@@ -11,6 +11,97 @@ from easyicu.databases.research_requirements import (
 KEYS = ("mimic", "mimic_demo", "miiv", "miiv_demo", "eicu", "eicu_demo", "hirid", "aumc", "sic")
 
 
+@pytest.mark.parametrize("database,status,endpoint,table,status_column,time_column", [
+    ("mimic", "exact", None, None, None, None),
+    ("miiv", "exact", None, None, None, None),
+    ("eicu", "substitution", "icu_death", "patient", "unitdischargestatus", "unitdischargeoffset"),
+    ("hirid", "refusal", None, None, None, None),
+    ("aumc", "substitution", "icu_death", "admissions", "destination", "dischargedat"),
+    ("sic", "substitution", "mort_28d", "derived_outcomes", "mort_28d", "followup_days_28d"),
+])
+def test_default_survival_offers_only_supported_mortality_with_explicit_coordinates(
+    database, status, endpoint, table, status_column, time_column,
+):
+    requirements = StudyRequirements(family="survival", outcome="hospital_death",
+                                    concepts=("death",), censoring_unit="hospitalization")
+    profile = research_capability_profile(database)
+    decision = assess_study(profile, requirements)
+    assert decision.status == status
+    assert decision.requirements == requirements
+    if status == "exact":
+        assert decision.substitutions == decision.missing == ()
+    elif status == "refusal":
+        assert [(item.capability, item.code) for item in decision.missing] == [
+            ("censor_time", "censor_time_unavailable")]
+    else:
+        assert not decision.missing
+        changes = {item.capability: item for item in decision.substitutions}
+        assert set(changes) == {"outcome_meaning", "event_time", "censor_time"}
+        assert changes["outcome_meaning"].original == "hospital_death"
+        assert changes["outcome_meaning"].substitute == endpoint
+        assert changes["outcome_meaning"].source_field.table == table
+        assert changes["outcome_meaning"].source_field.column == status_column
+        for capability in ("event_time", "censor_time"):
+            assert changes[capability].source_field.table == table
+            assert changes[capability].source_field.column == time_column
+        assert changes["event_time"].substitute == ("icu_discharge_proxy" if endpoint == "icu_death" else time_column)
+        assert changes["censor_time"].substitute == ("icu_discharge" if endpoint == "icu_death" else time_column)
+        assert all(item.source_field.source for item in changes.values())
+        if endpoint == "icu_death":
+            native = next(item for item in profile.mortality_outcomes if item.meaning == endpoint)
+            assert changes["outcome_meaning"].source_field == native.status
+            assert changes["event_time"].source_field == changes["censor_time"].source_field == profile.icu_discharge
+        else:
+            assert changes["outcome_meaning"].source_field.source == profile.concept(endpoint).source
+            assert changes["event_time"].source_field.source == profile.concept(time_column).source
+            assert changes["censor_time"].source_field == changes["event_time"].source_field
+            assert changes["event_time"].source_field.interpretation == "easyicu.scores.outcomes.load_outcomes"
+
+
+def test_default_survival_order_uses_facts_and_shortest_complete_followup():
+    profile = research_capability_profile("sic").model_copy(update={"database": "synthetic_source"})
+    requirements = StudyRequirements(family="survival", outcome="hospital_death", censoring_unit="hospitalization")
+    assert assess_study(profile, requirements).substitutions[0].substitute == "mort_28d"
+    concepts = tuple(item.model_copy(update={"mapped": False}) if item.concept == "followup_days_28d" else item
+                     for item in reversed(profile.concepts))
+    changed = profile.model_copy(update={"concepts": concepts})
+    assert assess_study(changed, requirements).substitutions[0].substitute == "mort_90d"
+    concepts = tuple(item.model_copy(update={"mapped": False}) if item.concept.startswith("mort_") else item
+                     for item in concepts)
+    changed = profile.model_copy(update={"concepts": concepts})
+    assert assess_study(changed, requirements).substitutions[0].substitute == "icu_death"
+    changed = changed.model_copy(update={"icu_discharge": None})
+    assert assess_study(changed, requirements).status == "refusal"
+
+
+def test_mortality_offer_does_not_hide_other_missing_requirements_or_change_a_named_endpoint():
+    profile = research_capability_profile("sic")
+    requirements = StudyRequirements(family="survival", outcome="hospital_death", censoring_unit="hospitalization")
+    decision = assess_study(profile.model_copy(update={"icu_admission": None}), requirements)
+    assert decision.status == "refusal"
+    assert "time_zero" in {item.capability for item in decision.missing}
+    native = next(item for item in profile.mortality_outcomes if item.meaning == "icu_death")
+    profile = profile.model_copy(update={"mortality_outcomes": (native.model_copy(update={"event_time": None}),)})
+    decision = assess_study(profile, requirements.model_copy(update={"outcome": "icu_death", "censoring_unit": None}))
+    assert decision.status == "refusal"
+    assert [(item.capability, item.code) for item in decision.missing] == [("event_time", "event_time_unavailable")]
+
+
+def test_source_preparation_preserves_the_assessed_time_to_event_proposal():
+    from easyicu.databases.research_capabilities import SourceField
+    from easyicu.databases.research_substitutions import source_decision
+
+    profile = research_capability_profile("aumc").model_copy(update={
+        "database": "synthetic_source", "hospital_discharge": SourceField(
+            source="synthetic_registry", table="synthetic_admissions", column="hospital_end"),
+    })
+    requirements = StudyRequirements(family="survival", outcome="hospital_death", censoring_unit="hospitalization")
+    decision = assess_study(profile, requirements)
+    assert decision.status == "substitution"
+    assert decision.substitutions[0].substitute == "death_within_72h_after_icu_discharge"
+    assert source_decision(profile, requirements) == decision
+
+
 @pytest.mark.parametrize("database", KEYS)
 def test_every_source_allows_an_exact_study_and_refuses_a_known_unmapped_concept(database):
     profile = research_capability_profile(database)
@@ -97,9 +188,12 @@ def test_mortality_substitution_names_actual_meaning():
         assert decision.substitutions[0].substitute == replacement
 
 
-def test_survival_refuses_missing_event_or_matching_censor_time():
+def test_survival_refuses_missing_event_or_matching_censor_time_without_an_alternative():
     for database, missing in (("eicu", "event_time"), ("hirid", "censor_time"), ("sic", "censor_time")):
-        decision = assess_study(research_capability_profile(database), StudyRequirements(
+        profile = research_capability_profile(database)
+        profile = profile.model_copy(update={"mortality_outcomes": (), "concepts": tuple(
+            item.model_copy(update={"mapped": False}) for item in profile.concepts)})
+        decision = assess_study(profile, StudyRequirements(
             family="survival", outcome="hospital_death", censoring_unit="hospitalization",
         ))
         assert decision.status == "refusal"
@@ -142,7 +236,8 @@ def test_family_requirements_come_from_existing_family_and_protocol_owners():
 
 def test_capability_loss_not_database_name_controls_decision():
     profile = research_capability_profile("miiv")
-    changed = profile.model_copy(update={"hospital_discharge": None})
+    changed = profile.model_copy(update={"hospital_discharge": None, "mortality_outcomes": (), "concepts": tuple(
+        item.model_copy(update={"mapped": False}) for item in profile.concepts)})
     requirements = StudyRequirements(family="survival", outcome="hospital_death", censoring_unit="hospitalization")
     assert assess_study(profile, requirements).status == "exact"
     assert assess_study(changed, requirements).status == "refusal"

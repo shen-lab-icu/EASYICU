@@ -147,10 +147,11 @@ def test_database_copy_changes_when_owner_facts_change(monkeypatch):
         update={"mortality": None, "mortality_outcomes": ()}) if database == "miiv" else original(database))
     row = next(row for row in WORKFLOWS if row.skill_id == "survival-time-to-event").to_dict(enabled=True)
     note = next(note for note in skills.package_database_notes(row) if note["decision"]["database"] == "miiv")
-    assert note["decision"]["status"] == "refusal"
-    assert {item["code"] for item in note["decision"]["missing"]} >= {"mortality_status_unavailable", "event_time_unavailable"}
-    assert "MIMIC-IV — Not available" in skills._package_skill_markdown("research_workflow", row)
-    assert "缺少：事件时间" in skills._package_skill_markdown("research_workflow", row, language=1)
+    assert note["decision"]["status"] == "substitution"
+    assert not note["decision"]["missing"]
+    assert note["decision"]["substitutions"][0]["substitute"] == "mort_28d"
+    assert "MIMIC-IV — Substitution proposed" in skills._package_skill_markdown("research_workflow", row)
+    assert "需要审阅修订后的计划" in skills._package_skill_markdown("research_workflow", row, language=1)
 
 
 def test_substitution_names_the_new_definition_and_unassessed_inputs_stay_visible(monkeypatch):

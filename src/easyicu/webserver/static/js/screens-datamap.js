@@ -36,7 +36,16 @@
     icu_death: ['death in the ICU', 'ICU 内死亡'],
     death_within_72h_after_icu_discharge: ['death up to 72 h after ICU discharge', '出 ICU 后 72 小时内死亡'],
     date: ['a date only', '只有日期'], last_observation_proxy: ['the last observation time as a proxy', '最后一次观测时间作为近似'],
+    icu_discharge_proxy: ['ICU discharge time as a proxy for death time', 'ICU 出科时间作为死亡时间近似'],
+    icu_discharge: ['ICU discharge, excluding later deaths', 'ICU 出科时间，不计之后的死亡'],
   };
+  for (const days of [28, 90, 365]) {
+    SUBSTITUTES[`mort_${days}d`] = [`death within ${days} days of ICU admission`, `ICU 入科后 ${days} 天内死亡`];
+    SUBSTITUTES[`followup_days_${days}d`] = [
+      `days from ICU admission to death or censoring at ${days} days, with documented follow-up`,
+      `有随访记录的从 ICU 入科到死亡或第 ${days} 天删失的天数`,
+    ];
+  }
   const CONCEPT_SUBSTITUTES = {
     capped_or_shifted: ['Values above a limit are capped or shifted', '超过上限的值被截断或平移'],
     binned: ['Recorded in bands', '以分段区间记录'],

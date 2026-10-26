@@ -42,11 +42,11 @@ def prepare_source_population(study: Mapping[str, Any]) -> dict[str, Any]:
             if original is not None and design.get("analysis_unit") != item.substitute:
                 raise ValueError("capability_substitution_binding_drift")
             design["analysis_unit"] = item.substitute
-        elif item.capability == "outcome_meaning" and item.substitute == "icu_death":
-            if original is not None and (study.get("execution_concepts") or {}).get("outcome") != "icu_death":
+        elif item.capability == "outcome_meaning":
+            if original is not None and (study.get("execution_concepts") or {}).get("outcome") != item.substitute:
                 raise ValueError("capability_substitution_binding_drift")
-            result["execution_concepts"] = {**(study.get("execution_concepts") or {}), "outcome": "icu_death"}
-            result["outcome"] = "icu_death"
+            result["execution_concepts"] = {**(study.get("execution_concepts") or {}), "outcome": item.substitute}
+            result["outcome"] = item.substitute
     result["analysis_design"] = design
     return result
 
