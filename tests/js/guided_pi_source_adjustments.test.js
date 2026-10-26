@@ -144,3 +144,42 @@ test('mortality alternatives name their horizon and censoring before confirmatio
     assert.ok(html.includes('<code>stays.exit_time</code>'));
   }
 });
+
+test('a band-aligned cut-off says who it adds or drops', () => {
+  const swap = (concept, from, to, database = 'hirid') => ({ status: 'substitution', database, missing: [],
+    substitutions: [{ capability: `threshold:${concept}`, original: { concept, ...from }, substitute: { concept, ...to },
+      reason_code: 'numeric_threshold_aligned_to_band', source_field: field('general', concept) }] });
+  const cases = [
+    ['zh', 'age', { operator: '>=', value: 18 }, { operator: '>=', value: 20 }, '18–19 岁的患者不纳入。'],
+    ['en', 'age', { operator: '>=', value: 18 }, { operator: '>=', value: 20 }, 'Patients aged 18–19 are not included.'],
+    ['zh', 'age', { operator: '>=', value: 17 }, { operator: '>=', value: 15 }, '15–16 岁的患者也会纳入。'],
+    ['en', 'age', { operator: '>', value: 64 }, { operator: '>=', value: 65 }, ''],
+    ['en', 'age', { operator: '<=', value: 66 }, { operator: '<', value: 65 }, 'Patients aged 65–66 are not included.'],
+    ['en', 'age', { operator: '>=', value: 89 }, { operator: '>=', value: 90 }, 'Patients aged 89 are not included.'],
+    ['zh', 'weight', { operator: '>=', value: 48 }, { operator: '>=', value: 50 }, '在 48 kg 至不满 50 kg 的患者不纳入。'],
+    ['en', 'weight', { operator: '<', value: 102 }, { operator: '<', value: 100 }, 'from 100 to under 102 kg are not included.'],
+    ['en', 'weight', { operator: '<=', value: 102 }, { operator: '<', value: 100 }, ''],
+  ];
+  for (const [language, concept, from, to, consequence] of cases) {
+    const html = owner(language).render(review(swap(concept, from, to)));
+    const reason = html.match(/<p>([^<]*)<code>/)[1];
+    assert.ok(reason.includes(language === 'zh' ? '切点改为最近的区间边界' : 'nearest band edge'));
+    if (consequence) assert.ok(reason.includes(consequence), `${language} ${concept} ${JSON.stringify(from)}: ${reason}`);
+    else assert.doesNotMatch(reason, /included|纳入/, `${language} ${concept} ${JSON.stringify(from)}: ${reason}`);
+  }
+});
+
+test('hospital death censored at hospital discharge says why follow-up continues past the ICU', () => {
+  for (const [language, text] of [
+    ['zh', '院内死亡包括出 ICU 后的死亡，所以随访到出院时结束'],
+    ['en', 'In-hospital death includes deaths after ICU discharge, so follow-up ends at hospital discharge'],
+  ]) {
+    const html = owner(language).render(review({ status: 'substitution', database: 'eicu', missing: [],
+      substitutions: [{ capability: 'censor_time', original: 'icu_discharge', substitute: 'hospital_discharge',
+        reason_code: 'mortality_censoring_differs', source_field: field('patient', 'hospitaldischargeoffset') }] }));
+    assert.ok(html.includes(text));
+    assert.ok(html.includes(language === 'zh' ? '<s>ICU 出科</s>' : '<s>ICU discharge</s>'));
+    assert.ok(html.includes(language === 'zh' ? '<strong>医院出院</strong>' : '<strong>Hospital discharge</strong>'));
+    assert.doesNotMatch(html, /Follow-up ends at ICU discharge|在 ICU 出科时结束随访/);
+  }
+});

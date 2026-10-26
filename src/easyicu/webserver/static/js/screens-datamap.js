@@ -38,6 +38,7 @@
     date: ['a date only', '只有日期'], last_observation_proxy: ['the last observation time as a proxy', '最后一次观测时间作为近似'],
     icu_discharge_proxy: ['ICU discharge time as a proxy for death time', 'ICU 出科时间作为死亡时间近似'],
     icu_discharge: ['ICU discharge, excluding later deaths', 'ICU 出科时间，不计之后的死亡'],
+    hospital_discharge: ['hospital discharge, counting deaths after ICU discharge', '出院时间，计入出 ICU 后的死亡'],
   };
   for (const days of [28, 90, 365]) {
     SUBSTITUTES[`mort_${days}d`] = [`death within ${days} days of ICU admission`, `ICU 入科后 ${days} 天内死亡`];
@@ -50,6 +51,27 @@
     capped_or_shifted: ['Values above a limit are capped or shifted', '超过上限的值被截断或平移'],
     binned: ['Recorded in bands', '以分段区间记录'],
   };
+  const UNIT_WORDS = { years: ['year', '岁'], kg: ['kg', 'kg'] };
+  // A cell's hover text: the band width and top band of a binned value, or
+  // the unavailable inputs of a derived variable the host marks missing.
+  function conceptTitle(cell) {
+    const substitute = cell.substitute;
+    if (substitute && substitute.kind === 'binned' && Number(substitute.bin_width) > 0) {
+      const unit = UNIT_WORDS[cell.unit] ? tr(...UNIT_WORDS[cell.unit]) : String(cell.unit || '');
+      const zhUnit = /^[\x20-\x7e]+$/.test(unit) ? `${unit} ` : unit;
+      const top = substitute.top_code == null ? NaN : Number(substitute.top_code);
+      return tr(`Recorded in ${substitute.bin_width}-${unit} bands`, `每 ${substitute.bin_width} ${zhUnit}记为一段`)
+        + (Number.isFinite(top) ? tr(`; ${top} and above form one band`, `；${top} ${zhUnit}及以上为一段`) : '');
+    }
+    if (substitute && CONCEPT_SUBSTITUTES[substitute.kind]) return tr(...CONCEPT_SUBSTITUTES[substitute.kind]);
+    const missing = cell.status === 'missing' && cell.capability && Array.isArray(cell.capability.missing_dependencies)
+      ? cell.capability.missing_dependencies : [];
+    if (missing.length) {
+      const names = missing.map(key => conceptName(key) || key);
+      return tr(`Missing inputs: ${names.join(', ')}`, `缺少的输入：${names.join('、')}`);
+    }
+    return '';
+  }
 
   const state = { view: null, loading: false, failed: null, offset: 0, open: '' };
 
@@ -129,8 +151,8 @@
       return `<tr><th scope="row"><code>${esc(concept)}</code>${name ? `<span>${esc(name)}</span>` : ''}</th><td class="dmap-unit">${esc(unit && unit !== 'boolean' ? unit : '')}</td>${rows.map(row => {
         const cell = lookup(row, concept);
         if (!cell) return '<td>—</td>';
-        const sub = cell.substitute && CONCEPT_SUBSTITUTES[cell.substitute.kind];
-        return `<td${sub ? ` title="${esc(tr(...sub))}"` : ''}>${chip(CONCEPT, cell.status)}</td>`;
+        const title = conceptTitle(cell);
+        return `<td${title ? ` title="${esc(title)}"` : ''}>${chip(CONCEPT, cell.status)}</td>`;
       }).join('')}</tr>`;
     }).join('');
     const total = Number(view.concept_total || 0);
