@@ -40,6 +40,11 @@
     // Entry views project titles through the shared label owner, retaining the
     // bounded fallback for bundles that have not loaded that owner yet.
     function displayProjectTitle(value, fallback) { return window.EU_PRODUCT_LABELS?.projectTitle?.(value, fallback) ?? String(value ?? fallback ?? '').slice(0, 200); }
+    // A saved message keeps its transcript entry id so search can reveal it.
+    function entryAttr(row) {
+      const id = String((row && row.entryId) || '');
+      return id ? ` data-gpi-entry-id="${esc(id)}"` : '';
+    }
 
     function activatePanel() {
       const saved = state.sessions.filter(sessionMatchesUiLanguage).map(row => `
@@ -206,7 +211,7 @@
       const streaming = row.role === 'assistant' && row.complete === false && !messageActions.editorHtml;
       const followUpsHtml = interactive && lifted && lifted.questions.length
         ? FOLLOW_UPS.render(lifted.questions, { tr, iconHtml, disabled: state.busy || sessionIsStale() }) : '';
-      return `<article class="gpi-message ${cls}${messageActions.actionsHtml ? ' has-actions' : ''}${streaming ? ' is-streaming' : ''}" data-gpi-message-id="${esc(row.id || '')}"${streaming ? ' data-gpi-streaming-message' : ''}>
+      return `<article class="gpi-message ${cls}${messageActions.actionsHtml ? ' has-actions' : ''}${streaming ? ' is-streaming' : ''}" data-gpi-message-id="${esc(row.id || '')}"${entryAttr(row)}${streaming ? ' data-gpi-streaming-message' : ''}>
         <div class="gpi-message-body">
           ${messageSkillHtml}${contentHtml}
           ${messageResourcesHtml}
@@ -334,9 +339,9 @@
         const text = publicAssistantText(String(displayRow.text || ''));
         if (!text) return '';
         if (kind === 'intro') {
-          return `<article class="gpi-message assistant gpi-turn-intro" data-gpi-message-id="${esc(displayRow.id || '')}"><div class="gpi-message-body"><div class="gpi-text">${assistantTextHtml(text)}</div></div></article>`;
+          return `<article class="gpi-message assistant gpi-turn-intro" data-gpi-message-id="${esc(displayRow.id || '')}"${entryAttr(displayRow)}><div class="gpi-message-body"><div class="gpi-text">${assistantTextHtml(text)}</div></div></article>`;
         }
-        return `<div class="gpi-activity-narration-text" data-gpi-message-id="${esc(displayRow.id || '')}">${assistantTextHtml(text)}</div>`;
+        return `<div class="gpi-activity-narration-text" data-gpi-message-id="${esc(displayRow.id || '')}"${entryAttr(displayRow)}>${assistantTextHtml(text)}</div>`;
       };
       const messages = ACTIVITY.renderTimeline(timeline, (row, trace) => {
         const displayRow = projectRow(row);

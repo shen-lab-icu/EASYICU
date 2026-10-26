@@ -135,7 +135,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261026-dbnames1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261026-personal1" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261026-search2" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -152,8 +152,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-dbnames1" in index
     assert "js/screens-guided-pi-skill-attach.js?v=20261026-attach1" in index
-    assert "js/screens-guided-pi-search.js?v=20261026-search1" in index
-    assert "css/guided-pi-search.css?v=20261026-search1" in index
+    assert "js/screens-guided-pi-search.js?v=20261026-search2" in index
+    assert "css/guided-pi-search.css?v=20261026-search2" in index
     assert "js/screens-guided-pi-usage.js?v=20261026-personal1" in index
     assert "js/screens-guided-pi-attention.js?v=20261026-attention1" in index
     assert "css/guided-pi-attention.css?v=20261026-attention1" in index
@@ -6588,7 +6588,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20261024-terminal1" in index
+    assert "screens-guided-pi-transcript.js?v=20261026-search2" in index
     assert "screens-guided-pi.js?v=20261026-attention1" in index
 
 

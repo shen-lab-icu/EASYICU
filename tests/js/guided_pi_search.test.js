@@ -1,8 +1,8 @@
 'use strict';
 
 // Search shows the host's hits as text and opens them through the owners that
-// already open a conversation, a project and a Drive file; it never opens a
-// conversation while a reply is running.
+// already open a conversation, a project and a Drive file, then reveals the
+// matched message; it never opens a conversation while a reply is running.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -43,6 +43,12 @@ function harness({ canOpen = true } = {}) {
     remove() {},
   };
   const material = { dataset: { gpiRailMaterialKey: 'r1/report.md' }, click() { calls.push(['material', 'r1/report.md']); } };
+  const classes = new Set();
+  const message = {
+    dataset: { gpiEntryId: 'e1' },
+    scrollIntoView(options) { calls.push(['reveal', 'e1', options.block]); },
+    classList: { add: name => classes.add(name), remove: name => classes.delete(name) },
+  };
   const declared = {};
   const window = {
     EU_LANG: 'zh',
@@ -61,7 +67,8 @@ function harness({ canOpen = true } = {}) {
     createElement: () => dialog,
     body: { appendChild() {} },
     activeElement: null,
-    querySelectorAll: selector => selector === '[data-gpi-rail-material-key]' ? [material] : [],
+    querySelectorAll: selector => selector === '[data-gpi-rail-material-key]' ? [material]
+      : selector === '[data-gpi-entry-id]' ? [message] : [],
   };
   const context = vm.createContext({ window, document, setTimeout, clearTimeout });
   for (const file of ['html-escape.js', 'screens-guided-pi-search.js']) {
@@ -77,7 +84,7 @@ function harness({ canOpen = true } = {}) {
     await listeners.click({ target: { closest: selector => selector === '[data-gpi-search-hit]' ? { dataset: { gpiSearchHit: String(index) } } : null } });
     await wait(10);
   };
-  return { search, ctx, dialog, results, calls, type, clickHit, listeners };
+  return { search, ctx, dialog, results, calls, type, clickHit, listeners, classes };
 }
 
 test('a hit is shown as text, with the host’s UTF-16 matches marked', async () => {
@@ -100,11 +107,15 @@ test('a hit in this project opens its conversation; another project opens throug
   await first.clickHit(0);
   assert.deepEqual(first.calls.filter(row => row[0] === 'session'), [['session', 'c1']]);
   assert.equal(first.dialog.open, false);
+  // The matched message is scrolled into view and marked for a moment.
+  assert.deepEqual(first.calls.filter(row => row[0] === 'reveal'), [['reveal', 'e1', 'center']]);
+  assert.equal(first.classes.has('is-search-hit'), true);
 
   const second = harness();
   second.search.open(second.ctx);
   await second.type('sepsis');
   await second.clickHit(1);
+  // A conversation hit names no message, so nothing is revealed.
   assert.deepEqual(second.calls.filter(row => row[0] !== 'search').map(row => [...row]), [['location', 'p2', 'c9'], ['project', 'p2']]);
 
   const third = harness();

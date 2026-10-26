@@ -23,3 +23,4 @@
 .gpi-search-hit-copy small{color:var(--skin-muted);font-size:12px;line-height:16px}
 .gpi-search-state,.gpi-search-note{margin:0;padding:12px 14px;color:var(--skin-muted)}
 .gpi-search-note{padding-top:6px;border-top:1px solid var(--skin-line);font-size:12px}
+.gpi-message.is-search-hit,.gpi-activity-narration-text.is-search-hit{border-radius:8px;background:var(--skin-primary-soft);transition:background-color .6s ease}
