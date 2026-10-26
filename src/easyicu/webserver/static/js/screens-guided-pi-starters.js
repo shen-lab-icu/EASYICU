@@ -124,7 +124,7 @@
         gets: tr('Restricted mean survival time per group and their difference, survival curves', '各组限制性平均生存时间及差值、生存曲线'),
         prompt: tr(
           'In SICdb, how many of the first 28 days do patients ventilated on the first ICU day live on average, compared with those who are not, after adjusting for age and sex?',
-          '在 SICdb 中，入 ICU 第一天接受有创机械通气的患者，28 天内平均存活多少天？与未通气的患者相比，调整年龄和性别后差多少？',
+          '在 SICdb 中，入 ICU 第一天接受机械通气的患者，28 天内平均存活多少天？与未通气的患者相比，调整年龄和性别后差多少？',
         ),
       },
       {
@@ -132,8 +132,8 @@
         title: tr('Starting ventilation and ICU death', 'ICU 期间开始机械通气与 ICU 死亡'),
         gets: tr('Time-varying Cox model results, follow-up split at the start of exposure', '时变 Cox 模型结果、按开始时间切分的随访'),
         prompt: tr(
-          'In MIMIC-III, taking the start of invasive mechanical ventilation during the ICU stay as an exposure that changes over time, how is it related to death in the ICU after adjusting for age and sex?',
-          '在 MIMIC-III 中，把 ICU 期间开始有创机械通气作为随时间变化的暴露，调整年龄和性别后，它与 ICU 内死亡的关系如何？',
+          'In MIMIC-III, taking the start of mechanical ventilation during the ICU stay as an exposure that changes over time, how is it related to death in the ICU after adjusting for age and sex?',
+          '在 MIMIC-III 中，把 ICU 期间开始机械通气作为随时间变化的暴露，调整年龄和性别后，它与 ICU 内死亡的关系如何？',
         ),
       },
       {
@@ -192,11 +192,11 @@
       },
       {
         id: 'example-vasopressor-use', database: 'AmsterdamUMCdb', kind: tr('Treatment patterns', '治疗模式'),
-        title: tr('How often vasopressors are used', '血管活性药的使用比例'),
-        gets: tr('Share treated with 95% CI and its denominator', '用药比例与 95% 置信区间、分母'),
+        title: tr('When vasopressors are started', '血管活性药何时开始使用'),
+        gets: tr('Patients treated, median and quartiles of the time to first use', '用药人数、首次使用时间的中位数与四分位数'),
         prompt: tr(
-          'In AmsterdamUMCdb, what share of patients receive a vasopressor on the first ICU day?',
-          '在 AmsterdamUMCdb 中，入 ICU 第一天使用血管活性药的患者占多少？',
+          'In AmsterdamUMCdb, among patients given a vasopressor on the first ICU day, how many hours after ICU admission is it first started?',
+          '在 AmsterdamUMCdb 中，入 ICU 第一天用了血管活性药的患者，首次使用多在入 ICU 后几小时？',
         ),
       },
       {
