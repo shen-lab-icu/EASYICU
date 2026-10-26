@@ -158,6 +158,7 @@ def run_landmark_spline_association(
     import statsmodels.api as sm
     from scipy.special import expit, logit
     from scipy.stats import chi2
+    from ...figures.publication import exposure_distribution_bin_edges
 
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
@@ -220,6 +221,14 @@ def run_landmark_spline_association(
     if density_display_n <= 0:
         raise ValueError("signed landmark curve range has no exposure observations")
     density_fractions = density_counts.astype(float) / density_display_n
+    # Keep the historical grid counts readable, and publish the independent
+    # strip geometry from actual observed values. Never infer resolution from
+    # fitted curve coordinates or reopen patient rows in the figure renderer.
+    distribution_edges = exposure_distribution_bin_edges(displayed_exposure, grid=curve_values)
+    distribution_counts, _ = np.histogram(displayed_exposure, bins=distribution_edges)
+    distribution_json = json.dumps({
+        "edges": distribution_edges, "counts": distribution_counts.tolist(),
+    }, allow_nan=False)
     curve_basis = patsy.build_design_matrices(
         [spline.design_info],
         {
@@ -264,6 +273,7 @@ def run_landmark_spline_association(
                 "adjusted_odds_ratio": _finite(math.exp(log_or)),
                 "ci_low": _finite(math.exp(log_or - 1.96 * se)),
                 "ci_high": _finite(math.exp(log_or + 1.96 * se)),
+                "exposure_distribution_json": distribution_json,
                 "exposure_density_n": int(density_counts[grid_index]),
                 "exposure_density_fraction": _finite(
                     density_fractions[grid_index]
@@ -306,6 +316,7 @@ def run_landmark_spline_association(
                 "standardization_n": int(len(model_frame)),
                 "events": int(model_frame["__outcome"].sum()),
                 "standardization_method": "marginal_over_primary_complete_case_covariates",
+                "exposure_distribution_json": distribution_json,
                 "exposure_density_n": int(density_counts[grid_index]),
                 "exposure_density_fraction": _finite(
                     density_fractions[grid_index]
