@@ -75,8 +75,7 @@ def _render_with(lang, capabilities):
 # What each example asks of its database, as the capability owner reads it.
 _EXAMPLE_REQUIREMENTS = {
     "example-quick-lactate": ("hirid", "descriptive_epidemiology", {"concepts": ("lact", "sex")}),
-    "example-ventilation-table-one": ("mimic", "descriptive_epidemiology", {"concepts": ("mech_vent", "age", "sex", "lact", "map", "crea")}),
-    "example-measurement-audit": ("hirid", "data_quality_audit", {"concepts": ("lact", "crea", "po2", "map", "hr")}),
+    "example-lactate-threshold-share": ("mimic", "descriptive_epidemiology", {"concepts": ("lact", "sex")}),
     "example-lactate-death": ("eicu", "association_study", {"outcome": "hospital_death", "concepts": ("lact", "age", "sex", "sofa")}),
     "example-sofa-trend": ("eicu", "ordinal_dose_response", {"outcome": "hospital_death", "concepts": ("sofa", "age", "sex")}),
     "example-lactate-dose-response": ("sic", "association_study", {"outcome": "hospital_death", "concepts": ("lact", "age", "sex")}),
@@ -89,14 +88,14 @@ _EXAMPLE_REQUIREMENTS = {
                                                                "censoring_unit": "icu_stay"}),
     "example-creatinine-competing": ("sic", "survival", {"outcome": "icu_death", "concepts": ("crea", "age", "sex"),
                                                          "censoring_unit": "icu_stay"}),
-    "example-predict-death": ("sic", "prediction_model", {"outcome": "hospital_death", "concepts": ("age", "sex", "map", "hr", "lact", "crea")}),
+    "example-predict-death": ("hirid", "prediction_model", {"outcome": "icu_death", "concepts": ("age", "sex", "map", "hr", "lact", "crea")}),
     "example-dynamic-prediction": ("aumc", "dynamic_prediction", {"outcome": "icu_death", "concepts": ("map", "hr", "lact", "crea", "age")}),
     "example-early-norepinephrine": ("miiv", "causal_inference", {"outcome": "mort_28d", "concepts": ("age", "sex", "lact", "map"),
                                                                   "treatment_concepts": ("norepi_rate",)}),
     "example-first-day-phenotypes": ("aumc", "trajectory_clustering", {"outcome": "icu_death",
                                                                        "concepts": ("map", "hr", "lact", "crea", "glu", "plt")}),
     "example-pressure-trajectories": ("eicu", "trajectory_clustering", {"concepts": ("map", "age", "sex", "lact")}),
-    "example-norepinephrine-use": ("hirid", "descriptive_epidemiology", {"concepts": ("norepi_rate", "mech_vent")}),
+    "example-vasopressor-use": ("aumc", "descriptive_epidemiology", {"concepts": ("vaso_ind",)}),
 }
 # A replication names its first database and the ones it repeats on; each
 # must answer the same study exactly.

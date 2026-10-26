@@ -65,21 +65,12 @@
         ),
       },
       {
-        id: 'example-ventilation-table-one', database: 'MIMIC-III', kind: tr('Descriptive', '描述性研究'),
-        title: tr('Who is ventilated on the first day', '首日机械通气患者的特征'),
-        gets: tr('Table 1 by group, each variable\'s denominator and missingness', '分组 Table 1、每个变量的分母与缺失'),
+        id: 'example-lactate-threshold-share', database: 'MIMIC-III', kind: tr('Descriptive', '描述性研究'),
+        title: tr('How often first-day lactate is raised', '首日乳酸升高的比例'),
+        gets: tr('Share per group with 95% CI, denominators and missingness', '各组比例与 95% 置信区间、分母与缺失'),
         prompt: tr(
-          'In MIMIC-III, how do baseline characteristics differ between patients who did and did not receive invasive mechanical ventilation on the first ICU day?',
-          '在 MIMIC-III 中，入 ICU 第一天接受与未接受有创机械通气的患者，基线特征有什么不同？',
-        ),
-      },
-      {
-        id: 'example-measurement-audit', database: 'HiRID', kind: tr('Measurement audit', '缺失与测量审计'),
-        title: tr('How completely first-day measurements are recorded', '首日化验与生命体征的记录情况'),
-        gets: tr('Patients measured and share missing per variable, when the measurements are taken', '逐个变量的有记录人数与缺失比例、测量时间分布'),
-        prompt: tr(
-          'In HiRID, how many patients have lactate, creatinine, arterial oxygen pressure, mean arterial pressure and heart rate recorded on the first ICU day, how much is missing, and at what times are they measured?',
-          '在 HiRID 中，入 ICU 第一天的乳酸、肌酐、动脉血氧分压、平均动脉压和心率，各有多少患者有记录？缺失多少，多在什么时间测得？',
+          'In MIMIC-III, what share of patients have a highest first-day lactate above 2 mmol/L, and does it differ between men and women?',
+          '在 MIMIC-III 中，入 ICU 第一天最高乳酸超过 2 mmol/L 的患者占多少？男女之间有差别吗？',
         ),
       },
       {
@@ -155,12 +146,12 @@
         ),
       },
       {
-        id: 'example-predict-death', database: 'SICdb', kind: tr('Prediction', '预测模型'),
-        title: tr('Predicting in-hospital death', '预测院内死亡'),
+        id: 'example-predict-death', database: 'HiRID', kind: tr('Prediction', '预测模型'),
+        title: tr('Predicting death in the ICU', '预测 ICU 内死亡'),
         gets: tr('Discrimination (AUC), calibration curve, important variables', '区分度（AUC）、校准曲线、重要变量'),
         prompt: tr(
-          'Using the first 24 hours of ICU data in SICdb, build a model that predicts in-hospital death. How well does it discriminate and how well is it calibrated?',
-          '用 SICdb 中入 ICU 前 24 小时的数据建立一个预测院内死亡的模型，它的区分度和校准怎么样？',
+          'Using the first 24 hours of ICU data in HiRID, build a model that predicts death in the ICU. How well does it discriminate and how well is it calibrated?',
+          '用 HiRID 中入 ICU 前 24 小时的数据建立一个预测 ICU 内死亡的模型，它的区分度和校准怎么样？',
         ),
       },
       {
@@ -200,12 +191,12 @@
         ),
       },
       {
-        id: 'example-norepinephrine-use', database: 'HiRID', kind: tr('Treatment patterns', '治疗模式'),
-        title: tr('How norepinephrine is used', '去甲肾上腺素的使用情况'),
-        gets: tr('Share treated per group with denominators, time to first dose', '各组用药比例与分母、首次用药时间'),
+        id: 'example-vasopressor-use', database: 'AmsterdamUMCdb', kind: tr('Treatment patterns', '治疗模式'),
+        title: tr('How often vasopressors are used', '血管活性药的使用比例'),
+        gets: tr('Share treated with 95% CI and its denominator', '用药比例与 95% 置信区间、分母'),
         prompt: tr(
-          'In HiRID, how do the share of patients given norepinephrine during the ICU stay and the time to the first dose differ between patients with and without invasive mechanical ventilation?',
-          '在 HiRID 中，接受与未接受有创机械通气的患者，ICU 期间使用去甲肾上腺素的比例和首次用药时间有什么不同？',
+          'In AmsterdamUMCdb, what share of patients receive a vasopressor on the first ICU day?',
+          '在 AmsterdamUMCdb 中，入 ICU 第一天使用血管活性药的患者占多少？',
         ),
       },
       {
