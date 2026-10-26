@@ -217,6 +217,44 @@ def test_initial_and_repair_context_explain_input_coding(monkeypatch):
         assert "boolean_numeric_encoding" in text
 
 
+@pytest.mark.parametrize("dtype,role,declared_input,needs_guidance", [
+    ("bool", "outcome", "event", True),
+    ("boolean", "outcome", "event", True),
+    ("bool", "lab", "event", True),
+    ("int64", "outcome", "event", False),
+    ("bool", "meta", "event", False),
+    ("bool", "outcome", "table:event", False),
+    ("bool", "outcome", None, False),
+])
+def test_generation_scopes_binary_guidance_to_declared_clinical_inputs(
+    monkeypatch, dtype, role, declared_input, needs_guidance,
+):
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    context = _context()
+    context.variables[1] = ConceptDescriptor(name="event", role=role, dtype=dtype)
+    step = AnalysisStep(
+        step_id="summary", intent="Summarize declared inputs.", method="descriptive",
+        inputs=["exposure", "age_group", *([declared_input] if declared_input else [])],
+        expected_outputs=["table:summary"],
+    )
+    llm = ExternalCaptureMockLLMClient(["value = 1\n"])
+
+    CoderAgent(llm).run(context=context, step=step)
+
+    prompt = "\n".join(message.content for message in llm.calls[0][0])
+    assert ("strict_binary_input" in prompt) is needs_guidance
+    assert ("boolean_numeric_encoding" in prompt) is needs_guidance
+    if needs_guidance:
+        assert '"boolean_numeric_encoding":{"event":{"false":0,"true":1}}' in prompt
+        for guidance in (
+            "strict_numeric_input", "False/True map to 0/1", "missing stays missing",
+            "non-binary values are rejected", "Pass column=", "declared levels",
+            "Never numeric-coerce category labels", "descriptive summaries",
+            "Never catch DescriptiveInputError and continue",
+        ):
+            assert guidance in prompt
+
+
 def test_exhausted_runtime_failure_retains_typed_diagnostic(tmp_path):
     from easyicu.research_agent.execution.candidate_loop import _candidate_failure_transition
 

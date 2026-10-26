@@ -55,7 +55,7 @@ from ..repairs.reasons import (
 from ..research_context.prompt_variables import (
     project_observed_domain,
 )
-from ..research_context.repair_prompt import format_repair_authority_context
+from ..research_context import repair_prompt
 from ..authority.step_capsule import ContentRef
 from ..schema import (
     AnalysisStep,
@@ -759,7 +759,7 @@ class CoderAgent:
                 step=step,
                 applies=trajectory_context_is_bound(context),
             )
-            + "\n\n"
+            + repair_prompt.format_input_coding_context(scoped_context, step) + "\n\n"
             "OUTPUT FORMAT — VERY IMPORTANT:\n"
             "Return only a complete runnable Python script; a Python fence is "
             "allowed and outside text is discarded. Read the cohort from "
@@ -935,12 +935,12 @@ class CoderAgent:
             if include_scientific_authority
             else ""
         )
-        compact_repair_context = format_repair_authority_context(
+        compact_repair_context = repair_prompt.format_repair_authority_context(
             scoped_context,
             include_scientific_authority=include_scientific_authority,
             user_notes=user_notes,
         )
-        rewrite_research_context = format_repair_authority_context(
+        rewrite_research_context = repair_prompt.format_repair_authority_context(
             scoped_context,
             include_scientific_authority=True,
             user_notes=_coder_relevant_notes(scoped_context.notes),
