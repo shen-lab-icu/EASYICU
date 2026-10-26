@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
+from itertools import islice
 import json
 import math
 from pathlib import Path
@@ -15,6 +16,21 @@ from easyicu.research_agent.authority.provider_hard_stop import (
     load_provider_hard_stop_ledger,
 )
 from easyicu.research_agent.canonical_json import canonical_sha256
+
+MAX_USAGE_LEDGERS = 64
+MAX_USAGE_BYTES = 8 * 1024 * 1024
+MAX_USAGE_CALLS = 10_000
+
+
+def _call_state(call: Mapping[str, Any]) -> str:
+    state = str(call.get("state") or "")
+    if call.get("error_type") or state.startswith("failed"):
+        return "failed"
+    if state == "in_progress":
+        return "in_flight"
+    if state.startswith("completed"):
+        return "completed"
+    return "unknown"
 
 
 def bind_shared_provider_task(wrapper_dir: Path, task: Any) -> None:
@@ -50,7 +66,7 @@ def _number(value: Any, *, integer: bool = False) -> int | float:
     return int(value) if integer else float(value)
 
 
-def _summarize(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
+def _summarize(calls: list[Mapping[str, Any]], *, group_states: bool = True) -> dict[str, Any]:
     reported = [call for call in calls if call.get("reported_total_tokens") is not None]
     durations = []
     for call in calls:
@@ -67,7 +83,7 @@ def _summarize(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
         ),
         "estimated_cost_usd": round(
             sum(_number(c["accounted_estimated_cost_usd"]) for c in calls), 8
-        ),
+        ) if all(c.get("accounted_estimated_cost_usd") is not None for c in calls) else None,
         "provider_reported_calls": len(reported),
         "provider_reported_tokens": sum(
             _number(c["reported_total_tokens"], integer=True) for c in reported
@@ -82,10 +98,15 @@ def _summarize(calls: list[Mapping[str, Any]]) -> dict[str, Any]:
         },
         "usage_unknown_calls": len(calls) - len(reported),
         "failed_calls": sum(
-            bool(c.get("error_type")) or c.get("state") == "failed" for c in calls
+            _call_state(c) == "failed" for c in calls
         ),
+        "in_flight_calls": sum(_call_state(c) == "in_flight" for c in calls),
         "provider_elapsed_seconds": round(sum(durations), 6),
         "timed_calls": len(durations),
+        **({"by_state": {
+            state: _summarize([c for c in calls if _call_state(c) == state], group_states=False)
+            for state in ("completed", "failed", "in_flight", "unknown")
+        }} if group_states else {}),
     }
 
 
@@ -104,22 +125,35 @@ def research_run_usage(wrapper_dir: Path) -> dict[str, Any] | None:
     paths = [("pipeline", runtime / "provider_hard_stop_ledger.json")]
     paths.extend(
         ("execution_retry", p)
-        for p in sorted(runtime.glob("provider_hard_stop_retry_*.json"))
+        for p in sorted(islice(runtime.glob("provider_hard_stop_retry_*.json"), MAX_USAGE_LEDGERS + 1))
     )
     paths.extend(
         ("report_revision", p)
-        for p in sorted(root.glob("report_revisions/*/runtime/provider_hard_stop.json"))
+        for p in sorted(islice(root.glob("report_revisions/*/runtime/provider_hard_stop.json"), MAX_USAGE_LEDGERS + 1))
     )
     attempts = []
     calls = []
     bindings = []
     statuses: set[str] = set()
     try:
+        if len(paths) > MAX_USAGE_LEDGERS:
+            raise ValueError("usage ledger count exceeds read budget")
+        bytes_read = 0
+
+        def load(path: Path) -> dict:
+            nonlocal bytes_read
+            bytes_read += path.stat().st_size
+            if bytes_read > MAX_USAGE_BYTES:
+                raise ValueError("usage exceeds read budget")
+            return load_provider_hard_stop_ledger(path)
+
         primary = paths[0][1]
         reference = runtime / "shared_provider_task.json"
         if not primary.exists() and (reference.exists() or reference.is_symlink()):
             if reference.is_symlink() or runtime.is_symlink():
                 raise ValueError("symlinked shared task")
+            if reference.stat().st_size > 4096:
+                raise ValueError("oversized shared task binding")
             binding = json.loads(reference.read_text(encoding="utf-8"))
             digest = binding.pop("sha256")
             if digest != canonical_sha256(binding) or binding.get("schema_version") != "easyicu.shared-provider-task/1":
@@ -130,7 +164,7 @@ def research_run_usage(wrapper_dir: Path) -> dict[str, Any] | None:
             shared = root.parent / relative
             if shared.is_symlink() or any(p.is_symlink() for p in shared.parents if p != root.parent and root.parent in p.parents):
                 raise ValueError("invalid shared recovery ledger")
-            ledger = load_provider_hard_stop_ledger(shared)
+            ledger = load(shared)
             if ledger.get("declaration_sha256") != binding["declaration_sha256"] or not any(
                 row.get("task_id") == binding["task_id"] for row in ledger.get("tasks", [])
             ):
@@ -153,7 +187,7 @@ def research_run_usage(wrapper_dir: Path) -> dict[str, Any] | None:
             if path.resolve() in seen:
                 continue
             seen.add(path.resolve())
-            ledger = load_provider_hard_stop_ledger(path)
+            ledger = load(path)
             rows = ledger["tasks"]
             if not isinstance(rows, list):
                 raise ValueError("invalid usage tasks")
@@ -181,6 +215,8 @@ def research_run_usage(wrapper_dir: Path) -> dict[str, Any] | None:
                 if any(not isinstance(c, Mapping) for c in row["calls"]):
                     raise ValueError("invalid usage call")
                 stage_calls.extend(row["calls"])
+                if len(calls) + len(stage_calls) > MAX_USAGE_CALLS:
+                    raise ValueError("usage call count exceeds read budget")
             binding = {"stage": stage, "ledger_digest": ledger["sha256"]}
             bindings.append(binding)
             attempts.append({**binding, **_summarize(stage_calls)})

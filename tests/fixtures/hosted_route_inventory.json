@@ -1,5 +1,44 @@
 [
   {
+    "method": "GET",
+    "route": "/api/copilot/pi/preferences",
+    "fields": [],
+    "reaches": "PersonalPreferencesStore.projection -> bounded personal_preferences.json under the current user's state_root; no browser user ID or path",
+    "protection": "no path inputs",
+    "writes": "instance home",
+    "write_owner": "Preference reading is read-only. Lazy PiCopilotService initialization may reconcile session/follow-up metadata under the server-owned instance home."
+  },
+  {
+    "method": "PATCH",
+    "route": "/api/copilot/pi/preferences",
+    "fields": ["body:figure_export_format", "body:journal_figure_style", "body:interface_language", "body:instructions"],
+    "reaches": "PersonalPreferencesStore.update -> strict bounded display/advisory values -> locked atomic replacement of a fixed state_root file; no host-policy or scientific configuration writes",
+    "protection": "hosted.guard_request + require_instance_path + regular non-symlink preferences file; strict extra-field refusal; instructions pass the Copilot sensitive-text boundary",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "PersonalPreferencesStore owns personal_preferences.json, its adjacent lock and private atomic staging file. New conversation snapshots alone consume changes."
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/runs/{run_id}/usage",
+    "fields": ["path:project_id", "path:run_id"],
+    "reaches": "PiCopilotService._research_run_row -> project-bound run history -> agent_runs.read_run_usage -> RunDirectory -> bounded digest-verified provider ledger summaries",
+    "protection": "hosted.guard_request + project run ownership + require_instance_path; only server-owned run directories, no client filesystem coordinate; shared-ledger lineage validated by the existing run usage owner",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Ledger reads do not write. Lazy PiCopilotService initialization may reconcile session/follow-up metadata under the server-owned instance home."
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/sessions/{session_id}/usage",
+    "fields": ["path:session_id", "query:project_id"],
+    "reaches": "PiCopilotService._scoped_record -> existing session state owner -> bounded ShellUsageLedger totals; no transcript or provider message returned",
+    "protection": "hosted.guard_request + session/project ownership; the existing gateway validates the host-owned saved session file; fixed summary fields and four call-state buckets",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "The existing session/gateway owner may reopen its saved session in the instance home. Usage reads never authorize a model call or change provider reservations."
+  },
+  {
     "method": "MOUNT",
     "route": "/",
     "fields": [

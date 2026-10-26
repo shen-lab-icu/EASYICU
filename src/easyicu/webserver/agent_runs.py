@@ -537,6 +537,14 @@ def make_agent_run_runner(
 project_artifact_governance = run_artifact_disclosure.project_artifact_governance
 
 
+def read_run_usage(project_dir: str) -> dict | None:
+    """Read only bounded provider accounting, including an unfinished run."""
+    from easyicu.webserver.research_run_usage import research_run_usage
+
+    directory = RunDirectory.resolve(project_dir)
+    return research_run_usage(directory.path) if directory is not None else None
+
+
 def read_run_record(project_dir: str) -> RunRecordReadResult:
     """Read one typed, bounded local run record."""
     directory = RunDirectory.resolve(project_dir)

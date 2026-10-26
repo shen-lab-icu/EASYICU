@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const vm = require('node:vm');
 const { pathToFileURL } = require('node:url');
 const { test } = require('node:test');
@@ -66,10 +67,12 @@ const imports = Promise.all([
   import(pathToFileURL(budgetFile)),
   import(pathToFileURL(projectionFile)),
   import(pathToFileURL(retryFile)),
+  // The usage ledger sits beside the budget guard and wraps each attempt.
+  import(pathToFileURL(path.join(path.dirname(budgetFile), 'shell-usage.mjs'))),
 ]);
 
 async function harness(attempts, config = {}) {
-  const [{ ShellBudgetGuard }, projection, retry] = await imports;
+  const [{ ShellBudgetGuard }, projection, retry, { ShellUsageLedger }] = await imports;
   const guard = new ShellBudgetGuard({
     tokenBudget: 100000, maxOutputTokens: 1000,
     maxProviderCallsPerMessage: 8, maxProviderCallsPerSession: 128,
@@ -90,7 +93,8 @@ async function harness(attempts, config = {}) {
   const closed = [];
   const authorize = guard.authorize.bind(guard);
   guard.authorize = (...args) => { order.push('authorize'); return authorize(...args); };
-  const record = { budgetGuard: guard, language: 'zh' };
+  const usage = [];
+  const record = { budgetGuard: guard, language: 'zh', usageLedger: new ShellUsageLedger({ persist: row => usage.push(row) }) };
   let subscribed;
   const session = { agent: {}, subscribe: publisher => { subscribed = publisher; return () => {}; } };
   const manager = {
@@ -153,7 +157,7 @@ async function harness(attempts, config = {}) {
   }
   const result = await stream.result();
   const projected = projection.normalizePiEvent({ type: 'message_end', message: result });
-  return { guard, receipts, calls, waits, order, events, result, projected, notices, retryStarts, closed,
+  return { guard, receipts, calls, waits, order, events, result, projected, notices, retryStarts, closed, usage,
     openCall: () => session.agent.streamFunction(model, context, { maxTokens: 1000 }),
   };
 }
@@ -164,6 +168,9 @@ for (const attempt of [2, 3, 4]) {
     const result = await harness([...failures, success(attempt)]);
     assert.equal(result.calls.length, attempt);
     assert.deepEqual(result.events, success(attempt));
+    // Each retried attempt is its own accounted call, never folded into the success.
+    assert.deepEqual(result.usage.filter(row => row.state !== 'in_flight').map(row => [row.call_id, row.state]),
+      Array.from({ length: attempt }, (_, i) => [i + 1, i + 1 < attempt ? 'failed' : 'completed']));
     assert.deepEqual(result.receipts.map(row => row.provider_calls), Array.from({ length: attempt }, (_, i) => i + 1));
     assert.deepEqual(result.order, [
       ...Array.from({ length: attempt - 1 }, () => ['authorize', 'receipt', 'provider', 'retry']).flat(),

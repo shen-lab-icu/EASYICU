@@ -37,6 +37,7 @@ from easyicu.webserver import (
 )
 from easyicu.webserver.data_package_review import DataPackageReviewSnapshotStore
 from easyicu.webserver.host_action_contracts import host_action_id
+from easyicu.webserver.personal_preferences import PersonalPreferencesStore
 from easyicu.webserver.target_trial_setup import TARGET_TRIAL_COMPILE_SUBMITTED
 from easyicu.webserver.copilot_data_workbench import (
     CopilotDataWorkbenchError,
@@ -252,6 +253,9 @@ class PiCopilotService(SkillAttachmentService):
             else state_paths.state_root() / "pi_copilot_sessions.json"
         )
         self.gateway = gateway or PiGatewayClient()
+        self.preferences = PersonalPreferencesStore(
+            None if store_path is None else self.store_path.with_name("personal_preferences.json")
+        )
         self.provider_store = (
             provider_store
             or getattr(self.gateway, "provider_store", None)
@@ -541,6 +545,8 @@ class PiCopilotService(SkillAttachmentService):
                 if row.session_id != record.session_id:
                     rows.append(row)
                 else:
+                    if record.preferences != row.preferences:
+                        raise PiCopilotError("pi_session_preferences_frozen", "Conversation preferences are frozen.", status_code=409)
                     # ``_note_research_job`` owns this field; a record read
                     # before its last note must not erase it.
                     record.latest_research_job = row.latest_research_job
@@ -1511,7 +1517,7 @@ class PiCopilotService(SkillAttachmentService):
         project_id: str,
         title: str = "EasyICU Copilot",
         agent_mode: str = "research",
-        language: str = "en",
+        language: Optional[str] = None,
         thinking_level: str = DEFAULT_THINKING_LEVEL,
         study_context_id: Optional[str] = None,
         external_llm_opt_in: bool = False,
@@ -1555,7 +1561,8 @@ class PiCopilotService(SkillAttachmentService):
             requested_study_context_id=study_context_id,
             confirm_initialization=True,
         )
-        resolved_language = "zh" if language == "zh" else "en"
+        preferences = self.preferences.read()
+        resolved_language = preferences.interface_language if language is None else ("zh" if language == "zh" else "en")
         # The effort level is the researcher's per-session choice (default
         # medium). Raw provider reasoning still never crosses the bridge: the
         # sidecar projects only reasoning markers and lifecycle times.
@@ -1598,6 +1605,7 @@ class PiCopilotService(SkillAttachmentService):
                     "agent_mode": resolved_mode,
                     "language": resolved_language,
                     "extension_snapshot": extension_activation.model_dump(mode="json"),
+                    "preferences": preferences.model_dump(),
                 },
                 timeout=30,
             )
@@ -1617,6 +1625,7 @@ class PiCopilotService(SkillAttachmentService):
                 extension_activation=extension_activation,
                 default_attached_skills=default_skills,
                 draft_attached_skills=list(default_skills),
+                preferences=preferences,
                 research_provider=selected_model_connection,
                 conversation_connection_sha256=self._conversation_connection_sha256(conversation_gateway),
                 binding=binding,
@@ -1743,6 +1752,7 @@ class PiCopilotService(SkillAttachmentService):
                 "thinking_level": resolve_thinking_level(record.thinking_level),
                 "agent_mode": record.agent_mode,
                 "language": record.language,
+                "preferences": record.preferences.model_dump(),
                 "extension_snapshot": record.extension_activation.model_dump(
                     mode="json"
                 ),
@@ -5316,6 +5326,7 @@ class PiCopilotService(SkillAttachmentService):
             "automatic_title": _session_title_is_automatic(record.title),
             "agent_mode": record.agent_mode,
             "language": record.language,
+            "preferences": record.preferences.model_dump(),
             "thinking_level": state.get("thinking_level") or record.thinking_level,
             "model": state.get("model"),
             "message_count": int(state.get("message_count") or 0),
