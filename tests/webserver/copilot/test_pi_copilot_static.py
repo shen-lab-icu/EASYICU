@@ -148,7 +148,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261026-append2" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261026-six2" in index
+    # The plan-approval card renders the database capability review through this owner.
+    assert "js/screens-guided-pi-source-adjustments.js?v=20261026-six1" in index
+    assert "css/guided-pi-source-adjustments.css?v=20261026-six1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261024-demo-raw-plan1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261026-roster2" in index
@@ -4837,6 +4840,7 @@ def test_pi_css_has_balanced_comments_and_braces() -> None:
         "css/guided-pi-preview.css",
         "css/guided-pi-workbench-preview.css",
         "css/guided-pi-literature.css",
+        "css/guided-pi-source-adjustments.css",
         "css/guided-pi-demo.css",
         "css/guided-pi-demo-walkthrough.css",
     ):
@@ -4859,6 +4863,7 @@ def test_pi_frontend_javascript_parses() -> None:
         "js/screens-guided-pi-preview.js",
         "js/screens-guided-pi-workbench-preview.js",
         "js/screens-guided-pi-literature.js",
+        "js/screens-guided-pi-source-adjustments.js",
         "js/screens-guided-pi-markdown.js",
         "js/screens-guided-pi-next-actions.js",
         "js/screens-guided-pi-message-actions.js",

@@ -59,6 +59,7 @@ from .exposure_group_notes import project_exposure_groups
 from .question_requirement_notes import project_question_requirement_notes
 from .population_preparation import current_population_preparation
 from .population_acceptance import current_population_acceptance
+from .source_adjustments import current_source_adjustments
 from .projections import (
     StudySetupReceipt,
     ensure_safe_projection,
@@ -636,6 +637,7 @@ def build_research_workflow_snapshot(
     )
     population_preparation = current_population_preparation(study_row, review_authority)
     population_acceptance = current_population_acceptance(study_row, review_authority)
+    source_adjustments = current_source_adjustments(review_authority)
     plan_review_summary = (
         {
             "run_id": str(review_authority.get("run_id") or "")[:160],
@@ -699,6 +701,8 @@ def build_research_workflow_snapshot(
             **({"coordinate_readings": coordinate_readings} if coordinate_readings is not None else {}),
             **({"population_preparation": population_preparation} if population_preparation is not None else {}),
             **({"population_acceptance": population_acceptance} if population_acceptance is not None else {}),
+            # How the selected database changes the study (db capability review).
+            **({"source_adjustments": source_adjustments} if source_adjustments is not None else {}),
         }
         if raw_scientific_review
         else None
