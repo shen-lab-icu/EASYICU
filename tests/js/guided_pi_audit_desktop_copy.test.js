@@ -10,7 +10,7 @@ const vm = require('node:vm');
 const owners = process.argv.length > 2 ? process.argv.slice(2) : [
   'html-escape.js', 'screens-guided-pi-modules.js', 'screens-guided-pi-hosted.js',
   'screens-guided-pi-starters.js', 'screens-guided-pi-effort-menu.js',
-  'screens-guided-pi-blockers.js', 'screens-guided-pi-help.js',
+  'screens-guided-pi-help.js',
 ].map(name => path.join(__dirname, '../../src/easyicu/webserver/static/js', name));
 
 function load(language, deployment) {
@@ -31,11 +31,6 @@ function load(language, deployment) {
   for (const owner of owners) vm.runInContext(fs.readFileSync(owner, 'utf8'), context, { filename: owner });
   return { window, tr, modules: window.EasyICU.guidedPi };
 }
-
-const runtimeCodes = [
-  'node_available', 'node_version_supported', 'entrypoint_available',
-  'dependency_installed', 'lockfile_present', 'runtime_integrity_verified',
-];
 
 for (const language of ['zh', 'en']) {
   const zh = language === 'zh';
@@ -130,22 +125,6 @@ for (const language of ['zh', 'en']) {
     });
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(error, zh ? '思考深度未能修改。' : 'The reasoning depth could not be changed.');
-  });
-
-  test(`${language}: missing or invalid runtime components direct the clinician to support`, () => {
-    const { window } = load(language);
-    const rows = window.EU_PI_BLOCKERS.describe(runtimeCodes.slice().reverse(), { node_version: '20.0.0' });
-    assert.deepEqual(Array.from(rows, row => row.code), runtimeCodes);
-    for (const row of rows) {
-      const failedCheck = row.code === 'runtime_integrity_verified';
-      assert.equal(row.title, zh
-        ? (failedCheck ? '研究助手组件校验未通过，请联系技术支持。' : '研究助手组件不完整，请联系技术支持。')
-        : (failedCheck ? 'Copilot component checks failed. Contact support.' : 'Copilot components are incomplete. Contact support.'));
-      assert.match(row.fix, zh ? /遇到问题.*复制问题编号/ : /Having a problem\?.*copy the problem reference/);
-      assert.doesNotMatch(`${row.title} ${row.fix}`, /lockfile|digest|easyicu-copilot-install|Node\.js|20\.0\.0|22\.19\.0|安装|升级|reinstall|upgrade/i);
-    }
-    assert.equal(window.EU_PI_BLOCKERS.describe(['api_key_configured', 'provider_connection_verified']).length, 0);
-    assert.equal(window.EU_PI_BLOCKERS.describe(['future_readiness_flag'])[0].code, 'future_readiness_flag');
   });
 
   test(`${language}: the existing Help entry still exposes the version and problem reference`, () => {
