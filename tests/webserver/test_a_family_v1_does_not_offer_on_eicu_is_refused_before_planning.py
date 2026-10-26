@@ -106,10 +106,13 @@ def test_the_recorded_design_is_the_family_checked():
 
     # The recorded family remains authoritative; an unavailable 28-day endpoint
     # is a source gap even for an association, so use the available status here.
+    # The same question recorded as survival is checked as survival: HiRID has
+    # no complete censoring clock, while eICU censors at hospital discharge.
+    question = "入 ICU 首日最高乳酸与院内死亡有关吗？"
     assert study_family_database_gap(association, question="Estimate the association with hospital mortality.", database="eicu") is None
-    assert study_family_database_gap(
-        survival, question="入 ICU 首日最高乳酸与院内死亡有关吗？", database="eicu",
-    )["family"] == "survival"
+    assert study_family_database_gap(association, question=question, database="hirid") is None
+    assert study_family_database_gap(survival, question=question, database="hirid")["family"] == "survival"
+    assert study_family_database_gap(survival, question=question, database="eicu") is None
 
 
 def test_a_demo_source_has_the_scope_of_the_database_it_samples():
