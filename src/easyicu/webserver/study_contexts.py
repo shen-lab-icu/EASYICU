@@ -18,6 +18,9 @@ from easyicu.research_agent.planning.sensitivity_authority import (
     normalize_prespecified_sensitivities,
 )
 from easyicu.webserver import primary_cohort, state_paths
+from easyicu.extensions.contracts import ExtensionRegistryError
+from easyicu.extensions.skill_attachments import attachment_payload
+from easyicu.webserver.skill_setup import apply_skill_setup
 from easyicu.webserver.causal_trial_reading import (
     normalize_causal_trial_reading,
     reading_rests_on,
@@ -78,6 +81,7 @@ _ROW_LEVEL_KEYS = {
     "entityids",
 }
 _CONTEXT_FIELDS = {
+    "attached_skills",
     "id",
     "title",
     "question",
@@ -326,6 +330,7 @@ _LITERATURE_SCOPE_FIELDS_V2 = (
     "idea_handoff",
 )
 _SCIENTIFIC_CONFIGURATION_FIELDS = (
+    "attached_skills",
     *_LITERATURE_SCOPE_FIELDS_V2,
     "cohort_eligibility_authority",
     "literature_authority",
@@ -1313,6 +1318,7 @@ def validate_context_update(
     _server_study_family_reading_write: bool = False,
     _server_question_wording_write: bool = False,
     _server_design_variance_basis_write: bool = False,
+    _server_skill_attachments_write: bool = False,
 ) -> Dict[str, Any]:
     """Validate and normalize one proposed update without mutating the store.
 
@@ -1326,6 +1332,7 @@ def validate_context_update(
 
     patch = _sanitize_patch(
         raw_context,
+        allow_skill_attachments=_server_skill_attachments_write,
         allow_cohort_eligibility_authority=(
             _server_cohort_eligibility_authority_write
         ),
@@ -1351,11 +1358,20 @@ def validate_context_update(
 
     candidate = dict(current)
     candidate.update(patch)
+    _apply_attached_setup(patch, candidate, current)
+    candidate.update(patch)
     _validate_covariate_decision_contract(candidate)
     _validate_analysis_dependence_contract(candidate)
     if "time_window" in patch:
         _validate_materialization_window_contract(candidate)
     return patch
+
+
+def _apply_attached_setup(patch: Dict[str, Any], candidate: Mapping[str, Any], previous=None) -> None:
+    try:
+        patch.update(apply_skill_setup(candidate, previous))
+    except ExtensionRegistryError as exc:
+        raise StudyContextError({"error": exc.code, "field": "attached_skills"}) from exc
 
 
 def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
@@ -1412,6 +1428,7 @@ def _sanitize_patch(
     allow_target_trial_design: bool = False,
     allow_causal_trial_reading: bool = False,
     allow_study_family_reading: bool = False,
+    allow_skill_attachments: bool = False,
     allow_question_wording: bool = False,
     allow_design_variance_basis: bool = False,
 ) -> Dict[str, Any]:
@@ -1426,6 +1443,13 @@ def _sanitize_patch(
         )
 
     patch: Dict[str, Any] = {}
+    if "attached_skills" in raw:
+        if not allow_skill_attachments:
+            raise StudyContextError({"error": "skill_attachment_server_owned", "field": "attached_skills"})
+        try:
+            patch["attached_skills"] = attachment_payload(raw["attached_skills"] or [])
+        except ExtensionRegistryError as exc:
+            raise StudyContextError({"error": exc.code, "field": "attached_skills"}) from exc
     if "id" in raw and raw.get("id"):
         patch["id"] = _identifier(raw.get("id"), field="id")
     for field, max_length in _TEXT_LIMITS.items():
@@ -1870,6 +1894,7 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             allow_concept_selection_authority=True,
             allow_causal_trial_reading=True,
             allow_study_family_reading=True,
+            allow_skill_attachments=True,
             allow_question_wording=True,
             allow_design_variance_basis=True,
         )
@@ -2236,6 +2261,7 @@ def upsert_context(
     _server_question_wording_write: bool = False,
     _server_design_variance_basis_write: bool = False,
     _server_agent_landmark_decision: bool = False,
+    _server_skill_attachments_write: bool = False,
 ) -> Dict[str, Any]:
     client_concept_selection_authority: Dict[str, Any] = {}
     if not _server_concept_selection_authority_write and isinstance(raw_context, dict):
@@ -2244,6 +2270,7 @@ def upsert_context(
         )
     patch = _sanitize_patch(
         raw_context,
+        allow_skill_attachments=_server_skill_attachments_write,
         allow_literature_authority=_server_literature_authority_write,
         allow_cohort_eligibility_authority=(
             _server_cohort_eligibility_authority_write
@@ -2319,6 +2346,11 @@ def upsert_context(
                 patch, current, client_concept_selection_authority
             )
         proposed_context = {**dict(current or {}), **patch}
+        _apply_attached_setup(
+            patch, proposed_context,
+            None if _server_skill_attachments_write and "question_family_check" in patch else current,
+        )
+        proposed_context.update(patch)
         proposed_authority = patch.get("cohort_eligibility_authority")
         if isinstance(proposed_authority, dict) and proposed_authority:
             # The receipt owner validates the complete contract. Persistence
@@ -2786,6 +2818,7 @@ def build_agent_context_binding(
                 "covariate_operationalizations",
                 "execution_concepts",
                 "analysis_design",
+                "attached_skills",
                 "sensitivity_specs",
                 "time_window",
                 "comparator",
@@ -2815,6 +2848,7 @@ def _scientific_fields_sha256(
         scoped["id"] = context.get("id")
     sanitized = _sanitize_patch(
         scoped,
+        allow_skill_attachments=True,
         allow_literature_authority=True,
         allow_cohort_eligibility_authority=True,
         allow_concept_selection_authority=True,
@@ -2822,6 +2856,8 @@ def _scientific_fields_sha256(
         allow_question_wording=True,
     )
     sanitized.pop("id", None)
+    if not sanitized.get("attached_skills"):
+        sanitized.pop("attached_skills", None)
     # An undeclared trajectory design contributes nothing, so every digest
     # recorded before this field existed stays byte-identical; declaring one
     # is a scientific change and does move the digest.
@@ -3043,6 +3079,8 @@ def restore_turn_configuration_snapshot(
         restored_source = dict(current_source)
 
     defaults: Dict[str, Any] = {
+        "attached_skills": [],
+        "question_family_check": None,
         "question": "",
         "stated_adjustments": [],
         "stated_subgroups": [],
@@ -3098,6 +3136,8 @@ def restore_turn_configuration_snapshot(
         _server_cohort_eligibility_authority_write=True,
         _server_target_trial_design_write=True,
         _server_question_wording_write=True,
+        _server_skill_attachments_write=True,
+        _server_study_family_reading_write=True,
     )
 
 

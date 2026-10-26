@@ -155,6 +155,10 @@
 .gpi-composer-skill button{border:0;background:transparent;cursor:pointer}
 .gpi-builder-context{background:#eef4f4;border-color:#b9d5d5}.gpi-builder-context button[data-gpi-builder-hub]{padding:0 3px;color:#205254;font-size:11px}.gpi-builder-context button[data-gpi-builder-remove]{font-size:15px;color:var(--muted)}
 .gpi-method-context{background:#eef4f4;border-color:#b9d5d5}.gpi-method-context button[data-gpi-method-hub]{padding:0 3px;color:#205254;font-size:11px}.gpi-method-context button[data-gpi-method-remove]{font-size:15px;color:var(--muted)}
+/* Skills attached to the next message (screens-guided-pi-skill-attach.js): a check on the picked row, the host's refusal under the chips, and the project-default control in the drawer footer. */
+.gpi-composer-drawer-row[data-gpi-attach-toggle][aria-pressed=true] strong::after{content:" ✓";color:var(--accent)}
+.gpi-attached-skill-error{margin:0 0 6px;color:var(--danger);font-size:12px;line-height:1.5}
+.gpi-composer-drawer>footer .gpi-attached-defaults{margin-top:4px}.gpi-composer-drawer>footer span.gpi-attached-defaults{display:block;padding:8px 0 0;color:var(--ink-3);font-size:12px}
 .gpi-message-skill{display:inline-block;margin-bottom:7px;padding:4px 7px;border:1px solid var(--hair);border-radius:6px;background:var(--wash);color:var(--muted);font-size:11px}
 .gpi-preview-download { display: inline-flex; align-items: center; text-decoration: none; }
 .gpi-pdf-access { max-width: 620px; margin: 36px auto; padding: 20px 28px; color: var(--ink); }

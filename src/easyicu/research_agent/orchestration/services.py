@@ -73,6 +73,10 @@ class PipelineServices:
             return
         if self.plan_revision_guard is not None:
             self.plan_revision_guard.validate_plan(plan=plan, context=context)
+        from easyicu.extensions.method_attachments import validate_attached_methods
+
+        if before_runtime_binding is None:
+            validate_attached_methods(plan=plan, context=context)
 
     def canonical_payload(self) -> Dict[str, Optional[str]]:
         """Return type identities only; never serialize live object state."""

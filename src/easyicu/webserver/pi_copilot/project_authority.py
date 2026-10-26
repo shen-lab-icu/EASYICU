@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+from easyicu.extensions.skill_attachments import AttachedSkills, parse_attachments
 
 from .contracts import PiCopilotError, utc_now
 from .locking import exclusive_file_lock
@@ -62,6 +63,7 @@ class ProjectAuthorityBinding(BaseModel):
     study_context_id: str = Field(min_length=1, max_length=160)
     migration_receipt: Optional[ProjectStudyContextMigrationReceipt] = None
     created_at: str = Field(default_factory=utc_now)
+    default_skills: AttachedSkills = Field(default_factory=list)
 
 
 class ProjectAuthorityStore:
@@ -251,6 +253,23 @@ class ProjectAuthorityStore:
             # file by now.
             late = [row for row in self._read() if row.project_id not in seen]
             return tuple(rows + archived + late)
+
+    def set_default_skills(self, project_id: str, attachments: object) -> None:
+        """Edit project metadata without touching any existing conversation."""
+        clean = self._clean(project_id, code="pi_project_binding_required")
+        refs = parse_attachments(attachments)
+        with self._lock, exclusive_file_lock(
+            self.path.with_name(self.path.name + ".lock"),
+            code="pi_project_authority_lock_unavailable",
+        ):
+            active, archived = self._known()
+            for rows, write in ((active, self._write), (archived, self._write_archive)):
+                for index, binding in enumerate(rows):
+                    if binding.project_id == clean:
+                        rows[index] = binding.model_copy(update={"default_skills": refs}, deep=True)
+                        write(rows)
+                        return
+            raise PiCopilotError("pi_project_not_initialized", "pi_project_not_initialized", status_code=409)
 
     def bind(
         self,

@@ -59,6 +59,7 @@ from .contracts import (
     ToolExecutionContext,
     utc_now,
 )
+from .skill_attachments import SkillAttachmentService
 from .codex_gateway import CodexPiGatewayPool
 from .conversation_status import (
     later_research_job,
@@ -225,7 +226,7 @@ def _session_title_is_automatic(title: str) -> bool:
     return value == "EasyICU Copilot" or value.endswith(_AUTO_SESSION_TITLE_SUFFIXES)
 
 
-class PiCopilotService:
+class PiCopilotService(SkillAttachmentService):
     """Bind Pi UX sessions to current EasyICU scientific authority."""
 
     def __init__(
@@ -1582,6 +1583,7 @@ class PiCopilotService:
                 skills=extension_activation.skills,
                 mcp_servers=(),
             )
+        default_skills = self._freeze_default_skills(clean_project_id, extension_activation, resolved_mode)
         state: Dict[str, Any] = {}
         record: Optional[PiSessionRecord] = None
         session_created = False
@@ -1613,6 +1615,8 @@ class PiCopilotService:
                 external_llm_opt_in=external_llm_opt_in,
                 credentialed_data_in_history=False,
                 extension_activation=extension_activation,
+                default_attached_skills=default_skills,
+                draft_attached_skills=list(default_skills),
                 research_provider=selected_model_connection,
                 conversation_connection_sha256=self._conversation_connection_sha256(conversation_gateway),
                 binding=binding,
@@ -2516,6 +2520,7 @@ class PiCopilotService:
         idea_source: Optional[Mapping[str, Any]] = None,
         message_origin: Optional[str] = None,
         queue_if_busy: bool = False,
+        attached_skills: Optional[list] = None,
         _followup_delivery: Optional[object] = None,
     ) -> Dict[str, Any]:
         with self._lock:
@@ -2551,7 +2556,7 @@ class PiCopilotService:
         )
         provider_text = prepared_input.provider_message
         if queue_if_busy:
-            if message_origin != "typed" or allowed_actions or message_intent or idea_source or regenerate_user_entry_id:
+            if message_origin != "typed" or allowed_actions or message_intent or idea_source or regenerate_user_entry_id or attached_skills or record.draft_attached_skills:
                 raise PiCopilotError("pi_followup_plain_message_required", "Queue only a directly typed message without action grants or attachments.", status_code=400)
             with self._lock:
                 if record.session_id in self._busy_sessions:
@@ -2714,6 +2719,10 @@ class PiCopilotService:
                 )
             if self._get_record(session_id).conversation_provider.model != prepared_model:
                 raise PiCopilotError("pi_session_model_changed", "The conversation model changed. Send the message again.", status_code=409)
+            record.draft_attached_skills = self._get_record(session_id).draft_attached_skills
+            turn_skills, loaded_skills = self._prepare_attached_skills(
+                record, attached_skills, regenerate_target,
+            )
             self._busy_sessions.add(record.session_id)
 
         start_gate = threading.Event()
@@ -2830,6 +2839,7 @@ class PiCopilotService:
                     allowed_actions=sorted(requested_actions),
                     user_message=wording_turn["text"],
                     message_origin=wording_origin,
+                    attached_skills=turn_skills,
                 )
                 job.emit(
                     {
@@ -2844,6 +2854,8 @@ class PiCopilotService:
                     "message": provider_text,
                     "message_origin": message_origin or "unknown",
                 }
+                if loaded_skills:
+                    params["attached_skill_context"] = loaded_skills
                 if idea_source:
                     params["idea_source"] = dict(idea_source)
                 if message_intent:
@@ -2995,7 +3007,7 @@ class PiCopilotService:
                     regenerate_target,
                 )
             tool_context = ToolExecutionContext(
-                session=record.model_copy(deep=True),
+                session=self._apply_turn_skills(record, turn_skills).model_copy(deep=True),
                 data_handling=self._data_handling_for_session(record),
                 note_credentialed_history=lambda: self._note_credentialed_history(record.session_id),
                 user_message=text,
@@ -5366,6 +5378,9 @@ class PiCopilotService:
                 else []
             ),
             "last_turn_allowed_actions": list(record.last_turn_allowed_actions),
+            "default_attached_skills": [ref.model_dump(mode="json", exclude_none=True) for ref in record.default_attached_skills],
+            "draft_attached_skills": [ref.model_dump(mode="json", exclude_none=True) for ref in record.draft_attached_skills],
+            "last_attached_skills": [ref.model_dump(mode="json", exclude_none=True) for ref in record.last_attached_skills],
             "last_turn_events": list(latest_replay_turn.get("events") or []),
             "conversation_replay": replay,
             "archived_child_jobs": list(replay.get("child_jobs") or []),
