@@ -707,6 +707,10 @@ def _project_job(
             "cancel_requested": bool(snapshot.get("cancel_requested")),
             "cancel_reason_code": stable_code(snapshot.get("cancel_reason")),
             "error_code": _safe_error_code(snapshot.get("error")),
+            **{key: True for key in ("recovered", "interrupted", "result_omitted")
+               if snapshot.get(key) is True},
+            **({"persistence_error_code": "job_journal_unavailable"}
+               if snapshot.get("persistence_error") == "job_journal_unavailable" else {}),
             "progress": progress,
             **({"progress_compacted": True} if compacted else {}),
             **({"progress_withheld_reason": "projection_budget"} if not include_progress else {}),

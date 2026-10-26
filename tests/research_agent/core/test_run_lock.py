@@ -160,3 +160,29 @@ def test_pipeline_exception_releases_resume_writer_lock(tmp_path: Path) -> None:
 
     with acquire_run_execution_lock(workdir=tmp_path, run_id="run_exception"):
         pass
+
+
+def test_host_quiescence_is_checked_before_pipeline_can_mutate(tmp_path, monkeypatch):
+    from easyicu.runtime import host_execution_lease
+
+    guarded = tmp_path / "run_resume" / ".host-execution"
+    guarded.mkdir(parents=True)
+    calls = []
+
+    def refuse(path, **kwargs):
+        calls.append(path)
+        assert kwargs == {"allow_missing": False, "wait_timeout": 15.0}
+        raise host_execution_lease.HostExecutionLeaseError("host_execution_unresolved")
+
+    monkeypatch.setattr(host_execution_lease, "assert_host_execution_quiescent", refuse)
+    pipeline = object.__new__(ResearchAgentPipeline)
+    pipeline.workdir = tmp_path
+    with pytest.raises(host_execution_lease.HostExecutionLeaseError):
+        pipeline.run(cohort=tmp_path / "not_read.parquet", resume_run_id="run_resume")
+    assert calls == [guarded]
+    assert list((tmp_path / "run_resume").iterdir()) == [guarded]
+
+    # A refusal also releases the whole-run lock; no leaked admission lock.
+    monkeypatch.setattr(host_execution_lease, "assert_host_execution_quiescent", lambda *a, **kw: None)
+    with acquire_run_execution_lock(workdir=tmp_path, run_id="run_resume"):
+        pass

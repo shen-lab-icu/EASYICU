@@ -122,3 +122,20 @@ def test_windows_directory_setup_applies_the_extended_path_before_creation(tmp_p
     assert module._absolute_directory(str(directory), name="state-dir") == directory
     assert calls == [str(directory)]
     assert directory.is_dir()
+
+
+def test_spawn_freeze_support_precedes_application_argument_parsing(monkeypatch):
+    import multiprocessing
+    import runpy
+
+    class SpawnChildDispatched(Exception):
+        pass
+
+    def dispatch_child():
+        raise SpawnChildDispatched
+
+    monkeypatch.setattr(multiprocessing, "freeze_support", dispatch_child)
+    monkeypatch.setattr("sys.argv", ["easyicu-backend", "--multiprocessing-fork", "pipe_handle=42"])
+    path = Path(__file__).parents[2] / "desktop/backend_entry.py"
+    with pytest.raises(SpawnChildDispatched):
+        runpy.run_path(str(path), run_name="__main__")

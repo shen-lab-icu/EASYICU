@@ -2960,6 +2960,26 @@ class PiCopilotService:
         stored record changes, in place.
         """
 
+        if job and job.get("recovered") is True and job.get("result_omitted") is True:
+            record = self._get_record(session_id)
+            replay = self.replay_store.snapshot(
+                session_id=session_id, project_id=str(record.project_id),
+            )
+            archived = next((item for item in replay.get("child_jobs", [])
+                             if isinstance(item, Mapping)
+                             and item.get("job_id") == job.get("job_id")
+                             and item.get("result_omitted") is not True
+                             and item.get("status") in {"done", "failed", "cancelled"}), None)
+            if archived is not None:
+                job = archived
+            elif record.latest_research_job and record.latest_research_job.job_id == job.get("job_id"):
+                if record.latest_research_job.state != "running":
+                    return
+                stopped = record.latest_research_job
+            else:
+                # A runner's terminal receipt does not prove a scientific
+                # result or that a pending human review has been satisfied.
+                job = {**job, "status": "failed"}
         if stopped is not None:
             noted: Optional[PiSessionResearchJob] = stopped.model_copy(
                 update={"state": "stopped", "at": utc_now()}
@@ -5297,20 +5317,20 @@ class PiCopilotService:
         }
 
     def _reconcile_replay_execution(self, record: PiSessionRecord) -> PiSessionRecord:
-        """Reconcile persisted UX continuity with the process-local JobManager."""
+        """Reconcile saved conversations with live jobs or lifecycle receipts."""
 
         active_job_id = str(record.active_message_job_id or "").strip()
         if active_job_id and record.last_turn_status == "running":
             job = jobs.MANAGER.get(active_job_id)
             if job is None or job.status != "running":
                 record.active_message_job_id = None
-                if job is not None and job.status in {"done", "failed", "cancelled"}:
+                if job is not None and job.snapshot().get("interrupted") is True:
+                    record.last_turn_status = "interrupted"
+                elif job is not None and job.status in {"done", "failed", "cancelled"}:
                     record.last_turn_status = job.status
                 else:
-                    # The generic JobManager is intentionally process-local. A
-                    # persisted running pointer with no matching job therefore
-                    # means the Web process restarted; never leave the
-                    # presentation showing "running".
+                    # Older or pruned jobs may have no lifecycle receipt. A
+                    # saved running pointer must never look live after restart.
                     record.last_turn_status = "interrupted"
                 record = self._save_record(record)
                 self.replay_store.finish_turn(
@@ -5336,11 +5356,10 @@ class PiCopilotService:
                     job_id=child_job_id,
                 )
                 continue
-            terminal_status = (
-                child.status
-                if child is not None and child.status in {"done", "failed", "cancelled"}
-                else "interrupted"
-            )
+            terminal_status = "interrupted"
+            if (child is not None and child.status in {"done", "failed", "cancelled"}
+                    and child.snapshot().get("interrupted") is not True):
+                terminal_status = child.status
             self.replay_store.finish_host_actions_for_child_job(
                 session_id=record.session_id,
                 project_id=str(record.project_id),

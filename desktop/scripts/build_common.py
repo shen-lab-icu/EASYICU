@@ -20,6 +20,19 @@ _OPTIONAL_NODE_DIRS = frozenset({
 })
 _NODE_BUILD_SUFFIXES = (".d.ts", ".d.mts", ".d.cts", ".map")
 _NODE_SOURCE_SUFFIXES = (".ts", ".mts", ".cts")
+# Typed executors run generated scripts in a frozen child. Their import strings
+# are not visible to PyInstaller's normal Python bytecode analysis. Importing
+# these entry points also activates PyInstaller's numerical-library hooks.
+_DESKTOP_ANALYSIS_IMPORTS = (
+    "numpy", "pandas", "scipy.stats", "matplotlib.pyplot",
+    # save_publication_figure chooses its export backend from the filename.
+    # Agg supplies PNG/TIFF (and the PNG embedded in PPTX); vector exports
+    # dynamically load separate modules even when pyplot uses Agg.
+    "matplotlib.backends.backend_agg", "matplotlib.backends.backend_svg",
+    "matplotlib.backends.backend_pdf", "PIL.TiffImagePlugin",
+    "statsmodels.api", "statsmodels.formula.api",
+    "sklearn", "pyarrow.parquet", "patsy", "psutil",
+)
 
 
 def _runtime_targets(value, *, skip_types=False):
@@ -591,7 +604,16 @@ def build_backend(python, *, build_root, desktop_root, run, windows=False):
         str(python), "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir",
         "--contents-directory", "_internal", "--name", "easyicu-backend",
         "--collect-submodules", "easyicu", "--collect-data", "easyicu",
-        "--copy-metadata", "easyicu",
+        # HostRunner binds runtime versions into execution authority. Core
+        # dependency metadata includes every baseline analysis package plus
+        # transitive numerical dependencies; psutil belongs to the web extra.
+        "--recursive-copy-metadata", "easyicu",
+        "--copy-metadata", "psutil",
+        # DBOS loads SQLite's SQLAlchemy dialect dynamically; its SDK imports
+        # psycopg even for a local SQLite workflow database.
+        "--copy-metadata", "dbos",
+        "--collect-all", "psycopg_binary",
+        "--hidden-import", "sqlalchemy.dialects.sqlite",
         "--hidden-import", "uvicorn.logging",
         "--hidden-import", "uvicorn.loops.auto",
         "--hidden-import", "uvicorn.protocols.http.auto",
@@ -600,6 +622,8 @@ def build_backend(python, *, build_root, desktop_root, run, windows=False):
         "--distpath", str(dist), "--workpath", str(build_root / "pyinstaller-work"),
         "--specpath", str(build_root / "pyinstaller-spec"),
     ]
+    for module in _DESKTOP_ANALYSIS_IMPORTS:
+        command += ["--hidden-import", module]
     if windows:
         command += ["--manifest", str(desktop_root / "windows-backend.manifest")]
     command.append(str(desktop_root / "backend_entry.py"))

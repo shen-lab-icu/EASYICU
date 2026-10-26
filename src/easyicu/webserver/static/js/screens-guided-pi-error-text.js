@@ -54,6 +54,7 @@
   function create({ tr, staticPreview }) {
     function errorText(error) {
       if (!error) return '';
+      if (error.code === 'job_interrupted_by_server_restart') return tr('The server restarted before this task finished. Review its saved state before continuing.', '服务器在任务完成前重启了，请核对保存的状态后再继续。');
       if (error.code === 'pi_followup_queue_full') return tr('Up to four follow-ups can wait. Remove one or wait for the current reply.', '最多排队四条消息，请移除一条或等待当前回复。');
       if (error.code === 'pi_followup_action_requires_idle' || error.code === 'pi_followup_plain_message_required') return tr('Queue a question or comment here. Send approvals, action requests, and source changes after the reply finishes.', '这里可排队提问或补充说明；请在当前回复结束后发送批准、执行请求或数据源变更。');
       if (error.code === 'pi_followup_store_unavailable') return tr('The saved message queue could not be read. Wait for the current reply before sending.', '无法读取已保存的消息队列，请等待当前回复结束后再发送。');
@@ -928,6 +929,10 @@
         research_pipeline_review_resume_failed: tr(
           'The approved plan could not resume. Its review is still open, so it can be approved again.',
           '已批准的计划未能恢复执行；审阅仍然有效，可以再次批准。',
+        ),
+        research_pipeline_recorded_approval_required: tr(
+          'The analysis did not continue on its own: no saved approval of this plan was found. Review the plan and approve it again.',
+          '分析没有自动继续：没有找到这份计划已保存的批准记录。请重新审阅并批准计划。',
         ),
         research_pipeline_manifest_required: tr(
           'The bound folder is a converted database, not a data package prepared for this study. Extract this study\'s data first, then generate the plan.',

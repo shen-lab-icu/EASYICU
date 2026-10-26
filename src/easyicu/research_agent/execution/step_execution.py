@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -58,12 +59,20 @@ def host_runtime_available(probe_timeout_seconds: float) -> bool:
         f"sys.exit(0 if all(importlib.util.find_spec(n) for n in {names!r}) else 1)"
     )
     try:
+        command = [sys.executable, "-c", source]
+        frozen = bool(getattr(sys, "frozen", False))
+        if frozen:
+            from easyicu.runtime.host_worker import frozen_worker_command
+
+            command = frozen_worker_command(
+                sys.executable, "capabilities", "--names", json.dumps(names),
+            )
         result = subprocess.run(
-            [sys.executable, "-c", source], capture_output=True,
+            command, capture_output=True,
             timeout=max(0.1, probe_timeout_seconds), check=False,
         )
-        return result.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
+        return result.returncode == 0 and (not frozen or set(names).issubset(json.loads(result.stdout)))
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
         return False
 
 

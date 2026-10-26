@@ -29,7 +29,9 @@ Requirements for the build machine only:
 - macOS 14+ on Apple Silicon (the minimum is set in `tauri.conf.json` to match
   the locked NumPy/SciPy binaries)
 - Rust/Cargo
-- Node 22.19+
+- A self-contained Node 22.19+ distribution, such as the official Node archive
+  (an nvm installation works). Homebrew's dynamically linked Node is rejected
+  because copying that executable alone cannot run on a clinician's Mac.
 - Python 3.11 (the Python library itself continues to support Python 3.10+)
 
 Run:
@@ -38,6 +40,11 @@ Run:
 cd desktop
 python3.11 scripts/build_macos.py
 ```
+
+Set `EASYICU_DESKTOP_NODE` to the selected distribution's `bin/node` when it is
+not the default, and put that distribution's `bin` directory first on `PATH`
+so npm uses the same Node. The build checks macOS library dependencies before
+freezing the backend.
 
 The build script creates an isolated build venv, installs hash-checked Python
 dependencies from `requirements-macos-arm64-py311.lock`, installs EasyICU as a
@@ -51,6 +58,8 @@ Build from a clean Git checkout. The backend freezes the installed package;
 it does not add the source checkout to PyInstaller's import path. Build inputs
 (commit, dirty flag, Python/Node versions, and dependency lock hashes) are
 recorded in `.build/build-inputs.json`. Keep that receipt with the artifacts.
+The macOS build also verifies the installed and frozen execution-kernel source
+identities, uses the locked Cargo graph, and records the final DMG SHA-256.
 
 Build caches can be kept outside a synchronized Documents checkout:
 

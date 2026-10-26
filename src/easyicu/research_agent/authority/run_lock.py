@@ -97,11 +97,12 @@ class RunExecutionLock:
 
 
 def acquire_run_execution_lock(*, workdir: Path, run_id: str) -> RunExecutionLock:
-    """Acquire the sole writer lease for ``run_id`` without waiting.
+    """Acquire the sole writer lease for ``run_id``.
 
     A conflict is reported immediately with the last holder receipt.  The
-    receipt is diagnostic only; kernel flock ownership is the authority, so a
-    stale receipt after a crash never blocks a later run.
+    receipt is diagnostic only; kernel flock ownership is the authority. A
+    surviving Host guardian is additionally given bounded time to stop its
+    writers, and an unresolved Host attempt blocks reuse of the run directory.
     """
 
     resolved_run_id = _validated_run_id(run_id)
@@ -149,6 +150,16 @@ def acquire_run_execution_lock(*, workdir: Path, run_id: str) -> RunExecutionLoc
         "acquired_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
+        # Parent flock ownership ends on a crash, but a local Host guardian
+        # can still be terminating the prior step's writers. Check before
+        # pipeline resume can prune outputs or change checkpoint authority.
+        host_lease_dir = run_dir / ".host-execution"
+        if host_lease_dir.exists() or host_lease_dir.is_symlink():
+            from easyicu.runtime.host_execution_lease import assert_host_execution_quiescent
+
+            assert_host_execution_quiescent(
+                host_lease_dir, allow_missing=False, wait_timeout=15.0
+            )
         handle.seek(0)
         handle.truncate()
         json.dump(receipt, handle, sort_keys=True)

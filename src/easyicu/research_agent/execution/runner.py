@@ -593,6 +593,8 @@ def _run_capturing_with_descendant_reaping(
     env: Mapping[str, str],
     timeout: float,
     terminate_tree=None,
+    on_spawn=None,
+    reap_process_group: bool = True,
 ) -> subprocess.CompletedProcess:
     """Run ``cmd`` with bounded streamed output and always kill descendants.
 
@@ -612,7 +614,10 @@ def _run_capturing_with_descendant_reaping(
         stderr=subprocess.PIPE,
     )
     if proc.stdout is None or proc.stderr is None:  # pragma: no cover - PIPE contract
-        _terminate_process_group(proc, process_group_id=proc.pid)
+        if reap_process_group:
+            _terminate_process_group(proc, process_group_id=proc.pid)
+        else:
+            proc.kill()
         raise RuntimeError("runner process pipes were not created")
     stdout_tail, stdout_thread, stdout_stop = _start_capture_drain(
         proc.stdout, name=f"easyicu-runner-{proc.pid}-stdout"
@@ -623,6 +628,8 @@ def _run_capturing_with_descendant_reaping(
     process_group_id = proc.pid if os.name == "posix" else None
     timed_out = False
     try:
+        if on_spawn is not None:
+            on_spawn(proc)
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
@@ -634,7 +641,8 @@ def _run_capturing_with_descendant_reaping(
             if terminate_tree is not None:
                 terminate_tree(proc)
         finally:
-            _terminate_process_group(proc, process_group_id=process_group_id)
+            if reap_process_group:
+                _terminate_process_group(proc, process_group_id=process_group_id)
             try:
                 proc.wait(timeout=5.0)
             except (OSError, subprocess.TimeoutExpired):
@@ -1066,6 +1074,9 @@ class CodeRunner:
         # the same context by an earlier run.
         set_runtime_capability_snapshot_provider(None)
 
+    def _runtime_probe_command(self, kind: str, names: Sequence[str], source: str) -> list[str]:
+        return [self.python_executable, "-c", source]
+
     def validate_runtime_capabilities(self) -> Tuple[str, ...]:
         """Verify the selected interpreter before planning executable work.
 
@@ -1091,7 +1102,7 @@ class CodeRunner:
         )
         try:
             proc = subprocess.run(  # noqa: S603 - configured interpreter, no shell
-                [self.python_executable, "-c", probe],
+                self._runtime_probe_command("capabilities", import_names, probe),
                 capture_output=True,
                 text=True,
                 timeout=max(15.0, min(self.timeout_seconds, 60.0)),
@@ -1167,7 +1178,7 @@ class CodeRunner:
             }
             probe_env["PYTHONNOUSERSITE"] = "1"
             result = subprocess.run(  # noqa: S603 - configured argv, no shell
-                [self.python_executable, "-c", probe],
+                self._runtime_probe_command("identity", sorted(distributions), probe),
                 capture_output=True,
                 text=True,
                 timeout=30.0,

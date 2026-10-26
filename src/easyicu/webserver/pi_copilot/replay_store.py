@@ -440,6 +440,21 @@ class PiConversationReplayStore:
                     "This child job was not submitted by the bound Copilot conversation.",
                     status_code=409,
                 )
+            if job.get("recovered") is True and job.get("result_omitted") is True:
+                previous = next((row for row in payload["child_jobs"]
+                                 if isinstance(row, dict) and row.get("job_id") == job_id), None)
+                if previous is not None:
+                    # A lifecycle receipt has no scientific result. It cannot
+                    # erase an already archived result, evidence link or trace.
+                    if previous.get("status") in {"done", "failed", "cancelled"}:
+                        return dict(previous)
+                    job = {
+                        **previous,
+                        **{key: job[key] for key in (
+                            "status", "finished_at_epoch", "cancel_requested", "error_code",
+                            "recovered", "interrupted", "result_omitted", "persistence_error_code",
+                        ) if key in job},
+                    }
             payload["child_jobs"] = [
                 row
                 for row in payload["child_jobs"]

@@ -6,7 +6,9 @@ host-rendered primary scripts. Sandboxed replays keep their per-replay cache.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import sys
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -31,3 +33,15 @@ def replay_environment(
     if env.get("EASYICU_HOST_RENDERED_ONLY") != "1":
         env["MPLCONFIGDIR"] = str(replay_root / "matplotlib")
     return env
+
+
+def replay_command(script_path: Path) -> list[str]:
+    """Interpreter command for a replay; a frozen app runs it through its worker."""
+    if not getattr(sys, "frozen", False):
+        return [sys.executable, str(script_path)]
+    from easyicu.runtime.host_worker import frozen_worker_command
+
+    return frozen_worker_command(
+        sys.executable, "replay", "--script", str(script_path),
+        "--sha256", hashlib.sha256(Path(script_path).read_bytes()).hexdigest(),
+    )

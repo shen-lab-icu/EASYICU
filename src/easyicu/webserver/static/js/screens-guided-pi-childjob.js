@@ -106,6 +106,21 @@
         ? ACTIVITY.planningEventFacts(event)
         : { unit: String(event && event.planning_unit || ''), phase: String(event && event.retry_phase || '') };
     }
+    function recoveredResultNeedsVerification(job) {
+      return job && job.recovered === true && job.result_omitted === true && job.status === 'done';
+    }
+    function receiptPresentation(job, presentation) {
+      if (!recoveredResultNeedsVerification(job)) return presentation;
+      return {
+        ...presentation,
+        title: tr('Task ended; research results need verification', '任务已结束；研究结果待核对'),
+        terminalLabel: tr(
+          'Task status was restored after restart; verify the plan, results, and evidence in the research workflow',
+          '已恢复重启前的任务状态；请在研究流程中核对计划、结果和证据',
+        ),
+        blocked: true,
+      };
+    }
     /* The progressive planner reports one validation event per outline step
        (structure, rules, then each executable step), and the activity card
        collapses them into a single "plan" row. Without a tally that row reads
@@ -140,7 +155,7 @@
         const error = String(event.error || '').trim();
         const errorCode = /^不支持的数据库: (eicu_demo|mimic_demo)$/.test(error)
           ? 'extraction_database_filter_unsupported' : error.split(':', 1)[0].trim();
-        const presentation = replayOwner && typeof replayOwner.childJobPresentation === 'function'
+        const presentation = receiptPresentation(event, replayOwner && typeof replayOwner.childJobPresentation === 'function'
           ? replayOwner.childJobPresentation({
             status: event.status,
             error_code: errorCode,
@@ -152,7 +167,7 @@
               kind: 'target-trial-compile',
               target_trial_compile: event.result && event.result.target_trial_compile,
             } : {}),
-          }, tr) : {};
+          }, tr) : {});
         const failed = event.status === 'failed' || event.status === 'cancelled';
         const blocked = Boolean(presentation.blocked);
         const label = presentation.terminalLabel || (event.status === 'cancelled'
@@ -191,6 +206,7 @@
             // the same transition hides the failure and can consume provider
             // calls indefinitely.
             const continued = event.status === 'done'
+              && !recoveredResultNeedsVerification(event)
               && typeof host.continueSystemOwnedPlanProgression === 'function'
               ? await host.continueSystemOwnedPlanProgression()
               : false;
@@ -272,8 +288,8 @@
       activity.childJobPlanAttempt = isPlanAttempt(job);
       activity.childJobCreatedAt = Number(job.created_at_epoch);
       const replayOwner = window.EasyICU.guidedPi.require('replay');
-      const presentation = replayOwner && typeof replayOwner.childJobPresentation === 'function'
-        ? replayOwner.childJobPresentation(job, tr) : {};
+      const presentation = receiptPresentation(job, replayOwner && typeof replayOwner.childJobPresentation === 'function'
+        ? replayOwner.childJobPresentation(job, tr) : {});
       activity.expanded = activity.status === 'running' || Boolean(presentation.expanded);
       activity.durationKnown = Boolean(presentation.durationKnown);
       if (presentation.startedAt != null) activity.startedAt = presentation.startedAt;

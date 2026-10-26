@@ -523,7 +523,8 @@ async def jobs_events(job_id: str) -> StreamingResponse:
             # Read the event slice and status under the Job's per-instance lock.
             events, status = job.events_since(sent)
             for ev in events:
-                if ev.get("type") == "end" and ev.get("result_omitted"):
+                if (ev.get("type") == "end" and ev.get("result_omitted")
+                        and not ev.get("recovered")):
                     # Bound retained progress memory, not the terminal wire
                     # contract. Existing clients consume the full end result.
                     terminal = job.snapshot()
