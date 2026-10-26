@@ -183,16 +183,6 @@ Code contract:
   If surrounding resource cleanup makes a `try` unavoidable, every matching
   handler must have a bare `raise` as its first executable statement; a guard
   beside the helper call does not help when an outer handler swallows it.
-- Input coding also applies to generated association and interaction analyses:
-  `strict_numeric_input` rejects Boolean values. For a declared 0/1 outcome or
-  exposure, use `strict_binary_input` from
-  `easyicu.research_agent.methods.descriptive_inputs`; it maps False/True to
-  0/1, preserves missingness, and rejects values outside the binary domain.
-  Read dtype, role and boolean_numeric_encoding from the raw input contract.
-  Pass `column=` with the declared name to input helpers. Validate categorical
-  modifiers against their declared levels and encode them as model terms;
-  never numeric-coerce category labels or replace association/interaction
-  estimates with descriptive summaries to make a failed analysis succeed.
 - For rendering-only figure steps, prefer the explicitly named upstream
   analysis step outputs over broad evidence-directory search. Do not use
   existing figure files, previous figure source-data CSVs, robustness panels,
