@@ -265,7 +265,7 @@
             return `
             <div class="gd-sessline ${projectManagementActive ? 'is-managing' : ''} ${selected ? 'is-selected' : ''}" data-project-search-row="${esc(title.toLocaleLowerCase())}">
               ${projectManagementActive ? `<label class="gd-sess-select" title="${active ? t('The current project cannot be selected', '当前正在使用的项目不能勾选') : t('Select project', '选择项目')}"><input type="checkbox" data-select-localdraft="${i}" ${selected ? 'checked' : ''} ${selectable ? '' : 'disabled'} /><span aria-hidden="true"></span></label>` : ''}
-              <button class="gd-sess draft ${active ? 'active' : ''} ${configurationMissing ? 'configuration-missing' : ''}" data-localdraft="${i}" title="${configurationMissing ? t('Configuration is missing; open recovery options', '研究配置已失效；打开恢复选项') : t('Open research project', '打开研究项目')}: ${esc(title)}" ${active ? 'aria-current="true"' : ''}>
+              <button class="gd-sess draft ${active ? 'active' : ''} ${configurationMissing ? 'configuration-missing' : ''}" data-localdraft="${i}" data-project-id="${esc(row.id)}" title="${configurationMissing ? t('Configuration is missing; open recovery options', '研究配置已失效；打开恢复选项') : t('Open research project', '打开研究项目')}: ${esc(title)}" ${active ? 'aria-current="true"' : ''}>
                 <span class="gd-sess-status" aria-hidden="true"></span>
                 <span class="gd-sess-body"><span class="ss-t">${esc(title)}</span><span class="ss-m">${esc(meta)}</span></span>
                 ${attentionMark(row.id)}<span class="ss-time">${esc(time)}</span>

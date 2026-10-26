@@ -55,13 +55,15 @@ function harness({ canOpen = true } = {}) {
     icon: () => '',
     EasyICU: { guidedPi: {
       declare: (name, api) => { declared[name] = api; },
-      optional: name => name === 'project' ? { syncLocation: (...args) => calls.push(['location', ...args]) } : null,
+      optional: name => name === 'project' ? {
+        syncLocation: (...args) => calls.push(['location', ...args]),
+        openListedProject: id => { calls.push(['project', id]); return true; },
+      } : null,
     } },
     EU_API: {
       searchWorkspace: async params => { calls.push(['search', params]); return { hits: HITS, has_more: true, index_truncated: false, issues: [] }; },
       loadGuidedDrafts: async () => ({ drafts: [{ id: 'p2', title: 'ICU sepsis' }] }),
     },
-    EU_GUIDED_CONTEXT: { openProject: async id => { calls.push(['project', id]); return true; } },
   };
   const document = {
     createElement: () => dialog,

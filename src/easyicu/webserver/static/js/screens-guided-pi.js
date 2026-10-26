@@ -1765,7 +1765,7 @@
     const attention = MODULES.optional('attention');
     if (attention) attention.bind({
       projectId, selectedId: () => (state.session && state.session.session_id) || '', openSession: id => openSession(id),
-      onChange: () => { render(); if (window.EU_GUIDED_CONTEXT && window.EU_GUIDED_CONTEXT.refreshProjects) window.EU_GUIDED_CONTEXT.refreshProjects(); },
+      onChange: () => render(),
     });
     const capabilitiesReady = api().loadCapabilities
       ? Promise.resolve(api().loadCapabilities()).catch(() => null)

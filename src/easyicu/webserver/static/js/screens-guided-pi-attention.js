@@ -92,8 +92,21 @@
     try { await bridge.badge({ unacknowledged_count: count }); } catch (_) {}
   }
 
+  // The project rail renders each row's mark (screens-guided-projects.js);
+  // between its renders this file keeps the marks current in place.
+  function paintProjectRail() {
+    if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+    document.querySelectorAll('.gd-sess[data-project-id]').forEach(row => {
+      const old = row.querySelector('.gpi-attention-mark');
+      const html = projectMarkHtml(row.dataset.projectId);
+      if (old) old.remove();
+      const time = row.querySelector('.ss-time');
+      if (html && time) time.insertAdjacentHTML('beforebegin', html);
+    });
+  }
   function changed() {
     syncTitle();
+    paintProjectRail();
     if (context && typeof context.onChange === 'function') context.onChange();
   }
 
@@ -176,8 +189,7 @@
     }
     const projectOwner = window.EasyICU.guidedPi.optional('project');
     if (projectOwner && projectOwner.syncLocation) projectOwner.syncLocation(projectId, sessionId);
-    const guided = window.EU_GUIDED_CONTEXT;
-    if (guided && guided.openProject) await guided.openProject(projectId);
+    if (projectOwner && projectOwner.openListedProject) projectOwner.openListedProject(projectId);
   }
 
   window.EasyICU.guidedPi.declare('attention', {

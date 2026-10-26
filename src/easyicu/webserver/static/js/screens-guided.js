@@ -1480,21 +1480,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     };
   }
   window.EU_GUIDED_CONTEXT = {
-    // Opens a listed project by id (search results): the same path as picking
-    // it in the project rail. False when this instance does not list it.
-    async openProject(projectId) {
-      const id = String(projectId || '').trim();
-      if (!id) return false;
-      await loadGuidedDrafts();
-      const row = localDraftRows().find(item => String(item.id) === id);
-      if (!row) return false;
-      selectedGuidedDraft = row;
-      await openGuidedProjectMemory(row, null, 'draft');
-      renderSessions();
-      return true;
-    },
-    // Repaints the project rail (its rows carry attention marks).
-    refreshProjects() { renderSessions(); },
     snapshot() {
     const guidedExtract = EXTRACT.state();
     const guidedDesign = EXTRACT.design();
