@@ -4,8 +4,11 @@ from __future__ import annotations
 import pandas as pd
 
 
-def source(root, database):
-    """Four invented stays: ICU death, later death, survivor, unknown status."""
+def source(root, database, *, upper=False):
+    """Four invented stays: ICU death, later death, survivor, unknown status.
+
+    ``upper`` writes MIMIC-III's upper-case column headers.
+    """
     root.mkdir()
     if database == "hirid":
         tables = {"general": {"patientid": [1, 2, 3, 4],
@@ -50,5 +53,8 @@ def source(root, database):
         if database == "hirid" and name == "observations":
             path = root / "observations" / "1.parquet"
             path.parent.mkdir()
-        pd.DataFrame(rows).to_parquet(path, index=False)
+        frame = pd.DataFrame(rows)
+        if upper:
+            frame.columns = [column.upper() for column in frame.columns]
+        frame.to_parquet(path, index=False)
     return root

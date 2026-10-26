@@ -62,6 +62,7 @@ def load_icu_death(database, data_path, *, patient_ids=None, max_patients=None):
     are not ICU deaths. ICU exit can time a discharge status but is never
     presented as a recorded death timestamp.
     """
+    from .comorbidity import lower_cols
     from .outcomes import _patient_values, _raw_table
 
     db = normalize_database_key(database)
@@ -70,7 +71,14 @@ def load_icu_death(database, data_path, *, patient_ids=None, max_patients=None):
     profile = get_database_profile("miiv" if db == "miiv_demo" else db)
     identifier = profile.stay_id_col
     base = db.removesuffix("_demo")
-    frame = _raw_table(db, data_path, profile.stay_table)
+
+    def read(table):
+        raw = _raw_table(db, data_path, table)
+        # MIMIC-III ships upper-case headers; like the data source, only that
+        # database is lowercased (SICdb's mixed case is its schema).
+        return lower_cols(raw) if base == "mimic" else raw
+
+    frame = read(profile.stay_table)
     _columns(frame, identifier)
     require_unique_keys(frame, [identifier], table="icu_death")
     patient_values = _patient_values(patient_ids)
@@ -108,7 +116,7 @@ def load_icu_death(database, data_path, *, patient_ids=None, max_patients=None):
         times, kind = (event - start) / 3600, "recorded"
     else:
         _columns(frame, "hadm_id", "intime", "outtime")
-        admissions = _raw_table(db, data_path, "admissions")
+        admissions = read("admissions")
         _columns(admissions, "hadm_id", "deathtime", "hospital_expire_flag")
         require_unique_keys(admissions, ["hadm_id"], table="icu_death_admissions")
         frame = frame.merge(admissions[["hadm_id", "deathtime", "hospital_expire_flag"]],

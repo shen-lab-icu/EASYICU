@@ -27,7 +27,10 @@ def baseline_context(exposure="sex", *, outcome="death", covariates=(), subgroup
             ConceptDescriptor(name="chronic_flag", role="demographic", dtype="int64",
                               observed_domain={"levels": [0, 1], "n_unique": 2, "is_binary": True}),
             ConceptDescriptor(name=outcome, role="outcome", dtype="bool",
-                              description="Death during the ICU stay" if outcome == "icu_death" else "Death before hospital discharge",
+                              # "unit_death" is a synthetic column with no registered outcome
+                              # authority; "icu_death" is a derived outcome that a synthetic
+                              # source cannot supply.
+                              description="Death during the ICU stay" if outcome == "unit_death" else "Death before hospital discharge",
                               observed_domain={"levels": [False, True], "n_unique": 2, "is_binary": True}),
         ],
         primary_exposure=exposure, target_outcome=outcome,
