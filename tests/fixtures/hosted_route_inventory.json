@@ -1,5 +1,35 @@
 [
   {
+    "method": "GET",
+    "route": "/api/capabilities/method-skills/clinical-concept-definitions/projection",
+    "fields": ["query:concepts[]", "query:database"],
+    "reaches": "clinician_skills.get_clinical_definitions -> concept_catalog.clinical_definitions -> packaged definition and database registries only",
+    "protection": "hosted.guard_request + at most 256 selected concepts; sk4 registered-composite and database allowlists; no filesystem coordinates or patient reads",
+    "guarded_fields": [],
+    "writes": "none",
+    "write_owner": "Unchanged metadata projection; no extraction, model call, export read, submission or persistence."
+  },
+  {
+    "method": "GET",
+    "route": "/api/capabilities/method-skills/six-database-cohort-extraction/projection",
+    "fields": ["query:database"],
+    "reaches": "clinician_skills.get_extraction_projection -> concept_catalog.extraction_projection -> packaged extraction module and database registries only",
+    "protection": "hosted.guard_request + sk4 registered database allowlist; no filesystem coordinates or patient reads",
+    "guarded_fields": [],
+    "writes": "none",
+    "write_owner": "Unchanged metadata projection and unsubmitted prefill; no extraction, model call, export read, submission or persistence."
+  },
+  {
+    "method": "POST",
+    "route": "/api/capabilities/method-skills/sample-size-and-power/calculate",
+    "fields": ["body:calculation", "body:basis", "body:p1", "body:p2", "body:difference", "body:standard_deviation", "body:alpha", "body:power", "body:allocation_ratio", "body:hazard_ratio", "body:allocation_fraction", "body:event_fraction", "body:parameters", "body:cox_snell_r2", "body:prevalence", "body:shrinkage", "body:r2_optimism", "body:prevalence_margin", "body:confidence"],
+    "reaches": "clinician_skills.post_sample_size_calculation -> skill_planning.calculate -> exactly one of skill_packages.two_proportions/two_means/survival_events/prediction_binary",
+    "protection": "hosted.guard_request + strict bounded discriminated scalar models; extra fields and unverified aggregate provenance refused; analysis_only result with method identity",
+    "guarded_fields": [],
+    "writes": "none",
+    "write_owner": "Pure scalar calculation on user assumptions; no data loader, model call, export read, submission or persistence."
+  },
+  {
     "method": "POST",
     "route": "/api/agent-runs/download-replay",
     "fields": ["body:run_ref"],
