@@ -62,6 +62,27 @@ def test_ambiguous_absent_or_other_variable_operations_remain_unbound(
     assert study_intent.explicit_exposure_aggregation(question, concept_id=concept) is None
 
 
+@pytest.mark.parametrize(
+    ("question", "aggregation", "evidence"),
+    [
+        # pilot1 10-26: the median summarizes the first-day maximum of each stay.
+        ("在 eICU demo 中，入 ICU 第一天最高乳酸的中位数是多少？男女之间有差别吗？", "max", "最高乳酸"),
+        ("首日最高乳酸中位数", "max", "最高乳酸"),
+        ("首日平均乳酸的最大值", "mean", "平均乳酸"),
+        ("The median of the highest lactate on the first ICU day", "max", "highest lactate"),
+        # Without a reduction before it, the statistic after it is its own.
+        ("前24小时乳酸的最高值与院内死亡", "max", "乳酸的最高值"),
+    ],
+)
+def test_a_statistic_after_a_reduced_measurement_summarizes_that_reduction(
+    question: str, aggregation: str, evidence: str,
+) -> None:
+    result = study_intent.explicit_exposure_aggregation(question, concept_id="lact")
+    assert result is not None
+    assert result.aggregation == aggregation
+    assert result.evidence == evidence
+
+
 def test_operations_bind_each_named_concept_without_cross_contamination() -> None:
     text = "研究最高乳酸与最低肌酐的关系"
     lactate = study_intent.explicit_exposure_aggregation(text, concept_id="lact")

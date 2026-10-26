@@ -183,6 +183,7 @@ from easyicu.webserver.research_launch_scientific import (
     bound_export_selection_basis,
     bound_export_selection_report,
     resolve_study_analysis_design,
+    study_design_family,
     validate_analysis_design_for_execution,
 )
 from easyicu.webserver.research_pipeline_run_preparation import (
@@ -5539,6 +5540,7 @@ def _load_candidate_plan_materialization_authority(
         stated_exposure=_clean_text(study.get("primary_exposure"), 300),
         stated_exposure_concept=study.get("primary_exposure_concept"),
         declared_covariates=_configured_covariates(study),
+        analysis_family=study_design_family(study),
     )
     primary_exposure = _clean_text(identity.get("primary_exposure"), 160)
     target_outcome = _clean_text(identity.get("target_outcome"), 160)
