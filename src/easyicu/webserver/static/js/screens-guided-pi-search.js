@@ -2,8 +2,9 @@
    The host's /api/search owns the index, its bounds and what is searchable;
    this file shows the hits as plain text and opens them through the owners
    that already open a project (EU_GUIDED_CONTEXT.openProject), a conversation
-   (the rail's open) and a Drive file (the rail's material button). Search is
-   navigation only: it grants nothing and starts nothing. */
+   (the rail's open, then the message it matched) and a Drive file (the rail's
+   material button). Search is navigation only: it grants nothing and starts
+   nothing. */
 (function () {
   'use strict';
   const { esc } = window.EU_HTML;
@@ -138,6 +139,23 @@
     look();
   }
 
+  // A message hit is revealed once its conversation renders; the wait is bounded.
+  function revealMessage(entryId) {
+    let tries = 0;
+    const look = () => {
+      const node = Array.from(document.querySelectorAll('[data-gpi-entry-id]'))
+        .find(row => row.dataset.gpiEntryId === entryId);
+      if (node) {
+        node.scrollIntoView({ block: 'center' });
+        node.classList.add('is-search-hit');
+        setTimeout(() => node.classList.remove('is-search-hit'), 2400);
+        return;
+      }
+      if (++tries < 24) setTimeout(look, 250);
+    };
+    look();
+  }
+
   async function openHit(hit) {
     const target = (hit && hit.open) || {};
     const projectId = String(target.project_id || (hit && hit.project_id) || '');
@@ -161,6 +179,7 @@
       if (!guided || !guided.openProject || !(await guided.openProject(projectId))) return;
     }
     if (target.kind === 'file') openDriveFile(target);
+    else if (sessionId && target.message_id) revealMessage(String(target.message_id));
   }
 
   function close() {

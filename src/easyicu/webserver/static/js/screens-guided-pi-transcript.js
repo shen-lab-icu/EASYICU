@@ -568,6 +568,7 @@
         if (text && row.role !== 'user') {
           const message = {
             id: 'history-' + index, role: row.role || 'assistant', text, complete: true,
+            entryId: String(row.entry_id || ''),
             errorCode: row.error_code || '',
             resources: row.role === 'assistant' ? turnResources.slice(0, 24) : [],
             afterSteps: toolsBeforeRow,
