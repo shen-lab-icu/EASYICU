@@ -133,6 +133,12 @@ _EDIT_CODES = frozenset(
         "research_pipeline_hospital_first_stay_restriction_unverified",
         # A revision whose source plan is gone or changed starts from a fresh plan.
         "plan_revision_source_plan_missing",
+        "result_append_source_changed",
+        "result_append_execution_failed",
+        "result_append_unavailable",
+        "plan_append_scope_changed",
+        "plan_append_source_changed",
+        "plan_append_source_not_approvable",
         # A population predicate emptied a declared group; an unchanged retry
         # repeats it, so the plan is generated again.
         "declared_exposure_level_empty",
@@ -498,6 +504,8 @@ def next_actions_for_stop(
         return []
     cause = _code(detail.get("cause_code"))
     inner = _code(detail.get("reason_code"))
+    if reason == "result_append_source_changed":
+        return [_action("reexport_data", DataExtractionParams())]
     if "export_time_window_unbounded" in {
         reason, cause, inner, _code(detail.get("intake_error_code")),
     }:

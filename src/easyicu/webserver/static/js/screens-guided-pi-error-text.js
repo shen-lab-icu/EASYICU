@@ -54,6 +54,7 @@
   function create({ tr, staticPreview }) {
     function errorText(error) {
       if (!error) return '';
+      if (/^result_append_(source_changed|execution_failed|unavailable)$/.test(error.code || '')) return runFailureText(error.code);
       if (error.code === 'job_interrupted_by_server_restart') return tr('The server restarted before this task finished. Review its saved state before continuing.', '服务器在任务完成前重启了，请核对保存的状态后再继续。');
       if (error.code === 'pi_followup_queue_full') return tr('Up to four follow-ups can wait. Remove one or wait for the current reply.', '最多排队四条消息，请移除一条或等待当前回复。');
       if (error.code === 'pi_followup_action_requires_idle' || error.code === 'pi_followup_plain_message_required') return tr('Queue a question or comment here. Send approvals, action requests, and source changes after the reply finishes.', '这里可排队提问或补充说明；请在当前回复结束后发送批准、执行请求或数据源变更。');
@@ -1064,6 +1065,12 @@
           'The run named a database EasyICU does not support.',
           '这次运行使用的数据库不受 EasyICU 支持。',
         ),
+        result_append_source_changed: tr('The data or results this addition builds on have changed, so it stopped. Check the source in data preparation.', '这次结果所用的数据或结果文件已被改动，追加已停止。请到数据准备里核对数据来源。'),
+        result_append_execution_failed: tr('The addition did not finish; earlier results are unchanged. Check its analysis settings.', '追加分析没有完成，之前的结果不受影响。请检查分析设置。'),
+        result_append_unavailable: tr('This result cannot take an addition yet. Open analysis settings to check its source and required variables.', '这次结果还不能追加分析。请到分析设置核对数据来源和所需变量。'),
+        plan_append_scope_changed: tr('The addition changes more than the selected analysis. Prepare it again from the result page.', '追加方案改动了所选分析以外的内容，请回到结果页重新准备。'),
+        plan_append_source_changed: tr('The study plan has changed. Check the earlier result, then prepare the addition again.', '原研究方案已经改变。请先核对之前的结果，再重新准备追加分析。'),
+        plan_append_source_not_approvable: tr('The study plan has not passed review yet. Finish its review before adding an analysis.', '原研究方案还没有通过审阅，请先完成审阅再追加分析。'),
         research_pipeline_cancelled: tr('The run was cancelled.', '运行已取消。'),
         research_pipeline_codex_user_auth_required: tr(
           'The model account needs to sign in again.',

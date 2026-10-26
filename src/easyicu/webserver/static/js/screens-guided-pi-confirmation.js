@@ -840,8 +840,10 @@
         ? `<details class="gpi-plan-design-disclosure"><summary>${esc(tr('View exact model and variable settings', '查看精确模型与变量设置'))}</summary>${designHtml}</details>`
         : '';
       const rowHtml = row => `<li><b>${esc(row.label)}</b><em>${esc(row.text)}</em></li>`;
+      const append = preview && preview.append;
+      const addition = append ? `<section class="gpi-plan-addition"><strong>${esc(tr(append.label_en, append.label_zh))}</strong><p>${esc(tr(append.source_notice, append.source_notice_zh))}</p><ul>${(append.steps || []).map(step => `<li>${esc(tr(step.intent, step.intent_zh))}</li>`).join('')}</ul><small>${esc(tr('Approve this addition to run it in the same study.', '确认后，这项追加分析会在同一研究里运行。'))}</small></section>` : '';
       return `<article class="gpi-plan-conversation" aria-label="${esc(tr('Candidate research plan summary', '候选研究计划摘要'))}">
-        <details class="gpi-plan-conversation-summary" open><summary>${esc(tr('Candidate plan summary', '候选计划摘要'))}</summary><ol class="gpi-clinical-lines">${rows.map(rowHtml).join('')}</ol>${summary.timing ? `<p class="gpi-plan-timing">${esc(summary.timing)}</p>` : ''}${designDisclosure}</details>
+        <details class="gpi-plan-conversation-summary" open><summary>${esc(append ? tr('Existing study plan', '已有研究计划') : tr('Candidate plan summary', '候选计划摘要'))}</summary><ol class="gpi-clinical-lines">${rows.map(rowHtml).join('')}</ol>${summary.timing ? `<p class="gpi-plan-timing">${esc(summary.timing)}</p>` : ''}${designDisclosure}</details>${addition}
       </article>`;
     }
 

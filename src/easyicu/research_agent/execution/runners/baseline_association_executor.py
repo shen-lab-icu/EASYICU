@@ -11,11 +11,17 @@ from ...authority.baseline_association_runtime import BASELINE_METHOD, BASELINE_
 from ...authority.current_case_scientific_runtime import load_current_case_scientific_runtime_authority
 from ...contracts.exposure_outcome_distribution import ExposureOutcomeDistributionSpec
 from ...contracts.model_terms import serialise_model_terms
+from ...authority.evidence_store import sha256_of_file
+from ...contracts.typed_schema import merge_host_table_contract, typed_product_schema_receipt
+from ...script_runtime import _sanitized, to_jsonable
 from ...schema import AnalysisPlan
+from .association_binary_sensitivity_executor import run_association_binary_sensitivity
+from .adjusted_association_figure_executor import run_adjusted_association_figure
+from .scientific_reporting_executor import run_scientific_reporting
 from .adjusted_association_executor import _coefficient_rows
 from .association_effect_modification import baseline_model_population, fit_baseline_association
 from .exposure_outcome_distribution_executor import _distribution_rows, _verify_product
-from .typed_input_binding import load_step_cohort_frame, load_typed_input
+from .typed_input_binding import contained_regular_file, load_step_cohort_frame, load_typed_input
 
 
 def baseline_executor_owns_step(step, *, plan, authority):
@@ -213,3 +219,146 @@ def run_baseline_step(*, step_id, plan: AnalysisPlan, authority, runtime_project
     }
     (out / "step_summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False), encoding="utf-8")
     return summary
+
+
+def append_input_binding(key, record, path):
+    binding = dict(relative_path=record.relative_path, sha256=record.sha256, evidence_id=record.evidence_id,
+                   declared_kind=key.split(":", 1)[0], product=key.split(":", 1)[1], evidence_kind=record.kind,
+                   produced_by_step=record.produced_by_step,
+                   consumption_contract={"input_key": key, "mode": "all_rows", "artifact_sha256": record.sha256})
+    binding["identity_row"] = {"input_key": key, **{k: binding[k] for k in ("declared_kind", "product", "evidence_id", "sha256")}}
+    if record.kind == "table":
+        receipt = typed_product_schema_receipt(artifact_path=path, expected_sha256=record.sha256)
+        if receipt is None:
+            raise ValueError("The sealed input has no readable table schema.")
+        binding["product_contract"] = merge_host_table_contract(None, receipt)
+        binding["consumption_contract"]["verified_row_count"] = binding["product_contract"]["row_count"]
+    return binding
+
+
+def _path(run_dir, binding):
+    path = contained_regular_file(run_dir / binding["relative_path"], run_dir)
+    if path is None or sha256_of_file(path) != binding["sha256"]:
+        raise ValueError("Adopted append input changed.")
+    return path
+
+
+def execute_result_append(*, run_dir: Path, plan: AnalysisPlan, authority, inputs, evidence, progress=None):
+    import pandas as pd
+
+    authority.validate_plan(plan)
+    compiled = authority.compilation()
+    parent = authority.baseline.governed_primary_step(AnalysisPlan.model_validate_json(authority.source_plan_json))
+    if compiled.kind == "sensitivity":
+        from ...planning.family_spec.baseline_association_template import SensitivityAppend
+
+        parent = SensitivityAppend.parent_step(AnalysisPlan.model_validate_json(authority.source_plan_json), authority.baseline)
+    from ...authority.runtime_artifacts import AuditLogger
+
+    audit = AuditLogger(run_dir / "audit_log.jsonl")
+    records = []
+
+    def event(step, index, verb):
+        row = audit.emit(phase="execute", event=f"Step {index}/{len(plan.steps)} {verb}: {step.step_id}.",
+                         status="completed" if verb == "complete" else "running", step_id=step.step_id)
+        if progress:
+            progress(row.model_dump(mode="json"))
+
+    bindings = dict(inputs)
+    results = []
+    for index, step in enumerate(plan.steps, 1):
+        event(step, index, "started")
+        selected = {key: bindings[key] for key in step.inputs if ":" in key}
+        for binding in selected.values():
+            _path(run_dir, binding)
+        out = run_dir / "steps" / step.step_id / "outputs"
+        out.mkdir(parents=True, exist_ok=False)
+        manifest = {"step_id": step.step_id, "inputs": selected}
+        resolved = out / "resolved_inputs.json"
+        resolved.write_text(json.dumps(manifest))
+        if step.method == "adjusted_association_figure":
+            summary = run_adjusted_association_figure(out_dir=out, run_dir=run_dir, resolved_inputs=manifest,
+                                                       step_id=step.step_id, figure_product="append_article_figure")
+        elif compiled.kind == "article":
+            summary = run_scientific_reporting(
+                out_dir=out, run_dir=run_dir, resolved_inputs=manifest, step_id=step.step_id,
+                planned_analysis_role=step.planned_analysis_role, intent=step.intent,
+                report_product=step.expected_outputs[0].split(":", 1)[1], declared_inputs=step.inputs,
+            )
+        else:
+            cohort_key = next(key for key in selected if key.startswith("artifact:"))
+            cohort_path = _path(run_dir, selected[cohort_key])
+            frame = pd.read_parquet(cohort_path)
+            if compiled.kind == "sensitivity":
+                summary = run_association_binary_sensitivity(
+                    frame=frame, cohort_path=cohort_path,
+                    step=step.model_copy(update={"scientific_capability": "association_freeform_v1"}), parent_step=parent,
+                    run_dir=run_dir, resolved_inputs=resolved, out_dir=out,
+                )
+            elif step.method == "append_exposure_definition":
+                frame["append_exposure_value"] = pd.to_numeric(frame[compiled.exposure_source], errors="raise")
+                path = out / "append_exposure_cohort.parquet"
+                frame.to_parquet(path, index=False)
+                summary = {"status": "ok", "output_files": {step.expected_outputs[0]: path.name},
+                           "source_column": compiled.exposure_source, "derived_column": "append_exposure_value"}
+            elif step.method == "append_exposure_absolute_risk":
+                requirement = next(item.model_requirements[0] for item in plan.steps if item.model_requirements)
+                primary_table = pd.read_csv(_path(run_dir, selected["table:adjusted_association_estimates"]))
+                rows = baseline_risk_rows(frame, primary_table, requirement=requirement, authority=compiled.model_authority)
+                path = out / "append_exposure_absolute_risk.csv"
+                pd.DataFrame(rows).to_csv(path, index=False)
+                summary = dict(status="ok", interpretation="different_exposure_definition",
+                               analysis_rows=rows, output_files={step.expected_outputs[0]: path.name})
+            else:
+                runtime = compiled.model_authority
+                # The model owner checks the same typed model on the child
+                # cohort. The append runtime has already sealed its distinct
+                # product name and the derivation that produced it.
+                model_step = step.model_copy(update={"inputs": ["artifact:analysis_cohort", *runtime.required_columns]})
+                requirement = runtime._requirement(model_step)
+                _, _, fit, rows, interaction = fit_baseline_association(frame, requirement=requirement, authority=runtime)
+                if compiled.kind == "subgroup":
+                    rows = [row for row in rows if row["subgroup"]]
+                for row in rows:
+                    row["execution_contract_sha256"] = runtime.execution_contract_sha256
+                    row["append_contract_sha256"] = authority.execution_contract_sha256
+                path = out / (step.expected_outputs[0].split(":", 1)[1] + ".csv")
+                pd.DataFrame(rows).to_csv(path, index=False)
+                summary = dict(status="ok", output_files={step.expected_outputs[0]: path.name},
+                               interpretation="different_exposure_definition" if compiled.kind == "exposure" else "effect_modification",
+                               source_run_id=authority.source_run_id, source_run_sha256=authority.source_run_sha256,
+                               n=fit.n, interaction_tests=interaction,
+                               stratum_estimates=[row for row in rows if row["subgroup"]],
+                               analysis_rows=rows, scientific_action_id=step.scientific_action_id)
+        summary.update(step_id=step.step_id, execution_contract_sha256=authority.execution_contract_sha256,
+                       deterministic_standard_analysis="result_append_" + compiled.kind)
+        summary = json.loads(json.dumps(_sanitized(summary), default=to_jsonable, allow_nan=False))
+        for binding in selected.values():
+            _path(run_dir, binding)
+        output_ids = []
+        for key, name in summary["output_files"].items():
+            record = evidence.register_file(
+                kind="table" if key.startswith(("table:", "artifact:")) else "figure" if key.startswith("figure:") else "log",
+                description=step.intent, source_path=out / name, produced_by_step=step.step_id,
+                inputs=[value["evidence_id"] for value in selected.values()],
+                metadata={"source_run_id": authority.source_run_id, "source_run_sha256": authority.source_run_sha256},
+            )
+            output_ids.append(record.evidence_id)
+            bindings[key] = append_input_binding(key, record, run_dir / record.relative_path)
+            if key.startswith("figure:"):
+                gallery = {"figures": [{"figure_id": key.split(":", 1)[1], "label": step.intent,
+                                        "relative_path": record.relative_path, "status": "available",
+                                        "caption": "Existing association estimate and interval; no model refit."}]}
+                (run_dir / "figure_gallery.json").write_text(json.dumps(gallery))
+        for name in summary.get("contract_files", ()):
+            evidence.register_file(kind="log", description="Append output contract", source_path=out / name,
+                                   produced_by_step=step.step_id)
+        (out / "step_summary.json").write_text(json.dumps(summary, allow_nan=False))
+        evidence.register_file(kind="statistic", description="Append execution summary", source_path=out / "step_summary.json",
+                               produced_by_step=step.step_id)
+        records.append(dict(step_id=step.step_id, status="ok", evidence_ids=output_ids, step_summary=summary,
+                            analysis_request={"step": step.model_dump(mode="json")}))
+        (run_dir / "manifest.json").write_text(json.dumps(dict(run_id=run_dir.name, per_step_records=records)))
+        event(step, index, "complete")
+        results.append(summary)
+    return results

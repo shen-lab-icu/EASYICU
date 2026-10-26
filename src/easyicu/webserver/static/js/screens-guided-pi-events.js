@@ -139,6 +139,20 @@
         if (HELP && HELP.handleClick(event)) return;
         if (PROVIDER_CONTROL && PROVIDER_CONTROL.handleClick(event)) return;
         if (RUN_FILES && RUN_FILES.handleClick(event)) return;
+        const append = event.target.closest('[data-gpi-result-append]');
+        if (append) {
+          if (!state.session || state.busy || state.childJobId || state.session.stale?.stale) return;
+          append.disabled = true;
+          void RUN_OUTCOME.proposeAppend(append.dataset.gpiResultAppend).then(changed => {
+            if (changed) loadStatus();
+            else append.disabled = false;
+          });
+          return;
+        }
+        if (event.target.closest('[data-gpi-append-owner]')) {
+          if (!state.busy && !state.childJobId) openStudySetupInConversation();
+          return;
+        }
         if (event.target.closest('[data-gpi-stop-recovery]')) { revealPendingReview(); return; }
         const stopAction = event.target.closest('[data-gpi-stop-action]');
         if (stopAction) {

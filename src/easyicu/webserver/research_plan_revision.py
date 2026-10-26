@@ -186,6 +186,27 @@ class PlanRevisionGuard:
     source_plan_json: str
     review: PlanScientificReview
     question_sensitivity_ids: frozenset[str] | None = None
+    append_plan_json: str | None = None
+
+    @classmethod
+    def for_append(cls, *, plan: Mapping[str, Any], review: PlanScientificReview,
+                   expected_plan: Mapping[str, Any], action: str,
+                   append_run: bool = False) -> PlanRevisionGuard:
+        """Bind an exact host-owned addition without loosening repair admission.
+
+        The append owner must verify the completed run and compile the requested
+        steps before calling this method. Scientific-review eligibility is not
+        proof of a source run's human approval and grants no new science.
+        """
+        from easyicu.webserver.research_plan_append import validate_append_structure
+
+        guard = cls.from_review(plan=plan, review=review)
+        if not review.approval_allowed:
+            raise ResearchPipelineRunError("plan_append_source_not_approvable", "The append source is not approvable.")
+        validate_append_structure(plan, expected_plan, action=action, append_run=append_run)
+        return cls(guard.source_plan_json, guard.review, append_plan_json=json.dumps(
+            expected_plan, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ))
 
     @classmethod
     def from_review(cls, *, plan: Mapping[str, Any], review: PlanScientificReview,
@@ -202,6 +223,13 @@ class PlanRevisionGuard:
         return json.loads(self.source_plan_json)
 
     def prompt_contract(self) -> str:
+        if self.append_plan_json is not None:
+            return "\n".join((
+                "EXACT APPEND SCOPE (host-derived; new approval required):",
+                f"- source_plan_sha256: {self.review.plan_sha256}",
+                "- Keep every original step and its evidence. Execute only the authorized addition.",
+                "- expected_plan_json: " + self.append_plan_json,
+            ))
         return "\n".join((
             "REPAIR-OR-REMOVE REVISION SCOPE (host-derived):",
             f"- source_plan_sha256: {self.review.plan_sha256}",
@@ -211,6 +239,12 @@ class PlanRevisionGuard:
         ))
 
     def validate_plan(self, *, plan: AnalysisPlan, context: ResearchContext) -> None:
+        if self.append_plan_json is not None:
+            if canonical_sha256(plan.model_dump(mode="json")) != canonical_sha256(json.loads(self.append_plan_json)):
+                raise ResearchPipelineRunError(
+                    "plan_append_scope_changed", "The append differs from the exact requested addition; the original plan was kept.",
+                )
+            return
         previous = self.previous_plan
         revised = plan.model_dump(mode="json")
         remaining = [(step, _step_coordinate(step, previous)) for step in previous["steps"]]

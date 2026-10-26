@@ -785,7 +785,7 @@ def test_every_reader_of_a_runs_groups_is_given_its_context() -> None:
     assert "window.AGENT_EXPOSURE_LEVELS.namedIn(state.resource.artifact)" in preview
     assert "artifactStructuredView(state.resource.artifact, state.payload || {}, state.runContext)" in preview
     assert "AGENT_QUESTION_REQUIREMENTS.view(n, p, { artifactTable, esc, context })" in source("screens-agent-render.js")
-    assert "summarize(payload('result_tables.json'), plan, context)" in source("screens-guided-pi-run-answer.js")
+    assert "summarize(earlierResults, plan, context)" in source("screens-guided-pi-run-answer.js")
     assert "summarize(p.result_tables || {}, p.plan, context)" in source("screens-guided-pi-analysis-report.js")
 
 

@@ -6,6 +6,7 @@
   'use strict';
 
   function create(deps) {
+    const APPEND = window.EasyICU.guidedPi.optional('resultAppend')?.create(deps);
     const {
       tr, esc, iconHtml, resourceButton, api, projectId, host, canPreview,
       preview, workflowContext, errorText, recordHostAction, onError, session, manuscriptNotPassedText,
@@ -96,6 +97,7 @@
     async function loadScientificReview(latestRun, workflow) {
       void loadAnswer(latestRun, workflow);
       if (!resultsAvailable(latestRun, workflow) || typeof projectId !== 'function') return;
+      void APPEND?.load(latestRun);
       const ref = scientificReviewReference(latestRun);
       if (!ref) return;
       const expectedProjectId = projectId();
@@ -539,6 +541,7 @@
             ? tr('Analysis complete', '分析已完成')
             : tr('Results generated — validation needs review', '结果已生成，请核对待处理事项'))}<span class="gpi-run-outcome-status">${esc(status)}</span></strong>
           ${lead}
+          ${APPEND ? APPEND.render(latestRun) : ''}
           ${manuscriptNotice}
           ${renderDeliverables(latestRun, workflow)}
           ${figureNote}
@@ -588,7 +591,8 @@
     }
 
     return Object.freeze({ render, renderShelf, renderReviewAction, collection, resultsAvailable,
-      followUps, dismissFollowUp, selectReviewTab, loadScientificReview, openData });
+      followUps, dismissFollowUp, selectReviewTab, loadScientificReview, openData,
+      proposeAppend: kind => APPEND?.propose(kind) });
   }
 
   window.EasyICU.guidedPi.declare('runOutcome', { create });

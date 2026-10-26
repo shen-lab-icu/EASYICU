@@ -723,8 +723,11 @@ def build_research_workflow_snapshot(
         and bool(review_authority.get("resumable_here"))
     )
     plan_configuration_matches = bool(
-        len(planned_scientific_digest) == 64
-        and planned_scientific_digest == current_scientific_digest
+        (len(planned_scientific_digest) == 64
+         and planned_scientific_digest == current_scientific_digest)
+        # Append approval binds the source run and its earlier export, not a
+        # newly registered export. Its runtime rechecks those sealed digests.
+        or (review_authority_available and review_authority.get("is_append_run") is True)
     )
     plan_review_pending = bool(
         plan_review_declared
@@ -1438,6 +1441,9 @@ def _enrich_plan_review(
         agent_plan, study=study, review_summary=snapshot.plan_review_summary,
         exposure_groups=(snapshot.plan_review_summary or {}).get("exposure_groups"),
     )
+    append = (payloads.get("source_run_manifest.json") or {}).get("append")
+    if isinstance(append, Mapping) and isinstance(append.get("source_preview"), Mapping):
+        plan_preview = {**append["source_preview"], "append": {key: value for key, value in append.items() if key != "source_preview"}}
     if plan_preview:
         snapshot = snapshot.model_copy(
             update={"plan_conversation_preview": plan_preview}
