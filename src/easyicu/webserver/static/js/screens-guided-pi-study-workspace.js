@@ -12,6 +12,9 @@
     let hubAttachment = null;
     // Skills attached as typed identities (sk2); without the owner, the older prose path stays.
     const attachOwner = () => window.EasyICU.guidedPi.optional('skillAttach');
+    // Databases, variables and project files mentioned with "@" (mt1).
+    const mentionOwner = () => window.EasyICU.guidedPi.optional('mentions');
+    const mentionKind = () => (String(picker.category).startsWith('mention:') ? picker.category.slice(8) : '');
     let skillPicker = { context: '', open: false, query: '', catalog: 'skills', category: 'all', focused: false };
     const contextKey = (projectId, sessionId) => JSON.stringify([projectId, sessionId]);
     const materialKey = resource => JSON.stringify([resource.kind, resource.run_id, resource.artifact, resource.sha256]);
@@ -252,7 +255,8 @@
       const methodChip = currentMethod ? `<div class="gpi-composer-skill gpi-method-context" role="status"><span>${currentMethod.kind === 'method_component' ? tr('Component', '组件') : tr('Method', '方法')}</span><strong>${esc(currentMethod.title)}</strong><button type="button" data-gpi-method-remove aria-label="${tr('Remove method', '移除方法')}">×</button></div>` : '';
       const skillChip = selected ? `<div class="gpi-composer-skill" role="status">✧ <strong>${esc(selected.name)}</strong><button type="button" data-gpi-skill-remove aria-label="${tr('Remove Skill', '移除技能')}">×</button></div>` : '';
       const attachedChips = attachOwner() && session ? attachOwner().chips(session) : '';
-      return builderChip + methodChip + skillChip + attachedChips;
+      const mentionChips = mentionOwner() && session ? mentionOwner().chips(projectId, session) : '';
+      return builderChip + methodChip + skillChip + attachedChips + mentionChips;
     }
     function decorateSkillMessage(text, projectId, session) {
       const selected = currentSkill(projectId, session);
@@ -287,20 +291,25 @@
         </div>
       </details>`;
     }
-    function renderMaterials(resources, projectId, sessionId, disabled) {
+    function renderMaterials(resources, projectId, sessionId, disabled, session) {
       const context = contextKey(projectId, sessionId);
       if (picker.context !== context || disabled) picker = { context, open: false, query: '', category: 'all', focused: false };
       if (disabled || !picker.open) return '';
+      const mentions = mentionOwner();
+      const kind = mentions && session ? mentionKind() : '';
       const rows = resources.filter(canReference);
       const classify = row => row.artifact.includes('figure') || /\.(png|svg|tiff?)$/i.test(row.artifact) ? tr('Figures', '图表')
         : row.artifact.includes('table') || /\.(csv|xlsx?)$/i.test(row.artifact) ? tr('Tables', '表格')
           : row.kind === 'research_document' || /\.(pdf|md)$/i.test(row.artifact) ? tr('Documents', '文稿') : tr('Reports', '报告');
       const categories = [...new Set(rows.map(classify))];
-      return `<section class="gpi-composer-drawer gpi-material-picker" data-gpi-material-picker="${esc(context)}" aria-label="${tr('Project resources', '项目资料')}">
-        <header class="gpi-composer-drawer-head"><strong>${tr('Project resources', '项目资料')}</strong><button type="button" data-gpi-material-close aria-label="${tr('Close materials', '关闭资料')}">×</button></header>
-        <label class="gpi-composer-drawer-search"><span aria-hidden="true">⌕</span><input type="search" data-gpi-material-search aria-label="${tr('Search project materials', '搜索项目资料')}" placeholder="${tr('Search project resources…', '搜索项目资料……')}" value="${esc(picker.query)}" autocomplete="off"></label>
-        <div class="gpi-composer-drawer-body"><nav aria-label="${tr('Resource categories', '资料分类')}"><button type="button" data-gpi-material-category="all" aria-pressed="${picker.category === 'all'}">${tr('All', '全部')}</button>${categories.map(category => `<button type="button" data-gpi-material-category="${esc(category)}" aria-pressed="${picker.category === category}">${esc(category)}</button>`).join('')}</nav>
-          <div class="gpi-composer-drawer-list">${rows.length ? rows.map(row => { const category = classify(row); return `<button type="button" class="gpi-composer-drawer-row" data-gpi-material-row data-gpi-material-reference data-gpi-material-key="${esc(materialKey(row))}" data-gpi-material-category-value="${esc(category)}" data-gpi-material-search-text="${esc(`${row.label} ${row.artifact} ${category}`.toLowerCase())}"><strong>${esc(row.label)}</strong><span>${esc(row.artifact)}</span><small>${esc(category)}</small></button>`; }).join('') : `<p class="gpi-material-empty">${tr('No results yet. Completed results will appear here.', '当前还没有研究成果，完成研究后会显示在这里。')}</p>`}<p data-gpi-material-empty role="status" hidden>${tr('No matching results.', '没有匹配的资料。')}</p></div>
+      const title = mentions && session ? tr('Mention', '引用') : tr('Project resources', '项目资料');
+      const placeholder = kind ? tr(`Search ${mentions.kindLabel(kind).toLowerCase()}…`, `搜索${mentions.kindLabel(kind)}……`) : tr('Search project resources…', '搜索项目资料……');
+      const mentionNav = mentions && session ? mentions.KINDS.map(value => `<button type="button" class="gpi-mention-kind" data-gpi-mention-kind="${value}" aria-pressed="${kind === value}">${esc(mentions.kindLabel(value))}</button>`).join('') : '';
+      return `<section class="gpi-composer-drawer gpi-material-picker" data-gpi-material-picker="${esc(context)}" aria-label="${esc(title)}">
+        <header class="gpi-composer-drawer-head"><strong>${esc(title)}</strong><button type="button" data-gpi-material-close aria-label="${tr('Close', '关闭')}">×</button></header>
+        <label class="gpi-composer-drawer-search"><span aria-hidden="true">⌕</span><input type="search" data-gpi-material-search aria-label="${esc(placeholder)}" placeholder="${esc(placeholder)}" value="${esc(picker.query)}" autocomplete="off"></label>
+        <div class="gpi-composer-drawer-body"><nav aria-label="${tr('Categories', '分类')}"><button type="button" data-gpi-material-category="all" aria-pressed="${picker.category === 'all'}">${mentionNav ? tr('All results', '全部成果') : tr('All', '全部')}</button>${categories.map(category => `<button type="button" data-gpi-material-category="${esc(category)}" aria-pressed="${picker.category === category}">${esc(category)}</button>`).join('')}${mentionNav}</nav>
+          <div class="gpi-composer-drawer-list">${kind ? mentions.listHtml(projectId, session, kind) : rows.length ? rows.map(row => { const category = classify(row); return `<button type="button" class="gpi-composer-drawer-row" data-gpi-material-row data-gpi-material-reference data-gpi-material-key="${esc(materialKey(row))}" data-gpi-material-category-value="${esc(category)}" data-gpi-material-search-text="${esc(`${row.label} ${row.artifact} ${category}`.toLowerCase())}"><strong>${esc(row.label)}</strong><span>${esc(row.artifact)}</span><small>${esc(category)}</small></button>`; }).join('') : `<p class="gpi-material-empty">${tr('No results yet. Completed results will appear here.', '当前还没有研究成果，完成研究后会显示在这里。')}</p>`}<p data-gpi-material-empty role="status" hidden>${tr('No matching results.', '没有匹配的资料。')}</p></div>
         </div>
       </section>`;
     }
@@ -308,6 +317,7 @@
       const menu = host && host.querySelector('[data-gpi-material-picker]');
       if (!menu) return;
       picker.query = query;
+      if (mentionKind()) return; // The host searches mentions (screens-guided-pi-mentions.js).
       let count = 0;
       menu.querySelectorAll('[data-gpi-material-row]').forEach(row => {
         const queryMatch = row.dataset.gpiMaterialSearchText.includes(query.trim().toLowerCase());
@@ -344,6 +354,7 @@
       }
     }
     function setMaterialCategory(value) { picker.category = String(value || 'all'); return true; }
+    const hasMaterials = resources => (Array.isArray(resources) ? resources : []).some(canReference);
     // A conversation with no history, no job and no turn outcome is an empty
     // draft created by "new task". They are only removable, never informative,
     // so the rail folds them behind one count instead of shipping a wall of
@@ -522,7 +533,7 @@
     }
     function consume(projectId, sessionId) { if (current(projectId, sessionId)) reference = null; }
     function removeReference() { reference = null; }
-    return { sessionStatusLabel, compactSessionTime, capture, syncNavigation, messageView, openMaterials, renderMaterials, filterMaterials, setMaterialCategory, restoreMaterials, selectedMaterial, closeMaterials,
+    return { sessionStatusLabel, compactSessionTime, capture, syncNavigation, messageView, openMaterials, renderMaterials, filterMaterials, setMaterialCategory, mentionKind, hasMaterials, restoreMaterials, selectedMaterial, closeMaterials,
       openSkills, renderSkillPicker, filterSkills, setSkillCatalog, setSkillCategory, selectCatalog, selectSkill, selectFrozenSkill, selectMethodTemplate, applyHubIntent, takeHubAttachment, hasHubIntent, closeSkills, renderSkillReference, decorateSkillMessage, consumeSkill, removeSkill, removeBuilder, removeMethod, renderAccessMode,
       hasReference: (projectId, sessionId) => Boolean(current(projectId, sessionId)), canReference, setReference, renderReference, decorateMessage, consume, removeReference,
       isEmptyConversation };

@@ -134,6 +134,9 @@
 
     function wire() {
       if (!state.host) return;
+      // Mentions (screens-guided-pi-mentions.js) finish host searches and lookups later.
+      const MENTIONS = window.EasyICU.guidedPi.optional('mentions');
+      if (MENTIONS) MENTIONS.onChange(() => render(true));
       state.host.addEventListener('click', event => {
         if (CONNECT && CONNECT.handleClick(event)) return;
         if (HELP && HELP.handleClick(event)) return;
@@ -216,6 +219,27 @@
           return;
         }
         if (event.target.closest('[data-gpi-material-close]')) { STUDY_WORKSPACE.closeMaterials(state.host, true); return; }
+        const mentionKind = event.target.closest('[data-gpi-mention-kind]');
+        if ((mentionKind || event.target.closest('[data-gpi-mention-retry]')) && MENTIONS && state.session) {
+          const kind = mentionKind ? mentionKind.dataset.gpiMentionKind : STUDY_WORKSPACE.mentionKind();
+          const search = state.host.querySelector('[data-gpi-material-search]');
+          STUDY_WORKSPACE.setMaterialCategory(`mention:${kind}`);
+          MENTIONS.search(projectId(), state.session, kind, search ? search.value : '');
+          render(true); return;
+        }
+        const mentionAdd = event.target.closest('[data-gpi-mention-add]');
+        if (mentionAdd && MENTIONS && state.session && !state.busy && !state.childJobId) {
+          void MENTIONS.add(projectId(), state.session, mentionAdd.dataset.gpiMentionAdd).then(added => {
+            if (added) STUDY_WORKSPACE.closeMaterials(state.host, false);
+            render(true);
+          });
+          return;
+        }
+        const mentionRemove = event.target.closest('[data-gpi-mention-remove]');
+        if (mentionRemove && MENTIONS && state.session && !state.busy) {
+          void MENTIONS.remove(projectId(), state.session, mentionRemove.dataset.gpiMentionRemove).then(() => render(true));
+          return;
+        }
         if (event.target.closest('[data-gpi-skill-close]')) { STUDY_WORKSPACE.closeSkills(state.host, true); return; }
         if (event.target.closest('[data-gpi-skill-remove]')) { STUDY_WORKSPACE.removeSkill(); render(true); return; }
         if (event.target.closest('[data-gpi-builder-remove]')) { STUDY_WORKSPACE.removeBuilder(); render(true); return; }
@@ -250,7 +274,7 @@
         if (pickerChoice) {
           if (state.busy || state.childJobId || !state.session) return;
           if (pickerChoice.dataset.gpiComposerPicker === 'materials') {
-            STUDY_WORKSPACE.openMaterials(projectId(), state.session.session_id);
+            openMentionDrawer();
           } else {
             STUDY_WORKSPACE.openSkills(projectId(), state.session);
             loadAttachable();
@@ -502,6 +526,13 @@
           void startEntry();
         }
       });
+      // "@" lists the project's results; with none yet it opens on variables.
+      function openMentionDrawer() {
+        STUDY_WORKSPACE.openMaterials(projectId(), state.session.session_id);
+        if (!MENTIONS || STUDY_WORKSPACE.hasMaterials(RUN_OUTCOME.collection(state.latestRun, state.workflow))) return;
+        STUDY_WORKSPACE.setMaterialCategory('mention:concept');
+        MENTIONS.search(projectId(), state.session, 'concept', '');
+      }
       // The picker marks what is attached at once; titles and project defaults arrive after one read.
       function loadAttachable() {
         const attachOwner = window.EasyICU.guidedPi.optional('skillAttach');
@@ -526,17 +557,26 @@
           if (trigger && state.session && !state.busy && !state.childJobId && !event.isComposing) {
             event.target.value = event.target.value.slice(0, -1);
             state.draft = event.target.value;
-            if (trigger === '@') STUDY_WORKSPACE.openMaterials(projectId(), state.session.session_id);
+            if (trigger === '@') openMentionDrawer();
             else { STUDY_WORKSPACE.openSkills(projectId(), state.session); loadAttachable(); }
             render(true);
             return;
           }
         }
-        if (event.target.matches('[data-gpi-material-search]')) STUDY_WORKSPACE.filterMaterials(state.host, event.target.value);
+        if (event.target.matches('[data-gpi-material-search]')) {
+          STUDY_WORKSPACE.filterMaterials(state.host, event.target.value);
+          const kind = STUDY_WORKSPACE.mentionKind();
+          if (kind && MENTIONS && state.session) MENTIONS.search(projectId(), state.session, kind, event.target.value);
+        }
         if (event.target.matches('[data-gpi-skill-search]')) STUDY_WORKSPACE.filterSkills(state.host, event.target.value);
       });
       state.host.addEventListener('change', event => {
         if (RUN_FILES && RUN_FILES.handleChange(event)) return;
+        const mentionRole = event.target.closest('[data-gpi-mention-role]');
+        if (mentionRole && MENTIONS && state.session && !state.busy) {
+          void MENTIONS.setRole(projectId(), state.session, mentionRole.dataset.gpiMentionRole, mentionRole.value).then(() => render(true));
+          return;
+        }
         if (IDEA_SOURCE && IDEA_SOURCE.handleChange(event, {
           host: () => state.host, render, tr,
           onReady: () => {
