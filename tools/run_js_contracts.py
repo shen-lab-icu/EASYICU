@@ -33,6 +33,8 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-header.js",
         "screens-guided-pi-session-view.js",
     ],
+    "guided_pi_result_append.test.js": [],
+    "guided_pi_append_evidence.test.js": [],
     "guided_pi_result_next_steps.test.js": [
         "html-escape.js", "screens-guided-pi-run-outcome.js", "screens-guided-pi-events.js",
     ],

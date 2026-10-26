@@ -655,7 +655,7 @@ def submit_agent_run_review(
             status_code=400,
             detail={"error": "codex_auth_login_required"},
         )
-    provider_environment = _provider_environment_for_agent_run(
+    provider_environment = {} if pending.get("is_append_run") else _provider_environment_for_agent_run(
         credential_source=str(
             pending.get("credential_source") or "scientific_provider"
         ),
@@ -677,7 +677,7 @@ def submit_agent_run_review(
     current_scientific_digest = context_store.scientific_configuration_sha256(
         study_context
     )
-    if pending.get("scientific_configuration_sha256") != current_scientific_digest:
+    if not pending.get("is_append_run") and pending.get("scientific_configuration_sha256") != current_scientific_digest:
         raise HTTPException(
             status_code=409,
             detail={
@@ -707,6 +707,7 @@ def submit_agent_run_review(
                 job=job,
                 current_study_context=study_context,
                 provider_environment=provider_environment,
+                require_recorded_decision=bool(pending.get("is_append_run") and decision == "approved"),
             )
             terminal_stage = (
                 "review_blocked"
@@ -759,6 +760,12 @@ def submit_agent_run_review(
             active_job_id=job.id,
             expected_revision=int(study_context.get("revision") or 0),
         )
+        if pending.get("is_append_run") and decision == "approved":
+            from easyicu.webserver.research_append_dispatch import stage_append_approval
+
+            stage_append_approval(run_id=run_id, study=study_context,
+                                  reviewer=agent_pipeline_runs.server_reviewer_identity(),
+                                  note=str(body.get("note") or ""))
         if durable is not None:
             durable.activate(job.id, runner)
     except context_store.StudyContextError as exc:

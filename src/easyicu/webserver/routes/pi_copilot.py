@@ -30,8 +30,10 @@ from easyicu.webserver.pi_copilot.provider_config import (
 )
 from easyicu.webserver import codex_account_sessions
 from easyicu.webserver.pi_copilot import openrouter_login
+from .research_append import router as append_router
 
 router = APIRouter()
+router.include_router(append_router)
 
 ShortText = Annotated[
     str,

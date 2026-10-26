@@ -4997,9 +4997,12 @@ def _write_terminal_projection(*, job: Any, provider_task: Any, **kwargs: Any) -
 
 
 def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
+    from easyicu.webserver.research_append_run import pending_append_review
     from easyicu.webserver.pi_copilot.population_preparation import population_preparation_proposal
 
     key = _clean_text(run_id, 160)
+    if key.startswith("append-"):
+        return pending_append_review(key)
     entry = _PENDING_REVIEWS.get(key)
     if entry is None:
         try:
@@ -6268,6 +6271,9 @@ def _cleanup_recovery_after_projection(
     gate = projection.get("gate")
     reason = gate.get("reason") if isinstance(gate, Mapping) else None
     if reason not in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS:
+        from easyicu.webserver.research_append_source import retain_completed_append_source
+
+        retain_completed_append_source(wrapper_dir=wrapper_dir, projection=projection)
         _remove_local_recovery(wrapper_dir)
 
 
@@ -7814,6 +7820,13 @@ def resume_research_pipeline(
 ) -> Dict[str, Any]:
     """Resume one digest-bound plan review, including after host restart."""
 
+    if str(run_id).startswith("append-"):
+        from easyicu.webserver.research_append_run import resume_append_review
+
+        return resume_append_review(run_id=run_id, study_context_id=study_context_id,
+                                    decision=decision, reviewer=reviewer, note=note,
+                                    current_study=current_study_context, job=job,
+                                    require_recorded_decision=require_recorded_decision)
     key = _clean_text(run_id, 160)
     resolved = str(decision or "").strip().lower()
     if resolved not in {"approved", "rejected"}:

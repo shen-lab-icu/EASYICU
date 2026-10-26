@@ -56,6 +56,15 @@ for (language of ['zh', 'en']) {
   }
   assert.ok(html.includes('≥4 mmol/L') && html.includes(language === 'zh' ? '&lt;4 mmol/L' : '&lt;4 vs'));
   assert.ok(html.includes('Exact method retained'));
+  workflow.plan_conversation_preview.append = { label_en: 'Add a subgroup', label_zh: '加亚组',
+    source_notice: 'Uses the earlier export.', source_notice_zh: '使用较早导出。',
+    steps: [{ intent: 'Stratum estimates and same-model interaction.', intent_zh: '各层估计及同一模型的交互检验。' }] };
+  const added = confirmation.workflowConfirmationHtml();
+  assert.match(added, /gpi-plan-addition/);
+  assert.ok(added.includes(tr('Existing study plan', '已有研究计划')));
+  assert.equal((added.match(/<ol class="gpi-clinical-lines">([\s\S]*?)<\/ol>/)?.[1].match(/<li>/g) || []).length, 5);
+  assert.ok(added.includes(tr('Stratum estimates and same-model interaction.', '各层估计及同一模型的交互检验。')));
+  delete workflow.plan_conversation_preview.append;
   assert.ok(!html.includes('<footer>'));
   workflow.plan_conversation_preview.clinical_summary.timing = null;
   assert.ok(!confirmation.workflowConfirmationHtml().includes('gpi-plan-timing'));

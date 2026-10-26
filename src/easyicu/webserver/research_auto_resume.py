@@ -51,6 +51,12 @@ def prepare_descriptor(
     source = credential_source or kwargs.get("credential_source")
     if not identity or not root or mode not in {"planner_canary", "full_reviewed"}:
         _refuse("launch_binding_invalid")
+    if str(execution_resume_source_run_id).startswith("append-"):
+        if mode != "full_reviewed":
+            _refuse("reviewed_budget_required")
+        from .research_append_dispatch import prepare_append_descriptor
+
+        return prepare_append_descriptor(study=study, project_root=root, run_id=execution_resume_source_run_id)
     if source not in {"pi_verified", "codex_user_auth"}:
         _refuse("credential_source_invalid")
     return {
@@ -222,6 +228,10 @@ def _original_task(seed: Any) -> Any:
 
 def recover_runner(descriptor: Mapping[str, Any], job: Any) -> Callable[[Any], Any]:
     """Return an exact continuation; no branch may silently launch fresh work."""
+    from .research_append_dispatch import SCHEMA as APPEND_SCHEMA, recover_append_runner
+
+    if descriptor.get("schema_version") == APPEND_SCHEMA:
+        return recover_append_runner(descriptor, job)
     from easyicu.webserver import agent_pipeline_runs, provider_adapter, research_launch_resume
     from easyicu.webserver.provider_job_recovery import ProviderJobRecovery, RecoveryJob
 

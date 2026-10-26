@@ -407,13 +407,17 @@
     function project(rows) {
       const payload = name => (rows[name] && rows[name].payload && typeof rows[name].payload === 'object')
         ? rows[name].payload : {};
-      const plan = payload('agent_plan.json');
+      const results = payload('result_tables.json');
+      const plan = results.append?.source_plan || payload('agent_plan.json');
+      const earlierResults = results.append?.source_plan ? { ...results,
+        tables: (results.tables || []).filter(table => table.origin?.run_id === results.append.source_run_id),
+      } : results;
       const firstResult = plan.design_selection && plan.design_selection.execution_tier === 'first_result';
       const context = payload('run_context.json');
       const provenance = payload('manuscript_provenance.json');
       const summarizer = window.EasyICU.guidedPi.optional('resultSummary');
       const summary = summarizer && typeof summarizer.summarize === 'function'
-        ? summarizer.summarize(payload('result_tables.json'), plan, context) : {};
+        ? summarizer.summarize(earlierResults, plan, context) : {};
       // A grouped exposure and its levels are named by the run's grouping
       // record, in the page's language (screens-agent-exposure-levels.js),
       // never by a plan label that restates the grouping's codes.
@@ -450,6 +454,7 @@
       const primarySteps = new Set((plan.steps || []).filter(step => step.planned_analysis_role === 'primary').map(step => step.step_id));
       return {
         source,
+        append: payload('result_tables.json').append,
         question: String(context.question || plan.research_question || ''),
         populationPreparation: context.population_preparation,
         analysisType: String(plan.analysis_type || ''),
@@ -558,6 +563,26 @@
 
     function answerSentences(view) {
       const sentences = [];
+      if (view.append) {
+        sentences.push(tr(view.append.label_en, view.append.label_zh));
+        if (view.estimate) sentences.push(tr(
+          `Earlier primary result: ${view.estimate.measure} ${view.estimate.value} (${view.estimate.low}–${view.estimate.high}).`,
+          `之前的主要结果：${view.estimate.measure} ${view.estimate.value}（${view.estimate.low}–${view.estimate.high}）。`));
+        if (view.append.kind === 'subgroup') {
+          for (const row of (view.append.strata || [])) {
+            if ([row.estimate, row.ci_low, row.ci_high, row.interaction_p_value].some(value => finite(value) == null)) continue;
+            const number = value => Number(value).toPrecision(3);
+            sentences.push(`${conceptName(row.subgroup) || row.subgroup} = ${row.stratum}: OR ${number(row.estimate)} (95% CI ${number(row.ci_low)}–${number(row.ci_high)}); ${tr('interaction', '交互检验')} P = ${number(row.interaction_p_value)}.`);
+          }
+          return sentences;
+        }
+        if (view.append.kind === 'exposure') sentences.push(tr(
+          'This uses a different exposure definition; the earlier estimate stays in its own run.',
+          '这里换了一种暴露定义，之前的估计仍保留在原来的运行里。'));
+        if (view.append.kind === 'article') return [...sentences, tr(
+          'The figure and traceable reporting materials are ready; the manuscript has not been reviewed yet.',
+          '图和可追溯的论文材料已生成，稿件还没有审阅。')];
+      }
       // A prediction study answers only with its primary model's performance.
       if (PREDICTION_TYPES.has(view.analysisType)) {
         const model = view.prediction;
@@ -710,6 +735,8 @@
     // is its model's performance, in the result tables; otherwise a
     // registered estimate is an association and group counts a description.
     function caveat(view) {
+      if (view.append) return tr('This addition uses the earlier data version. Results describe associations; numeric and publication reviews are not done yet.',
+        '这次追加沿用之前的数据版本。结果只说明关联；数字核验和投稿审阅还没有做。');
       if (view.prediction) {
         const scope = view.prediction.analysisOnly
           ? tr('for analysis only', '仅供分析')
@@ -775,7 +802,7 @@
       const sentences = view ? answerSentences(view) : [];
       if (!view || view.primaryModelAmbiguous || !sentences.length
         || !(view.groups.length || view.continuousGroups.length || view.categoricalGroups.length
-          || view.estimate || view.prediction || view.curvePreview.length)) {
+          || view.estimate || view.prediction || view.curvePreview.length || view.append)) {
         return unavailable(latestRun, view);
       }
       // The answer, then the data it rests on, then how to read it: the same
