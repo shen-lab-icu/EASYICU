@@ -69,10 +69,12 @@ const imports = Promise.all([
   import(pathToFileURL(retryFile)),
   // The usage ledger sits beside the budget guard and wraps each attempt.
   import(pathToFileURL(path.join(path.dirname(budgetFile), 'shell-usage.mjs'))),
+  // The data-source transition's quick-answer offer settles the decision call.
+  import(pathToFileURL(path.join(path.dirname(budgetFile), 'post-tool-finalization.mjs'))),
 ]);
 
 async function harness(attempts, config = {}) {
-  const [{ ShellBudgetGuard }, projection, retry, { ShellUsageLedger }] = await imports;
+  const [{ ShellBudgetGuard }, projection, retry, { ShellUsageLedger }, finalization] = await imports;
   const guard = new ShellBudgetGuard({
     tokenBudget: 100000, maxOutputTokens: 1000,
     maxProviderCallsPerMessage: 8, maxProviderCallsPerSession: 128,
@@ -156,6 +158,8 @@ async function harness(attempts, config = {}) {
     normalizePiEvent: projection.normalizePiEvent,
     emit: envelope => { order.push('retry'); notices.push(envelope); },
     hostPostToolFinalization: () => config.finalization || null,
+    quickAnswerOfferReply: () => config.quickOfferReply || '',
+    settleQuickAnswerOffer: finalization.settleQuickAnswerOffer,
     ...retry, retryTransientProviderStream: retryWithFastSleep,
   }, { filename: mainFile });
   if (config.sessionEvent) subscribed(config.sessionEvent);
@@ -600,4 +604,48 @@ test('prefix replay preserves the SDK result and closes the underlying iterator'
   assert.deepEqual(observed, events);
   assert.equal(await stream.result(), events.at(-1).message);
   assert.equal(closed, true);
+});
+
+// The data-source transition may offer the saved question to the quick-answer
+// owner. That provider call is settled, never streamed: the host writes the
+// reply, and only the first easyicu_quick_answer call goes on to the host.
+const ACK = '已确认使用 eICU Demo 数据。';
+const reading = { question: '入 ICU 第一天最高乳酸的中位数是多少？' };
+const decided = (content, stopReason, usage) => [
+  opened(1),
+  { type: 'done', reason: stopReason, message: { ...message(content, stopReason), usage } },
+];
+
+test('a quick-answer offer the model declines shows only the host acknowledgement', async () => {
+  const usage = { input: 40, output: 9, cacheRead: 0, cacheWrite: 0, totalTokens: 49, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  const result = await harness([decided([{ type: 'text', text: 'Model prose with a number 2.1' }], 'stop', usage)], { quickOfferReply: ACK });
+  assert.equal(result.calls.length, 1);
+  assert.equal(result.result.stopReason, 'stop');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.result.content)), [{ type: 'text', text: ACK }]);
+  assert.ok(!JSON.stringify(result.events).includes('2.1'), 'the model text is never streamed');
+  assert.deepEqual(result.result.usage, usage, 'the decision call stays accounted');
+  assert.deepEqual(result.usage.filter(row => row.state !== 'in_flight').map(row => row.state), ['completed']);
+});
+
+test('a quick-answer offer keeps the first reading call behind the acknowledgement', async () => {
+  const first = { type: 'toolCall', id: 'call-quick', name: 'easyicu_quick_answer', arguments: { reading } };
+  const result = await harness([decided([
+    { type: 'text', text: 'I will submit it.' }, first,
+    { type: 'toolCall', id: 'call-again', name: 'easyicu_quick_answer', arguments: { reading } },
+    { type: 'toolCall', id: 'call-other', name: 'easyicu_run', arguments: {} },
+  ], 'toolUse')], { quickOfferReply: ACK });
+  assert.equal(result.result.stopReason, 'toolUse');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.result.content)), [{ type: 'text', text: ACK }, first]);
+  assert.deepEqual(result.events.map(event => event.type), [
+    'start', 'text_start', 'text_delta', 'text_end', 'toolcall_start', 'toolcall_delta', 'toolcall_end', 'done',
+  ]);
+});
+
+test('a failed or aborted quick-answer decision keeps the transition safe', async () => {
+  const failedCall = await harness([[opened(1), failed('HTTP 401: authentication failed')]], { quickOfferReply: ACK });
+  assert.equal(failedCall.result.stopReason, 'stop');
+  assert.deepEqual(JSON.parse(JSON.stringify(failedCall.result.content)), [{ type: 'text', text: ACK }]);
+  const aborted = await harness([[opened(1), { type: 'error', reason: 'aborted', error: message([], 'aborted') }]], { quickOfferReply: ACK });
+  assert.equal(aborted.result.stopReason, 'aborted');
+  assert.deepEqual(aborted.events.map(event => event.type), ['error']);
 });

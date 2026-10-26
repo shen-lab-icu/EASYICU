@@ -148,7 +148,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261026-six2" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261026-quickoffer1" in index
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
     assert "js/screens-datamap.js?v=20261026-cal1copy" in index
@@ -164,7 +164,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-review-items.js?v=20261026-review1" in index
     assert index.index("js/screens-guided-pi-review-items.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "css/guided-pi-source-adjustments.css?v=20261026-six1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20261026-quick1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261026-quickoffer1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261026-eg2" in index
     assert "js/screens-guided-pi.js?v=20261026-quick1" in index

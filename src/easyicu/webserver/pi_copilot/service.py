@@ -2848,6 +2848,13 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                     [*wording_history["user_turns"], wording_turn],
                     wording_history["previous_reply"],
                 )
+                if message_intent == "advance_after_data_source_confirmation":
+                    # The transition's own text is the host's. A quick answer
+                    # may restate only the researcher's saved question.
+                    active_tool_context.quick_question = (
+                        self._transition_quick_question(active_tool_context)
+                        if regenerate_target is None else ""
+                    )
                 self.replay_store.start_turn(
                     session_id=record.session_id,
                     project_id=str(record.project_id),
@@ -2885,6 +2892,9 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                     params["user_entry_id"] = str(regenerate_user_entry_id)
                     if regeneration_intent:
                         params["intent"] = str(regeneration_intent)
+                elif (message_intent == "advance_after_data_source_confirmation"
+                      and active_tool_context.quick_question):
+                    params["quick_question"] = active_tool_context.quick_question
                 require_copilot_data_clearance(active_tool_context)
                 if job.cancel_requested:
                     raise RuntimeError("pi_message_cancelled_before_delivery")

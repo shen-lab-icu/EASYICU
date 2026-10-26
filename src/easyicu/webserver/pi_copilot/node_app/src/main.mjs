@@ -40,7 +40,13 @@ import { ShellUsageLedger } from "./shell-usage.mjs";
 import { normalizePreferences, preferenceAdvisory } from "./personal-preferences.mjs";
 import { ResearchContextMemory } from "./research-context.mjs";
 import { conversationModel, switchConversationModel } from "./conversation-model.mjs";
-import { DATA_SOURCE_CONFIRMED_MARKER, hostPostToolFinalization } from "./post-tool-finalization.mjs";
+import {
+  DATA_SOURCE_CONFIRMED_MARKER,
+  hostPostToolFinalization,
+  QUICK_ANSWER_OFFER_MARKER,
+  quickAnswerOfferReply,
+  settleQuickAnswerOffer,
+} from "./post-tool-finalization.mjs";
 import {
   HotSessionLifecycle,
   sessionLifecycleConfig,
@@ -581,7 +587,7 @@ const PLAN_LIFECYCLE_WORKFLOW_CODES = new Set([
 
 import { attachedSkillContext, ATTACHED_SKILL_MARKER, mentionedObjectContext, MENTION_MARKER } from "./attached-skills.mjs";
 
-function modelPrompt(message, language, ownerContext = [], turnIntent = "", ideaSource = undefined, attachedSkills = undefined, mentionedObjects = undefined) {
+function modelPrompt(message, language, ownerContext = [], turnIntent = "", ideaSource = undefined, attachedSkills = undefined, mentionedObjects = undefined, quickQuestion = "") {
   const explicitChinese = /(?:请|用|改用|使用|以)\s*(?:中文|汉语)(?:回答|回复|说明|输出|翻译)/.test(message)
     || /\b(?:respond|reply|answer|write|translate)(?:\s+\w+){0,6}\s+(?:in|into)\s+(?:simplified\s+)?chinese\b/i.test(message);
   const explicitEnglish = /(?:请|用|改用|使用|以)\s*(?:英文|英语)(?:回答|回复|说明|输出|翻译)/.test(message)
@@ -614,7 +620,9 @@ function modelPrompt(message, language, ownerContext = [], turnIntent = "", idea
     : turnIntent === "confirm_planner_checkpoint_resume"
     ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe user confirmed the host-owned planner_checkpoint_resume_available control. Call easyicu_request_replan exactly once with strategy='resume_checkpoint' and a concise reason that the unchanged study must continue from its validated development Planner checkpoint, then stop after the submission receipt. Do not inspect the old run, explain its blocker, start a fresh plan, ask for a path or job id, or claim that analysis ran. The host owns checkpoint selection and validation."
     : turnIntent === "advance_after_data_source_confirmation"
-    ? (sourcePreparationAlreadyPassed
+    ? (quickQuestion
+      ? `\n\n[EASYICU_HOST_TRANSITION_V1]\n${DATA_SOURCE_CONFIRMED_MARKER}\n${QUICK_ANSWER_OFFER_MARKER}\nThe host has confirmed the study's data source and writes this turn's reply, so write no reply text. The researcher's saved question, exactly as they typed it: ${JSON.stringify(quickQuestion)}. If it is a direct numerical question about this source, call easyicu_quick_answer exactly once with a QuickReading whose question is exactly that text; the host decides whether it qualifies, including questions that sound simple but need adjustment or survival analysis. Otherwise call no tool. Never calculate or state a value, and do not ask the user to choose, confirm, download, inspect, or prepare a data source again.`
+      : sourcePreparationAlreadyPassed
       ? `\n\n[EASYICU_HOST_TRANSITION_V1]\n${DATA_SOURCE_CONFIRMED_MARKER}\nThe host has confirmed the study's data source outside the model transcript, and the authoritative workflow has already advanced to ${transitionWorkflowCode}. Do not ask the user to choose, confirm, download, inspect, or prepare a data source again. Acknowledge the current plan-stage readiness in at most two short sentences and stop so the host can show the workflow-owned action. Do not ask a setup question, do not start a sequential questionnaire, and do not propose cohort, exposure, outcome, window, module or export values yourself. Do not call a tool during this transition.`
       : `\n\n[EASYICU_HOST_TRANSITION_V1]\n${DATA_SOURCE_CONFIRMED_MARKER}\nThe host has confirmed the study data source. Follow the authoritative workflow receipt, including any blocker. Do not ask the user to choose, confirm, download, inspect, or prepare a data source again. A raw identified database supports metadata-only candidate planning: extraction is not a prerequisite for generating a candidate plan. Acknowledge the saved source briefly and stop for the host-owned next action. Do not invent data-preparation inputs, ask exposure/outcome/goal confirmations, or authorize extraction. The host carries the research question the researcher already wrote in this conversation into the study setup; never ask them to send it again. Only when this conversation contains no research question at all, ask for it once. Do not call a tool during this transition.`)
     : turnIntent === "idea_discovery_entry"
@@ -1407,7 +1415,7 @@ async function createSession(params) {
       async () => {
         const hostFinalization = hostPostToolFinalization(model, context, record.language);
         if (hostFinalization) return hostFinalization;
-        return await retryTransientProviderStream(async () => {
+        const open = () => retryTransientProviderStream(async () => {
           const reservation = record.budgetGuard.authorize(context, options);
           const budgetReceipt = record.budgetGuard.receipt();
           manager.appendCustomEntry(
@@ -1420,6 +1428,12 @@ async function createSession(params) {
             maxRetries: 0,
           }), reservation, record.budgetGuard.pricing);
         }, { signal: options.signal, onRetry: emitSessionEvent });
+        // The data-source transition's quick-answer offer: the model decides
+        // whether to submit a reading; the host writes the reply.
+        const offerReply = quickAnswerOfferReply(context, record.language);
+        return offerReply
+          ? await settleQuickAnswerOffer(model, open, offerReply, options.signal)
+          : await open();
       },
     );
     sessions.set(externalId, record);
@@ -1435,12 +1449,18 @@ async function createSession(params) {
 }
 
 async function promptSession(requestId, params) {
-  assertExactKeys(params, new Set(["session_id", "message", "intent", "idea_source", "message_origin", "attached_skill_context", "mentioned_objects"]), "pi_prompt_invalid");
+  assertExactKeys(params, new Set(["session_id", "message", "intent", "idea_source", "message_origin", "attached_skill_context", "mentioned_objects", "quick_question"]), "pi_prompt_invalid");
   const sessionId = boundedText(params.session_id, 160).trim();
   const message = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();
   if (intent && intent !== "confirm_formal_plan_generation" && intent !== "confirm_fresh_plan_generation" && intent !== "confirm_planner_checkpoint_resume" && intent !== "advance_after_data_source_confirmation" && intent !== "idea_discovery_entry" && intent !== "idea_mining_entry" && intent !== "idea_mining_candidate_selection" && intent !== "implement_scientific_question" && intent !== "data_first_entry" && intent !== "clarify_research_entry") {
     throw Object.assign(new Error("unsupported message intent"), { code: "pi_message_intent_invalid" });
+  }
+  // The host binds this question to the researcher's own typed message; only
+  // the data-source transition may offer it to the quick-answer owner.
+  const quickQuestion = boundedText(params.quick_question, 2000).trim();
+  if (params.quick_question !== undefined && (!quickQuestion || intent !== "advance_after_data_source_confirmation")) {
+    throw Object.assign(new Error("a quick question belongs to the data-source transition"), { code: "pi_prompt_invalid" });
   }
   const record = sessions.get(sessionId);
   if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
@@ -1465,9 +1485,10 @@ async function promptSession(requestId, params) {
     } else if (intent === "clarify_research_entry" || intent === "idea_discovery_entry") {
       record.session.setActiveToolsByName([]);
     }
+    if (quickQuestion) record.session.setActiveToolsByName(["easyicu_quick_answer"]);
     const ownerContext = await currentTurnOwnerContext(sessionId);
     record.researchContext.beginTurn(ownerContext);
-    const prompt = modelPrompt(message, record.language, ownerContext, intent, params.idea_source, params.attached_skill_context, params.mentioned_objects);
+    const prompt = modelPrompt(message, record.language, ownerContext, intent, params.idea_source, params.attached_skill_context, params.mentioned_objects, quickQuestion);
     if (intent === "advance_after_data_source_confirmation") {
       await record.session.sendCustomMessage({
         customType: "easyicu_host_transition",

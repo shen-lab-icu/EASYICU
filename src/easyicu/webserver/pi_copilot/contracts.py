@@ -519,6 +519,10 @@ class ToolExecutionContext:
         # bounded, PHI-screened value as user-intent authority; the model
         # cannot supply or rewrite it through tool arguments.
         self.user_message = str(user_message or "")
+        # The question a quick reading must restate. The data-source
+        # transition rebinds it to the saved question in the researcher's
+        # typed words, or to nothing (quick_answers.py).
+        self.quick_question = self.user_message
         self.bind_question_wording_context(
             user_turns if user_turns is not None else (
                 [{"text": self.user_message, "message_origin": "typed"}] if self.user_message else []
