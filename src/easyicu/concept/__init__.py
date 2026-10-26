@@ -36,6 +36,7 @@ from .availability_signal import (
     table_availability,
 )
 from .data_source_contract import ConceptDataSourceStorage
+from .merge_time_index import declare_resolved_time_index, merge_index_name
 from ..utils import compat
 
 logger = logging.getLogger(__name__)
@@ -1844,6 +1845,10 @@ class ConceptResolver:
                 kwargs,
                 _skip_concept_cache=_skip_concept_cache,
                 availability_context=availability_context,
+            )
+            declare_resolved_time_index(
+                concept_table, align_to_admission=align_to_admission,
+                interval=interval if aggregators[name] is not False else None,
             )
             if verbose and logger.isEnabledFor(logging.INFO):
                 if isinstance(concept_table, ICUTable) or hasattr(concept_table, 'data'):
@@ -8486,32 +8491,37 @@ class ConceptResolver:
         all_frames: list = []
         index_column: Optional[str] = None
         id_columns: Optional[List[str]] = None
+        aligned_index = merge_index_name(tables)
 
         for name, table in tables.items():
             frame = table.data.copy()
+            table_index = table.index_var if isinstance(table, WinTbl) else table.index_column
+            if table_index and table_index != aligned_index:
+                frame = frame.rename(columns={table_index: aligned_index})
+                table_index = aligned_index
 
             # Handle both ICUTable and WinTbl
             if isinstance(table, WinTbl):
                 id_columns = id_columns or list(table.id_vars)
-                index_column = index_column or table.index_var
+                index_column = index_column or table_index
                 expected_id = id_columns or []
                 if list(table.id_vars) != expected_id:
                     raise ValueError(
                         "All concepts must share identical identifier columns to merge"
                     )
-                if table.index_var != index_column:
+                if table_index != index_column:
                     raise ValueError(
                         "All concepts must share identical index column to merge"
                     )
             else:
                 id_columns = id_columns or list(table.id_columns)
-                index_column = index_column or table.index_column
+                index_column = index_column or table_index
                 expected_id = id_columns or []
                 if list(table.id_columns) != expected_id:
                     raise ValueError(
                         "All concepts must share identical identifier columns to merge"
                     )
-                if table.index_column != index_column:
+                if table_index != index_column:
                     raise ValueError(
                         "All concepts must share identical index column to merge"
                     )
