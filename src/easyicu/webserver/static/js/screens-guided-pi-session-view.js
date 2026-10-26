@@ -17,9 +17,12 @@
     const modelMenu = MODULES.optional('modelMenu');
     if (modelMenu) modelMenu.bind({
       session: () => state.session, projectId,
-      locked: () => Boolean(state.busy || state.childJobId || state.projectLoading || state.planStarting
-        || (state.session && state.session.streaming) || sessionIsStale()
-        || (state.workflow && state.workflow.active_job && state.workflow.active_job.present)),
+      applySession: session => {
+        state.session = { ...state.session, ...session };
+        state.sessions = state.sessions.map(row => row.session_id === session.session_id ? { ...row, ...session } : row);
+      },
+      locked: () => Boolean(state.busy || state.projectLoading || state.planStarting
+        || (state.session && state.session.streaming)),
       hosted: () => { const owner = MODULES.optional('hosted'); return Boolean(owner && owner.active()); },
     });
     // A stopped run's block (owner: screens-guided-pi-run-stop.js).
@@ -397,7 +400,7 @@
             researchLabel ? tr(`Analysis: ${researchLabel}`, `分析：${researchLabel}`) : ''].filter(Boolean).join(' / ')
           : researchLabel) || tr('Model connection unavailable', '模型连接暂不可用'),
         connectionTitle: connection
-          ? tr('One model connection for conversation and analysis', '对话与分析共用的一套模型连接')
+          ? tr('Conversation model', '对话模型')
           : tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定'),
       };
       // A plan start the host has not answered with a job yet: nothing to stop.

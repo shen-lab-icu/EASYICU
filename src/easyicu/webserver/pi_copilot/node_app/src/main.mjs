@@ -36,6 +36,7 @@ import {
 } from "./shell-budget.mjs";
 import { retryTransientProviderStream } from "./provider-retry.mjs";
 import { ResearchContextMemory } from "./research-context.mjs";
+import { conversationModel, switchConversationModel } from "./conversation-model.mjs";
 import { DATA_SOURCE_CONFIRMED_MARKER, hostPostToolFinalization } from "./post-tool-finalization.mjs";
 import {
   HotSessionLifecycle,
@@ -1286,7 +1287,7 @@ function sessionState(record, options = {}) {
 }
 
 async function createSession(params) {
-  assertExactKeys(params, new Set(["session_id", "session_file", "thinking_level", "agent_mode", "language", "extension_snapshot"]), "pi_session_create_invalid");
+  assertExactKeys(params, new Set(["session_id", "session_file", "thinking_level", "agent_mode", "language", "extension_snapshot", "model"]), "pi_session_create_invalid");
   const externalId = boundedText(params.session_id, 160).trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(externalId)) {
     throw Object.assign(new Error("invalid external session id"), { code: "pi_session_id_invalid" });
@@ -1309,7 +1310,9 @@ async function createSession(params) {
     return sessionState(existing);
   }
   sessionLifecycle.admit({ incoming: 1 });
-  const { runtime, selected, config } = await getModelRuntime();
+  const modelRuntime = await getModelRuntime();
+  const { runtime, config } = modelRuntime;
+  const selected = conversationModel(modelRuntime, params.model);
   let manager;
   let createdSessionFile = "";
   if (params.session_file) {
@@ -1638,6 +1641,14 @@ async function handleRequest(request) {
         transcriptCursor: params.transcript_cursor,
         transcriptLimit,
       });
+    }
+    case "session.set_model": {
+      assertExactKeys(params, new Set(["session_id", "model"]), "pi_session_model_invalid");
+      const record = sessions.get(boundedText(params.session_id, 160).trim());
+      if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
+      await switchConversationModel(record, activeRequestBySession, await getModelRuntime(), params.model);
+      sessionLifecycle.touch(record.externalId);
+      return sessionState(record);
     }
     case "session.set_thinking_level": {
       assertExactKeys(params, new Set(["session_id", "thinking_level"]), "pi_session_thinking_level_invalid");

@@ -486,3 +486,35 @@ def test_http_routes_keep_auth_bound_to_the_browser_cookie(
         "easyicu.codex-subscription-model-catalog/1"
     )
     assert models.json()["secrets_returned"] is False
+
+
+def test_conversation_catalog_uses_saved_account_and_only_discovered_models() -> None:
+    response = Response()
+    codex_account_sessions.start_login(_request(), response)
+    _FakeRuntime.logged_in = True
+    binding = codex_account_sessions.binding_for_request(_request(_cookie_from_response(response)))
+    _FakeRuntime.model_rows = [{"model": "synthetic-model", "hidden": False}]
+    assert codex_account_sessions.discovered_models_for_binding(binding) == ["synthetic-model"]
+    assert _FakeRuntime.instances[-1].kwargs["environment"]["EASYICU_CODEX_SESSION_SHA256"] == binding
+
+
+def test_conversation_catalog_never_uses_documented_fallback_after_discovery_failure() -> None:
+    response = Response()
+    codex_account_sessions.start_login(_request(), response)
+    _FakeRuntime.logged_in = True
+    binding = codex_account_sessions.binding_for_request(_request(_cookie_from_response(response)))
+    _FakeRuntime.model_list_error = "synthetic_discovery_failure"
+    with pytest.raises(codex_account_sessions.CodexAccountSessionError) as caught:
+        codex_account_sessions.discovered_models_for_binding(binding)
+    assert caught.value.code == "synthetic_discovery_failure"
+
+
+def test_conversation_catalog_requires_the_saved_account_to_remain_authenticated() -> None:
+    response = Response()
+    codex_account_sessions.start_login(_request(), response)
+    _FakeRuntime.logged_in = True
+    binding = codex_account_sessions.binding_for_request(_request(_cookie_from_response(response)))
+    _FakeRuntime.logged_in = False
+    with pytest.raises(codex_account_sessions.CodexAccountSessionError) as caught:
+        codex_account_sessions.discovered_models_for_binding(binding)
+    assert caught.value.code == "codex_auth_login_required"

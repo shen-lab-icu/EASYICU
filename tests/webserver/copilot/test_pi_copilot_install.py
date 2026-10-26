@@ -46,6 +46,10 @@ def test_pi_event_projection_is_in_both_distribution_manifests() -> None:
     context_relative = "pi_copilot/node_app/src/research-context.mjs"
     assert f"src/easyicu/webserver/{context_relative}" in manifest
     assert f'"{context_relative}"' in pyproject
+    model_relative = "pi_copilot/node_app/src/conversation-model.mjs"
+    assert f"src/easyicu/webserver/{model_relative}" in manifest
+    assert f'"{model_relative}"' in pyproject
+    assert "src/conversation-model.mjs" in runtime_manifest()["files"]
     skill_relative = "pi_copilot/node_app/src/skills/web-prototype/SKILL.md"
     assert f"src/easyicu/webserver/{skill_relative}" in manifest
     assert f'"{skill_relative}"' in pyproject
@@ -85,6 +89,7 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     (source / "src" / "provider-retry.mjs").write_text("", encoding="utf-8")
     (source / "src" / "session-lifecycle.mjs").write_text("", encoding="utf-8")
     (source / "src" / "research-context.mjs").write_text("", encoding="utf-8")
+    (source / "src" / "conversation-model.mjs").write_text("", encoding="utf-8")
     (source / "src" / "skills" / "web-prototype").mkdir(parents=True)
     (source / "src" / "skills" / "web-prototype" / "SKILL.md").write_text(
         "# Web prototype\n",

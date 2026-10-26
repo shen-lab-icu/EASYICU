@@ -218,6 +218,16 @@ class PiProviderConfig:
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+    def conversation_connection_sha256(self) -> str:
+        """Pin the provider, endpoint, transport and private credential identity.
+
+        Presets and OpenRouter sign-in resolve to this same API configuration.
+        OpenRouter's exchanged API key identifies the connection, not the
+        temporary login cookie. Model and data policy are deliberately excluded.
+        """
+        identity = [self.provider, self.base_url, self.api_transport, self.api_key]
+        return hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+
     def connection(self) -> PiProviderConnection:
         return PiProviderConnection(provider=self.provider, base_url=self.base_url, model=self.model)
 
@@ -499,6 +509,27 @@ class PiProviderConfigStore:
                 "Connect a model service before choosing a model.",
             )
         return stored
+
+    def conversation_connection_sha256(self, environ: Mapping[str, str]) -> Optional[str]:
+        """Read runtime connection identity without touching the declaration journal."""
+        config = self._configured_connection(environ=environ, include_file=False)
+        return config.conversation_connection_sha256() if config else None
+
+    def conversation_config(self, model: str, *, connection_sha256: str) -> PiProviderConfig:
+        """Resolve a model on a pinned connection without moving its declaration.
+
+        Settings declarations name a model. Looking at a sibling model neither
+        transfers nor lapses that declaration; administrator policy still applies.
+        """
+        with self._lock:
+            config = self._require_stored_config()
+            if config.conversation_connection_sha256() != connection_sha256:
+                raise PiCopilotError("pi_session_connection_changed",
+                                     "The saved model connection has changed.", status_code=409)
+            if model == config.model:
+                return config
+            configured = self._configured_connection()
+            return replace(configured, model=model)
 
     def discover_models(
         self,

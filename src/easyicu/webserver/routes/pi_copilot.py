@@ -149,6 +149,13 @@ class PiSessionRenameRequest(BaseModel):
     ]
 
 
+class PiSessionModelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    model: ModelText
+
+
 class PiSessionThinkingLevelRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1081,6 +1088,25 @@ def post_pi_copilot_session_rename(
             project_id=body.project_id,
             title=body.title,
         )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.get("/api/copilot/pi/sessions/{session_id}/models")
+def get_pi_copilot_session_models(
+    session_id: ShortText,
+    project_id: Annotated[str, Query(min_length=1, max_length=160)],
+) -> dict:
+    try:
+        return get_pi_copilot_service().conversation_models(session_id, project_id=project_id)
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/model")
+def post_pi_copilot_session_model(session_id: ShortText, body: PiSessionModelRequest) -> dict:
+    try:
+        return get_pi_copilot_service().set_conversation_model(session_id, **body.model_dump())
     except PiCopilotError as exc:
         _raise_http(exc)
 

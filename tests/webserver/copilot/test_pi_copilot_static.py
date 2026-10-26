@@ -1279,8 +1279,8 @@ def test_guided_header_and_progress_keep_secondary_controls_available() -> None:
     # The chip is a menu now, but the full connection page must stay reachable
     # as one row inside it rather than being the only thing it can do.
     assert 'data-gpi-config' in header
-    # The saved session has no connection-bound model switch endpoint.
-    assert "查看本对话的模型连接" in header
+    # The host scopes model selection to the saved conversation connection.
+    assert "选择对话模型" in header
     assert "在当前连接上切换模型" not in header
     assert "gpi-head-overflow-menu" in header
     for selector in (

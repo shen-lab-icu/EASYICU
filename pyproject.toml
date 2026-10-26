@@ -164,6 +164,7 @@ easyicu = ["data/*.json", "data/*.md", "data/research_know_how/*.json"]
   "pi_copilot/node_app/src/provider-retry.mjs",
   "pi_copilot/node_app/src/session-lifecycle.mjs",
   "pi_copilot/node_app/src/research-context.mjs",
+  "pi_copilot/node_app/src/conversation-model.mjs",
   "pi_copilot/node_app/src/skills/web-prototype/SKILL.md"
 ]
 "easyicu.research_agent.providers.prompts" = ["v1/*.txt", "v2/*.txt"]

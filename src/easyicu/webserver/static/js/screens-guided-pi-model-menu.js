@@ -7,7 +7,7 @@
   function api() { return window.EU_API || {}; }
   function clean(value, limit) { return String(value || '').trim().slice(0, limit || 256); }
 
-  const state = { key: '', models: [], current: '', loading: false, error: '', request: 0 };
+  const state = { key: '', models: [], current: '', loading: false, switching: false, error: '', request: 0 };
   let context = null;
 
   // Only the public, saved connection selects an owner. A printed label and
@@ -29,7 +29,7 @@
   function bind(options) {
     context = options;
     ++state.request;
-    state.key = ''; state.models = []; state.loading = false; state.error = '';
+    state.key = ''; state.models = []; state.loading = false; state.switching = false; state.error = '';
   }
   function currentKey() { return context ? bindingKey(context.session(), context.projectId()) : ''; }
   function controlKey(control) {
@@ -42,32 +42,23 @@
   }
 
   function rowsHtml() {
-    // ResearchProviderBinding is frozen. The existing switch endpoint changes
-    // the global API config, not this session, so no catalogue row is a switch.
-    const hosted = context && context.hosted();
-    const note = hosted
-      ? tr('This conversation’s model connection cannot be changed here. To change models, contact the administrator and start a new conversation.', '本对话的模型连接不能在此切换。如需更换，请联系管理员并新建对话。')
-      : tr('This conversation’s model connection cannot be changed here. To change models, choose one in connection settings and start a new conversation.', '本对话的模型连接不能在此切换。如需更换，请在连接设置中选择后新建对话。');
-    const status = state.loading ? tr('Reading the model list…', '正在读取模型列表…') : state.error;
-    const message = `<p class="gpi-model-note">${esc(note)}</p>`;
-    if (status) return message + `<p class="gpi-model-note${state.error ? ' is-error' : ''}" role="status">${esc(status)}</p>`;
-    if (!state.models.length) return message + `<p class="gpi-model-note">${esc(tr('No model list is available.', '暂无可用模型列表。'))}</p>`;
-    // Catalogues describe the currently configured service/account. The
-    // public session has no endpoint/account locator; do not claim these are
-    // switchable models on that historical connection.
-    return message + `<p class="gpi-model-note">${esc(tr('Models currently reported by this service (for new conversations)', '当前服务报告的模型（供新对话选择）'))}</p><ul>${state.models.map(model => `<li>${esc(model)}</li>`).join('')}</ul>`;
+    const status = state.loading ? tr('Reading models…', '正在读取模型…') : state.error;
+    const message = status ? `<p class="gpi-model-note${state.error ? ' is-error' : ''}" role="status">${esc(status)}</p>` : '';
+    if (!state.models.length) return message || `<p class="gpi-model-note">${esc(tr('No models available.', '暂无可用模型。'))}</p>`;
+    return message + state.models.map(model => `<button type="button" data-gpi-pick-model="${esc(model)}" role="menuitemradio" aria-checked="${model === state.current}" ${state.switching ? 'disabled' : ''}><span>${esc(model)}</span><span aria-hidden="true">${model === state.current ? '✓' : ''}</span></button>`).join('');
   }
   function paint(control) {
     const popover = control.querySelector('[data-gpi-model-popover]');
     if (!popover) return;
     popover.querySelectorAll('.gpi-model-rows').forEach(node => node.remove());
     const list = document.createElement('div');
-    list.className = 'gpi-model-rows'; list.innerHTML = rowsHtml();
+    list.className = 'gpi-model-rows'; list.role = 'menu'; list.innerHTML = rowsHtml();
     const settings = popover.querySelector('.gpi-model-settings');
     if (settings) popover.insertBefore(list, settings); else popover.appendChild(list);
   }
 
   async function load(control) {
+    if (state.switching) return;
     const key = currentKey();
     if (!context || controlKey(control) !== key || control.isConnected === false) return;
     const session = context.session();
@@ -95,9 +86,9 @@
         throw new Error(tr('The connection changed. Reopen this conversation to view its model.', '连接状态已变化，请重新打开对话后查看模型。'));
       }
       state.current = clean(acknowledged.session.model_connection.model);
-      const caller = kind === 'account' ? api().loadPiCopilotCodexModels : api().loadPiCopilotApiModels;
+      const caller = api().loadPiCopilotConversationModels;
       if (typeof caller !== 'function') throw new Error(tr('Model listing is unavailable.', '模型列表不可用。'));
-      const payload = await caller();
+      const payload = await caller(session.session_id, project);
       if (!live(control, key, request)) return;
       const rows = Array.isArray(payload && payload.models) ? payload.models : [];
       state.models = [...new Set(rows.map(row => clean(typeof row === 'string' ? row : row && row.id)).filter(Boolean))];
@@ -110,6 +101,16 @@
     }
   }
   function friendlyError(error) {
+    const messages = {
+      pi_session_busy: ['Wait for the current reply to finish.', '请等待当前回复结束。'],
+      pi_session_model_unavailable: ['This model is not available on the saved connection.', '已保存的连接中没有此模型。'],
+      pi_session_project_mismatch: ['This conversation belongs to another project.', '本对话属于另一个项目。'],
+      provider_not_cleared_for_credentialed_data: ['This model’s declared data handling does not permit this data source.', '此模型声明的数据处理方式不允许使用当前数据源。'],
+      pi_session_connection_changed: ['The saved connection changed. Reopen this conversation.', '已保存的连接已变化，请重新打开对话。'],
+      pi_session_connection_unpinned: ['This conversation predates model switching. Start a new conversation to use another model.', '这条对话创建于旧版本，不能切换模型。新建对话即可选择其他模型。'],
+    };
+    const messagePair = messages[error && error.code];
+    if (messagePair) return tr(...messagePair);
     const status = Number(error && error.status);
     const message = clean(error && error.message, 200);
     const rawHttp = !message || /^(not found|internal server error|bad request|forbidden|unauthorized|service unavailable)$/i.test(message);
@@ -120,13 +121,53 @@
     }
     return clean(message || tr('Could not read the model list.', '读取模型列表失败。'), 240);
   }
+  async function select(control, model) {
+    const key = currentKey();
+    if (state.loading || state.switching || state.key !== key || !state.models.includes(model)
+      || !live(control, key, state.request)) return;
+    const session = context.session(), project = context.projectId();
+    const request = ++state.request;
+    state.switching = true; state.error = ''; paint(control);
+    try {
+      if (typeof api().setPiCopilotConversationModel !== 'function') throw new Error(tr('Model switching is unavailable.', '模型切换不可用。'));
+      const payload = await api().setPiCopilotConversationModel(session.session_id, { project_id: project, model });
+      if (!live(control, key, request)) return;
+      const updated = payload && payload.session;
+      if (!updated || updated.session_id !== session.session_id || updated.project_id !== project
+        || updated.model_connection?.provider !== session.model_connection.provider
+        || updated.model_connection?.authentication_mode !== session.model_connection.authentication_mode
+        || updated.model_connection?.credential_source !== session.model_connection.credential_source
+        || updated.model_connection?.model !== model || updated.model?.id !== model) {
+        throw new Error(tr('The model change could not be confirmed. Reopen this conversation.', '无法确认模型切换，请重新打开对话。'));
+      }
+      context.applySession(updated);
+      state.current = model; state.key = currentKey();
+      control.querySelector('[data-gpi-model-popover]').dataset.gpiModelKey = state.key;
+      const label = control.querySelector('.gpi-model-binding > span');
+      if (label) label.textContent = label.title = [updated.model_connection.provider, model].join(' · ');
+      control.open = false;
+    } catch (error) {
+      if (live(control, key, request)) { state.error = friendlyError(error); paint(control); }
+    } finally {
+      if (request === state.request) {
+        state.switching = false;
+        if (control.isConnected !== false && controlKey(control) === currentKey()) paint(control);
+      }
+    }
+  }
+  function onClick(event) {
+    const choice = event.target.closest ? event.target.closest('[data-gpi-pick-model]') : null;
+    if (!choice) return;
+    const control = choice.closest('.gpi-model-control');
+    if (control) { event.preventDefault(); void select(control, choice.dataset.gpiPickModel); }
+  }
   function onToggle(event) {
     const control = event.target.closest ? event.target.closest('.gpi-model-control') : null;
     if (control && control.open) void load(control);
   }
   function mount() {
-    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') document.addEventListener('toggle', onToggle, true);
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') { document.addEventListener('toggle', onToggle, true); document.addEventListener('click', onClick); }
   }
   mount();
-  window.EasyICU.guidedPi.declare('modelMenu', { bind, bindingKey, load, state });
+  window.EasyICU.guidedPi.declare('modelMenu', { bind, bindingKey, load, select, state });
 })();

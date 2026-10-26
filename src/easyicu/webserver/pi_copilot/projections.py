@@ -1336,6 +1336,10 @@ def project_pi_replay_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]
     """Return one bounded UX replay event without text deltas or tool arguments."""
 
     event_type = stable_code(event.get("type"))
+    if event_type == "model_changed":
+        return {"type": "model_changed", "role": "system",
+                "previous_model": _bounded_text(event.get("previous_model"), 256),
+                "model": _bounded_text(event.get("model"), 256)}
     if event_type not in {
         "run_start",
         "turn_start",

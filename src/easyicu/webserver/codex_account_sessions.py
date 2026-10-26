@@ -660,6 +660,18 @@ def models(request: Request) -> dict[str, Any]:
     }
 
 
+def discovered_models_for_binding(binding_sha256: str) -> list[str]:
+    """Read only this saved account's discovered models (no browser fallback)."""
+    managed = _runtime_for(_coordinates_from_binding(binding_sha256))
+    with managed.lock:
+        if not _status_for_managed(managed).get("authentication_verified"):
+            raise CodexAccountSessionError("codex_auth_login_required")
+        rows, failure = _model_rows(managed)
+        if failure:
+            raise CodexAccountSessionError(failure)
+        return [row["id"] for row in rows if row["catalog_source"] == "codex_app_server"]
+
+
 def validated_model_for_request(request: Request, model: str) -> str:
     """Compile a browser selection against the signed-in account catalog."""
 
