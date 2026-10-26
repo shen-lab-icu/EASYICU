@@ -463,21 +463,25 @@
       if (!demo || typeof demo.messages !== 'function') {
         return `<div class="gpi-activate"><h2>${tr('Demo unavailable', '演示暂不可用')}</h2><button class="btn" type="button" data-gpi-demo-exit>${tr('Back', '返回')}</button></div>`;
       }
-      const messages = demo.messages().map(row => messageHtml(row, { interactive: false })).join('');
-      const result = typeof demo.resultHtml === 'function'
-        ? demo.resultHtml({ tr, esc, button: (resource, label) => RESOURCE_OWNER.button(resource, label) }) : '';
-      const workflow = demo.workflow();
+      const button = (resource, label) => RESOURCE_OWNER.button(resource, label);
+      // The walkthrough replays the run beat by beat; without it the whole
+      // conversation shows at once.
+      const walkthrough = MODULES.optional('demoWalkthrough');
+      const body = walkthrough
+        ? walkthrough.panelHtml({ messageHtml, workflowHtml, iconHtml, button, durationText: ACTIVITY.durationText, syncAside: () => ASIDE && ASIDE.syncProjectWorkflowAside() })
+        : `<div class="gpi-log" data-gpi-log>${demo.messages().map(row => messageHtml(row, { interactive: false })).join('')}${typeof demo.resultHtml === 'function' ? demo.resultHtml({ tr, esc, button }) : ''}</div>
+        <footer class="gpi-demo-footer"><span>${tr('Open any underlined file to see its record.', '点击带下划线的文件可查看原始记录。')}</span><button class="btn primary" type="button" data-gpi-demo-exit>${tr('Start my own research', '开始我自己的研究')}</button></footer>`;
+      const workflow = walkthrough ? walkthrough.workflow() : demo.workflow();
       // A read-only walkthrough of one registered run: the header says what
       // it is in a few words and the note says what it will not touch.
-      return `<div class="gpi-panel gpi-demo-panel">
+      return `<div class="gpi-panel gpi-demo-panel"${walkthrough ? ' data-gpi-walk-root' : ''}>
         <header class="gpi-head">
           <div><div class="gpi-kicker">${tr('EASYICU COPILOT · DEMO', 'EASYICU COPILOT · 演示')}</div><div class="gpi-title">${tr('A research question, end to end', '一个研究问题的完整流程')}</div></div>
           <div class="gpi-head-meta"><span>${tr('MIMIC-IV · read-only', 'MIMIC-IV · 只读')}</span><button class="gpi-link" type="button" data-gpi-demo-exit>${tr('Back to my project', '返回我的项目')}</button></div>
         </header>
-        ${workflowHtml(workflow)}
+        <div data-gpi-walk-workflow>${workflowHtml(workflow)}</div>
         <div class="gpi-demo-note" role="note">${iconHtml('shield', 16)}<span>${tr('Read-only: the conversation and results come from one registered run. Nothing calls a model or changes your projects.', '只读演示：对话和结果来自一次已登记的真实运行，不会调用模型，也不会改动你的项目。')}</span></div>
-        <div class="gpi-log" data-gpi-log>${messages}${result}</div>
-        <footer class="gpi-demo-footer"><span>${tr('Open any underlined file to see its record.', '点击带下划线的文件可查看原始记录。')}</span><button class="btn primary" type="button" data-gpi-demo-exit>${tr('Start my own research', '开始我自己的研究')}</button></footer>
+        ${body}
       </div>`;
     }
 

@@ -221,7 +221,10 @@
 
     function syncProjectWorkflowAside() {
       const demo = host.demoMode() && window.EasyICU.guidedPi.optional('demo');
-      const workflow = demo && typeof demo.workflow === 'function' ? demo.workflow() : host.workflow();
+      // The demo replay advances its stages chapter by chapter.
+      const walkthrough = host.demoMode() && window.EasyICU.guidedPi.optional('demoWalkthrough');
+      const workflow = walkthrough ? walkthrough.workflow()
+        : demo && typeof demo.workflow === 'function' ? demo.workflow() : host.workflow();
       if (host.shell() !== 'pi' || (!host.demoMode() && !projectId())) return;
       if (resultProjectId !== projectId()) { resultProjectId = projectId(); resultQuery = ''; }
       const aside = document.getElementById('gdStudyAside');

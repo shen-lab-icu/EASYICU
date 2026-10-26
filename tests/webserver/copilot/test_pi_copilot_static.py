@@ -99,7 +99,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
     assert "css/guided-pi-workspace.css?v=20261021-entry-examples1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
-    assert "js/screens-guided-pi-demo.js?v=20261022-plain3" in index
+    assert "js/screens-guided-pi-demo.js?v=20261026-walk1" in index
+    assert "js/screens-guided-pi-demo-trace.js?v=20261026-walk1" in index
+    assert "js/screens-guided-pi-demo-walkthrough.js?v=20261026-walk1" in index
+    assert "css/guided-pi-demo-walkthrough.css?v=20261026-walk1" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
         "js/screens-guided-pi-evidence-preview.js?v=20261022-plain3" in index
@@ -126,11 +129,11 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261021-decision-records1" in index
-    assert "js/screens-guided-pi-events.js?v=20261024-queue1" in index
+    assert "js/screens-guided-pi-events.js?v=20261026-walk1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261023-demo-identity1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261025-entry-views1" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261026-walk1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -147,7 +150,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261024-demo-raw-plan1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261026-probe-copy1" in index
-    assert "js/screens-guided-pi.js?v=20261026-plain-connect1" in index
+    assert "js/screens-guided-pi.js?v=20261026-walk1" in index
     assert "js/screens-guided.js?v=20261022-legacy1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -4833,6 +4836,7 @@ def test_pi_css_has_balanced_comments_and_braces() -> None:
         "css/guided-pi-workbench-preview.css",
         "css/guided-pi-literature.css",
         "css/guided-pi-demo.css",
+        "css/guided-pi-demo-walkthrough.css",
     ):
         owner = _read(relative)
         assert owner.count("/*") == owner.count("*/")
@@ -4857,6 +4861,8 @@ def test_pi_frontend_javascript_parses() -> None:
         "js/screens-guided-pi-next-actions.js",
         "js/screens-guided-pi-message-actions.js",
         "js/screens-guided-pi-demo.js",
+        "js/screens-guided-pi-demo-trace.js",
+        "js/screens-guided-pi-demo-walkthrough.js",
         "js/screens-guided-pi-replay.js",
     ):
         subprocess.run(
@@ -5725,12 +5731,19 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "['manuscript', 'blocked', 'manuscript_withheld_by_design']" in demo
     assert "primaryDocument: () => artifactResource('figure_gallery.json'" in demo
     assert "assets/demo/sofa2-phenotype-mortality.png" in demo
-    assert "followUps, resultHtml, shelfResources" in demo
+    assert "followUps, resultHtml, figureCaption, governanceHtml, shelfResources" in demo
+    # The record says what the run recorded: one plan draft passed, and the
+    # answer's numbers come from the result tables (no manuscript numeric check ran).
+    assert "计划草案第 1 版通过合同检查：共 6 个步骤" in demo
+    assert "第 2 版" not in demo
+    assert "every number checked" not in demo
+    assert "回答里的数字都取自结果表" in demo
     assert "10.02% 是死亡事件比例" in demo
     assert "94,458 / 94,458" in demo
     assert "0 / 9,466" in demo
     assert "preview.open(primary" in pi_owner
-    assert "demo.resultHtml({ tr, esc, button:" in session_view
+    assert "demo.resultHtml({ tr, esc, button })" in session_view
+    assert "walkthrough.panelHtml({ messageHtml, workflowHtml, iconHtml, button" in session_view
     assert "一个研究问题的完整流程" in session_view
     assert "gpi-demo-reviewer" not in pi_owner
     assert "reviewer_dossier_complete" in aside_owner
@@ -5843,8 +5856,8 @@ def test_reviewer_demo_lifecycle_exposes_only_resolvable_standard_artifacts() ->
     # Every trace row is a named step that stays its own row; every standard
     # record is reachable from the conversation.
     assert payload == {
-        "activityCount": 2,
-        "stepCount": 14,
+        "activityCount": 4,
+        "stepCount": 15,
         "namedRows": True,
         "assistantReplies": 2,
         "userMessages": 1,
@@ -6555,7 +6568,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261024-terminal1" in index
-    assert "screens-guided-pi.js?v=20261026-plain-connect1" in index
+    assert "screens-guided-pi.js?v=20261026-walk1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

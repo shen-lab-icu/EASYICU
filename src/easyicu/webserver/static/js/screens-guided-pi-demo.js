@@ -434,59 +434,113 @@
     ];
   }
 
-  // A demo trace row: named for a reader and kept as its own row. The fixture
-  // records only each activity's total time, so rows carry no per-step time.
+  // A demo trace row: named for a reader and kept as its own row. It shows a
+  // time only when the run's audit log recorded one (sofa2-run-trace.json).
   function traceStep(id, label, text, resource, resources) {
     return { id, kind: 'pipeline', step: 'plan_step', status: 'complete', label, text: text || '', resource: resource || null, resources: resources || [], durationKnown: false };
   }
+  function recordedSpan(trace, id) {
+    const span = trace && trace.spans && trace.spans[id];
+    if (!Array.isArray(span)) return null;
+    const started = Date.parse(span[0]);
+    const ended = Date.parse(span[1]);
+    return Number.isFinite(started) && Number.isFinite(ended) && ended >= started ? [started, ended] : null;
+  }
+  function timed(trace, step) {
+    const span = recordedSpan(trace, step.id);
+    return span ? Object.assign(step, { startedAt: span[0], endedAt: span[1], durationKnown: true }) : step;
+  }
+  // An activity's total is its recorded first start to last end; an activity
+  // with an unrecorded row claims no total.
+  function timedActivity(id, steps, extra) {
+    const known = steps.filter(step => step.durationKnown !== false);
+    const row = activity(id, null, null, steps, extra);
+    if (!known.length) return Object.assign(row, { durationKnown: false });
+    return Object.assign(row, {
+      startedAt: Math.min(...known.map(step => step.startedAt)),
+      endedAt: Math.max(...known.map(step => step.endedAt)),
+    });
+  }
 
-  /* The walkthrough reads as one ordinary research conversation: a clinical
-     question, the plan to confirm, the answer in the run's own numbers, and
-     the questions to ask next. The governance record stays one click away. */
-  function messages() {
+  /* The walkthrough reads as one ordinary research conversation in six
+     chapters: the question, how its words map to the data, the plan and its
+     literature, the researcher's confirmation, the analysis, and the reading
+     of the result. A `card` beat is a traceability stop the replay owner
+     (screens-guided-pi-demo-walkthrough.js) renders from the run's trace. */
+  function chapters(trace) {
     const documents = reviewResources();
     const run = standardRunResources();
     const resource = name => run.find(row => row.artifact === name);
+    const step = (...args) => timed(trace, traceStep(...args));
+    const evidenceCount = trace && trace.evidence && Number(trace.evidence.count);
+    const registered = Number.isFinite(evidenceCount) && evidenceCount > 0 ? evidenceCount.toLocaleString('en-US') : '125';
     return [
-      message('reviewer-user-1', 'user', tr(
-        'In MIMIC-IV adult ICU stays, how common is the experimental SOFA-2 sepsis phenotype within the first 24 hours of admission, and how does in-hospital mortality differ with and without it?',
-        '在 MIMIC-IV 的成人 ICU 入住中，入 ICU 后 24 小时内出现实验性 SOFA-2 脓毒症表型的比例有多高？有和没有这个表型的患者，院内死亡率差多少？',
-      )),
-      activity('reviewer-planning', 1000, 194000, [
-        traceStep('p-scope', tr('Checked the question and the data scope', '核对研究问题与数据范围'), tr('MIMIC-IV and adult ICU stays confirmed.', '已确认使用 MIMIC-IV 与成人 ICU 入住。'), resource('run_context.json')),
-        traceStep('p-cohort', tr('Analysis population: 94,458 adult ICU stays', '分析人群：94,458 个成人 ICU 入住'), tr('Age ≥ 18; no stay was excluded.', '年龄 ≥ 18 岁，没有入住被排除。'), resource('cohort_summary.json')),
-        traceStep('p-literature', tr('Collected the methods references', '整理方法学依据'), tr('Nine methods references kept (STROBE, RECORD, Sepsis-3 and others); no novelty search was run.', '保留 9 篇方法学文献（STROBE、RECORD、Sepsis-3 等）；这次没有做新颖性检索。'), resource('literature_evidence.json')),
-        traceStep('p-draft-1', tr('Plan draft 1 failed the scientific checks and was revised', '计划草案第 1 版未通过科学检查，已自动修订'), tr('A rejected draft never becomes the plan.', '被否决的草案不会成为计划。')),
-        traceStep('p-draft-2', tr('Plan draft 2 passed: six steps', '计划草案第 2 版通过检查：共 6 个步骤'), '', resource('agent_plan.json')),
-        traceStep('p-review', tr('Scientific review of the plan', '计划科学审阅'), tr('Ready to run; the missing novelty search and independent review are kept as limitations.', '可以执行；缺少的新颖性检索和独立审阅记为局限。'), resource('scientific_plan_review.json')),
-      ], { displayTitle: tr('Plan ready for your review', '计划已就绪，等待你确认'), childJobId: 'reviewer-plan-run' }),
-      message('reviewer-assistant-1', 'assistant', tr(
-        'I drafted a six-step descriptive plan. Please confirm it before the analysis starts:\n\n- **Population**: all adult ICU stays in MIMIC-IV (94,458)\n- **Exposure**: the experimental SOFA-2 sepsis phenotype within 24 hours of ICU admission (yes / no)\n- **Outcome**: in-hospital death\n- **Method**: counts and proportions by phenotype; no adjustment and no significance test\n- **Data quality**: a separate audit of missing values that keeps not-applicable death times apart from true missingness\n\nThe complete plan and its methods references are below.',
-        '我拟定了一份 6 步的描述性分析计划，开始分析前请你确认：\n\n- **人群**：MIMIC-IV 中全部成人 ICU 入住（94,458 个）\n- **暴露**：入 ICU 后 24 小时内是否出现实验性 SOFA-2 脓毒症表型\n- **结局**：院内死亡\n- **方法**：按有无表型计数并计算比例，不做调整，不做显著性检验\n- **数据质量**：单独审计缺失值，并把“不适用”的死亡时间和真正的缺失分开\n\n完整计划和方法学依据可以从下方打开。',
-      ), [resource('agent_plan.json'), resource('literature_evidence.json'), resource('scientific_plan_review.json')]),
-      // In a project only the review control approves a plan; a chat message
-      // cannot, so the walkthrough shows the control that was pressed.
-      {
-        id: 'reviewer-plan-approval', role: 'demo_action',
-        label: tr('Plan confirmed: “Confirm plan and prepare data”', '已确认方案：「确认方案并准备数据」'),
-        note: tr('Pressed in the review control under the plan; typing in the conversation does not approve a plan.',
-          '在计划下方的审阅控件中点击；在对话里打字不会批准计划。'),
-      },
-      activity('reviewer-execution', 200000, 578000, [
-        traceStep('e-1', tr('Step 1/6: Cohort and denominators', '第 1/6 步：队列与分母核算'), tr('All 94,458 stays retained.', '94,458 个入住全部保留。'), resource('cohort_summary.json')),
-        traceStep('e-2', tr('Step 2/6: Measurement and missingness audit', '第 2/6 步：测量与缺失审计'), tr('Death time applies only to the 9,466 deaths; 0 of them missing.', '死亡时间只对 9,466 例死亡适用，其中缺失 0 例。'), artifactResource('applicability_audit.json', tr('Applicability audit', '适用性审计'))),
-        traceStep('e-3', tr('Step 3/6: Group proportions and outcomes', '第 3/6 步：分组比例与结局'), tr('Counts and proportions only; no inferential estimate added.', '只计数和比例，不新增推断估计。'), resource('result_tables.json')),
-        traceStep('e-4', tr('Step 4/6: Result figure', '第 4/6 步：结果图'), '', resource('figure_gallery.json')),
-        traceStep('e-5', tr('Step 5/6: Cohort flow figure', '第 5/6 步：队列流程图'), '', resource('figure_gallery.json')),
-        traceStep('e-6', tr('Step 6/6: Data-quality figure', '第 6/6 步：数据质量图'), '', resource('figure_gallery.json')),
-        traceStep('e-verify', tr('Checked every number against the result tables', '核对数字与分母'), tr('125 evidence records registered; each reported number traces to a result table.', '登记 125 条证据，报告中的数字都能对回结果表。'), resource('evidence_ledger.json'), [resource('quality_gate.json'), resource('source_run_manifest.json')]),
-        traceStep('e-report', tr('Wrote the review report', '生成审阅报告'), tr('No clinical manuscript: the novelty search and independent scientific review are not done, a boundary kept by design.', '没有生成临床论文：新颖性检索和独立科学审阅尚未完成，这是按设计保留的边界。'), documents[0], documents.concat([resource('scientific_readiness.json'), resource('manuscript_draft.json')])),
-      ], { displayTitle: tr('Analysis complete', '分析已完成'), childJobId: 'reviewer-execution-run' }),
-      message('reviewer-assistant-2', 'assistant', tr(
-        '**Result**: of 94,458 adult ICU stays, 33,997 (35.99%) had the experimental SOFA-2 sepsis phenotype within 24 hours of ICU admission.\n\nIn-hospital death: 13.18% (4,480/33,997) with the phenotype and 8.25% (4,986/60,461) without it; 10.02% (9,466/94,458) overall.\n\nThis is an unadjusted descriptive comparison and does not show cause and effect. The phenotype is assessed over the first 24 hours, and deaths during that window are not handled separately, so read the difference with that in mind.',
-        '**结果**：在 94,458 个成人 ICU 入住中，33,997 个（35.99%）在入 ICU 后 24 小时内出现实验性 SOFA-2 脓毒症表型。\n\n院内死亡：有表型组 13.18%（4,480/33,997），无表型组 8.25%（4,986/60,461）；总体 10.02%（9,466/94,458）。\n\n这是未调整的描述性比较，不能说明因果。表型在入 ICU 后 24 小时内判定，这段时间里的早期死亡没有单独处理，解读差异时要注意这一点。',
-      ), [resource('result_tables.json'), resource('figure_gallery.json'), documents[0]]),
+      { id: 'question', label: tr('Question', '提问'), beats: [
+        message('reviewer-user-1', 'user', tr(
+          'In MIMIC-IV adult ICU stays, how common is the experimental SOFA-2 sepsis phenotype within the first 24 hours of admission, and how does in-hospital mortality differ with and without it?',
+          '在 MIMIC-IV 的成人 ICU 入住中，入 ICU 后 24 小时内出现实验性 SOFA-2 脓毒症表型的比例有多高？有和没有这个表型的患者，院内死亡率差多少？',
+        )),
+      ] },
+      { id: 'data', label: tr('Data mapping', '数据映射'), beats: [
+        timedActivity('reviewer-context', [
+          step('p-scope', tr('Checked the question and the data scope', '核对研究问题与数据范围'), tr('MIMIC-IV and adult ICU stays confirmed.', '已确认使用 MIMIC-IV 与成人 ICU 入住。'), resource('run_context.json')),
+          step('p-cohort', tr('Analysis population: 94,458 adult ICU stays', '分析人群：94,458 个成人 ICU 入住'), tr('Age ≥ 18; no stay was excluded.', '年龄 ≥ 18 岁，没有入住被排除。'), resource('cohort_summary.json')),
+        ], { displayTitle: tr('The question is mapped to the data', '问题已对应到数据') }),
+        { card: 'dictionary', stop: true },
+      ] },
+      { id: 'plan', label: tr('Plan and literature', '计划与文献'), beats: [
+        timedActivity('reviewer-planning', [
+          step('p-literature', tr('Collected the methods references', '整理方法学依据'), tr('Nine methods references kept (STROBE, RECORD, Sepsis-3 and others); no novelty search was run.', '保留 9 篇方法学文献（STROBE、RECORD、Sepsis-3 等）；这次没有做新颖性检索。'), resource('literature_evidence.json')),
+          step('p-draft', tr('Plan draft 1 passed the contract checks: six steps', '计划草案第 1 版通过合同检查：共 6 个步骤'), '', resource('agent_plan.json')),
+          step('p-review', tr('Scientific review of the plan', '计划科学审阅'), tr('Ready to run; the missing novelty search and independent review are kept as limitations.', '可以执行；缺少的新颖性检索和独立审阅记为局限。'), resource('scientific_plan_review.json')),
+        ], { displayTitle: tr('Plan ready for your review', '计划已就绪，等待你确认'), childJobId: 'reviewer-plan-run' }),
+        message('reviewer-assistant-1', 'assistant', tr(
+          'I drafted a six-step descriptive plan. Please confirm it before the analysis starts:\n\n- **Population**: all adult ICU stays in MIMIC-IV (94,458)\n- **Exposure**: the experimental SOFA-2 sepsis phenotype within 24 hours of ICU admission (yes / no)\n- **Outcome**: in-hospital death\n- **Method**: counts and proportions by phenotype; no adjustment and no significance test\n- **Data quality**: a separate audit of missing values that keeps not-applicable death times apart from true missingness\n\nThe complete plan and its methods references are below.',
+          '我拟定了一份 6 步的描述性分析计划，开始分析前请你确认：\n\n- **人群**：MIMIC-IV 中全部成人 ICU 入住（94,458 个）\n- **暴露**：入 ICU 后 24 小时内是否出现实验性 SOFA-2 脓毒症表型\n- **结局**：院内死亡\n- **方法**：按有无表型计数并计算比例，不做调整，不做显著性检验\n- **数据质量**：单独审计缺失值，并把“不适用”的死亡时间和真正的缺失分开\n\n完整计划和方法学依据可以从下方打开。',
+        ), [resource('agent_plan.json'), resource('literature_evidence.json'), resource('scientific_plan_review.json')]),
+        { card: 'literature', stop: true },
+      ] },
+      { id: 'confirm', label: tr('Your confirmation', '你确认'), beats: [
+        // In a project only the review control approves a plan; a chat
+        // message cannot, so the walkthrough waits for that control.
+        { card: 'confirm', stop: 'confirm' },
+        {
+          id: 'reviewer-plan-approval', role: 'demo_action',
+          label: tr('Plan confirmed: “Confirm plan and prepare data”', '已确认方案：「确认方案并准备数据」'),
+          note: tr('Pressed in the review control under the plan; typing in the conversation does not approve a plan.',
+            '在计划下方的审阅控件中点击；在对话里打字不会批准计划。'),
+        },
+      ] },
+      { id: 'analysis', label: tr('Analysis and figures', '分析与图表'), beats: [
+        timedActivity('reviewer-execution', [
+          step('e-1', tr('Step 1/6: Cohort and denominators', '第 1/6 步：队列与分母核算'), tr('All 94,458 stays retained.', '94,458 个入住全部保留。'), resource('cohort_summary.json')),
+          step('e-2', tr('Step 2/6: Measurement and missingness audit', '第 2/6 步：测量与缺失审计'), tr('Death time applies only to the 9,466 deaths; 0 of them missing.', '死亡时间只对 9,466 例死亡适用，其中缺失 0 例。'), artifactResource('applicability_audit.json', tr('Applicability audit', '适用性审计'))),
+          step('e-3', tr('Step 3/6: Group proportions and outcomes', '第 3/6 步：分组比例与结局'), tr('Counts and proportions only; no inferential estimate added.', '只计数和比例，不新增推断估计。'), resource('result_tables.json')),
+          step('e-4', tr('Step 4/6: Result figure', '第 4/6 步：结果图'), '', resource('figure_gallery.json')),
+          step('e-5', tr('Step 5/6: Cohort flow figure', '第 5/6 步：队列流程图'), '', resource('figure_gallery.json')),
+          step('e-6', tr('Step 6/6: Data-quality figure', '第 6/6 步：数据质量图'), '', resource('figure_gallery.json')),
+          step('e-figures', tr('Audited the figures', '审核图件'), '', resource('figure_gallery.json')),
+        ], { displayTitle: tr('Analysis complete', '分析已完成'), childJobId: 'reviewer-execution-run' }),
+        { card: 'result', stop: true },
+      ] },
+      { id: 'interpretation', label: tr('Interpretation', '解读与追问'), beats: [
+        message('reviewer-assistant-2', 'assistant', tr(
+          '**Result**: of 94,458 adult ICU stays, 33,997 (35.99%) had the experimental SOFA-2 sepsis phenotype within 24 hours of ICU admission.\n\nIn-hospital death: 13.18% (4,480/33,997) with the phenotype and 8.25% (4,986/60,461) without it; 10.02% (9,466/94,458) overall.\n\nThis is an unadjusted descriptive comparison and does not show cause and effect. The phenotype is assessed over the first 24 hours, and deaths during that window are not handled separately, so read the difference with that in mind.',
+          '**结果**：在 94,458 个成人 ICU 入住中，33,997 个（35.99%）在入 ICU 后 24 小时内出现实验性 SOFA-2 脓毒症表型。\n\n院内死亡：有表型组 13.18%（4,480/33,997），无表型组 8.25%（4,986/60,461）；总体 10.02%（9,466/94,458）。\n\n这是未调整的描述性比较，不能说明因果。表型在入 ICU 后 24 小时内判定，这段时间里的早期死亡没有单独处理，解读差异时要注意这一点。',
+        ), [resource('result_tables.json'), resource('figure_gallery.json'), documents[0]]),
+        { card: 'boundary' },
+        timedActivity('reviewer-writing', [
+          step('e-writer', tr('Manuscript stopped by the evidence check', '撰写论文：被证据检查拦下'), tr('Strict evidence enforcement blocked the manuscript, so no clinical paper was written.', '严格证据检查拦下了论文生成，没有写出临床论文。'), resource('manuscript_draft.json')),
+          step('e-register', tr(`Registered ${registered} evidence records`, `登记 ${registered} 条证据`), tr('Every number in the answer opens to its result table and code.', '回答里的每个数字都能点开，追到结果表和代码。'), resource('evidence_ledger.json'), [resource('quality_gate.json'), resource('source_run_manifest.json')]),
+          step('e-report', tr('Wrote the review report', '生成审阅报告'), tr('No clinical manuscript: the novelty search and independent scientific review are not done, a boundary kept by design.', '没有生成临床论文：新颖性检索和独立科学审阅尚未完成，这是按设计保留的边界。'), documents[0], documents.concat([resource('scientific_readiness.json'), resource('manuscript_draft.json')])),
+        ], { displayTitle: tr('Run complete', '运行结束') }),
+        { card: 'followups', stop: 'end' },
+      ] },
     ];
+  }
+  // The conversation rows alone, without the replay's traceability stops.
+  function messages(trace) {
+    return chapters(trace || null).flatMap(chapter => chapter.beats).filter(beat => !beat.card);
   }
 
   // Next questions for this result; shown, not sent, in the read-only demo.
@@ -499,6 +553,25 @@
     ];
   }
 
+  function figureCaption() {
+    return tr('Main figure · A: share of stays by phenotype (0 = no, 1 = yes); B: in-hospital mortality by phenotype', '主图 · A：有无表型的入住占比（0 = 无，1 = 有）；B：各组院内死亡率');
+  }
+  // The folded review and governance record under the answer.
+  function governanceHtml(ctx) {
+    const esc = ctx.esc;
+    const button = typeof ctx.button === 'function' ? ctx.button : () => '';
+    const run = standardRunResources();
+    const resource = name => run.find(row => row.artifact === name);
+    const documents = reviewResources();
+    return `<details class="gpi-response-review gpi-demo-governance"><summary>${esc(tr('Review and governance record', '审阅与治理记录'))}</summary>
+        <div class="gpi-demo-governance-body">
+          <p><strong>${esc(tr('Done', '已完成'))}</strong>${esc(tr(': plan reviewed before analysis (six steps); 6/6 steps run; the numbers in the answer come from the result tables; the browser received aggregate tables only (no patient rows, paths or credentials).', '：分析前审阅计划（6 步）；6/6 步执行完成；回答里的数字都取自结果表；浏览器只收到聚合表（无患者行、路径或凭据）。'))}</p>
+          <p><strong>${esc(tr('Kept open by design', '按设计保留'))}</strong>${esc(tr(': no novelty search and no independent scientific review, so no clinical manuscript was written. This does not change the analysis above.', '：没有做新颖性检索和独立科学审阅，所以没有生成临床论文；这不影响上面的分析结果。'))}</p>
+          <p><strong>${esc(tr('Model use', '模型用量'))}</strong>${esc(tr(': 14 calls · 162,256 tokens · about $2.31', '：14 次调用 · 162,256 tokens · 约 $2.31'))}</p>
+          <div class="gpi-demo-governance-links">${documents.map(doc => button(doc)).join('')}${button(resource('scientific_readiness.json'), tr('Scientific review', '科学审阅'))}</div>
+        </div>
+      </details>`;
+  }
   /* The answer's figure and table, the follow-up questions, and the folded
      governance record. The figure is the run's registered main figure,
      extracted unchanged from the reviewer dossier (sha256 37a29be8…). */
@@ -507,7 +580,6 @@
     const button = typeof ctx.button === 'function' ? ctx.button : () => '';
     const run = standardRunResources();
     const resource = name => run.find(row => row.artifact === name);
-    const documents = reviewResources();
     const rows = [
       [tr('With the phenotype', '有表型'), '33,997', '35.99%', '4,480', '13.18%'],
       [tr('Without the phenotype', '无表型'), '60,461', '64.01%', '4,986', '8.25%'],
@@ -517,18 +589,11 @@
     return `<section class="gpi-demo-result" aria-label="${esc(tr('Demo result', '演示结果'))}">
       <figure class="gpi-run-answer-figure">
         <img src="assets/demo/sofa2-phenotype-mortality.png?v=20260922-demo2" alt="${esc(tr('Phenotype share and in-hospital mortality by phenotype', '表型占比与各组院内死亡率'))}" loading="lazy" decoding="async">
-        <figcaption>${esc(tr('Main figure · A: share of stays by phenotype (0 = no, 1 = yes); B: in-hospital mortality by phenotype', '主图 · A：有无表型的入住占比（0 = 无，1 = 有）；B：各组院内死亡率'))} · ${button(resource('figure_gallery.json'), tr('All figures', '全部图表'))}</figcaption>
+        <figcaption>${esc(figureCaption())} · ${button(resource('figure_gallery.json'), tr('All figures', '全部图表'))}</figcaption>
       </figure>
       <div class="gpi-demo-table"><table><thead><tr>${headers.map(label => `<th scope="col">${esc(label)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr><th scope="row">${esc(row[0])}</th>${row.slice(1).map(cell => `<td>${esc(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
-      <div class="gpi-followups gpi-demo-followups"><div class="gpi-followups-head">${esc(tr('Follow-up questions', '可以继续问'))}</div><div class="gpi-followups-list">${followUps().map(text => `<div class="gpi-followup-row"><span class="gpi-followup-prompt" aria-disabled="true"><span aria-hidden="true">↳</span>${esc(text)}</span></div>`).join('')}</div></div>
-      <details class="gpi-response-review gpi-demo-governance"><summary>${esc(tr('Review and governance record', '审阅与治理记录'))}</summary>
-        <div class="gpi-demo-governance-body">
-          <p><strong>${esc(tr('Done', '已完成'))}</strong>${esc(tr(': plan reviewed before analysis (six steps); 6/6 steps run; every number checked against the result tables; the browser received aggregate tables only (no patient rows, paths or credentials).', '：分析前审阅计划（6 步）；6/6 步执行完成；所有数字对回结果表；浏览器只收到聚合表（无患者行、路径或凭据）。'))}</p>
-          <p><strong>${esc(tr('Kept open by design', '按设计保留'))}</strong>${esc(tr(': no novelty search and no independent scientific review, so no clinical manuscript was written. This does not change the analysis above.', '：没有做新颖性检索和独立科学审阅，所以没有生成临床论文；这不影响上面的分析结果。'))}</p>
-          <p><strong>${esc(tr('Model use', '模型用量'))}</strong>${esc(tr(': 14 calls · 162,256 tokens · about $2.31', '：14 次调用 · 162,256 tokens · 约 $2.31'))}</p>
-          <div class="gpi-demo-governance-links">${documents.map(doc => button(doc)).join('')}${button(resource('scientific_readiness.json'), tr('Scientific review', '科学审阅'))}</div>
-        </div>
-      </details>
+      ${ctx.figureOnly ? '' : `<div class="gpi-followups gpi-demo-followups"><div class="gpi-followups-head">${esc(tr('Follow-up questions', '可以继续问'))}</div><div class="gpi-followups-list">${followUps().map(text => `<div class="gpi-followup-row"><span class="gpi-followup-prompt" aria-disabled="true"><span aria-hidden="true">↳</span>${esc(text)}</span></div>`).join('')}</div></div>`}
+      ${ctx.figureOnly ? '' : governanceHtml(ctx)}
     </section>`;
   }
 
@@ -582,8 +647,9 @@
   function artifactLabel(name) { const item = artifacts()[String(name || '')]; return item ? item.title : String(name || ''); }
 
   window.EasyICU.guidedPi.declare('demo', {
-    messages, workflow, artifact, previewArtifact, hasArtifact, artifactLabel,
+    messages, chapters, workflow, artifact, previewArtifact, hasArtifact, artifactLabel,
     reviewResources, primaryDocument: () => artifactResource('figure_gallery.json', tr('Figures', '图表')),
-    followUps, resultHtml, shelfResources, sourceRunId: SOURCE_RUN_ID,
+    followUps, resultHtml, figureCaption, governanceHtml, shelfResources,
+    standardResources: standardRunResources, sourceRunId: SOURCE_RUN_ID,
   });
 })();

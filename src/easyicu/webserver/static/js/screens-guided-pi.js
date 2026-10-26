@@ -564,13 +564,18 @@
     state.demoMode = true;
     state.demoScrollTopPending = true;
     state.error = '';
+    // The walkthrough replays from the question; it opens no file up front.
+    const walkthrough = MODULES.optional('demoWalkthrough');
+    if (walkthrough) walkthrough.start();
     setShell('pi');
-    const primary = typeof demo.primaryDocument === 'function' ? demo.primaryDocument() : null;
+    const primary = !walkthrough && typeof demo.primaryDocument === 'function' ? demo.primaryDocument() : null;
     if (primary && preview && preview.open) {
       preview.open(primary, projectId());
     }
   }
   function closeDemo() {
+    const walkthrough = MODULES.optional('demoWalkthrough');
+    if (walkthrough) walkthrough.stop();
     state.demoMode = false;
     state.demoScrollTopPending = false;
     const preview = MODULES.optional('preview');
