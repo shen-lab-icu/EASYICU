@@ -1,0 +1,21 @@
+{
+  "schema_version": "easyicu.replay-gallery-registry/1",
+  "entries": [
+    {
+      "id": "synthetic-group-comparison",
+      "run_id": "synthetic-group-comparison",
+      "run_dir": "replay-fixtures/synthetic-group-comparison",
+      "source_manifest_sha256": "ca5b92cd42bfcdd32bf129900de8f56a9c12a8c38ecfe782f12075645c641b42",
+      "title": "Synthetic group comparison",
+      "study_type": "association"
+    },
+    {
+      "id": "synthetic-cohort-summary",
+      "run_id": "synthetic-cohort-summary",
+      "run_dir": "replay-fixtures/synthetic-cohort-summary",
+      "source_manifest_sha256": "624d65d1bcc5ac1b2f67e918e94e21ee0eea07101c668a7fa161be942323fd98",
+      "title": "Synthetic cohort summary",
+      "study_type": "descriptive"
+    }
+  ]
+}

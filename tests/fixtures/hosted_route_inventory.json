@@ -1,5 +1,15 @@
 [
   {
+    "method": "POST",
+    "route": "/api/agent-runs/download-replay",
+    "fields": ["body:run_ref"],
+    "reaches": "run_refs.resolve -> require_instance_path -> study_replay.build_study_replay: digest-pinned wrapper projections, aggregate tables and cleared figures only -> in-memory ZIP",
+    "protection": "hosted.guard_request + server-issued run_ref only (no client filesystem coordinate) + require_instance_path; the exporter refuses patient-level rows, groups under 20, paths and credentials with a stable code",
+    "guarded_fields": [],
+    "writes": "none",
+    "write_owner": "In-memory ZIP returned to the requester; no filesystem destination and no upload."
+  },
+  {
     "method": "GET",
     "route": "/api/copilot/pi/preferences",
     "fields": [],

@@ -626,6 +626,12 @@
     const match = disposition.match(/filename="([^"]+)"/i);
     triggerDownload(await res.blob(), match ? match[1] : 'easyicu-problem.zip');
   }
+  // A shareable replay of one run: aggregates only, checked by the host's exporter.
+  async function downloadStudyReplay(runRef) {
+    const file = await postBlob('/api/agent-runs/download-replay', { run_ref: runRef });
+    triggerDownload(file.blob, file.filename);
+    return file;
+  }
   // Runs and plans that need the researcher, per persistent client id.
   function loadAttention(params) {
     const query = new URLSearchParams({ client_id: String(params && params.client_id || ''), after: String(params && params.after || 0), limit: String(params && params.limit || 100) });
@@ -993,6 +999,7 @@
   window.EU_API.loadConversationEgress = loadConversationEgress;
   window.EU_API.loadWhatsNew = loadWhatsNew;
   window.EU_API.downloadProblemBundle = downloadProblemBundle;
+  window.EU_API.downloadStudyReplay = downloadStudyReplay;
   window.EU_API.loadPiRunScientificReview = loadPiRunScientificReview;
   window.EU_API.acknowledgeAttention = acknowledgeAttention;
   window.EU_API.loadPersonalPreferences = loadPersonalPreferences;

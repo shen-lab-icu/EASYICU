@@ -1,0 +1,14 @@
+[
+  {
+    "description": "Synthetic aggregate table",
+    "evidence_id": "aggregate",
+    "generation_mode": "deterministic_standard",
+    "kind": "table",
+    "metadata": {},
+    "produced_by_step": "aggregate",
+    "producer": "standard_executor",
+    "relative_path": "evidence/aggregate.csv",
+    "script_evidence_id": "fixture-script",
+    "sha256": "19477d4ba957cc064d1a2fd5e0eb7d135063ff28c9d7b9668e5c1ccb9bd4bb54"
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "question": "How do aggregate outcomes differ between synthetic groups?",
+  "run_id": "synthetic-group-comparison",
+  "source": {
+    "database": "synthetic",
+    "label": "Synthetic fixture"
+  },
+  "study_id": "synthetic-group-comparison"
+}

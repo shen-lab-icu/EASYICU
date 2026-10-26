@@ -1,0 +1,9 @@
+{
+  "question": "What is the aggregate composition of the synthetic cohort?",
+  "run_id": "synthetic-cohort-summary",
+  "source": {
+    "database": "synthetic",
+    "label": "Synthetic fixture"
+  },
+  "study_id": "synthetic-cohort-summary"
+}

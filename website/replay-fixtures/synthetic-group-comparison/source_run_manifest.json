@@ -1,0 +1,22 @@
+{
+  "run_id": "synthetic-group-comparison",
+  "source": {
+    "database": "synthetic",
+    "label": "Synthetic fixture"
+  },
+  "status": "analysis_only",
+  "trace_timings": [
+    {
+      "phase": "step",
+      "status": "running",
+      "step_id": "aggregate",
+      "timestamp": "2026-01-01T00:00:00+00:00"
+    },
+    {
+      "phase": "step",
+      "status": "done",
+      "step_id": "aggregate",
+      "timestamp": "2026-01-01T00:00:02+00:00"
+    }
+  ]
+}

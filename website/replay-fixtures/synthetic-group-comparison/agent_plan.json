@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {
+      "description": "Summarize synthetic groups",
+      "planned_analysis_role": "primary",
+      "step_id": "aggregate"
+    }
+  ],
+  "study_type": "association",
+  "title": "Synthetic fixture"
+}

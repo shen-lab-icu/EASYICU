@@ -33,6 +33,7 @@ function harness(overrides = {}) {
       loadRunEgress: async ref => { calls.push(['run', ref]); if (overrides.runFailure) throw overrides.runFailure; return overrides.view || VIEW; },
       loadConversationEgress: async id => { calls.push(['conversation', id]); return { ...VIEW, requests: [] }; },
       downloadProblemBundle: async ref => { calls.push(['bundle', ref]); if (overrides.bundleFailure) throw overrides.bundleFailure; },
+      downloadStudyReplay: async ref => { calls.push(['replay', ref]); if (overrides.replayFailure) throw overrides.replayFailure; },
     },
   };
   const document = {
@@ -111,4 +112,23 @@ test('the problem report downloads by run_ref and says when it failed', async ()
   await settle();
   assert.equal(other.textContent, '下载失败，点此重试');
   assert.equal(other.disabled, false);
+});
+
+test('a replay downloads by run_ref; a refusal is said in plain words beside the actions', async () => {
+  const refusal = Object.assign(new Error('x'), { code: 'replay_small_cell_forbidden' });
+  const { trust, calls, listeners } = harness({ replayFailure: refusal });
+  assert.match(trust.replayButtonHtml('rr_1'), /<button type="button" data-gpi-study-replay="rr_1">下载研究回放<\/button>/);
+  const inserted = [];
+  const actions = { insertAdjacentHTML: (where, html) => inserted.push([where, html]), parentElement: { querySelector: () => null } };
+  const button = { dataset: { gpiStudyReplay: 'rr_1' }, disabled: false, parentElement: actions };
+  listeners.click({ target: { closest: selector => selector === '[data-gpi-study-replay]' ? button : null }, preventDefault() {} });
+  await settle();
+  assert.deepEqual(calls, [['replay', 'rr_1']]);
+  assert.equal(inserted[0][0], 'afterend');
+  assert.match(inserted[0][1], /role="alert" data-gpi-study-replay-refusal>有分组少于 20 人，按数据使用协议不能分享这份回放。<\/p>/);
+  assert.equal(button.disabled, false);
+  // Every exporter code reads as a sentence; an unknown one still says no replay was made.
+  assert.equal(trust.replayRefusal('replay_figure_uncleared'), '有图没有通过外传检查，不能生成回放。');
+  assert.equal(trust.replayRefusal('replay_digest_mismatch'), '运行记录不完整或已改动，不能生成回放。');
+  assert.equal(trust.replayRefusal('something_else'), '无法生成回放。');
 });

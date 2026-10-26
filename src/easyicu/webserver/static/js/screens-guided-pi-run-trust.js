@@ -1,10 +1,13 @@
-/* Owner: what a run or a conversation sent to the model, and a run's problem report.
+/* Owner: what leaves the machine for a run: what it sent to the model, its
+   problem report and its shareable replay.
    The host's request records (webserver/model_request_records.py) own what
    is recorded for each model request: its purpose, provider, kind of content,
    size and state, never its text. The host's problem bundle
-   (webserver/problem_bundle.py) owns the diagnostic zip. This file lists the
-   records in plain words and starts the local download; it sends nothing and
-   reads nothing else. The run-files and run-stop owners place its controls. */
+   (webserver/problem_bundle.py) owns the diagnostic zip, and its replay
+   exporter (webserver/study_replay.py) owns what a replay may contain and
+   refuses anything else with a code. This file lists the records in plain
+   words and starts the local downloads; it sends nothing and reads nothing
+   else. The run-files and run-stop owners place its controls. */
 (function () {
   'use strict';
   const { esc } = window.EU_HTML;
@@ -143,6 +146,40 @@
     }
   }
 
+  // The exporter's refusals, in the researcher's words.
+  const REPLAY_REFUSALS = [
+    [/^replay_small_cell_forbidden$/, ['A group has fewer than 20 patients, so the data use agreement does not allow sharing this replay.', '有分组少于 20 人，按数据使用协议不能分享这份回放。']],
+    [/^replay_patient_level_forbidden$/, ['The results contain patient-level data, so no replay is made.', '结果里含有患者级数据，不能生成回放。']],
+    [/^replay_aggregate_unproven$|^replay_evidence_class_forbidden$/, ['A result file could not be confirmed as aggregate, so no replay is made.', '有结果文件无法确认是汇总数据，不能生成回放。']],
+    [/^replay_figure_/, ['A figure did not pass the sharing check, so no replay is made.', '有图没有通过外传检查，不能生成回放。']],
+    [/^replay_path_forbidden$|^replay_credential_in_identity$/, ['The records name a local path or a credential, so no replay is made.', '记录里有本机路径或凭据，不能生成回放。']],
+    [/^replay_source_unsupported$/, ['Replays are not available for this data source yet.', '这个数据来源暂不支持生成回放。']],
+    [/^replay_size_limit$/, ['The replay would exceed 32 MB.', '回放会超过 32 MB 上限。']],
+    [/^run_ref_unknown$/, ['The run list is out of date. Refresh the status and try again.', '运行列表已过期，请刷新状态后再试。']],
+    [/^replay_/, ['The run’s records are incomplete or changed, so no replay is made.', '运行记录不完整或已改动，不能生成回放。']],
+  ];
+  function replayRefusal(code) {
+    const known = REPLAY_REFUSALS.find(([pattern]) => pattern.test(String(code || '')));
+    return known ? tr(...known[1]) : tr('The replay could not be made.', '无法生成回放。');
+  }
+  function replayButtonHtml(runRef) {
+    return runRef ? `<button type="button" data-gpi-study-replay="${esc(runRef)}">${esc(tr('Download replay', '下载研究回放'))}</button>` : '';
+  }
+  async function downloadReplay(button) {
+    if (button.disabled || typeof api().downloadStudyReplay !== 'function') return;
+    const actions = button.parentElement;
+    const old = actions && actions.parentElement ? actions.parentElement.querySelector('[data-gpi-study-replay-refusal]') : null;
+    if (old) old.remove();
+    button.disabled = true;
+    try {
+      await api().downloadStudyReplay(button.dataset.gpiStudyReplay);
+    } catch (failure) {
+      if (actions) actions.insertAdjacentHTML('afterend', `<p class="gpi-run-files-error" role="alert" data-gpi-study-replay-refusal>${esc(replayRefusal(failure && failure.code))}</p>`);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   // A conversation's records open in a dialog from the model menu.
   let dialog = null;
   async function openConversation(sessionId) {
@@ -170,10 +207,13 @@
       if (node && node.matches && node.matches('[data-gpi-trust-run]') && node.open) void loadRun(node.dataset.gpiTrustRun);
     }, true);
     document.addEventListener('click', event => {
-      const button = event.target && event.target.closest ? event.target.closest('[data-gpi-problem-bundle]') : null;
-      if (button) { event.preventDefault(); void downloadProblem(button); }
+      const closest = selector => (event.target && event.target.closest ? event.target.closest(selector) : null);
+      const button = closest('[data-gpi-problem-bundle]');
+      if (button) { event.preventDefault(); void downloadProblem(button); return; }
+      const replay = closest('[data-gpi-study-replay]');
+      if (replay) { event.preventDefault(); void downloadReplay(replay); }
     });
   }
 
-  window.EasyICU.guidedPi.declare('runTrust', { sectionHtml, problemButtonHtml, recordsHtml, openConversation, loadRun });
+  window.EasyICU.guidedPi.declare('runTrust', { sectionHtml, problemButtonHtml, replayButtonHtml, replayRefusal, recordsHtml, openConversation, loadRun });
 })();

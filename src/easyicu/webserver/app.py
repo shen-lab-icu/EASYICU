@@ -65,6 +65,7 @@ from easyicu.webserver.routes.pi_copilot import router as pi_copilot_router
 from easyicu.webserver.routes.reviews import router as reviews_router
 from easyicu.webserver.routes.search import router as search_router
 from easyicu.webserver.routes.study_contexts import router as study_contexts_router
+from easyicu.webserver.routes.study_replay import router as study_replay_router
 from easyicu.webserver.routes.system import router as system_router
 from easyicu.webserver.routes.trust_help import router as trust_help_router
 from easyicu.webserver.routes.workspaces import router as workspaces_router
@@ -322,6 +323,7 @@ app.include_router(system_router)
 app.include_router(search_router)
 app.include_router(attention_router)
 app.include_router(trust_help_router)
+app.include_router(study_replay_router)
 app.include_router(extensions_router)
 app.include_router(local_data_router)
 app.include_router(reviews_router)

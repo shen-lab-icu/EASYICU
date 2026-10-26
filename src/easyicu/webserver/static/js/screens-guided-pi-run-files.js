@@ -304,9 +304,9 @@
       const extraction = state.extractionError ? `<p>${esc(state.extractionError)}</p>`
         : state.loading && !state.extraction ? `<p>${tr('Reading extraction record…', '正在读取提取记录…')}</p>`
           : extractionOwner ? extractionOwner.renderExtraction(state.extraction) : `<p>${tr('Extraction record: Not recorded', '提取记录：未记录')}</p>`;
-      // What the run sent to the model and its problem report (runTrust).
+      // What the run sent to the model, its replay and problem report (runTrust).
       const trust = modules.optional('runTrust');
-      return `${error}<div class="gpi-run-files-actions"><button type="button" data-run-files-bundle ${disabled || !artifacts.length ? 'disabled' : ''}>${tr('Download all files', '下载全部文件')}</button><button type="button" data-run-files-reload ${disabled ? 'disabled' : ''}>${tr('Refresh status', '刷新状态')}</button>${trust ? trust.problemButtonHtml(review.run_ref, '') : ''}</div>
+      return `${error}<div class="gpi-run-files-actions"><button type="button" data-run-files-bundle ${disabled || !artifacts.length ? 'disabled' : ''}>${tr('Download all files', '下载全部文件')}</button><button type="button" data-run-files-reload ${disabled ? 'disabled' : ''}>${tr('Refresh status', '刷新状态')}</button>${trust ? trust.replayButtonHtml(review.run_ref) + trust.problemButtonHtml(review.run_ref, '') : ''}</div>
         ${extraction}
         ${primary ? table(primary) : ''}${other ? `<details class="gpi-run-extra" ${entry.extraOpen ? 'open' : ''}><summary>${tr('More files & provenance', '更多文件与溯源')}</summary>${table(other)}</details>` : ''}
         ${trust ? trust.sectionHtml(review.run_ref, entry.trustOpen) : ''}
@@ -428,7 +428,7 @@
       if (summary && summary.parentElement.classList.contains('gpi-run-signoff')) { entry.reviewOpen = !summary.parentElement.open; return true; }
       if (summary && summary.parentElement.classList.contains('gpi-run-extra')) { entry.extraOpen = !summary.parentElement.open; return true; }
       if (summary && summary.parentElement.classList.contains('gpi-run-trust')) { entry.trustOpen = !summary.parentElement.open; return true; }
-      if (target.closest('[data-gpi-problem-bundle]')) return true;
+      if (target.closest('[data-gpi-problem-bundle], [data-gpi-study-replay]')) return true;
       const artifact = target.closest('[data-run-files-artifact]');
       if (artifact && !artifact.disabled) {
         const item = rows(entry.controller.state.review && entry.controller.state.review.artifacts)[Number(artifact.dataset.runFilesArtifact)];

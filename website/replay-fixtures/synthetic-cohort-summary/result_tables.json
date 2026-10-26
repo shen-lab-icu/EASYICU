@@ -1,0 +1,10 @@
+{
+  "schema_version": "easyicu.web-pipeline-result-tables/1",
+  "tables": [
+    {
+      "evidence_id": "aggregate",
+      "label": "Synthetic aggregate table",
+      "sha256": "19477d4ba957cc064d1a2fd5e0eb7d135063ff28c9d7b9668e5c1ccb9bd4bb54"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "child_jobs": [
+    {
+      "job_id": "fixture-job",
+      "result": {
+        "run_id": "synthetic-cohort-summary"
+      }
+    }
+  ],
+  "schema_version": "easyicu.pi-conversation-replay/1",
+  "turns": [
+    {
+      "action_code": "approve_plan",
+      "child_job_id": "fixture-job",
+      "kind": "host_action",
+      "status": "done"
+    }
+  ]
+}
