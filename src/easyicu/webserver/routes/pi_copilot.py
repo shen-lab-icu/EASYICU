@@ -33,12 +33,14 @@ from easyicu.webserver import codex_account_sessions
 from easyicu.webserver.pi_copilot import openrouter_login
 from .research_append import router as append_router
 from .personal_preferences import router as preferences_router
+from .pi_run_scientific_review import router as scientific_review_router
 from .skill_attachments import router as skill_router
 
 router = APIRouter()
 router.include_router(append_router)
 router.include_router(skill_router)
 router.include_router(preferences_router)
+router.include_router(scientific_review_router)
 
 ShortText = Annotated[
     str,

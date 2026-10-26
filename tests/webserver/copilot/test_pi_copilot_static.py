@@ -117,7 +117,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-preview.js?v=20261021-where1" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20261026-append2" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20261026-review1" in index
     assert "js/screens-guided-pi-result-append.js?v=20261026-append2" in index
     assert index.index("js/screens-guided-pi-result-append.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "js/screens-guided-pi-activity.js?v=20261026-retry1" in index
@@ -157,6 +157,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-usage.js?v=20261026-personal1" in index
     assert "js/screens-guided-pi-attention.js?v=20261026-attention1" in index
     assert "css/guided-pi-attention.css?v=20261026-attention1" in index
+    assert "js/screens-guided-pi-review-items.js?v=20261026-review1" in index
+    assert index.index("js/screens-guided-pi-review-items.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "css/guided-pi-source-adjustments.css?v=20261026-six1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261024-demo-raw-plan1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
@@ -167,7 +169,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20261026-attention1" in index
+    assert "js/api.js?v=20261026-review1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -4874,6 +4876,7 @@ def test_pi_frontend_javascript_parses() -> None:
         "js/screens-guided-pi-search.js",
         "js/screens-guided-pi-usage.js",
         "js/screens-guided-pi-attention.js",
+        "js/screens-guided-pi-review-items.js",
         "js/screens-guided-pi-markdown.js",
         "js/screens-guided-pi-next-actions.js",
         "js/screens-guided-pi-message-actions.js",

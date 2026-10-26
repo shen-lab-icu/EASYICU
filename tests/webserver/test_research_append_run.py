@@ -79,6 +79,14 @@ def test_append_kind_runs_from_sealed_source_to_result(tmp_path, kind, monkeypat
     from easyicu.webserver.pi_copilot.projections import project_run_outcome
     completed = read_run_record(str(child.wrapper))
     assert completed.ok, completed
+    review_metadata = read_json(child.wrapper / "source_run_manifest.json")["scientific_review"]
+    assert review_metadata["status"] == "recorded"
+    from easyicu.webserver.scientific_review import read_scientific_review
+
+    review = read_scientific_review(str(child.wrapper))
+    assert review["ok"], review
+    assert review["review"]["append_source_run_id"] == source.seal["run_id"]
+    assert review["review"]["analysis_only"]
     public_run = project_run_outcome(completed.to_dict())
     assert public_run["analysis_results_available"]
     assert not public_run["numeric_verified"]

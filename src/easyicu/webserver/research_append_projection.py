@@ -103,6 +103,9 @@ def publish_append_projection(child, *, result=None):
             research_input_state="prepared", pending_reviews=requests, plan_approval_allowed=pending,
             plan_revision_source_run_id=child.authority.source_run_id, append=block, readiness=checks, **stop),
     }
+    from .scientific_review_metadata import recorded_review_metadata
+
+    payloads["source_run_manifest.json"]["scientific_review"] = recorded_review_metadata(child.run_dir, source)
     if not run_artifact_disclosure.scan_browser_projection(payloads)["passed"]:
         raise ValueError("Append projection failed the browser privacy boundary.")
     for name, payload in payloads.items():

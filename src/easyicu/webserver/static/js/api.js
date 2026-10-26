@@ -597,6 +597,10 @@
   function loadPiRunUsage(projectId, runId) {
     return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/runs/' + encodeURIComponent(runId) + '/usage');
   }
+  // One finished run's itemised scientific review, read through its project.
+  function loadPiRunScientificReview(projectId, runId, offset) {
+    return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/runs/' + encodeURIComponent(runId) + '/scientific-review?offset=' + encodeURIComponent(String(offset || 0)) + '&limit=50');
+  }
   // Runs and plans that need the researcher, per persistent client id.
   function loadAttention(params) {
     const query = new URLSearchParams({ client_id: String(params && params.client_id || ''), after: String(params && params.after || 0), limit: String(params && params.limit || 100) });
@@ -960,6 +964,7 @@
   window.EU_API.loadPiSessionSkills = loadPiSessionSkills;
   window.EU_API.searchWorkspace = searchWorkspace;
   window.EU_API.loadAttention = loadAttention;
+  window.EU_API.loadPiRunScientificReview = loadPiRunScientificReview;
   window.EU_API.acknowledgeAttention = acknowledgeAttention;
   window.EU_API.loadPersonalPreferences = loadPersonalPreferences;
   window.EU_API.updatePersonalPreferences = updatePersonalPreferences;

@@ -23,6 +23,10 @@
     const answerOwner = window.EasyICU.guidedPi.optional('runAnswer');
     const ANSWER = answerOwner && typeof answerOwner.create === 'function'
       ? answerOwner.create({ tr, esc, api, projectId, resourceButton }) : null;
+    // The host's itemised review (approach, materials, number check, limitations).
+    const itemsOwner = window.EasyICU.guidedPi.optional('reviewItems');
+    const REVIEW_ITEMS = itemsOwner && typeof itemsOwner.create === 'function'
+      ? itemsOwner.create({ tr, esc, api, projectId, resourceButton }) : null;
     let scientificReview = { key: '', payload: null, loading: false, error: '' };
     // Display copy only: review codes, repair eligibility and approvals remain
     // owned by the saved scientific review and workflow.
@@ -98,6 +102,7 @@
       void loadAnswer(latestRun, workflow);
       if (!resultsAvailable(latestRun, workflow) || typeof projectId !== 'function') return;
       void APPEND?.load(latestRun);
+      if (REVIEW_ITEMS) void REVIEW_ITEMS.load(latestRun).then(changed => { if (changed) repaintReview(latestRun); });
       const ref = scientificReviewReference(latestRun);
       if (!ref) return;
       const expectedProjectId = projectId();
@@ -121,9 +126,12 @@
         if (scientificReview.key !== key || projectId() !== expectedProjectId) return;
         scientificReview = { key, payload: null, loading: false, error: 'unavailable' };
       }
+      repaintReview(latestRun);
+    }
+    function repaintReview(latestRun) {
       const root = typeof host === 'function' ? host() : null;
       const current = root && root.querySelector('.gpi-review-summary');
-      if (current && current.dataset.gpiReviewRun === ref.run_id) {
+      if (current && current.dataset.gpiReviewRun === latestRun.run_id) {
         current.outerHTML = renderReviewSummary(latestRun);
       }
     }
@@ -417,14 +425,18 @@
         .map(value => row(domainNames[value.domain], '', value.status === 'passed' ? true
           : ['blocked', 'warning'].includes(value.status) ? false : null, null, tr('Recorded', '有记录'), evidenceRefs(value))).join('')
         + findings.filter(value => names.includes(String(value.domain || ''))).map(issue).join('');
+      const recorded = (name, exclude) => (REVIEW_ITEMS ? REVIEW_ITEMS.panelHtml(latestRun, name, exclude) : '');
+      // Readiness findings already appear as issues above; the itemised review
+      // repeats only the plan review's own findings.
+      const shownFinding = item => item.code === 'SR_FINDING' && item.source && item.source.artifact === 'scientific_readiness.json' && payload;
       const panels = [
-        [tr('Approach', '方法'), approachLead
+        [tr('Approach', '方法'), (recorded('approach') || approachLead)
           + row(tr('Execution', '分析执行'), '', latestRun.execution_complete, evidence('quality_gate.json'), tr('Complete', '已完成'))
           + row(tr('Validation', '分析校验'), '', latestRun.analysis_validated, evidence('quality_report.json')) + forDomains(['analysis'])],
-        [tr('Materials', '材料'), materialsLead
+        [tr('Materials', '材料'), (recorded('materials') || materialsLead)
           + row(tr('Evidence record', '证据记录'), '', latestRun.evidence_complete, evidence('evidence_ledger.json')) + forDomains(['data', 'literature'])],
-        [tr('Evidence checks', '证据核对'), row(tr('Numeric provenance', '数字溯源'), numericCopy, latestRun.numeric_verified, evidence('manuscript_provenance.json')) + forDomains(['manuscript'])],
-        [tr('Limitations', '局限'), limitationLead + forDomains(['idea'])
+        [tr('Evidence checks', '证据核对'), row(tr('Numeric provenance', '数字溯源'), numericCopy, latestRun.numeric_verified, evidence('manuscript_provenance.json')) + recorded('numbers') + forDomains(['manuscript'])],
+        [tr('Limitations', '局限'), limitationLead + recorded('limitations', shownFinding) + forDomains(['idea'])
           + findings.filter(value => !['analysis', 'data', 'literature', 'manuscript', 'idea'].includes(value.domain)).map(issue).join('')],
       ];
       const original = payload ? `<details class="gpi-review-original"><summary>${tr('Original review', '原始审阅意见')}</summary><pre>${esc(JSON.stringify(payload, null, 2))}</pre></details>` : '';

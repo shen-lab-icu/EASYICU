@@ -30,6 +30,16 @@
   },
   {
     "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/runs/{run_id}/scientific-review",
+    "fields": ["path:project_id", "path:run_id", "query:offset", "query:limit"],
+    "reaches": "PiCopilotService._research_run_row -> project-bound run history -> scientific_review.read_scientific_review -> agent_runs.read_run_record -> browser projection privacy scan",
+    "protection": "hosted.guard_request + project run ownership; only server-owned run directories, no client filesystem coordinate; bounded pages",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Review reads do not write. Lazy PiCopilotService initialization may reconcile session/follow-up metadata under the server-owned instance home."
+  },
+  {
+    "method": "GET",
     "route": "/api/copilot/pi/sessions/{session_id}/usage",
     "fields": ["path:session_id", "query:project_id"],
     "reaches": "PiCopilotService._scoped_record -> existing session state owner -> bounded ShellUsageLedger totals; no transcript or provider message returned",
@@ -203,6 +213,24 @@
     ],
     "writes": "none",
     "write_owner": "Read-only handler or in-memory response; no filesystem destination.",
+    "guarded_errors": {
+      "body:project_dir": "hosted_data_read_only"
+    }
+  },
+  {
+    "method": "POST",
+    "route": "/api/agent-runs/scientific-review",
+    "fields": [
+      "body:project_dir",
+      "body:run_ref"
+    ],
+    "reaches": "run_refs.resolve / RunDirectory.resolve -> bounded existing artifact reader -> scientific review projection",
+    "protection": "instance-only project field guard and RunDirectory owner check; allowlisted artifact names and symlink rejection",
+    "guarded_fields": [
+      "body:project_dir"
+    ],
+    "writes": "none",
+    "write_owner": "Read-only projection; no filesystem destination.",
     "guarded_errors": {
       "body:project_dir": "hosted_data_read_only"
     }

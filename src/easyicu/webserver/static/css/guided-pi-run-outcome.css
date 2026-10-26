@@ -92,6 +92,10 @@
 .gpi-run-answer-figure figcaption .gpi-resource-link{display:inline-flex;align-items:center;min-height:24px;font-size:11.5px}
 .gpi-review-narrative ol{margin:6px 0 0;padding-left:18px;list-style:decimal}
 .gpi-review-summary .gpi-review-narrative ol>li{display:list-item;margin:0;padding:3px 0;border:0;line-height:1.55}
+/* Itemised review rows (owner: js/screens-guided-pi-review-items.js). */
+.gpi-review-item p{margin:2px 0 0;color:var(--ink-2,#3b4644);overflow-wrap:anywhere}
+.gpi-review-item.is-defect>div>strong::before{content:"";display:inline-block;width:7px;height:7px;margin:0 6px 1px 0;border-radius:50%;background:var(--bad,#b42318)}
+.gpi-review-more p{margin:0;color:var(--muted,#66716f);font-size:12px}
 .gpi-review-original{margin-top:4px}
 .gpi-review-original>summary{cursor:pointer;color:var(--muted,#66716f);font-size:11.5px}
 .gpi-review-original>p{margin:4px 0 0}
