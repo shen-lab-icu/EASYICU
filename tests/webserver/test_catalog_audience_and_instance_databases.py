@@ -149,9 +149,11 @@ def test_instance_support_is_distinct_from_the_legacy_audit_count(
     assert body["instance_databases"] == ["eicu", "miiv"]
     coverage = body["conceptCoverage"]["hr"]
     assert coverage["instance_databases_covered"] == ["eicu"]
-    assert (coverage["kind"], coverage["databases"], coverage["basis"]) == (
-        "audited", 6, "CONCEPT_DB_COVERAGE",
+    # The dictionary names the mapped database; the earlier audit's count stays beside it.
+    assert (coverage["kind"], coverage["declared_databases"], coverage["basis"]) == (
+        "mapped", ["eicu"], "concept_dictionary",
     )
+    assert coverage["data_audit_databases"] == 6
     assert body["coverageSummary"]["supportedDatabases"] == 6
     assert body["activeExportCoverage"]["status"] == "no_active_source"
 

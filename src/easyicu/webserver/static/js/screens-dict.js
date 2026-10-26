@@ -15,6 +15,7 @@
   let dictLineageError = '';
   let dictShowInternal = false;
   const DATABASE_NAMES = { miiv: 'MIMIC-IV', eicu: 'eICU-CRD', mimic: 'MIMIC-III', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sic: 'SICdb' };
+  const DATABASE_SHORT = { miiv: 'M-IV', mimic: 'M-III', eicu: 'eICU', aumc: 'AUMC', hirid: 'HiRID', sic: 'SIC' };
 
   function L(en, zh) { return t(en, zh); }
   function html(v) {
@@ -83,6 +84,27 @@
     };
   }
 
+  // Which supported databases the dictionary maps a concept to, by name; a
+  // derived concept reads its inputs' mappings. An earlier data audit that
+  // confirmed fewer of them is marked, since it records a count, not names.
+  function declaredBadge(meta) {
+    const declared = meta.declared_databases;
+    if (!declared.length) {
+      return `<span class="cov-badge unaudited" title="${html(L('The dictionary declares no source mapping for this concept.', '字典没有为这个概念声明来源映射。'))}">${L('No mapping', '未声明映射')}</span>`;
+    }
+    const all = C().supportedDbs && C().supportedDbs.length ? C().supportedDbs : Object.keys(DATABASE_SHORT);
+    const names = declared.map(dbName).join(window.EU_LANG === 'zh' ? '、' : ', ');
+    const derived = meta.kind === 'derived';
+    const title = derived
+      ? L(`Derived from its input concepts, which are mapped in: ${names}`, `由输入概念计算；输入映射所在库：${names}`)
+      : L(`Dictionary mapping in: ${names}`, `字典映射所在库：${names}`);
+    const audited = Number(meta.data_audit_databases);
+    const audit = Number.isFinite(audited) && audited < declared.length
+      ? `<span class="cov-audit" title="${html(L(`An earlier data audit confirmed usable data in ${audited} of these ${declared.length} databases.`, `早期数据核对只在这 ${declared.length} 个库中的 ${audited} 个确认有可用数据。`))}">${L(`data ${audited}/${declared.length}`, `数据核对 ${audited}/${declared.length}`)}</span>`
+      : '';
+    return `<span class="cov-badge cov-declared${derived ? ' is-derived' : ''}" title="${html(title)}"><span class="cov-dbs">${all.map(db => `<i class="${declared.includes(db) ? 'on' : ''}">${html(DATABASE_SHORT[db] || dbName(db))}</i>`).join('')}</span>${derived ? `<span class="cov-kind">${L('derived', '派生')}</span>` : ''}${audit}</span>`;
+  }
+
   function covBadge(k) {
     const inst = instanceDbs();
     if (inst) {
@@ -91,6 +113,7 @@
       return `<span class="cov-badge ${cls}"><span class="cov-n">${covered.length ? covered.map(dbName).join(' · ') : L('Not in this instance', '本实例无')}</span></span>`;
     }
     const meta = coverageOf(k);
+    if (Array.isArray(meta.declared_databases)) return declaredBadge(meta);
     if (meta.kind === 'derived') {
       return `<span class="cov-badge derived" title="${L('Derived or rule-based output. It is not a separate raw database mapping count.', '派生或规则输出,不是单独的原始数据库映射数量。')}">${L('derived', '派生')}</span>`;
     }
@@ -130,7 +153,7 @@
   }
   function tableHtml(rows) {
     if (!rows.length) return `<div class="dict-empty">${icon('search', 22)}<div>${L('No matching concepts.', '未找到匹配的概念。')}</div></div>`;
-    const coverageLabel = instanceDbs() ? L('Databases here', '本实例数据库') : L('Database coverage', '数据库覆盖');
+    const coverageLabel = instanceDbs() ? L('Databases here', '本实例数据库') : L('Mapped databases', '映射的数据库');
     const head = `
       <div class="dict-row dict-head">
         <span class="dc-code">${L('Code', '代码')}</span>
@@ -229,14 +252,13 @@
           <div class="setup-row"><span class="k">${t('Concepts', '概念')}</span><span class="vv">${cat.totalConcepts}</span></div>
           <div class="setup-row"><span class="k">${t('Databases', '数据库')}</span><span class="vv">${dbs}</span></div>
         </div>
-        <div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Dictionary database coverage', '字典数据库覆盖')}</div>
+        ${summary.mappedAll == null ? '' : `<div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Dictionary mappings', '字典映射')}</div>
         <div class="col gap-6" style="font-size:11.5px;color:var(--ink-3);">
-          <div class="row gap-6" style="justify-content:space-between;"><span>${t('All ' + dbs + ' databases', '全部 ' + dbs + ' 库')}</span><span class="mono">${summary.auditedAll || 0}</span></div>
-          <div class="row gap-6" style="justify-content:space-between;"><span>${t((dbs - 1) + ' databases', (dbs - 1) + ' 库')}</span><span class="mono">${summary.auditedFive || 0}</span></div>
-          <div class="row gap-6" style="justify-content:space-between;"><span>${t('≤ ' + Math.max(1, dbs - 2) + ' databases', '≤ ' + Math.max(1, dbs - 2) + ' 库')}</span><span class="mono">${summary.auditedPartial || 0}</span></div>
-          <div class="row gap-6" style="justify-content:space-between;"><span>${t('Derived / rule outputs', '派生/规则输出')}</span><span class="mono">${summary.derived || 0}</span></div>
-          <div class="row gap-6" style="justify-content:space-between;"><span>${t('No catalog audit', '无字典审计')}</span><span class="mono">${summary.notAudited || 0}</span></div>
-        </div>
+          <div class="row gap-6" style="justify-content:space-between;"><span>${t('In all ' + dbs + ' databases', dbs + ' 个库都有映射')}</span><span class="mono">${summary.mappedAll}</span></div>
+          <div class="row gap-6" style="justify-content:space-between;"><span>${t('In some databases', '部分库有映射')}</span><span class="mono">${summary.mappedPartial}</span></div>
+          <div class="row gap-6" style="justify-content:space-between;"><span>${t('No mapping declared', '未声明映射')}</span><span class="mono">${summary.unmapped}</span></div>
+          <div class="row gap-6" style="justify-content:space-between;"><span>${t('Of which derived from inputs', '其中由输入计算')}</span><span class="mono">${summary.derived}</span></div>
+        </div>`}
       </div>`;
     },
     render() {
@@ -251,7 +273,7 @@
 
       ${instanceDbs() ? '' : `<div class="dict-catalog-note">
         ${icon('help', 14)}
-        <span>${t('This column counts how many supported ICU databases have a dictionary mapping for each feature. It does not depend on the data currently selected.', '这一列统计字典中每个特征覆盖了多少个支持的 ICU 数据库，与当前选择的数据无关。')}</span>
+        <span>${t('This column shows which ICU databases the dictionary maps each feature to. It is the dictionary’s declaration, not coverage in the data currently selected.', '这一列显示字典把每个特征映射到了哪些 ICU 数据库；这是字典的声明，不是当前所选数据中的实际覆盖。')}</span>
       </div>`}
 
       <div class="dict-search">

@@ -1,7 +1,7 @@
 /* Executable contract: the Data Dictionary lists the concepts a clinician
    picks, keeps bookkeeping concepts (receipts, evidence flags, helper series)
    behind one toggle, and on a hosted instance counts coverage over the
-   databases this instance has instead of the six the dictionary audits. */
+   databases this instance has instead of the six the dictionary maps. */
 'use strict';
 
 const assert = require('node:assert/strict');
@@ -30,8 +30,8 @@ context.EU_CATALOG = {
   supportedDbs: ['miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic'],
   instanceDatabases: ['eicu', 'miiv'],
   conceptCoverage: {
-    hr: { kind: 'audited', databases: 6, audience: 'clinical', instance_databases_covered: ['eicu', 'miiv'] },
-    crea: { kind: 'audited', databases: 5, audience: 'clinical', instance_databases_covered: ['miiv'] },
+    hr: { kind: 'mapped', databases: 6, declared_databases: ['miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic'], data_audit_databases: 6, audience: 'clinical', instance_databases_covered: ['eicu', 'miiv'] },
+    crea: { kind: 'mapped', databases: 5, declared_databases: ['miiv', 'mimic', 'eicu', 'aumc', 'hirid'], data_audit_databases: 4, audience: 'clinical', instance_databases_covered: ['miiv'] },
     aki_reference_status: { kind: 'audited', databases: 6, audience: 'internal', instance_databases_covered: ['eicu', 'miiv'] },
   },
 };
@@ -50,7 +50,7 @@ assert(text.includes('显示内部字段（1）'), 'one toggle offers the hidden
 assert(text.includes('本实例数据库'), 'the coverage column names this instance');
 assert(text.includes('eICU-CRD · MIMIC-IV') && text.includes(' MIMIC-IV '), 'coverage lists the instance databases a concept has');
 assert(!/\d\/6/.test(text) && !text.includes('6 库'), 'no six-database counts on a hosted instance');
-assert(!text.includes('这一列统计字典中每个特征'), 'no explanatory note on a hosted instance');
+assert(!text.includes('这一列显示字典把每个特征映射到了哪些'), 'no explanatory note on a hosted instance');
 assert(text.includes('全部 2'), 'the All chip counts listed concepts only');
 
 // The toggle brings the internal concept back.
@@ -73,6 +73,9 @@ handler({ target: { closest: sel => (sel === '[data-dict-internal]' ? {} : null)
 context.EU_CAPABILITIES = { deployment: { hosted: false } };
 text = page();
 assert(!text.includes('AKI参考口径评估状态'), 'internal concepts are hidden on the desktop too');
-assert(/5\/6/.test(text) && text.includes('这一列统计字典中每个特征'), 'the desktop keeps the six-database audit');
+// Local desktop: each concept names the databases the dictionary maps it to.
+assert(text.includes('M-IV') && text.includes('HiRID') && text.includes('这一列显示字典把每个特征映射到了哪些'), 'the desktop names the mapped databases');
+assert(text.includes('数据核对 4/5'), 'an earlier audit that confirmed fewer databases is marked');
+assert(!text.includes('无字典审计'), 'no concept is left as unaudited');
 
 console.log(JSON.stringify({ ok: true }));
