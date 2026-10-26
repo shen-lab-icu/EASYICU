@@ -344,6 +344,10 @@ def test_seven_step_template_compiles(exposure, outcome, covariates, subgroup, t
     ) == []
     assert summary["n_total"] == (396 if subgroup else 400) and len(summary["model_contracts"]) == 1
     estimates = pd.read_csv(tmp_path / "primary" / "adjusted_association_estimates.csv")
+    model_rows = frame.loc[fit_calls[0]["y"].index]
+    assert estimates["outcome_proportion"].tolist() == pytest.approx(
+        [model_rows[outcome].mean()] * len(estimates)
+    )
     if subgroup:
         assert set(estimates["stratum"].dropna().astype(int)) == {0, 1}
         assert estimates.loc[estimates["subgroup"].notna(), "interaction_p_value"].nunique() == 1

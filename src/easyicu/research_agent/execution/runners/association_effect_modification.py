@@ -114,6 +114,7 @@ def fit_baseline_association(frame, *, requirement, authority):
                 requirement_id=requirement.requirement_id, covariates=";".join(requirement.covariates),
                 analysis_role="primary", analysis_set=requirement.analysis_set, estimator_kind="logistic",
                 n=result.n, n_events=result.n_events, n_parameters=len(design.columns), variance_estimator=result.variance_estimator,
+                outcome_proportion=result.n_events / result.n,
                 cluster_count=result.cluster_count, exposure_level=exposed, reference_level=reference,
                 contrast=f"{exposed} vs {reference}" + (f"; {modifier}={level}" if modifier else ""),
                 is_primary_contrast=primary and modifier is None,

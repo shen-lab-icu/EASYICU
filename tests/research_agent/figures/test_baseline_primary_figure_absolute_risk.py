@@ -205,3 +205,68 @@ def test_runtime_cannot_relabel_an_unregistered_risk_product(tmp_path):
             run_dir=tmp_path, out_dir=tmp_path / "out", step_id="figure", figure_product="primary",
             resolved_inputs={}, distribution_input="table:unregistered_risk",
         )
+
+
+@pytest.mark.parametrize("kind,method,scale,estimate", [
+    ("logistic", "statsmodels_logit_mle", "odds_ratio", 3.0),
+    ("glm_poisson", "statsmodels_glm_poisson_log_robust", "risk_ratio", 2.0),
+])
+def test_host_binary_estimators_keep_their_scale_in_the_overview(tmp_path, kind, method, scale, estimate):
+    from easyicu.research_agent.execution.runners.adjusted_association_executor import run_adjusted_association_from_env
+    from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import _distribution_rows
+    from easyicu.research_agent.schema import AnalysisStep, ExposureOutcomeDistributionSpec
+
+    data = pd.DataFrame([
+        {"exposure": exposure, "outcome": int(row < events)}
+        for exposure, events in ((0, 10), (1, 20)) for row in range(40)
+    ])
+    run_adjusted_association_from_env(
+        frame=data, output_dir=tmp_path, requirement_id="primary", exposure="exposure", outcome="outcome",
+        covariates=[], model_terms=[dict(name="exposure", role="exposure", coding="binary",
+                                       levels=["0", "1"], reference_level="0", transform="treatment_contrast")],
+        estimator_kind=kind, method_family=method, analysis_set="complete_case", analysis_role="primary",
+        emit_step_summary=False,
+    )
+    risk_path = tmp_path / "absolute_risk_context.csv"
+    pd.DataFrame(_distribution_rows(data, spec=ExposureOutcomeDistributionSpec(
+        exposure="exposure", exposure_levels=[0, 1], outcome="outcome", outcome_levels=[0, 1],
+        outcome_positive_value=1, level_match_policy="exact_typed", denominator_policy="all_declared_rows",
+        missing_outcome_policy="structural_absence_is_non_event", confidence_level=0.95,
+    ))).to_csv(risk_path, index=False)
+    step = AnalysisStep(
+        step_id="figure", intent="Show observed risks and the declared adjusted effect", method="visualization",
+        inputs=[RISK, EFFECT], expected_outputs=["figure:overview"],
+        input_consumption_contracts=[dict(input_key=key, mode="all_rows") for key in (RISK, EFFECT)],
+    )
+    evidence = EvidenceStore(tmp_path)
+    bindings = {}
+    for product, path in ((EFFECT, tmp_path / "adjusted_association_estimates.csv"), (RISK, risk_path)):
+        ref = evidence.register_file(
+            kind="table", source_path=path, evidence_id=path.stem, produced_by_step=path.stem,
+            description="Synthetic binary association", producer="runner", generation_mode="deterministic_standard",
+        )
+        binding = _resolved_typed_input_binding(
+            input_name=product, evidence_ref=ref, evidence_records=evidence.records(), run_dir=tmp_path,
+        )
+        bindings[product] = _attach_verified_consumption_contract(step=step, input_name=product, binding=binding)
+    assert resolve_standard_executor(step, plan=None, resolved_bindings=bindings).claimed_by == "association_overview_figure"
+    manifest = {"step_id": step.step_id, "inputs": bindings}
+    run_association_overview_figure(
+        run_dir=tmp_path, out_dir=tmp_path / "figure", step_id=step.step_id,
+        figure_product="overview", resolved_inputs=manifest, distribution_input=RISK,
+    )
+    plotted = pd.read_csv(tmp_path / "figure/overview_association_source_data.csv")
+    assert plotted.effect_scale.tolist() == [scale]
+    assert plotted.estimate.tolist() == pytest.approx([estimate])
+    pd.testing.assert_frame_equal(plotted, pd.read_csv(tmp_path / "adjusted_association_estimates.csv"))
+    pd.testing.assert_frame_equal(pd.read_csv(tmp_path / "figure/overview_distribution_source_data.csv"),
+                                  pd.read_csv(risk_path))
+    assert ("risk ratio" if kind == "glm_poisson" else "odds ratio") in (tmp_path / "figure/overview.svg").read_text()
+    # The integration must preserve the complete host schema check at both boundaries.
+    bindings[EFFECT]["product_contract"]["columns"].remove("outcome_proportion")
+    assert resolve_standard_executor(step, plan=None, resolved_bindings=bindings).claimed_by != "association_overview_figure"
+    with pytest.raises(ValueError, match="not written by the host model owner"):
+        run_association_overview_figure(
+            run_dir=tmp_path, out_dir=tmp_path / "refused", step_id=step.step_id,
+            figure_product="overview", resolved_inputs=manifest, distribution_input=RISK,
+        )
