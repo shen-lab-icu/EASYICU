@@ -3621,6 +3621,9 @@ def compile_progressive_plan(
                 "steps": [step for step in plan.steps if step.step_id not in omitted_ids],
                 "rationale": "\n".join(filter(None, [plan.rationale, *(note.message for note in omitted)])),
             })
+    from easyicu.databases.research_substitutions import source_plan_labels
+
+    plan = plan.model_copy(update={"display_labels": source_plan_labels(context, plan.display_labels)})
     skeleton_payload = skeleton.model_dump(mode="json")
     plan_payload = plan.model_dump(mode="json")
     return plan, ProgressivePlanCompileReceipt(

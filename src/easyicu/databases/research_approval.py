@@ -44,6 +44,18 @@ class CapabilityApprovalError(RuntimeError):
 
 def _companion(context, plan) -> DatabaseCapabilityReview | None:
     decision = plan_capability_decision(context, plan)
+    from .research_substitutions import source_binding
+
+    try:
+        if decision is None or decision.status != "refusal":
+            source_binding(context)
+    except (KeyError, ValueError, TypeError) as exc:
+        if decision is None:
+            from .research_plan_requirements import _constraints
+
+            saved = _constraints(context).get("database_capability_binding") or context.cohort.provenance.get("database_capability_binding")
+            decision = CapabilityDecision.model_validate(saved["decision"])
+        raise CapabilityApprovalError("capability_substitution_review_mismatch", decision) from exc
     if decision is None:
         return None
     return DatabaseCapabilityReview(
@@ -67,14 +79,16 @@ def require_approved_database_capabilities(plan_result, run_dir: Path) -> None:
     """Refuse before Execute unless the exact source substitution was approved."""
     companion = _companion(plan_result.context, plan_result.plan)
     if companion is None:
+        _refuse_lost_reviewed_substitution(plan_result, run_dir, companion)
         return
     decision = companion.decision
     if decision.status == "refusal":
         raise CapabilityApprovalError("study_capability_refused", decision)
-    if decision.status == "exact":
-        return
     if companion.unapplied_substitutions:
         raise CapabilityApprovalError("capability_substitution_not_applied", decision)
+    if decision.status == "exact":
+        _refuse_lost_reviewed_substitution(plan_result, run_dir, companion)
+        return
     evidence = plan_result.evidence
     record = evidence.get("scientific_plan_review")
     path = verified_run_evidence_path(run_dir, record) if record is not None else None
@@ -93,6 +107,26 @@ def require_approved_database_capabilities(plan_result, run_dir: Path) -> None:
         _verify_existing_approval(plan_result, run_dir, companion, record.sha256)
     except (ValueError, RuntimeError, OSError) as exc:
         raise CapabilityApprovalError("capability_substitution_approval_required", decision) from exc
+
+
+def _refuse_lost_reviewed_substitution(plan_result, run_dir, companion):
+    """Erasing the source or original requirements cannot erase its approval."""
+    record = getattr(plan_result, "evidence", {}).get("scientific_plan_review")
+    if record is None:
+        return
+    path = verified_run_evidence_path(run_dir, record)
+    if path is None:
+        if companion is not None:
+            raise CapabilityApprovalError("capability_substitution_review_mismatch", companion.decision)
+        raise ValueError("capability_substitution_review_mismatch")
+    from easyicu.research_agent.planning.scientific_review import PlanScientificReview
+
+    review = PlanScientificReview.model_validate_json(path.read_bytes())
+    saved = review.facts.get(REVIEW_FIELD)
+    current = companion.model_dump(mode="json") if companion else None
+    if saved and saved.get("decision", {}).get("substitutions") and saved != current:
+        raise CapabilityApprovalError("capability_substitution_review_mismatch",
+                                      CapabilityDecision.model_validate(saved["decision"]))
 
 
 def _verify_existing_approval(plan_result, run_dir, companion, review_sha256) -> None:

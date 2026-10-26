@@ -339,6 +339,7 @@ CONCEPT_DICTIONARY = {
     'elixhauser': ('Elixhauser (van Walraven) Score', 'Elixhauser (van Walraven) 评分', 'points'),
 
     # 复合结局终点
+    'icu_death': ('ICU death', 'ICU内死亡', 'boolean'),
     'mort_28d': ('28-day Mortality', '28天死亡率', 'boolean'),
     'mort_90d': ('90-day Mortality', '90天死亡率', 'boolean'),
     'mort_365d': ('1-year Mortality', '1年死亡率', 'boolean'),
@@ -584,7 +585,7 @@ CONCEPT_GROUPS_INTERNAL = {
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 + 静脉血氧/楔压 (2026-07-04)
     'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm', 'icu_unit_type'],
     'other_scores': ['qsofa', 'sirs', 'mews', 'news', 'apache_iv', 'apache_iv_pred_hosp_mort', 'saps3', 'charlson', 'elixhauser'],
-    'outcome': ['death', 'los_icu', 'los_hosp', 'mort_28d', 'mort_90d', 'mort_365d', 'followup_days_28d', 'followup_days_90d', 'followup_days_365d', 'icu_free_days_28', 'vent_free_days_28', 'icu_readmission', 'persistent_critical_illness'],
+    'outcome': ['death', 'icu_death', 'los_icu', 'los_hosp', 'mort_28d', 'mort_90d', 'mort_365d', 'followup_days_28d', 'followup_days_90d', 'followup_days_365d', 'icu_free_days_28', 'vent_free_days_28', 'icu_readmission', 'persistent_critical_illness'],
 }
 
 # Concepts present in the extraction dictionary but intentionally hidden from

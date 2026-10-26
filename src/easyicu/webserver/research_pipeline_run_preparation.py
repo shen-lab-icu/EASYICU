@@ -264,10 +264,6 @@ def _prepare_scientific_launch(
         _require_export_holds_study_cohort(study, request.export_path)
 
     budget_mode = str(request.budget_mode or "").strip().lower()
-    materialization_study = _neutral_materialization_scope(
-        study,
-        export_path=request.export_path,
-    )
     configured_target = _target_outcome(study)
     configured_primary_exposure = _primary_exposure(study)
     # The exposure's concept selection is judged before the covariates: a
@@ -276,6 +272,13 @@ def _prepare_scientific_launch(
         study,
         configured_primary_exposure,
     )
+    if not (request.execution_resume_source_run_id or request.development_resume_source_job_id
+            or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV)):
+        from .research_launch_population import prepare_source_population
+
+        study = prepare_source_population(study)
+        configured_target = _target_outcome(study)
+    materialization_study = _neutral_materialization_scope(study, export_path=request.export_path)
     covariates = _configured_covariates(study)
     planning_coordinates = _metadata_only_planning_coordinates(
         question=question,

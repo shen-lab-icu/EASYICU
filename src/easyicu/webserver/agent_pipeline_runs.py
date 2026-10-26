@@ -2789,7 +2789,7 @@ def _research_user_preferences(
         if analysis_design.get("analysis_family") and study.get("data_source"):
             from .research_capability_scope import study_requirements
 
-            constraints["database_study_requirements"] = study_requirements(
+            constraints["database_study_requirements"] = study.get("_database_study_requirements") or study_requirements(
                 study, family=analysis_design["analysis_family"], question=str(study.get("question") or ""),
             ).model_dump(mode="json")
     if patient_grouping is not None:

@@ -271,6 +271,7 @@ class CompiledPopulation:
 
     criteria: tuple[CompiledCriterion, ...]
     time_zero_hours: Optional[float] = None
+    source_binding: Optional[Mapping[str, Any]] = None
 
     @property
     def blocking(self) -> tuple[CompiledCriterion, ...]:
@@ -321,6 +322,7 @@ class CompiledPopulation:
             "time_zero_hours": self.time_zero_hours,
             "criteria": [item.record() for item in self.criteria],
             "cohort": self.cohort_definition().plan_dict(),
+            **({"database_capability_binding": dict(self.source_binding)} if self.source_binding else {}),
         }
 
     def sha256(self) -> str:
@@ -375,6 +377,8 @@ def compile_population(
         context,
         time_zero_hours=None if time_zero_hours is None else float(time_zero_hours),
     )
+    from easyicu.databases.research_substitutions import source_binding
+
     with cohort_concept_id_scope(sealed_cohort_concept_ids(context)):
         population = CompiledPopulation(
             criteria=tuple(
@@ -388,6 +392,7 @@ def compile_population(
                 for item in spec.criteria
             ),
             time_zero_hours=reading.time_zero_hours,
+            source_binding=source_binding(context),
         )
         validate_cohort_definition(population.cohort_definition())
     return population
@@ -592,7 +597,9 @@ def _compile(criterion: PopulationCriterion, reading: _Input) -> CompiledCriteri
                 "population_kind_not_typed",
                 f"No population kind expresses it: {criterion.why}",
             )
-        proof = _source_proof(criterion, reading.sources)
+        from easyicu.databases.research_substitutions import criterion_has_source_substitution
+
+        proof = None if criterion_has_source_substitution(reading.context, criterion) else _source_proof(criterion, reading.sources)
         if proof is not None:
             return CompiledCriterion(
                 criterion=criterion,
@@ -701,6 +708,12 @@ def _plan_predicates(
         )
     else:  # pragma: no cover - the union is closed
         raise TypeError(f"unknown population criterion {type(criterion).__name__}")
+    from easyicu.databases.research_substitutions import compile_source_predicate
+
+    try:
+        predicates = tuple(compile_source_predicate(reading.context, predicate) for predicate in predicates)
+    except ValueError as exc:
+        raise _NotApplied("population_threshold_outside_domain", str(exc)) from exc
     note = ""
     for predicate in predicates:
         note = (

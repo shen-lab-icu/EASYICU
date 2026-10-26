@@ -241,7 +241,7 @@ _STAY_OUT_COL = {
 }
 
 
-def load_outcomes(
+def _load_followup_outcomes(
     database: str,
     data_path: object = None,
     *,
@@ -310,6 +310,27 @@ def load_outcomes(
         stay_col = _STAY_OUT_COL[db]
         out = out[out[stay_col].isin(patient_values)]
     return out.reset_index(drop=True)
+
+
+def load_outcomes(database, data_path=None, *, patient_ids=None, max_patients=None,
+                  verbose=False, output_concepts=None):
+    """Load explicitly named endpoints without changing generic death meaning."""
+    requested = set(output_concepts or ())
+    options = dict(patient_ids=patient_ids, max_patients=max_patients)
+    if "icu_death" not in requested:
+        return _load_followup_outcomes(database, data_path, verbose=verbose, **options)
+    from .icu_mortality import load_icu_death
+
+    native = load_icu_death(database, data_path, **options)
+    if requested == {"icu_death"}:
+        return native
+    followup = _load_followup_outcomes(database, data_path, verbose=verbose, **options)
+    if followup.empty:
+        return native
+    identity = native.attrs["source_identifier"]
+    result = native.merge(followup, on=identity, how="left", validate="one_to_one")
+    result.attrs.update(native.attrs)
+    return result
 
 
 __all__ = ["load_outcomes"]

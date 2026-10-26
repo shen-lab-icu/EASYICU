@@ -31,6 +31,7 @@ EICU_VENTILATOR_DAY_DATABASES = frozenset()
 
 OUTCOME_CONCEPT_SUPPORTED_DATABASES: Mapping[str, frozenset[str]] = MappingProxyType(
     {
+        "icu_death": frozenset({"mimic", "mimic_demo", "miiv", "miiv_demo", "eicu", "eicu_demo", "hirid", "aumc", "sic"}),
         "mort_28d": FOLLOWUP_OUTCOME_DATABASES,
         "mort_90d": FOLLOWUP_OUTCOME_DATABASES,
         "mort_365d": FOLLOWUP_OUTCOME_DATABASES,

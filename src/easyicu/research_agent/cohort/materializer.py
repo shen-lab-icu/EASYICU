@@ -806,8 +806,7 @@ def _load_concept(
             return _coerce_int_stay(loaded)
         from ...api import load_concepts  # local import: heavy module
 
-        return _coerce_int_stay(
-            load_concepts(
+        loaded = load_concepts(
                 [concept],
                 database=database,
                 data_path=str(root),
@@ -818,7 +817,17 @@ def _load_concept(
                 # missing-as-normal zero cannot masquerade as an observation.
                 keep_components=str(concept).startswith("sofa2"),
             )
-        )
+        from easyicu.databases.profiles import get_database_profile
+
+        native_id = get_database_profile("miiv" if database == "miiv_demo" else database).stay_id_col
+        if (native_id != ID_COL and {native_id, ID_COL} <= set(loaded.columns)
+                and not loaded[native_id].eq(loaded[ID_COL]).fillna(False).all()):
+            raise ValueError("source_icu_identifier_conflict")
+        if ID_COL not in loaded.columns:
+            if native_id not in loaded.columns:
+                raise ValueError("source_icu_identifier_missing")
+            loaded = loaded.rename(columns={native_id: ID_COL})
+        return _coerce_int_stay(loaded)
     except ExportPackageError:
         raise
     except KeyError:
@@ -1831,6 +1840,9 @@ def _materialize_cohort_from_resolved_source(
                 for source in definitions[concept].for_data_source(source_config)
             )
         }
+        # The named native builder emits a dense nullable status, unlike a
+        # positive-only event stream. An unknown discharge never means alive.
+        dense_status_outcomes.update(set(outcome_set) & {"icu_death"})
     feature_set = [c for c in dict.fromkeys(feature_concepts) if c not in static_set]
     if not set(last_value_concepts) <= set(feature_set):
         raise MaterializedMetadataError(

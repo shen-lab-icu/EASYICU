@@ -40,6 +40,7 @@ class NumericRepresentation(Fact):
     field: SourceField | None = None
     bin_edges: tuple[float, ...] = ()
     bin_labels: tuple[str, ...] = ()
+    bin_values: tuple[int, ...] = ()
     exact_through: float | None = None
 
 
@@ -215,7 +216,9 @@ def _numeric(config, name: str) -> NumericRepresentation:
     labels = tuple(re.findall(r"`(\d+(?:-\d+|\+|-))`", entry.callback or ""))
     if labels:
         edges = tuple(float(label.split("-")[0].rstrip("+")) for label in labels if not label.endswith("-"))
-        return NumericRepresentation(kind="binned", source=source, field=field, bin_labels=labels, bin_edges=edges)
+        values = tuple(int(float(value)) for value in re.findall(r"`\d+(?:-\d+|\+|-)`\s*=\s*([\d.]+)", entry.callback or ""))
+        return NumericRepresentation(kind="binned", source=source, field=field,
+                                     bin_labels=labels, bin_edges=edges, bin_values=values)
     capped = name == "age" and (
         entry.value_var == "anchor_age" or "mimic_age" in (entry.callback or "")
         or "eicu_age" in (entry.callback or "")
@@ -278,6 +281,18 @@ def research_capability_profile(database: str) -> ResearchCapabilityProfile:
     icu_status = _field(config, "patient", "unitdischargestatus")
     if icu_status is not None:
         outcomes.append(MortalityCapability(meaning="icu_death", status=icu_status, event_time=None, time_kind="unavailable"))
+    # These named builders do not relabel the dictionary's generic death.
+    native = {"aumc": ("admissions", "destination", None),
+              "sic": ("cases", "OffsetOfDeath", "OffsetOfDeath"),
+              "mimic": ("admissions", "deathtime", "deathtime"),
+              "miiv": ("admissions", "deathtime", "deathtime")}.get(parent)
+    if native is not None:
+        table, column, timing = native
+        status = _field(config, table, column, interpretation="easyicu.scores.icu_mortality.load_icu_death")
+        if status is not None:
+            outcomes.append(MortalityCapability(meaning="icu_death", status=status,
+                event_time=_field(config, table, timing) if timing else None,
+                time_kind="recorded" if timing else "unavailable"))
     concepts = _concepts(config)
     mapped = {item.concept for item in concepts if item.mapped}
     # These are source clock declarations, grounded in the registry's typed
