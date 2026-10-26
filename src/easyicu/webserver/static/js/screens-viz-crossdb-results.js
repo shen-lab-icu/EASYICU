@@ -192,7 +192,7 @@
       <span class="pill ${scope.partial ? 'warn' : 'ok'}"><span class="dot"></span>${scope.partial ? h.t('Quick scope', '快速范围') : h.t('Ready', '已就绪')}</span>
       <div>
         <b>${h.t('Cross-database consistency workspace', '跨库一致性检查工作区')}</b>
-        <span>${h.fmtInt(sources.length)} ${h.t('sources', '个数据源')} · ${moduleText} ${h.t('modules', '个模块')} · ${featureText} ${h.t('available feature profiles', '个可用特征剖面')}</span>
+        <span>${h.fmtInt(sources.length)} ${h.t('sources', '个数据源')} · ${moduleText} ${h.t('modules', '个模块')} · ${featureText} ${h.t('features', '个特征')}</span>
       </div>
     </div>`;
   }
@@ -226,22 +226,32 @@
     </div>`;
   }
 
+  // Panels are narrow; the database name identifies a source, the full title stays in the tooltip.
+  const DATABASE_SHORT = { miiv: 'MIMIC-IV', mimic: 'MIMIC-III', mimic_demo: 'MIMIC-III', eicu: 'eICU', eicu_demo: 'eICU', aumc: 'AUMCdb', hirid: 'HiRID', sic: 'SICdb' };
+  function shortSourceName(source, label) {
+    const db = String(source && source.database || '').toLowerCase();
+    const name = DATABASE_SHORT[db];
+    if (!name) return label;
+    return /demo/i.test(`${db} ${label}`) ? `${name} Demo` : name;
+  }
+
   function threeScaleComparison(payload, config) {
     const h = helpersOf(config);
     const sources = (payload.sources || []).map((source, index) => {
       const summary = source.summary || {};
       const entities = Number(summary.stays != null ? summary.stays : summary.cohort_size != null ? summary.cohort_size : summary.entities || 0);
       const records = Number(summary.total_records != null ? summary.total_records : summary.total_rows != null ? summary.total_rows : 0);
-      return { label: source.label || source.database || `${h.t('Source', '来源')} ${index + 1}`, entities, records, density: entities > 0 ? records / entities : 0, color: palette(index) };
+      const label = source.label || source.database || `${h.t('Source', '来源')} ${index + 1}`;
+      return { label, short: shortSourceName(source, label), entities, records, density: entities > 0 ? records / entities : 0, color: palette(index) };
     });
     const scales = [
-      ['entities', h.t('Entities / stays', '实体 / ICU 住院'), value => h.fmtInt(value)],
+      ['entities', h.t('ICU stays', 'ICU 住院'), value => h.fmtInt(value)],
       ['records', h.t('Total records', '总记录量'), value => h.fmtInt(value)],
-      ['density', h.t('Records per entity', '每实体记录密度'), value => formatDensity(value)],
+      ['density', h.t('Records per stay', '每次住院记录数'), value => formatDensity(value)],
     ];
     return `<section class="xdb-three-scale" data-crossdb-three-scale>
-      <div class="xdb-section-head"><div><h2>${h.t('Three-scale database comparison', '跨库三尺度比较')}</h2><p>${h.t('Entities, records, and density use independent scales so a large record count cannot flatten the other comparisons.', '实体量、记录量和记录密度分别使用独立尺度，避免记录量级过大压扁另外两个维度。')}</p></div></div>
-      <div class="xdb-scale-grid">${scales.map(([key,label,format]) => { const max = Math.max(1,...sources.map(row=>row[key])); return `<article><h3>${h.esc(label)}</h3>${sources.map(row=>`<div class="xdb-scale-row"><span><i style="background:${row.color}"></i>${h.esc(row.label)}</span><div><b style="width:${Math.max(1,row[key]/max*100).toFixed(1)}%;background:${row.color}"></b></div><strong>${format(row[key])}</strong></div>`).join('')}</article>`; }).join('')}</div>
+      <div class="xdb-section-head"><div><h2>${h.t('Database size', '数据规模')}</h2><p>${h.t('Each panel has its own scale, so a large record count does not flatten the other two.', '三个面板各用自己的刻度，记录量大不会压扁另外两项。')}</p></div></div>
+      <div class="xdb-scale-grid">${scales.map(([key,label,format]) => { const max = Math.max(1,...sources.map(row=>row[key])); return `<article><h3>${h.esc(label)}</h3>${sources.map(row=>`<div class="xdb-scale-row"><span title="${h.esc(row.label)}"><i style="background:${row.color}"></i>${h.esc(row.short)}</span><div><b style="width:${Math.max(1,row[key]/max*100).toFixed(1)}%;background:${row.color}"></b></div><strong>${format(row[key])}</strong></div>`).join('')}</article>`; }).join('')}</div>
     </section>`;
   }
 
@@ -257,7 +267,7 @@
         <div class="xdb-kpi-grid">
           <article><span>${h.t('Data sources', '数据源')}</span><strong>${h.fmtInt((payload.sources || []).length)}</strong><small>${h.t('independent exports or databases', '独立导出或数据库')}</small></article>
           <article><span>${h.t('Shared modules', '共享模块')}</span><strong>${h.fmtInt(sharedModules.length)}</strong><small>${h.t('available across every selected source', '在所有所选来源中可用')}</small></article>
-          <article><span>${h.t('Comparable feature profiles', '可对比特征剖面')}</span><strong>${h.fmtInt(counts.shared)}</strong><small>${h.t('present in every selected source', '在全部所选来源中存在')}</small></article>
+          <article><span>${h.t('Comparable feature profiles', '共有特征')}</span><strong>${h.fmtInt(counts.shared)}</strong><small>${h.t('present in every selected source', '在全部所选来源中存在')}</small></article>
           <article><span>${h.t('Comparison mode', '比较模式')}</span><strong class="textual">${h.esc(h.statusLabel(gate.comparison_mode || 'descriptive_only'))}</strong><small>${h.esc(h.statusLabel(gate.status || 'compatible'))}</small></article>
         </div>
         ${partialScopeNotice(payload, config)}
@@ -286,7 +296,7 @@
                carries no context, so nothing set the flag and the gate could
                never fire — that is what this button degraded into when crossdb
                moved out of screens-viz.js. -->
-          <button class="btn primary" data-study-handoff data-study-source="crossdb" data-study-target="guided">${h.icon('agent', 13)} ${h.t('Plan in Guided Copilot', '在研究引导中规划')}</button>
+          <button class="btn primary" data-study-handoff data-study-source="crossdb" data-study-target="guided">${h.icon('agent', 13)} ${h.t('Plan in Guided Copilot', '在研究对话中规划')}</button>
         </div>
       </section>`;
   }

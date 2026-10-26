@@ -34,7 +34,9 @@ const drill = {
 
 const html = global.EU_PATIENT_OVERVIEW.renderQualityAudit({ drill }, helpers);
 assert.match(html, /Feature-level missingness and observation volume/);
-assert.match(html, /1,000,400 records audited/);
+// The audited record count is the summary tile above the audit; the audit states it is post-cleaning.
+assert.match(html, /post-cleaning state/);
+assert.match(html, /data-patient-cleaning-receipt/);
 assert.match(html, /heart_rate: 20% missing, 400 records/);
 assert.match(html, /creatinine: 35% missing, 1000000 records/);
 assert.doesNotMatch(html, /sepsis3/);

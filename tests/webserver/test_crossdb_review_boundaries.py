@@ -42,6 +42,26 @@ def test_blank_boolean_feature_does_not_break_real_summary(
     assert data["min"] == 0 and data["max"] == 1
 
 
+def test_summary_receipt_keeps_the_registered_identity_when_the_summary_renames_a_source(
+    tmp_path, monkeypatch
+):
+    _sources(tmp_path, monkeypatch)
+    original = c.cohort_review.cohort_review_summary
+
+    def renamed(body):
+        payload = original(body)
+        source = dict(payload.get("source") or {})
+        source["label"] = f"Full release title of {source.get('label')}"
+        return {**payload, "source": source}
+
+    monkeypatch.setattr(c.cohort_review, "cohort_review_summary", renamed)
+    selected = c._resolve_registered_sources({})
+    leased = c._crossdb_selection_receipt([c._safe_registered_source(s) for s in selected])
+    result = c._crossdb_review_summary_for_sources(selected)
+    assert result["selection_receipt"]["selection_digest"] == leased["selection_digest"]
+    assert [s["label"] for s in result["sources"]] == ["miiv", "eicu"]
+
+
 @pytest.mark.parametrize("ext", ["csv", "xlsx"])
 def test_reader_keeps_every_row_or_refuses_budget(tmp_path, monkeypatch, ext):
     p = tmp_path / f"values.{ext}"

@@ -1,20 +1,25 @@
 /* Patient Review bounded module-table owner. */
-.pt-table-dashboard{display:grid;grid-template-columns:minmax(280px,.72fr) minmax(520px,1.28fr);gap:14px;margin-top:16px}
-.pt-table-search,.pt-pareto{border:1px solid var(--hair);border-radius:var(--r-2);background:var(--surface);padding:14px}
-.pt-table-search{display:flex;flex-direction:column;justify-content:space-between;gap:20px}
-.pt-table-search b,.pt-pareto-head b{display:block;font-size:15px;color:var(--ink)}
-.pt-table-search > div > span,.pt-pareto-head span{display:block;margin-top:5px;color:var(--ink-4);font-size:13px;line-height:1.45}
-.pt-table-search label{display:flex;align-items:center;gap:8px;border:1px solid var(--hair-2);border-radius:var(--r-1);padding:0 11px;background:var(--surface-2)}
-.pt-table-search input{width:100%;height:42px;border:0;outline:0;background:transparent;color:var(--ink);font:500 14px/1.2 var(--sans)}
+.pt-table-dashboard{margin-top:16px}
+.pt-pareto{border:1px solid var(--hair);border-radius:var(--r-2);background:var(--surface);padding:14px}
+.pt-pareto-head b{display:block;font-size:14px;color:var(--ink)}
+.pt-pareto-head span{display:block;margin-top:4px;color:var(--ink-4);font-size:12.5px;line-height:1.45}
+.pt-table-search{display:flex;align-items:center;gap:6px;flex:0 1 240px;border:1px solid var(--hair-2);border-radius:var(--r-1);padding:0 10px;background:var(--surface-2)}
+.pt-table-search input{width:100%;height:32px;border:0;outline:0;background:transparent;color:var(--ink);font:500 13px/1.2 var(--sans)}
 .pt-pareto-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-.pt-pareto-head strong{font-size:13px;color:var(--ink-3);white-space:nowrap}
-.pt-pareto-rows{display:grid;gap:6px;margin-top:12px}
-.pt-pareto-rows button{display:grid;grid-template-columns:112px minmax(110px,1fr) 76px 58px;align-items:center;gap:9px;width:100%;border:0;background:none;color:var(--ink-3);font:500 12.5px/1.2 var(--sans);text-align:left;cursor:pointer;padding:3px 0}
+.pt-pareto-rows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 28px;margin-top:12px}
+.pt-pareto-rows button{display:grid;grid-template-columns:132px minmax(80px,1fr) 70px 48px;align-items:center;gap:9px;width:100%;border:0;background:none;color:var(--ink-3);font:500 12.5px/1.2 var(--sans);text-align:left;cursor:pointer;padding:3px 0}
 .pt-pareto-rows button:hover .pt-pareto-name{color:var(--accent)}
 .pt-pareto-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:650}
 .pt-pareto-track{height:10px;border-radius:99px;background:var(--surface-3);overflow:hidden}
-.pt-pareto-track i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--accent),var(--accent-2))}
-.pt-pareto-rows b,.pt-pareto-rows em{font-family:var(--mono);font-size:12px;text-align:right;font-style:normal}
+.pt-pareto-track i{display:block;height:100%;border-radius:inherit;background:var(--accent)}
+.pt-pareto-rows b,.pt-pareto-rows em{font-size:12px;text-align:right;font-style:normal;font-variant-numeric:tabular-nums}
+.pt-pareto-rows em{color:var(--ink-4)}
+.pt-pareto-rows button[hidden]{display:none}
+.pt-pareto-rows button.is-active .pt-pareto-name{color:var(--accent)}
+.pt-pareto-rows button.is-active{box-shadow:inset 2px 0 0 var(--accent);padding-left:8px}
+/* The rows above pick the module; the chip row stays as the fallback picker only. */
+.pt-table-dashboard + [data-pt-table-picker]{display:none}
+@media (max-width:980px){.pt-pareto-rows{grid-template-columns:minmax(0,1fr)}}
 .patient-table-frame{
   border:1px solid var(--hair);
   border-radius:var(--r-3);

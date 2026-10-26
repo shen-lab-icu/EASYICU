@@ -1349,7 +1349,7 @@
     const hosted = hostedServer();
     const preparedData = t('Prepared data', '已准备的数据');
     const sourceLabel = xdb
-      ? (xdbDemo ? crossTerm('Demo simulated frames') : (xdbRaw ? (hosted ? t('Raw databases', '原始数据库') : t('Local raw databases', '本地原始数据库')) : (officialDemo ? t('Official demo pair', '官方 Demo 组合') : (hosted ? preparedData : crossTerm('Local exports')))))
+      ? (xdbDemo ? crossTerm('Demo simulated frames') : (xdbRaw ? (hosted ? t('Raw databases', '原始数据库') : t('Local raw databases', '本地原始数据库')) : (officialDemo ? t('Official demo pair', '官方演示') : (hosted ? preparedData : crossTerm('Local exports')))))
       : (ws ? (hosted ? preparedData : crossTerm('Local export')) : (dataMode === 'real' ? crossTerm('No data loaded') : crossTerm('Demo cohort')));
     return `
       <div class="row gap-8" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px;white-space:nowrap;flex-wrap:wrap;row-gap:2px;">

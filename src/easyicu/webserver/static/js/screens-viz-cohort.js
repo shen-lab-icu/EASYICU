@@ -346,11 +346,11 @@
       const loaded = cohortLoaded();
       const head = `${guidedNote}
       <div class="row gap-8" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px;white-space:nowrap;flex-wrap:wrap;row-gap:2px;">
-        <span>${view.text('Workspace')}</span> ${icon('chevron', 11)} <span>${loaded ? (realMode ? view.text('Local export') : (officialDemo ? t('Official demo', '官方演示') : view.text('Demo cohort'))) : view.text('No data loaded')}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">${view.text('Cohort statistics')}</span>
+        <span>${view.text('Workspace')}</span> ${icon('chevron', 11)} ${loaded ? `<span>${realMode ? view.text('Local export') : (officialDemo ? t('Official demo', '官方演示') : view.text('Demo cohort'))}</span> ${icon('chevron', 11)} ` : ''}<span style="color:var(--ink-2);">${view.text('Cohort statistics')}</span>
       </div>
       <div class="page-head" style="margin-bottom:16px;">
         <h1 style="margin-top:0;">${t('Cohort Statistics', '队列统计')}</h1>
-        ${loaded && review && realMode ? '' : `<p class="lead">${loaded ? (review ? t('Official deidentified demo cohort · source-backed aggregate review', '官方去标识化演示队列 · 有来源支撑的聚合审阅') : t('Synthetic fallback contrast · UI rehearsal only', '合成兜底对照 · 仅用于界面演练')) : (hostedServer() ? t('Choose one of the datasets the administrator prepared to view group contrasts, coverage, survival curves and SOFA reclassification.', '选择管理员准备的一份数据，查看组间对照、覆盖率、生存曲线和 SOFA 重分层。') : t('Choose one official demo or one registered export before viewing group contrasts, coverage, survival curves, and SOFA reclassification.', '选择一个官方演示或一个已注册导出，再查看组间对照、覆盖率、生存曲线和 SOFA 重分层。'))}</p>`}
+        ${loaded && review && realMode ? '' : `<p class="lead">${loaded ? (review ? t('Official deidentified demo cohort · source-backed aggregate review', '官方去标识化演示队列 · 有来源支撑的聚合审阅') : t('Synthetic example data · not a research result', '合成示例数据 · 不是研究结果')) : (hostedServer() ? t('Choose one of the datasets the administrator prepared to view group contrasts, coverage, survival curves and SOFA reclassification.', '选择管理员准备的一份数据，查看组间对照、覆盖率、生存曲线和 SOFA 重分层。') : t('Choose one official demo or one registered export before viewing group contrasts, coverage, survival curves, and SOFA reclassification.', '选择一个官方演示或一个已注册导出，再查看组间对照、覆盖率、生存曲线和 SOFA 重分层。'))}</p>`}
       </div>`;
       if (state.view !== 'loading' && !loaded) {
         const demoSourceOwner = window.EU_OFFICIAL_DEMO_SOURCES || window.EU_PATIENT_DEMO_SOURCES;
@@ -363,11 +363,9 @@
         return head + `<div class="card pad" data-cohort-config-required="true">
             ${hostedServer() ? '' : `<div class="panel-head">
               <div>
-                <div class="eyebrow">${t('Cohort Statistics', '队列统计')}</div>
                 <div class="panel-title" style="font-size:17px;">${t('Choose one cohort data source', '选择一个队列数据源')}</div>
-                <div class="panel-sub mt-4">${realMode ? (hostedServer() ? t('Use one of the datasets the administrator prepared.', '使用管理员准备好的一份数据。') : t('Use one registered local EasyICU export.', '使用一个已注册的本地 EasyICU 导出。')) : t('Use one official deidentified ICU demo; synthetic data remains an explicit offline fallback.', '使用一个官方去标识化 ICU 演示；合成数据仅作为明确的离线兜底。')}</div>
+                <div class="panel-sub mt-4">${realMode ? (hostedServer() ? t('Use one of the datasets the administrator prepared.', '使用管理员准备好的一份数据。') : t('Use one registered local EasyICU export.', '使用一个已注册的本地 EasyICU 导出。')) : t('Open one official deidentified demo.', '打开一份官方去标识化演示数据。')}</div>
               </div>
-              <span class="pill ${realMode ? '' : 'demo'}"><span class="dot"></span>${realMode ? t('1 source required', '需要 1 个来源') : t('Official demos', '官方演示')}</span>
             </div>
             <div style="border-top:1px solid var(--hair);padding-top:16px;">
               ${sourceModeSelector(realMode)}
@@ -384,8 +382,8 @@
           </div>
           ${hostedServer() ? '' : `<div class="empty mt-16" data-cohort-empty-preview="true">
             <div class="glyph">${icon('cohort', 22)}</div>
-            <div class="t">${t('Cohort review awaits setup', '队列审阅等待配置')}</div>
-            <div class="d">${t('After setup, this page will show group contrast, KM/log-rank, coverage audit, cohort profile, and SOFA reclassification.', '配置后，这里会显示组间对照、KM 生存曲线与 log-rank 检验、覆盖审计、队列画像和 SOFA 重分层。')}</div>
+            <div class="t">${t('No cohort open yet', '还没有打开队列')}</div>
+            <div class="d">${t('Open a dataset above to see group comparison, survival curves, coverage, cohort profile and SOFA reclassification.', '在上方打开一份数据后，这里会显示组间对照、生存曲线、覆盖审计、队列画像和 SOFA 重分层。')}</div>
           </div>`}`;
       }
       if (state.view === 'loading') {

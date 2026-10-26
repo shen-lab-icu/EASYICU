@@ -423,28 +423,16 @@
       </div>`;
   }
 
-  function cohortRealModuleSummary(review) {
-    const rows = (review && review.coverage) || [];
-    if (!rows.length) return '';
-    const metadataRows = rows.filter(row => row.coverage_basis === 'metadata_row_count_only');
-    const chips = rows.map(row => {
-      const cls = row.quality_status === 'ok' || row.quality_status === 'neutral' ? 'solid' : (row.quality_status === 'unknown' ? 'demo' : '');
-      const label = row.coverage_basis === 'metadata_row_count_only'
-        ? t('manifest rows', '清单行数')
-        : cohortCoverageMetricValue(row);
-      return `<span class="chip ${cls}" title="${esc(row.module)}">${esc(catalogModuleText(row.module))} <span class="mono" style="font-size:10.5px;color:inherit;opacity:.72;">${label}</span></span>`;
-    }).join('');
-    return `
-      <div class="card pad mt-14" data-cohort-real-modules>
-        <div class="row wrap gap-8" style="align-items:center;">
-          <span style="font-size:12px;color:var(--ink-3);">${fmtInt(rows.length)} ${t('modules', '个模块')}</span>
-          <span class="grow"></span>
-          <button class="btn sm" type="button" data-cohgo="coverage">${icon('shield', 12)} ${t('Open coverage audit', '打开覆盖审计')}</button>
-        </div>
-        <div class="row wrap gap-6" style="margin-top:10px;">${chips}</div>
-        ${metadataRows.length ? `<div style="font-size:11.5px;color:var(--ink-4);margin-top:8px;">${t('Some non-Parquet or very large modules may show manifest-confirmed row counts instead of exact unique-stay coverage; they are still part of this export.', '部分非 Parquet 或超大模块可能显示清单确认的行数，而不是精确唯一 stay 覆盖率；它们仍属于当前导出。')}</div>` : ''}
-      </div>`;
+  // The picker re-renders on every toggle; keep it open while the user is choosing.
+  let featurePickerOpen = false;
+  if (typeof document !== 'undefined') {
+    document.addEventListener('toggle', event => {
+      const target = event.target;
+      if (target && target.matches && target.matches('[data-cohort-feature-picker]')) featurePickerOpen = target.open;
+    }, true);
   }
+
+  const SPLIT_DEFINING_METRIC = { survival: 'Mortality %', sex: 'Female %', sepsis: 'Sepsis-3 %' };
 
   function cohortCoverageMetricLabel(row) {
     if (!row || row.coverage_basis === 'metadata_row_count_only') return t('row count only', '仅行数');
@@ -521,10 +509,12 @@
         <span style="opacity:.72;">${esc(feature.module ? catalogModuleText(feature.module) : '')}</span>
       </button>`).join('');
     return `
-      <div class="card pad mt-14" data-cohort-feature-picker>
-        <div class="row wrap gap-8" style="align-items:center;">
-          <span class="pill ok"><span class="dot"></span>${t('Full export feature catalog', '全量导出特征目录')}</span>
-          <span style="font-size:12px;color:var(--ink-3);">${fmtInt(modules.length)} ${t('modules', '个模块')} · ${fmtInt(offeredTotal)} ${t('available comparison features', '个可比较特征')} · ${fmtInt(selection.selected_count || selectedIds.size)} ${t('selected', '个已选择')}</span>
+      <details class="card pad mt-16 cohort-feature-picker" data-cohort-feature-picker ${featurePickerOpen ? 'open' : ''}>
+        <summary>
+          <b>${t('Adjust compared features', '调整比较特征')}</b>
+          <span>${fmtInt(selection.selected_count || selectedIds.size)} / ${fmtInt(maxSelected)} ${t('selected', '已选')} · ${t('Full export feature catalog', '全量导出特征目录')} ${fmtInt(offeredTotal)}</span>
+        </summary>
+        <div class="row wrap gap-8 mt-12" style="align-items:center;">
           <span class="grow"></span>
           <button class="btn sm" type="button" data-cohort-feature-default>${icon('sliders', 12)} ${t('Restore default features', '恢复默认特征')}</button>
           <button class="btn sm ghost" type="button" data-cohort-feature-clear>${icon('close', 12)} ${t('Clear added features', '清空已选特征')}</button>
@@ -532,8 +522,7 @@
         <div class="row wrap gap-6" style="margin-top:10px;">${moduleChips}</div>
         ${selectedChips ? `<div class="row wrap gap-6" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--hair);"><span style="font-size:11px;color:var(--ink-4);padding-top:4px;">${t('Selected', '已选择')}</span>${selectedChips}</div>` : ''}
         <div class="row wrap gap-6" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--hair);max-height:180px;overflow:auto;">${featureButtons}</div>
-        <div style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Selected', '已选')} ${fmtInt(selectedIds.size)} / ${fmtInt(maxSelected)}</div>
-      </div>`;
+      </details>`;
   }
 
   function cohortCoverageBody(review, opts = {}) {
@@ -1198,6 +1187,9 @@
       const shownGroups = activeGroups.filter(g => !emptyGroup(g));
       const hiddenLabels = new Set(activeGroups.filter(emptyGroup).map(g => String(g.label)));
       const shownCols = profileColumns.map((col, i) => [col, i]).filter(([col]) => !hiddenLabels.has(String(col)));
+      // The row that defines the split reads 0% / 100% by construction.
+      const definingMetric = SPLIT_DEFINING_METRIC[active.id];
+      const shownRows = profileRows.filter(row => row.metric !== definingMetric);
       const radio = (row) => `<label class="radio ${active.id === row.id ? 'on' : ''}" role="button" tabindex="0" data-cohort-comp="${esc(row.id)}"><span class="mk"></span> ${esc(cohortText(row.label || row.id))}</label>`;
       return `
       ${workspaceSamplingNote(s)}
@@ -1207,8 +1199,6 @@
         <div class="stat accent"><div class="label">${cohortText('Median age')}</div><div class="val">${fmtNum(s.age && s.age.median, 1)}</div></div>
         <div class="stat accent"><div class="label">${cohortText('Median SOFA-2')}</div><div class="val">${fmtNum(s.sofa2 && s.sofa2.median, 1)}</div></div>
       </div>
-      ${cohortRealModuleSummary(review)}
-      ${cohortRealFeaturePicker(review)}
 
       <div class="sec-stack"><h2>${cohortText('Select descriptive split')}</h2></div>
       <div class="radio-row">
@@ -1225,13 +1215,14 @@
         <table class="eu-table">
           <thead><tr><th>${cohortText('Metric')}</th>${shownCols.map(([col]) => `<th class="num">${esc(cohortText(col))}</th>`).join('')}</tr></thead>
           <tbody>
-            ${profileRows.map(row => `<tr>
+            ${shownRows.map(row => `<tr>
               <td class="key">${esc(cohortMetricText(row))}${row.unit ? ` <span class="mono" style="color:var(--ink-4);font-weight:500;">${esc(cohortText(row.unit))}</span>` : ''}</td>
               ${shownCols.map(([, i]) => `<td class="num">${cohortProfileValue(row, (row.values || [])[i])}</td>`).join('')}
             </tr>`).join('')}
           </tbody>
         </table>
       </div>
+      ${cohortRealFeaturePicker(review)}
 `;
     }
     const ws = window.EU_VIZ_WORKSPACE;
@@ -1262,7 +1253,7 @@
           </tbody>
         </table>
       </div>
-      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to address when Guided Copilot prepares the formal analysis.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 「研究引导」准备正式分析时需要处理它们。')}</span></div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to address when Guided Copilot prepares the formal analysis.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 研究对话准备正式分析时需要处理它们。')}</span></div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Real local export summary. P-values and manuscript claims are intentionally withheld from this UI preview.', '真实本地导出摘要。此 UI 预览不会直接给出 p 值或稿件声明。')}</p>`;
     }
     const comparisons = {
@@ -1385,7 +1376,7 @@
           </tbody>
         </table>
       </div>
-      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to address when Guided Copilot prepares the formal analysis.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 「研究引导」准备正式分析时需要处理它们。')}</span></div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to address when Guided Copilot prepares the formal analysis.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 研究对话准备正式分析时需要处理它们。')}</span></div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Demo / seeded example values for UI preview — not a real run output.', '演示 / 示例数据，仅用于界面预览 —— 非真实运行结果。')}</p>`;
   }
   function init(config) {

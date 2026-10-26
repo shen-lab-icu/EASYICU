@@ -56,21 +56,16 @@
     return Math.max(officialPaths().length, catalogReady);
   }
 
-  function officialSourceStatus(source, pairReady) {
+  function officialSourceStatus(source, pairReady, sourceOwner) {
     const status = source && source.status || {};
     const active = pairReady || Boolean(status.active)
       || (status.state === 'prepared' && status.registered);
-    const labels = {
-      not_downloaded: text('Not installed', '尚未安装'),
-      downloaded: text('Downloaded', '已下载'),
-      converted: text('Converted', '已转换'),
-      prepared: text('Ready', '已就绪'),
-    };
-    return {
-      active,
-      label: active ? text('Ready', '已就绪') : (labels[status.state] || text('Not installed', '尚未安装')),
-      tone: active ? 'ok' : (status.state === 'not_downloaded' ? 'neutral' : 'warn'),
-    };
+    if (active) return { active, label: text('Ready', '已就绪'), tone: 'ok' };
+    // The shared source owner names the cache stages the same way on every page.
+    const [label, tone] = sourceOwner && typeof sourceOwner.stateLabel === 'function'
+      ? sourceOwner.stateLabel(source, { t: text, esc })
+      : [text('Not downloaded', '未下载'), 'neutral'];
+    return { active, label, tone };
   }
 
   function officialScope(source) {
@@ -92,27 +87,22 @@
     }
     return `<div class="crossdb-demo-pair" data-official-demo-sources data-demo-source-scope="crossdb">
       ${sources.slice(0, 2).map(source => {
-        const status = officialSourceStatus(source, pairReady);
+        const status = officialSourceStatus(source, pairReady, sourceOwner);
         const provenance = source.provenance || {};
         const license = provenance.license || {};
         const download = source.download || {};
         return `<article class="crossdb-demo-source ${status.active ? 'ready' : ''}">
           <div class="crossdb-demo-source-main">
-            <span class="crossdb-demo-source-icon">DB</span>
             <div>
               <small>${esc(provenance.provider || 'PhysioNet')} · ${esc(source.version || '')}</small>
               <b>${esc(source.title || source.id)}</b>
-              <span>${esc(officialScope(source))} · ${esc(download.size_label || '')} · ${esc(source.database || '')}</span>
+              <span>${esc(officialScope(source))} · ${esc(download.size_label || '')} · ${esc(license.name || 'ODbL 1.0')}</span>
             </div>
           </div>
-          <div class="crossdb-demo-source-action">
+          ${status.active ? '' : `<div class="crossdb-demo-source-action">
             <span class="pill ${status.tone}">${esc(status.label)}</span>
-            ${status.active ? '' : `<button class="btn sm" type="button" data-demo-source-prepare="${esc(source.id)}">${text('Prepare', '准备数据')}</button>`}
-          </div>
-          <details>
-            <summary>${text('License & provenance', '许可与溯源')}</summary>
-            <p>${esc(license.name || 'ODbL 1.0')} · ${text('deidentified real records', '去标识化真实记录')}</p>
-          </details>
+            <button class="btn sm" type="button" data-demo-source-prepare="${esc(source.id)}">${text('Prepare', '准备数据')}</button>
+          </div>`}
         </article>`;
       }).join('')}
     </div>`;
@@ -129,19 +119,16 @@
         <div class="card pad">
           <div class="panel-head">
             <div>
-              <div class="eyebrow">${text('Official demo pair', '官方 Demo 组合')}</div>
               <div class="panel-title" style="font-size:17px;">${text('MIMIC-IV Demo + eICU Demo', 'MIMIC-IV Demo + eICU Demo')}</div>
-              <div class="panel-sub mt-4">${text('Two real deidentified public demo exports, processed through the normal EasyICU mapping pipeline.', '两个真实去标识化公开 Demo 导出，均经过正常 EasyICU 映射流程。')}</div>
+              <div class="panel-sub mt-4">${text('Two deidentified public demos, prepared the same way as your own data.', '两个去标识化公开演示数据，和你自己的数据走同样的准备流程。')}</div>
             </div>
-            <span class="pill ${ready ? 'ok' : 'warn'}"><span class="dot"></span>${count} / 2 ${text('ready', '已就绪')}</span>
+            <span class="pill ${ready ? 'ok' : 'warn'}" data-crossdb-pair-count><span class="dot"></span>${count} / 2 ${text('ready', '已就绪')}</span>
           </div>
           <div class="mt-16">
             ${officialHtml}
           </div>
           <div class="gate-strip mt-16">
-            <span class="panel-sub">${ready
-              ? text('Both deidentified exports are registered locally.', '两个去标识化导出均已在本地注册。')
-              : text('Prepare both official demos before running.', '运行前请先准备好两个官方 Demo。')}</span>
+            <span class="panel-sub">${ready ? '' : text('Prepare both official demos before running.', '运行前请先准备好两个官方演示数据。')}</span>
             <div class="grow"></div>
             <button class="btn primary" type="button" data-crossdb-run-official ${ready ? '' : 'aria-disabled="true"'}>${text('Start consistency check', '开始一致性检查')}</button>
           </div>
@@ -149,9 +136,8 @@
         <details class="card crossdb-offline-fallback mt-16" data-crossdb-synthetic-fallback>
           <summary class="crossdb-source-summary">
             <div>
-              <div class="eyebrow">${text('Offline fallback', '离线兜底')}</div>
-              <div class="panel-title mt-4">${text('Seeded synthetic multi-database preview', '种子合成多数据库预览')}</div>
-              <div class="panel-sub mt-4">${text('UI rehearsal only. These six simulated frames are not official database records or scientific results.', '仅用于界面演练。这六组模拟特征帧不是官方数据库记录，也不是科学结果。')}</div>
+              <div class="panel-title">${text('Synthetic example data', '合成示例数据')}</div>
+              <div class="panel-sub mt-4">${text('Six simulated databases for learning the screen. Not real records and no research result.', '六个模拟数据库，用于熟悉界面；不是真实记录，也不产生研究结果。')}</div>
             </div>
             <span class="pill warn">${text('Synthetic', '合成')}</span>
           </summary>

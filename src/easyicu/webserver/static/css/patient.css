@@ -315,7 +315,7 @@
 .pt-overview-availability{
   margin-top:12px;
   display:grid;
-  grid-template-columns:repeat(3, minmax(0,1fr));
+  grid-template-columns:repeat(2, minmax(0,1fr));
   gap:10px;
 }
 .pt-overview-availability > div{
@@ -720,3 +720,7 @@
     text-align:left;
   }
 }
+
+/* Per-module quality rows: the value reads "5,454 行 · 未计算覆盖率", wider than the shared 48px column. */
+.qrow.pt-qrow{ grid-template-columns:130px minmax(0,1fr) max-content; }
+.qrow.pt-qrow .qv{ font-family:var(--font-sans), var(--font-cn); font-variant-numeric:tabular-nums; }

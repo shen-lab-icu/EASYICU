@@ -2344,7 +2344,12 @@ def _source_aggregate(
     *,
     checkpoint: Optional[Callable[[], None]] = None,
 ) -> Dict[str, Any]:
-    safe_source = dict(payload.get("source") or _safe_registered_source(source))
+    # The registered record owns the selection's identity; the cohort summary
+    # may name the same export differently, which must not change the receipt.
+    safe_source = {
+        **dict(payload.get("source") or {}),
+        **_safe_registered_source(source),
+    }
     summary = payload.get("summary") or {}
     coverage = payload.get("coverage") or []
     quality = payload.get("quality") or {}

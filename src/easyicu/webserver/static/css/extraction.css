@@ -398,7 +398,7 @@
 .mod-concept-toolbar{ display:flex; align-items:center; gap:10px; margin-bottom:9px; }
 .mod-concept-toolbar .hint{ font-size:11.5px; color:var(--ink-3); }
 .mod-concept-toolbar .spacer{ flex:1; }
-.linkbtn{ min-height:24px; border:0; background:transparent; padding:2px 0; color:var(--accent-ink); font-size:11.5px; cursor:pointer; }
+.linkbtn{ min-height:24px; min-width:24px; border:0; background:transparent; padding:2px 2px; color:var(--accent-ink); font-size:11.5px; cursor:pointer; }
 .linkbtn:hover{ text-decoration:underline; }
 .concept-list{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
 .concept-toggle{
