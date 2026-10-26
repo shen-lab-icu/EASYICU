@@ -9,7 +9,11 @@ const source = fs.readFileSync(process.argv[2], 'utf8');
 const cancelCalls = [];
 const context = { console };
 context.window = context;
-vm.runInNewContext(source, vm.createContext(context), { filename: process.argv[2] });
+const sandbox = vm.createContext(context);
+// Load the database-name owner as index.html does, before this widget.
+const namesPath = process.argv[2].replace(/[^/]+$/, 'database-names.js');
+vm.runInContext(fs.readFileSync(namesPath, 'utf8'), sandbox, { filename: namesPath });
+vm.runInContext(source, sandbox, { filename: process.argv[2] });
 const progress = context.EU_CROSSDB_PROGRESS;
 
 progress.beginStart();
@@ -103,7 +107,9 @@ assert.match(html, /role="status"/);
 assert.match(html, /aria-live="polite"/);
 assert.match(html, /<progress[^>]+value="50"/);
 assert.match(html, /MIMIC-IV/);
-assert.match(html, /eicu/);
+// A database still waiting is named by the owner, not shown as its key.
+assert.match(html, /crossdb-progress-db-name">eICU-CRD</);
+assert.doesNotMatch(html, />eicu</);
 assert.match(html, /is-complete/);
 assert.match(html, /data-crossdb-cancel/);
 

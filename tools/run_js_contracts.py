@@ -70,7 +70,7 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-provider.js",
         "screens-guided-pi-provider-declaration.js",
     ],
-    "crossdb_progress_owner.test.js": ["screens-viz-crossdb-progress.js"],
+    "crossdb_progress_owner.test.js": ["screens-viz-crossdb-progress.js", "database-names.js"],
     "crossdb_raw_scope.test.js": ["screens-viz-crossdb-raw.js"],
     "crossdb_results_owner.test.js": ["screens-viz-crossdb-results.js"],
     "crossdb_setup_owner.test.js": ["screens-viz-crossdb-setup.js"],

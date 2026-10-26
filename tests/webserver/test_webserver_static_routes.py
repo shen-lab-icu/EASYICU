@@ -2089,6 +2089,9 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "scanCrossdbRawRoot" in api_js
     assert "/api/crossdb-review/raw-root-scan" in api_js
     assert "loadDemoCrossdb" not in viz_js
+    # The comparison-mode card names the raw mode; no code reads as an identifier.
+    assert "raw_feature_distribution_only: '仅特征分布'," in viz_js
+    assert "const words = raw.replace(/_/g, ' ');" in viz_js
     assert "loadCrossdbDemoDistribution" not in viz_js
     assert "window.EU_CROSSDB_RAW.buildRequest" in viz_js
     assert "max_patients: sampleProfile.maxPatients" in viz_js
@@ -2140,10 +2143,10 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "padding-right: 168px" in crossdb_css
     assert "scroll-margin-bottom: 84px" in crossdb_css
 
-    assert "js/screens-viz-crossdb-setup.js?v=20261026-src1" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261026-xdbq1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz-crossdb-results.js?v=20261026-dbnames1" in index_html
-    assert "js/screens-viz.js?v=20261026-src1" in index_html
+    assert "js/screens-viz.js?v=20261026-xdbq1" in index_html
     assert "css/crossdb.css?v=20261026-src1" in index_html
     for selector in (
         ".crossdb-method-grid",
@@ -2190,7 +2193,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20261026-src1" in index_html
+    assert "js/screens-viz.js?v=20261026-xdbq1" in index_html
 
 
 def test_native_cohort_groups_render_table_one_without_legacy_bars() -> None:
@@ -2912,7 +2915,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20261026-src1" in index_html
+    assert "js/screens-viz.js?v=20261026-xdbq1" in index_html
     assert "bounded browser review', '本页审阅" in patient_domain_js
     assert "function buildPatientDrilldown" in demo_drilldown_js
     assert "function demoTablePreviewRowContext" in demo_drilldown_js
@@ -3121,7 +3124,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20261026-data1" in index_html
-    assert "js/screens-viz.js?v=20261026-src1" in index_html
+    assert "js/screens-viz.js?v=20261026-xdbq1" in index_html
     assert "view: 'idle'," in cohort_js
     assert "featureScope: 'recommended'," in cohort_js
     assert 'data-cohort-config-required="true"' in cohort_js
@@ -3300,7 +3303,7 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert "owner.rememberPair(registrySources())" in viz_js
     assert ".official-demo-sources" in shared_css
     assert "css/official-demo-sources.css?v=20261026-src1" in index_html
-    assert "js/screens-viz-crossdb-setup.js?v=20261026-src1" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261026-xdbq1" in index_html
     assert "js/screens-viz-crossdb-source.js?v=20261026-src1" in index_html
 
 
