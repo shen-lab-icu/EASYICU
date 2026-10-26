@@ -85,9 +85,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-article-report.css?v=20260830-e2-report1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260829-data-readiness1" in index
     assert "css/guided-pi-source-view.css?v=20261022-winfont1" in index
-    assert "css/guided-pi-literature.css?v=20260902-type-scale2" in index
+    assert "css/guided-pi-literature.css?v=20261026-funnel1" in index
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
-    assert "js/screens-guided-pi-literature.js?v=20261022-plain3" in index
+    assert "js/screens-guided-pi-literature.js?v=20261026-funnel1" in index
     assert "js/screens-guided-pi-markdown.js?v=20260921-turn-traces3" in index
     assert "js/screens-guided-pi-next-actions.js?v=20261022-nofiller1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20261021-turn-layout1" in index

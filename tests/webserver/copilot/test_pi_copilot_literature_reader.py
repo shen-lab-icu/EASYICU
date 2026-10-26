@@ -112,6 +112,30 @@ def test_search_summary_distinguishes_search_receipt_from_preset_references():
     assert "<strong>未记录</strong>" in unknown
 
 
+def test_recorded_search_reads_as_its_screening_steps():
+    html = _render_literature({"direct_comparator_count": 3, "search": {
+        "search_conducted": True, "curated_seed_count": 10,
+        "prisma": {"identified": 8, "duplicates_removed": 0, "screened": 8, "eligible": 3, "included": 3},
+    }})
+    funnel = html.split('<ol class="gpi-lit-funnel"', 1)[1].split("</ol>", 1)[0]
+    labels = ["本次检索", "去重后筛选", "符合条件", "纳入对照"]
+    assert [funnel.index(label) for label in labels] == sorted(funnel.index(label) for label in labels)
+    assert funnel.count("<strong>8</strong>") == 2 and funnel.count("<strong>3</strong>") == 2
+    assert 'style="width:100%"' in funnel and 'style="width:37.5%"' in funnel
+    assert "系统预置参考" in html and "<strong>10</strong>" in html
+    assert "直接匹配" in html
+    curated_only = _render_literature({"search": {"search_conducted": False, "curated_seed_count": 4}})
+    assert "gpi-lit-funnel" not in curated_only
+    missing_stage = _render_literature({"search": {"search_conducted": True, "prisma": {"identified": 0}}})
+    assert 'style="width:0%"' in missing_stage and "<strong>未记录</strong>" in missing_stage
+
+
+def test_screening_bars_respect_reduced_motion():
+    css = _read("css/guided-pi-literature.css")
+    assert "@keyframes gpi-lit-grow" in css
+    assert "@media (prefers-reduced-motion:reduce){.gpi-lit-bar i{animation:none}}" in css
+
+
 def test_citation_membership_is_not_reviewed_support_or_novelty():
     payload = {
         "direct_comparator_count": 1, "direct_comparator_keys": ["paper"],
