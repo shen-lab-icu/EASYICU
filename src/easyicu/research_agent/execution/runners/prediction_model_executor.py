@@ -44,16 +44,24 @@ from ...contracts.prediction_execution import (
     STATIC_PREDICTION_ACTION_OUTPUTS as _ACTION_OUTPUTS,
     static_prediction_benchmark_cohort_input,
     static_prediction_benchmark_columns,
+    static_prediction_bootstrap_spec,
     static_prediction_executes_robustness_spec,
     static_prediction_features,
     static_prediction_model_columns,
     static_prediction_owns_step,
 )
-from ...contracts.prediction_validation import PredictionValidationSpec
+from ...contracts.prediction_validation import BootstrapSpec, PredictionValidationSpec
+from easyicu.research_agent.methods.prediction_validation import (
+    bootstrap_optimism_validation,
+    calibration_in_the_large,
+    recalibrate_score,
+)
 from ...methods.auc_interval import AUCInterval, auc_interval, paired_auc_difference
 from ...methods.delong_auc import delong_auc_ci
+from easyicu.research_agent.methods.reclassification import continuous_nri, idi
 from ...planning.benchmark_comparator import (
     benchmark_comparator_facts,
+    benchmark_source_omission,
     calibration_reason,
     comparator_information_window,
     information_window_relation,
@@ -100,6 +108,8 @@ def prediction_model_consumed_input_keys(step: AnalysisStep) -> tuple[str, ...]:
     if step.scientific_action_id == PREDICTION_BENCHMARK_ACTION:
         cohort = static_prediction_benchmark_cohort_input(step)
         return (cohort, PREDICTION_SCORES_PRODUCT) if cohort else (PREDICTION_SCORES_PRODUCT,)
+    if step.scientific_action_id == "prediction.internal_validation" and PREDICTION_PERFORMANCE_PRODUCT in step.inputs:
+        return (PREDICTION_SCORES_PRODUCT, PREDICTION_PERFORMANCE_PRODUCT)
     return (PREDICTION_SCORES_PRODUCT,)
 
 
@@ -107,6 +117,7 @@ def prediction_model_executor_code(step: AnalysisStep) -> str:
     if not prediction_model_executor_owns_step(step):
         raise ValueError("step is not owned by the static prediction adapter")
     action = str(step.scientific_action_id)
+    bootstrap_spec = static_prediction_bootstrap_spec(step)
     if action == _PRIMARY_ACTION:
         cohort = sole_typed_cohort_input(step)
         return textwrap.dedent(
@@ -133,6 +144,7 @@ def prediction_model_executor_code(step: AnalysisStep) -> str:
                 out_dir=Path(os.environ["STEP_OUT_DIR"]),
                 run_dir=Path(os.environ["EASYICU_RUN_DIR"]),
                 step_id={step.step_id!r},
+                bootstrap_spec={bootstrap_spec.model_dump() if bootstrap_spec else None!r},
             )
             print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
             """
@@ -184,6 +196,7 @@ def prediction_model_executor_code(step: AnalysisStep) -> str:
             run_dir=Path(os.environ["EASYICU_RUN_DIR"]),
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r},
+            include_bootstrap={PREDICTION_PERFORMANCE_PRODUCT in step.inputs!r},
         )
         print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
         """
@@ -562,6 +575,44 @@ def run_prediction_robustness_specs(
     return panel_rows, results
 
 
+def _bootstrap_columns(result: Mapping[str, Any] | None) -> dict[str, Any]:
+    if result is None:
+        return {}
+    return {
+        "bootstrap_optimism": json.dumps(result, allow_nan=False),
+        **{f"bootstrap_{key}": result[key] for key in ("n_replicates", "seed", "failed_replicates", "successful_replicates")},
+        **{f"bootstrap_{metric}_{kind}": value for metric, values in result["metrics"].items() for kind, value in values.items()},
+    }
+
+
+def _bootstrap_pipeline_validation(
+    frame: pd.DataFrame, outcome: pd.Series, groups: pd.Series,
+    features: tuple[str, ...], spec: BootstrapSpec,
+) -> dict[str, Any]:
+    """The apparent and every resampled fit use exactly the primary pipeline."""
+
+    def refit(rows):
+        combined = pd.concat([frame.iloc[rows], frame], ignore_index=True)
+        labels = pd.concat([outcome.iloc[rows], outcome], ignore_index=True)
+        development = np.arange(len(combined)) < len(rows)
+        return _fit_probabilities(
+            frame=combined, outcome=labels, features=features,
+            development=development, prediction_rows=~development,
+        )
+
+    return {
+        **bootstrap_optimism_validation(
+            outcomes=outcome, groups=groups, refit_predict=refit,
+            n_replicates=spec.replicates, seed=spec.seed,
+        ),
+        "evaluation_population": "development_partition",
+        "pipeline": "median_mode_imputation_scaling_one_hot_l2_logistic_C1",
+        "penalty_selection": "fixed_C1_no_selection",
+        "probability_calibration": "none",
+        "authority_scope": "analysis_only",
+    }
+
+
 def run_prediction_model(
     *,
     frame: pd.DataFrame,
@@ -571,6 +622,7 @@ def run_prediction_model(
     out_dir: Path,
     run_dir: Path,
     step_id: str,
+    bootstrap_spec: BootstrapSpec | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fit the exact Planner roster with one fixed analysis-only pipeline."""
 
@@ -642,6 +694,12 @@ def run_prediction_model(
         unit_ids=unit_ids,
         features=features,
     )
+    bootstrap = None
+    if bootstrap_spec is not None:
+        bootstrap = _bootstrap_pipeline_validation(
+            frame.loc[development], outcome.loc[development], groups.loc[development],
+            features, BootstrapSpec.model_validate(bootstrap_spec),
+        )
     performance = pd.DataFrame(
         [
             {
@@ -707,6 +765,7 @@ def run_prediction_model(
                 "repeated_split_results": json.dumps(
                     repeated_split_rows, separators=(",", ":"), allow_nan=False
                 ),
+                **_bootstrap_columns(bootstrap),
             }
         ]
     )
@@ -746,6 +805,7 @@ def run_prediction_model(
             **repeated_split_summary,
             "repeats": repeated_split_rows,
         },
+        **({"bootstrap_optimism": bootstrap} if bootstrap else {}),
         "robustness_rows": robustness_rows,
         "prediction_robustness_results": prediction_robustness,
         "source_cohort": str(Path(source_cohort).resolve()),
@@ -788,6 +848,7 @@ def run_prediction_score_analysis(
     run_dir: Path,
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
+    include_bootstrap: bool = False,
 ) -> dict[str, Any]:
     """Compute one exact downstream validation product from sealed scores."""
 
@@ -808,6 +869,21 @@ def run_prediction_score_analysis(
         minimum_row_count=1,
     )
     result = _validation_result(bound.frame)
+    performance = None
+    bootstrap = None
+    if include_bootstrap:
+        if action_id != "prediction.internal_validation":
+            raise RuntimeError("bootstrap performance belongs only to internal validation")
+        performance = load_typed_input(
+            input_key=PREDICTION_PERFORMANCE_PRODUCT, run_dir=Path(run_dir),
+            resolved_inputs=resolved_inputs, step_id=step_id,
+            expected_declared_kind="table", expected_evidence_kind="table",
+            require_consumption_contract=True,
+            minimum_row_count=1,
+        )
+        if len(performance.frame) != 1 or "bootstrap_optimism" not in performance.frame:
+            raise RuntimeError("bootstrap performance must have one primary model row")
+        bootstrap = json.loads(performance.frame.iloc[0]["bootstrap_optimism"])
     if action_id == "prediction.internal_validation":
         table = pd.DataFrame(
             [
@@ -816,6 +892,7 @@ def run_prediction_score_analysis(
                     "patient_overlap_n": 0,
                     "split_rule": "patient_group_shuffle_80_20_seed_1729",
                     "authority_scope": "analysis_only",
+                    **_bootstrap_columns(bootstrap),
                 }
             ]
         )
@@ -880,6 +957,8 @@ def run_prediction_score_analysis(
     table.to_csv(out_dir / filename, index=False)
     if sha256_file(bound.path) != bound.sha256:
         raise RuntimeError("prediction scores changed during downstream evaluation")
+    if performance and sha256_file(performance.path) != performance.sha256:
+        raise RuntimeError("prediction performance changed during downstream evaluation")
     summary = {
         "step_id": step_id,
         "status": "ok",
@@ -889,7 +968,8 @@ def run_prediction_score_analysis(
         "deterministic_standard_analysis": PREDICTION_MODEL_ANALYSIS_KIND,
         "authority_scope": "analysis_only",
         "paper_authorization_allowed": False,
-        "source_inputs": [PREDICTION_SCORES_PRODUCT],
+        "source_inputs": [PREDICTION_SCORES_PRODUCT] + ([PREDICTION_PERFORMANCE_PRODUCT] if performance else []),
+        **({"bootstrap_optimism": bootstrap} if bootstrap else {}),
         "input_bindings": [
             {
                 "input_key": PREDICTION_SCORES_PRODUCT,
@@ -901,6 +981,11 @@ def run_prediction_score_analysis(
         ],
         "output_files": {product: filename},
     }
+    if performance:
+        summary["input_bindings"].append({
+            "input_key": PREDICTION_PERFORMANCE_PRODUCT, "evidence_id": performance.evidence_id,
+            "sha256": performance.sha256, "loaded": True, "row_count": performance.row_count,
+        })
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
         encoding="utf-8",
@@ -998,9 +1083,9 @@ def run_prediction_benchmark_comparison(
     comparator's facts -- probability or oriented score, the outcome it
     predicts, the window it was computed over -- are the dictionary's
     (:mod:`...planning.benchmark_comparator`).  Every interval follows how the
-    comparison rows depend (:mod:`...methods.auc_interval`).  Calibration is
-    compared only for a probability of the study's own outcome, and never by
-    recalibrating the comparator.
+    comparison rows depend (:mod:`...methods.auc_interval`). Raw scores get
+    their own logistic recalibration fitted on development patients only.
+    Existing probabilities retain their native outcome-specific calibration.
     """
 
     context = _load_context(Path(run_dir))
@@ -1012,7 +1097,15 @@ def run_prediction_benchmark_comparison(
     )
     if not outcome_column or group_authority is None:
         raise RuntimeError("prediction requires typed outcome and patient-group authority")
-    comparators = tuple(str(column) for column in comparator_columns)
+    comparators, omitted = [], []
+    for column in comparator_columns:
+        variable = context.variable(column)
+        concept = str(getattr(variable, "source_concept", None) or column)
+        omission = benchmark_source_omission(column=column, concept=concept, database=context.cohort.database)
+        if omission:
+            omitted.append(omission)
+        else:
+            comparators.append(column)
     missing = sorted({group_authority.group_source, *comparators} - set(frame.columns))
     if missing:
         raise RuntimeError(f"benchmark comparison cohort is missing declared columns: {missing!r}")
@@ -1051,6 +1144,7 @@ def run_prediction_benchmark_comparison(
             "the model's scores and the cohort hold different stays",
         )
     merged = scores.merge(cohort_rows, on="unit_id", how="left", validate="one_to_one")
+    _validation_result(scores)  # Also enforce the primary's patient split contract.
     if not merged["subject_id"].astype(str).eq(merged["cohort_subject_id"]).all():
         raise BenchmarkComparisonError(
             "benchmark_rows_do_not_align",
@@ -1115,6 +1209,18 @@ def run_prediction_benchmark_comparison(
         model_auc = auc_interval(outcome, model_values, subjects)
         comparator_auc = auc_interval(outcome, comparator_values, subjects)
         reason = calibration_reason(facts, outcome_concept=outcome_concept)
+        recalibration = None
+        calibration_values = comparator_values
+        if facts.kind == "score":
+            development = merged["split"].eq("development") & values.notna()
+            try:
+                calibration_values, recalibration = recalibrate_score(
+                    outcomes=merged.loc[development, "outcome"], scores=values.loc[development],
+                    evaluation_scores=comparator_values,
+                )
+                reason = None
+            except (ValueError, RuntimeError, np.linalg.LinAlgError):
+                reason = "benchmark_recalibration_not_estimable"
         window = comparator_information_window(
             getattr(variable, "analysis_window", None), facts
         )
@@ -1173,6 +1279,8 @@ def run_prediction_benchmark_comparison(
             "auroc_ci_low": comparator_auc.ci_low,
             "auroc_ci_high": comparator_auc.ci_high,
         }
+        reclassification = {}
+        reclassification_reason = "comparator_probability_unavailable" if reason else "patient_dependence_unsupported"
         if reason is None:
             unit_ids = compared["unit_id"].to_numpy()
             model_calibration = _calibration_summary(
@@ -1182,7 +1290,7 @@ def run_prediction_benchmark_comparison(
                 unit_ids=unit_ids,
                 subjects=subjects,
                 outcome=outcome,
-                probability=comparator_values,
+                probability=calibration_values,
             )
             for metric in _CALIBRATION_METRICS:
                 model_value = _finite_or_none(getattr(model_calibration, metric))
@@ -1197,6 +1305,26 @@ def run_prediction_benchmark_comparison(
                         "comparator_value": comparator_value,
                     }
                 )
+            if recalibration:
+                model_citl = calibration_in_the_large(outcome, model_values)
+                comparator_citl = calibration_in_the_large(outcome, calibration_values)
+                model_block["calibration_in_the_large"] = model_citl
+                comparator_block["calibration_in_the_large"] = comparator_citl
+                rows.append({**shared, "metric": "calibration_in_the_large", "model_value": model_citl, "comparator_value": comparator_citl})
+            if np.unique(subjects).size == len(subjects):
+                reclassification_reason = ""
+                for metric, estimator, attribute in (
+                    ("continuous_nri", continuous_nri, "nri"), ("idi", idi, "idi"),
+                ):
+                    estimate = estimator(outcome, calibration_values, model_values, n_bootstrap=1000, random_state=1729)
+                    reclassification[metric] = estimate.to_json()
+                    rows.append({
+                        **shared, "metric": metric, "difference": getattr(estimate, attribute),
+                        "difference_se": estimate.se, "difference_ci_low": estimate.ci_low,
+                        "difference_ci_high": estimate.ci_high, "bootstrap_n": estimate.n_bootstrap,
+                        "bootstrap_skipped_n": estimate.n_bootstrap - estimate.n_successful,
+                        "interval_method": estimate.method,
+                    })
         reportable.append(
             {
                 **shared,
@@ -1207,6 +1335,9 @@ def run_prediction_benchmark_comparison(
                 "auroc_difference_ci_high": difference.ci_high,
                 "auroc_difference_p_value": difference.p_value,
                 "interval_method": difference.method,
+                "recalibration": recalibration,
+                "reclassification": reclassification,
+                "reclassification_reason": reclassification_reason,
             }
         )
     table = pd.DataFrame(rows, columns=_BENCHMARK_COLUMNS)
@@ -1225,6 +1356,7 @@ def run_prediction_benchmark_comparison(
         "authority_scope": "analysis_only",
         "paper_authorization_allowed": False,
         "comparator_columns": list(comparators),
+        "omitted_comparators": omitted,
         "reportable_benchmark_comparison": {
             "prediction_time_hours": float(prediction_time),
             "outcome_concept": outcome_concept,

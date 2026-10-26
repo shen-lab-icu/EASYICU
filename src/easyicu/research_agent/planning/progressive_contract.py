@@ -29,6 +29,7 @@ from ..canonical_json import canonical_sha256
 from ..contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
 from ..contracts.product_identity import is_canonical_typed_product_token
 from ..contracts.functional_form import FunctionalFormSpec
+from ..contracts.prediction_validation import BootstrapSpec
 from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from .design_selection import ResearchDesignSelection
@@ -821,6 +822,7 @@ class ProgressivePlanOutline(BaseModel):
 #: refuses them elsewhere, so a transport must not offer them elsewhere either.
 COORDINATE_OWNED_STEP_FIELDS = (
     "functional_form_spec",
+    "bootstrap_spec",
     "phenotyping_feature_columns",
     "phenotyping_comparison_variables",
     "repeated_unit_interval_method",
@@ -841,6 +843,8 @@ def coordinate_owned_step_fields(
         owned.update({"repeated_unit_interval_method", "patient_weighted_interval_assumptions"})
     if module_id == "custom_analysis" and planned_analysis_role == "sensitivity":
         owned.add("functional_form_spec")
+    if scientific_action_id == "prediction.discrimination_calibration" and planned_analysis_role == "primary":
+        owned.add("bootstrap_spec")
     if scientific_action_id == PHENOTYPING_PRIMARY_ACTION and planned_analysis_role == "primary":
         owned.add("phenotyping_feature_columns")
     if (
@@ -916,6 +920,7 @@ class ProgressiveSkeletonStep(BaseModel):
 
     sensitivity_spec_ids: list[str] = Field(default_factory=list)
     functional_form_spec: Optional[FunctionalFormSpec] = Field(default=None, exclude_if=lambda value: value is None)
+    bootstrap_spec: Optional[BootstrapSpec] = Field(default=None, exclude_if=lambda value: value is None)
     phenotyping_feature_columns: Optional[list[str]] = Field(default=None, min_length=2, max_length=64, exclude_if=lambda value: value is None)
     phenotyping_comparison_variables: Optional[list[ProgressiveTableOneVariable]] = Field(default=None, min_length=1, max_length=64, exclude_if=lambda value: value is None)
     literature_bindings: list[ProgressiveLiteratureBinding] = Field(
@@ -1032,6 +1037,8 @@ class ProgressiveSkeletonStep(BaseModel):
         )
         if self.functional_form_spec is not None and "functional_form_spec" not in owned:
             raise ValueError("functional_form_spec belongs only to a custom sensitivity")
+        if self.bootstrap_spec is not None and "bootstrap_spec" not in owned:
+            raise ValueError("bootstrap_spec belongs only to the static prediction primary")
         if self.phenotyping_feature_columns is not None:
             if "phenotyping_feature_columns" not in owned:
                 raise ValueError("phenotyping_feature_columns belongs only to the primary cluster solution")

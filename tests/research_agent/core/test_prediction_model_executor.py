@@ -31,8 +31,11 @@ from easyicu.research_agent.contracts.figure_plan import (
     STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX,
 )
 from easyicu.research_agent.contracts.prediction_execution import (
+    prediction_bootstrap_method,
+    static_prediction_bootstrap_spec,
     static_prediction_model_columns,
 )
+from easyicu.research_agent.contracts.prediction_validation import BootstrapSpec
 from easyicu.research_agent.execution.figure_plan_binding import (
     validate_step_planned_figure_contract_binding,
 )
@@ -203,6 +206,129 @@ def test_prediction_model_roster_stops_at_typed_cohort_boundary() -> None:
     )
     assert prediction_model_executor_owns_step(step)
     assert static_prediction_model_columns(step) == ("age", "sex", "marker", "death")
+
+
+def test_declared_bootstrap_refits_development_and_flows_through_bound_table(tmp_path, monkeypatch):
+    from easyicu.research_agent.execution.runners import prediction_model_executor as owner
+    from easyicu.research_agent.contracts.prediction_validation import BootstrapSpec
+
+    frame = _frame()
+    (tmp_path / "research_context.json").write_text(_context(len(frame)).model_dump_json())
+    cohort = tmp_path / "cohort.csv"
+    frame.to_csv(cohort, index=False)
+    fitted_patients = []
+    original_pipeline = owner._model_pipeline
+
+    def spy(frame, features):
+        fitted_patients.append(set(frame["patient_stay_id"]))
+        return original_pipeline(frame, features)
+
+    monkeypatch.setattr(owner, "_model_pipeline", spy)
+    summary = run_prediction_model(
+        frame=frame, declared_columns=("age", "sex", "marker", "death"),
+        typed_cohort_input="artifact:analysis_cohort", source_cohort=cohort,
+        out_dir=tmp_path / "primary", run_dir=tmp_path, step_id="primary",
+        bootstrap_spec=BootstrapSpec(replicates=20, seed=63),
+    )
+    result = summary["bootstrap_optimism"]
+    assert result["evaluation_population"] == "development_partition"
+    assert len(fitted_patients) == 32  # primary, ten repeated splits, apparent, twenty refits
+    assert all(patients <= fitted_patients[0] for patients in fitted_patients[11:])
+    assert any(patients < fitted_patients[0] for patients in fitted_patients[12:])
+    scores_path = tmp_path / "primary" / "prediction_scores.csv"
+    performance_path = tmp_path / "primary" / "prediction_performance.csv"
+    scores = pd.read_csv(scores_path)
+    assert result["row_n"] == int(scores["split"].eq("development").sum())
+    bindings = {
+        PREDICTION_SCORES_PRODUCT: _binding(PREDICTION_SCORES_PRODUCT, scores, scores_path),
+        "table:model_performance": _binding("table:model_performance", pd.read_csv(performance_path), performance_path),
+    }
+    validation = run_prediction_score_analysis(
+        action_id="prediction.internal_validation", out_dir=tmp_path / "validation",
+        run_dir=tmp_path, resolved_inputs={"step_id": "validation", "inputs": bindings},
+        step_id="validation", include_bootstrap=True,
+    )
+    assert validation["bootstrap_optimism"] == result
+    table = pd.read_csv(tmp_path / "validation" / "internal_validation.csv")
+    assert json.loads(table.iloc[0]["bootstrap_optimism"]) == result
+    assert table.iloc[0]["bootstrap_auroc_corrected"] == pytest.approx(result["metrics"]["auroc"]["corrected"])
+    development = scores.loc[scores["split"].eq("development")]
+    from sklearn.metrics import brier_score_loss
+
+    assert result["metrics"]["brier_score"]["apparent"] == pytest.approx(brier_score_loss(development.outcome, development.probability))
+    assert validation["input_bindings"][1]["sha256"] == bindings["table:model_performance"]["sha256"]
+
+
+@pytest.mark.parametrize("spec", [
+    {"replicates": 0, "seed": 4}, {"replicates": 20}, {"replicates": 20, "seed": True},
+    {"replicates": 2001, "seed": 0}, {"replicates": 20, "seed": -1},
+    {"replicates": 20, "seed": 4294967296},
+])
+def test_bootstrap_declaration_requires_a_budget_and_seed(spec):
+    from easyicu.research_agent.contracts.prediction_validation import BootstrapSpec
+
+    with pytest.raises(ValueError):
+        BootstrapSpec.model_validate(spec)
+
+
+def test_bootstrap_declaration_cannot_be_attached_to_a_secondary():
+    from easyicu.research_agent.execution.runners.prediction_model_executor import prediction_model_executor_code
+
+    step = AnalysisStep(
+        step_id="validation", intent="Validate the primary predictions.",
+        scientific_action_id="prediction.internal_validation", planned_analysis_role="secondary",
+        inputs=["table:prediction_scores"], expected_outputs=["table:validation"],
+        method=prediction_bootstrap_method(BootstrapSpec(replicates=20, seed=7)),
+    )
+    with pytest.raises(ValueError, match="static prediction primary"):
+        prediction_model_executor_code(step)
+
+
+def test_bootstrap_declaration_is_preserved_in_generated_executor_code():
+    from easyicu.research_agent.execution.runners.prediction_model_executor import prediction_model_executor_code
+
+    step = AnalysisStep(
+        step_id="primary", intent="Fit the declared predictors and validate them.",
+        scientific_action_id="prediction.discrimination_calibration", planned_analysis_role="primary",
+        inputs=["age", "death", "artifact:analysis_cohort"],
+        expected_outputs=["table:prediction_scores", "table:model_performance"],
+        method=prediction_bootstrap_method(BootstrapSpec(replicates=40, seed=502)),
+    )
+    assert static_prediction_bootstrap_spec(step) == BootstrapSpec(replicates=40, seed=502)
+    code = prediction_model_executor_code(step)
+    assert "bootstrap_spec={'replicates': 40, 'seed': 502}" in code
+
+
+@pytest.mark.parametrize("method", [
+    "prediction_bootstrap_optimism", "prediction_bootstrap_optimism(replicates=40)",
+    "prediction_bootstrap_optimism(replicates=40,seed=7) trailing prose",
+    "prediction_bootstrap_optimism(replicates=40,seed=-1)",
+])
+def test_malformed_bootstrap_declaration_fails_closed(method):
+    step = AnalysisStep(
+        step_id="primary", intent="Validate a synthetic prediction model.",
+        scientific_action_id="prediction.discrimination_calibration", planned_analysis_role="primary",
+        method=method,
+    )
+    with pytest.raises(ValueError, match="prediction_bootstrap_method_invalid"):
+        static_prediction_bootstrap_spec(step)
+
+
+def test_historical_method_has_split_only_validation():
+    step = AnalysisStep(step_id="primary", intent="Evaluate a synthetic model.", method="logistic_regression")
+    assert static_prediction_bootstrap_spec(step) is None
+
+
+@pytest.mark.parametrize("spec", [BootstrapSpec(replicates=40, seed=502), BootstrapSpec(replicates=20, seed=503)])
+def test_bootstrap_budget_and_seed_change_scientific_identity(spec):
+    from easyicu.research_agent.authority.plan_scope import _step_scientific_signature
+
+    step = AnalysisStep(
+        step_id="primary", intent="Fit and validate a synthetic model.",
+        method=prediction_bootstrap_method(BootstrapSpec(replicates=20, seed=502)),
+    )
+    changed = step.model_copy(update={"method": prediction_bootstrap_method(spec)})
+    assert _step_scientific_signature(step) != _step_scientific_signature(changed)
 
 
 @pytest.mark.parametrize(

@@ -568,7 +568,9 @@ def build_prediction_skeleton(
             "Quantify calibration slope, intercept, and Brier score of the held-out scores."
         ),
         "internal_validation": (
-            "Report optimism-corrected internal validation of the discrimination and calibration."
+            "Report the held-out split and 200 patient bootstrap refits (seed 1729) within the "
+            "development partition: apparent, optimism and corrected AUROC, calibration slope, "
+            "calibration-in-the-large and Brier; stop if more than 10% of replicates fail."
         ),
         "clinical_utility": (
             "Report the decision curve of the held-out scores across prespecified thresholds."
@@ -576,8 +578,8 @@ def build_prediction_skeleton(
         "benchmark_comparison": (
             "Compare the model's held-out discrimination with "
             + listing([_label(spec, name) for name in comparators], "en")
-            + " on the same validation stays, and its calibration where a comparator is a "
-            "probability of the same outcome."
+            + " on the same validation stays. Recalibrate raw scores by logistic regression on "
+            "development patients only; evaluate their held-out calibration."
         ),
         "visualization": (
             "Assemble the composite prediction display: calibration, discrimination, internal "
@@ -588,6 +590,18 @@ def build_prediction_skeleton(
             "missingness, performance, validation, utility, limitations, and the analysis-only boundary."
         ),
     }
+    if request.benchmark_omissions:
+        objectives["report"] += (
+            " Benchmark omitted: "
+            + "; ".join(
+                f"{item['column']} ({item['concept']}) in {item['database']}: "
+                f"{item['reason']} ({item['availability_reason']})"
+                for item in request.benchmark_omissions
+            )
+            + "."
+        )
+    elif not comparators:
+        objectives["report"] += " No benchmark declared in the bound roster (benchmark_comparator_not_declared)."
     outline_steps = [
         _outline_step(
             step_id="cohort_accounting", role="auxiliary", module_id="cohort_definition",
@@ -718,6 +732,7 @@ def build_prediction_skeleton(
                 ProgressiveOutputIntent(product_id="table:model_performance", semantic_role="custom"),
             ],
             scientific_action_id=PRIMARY_ACTION, custom_method=PRIMARY_METHOD,
+            bootstrap_spec={"replicates": 200, "seed": 1729},
             literature_bindings=_bindings(
                 bound["primary_performance"], module="primary", comparator_applications=applications,
             ),
@@ -726,7 +741,10 @@ def build_prediction_skeleton(
             ProgressiveSkeletonStep(
                 step_id=step_id, planned_analysis_role="secondary", module_id="custom_analysis",
                 objective=objectives[step_id], depends_on=["primary_performance"],
-                product_inputs=[_ref("primary_performance", "table:prediction_scores")],
+                product_inputs=[_ref("primary_performance", "table:prediction_scores")] + (
+                    [_ref("primary_performance", "table:model_performance")]
+                    if step_id == "internal_validation" else []
+                ),
                 outputs=[ProgressiveOutputIntent(product_id=product, semantic_role="custom")],
                 scientific_action_id=action, custom_method=method,
                 literature_bindings=_bindings(

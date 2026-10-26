@@ -1,14 +1,15 @@
-"""Deterministic validation of already-produced binary risk probabilities.
+"""Binary prediction metrics, pipeline bootstrap, and score recalibration.
 
-This experimental kernel owns metric mechanics only.  It does not train or
-select a model, choose a cohort, outcome, split, threshold, or analysis unit.
-Those coordinates must arrive in a digest-bound ``PredictionValidationSpec``.
+The probability-table evaluator remains non-training. Enhanced bootstrap
+accepts a full-pipeline refit callback from the executor, and score recalibration
+fits only the development rows supplied by that owner. No function chooses a
+cohort, outcome, predictor roster, or split.
 """
 
 from __future__ import annotations
 
 import warnings
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import numpy as np
@@ -19,6 +20,8 @@ from statsmodels.tools.sm_exceptions import (
     PerfectSeparationError,
     PerfectSeparationWarning,
 )
+from scipy.special import expit, logit
+from scipy.optimize import brentq
 
 from ..contracts.prediction_validation import (
     CalibrationStatus,
@@ -361,4 +364,116 @@ def evaluate_binary_predictions(
     )
 
 
-__all__ = ["evaluate_binary_predictions"]
+def calibration_in_the_large(outcomes: np.ndarray, probabilities: np.ndarray) -> float:
+    """Offset-logistic intercept with slope fixed at one, not the joint intercept."""
+
+    logits = logit(np.clip(probabilities, 1e-6, 1 - 1e-6))
+    return float(brentq(lambda alpha: np.mean(expit(alpha + logits)) - np.mean(outcomes), -50, 50))
+
+
+def optimism_metrics(outcomes: np.ndarray, probabilities: np.ndarray) -> dict[str, float]:
+    """The four prespecified metrics; an unestimable calibration invalidates a draw."""
+
+    outcomes, probabilities = np.asarray(outcomes), np.asarray(probabilities)
+    if (outcomes.ndim != 1 or probabilities.shape != outcomes.shape
+            or not np.isin(outcomes, (0, 1)).all() or np.unique(outcomes).size != 2
+            or not np.isfinite(probabilities).all() or ((probabilities < 0) | (probabilities > 1)).any()):
+        raise ValueError("bootstrap metrics require aligned binary outcomes and finite probabilities")
+    status, _intercept, slope, _clipped = _calibration_model(outcomes, probabilities, epsilon=1e-6)
+    if status != "estimated":
+        raise RuntimeError(f"prediction_bootstrap_calibration_{status}")
+    return {
+        "auroc": float(roc_auc_score(outcomes, probabilities)),
+        "calibration_slope": float(slope),
+        "calibration_in_the_large": calibration_in_the_large(outcomes, probabilities),
+        "brier_score": float(brier_score_loss(outcomes, probabilities)),
+    }
+
+
+class BootstrapValidationError(RuntimeError):
+    """A bootstrap whose failed fits exceed the prespecified tolerance."""
+
+    def __init__(self, failed_replicates: int, n_replicates: int) -> None:
+        self.failed_replicates = failed_replicates
+        self.n_replicates = n_replicates
+        super().__init__(f"prediction_bootstrap_too_many_failures: {failed_replicates}/{n_replicates}")
+
+
+def bootstrap_optimism_validation(
+    *, outcomes, groups, refit_predict: Callable[[np.ndarray], np.ndarray],
+    n_replicates: int, seed: int,
+) -> dict[str, Any]:
+    """Enhanced patient bootstrap of the entire modelling procedure.
+
+    ``refit_predict`` must freshly fit its complete pipeline on the supplied
+    positional rows (including duplicates) and predict every original row.
+    Optimism is resample minus original for every metric, including Brier;
+    subtracting a negative Brier optimism therefore increases corrected error.
+    This estimates performance on new patients from the development population.
+    It neither trains on held-out patients nor supplies an external validation.
+    """
+
+    from ..contracts.prediction_validation import BootstrapSpec
+
+    spec = BootstrapSpec(replicates=n_replicates, seed=seed)
+    y = np.asarray(outcomes)
+    codes, patients = pd.factorize(np.asarray(groups), sort=False)
+    if codes.shape != y.shape or (codes < 0).any() or len(patients) < 2:
+        raise ValueError("bootstrap requires aligned complete patient groups")
+    original_rows = np.arange(len(y))
+    apparent = optimism_metrics(y, refit_predict(original_rows))
+    order = np.argsort(codes, kind="stable")
+    patient_rows = np.split(order, np.cumsum(np.bincount(codes))[:-1])
+    generator = np.random.default_rng(spec.seed)
+    replicates, failures = [], []
+    for replicate in range(spec.replicates):
+        draws = generator.integers(0, len(patients), size=len(patients))
+        rows = np.concatenate([patient_rows[i] for i in draws])
+        try:
+            if np.unique(y[rows]).size != 2:
+                raise ValueError("single_class_resample")
+            probabilities = np.asarray(refit_predict(rows))
+            original = optimism_metrics(y, probabilities)
+            resample = optimism_metrics(y[rows], probabilities[rows])
+        except (ValueError, RuntimeError, np.linalg.LinAlgError) as exc:
+            failures.append({"replicate": replicate + 1, "reason": str(exc)})
+            continue
+        replicates.append({"replicate": replicate + 1, "resample": resample, "original": original})
+    if len(failures) > 0.1 * spec.replicates:
+        raise BootstrapValidationError(len(failures), spec.replicates)
+    metrics = {}
+    for name, apparent_value in apparent.items():
+        optimism = float(np.mean([r["resample"][name] - r["original"][name] for r in replicates]))
+        metrics[name] = {"apparent": apparent_value, "optimism": optimism, "corrected": apparent_value - optimism}
+    return {
+        "method": "patient_bootstrap_optimism_full_pipeline_refit",
+        "n_replicates": spec.replicates, "seed": spec.seed,
+        "max_failed_fraction": 0.1, "failed_replicates": len(failures),
+        "successful_replicates": len(replicates), "patient_n": len(patients), "row_n": len(y),
+        "metrics": metrics, "replicates": replicates, "failures": failures,
+    }
+
+
+def recalibrate_score(*, outcomes, scores, evaluation_scores) -> tuple[np.ndarray, dict[str, Any]]:
+    """Fit a score's own unpenalized logistic mapping on development rows only."""
+
+    y, score, evaluation = np.asarray(outcomes), np.asarray(scores, dtype=float), np.asarray(evaluation_scores, dtype=float)
+    if (y.ndim != 1 or score.shape != y.shape or np.unique(y).size != 2
+            or not np.isin(y, (0, 1)).all() or not np.isfinite(score).all()
+            or not np.isfinite(evaluation).all() or np.unique(score).size < 2
+            or _perfectly_separated(y, score)):
+        raise ValueError("benchmark_recalibration_not_estimable")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", PerfectSeparationWarning)
+        fitted = sm.GLM(y, sm.add_constant(score, has_constant="add"), family=sm.families.Binomial()).fit(maxiter=100, tol=1e-10)
+    if (not fitted.converged or not np.isfinite(fitted.params).all()
+            or any(issubclass(w.category, PerfectSeparationWarning) for w in caught)):
+        raise RuntimeError("benchmark_recalibration_not_estimable")
+    intercept, slope = map(float, fitted.params)
+    return expit(intercept + slope * evaluation), {
+        "intercept": intercept, "slope": slope, "fit_n": len(y),
+        "fit_scope": "development_partition_only", "method": "unpenalized_logistic_score",
+    }
+
+
+__all__ = ["evaluate_binary_predictions", "bootstrap_optimism_validation", "recalibrate_score"]

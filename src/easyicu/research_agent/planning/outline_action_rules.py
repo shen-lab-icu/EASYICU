@@ -61,8 +61,8 @@ def replayed_producer_action_ids(analysis_type: str, action_id: str) -> tuple[st
     """The actions whose sealed result ``action_id`` replays; none for any other action.
 
     The runtime contract must require product inputs that another action run
-    by the same host executor produces.  An action that also accepts another
-    input set reads other owners' products, so it replays nothing.
+    by the same host executor produces. Alternative input sets retain the
+    producer requirement when they all require one of its same products.
     """
 
     return _replayed_producers(_actions(analysis_type), action_id)
@@ -89,11 +89,10 @@ def _replayed_producers(
     if (
         contract is None
         or not contract.required_product_inputs
-        or contract.alternative_product_inputs
         or not contract.standard_executor
     ):
         return ()
-    required = set(contract.required_product_inputs)
+    required = set.intersection(*(set(inputs) for inputs in contract.accepted_product_inputs))
     return tuple(
         action.action_id
         for action in actions

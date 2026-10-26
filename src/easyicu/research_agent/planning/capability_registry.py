@@ -588,6 +588,7 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         primary_estimand=(
             "Host-fitted static binary risk model with a Planner-owned predictor "
             "roster, patient-group split, held-out discrimination and calibration"
+            ", optional bootstrap optimism correction and mapped score benchmarks"
         ),
         primary_runner="static_prediction_model",
         primary_runner_module="execution.runners.prediction_model_executor",
@@ -599,11 +600,13 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
             "predictor prefix, patient leakage, a single-class split, invalid scores, "
             "or unsupported model/sensitivity coordinates; it never infers predictors "
             "from supporting audit inputs."
+            " Bootstrap validation stops above 10% failed refits."
         ),
         notes=(
-            "The exact static L2-logistic fit and validation are deterministic and "
-            "analysis-only. Dynamic prediction and alternative model families remain "
-            "separate agent-coded capabilities."
+            "Static L2-logistic validation includes optional declared patient bootstrap "
+            "optimism correction with full pipeline refits. Mapped severity comparators "
+            "use paired held-out AUROC and development-only logistic recalibration; "
+            "unavailable sources are explicitly omitted. All remain analysis-only."
         ),
         capability_id="prediction_risk_model_v1",
         result_contract=(

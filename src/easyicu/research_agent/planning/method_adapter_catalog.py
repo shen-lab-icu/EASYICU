@@ -196,6 +196,10 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
         validation_test_refs=(
             "tests/research_agent/core/test_prediction_model_executor.py::test_prediction_owner_selects_only_exact_action_contract",
             "tests/research_agent/core/test_prediction_model_executor.py::test_prediction_workflow_is_group_safe_source_bound_and_renderable",
+            "tests/research_agent/core/test_prediction_model_executor.py::test_declared_bootstrap_refits_development_and_flows_through_bound_table",
+            "tests/research_agent/core/test_prediction_bootstrap_validation.py::test_optimism_correction_tracks_independent_performance",
+            "tests/research_agent/core/test_a_prediction_is_compared_with_an_existing_score_on_the_same_stays.py::test_a_raw_score_is_recalibrated_on_development_patients_only",
+            "tests/research_agent/core/test_a_prediction_is_compared_with_an_existing_score_on_the_same_stays.py::test_a_source_without_the_named_score_omits_it_without_substitution",
         ),
     ),
     *_adapter_group(
@@ -374,6 +378,18 @@ class DirectMethodBinding:
 
 DIRECT_METHOD_BINDINGS: Tuple[DirectMethodBinding, ...] = (
     DirectMethodBinding(
+        binding_id="direct_prediction_validation_v1",
+        owner_module="easyicu.research_agent.execution.runners.prediction_model_executor",
+        direct_module="easyicu.research_agent.methods.prediction_validation",
+        direct_symbols=("bootstrap_optimism_validation", "calibration_in_the_large", "recalibrate_score"),
+    ),
+    DirectMethodBinding(
+        binding_id="direct_prediction_reclassification_v1",
+        owner_module="easyicu.research_agent.execution.runners.prediction_model_executor",
+        direct_module="easyicu.research_agent.methods.reclassification",
+        direct_symbols=("continuous_nri", "idi"),
+    ),
+    DirectMethodBinding(
         binding_id="direct_table_one_v1",
         owner_module=(
             "easyicu.research_agent.execution.runners.table_one_executor"
@@ -415,7 +431,7 @@ def get_direct_method_binding(binding_id: str) -> DirectMethodBinding | None:
 
 
 def direct_method_bindings_receipt() -> dict[str, object]:
-    """Return a stable digest-bound receipt for the three direct bindings."""
+    """Return a stable digest-bound receipt for the registered direct bindings."""
 
     entries = [item.to_dict() for item in DIRECT_METHOD_BINDINGS]
     canonical = json.dumps(

@@ -32,6 +32,7 @@ from .scientific_review_fixtures import _context
 from tests.research_agent.core.patient_weighted_distribution_fixtures import ASSUMPTIONS
 
 _ROSTER = (
+    "prediction.discrimination_calibration",
     "phenotyping.cluster_solution",
     "phenotyping.trajectory_feature_clustering",
     "phenotyping.outcome_by_cluster",
@@ -42,6 +43,7 @@ _FEATURES = ["marker_a", "marker_b"]
 _COMPARISONS = [{"name": "event_flag", "summary": "count_percent"}]
 _FORM = {"target_column": "marker_a", "knot_quantiles": [0.1, 0.5, 0.9]}
 _VALUES = {
+    "bootstrap_spec": {"replicates": 20, "seed": 12},
     "phenotyping_feature_columns": _FEATURES,
     "phenotyping_comparison_variables": _COMPARISONS,
     "functional_form_spec": _FORM,
@@ -49,6 +51,7 @@ _VALUES = {
     "patient_weighted_interval_assumptions": ASSUMPTIONS,
 }
 _COORDINATES = {
+    "prediction_primary": ("prediction.discrimination_calibration", "primary"),
     "trajectory_primary": ("phenotyping.trajectory_feature_clustering", "primary"),
     "cross_sectional_primary": ("phenotyping.cluster_solution", "primary"),
     "outcome_comparison": ("phenotyping.outcome_by_cluster", "secondary"),
@@ -172,6 +175,7 @@ def test_the_ownership_rule(module, action, role, expected):
 
 def test_the_owners_keep_their_fields_in_both_transports():
     for action, role, field in (
+        ("prediction.discrimination_calibration", "primary", "bootstrap_spec"),
         ("phenotyping.cluster_solution", "primary", "phenotyping_feature_columns"),
         ("phenotyping.outcome_by_cluster", "secondary", "phenotyping_comparison_variables"),
     ):

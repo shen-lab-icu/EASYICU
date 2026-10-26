@@ -58,13 +58,14 @@ def _context(
     *,
     outcome_concept: str = "death",
     hours: float = 24.0,
+    database: str = "eicu",
     extra_variables: tuple[ConceptDescriptor, ...] = (),
 ):
     return ResearchContext(
         research_question="Predict in-hospital death and compare with APACHE IVa.",
         cohort=CohortDescriptor(
             cohort_name="benchmark_fixture",
-            database="synthetic",
+            database=database,
             n_stays=row_count,
             id_columns=["patient_stay_id"],
             outcome_columns=["death"],
@@ -262,6 +263,8 @@ def test_a_probability_of_the_outcome_is_compared_in_discrimination_and_calibrat
         "brier_score",
         "calibration_intercept",
         "calibration_slope",
+        "continuous_nri",
+        "idi",
     ]
     assert auroc["comparator_kind"] == "probability"
     assert auroc["interval_method"] == "delong_paired_normal_95pct"
@@ -293,19 +296,79 @@ def test_a_probability_of_the_outcome_is_compared_in_discrimination_and_calibrat
 
 
 def test_repeat_stays_compare_by_patient_resampling(tmp_path: Path) -> None:
-    _summary, table, _scores = _compare(tmp_path, _frame(repeats=True), (_PROBABILITY,))
+    summary, table, _scores = _compare(tmp_path, _frame(repeats=True), (_PROBABILITY,))
 
     auroc = table.loc[table["metric"].eq("auroc")].iloc[0]
     assert auroc["interval_method"] == "patient_stratified_bootstrap_percentile_95pct"
     assert auroc["bootstrap_n"] == 2000
     assert np.isnan(auroc["p_value"]) and np.isnan(auroc["z"])
     assert auroc["comparison_subject_n"] < auroc["comparison_n"]
+    assert summary["reportable_benchmark_comparison"]["comparisons"][0]["reclassification_reason"] == "patient_dependence_unsupported"
+
+
+def test_a_raw_score_is_recalibrated_on_development_patients_only(tmp_path: Path) -> None:
+    import statsmodels.api as sm
+    from sklearn.metrics import brier_score_loss
+
+    frame = _frame(repeats=False)
+    summary, table, scores = _compare(tmp_path, frame, (_SCORE,))
+    comparison = summary["reportable_benchmark_comparison"]["comparisons"][0]
+    fit = comparison["recalibration"]
+    development = scores["split"].eq("development").to_numpy()
+    validation = ~development
+    reference = sm.GLM(
+        frame.loc[development, "death"], sm.add_constant(frame.loc[development, _SCORE]),
+        family=sm.families.Binomial(),
+    ).fit()
+    p = reference.predict(sm.add_constant(frame.loc[validation, _SCORE]))
+    assert fit["fit_scope"] == "development_partition_only"
+    assert fit["fit_n"] == int(development.sum())
+    assert fit["intercept"] == pytest.approx(reference.params.iloc[0])
+    assert fit["slope"] == pytest.approx(reference.params.iloc[1])
+    assert comparison["comparator"]["brier_score"] == pytest.approx(brier_score_loss(frame.loc[validation, "death"], p))
+    assert "calibration_in_the_large" in set(table["metric"])
+    from easyicu.research_agent.methods.reclassification import continuous_nri, idi
+
+    model_p = scores.loc[validation, "probability"].to_numpy()
+    y = frame.loc[validation, "death"].to_numpy()
+    assert comparison["reclassification"]["continuous_nri"]["nri"] == pytest.approx(continuous_nri(y, p, model_p, random_state=1729).nri)
+    reference_idi = idi(y, p, model_p, random_state=1729)
+    assert comparison["reclassification"]["idi"]["idi"] == pytest.approx(reference_idi.idi)
+    assert comparison["reclassification"]["idi"]["ci"] == pytest.approx([reference_idi.ci_low, reference_idi.ci_high])
+
+
+def test_a_source_without_the_named_score_omits_it_without_substitution(tmp_path: Path) -> None:
+    from easyicu.databases.profiles import iter_database_profiles
+    from easyicu.research_agent.concept_availability import explain_concept_availability
+
+    database = next(p.key for p in iter_database_profiles(public_only=True)
+                    if not explain_concept_availability(concept=_SCORE, database=p.key).available)
+    summary, table, _scores = _compare(tmp_path, _frame(repeats=False).drop(columns=[_SCORE]), (_SCORE,), database=database)
+    assert table.empty
+    assert summary["reportable_benchmark_comparison"]["comparisons"] == []
+    assert summary["omitted_comparators"][0]["reason"] == "benchmark_comparator_source_unavailable"
+    assert summary["omitted_comparators"][0]["concept"] == _SCORE
+
+
+def test_unestimable_recalibration_is_stated_without_substituting_probabilities(tmp_path):
+    from easyicu.research_agent.execution.runners.prediction_model_executor import _split_labels
+
+    frame = _frame(repeats=False)
+    groups = frame.patient_stay_id.str.split(":s").str[0]
+    split = _split_labels(groups, frame.death)
+    frame.loc[split == "development", _SCORE] = 50
+    summary, table, _scores = _compare(tmp_path, frame, (_SCORE,))
+    assert list(table.metric) == ["auroc"]
+    comparison = summary["reportable_benchmark_comparison"]["comparisons"][0]
+    assert comparison["calibration_reason"] == "benchmark_recalibration_not_estimable"
+    assert comparison["recalibration"] is None
+    assert comparison["reclassification"] == {}
 
 
 @pytest.mark.parametrize(
     "comparator, outcome_concept, hours, reason, relation",
     [
-        (_SCORE, "death", 24.0, "score_scale", "same"),
+        (_SCORE, "death", 24.0, "", "same"),
         (_PROBABILITY, "death_icu", 24.0, "predicts_another_outcome", "same"),
         (_PROBABILITY, "death", 6.0, "", "comparator_ends_after_prediction_time"),
         (_PROBABILITY, "death", 48.0, "", "comparator_ends_before_prediction_time"),
@@ -352,7 +415,7 @@ def test_a_summary_column_is_compared_over_its_own_window(tmp_path: Path) -> Non
         ),
     )
 
-    [auroc] = table.to_dict("records")
+    auroc = table.loc[table["metric"].eq("auroc")].iloc[0]
     assert (auroc["comparator_concept"], auroc["comparator_kind"]) == ("sofa", "score")
     assert auroc["comparator_information_window"] == "icu_admission[0,6]h"
     assert auroc["information_window_relation"] == "comparator_ends_before_prediction_time"

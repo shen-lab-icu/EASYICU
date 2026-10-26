@@ -54,11 +54,13 @@ def test_direct_method_bindings_match_runner_targets() -> None:
         direct_method_bindings_receipt,
     )
 
-    assert len(DIRECT_METHOD_BINDINGS) == 3
+    assert len(DIRECT_METHOD_BINDINGS) == 5
     assert {item.binding_id for item in DIRECT_METHOD_BINDINGS} == {
         "direct_table_one_v1",
         "direct_descriptive_inputs_v1",
         "direct_source_status_v1",
+        "direct_prediction_validation_v1",
+        "direct_prediction_reclassification_v1",
     }
 
     repo = Path(__file__).resolve().parents[3]
@@ -85,5 +87,5 @@ def test_direct_method_bindings_match_runner_targets() -> None:
             )
 
     receipt = direct_method_bindings_receipt()
-    assert receipt["binding_count"] == 3
+    assert receipt["binding_count"] == 5
     assert len(str(receipt["catalog_sha256"])) == 64

@@ -291,6 +291,11 @@ def family_spec_user_prompt(
                 ensure_ascii=False,
             )
         )
+        if request.benchmark_omissions:
+            sections.append(
+                "Unavailable benchmark comparators (omit with these source reasons; do not substitute):\n"
+                + json.dumps(request.benchmark_omissions, ensure_ascii=False)
+            )
         if request.benchmark_candidates:
             sections.append(
                 "Benchmark comparators (an existing score or probability the host compares the "

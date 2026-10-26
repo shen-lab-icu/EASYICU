@@ -3592,6 +3592,10 @@
       "easyicu.research_agent.contracts.ownership_verdict"
     ],
     [
+      "easyicu.research_agent.contracts.prediction_execution",
+      "easyicu.research_agent.contracts.prediction_validation"
+    ],
+    [
       "easyicu.research_agent.contracts.prediction_model_fit",
       "easyicu.research_agent.canonical_json"
     ],
@@ -7146,6 +7150,14 @@
     [
       "easyicu.research_agent.execution.runners.prediction_model_executor",
       "easyicu.research_agent.methods.delong_auc"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.prediction_model_executor",
+      "easyicu.research_agent.methods.prediction_validation"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.prediction_model_executor",
+      "easyicu.research_agent.methods.reclassification"
     ],
     [
       "easyicu.research_agent.execution.runners.prediction_model_executor",
@@ -11065,6 +11077,10 @@
     ],
     [
       "easyicu.research_agent.planning.benchmark_comparator",
+      "easyicu.research_agent.concept_availability"
+    ],
+    [
+      "easyicu.research_agent.planning.benchmark_comparator",
       "easyicu.research_agent.research_context.materialization_window"
     ],
     [
@@ -12413,6 +12429,10 @@
     ],
     [
       "easyicu.research_agent.planning.progressive_compiler",
+      "easyicu.research_agent.contracts.prediction_execution"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_compiler",
       "easyicu.research_agent.contracts.primary_cohort"
     ],
     [
@@ -12538,6 +12558,10 @@
     [
       "easyicu.research_agent.planning.progressive_contract",
       "easyicu.research_agent.contracts.phenotyping_features"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_contract",
+      "easyicu.research_agent.contracts.prediction_validation"
     ],
     [
       "easyicu.research_agent.planning.progressive_contract",
@@ -16380,7 +16404,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 4087,
+    "edge_count": 4093,
     "largest_scc_size": 0,
     "module_count": 865,
     "package_count": 36,
