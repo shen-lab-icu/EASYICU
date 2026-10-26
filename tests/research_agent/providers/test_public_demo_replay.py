@@ -7,6 +7,8 @@ from contextlib import contextmanager
 
 import pytest
 
+from easyicu.research_agent.orchestration.profiles import PUBLIC_DEMO_ACCEPTANCE
+
 from easyicu.research_agent.providers.client_trust import (
     authorized_complete,
     provider_authorization_manifest,
@@ -23,10 +25,21 @@ def public_scope(tmp_path, monkeypatch, **overrides):
     # Source-owner verification is exercised separately; no patient data is read.
     monkeypatch.setattr(demo_source_storage, "egress_source_database", lambda path, database: database)
     options = {"export_path": tmp_path, "database": "eicu_demo",
-               "profile_ref": "public_demo_acceptance_dev/20261025"}
+               "profile_ref": PUBLIC_DEMO_ACCEPTANCE.ref}
     options.update(overrides)
     with public_demo_replay_scope(**options) as scope:
         yield scope
+
+
+def test_replay_allowlist_tracks_the_current_profile_and_rejects_its_frozen_predecessor(tmp_path, monkeypatch):
+    from easyicu.research_agent.orchestration.profiles import PUBLIC_DEMO_ACCEPTANCE_2026_10_25
+    from easyicu.research_agent.providers.client_trust import ACCEPTANCE_PROFILE_REF
+    from easyicu.research_agent.providers.protocol import ReplayError
+
+    assert ACCEPTANCE_PROFILE_REF == PUBLIC_DEMO_ACCEPTANCE.ref
+    with pytest.raises(ReplayError, match="model_replay_profile_forbidden"):
+        with public_scope(tmp_path, monkeypatch, profile_ref=PUBLIC_DEMO_ACCEPTANCE_2026_10_25.ref):
+            pytest.fail("a frozen profile must not authorize current replay")
 
 
 def recorded(scope, **options):
@@ -158,7 +171,7 @@ def test_hosted_scope_is_refused_before_source_access(tmp_path, monkeypatch, set
     monkeypatch.setenv(setting, "1" if setting == "EASYICU_HOSTED" else "hosted")
     with pytest.raises(ReplayError, match="model_replay_hosted_forbidden"):
         with public_demo_replay_scope(export_path=tmp_path, database="eicu_demo",
-                                      profile_ref="public_demo_acceptance_dev/20261025"):
+                                      profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref):
             pytest.fail("hosted scope admitted")
 
 
@@ -168,7 +181,7 @@ def test_source_owner_must_verify_demo_manifest(tmp_path):
 
     with pytest.raises(ProviderConfigurationError, match="public_demo_manifest_invalid"):
         with public_demo_replay_scope(export_path=tmp_path, database="eicu_demo",
-                                     profile_ref="public_demo_acceptance_dev/20261025"):
+                                     profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref):
             pytest.fail("a label is not source authority")
 
 
@@ -303,7 +316,7 @@ def test_run_and_resume_cannot_move_replay_into_study_authority(tmp_path, monkey
 
     with public_scope(tmp_path, monkeypatch) as scope:
         cassette, _, _ = recorded(scope)
-        config = dict(submission_profile_name="public_demo_acceptance_dev", submission_profile_version="20261025",
+        config = dict(submission_profile_name="public_demo_acceptance_dev", submission_profile_version=PUBLIC_DEMO_ACCEPTANCE.version,
             development_diagnostic=True, require_human_plan_review=True, generate_manuscript=False)
         config[field] = value
         pipeline = SimpleNamespace(_llm=ReplayLLMClient(cassette), _config=SimpleNamespace(**config))
@@ -334,7 +347,7 @@ def test_credentialed_mimic_is_refused_but_pinned_public_release_is_admitted(tmp
     from easyicu.webserver import demo_source_storage as storage
     from easyicu.webserver.demo_source_contracts import SOURCES
 
-    options = dict(export_path=tmp_path, database="miiv", profile_ref="public_demo_acceptance_dev/20261025")
+    options = dict(export_path=tmp_path, database="miiv", profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref)
     monkeypatch.setattr(storage, "_verified_public_demo", lambda path: None)
     with pytest.raises(ReplayError, match="model_replay_source_forbidden"):
         with public_demo_replay_scope(**options):

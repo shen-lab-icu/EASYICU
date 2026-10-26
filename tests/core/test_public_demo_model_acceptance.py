@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from easyicu.research_agent.orchestration.profiles import PUBLIC_DEMO_ACCEPTANCE
+
 from tools import windows_laptop_acceptance as acceptance
 
 
@@ -141,7 +143,7 @@ def demo_cassette(tmp_path, monkeypatch):
 
     monkeypatch.setattr(storage, "egress_source_database", lambda path, database: database)
     with public_demo_replay_scope(export_path=tmp_path, database="eicu_demo",
-                                  profile_ref="public_demo_acceptance_dev/20261025") as scope:
+                                  profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref) as scope:
         return ReplayCassette.create(source=scope.source, model=ModelIdentity(provider="synthetic", model="synthetic-model"))
 
 
@@ -205,7 +207,7 @@ def test_acceptance_entry_refuses_a_different_export_before_materialization(tmp_
     from easyicu.research_agent.providers.protocol import ReplayError
 
     cassette = demo_cassette(tmp_path, monkeypatch)
-    with public_demo_replay_scope(export_path=tmp_path, database="eicu_demo", profile_ref="public_demo_acceptance_dev/20261025"):
+    with public_demo_replay_scope(export_path=tmp_path, database="eicu_demo", profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref):
         client = ReplayLLMClient(cassette)
         with pytest.raises(ReplayError, match="model_replay_source_mismatch"):
             facade.run_public_demo(export_path=tmp_path / "credentialed", database="eicu_demo", work_dir=tmp_path / "work",
@@ -364,7 +366,7 @@ def test_acceptance_uses_the_normal_pipeline_review_and_evidence_owners(tmp_path
         events.append("verify")
         return 1
     monkeypatch.setattr(facade, "verify_first_result", verify)
-    with public_demo_replay_scope(export_path=tmp_path, database="eicu_demo", profile_ref="public_demo_acceptance_dev/20261025"):
+    with public_demo_replay_scope(export_path=tmp_path, database="eicu_demo", profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref):
         client = ReplayLLMClient(cassette)
         result = facade.run_public_demo(export_path=tmp_path, database="eicu_demo", work_dir=work, client=client,
             question="Describe an invented shape.", primary_exposure="a", target_outcome="b", covariates=("c",), review=review)
@@ -389,7 +391,7 @@ def test_acceptance_requires_a_fresh_run_directory(tmp_path, monkeypatch):
 
     cassette = demo_cassette(tmp_path, monkeypatch)
     (tmp_path / "work/runs").mkdir(parents=True)
-    with public_demo_replay_scope(export_path=tmp_path, database="eicu_demo", profile_ref="public_demo_acceptance_dev/20261025"):
+    with public_demo_replay_scope(export_path=tmp_path, database="eicu_demo", profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref):
         with pytest.raises(ReplayError, match="model_replay_workdir_not_empty"):
             facade.run_public_demo(export_path=tmp_path, database="eicu_demo", work_dir=tmp_path / "work",
                 client=ReplayLLMClient(cassette), question="Describe an invented shape.", primary_exposure="a",
