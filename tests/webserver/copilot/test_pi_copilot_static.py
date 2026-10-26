@@ -92,7 +92,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-next-actions.js?v=20261022-nofiller1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2" in index
-    assert "js/screens-guided-pi-starters.js?v=20261026-skills1" in index
+    assert "js/screens-guided-pi-starters.js?v=20261026-six6" in index
     assert "js/screens-guided-pi-idea-source.js?v=20261026-mention1" in index
     assert "js/screens-guided-pi-header.js?v=20261021-help1" in index
     assert "js/screens-guided-pi-model-menu.js?v=20260923-keep-open1" in index
@@ -133,7 +133,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-study-workspace.js?v=20261026-mention1" in index
     assert "js/screens-guided-pi-events.js?v=20261026-mention1" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20261026-dbnames1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20261026-six6" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
     assert "js/screens-guided-pi-session-view.js?v=20261026-mention1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(

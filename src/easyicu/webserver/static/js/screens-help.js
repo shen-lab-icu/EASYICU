@@ -156,8 +156,8 @@
       [
         t('Which studies does this version run?', '这个版本能做哪些研究？'),
         t(
-          'On MIMIC-IV: descriptive, association, prediction, survival, subtype or trajectory, and causal studies (target trial emulation). On eICU: descriptive, association and prediction studies. The conversation says so before planning when a question falls outside this. HiRID, AmsterdamUMCdb and SICdb can be extracted and compared in the data workspace.',
-          'MIMIC-IV：描述、关联、预测、生存分析、亚型或轨迹，以及因果研究（目标试验模拟）。eICU：描述、关联和预测研究。超出范围的问题，对话会在拟定计划前直接说明。HiRID、AmsterdamUMCdb 和 SICdb 可以在数据工作台里抽取和比较。',
+          'Descriptive, association, prediction, survival, subtype or trajectory, and causal studies (target trial emulation) on MIMIC-III, MIMIC-IV, eICU, HiRID, AmsterdamUMCdb and SICdb. What a study can do depends on what the database records: when it lacks something the question needs, the plan states the substitute and runs only after you approve it, or the conversation says what is missing before planning. Accepted on real data so far: every study type on MIMIC-IV, and descriptive, association and prediction studies on eICU; other combinations are not yet accepted on real data.',
+          'MIMIC-III、MIMIC-IV、eICU、HiRID、AmsterdamUMCdb、SICdb 上的描述、关联、预测、生存分析、亚型或轨迹，以及因果研究（目标试验模拟）。能做到哪一步取决于该库记录了哪些信息：缺少问题需要的信息时，计划会写明替代口径，你批准后才运行；无法替代时，对话会在拟定计划前说明缺少什么。目前已在真实数据上验收的是 MIMIC-IV 的全部研究类型，以及 eICU 的描述、关联与预测分析；其余组合尚未在真实数据上验收。',
         ),
       ],
       [

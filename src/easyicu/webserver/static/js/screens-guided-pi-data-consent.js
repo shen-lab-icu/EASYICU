@@ -132,21 +132,6 @@
 
   function render(session, ctx) {
     const current = authorization(session);
-    // Research-entry scope (screens-guided-pi-starters), before installation
-    // state: even a registered export cannot enable these research paths.
-    const scopeSource = current.reason === 'project_source_confirmation_required'
-      ? current.source : ctx.namedDemo || ctx.namedDatabase;
-    const scopeKey = String(scopeSource && (scopeSource.database || scopeSource.key) || '').replace(/_demo$/, '');
-    if (current.status === 'pending' && ['hirid', 'aumc', 'sic'].includes(scopeKey)) {
-      const label = scopeSource.label || window.EU_DATABASE_NAMES.name(scopeKey);
-      return `<section class="gpi-data-consent" aria-label="${ctx.tr('Research scope', '研究支持范围')}"><div class="gpi-data-consent-body">
-        <strong>${ctx.esc(ctx.tr(`This version does not support this study with ${label}.`, `本版本暂不支持使用 ${label} 完成这项研究。`))}</strong>
-        <p>${ctx.tr('Please choose another supported data source.', '请选择其他受支持的数据源。')}</p>
-        <div class="gpi-data-consent-actions">
-          <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
-        </div>
-      </div></section>`;
-    }
     if (current.status === 'pending' && current.reason === 'project_source_confirmation_required') {
       const label = sourceLabel(current);
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Confirm data source', '确认数据源')}">
