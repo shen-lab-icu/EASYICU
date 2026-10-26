@@ -42,6 +42,7 @@ def _offer_script(replies: list) -> str:
       global.window = global;
       window.EU_LANG = 'zh';
       eval({_ESCAPE_OWNER!r});
+      eval({_read("js/database-names.js")!r});
       eval({_read("js/screens-guided-pi-next-actions.js")!r});
       eval({_read("js/screens-guided-pi-host-jobs.js")!r});
       eval({_read("js/screens-guided-pi-data-consent.js")!r});
@@ -101,12 +102,12 @@ def test_the_recommended_export_is_the_primary_action() -> None:
         process.stdout.write(JSON.stringify({
           calls,
           loading: {
-            copy: loading.includes('正在查找 EasyICU 中已有的 eICU 数据…'),
+            copy: loading.includes('正在查找 EasyICU 中已有的 eICU-CRD 数据…'),
             folderOnly: loading.includes('选择数据文件夹') && !loading.includes('use_registered_source'),
             noPrimary: !loading.includes('btn primary'),
           },
           ready: {
-            title: ready.includes('你的问题指定了 eICU'),
+            title: ready.includes('你的问题指定了 eICU-CRD'),
             facts: ready.includes('<p class="gpi-data-consent-facts">eICU-CRD v2.0 · 2026-10-19 生成 · 200,859 例 ICU 住院 · 12 个模块</p>'),
             use: ready.includes('<button class="btn primary" type="button" data-gpi-data-source-action="use_registered_source" data-gpi-data-source-database="eicu" data-gpi-data-source-id="src_eicu_full">使用这份数据</button>'),
             folder: ready.includes('<button class="btn" type="button" data-gpi-data-source-action="begin_local_selection" data-gpi-data-source-database="eicu">选择数据文件夹</button>'),
@@ -143,14 +144,14 @@ def test_tied_exports_are_listed_and_a_failed_read_falls_back_to_the_folder() ->
         owner.stopAll();
         process.stdout.write(JSON.stringify({
           tied: {
-            count: tied.includes('EasyICU 中有 2 份验证过的 eICU 数据，无法替你判断这项研究该用哪一份。'),
+            count: tied.includes('EasyICU 中有 2 份验证过的 eICU-CRD 数据，无法替你判断这项研究该用哪一份。'),
             first: tied.includes('data-gpi-data-source-id="src_a">使用这份</button>'),
             escaped: tied.includes('data-gpi-data-source-id="src_&quot;b&quot;"') && !tied.includes('src_"b"'),
             dates: tied.includes('2026-10-19 生成') && tied.includes('2026-10-18 生成'),
             noPrimaryUse: !tied.includes('btn primary'),
           },
-          failed: failed.includes('选择 eICU 数据') && !failed.includes('use_registered_source'),
-          noProject: noProject.includes('选择 eICU 数据'),
+          failed: failed.includes('选择 eICU-CRD 数据') && !failed.includes('use_registered_source'),
+          noProject: noProject.includes('选择 eICU-CRD 数据'),
           calls: calls.map(row => row[1]),
         }));
       })().catch(err => { console.error(err); process.exitCode = 1; });
@@ -195,6 +196,7 @@ def test_the_click_posts_the_exact_export_and_the_conversation_continues() -> No
       global.window = global;
       window.EU_LANG = 'zh';
       eval({_ESCAPE_OWNER!r});
+      eval({_read("js/database-names.js")!r});
       eval({_read("js/screens-guided-pi-data-consent.js")!r});
       eval({_read("js/screens-guided-pi-data-binding.js")!r});
       const consent = window.EasyICU.guidedPi.require('dataConsent');
@@ -289,6 +291,7 @@ def test_a_generic_database_list_beside_the_card_is_collapsed() -> None:
       global.window = global;
       window.EU_LANG = 'zh';
       eval({_ESCAPE_OWNER!r});
+      eval({_read("js/database-names.js")!r});
       eval({_read("js/screens-guided-pi-next-actions.js")!r});
       const next = window.EasyICU.guidedPi.require('nextActions');
       const databases = {{ explicit: true, asking: false, prompt: '请选择一个选项。',

@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const files = process.argv.slice(2);
-assert.equal(files.length, 9, 'Run through tools/run_js_contracts.py with all nine owners');
+assert.equal(files.length, 10, 'Run through tools/run_js_contracts.py with all ten owners');
 const modules = {};
 const sandbox = {
   window: { EU_LANG: 'zh', EasyICU: { guidedPi: {

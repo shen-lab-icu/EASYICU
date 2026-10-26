@@ -227,12 +227,13 @@
   }
 
   // Panels are narrow; the database name identifies a source, the full title stays in the tooltip.
-  const DATABASE_SHORT = { miiv: 'MIMIC-IV', mimic: 'MIMIC-III', mimic_demo: 'MIMIC-III', eicu: 'eICU', eicu_demo: 'eICU', aumc: 'AUMCdb', hirid: 'HiRID', sic: 'SICdb' };
+  // A demo registered under the full key (the MIMIC-IV demo is "miiv") says so in its label.
   function shortSourceName(source, label) {
-    const db = String(source && source.database || '').toLowerCase();
-    const name = DATABASE_SHORT[db];
-    if (!name) return label;
-    return /demo/i.test(`${db} ${label}`) ? `${name} Demo` : name;
+    const names = window.EU_DATABASE_NAMES;
+    const db = String(source && source.database || '');
+    const key = names.key(db);
+    if (!key) return label;
+    return names.isDemo(db) || /demo/i.test(label) ? names.name(`${key}_demo`) : names.name(key);
   }
 
   function threeScaleComparison(payload, config) {

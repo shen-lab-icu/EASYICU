@@ -336,6 +336,7 @@ def test_a_question_that_names_a_full_database_opens_its_source_selection() -> N
       global.window = global;
       window.EU_LANG = 'zh';
       eval({_ESCAPE_OWNER!r});
+      eval({_read("js/database-names.js")!r});
       eval({next_actions!r});
       eval({host_jobs!r});
       eval({consent!r});

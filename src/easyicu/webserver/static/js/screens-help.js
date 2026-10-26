@@ -27,10 +27,10 @@
     const owner = window.EasyICU?.guidedPi?.optional('hosted');
     return owner && owner.active() ? owner : null;
   }
-  const DATABASE_NAMES = { miiv: 'MIMIC-IV', eicu: 'eICU-CRD', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', mimic: 'MIMIC-III', sic: 'SICdb' };
   function preparedDatabases() {
     const counts = (((window.EU_CAPABILITIES || {}).registered_sources || {}).by_database) || {};
-    return Object.keys(DATABASE_NAMES).filter(key => Number(counts[key]) > 0).map(key => DATABASE_NAMES[key]);
+    const names = window.EU_DATABASE_NAMES;
+    return names.keys().filter(key => Number(counts[key]) > 0).map(key => names.name(key));
   }
   function hostedRail(owner) {
     const contact = owner.supportContact();

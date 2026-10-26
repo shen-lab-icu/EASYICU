@@ -110,6 +110,32 @@ def test_html_escaping_has_exactly_one_implementation() -> None:
     )
 
 
+def test_database_names_have_one_owner_loaded_before_its_consumers() -> None:
+    # Ten screens each kept a key -> name map and they had drifted ("eICU" vs
+    # "eICU-CRD", "demo" vs "Demo"). js/database-names.js is the only one now.
+    owner = (STATIC / "js" / "database-names.js").read_text(encoding="utf-8")
+    assert "window.EU_DATABASE_NAMES" in owner
+    spelled_map = re.compile(
+        r"""\b(?:miiv|eicu|mimic|aumc|hirid|sic)(?:_demo)?['"]?\s*:\s*['"](?:MIMIC|eICU|AmsterdamUMC|AUMC|HiRID|SIC|M-I)"""
+        r"""|label:\s*'(?:MIMIC-IV|eICU-CRD|AmsterdamUMCdb)'"""
+    )
+    index = (STATIC / "index.html").read_text(encoding="utf-8")
+    owner_at = index.index('src="js/database-names.js')
+    copies, loaded_first = [], []
+    for path in sorted((STATIC / "js").glob("*.js")):
+        if path.name == "database-names.js":
+            continue
+        source = path.read_text(encoding="utf-8")
+        if spelled_map.search(source):
+            copies.append(path.name)
+        if "EU_DATABASE_NAMES" in source:
+            at = index.find(f'src="js/{path.name}')
+            if at != -1 and at < owner_at:
+                loaded_first.append(path.name)
+    assert copies == [], f"these screens spell their own database-name map: {copies}"
+    assert loaded_first == [], f"these consumers load before js/database-names.js: {loaded_first}"
+
+
 def test_every_icon_a_screen_names_is_drawn_by_the_icon_owner() -> None:
     # icons.js draws an unknown name as a filled dot, so a misspelt or missing
     # icon renders as a stray bullet beside "上一页" instead of failing.
@@ -786,7 +812,7 @@ def test_agent_report_reader_owns_figures_and_manuscript_with_explicit_helpers()
     assert scripts.index("html-escape.js") < scripts.index("screens-agent-report-reader.js")
     assert scripts.index("screens-agent-report-reader.js") + 1 == scripts.index("screens-agent-render.js")
     assert scripts.index("screens-agent-render.js") < scripts.index("screens-guided-pi-run-files.js")
-    assert "js/screens-agent-report-reader.js?v=20261026-run-files1" in index
+    assert "js/screens-agent-report-reader.js?v=20261026-dbnames1" in index
     assert "js/screens-agent-render.js?v=20261026-run-files1" in index
 
 

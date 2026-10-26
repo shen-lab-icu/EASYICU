@@ -16,9 +16,10 @@ global.EU_CROSSDB_CHARTS = {
   },
 };
 
-/* Source colours come from the palette owner, which index.html loads ahead of
-   every screen module. */
+/* Source colours and database names come from their owners, which index.html
+   loads ahead of every screen module. */
 require(path.join(path.dirname(path.resolve(process.argv[2])), 'chart-palette.js'));
+require(path.join(path.dirname(path.resolve(process.argv[2])), 'database-names.js'));
 
 require(path.resolve(process.argv[2]));
 

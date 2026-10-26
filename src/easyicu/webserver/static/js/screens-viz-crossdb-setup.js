@@ -5,14 +5,15 @@
   // A hosted instance browses the administrator's data folders on the server.
   const hostedServer = () => ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true;
 
-  const DATABASES = [
-    { label: 'MIMIC-IV', key: 'miiv', selected: true },
-    { label: 'eICU-CRD', key: 'eicu', selected: true },
-    { label: 'AmsterdamUMCdb', key: 'aumc', selected: true },
-    { label: 'HiRID', key: 'hirid', selected: true },
-    { label: 'MIMIC-III', key: 'mimic', selected: true },
-    { label: 'SICdb', key: 'sic', selected: true },
-  ];
+  // Selection state per database, built on first use; names come from the database-name owner.
+  let DATABASES = null;
+  function databaseState() {
+    if (!DATABASES) {
+      const names = window.EU_DATABASE_NAMES;
+      DATABASES = names.keys().map(key => ({ label: names.name(key), key, selected: true }));
+    }
+    return DATABASES;
+  }
   const SAMPLE_SPECS = [
     {
       id: 'quick',
@@ -69,21 +70,21 @@
   }
 
   function selectedKeys() {
-    return DATABASES.filter(row => row.selected).map(row => row.key);
+    return databaseState().filter(row => row.selected).map(row => row.key);
   }
 
   function databaseRows() {
-    return DATABASES.map(row => ({ ...row }));
+    return databaseState().map(row => ({ ...row }));
   }
 
   function setSelectedKeys(values) {
     const selected = new Set((values || []).map(value => String(value || '').trim()).filter(Boolean));
-    DATABASES.forEach(row => { row.selected = selected.has(row.key); });
+    databaseState().forEach(row => { row.selected = selected.has(row.key); });
     return selectedKeys();
   }
 
   function toggleDatabase(index) {
-    const row = DATABASES[Number(index)];
+    const row = databaseState()[Number(index)];
     if (!row) return null;
     row.selected = !row.selected;
     return { ...row };
@@ -96,7 +97,7 @@
   function identityKeys(meta) {
     const identity = String(meta && meta.source_identity || '').trim();
     const keys = Array.from(new Set(identity.split(',').map(key => key.trim()).filter(Boolean))).sort();
-    const known = new Set(DATABASES.map(row => row.key));
+    const known = new Set(databaseState().map(row => row.key));
     if (keys.length < 2 || keys.some(key => !known.has(key)) || keys.join(',') !== identity) return [];
     return keys;
   }
@@ -329,7 +330,7 @@
         : [];
       // The default means "all databases found in this parent folder", not
       // "require six hard-coded folders". Preserve explicit advanced choices.
-      if (detected.length >= 2 && selectedKeys().length === DATABASES.length) {
+      if (detected.length >= 2 && selectedKeys().length === databaseState().length) {
         setSelectedKeys(detected);
         notifySourceChanged(root, state.sampleMode, state.featureScope);
       }
@@ -443,7 +444,7 @@
   }
 
   function databaseLabel(key) {
-    const row = DATABASES.find(item => item.key === key);
+    const row = databaseState().find(item => item.key === key);
     return row ? row.label : String(key || '');
   }
 
@@ -639,7 +640,7 @@
             <div class="crossdb-advanced-section">
               <b>${h.term('Databases')} · <span id="dbcount">${count}</span> ${h.term('selected')}</b>
               <div class="db-grid mt-10" id="dbgrid">
-                ${DATABASES.map((row, index) => {
+                ${databaseState().map((row, index) => {
                   const status = databaseStatus(row.key, row.selected, config);
                   return `<button class="db-card ${row.selected ? 'sel' : ''}" type="button" data-db="${index}" aria-pressed="${row.selected ? 'true' : 'false'}"><div><b>${h.esc(row.label)}</b><small>${h.esc(status.sub)}</small></div><span class="db-mk pill ${status.cls}">${h.esc(status.label)}</span></button>`;
                 }).join('')}
@@ -659,7 +660,7 @@
     </div>
     <div class="sec-stack"><div class="lbl">${h.term('Available databases')} · <span id="dbcount">${count}</span> ${h.term('selected')}</div></div>
     <div class="db-grid" id="dbgrid">
-      ${DATABASES.map((row, index) => `<button class="db-card ${row.selected ? 'sel' : ''}" type="button" data-db="${index}" aria-pressed="${row.selected ? 'true' : 'false'}">
+      ${databaseState().map((row, index) => `<button class="db-card ${row.selected ? 'sel' : ''}" type="button" data-db="${index}" aria-pressed="${row.selected ? 'true' : 'false'}">
         <div class="row gap-8" style="min-width:0;">
           <span class="${row.selected ? '' : 'ink-4'}" style="flex:none;color:${row.selected ? 'var(--accent-ink)' : 'var(--ink-4)'};">${h.icon('db', 15)}</span>
           <div style="min-width:0;">

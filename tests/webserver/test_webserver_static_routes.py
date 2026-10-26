@@ -186,10 +186,10 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261022-help1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261026-data1" in index_html
+    assert "js/screens-extraction.js?v=20261026-dbnames1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261023-stop-attribution1" in index_html
-    assert "js/screens-help.js?v=20261026-ask-on-use1" in index_html
+    assert "js/screens-help.js?v=20261026-dbnames1" in index_html
 
 
 def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
@@ -337,7 +337,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert "How a study moves through EasyICU</h2>" not in help_js
 
     assert "js/app.js?v=20261022-help1" in index_html
-    assert "js/screens-help.js?v=20261026-ask-on-use1" in index_html
+    assert "js/screens-help.js?v=20261026-dbnames1" in index_html
 
 
 def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
@@ -866,7 +866,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     # the renderer at call time, so it must be defined before it.
     vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261026-run-files1")
     assert fixtures_pos < vocab_pos < render_pos
-    assert "js/screens-agent-report-reader.js?v=20261026-run-files1" in index_html
+    assert "js/screens-agent-report-reader.js?v=20261026-dbnames1" in index_html
     assert "js/screens-agent-render.js?v=20261026-run-files1" in index_html
     assert "js/screens-agent-question-requirements.js?v=20261010-exposure-labels1" in index_html
     assert "css/agent-plan.css?v=20261026-run-files1" in index_html
@@ -1136,7 +1136,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "css/tweaks.css?v=20260625-stage96" in index_html
     assert "css/settings.css?v=20260921-anchor-room1" in index_html
     assert "js/screens-settings-extensions.js?v=20260812-extension-manager1" in index_html
-    assert "js/screens-settings.js?v=20261023-desktop-egress1" in index_html
+    assert "js/screens-settings.js?v=20261026-dbnames1" in index_html
     assert ".settings-cap-panel" in settings_css
     assert ".settings-cap-tabs" in settings_css
     assert ".settings-cap-tile" in settings_css
@@ -1184,12 +1184,12 @@ def test_the_folder_hint_names_the_database_the_study_needs() -> None:
     assert "Choose the MIMIC folder" not in extraction_js
     assert "选择 MIMIC 数据文件夹" not in extraction_js
     hint = extraction_js.split("function connectFolderHint() {", 1)[1].split("\n  }\n", 1)[0]
-    assert "EXPECTED_DATABASE_LABELS[exExpectedDatabase]" in hint
+    assert "window.EU_DATABASE_NAMES.release(exExpectedDatabase)" in hint
     assert "选择 ${name} 数据文件夹后" in hint
     assert "选择 ICU 数据文件夹后" in hint
     assert '<div class="ex-connect-copy-desc">${connectFolderHint()}</div>' in extraction_js
-    labels = extraction_js.split("const EXPECTED_DATABASE_LABELS = Object.freeze({", 1)[1].split("});", 1)[0]
-    assert "eicu: 'eICU 2.0'" in labels and "miiv: 'MIMIC-IV 3.1'" in labels
+    names = _static_js("database-names.js")
+    assert "release: 'eICU 2.0'" in names and "release: 'MIMIC-IV 3.1'" in names
 
 
 def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
@@ -2140,11 +2140,11 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "padding-right: 168px" in crossdb_css
     assert "scroll-margin-bottom: 84px" in crossdb_css
 
-    assert "js/screens-viz-crossdb-setup.js?v=20261022-copy1" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261026-dbnames1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz-crossdb-results.js?v=20261026-data1" in index_html
+    assert "js/screens-viz-crossdb-results.js?v=20261026-dbnames1" in index_html
     assert "js/screens-viz.js?v=20261026-data1" in index_html
-    assert "css/crossdb.css?v=20261026-data1" in index_html
+    assert "css/crossdb.css?v=20261026-dbnames1" in index_html
     for selector in (
         ".crossdb-method-grid",
         ".xdb-result-tabs",
@@ -2370,7 +2370,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
     assert "api.js?v=20261026-append2" in index_html
-    assert "screens-dict.js?v=20261026-db-names1" in index_html
+    assert "screens-dict.js?v=20261026-dbnames1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
     assert "deepdive.css?v=20261026-db-names1" in index_html
@@ -3298,7 +3298,7 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert ".official-demo-sources" in shared_css
     assert ".crossdb-offline-fallback" in crossdb_css
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
-    assert "js/screens-viz-crossdb-setup.js?v=20261022-copy1" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261026-dbnames1" in index_html
     assert "js/screens-viz-crossdb-source.js?v=20261026-data1" in index_html
 
 

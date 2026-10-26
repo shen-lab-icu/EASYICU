@@ -57,6 +57,7 @@ CONTRACTS: dict[str, list[str]] = {
     "copilot_history.test.js": [],
     "guided_pi_audit_recovery_choices.test.js": [],
     "credentialed_egress_copy.test.js": [
+        "database-names.js",
         "screens-guided-pi-error-text.js",
         "screens-guided-pi-hosted.js",
         "screens-help.js",
@@ -198,7 +199,7 @@ CONTRACTS: dict[str, list[str]] = {
     ],
     "guided_pi_job_recovery.test.js": ["screens-guided-pi.js"],
     "guided_pi_study_readings.test.js": [
-        "html-escape.js", "screens-agent-reader-vocab.js",
+        "database-names.js", "html-escape.js", "screens-agent-reader-vocab.js",
         "screens-guided-pi-question-requirements.js", "screens-guided-pi-study-readings.js",
         "screens-guided-pi-target-trial-copy.js", "screens-guided-pi-target-trial.js",
         "screens-guided-pi-confirmation.js", "screens-guided-pi-error-text.js",
@@ -291,7 +292,7 @@ CONTRACTS: dict[str, list[str]] = {
         "../../pi_copilot/node_app/src/event-projection.mjs",
         "../../pi_copilot/node_app/src/provider-retry.mjs",
     ],
-    "dictionary_hosted_instance.test.js": ["screens-dict.js"],
+    "dictionary_hosted_instance.test.js": ["database-names.js", "screens-dict.js"],
     "review_echarts_owners.test.js": [
         "screens-viz-echarts.js",
         "screens-viz-crossdb-charts.js",

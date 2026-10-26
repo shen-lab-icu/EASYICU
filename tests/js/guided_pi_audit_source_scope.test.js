@@ -34,7 +34,7 @@ function card(database, label, { hosted = false, language = 'zh', offer = empty,
   const window = { EU_CAPABILITIES: { deployment: { hosted } },
     EU_SETTINGS: { support_contact: 'Support <desk>' } };
   const context = vm.createContext({ window });
-  for (const name of ['screens-guided-pi-modules.js', 'html-escape.js',
+  for (const name of ['database-names.js', 'screens-guided-pi-modules.js', 'html-escape.js',
     'screens-guided-pi-hosted.js', 'screens-guided-pi-data-consent.js']) {
     vm.runInContext(fs.readFileSync(path.join(js, name), 'utf8'), context, { filename: name });
   }

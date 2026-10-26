@@ -43,6 +43,8 @@ global.window = {
 };
 global.t = (en, zh) => zh;
 global.icon = () => '';
+// index.html loads the database-name owner ahead of every screen.
+require(process.argv[1].replace(/[^/]+$/, 'database-names.js'));
 require(process.argv[1]);
 require(process.argv[2]);
 const page = window.SCREENS.tutorial;

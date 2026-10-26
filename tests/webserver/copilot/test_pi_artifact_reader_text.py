@@ -27,6 +27,7 @@ def render(name, payload, *, lang="zh"):
         t: (en, zh) => {json.dumps(lang)} === 'zh' ? zh : en,
         icon: () => '',
       }};
+      eval({json.dumps(_read('js/database-names.js'))});
       eval({json.dumps(_read('js/screens-agent-reader-vocab.js'))});
       eval({json.dumps(_read('js/screens-agent-run-file-reader.js'))});
       eval({json.dumps(_read('js/screens-agent-render.js'))});

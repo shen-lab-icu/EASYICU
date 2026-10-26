@@ -153,10 +153,6 @@
     dictionary_digest_not_recorded: ['The run did not record a checksum for the dictionary', '运行没有记录所用字典的校验值'],
     source_identity_not_recorded: ['The run did not record its data source', '运行没有记录数据来源'],
   };
-  const DATABASE_NAMES = {
-    miiv: 'MIMIC-IV', miiv_demo: 'MIMIC-IV Demo', eicu: 'eICU-CRD', eicu_demo: 'eICU-CRD Demo',
-    mimic: 'MIMIC-III', mimic_demo: 'MIMIC-III Demo', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sic: 'SICdb',
-  };
   function lineageCount(value) {
     return Number.isSafeInteger(value) && value >= 0 ? new Intl.NumberFormat().format(value) : '';
   }
@@ -179,7 +175,7 @@
       parts.push(esc(t(`${lineageCount(facts.concept_count)} concepts`, `${lineageCount(facts.concept_count)} 个概念`)));
     }
     if (node.kind === 'data_source') {
-      const database = typeof facts.database === 'string' ? (DATABASE_NAMES[facts.database] || facts.database) : '';
+      const database = typeof facts.database === 'string' ? (window.EU_DATABASE_NAMES.name(facts.database) || facts.database) : '';
       const name = [database, facts.version].filter(value => typeof value === 'string' && value).join(' ');
       if (name) parts.push(esc(name));
       const doi = String(facts.doi || '');

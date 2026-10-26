@@ -138,7 +138,7 @@
       ? current.source : ctx.namedDemo || ctx.namedDatabase;
     const scopeKey = String(scopeSource && (scopeSource.database || scopeSource.key) || '').replace(/_demo$/, '');
     if (current.status === 'pending' && ['hirid', 'aumc', 'sic'].includes(scopeKey)) {
-      const label = scopeSource.label || { hirid: 'HiRID', aumc: 'AmsterdamUMCdb', sic: 'SICdb' }[scopeKey];
+      const label = scopeSource.label || window.EU_DATABASE_NAMES.name(scopeKey);
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Research scope', '研究支持范围')}"><div class="gpi-data-consent-body">
         <strong>${ctx.esc(ctx.tr(`This version does not support this study with ${label}.`, `本版本暂不支持使用 ${label} 完成这项研究。`))}</strong>
         <p>${ctx.tr('Please choose another supported data source.', '请选择其他受支持的数据源。')}</p>

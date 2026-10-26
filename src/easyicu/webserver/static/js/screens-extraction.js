@@ -505,14 +505,10 @@
     ['Write shard layout', '写入分片布局'],
     ['Index & freeze', '建立索引并冻结'],
   ];
-  const EXPECTED_DATABASE_LABELS = Object.freeze({
-    miiv: 'MIMIC-IV 3.1', mimic: 'MIMIC-III 1.4', eicu: 'eICU 2.0',
-    aumc: 'AmsterdamUMCdb', hirid: 'HiRID 1.1.1', sic: 'SICdb 1.0.6',
-  });
   function copilotPrefillSummary() {
     if (!exHydratedStudyCoordinate) return '';
     const cohort = cohortContract();
-    const database = EXPECTED_DATABASE_LABELS[exExpectedDatabase] || exExpectedDatabase.toUpperCase();
+    const database = window.EU_DATABASE_NAMES.release(exExpectedDatabase) || exExpectedDatabase.toUpperCase();
     const diagnoses = Array.isArray(cohort.include_diagnoses) ? cohort.include_diagnoses.join(', ') : '';
     const parts = [
       database,
@@ -535,7 +531,7 @@
   }
   // The folder the study needs, named by its database when the study has one.
   function connectFolderHint() {
-    const name = EXPECTED_DATABASE_LABELS[exExpectedDatabase];
+    const name = window.EU_DATABASE_NAMES.release(exExpectedDatabase);
     return name
       ? hostedCopy('folderHintNamed', t(`Choose the ${name} data folder; EasyICU then identifies its layout automatically. No patient rows are uploaded or returned.`, `选择 ${name} 数据文件夹后，EasyICU 会自动判断目录结构。不上传，也不返回患者行。`), name)
       : hostedCopy('folderHint', t('Choose the ICU data folder; EasyICU then identifies its database and layout automatically. No patient rows are uploaded or returned.', '选择 ICU 数据文件夹后，EasyICU 会自动判断数据库和目录结构。不上传，也不返回患者行。'));
@@ -1539,11 +1535,7 @@
       ? window.EU_EXTRACTION_CONTEXT.snapshot() : {};
     const source = snapshot.data_source || {};
     const databaseKey = String(source.database || '').toLowerCase();
-    const databaseLabel = {
-      miiv: 'MIMIC-IV', mimiciv: 'MIMIC-IV', mimic_iv: 'MIMIC-IV',
-      mimic: 'MIMIC-III', miii: 'MIMIC-III', mimiciii: 'MIMIC-III', mimic_iii: 'MIMIC-III',
-      eicu: 'eICU', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sic: 'SICdb', sicdb: 'SICdb',
-    }[databaseKey] || String(source.database || source.label || '');
+    const databaseLabel = window.EU_DATABASE_NAMES.name(databaseKey) || String(source.database || source.label || '');
     return {
       id: 'extraction-' + String(exportJobId || Date.now()),
       job_id: String(exportJobId || ''),

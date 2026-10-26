@@ -514,7 +514,7 @@
         <div class="setup-row"><span class="k">${T('Version', '版本')}</span><span class="vv mono">EasyICU ${(S0().about || {}).version || '—'}</span></div>
         ${hosted ? `<div class="setup-row" data-settings-support-contact><span class="k">${T('Administrator', '管理员')}</span><span class="vv">${h(hostedContact() || T('Ask the person who gave you this link', '请联系给你这个链接的人'))}</span></div>` : `
         <div class="setup-row"><span class="k">Python</span><span class="vv mono">${(S0().about || {}).python || '—'}</span></div>
-        <div class="setup-row"><span class="k">${T('Databases detected', '已检测数据库')}</span><span class="vv mono">MIMIC-IV · eICU · AUMC · HiRID · MIMIC-III · SICdb</span></div>
+        <div class="setup-row"><span class="k">${T('Supported databases', '支持的数据库')}</span><span class="vv">${h(window.EU_DATABASE_NAMES.keys().map(window.EU_DATABASE_NAMES.name).join(' · '))}</span></div>
         <div class="setup-row"><span class="k">${T('Settings file', '设置文件')}</span><span class="vv mono">${h((S0().about || {}).config_path || '—')}</span></div>`}
         <div class="set-about-actions row gap-8 mt-16">
           ${hosted ? '' : `<button class="btn sm" data-settings-doc="release">${icon('file', 13)} ${T('Release notes', '版本说明')}</button>

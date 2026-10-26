@@ -9,10 +9,6 @@
   const { esc } = window.EU_HTML;
   const t = window.t;
 
-  const DATABASES = {
-    miiv: 'MIMIC-IV', mimic: 'MIMIC-III', mimic_demo: 'MIMIC-III demo', eicu: 'eICU-CRD',
-    eicu_demo: 'eICU-CRD demo', hirid: 'HiRID', aumc: 'AmsterdamUMCdb', sic: 'SICdb',
-  };
   const CHECKS = {
     execution_complete: ['Analysis steps executed', '分析步骤执行完成'],
     analysis_validated: ['Automated analysis validation', '自动分析校验'],
@@ -54,7 +50,7 @@
   }
   function database(source) {
     const s = source && typeof source === 'object' ? source : {};
-    const name = DATABASES[String(s.database || '').toLowerCase()] || text(s.database);
+    const name = window.EU_DATABASE_NAMES.name(s.database) || text(s.database);
     return name || text(s.label);
   }
   function criterion(value) {
