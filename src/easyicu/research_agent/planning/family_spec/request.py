@@ -2041,7 +2041,11 @@ def _association_adjustment(
 
     Resolve stated concepts using the adjustment owner. An unavailable or
     ambiguous reading stays a refusal; availability never expands a stated
-    roster. A question receipt grants no measurement-time authority.
+    roster. A question receipt grants no measurement-time authority. The
+    reading is a required subset (``adjustment_authority``), never a complete
+    roster: a fixed study roster must hold every stated variable and keeps
+    what else it fixed, such as a variable whose reading the conversation
+    could not record.
     """
     from dataclasses import replace
 
@@ -2082,10 +2086,15 @@ def _association_adjustment(
     if adjustment.selection != "exact":
         adjustment = replace(adjustment, selection="exact", covariates=tuple(dict.fromkeys(columns)),
                              temporal_roles=tuple((name, timed[name]) for name in dict.fromkeys(columns) if name in timed))
-    elif stated and set(columns) != set(adjustment.operational_covariates):
-        raise FamilySpecError("family_spec_exact_roster_mismatch",
-                              "The plan's adjustment variables differ from the ones the question names.",
-                              path="adjustment_set")
+    else:
+        omitted = next((item for item, column in zip(stated, columns)
+                        if column not in adjustment.operational_covariates), None)
+        if omitted is not None:
+            raise FamilySpecError("family_spec_exact_roster_mismatch",
+                                  f"The study's fixed adjustment variables leave out {omitted.variable!r}, "
+                                  "which the question asks to adjust for.",
+                                  path="adjustment_set", stated_variable=omitted.variable,
+                                  cause_code="stated_adjustment_outside_exact_roster")
     if primary_landmark_hours(context) is not None:
         _require_landmark_adjustment_timing(context, adjustment)
     return adjustment

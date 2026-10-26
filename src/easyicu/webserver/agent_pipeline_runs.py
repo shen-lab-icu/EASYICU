@@ -847,6 +847,16 @@ def _progressive_compile_failure_message(exc: BaseException) -> str:
             "Use data that includes it, or remove it from the question."
         )
         return f"{why} Planning stopped and no analysis was run. Generate the plan again after that change."
+    if (typed.get("reason_code") == "progressive_family_spec_exact_roster_mismatch"
+            and typed.get("cause_code") == "stated_adjustment_outside_exact_roster"
+            and typed.get("stated_variable")):
+        # The study's fixed roster, not a plan, leaves the stated variable out.
+        return (
+            f"The study's fixed adjustment variables leave out “{typed['stated_variable']}”, which "
+            "the question asks to adjust for. Add it to the adjustment variables, or remove it from "
+            "the question. Planning stopped and no analysis was run. Generate the plan again after "
+            "that change."
+        )
     sentence = _PLANNING_STOP_SENTENCES.get(str(typed.get("reason_code") or ""))
     if sentence:
         return sentence

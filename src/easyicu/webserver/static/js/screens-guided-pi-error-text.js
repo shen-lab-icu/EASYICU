@@ -564,6 +564,11 @@
         return why + tr(' Planning stopped and no analysis was run. Generate the plan again after that change.',
           ' 规划已停止，没有运行分析。修改后请重新生成计划。');
       }
+      if (code === 'progressive_family_spec_exact_roster_mismatch' && statedVariable
+          && cause === 'stated_adjustment_outside_exact_roster') {
+        return tr(`The study's fixed adjustment variables leave out “${statedVariable}”, which the question asks to adjust for. Add it to the adjustment variables, or remove it from the question. Planning stopped and no analysis was run. Generate the plan again after that change.`,
+          `研究设置中固定的调整变量没有包含问题要求调整的「${statedVariable}」。请把它加入调整变量，或在问题中去掉它。规划已停止，没有运行分析。修改后请重新生成计划。`);
+      }
       const missing = Array.isArray(detail && detail.missing) ? detail.missing.map(String).filter(Boolean) : [];
       const list = missing.length ? missing.join(', ') : '';
       if (code === 'execution_step_raised') {

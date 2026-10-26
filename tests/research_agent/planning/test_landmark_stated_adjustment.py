@@ -336,9 +336,10 @@ def test_unavailable_stated_covariate_stops_before_planning():
     ),
     (
         "family_spec_exact_roster_mismatch",
-        "The plan's adjustment variables differ from the ones named in the question, "
-        "so planning stopped and no analysis was run. Generate the plan again.",
-        "The plan's adjustment variables differ from the ones the question names.",
+        "The study's fixed adjustment variables leave out “sex”, which the question asks to "
+        "adjust for. Add it to the adjustment variables, or remove it from the question. "
+        "Planning stopped and no analysis was run. Generate the plan again after that change.",
+        "The study's fixed adjustment variables leave out 'sex', which the question asks to adjust for.",
     ),
     (
         "family_spec_covariate_timing_unproven",
@@ -392,13 +393,46 @@ def test_ambiguous_value_columns_do_not_silently_pick_an_adjustment():
         _request(context)
 
 
-def test_an_exact_roster_cannot_add_to_or_omit_the_question_roster():
-    for covariates in ([], ["age"], ["sex", "age"]):
-        context = _study()
-        context.user_preferences.covariate_selection = "exact"
-        context.user_preferences.covariates = covariates
-        with pytest.raises(FamilySpecError, match="family_spec_exact_roster_mismatch"):
-            _request(context)
+def _fixed_roster(context, covariates):
+    context.user_preferences.covariate_selection = "exact"
+    context.user_preferences.covariate_authority = "user"
+    context.user_preferences.covariates = list(covariates)
+    context.user_preferences.covariate_rationales = {
+        name: "Pre-specified baseline demographic confounder selected by the user." for name in covariates
+    }
+    context.user_preferences.covariate_temporal_roles = {name: "baseline_static" for name in covariates}
+    return context
+
+
+def test_an_exact_roster_cannot_omit_a_stated_variable():
+    for covariates in ([], ["age"]):
+        with pytest.raises(FamilySpecError, match="family_spec_exact_roster_mismatch") as stopped:
+            _request(_fixed_roster(_study(), covariates))
+        assert stopped.value.stated_variable == "sex"
+        assert stopped.value.cause_code == "stated_adjustment_outside_exact_roster"
+        assert "plan" not in str(stopped.value)
+
+
+@pytest.mark.parametrize("recorded,fixed", [
+    (("age",), ("age", "sex")), (("sex",), ("age", "sex")), (("sex", "age"), ("age", "sex")),
+])
+def test_a_fixed_roster_keeps_what_a_partial_question_reading_left_out(recorded, fixed):
+    # The stated reading is a required subset: a variable the conversation
+    # could not record (its quote was not the question's own words) stays in
+    # the fixed roster, in the roster's order, through the signed first plan.
+    context = _fixed_roster(_study(recorded), fixed)
+    request = _request(context)
+    assert request.adjustment_selection == "exact"
+    assert request.exact_roster == list(fixed)
+    draft = _first_plan(context, fixed)
+    primary = next(step for step in draft.steps if step.planned_analysis_role == "primary")
+    assert primary.model_requirements[0].covariates == list(fixed)
+    runtime = _runtime(context).seal_for_plan(draft)
+    bound, _ = runtime.bind_plan(draft)
+    assert runtime.current_case.required_adjustment_columns == fixed
+    review = build_plan_scientific_review(context=context, plan=bound, runtime_authority=runtime.current_case)
+    assert review.facts["stated_adjustment_coverage"]["complete"]
+    assert "STATED_ADJUSTMENT_MISSING" not in {finding.code for finding in review.findings}
 
 
 def test_no_stated_field_binds_the_family_minimal_adjustment():
