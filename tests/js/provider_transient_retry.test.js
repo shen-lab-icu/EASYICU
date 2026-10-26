@@ -85,6 +85,7 @@ async function harness(attempts, config = {}) {
   }
   guard.beginMessage();
   const receipts = [];
+  const egressReceipts = [];
   const calls = [];
   const waits = [];
   const order = [];
@@ -142,6 +143,15 @@ async function harness(attempts, config = {}) {
   vm.runInNewContext(eventPublisher + wrapper, {
     session, record, manager, originalStreamFunction, lazyStream,
     externalId: 'synthetic-session',
+    SESSION_DIR: 'synthetic-session-root',
+    appendModelRequestReceipt(root, sessionId, selected, suppliedContext) {
+      assert.equal(root, 'synthetic-session-root');
+      assert.equal(sessionId, 'synthetic-session');
+      assert.equal(selected, model);
+      assert.equal(suppliedContext, context);
+      egressReceipts.push({ selected, suppliedContext });
+      assert.equal(calls.length + 1, egressReceipts.length, 'receipt precedes transport');
+    },
     activeRequestBySession: new Map(config.activeRequest === false ? [] : [['synthetic-session', 'synthetic-request']]),
     normalizePiEvent: projection.normalizePiEvent,
     emit: envelope => { order.push('retry'); notices.push(envelope); },
@@ -157,7 +167,7 @@ async function harness(attempts, config = {}) {
   }
   const result = await stream.result();
   const projected = projection.normalizePiEvent({ type: 'message_end', message: result });
-  return { guard, receipts, calls, waits, order, events, result, projected, notices, retryStarts, closed, usage,
+  return { guard, receipts, egressReceipts, calls, waits, order, events, result, projected, notices, retryStarts, closed, usage,
     openCall: () => session.agent.streamFunction(model, context, { maxTokens: 1000 }),
   };
 }
@@ -167,6 +177,7 @@ for (const attempt of [2, 3, 4]) {
     const failures = Array.from({ length: attempt - 1 }, (_, i) => [opened(i + 1), failed(relayFailure)]);
     const result = await harness([...failures, success(attempt)]);
     assert.equal(result.calls.length, attempt);
+    assert.equal(result.egressReceipts.length, attempt, 'every retry retains a request receipt');
     assert.deepEqual(result.events, success(attempt));
     // Each retried attempt is its own accounted call, never folded into the success.
     assert.deepEqual(result.usage.filter(row => row.state !== 'in_flight').map(row => [row.call_id, row.state]),

@@ -805,8 +805,8 @@
           const target = btn.getAttribute('data-settings-doc');
           if (target === 'docs') {
             location.hash = '#help';
-          } else {
-            setNotice(T('Release notes are tracked in the local docs/task logs for this build.', '此构建的版本说明记录在本地文档和任务日志中。'));
+          } else if (window.EU_WHATS_NEW) {
+            window.EU_WHATS_NEW.open();
           }
         });
       });

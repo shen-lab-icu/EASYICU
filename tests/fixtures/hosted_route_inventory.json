@@ -1606,6 +1606,26 @@
     "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
+    "method": "GET",
+    "route": "/api/help/runs/{run_ref}/problem-bundle",
+    "fields": ["path:run_ref"],
+    "reaches": "run_refs.resolve -> require_instance_path -> problem_bundle.build_problem_bundle: source_run_manifest.json through the safe artifact reader, provider task state, closed reason codes and payload-free request metadata -> in-memory ZIP",
+    "protection": "hosted.guard_request + server-issued run_ref only (no client filesystem coordinate) + require_instance_path; closed status/reason vocabulary only: no payloads, prompts, rows, paths, secrets or free log text",
+    "guarded_fields": [],
+    "writes": "none",
+    "write_owner": "In-memory ZIP returned to the requester; no filesystem destination and no upload."
+  },
+  {
+    "method": "GET",
+    "route": "/api/help/whats-new",
+    "fields": ["query:last_seen_version"],
+    "reaches": "release_notes.whats_new -> packaged easyicu/data/release_notes.json",
+    "protection": "hosted.guard_request; numeric major.minor.patch parameter validated; packaged read-only source",
+    "guarded_fields": [],
+    "writes": "none",
+    "write_owner": "Read-only packaged resource; acknowledging a version is client-side state."
+  },
+  {
     "method": "POST",
     "route": "/api/ideas/agent-projects",
     "fields": [],
@@ -2142,6 +2162,26 @@
     "protection": "no path inputs",
     "writes": "none",
     "write_owner": "Read-only handler or in-memory response; no filesystem destination."
+  },
+  {
+    "method": "GET",
+    "route": "/api/trust/conversations/{session_id}/egress",
+    "fields": ["path:session_id"],
+    "reaches": "model_request_records.conversation_egress -> PiCopilotService._get_record -> gateway session directory .egress/<sha256(session id)>.jsonl -> closed request projection",
+    "protection": "hosted.guard_request + existing session lookup; symlinked, oversized or invalid receipt files fail closed; never opens the transcript, refreshes credentials or starts a gateway; payload-free closed fields",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Receipt reads do not write. Lazy PiCopilotService initialization may reconcile session/follow-up metadata under the server-owned instance home."
+  },
+  {
+    "method": "GET",
+    "route": "/api/trust/runs/{run_ref}/egress",
+    "fields": ["path:run_ref"],
+    "reaches": "run_refs.resolve -> require_instance_path -> research_run_usage(include_requests) -> digest-verified provider ledgers -> closed request projection",
+    "protection": "hosted.guard_request + server-issued run_ref only (no client filesystem coordinate) + require_instance_path; payload-free closed fields",
+    "guarded_fields": [],
+    "writes": "none",
+    "write_owner": "Read-only ledger projection; no filesystem destination."
   },
   {
     "method": "POST",

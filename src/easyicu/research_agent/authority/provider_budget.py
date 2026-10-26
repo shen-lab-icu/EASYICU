@@ -2107,7 +2107,7 @@ def provider_call_scope(
         _ACTIVE_PROVIDER_CALL.reset(token)
 
 
-def consume_active_transport_attempt() -> Optional[float]:
+def consume_active_transport_attempt(*, provider: Optional[str] = None) -> Optional[float]:
     """Charge one real HTTP attempt of the SAME request to the stop-loss.
 
     The per-step allowance is deliberately NOT charged here: it counts logical
@@ -2121,7 +2121,7 @@ def consume_active_transport_attempt() -> Optional[float]:
     # ceilings were durably recorded.
     from .provider_hard_stop import consume_active_provider_hard_stop_attempt
 
-    return consume_active_provider_hard_stop_attempt()
+    return consume_active_provider_hard_stop_attempt(provider=provider)
 
 
 def consume_active_provider_handoff() -> Optional[float]:

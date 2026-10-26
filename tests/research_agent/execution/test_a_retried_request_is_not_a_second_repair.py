@@ -229,7 +229,7 @@ def test_the_run_wide_stop_loss_is_still_charged_for_every_attempt(monkeypatch):
     monkeypatch.setattr(
         provider_hard_stop,
         "consume_active_provider_hard_stop_attempt",
-        lambda: (charged.append(1), 123.0)[1],
+        lambda *, provider=None: (charged.append(1), 123.0)[1],
     )
 
     budget = _budget()

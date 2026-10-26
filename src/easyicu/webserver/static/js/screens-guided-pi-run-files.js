@@ -304,9 +304,12 @@
       const extraction = state.extractionError ? `<p>${esc(state.extractionError)}</p>`
         : state.loading && !state.extraction ? `<p>${tr('Reading extraction record…', '正在读取提取记录…')}</p>`
           : extractionOwner ? extractionOwner.renderExtraction(state.extraction) : `<p>${tr('Extraction record: Not recorded', '提取记录：未记录')}</p>`;
-      return `${error}<div class="gpi-run-files-actions"><button type="button" data-run-files-bundle ${disabled || !artifacts.length ? 'disabled' : ''}>${tr('Download all files', '下载全部文件')}</button><button type="button" data-run-files-reload ${disabled ? 'disabled' : ''}>${tr('Refresh status', '刷新状态')}</button></div>
+      // What the run sent to the model and its problem report (runTrust).
+      const trust = modules.optional('runTrust');
+      return `${error}<div class="gpi-run-files-actions"><button type="button" data-run-files-bundle ${disabled || !artifacts.length ? 'disabled' : ''}>${tr('Download all files', '下载全部文件')}</button><button type="button" data-run-files-reload ${disabled ? 'disabled' : ''}>${tr('Refresh status', '刷新状态')}</button>${trust ? trust.problemButtonHtml(review.run_ref, '') : ''}</div>
         ${extraction}
         ${primary ? table(primary) : ''}${other ? `<details class="gpi-run-extra" ${entry.extraOpen ? 'open' : ''}><summary>${tr('More files & provenance', '更多文件与溯源')}</summary>${table(other)}</details>` : ''}
+        ${trust ? trust.sectionHtml(review.run_ref, entry.trustOpen) : ''}
         ${review.signoff_stale ? `<p class="gpi-run-files-error">${tr('Review is stale: files changed or are missing.', '审阅已失效：文件发生变化或缺失。')}</p>` : review.signed ? `<p role="status">${tr('Local review recorded.', '已记录本地审阅。')}</p>` : ''}
         ${signable ? `<details class="gpi-run-signoff" ${entry.reviewOpen ? 'open' : ''}><summary>${tr('Record my review', '记录我的审阅')}</summary><p>${tr('Local review does not grant publication authority.', '本地审阅不授予发表权限。')}</p><fieldset>${confirmations.map(([id, en, zh]) => `<label><input type="checkbox" data-run-files-confirm="${id}" ${entry.checks.has(id) ? 'checked' : ''} ${disabled ? 'disabled' : ''}>${tr(en, zh)}</label>`).join('')}<button type="button" data-run-files-sign ${disabled || entry.checks.size !== confirmations.length ? 'disabled' : ''}>${tr('Sign reviewed run', '签署本次审阅')}</button></fieldset></details>` : ''}
         ${state.artifact ? `<article class="gpi-run-artifact"><h4>${esc(window.AGENT_RENDER.artifactTitle(state.artifact.name))}</h4>${window.AGENT_RENDER.artifactStructuredView(state.artifact.name, state.artifact.payload || {}, state.artifact.context)}<details><summary>${tr('Source JSON', '来源 JSON')}</summary><pre>${esc(JSON.stringify(state.artifact.payload, null, 2))}</pre></details></article>` : ''}`;
@@ -424,6 +427,8 @@
       if (!entry) return true;
       if (summary && summary.parentElement.classList.contains('gpi-run-signoff')) { entry.reviewOpen = !summary.parentElement.open; return true; }
       if (summary && summary.parentElement.classList.contains('gpi-run-extra')) { entry.extraOpen = !summary.parentElement.open; return true; }
+      if (summary && summary.parentElement.classList.contains('gpi-run-trust')) { entry.trustOpen = !summary.parentElement.open; return true; }
+      if (target.closest('[data-gpi-problem-bundle]')) return true;
       const artifact = target.closest('[data-run-files-artifact]');
       if (artifact && !artifact.disabled) {
         const item = rows(entry.controller.state.review && entry.controller.state.review.artifacts)[Number(artifact.dataset.runFilesArtifact)];

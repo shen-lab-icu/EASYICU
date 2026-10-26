@@ -147,6 +147,8 @@
 .gpi-model-usage{display:grid;gap:4px;margin-top:3px;padding:8px 10px 6px;border-top:1px solid var(--hair);color:var(--ink-3);font-size:12px;line-height:17px}
 .gpi-model-usage p{margin:0}
 .gpi-model-usage span{display:block;color:var(--ink-2);font-weight:600}
+.gpi-model-usage button{justify-self:start;margin-top:2px;padding:0;border:0;background:none;color:var(--ink-2);font:inherit;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.gpi-model-usage button:hover{color:var(--ink)}
 .gpi-model-popover [data-gpi-pick-model]:focus-visible,.gpi-model-settings:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
 .gpi-workflow{
   flex:0 0 auto;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:16px;

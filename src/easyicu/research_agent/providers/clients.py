@@ -33,6 +33,7 @@ from ..authority.provider_budget import (
     consume_active_transport_attempt,
 )
 from ..authority.provider_hard_stop import record_active_provider_transport_failure
+from easyicu.model_request_metadata import provider_name
 from ..authority.secret_redaction import (
     debug_capture_enabled,
     redact_debug_value,
@@ -904,7 +905,7 @@ class OpenAIClient:
 
         def _do_call():
             nonlocal dispatched_attempts
-            hard_stop_remaining = consume_active_transport_attempt()
+            hard_stop_remaining = consume_active_transport_attempt(provider=provider_name(provider_authorization_manifest(self)))
             dispatched_attempts += 1
             self.last_transport_attempts = dispatched_attempts
             reservation.update(remaining=hard_stop_remaining, at=_time.monotonic())
@@ -1361,7 +1362,7 @@ class OpenAIClient:
         create_kwargs[self._completion_token_parameter] = int(max_tokens)
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
-        hard_stop_remaining = consume_active_transport_attempt()
+        hard_stop_remaining = consume_active_transport_attempt(provider=provider_name(provider_authorization_manifest(self)))
         if hard_stop_remaining is not None:
             create_kwargs["timeout"] = min(
                 float(create_kwargs["timeout"]),
@@ -1608,7 +1609,7 @@ class AnthropicMessagesClient:
         retry_started = _time.monotonic()
         for attempt in range(attempts):
             self.last_transport_attempts = attempt + 1
-            hard_stop_remaining = consume_active_transport_attempt()
+            hard_stop_remaining = consume_active_transport_attempt(provider=provider_name(provider_authorization_manifest(self)))
             reserved_at = _time.monotonic()
             transport_kwargs = dict(create_kwargs)
             if hard_stop_remaining is not None:

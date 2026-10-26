@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 from typing import Any, Mapping
 
+from easyicu.model_request_metadata import project_request
 from easyicu.research_agent.authority.provider_hard_stop import (
     ProviderHardStopLedgerError,
     load_provider_hard_stop_ledger,
@@ -110,7 +111,7 @@ def _summarize(calls: list[Mapping[str, Any]], *, group_states: bool = True) -> 
     }
 
 
-def research_run_usage(wrapper_dir: Path) -> dict[str, Any] | None:
+def research_run_usage(wrapper_dir: Path, *, include_requests: bool = False) -> dict[str, Any] | None:
     """Include every owned ledger once, retaining failed and zero-call attempts.
 
     This accounts for this wrapper, its execution retries and report revisions.
@@ -133,6 +134,7 @@ def research_run_usage(wrapper_dir: Path) -> dict[str, Any] | None:
     )
     attempts = []
     calls = []
+    requests = []
     bindings = []
     statuses: set[str] = set()
     try:
@@ -221,6 +223,9 @@ def research_run_usage(wrapper_dir: Path) -> dict[str, Any] | None:
             bindings.append(binding)
             attempts.append({**binding, **_summarize(stage_calls)})
             calls.extend(stage_calls)
+            if include_requests:
+                for call in stage_calls:
+                    requests.append({"stage": stage, **project_request(call, sequence=len(requests) + 1)})
         if not bindings:
             return None
         by_role: dict[str, list] = defaultdict(list)
@@ -242,6 +247,7 @@ def research_run_usage(wrapper_dir: Path) -> dict[str, Any] | None:
                 {"role": role, **_summarize(rows)}
                 for role, rows in sorted(by_role.items())
             ],
+            **({"request_records": requests} if include_requests else {}),
         }
     except (
         OSError,

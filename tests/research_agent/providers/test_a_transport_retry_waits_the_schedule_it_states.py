@@ -170,7 +170,7 @@ def test_a_wait_that_ends_past_the_window_is_not_taken(
 
 
 def test_a_wait_that_would_use_the_remaining_wall_clock_is_not_taken(monkeypatch, ra):
-    monkeypatch.setattr(clients, "consume_active_transport_attempt", lambda: 150.0)
+    monkeypatch.setattr(clients, "consume_active_transport_attempt", lambda *, provider=None: 150.0)
     client, completions, sleeps = _client(monkeypatch, [_failure(), _ok()])
 
     with pytest.raises(RuntimeError) as raised:
@@ -180,7 +180,7 @@ def test_a_wait_that_would_use_the_remaining_wall_clock_is_not_taken(monkeypatch
     assert sleeps == []
     assert raised.value.easyicu_transport_retry_exhausted == RETRY_WALL_CLOCK_EXHAUSTED
 
-    monkeypatch.setattr(clients, "consume_active_transport_attempt", lambda: 1_000.0)
+    monkeypatch.setattr(clients, "consume_active_transport_attempt", lambda *, provider=None: 1_000.0)
     client, completions, sleeps = _client(monkeypatch, [_failure(), _ok()])
     assert _ask(client) == "OK"
     assert sleeps == [pytest.approx(180.0)]
