@@ -5,6 +5,13 @@
   'use strict';
 
   const SOURCE_RUN_ID = 'run_20260815T061842_5049c6';
+  // The answer shows the registered result table drawn by the current figure
+  // renderer; the run's own figure stays unchanged and one click away.
+  const FIGURE_URL = 'assets/demo/sofa2-phenotype-mortality-rerendered.png?v=20261026-fig1';
+  const ORIGINAL_FIGURE_URL = 'assets/demo/sofa2-phenotype-mortality.png?v=20260922-demo2';
+  // The registered result laid out as a journal-style descriptive report
+  // (tools/build_demo_study_report.py); it is not the withheld manuscript.
+  const STUDY_REPORT_URL = { en: 'assets/demo/sofa2-study-report.en.html?v=20261026-fig1', zh: 'assets/demo/sofa2-study-report.zh.html?v=20261026-fig1' };
   const WRAPPER_RUN_ID = 'e59d1a54feff';
   const SOURCE_AUTHORITY = 'bounded_reviewer_projection_from_registered_run';
 
@@ -554,7 +561,13 @@
   }
 
   function figureCaption() {
-    return tr('Main figure · A: share of stays by phenotype (0 = no, 1 = yes); B: in-hospital mortality by phenotype', '主图 · A：有无表型的入住占比（0 = 无，1 = 有）；B：各组院内死亡率');
+    return tr('Main figure, redrawn from the registered result table · A: share of stays by phenotype; B: in-hospital mortality by phenotype, dashed line = all stays', '主图（按登记的结果表重新绘制）· A：有无表型的入住占比；B：各组院内死亡率，虚线为全部入住');
+  }
+  function studyReportLink(esc) {
+    return `<a class="gpi-link" href="${esc(tr(STUDY_REPORT_URL.en, STUDY_REPORT_URL.zh))}" target="_blank" rel="noopener">${esc(tr('Open the result report', '打开研究结果报告'))}</a>`;
+  }
+  function originalFigureLink(esc) {
+    return `<a class="gpi-link" href="${esc(ORIGINAL_FIGURE_URL)}" target="_blank" rel="noopener">${esc(tr('Original run figure', '原始运行图'))}</a>`;
   }
   // The folded review and governance record under the answer.
   function governanceHtml(ctx) {
@@ -568,13 +581,14 @@
           <p><strong>${esc(tr('Done', '已完成'))}</strong>${esc(tr(': plan reviewed before analysis (six steps); 6/6 steps run; the numbers in the answer come from the result tables; the browser received aggregate tables only (no patient rows, paths or credentials).', '：分析前审阅计划（6 步）；6/6 步执行完成；回答里的数字都取自结果表；浏览器只收到聚合表（无患者行、路径或凭据）。'))}</p>
           <p><strong>${esc(tr('Kept open by design', '按设计保留'))}</strong>${esc(tr(': no novelty search and no independent scientific review, so no clinical manuscript was written. This does not change the analysis above.', '：没有做新颖性检索和独立科学审阅，所以没有生成临床论文；这不影响上面的分析结果。'))}</p>
           <p><strong>${esc(tr('Model use', '模型用量'))}</strong>${esc(tr(': 14 calls · 162,256 tokens · about $2.31', '：14 次调用 · 162,256 tokens · 约 $2.31'))}</p>
-          <div class="gpi-demo-governance-links">${documents.map(doc => button(doc)).join('')}${button(resource('scientific_readiness.json'), tr('Scientific review', '科学审阅'))}</div>
+          <div class="gpi-demo-governance-links">${studyReportLink(esc)}${documents.map(doc => button(doc)).join('')}${button(resource('scientific_readiness.json'), tr('Scientific review', '科学审阅'))}</div>
         </div>
       </details>`;
   }
   /* The answer's figure and table, the follow-up questions, and the folded
-     governance record. The figure is the run's registered main figure,
-     extracted unchanged from the reviewer dossier (sha256 37a29be8…). */
+     governance record. The figure is the run's registered result table drawn
+     by the current renderer; the registered main figure (sha256 37a29be8…,
+     byte-identical to the reviewer dossier's) is linked beside it. */
   function resultHtml(ctx) {
     const esc = ctx.esc;
     const button = typeof ctx.button === 'function' ? ctx.button : () => '';
@@ -588,8 +602,8 @@
     const headers = [tr('Group', '分组'), tr('ICU stays', 'ICU 入住'), tr('Share', '占比'), tr('Deaths', '死亡'), tr('In-hospital mortality', '院内死亡率')];
     return `<section class="gpi-demo-result" aria-label="${esc(tr('Demo result', '演示结果'))}">
       <figure class="gpi-run-answer-figure">
-        <img src="assets/demo/sofa2-phenotype-mortality.png?v=20260922-demo2" alt="${esc(tr('Phenotype share and in-hospital mortality by phenotype', '表型占比与各组院内死亡率'))}" loading="lazy" decoding="async">
-        <figcaption>${esc(figureCaption())} · ${button(resource('figure_gallery.json'), tr('All figures', '全部图表'))}</figcaption>
+        <img src="${esc(FIGURE_URL)}" alt="${esc(tr('Phenotype share and in-hospital mortality by phenotype', '表型占比与各组院内死亡率'))}" loading="lazy" decoding="async">
+        <figcaption>${esc(figureCaption())} · ${originalFigureLink(esc)} · ${button(resource('figure_gallery.json'), tr('All figures', '全部图表'))}</figcaption>
       </figure>
       <div class="gpi-demo-table"><table><thead><tr>${headers.map(label => `<th scope="col">${esc(label)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr><th scope="row">${esc(row[0])}</th>${row.slice(1).map(cell => `<td>${esc(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
       ${ctx.figureOnly ? '' : `<div class="gpi-followups gpi-demo-followups"><div class="gpi-followups-head">${esc(tr('Follow-up questions', '可以继续问'))}</div><div class="gpi-followups-list">${followUps().map(text => `<div class="gpi-followup-row"><span class="gpi-followup-prompt" aria-disabled="true"><span aria-hidden="true">↳</span>${esc(text)}</span></div>`).join('')}</div></div>`}
@@ -649,7 +663,7 @@
   window.EasyICU.guidedPi.declare('demo', {
     messages, chapters, workflow, artifact, previewArtifact, hasArtifact, artifactLabel,
     reviewResources, primaryDocument: () => artifactResource('figure_gallery.json', tr('Figures', '图表')),
-    followUps, resultHtml, figureCaption, governanceHtml, shelfResources,
+    followUps, resultHtml, figureCaption, originalFigureLink, studyReportLink, FIGURE_URL, governanceHtml, shelfResources,
     standardResources: standardRunResources, sourceRunId: SOURCE_RUN_ID,
   });
 })();

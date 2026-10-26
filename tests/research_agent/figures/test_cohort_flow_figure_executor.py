@@ -904,7 +904,7 @@ def test_each_exclusion_gets_a_side_box_and_the_final_stage_stands_out(
         if isinstance(patch, FancyBboxPatch) and patch.get_facecolor()[:3] == (1.0, 1.0, 1.0)
     ]
     assert len(nodes) == 5 and len(side_boxes) == 3
-    assert [patch.get_linewidth() for patch in nodes] == [0.9, 0.9, 0.9, 0.9, 1.4]
+    assert [patch.get_linewidth() for patch in nodes] == [0.6, 0.6, 0.6, 0.6, 1.0]
     _assert_no_text_overlap(_drawn_text_rows(fig, ax))
     plt.close(fig)
 

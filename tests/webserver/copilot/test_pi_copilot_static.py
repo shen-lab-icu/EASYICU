@@ -78,7 +78,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-header.css?v=20261009-header-owner1") < index.index("css/guided-pi-composer-menus.css?v=")
     assert _read("css/guided-pi-header.css").startswith("/* Owner: Guided Copilot conversation header")
     assert "css/guided-pi-idea-source.css?v=20260922-connectors1" in index
-    assert "css/guided-pi-demo.css?v=20260922-demo-rewrite1" in index
+    assert "css/guided-pi-demo.css?v=20261026-fig1" in index
     assert "css/guided-pi-preview.css?v=20261026-lineage1" in index
     assert "css/guided-pi-technical-report.css?v=20260830-technical-report1" in index
     assert "css/guided-pi-analysis-report.css?v=20260916-study-workspace3" in index
@@ -99,10 +99,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
     assert "css/guided-pi-workspace.css?v=20261021-entry-examples1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
-    assert "js/screens-guided-pi-demo.js?v=20261026-walk1" in index
-    assert "js/screens-guided-pi-demo-trace.js?v=20261026-walk1" in index
-    assert "js/screens-guided-pi-demo-walkthrough.js?v=20261026-walk1" in index
-    assert "css/guided-pi-demo-walkthrough.css?v=20261026-walk1" in index
+    assert "js/screens-guided-pi-demo.js?v=20261026-fig1" in index
+    assert "js/screens-guided-pi-demo-trace.js?v=20261026-fig1" in index
+    assert "js/screens-guided-pi-demo-walkthrough.js?v=20261026-fig1" in index
+    assert "css/guided-pi-demo-walkthrough.css?v=20261026-fig1" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
         "js/screens-guided-pi-evidence-preview.js?v=20261022-plain3" in index
@@ -5738,7 +5738,7 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "['manuscript', 'blocked', 'manuscript_withheld_by_design']" in demo
     assert "primaryDocument: () => artifactResource('figure_gallery.json'" in demo
     assert "assets/demo/sofa2-phenotype-mortality.png" in demo
-    assert "followUps, resultHtml, figureCaption, governanceHtml, shelfResources" in demo
+    assert "followUps, resultHtml, figureCaption, originalFigureLink, studyReportLink, FIGURE_URL, governanceHtml, shelfResources" in demo
     # The record says what the run recorded: one plan draft passed, and the
     # answer's numbers come from the result tables (no manuscript numeric check ran).
     assert "计划草案第 1 版通过合同检查：共 6 个步骤" in demo

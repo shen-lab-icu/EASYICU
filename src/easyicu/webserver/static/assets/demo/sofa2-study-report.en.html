@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="easyicu-authority-class" content="descriptive_result_report">
+<meta name="easyicu-source-run" content="run_20260815T061842_5049c6">
+<title>An experimental SOFA-2 Sepsis-3 phenotype and in-hospital mortality among adult ICU stays: a descriptive cohort analysis in MIMIC-IV</title>
+<style>
+:root{--ink:#1f2328;--ink-2:#4a4f57;--ink-3:#6e747d;--rule:#c9cdd3;--accent:#0f4d92;--paper:#fff;--wash:#f4f6f8}
+*{box-sizing:border-box}
+html{background:#eceef1}
+body{margin:0;color:var(--ink);font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,"PingFang SC","Microsoft YaHei",sans-serif}
+article{max-width:820px;margin:28px auto;padding:56px 64px 64px;background:var(--paper);box-shadow:0 1px 3px #0000001a}
+.kicker{color:var(--accent);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+h1{margin:10px 0 14px;font:600 28px/1.25 Georgia,"Times New Roman","Songti SC","SimSun",serif;letter-spacing:-.01em}
+.meta{color:var(--ink-3);font-size:13px}
+.notice{margin:18px 0 26px;padding:10px 14px;border-left:3px solid var(--rule);background:var(--wash);color:var(--ink-2);font-size:13.5px}
+h2{margin:34px 0 10px;padding-top:12px;border-top:1px solid var(--rule);font:600 19px/1.3 Georgia,"Times New Roman","Songti SC","SimSun",serif}
+h3{margin:16px 0 2px;font-size:14px;font-weight:650}
+p{margin:4px 0 10px}
+.summary{margin:0;padding:14px 18px 14px 34px;border:1px solid var(--rule);border-radius:4px}
+.summary li{margin:4px 0}
+sup{font-size:10px;color:var(--accent)}
+code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink-2);overflow-wrap:anywhere}
+figure{margin:20px 0}
+figure img{display:block;width:100%;height:auto}
+figure.flow img{max-width:560px;margin:0 auto}
+figcaption{margin-top:8px;color:var(--ink-2);font-size:13px;line-height:1.55}
+.table-caption{margin:22px 0 6px;font-size:13.5px}
+table.three-line{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums;border-top:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink)}
+.three-line th,.three-line td{padding:6px 10px;text-align:right;white-space:nowrap}
+.three-line th:first-child{text-align:left}
+.three-line thead th{font-weight:600;border-bottom:.75px solid var(--ink)}
+.three-line tbody tr:last-child>*{border-top:.5px solid var(--rule)}
+.three-line tbody th{font-weight:400}
+.table-note{margin-top:6px;color:var(--ink-3);font-size:12.5px}
+.boundary li{margin:6px 0}
+table.trace{width:100%;border-collapse:collapse;font-size:13px}
+.trace th,.trace td{padding:5px 8px;border-bottom:1px solid #e4e7eb;text-align:left;vertical-align:top}
+.trace th{font-weight:500;color:var(--ink-2);white-space:nowrap}
+ol.refs{padding-left:22px;font-size:13px;color:var(--ink-2)}
+ol.refs li{margin:4px 0}
+a{color:var(--accent)}
+@media (max-width:720px){article{margin:0;padding:28px 18px 36px;box-shadow:none}h1{font-size:23px}.three-line th,.three-line td{padding:5px 6px;white-space:normal}}
+@media print{html{background:none}article{margin:0;padding:0;box-shadow:none;max-width:none}h2{break-after:avoid}figure,table{break-inside:avoid}}
+</style>
+</head>
+<body>
+<article>
+<div class="kicker">Descriptive result report · laid out from one registered run</div>
+<h1>An experimental SOFA-2 Sepsis-3 phenotype and in-hospital mortality among adult ICU stays: a descriptive cohort analysis in MIMIC-IV</h1>
+<div class="meta">MIMIC-IV · run_20260815T061842_5049c6 · 2026-08-15</div>
+<p class="notice">This page is not a manuscript. The run’s Writer withheld one under strict evidence enforcement; the page arranges the run’s registered tables and figures and adds no finding of its own.</p>
+<h2>Key results</h2>
+<ul class="summary"><li>Of 94,458 adult ICU stays, 33,997 (36.0%) met the experimental SOFA-2 sepsis phenotype within 24 hours of ICU admission.</li><li>In-hospital mortality was 13.2% (4,480 deaths) with the phenotype and 8.2% (4,986) without it; 10.0% overall.</li><li>Counts and proportions only: unadjusted, with no confidence intervals or hypothesis tests.</li></ul>
+<h2>Methods</h2>
+<h3>Data source</h3><p>MIMIC-IV, a single-centre critical care database<sup>2</sup>, extracted with the EasyICU concept dictionary (concept-dict commit <code>190ab8f69</code>, sofa2-dict commit <code>7f7ba49a2</code>).</p><h3>Study population</h3><p>ICU stays of patients aged ≥ 18 years (94,458 stays). The unit of analysis is the ICU stay; the export carries no patient identifier, so repeat stays of one patient cannot be grouped.</p><h3>Exposure</h3><p>An experimental Sepsis-3 phenotype within hours 0–24 after ICU admission: a rise of ≥ 2 points in the SOFA-2 score around a suspected infection<sup>1</sup>. It substitutes SOFA-2 for the original SOFA and is a sensitivity definition, not the 2016 definition.</p><h3>Outcome</h3><p>In-hospital death, from <code>admissions.hospital_expire_flag</code>.</p><h3>Analysis</h3><p>Stays, share, deaths and in-hospital mortality by phenotype group, each over all stays in the group, reported following STROBE and RECORD<sup>3,4</sup>. The plan specified a descriptive analysis without confidence intervals, tests or effect estimates.</p>
+<h2>Results</h2>
+<figure class="flow"><img src="sofa2-cohort-flow-rerendered.png?v=38afd976" alt=""><figcaption><b>Figure 1</b> Cohort flow, from the registered cohort-flow table <code>cohort_flow_execute_repair</code>.</figcaption></figure>
+<p class="table-caption"><b>Table 1</b> In-hospital mortality by phenotype group</p>
+<table class="three-line"><thead><tr><th scope="col">Group</th><th scope="col">ICU stays, n</th><th scope="col">Share, %</th><th scope="col">Deaths, n</th><th scope="col">In-hospital mortality, %</th></tr></thead><tbody><tr><th scope="row">With the phenotype</th><td>33,997</td><td>36.0</td><td>4,480</td><td>13.2</td></tr><tr><th scope="row">Without the phenotype</th><td>60,461</td><td>64.0</td><td>4,986</td><td>8.2</td></tr><tr><th scope="row">All stays</th><td>94,458</td><td>100.0</td><td>9,466</td><td>10.0</td></tr></tbody></table>
+<p class="table-note">Denominators are all stays in each group; percentages are computed from the counts shown.</p>
+<figure><img src="sofa2-phenotype-mortality-rerendered.png?v=514c737f" alt=""><figcaption><b>Figure 2</b> Share of stays by phenotype (A) and in-hospital mortality by group (B). The dashed line in B is the mortality of all stays. Redrawn from the registered result table.</figcaption></figure>
+<h2>How far the result reads</h2>
+<ul class="boundary"><li><b>Descriptive only.</b> The difference in mortality between the groups is not an effect of the phenotype, and nothing is adjusted for confounding.</li><li><b>Exposure assessed after the start of follow-up.</b> The phenotype is assessed over the first 24 hours, so stays ending in early death had a different opportunity to meet it<sup>5,6</sup>; the plan records this as an open limitation.</li><li><b>No patient identifier.</b> Repeat stays of one patient count as separate stays, so no interval estimate is given.</li></ul>
+<h2>Data and code traceability</h2>
+<p>Run <code>run_20260815T061842_5049c6</code> registered 125 evidence records. The redrawn figures have their own digests; the run’s figures are kept unchanged.</p>
+<table class="trace"><tbody><tr><th scope="row">Result table</th><td><code>table_step_artifact_257971d9f784c410</code></td><td><code>b663b010f57f</code></td></tr><tr><th scope="row">Analysis code</th><td><code>code_analysis_27260fbc62111090</code></td><td><code>58fc0719647c</code></td></tr><tr><th scope="row">Run figure</th><td><code>figure_step_artifact_1c86f17d397e23b3</code></td><td><code>37a29be80f07</code></td></tr><tr><th scope="row">Analysis cohort</th><td><code>cohort</code></td><td><code>38a79eb80ffe</code></td></tr><tr><th scope="row">MIMIC-IV export manifest</th><td><code>export manifest</code></td><td><code>aac68926710f</code></td></tr></tbody></table>
+<h2>Supplementary figure</h2>
+<figure><img src="sofa2-data-quality-rerendered.png?v=a0e791cf" alt=""><figcaption><b>Supplementary Figure S1</b> Data completeness of the analysis variables, from the registered measurement audit <code>table_step_artifact_2edb4f312cc279ab</code>.</figcaption></figure>
+<h2>References</h2>
+<ol class="refs"><li>The Third International Consensus Definitions for Sepsis and Septic Shock (Sepsis-3). <i>JAMA</i>. 2016. <a href="https://pubmed.ncbi.nlm.nih.gov/26903338/">PMID 26903338</a></li><li>MIMIC-IV, a freely accessible electronic health record dataset. <i>Scientific Data</i>. 2023.</li><li>The Strengthening the Reporting of Observational Studies in Epidemiology (STROBE) statement: guidelines for reporting observational studies. <i>Annals of Internal Medicine / BMJ / Lancet (co-published)</i>. 2007. <a href="https://pubmed.ncbi.nlm.nih.gov/17938396/">PMID 17938396</a></li><li>The REporting of studies Conducted using Observational Routinely-collected health Data (RECORD) statement. <i>PLoS Medicine</i>. 2015. <a href="https://pubmed.ncbi.nlm.nih.gov/26440803/">PMID 26440803</a></li><li>Analysis of survival by tumor response and other comparisons of time-to-event by outcome variables. <i>Journal of Clinical Oncology</i>. 1983. <a href="https://pubmed.ncbi.nlm.nih.gov/6668489/">PMID 6668489</a></li><li>Immortal time bias in pharmacoepidemiology. <i>American Journal of Epidemiology</i>. 2008. <a href="https://pubmed.ncbi.nlm.nih.gov/18056625/">PMID 18056625</a></li></ol>
+</article>
+</body>
+</html>

@@ -1618,7 +1618,38 @@
    ")",
    "",
    "import json"
-  ]
+  ],
+  "rerender": {
+   "renderer": "exposure_outcome_distribution_render",
+   "step_id": "04_visualize_exposure_outcome_distribution",
+   "source_table": "table_step_artifact_257971d9f784c410",
+   "source_sha256": "b663b010f57fae01a3550c1c7183698448112795a73adf0054f2ff79ec3b2d37",
+   "png": "sofa2-phenotype-mortality-rerendered.png",
+   "png_sha256": "514c737fdea7c0802bf126bea982e082aab98ac46a983cb131f7f6d4dab99046",
+   "added_empty_columns": [
+    "exposure_interval_cluster_size_square_sum",
+    "outcome_interval_cluster_size_square_sum",
+    "patient_weighted_interval_assumptions"
+   ]
+  },
+  "rerender_supporting": {
+   "cohort_flow": {
+    "renderer": "cohort_flow_figure_executor",
+    "step_id": "05_visualize_cohort_accounting",
+    "source_table": "cohort_flow_execute_repair",
+    "source_sha256": "289589de9ef01c05203e6c86daa82047a5e7685c9d9bc2f5eb6b4e17d5a762e4",
+    "png": "sofa2-cohort-flow-rerendered.png",
+    "png_sha256": "38afd97688cbb4acdbcdc9451b4b51e1f39434380024e56619e37ac1d6e839b5"
+   },
+   "data_quality": {
+    "renderer": "missingness_measurement_figure_executor",
+    "step_id": "06_visualize_data_quality",
+    "source_table": "table_step_artifact_2edb4f312cc279ab",
+    "source_sha256": "c528c6a42bad7babc9b0a21dbd81e67114c2b50b32e25f4b94161878a52c2a05",
+    "png": "sofa2-data-quality-rerendered.png",
+    "png_sha256": "a0e791cf4435e3555e450621b6a4ee3eae56f0d04c9b2c517e73d21beb631887"
+   }
+  }
  },
  "writer": {
   "event": "STRICT evidence enforcement blocked manuscript generation."

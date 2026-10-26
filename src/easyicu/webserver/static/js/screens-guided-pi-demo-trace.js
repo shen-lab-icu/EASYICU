@@ -212,7 +212,7 @@
         <p class="gpi-chain-ids">${digest(tr('cohort', '队列'), trace.cohort.cohort_sha256)}${digest(tr('MIMIC-IV export', 'MIMIC-IV 导出'), trace.cohort.export_manifest_sha256)}</p>`,
         `<button type="button" class="gpi-link" data-gpi-walk="dictionary">${esc(tr('Open the data dictionary', '打开数据字典'))}</button>`);
     }
-    function chainHtml(trace, selection) {
+    function chainHtml(trace, selection, demo) {
       const records = trace.evidence.records;
       const [tableId, codeId, figureId, sourceId, figureCodeId] = trace.evidence.chain;
       const target = selectionKey(selection);
@@ -220,11 +220,15 @@
       let nodes;
       if (target === 'figure') {
         title = tr('Where the figure comes from', '这张图从哪来');
+        const redrawn = trace.evidence.rerender;
         nodes = [
-          chainNode('figure', tr('Figure', '图'), `<p>${esc(tr('The image above is the registered file', '上面这张图就是登记的文件'))} <code>${esc(records[figureId].file)}</code></p><p class="gpi-chain-ids"><code>${esc(figureId)}</code>${digest('sha256', records[figureId].sha256)}</p>`),
+          ...(redrawn ? [chainNode('figure', tr('Figure', '图'), `<p>${esc(tr('The image above is the result table below, drawn by the current figure renderer', '上面这张图由当前绘图程序根据下方结果表绘制'))} <code>${esc(redrawn.renderer)}</code></p><p class="gpi-chain-ids"><code>${esc(redrawn.png)}</code>${digest('sha256', redrawn.png_sha256)}</p>`),
+            tableNode(records[tableId], tableId, null, null, tr('all three rows', '全部三行')),
+            chainNode('figure', tr('Run figure', '运行原图'), `<p>${esc(tr('The run registered its own drawing of the same table', '运行时登记的同一张表的原图'))} <code>${esc(records[figureId].file)}</code></p><p class="gpi-chain-ids"><code>${esc(figureId)}</code>${digest('sha256', records[figureId].sha256)}</p>`, demo.originalFigureLink(esc))]
+            : [chainNode('figure', tr('Figure', '图'), `<p>${esc(tr('The image above is the registered file', '上面这张图就是登记的文件'))} <code>${esc(records[figureId].file)}</code></p><p class="gpi-chain-ids"><code>${esc(figureId)}</code>${digest('sha256', records[figureId].sha256)}</p>`)]),
           tableNode(records[sourceId], sourceId, null, null, tr('data of panel B', 'B 图的数据')),
           codeNode(trace, records[figureCodeId], figureCodeId),
-          tableNode(records[tableId], tableId),
+          ...(redrawn ? [] : [tableNode(records[tableId], tableId)]),
           codeNode(trace, records[codeId], codeId),
           cohortNode(trace),
         ];
@@ -242,23 +246,38 @@
       }
       return `<div class="gpi-chain" aria-live="polite"><h4>${esc(title)}</h4><ol>${nodes.join('')}</ol></div>`;
     }
+    // The run's other two figures, redrawn from their own registered tables.
+    const SUPPORTING = {
+      cohort_flow: ['Cohort flow', '队列流程'],
+      data_quality: ['Data completeness (supplementary)', '数据完整性（补充）'],
+    };
+    function supportingFigures(trace) {
+      const records = trace.evidence.rerender_supporting || {};
+      const figures = Object.keys(SUPPORTING).filter(key => records[key]).map(key => {
+        const record = records[key];
+        const url = `assets/demo/${record.png}?v=${short(record.png_sha256)}`;
+        return `<figure><a href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="${esc(pair(SUPPORTING[key]))}" loading="lazy" decoding="async"></a><figcaption>${esc(pair(SUPPORTING[key]))}</figcaption></figure>`;
+      });
+      return figures.length ? `<div class="gpi-walk-figures">${figures.join('')}</div>` : '';
+    }
     function resultCard(trace, selection, demo) {
       const figureSelected = selectionKey(selection) === 'figure';
       return card('result', tr('Traceable · result evidence', '可追溯 · 结果证据'),
         tr('Click any number or the figure to see where it comes from', '点表格里的任意数字或图，看它从哪来'),
         `<figure class="gpi-run-answer-figure gpi-walk-figure">
           <button type="button" class="gpi-walk-figure-button${figureSelected ? ' is-selected' : ''}" data-gpi-walk="select" data-gpi-walk-target="figure" aria-pressed="${figureSelected}">
-            <img src="assets/demo/sofa2-phenotype-mortality.png?v=20260922-demo2" alt="${esc(tr('Phenotype share and in-hospital mortality by phenotype', '表型占比与各组院内死亡率'))}" decoding="async">
+            <img src="${esc(demo.FIGURE_URL)}" alt="${esc(tr('Phenotype share and in-hospital mortality by phenotype', '表型占比与各组院内死亡率'))}" decoding="async">
           </button>
-          <figcaption>${esc(demo.figureCaption())}</figcaption>
+          <figcaption>${esc(demo.figureCaption())} · ${demo.originalFigureLink(esc)}</figcaption>
         </figure>
+        ${supportingFigures(trace)}
         ${resultTable(trace, selection)}
-        ${chainHtml(trace, selection)}`,
+        ${chainHtml(trace, selection, demo)}`,
         `<span>${esc(tr('Run', '运行'))} <code>${esc(trace.source_run_id)}</code></span><span>${esc(tr(`${trace.evidence.count} evidence records`, `${trace.evidence.count} 条证据`))}</span>`);
     }
 
     // ---- reading the result --------------------------------------------------
-    function boundaryCard(trace) {
+    function boundaryCard(trace, demo) {
       const primary = trace.plan.steps.find(step => step.role === 'primary') || {};
       const open = (primary.limitations || []).map(code => `<li><b>${esc(tr('Open limitation', '未解决的局限'))}</b>${esc(LIMITATIONS[code] ? pair(LIMITATIONS[code]) : code)}</li>`).join('');
       return card('boundary', tr('Traceable · claim boundary', '可追溯 · 结论边界'),
@@ -267,7 +286,7 @@
           <li><b>${esc(tr('Descriptive only', '仅描述性'))}</b>${esc(tr('Counts and proportions; no adjusted estimate, test or confidence interval.', '只有计数和比例，没有调整估计、检验或置信区间。'))}</li>
           ${open}
         </ul>`,
-        `<span>${esc(tr('The plan’s claim ceiling', '来自计划的结论上限'))}</span><code>${esc(primary.claim_ceiling || '')}</code>`);
+        `<span>${esc(tr('The plan’s claim ceiling', '来自计划的结论上限'))}</span><code>${esc(primary.claim_ceiling || '')}</code>${demo ? demo.studyReportLink(esc) : ''}`);
     }
     function followUpsCard(questions, asked) {
       const rows = questions.map((text, index) => `<li><button type="button" class="gpi-walk-followup${asked === index ? ' is-selected' : ''}" data-gpi-walk="followup" data-gpi-walk-index="${index}" aria-pressed="${asked === index}"><span aria-hidden="true">↳</span>${esc(text)}</button>

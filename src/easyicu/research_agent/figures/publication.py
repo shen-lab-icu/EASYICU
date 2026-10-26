@@ -328,7 +328,7 @@ class FigureContract(BaseModel):
 
 
 PALETTE_CLINICAL: Dict[str, str] = {
-    "baseline": "#272727",
+    "baseline": "#1F2328",
     "blue": "#0F4D92",
     "blue_soft": "#B4C0E4",
     "teal": "#42949E",
@@ -343,9 +343,18 @@ PALETTE_CLINICAL: Dict[str, str] = {
     "orange_soft": "#F7DFC0",
     "red": "#B64342",
     "red_soft": "#F6CFCB",
-    "neutral": "#8F8F8F",
-    "neutral_light": "#D8D8D8",
-    "band": "#F3F0EA",
+    # Cool greys sit with the blue accent; ``neutral`` is also the colour of
+    # a reference or absent group, so it stays mid-grey rather than faint.
+    "neutral": "#8C929B",
+    "neutral_light": "#E2E5E9",
+    "band": "#EEF1F4",
+    # Text and structure. Values and titles use ``baseline``; axis labels and
+    # reference notes ``ink_2``; ticks, counts and secondary notes ``ink_3``;
+    # spines and tick marks ``rule``; the empty part of a bar ``track``.
+    "ink_2": "#4A4F57",
+    "ink_3": "#6E747D",
+    "rule": "#B9BEC6",
+    "track": "#EEF0F3",
 }
 
 #: The colours a series may be drawn in. A fill twin is required for each.
@@ -732,41 +741,87 @@ def apply_publication_style(
     """
     import matplotlib.pyplot as plt
 
+    colours = PublicationPalette(palette or PALETTE_CLINICAL)
+    ink = colours.get("baseline", PALETTE_CLINICAL["baseline"])
+    ink_2 = colours.get("ink_2", PALETTE_CLINICAL["ink_2"])
+    rule = colours.get("rule", PALETTE_CLINICAL["rule"])
     plt.rcParams.update({
-        "font.family": "sans-serif",
-        # Prefer a journal-compatible Unicode sans when one is installed, then
-        # fall back to the ordinary Latin families.  A Latin-only first choice
-        # makes valid Planner-owned Chinese labels rasterise as tofu boxes even
-        # though the editable SVG still carries the original text.
-        "font.sans-serif": [
-            "Noto Sans CJK SC",
-            "Source Han Sans SC",
-            "Arial Unicode MS",
-            "PingFang SC",
-            "Hiragino Sans GB",
-            "Heiti SC",
-            "Microsoft YaHei",
-            "SimHei",
-            "Arial",
-            "DejaVu Sans",
-            "Liberation Sans",
-        ],
+        # An explicit family list lets matplotlib fall back glyph by glyph:
+        # Latin text sets in the journal sans while a Planner-owned Chinese
+        # label still finds a CJK face instead of rasterising as tofu boxes.
+        "font.family": _installed_font_families(),
         "svg.fonttype": "none",
         "pdf.fonttype": 42,
         "font.size": font_size,
-        "axes.labelsize": font_size + 0.5,
-        "axes.titlesize": font_size + 1.0,
+        "text.color": ink,
+        "axes.labelsize": font_size,
+        "axes.labelcolor": ink_2,
+        "axes.titlesize": font_size + 0.5,
+        "axes.titleweight": "bold",
+        "axes.titlelocation": "left",
+        "axes.titlepad": 5.0,
+        "axes.titlecolor": ink,
         "xtick.labelsize": max(font_size - 0.5, 5.5),
         "ytick.labelsize": max(font_size - 0.5, 5.5),
-        "axes.linewidth": axes_linewidth,
+        "xtick.color": rule,
+        "ytick.color": rule,
+        "xtick.labelcolor": ink_2,
+        "ytick.labelcolor": ink,
+        "xtick.major.size": 2.5,
+        "ytick.major.size": 2.5,
+        "xtick.major.width": min(axes_linewidth, 0.6),
+        "ytick.major.width": min(axes_linewidth, 0.6),
+        "xtick.major.pad": 2.0,
+        "ytick.major.pad": 2.0,
+        "axes.linewidth": min(axes_linewidth, 0.6),
+        "axes.edgecolor": rule,
         "axes.spines.top": False,
         "axes.spines.right": False,
+        # A grid a renderer asks for sits behind its data, never over a bar.
+        "axes.axisbelow": True,
+        "grid.color": colours.get("neutral_light", PALETTE_CLINICAL["neutral_light"]),
+        "grid.linewidth": 0.5,
+        "lines.linewidth": 1.2,
+        "lines.markersize": 4.0,
+        "patch.linewidth": 0.0,
+        "errorbar.capsize": 0.0,
         "legend.frameon": False,
+        "legend.fontsize": font_size,
+        "legend.handlelength": 1.4,
+        "legend.borderaxespad": 0.3,
         "figure.facecolor": "white",
         "savefig.facecolor": "white",
     })
     _ = fig
-    return PublicationPalette(palette or PALETTE_CLINICAL)
+    return colours
+
+
+#: Journal sans faces first, then CJK faces for glyph-by-glyph fallback.
+_FONT_PREFERENCE: tuple[str, ...] = (
+    "Arial",
+    "Helvetica",
+    "Liberation Sans",
+    "Noto Sans",
+    "Noto Sans CJK SC",
+    "Source Han Sans SC",
+    "Arial Unicode MS",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Heiti SC",
+    "Microsoft YaHei",
+    "SimHei",
+    "DejaVu Sans",
+)
+
+
+def _installed_font_families() -> list[str]:
+    """The preferred families this host has, so no lookup logs a miss."""
+
+    from matplotlib import font_manager
+
+    installed = {entry.name for entry in font_manager.fontManager.ttflist}
+    families = [name for name in _FONT_PREFERENCE if name in installed]
+    return families or ["sans-serif"]
 
 
 def add_panel_label(
@@ -775,7 +830,7 @@ def add_panel_label(
     *,
     x: float = -0.03,
     y: float = 1.02,
-    fontsize: float = 11.0,
+    fontsize: float = 9.0,
     color: str = PALETTE_CLINICAL["baseline"],
 ) -> None:
     """Add a compact Nature-style panel label to a matplotlib Axes."""

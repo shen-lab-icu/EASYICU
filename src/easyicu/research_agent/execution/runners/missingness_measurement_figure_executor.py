@@ -536,6 +536,7 @@ def measurement_missingness_figure_executor_code(
             step_id={step.step_id!r},
             figure_product={product!r},
             input_key={input_key!r},
+            display_labels={dict(getattr(plan, 'display_labels', {}) or {})!r},
         )
         """
     ).strip()
@@ -909,6 +910,7 @@ def run_measurement_missingness_figure(
     step_id: str,
     figure_product: str,
     input_key: str = MEASUREMENT_MISSINGNESS_FIGURE_INPUT,
+    display_labels: Mapping[str, str] | None = None,
 ) -> Mapping[str, Any]:
     """Render one complete typed missingness audit without model-authored lineage."""
 
@@ -916,6 +918,12 @@ def run_measurement_missingness_figure(
         raise ValueError("unsafe or malformed figure product id")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    display_labels = figure_language_labels(
+        display_labels,
+        load_bound_variable_descriptions(
+            run_dir=Path(run_dir), resolved_inputs=resolved_inputs
+        ),
+    )
     audit_frame, audit_binding, audit_table = _load_single_measurement_binding(
         run_dir=Path(run_dir),
         resolved_inputs=resolved_inputs,
@@ -944,26 +952,28 @@ def run_measurement_missingness_figure(
     ]
     display = display.sort_values("_missing_pct", ascending=True)
     variables = [_text(value) for value in display["variable"]]
+    # The Planner's name for each variable, else the identifier in plain words.
     labels = [
-        _reader_label(_text(label) or variable)
+        display_label(variable, display_labels)
         + (" (conditional)" if per_variable[variable]["conditional"] else "")
-        for variable, label in zip(variables, display["label"])
+        for variable in variables
     ]
     missing_pct = [per_variable[name]["missing_pct"] for name in variables]
     available_pct = [per_variable[name]["available_pct"] for name in variables]
     not_applicable_pct = [
         per_variable[name]["not_applicable_pct"] for name in variables
     ]
-    height_mm = max(82.0, 31.0 + 7.0 * len(variables))
+    height_mm = max(58.0, 30.0 + 6.0 * len(variables))
     panel_template = measurement_availability_figure_panels(input_key)[0]
     fig, ax = plt.subplots(figsize=(183 / 25.4, height_mm / 25.4))
     positions = list(range(len(variables)))
+    bar_height = 0.5
     ax.barh(
         positions,
         available_pct,
-        color=palette["blue_soft"],
+        color=palette["blue"],
         label="Value available",
-        height=0.62,
+        height=bar_height,
     )
     ax.barh(
         positions,
@@ -971,30 +981,36 @@ def run_measurement_missingness_figure(
         left=available_pct,
         color=palette["orange"],
         label="Missing among applicable stays",
-        height=0.62,
+        height=bar_height,
     )
     ax.barh(
         positions,
         not_applicable_pct,
         left=[available + missing for available, missing in zip(available_pct, missing_pct)],
-        color=palette["neutral_light"],
+        color=palette["track"],
         label="Not applicable",
-        height=0.62,
+        height=bar_height,
     )
     ax.set_yticks(positions)
     ax.set_yticklabels(labels)
+    ax.tick_params(axis="y", length=0)
+    ax.spines["left"].set_visible(False)
     ax.set_xlim(0, 100)
+    ax.set_ylim(len(positions) - 0.5, -0.7)
     ax.set_xlabel("Share of the declared cohort (%)")
-    ax.set_title("Data availability and applicability", loc="left", pad=4)
-    ax.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
+    ax.set_title("Data availability and applicability", pad=16)
     ax.legend(
         frameon=False,
-        loc="lower center",
-        bbox_to_anchor=(0.58, 1.10),
+        loc="lower left",
+        bbox_to_anchor=(0.0, 1.0),
         ncol=3,
-        fontsize=6.2,
-        columnspacing=1.2,
+        fontsize=6.3,
+        columnspacing=1.4,
+        handlelength=0.9,
+        handleheight=0.9,
+        borderaxespad=0.1,
     )
+    # Each row's count reads in its own column to the right of the scale.
     for y, name in zip(positions, variables):
         entry = per_variable[name]
         if entry["conditional"]:
@@ -1004,22 +1020,33 @@ def run_measurement_missingness_figure(
             )
         else:
             annotation = f"{entry['missing']:,}/{entry['eligible']:,} missing"
-        ax.text(
-            98.0,
-            y,
+        ax.annotate(
             annotation,
+            xy=(1.0, y),
+            xycoords=("axes fraction", "data"),
+            xytext=(6, 0),
+            textcoords="offset points",
             va="center",
-            ha="right",
-            fontsize=5.9,
-            color=palette["blue"],
+            ha="left",
+            fontsize=6.3,
+            color=palette["ink_3"],
         )
     if any(entry["conditional"] for entry in per_variable.values()):
         ax.set_xlabel(
             "Share of the declared cohort (%)\n"
             "Conditional event times are applicable only when the event occurs"
         )
-    add_panel_label(ax, "a", x=-0.20, y=1.02)
-    fig.subplots_adjust(left=0.24, right=0.96, bottom=0.20, top=0.76)
+    add_panel_label(ax, "a", x=-0.02, y=1.0)
+    fig.subplots_adjust(left=0.2, right=0.8, bottom=0.24, top=0.8)
+    canvas = fig.canvas.get_renderer()
+    widest = max(label.get_window_extent(canvas).width for label in ax.get_yticklabels())
+    fig.subplots_adjust(left=max(0.12, (widest + fig.dpi * 0.12) / fig.bbox.width))
+    # The letter sits on the title's baseline at the figure's edge.
+    box = ax.get_window_extent(canvas)
+    title_bottom = ax.title.get_window_extent(canvas).y0
+    ax.texts[-1].set_position(
+        ((0.04 * fig.dpi - box.x0) / box.width, (title_bottom - box.y0) / box.height)
+    )
 
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
