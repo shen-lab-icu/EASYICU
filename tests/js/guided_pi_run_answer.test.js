@@ -258,6 +258,31 @@ const outcome = modules.require('runOutcome').create({
     ]),
   ] };
   const missingOutcomes = await reread(plan);
+  assert.doesNotMatch(missingOutcomes.html, /没有记录分组/, 'no unplaced records, no sentence');
+  // 10 stays, 8 with a recorded group (5 in A, 3 in B), 2 without one: the
+  // shares stay of the 8, and the 2 are named rather than silently dropped.
+  payloads['result_tables.json'] = { tables: [
+    table('flow.csv', ['n_before', 'n_remaining'], [[10, 10]]),
+    table('distribution.csv', ['row_role', 'exposure_level', 'n_rows', 'exposure_denominator', 'exposure_pct',
+      'outcome_events', 'outcome_denominator', 'outcome_rate_pct', 'outcome_missing_n', 'missing_exposure_excluded_n'], [
+      ['exposure_level', 0, 5, 8, 62.5, 1, 5, 20, 0, 2],
+      ['exposure_level', 1, 3, 8, 37.5, 1, 3, 100 / 3, 0, 2],
+      ['overall', '', 8, 8, 100, 2, 8, 25, 0, 2],
+    ]),
+  ] };
+  const unplacedGroups = await reread(plan);
+  assert.match(unplacedGroups.html,
+    /在 MIMIC-IV 的 8 个 ICU 入住记录中，[^。]*有 3 个（37\.50%）。<\/p><p>另有 2 个 ICU 入住记录没有记录分组，未计入以上各组。/);
+  assert.doesNotMatch(unplacedGroups.html, /结局缺失/);
+  payloads['result_tables.json'] = { tables: [
+    table('flow.csv', ['n_before', 'n_remaining'], [[12, 10]]),
+    table('distribution.csv', ['row_role', 'exposure_level', 'n_rows', 'exposure_denominator', 'exposure_pct',
+      'outcome_events', 'outcome_denominator', 'outcome_rate_pct', 'outcome_missing_n'], [
+      ['exposure_level', 0, 4, 8, 50, 1, 2, 50, 2],
+      ['exposure_level', 1, 4, 8, 50, 2, 3, 200 / 3, 1],
+      ['overall', '', 8, 8, 100, 3, 5, 60, 3],
+    ]),
+  ] };
   assert.match(missingOutcomes.html, /2\/3/);
   assert.match(missingOutcomes.html, /1\/2/);
   assert.match(missingOutcomes.html, /在 MIMIC-IV 的 8 个 ICU 入住记录中/);
