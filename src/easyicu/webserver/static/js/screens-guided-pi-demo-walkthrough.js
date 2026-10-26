@@ -143,7 +143,7 @@
   // ---- rendering -------------------------------------------------------
   function cards() {
     const deps = walk.deps;
-    return modules().require('demoTrace').create({ tr, icon: deps.iconHtml, button: deps.button });
+    return modules().require('demoTrace').create({ tr, icon: deps.iconHtml, button: deps.button, durationText: deps.durationText });
   }
   function resource(name) {
     const owner = demo();

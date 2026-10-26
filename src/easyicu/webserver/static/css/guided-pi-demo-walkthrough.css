@@ -30,6 +30,8 @@
 .gpi-trace-foot .gpi-resource-link{min-height:24px}
 .gpi-trace-chip{display:inline-block;margin-right:6px;padding:0 6px;border-radius:4px;background:var(--wash);color:var(--ink-3);font-size:11px;line-height:18px}
 
+.gpi-walk-timing{margin:0 0 10px;color:var(--ink-2);font-size:13px;font-variant-numeric:tabular-nums}
+
 /* Data dictionary tree. */
 .gpi-dict-terms,.gpi-dict-tree,.gpi-dict-tree ul,.gpi-dict-sources{margin:0;padding:0;list-style:none}
 .gpi-dict-term{border-top:1px solid var(--line)}
@@ -46,7 +48,11 @@ summary.gpi-dict-head{cursor:pointer}
 .gpi-dict-sources{margin:0 0 4px 2px}
 .gpi-dict-source{display:flex;align-items:flex-start;gap:6px;padding:1px 0;color:var(--ink-3);font-family:var(--mono);font-size:11.5px;line-height:1.5;overflow-wrap:anywhere}
 .gpi-dict-source svg{flex:0 0 auto;margin-top:2px;color:var(--teal,var(--accent))}
-.gpi-dict-none{margin:0 0 4px;color:var(--ink-4);font-size:11.5px}
+.gpi-dict-none{color:var(--ink-4);font-size:11.5px}
+.gpi-dict-leaf.is-unread .gpi-dict-head,.gpi-dict-leaf.is-unread .gpi-dict-head code{color:var(--ink-4)}
+.gpi-dict-ids{min-width:0}
+.gpi-dict-ids summary{cursor:pointer;min-height:24px}
+.gpi-dict-ids>span{display:block;padding:2px 0 4px}
 
 /* Plan literature. */
 .gpi-trace-papers{margin:0;padding-left:18px;font-size:13px}
