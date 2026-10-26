@@ -132,13 +132,16 @@ def _study(question: str, check: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def test_an_in_scope_reading_is_not_refused_on_eicu_and_a_survival_one_is() -> None:
+def test_an_in_scope_reading_goes_on_and_a_survival_one_needs_a_censoring_clock() -> None:
     discharge = _check(_DISCHARGE, "association_study", "与生存出院有关吗")
     chosen = researcher_choice(discharge, _DISCHARGE, "按关联研究做（暴露与结局是否相关、相关多强）")
     hazard = _check(_HAZARD, "survival", "死亡风险比（HR）")
 
     assert study_family_database_gap(_study(_DISCHARGE, chosen), question=_DISCHARGE, database="eicu") is None
-    gap = study_family_database_gap(_study(_HAZARD, hazard), question=_HAZARD, database="eicu")
+    # eICU censors in-hospital death at hospital discharge; HiRID records no
+    # complete censoring clock, so the same survival reading stops there.
+    assert study_family_database_gap(_study(_HAZARD, hazard), question=_HAZARD, database="eicu") is None
+    gap = study_family_database_gap(_study(_HAZARD, hazard), question=_HAZARD, database="hirid")
     assert gap is not None and (gap["code"], gap["family"]) == (STUDY_FAMILY_DATABASE_OUT_OF_SCOPE, "survival")
 
 

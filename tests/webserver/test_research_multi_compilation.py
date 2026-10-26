@@ -18,7 +18,8 @@ def source():
     return CompletedResult("source", "a" * 64, plan, context, frozenset(), ())
 
 
-@pytest.mark.parametrize("database", ["miiv", "sic", "hirid"])
+# Databases that record age in years; banded sources are covered below.
+@pytest.mark.parametrize("database", ["miiv", "eicu", "mimic"])
 def test_recompilation_uses_target_metadata_and_retains_scientific_coordinates(database):
     original = source()
     target = original.context.model_copy(deep=True)
@@ -64,10 +65,11 @@ def test_template_cannot_silently_omit_a_reviewed_additional_step():
         compile_same_study(replace(original, plan=changed), original.context)
 
 
-def test_aumc_binned_covariate_is_recompiled_not_treated_as_measured_years():
+@pytest.mark.parametrize("database", ["aumc", "sic", "hirid"])
+def test_a_binned_covariate_is_recompiled_not_treated_as_measured_years(database):
     original = source()
     target = original.context.model_copy(deep=True)
-    target.cohort.database = "aumc"
+    target.cohort.database = database
     context, plan, _ = compile_same_study(original, target)
     primary = next(step for step in plan.steps if step.planned_analysis_role == "primary")
     age = next(term for term in primary.model_requirements[0].model_terms if term.name == "age")
@@ -82,8 +84,8 @@ def test_fu1_owner_uses_the_same_real_compiler_without_source_observations(monke
     original = source()
     monkeypatch.setattr(module, "select_source", lambda _: ({}, "a" * 64))
     owner = module.RegisteredDatabaseOwner()
-    decision = owner.decide(original, database="sic")
+    decision = owner.decide(original, database="eicu")
     context, plan = owner.dry_compile(original, decision=decision)
-    assert context.cohort.database == "sic" and context.cohort.n_stays == 0
+    assert context.cohort.database == "eicu" and context.cohort.n_stays == 0
     assert "synthetic_target_identity" not in context.cohort.provenance
     require_same_design(plan, original.plan)
