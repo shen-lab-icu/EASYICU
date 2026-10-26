@@ -37,15 +37,19 @@ def test_append_kind_runs_from_sealed_source_to_result(tmp_path, kind, monkeypat
     source = seal_completed_source(wrapper=wrapper, run_dir=run, study={"id": "study"},
                                    baseline=baseline.model_dump(mode="json"), prepared_package_binding={"synthetic": True})
     before = {str(path.relative_to(wrapper)): path.read_bytes() for path in wrapper.rglob("*") if path.is_file()}
+    attention = []
     service = SimpleNamespace(_research_run_row=lambda *args: {"project_dir": str(wrapper), "study_id": "study"},
                               rebind_session=lambda *args, **kwargs: None,
-        host_action_session=lambda *args, **kwargs: None)
+        host_action_session=lambda *args, **kwargs: None,
+        replay_store=SimpleNamespace(attention=SimpleNamespace(record=attention.extend)))
     monkeypatch.setattr(route, "get_pi_copilot_service", lambda: service)
     monkeypatch.setattr(study_contexts, "get_context", lambda _: {"id": "study"})
     response = route.post_append_run("conversation", route.AppendRequest(
         project_id="project", run_id="source", kind=kind, expected_source_sha256=source.digest))
     child = append_run_for_id(response["run_id"])
     assert agent_pipeline_runs.pending_review(child.checkpoint.run_id)["is_append_run"]
+    assert [(row.run_id, row.kind, row.reason_code) for row in attention] == [
+        (child.checkpoint.run_id, "needs_review", "human_plan_review_required")]
     assert child.plan.steps and not ({s.step_id for s in child.plan.steps} & {s.step_id for s in source_plan.steps})
     assert len(child.plan.steps) == {"sensitivity": 1, "exposure": 3, "subgroup": 1, "article": 2}[kind]
     widened = child.plan.model_copy(deep=True, update={"steps": [*child.plan.steps, addition()]})

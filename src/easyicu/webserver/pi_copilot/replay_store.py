@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -15,6 +16,7 @@ from .contracts import PiCopilotError, utc_now
 from .projections import project_pi_replay_event
 
 from easyicu.webserver import state_paths
+from easyicu.webserver.attention_store import AttentionStore, AttentionUnavailable
 
 SCHEMA_VERSION = "easyicu.pi-conversation-replay/1"
 MAX_REPLAY_BYTES = 8 * 1024 * 1024
@@ -40,6 +42,7 @@ class PiConversationReplayStore:
             else state_paths.state_root() / "pi-copilot-replay"
         )
         self._lock = threading.RLock()
+        self.attention = AttentionStore(self.root.with_name(f"{self.root.name}.attention.sqlite3"))
 
     def _path(self, session_id: str) -> Path:
         identity = hashlib.sha256(str(session_id).encode("utf-8")).hexdigest()
@@ -134,6 +137,12 @@ class PiConversationReplayStore:
                 os.fsync(handle.fileno())
             tmp.chmod(0o600)
             tmp.replace(self._path(str(payload["session_id"])))
+            try:
+                self.attention.observe_replay(payload)
+            except AttentionUnavailable:
+                # The source receipt already committed. GET reconciles it if
+                # attention delivery was interrupted; never fail the study.
+                logging.getLogger(__name__).error("attention_store_unavailable")
         finally:
             tmp.unlink(missing_ok=True)
 

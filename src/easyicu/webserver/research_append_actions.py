@@ -6,6 +6,7 @@ from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.planning.family_spec.baseline_association_template import LABELS, compile_result_append
 from . import state_paths, study_contexts
 from .agent_review_recovery import _locked, _write
+from .attention_service import publish_append_review
 from .research_append_run import append_run_for_id, propose_append_run
 from .research_append_history import resolve_result_source
 from .research_append_source import read_json, registered_source_changed
@@ -66,4 +67,5 @@ def propose_for_conversation(service, *, session_id, project_id, run_id, kind, e
                                        study=study, registered_source_changed=registered_source_changed(source, study), predecessor=predecessor)
             _write(receipt, {"run_id": child.checkpoint.run_id})
     service.rebind_session(session_id, project_id=project_id)
+    publish_append_review(service, project_id=project_id, session_id=session_id, checkpoint=child.checkpoint)
     return dict(run_id=child.checkpoint.run_id, study_id=study["id"], human_review_pending=child.checkpoint.state == "pending")
