@@ -41,6 +41,18 @@
     } catch (error) {}
   }
 
+  // Opens a project the rail lists, exactly as picking its row does (search,
+  // attention). False when the rail does not list it.
+  function openListedProject(projectId) {
+    const id = String(projectId || '').trim();
+    if (!id || typeof document === 'undefined') return false;
+    const row = Array.from(document.querySelectorAll('.gd-sess[data-project-id]'))
+      .find(node => node.dataset.projectId === id);
+    if (!row) return false;
+    row.click();
+    return true;
+  }
+
   async function prepare(options) {
     const {
       state, api, projectId, connectionReady, loadWorkflow,
@@ -91,6 +103,6 @@
   }
 
   window.EasyICU.guidedPi.declare('project', {
-    prepare, requestedProjectId, requestedSessionId, syncLocation,
+    prepare, requestedProjectId, requestedSessionId, syncLocation, openListedProject,
   });
 })();

@@ -17,7 +17,18 @@ const ITEMS = [
   { project_id: 'p2', conversation_id: 'c7', run_id: 'r3', kind: 'failed', reason_code: 'run_failed', sequence: 43, timestamp: '2026-10-26T12:02:00Z' },
 ];
 
-function harness({ visible = true, bridge = null } = {}) {
+// A project rail row as screens-guided-projects.js renders it.
+function railRow(projectId, markHtml = '') {
+  const row = { dataset: { projectId }, mark: markHtml, inserted: [] };
+  row.querySelector = selector => {
+    if (selector === '.gpi-attention-mark') return row.mark ? { remove: () => { row.mark = ''; } } : null;
+    if (selector === '.ss-time') return { insertAdjacentHTML: (where, html) => { row.inserted.push([where, html]); row.mark = html; } };
+    return null;
+  };
+  return row;
+}
+
+function harness({ visible = true, bridge = null, rail = [] } = {}) {
   const calls = [];
   const declared = {};
   const store = new Map();
@@ -25,14 +36,23 @@ function harness({ visible = true, bridge = null } = {}) {
     EU_LANG: 'zh',
     crypto: { randomUUID: () => '0b1c2d3e-0000-4000-8000-000000000000' },
     localStorage: { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, String(value)) },
-    EasyICU: { guidedPi: { declare: (name, api) => { declared[name] = api; }, optional: () => null } },
+    EasyICU: { guidedPi: {
+      declare: (name, api) => { declared[name] = api; },
+      optional: name => name === 'project' ? {
+        syncLocation: (...args) => calls.push(['location', ...args]),
+        openListedProject: id => { calls.push(['project', id]); return true; },
+      } : null,
+    } },
     EU_API: {
       loadAttention: async params => { calls.push(['feed', { ...params }]); return { items: params.after ? [] : ITEMS, next_after: 43, has_more: false, unacknowledged_count: 3 }; },
       acknowledgeAttention: async body => { calls.push(['ack', { ...body, sequences: [...body.sequences] }]); return { acknowledged: [...body.sequences] }; },
     },
     easyicuAttentionBridge: bridge,
   };
-  const document = { title: 'EasyICU', visibilityState: visible ? 'visible' : 'hidden', addEventListener() {} };
+  const document = {
+    title: 'EasyICU', visibilityState: visible ? 'visible' : 'hidden', addEventListener() {},
+    querySelectorAll: selector => selector === '.gd-sess[data-project-id]' ? rail : [],
+  };
   const intervals = [];
   const context = vm.createContext({ window, document, setInterval: fn => { intervals.push(fn); return 1; } });
   for (const file of ['html-escape.js', 'screens-guided-pi-attention.js']) {
@@ -92,4 +112,26 @@ test('a desktop bridge receives each new item once, then the count', async () =>
   assert.equal(store.get('easyicu.attention.published'), '43');
   await attention.poll();
   assert.deepEqual(published, [41, 42, 43]);
+});
+
+test('the project rail keeps its marks current between renders', async () => {
+  const stale = railRow('p1', '<i class="gpi-attention-mark is-completed"></i>');
+  const other = railRow('p2');
+  const quiet = railRow('p3');
+  const { bind } = harness({ rail: [stale, other, quiet] });
+  bind('');
+  await settle();
+  assert.match(stale.mark, /is-needs_review/);
+  assert.deepEqual(other.inserted.map(row => row[0]), ['beforebegin']);
+  assert.match(other.mark, /is-failed/);
+  assert.equal(quiet.mark, '');
+});
+
+test('opening an item in another project goes through the project owner', async () => {
+  const { attention, calls, bind } = harness();
+  bind('');
+  await settle();
+  await attention.open({ project_id: 'p2', conversation_id: 'c7' });
+  assert.deepEqual(calls.filter(row => row[0] === 'location' || row[0] === 'project').map(row => [...row]),
+    [['location', 'p2', 'c7'], ['project', 'p2']]);
 });

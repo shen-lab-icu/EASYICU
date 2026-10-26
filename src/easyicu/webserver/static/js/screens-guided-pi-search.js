@@ -1,10 +1,9 @@
 /* Owner: search across this instance's projects, conversations, runs and files.
    The host's /api/search owns the index, its bounds and what is searchable;
    this file shows the hits as plain text and opens them through the owners
-   that already open a project (EU_GUIDED_CONTEXT.openProject), a conversation
-   (the rail's open, then the message it matched) and a Drive file (the rail's
-   material button). Search is navigation only: it grants nothing and starts
-   nothing. */
+   that already open a project (the rail's row), a conversation (the rail's
+   open, then the message it matched) and a Drive file (the rail's material
+   button). Search is navigation only: it grants nothing and starts nothing. */
 (function () {
   'use strict';
   const { esc } = window.EU_HTML;
@@ -175,8 +174,7 @@
       // project's conversations load.
       const projectOwner = window.EasyICU.guidedPi.optional('project');
       if (projectOwner && projectOwner.syncLocation) projectOwner.syncLocation(projectId, sessionId);
-      const guided = window.EU_GUIDED_CONTEXT;
-      if (!guided || !guided.openProject || !(await guided.openProject(projectId))) return;
+      if (!projectOwner || !projectOwner.openListedProject || !projectOwner.openListedProject(projectId)) return;
     }
     if (target.kind === 'file') openDriveFile(target);
     else if (sessionId && target.message_id) revealMessage(String(target.message_id));
