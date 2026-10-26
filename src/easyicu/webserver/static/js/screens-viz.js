@@ -215,6 +215,9 @@
   // badge; a public demo or a synthetic test source says so on its row.
   function sourceKind(s) {
     if (s && s.source_kind === 'synthetic') return { kind: 'synthetic', label: t('Synthetic test data', '合成测试数据') };
+    if (s && s.source_kind) return s.source_kind === 'public_demo'
+      ? { kind: 'demo', label: t('Public demo', '公开 Demo') } : { kind: 'own', label: '' };
+    // Older registries have no host-decided kind: retain their demo fallbacks.
     const names = window.EU_DATABASE_NAMES;
     const demos = window.EU_OFFICIAL_DEMO_SOURCES;
     const officialDemo = s && demos && typeof demos.registeredSources === 'function'

@@ -367,6 +367,11 @@ def load_registry() -> Dict[str, Any]:
         by_path.values(),
         key=lambda s: (not s.get("ok"), str(s.get("label") or "").lower()),
     )
+    for source in sources:
+        source["source_kind"] = (
+            "synthetic" if source.get("source_kind") == "synthetic"
+            else "public_demo" if is_demo_source(source) else "own"
+        )
     valid_paths = [str(s["path"]) for s in sources if s.get("ok")]
     active_path = (
         _norm_path(raw.get("active_path") or "") if raw.get("active_path") else None
@@ -401,10 +406,27 @@ def load_registry() -> Dict[str, Any]:
     return result
 
 
-def is_official_demo_source(source: Mapping[str, Any]) -> bool:
-    """Use the same official-demo identity in offers and source counts."""
+def _receipt_demo_release(source: Mapping[str, Any]) -> Any:
+    """The allowlisted release a stored receipt names, with its pinned digest."""
     from easyicu.webserver import demo_sources
 
+    source_id = source.get("source_id")
+    if source_id not in demo_sources.allowed_source_ids():
+        return None
+    spec = demo_sources.get_source(source_id)
+    return spec if not spec.archive_sha256 or source.get("archive_sha256") == spec.archive_sha256 else None
+
+
+def is_official_demo_source(source: Mapping[str, Any]) -> bool:
+    """Recognize the stored allowlisted release and its pinned archive digest.
+
+    Only legacy rows without a stored release identity fall back to the label;
+    a title match cannot override an unknown release or a mismatched digest.
+    """
+    from easyicu.webserver import demo_sources
+
+    if "source_id" in source or "archive_sha256" in source:
+        return _receipt_demo_release(source) is not None
     label = str(source.get("label") or "").strip().casefold()
     return any(
         label == f"{spec.title} v{spec.version}".casefold()
@@ -414,7 +436,7 @@ def is_official_demo_source(source: Mapping[str, Any]) -> bool:
 
 
 def is_demo_source(source: Mapping[str, Any]) -> bool:
-    """A profiled demo or a legacy official demo with a full loader key."""
+    """A synthetic/profiled demo or an official demo with a full loader key."""
     from easyicu.databases.profiles import get_database_profile
 
     if source.get("source_kind") == "synthetic" or is_official_demo_source(source):
@@ -436,7 +458,10 @@ def source_reader_label(source: Mapping[str, Any]) -> str:
     if source.get("source_kind") == "synthetic":
         return f"Synthetic {profile.display_name} — test data"
     if profile.is_public and is_official_demo_source(source):
-        return str(source.get("label") or "").strip()
+        # A receipt names the release, so a renamed demo still reads as it;
+        # a legacy row is recognised by its release title, which it keeps.
+        release = _receipt_demo_release(source)
+        return f"{release.title} v{release.version}" if release is not None else str(source.get("label") or "").strip()
     if profile.reference_release:
         return f"{profile.display_name} v{profile.reference_release}"
     return profile.display_name
@@ -686,6 +711,7 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
                     "registered_at": item.get("registered_at")
                     or current.get("registered_at"),
                     **_registration_fields(current),
+                    **({"source_kind": "synthetic"} if current.get("source_kind") == "synthetic" else {}),
                 }
             )
             updated = True
@@ -696,6 +722,7 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
                     "label": item.get("label"),
                     "registered_at": item.get("registered_at"),
                     **_registration_fields(item),
+                    **({"source_kind": "synthetic"} if item.get("source_kind") == "synthetic" else {}),
                 }
             )
     if not updated:
@@ -705,6 +732,7 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
                 "label": clean_label,
                 "registered_at": current.get("registered_at") or _now(),
                 **_registration_fields(current),
+                **({"source_kind": "synthetic"} if current.get("source_kind") == "synthetic" else {}),
             }
         )
 
