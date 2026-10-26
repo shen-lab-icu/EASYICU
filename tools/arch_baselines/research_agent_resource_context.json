@@ -1,8 +1,6 @@
 {
   "baseline_change_summary": {
-    "source_digest_changes": [
-      "src/easyicu/research_agent/research_context/outbound.py"
-    ],
+    "source_digest_changes": [],
     "summary_changes": {}
   },
   "baseline_history": [
@@ -859,9 +857,21 @@
         "src/easyicu/research_agent/research_context/outbound.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "User-approved cal1b MIMIC-IV ICU-admission age reseal; only the concept-dict source digest changes, with no budget growth.",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json"
+      ],
+      "summary_changes": {}
+    },
+    {
+      "reason": "cal1b: user-approved MIMIC-IV age-at-admission dictionary reseal",
+      "source_digest_changes": [],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Refresh only the outbound.py source identity after projecting bound family adjustment rosters; all offline task measurements, summary sizes, and budgets remain unchanged.",
+  "baseline_reason": "cal1b: user-approved MIMIC-IV age-at-admission dictionary reseal",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -871,7 +881,7 @@
   "schema_version": "easyicu.research_agent_resource_baseline/2",
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
-    "src/easyicu/data/concept-dict.json": "ab4edb8a79388ccbd902001ad6b733d063042a423d7b6507ad0dd3dd3b04b720",
+    "src/easyicu/data/concept-dict.json": "44381216a749d146841200f028a6c58d5fe72b2e83b6039469c26707d5bcc532",
     "src/easyicu/data/sofa2-dict.json": "c53b7d1c5eda51c9e88727e75eebbd93f579d0a297a5fa6f49b646032dc4faa3",
     "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",
     "src/easyicu/research_agent/agents/planner.py": "71446be03f7956f6e074a5c85fcc8b06234968502423f4a34183fa6cfff64234",

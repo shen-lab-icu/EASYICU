@@ -755,6 +755,12 @@ def _apply_callback(
 
     expr = callback.strip()
 
+    if expr == "transform_fun(miiv_age)":
+        from .callbacks import miiv_age
+
+        value_column = concept_name if concept_name in frame else source.value_var
+        return miiv_age(frame, data_source=data_source, value_column=value_column)
+
     if expr == EICU_HOSPITAL_STATUS_BINDING:
         value_column = concept_name if concept_name in frame else source.value_var
         return frame.assign(**{concept_name: hospital_mortality_status_from_discharge(frame[value_column])})

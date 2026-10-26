@@ -2076,6 +2076,48 @@ def _callback_blood_cell_ratio(
     
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
 
+def miiv_age(frame: pd.DataFrame, *, data_source: ICUDataSourceProtocol,
+             value_column: str) -> pd.DataFrame:
+    """Age at each ICU admission in whole years, preserving anchor_age=91.
+
+    The privacy top code describes age in the anchor year, not an exact age
+    that can be advanced with calendar time. Uncapped ages use icustays.intime;
+    hospitalization time is deliberately not a fallback for missing evidence.
+    """
+    if frame.empty:
+        return frame.copy()
+    if data_source is None:
+        raise ValueError("miiv_age requires patients.anchor_year and icustays.intime")
+
+    from ..datasource import FilterOp, FilterSpec
+
+    key = "stay_id" if "stay_id" in frame else "subject_id"
+    stays = data_source.load_table(
+        "icustays", columns=["subject_id", "stay_id", "intime"],
+        filters=[FilterSpec(column=key, op=FilterOp.IN, value=frame[key].dropna().unique().tolist())],
+        verbose=False,
+    )
+    stays = stays.data if hasattr(stays, "data") else stays
+    join_keys = [name for name in ("subject_id", "stay_id") if name in frame]
+    result = frame.merge(
+        stays.rename(columns={"intime": "_miiv_intime"}), on=join_keys, how="left",
+        validate="many_to_one" if "stay_id" in join_keys else "one_to_many",
+    )
+    patients = data_source.load_table(
+        "patients", columns=["subject_id", "anchor_year"],
+        filters=[FilterSpec(column="subject_id", op=FilterOp.IN,
+                            value=result.subject_id.dropna().unique().tolist())], verbose=False,
+    )
+    patients = patients.data if hasattr(patients, "data") else patients
+    result = result.merge(patients.rename(columns={"anchor_year": "_miiv_anchor_year"}),
+                          on="subject_id", how="left", validate="many_to_one")
+    anchor_age = pd.to_numeric(result[value_column], errors="coerce")
+    anchor_year = pd.to_numeric(result["_miiv_anchor_year"], errors="coerce")
+    admission_year = pd.to_datetime(result["_miiv_intime"], errors="coerce").dt.year
+    result[value_column] = (anchor_age + admission_year - anchor_year).mask(anchor_age.eq(91).fillna(False), 91)
+    return result.drop(columns=["_miiv_intime", "_miiv_anchor_year"])
+
+
 # ============================================================================
 # MIMIC-III-specific callbacks
 # ============================================================================

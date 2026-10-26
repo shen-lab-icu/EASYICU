@@ -625,6 +625,7 @@
     {
      "table": "patients",
      "val_var": "anchor_age",
+     "callback": "transform_fun(miiv_age)",
      "class_name": "col_itm"
     }
    ],

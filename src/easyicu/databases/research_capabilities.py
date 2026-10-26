@@ -217,6 +217,13 @@ def _numeric(config, name: str) -> NumericRepresentation:
     entry = entries[0]
     column = entry.value_var or config.tables[entry.table].defaults.val_var or entry.sub_var or ""
     field = _field(config, entry.table, column, source=source)
+    if field is not None and entry.callback == "transform_fun(miiv_age)":
+        field = field.model_copy(update={"interpretation": (
+            "Age at ICU admission, exact to whole years: anchor_age + "
+            "year(icustays.intime) - anchor_year. An anchor_age of 91 is a "
+            "privacy top code and remains 91, not an exact age. "
+            "Owner: easyicu.concept.callbacks.miiv_age."
+        )})
     if config.name in {"hirid", "sic"}:
         # Public release deidentification groups age/weight in five-year/kg
         # bands; the age band 90 includes all older ages. Stored numbers are
