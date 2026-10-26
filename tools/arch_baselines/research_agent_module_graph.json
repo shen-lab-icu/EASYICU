@@ -15676,6 +15676,22 @@
       "easyicu.research_agent.scientific_adapters.runtime"
     ],
     [
+      "easyicu.research_agent.skill_packages",
+      "easyicu.research_agent.methods.competing_risks"
+    ],
+    [
+      "easyicu.research_agent.skill_packages",
+      "easyicu.research_agent.methods.table_one"
+    ],
+    [
+      "easyicu.research_agent.skill_packages",
+      "easyicu.research_agent.planning.treatment_capture"
+    ],
+    [
+      "easyicu.research_agent.skill_packages",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.skill_packages.landmark_categorical_association",
       "easyicu.research_agent.skill_packages.landmark_categorical_association.scripts.example_data"
     ],
@@ -15916,7 +15932,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3971,
+    "edge_count": 3975,
     "largest_scc_size": 0,
     "module_count": 865,
     "package_count": 36,
