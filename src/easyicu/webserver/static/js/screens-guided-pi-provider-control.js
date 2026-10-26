@@ -327,6 +327,15 @@
 
     function handleClick(event) {
       if (event.target.closest && event.target.closest('[data-gpi-openrouter-login]')) { startOpenRouterLogin(); return true; }
+      // A run stopped because the model is not cleared for credentialed data:
+      // open the connection page with that one question first.
+      if (event.target.closest && event.target.closest('[data-gpi-stop-declare]')) {
+        state.declarationAsked = true; state.researchProvider = 'api'; state.showSetup = true; state.error = '';
+        render();
+        const page = state.host && state.host.querySelector && state.host.querySelector('[data-gpi-connection-page]');
+        if (page) page.scrollTop = 0;
+        return true;
+      }
       const button = event.target.closest && event.target.closest('[data-gpi-provider-rediscover]');
       if (!button) return false;
       const form = button.closest('[data-gpi-provider-form]');

@@ -117,10 +117,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-run-outcome.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-activity.js?v=20261024-terminal1" in index
     assert (
-        "js/screens-guided-pi-provider.js?v=20261026-plain-connect1"
+        "js/screens-guided-pi-provider.js?v=20261026-ask-on-use1"
         in index
     )
-    assert "js/screens-guided-pi-provider-control.js?v=20261026-openrouter1" in index
+    assert "js/screens-guided-pi-provider-control.js?v=20261026-ask-on-use1" in index
     assert "js/screens-guided-pi-connect.js?v=20261021-hosted1" in index
     assert index.index("js/screens-guided-pi-provider-control.js") < index.index(
         "js/screens-guided-pi-connect.js"

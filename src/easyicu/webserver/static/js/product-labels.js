@@ -172,7 +172,7 @@
       edit_plan: ['Regenerate the plan', '重新生成计划'],
       plan_edit: ['Open plan changes', '打开计划修改'],
       reexport_data: ['Open data preparation', '打开数据准备'],
-      open_provider_settings: ['Open model settings', '打开模型设置'],
+      open_provider_settings: ['Choose how the model handles data', '选择模型的数据处理方式'],
       receipt: ['Open failure receipt', '打开失败回执'],
       review: ['Open recovery options', '打开恢复操作'],
     };

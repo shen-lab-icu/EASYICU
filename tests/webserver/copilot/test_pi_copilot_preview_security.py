@@ -175,7 +175,7 @@ def test_product_label_calls_are_defensive_and_share_one_default() -> None:
     """D-P2-1: no bare EU_PRODUCT_LABELS call; one shared row fallback."""
 
     index = _read("index.html")
-    assert "js/product-labels.js?v=20260917-product-label-defensive1" in index
+    assert "js/product-labels.js?v=20261026-ask-on-use1" in index
 
     consumers = [
         "js/screens-guided-projects.js",
