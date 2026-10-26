@@ -75,6 +75,17 @@ def test_an_eicu_launch_stops_before_any_model_is_called(tmp_path, question, fam
     assert "event_time" in {item["capability"] for item in gap["missing_capabilities"]}
 
 
+def test_hirid_survival_stops_before_planning_with_its_missing_censor_time(tmp_path):
+    stopped = _launch(tmp_path, "Use HiRID for a survival analysis of time to ICU death.", "hirid")
+
+    assert stopped.code == STUDY_FAMILY_DATABASE_OUT_OF_SCOPE
+    gap = stopped.details["study_family_gap"]
+    assert (gap["database"], gap["family"]) == ("hirid", "survival")
+    assert ("censor_time", "censor_time_unavailable") in {
+        (item["capability"], item["code"]) for item in gap["missing_capabilities"]
+    }
+
+
 def test_eicu_trajectory_launch_is_no_longer_blocked_by_product_scope(tmp_path):
     assert _launch(tmp_path, _SUBTYPES) is None
 

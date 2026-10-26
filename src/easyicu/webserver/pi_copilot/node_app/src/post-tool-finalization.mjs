@@ -439,13 +439,6 @@ function namedDatabaseText(language, catalog, text) {
     .filter(Boolean).join(" ");
   if (!label) return "";
   const zh = language === "zh";
-  // Same research-entry scope as the source card and recommendation owner.
-  // A cataloged database or installed export is not research support.
-  if (["hirid", "aumc", "sic"].includes(String(selected.database).replace(/_demo$/, ""))) {
-    return zh
-      ? `研究问题已保存。本版本暂不支持使用 ${label} 完成这项研究。请在下方选择其他受支持的数据源。`
-      : `The research question is saved. This version does not support this study with ${label}. Choose another supported data source below.`;
-  }
   const recommended = catalog?.recommended_source && typeof catalog.recommended_source === "object"
     ? catalog.recommended_source : null;
   if (recommended && recommended.availability === "available_in_easyicu") {

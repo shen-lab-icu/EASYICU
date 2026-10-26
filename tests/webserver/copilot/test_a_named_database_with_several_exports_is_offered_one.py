@@ -258,6 +258,23 @@ def _first_reply(question: str, language: str, **catalog_details: Any) -> str:
     return json.loads(completed.stdout)
 
 
+def _named_database_reply(question: str, language: str, **catalog_details: Any) -> str:
+    """Exercise the pure Node narration owner without the optional Pi stream SDK."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    source = (APP_DIR / "src" / "post-tool-finalization.mjs").read_text(encoding="utf-8")
+    owner = source[source.index("function boundedLabel("):source.index("\nfunction dataSourceSelectionText(")]
+    script = f"""
+      {owner}
+      console.log(JSON.stringify(namedDatabaseText(
+        {json.dumps(language)}, {json.dumps(catalog_details)}, {json.dumps(question)}
+      )));
+    """
+    return json.loads(run_node(node, script, check=True).stdout)
+
+
 def test_a_named_database_with_exports_to_choose_from_lists_them() -> None:
     text = _first_reply(
         "用 MIMIC-IV 研究乳酸与院内死亡", "zh",
@@ -310,25 +327,25 @@ HIRID = {"database": "hirid", "label": "HiRID", "reference_release": "1.1.1"}
 
 @pytest.mark.parametrize("language", ["zh", "en"])
 def test_a_hosted_server_without_the_database_offers_no_local_folder(language: str) -> None:
-    """An unsupported database has the same scope limit on both deployments."""
+    """Missing data is a source setup issue, not a database-wide refusal."""
 
-    text = _first_reply(
+    text = _named_database_reply(
         "在 HiRID 数据库中描述体温记录的分布。", language,
         selected_database=HIRID, recommended_source=None, registered_source_choices=[],
         local_folder_selection_available=False,
     )
 
     assert text == (
-        "研究问题已保存。本版本暂不支持使用 HiRID v1.1.1 完成这项研究。请在下方选择其他受支持的数据源。"
+        "研究问题已保存。尚未添加 HiRID v1.1.1 数据。"
         if language == "zh"
-        else "The research question is saved. This version does not support this study with HiRID v1.1.1. Choose another supported data source below."
+        else "The research question is saved. HiRID v1.1.1 data have not been added."
     )
-    local = _first_reply(
+    local = _named_database_reply(
         "在 HiRID 数据库中描述体温记录的分布。", "zh",
         selected_database=HIRID, recommended_source=None, registered_source_choices=[],
     )
-    assert "本版本暂不支持使用 HiRID v1.1.1 完成这项研究。" in local
-    assert "数据目录" not in local
+    assert "尚未添加 HiRID v1.1.1 数据。" in local
+    assert "选择本机的 HiRID v1.1.1 数据目录" in local
 
 
 def _synthetic_catalog(database: str) -> dict[str, Any]:
@@ -341,26 +358,124 @@ def _synthetic_catalog(database: str) -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("database", "alias"), [("hirid", "HiRID"), ("aumc", "AmsterdamUMCdb"), ("sic", "SICdb")],
 )
-def test_an_unsupported_database_keeps_its_export_listed_but_not_recommended(
+def test_a_named_database_recommends_its_registered_export(
     database: str, alias: str,
 ) -> None:
-    """Physical availability stays distinct from research scope (audit F07)."""
+    """Study feasibility belongs to the capability gate after source choice."""
 
     choices, recommendation = registered_sources_for_database(_synthetic_catalog(database), alias)
 
     assert len(choices) == 1
     assert choices[0]["availability"] == "available_in_easyicu"
-    assert recommendation.source is None
+    assert recommendation.source == choices[0]
     assert not recommendation.choices
-    assert recommendation.reason is None
+    assert recommendation.reason == "most_complete_local_dataset"
     assert "/synthetic/" not in json.dumps(choices)
 
 
 @pytest.mark.parametrize(
-    ("database", "alias"), [("eicu", "eicu"), ("miiv", "MIMIC-IV"), ("eicu_demo", "eicu_demo")],
+    ("database", "alias"), [("eicu", "eicu"), ("miiv", "MIMIC-IV"),
+                            ("mimic", "MIMIC-III"), ("eicu_demo", "eicu_demo")],
 )
 def test_a_supported_database_still_recommends_its_registered_export(database: str, alias: str) -> None:
     _, recommendation = registered_sources_for_database(_synthetic_catalog(database), alias)
 
     assert recommendation.source["source_id"] == "src_synthetic"
     assert recommendation.source["database"] == database
+
+
+@pytest.mark.parametrize("database", ["hirid", "aumc", "sic"])
+def test_a_named_question_recommends_and_binds_a_registered_synthetic_source(
+    tmp_path, monkeypatch, database,
+) -> None:
+    from easyicu.databases.profiles import get_database_profile
+    from easyicu.synthetic_sources import generate_source
+    from easyicu.webserver import sources, study_contexts
+    from easyicu.webserver.pi_copilot.contracts import PiSessionDataSourceAuthorization
+    from easyicu.webserver.pi_copilot.registered_source_offer import (
+        bind_offered_registered_source, registered_source_offer,
+    )
+
+    monkeypatch.setattr(sources, "_CONFIG_PATH", tmp_path / "registry.json")
+    monkeypatch.setattr(sources, "_autodiscovery_bases", lambda: [])
+    monkeypatch.setattr(sources.settings_store, "load_settings", lambda: {})
+    monkeypatch.setattr(study_contexts, "_CONFIG_PATH", tmp_path / "contexts.json")
+    path = tmp_path / "synthetic"
+    generate_source(path, database, stays=4)
+    registry = sources.register_source(str(path), active=False)
+    registry_before = sources._CONFIG_PATH.read_bytes()
+    row = registry["sources"][0]
+    assert row["source_kind"] == "synthetic"
+    question = f"Describe the temperature records in {get_database_profile(database).display_name}."
+    record = PiSessionRecord(session_id="pi-synthetic-choice", data_source_authorization=(
+        PiSessionDataSourceAuthorization(status="pending")))
+    context = ToolExecutionContext(session=record, user_message=question)
+    policy = context.data_handling
+    result = tool_module.execute_tool("easyicu_list_data_sources", {}, context)
+    assert result["code"] == "easyicu_data_sources_listed"
+    recommendation = result["details"]["recommended_source"]
+    assert recommendation["source_id"] == row["id"]
+    assert recommendation["database"] == database
+    assert recommendation["auto_select_for_exact_database_request"] is True
+    assert str(path) not in json.dumps(result)
+    offer = registered_source_offer(record, database)
+    assert offer["recommended"]["source_id"] == row["id"]
+    study = study_contexts.upsert_context({"id": "study-synthetic-choice", "question": question})
+    bound = bind_offered_registered_source(
+        record, study, database=database, source_id=row["id"], stale={},
+    )
+    assert bound["data_source"]["database"] == database
+    assert bound["data_source"]["path"] == str(path)
+    assert context.data_handling == policy
+    assert sources._CONFIG_PATH.read_bytes() == registry_before
+
+
+@pytest.mark.parametrize("database", ["hirid", "aumc", "sic"])
+def test_recommending_a_credentialed_source_does_not_grant_provider_clearance(
+    tmp_path, monkeypatch, database,
+) -> None:
+    from easyicu.research_agent.providers.client_trust import PROVIDER_NOT_CLEARED
+    from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+
+    registry = _synthetic_catalog(database)
+    registry["sources"][0]["path"] = str(tmp_path / "unverified")
+    monkeypatch.setattr(tool_module.sources, "load_registry", lambda: registry)
+    _, recommendation = registered_sources_for_database(registry, database)
+    assert recommendation.source["source_id"] == "src_synthetic"
+    context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-uncleared"))
+    policy = context.data_handling
+    with pytest.raises(PiCopilotError) as error:
+        tool_module.execute_tool("easyicu_list_data_sources", {"database": database}, context)
+    assert error.value.status_code == 403
+    assert error.value.code == PROVIDER_NOT_CLEARED
+    assert context.data_handling == policy
+    assert not registry.get("active_path")
+
+
+@pytest.mark.parametrize("database", ["hirid", "aumc", "sic"])
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("choice_count", [1, 2])
+def test_named_database_narration_preserves_export_facts(database, language, choice_count):
+    from easyicu.databases.profiles import get_database_profile
+
+    profile = get_database_profile(database)
+    selected = {"database": database, "label": profile.display_name,
+                "reference_release": profile.reference_release}
+    row = {"source_id": "src_synthetic", "database": database,
+           "availability": "available_in_easyicu", "aggregate": {"stays": 12}, "module_count": 2}
+    choices = [{"choice": index, "source_id": f"src_synthetic_{index}", "stays": 12,
+                "module_count": 2, "generated_date": "2026-10-08"} for index in range(1, 3)]
+    text = _named_database_reply(
+        f"Describe temperature records in {profile.display_name}.", language,
+        selected_database=selected, recommended_source=row if choice_count == 1 else None,
+        registered_source_choices=choices if choice_count == 2 else [],
+    )
+    label = profile.display_name + (f" v{profile.reference_release}" if profile.reference_release else "")
+    assert label in text
+    assert ("12 个 ICU 入住记录，2 个数据模块" if language == "zh" else "12 ICU stays, 2 data modules") in text
+    assert ("确认数据源不等于批准分析" if language == "zh" else "Confirming a source does not approve analysis") in text
+    assert "暂不支持" not in text and "does not support" not in text
+    if choice_count == 1:
+        assert ("（推荐）" if language == "zh" else "(recommended)") in text
+    else:
+        assert ("第 2 份，生成于 2026-10-08" if language == "zh" else "export 2, generated 2026-10-08") in text

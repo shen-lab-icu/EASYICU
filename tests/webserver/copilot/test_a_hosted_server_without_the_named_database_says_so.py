@@ -1,8 +1,4 @@
-"""Unsupported research scope is distinct from missing hosted or desktop data.
-
-An installed export cannot enable a research path this version does not offer.
-Supported missing and registered sources are covered by the source-scope JS contract.
-"""
+"""Source cards distinguish missing hosted data from available named exports."""
 
 from __future__ import annotations
 
@@ -69,32 +65,37 @@ _EMPTY = {"database": "hirid", "recommended": None, "choices": []}
 
 @pytest.mark.requires_node
 @pytest.mark.usefixtures("_load_guided_pi_module_harness")
-def test_a_hosted_unsupported_database_explains_scope() -> None:
+def test_a_hosted_missing_database_names_the_administrator() -> None:
     html = _card(hosted=True, reply=_EMPTY, contact="信息科 <8888>")
 
-    assert "本版本暂不支持使用 HiRID 完成这项研究。" in html
-    assert "信息科" not in html and "添加 HiRID 数据" not in html
+    assert "尚未添加 HiRID 数据。" in html
+    assert "信息科 &lt;8888&gt;" in html and "添加 HiRID 数据" in html
+    assert "本版本暂不支持" not in html
     assert 'data-gpi-data-source-action="begin_local_selection">选择其他数据源</button>' in html
     assert "选择 HiRID 数据" not in html and "data-gpi-data-source-database" not in html
 
 
 @pytest.mark.requires_node
 @pytest.mark.usefixtures("_load_guided_pi_module_harness")
-def test_a_local_install_explains_the_same_scope_limit() -> None:
+def test_a_local_install_offers_the_named_database_folder() -> None:
     html = _card(hosted=False, reply=_EMPTY)
 
-    assert "本版本暂不支持使用 HiRID 完成这项研究。" in html
-    assert "选择 HiRID 数据" not in html
+    assert "尚未添加 HiRID 数据。" in html
+    assert "选择 HiRID 数据" in html
+    assert 'data-gpi-data-source-database="hirid"' in html
+    assert "本版本暂不支持" not in html
     assert "这台服务器上还没有" not in html
 
 
 @pytest.mark.requires_node
 @pytest.mark.usefixtures("_load_guided_pi_module_harness")
-def test_an_unsupported_export_is_not_offered_for_research() -> None:
-    held = {"source_id": "src_hirid", "label": "HiRID v1.1", "stays": 33905,
-            "module_count": 10, "generated_date": "2026-10-19"}
+def test_a_registered_export_is_offered_for_research() -> None:
+    held = {"source_id": "src_hirid", "label": "HiRID v1.1.1", "stays": 12,
+            "module_count": 2, "generated_date": "2026-10-19"}
     html = _card(hosted=True, reply={"database": "hirid", "recommended": held, "choices": []})
 
-    assert "本版本暂不支持使用 HiRID 完成这项研究。" in html
-    assert "data-gpi-data-source-id" not in html
+    assert "本版本暂不支持" not in html
+    assert 'data-gpi-data-source-id="src_hirid"' in html
+    assert 'data-gpi-data-source-database="hirid"' in html
+    assert "12 例 ICU 住院" in html and "2 个模块" in html
     assert "这台服务器上还没有" not in html
