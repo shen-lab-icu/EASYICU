@@ -62,6 +62,17 @@ function Wait-CheckedProcess($Process, [int]$Timeout, [string]$Stage) {
     Write-Host "$Stage finished in $([int]$clock.Elapsed.TotalSeconds) s"
 }
 
+function Assert-FrozenBackendStartup([string]$LogPath) {
+    if (-not (Test-Path -LiteralPath $LogPath)) { throw 'desktop_backend_startup_incomplete' }
+    [string]$log = Get-Content -LiteralPath $LogPath -Raw -Encoding utf8
+    # Retain the backend's typed failure (including durable_dependency_unavailable)
+    # even when the launcher exits before it can write a health receipt.
+    $failure = [regex]::Match($log, '(?m)(?<=DurableWorkflowError: )durable_[a-z0-9_]+\b')
+    if ($failure.Success) { throw $failure.Value }
+    if (-not $log.Contains('Application startup complete.')) { throw 'desktop_backend_startup_incomplete' }
+    if (-not $log.Contains('Durable dispatcher started (frozen=True)')) { throw 'durable_executor_unavailable' }
+}
+
 # The hosted runner remains the OS user. Its temporary application-data profile
 # exercises paths with spaces and Unicode without touching its normal data.
 $saved = @{}
@@ -90,8 +101,12 @@ try {
     Remove-Item Env:PYTHONPATH, Env:PYTHONHOME -ErrorAction SilentlyContinue
     $app = Start-Process -FilePath $executable -ArgumentList '--smoke-test' -PassThru
     # The first launch also unpacks nothing but is scanned file by file.
-    Wait-CheckedProcess $app 300000 'First launch smoke test'
     $dataRoot = Join-Path $env:LOCALAPPDATA 'EasyICU'
+    try {
+        Wait-CheckedProcess $app 300000 'First launch smoke test'
+    } finally {
+        Assert-FrozenBackendStartup (Join-Path $dataRoot 'logs\desktop-smoke.log')
+    }
     $result = Get-Content -LiteralPath (Join-Path $dataRoot 'runtime\desktop-smoke-result.json') -Raw | ConvertFrom-Json
     if (-not $result.healthy -or -not $result.unauthenticated_rejected) {
         throw 'Backend readiness/session checks did not pass'

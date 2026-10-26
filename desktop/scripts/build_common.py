@@ -613,7 +613,9 @@ def build_backend(python, *, build_root, desktop_root, run, windows=False):
         # psycopg even for a local SQLite workflow database.
         "--copy-metadata", "dbos",
         "--collect-all", "psycopg_binary",
+        "--hidden-import", "dbos",
         "--hidden-import", "sqlalchemy.dialects.sqlite",
+        "--hidden-import", "sqlalchemy.dialects.sqlite.pysqlite",
         "--hidden-import", "uvicorn.logging",
         "--hidden-import", "uvicorn.loops.auto",
         "--hidden-import", "uvicorn.protocols.http.auto",
