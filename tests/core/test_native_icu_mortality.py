@@ -18,6 +18,15 @@ def test_named_outcome_uses_icu_status_and_keeps_unknowns(tmp_path, database):
     assert "death" not in frame
 
 
+def test_mimic_iii_upper_case_headers_read_like_the_data_source(tmp_path):
+    from easyicu.scores.icu_mortality import load_icu_death
+
+    frame = load_icu_death("mimic", source(tmp_path / "mimic", "mimic", upper=True))
+    assert frame.icu_death.iloc[:3].tolist() == [True, False, False]
+    assert pd.isna(frame.icu_death.iloc[3])
+    assert frame.attrs["source_identifier"] == "icustay_id"
+
+
 @pytest.mark.parametrize("database", ["eicu", "hirid", "aumc", "sic"])
 def test_public_concept_api_selects_the_named_builder(tmp_path, database):
     from easyicu import load_concepts

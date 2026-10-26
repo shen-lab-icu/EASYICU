@@ -210,9 +210,9 @@ def test_first_result_keeps_a_question_requested_figure():
 
 
 @pytest.mark.parametrize("exposure,outcome,covariates,subgroup", [
-    ("sex", "death", (), None), ("admission_type", "icu_death", ("age",), "sex"),
+    ("sex", "death", (), None), ("admission_type", "unit_death", ("age",), "sex"),
     ("chronic_flag", "death", ("age", "sex", "admission_type"), "sex"),
-    ("age", "icu_death", ("sex",), None), ("age", "death", ("sex",), "sex"),
+    ("age", "unit_death", ("sex",), None), ("age", "death", ("sex",), "sex"),
     ("age_group", "death", ("sex",), None),
 ])
 def test_seven_step_template_compiles(exposure, outcome, covariates, subgroup, tmp_path, monkeypatch):
@@ -451,7 +451,7 @@ def test_a_baseline_template_revision_passes_the_repair_guard(subgroup):
     from easyicu.webserver.research_plan_revision import PlanRevisionGuard
     from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 
-    context = baseline_context("admission_type", outcome="icu_death", covariates=("age",), subgroup=subgroup)
+    context = baseline_context("admission_type", outcome="unit_death", covariates=("age",), subgroup=subgroup)
     attempt, _ = baseline_plan_attempt(context)
     runtime = baseline_runtime(context, attempt.output).seal_for_plan(attempt.output)
     source, _ = runtime.bind_plan(attempt.output)
