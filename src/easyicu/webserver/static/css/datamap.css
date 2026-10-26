@@ -15,7 +15,7 @@
 .dmap-table tbody th{font-weight:600}
 .dmap-concepts tbody th span{margin-left:8px;color:var(--ink-3);font-weight:500}
 .dmap-unit{color:var(--ink-3)}
-.dmap-matrix td button{padding:0;border:0;background:transparent;cursor:pointer}
+.dmap-matrix td button{display:inline-flex;align-items:center;min-height:24px;padding:0;border:0;background:transparent;cursor:pointer}
 .dmap-matrix td button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:999px}
 .dmap-matrix td button[aria-expanded="true"] .dmap-chip{box-shadow:0 0 0 2px var(--accent-border)}
 .dmap-chip{display:inline-flex;align-items:center;height:21px;padding:0 8px;border-radius:999px;background:var(--surface-3);color:var(--ink-2);font-size:11px;font-weight:650;white-space:nowrap}

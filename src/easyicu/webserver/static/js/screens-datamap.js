@@ -161,7 +161,14 @@
       host.dataset.bound = '1';
       host.addEventListener('click', event => {
         const study = event.target.closest('[data-dmap-study]');
-        if (study) { state.open = state.open === study.dataset.dmapStudy ? '' : study.dataset.dmapStudy; paint(); return; }
+        if (study) {
+          state.open = state.open === study.dataset.dmapStudy ? '' : study.dataset.dmapStudy;
+          paint();
+          // The explanation sits below the matrix; bring it into view on short windows.
+          const detail = state.open && typeof host.querySelector === 'function' ? host.querySelector('.dmap-detail') : null;
+          if (detail && typeof detail.scrollIntoView === 'function') detail.scrollIntoView({ block: 'nearest' });
+          return;
+        }
         const page = event.target.closest('[data-dmap-page]');
         if (page && !page.disabled) {
           state.offset = Math.max(0, state.offset + (page.dataset.dmapPage === 'next' ? PAGE : -PAGE));

@@ -24,10 +24,26 @@ global.EU_CAPABILITIES = { capabilities: {
     execution_mode: 'deterministic_host', claim_ceiling: 'reportable', scope: 'Cox',
     inputs: ['time origin'], outputs: ['result.csv'], diagnostics: ['PH'],
     prompt: 'Use survival.', prompt_zh: '请使用生存方法。',
+  }, {
+    id: 'landmark-association', title: 'Landmark association', title_zh: '固定 Landmark 关联研究',
+    category: 'Association', category_zh: '关联研究', description: 'Landmark.', description_zh: '固定时点。',
+    version: 'easyicu.method-skills/1', enabled: true, capability_id: 'landmark_v1', action_ids: [],
+    layer: 'research_workflow', included_module_ids: [], execution_mode: 'deterministic_host', claim_ceiling: 'reportable',
   }], components: [], workflow_count: 1, available_method_count: 0, planned_method_count: 0 },
 } };
 global.EU_API = {
-  loadBuiltinSkillPackage: async id => ({
+  loadBuiltinSkillPackage: async id => id === 'landmark-association' ? {
+    schema_version: 'easyicu.method-skill-package/3', skill_id: id, package_sha256: 'c'.repeat(64), read_only: true,
+    overview_paths: { en: 'SKILL.md', zh: 'SKILL.zh.md' },
+    not_for: [
+      { situation_en: 'Exposure changes during follow-up', situation_zh: '暴露在随访期间变化', sibling_skill_id: 'survival-time-to-event' },
+      { situation_en: 'Confounding is not recorded', situation_zh: '混杂信息不足', sibling_skill_id: null },
+    ],
+    files: [
+      { path: 'SKILL.md', language: 'markdown', size_bytes: 40, content: '# Landmark association\n\n## When not to use\n\n- Exposure changes during follow-up → Survival\n' },
+      { path: 'SKILL.zh.md', language: 'markdown', size_bytes: 40, content: '# 固定 Landmark 关联研究\n\n## 何时不适用\n\n- 暴露在随访期间变化 → 生存与时间结局分析\n- 混杂信息不足\n' },
+    ],
+  } : ({
     schema_version: 'easyicu.method-skill-package/3', skill_id: id,
     package_sha256: 'b'.repeat(64), read_only: true,
     files: [
@@ -74,6 +90,17 @@ const click = dataset => handlers.click({ target: { closest: selector => selecto
   assert.doesNotMatch(html, /<pre># Survival/);
   assert.doesNotMatch(html, /machine metadata/);
   assert.match(html, /只有该能力确有专用实现时才显示 scripts/);
+
+  // A bilingual package opens on the reader's language, and a sibling it names
+  // opens that Skill; a line without a sibling stays text.
+  click({ skOpen: 'builtin:landmark-association' });
+  await new Promise(resolve => setImmediate(resolve));
+  html = screen.render();
+  assert.match(html, /data-sk-overview-source="SKILL\.zh\.md"/);
+  assert.match(html, /<h1>固定 Landmark 关联研究<\/h1>/);
+  assert.match(html, /- 暴露在随访期间变化 → <button type="button" class="eusk-sibling" data-sk-open="builtin:survival-time-to-event">生存与时间结局分析<\/button>/);
+  assert.match(html, /- 混杂信息不足/);
+  assert.doesNotMatch(html, /EUSKSIBLING/);
   process.stdout.write('Built-in method Skill package file view passed.\n');
 })().catch(error => {
   console.error(error);
