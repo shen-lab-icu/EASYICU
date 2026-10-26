@@ -6,6 +6,51 @@ import math
 from typing import Any, Mapping
 
 
+def prepare_source_population(study: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a source proposal for preparation; preserve its original request.
+
+    This confers no execution authority. Scientific review, the human decision
+    and the approved executable plan must bind the resulting context and plan.
+    """
+    from easyicu.databases.research_requirements import StudyRequirements
+    from easyicu.databases.research_substitutions import registered_source_profile, source_decision
+    from .research_capability_scope import study_requirements
+
+    result = dict(study)
+    design = dict(study.get("analysis_design") or {})
+    database = (study.get("data_source") or {}).get("database")
+    family = design.get("analysis_family")
+    if not database or not family:
+        return result
+    profile = registered_source_profile(database)
+    if profile is None:
+        if "_database_study_requirements" in study:
+            raise ValueError("capability_substitution_binding_drift")
+        return result
+    original = study.get("_database_study_requirements")
+    requirements = (StudyRequirements.model_validate(original) if original is not None else
+                    study_requirements(study, family=family, question=str(study.get("question") or "")))
+    decision = source_decision(profile, requirements)
+    if original is not None and study.get("_database_capability_decision") != decision.model_dump(mode="json"):
+        raise ValueError("capability_substitution_binding_drift")
+    if decision.status != "substitution":
+        return result
+    result["_database_study_requirements"] = requirements.model_dump(mode="json")
+    result["_database_capability_decision"] = decision.model_dump(mode="json")
+    for item in decision.substitutions:
+        if item.capability == "analysis_unit":
+            if original is not None and design.get("analysis_unit") != item.substitute:
+                raise ValueError("capability_substitution_binding_drift")
+            design["analysis_unit"] = item.substitute
+        elif item.capability == "outcome_meaning" and item.substitute == "icu_death":
+            if original is not None and (study.get("execution_concepts") or {}).get("outcome") != "icu_death":
+                raise ValueError("capability_substitution_binding_drift")
+            result["execution_concepts"] = {**(study.get("execution_concepts") or {}), "outcome": "icu_death"}
+            result["outcome"] = "icu_death"
+    result["analysis_design"] = design
+    return result
+
+
 def prepared_candidate_selection_mode(
     *, candidate_definition: Mapping[str, Any] | None, required_mode: str,
     source_basis: str | None, source_report: Mapping[str, Any] | None, database: str,

@@ -6242,7 +6242,9 @@ class ConceptResolver:
                     continue
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
                     max_abs = data[col].abs().max()
-                    if pd.notna(max_abs) and max_abs > 5000:
+                    # The native ICU origin is in seconds even below the
+                    # magnitude heuristic; declared ICU hours were skipped above.
+                    if col == "ICUOffset" or pd.notna(max_abs) and max_abs > 5000:
                         second_valued_cols.append(col)
 
             if second_valued_cols:
@@ -6287,7 +6289,7 @@ class ConceptResolver:
                     frame[col] = (
                         pd.to_numeric(frame[col], errors="coerce") - origin
                     ) / 3600.0
-                data = frame.drop(columns=["ICUOffset"], errors="ignore")
+                data = frame.drop(columns=[] if index_column == "ICUOffset" else ["ICUOffset"], errors="ignore")
 
             # SIC interval tables (notably data_range for mech_vent) produce
             # dur_var in seconds.  It is an interval, not an absolute offset,

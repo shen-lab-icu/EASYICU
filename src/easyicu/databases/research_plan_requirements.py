@@ -82,6 +82,10 @@ def plan_capability_decision(context: ResearchContext, plan: AnalysisPlan) -> Ca
         # The generic death builder has this dictionary meaning even when the
         # source records another mortality status that needs a separate builder.
         profile = profile.model_copy(update={"mortality_outcomes": (profile.mortality,) if profile.mortality else ()})
+    if "database_capability_binding" in constraints:
+        from .research_substitutions import source_decision
+
+        return source_decision(profile, requirements)
     return assess_study(profile, requirements)
 
 
@@ -96,10 +100,23 @@ def unapplied_substitution_capabilities(decision: CapabilityDecision, context: R
         replacement = item.substitute
         if item.capability == "analysis_unit" and _effective_unit(_constraints(context)) != replacement:
             missing.append(item.capability)
+        if (item.capability == "analysis_unit" and "database_capability_binding" in _constraints(context)
+                and not ({item.source_field.column, "stay_id"} & set(context.cohort.id_columns))):
+            missing.append(item.capability)
+        if item.capability == "outcome_meaning" and "database_capability_binding" in _constraints(context):
+            targets = [context.target_outcome, *(requirement.outcome for step in plan.steps
+                        for requirement in step.model_requirements)]
+            targets.extend(step.exposure_outcome_distribution_spec.outcome for step in plan.steps
+                           if step.exposure_outcome_distribution_spec is not None)
+            expected = "death" if replacement == "hospital_death" else replacement
+            if not targets[0] or any(target != expected for target in targets):
+                missing.append(item.capability)
         if isinstance(replacement, ThresholdRequirement):
             applied = (replacement.concept, replacement.operator, replacement.value) in coordinates
             original = item.original
             retained = isinstance(original, ThresholdRequirement) and (original.concept, original.operator, original.value) in coordinates
             if not applied or retained:
                 missing.append(item.capability)
-    return tuple(missing)
+    from .research_substitutions import source_model_term_errors
+
+    return tuple(missing) + source_model_term_errors(context, plan)

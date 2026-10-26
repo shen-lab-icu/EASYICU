@@ -1066,8 +1066,9 @@ def test_an_adult_septic_shock_population_compiles_to_the_predicates_it_states()
 
 def test_a_ventilated_population_alive_at_its_landmark_compiles() -> None:
     # Not a benchmark question: ventilated in the first day, alive at 24 h, in
-    # adults up to 90, excluding lactate above 4 mmol/L in the first day.
-    adults = {"kind": "age_years", "min_years": 18, "max_years": 90}
+    # adults up to 89, excluding lactate above 4 mmol/L in the first day.
+    # The landmark behavior uses an exact bound, below the privacy age band.
+    adults = {"kind": "age_years", "min_years": 18, "max_years": 89}
     lactate = _measurement("lact", "max", ">", 4, unit="mmol/L", role="exclude")
     spec = _spec(adults, _condition("vent"), {"kind": "alive_at", "hours": 24}, lactate)
     compiled = compile_population(spec, _ctx(), time_zero_hours=24.0)

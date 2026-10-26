@@ -44,6 +44,9 @@ def bind_reviewed_requirements(
     context = bind_population_requirements(
         context, config.bound_population_requirements, restoring=restoring
     )
+    from easyicu.databases.research_substitutions import bind_source_substitutions
+
+    context = bind_source_substitutions(context, restoring=restoring)
     return bind_analysis_inputs(
         context, config.bound_analysis_inputs, restoring=restoring
     )

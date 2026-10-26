@@ -67,6 +67,7 @@ COMPOSITE_CONCEPT_OUTPUT_SOURCES: dict[str, str] = {
     "charlson": "comorbidity_loader",
     "elixhauser": "comorbidity_loader",
     "mort_28d": "outcomes_loader",
+    "icu_death": "outcomes_loader",
     "mort_90d": "outcomes_loader",
     "mort_365d": "outcomes_loader",
     "followup_days_28d": "outcomes_loader",

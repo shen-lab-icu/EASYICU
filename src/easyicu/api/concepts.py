@@ -1266,6 +1266,7 @@ def load_concepts(
     _COMORB_OUTPUTS = {"charlson", "elixhauser"}
     # Composite outcome endpoints (outcomes.py) — fixed-horizon mortality etc.
     _OUTCOME_OUTPUTS = {
+        "icu_death",
         "mort_28d",
         "mort_90d",
         "mort_365d",
@@ -2072,8 +2073,11 @@ def load_concepts(
                     data_path=str(loader.data_path),
                     patient_ids=special_patient_ids,
                     verbose=verbose,
+                    output_concepts=sorted(_need_outcome),
                 )
             except Exception as e:
+                if "icu_death" in _need_outcome:
+                    raise
                 logger.warning(f"load_outcomes failed: {e}")
                 oc = None
             if isinstance(oc, pd.DataFrame) and not oc.empty:
@@ -2085,6 +2089,7 @@ def load_concepts(
                         "patientunitstayid",
                         "CaseID",
                         "admissionid",
+                        "patientid",
                     )
                     if col in oc.columns
                 ]
