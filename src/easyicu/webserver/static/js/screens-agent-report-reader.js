@@ -50,13 +50,14 @@
       title = t('Primary association estimate', '主要关联估计');
       clinical = t('Read the primary association and its uncertainty; an association does not establish causation.',
         '查看主要关联估计及其不确定性；关联不能说明因果。');
-    } else if (roles.has('descriptive_result')) {
+    } else if (roles.has('descriptive_result') || roles.has('distribution')) {
       title = t('Group comparison', '分组结果比较');
       clinical = t('Compare the observed groups; a descriptive difference does not establish causation.',
         '比较各组的观察结果；描述性差异不能说明因果。');
     }
     const prose = value => {
-      const text = String(value || '').trim();
+      // A product token ("figure:cohort flow") names the file, not the figure.
+      const text = String(value || '').trim().replace(/^figure:\s*/i, '');
       return /^(?:file:\/\/|\/|[A-Za-z]:\\|\.\.?[\\/])|^(?:[\w.-]+[\\/])*[\w.-]+\.(?:png|pdf|svg|tiff?)$/i.test(text) ? '' : text;
     };
     return {

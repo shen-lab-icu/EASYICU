@@ -41,6 +41,8 @@
       preflight: t('preflight', '预检'),
       ready: t('ready', '就绪'),
       imported: t('imported package', '已导入包'),
+      unsupported: t('no supported claim', '尚无可支持的结论'),
+      descriptive_only: t('descriptive only', '仅描述性'),
     };
     return labels[key] || status || t('analysis-only', '仅分析');
   }
@@ -298,12 +300,16 @@
     return (window.AGENT_READER_VOCAB && window.AGENT_READER_VOCAB.column(key))
       || String(key || '').replace(/_/g, ' ');
   }
+  // Envelope fields name the file itself; the preview header already does.
+  const SUMMARY_SKIP = new Set(['schema_version', 'artifact', 'title']);
   function artifactSummaryRows(payload, preferred) {
     const source = payload && typeof payload === 'object' ? payload : {};
     const keys = (preferred || []).concat(Object.keys(source)).filter((key, idx, arr) => arr.indexOf(key) === idx);
     return keys
       .filter(key => Object.prototype.hasOwnProperty.call(source, key))
-      .filter(key => !/data_url|image_data_url/i.test(key))
+      .filter(key => !/data_url|image_data_url/i.test(key) && !SUMMARY_SKIP.has(key))
+      // A nested record has its own table below; "3 fields" tells a reader nothing.
+      .filter(key => !source[key] || typeof source[key] !== 'object')
       .map(key => [artifactKeyLabel(key), artifactScalar(source[key], key)])
       .filter(row => row[1] !== '—')
       .slice(0, 10);
@@ -616,6 +622,7 @@
     const canonical = {
       lact: t('Lactate', '乳酸'), death: t('In-hospital death', '院内死亡'),
       age: t('Age', '年龄'), sex: t('Sex', '性别'), adm: t('Admission type', '入院类型'),
+      sep3_sofa2: t('Sepsis-3 (SOFA-2)', 'Sepsis-3（SOFA-2）'),
       sofa: t('SOFA score', 'SOFA 评分'), los_icu: t('ICU length of stay', 'ICU 住院时长'),
       hr: t('Heart rate', '心率'), map: t('Mean arterial pressure', '平均动脉压'),
       ph: t('Blood pH', '血液酸碱度（pH）'), crea: t('Creatinine', '肌酐'),
@@ -916,7 +923,11 @@
     const selectedAnalysisType = String(selected.analysis_type || p.analysis_type || '').toLowerCase();
     const analysisOnlyPlan = String(designSelection.claim_ceiling || '') === 'analysis_only';
     const endpoint = p.endpoint && typeof p.endpoint === 'object' ? p.endpoint : null;
-    const required = Array.isArray(selected.required_variables) ? selected.required_variables : [];
+    // A saved executable plan may carry no design selection; its own display
+    // labels then name the variables it reads.
+    const required = Array.isArray(selected.required_variables) && selected.required_variables.length
+      ? selected.required_variables
+      : Object.keys(p.display_labels && typeof p.display_labels === 'object' ? p.display_labels : {}).filter(key => !key.includes('='));
     // A row identity is how records are keyed, not a study ingredient; the
     // cohort step names it, whatever the source database calls it.
     const identityColumns = new Set(steps.map(step => String(step && step.cohort_definition_spec
@@ -940,14 +951,18 @@
       ...(Array.isArray(selected.literature_citation_keys) ? selected.literature_citation_keys : []),
       ...steps.flatMap(step => Array.isArray(step && step.literature_citation_keys) ? step.literature_citation_keys : []),
     ].filter(Boolean)));
+    // Approval readiness is a judgment on a candidate the Planner offers; a
+    // saved plan without a design selection is not one, and its approval is
+    // the plan review's record, not this reader's.
+    const candidatePlan = candidates.length > 0;
     const gaps = [];
-    if (!recommendation) gaps.push(t('The Planner has not yet produced a complete reviewable recommendation.', 'Planner 尚未给出完整、可审阅的推荐方案。'));
+    if (candidatePlan && !recommendation) gaps.push(t('The Planner has not yet produced a complete reviewable recommendation.', 'Planner 尚未给出完整、可审阅的推荐方案。'));
     // AnalysisPlan.endpoint is an optional projection; the sealed
     // ResearchContext and scientific review own endpoint authority.  An
     // analysis-only plan may therefore omit the duplicate projection without
     // the artifact reader contradicting the approval gate beside it.
-    if (!endpoint && !analysisOnlyPlan) gaps.push(t('The primary outcome still lacks an executable definition and observation horizon.', '主要结局尚缺可执行定义和观察时间范围。'));
-    if (!robustness.length && !analysisOnlyPlan) gaps.push(t('The sensitivity-analysis proposal has not yet been formed.', '敏感性分析方案尚未形成。'));
+    if (candidatePlan && !endpoint && !analysisOnlyPlan) gaps.push(t('The primary outcome still lacks an executable definition and observation horizon.', '主要结局尚缺可执行定义和观察时间范围。'));
+    if (candidatePlan && !robustness.length && !analysisOnlyPlan) gaps.push(t('The sensitivity-analysis proposal has not yet been formed.', '敏感性分析方案尚未形成。'));
     if (String(p.analysis_type || '') === 'data_quality_audit') gaps.push(t('This version answers data readiness only; it does not yet answer the stated association question.', '这一版只能回答数据是否可用，还不能回答原研究问题中的关联。'));
     const planReady = gaps.length === 0;
     const flowStages = agentPlanFlowStages(steps);
@@ -975,15 +990,27 @@
       [t('Missing-data strategy', '缺失数据处理'), recommendation[4]],
       [t('Sensitivity and feasibility checks', '敏感性分析与数据可行性检查'), recommendation[5]],
     ].map(([label, value]) => `<article><small>${esc(label)}</small><p>${esc(String(value || '').trim() || '—')}</p></article>`).join('') : '';
+    // A design setting the plan did not record is left out rather than shown as a dash.
+    const designCards = [
+      [t('Target quantity', '要估计什么'), 'estimand', selected.estimand],
+      [t('Study start', '研究起点'), 'time_zero', selected.time_zero],
+      [t('Observation window', '观察范围'), 'observation_window', selected.observation_window],
+      [t('Primary method', '主要方法'), 'primary_method', selected.primary_method],
+    ].filter(row => String(row[2] || '').trim()).map(([label, kind, value]) => `<article><small>${esc(label)}</small>${planField(kind, value)}</article>`).join('');
+    const boundaryCards = [
+      [t('What this design can answer', '这套设计能回答'), 'supports', selected.supports],
+      [t('What it cannot prove', '这套设计不能证明'), 'cannot_prove', selected.cannot_prove],
+    ].filter(row => String(row[2] || '').trim()).map(([label, kind, value]) => `<article><strong>${esc(label)}</strong>${planField(kind, value)}</article>`).join('');
+    const question = String(p.research_question || '');
     return `<div class="ag-artifact-readable ag-plan-reader">
-      <header class="ag-plan-hero"><div><div class="eyebrow">${esc(t('Research plan', '研究计划'))}</div><h2>${esc(p.research_question || t('Research question not recorded', '尚未记录研究问题'))}</h2><p>${esc(t('Recorded study design and analysis steps. See the run record for execution status.', '已记录的研究设计与分析步骤；执行状态请查看运行记录。'))}</p></div><span class="ag-plan-state ${planReady ? 'is-ready' : 'is-revision'}">${esc(planReady ? t('Design settings recorded', '设计要素已记录') : t('Design information incomplete', '设计信息不完整'))}</span></header>
+      <header class="ag-plan-hero"><div><div class="eyebrow">${esc(t('Research plan', '研究计划'))}</div><h2${question.length > 140 ? ' class="is-long"' : ''}>${esc(question || t('Research question not recorded', '尚未记录研究问题'))}</h2><p>${esc(t('Recorded study design and analysis steps. See the run record for execution status.', '已记录的研究设计与分析步骤；执行状态请查看运行记录。'))}</p></div><span class="ag-plan-state ${planReady ? 'is-ready' : 'is-revision'}">${esc(planReady ? t('Design settings recorded', '设计要素已记录') : t('Design information incomplete', '设计信息不完整'))}</span></header>
       ${agentPlanGlance(steps, flowStages.length, citations.length)}
       ${gaps.length ? `<section class="ag-plan-section is-gap"><div class="ag-plan-section-head"><span>!</span><div><small>${esc(t('EasyICU must revise', 'EasyICU 需要修订'))}</small><h3>${esc(t('Why this version is not ready for approval', '为什么这一版还不能批准'))}</h3></div></div><ul>${gaps.map(value => `<li>${esc(value)}</li>`).join('')}</ul><p>${esc(t('These are Planner responsibilities. The researcher reviews the revised complete plan instead of filling these implementation details one by one.', '这些属于 Planner 的职责。研究者应审阅修订后的完整计划，而不是逐项替系统填写实现细节。'))}</p></section>` : ''}
-      <section class="ag-plan-section"><div class="ag-plan-section-head"><span>01</span><div><small>${esc(t('Chosen design · plan at a glance', '设计选择 · 先看核心设定'))}</small><h3>${esc(agentPlanAnalysisLabel(selected.analysis_type || p.analysis_type))}</h3></div></div><p class="ag-plan-lead">${esc(t('Start with the target quantity, study start, follow-up, and primary method. The full rationale remains available below.', '先看要估计什么、研究从哪里开始、随访到哪里以及主要方法；完整设计理由保留在下方。'))}</p><div class="ag-plan-design-grid"><article><small>${esc(t('Target quantity', '要估计什么'))}</small>${planField('estimand', selected.estimand)}</article><article><small>${esc(t('Study start', '研究起点'))}</small>${planField('time_zero', selected.time_zero)}</article><article><small>${esc(t('Observation window', '观察范围'))}</small>${planField('observation_window', selected.observation_window)}</article><article><small>${esc(t('Primary method', '主要方法'))}</small>${planField('primary_method', selected.primary_method)}</article></div><div class="ag-plan-boundaries"><article><strong>${esc(t('What this design can answer', '这套设计能回答'))}</strong>${planField('supports', selected.supports)}</article><article><strong>${esc(t('What it cannot prove', '这套设计不能证明'))}</strong>${planField('cannot_prove', selected.cannot_prove)}</article></div></section>
+      <section class="ag-plan-section"><div class="ag-plan-section-head"><span>01</span><div><small>${esc(t('Chosen design · plan at a glance', '设计选择 · 先看核心设定'))}</small><h3>${esc(agentPlanAnalysisLabel(selected.analysis_type || p.analysis_type))}</h3></div></div>${designCards ? `<p class="ag-plan-lead">${esc(t('Start with the target quantity, study start, follow-up, and primary method. The full rationale remains available below.', '先看要估计什么、研究从哪里开始、随访到哪里以及主要方法；完整设计理由保留在下方。'))}</p><div class="ag-plan-design-grid">${designCards}</div>` : ''}${boundaryCards ? `<div class="ag-plan-boundaries">${boundaryCards}</div>` : ''}</section>
       <section class="ag-plan-section"><div class="ag-plan-section-head"><span>02</span><div><small>${esc(t('Analysis path · workflow', '分析路径 · 分析流程'))}</small><h3>${esc(t(`${steps.length} planned steps in ${flowStages.length} stages`, `共 ${steps.length} 个步骤 · ${flowStages.length} 个阶段`))}</h3></div></div><p class="ag-plan-lead">${esc(t('Read the map first: each stage says what the run finishes before it moves on. Open the detail list only when you need the exact wording of a step.', '先看流程图：每个阶段说明这一段要做完什么，再进入下一段；需要逐条核对时再展开详细说明。'))}</p>${agentPlanFlowMap(steps, labels)}${stepCards ? `<details class="ag-plan-step-detail"><summary>${esc(t(`Step-by-step detail · ${steps.length} steps`, `逐步说明 · 共 ${steps.length} 步`))}</summary><ol class="ag-plan-steps">${stepCards}</ol></details>` : `<ol class="ag-plan-steps"><li><span>—</span><div><strong>${esc(t('No analysis steps are present.', '尚未形成分析步骤。'))}</strong></div></li></ol>`}</section>
       <section class="ag-plan-section"><div class="ag-plan-section-head"><span>03</span><div><small>${esc(t('Study ingredients', '研究要素'))}</small><h3>${esc(t('Variables named in the plan', '计划涉及的变量'))}</h3></div></div><div class="ag-plan-chips">${variableChips || `<span>${esc(t('Not yet specified', '尚未明确'))}</span>`}</div>${levelsNote}${endpoint ? `<p class="ag-plan-note"><strong>${esc(t('Primary outcome', '主要结局'))}：</strong>${esc(agentPlanVariableLabel(endpoint.name, labels))}</p>` : ''}</section>
       ${recommendation ? `<details class="ag-plan-recommendations"><summary><span>${esc(t('Recorded design settings · 6 items', '已记录的研究设定 · 6 项'))}</span><small>${esc(t('Open to inspect the recorded definitions.', '展开核对已记录的具体定义。'))}</small></summary><p class="ag-plan-lead">${esc(t('These are the design settings recorded in this plan. See the corresponding records for approval and execution status.', '以下为本计划记录的研究设定；批准与执行状态请查看相应记录。'))}</p><div class="ag-plan-design-grid">${recommendationCards}</div></details>` : ''}
-      <details class="ag-plan-details"><summary>${esc(t('Why this design was chosen', '查看完整设计理由'))}</summary>${planField('decision_reason', p.rationale || selected.decision_reason)}</details>
+      ${String(p.rationale || selected.decision_reason || '').trim() ? `<details class="ag-plan-details"><summary>${esc(t('Why this design was chosen', '查看完整设计理由'))}</summary>${planField('decision_reason', p.rationale || selected.decision_reason)}</details>` : ''}
       ${literatureSummary ? `<section class="ag-plan-literature"><div><strong>${esc(t('Literature used by this plan', '本计划使用的文献依据'))}</strong><small>${esc(t('Open “Literature evidence” for source, screening, and exact step bindings.', '具体来源、筛选理由及步骤绑定请打开「文献依据」。'))}</small></div><div>${literatureSummary}</div></section>` : ''}
       <p class="ag-plan-audit">${esc(t('Internal ids, methods, inputs, outputs, and the full immutable payload remain in the JSON audit view.', '内部标识、方法、输入输出及完整不可变内容仍保留在 JSON 审计视图中。'))}</p>
     </div>`;
@@ -1060,9 +1087,16 @@
     ]);
     const tableCard = (entry, open) => {
       const table = entry.table || {};
-      const headers = Array.isArray(table.headers) ? table.headers.slice(0, 12) : [];
+      const previewHeaders = Array.isArray(table.headers) ? table.headers.slice(0, 12) : [];
       const totalRows = Array.isArray(table.rows) ? table.rows.length : 0;
-      const rows = Array.isArray(table.rows) ? table.rows.slice(0, 30) : [];
+      const previewRows = Array.isArray(table.rows) ? table.rows.slice(0, 30) : [];
+      // A column empty in every shown row, or a row-order index, carries
+      // nothing to read; the registered file keeps both.
+      const blank = value => value === null || value === undefined || String(value).trim() === '';
+      const kept = previewHeaders.map((header, column) => column).filter(column => !/(?:^|_)index$/i.test(String(previewHeaders[column]))
+        && previewRows.some(row => Array.isArray(row) && !blank(row[column])));
+      const headers = kept.map(column => previewHeaders[column]);
+      const rows = previewRows.map(row => (Array.isArray(row) ? kept.map(column => row[column]) : row));
       const notes = [];
       if (table.preview_truncated || rows.length < totalRows) notes.push(t('Some rows are omitted from this preview.', '此预览省略了部分行。'));
       if (table.preview_columns_truncated || (table.headers || []).length > headers.length) notes.push(t('Some columns are omitted from this preview.', '此预览省略了部分列。'));
@@ -1149,6 +1183,7 @@
       not_assessed: t('Not assessed', '未评估'), passed: t('Passed', '已通过'),
       blocked: t('Blocked', '已阻断'), warning: t('Attention', '需关注'),
       blocker: t('Blocker', '阻断'), major: t('Major', '重大'), minor: t('Minor', '一般'),
+      review_required: t('Needs human review', '需人工审阅'),
     };
     return labels[key] || runStatusLabel(value);
   }
@@ -1196,7 +1231,7 @@
       { disclosure: findings.length > 3, open: false, meta: t(`${findings.length} findings`, `${findings.length} 项`) },
     );
     return `<div class="ag-artifact-readable ag-scientific-review-reader">
-      <div class="ag-artifact-readable-head"><div><div class="eyebrow">${esc(t('Scientific review', '科学审阅'))}</div><div class="ag-artifact-readable-title">${esc(t('Review conclusions and permissions are shown in plain language. Raw JSON remains available for audit.', '以可读语言展示审阅结论和权限；原始 JSON 仍保留用于审计。'))}</div></div><span class="pill" style="height:22px;">${esc(runStatusLabel(p.status || p.claim_ceiling))}</span></div>
+      <div class="ag-artifact-readable-head"><div><div class="eyebrow">${esc(t('Scientific review', '科学审阅'))}</div></div><span class="pill" style="height:22px;">${esc(runStatusLabel(p.status || p.claim_ceiling))}</span></div>
       ${summary}${domainTable}${findingTable}
     </div>`;
   }
@@ -1216,30 +1251,17 @@
     if (questionRequirements) return questionRequirements;
     if (String(p.schema_version || '') === 'easyicu.web-scientific-readiness/1') return scientificReadinessView(p);
     if (n.includes('result_tables')) return resultTablesView(p, context);
-    if (n === 'cohort_summary.json') {
-      const cohort = p.cohort || {};
-      const summary = p.summary || {};
-      const absent = t('Not recorded', '未记录');
-      const concepts = (Array.isArray(summary.selected_concepts) ? summary.selected_concepts : [])
-        .filter(value => typeof value === 'string').slice(0, 40).map(value => agentPlanVariableLabel(value, {}));
-      const criteria = value => (Array.isArray(value) ? value.filter(item => typeof item === 'string').slice(0, 20).join('; ') : '') || absent;
-      const hours = cohort.time_window_hours;
-      return `<div class="ag-artifact-readable">${artifactTable(t('Cohort summary', '队列摘要'), [t('Item', '项目'), t('Recorded definition', '记录的定义')], [
-        [t('Selected concepts', '已选研究概念'), concepts.join('、') || absent],
-        [t('Study outcome', '研究结局'), typeof cohort.target_outcome === 'string' && cohort.target_outcome ? agentPlanVariableLabel(cohort.target_outcome, {}) : absent],
-        [t('Time window', '时间窗'), typeof hours === 'number' && Number.isFinite(hours) && hours >= 0 ? t(`${hours} hours`, `${hours} 小时`) : absent],
-        [t('Inclusion criteria', '纳入条件'), criteria(cohort.criteria)],
-        [t('Exclusion criteria', '排除条件'), criteria(cohort.exclusion_criteria)],
-        [t('Prepared concepts', '已准备的概念数'), Number.isSafeInteger(summary.materialized_concept_count) && summary.materialized_concept_count >= 0 ? summary.materialized_concept_count : absent],
-      ])}</div>`;
-    }
+    const runFile = window.AGENT_RUN_FILE_READER ? window.AGENT_RUN_FILE_READER.view(n, p, {
+      artifactTable, gateCheckLabel, variable: value => agentPlanVariableLabel(value, {}),
+    }) : '';
+    if (runFile) return runFile;
     const sections = [];
     const summary = artifactSummaryRows(
       p,
       ['run_id', 'study_id', 'run_type', 'status', 'mode', 'database_scope', 'cohort_size', 'evidence_count', 'missing_evidence', 'local_first']
     );
     if (summary.length) {
-      sections.push(artifactTable(t('Readable artifact summary', '可读产物摘要'), [t('Field', '字段'), t('Value', '值')], summary));
+      sections.push(artifactTable(t('Overview', '概览'), [t('Field', '字段'), t('Value', '值')], summary));
     }
     if (String(p.schema_version || '') === 'easyicu.data-package-review/1') {
       const denominator = p.denominator && typeof p.denominator === 'object' ? p.denominator : {};
@@ -1362,25 +1384,18 @@
       const firstTable = firstObjectArray(p);
       if (firstTable) {
         sections.push(artifactTable(
-          t('Structured rows', '结构化行'),
+          artifactKeyLabel(firstTable.name) || t('Records', '记录'),
           firstTable.keys.map(artifactKeyLabel),
           objectArrayRows(firstTable.rows, firstTable.keys),
-          t('No structured rows are present.', '没有结构化行。')
+          t('No records are present.', '没有记录。')
         ));
       }
     }
     if (!sections.length) {
-      sections.push(artifactTable(t('Readable artifact summary', '可读产物摘要'), [t('Field', '字段'), t('Value', '值')], [[t('Artifact', '产物'), name || 'artifact'], [t('Payload', '内容'), artifactScalar(p)]]));
+      sections.push(artifactTable(t('Overview', '概览'), [t('Field', '字段'), t('Value', '值')], [[t('File', '文件'), name || 'artifact'], [t('Contents', '内容'), artifactScalar(p)]]));
     }
     return `
       <div class="ag-artifact-readable">
-        <div class="ag-artifact-readable-head">
-          <div>
-            <div class="eyebrow">${t('Table view', '表格视图')}</div>
-            <div class="ag-artifact-readable-title">${t('Raw JSON is kept for audit, but the default view is table-based.', '原始 JSON 保留用于审计；默认展示为表格。')}</div>
-          </div>
-          <span class="pill ok" style="height:22px;"><span class="dot"></span>${t('readable', '可读')}</span>
-        </div>
         ${artifactContentsStrip(sections)}
         ${figureGallery(p)}
         ${sections.join('')}

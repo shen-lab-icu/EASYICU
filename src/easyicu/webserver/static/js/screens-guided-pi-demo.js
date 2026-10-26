@@ -17,6 +17,22 @@
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
+  const RUN_FILES_URL = 'assets/demo/run-files/';
+  const RUN_FILES_TOKEN = '20261026-run-files1';
+  const RUN_FILES = {
+    'run_context.json': () => tr('Run context', '运行上下文'),
+    'cohort_summary.json': () => tr('Cohort summary', '队列摘要'),
+    'quality_gate.json': () => tr('Evidence verification', '证据核验'),
+    'agent_plan.json': () => tr('Research plan', '研究计划'),
+    'literature_evidence.json': () => tr('Literature evidence', '文献证据'),
+    'scientific_plan_review.json': () => tr('Scientific plan review', '科学计划审阅'),
+    'scientific_readiness.json': () => tr('Scientific review', '科学审阅'),
+    'manuscript_draft.json': () => tr('Locked manuscript draft', '锁定论文草稿'),
+    'figure_gallery.json': () => tr('Figure gallery', '图件画廊'),
+    'result_tables.json': () => tr('Research result tables', '科研结果表'),
+    'source_run_manifest.json': () => tr('Source run manifest', '原始运行清单'),
+    'evidence_ledger.json': () => tr('Evidence ledger', '证据账本'),
+  };
   function demoArtifact(name, title, summary, metrics, sections, extra) {
     return Object.assign({
       schema_version: 'easyicu.pi-reviewer-demo-artifact/1',
@@ -34,106 +50,8 @@
       sections: sections || [],
     }, extra || {});
   }
-  function literatureRecords() {
-    return [
-      {
-        key: 'strobe_2007', year: '2007', venue: 'Annals of Internal Medicine', pmid: '17938396',
-        title: 'The STROBE statement: guidelines for reporting observational studies.',
-        relevance: tr('Supports explicit cohort, denominator, uncertainty, and limitation reporting.', '支持明确报告队列、分母、不确定性与局限。'),
-        url: 'https://pubmed.ncbi.nlm.nih.gov/17938396/',
-      },
-      {
-        key: 'record_2015', year: '2015', venue: 'PLOS Medicine', pmid: '26440803',
-        title: 'The RECORD statement for studies using routinely collected health data.',
-        relevance: tr('Supports source-data, code-list, and reproducibility reporting.', '支持来源数据、代码表与可复现性报告。'),
-        url: 'https://pubmed.ncbi.nlm.nih.gov/26440803/',
-      },
-      {
-        key: 'anderson_landmark_1983', year: '1983', venue: 'Journal of Clinical Oncology', pmid: '6668489',
-        title: 'Analysis of survival by tumor response.',
-        relevance: tr('Frames the temporal limitation of a first-24-hour phenotype.', '界定入 ICU 后 24 小时表型的时间学局限。'),
-        url: 'https://pubmed.ncbi.nlm.nih.gov/6668489/',
-      },
-      {
-        key: 'suissa_immortal_time_2008', year: '2008', venue: 'American Journal of Epidemiology', pmid: '18056625',
-        title: 'Immortal time bias in pharmacoepidemiology.',
-        relevance: tr('Supports keeping post-baseline exposure opportunity visible.', '支持显式保留基线后暴露机会问题。'),
-        url: 'https://pubmed.ncbi.nlm.nih.gov/18056625/',
-      },
-      {
-        key: 'singer_sepsis3_2016', year: '2016', venue: 'JAMA', pmid: '26903338',
-        title: 'The Third International Consensus Definitions for Sepsis and Septic Shock (Sepsis-3).',
-        relevance: tr('Frames the source Sepsis-3 organ-dysfunction definition.', '界定来源 Sepsis-3 器官功能障碍定义。'),
-        url: 'https://pubmed.ncbi.nlm.nih.gov/26903338/',
-      },
-      {
-        key: 'durrleman_splines_1989', year: '1989', venue: 'Statistics in Medicine', pmid: '2657958',
-        title: 'Flexible regression models with cubic splines.',
-        relevance: tr('Documents flexible modelling of continuous covariates.', '记录连续协变量的灵活建模方法。'),
-        url: 'https://pubmed.ncbi.nlm.nih.gov/2657958/',
-      },
-      {
-        key: 'sterne_missing_data_2009', year: '2009', venue: 'BMJ', pmid: '19564179',
-        title: 'Multiple imputation for missing data in epidemiological and clinical research: potential and pitfalls.',
-        relevance: tr('Frames assumptions behind complete-case and missing-data handling.', '界定完整病例与缺失数据处理的假设。'),
-        url: 'https://pubmed.ncbi.nlm.nih.gov/19564179/',
-      },
-      {
-        key: 'ricu_2023', year: '2023', venue: 'GigaScience', pmid: '37318234',
-        title: "ricu: R's interface to intensive care data.",
-        relevance: tr("Conceptual ancestor of EasyICU's concept dictionary and table model.", 'EasyICU 概念字典与表模型的概念先驱。'),
-        url: 'https://academic.oup.com/gigascience/article/doi/10.1093/gigascience/giad041/7198370',
-      },
-      {
-        key: 'johnson_mimiciv_2023', year: '2023', venue: 'Scientific Data', pmid: '36596836',
-        title: 'MIMIC-IV, a freely accessible electronic health record dataset.',
-        relevance: tr('Primary source database used by this EasyICU run.', '本次 EasyICU 运行使用的主要来源数据库。'),
-        url: 'https://pubmed.ncbi.nlm.nih.gov/36596836/',
-      },
-    ];
-  }
   function artifacts() {
     const rows = {
-      'reviewer_protocol.json': demoArtifact(
-        'reviewer_protocol.json',
-        tr('Prespecified reviewer demonstration protocol', '预先规定的审稿人演示协议'),
-        tr('A real, read-only run is evaluated against explicit workflow criteria. Clinical novelty is intentionally outside this systems demonstration.', '使用真实只读运行按明确流程标准进行评估；临床新颖性明确不属于本次系统演示。'),
-        [
-          { label: tr('Prepared ICU stays', '准备后 ICU stays'), value: '94,458' },
-          { label: tr('Analysis mode', '分析模式'), value: 'descriptive · counts only' },
-          { label: tr('Reviewer criteria', '审稿标准'), value: '6 prespecified checks' },
-          { label: tr('Patient rows in browser', '浏览器患者行'), value: '0' },
-        ],
-        [
-          { heading: tr('System question', '系统问题'), items: [tr('Can the Agent preserve an exact approved plan, execute it, expose aggregate evidence, and stop unsupported authority escalation?', 'Agent 能否保留精确批准的计划、完成执行、展示聚合证据，并阻止无依据的权限升级？')] },
-          { heading: tr('Pass criteria', '通过标准'), items: [tr('Typed plan is inspectable and digest-bound.', 'Typed Plan 可审阅且绑定摘要。'), tr('All required steps complete without plan drift.', '所有必需步骤完成且无计划漂移。'), tr('Tables, figures, run identity, Provider usage, and source bindings remain inspectable.', '表格、图件、运行身份、Provider 使用及来源绑定均可审阅。'), tr('No identifier column, patient row, credential, or host path reaches the browser.', '浏览器不接收标识列、患者行、凭据或宿主路径。'), tr('Unsupported manuscript authority is withheld.', '无依据的稿件权限被正确拒绝。'), tr('A self-contained reviewer dossier is produced.', '生成自包含审稿人报告。')] },
-          { heading: tr('Authority boundary', '权限边界'), items: [tr('The reviewer demo may complete even when a clinical manuscript is withheld. These are separate outcomes.', '即使临床稿件被拒绝，审稿人 Demo 仍可完整通过；二者是不同结果。')] },
-        ],
-      ),
-      'analysis_plan.json': demoArtifact(
-        'analysis_plan.json',
-        tr('Exact reviewed six-step plan', '精确审阅的六步计划'),
-        tr('The approved plan is descriptive only: no p-values, confidence intervals, causal effects, or independence-sensitive inference.', '批准计划仅限描述：不计算 P 值、置信区间、因果效应或依赖独立性假设的推断。'),
-        [
-          { label: tr('Typed steps', 'Typed steps'), value: '6' },
-          { label: tr('Primary analysis', '主要分析'), value: 'counts + proportions' },
-          { label: tr('Variance mode', '方差模式'), value: 'none_counts_only' },
-          { label: tr('Claim ceiling', '结论上限'), value: 'descriptive_only' },
-        ],
-        [{ heading: tr('Locked question', '锁定问题'), items: [tr('Estimate the first-24-hour experimental SOFA-2 phenotype prevalence and observed in-hospital mortality by phenotype status among adult ICU stays.', '在成人 ICU stays 中估计入 ICU 后 24 小时实验性 SOFA-2 表型比例，并按表型状态报告观察到的院内死亡。')] }],
-        {
-          projection_note: tr('The four displayed methods references are exact keys retained by the run. The source receipt records curated seeds rather than a completed novelty search.', '展示的 4 条方法学文献是该运行保留的精确 key；来源回执记录的是人工种子，而不是已完成的新颖性检索。'),
-          steps: [
-            { step_id: '01_define_analysis_cohort', method: 'cohort definition + attrition', intent: tr('Materialize adult ICU stays and preserve exact denominator accounting.', '生成成人 ICU stay 队列并保留精确分母账本。'), inputs: ['age ≥ 18', 'prepared ICU universe'], outputs: ['analysis_cohort', 'cohort_flow'], citation_keys: ['record_2015'] },
-            { step_id: '02_missingness_and_measurement_audit', method: 'typed measurement audit', intent: tr('Separate measurement availability, binary event status, and conditional event-time applicability.', '区分测量可得性、二元事件状态与条件事件时间适用性。'), inputs: ['age', 'sex', 'sep3_sofa2', 'death', 'death_time'], outputs: ['missingness_data_quality'], citation_keys: ['record_2015'] },
-            { step_id: '03_exposure_outcome_distribution', method: 'descriptive counts only', intent: tr('Report phenotype prevalence and observed mortality with exact denominators.', '按精确分母报告表型比例及观察到的死亡。'), inputs: ['analysis_cohort', 'sep3_sofa2_max', 'death'], outputs: ['exposure_outcome_distribution'], citation_keys: ['strobe_2007', 'record_2015', 'anderson_landmark_1983', 'suissa_immortal_time_2008'] },
-            { step_id: '04_visualize_exposure_outcome_distribution', method: 'deterministic rendering', intent: tr('Render registered counts and proportions without re-analysis.', '不重新分析，仅绘制已登记计数和比例。'), inputs: ['exposure_outcome_distribution'], outputs: ['phenotype_mortality_figure'], citation_keys: ['strobe_2007'] },
-            { step_id: '05_visualize_cohort_accounting', method: 'deterministic rendering', intent: tr('Render the cohort denominator and eligibility accounting.', '绘制队列分母与纳入账本。'), inputs: ['cohort_flow'], outputs: ['cohort_flow_figure'], citation_keys: ['record_2015'] },
-            { step_id: '06_visualize_data_quality', method: 'applicability-aware rendering', intent: tr('Render true missingness separately from not-applicable conditional event times.', '将真实缺失与不适用的条件事件时间分开绘制。'), inputs: ['missingness_data_quality'], outputs: ['data_quality_figure'], citation_keys: ['record_2015'] },
-          ],
-          citations: literatureRecords(),
-        },
-      ),
       'descriptive_results.json': demoArtifact(
         'descriptive_results.json',
         tr('Registered aggregate results', '已登记聚合结果'),
@@ -159,64 +77,6 @@
           }],
         },
       ),
-      'applicability_audit.json': demoArtifact(
-        'applicability_audit.json',
-        tr('Applicability-aware data-quality audit', '适用性敏感的数据质量审计'),
-        tr('The audit prevents event prevalence from being mislabelled as measurement coverage.', '该审计避免把事件比例误标为测量覆盖率。'),
-        [
-          { label: tr('Death status available', '死亡状态可得'), value: '94,458 / 94,458' },
-          { label: tr('Death-time applicable', '死亡时间适用'), value: '9,466' },
-          { label: tr('Missing among applicable', '适用者中缺失'), value: '0 / 9,466' },
-          { label: tr('Not applicable', '不适用'), value: '84,992' },
-        ],
-        [
-          { heading: tr('Semantic correction', '语义修正'), items: [tr('10.02% is the death-event prevalence and therefore the share for which death_time is applicable. It is not a death-time measurement rate.', '10.02% 是死亡事件比例，因此也是 death_time 的适用比例；它不是死亡时间测量率。'), tr('Twenty-eight death times precede the ICU origin and remain a separate timing-protocol flag, not missingness.', '28 个死亡时间早于 ICU origin，作为独立时间协议标记保留，不计为缺失。')] },
-        ],
-        {
-          tables: [{
-            label: tr('Typed observation semantics', 'Typed observation semantics'),
-            headers: [tr('Variable', '变量'), tr('Semantic type', '语义类型'), tr('Applicable', '适用'), tr('Missing in applicable', '适用者中缺失'), tr('Not applicable', '不适用')],
-            rows: [
-              ['age', 'measurement_availability', '94,458', '0', '0'],
-              ['sex', 'measurement_availability', '94,458', '0', '0'],
-              ['sep3_sofa2', 'binary_event_presence', '94,458', '0', '0'],
-              ['death', 'measurement_availability', '94,458', '0', '0'],
-              ['death_time', 'conditional_event_time', '9,466', '0', '84,992'],
-            ],
-          }],
-        },
-      ),
-      'execution_receipt.json': demoArtifact(
-        'execution_receipt.json',
-        tr('Execution, provenance, and privacy receipt', '执行、来源与隐私回执'),
-        tr('One exact reviewed plan completed and produced a bounded, inspectable browser projection.', '一份审阅过的计划执行完成，并在页面上生成可审阅的结果。'),
-        [
-          { label: tr('Execution', '执行'), value: '6 / 6 steps' },
-          { label: tr('Registered evidence', '已登记证据'), value: '125 records' },
-          { label: tr('Review surfaces', '审阅界面'), value: '12 tables / 3 figures' },
-          { label: tr('Provider usage', 'Provider 使用'), value: '14 calls / 162,256 tokens' },
-          { label: tr('Estimated cost', '估算成本'), value: '$2.30776' },
-          { label: tr('Source bindings', '来源绑定'), value: '11 SHA-256 bindings' },
-        ],
-        [
-          { heading: tr('Privacy boundary', '隐私边界'), items: [tr('Aggregate tables only; zero patient rows, identifier columns, host paths, or credentials in the browser projection.', '浏览器投影仅含聚合表；患者行、标识列、宿主路径和凭据均为 0。')] },
-          { heading: tr('Reproducibility boundary', '可复现性边界'), items: [tr('The report, HTML, PDF, corrected figure source, evidence ledger, and private review/Provider receipts are digest-bound.', '报告、HTML、PDF、修正图源、证据账本及私有审阅/Provider 回执均绑定摘要。')] },
-        ],
-        {
-          tables: [{
-            label: tr('Reviewer workflow outcome', '审稿人流程结果'),
-            headers: [tr('Boundary', '边界'), tr('Outcome', '结果'), tr('Meaning', '含义')],
-            rows: [
-              [tr('Typed plan', 'Typed Plan'), tr('Verified', '已核验'), tr('Six exact steps', '精确六步')],
-              [tr('Development review', '开发审阅'), tr('Verified', '已核验'), tr('Exact-plan approval', '精确计划批准')],
-              [tr('Execution', '执行'), tr('Verified', '已核验'), tr('6/6 complete', '6/6 完成')],
-              [tr('Browser projection', '浏览器投影'), tr('Verified', '已核验'), tr('Aggregate-only privacy pass', '仅聚合隐私检查通过')],
-              [tr('Clinical manuscript', '临床稿件'), tr('Withheld as designed', '按设计拒绝'), tr('STRICT authority gate', 'STRICT 权限闸门')],
-              [tr('Reviewer dossier', '审稿人报告'), tr('Complete', '完整'), tr('HTML + six-page PDF', 'HTML + 6 页 PDF')],
-            ],
-          }],
-        },
-      ),
       'authority_verdict.json': demoArtifact(
         'authority_verdict.json',
         tr('Reviewer verdict: demonstration complete', '审稿结论：演示完整完成'),
@@ -233,175 +93,9 @@
         ],
       ),
     };
-    rows['run_context.json'] = demoArtifact(
-      'run_context.json', tr('Run context', '运行上下文'),
-      tr('Path-free identity and scientific scope derived from the registered source run.', '从登记 source run 派生的无路径身份与科学范围。'),
-      [
-        { label: tr('Pipeline run', 'Pipeline run'), value: SOURCE_RUN_ID },
-        { label: tr('Wrapper job', 'Wrapper job'), value: WRAPPER_RUN_ID },
-        { label: tr('Analysis family', '分析家族'), value: 'descriptive_epidemiology' },
-        { label: tr('Claim ceiling', '结论上限'), value: 'descriptive_only' },
-      ],
-      [{ heading: tr('Bound question', '绑定问题'), items: [tr('Estimate the experimental first-24-hour SOFA-2 phenotype prevalence and observed in-hospital mortality with exact denominators.', '按精确分母估计实验性入 ICU 后 24 小时 SOFA-2 表型比例及观察到的院内死亡。')] }],
-      {
-        run_id: SOURCE_RUN_ID, study_id: 'e1-luna-canary-20260814-a56657b', run_type: 'full',
-        mode: 'research_agent_pipeline', database_scope: 'miiv', cohort_size: 94458,
-        local_first: { uploads: 0 },
-        question: tr('Estimate the experimental first-24-hour SOFA-2 phenotype prevalence and observed in-hospital mortality using exact denominators.', '按精确分母估计实验性入 ICU 后 24 小时 SOFA-2 表型比例及观察到的院内死亡。'),
-      },
-    );
-    rows['cohort_summary.json'] = demoArtifact(
-      'cohort_summary.json', tr('Cohort summary', '队列摘要'),
-      tr('The host-materialized adult ICU-stay universe and exact attrition accounting.', 'Host 生成的成人 ICU stay 分析全集与精确队列账本。'),
-      [
-        { label: tr('Prepared universe', '准备后全集'), value: '94,458 ICU stays' },
-        { label: tr('Adult criterion', '成人标准'), value: 'age ≥ 18' },
-        { label: tr('Excluded', '排除'), value: '0' },
-        { label: tr('Analysis cohort', '分析队列'), value: '94,458 ICU stays' },
-      ],
-      [{ heading: tr('Cohort contract', '队列合同'), items: [tr('One prepared row per ICU stay; no patient-level independence claim is made.', '每个 ICU stay 一条准备后记录；不主张患者层独立性。')] }],
-      {
-        run_id: SOURCE_RUN_ID, status: 'complete', database_scope: 'miiv', cohort_size: 94458,
-        analysis_unit: 'ICU stay', included: 94458, excluded: 0,
-        criteria: [tr('Adult ICU stays', '成人 ICU stays'), 'age >= 18'],
-      },
-    );
-    rows['quality_gate.json'] = Object.assign(clone(rows['authority_verdict.json']), {
-      artifact: 'quality_gate.json',
-      title: tr('Evidence verification', '证据核验'),
-      summary: tr('Execution completed, while manuscript and publication authority were withheld by separate checks.', '执行已完成；稿件与发表权限由独立检查按设计拒绝。'),
-      gate: {
-        status: 'blocked', reportable: false, draft_unlocked: false,
-        reason: 'research_agent_pipeline_failed_closed',
-        checks: [
-          { id: 'execution_complete', passed: true, status: 'passed', evidence: '6 / 6 steps', reason: '' },
-          { id: 'analysis_validated', passed: false, status: 'failed', evidence: '', reason: 'analysis_validated_not_satisfied' },
-          { id: 'evidence_complete', passed: false, status: 'failed', evidence: '', reason: 'evidence_complete_not_satisfied' },
-          { id: 'numeric_verified', passed: false, status: 'failed', evidence: '', reason: 'numeric_verified_not_satisfied' },
-          { id: 'manuscript_ready', passed: false, status: 'failed', evidence: '', reason: 'manuscript_ready_not_satisfied' },
-          { id: 'publication_ready', passed: false, status: 'failed', evidence: '', reason: 'publication_ready_not_satisfied' },
-          { id: 'paper_authorized', passed: false, status: 'failed', evidence: '', reason: 'paper_authorized_not_satisfied' },
-        ],
-      },
-    });
-    rows['agent_plan.json'] = Object.assign(clone(rows['analysis_plan.json']), {
-      artifact: 'agent_plan.json', title: tr('Research plan', '研究计划'),
-    });
-    rows['literature_evidence.json'] = demoArtifact(
-      'literature_evidence.json', tr('Literature evidence', '文献证据'),
-      tr('Exact retained methodology keys are inspectable; the source receipt honestly records that no live novelty retrieval completed.', '可审阅精确保留的方法学 key；来源回执如实记录未完成实时新颖性检索。'),
-      [
-        { label: tr('Retained curated records', '保留人工文献'), value: '9' },
-        { label: tr('Live retrieval completed', '实时检索完成'), value: tr('No', '否') },
-        { label: tr('Plan mapping', '计划映射'), value: 'complete' },
-        { label: tr('Novelty authority', '新颖性权限'), value: 'not established' },
-      ],
-      [{ heading: tr('Search receipt', '检索回执'), items: ['search_conducted=false', 'sources_enabled=[]', tr('Curated methods evidence cannot establish novelty.', '人工方法学证据不能建立新颖性。')] }],
-      {
-        citations: literatureRecords(),
-        search: {
-          search_conducted: false, sources_returning: [],
-          note: tr('The run retained curated methodology records; no live novelty search completed.', '该运行保留人工方法学文献；未完成实时新颖性检索。'),
-        },
-        evidence_boundary: tr('Literature supports design rationale; patient and result evidence remain separately governed.', '文献支持设计依据；患者与结果证据由独立链路治理。'),
-        step_citation_map: clone(rows['analysis_plan.json'].steps).map(step => ({
-          step_id: step.step_id, intent: step.intent,
-          planned_analysis_role: step.step_id.startsWith('0') && Number(step.step_id.slice(0, 2)) > 3 ? 'auxiliary' : 'scientific',
-          citation_keys: step.citation_keys,
-        })),
-      },
-    );
-    rows['scientific_plan_review.json'] = demoArtifact(
-      'scientific_plan_review.json', tr('Scientific plan review', '科学计划审阅'),
-      tr('The six-step counts-only plan passed development review for execution, not publication review.', '六步仅计数计划通过开发执行审阅，但不是投稿审阅。'),
-      [
-        { label: tr('Plan contract', '计划合同'), value: 'passed' },
-        { label: tr('Typed steps', 'Typed steps'), value: '6' },
-        { label: tr('Execution approval', '执行批准'), value: 'development only' },
-        { label: tr('Publication review', '投稿审阅'), value: 'not granted' },
-      ],
-      [{ heading: tr('Open scientific limits', '未闭合科学限制'), items: [tr('Post-baseline exposure opportunity remains unresolved.', '基线后暴露机会仍未闭合。'), tr('Independent novelty and scientific review are unavailable.', '缺少独立新颖性与科学审阅。')] }],
-      {
-        review_scope: 'pre_execution_plan', rendered_outputs_assessed: false,
-        dimension_scores: { literature: 40, novelty: 70, literature_to_plan: 100, icu_clinical_design: 100, statistical_design: 100, robustness: 70, figures: 100, content_completeness: 100 },
-        findings: [
-          { severity: 'major', remediation_route: 'literature', code: 'LITERATURE_RETRIEVAL_NOT_CONDUCTED', message: tr('Curated seeds do not establish current novelty.', '人工种子不能建立当前新颖性。'), remediation: tr('Run a dated, inspectable retrieval and independent review.', '执行带日期、可检查的检索与独立审阅。') },
-          { severity: 'major', remediation_route: 'study_design', code: 'POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED', message: tr('The first-24-hour phenotype is post-baseline.', '入 ICU 后 24 小时表型属于基线后暴露。'), remediation: tr('Keep the current run descriptive or create a new landmark design.', '保持当前运行仅描述，或创建新的 landmark 设计。') },
-        ],
-        facts: { score_interpretation: { figures: tr('Planned roles only; rendered visual quality was assessed after execution.', '仅规划角色；渲染后再评估视觉质量。'), content_completeness: tr('Planned article-role coverage only.', '仅表示计划文章角色覆盖。') } },
-      },
-    );
-    rows['scientific_readiness.json'] = Object.assign(clone(rows['authority_verdict.json']), {
-      artifact: 'scientific_readiness.json', title: tr('Scientific review', '科学审阅'),
-      summary: tr('Engineering validation is complete; clinical and publication readiness remain separately withheld.', '工程验证已完成；临床与投稿就绪度仍由独立边界拒绝。'),
-      metrics: [], sections: [], claim_ceiling: 'unsupported',
-      domains: [
-        { domain: 'idea', status: 'not_assessed', summary: tr('Technical execution does not establish novelty.', '技术执行不能建立新颖性。') },
-        { domain: 'literature', status: 'blocked', summary: tr('No live novelty retrieval completed.', '未完成实时新颖性检索。') },
-        { domain: 'data', status: 'review_required', summary: tr('Prepared-data provenance exists; publication population scope remains open.', '准备后数据来源存在；投稿人群范围仍未闭合。') },
-        { domain: 'analysis', status: 'analysis_only', summary: tr('Six descriptive steps completed without inferential authority.', '六个描述性步骤完成，但无推断权限。') },
-        { domain: 'manuscript', status: 'blocked', summary: tr('STRICT evidence binding withheld the formal draft.', 'STRICT 证据绑定拒绝正式稿件。') },
-      ],
-    });
-    rows['manuscript_draft.json'] = demoArtifact(
-      'manuscript_draft.json', tr('Locked manuscript draft', '锁定论文草稿'),
-      tr('STRICT evidence enforcement stopped before a formal manuscript could be authorized.', 'STRICT 证据执行在正式稿件获得授权前停止。'),
-      [
-        { label: tr('Status', '状态'), value: 'withheld_as_designed' },
-        { label: tr('Formal manuscript', '正式稿件'), value: tr('Not generated', '未生成') },
-        { label: tr('Authorized sentences', '授权句子'), value: '0' },
-        { label: tr('Publication authority', '发表权限'), value: 'false' },
-      ],
-      [{ heading: tr('Deterministic reason', '确定性原因'), items: ['STRICT evidence mode: manuscript prose lacks deterministic evidence or scientific claim authority.', tr('This is a safety result, not missing execution output.', '这是安全结果，不是分析执行产物缺失。')] }],
-      {
-        run_id: SOURCE_RUN_ID, status: 'locked_pending_human_review',
-        claims: [{ id: 'claim_000', text: tr('Formal manuscript was not generated.', '未生成正式稿件。'), evidence_ids: [], status: 'diagnostic_only' }],
-      },
-    );
-    rows['figure_gallery.json'] = demoArtifact(
-      'figure_gallery.json', tr('Figure gallery', '图件画廊'),
-      tr('Three source-bound supporting figures are available; no primary publication figure bundle is claimed.', '3 张来源绑定支持图可用；不声称存在主投稿图件包。'),
-      [
-        { label: tr('Supporting figures', '支持图'), value: '3' },
-        { label: tr('Primary publication figures', '主投稿图'), value: '0' },
-        { label: tr('Embedded images', '嵌入图像'), value: '3' },
-        { label: tr('Semantic corrections', '语义修正'), value: '1' },
-      ],
-      [{ heading: tr('Registered figures', '登记图件'), items: [tr('Phenotype prevalence and observed mortality.', '表型比例与观察死亡。'), tr('Adult ICU cohort accounting.', '成人 ICU 队列账本。'), tr('Applicability-aware data quality.', '适用性敏感的数据质量。')] }],
-      {
-        schema_version: 'easyicu.web-pipeline-figure-gallery/1', kind: 'figure_gallery',
-        status: 'no_primary_publication_figure', embedded_count: 3, primary_count: 0, supporting_count: 3,
-        figures: [
-          { label: tr('Phenotype prevalence and observed in-hospital mortality', '表型比例与观察院内死亡'), name: 'sep3_sofa2_mortality_distribution.png', relative_path: 'steps/04_visualize_exposure_outcome_distribution/outputs/sep3_sofa2_mortality_distribution.png', status: 'supporting' },
-          { label: tr('Adult ICU cohort accounting', '成人 ICU 队列账本'), name: 'cohort_flow.png', relative_path: 'steps/05_visualize_cohort_accounting/outputs/cohort_flow.png', status: 'supporting' },
-          { label: tr('Applicability-aware data quality', '适用性敏感的数据质量'), name: 'data_quality.png', relative_path: 'steps/06_visualize_data_quality/outputs/data_quality.png', status: 'supporting' },
-        ],
-      },
-    );
-    rows['result_tables.json'] = Object.assign(clone(rows['descriptive_results.json']), {
-      artifact: 'result_tables.json', title: tr('Research result tables', '科研结果表'),
-    });
-    rows['source_run_manifest.json'] = Object.assign(clone(rows['execution_receipt.json']), {
-      artifact: 'source_run_manifest.json', title: tr('Source run manifest', '原始运行清单'),
-      run_id: SOURCE_RUN_ID, status: 'blocked', evidence_count: 125, figure_count: 3,
-      result_table_count: 12, system_validation_report_available: true,
-      provider: { provider: 'openai', model: 'gpt-5.6-luna', provider_gate: 'research_agent_provider_ready' },
-      readiness: { execution_complete: true, failed_steps: [], missing_steps: [], manuscript_generated: false, paper_authorized: false, publication_ready: false },
-    });
-    rows['evidence_ledger.json'] = Object.assign(clone(rows['execution_receipt.json']), {
-      artifact: 'evidence_ledger.json', title: tr('Evidence ledger', '证据账本'),
-      summary: tr('Digest-bound inventory of the browser-safe run projection and registered reviewer documents.', '浏览器安全运行投影与登记审稿文档的摘要绑定清单。'),
-      artifacts: [
-        ['run_context.json', 'eb96c56e38ddcda5e4781226bc068654dd82753e5c58d8e63efed01450e16695'],
-        ['cohort_summary.json', '6569849a2e0a8f27f0246066f4cb0a42820d209b5db0422ec712fc6fbce64e40'],
-        ['quality_gate.json', '01d1be6ffa605c4e44f04d66ee63331466c2f1e120f8460dffa26fe11f2133d7'],
-        ['agent_plan.json', '04796b6430c1e75b22ee4d73826f14869bd7d2e85eb812be0b8854775863e44e'],
-        ['literature_evidence.json', 'bc5c6dffdf90ba37b7265da8f35110f96c509f6cdcf8777f432af56dca132760'],
-        ['scientific_readiness.json', '9707075317783a2c943364197ada7515f5e18be0e2f8c152d7ecab47c0336c85'],
-        ['manuscript_draft.json', '5c41b834bf45b364c600111838daf364abb44739ab9a9743ef0da86850490913'],
-        ['result_tables.json', '16c14d7f8d456eb5334df6df9fef59f028fd8d303dbf31cb198fe75e62372089'],
-      ].map(([name, sha256]) => ({ name, sha256, kind: 'json', media_type: 'application/json' })),
-    });
+    // The standard run files are the source run's own files, published by
+    // tools/build_demo_run_files.py and read by the same views as any run.
+    Object.keys(RUN_FILES).forEach(name => { rows[name] = { artifact: name, title: RUN_FILES[name](), run_file: true }; });
     return rows;
   }
 
@@ -521,7 +215,7 @@
       { id: 'analysis', label: tr('Analysis and figures', '分析与图表'), beats: [
         timedActivity('reviewer-execution', [
           step('e-1', tr('Step 1/6: Cohort and denominators', '第 1/6 步：队列与分母核算'), tr('All 94,458 stays retained.', '94,458 个入住全部保留。'), resource('cohort_summary.json')),
-          step('e-2', tr('Step 2/6: Measurement and missingness audit', '第 2/6 步：测量与缺失审计'), tr('Death time applies only to the 9,466 deaths; 0 of them missing.', '死亡时间只对 9,466 例死亡适用，其中缺失 0 例。'), artifactResource('applicability_audit.json', tr('Applicability audit', '适用性审计'))),
+          step('e-2', tr('Step 2/6: Measurement and missingness audit', '第 2/6 步：测量与缺失审计'), tr('Death time applies only to the 9,466 deaths; 0 of them missing.', '死亡时间只对 9,466 例死亡适用，其中缺失 0 例。'), resource('result_tables.json')),
           step('e-3', tr('Step 3/6: Group proportions and outcomes', '第 3/6 步：分组比例与结局'), tr('Counts and proportions only; no inferential estimate added.', '只计数和比例，不新增推断估计。'), resource('result_tables.json')),
           step('e-4', tr('Step 4/6: Result figure', '第 4/6 步：结果图'), '', resource('figure_gallery.json')),
           step('e-5', tr('Step 5/6: Cohort flow figure', '第 5/6 步：队列流程图'), '', resource('figure_gallery.json')),
@@ -640,22 +334,12 @@
   }
   function artifact(name) { return clone(artifacts()[String(name || '')] || null); }
   async function previewArtifact(name) {
-    const item = artifact(name);
-    if (!item || String(name || '') !== 'figure_gallery.json' || typeof fetch !== 'function') return item;
-    try {
-      const response = await fetch('/assets/demo/system-validation-report.html?v=20260815-reviewer-demo1', { credentials: 'same-origin' });
-      if (!response.ok) return item;
-      const html = await response.text();
-      const images = [];
-      const pattern = /\bsrc=(["'])(data:image\/png;base64,[A-Za-z0-9+/=]+)\1/gi;
-      let match;
-      while ((match = pattern.exec(html)) && images.length < 3) images.push(match[2]);
-      if (images.length !== 3) return item;
-      item.figures.forEach((figure, index) => { figure.data_url = images[index]; });
-    } catch (_) {
-      // The metadata table remains usable if the registered dossier is unavailable.
-    }
-    return item;
+    const key = String(name || '');
+    if (!Object.prototype.hasOwnProperty.call(RUN_FILES, key)) return artifact(key);
+    if (typeof fetch !== 'function') throw new Error(tr('The demo run file cannot be loaded here.', '此处无法加载演示运行文件。'));
+    const response = await fetch(`${RUN_FILES_URL}${key}?v=${RUN_FILES_TOKEN}`, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error(tr('The demo run file is unavailable.', '演示运行文件不可用。'));
+    return response.json();
   }
   function hasArtifact(name) { return Object.prototype.hasOwnProperty.call(artifacts(), String(name || '')); }
   function artifactLabel(name) { const item = artifacts()[String(name || '')]; return item ? item.title : String(name || ''); }

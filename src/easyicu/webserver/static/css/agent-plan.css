@@ -4,6 +4,7 @@
 .ag-plan-reader{color:var(--ink-2);background:var(--surface)}
 .ag-plan-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:22px;padding:26px 28px;border-bottom:1px solid var(--hair);background:linear-gradient(140deg,color-mix(in srgb,var(--accent) 7%,var(--surface)),var(--surface) 68%)}
 .ag-plan-hero h2{max-width:780px;margin:6px 0 8px;color:var(--ink);font-size:22px;line-height:1.38;letter-spacing:-.018em}
+.ag-plan-hero h2.is-long{font-size:15.5px;line-height:1.6;font-weight:600;letter-spacing:0}
 .ag-plan-hero p{margin:0;color:var(--ink-3);font-size:13.5px;line-height:1.6}
 .ag-plan-state{flex:0 0 auto;padding:7px 11px;border:1px solid color-mix(in srgb,var(--ok) 34%,var(--hair));border-radius:999px;background:color-mix(in srgb,var(--ok) 8%,var(--surface));color:var(--ink-2);font-size:12px;font-weight:700;white-space:nowrap}
 .ag-plan-state.is-revision{border-color:color-mix(in srgb,var(--warn) 38%,var(--hair));background:color-mix(in srgb,var(--warn) 9%,var(--surface))}
