@@ -1306,6 +1306,8 @@ def test_p1_5_debug_dump_is_owner_only_on_disk(tmp_path, monkeypatch):
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
     client._model = "gpt-test"
     client._timeout = 1.0
+    client._request_timeout = 1.0
+    client._retryable_http_status_codes = None
     client._extra_body = {}
     client._completion_token_parameter = "max_tokens"
     client._stream_enabled = False
