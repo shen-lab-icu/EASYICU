@@ -524,6 +524,26 @@ def _blocked_manuscript_critique(
     )
 
 
+def _blocked_critique(
+    critique: CritiqueReport,
+    *,
+    unsupported_claims: Sequence[str] | None = None,
+    concerns: Sequence[str] | None = None,
+    suggested_repairs: Sequence[str] | None = None,
+) -> CritiqueReport:
+    """Block a critique and append the deterministic reasons to the named lists."""
+
+    update: dict[str, Any] = {"status": "blocked"}
+    for field, extra in (
+        ("unsupported_claims", unsupported_claims),
+        ("concerns", concerns),
+        ("suggested_repairs", suggested_repairs),
+    ):
+        if extra is not None:
+            update[field] = list(getattr(critique, field)) + list(extra)
+    return critique.model_copy(update=update)
+
+
 def _review_manuscript_with_fail_safe(
     critic: CriticAgent,
     *,
@@ -2730,60 +2750,44 @@ def _bind_and_review_manuscript(
         available_evidence_ids=current_evidence_names,
     )
     if manuscript_output_blockers:
-        manuscript_critique = manuscript_critique.model_copy(
-            update={
-                "status": "blocked",
-                "unsupported_claims": list(manuscript_critique.unsupported_claims)
-                + manuscript_output_blockers,
-                "concerns": list(manuscript_critique.concerns)
-                + [
-                    "The writer did not produce a usable evidence-bound manuscript; "
-                    "the run must remain analysis-only until writer output is regenerated."
-                ],
-            }
+        manuscript_critique = _blocked_critique(
+            manuscript_critique,
+            unsupported_claims=manuscript_output_blockers,
+            concerns=[
+                "The writer did not produce a usable evidence-bound manuscript; "
+                "the run must remain analysis-only until writer output is regenerated."
+            ],
         )
     if caveat_finding is not None:
         manifest_comment_counts = caveat_finding.detail["manifest_comment_counts"]
-        manuscript_critique = manuscript_critique.model_copy(
-            update={
-                "status": "blocked",
-                "unsupported_claims": list(manuscript_critique.unsupported_claims)
-                + [
-                    "Bound manuscript contains unresolved manifest caveat comments "
-                    f"({manifest_comment_counts['error']} error, "
-                    f"{manifest_comment_counts['warning']} warning)."
-                ],
-                "concerns": list(manuscript_critique.concerns)
-                + [
-                    "Manuscript cites records that are not manuscript-facing clean "
-                    "because their evidence records carry active warning/error caveats."
-                ],
-            }
+        manuscript_critique = _blocked_critique(
+            manuscript_critique,
+            unsupported_claims=[
+                "Bound manuscript contains unresolved manifest caveat comments "
+                f"({manifest_comment_counts['error']} error, "
+                f"{manifest_comment_counts['warning']} warning)."
+            ],
+            concerns=[
+                "Manuscript cites records that are not manuscript-facing clean "
+                "because their evidence records carry active warning/error caveats."
+            ],
         )
     if manuscript_numeric_findings:
-        manuscript_critique = manuscript_critique.model_copy(
-            update={
-                "status": "blocked",
-                "unsupported_claims": list(manuscript_critique.unsupported_claims)
-                + [finding.message for finding in manuscript_numeric_findings],
-                "concerns": list(manuscript_critique.concerns)
-                + [
-                    "Manuscript numeric claims disagree with registered step_summary values."
-                ],
-            }
+        manuscript_critique = _blocked_critique(
+            manuscript_critique,
+            unsupported_claims=[finding.message for finding in manuscript_numeric_findings],
+            concerns=["Manuscript numeric claims disagree with registered step_summary values."],
         )
     if manuscript_quality_errors or question_coverage_findings:
-        manuscript_critique = manuscript_critique.model_copy(
-            update={
-                "status": "blocked",
-                "concerns": list(manuscript_critique.concerns)
-                + [
-                    "The deterministic manuscript quality audit found structural, "
-                    "terminology, or cross-section consistency errors."
-                ],
-                "suggested_repairs": list(manuscript_critique.suggested_repairs)
-                + [item.message for item in (*manuscript_quality_errors, *question_coverage_findings)[:8]],
-            }
+        manuscript_critique = _blocked_critique(
+            manuscript_critique,
+            concerns=[
+                "The deterministic manuscript quality audit found structural, "
+                "terminology, or cross-section consistency errors."
+            ],
+            suggested_repairs=[
+                item.message for item in (*manuscript_quality_errors, *question_coverage_findings)[:8]
+            ],
         )
     _persist_manuscript_critique(
         critique=manuscript_critique,
