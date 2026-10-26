@@ -28,7 +28,18 @@ export function modelErrorCode(message) {
   if (/context|token.*limit|maximum.*length/.test(detail)) return "pi_model_context_limit";
   if (/rate.?limit|too many requests|quota/.test(detail) || httpStatus === "429") return "pi_model_rate_limited";
   if (httpStatus?.startsWith("4") || detail.includes("budget")) return "pi_model_provider_error";
-  if (/timeout|timed out|connection reset|econnreset|etimedout|server_error|internal_server_error|\b5\d\d\b/.test(detail)) {
+  // Relays may wrap permanent refusals in a 500/server_error. Those reasons
+  // take precedence over transport indicators so they never trigger a replay.
+  if (/authenticat|authoriz|credential|api[ _-]?key|permission|access[ _-]?denied|forbidden|(?:invalid|expired)[ _-]?(?:bearer[ _-]?)?token/.test(detail)) {
+    return "pi_model_provider_error";
+  }
+  if (/content[ _-]?(?:filter|policy|refus)|safety|refusal|(?:request|prompt)[ _-]?(?:blocked|refused)/.test(detail)) {
+    return "pi_model_provider_error";
+  }
+  if (/invalid[ _-]?(?:request|argument|parameter)|bad[ _-]?request|malformed[ _-]?(?:request|json)|unsupported[ _-]?(?:model|parameter|configuration)/.test(detail)) {
+    return "pi_model_provider_error";
+  }
+  if (/timeout|timed out|connection reset|econnreset|etimedout|proxy connect|upstream connect(?:ion)? (?:fail|error|reset|refused|closed)|server_error|internal_server_error|\b5\d\d\b/.test(detail)) {
     return "pi_model_provider_unavailable";
   }
   return "pi_model_provider_error";

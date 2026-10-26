@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { modelErrorCode } from "./event-projection.mjs";
 
-const RETRY_DELAY_MS = 1500;
+const RETRY_DELAYS_MS = [1500, 4000, 10000];
 
 function hasContent(event) {
   // Opening a content block commits this attempt even before its first delta.
@@ -41,35 +41,40 @@ function replayPrefix(stream, iterator, prefix) {
   };
 }
 
-/** Inspect only the first attempt's empty prefix; every open is host-guarded. */
+/** Retry only empty attempts; every open is host-guarded, every wait abortable. */
 export async function retryTransientProviderStream(
   openAttempt,
-  { signal, sleep: wait = sleep } = {},
+  { signal, sleep: wait = sleep, onRetry } = {},
 ) {
-  let iterator;
-  const prefix = [];
-  try {
-    const stream = await openAttempt();
-    iterator = stream[Symbol.asyncIterator]();
-    while (true) {
-      const next = await iterator.next();
-      if (next.done) return replayPrefix(stream, iterator, prefix);
-      const event = next.value;
-      prefix.push(event);
-      if (hasContent(event) || event.type === "done") {
-        return replayPrefix(stream, iterator, prefix);
+  for (let attempt = 0; ; attempt += 1) {
+    let iterator;
+    const prefix = [];
+    const canRetry = () => attempt < RETRY_DELAYS_MS.length && !signal?.aborted;
+    try {
+      const stream = await openAttempt();
+      iterator = stream[Symbol.asyncIterator]();
+      while (true) {
+        const next = await iterator.next();
+        if (next.done) return replayPrefix(stream, iterator, prefix);
+        const event = next.value;
+        prefix.push(event);
+        if (hasContent(event) || event.type === "done") {
+          return replayPrefix(stream, iterator, prefix);
+        }
+        if (event.type === "error") {
+          if (canRetry() && isTransient(event.error) && !prefix.some(hasContent)) break;
+          return replayPrefix(stream, iterator, prefix);
+        }
       }
-      if (event.type === "error") {
-        if (!signal?.aborted && isTransient(event.error) && !prefix.some(hasContent)) break;
-        return replayPrefix(stream, iterator, prefix);
-      }
+    } catch (error) {
+      if (!canRetry() || !isTransient(error) || prefix.some(hasContent)) throw error;
     }
-  } catch (error) {
-    if (signal?.aborted || !isTransient(error) || prefix.some(hasContent)) throw error;
+    // Discard this failed prefix before announcing a retry. Counts describe
+    // retries (1..3), not total calls; no provider error detail crosses here.
+    await iterator?.return?.();
+    signal?.throwIfAborted();
+    onRetry?.({ type: "auto_retry_start", attempt: attempt + 1, maxAttempts: RETRY_DELAYS_MS.length });
+    await wait(RETRY_DELAYS_MS[attempt], undefined, { signal });
+    signal?.throwIfAborted();
   }
-  // The failed prefix stays private. The second stream passes through unchanged,
-  // including its terminal error or a refusal from the next authorization.
-  await iterator?.return?.();
-  await wait(RETRY_DELAY_MS, undefined, { signal });
-  return await openAttempt();
 }
