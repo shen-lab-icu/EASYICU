@@ -297,44 +297,6 @@ function fakeButton() {
   assert.match(missingApiError, /folder check API is unavailable/);
   assert.match(setup.renderReal(missingApiConfig), /folder check API is unavailable/);
 
-  context.EU_DATA = 'demo';
-  setup.setSelectedKeys(['miiv', 'eicu']);
-  setup.setView('idle');
-  const runButton = fakeButton();
-  const resetButton = fakeButton();
-  const root = {
-    querySelector() { return null; },
-    querySelectorAll(selector) {
-      if (selector === '[data-crossdb-run-demo]') return [runButton];
-      if (selector === '[data-viz-reset]') return [resetButton];
-      return [];
-    },
-  };
-  let lateCompletion = null;
-  let operationId = null;
-  let resetCount = 0;
-  const operationConfig = {
-    helpers: helpers(),
-    repaint() { repaintCount += 1; },
-    resetResult() { resetCount += 1; },
-    runDemo(done, runSnapshot) {
-      lateCompletion = done;
-      operationId = runSnapshot.operationId;
-    },
-  };
-  setup.bind(root, operationConfig);
-  runButton.click();
-  assert.equal(setup.view(), 'loading');
-  assert.equal(setup.operationCurrent(operationId), true);
-  resetButton.click();
-  assert.equal(setup.view(), 'idle');
-  assert.equal(setup.operationCurrent(operationId), false);
-  assert.equal(resetCount, 1);
-  const repaintAfterReset = repaintCount;
-  lateCompletion(true);
-  assert.equal(setup.view(), 'idle', 'a late completion must not restore loaded state after reset');
-  assert.equal(repaintCount, repaintAfterReset, 'a fenced completion must not repaint stale state');
-
   // A summary over more rows than the budget reads as a sentence, never as its code.
   errorMessage = 'crossdb_feature_read_budget_exceeded';
   for (const hosted of [false, true]) {

@@ -56,10 +56,10 @@
 /* —— Search, segmented tabs, filter pills —— */
 .eusk-search{border:1px solid var(--skin-ink);border-radius:8px;background:var(--skin-paper);color:var(--skin-muted)}
 .eusk-search:focus-within{border-color:var(--skin-ink);box-shadow:0 0 0 2px var(--skin-primary-soft)}
-.eusk-mode-tabs,.eusk-tabs,.eudata-head .mode-seg,.euh-shell .mode-seg{gap:3px;padding:3px;border:1px solid var(--skin-ink);border-radius:8px;background:var(--skin-sunken)}
-.eusk-mode-tabs button,.eusk-tabs button,.eudata-head .mode-seg button,.euh-shell .mode-seg button{border:1px solid transparent;border-radius:6px;color:var(--skin-muted)}
+.eusk-mode-tabs,.eusk-tabs{gap:3px;padding:3px;border:1px solid var(--skin-ink);border-radius:8px;background:var(--skin-sunken)}
+.eusk-mode-tabs button,.eusk-tabs button{border:1px solid transparent;border-radius:6px;color:var(--skin-muted)}
 .eusk-mode-tabs button:hover,.eusk-tabs button:hover,.eusk-tabs button:focus-visible{background:rgba(247,246,242,.7);color:var(--skin-ink)}
-.eusk-mode-tabs button[aria-selected=true],.eusk-tabs button[aria-selected=true],.eudata-head .mode-seg button.on,.euh-shell .mode-seg button.on{border-color:var(--skin-ink);background:var(--skin-paper);color:var(--skin-ink);font-weight:500;box-shadow:none}
+.eusk-mode-tabs button[aria-selected=true],.eusk-tabs button[aria-selected=true]{border-color:var(--skin-ink);background:var(--skin-paper);color:var(--skin-ink);font-weight:500;box-shadow:none}
 .eusk-mode-tabs span{background:rgba(42,38,34,.08);color:var(--skin-muted);font:500 11px/18px var(--skin-mono)}
 .eusk-mode-tabs button[aria-selected=true] span{background:var(--skin-ink);color:var(--skin-paper)}
 .eusk-filters{border-bottom:1px solid rgba(42,38,34,.5)}

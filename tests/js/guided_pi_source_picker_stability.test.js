@@ -49,27 +49,12 @@ test('opening another conversation still closes the previous data-source panel',
   assert.equal(ui.panel.closes, 1);
 });
 
-test('source binding removes the synthetic extraction-mode control while normal extraction retains it', () => {
-  const modes = { removed: 0, remove() { this.removed += 1; } };
-  const root = {
-    isConnected: true, innerHTML: '', querySelector: () => null,
-    querySelectorAll: selector => selector.includes('[data-datamode-switch]') ? [modes] : [],
-  };
-  const context = vm.createContext({
-    icon: () => '', t: en => en,
-    window: {
-      EU_HTML: { esc: value => String(value ?? '') },
-      EU_EXTRACTION_NATIVE_OWNER: {
-        render: () => '<div data-datamode-switch></div>', bind() {}, isReal: () => true,
-        isPreparedExport: () => false, sourceBindingSnapshot: () => ({ ready: false }),
-        beginSourceBinding() {},
-      },
-    },
-  });
-  vm.runInContext(fs.readFileSync(path.join(JS, 'screens-extraction-embedded.js'), 'utf8'), context);
-  const embedded = context.window.EU_EXTRACTION_EMBEDDED_WORKSPACE;
-  embedded.mount(root, { resource: { state: 'setup', entry_mode: 'source_binding', study_context_id: 'study-1' } });
-  assert.equal(modes.removed, 1, 'a source decision must not offer synthetic extraction mode');
-  embedded.mount(root, { resource: { state: 'setup', study_context_id: 'study-1' } });
-  assert.equal(modes.removed, 1, 'the native extraction mode control remains available outside source binding');
+test('extraction offers no synthetic data-mode control, embedded or not', () => {
+  // Every source takes the one source-backed path; there is no Demo/Real
+  // switch for the native page to render or the source-binding panel to strip.
+  for (const name of ['screens-extraction.js', 'screens-extraction-embedded.js']) {
+    const source = fs.readFileSync(path.join(JS, name), 'utf8');
+    assert.doesNotMatch(source, /data-datamode/, `${name} must not offer a data-mode control`);
+    assert.doesNotMatch(source, /data-ex-sample/, `${name} must not offer the synthetic sample study`);
+  }
 });

@@ -30,11 +30,10 @@
     if (opts.syncStorage) {
       try { localStorage.setItem('easyicu_lang', lang); } catch (e) {}
     }
-    const mode = validMode(settings.data_mode) ? settings.data_mode : (validMode(window.EU_DATA) ? window.EU_DATA : 'demo');
-    window.EU_DATA = mode;
-    if (opts.syncStorage) {
-      try { localStorage.setItem('easyicu_home_data', mode); } catch (e) {}
-    }
+    // Every source goes through the same source-backed path; which one is
+    // open (an official demo, a synthetic test source or the user's own export)
+    // is the source's own label, not a separate mode.
+    window.EU_DATA = 'real';
     applyLangDom(lang);
     applyDisplayDom(settings);
     if (previousLang !== lang || opts.notifyLanguage) {
@@ -120,16 +119,15 @@
     setTimeout(() => { const b = ov.querySelector('[data-em-ok]'); if (b) b.focus(); }, 30);
   };
 
-  /* ---- global workspace mode: Demo / Real (cross-cutting state) ---- */
-  try { window.EU_DATA = localStorage.getItem('easyicu_home_data') || 'demo'; } catch (e) { window.EU_DATA = 'demo'; }
+  /* ---- data source processing mode (cross-cutting state) ---- */
   /*
-   * Public data-mode display contract.
-   *
-   * EU_DATA remains the processing mode because an official MIMIC/eICU demo
-   * must use the same source-backed API path as a local export.  The immutable
-   * context below separately records what the user selected, so official
-   * deidentified records remain visibly "Demo" throughout the shell.
+   * There is one processing path: an official demo, a synthetic test source
+   * and the user's own export all go through the same source-backed API, so
+   * EU_DATA is always 'real' and there is no Demo/Real switch. The immutable
+   * context below records what the user opened, so official deidentified
+   * records still read as a demo throughout the shell.
    */
+  window.EU_DATA = 'real';
   window.EU_DATA_MODE_CONTEXT = null;
   window.setDataModeContext = function (context) {
     if (context == null) {
@@ -156,14 +154,14 @@
     const context = window.EU_DATA_MODE_CONTEXT;
     return context && validMode(context.display_mode)
       ? context.display_mode
-      : (validMode(window.EU_DATA) ? window.EU_DATA : 'demo');
+      : 'real';
   };
   // becomes true once the user has produced downstream work worth protecting
   window.EU_HASWORK = false;
   window.setDataMode = function (m, opts) {
-    if (m !== 'demo' && m !== 'real') return;
-    // A hosted instance shows only the data its administrator prepared.
-    if (m === 'demo' && ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true) return;
+    // Only a return to the user's own data remains: there is no synthetic
+    // demo mode to switch to.
+    if (m !== 'real') return;
     if (window.getDataMode() === m) return;
     const apply = () => {
       window.EU_STALE = true;  // changing the source invalidates downstream
@@ -173,13 +171,6 @@
       window.EU_CROSSDB_WORKSPACE = null;
       window.EU_PATIENT_DRILLDOWN = null;
       window.EU_COHORT_REVIEW = null;
-      try { localStorage.setItem('easyicu_home_data', m); } catch (e) {}
-      if (window.EU_SETTINGS) window.EU_SETTINGS.data_mode = m;
-      if (window.EU_API && window.EU_API.saveSetting) {
-        window.EU_API.saveSetting('data_mode', m).catch(function (err) {
-          console.warn('[EasyICU] data mode setting sync failed', err);
-        });
-      }
       if (window.__euVizResetForDataMode) window.__euVizResetForDataMode();
       if (window.__euExtractReset) window.__euExtractReset();  // prev extraction belonged to the old source
       if (window.__euRender) window.__euRender();

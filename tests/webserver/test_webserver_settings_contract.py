@@ -311,15 +311,16 @@ def test_stage_status_is_evidence_based_not_optimistic() -> None:
     assert "const started = !!context" in owner
 
 
-def test_data_mode_switch_is_weighted_when_downstream_work_exists() -> None:
-    """Demo <-> Real swaps the data source; it is not a display preference."""
+def test_settings_offer_no_data_mode_switch() -> None:
+    """There is one source-backed path; a public demo is a labelled source,
+    not a global mode a setting switches."""
     shell = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    settings = (STATIC_JS / "screens-settings.js").read_text(encoding="utf-8")
     shell_css = (STATIC_JS.parent / "css" / "shell.css").read_text(encoding="utf-8")
-    assert "const consequential = !!window.EU_HASWORK;" in shell
-    assert "${consequential ? 'consequential' : ''}" in shell
-    assert ".mode-seg.consequential" in shell_css
-    # Reduce-motion users still get the colour, just not the glow.
-    assert 'body[data-reduce-motion="true"] .mode-seg.consequential' in shell_css
+    assert "mode-seg" not in shell
+    assert ".mode-seg" not in shell_css
+    assert "set-data-mode" not in settings
+    assert "data_mode" not in settings
 
 
 def test_shell_states_the_two_entry_paths_are_one_pipeline() -> None:

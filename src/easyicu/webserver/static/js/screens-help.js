@@ -165,10 +165,10 @@
         t('No. EasyICU results are for research. They do not replace clinical judgement for an individual patient.', '不能。EasyICU 的结果用于科研，不能替代对个体患者的临床判断。'),
       ],
       [
-        t('What is Demo mode in the data workspace?', '数据工作台里的「演示」是什么？'),
+        t('What is a “Public demo” in the data workspace?', '数据工作台里的「公开 Demo」是什么？'),
         t(
-          'A reproducible synthetic dataset of 10 ICU stays for learning the extraction and review screens. Its numbers are seeded placeholders and support no finding. For a whole study on real records, use the public eICU demo.',
-          '一份可复现的合成数据（10 个 ICU stay），用来熟悉数据抽取和审阅界面。里面的数字都是占位值，不支持任何结论。想在真实记录上完整做一项研究，请用公开 eICU Demo。',
+          'A small official release of deidentified real records from PhysioNet (MIMIC-IV, eICU-CRD, MIMIC-III). Once prepared on this computer it goes through the same conversion, mapping and export as your own data, and its row says “Public demo”.',
+          'PhysioNet 官方发布的小规模去标识化真实记录（MIMIC-IV、eICU-CRD、MIMIC-III）。在本机准备好后，和你自己的数据走同样的转换、映射和导出，数据行上标着「公开 Demo」。',
         ),
       ],
       [

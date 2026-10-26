@@ -103,9 +103,9 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "data-lang-toggle" in app_js
     assert "window.EU_LANG === 'zh' ? 'en' : 'zh'" in app_js
     assert "localStorage.getItem('easyicu_lang')" in api_js
-    assert "localStorage.getItem('easyicu_home_data')" in api_js
+    assert "easyicu_home_data" not in api_js
     assert "syncPatch.language = browserLang" in api_js
-    assert "syncPatch.data_mode = browserMode" in api_js
+    assert "data_mode" not in api_js
     assert "window.applySettingsState(window.EU_SETTINGS" in api_js
     assert "window.applySettingsState = function" in i18n_js
     assert "const previousLang = window.EU_LANG" in i18n_js
@@ -118,9 +118,9 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EUPageGuide = { open, close, toggle, refreshLanguage }" in dock_js
     assert "window.setLang(val);" in settings_js
     assert "window.EU_LANG = val;" not in settings_js
-    assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
-    assert "js/i18n.js?v=20261021-lang1" in index_html
-    assert "js/api.js?v=20261026-replay1" in index_html
+    assert "saveSetting('data_mode'" not in i18n_js
+    assert "js/i18n.js?v=20261026-src1" in index_html
+    assert "js/api.js?v=20261026-src1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -183,13 +183,13 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260827-no-fab1" in index_html
-    assert "js/app.js?v=20261022-help1" in index_html
+    assert "js/app.js?v=20261026-src1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261026-dbnames1" in index_html
+    assert "js/screens-extraction.js?v=20261026-src1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
-    assert "js/screens-help.js?v=20261026-dbnames1" in index_html
+    assert "js/screens-help.js?v=20261026-src1" in index_html
 
 
 def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
@@ -336,8 +336,8 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20261022-help1" in index_html
-    assert "js/screens-help.js?v=20261026-dbnames1" in index_html
+    assert "js/app.js?v=20261026-src1" in index_html
+    assert "js/screens-help.js?v=20261026-src1" in index_html
 
 
 def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
@@ -399,7 +399,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20261026-replay1" in index_html
+    assert "js/api.js?v=20261026-src1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -555,7 +555,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20261022-legacy1" in index_html
     assert "css/guided-projects.css?v=20261020-project-root1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20261026-replay1" in index_html
+    assert "js/api.js?v=20261026-src1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20261026-projects1" in index_html
     )
@@ -1104,7 +1104,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert 'data-setting="telemetry_enabled"' not in settings_js
     assert 'data-setting-input="token_budget"' not in settings_js
     assert 'data-setting="module_folder_mode"' not in settings_js
-    assert "if (key === 'data_mode' && val && window.setDataMode)" in settings_js
+    assert "data_mode" not in settings_js
     assert (
         "window.applySettingsState(window.EU_SETTINGS, { syncStorage: true })" in api_js
     )
@@ -1136,7 +1136,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "css/tweaks.css?v=20260625-stage96" in index_html
     assert "css/settings.css?v=20261026-personal1" in index_html
     assert "js/screens-settings-extensions.js?v=20260812-extension-manager1" in index_html
-    assert "js/screens-settings.js?v=20261026-trust1" in index_html
+    assert "js/screens-settings.js?v=20261026-src1" in index_html
     assert "js/screens-settings-personalization.js?v=20261026-personal1" in index_html
     assert index_html.index("js/screens-settings-personalization.js") < index_html.index("js/screens-settings.js")
     assert ".settings-cap-panel" in settings_css
@@ -1155,7 +1155,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert ".settings-audit-log" not in _static_css("redesign.css")
     assert ".settings-ext-manager" not in _static_css("screens.css")
     assert ".settings-ext-manager" not in _static_css("redesign.css")
-    assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
+    assert "saveSetting('data_mode'" not in i18n_js
     assert "All controls are demo-interactive" not in settings_js
 
 
@@ -1203,7 +1203,7 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/extraction.css?v=20261026-data1" in index_html
+    assert "css/extraction.css?v=20261026-src1" in index_html
     assert "data-ex-analyze" in extraction_js
     assert "Choose folder and identify" in extraction_js
     assert "function copilotPrefillSummary()" in extraction_js
@@ -1549,9 +1549,9 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     assert "Evidence and literature open in its review panel" in app_js
     assert "wsi-sub" in app_js
     assert "css/ideas.css?v=20261022-legacy1" in index_html
-    assert "css/shell.css?v=20261022-legacy1" in index_html
+    assert "css/shell.css?v=20261026-src1" in index_html
     assert "js/icons.js?v=20261026-data1" in index_html
-    assert "js/app.js?v=20261022-help1" in index_html
+    assert "js/app.js?v=20261026-src1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2088,10 +2088,8 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "/api/jobs/crossdb-summary" in api_js
     assert "scanCrossdbRawRoot" in api_js
     assert "/api/crossdb-review/raw-root-scan" in api_js
-    assert "loadDemoCrossdb" in viz_js
-    assert "loadCrossdbDemoDistribution" in viz_js
-    assert "legacy_simulated_multidb_feature_frames" in viz_js
-    assert "feature_scope: 'all_catalog'" in viz_js
+    assert "loadDemoCrossdb" not in viz_js
+    assert "loadCrossdbDemoDistribution" not in viz_js
     assert "window.EU_CROSSDB_RAW.buildRequest" in viz_js
     assert "max_patients: sampleProfile.maxPatients" in viz_js
     assert "sample_size: sampleProfile.sampleSize" in viz_js
@@ -2111,7 +2109,7 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "maxPatients: 200" in setup_js
     assert "sampleSize: 600" in setup_js
     assert "data-crossdb-run-raw" in setup_js
-    assert "data-crossdb-run-demo" in setup_js
+    assert "data-crossdb-run-demo" not in setup_js
 
     # Results are a separate owner: four sections, complete catalog filtering,
     # one selected feature chart, and no repeated mini-plot grid.
@@ -2142,11 +2140,11 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "padding-right: 168px" in crossdb_css
     assert "scroll-margin-bottom: 84px" in crossdb_css
 
-    assert "js/screens-viz-crossdb-setup.js?v=20261026-dbnames1" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261026-src1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz-crossdb-results.js?v=20261026-dbnames1" in index_html
-    assert "js/screens-viz.js?v=20261026-data1" in index_html
-    assert "css/crossdb.css?v=20261026-dbnames1" in index_html
+    assert "js/screens-viz.js?v=20261026-src1" in index_html
+    assert "css/crossdb.css?v=20261026-src1" in index_html
     for selector in (
         ".crossdb-method-grid",
         ".xdb-result-tabs",
@@ -2192,7 +2190,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20261026-data1" in index_html
+    assert "js/screens-viz.js?v=20261026-src1" in index_html
 
 
 def test_native_cohort_groups_render_table_one_without_legacy_bars() -> None:
@@ -2371,7 +2369,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20261026-replay1" in index_html
+    assert "api.js?v=20261026-src1" in index_html
     assert "screens-dict.js?v=20261026-dbnames1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
@@ -2686,7 +2684,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20261026-replay1" in index_html
+    assert "api.js?v=20261026-src1" in index_html
     assert "screens-guided-projects.js?v=20261026-projects1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -2745,10 +2743,9 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     official_demo_sources_css = _static_css("official-demo-sources.css")
     index_html = _static_html("index.html")
 
-    assert 'data-datamode="real"' in patient_domain_js
-    assert 'data-datamode="demo"' in patient_domain_js
-    assert "Previously exported data" in patient_domain_js
-    assert "Demo data" in patient_domain_js
+    assert "data-datamode" not in patient_domain_js
+    assert "Previously exported data" not in patient_domain_js
+    assert "buildDemoPatientDrilldown()" not in patient_domain_js
     assert "loadPatientReviewSources" in api_js
     assert "/api/patient-review/sources" in api_js
     assert "loadPatientReviewEntities" in api_js
@@ -2758,7 +2755,8 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "loadPatientReviewTablePreview" in api_js
     assert "/api/patient-review/table-preview" in api_js
     assert "loadPatientSources" in patient_domain_js
-    assert "Ready to load local export" in patient_domain_js
+    assert "Ready to load" in patient_domain_js
+    assert "Ready to load local export" not in patient_domain_js
     assert "No registered export is active" in patient_domain_js
     assert "Reading patient data" in viz_js
     assert "const wsMatchesActive = ws" in viz_js
@@ -2766,7 +2764,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "route: 'patient'" in patient_domain_js
     assert "route: 'cohort'" in cohort_domain_js
     assert "route: 'crossdb'" in viz_js
-    assert "skeletonWorkspace(window.EU_DATA)" in patient_domain_js
+    assert "skeletonWorkspace()" in patient_domain_js
     assert "full cohort', '完整队列'" in patient_domain_js
     assert "bounded browser review', '本页审阅'" in patient_domain_js
     assert "data-patient-export" in patient_domain_js
@@ -2894,17 +2892,17 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "js/screens-viz-patient-charts.js?v=20261026-data1" in index_html
     assert "js/screens-viz-patient-series.js?v=20261026-data1" in index_html
     assert (
-        "js/screens-viz-patient-demo-sources.js?v=20261026-data1"
+        "js/screens-viz-patient-demo-sources.js?v=20261026-src1"
         in index_html
     )
-    assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
+    assert "css/official-demo-sources.css?v=20261026-src1" in index_html
     assert (
         "js/screens-viz-patient-navigation.js?v=20261022-lean1"
         in index_html
     )
     assert "js/screens-viz-patient-tables.js?v=20261026-data1" in index_html
     assert "js/screens-viz-patient-overview.js?v=20261026-data1" in index_html
-    assert "js/screens-viz-patient.js?v=20261026-data1" in index_html
+    assert "js/screens-viz-patient.js?v=20261026-src1" in index_html
     assert index_html.index("js/screens-viz-patient-navigation.js?") < index_html.index(
         "js/screens-viz.js?"
     )
@@ -2914,7 +2912,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20261026-data1" in index_html
+    assert "js/screens-viz.js?v=20261026-src1" in index_html
     assert "bounded browser review', '本页审阅" in patient_domain_js
     assert "function buildPatientDrilldown" in demo_drilldown_js
     assert "function demoTablePreviewRowContext" in demo_drilldown_js
@@ -2969,7 +2967,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "demoSourceOwner.rememberOpened(sourceId)" in patient_domain_js
     assert "function activeMetadata(registrySources, activePath)" in demo_sources_js
     assert "data-patient-official-demo" in patient_domain_js
-    assert "data-gen" in demo_sources_js
+    assert "data-gen" not in demo_sources_js
     assert "window.EU_OFFICIAL_DEMO_SOURCES = owner" not in viz_js
     assert ".official-demo-sources" in official_demo_sources_css
     for unrelated_css in ("patient.css", "patient-series.css", "cohort.css", "crossdb.css"):
@@ -3064,7 +3062,7 @@ def test_native_cohort_real_page_is_backend_backed_and_bilingual() -> None:
     assert "window.EU_COHORT_REVIEW = payload;" in cohort_js
     assert "cohortWorkspaceFromReview(payload)" in cohort_js
     assert "function cohortLoaded()" in cohort_js
-    assert "window.EU_DATA !== 'real' || !!(review && review.summary)" in cohort_js
+    assert "return state.view === 'loaded' && !!(review && review.summary);" in cohort_js
     assert "function reloadStaleRealCohortIfNeeded" in cohort_js
     assert "function cohortText" in cohort_view_js
     assert "function cohortReason" in cohort_view_js
@@ -3123,21 +3121,20 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20261026-data1" in index_html
-    assert "js/screens-viz.js?v=20261026-data1" in index_html
+    assert "js/screens-viz.js?v=20261026-src1" in index_html
     assert "view: 'idle'," in cohort_js
     assert "featureScope: 'recommended'," in cohort_js
     assert 'data-cohort-config-required="true"' in cohort_js
     assert "Choose one cohort data source" in cohort_js
-    assert "data-cohort-demo-fallback" in cohort_js
-    assert "{ scope: 'cohort', fallbackAttribute: 'data-cohort-demo-fallback' }" in cohort_js
+    assert "data-cohort-demo-fallback" not in cohort_js
     assert "demoSourceOwner.rememberOpened(sourceId)" in cohort_js
     assert "state.view = ok ? 'loaded' : 'idle';" in cohort_js
     assert "function cohortMissingExportMessage" in cohort_js
     assert (
-        "Choose or add a local EasyICU export before loading Cohort Statistics."
+        "Choose prepared data, or prepare a public demo below, before loading Cohort Statistics."
         in cohort_js
     )
-    assert "请先选择或添加本地 EasyICU 导出，再加载队列统计。" in cohort_js
+    assert "请先选择一份已准备的数据，或准备下方的公开 Demo，再加载队列统计。" in cohort_js
     assert "const body = { source_path: active };" in cohort_js
     assert "if (!registryActivePath()) {" in cohort_js
     assert "No current data selected" in cohort_js
@@ -3269,7 +3266,8 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
 
 
 def test_visual_routes_share_source_choice_with_single_and_multi_source_contracts() -> None:
-    """Patient/Cohort select one source; Cross-DB selects an official pair."""
+    """Patient/Cohort select one source and Cross-DB two or more, from one list
+    of prepared data in which a public demo is a labelled row."""
     viz_js = _static_js("screens-viz.js")
     cohort_js = _static_js("screens-viz-cohort.js")
     demo_sources_js = _static_js("screens-viz-patient-demo-sources.js")
@@ -3279,29 +3277,31 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     crossdb_css = _static_css("crossdb.css")
     index_html = _static_html("index.html")
 
-    assert "function sourceModeSelector(realMode)" in viz_js
-    assert "Previously exported data" in viz_js
-    assert "Demo data" in viz_js
-    assert "{ scope: 'cohort', fallbackAttribute: 'data-cohort-demo-fallback' }" in cohort_js
+    assert "sourceModeSelector" not in viz_js
+    assert "Previously exported data" not in viz_js
+    assert "function sourceKind(s)" in viz_js
+    assert "data-src-kind=" in viz_js
+    assert "pendingOnly: true, registryRows: registrySources()" in viz_js
+    assert "data-cohort-demo-fallback" not in cohort_js
+    assert "officialDemoOffers('cohort')" in cohort_js
     assert "window.EU_OFFICIAL_DEMO_SOURCES = owner" in demo_sources_js
     assert "function registeredSources(registryRows)" in demo_sources_js
     assert "function rememberPair(registryRows)" in demo_sources_js
     assert "kind: 'official_demo_pair'" in demo_sources_js
     assert "sourceModeHtml(realMode)" not in crossdb_setup_js
     assert "sourceMethod: 'registered'" in crossdb_setup_js
-    assert "data-crossdb-demo-source-choice" in crossdb_source_js
-    assert "compactOfficialPair" in crossdb_source_js
+    assert "data-crossdb-demo-source-choice" not in crossdb_source_js
     assert "Start consistency check" in crossdb_source_js
-    assert "data-crossdb-synthetic-fallback" in crossdb_source_js
-    assert "Not real records" in crossdb_source_js
+    assert "data-crossdb-synthetic-fallback" not in crossdb_source_js
+    assert "${offersHtml}" in crossdb_source_js
+    assert "demoOffersHtml() { return officialDemoOffers('crossdb'); }" in viz_js
     assert "officialPaths()" in viz_js
     assert "runOfficial()" in viz_js
     assert "owner.rememberPair(registrySources())" in viz_js
     assert ".official-demo-sources" in shared_css
-    assert ".crossdb-offline-fallback" in crossdb_css
-    assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
-    assert "js/screens-viz-crossdb-setup.js?v=20261026-dbnames1" in index_html
-    assert "js/screens-viz-crossdb-source.js?v=20261026-data1" in index_html
+    assert "css/official-demo-sources.css?v=20261026-src1" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261026-src1" in index_html
+    assert "js/screens-viz-crossdb-source.js?v=20261026-src1" in index_html
 
 
 def test_native_webapp_foreground_interrupt_returns_shell_status(monkeypatch) -> None:
@@ -3328,7 +3328,7 @@ def test_native_home_landing_styles_are_owned_by_home_css() -> None:
     assert ".way-card" in home_css
     assert ".mode-card" in home_css
     assert ".col-entry" in home_css
-    assert "css/home.css?v=20260707-design" in index_html
+    assert "css/home.css?v=20261026-src1" in index_html
 
     # screens.css is no longer a landing-page catch-all
     assert ".home-wrap" not in screens_css
@@ -3418,15 +3418,13 @@ def test_guided_handoff_banner_surfaces_full_study_design() -> None:
     assert "shortPath" in app_js
 
 
-def test_home_data_toggle_routes_through_setdatamode() -> None:
-    """Regression: the home Demo/Real toggle must go through the canonical
-    setDataMode (workspace invalidation + confirm-on-switch guard), not a bare
-    EU_DATA write that leaves stale workspaces bound to the wrong source."""
+def test_home_offers_no_data_mode_toggle() -> None:
+    """Every source takes one source-backed path, so the home page has no
+    Demo/Real toggle to route anywhere."""
     entry_js = _static_js("screens-entry.js")
-    ext_js = _static_js("screens-extraction.js")
-    assert "function setHomeData(mode) {" in entry_js
-    assert "if (window.setDataMode) { window.setDataMode(mode); return; }" in entry_js
-    assert "function setHomeData(" not in ext_js
+    assert "setHomeData" not in entry_js
+    assert "data-hd=" not in entry_js
+    assert "setDataMode" not in entry_js
 
 
 def test_guided_terminal_path_opens_project_monitor_without_moving_setup_there() -> None:
@@ -3480,7 +3478,7 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
     output_css = _static_css("extraction-output.css")
 
     assert "css/extraction-output.css?v=20260824-local-open1" in index_html
-    assert "js/screens-extraction-embedded.js?v=20261024-source-picker1" in index_html
+    assert "js/screens-extraction-embedded.js?v=20261026-src1" in index_html
     assert "js/screens-guided-pi-starters.js?" in index_html
     assert "js/screens-guided-pi-header.js?" in index_html
     assert "js/screens-guided-pi.js?" in index_html
@@ -3779,41 +3777,36 @@ def test_result_charts_carry_reading_captions() -> None:
     assert ".viz-cap{" in app_css
 
 
-def test_demo_mode_is_unmistakable_and_single_source_of_truth() -> None:
-    """Demo state must be loud (amber topbar segment + explicit tooltip) and the
-    global toggle is the source of truth on Guided entry (sync-up, demo→real)."""
+def test_data_kind_is_a_source_label_not_a_global_mode() -> None:
+    """There is one source-backed path, so no Demo/Real switch exists. What a
+    source is (public demo, synthetic test data, the user's own) is its row's
+    label; the official-demo context only names what the user opened."""
     app_js = _static_js("app.js")
     i18n_js = _static_js("i18n.js")
     app_css = _static_css("app.css")
-    guided_js = _static_js("screens-guided.js")
-    assert "demo-active" in app_js
-    assert ".mode-seg.demo-active" in app_css
-    assert "官方公开去标识 Demo 数据集" in app_js
-    assert "明确标注的种子示例" in app_js
-    assert "所有数字都是种子示例" not in app_js
-    assert "window.EU_DATA_MODE_CONTEXT = null;" in i18n_js
-    assert "window.setDataModeContext = function" in i18n_js
-    assert "window.getDataMode = function" in i18n_js
-    assert "window.setDataModeContext(null);" in i18n_js
-    assert "const dataMode = displayedDataMode();" in app_js
-    assert "t('Official demo', '官方演示')" in app_js
-    assert (
-        "if (window.EU_DATA === 'real' && dataMode !== 'real') dataMode = 'real';"
-        in guided_js
-    )
-    # demo mode no longer ships fake decorative sliders on the patient setup card
+    settings_js = _static_js("screens-settings.js")
     viz_js = _static_js("screens-viz.js")
     patient_domain_js = _static_js("screens-viz-patient.js")
     demo_sources_js = _static_js("screens-viz-patient-demo-sources.js")
+    assert "demo-active" not in app_js
+    assert ".mode-seg" not in app_css
+    assert "data-datamode" not in app_js
+    assert "set-data-mode" not in settings_js
+    assert "window.EU_DATA = 'real';" in i18n_js
+    assert "if (m !== 'real') return;" in i18n_js
+    assert "window.EU_DATA_MODE_CONTEXT = null;" in i18n_js
+    assert "window.setDataModeContext = function" in i18n_js
+    assert "window.setDataModeContext(null);" in i18n_js
+    # the kind badge: own data none, public demo and synthetic test data labelled
+    assert "t('Public demo', '公开 Demo')" in viz_js
+    assert "t('Synthetic test data', '合成测试数据')" in viz_js
+    assert "demos.registeredSources([s])" in viz_js
+    assert ".src-name .src-kind{" in app_css
+    # choosing a row clears an official demo opened earlier
+    assert "if (window.setDataModeContext) window.setDataModeContext(null);" in viz_js
     assert "数据时长（小时）" not in patient_domain_js
-    assert "打开一份官方去标识化演示数据" in patient_domain_js
     assert "官方公开演示数据" in demo_sources_js
-    assert "使用合成数据" in demo_sources_js
-    assert "兜底" not in demo_sources_js
+    assert "使用合成数据" not in demo_sources_js
     assert "processing_mode: 'real'" in demo_sources_js
-    assert "const realMode = dataMode === 'real';" in patient_domain_js
-    assert "localStorage.setItem('easyicu_home_data', 'real')" not in patient_domain_js[
-        patient_domain_js.index("openPrepared: sourceId =>") : patient_domain_js.index(
-            "root.querySelectorAll('.radio[data-datamode]')"
-        )
-    ]
+    assert "realMode" not in patient_domain_js
+    assert "easyicu_home_data" not in patient_domain_js

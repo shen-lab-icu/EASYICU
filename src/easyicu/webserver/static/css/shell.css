@@ -25,13 +25,6 @@
 
 .shared-note.plan-only{ margin-top:6px; }
 
-/* Demo <-> Real is a data-source swap that invalidates downstream work, not a
-   display preference. Once downstream work exists, stop letting it look like
-   the EN/中 toggle sitting next to it. */
-.mode-seg.consequential{ border-color:#e0ac79; box-shadow:0 0 0 2px #ffead7; }
-.mode-seg.consequential button:not(.on){ color:#814800; }
-body[data-reduce-motion="true"] .mode-seg.consequential{ box-shadow:none; }
-
 .ideas-entry{ background:var(--surface); border-color:var(--hair-2); margin-top:3px; }
 .ideas-entry:hover{ border-color:#5daecc; box-shadow:var(--sh-1); }
 .ideas-entry.on{ border-color:#3a99ba; box-shadow:var(--sh-1); background:linear-gradient(180deg, oklch(97% 0.018 225), var(--surface)); }
@@ -64,9 +57,6 @@ body[data-reduce-motion="true"] .mode-seg.consequential{ box-shadow:none; }
 .agent-entry .cp-d{ color:var(--ink-4); }
 .agent-entry .cp-go{ color:var(--ink-4); }
 
-/* A hosted instance shows only the data its administrator prepared: the
-   demo/real switches are not offered there (app.js marks the root). */
-:root[data-eu-hosted] [data-datamode-switch]{ display:none; }
 
 /* The hosted login session ended (js/hosted-session.js). The page stays
    put so unsent text can be copied; the notice links back to the login. */

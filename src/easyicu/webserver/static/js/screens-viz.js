@@ -14,11 +14,7 @@
   }
 
   function vizRail(active) {
-    const dataMode = window.getDataMode
-      ? window.getDataMode()
-      : (window.EU_DATA === 'real' ? 'real' : 'demo');
-    const real = dataMode === 'real';
-    const officialDemo = !real && officialDemoContext();
+    const kind = activeSourceKind();
     const xdb = active === 'crossdb' ? window.EU_CROSSDB_WORKSPACE : null;
     const drill = active === 'patient' ? patientReview.drilldown() : null;
     const cohort = active === 'cohort' ? cohortOwner.review() : null;
@@ -28,9 +24,6 @@
       || (!ws.route && active === 'patient' && ws.summary && ws.summary.stays != null)
     );
     const patientSource = active === 'patient' ? patientReview.activeSourceMeta() : null;
-    const label = real
-      ? t('Real', '真实')
-      : (officialDemo ? t('Official demo', '官方演示') : t('Demo', '演示'));
     const xdbRaw = xdb && xdb.source_type === 'raw_database_root';
     const xdbDemo = xdb && xdb.source_type === 'legacy_simulated_multidb_feature_frames';
     let dataset;
@@ -54,7 +47,7 @@
       dataset = (cohort.source || {}).label || t('Local export', '本地导出');
       cohortLine = `${fmtInt(cohort.summary && cohort.summary.cohort_size)} ${t('entities', '个实体')}`;
       variables = `${fmtInt(cohort.summary && cohort.summary.modules)} ${t('modules', '个模块')} · ${fmtInt(fsel.selected_count)} / ${fmtInt(fsel.available_count)} ${t('features', '个特征')}`;
-    } else if (real && patientSource) {
+    } else if (patientSource) {
       const summary = patientSource.summary || {};
       dataset = patientSource.label || patientSource.database || t('Local export', '本地导出');
       cohortLine = `${fmtInt(summary.entities != null ? summary.entities : summary.stays)} ${t('entities', '个实体')}`;
@@ -69,21 +62,14 @@
       const cat = window.EU_CATALOG || {};
       const moduleCount = Array.isArray(cat.groups) ? cat.groups.length : 19;
       const featureCount = cat.totalConcepts || Object.values(cat.groupConcepts || {}).reduce((a, b) => a + (Array.isArray(b) ? b.length : 0), 0) || 247;
-      if (!real && active === 'cohort' && cohortOwner.snapshot().view === 'loaded') {
-        const scope = cohortOwner.demoCatalogScope();
-        dataset = t('Demo · EasyICU catalog', '演示 · EasyICU 字典');
-        cohortLine = `10 ${t('stays', '次住院')}`;
-        variables = `${fmtInt(scope.selectedModuleCount)} / ${fmtInt(scope.totalModuleCount || moduleCount)} ${t('modules', '个模块')} · ${fmtInt(scope.selectedFeatureCount)} / ${fmtInt(scope.totalFeatureCount || featureCount)} ${t('features', '个特征')}`;
-      } else {
-        dataset = real ? t('No export loaded', '尚未加载导出') : t('Demo · EasyICU catalog', '演示 · EasyICU 字典');
-        cohortLine = real ? t('load exported tables', '加载导出表') : t('official demos available', '官方演示数据可用');
-        variables = real ? t('from export manifest', '来自导出清单') : `${fmtInt(moduleCount)} ${t('modules', '个模块')} · ${fmtInt(featureCount)} ${t('features', '个特征')}`;
-      }
+      dataset = t('No data loaded', '尚未加载数据');
+      cohortLine = t('choose prepared data', '选择已准备的数据');
+      variables = `${fmtInt(moduleCount)} ${t('modules', '个模块')} · ${fmtInt(featureCount)} ${t('features', '个特征')}`;
     }
     return `
     <div class="rail-sep"></div>
     <div class="rail-block">
-      <div class="rail-head"><span class="t">${t('Current setup', '当前配置')}</span><span class="pill ${real ? 'ok' : 'demo'}" style="height:20px;"><span class="dot"></span>${label}</span></div>
+      <div class="rail-head"><span class="t">${t('Current setup', '当前配置')}</span>${kind && kind.label ? `<span class="pill demo" style="height:20px;"><span class="dot"></span>${esc(kind.label)}</span>` : ''}</div>
       <div class="setup-row"><span class="k">${t('Dataset', '数据集')}</span><span class="vv">${esc(dataset)}</span></div>
       <div class="setup-row"><span class="k">${t('Cohort', '队列')}</span><span class="vv">${cohortLine}</span></div>
       <div class="setup-row"><span class="k">${t('Variables', '变量')}</span><span class="vv">${variables}</span></div>
@@ -106,11 +92,6 @@
     else vizErr = value == null ? null : String(value);
   }
 
-  function displayDataMode() {
-    return window.getDataMode
-      ? window.getDataMode()
-      : (window.EU_DATA === 'real' ? 'real' : 'demo');
-  }
   function officialDemoContext() {
     const context = window.EU_DATA_MODE_CONTEXT;
     return context && String(context.kind || '').startsWith('official_demo')
@@ -230,6 +211,22 @@
     if (sum.total_rows != null) parts.push(`${fmtInt(sum.total_rows)} ${t('rows', '行')}`);
     return parts.join(' · ') || t('export folder', '导出文件夹');
   }
+  // What kind of data a registered source is. The user's own export needs no
+  // badge; a public demo or a synthetic test source says so on its row.
+  function sourceKind(s) {
+    if (s && s.source_kind === 'synthetic') return { kind: 'synthetic', label: t('Synthetic test data', '合成测试数据') };
+    const names = window.EU_DATABASE_NAMES;
+    const demos = window.EU_OFFICIAL_DEMO_SOURCES;
+    const officialDemo = s && demos && typeof demos.registeredSources === 'function'
+      && demos.registeredSources([s]).length > 0;
+    if (s && (officialDemo || (names && names.isDemo(s.database)))) return { kind: 'demo', label: t('Public demo', '公开 Demo') };
+    return { kind: 'own', label: '' };
+  }
+  function activeSourceKind() {
+    const active = registryActivePath();
+    const row = active ? registrySources().find(s => s.path === active) : null;
+    return row ? sourceKind(row) : null;
+  }
   // A hosted instance reviews the data its administrator prepared and
   // registered: rows name the data, not a server path, and registration
   // (rename, remove, add by path) stays with the administrator.
@@ -246,14 +243,14 @@
       return 0;
     });
     const title = hosted ? (multi ? t('Prepared data sources', '已准备的数据来源') : t('Prepared data', '已准备的数据'))
-      : multi ? t('Local export sources', '本地导出来源') : t('Current local export', '当前本地导出');
-    const empty = multi
-      ? t('No registered exports yet. Add two EasyICU export folders below.', '还没有注册导出。请在下方添加两个 EasyICU 导出文件夹。')
-      : t('No registered export yet. Add an EasyICU export folder below.', '还没有注册导出。请在下方添加一个 EasyICU 导出文件夹。');
+      : t('Prepared data', '已准备的数据');
+    const empty = hosted
+      ? t('No data has been prepared on this server yet.', '这台服务器上还没有准备好的数据。')
+      : t('Nothing prepared yet. Prepare an official demo below, or export your own database from Data Extraction.', '还没有准备好的数据。可以准备下方的官方公开 Demo，或在数据抽取中导出你自己的数据库。');
     return `
       <div class="src-registry" data-src-mode="${multi ? 'multi' : 'single'}">
         <div class="src-head">
-          <div><div class="eyebrow">${title}</div>${multi || !hosted ? `<div class="src-sub">${multi ? t('Choose at least two exports to compare.', '请选择至少两份数据进行对比。') : t('This active export is shared by Patient, Cohort, Agent, and Copilot.', '这个 active 导出会被患者审阅、队列统计、Agent 和 Copilot 共用。')}</div>` : ''}</div>
+          <div><div class="eyebrow">${title}</div>${multi || !hosted ? `<div class="src-sub">${multi ? t('Choose at least two exports to compare.', '请选择至少两份数据进行对比。') : t('The data picked here is used by every data page and the research conversation.', '这里选中的数据会同时用于各数据页面和研究对话。')}</div>` : ''}</div>
           <button class="btn sm ghost" data-src-refresh>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
         </div>
         <div class="src-list">
@@ -262,10 +259,14 @@
               const on = multi ? selected.has(s.path) : s.path === active;
               const attr = multi ? '' : `data-src-active="${esc(s.path)}"`;
               const label = s.label || s.database || (hosted ? t('data', '数据') : t('local', '本地'));
+              const kind = sourceKind(s);
+              // A demo's or a synthetic source's storage folder is not something
+              // to read; the user's own export keeps its folder in view.
+              const pathLine = hosted || kind.kind !== 'own' ? '' : `<span class="src-path mono">${esc(s.path)}</span>`;
               return `
-              <div class="src-row ${on ? 'on' : ''}" ${attr}>
+              <div class="src-row ${on ? 'on' : ''}" ${attr}${hosted ? '' : ` title="${esc(s.path)}"`}>
                 <span class="src-ico">${icon(multi && on ? 'check' : 'folder', 14, multi && on ? 2.6 : undefined)}</span>
-                <span class="src-body"><span class="src-name">${esc(label)}</span><span class="src-meta">${esc(sourceLine(s))}</span>${hosted ? '' : `<span class="src-path mono">${esc(s.path)}</span>`}</span>
+                <span class="src-body"><span class="src-name">${esc(label)}${kind.label ? ` <span class="pill src-kind" data-src-kind="${kind.kind}">${esc(kind.label)}</span>` : ''}</span><span class="src-meta">${esc(sourceLine(s))}</span>${pathLine}</span>
                 ${multi
                   ? `<button class="btn sm ${on ? '' : 'ghost'}" type="button" data-src-cross="${esc(s.path)}" aria-pressed="${on ? 'true' : 'false'}">${on ? t('selected', '已选择') : t('add', '添加')}</button>`
                   : `<span class="pill ${on ? 'ok' : 'dashed'}" style="height:20px;">${on ? t('active', '当前') : t('use', '使用')}</span>`}
@@ -291,7 +292,7 @@
         </div>
         ${hosted ? '' : `<div class="path-field editable src-add">
           <span class="pf-ico">${icon('folder', 14)}</span>
-          <input class="pf-input" data-src-path-input type="text" spellcheck="false" autocomplete="off" placeholder="${esc(t('Paste a local EasyICU export folder', '粘贴本地 EasyICU 导出文件夹'))}" aria-label="${esc(t('EasyICU export path', 'EasyICU 导出路径'))}" />
+          <input class="pf-input" data-src-path-input type="text" spellcheck="false" autocomplete="off" placeholder="${esc(t('Paste an existing EasyICU export folder', '粘贴已有的 EasyICU 导出文件夹'))}" aria-label="${esc(t('EasyICU export path', 'EasyICU 导出路径'))}" />
           <button class="btn sm" data-src-browse>${icon('folder', 12)} ${t('Browse...', '浏览...')}</button>
           <button class="btn sm primary" data-src-add>${icon('plus', 12)} ${t('Add', '添加')}</button>
         </div>`}
@@ -301,13 +302,13 @@
         </div>
       </div>`;
   }
-  function sourceModeSelector(realMode) {
-    return `
-      <div data-datamode-switch><div class="eyebrow" style="margin-bottom:10px;">${t('Data source', '数据源')}</div>
-      <div class="radio-row">
-        <label class="radio ${realMode ? 'on' : ''}" role="button" tabindex="0" data-datamode="real"><span class="mk"></span> ${t('Previously exported data', '此前导出的数据')}</label>
-        <label class="radio ${realMode ? '' : 'on'}" role="button" tabindex="0" data-datamode="demo"><span class="mk"></span> ${t('Demo data', '演示数据')}</label>
-      </div></div>`;
+  // The official public demos this computer has not prepared yet, offered
+  // under the prepared data on every data page; a prepared one is a row above.
+  function officialDemoOffers(scope) {
+    const owner = window.EU_OFFICIAL_DEMO_SOURCES;
+    if (hostedServer() || !owner || typeof owner.render !== 'function') return '';
+    const html = owner.render({ t, esc }, { scope, pendingOnly: true, registryRows: registrySources() });
+    return html ? `<div class="mt-20">${html}</div>` : '';
   }
   function setSourceAddFeedback(container, message, kind) {
     const box = container && container.querySelector('[data-src-add-feedback]');
@@ -470,9 +471,11 @@
       if (!path || !(window.EU_API && window.EU_API.saveWorkspaceRegistry)) return;
       window.EU_API.saveWorkspaceRegistry({ active_path: path }).then(() => {
         try { localStorage.setItem('easyicu_last_export_dir', path); } catch (e) {}
+        // The chosen row names its own kind; an official demo opened earlier no longer applies.
+        if (window.setDataModeContext) window.setDataModeContext(null);
         window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; window.EU_PATIENT_SOURCES = null; cohortOwner.resetForSourceChange(); window.EU_STALE = true;
         patientReview.resetForSourceChange(); resetCrossSetupForSourceChange();
-        if (screenId === 'cohort' && window.EU_DATA === 'real') {
+        if (screenId === 'cohort') {
           cohortOwner.reloadAfterSourceChange();
           return;
         }
@@ -591,7 +594,7 @@
       registryHtml() { return sourceRegistryBlock('multi'); },
       openFolderPicker: openSourceFolderPicker,
       runRaw: loadRealCrossdb,
-      runDemo: loadDemoCrossdb,
+      demoOffersHtml() { return officialDemoOffers('crossdb'); },
       header: crossHeader,
       renderLoaded(payload) {
         return crossResults.render(payload, crossResultsConfig());
@@ -815,7 +818,7 @@
   }
   window.EU_CROSSDB_JOB_HOST = {
     canRestore(meta) {
-      if (displayDataMode() !== 'real' || crossSetup.view() !== 'idle' || window.EU_CROSSDB_WORKSPACE) return false;
+      if (crossSetup.view() !== 'idle' || window.EU_CROSSDB_WORKSPACE) return false;
       if (meta && meta.kind === 'crossdb-summary') return registeredSelectionAvailable(meta);
       return crossSetup.sourceMethod() === 'raw';
     },
@@ -1026,46 +1029,6 @@
       repaintScreen('crossdb');
     },
   };
-  function loadDemoCrossdb(done, opts) {
-    const operationId = opts && opts.operationId;
-    const operationActive = () => operationId == null || crossSetup.operationCurrent(operationId);
-    if (!operationActive()) return;
-    window.EU_CROSSDB_WORKSPACE = null;
-    window.EU_VIZ_WORKSPACE = null;
-    crossResults.reset();
-    const databases = opts && Array.isArray(opts.selectedKeys)
-      ? opts.selectedKeys.slice()
-      : crossSetup.selectedKeys();
-    if (databases.length < 2) {
-      vizErr = t('Select at least two demo databases.', '请至少选择两个演示数据库。');
-      done && done(false);
-      return;
-    }
-    if (!window.EU_API || !window.EU_API.loadCrossdbDemoDistribution) {
-      vizErr = t('Demo distribution endpoint is unavailable.', '演示分布接口不可用。');
-      done && done(false);
-      return;
-    }
-    window.EU_API.loadCrossdbDemoDistribution({
-      databases,
-      feature_scope: 'all_catalog',
-      records_per_feature: 96,
-    }).then(xdb => {
-      if (!operationActive()) return;
-      window.EU_CROSSDB_WORKSPACE = xdb;
-      const first = xdb.sources && xdb.sources[0];
-      if (first) window.EU_VIZ_WORKSPACE = { route: 'crossdb', database: first.database, summary: first.summary };
-      vizErr = null;
-      window.EU_HASWORK = true;
-      done && done(true);
-    }).catch(err => {
-      if (!operationActive()) return;
-      window.EU_CROSSDB_WORKSPACE = null;
-      vizErr = String(err && err.message || err);
-      done && done(false);
-    });
-  }
-
   /* allow the print harness to preset loaded states for a richer PDF */
   window.__euVizPreset = function (which) {
     if (!which || which === 'patient') patientReview.presetLoaded();
@@ -1166,16 +1129,11 @@
       </svg>`;
   }
 
-  function skeletonWorkspace(mode) {
-    const real = mode === 'real';
-    const title = real
-      ? t('Reading patient data…', '正在读取患者数据…')
-      : t('Generating demo review workspace…', '正在生成演示审阅工作区…');
-    const detail = real
-      ? (hostedServer()
-        ? t('read on the hospital server · no outside services', '在医院服务器上读取 · 不调用外部服务')
-        : t('read on this computer · no outside services', '在这台电脑上读取 · 不调用外部服务'))
-      : t('reproducible · no outbound calls', '可复现 · 无外部调用');
+  function skeletonWorkspace() {
+    const title = t('Reading patient data…', '正在读取患者数据…');
+    const detail = hostedServer()
+      ? t('read on the hospital server · no outside services', '在医院服务器上读取 · 不调用外部服务')
+      : t('read on this computer · no outside services', '在这台电脑上读取 · 不调用外部服务');
     return `
       <div class="load-strip">
         <span class="spin accent"></span>
@@ -1344,22 +1302,21 @@
     const xdb = window.EU_CROSSDB_WORKSPACE;
     const xdbDemo = xdb && xdb.source_type === 'legacy_simulated_multidb_feature_frames';
     const xdbRaw = xdb && xdb.source_type === 'raw_database_root';
-    const dataMode = displayDataMode();
     const officialDemo = officialDemoContext();
     const hosted = hostedServer();
     const preparedData = t('Prepared data', '已准备的数据');
     const sourceLabel = xdb
       ? (xdbDemo ? crossTerm('Demo simulated frames') : (xdbRaw ? (hosted ? t('Raw databases', '原始数据库') : t('Local raw databases', '本地原始数据库')) : (officialDemo ? t('Official demo pair', '官方演示') : (hosted ? preparedData : crossTerm('Local exports')))))
-      : (ws ? (hosted ? preparedData : crossTerm('Local export')) : (dataMode === 'real' ? crossTerm('No data loaded') : crossTerm('Demo cohort')));
+      : (ws ? (hosted ? preparedData : crossTerm('Local export')) : crossTerm('No data loaded'));
     return `
       <div class="row gap-8" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px;white-space:nowrap;flex-wrap:wrap;row-gap:2px;">
         <span>${crossTerm('Workspace')}</span> ${icon('chevron', 11)} <span>${sourceLabel}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">${t('Cross-database comparison', '跨库对比')}</span>
       </div>
       <div class="page-head" style="margin-bottom:14px;">
         <h1 style="margin-top:0;">${t('Cross-database comparison', '跨库对比')}</h1>
-        <p class="lead">${dataMode === 'real' ? (hostedServer()
+        <p class="lead">${hostedServer()
           ? t('Check concept coverage and aggregate distributions across the data the administrator prepared.', '检查管理员准备的各份数据之间的概念覆盖和聚合分布。')
-          : t('Check concept coverage and aggregate distributions across prepared exports or locally sampled ICU databases.', '检查已准备导出或本地抽样 ICU 数据库之间的概念覆盖和聚合分布。')) : t('Compare the official MIMIC-IV and eICU demo exports through the same aggregate pipeline used for local data.', '通过与本地数据相同的聚合流程，对比官方 MIMIC-IV 与 eICU Demo 导出。')}</p>
+          : t('Check concept coverage and aggregate distributions across prepared data or locally sampled ICU databases.', '检查已准备数据或本地抽样 ICU 数据库之间的概念覆盖和聚合分布。')}</p>
       </div>`;
   }
   S.crossdb = {
@@ -1387,12 +1344,12 @@
     fmtNum,
     fmtPct,
     fmtP,
-    displayDataMode,
     officialDemoContext,
     registryActivePath,
     bindSourceRegistry,
-    sourceModeSelector,
     sourceRegistryBlock,
+    officialDemoOffers,
+    activeSourceKind,
     repaintScreen,
     vizRail,
     workspaceSamplingNote,
@@ -1413,6 +1370,7 @@
     registryActivePath,
     sourceLine,
     sourceRegistryBlock,
+    officialDemoOffers,
     bindSourceRegistry,
     repaintScreen,
     skeletonWorkspace,

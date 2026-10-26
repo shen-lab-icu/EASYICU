@@ -19,9 +19,9 @@
         const sources = owner.sources ? owner.sources() : [];
         const source = sources.find(row => row.path === activePath) || sources[0] || {};
         const dataSource = {
-          path: source.path || activePath || (window.EU_DATA === 'real' && owner.defaultExportPath ? owner.defaultExportPath() : ''),
-          label: source.label || (window.EU_DATA === 'real' ? 'Local EasyICU export' : 'Demo data'),
-          database: source.database || (window.EU_DATA === 'real' ? '' : 'demo'),
+          path: source.path || activePath || (owner.defaultExportPath ? owner.defaultExportPath() : ''),
+          label: source.label || 'Local EasyICU export',
+          database: source.database || '',
         };
         if (route === 'patient') {
           const drill = owner.patient ? (owner.patient() || {}) : {};

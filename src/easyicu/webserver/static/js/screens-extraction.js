@@ -9,7 +9,7 @@
   const S = (window.SCREENS = window.SCREENS || {});
 
   /* ================= DATA EXTRACTION (simplified) ================= */
-  function dataMode() { return window.EU_DATA || 'demo'; }  // global Demo/Real (topbar)
+  function dataMode() { return window.EU_DATA || 'real'; }  // always 'real': there is no Demo/Real switch
   // A hosted instance runs on the hospital server (screens-guided-pi-hosted.js).
   function hostedServer() { const owner = window.EasyICU?.guidedPi?.optional('hosted'); return Boolean(owner && owner.active()); }
   function runsWhere() { return hostedServer() ? t('on the server', '在服务器上') : t('on your machine', '在本机'); }
@@ -568,7 +568,6 @@
           </div>
           <div class="ex-connect-actions">
             <button class="ex-linkbtn" data-ex-manual>${icon('sliders', 13)} ${t('Advanced: choose manually', '高级:手动选择')} <span class="chev">${icon('chevdown', 13)}</span></button>
-            <button class="ex-linkbtn" data-ex-sample data-datamode-switch title="${t('Switches to Demo mode', '切换到演示模式')}">${icon('play', 13)} ${t('Explore a sample study (switches to Demo)', '体验示例研究（切换到演示模式）')}</button>
           </div>
           <div class="adv-body mt-12" ${exManualSourceOpen ? '' : 'hidden'} data-ex-manual-body>
             <div class="pf-hint" style="font-size:11px;color:var(--ink-4);margin-bottom:10px;">${t('Use this only if automatic detection is wrong:', '仅在自动识别不正确时使用:')}</div>
@@ -1778,7 +1777,7 @@
       <div class="rail-block">
         <div class="rail-head"><span class="t">${t('Extraction', '抽取')}</span></div>
         <div class="col gap-6" style="font-size:12px;">
-          <div class="setup-row"><span class="k">${t('Source', '数据源')}</span><span class="vv">${dataMode() === 'demo' ? t('Demo · 10', '演示 · 10') : t('Real · local', '真实 · 本地')}</span></div>
+          <div class="setup-row"><span class="k">${t('Source', '数据源')}</span><span class="vv">${hostedServer() ? t('Server', '服务器') : t('This computer', '本机')}</span></div>
           <div class="setup-row"><span class="k">${t('Modules', '模块')}</span><span class="vv">${selMods().length}</span></div>
           <div class="setup-row"><span class="k">${t('Format', '格式')}</span><span class="vv">${exFormat.toUpperCase()}</span></div>
         </div>
@@ -1804,17 +1803,12 @@
       else {
         body = `${setupFlow()}${exSetupStep === 'modules' ? handoffBar() : ''}`;
       }
-      const demo = dataMode() === 'demo';
       const content = `
         <header class="eudata-head">
           <div><h1>${t('Data Extraction', '数据抽取')}</h1>
           <p>${setupStepSubtitle()}</p></div>
           <div class="eudata-head-actions">
             <button type="button" class="eudata-dictionary-link" data-nav="dictionary">${t('Data dictionary', '数据字典')}</button>
-            <div class="mode-seg ${demo ? 'demo-active' : ''} ${window.EU_HASWORK ? 'consequential' : ''}" data-datamode-switch role="group" aria-label="${t('Data mode', '数据模式')}">
-              <button type="button" class="${demo ? 'on' : ''}" data-datamode="demo" aria-pressed="${demo}">${icon('flask', 12)} ${t('Demo', '演示')}</button>
-              <button type="button" class="${demo ? '' : 'on'}" data-datamode="real" aria-pressed="${!demo}">${icon('db', 12)} ${t('Real', '真实')}</button>
-            </div>
           </div>
         </header>
         ${guidedNote}
@@ -1887,7 +1881,6 @@
       const startConvBtn = root.querySelector('[data-ex-startconv]'); if (startConvBtn) startConvBtn.addEventListener('click', () => { startConvert(); });
       root.querySelectorAll('[data-ex-rescan]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'connect'; exSource = null; exScanResult = null; exScanError = null; convProg = null; convResult = null; convErr = null; repaint(); }));
       const convDoneBtn = root.querySelector('[data-ex-convdone]'); if (convDoneBtn) convDoneBtn.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'ready'; repaint(); });
-      const sampleBtn = root.querySelector('[data-ex-sample]'); if (sampleBtn) sampleBtn.addEventListener('click', () => { if (window.setDataMode) window.setDataMode('demo'); });
       // run
       root.querySelectorAll('[data-ex-run]').forEach(b => b.addEventListener('click', () => runExtract(b.dataset.exRun || 'custom')));
       root.querySelectorAll('[data-ex-express-setdest]').forEach(b => b.addEventListener('click', () => {

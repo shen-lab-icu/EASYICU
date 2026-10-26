@@ -90,7 +90,7 @@ def test_desktop_modules_share_rail_geometry_and_route_motion() -> None:
     app = _read("js", "app.js")
 
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
-    assert "js/app.js?v=20261022-help1" in index
+    assert "js/app.js?v=20261026-src1" in index
     assert "--workspace-global-rail-width: 59px" in canvas
     assert "--workspace-project-rail-width: clamp(330px, 15vw, 380px)" in canvas
     assert "var(--workspace-global-rail-width,59px)" in skills
@@ -148,8 +148,7 @@ def test_data_shell_keeps_source_controls_and_extraction_actions_visible() -> No
     extraction = _read("js", "screens-extraction.js")
     css = _read("css", "extraction.css")
 
-    assert 'data-datamode="demo"' in extraction
-    assert 'data-datamode="real"' in extraction
+    assert "data-datamode" not in extraction
     assert 'data-ex-run="recommended"' in extraction
     assert "data-ex-advc" in extraction
     assert "data-ex-adve" in extraction

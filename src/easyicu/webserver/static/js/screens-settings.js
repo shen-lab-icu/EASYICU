@@ -10,7 +10,6 @@
   const DEFAULT_SETTINGS = {
     ai_enabled: false,
     language: 'en',
-    data_mode: 'demo',
     science_skills_enabled: true,
     nature_figure_skill_enabled: true,
     nature_writing_skill_enabled: true,
@@ -570,7 +569,6 @@
           ${[
             [dual('Capabilities', '能力'), 'layers', 'set-capabilities'],
             [T('Workspace', '工作区'), 'folder', 'set-workspace'],
-            [T('Data mode', '数据模式'), 'flask', 'set-data-mode'],
             [T('Privacy', '隐私'), 'shield', 'set-privacy'],
             [T('Research Agent', '研究代理'), 'agent', 'set-research-agent'],
             [T('Personal', '个人'), 'edit', 'set-personal'],
@@ -609,12 +607,6 @@
       <div class="card pad">
         ${row(T('Default export folder', '默认导出文件夹'), T('Optional destination for code, tables, figures, and the evidence ledger bundle. Project and guided-run folders are chosen inside their own workflows.', '用于代码、表格、图件和证据账本包的可选导出位置。项目和引导运行文件夹在各自工作流中选择。'),
           pathCtl('export_dir', T('Not set - EasyICU creates a local run folder when extracting', '未设置 - 抽取时 EasyICU 会创建本地运行文件夹'), 'download'))}
-      </div>
-
-      <div class="sec-stack" id="set-data-mode"><div class="lbl">${T('Data mode', '数据模式')}</div><h2>${T('Defaults for new sessions', '新会话默认值')}</h2></div>
-      <div class="card pad">
-        ${row(T('Start mode', '启动模式'), T('Which mode a new workspace opens in. Demo screens use bounded seeded fixtures; Real Data reads your registered local export. You can always switch later.', '新工作区默认打开的模式。演示页面使用有边界的种子夹具，真实数据读取已注册的本地导出；之后随时可以切换。'),
-          segBound('data_mode', [['demo', T('Demo', '演示')], ['real', T('Real Data', '真实数据')]], S0().data_mode || 'demo'))}
       </div>
 
       <div class="sec-stack" id="set-privacy"><div class="lbl">${T('Privacy', '隐私')}</div><h2>${T('Local-first guarantees', '本地优先保障')}</h2></div>
@@ -767,10 +759,6 @@
           const b = e.target.closest('button'); if (!b) return;
           seg.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
           const val = b.getAttribute('data-val');
-          if (key === 'data_mode' && val && window.setDataMode) {
-            window.setDataMode(val);
-            return;
-          }
           if (key === 'language' && val && window.setLang) {
             window.setLang(val);
             return;

@@ -553,7 +553,10 @@
     const sourceChoice = window.EU_CROSSDB_SOURCE_CHOICE;
     const registryHtml = config && typeof config.registryHtml === 'function' ? config.registryHtml() : '';
     const sourceChoiceHtml = sourceChoice && typeof sourceChoice.render === 'function'
-      ? sourceChoice.render({ registryHtml })
+      ? sourceChoice.render({
+        registryHtml,
+        offersHtml: config && typeof config.demoOffersHtml === 'function' ? config.demoOffersHtml() : '',
+      })
       : '';
     const error = getError(config);
     return `
@@ -651,56 +654,11 @@
       </section>`}`;
   }
 
-  function renderSyntheticDemo(config) {
-    const h = helpersOf(config);
-    const count = selectedKeys().length;
-    return `<div class="note info">
-      <div class="ico">${h.icon('benchmark', 16)}</div>
-      <div class="body"><span class="t">${h.term('Select databases to compare')}</span> <span class="d" style="display:inline;">— ${h.t('Pick two or more standardized ICU sources, then start the comparison. Each uses an independent seeded feature frame in Demo Mode.', '选择两个或更多标准化 ICU 来源后运行对比。演示模式下，每个数据库使用独立的种子特征帧。')}</span></div>
-    </div>
-    <div class="sec-stack"><div class="lbl">${h.term('Available databases')} · <span id="dbcount">${count}</span> ${h.term('selected')}</div></div>
-    <div class="db-grid" id="dbgrid">
-      ${databaseState().map((row, index) => `<button class="db-card ${row.selected ? 'sel' : ''}" type="button" data-db="${index}" aria-pressed="${row.selected ? 'true' : 'false'}">
-        <div class="row gap-8" style="min-width:0;">
-          <span class="${row.selected ? '' : 'ink-4'}" style="flex:none;color:${row.selected ? 'var(--accent-ink)' : 'var(--ink-4)'};">${h.icon('db', 15)}</span>
-          <div style="min-width:0;">
-            <div style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${row.label}</div>
-            <div class="mono" style="font-size:10.5px;color:var(--ink-4);">${h.term('all supported catalog concepts')}</div>
-          </div>
-        </div>
-        <span class="db-mk pill ${row.selected ? 'ok' : 'dashed'}" style="flex:none;height:20px;">${row.selected ? `<span class="dot"></span>${h.term('selected')}` : h.term('add')}</span>
-      </button>`).join('')}
-    </div>
-    <div class="gate-strip mt-20">
-      <span class="pill"><span style="color:var(--ink-3);">${h.icon('benchmark', 12)}</span> <span id="runhint">${count} / 6 · ${h.t('need ≥ 2', '至少需要 2 个')}</span></span>
-      <div class="grow"></div>
-      <button class="btn primary" data-crossdb-run-demo ${count < 2 ? 'aria-disabled="true"' : ''}>${h.icon('play', 13)} ${h.t('Start comparison', '开始对比')}</button>
-    </div>`;
-  }
-
-  function renderDemo(config) {
-    const h = helpersOf(config);
-    const sourceChoice = window.EU_CROSSDB_SOURCE_CHOICE;
-    const syntheticHtml = renderSyntheticDemo(config);
-    const error = getError(config);
-    const body = sourceChoice && typeof sourceChoice.renderDemo === 'function'
-      ? sourceChoice.renderDemo({ syntheticHtml })
-      : `<div class="card pad">${syntheticHtml}</div>`;
-    return `${error ? `<div class="note warn" role="alert" aria-live="assertive"><div class="ico">${h.icon('alert', 14)}</div><div class="body"><div class="t">${h.t('Comparison needs attention', '对比需要处理')}</div><div class="d">${h.esc(userError(error, config))}</div></div></div>` : ''}${body}`;
-  }
-
   function renderLoading(config) {
     const h = helpersOf(config);
     const sourceChoice = window.EU_CROSSDB_SOURCE_CHOICE;
     if (state.registeredLoading && sourceChoice && typeof sourceChoice.renderLoading === 'function') {
       return sourceChoice.renderLoading();
-    }
-    if (window.EU_DATA !== 'real') {
-      return `<div class="card pad">
-        <div class="load-strip"><span class="spin accent"></span><div class="grow"><div style="font-weight:600;font-size:12.75px;">${h.progressMessage('Loading seeded frames for selected databases…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${h.term('local-only · nothing uploaded')}</div></div><button class="btn sm" data-viz-reset>${h.icon('stop', 13)} ${h.t('Cancel', '取消')}</button></div>
-        <div class="indet mt-12"></div>
-        <div style="font-size:12px;color:var(--ink-3);min-height:18px;margin-top:8px;">${h.progressMessage('Building seeded density frames…')}</div>
-      </div>`;
     }
     const progress = window.EU_CROSSDB_PROGRESS;
     return progress && typeof progress.render === 'function' ? progress.render({
@@ -732,22 +690,12 @@
     if (workspace && config && typeof config.renderLoaded === 'function') {
       return note + header + config.renderLoaded(workspace);
     }
-    const displayMode = window.getDataMode
-      ? window.getDataMode()
-      : (window.EU_DATA === 'real' ? 'real' : 'demo');
-    if (displayMode === 'real') return note + header + renderReal(config);
-    if (state.view === 'loaded') {
-      return note + header + `<div class="note warn">
-        <div class="ico">${h.icon('alert', 14)}</div>
-        <div class="body"><span class="t">${h.t('Demo comparison was not loaded', '演示对比未加载')}</span> <span class="d" style="display:inline;">— ${h.t('Run the comparison again so the backend can build the seeded distribution payload.', '请重新运行对比，让后端生成种子分布载荷。')}</span></div>
-      </div>`;
-    }
-    return note + header + renderDemo(config);
+    return note + header + renderReal(config);
   }
 
   function actionHtml(config) {
     const h = helpersOf(config);
-    const loaded = state.view === 'loaded' || (window.EU_DATA === 'real' && window.EU_CROSSDB_WORKSPACE);
+    const loaded = state.view === 'loaded' || Boolean(window.EU_CROSSDB_WORKSPACE);
     if (!loaded) return '';
     const rawLoaded = window.EU_CROSSDB_WORKSPACE && window.EU_CROSSDB_WORKSPACE.source_type === 'raw_database_root';
     return `<button class="btn" data-viz-reset>${h.icon('sliders', 13)} ${h.term('Change selection')}</button><button class="btn" data-crossdb-export>${h.icon('download', 13)} ${h.term('Export JSON')}</button>${rawLoaded ? '' : `<button class="btn primary" data-crossdb-rerun>${h.icon('refresh', 13)} ${h.term('Re-run')}</button>`}`;
@@ -792,12 +740,6 @@
       repaint(config, `[data-crossdb-source-method="${next}"]`);
     }));
 
-    root.querySelectorAll('.radio[data-datamode]').forEach(button => button.addEventListener('keydown', event => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault();
-      if (window.setDataMode) window.setDataMode(button.dataset.datamode);
-    }));
-
     root.querySelectorAll('[data-crossdb-sample-mode]').forEach(button => button.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
@@ -822,28 +764,9 @@
       if (!card) return;
       const row = toggleDatabase(card.dataset.db);
       if (!row) return;
-      if (window.EU_DATA === 'real') {
-        notifySourceChanged(state.rawRootDraft, state.sampleMode);
-        setError(config, null);
-        repaint(config, `[data-db="${card.dataset.db}"]`);
-        return;
-      }
-      card.classList.toggle('sel', row.selected);
-      card.setAttribute('aria-pressed', row.selected ? 'true' : 'false');
-      const marker = card.querySelector('.db-mk');
-      if (marker) {
-        marker.className = `db-mk pill ${row.selected ? 'ok' : 'dashed'}`;
-        marker.innerHTML = row.selected ? `<span class="dot"></span>${helpersOf(config).term('selected')}` : helpersOf(config).term('add');
-      }
-      const count = selectedKeys().length;
-      const counter = root.querySelector('#dbcount');
-      if (counter) counter.textContent = count;
-      const hint = root.querySelector('#runhint');
-      if (hint) hint.textContent = `${count} / 6 · ${helpersOf(config).t('need ≥ 2', '至少需要 2 个')}`;
-      root.querySelectorAll('[data-crossdb-run-demo]').forEach(button => {
-        if (count < 2) button.setAttribute('aria-disabled', 'true');
-        else button.removeAttribute('aria-disabled');
-      });
+      notifySourceChanged(state.rawRootDraft, state.sampleMode);
+      setError(config, null);
+      repaint(config, `[data-db="${card.dataset.db}"]`);
     });
 
     root.querySelectorAll('[data-crossdb-select-detected]').forEach(button => button.addEventListener('click', event => {
@@ -886,49 +809,17 @@
       startRawRun(rootValue, config);
     }));
 
-    root.querySelectorAll('[data-crossdb-run-demo]').forEach(button => button.addEventListener('click', event => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (button.getAttribute('aria-disabled') === 'true' || state.view === 'loading') return;
-      button.setAttribute('aria-disabled', 'true');
-      const operationId = beginOperation();
-      state.view = 'loading';
-      const runSnapshot = { ...snapshot(config), operationId };
-      repaint(config);
-      if (config && typeof config.runDemo === 'function') {
-        config.runDemo(ok => {
-          if (!operationCurrent(operationId)) return;
-          state.view = ok ? 'loaded' : 'idle';
-          repaint(config);
-        }, runSnapshot);
-      }
-    }));
-
     root.querySelectorAll('[data-crossdb-rerun]').forEach(button => button.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
       if (state.view === 'loading') return;
       button.setAttribute('aria-disabled', 'true');
-      if (window.EU_DATA === 'real') {
-        const sourceHost = window.EU_CROSSDB_SOURCE_HOST;
-        const context = window.EU_DATA_MODE_CONTEXT;
-        if (context && context.kind === 'official_demo_pair' && sourceHost && typeof sourceHost.runOfficial === 'function') {
-          sourceHost.runOfficial();
-        } else if (sourceHost && typeof sourceHost.runRegistered === 'function') {
-          sourceHost.runRegistered();
-        }
-        return;
-      }
-      const operationId = beginOperation();
-      state.view = 'loading';
-      const runSnapshot = { ...snapshot(config), operationId };
-      repaint(config);
-      if (config && typeof config.runDemo === 'function') {
-        config.runDemo(ok => {
-          if (!operationCurrent(operationId)) return;
-          state.view = ok ? 'loaded' : 'idle';
-          repaint(config);
-        }, runSnapshot);
+      const sourceHost = window.EU_CROSSDB_SOURCE_HOST;
+      const context = window.EU_DATA_MODE_CONTEXT;
+      if (context && context.kind === 'official_demo_pair' && sourceHost && typeof sourceHost.runOfficial === 'function') {
+        sourceHost.runOfficial();
+      } else if (sourceHost && typeof sourceHost.runRegistered === 'function') {
+        sourceHost.runRegistered();
       }
     }));
 
@@ -1070,7 +961,6 @@
     rawRoot,
     registeredLoading,
     renderBody,
-    renderDemo,
     renderLoading,
     renderReal,
     resetForDataMode,
