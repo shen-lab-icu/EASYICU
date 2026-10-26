@@ -115,7 +115,8 @@ def test_the_local_page_keeps_desktop_guidance_and_entry_points() -> None:
     assert 'data-help-question="在 eICU demo 中，不同 ICU 类型的患者，ICU 住院时长有什么差别？"' in body
     # Credentialed data needs the model's declaration, asked when first used.
     assert "研究第一次用到这些数据时，EasyICU 会问你：模型是否在本机运行，或服务是否不保留数据" in body
-    assert "eICU：描述、关联和预测研究" in body
+    # All six databases are offered; the answer names what is accepted on real data.
+    assert "目前已在真实数据上验收的是 MIMIC-IV 的全部研究类型，以及 eICU 的描述、关联与预测分析" in body
     # The hosted page's server and administrator claims are not made here.
     for hosted_claim in ("医院服务器", "管理员"):
         assert hosted_claim not in body

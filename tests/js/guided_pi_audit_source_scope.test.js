@@ -23,8 +23,9 @@ const finalizer = vm.runInNewContext(finalizerSource
       result: async () => message };
   },
 });
-const unsupported = { hirid: 'HiRID', aumc: 'AmsterdamUMCdb', sic: 'SICdb' };
-const supported = { miiv: 'MIMIC-IV', eicu: 'eICU' };
+// Every research database takes the same source path; what a study can do on
+// it is the capability gate's decision before planning, not a fixed list here.
+const supported = { miiv: 'MIMIC-IV', eicu: 'eICU', hirid: 'HiRID', aumc: 'AmsterdamUMCdb', sic: 'SICdb' };
 const exportRow = { source_id: 'src_synthetic', label: 'Synthetic export', stays: 12,
   module_count: 2, generated_date: '2026-01-02' };
 const empty = { state: 'ready', recommended: null, choices: [] };
@@ -77,30 +78,6 @@ async function narration(database, label, { hosted = false, language = 'zh',
   return (await stream.result()).content[0].text;
 }
 
-for (const [database, label] of Object.entries(unsupported)) {
-  for (const language of ['zh', 'en']) for (const hosted of [false, true]) {
-    test(`${database} card explains scope before availability (${language}, hosted=${hosted})`, () => {
-      for (const offer of [null, { state: 'loading' }, { state: 'none' }, empty,
-        { ...empty, recommended: exportRow }, { ...empty, choices: [exportRow] }]) {
-        const html = card(database, label, { hosted, language, offer });
-        assert.ok(html.includes(refusal(label, language)), html);
-        assert.match(html, /data-gpi-data-source-action="begin_local_selection"/);
-        assert.doesNotMatch(html, /data-gpi-data-source-(database|id)=|use_registered_source|data-gpi-named-demo/);
-        assert.doesNotMatch(html, /管理员|Support|administrator|data folder|数据文件夹|尚未添加|server has no/);
-      }
-    });
-    test(`${database} narration explains scope before availability (${language}, hosted=${hosted})`, async () => {
-      for (const toolResult of [false, true]) for (const extra of [{},
-        { recommended_source: { ...exportRow, database, availability: 'available_in_easyicu' } },
-        { registered_source_choices: [{ ...exportRow, choice: 1 }] }]) {
-        const text = await narration(database, label, { hosted, language, extra, toolResult });
-        assert.ok(text.includes(refusal(label, language)), text);
-        assert.doesNotMatch(text, /目录|folder|服务器上还没有|server has no|推荐|recommended|已登记|registered.*exports/);
-      }
-    });
-  }
-}
-
 for (const [database, label] of Object.entries(supported)) {
   for (const language of ['zh', 'en']) for (const hosted of [false, true]) {
     test(`${database} missing data keeps deployment-specific guidance (${language}, hosted=${hosted})`, async () => {
@@ -140,13 +117,12 @@ for (const [database, label] of Object.entries(supported)) {
   }
 }
 
-test('a pending project source cannot bypass the scope card', () => {
-  for (const label of ['HiRID <fixture>', '']) {
-    const html = card('eicu', 'eICU', { authorization: { status: 'pending',
-      reason: 'project_source_confirmation_required', source: { database: 'hirid', label } } });
-    assert.ok(html.includes(refusal(label ? 'HiRID &lt;fixture&gt;' : 'HiRID', 'zh')));
-    assert.doesNotMatch(html, /use_study_required_data|<fixture>/);
-  }
+test('a pending HiRID project source is confirmed like any other source', () => {
+  const html = card('eicu', 'eICU', { authorization: { status: 'pending',
+    reason: 'project_source_confirmation_required', source: { database: 'hirid', label: 'HiRID <fixture>' } } });
+  assert.match(html, /这项研究使用哪份数据/);
+  assert.ok(!html.includes(refusal('HiRID &lt;fixture&gt;', 'zh')));
+  assert.doesNotMatch(html, /<fixture>/);
 });
 
 test('confirmed and in-progress source states are not new scope refusals', () => {
