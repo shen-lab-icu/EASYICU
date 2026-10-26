@@ -4749,6 +4749,14 @@ def _write_projection(
         "path_values_returned": False,
         "provider_usage": _provider_usage_projection(wrapper_dir),
     }
+    from .scientific_review_metadata import recorded_review_metadata
+
+    source_manifest["scientific_review"] = recorded_review_metadata(run_dir, source)
+    if manuscript_provenance:
+        source_manifest["scientific_review"]["manuscript_preview"] = {
+            "sha256": hashlib.sha256(manuscript_text.encode("utf-8")).hexdigest(),
+            "manuscript_sha256": manuscript_provenance["manuscript_sha256"],
+        }
     payloads: Dict[str, Dict[str, Any]] = {
         "run_context.json": run_context,
         "cohort_summary.json": cohort_summary,

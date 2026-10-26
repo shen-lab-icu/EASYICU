@@ -1083,6 +1083,18 @@ def post_agent_run_science_workbench(body: Dict[str, Any]) -> dict:
     return result
 
 
+@control_router.post("/api/agent-runs/scientific-review")
+def post_agent_run_scientific_review(body: Dict[str, Any]) -> dict:
+    """Read one bounded review page using the same run coordinate as review."""
+    from easyicu.webserver.scientific_review import read_scientific_review
+
+    project_dir, ref = _run_coordinate(body)
+    result = read_scientific_review(project_dir, offset=body.get("offset", 0), limit=body.get("limit", 50))
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=_addressed(result, ref))
+    return _addressed(result, ref)
+
+
 @control_router.post("/api/agent-runs/signoff")
 def post_agent_run_signoff(body: Dict[str, Any]) -> dict:
     """Write a local human signoff artifact without unlocking the draft."""

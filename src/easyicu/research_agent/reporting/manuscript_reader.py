@@ -47,6 +47,7 @@ def build_manuscript_reader(
     literature: LiteratureBundle | None = None,
     evidence_records: Sequence[EvidenceRecord] | None = None,
     binding_map: Mapping | None = None,
+    untraced_numerics: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Keep source numbers unchanged and order references by first citation."""
 
@@ -55,6 +56,12 @@ def build_manuscript_reader(
     )
     from easyicu.synthetic_source_provenance import report_disclosure
     payload.update(report_disclosure(manuscript))
+    # Keep the binder's negative result as well as its successful links. A
+    # reconstructed legacy reader cannot certify that every number was bound.
+    payload["number_binding"] = {
+        "status": "recorded" if untraced_numerics is not None else "unavailable",
+        "untraced": list(untraced_numerics or ()),
+    }
     try:
         tables = build_manuscript_tables(
             plan=plan,

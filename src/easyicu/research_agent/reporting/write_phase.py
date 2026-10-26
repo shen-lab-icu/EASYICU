@@ -671,6 +671,7 @@ def _persist_manuscript_provenance_artifact(
     plan: AnalysisPlan | None = None,
     literature: LiteratureBundle | None = None,
     evidence_records: Sequence[Any] | None = None,
+    untraced_numerics: Sequence[str] | None = None,
 ) -> None:
     """Persist the path-free number -> JSON -> code/data reader contract."""
 
@@ -679,6 +680,7 @@ def _persist_manuscript_provenance_artifact(
             manuscript=bound,
             evidence=evidence,
             binding_map=numeric_binding_map,
+            untraced_numerics=untraced_numerics,
             plan=plan, literature=literature, evidence_records=evidence_records,
         )
     except ManuscriptProvenanceError as exc:
@@ -727,6 +729,7 @@ def _persist_reader_artifacts(
     plan: AnalysisPlan | None,
     literature: LiteratureBundle | None,
     evidence_records: Sequence[Any],
+    untraced_numerics: Sequence[str] | None = None,
 ) -> None:
     """Persist what the reader and the signing reviewer read beside the bound text."""
 
@@ -734,6 +737,7 @@ def _persist_reader_artifacts(
         bound=bound, numeric_binding_map=numeric_binding_map, run_dir=run_dir,
         evidence=evidence, findings=findings, plan=plan, literature=literature,
         evidence_records=evidence_records,
+        untraced_numerics=untraced_numerics,
     )
     persist_publication_disclosure_review(
         context=context, plan=plan, evidence_records=evidence_records,
@@ -2717,6 +2721,7 @@ def _bind_and_review_manuscript(
             bound=bound, numeric_binding_map=numeric_binding_map, run_dir=run_dir,
             evidence=evidence, findings=findings, context=context, plan=plan, literature=literature,
             evidence_records=evidence.current_verified_records(per_step_records),
+            untraced_numerics=untraced_numerics,
         )
 
     manuscript_critique, critic_review_error = _review_manuscript_with_fail_safe(

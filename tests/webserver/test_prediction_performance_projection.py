@@ -316,8 +316,25 @@ def _project(tmp_path: Path, run_dir: Path) -> Dict[str, Any]:
 def test_the_run_projection_carries_the_block_with_its_gate(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     _write_run(run_dir, gates={**_PASSED, "numeric_verified": False})
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    manifest["per_step_records"][0]["step_summary"]["package_versions"] = {"synthetic-package": "0.4"}
+    (run_dir / "manifest.json").write_text(json.dumps(manifest))
+    manuscript = "A recorded synthetic manuscript sentence.\n" * 1000
+    manuscript_sha = hashlib.sha256(manuscript.encode()).hexdigest()
+    (run_dir / "manuscript_scaffold_bound.md").write_text(manuscript)
+    (run_dir / "manuscript_provenance.json").write_text(json.dumps({
+        "schema_version": "easyicu.manuscript-provenance/1", "manuscript_sha256": manuscript_sha,
+        "claims": [], "integrity": {"path_values_returned": False, "patient_rows_returned": False, "raw_data_returned": False},
+    }))
 
     result_tables = _project(tmp_path, run_dir)
+    metadata = json.loads((tmp_path / "wrapper/source_run_manifest.json").read_text())["scientific_review"]
+    assert metadata["status"] == "recorded"
+    assert any(row["value"] == {"synthetic-package": "0.4"} for row in metadata["runtime"])
+    preview = json.loads((tmp_path / "wrapper/manuscript_draft.json").read_text())["markdown_preview"]
+    assert len(preview) < len(manuscript)
+    assert metadata["manuscript_preview"] == {"sha256": hashlib.sha256(preview.encode()).hexdigest(),
+                                               "manuscript_sha256": manuscript_sha}
 
     block = result_tables["prediction_performance"]
     assert block["evidence_id"] == "table_perf"
