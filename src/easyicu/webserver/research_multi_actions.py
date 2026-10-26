@@ -76,16 +76,28 @@ def _dispatch(service, request, batch_id, phase):
     return dict(job_id=job.id, kind=job.kind, status=job.status, multi_database_batch_id=batch_id)
 
 
-def propose(service, request: MultiDatabaseRequest):
+def propose(service, request: MultiDatabaseRequest, *, _message_job_id=None):
     service.host_action_session(request.session_id, project_id=request.project_id, study_context_id=request.study_context_id)
     record = service._scoped_record(request.session_id, project_id=request.project_id)
     with service._lock:
-        if request.session_id in service._busy_sessions or request.session_id in service._dispatching_followups:
+        if _message_job_id is not None:
+            # Only the host callback bound to the currently executing Pi turn
+            # may prepare a proposal while that conversation is busy.
+            if service._active_message_jobs.get(request.session_id) != _message_job_id:
+                raise MultiDatabaseError("multi_database_turn_expired")
+        elif request.session_id in service._busy_sessions or request.session_id in service._dispatching_followups:
             raise MultiDatabaseError("pi_session_busy")
     if not record.external_llm_opt_in or record.agent_mode != "research":
         raise MultiDatabaseError("multi_database_opt_in_required")
     batch_id = canonical_sha256([request.model_dump(mode="json"), uuid.uuid4().hex])
     _write(batch_root(batch_id) / "admission.json", request.model_dump(mode="json"))
+    from .pi_copilot.contracts import utc_now
+
+    service.replay_store.record_multi_database_batch(
+        session_id=request.session_id, project_id=request.project_id,
+        reference=dict(batch_id=batch_id, study_context_id=request.study_context_id,
+                       source_run_id=request.source_run_id, message_job_id=_message_job_id, created_at=utc_now()),
+    )
     return _dispatch(service, request, batch_id, "prepare")
 
 

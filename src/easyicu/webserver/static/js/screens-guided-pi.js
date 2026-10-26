@@ -38,35 +38,7 @@
   });
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
-  function publicAssistantText(value) {
-    return String(value || '')
-      .replace(/\b(?:one[-\s]time\s+)?extraction grant\b/gi, tr(
-        'one-time data preparation authorization',
-        '本轮一次性数据准备授权',
-      ))
-      .replace(/\beasyicu_prepare_demo_source\b/gi, tr(
-        'the official demo preparation workflow',
-        '官方 Demo 准备流程',
-      ))
-      .replace(/\bpi_action_authorization_required\b/gi, tr(
-        'the required EasyICU data authorization is not active for this turn',
-        '本轮数据准备授权尚未生效',
-      ))
-      .replace(/\bpi_session_data_source_confirmation_required\b/gi, tr(
-        'this conversation still needs the selected data source to be confirmed',
-        '本会话仍需确认所选数据源',
-      ))
-      .replace(/\bpi_[a-z0-9_]+\b/gi, tr('an EasyICU internal status', 'EasyICU 内部状态'))
-      .replace(/\beasyicu\.webserver\.pi_copilot(?:\.[a-z0-9_.]+)?\b/gi, 'EasyICU Copilot')
-      // Earlier replies quoted readiness codes and file digests; the host
-      // shows files and digests beside the conversation.
-      .replace(/`?report_revision_quality_pass_analysis_only`?/gi, tr(
-        'a report revision that passed its quality checks for analysis review',
-        '已通过质量检查、仅供分析审阅的报告修订',
-      ))
-      .replace(/[，,;；]?\s*SHA-?256\s*[:：]\s*`?[a-f0-9]{64}`?/gi, '')
-      .replace(/`[a-f0-9]{64}`/gi, '');
-  }
+  const { publicAssistantText } = MODULES.require('assistantText').create({ tr });
   function assistantTextHtml(value) {
     const renderer = MODULES.require('markdown');
     // A filename in prose has no resource identity. Attached message resources
@@ -438,6 +410,18 @@
   const MESSAGE_QUEUE = MODULES.require('messageQueue').create({
     state, api, projectId, render, refreshSession, watchJob, errorText,
   });
+  // Quick-answer cards (owner: screens-guided-pi-quick-answers.js).
+  const quickAnswerOwner = MODULES.optional('quickAnswers');
+  const QUICK_ANSWERS = quickAnswerOwner ? quickAnswerOwner.create({
+    tr, esc, act: PLAN_ACTIONS.quickAnswerAction,
+    disabled: () => Boolean(state.busy || state.childJobId || sessionIsStale()),
+  }) : null;
+  // Multi-database batch cards (owner: screens-guided-pi-multi-database.js).
+  const multiDatabaseOwner = MODULES.optional('multiDatabase');
+  const MULTI_DATABASE = multiDatabaseOwner ? multiDatabaseOwner.create({
+    tr, esc, api, session: () => state.session, projectId, errorText, repaint: () => render(),
+    disabled: () => Boolean(state.busy || sessionIsStale()),
+  }) : null;
   const EVENTS = MODULES.require('events').create({
     state, RESOURCE_OWNER, RUN_FILES, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
     DATA_CONSENT, RUN_OUTCOME, STUDY_WORKSPACE, ASIDE, render, projectId, previewWorkflowContext,
@@ -452,7 +436,7 @@
     authorizeDataSource, sendText, continueAfterDataSourceConfirmation,
     governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
     togglePresentationPin, configureProvider, rememberSession, recordHostAction,
-    HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP, MESSAGE_QUEUE,
+    HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP, MESSAGE_QUEUE, QUICK_ANSWERS, MULTI_DATABASE,
   });
   const dismissHeaderOverflow = EVENTS.dismissHeaderOverflow;
   const wire = EVENTS.wire;
@@ -553,6 +537,7 @@
     workflowConfirmationHtml, hostJobs: HOST_JOBS, followUps: MODULES.require('followUps'),
     effortMenu: EFFORT_MENU, workflowConfirmation, runFailureText, help: HELP,
     sessionMatchesUiLanguage, displaySessionTitle, sessionTraceLabel, providerBindingSummary,
+    quickAnswers: QUICK_ANSWERS, multiDatabase: MULTI_DATABASE,
   });
   const { messageHtml, workflowHtml, sessionPanel, demoPanel,
     activatePanel, projectRequiredPanel, restoringPanel } = SESSION_VIEW;

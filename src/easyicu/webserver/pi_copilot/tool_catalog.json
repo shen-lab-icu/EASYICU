@@ -1131,6 +1131,955 @@
         "type": "object"
       }
     },
+    {
+      "name": "easyicu_quick_answer",
+      "surface": "research",
+      "policy_group": "read",
+      "execution_mode": "sequential",
+      "host_mutating": true,
+      "data_source_required": true,
+      "arguments": {
+        "model": [
+          "reading"
+        ],
+        "host": [],
+        "required": [
+          "reading"
+        ]
+      },
+      "model_schema": {
+        "$defs": {
+          "AgeYears": {
+            "additionalProperties": false,
+            "description": "Age at ICU admission within ``[min_years, max_years]``.",
+            "properties": {
+              "id": {
+                "pattern": "^c[1-9][0-9]?$",
+                "title": "Id",
+                "type": "string"
+              },
+              "quote": {
+                "maxLength": 160,
+                "minLength": 2,
+                "title": "Quote",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "question",
+                  "study_wording",
+                  "outline",
+                  "preset"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "include",
+                  "exclude"
+                ],
+                "title": "Role",
+                "type": "string"
+              },
+              "kind": {
+                "const": "age_years",
+                "title": "Kind",
+                "type": "string"
+              },
+              "min_years": {
+                "anyOf": [
+                  {
+                    "maximum": 130,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Min Years"
+              },
+              "max_years": {
+                "anyOf": [
+                  {
+                    "maximum": 130,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Max Years"
+              }
+            },
+            "required": [
+              "id",
+              "quote",
+              "source",
+              "role",
+              "kind"
+            ],
+            "title": "AgeYears",
+            "type": "object"
+          },
+          "AliveAt": {
+            "additionalProperties": false,
+            "description": "No death the input records happened before this hour after ICU admission.",
+            "properties": {
+              "id": {
+                "pattern": "^c[1-9][0-9]?$",
+                "title": "Id",
+                "type": "string"
+              },
+              "quote": {
+                "maxLength": 160,
+                "minLength": 2,
+                "title": "Quote",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "question",
+                  "study_wording",
+                  "outline",
+                  "preset"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "include",
+                  "exclude"
+                ],
+                "title": "Role",
+                "type": "string"
+              },
+              "kind": {
+                "const": "alive_at",
+                "title": "Kind",
+                "type": "string"
+              },
+              "hours": {
+                "exclusiveMinimum": 0,
+                "maximum": 8760.0,
+                "title": "Hours",
+                "type": "number"
+              }
+            },
+            "required": [
+              "id",
+              "quote",
+              "source",
+              "role",
+              "kind",
+              "hours"
+            ],
+            "title": "AliveAt",
+            "type": "object"
+          },
+          "ConditionPresent": {
+            "additionalProperties": false,
+            "description": "Each concept's status is present within the window: no threshold.\n\nAn inclusion keeps the stays with every concept present; an exclusion\nremoves the stays with its one concept present.  A stay is removed when\nit meets any exclusion, so an exclusion cannot name a combination.  With\nno window, the status counts over the whole stay.",
+            "properties": {
+              "id": {
+                "pattern": "^c[1-9][0-9]?$",
+                "title": "Id",
+                "type": "string"
+              },
+              "quote": {
+                "maxLength": 160,
+                "minLength": 2,
+                "title": "Quote",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "question",
+                  "study_wording",
+                  "outline",
+                  "preset"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "include",
+                  "exclude"
+                ],
+                "title": "Role",
+                "type": "string"
+              },
+              "kind": {
+                "const": "condition_present",
+                "title": "Kind",
+                "type": "string"
+              },
+              "concepts_all_of": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 4,
+                "minItems": 1,
+                "title": "Concepts All Of",
+                "type": "array"
+              },
+              "window": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SpecWindow"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "quote",
+              "source",
+              "role",
+              "kind",
+              "concepts_all_of",
+              "window"
+            ],
+            "title": "ConditionPresent",
+            "type": "object"
+          },
+          "DiagnosisCodes": {
+            "additionalProperties": false,
+            "description": "A recorded diagnosis code begins with one of ``codes``.",
+            "properties": {
+              "id": {
+                "pattern": "^c[1-9][0-9]?$",
+                "title": "Id",
+                "type": "string"
+              },
+              "quote": {
+                "maxLength": 160,
+                "minLength": 2,
+                "title": "Quote",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "question",
+                  "study_wording",
+                  "outline",
+                  "preset"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "include",
+                  "exclude"
+                ],
+                "title": "Role",
+                "type": "string"
+              },
+              "kind": {
+                "const": "diagnosis_codes",
+                "title": "Kind",
+                "type": "string"
+              },
+              "system": {
+                "enum": [
+                  "icd9",
+                  "icd10"
+                ],
+                "title": "System",
+                "type": "string"
+              },
+              "codes": {
+                "items": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9.]{0,9}$",
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "title": "Codes",
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "quote",
+              "source",
+              "role",
+              "kind",
+              "system",
+              "codes"
+            ],
+            "title": "DiagnosisCodes",
+            "type": "object"
+          },
+          "EventAbsent": {
+            "additionalProperties": false,
+            "description": "The concept's event did not happen within the window, or in the stay.",
+            "properties": {
+              "id": {
+                "pattern": "^c[1-9][0-9]?$",
+                "title": "Id",
+                "type": "string"
+              },
+              "quote": {
+                "maxLength": 160,
+                "minLength": 2,
+                "title": "Quote",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "question",
+                  "study_wording",
+                  "outline",
+                  "preset"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "include",
+                  "exclude"
+                ],
+                "title": "Role",
+                "type": "string"
+              },
+              "kind": {
+                "const": "event_absent",
+                "title": "Kind",
+                "type": "string"
+              },
+              "concept": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Concept",
+                "type": "string"
+              },
+              "window": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SpecWindow"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "quote",
+              "source",
+              "role",
+              "kind",
+              "concept",
+              "window"
+            ],
+            "title": "EventAbsent",
+            "type": "object"
+          },
+          "FirstIcuStay": {
+            "additionalProperties": false,
+            "description": "Each patient's first ICU stay.",
+            "properties": {
+              "id": {
+                "pattern": "^c[1-9][0-9]?$",
+                "title": "Id",
+                "type": "string"
+              },
+              "quote": {
+                "maxLength": 160,
+                "minLength": 2,
+                "title": "Quote",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "question",
+                  "study_wording",
+                  "outline",
+                  "preset"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "include",
+                  "exclude"
+                ],
+                "title": "Role",
+                "type": "string"
+              },
+              "kind": {
+                "const": "first_icu_stay",
+                "title": "Kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "quote",
+              "source",
+              "role",
+              "kind"
+            ],
+            "title": "FirstIcuStay",
+            "type": "object"
+          },
+          "FirstIcuStayPerHospitalization": {
+            "additionalProperties": false,
+            "description": "The first ICU stay within each hospitalization, not each patient.",
+            "properties": {
+              "id": {
+                "pattern": "^c[1-9][0-9]?$",
+                "title": "Id",
+                "type": "string"
+              },
+              "quote": {
+                "maxLength": 160,
+                "minLength": 2,
+                "title": "Quote",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "question",
+                  "study_wording",
+                  "outline",
+                  "preset"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "include",
+                  "exclude"
+                ],
+                "title": "Role",
+                "type": "string"
+              },
+              "kind": {
+                "const": "first_icu_stay_per_hospitalization",
+                "title": "Kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "quote",
+              "source",
+              "role",
+              "kind"
+            ],
+            "title": "FirstIcuStayPerHospitalization",
+            "type": "object"
+          },
+          "IcuStayHours": {
+            "additionalProperties": false,
+            "description": "An ICU length of stay within ``[min_hours, max_hours]``.",
+            "properties": {
+              "id": {
+                "pattern": "^c[1-9][0-9]?$",
+                "title": "Id",
+                "type": "string"
+              },
+              "quote": {
+                "maxLength": 160,
+                "minLength": 2,
+                "title": "Quote",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "question",
+                  "study_wording",
+                  "outline",
+                  "preset"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "include",
+                  "exclude"
+                ],
+                "title": "Role",
+                "type": "string"
+              },
+              "kind": {
+                "const": "icu_stay_hours",
+                "title": "Kind",
+                "type": "string"
+              },
+              "min_hours": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "maximum": 8760.0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Min Hours"
+              },
+              "max_hours": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "maximum": 8760.0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Max Hours"
+              }
+            },
+            "required": [
+              "id",
+              "quote",
+              "source",
+              "role",
+              "kind"
+            ],
+            "title": "IcuStayHours",
+            "type": "object"
+          },
+          "Measure": {
+            "additionalProperties": false,
+            "properties": {
+              "concept": {
+                "default": "",
+                "maxLength": 120,
+                "pattern": "^[A-Za-z0-9_]*$",
+                "title": "Concept",
+                "type": "string"
+              },
+              "statistic": {
+                "enum": [
+                  "count",
+                  "proportion",
+                  "mean",
+                  "median",
+                  "iqr"
+                ],
+                "title": "Statistic",
+                "type": "string"
+              },
+              "summary": {
+                "default": "value",
+                "enum": [
+                  "value",
+                  "max",
+                  "min",
+                  "first",
+                  "last",
+                  "mean"
+                ],
+                "title": "Summary",
+                "type": "string"
+              },
+              "window": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SpecWindow"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "level": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Level"
+              }
+            },
+            "required": [
+              "statistic"
+            ],
+            "title": "Measure",
+            "type": "object"
+          },
+          "Measurement": {
+            "additionalProperties": false,
+            "description": "A value's summary over the window meets a threshold.",
+            "properties": {
+              "id": {
+                "pattern": "^c[1-9][0-9]?$",
+                "title": "Id",
+                "type": "string"
+              },
+              "quote": {
+                "maxLength": 160,
+                "minLength": 2,
+                "title": "Quote",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "question",
+                  "study_wording",
+                  "outline",
+                  "preset"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "include",
+                  "exclude"
+                ],
+                "title": "Role",
+                "type": "string"
+              },
+              "kind": {
+                "const": "measurement",
+                "title": "Kind",
+                "type": "string"
+              },
+              "concept": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Concept",
+                "type": "string"
+              },
+              "summary": {
+                "enum": [
+                  "max",
+                  "min",
+                  "first",
+                  "last",
+                  "mean"
+                ],
+                "title": "Summary",
+                "type": "string"
+              },
+              "window": {
+                "$ref": "#/$defs/SpecWindow"
+              },
+              "op": {
+                "enum": [
+                  ">",
+                  ">=",
+                  "<",
+                  "<=",
+                  "==",
+                  "!="
+                ],
+                "title": "Op",
+                "type": "string"
+              },
+              "value": {
+                "title": "Value",
+                "type": "number"
+              },
+              "unit": {
+                "anyOf": [
+                  {
+                    "maxLength": 32,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Unit"
+              }
+            },
+            "required": [
+              "id",
+              "quote",
+              "source",
+              "role",
+              "kind",
+              "concept",
+              "summary",
+              "window",
+              "op",
+              "value"
+            ],
+            "title": "Measurement",
+            "type": "object"
+          },
+          "NotTyped": {
+            "additionalProperties": false,
+            "description": "A restriction no kind expresses, kept with the reason.",
+            "properties": {
+              "id": {
+                "pattern": "^c[1-9][0-9]?$",
+                "title": "Id",
+                "type": "string"
+              },
+              "quote": {
+                "maxLength": 160,
+                "minLength": 2,
+                "title": "Quote",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "question",
+                  "study_wording",
+                  "outline",
+                  "preset"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "include",
+                  "exclude"
+                ],
+                "title": "Role",
+                "type": "string"
+              },
+              "kind": {
+                "const": "not_typed",
+                "title": "Kind",
+                "type": "string"
+              },
+              "why": {
+                "maxLength": 240,
+                "minLength": 8,
+                "title": "Why",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "quote",
+              "source",
+              "role",
+              "kind",
+              "why"
+            ],
+            "title": "NotTyped",
+            "type": "object"
+          },
+          "PopulationSpec": {
+            "additionalProperties": false,
+            "description": "Every restriction the study states on whom it includes; none for all rows.",
+            "properties": {
+              "criteria": {
+                "items": {
+                  "discriminator": {
+                    "mapping": {
+                      "age_years": "#/$defs/AgeYears",
+                      "alive_at": "#/$defs/AliveAt",
+                      "condition_present": "#/$defs/ConditionPresent",
+                      "diagnosis_codes": "#/$defs/DiagnosisCodes",
+                      "event_absent": "#/$defs/EventAbsent",
+                      "first_icu_stay": "#/$defs/FirstIcuStay",
+                      "first_icu_stay_per_hospitalization": "#/$defs/FirstIcuStayPerHospitalization",
+                      "icu_stay_hours": "#/$defs/IcuStayHours",
+                      "measurement": "#/$defs/Measurement",
+                      "not_typed": "#/$defs/NotTyped"
+                    },
+                    "propertyName": "kind"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/AgeYears"
+                    },
+                    {
+                      "$ref": "#/$defs/FirstIcuStay"
+                    },
+                    {
+                      "$ref": "#/$defs/FirstIcuStayPerHospitalization"
+                    },
+                    {
+                      "$ref": "#/$defs/IcuStayHours"
+                    },
+                    {
+                      "$ref": "#/$defs/ConditionPresent"
+                    },
+                    {
+                      "$ref": "#/$defs/DiagnosisCodes"
+                    },
+                    {
+                      "$ref": "#/$defs/Measurement"
+                    },
+                    {
+                      "$ref": "#/$defs/AliveAt"
+                    },
+                    {
+                      "$ref": "#/$defs/EventAbsent"
+                    },
+                    {
+                      "$ref": "#/$defs/NotTyped"
+                    }
+                  ]
+                },
+                "maxItems": 8,
+                "title": "Criteria",
+                "type": "array"
+              }
+            },
+            "title": "PopulationSpec",
+            "type": "object"
+          },
+          "QuickReading": {
+            "additionalProperties": false,
+            "properties": {
+              "question": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "title": "Question",
+                "type": "string"
+              },
+              "intent": {
+                "enum": [
+                  "describe",
+                  "compare",
+                  "adjusted",
+                  "prediction",
+                  "survival",
+                  "causal",
+                  "clustering",
+                  "multistep"
+                ],
+                "title": "Intent",
+                "type": "string"
+              },
+              "population": {
+                "$ref": "#/$defs/PopulationSpec"
+              },
+              "measure": {
+                "$ref": "#/$defs/Measure"
+              },
+              "grouping": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "title": "Grouping",
+                "type": "array"
+              },
+              "analysis_unit": {
+                "default": "icu_stay",
+                "enum": [
+                  "icu_stay",
+                  "patient",
+                  "hospitalization"
+                ],
+                "title": "Analysis Unit",
+                "type": "string"
+              },
+              "adjustments": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "title": "Adjustments",
+                "type": "array"
+              },
+              "endpoint_kind": {
+                "default": "observed",
+                "enum": [
+                  "observed",
+                  "time_to_event",
+                  "fixed_horizon"
+                ],
+                "title": "Endpoint Kind",
+                "type": "string"
+              },
+              "ambiguities": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "title": "Ambiguities",
+                "type": "array"
+              }
+            },
+            "required": [
+              "question",
+              "intent",
+              "population",
+              "measure"
+            ],
+            "title": "QuickReading",
+            "type": "object"
+          },
+          "SpecWindow": {
+            "additionalProperties": false,
+            "description": "``[start_hours, end_hours)`` after ICU admission, both finite.",
+            "properties": {
+              "start_hours": {
+                "maximum": 8760.0,
+                "minimum": -8760.0,
+                "title": "Start Hours",
+                "type": "number"
+              },
+              "end_hours": {
+                "maximum": 8760.0,
+                "minimum": -8760.0,
+                "title": "End Hours",
+                "type": "number"
+              }
+            },
+            "required": [
+              "start_hours",
+              "end_hours"
+            ],
+            "title": "SpecWindow",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "reading": {
+            "$ref": "#/$defs/QuickReading"
+          }
+        },
+        "required": [
+          "reading"
+        ],
+        "title": "QuickQuestionInput",
+        "type": "object"
+      }
+    },
+    {"name": "easyicu_propose_multi_database", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["targets"], "host": [], "required": ["targets"]}, "model_schema": null},
     {"name": "easyicu_mine_ideas", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["doi", "excerpt", "journal", "pmid", "title", "topic", "year"], "host": [], "required": []}, "model_schema": null},
     {"name": "easyicu_search_literature", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["idea_id", "journal", "limit", "run_id", "topic"], "host": [], "required": []}, "model_schema": null},
     {"name": "easyicu_adjudicate_idea_literature", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["decision", "idea_id", "plan_fields", "rationale", "run_id"], "host": [], "required": ["decision", "idea_id", "plan_fields", "rationale", "run_id"]}, "model_schema": null},

@@ -687,6 +687,22 @@
   function approvePiCopilotTargetTrial(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/target-trial-approval', body || {});
   }
+  function approvePiQuickAnswer(sessionId, quickAnswerId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/quick-answers/' + encodeURIComponent(quickAnswerId) + '/approve', body || {});
+  }
+  function expandPiQuickAnswer(sessionId, quickAnswerId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/quick-answers/' + encodeURIComponent(quickAnswerId) + '/expand', body || {});
+  }
+  function getPiMultiDatabase(batchId, projectId, sessionId) {
+    return getJSON('/api/copilot/pi/multi-database/' + encodeURIComponent(batchId)
+      + '?project_id=' + encodeURIComponent(projectId) + '&session_id=' + encodeURIComponent(sessionId));
+  }
+  function approvePiMultiDatabase(body) {
+    return postJSON('/api/copilot/pi/multi-database/approve', body || {});
+  }
+  function cancelPiMultiDatabase(body) {
+    return postJSON('/api/copilot/pi/multi-database/cancel', body || {});
+  }
   function applyPiCopilotAgentPlanConfiguration(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/agent-plan-configuration', body || {});
   }
@@ -1035,6 +1051,11 @@
   window.EU_API.confirmPiCopilotCohortEligibility = confirmPiCopilotCohortEligibility;
   window.EU_API.confirmPiCopilotPlanDecision = confirmPiCopilotPlanDecision;
   window.EU_API.approvePiCopilotTargetTrial = approvePiCopilotTargetTrial;
+  window.EU_API.approvePiQuickAnswer = approvePiQuickAnswer;
+  window.EU_API.expandPiQuickAnswer = expandPiQuickAnswer;
+  window.EU_API.getPiMultiDatabase = getPiMultiDatabase;
+  window.EU_API.approvePiMultiDatabase = approvePiMultiDatabase;
+  window.EU_API.cancelPiMultiDatabase = cancelPiMultiDatabase;
   window.EU_API.applyPiCopilotAgentPlanConfiguration = applyPiCopilotAgentPlanConfiguration;
   window.EU_API.applyPiCopilotPopulationPreparation = applyPiCopilotPopulationPreparation;
   window.EU_API.acceptPiCopilotPopulationInclusion = acceptPiCopilotPopulationInclusion;

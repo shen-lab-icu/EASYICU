@@ -2833,6 +2833,8 @@ def _research_user_preferences(
             }
             for item in question_substance_forms
         ]
+    if study.get("quick_answer_handoff"):
+        constraints["quick_answer_handoff"] = study["quick_answer_handoff"]
     if constraints:
         preferences["data_constraints"] = _compile_data_constraints(constraints)
     sensitivity_specs = _configured_sensitivity_specs(study)

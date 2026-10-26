@@ -61,6 +61,7 @@ from .contracts import (
     utc_now,
 )
 from .skill_attachments import SkillAttachmentService
+from .quick_answers import QuickAnswerService
 from .codex_gateway import CodexPiGatewayPool
 from .conversation_status import (
     later_research_job,
@@ -227,7 +228,7 @@ def _session_title_is_automatic(title: str) -> bool:
     return value == "EasyICU Copilot" or value.endswith(_AUTO_SESSION_TITLE_SUFFIXES)
 
 
-class PiCopilotService(SkillAttachmentService):
+class PiCopilotService(SkillAttachmentService, QuickAnswerService):
     """Bind Pi UX sessions to current EasyICU scientific authority."""
 
     def __init__(
@@ -3024,10 +3025,16 @@ class PiCopilotService(SkillAttachmentService):
                     record,
                     regenerate_target,
                 )
+            from easyicu.webserver.research_multi_actions import propose as propose_multi_database
+
             tool_context = ToolExecutionContext(
+                quick_answer_submit=lambda context, reading: self._submit_quick_answer(
+                    context, reading, message_job_id=job.id,
+                ),
                 session=self._apply_turn_skills(record, turn_skills, turn_mentions).model_copy(deep=True),
                 data_handling=self._data_handling_for_session(record),
                 note_credentialed_history=lambda: self._note_credentialed_history(record.session_id),
+                propose_multi_database=lambda request: propose_multi_database(self, request, _message_job_id=job.id),
                 user_message=text,
                 idea_source=idea_source,
                 allowed_actions=requested_actions,
@@ -5332,6 +5339,7 @@ class PiCopilotService(SkillAttachmentService):
             or record.last_message_job_id
             or record.last_turn_status
             or latest_conversation_turn
+            or replay.get("multi_database_batches")
         )
         return {
             "session_id": record.session_id,
@@ -5363,6 +5371,7 @@ class PiCopilotService(SkillAttachmentService):
             # browser, and therefore never reach the next-step buttons the
             # front end parses out of this same text.
             "transcript": project_transcript(state.get("transcript")),
+            "quick_answers": self._quick_attachments(record, replay_turns) if include_replay else [],
             "transcript_page": (
                 dict(state.get("transcript_page") or {})
                 if isinstance(state.get("transcript_page"), Mapping)

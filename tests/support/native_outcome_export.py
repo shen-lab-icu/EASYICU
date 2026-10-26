@@ -50,6 +50,7 @@ def typed_native_export(
     longitudinal: pd.DataFrame | None = None,
     longitudinal_concepts: list[str] | None = None,
     statics: pd.DataFrame | None = None,
+    static_concepts: list[str] | None = None,
     database: str = "miiv",
 ) -> Path:
     """Write the export; ``statics`` holds each stay's age, else one per index."""
@@ -61,7 +62,7 @@ def typed_native_export(
             {"stay_id": stays, "age": [50 + 5 * index for index in range(len(stays))]}
         )
     members: list[tuple[str, str, pd.DataFrame, list[str]]] = [
-        ("demographics.parquet", "demographics", statics, ["age"]),
+        ("demographics.parquet", "demographics", statics, static_concepts or ["age"]),
         ("outcome.parquet", "outcome", outcome, list(outcome_concepts)),
     ]
     if longitudinal is not None:

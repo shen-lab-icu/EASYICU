@@ -154,6 +154,13 @@
     }
     return MISSING[code] ? tr(MISSING[code][0], MISSING[code][1]) : '';
   }
+  // One list item per substitution in a host CapabilityDecision.
+  function items(decision) {
+    if (!decision || decision.status !== 'substitution') return [];
+    const database = databaseName(decision.database);
+    return (Array.isArray(decision.substitutions) ? decision.substitutions : [])
+      .map(item => substitutionRow(item, database)).filter(Boolean);
+  }
   // review: the host's database_capability_review ({decision, unapplied_substitutions}).
   function render(review) {
     const decision = review && review.decision && typeof review.decision === 'object' ? review.decision : null;
@@ -165,8 +172,7 @@
         ? `<ul>${reasons.map(text => `<li>${esc(text)}</li>`).join('')}</ul>` : ''}</section>`;
     }
     if (decision.status !== 'substitution') return '';
-    const rows = (Array.isArray(decision.substitutions) ? decision.substitutions : [])
-      .map(item => substitutionRow(item, database)).filter(Boolean);
+    const rows = items(decision);
     if (!rows.length) return '';
     const unapplied = Array.isArray(review.unapplied_substitutions) && review.unapplied_substitutions.length;
     return `<section class="gpi-source-adjustments"><h4>${esc(tr(`How ${database} changes this study`, `${database} 上的口径调整`))}</h4><ul>${rows.join('')}</ul><p class="${unapplied ? 'is-blocked' : ''}">${esc(unapplied
@@ -174,5 +180,5 @@
       : tr('Approving the plan accepts these changes.', '批准计划即同意按以上口径分析。'))}</p></section>`;
   }
 
-  window.EasyICU.guidedPi.declare('sourceAdjustments', { render, missingText, databaseName });
+  window.EasyICU.guidedPi.declare('sourceAdjustments', { render, items, missingText, databaseName });
 })();

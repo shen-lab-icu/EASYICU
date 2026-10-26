@@ -13,6 +13,7 @@
       workflowConfirmationHtml, hostJobs: HOST_JOBS, followUps: FOLLOW_UPS,
       effortMenu: EFFORT_MENU, workflowConfirmation, runFailureText, help: HELP,
       sessionMatchesUiLanguage, displaySessionTitle, sessionTraceLabel, providerBindingSummary,
+      quickAnswers: QUICK_ANSWERS, multiDatabase: MULTI_DATABASE,
     } = deps;
     const modelMenu = MODULES.optional('modelMenu');
     if (modelMenu) modelMenu.bind({
@@ -122,6 +123,8 @@
         return ACTIVITY.render(row, { ...(options && options.trace), failureExplained: true }) + stopHtml + RUN_FILES.render(row);
       }
       if (row.role === 'activity') return ACTIVITY.render(row, options && options.trace) + RUN_FILES.render(row);
+      if (row.role === 'quick_answer') return QUICK_ANSWERS ? QUICK_ANSWERS.render(row) : '';
+      if (row.role === 'multi_database') return MULTI_DATABASE ? MULTI_DATABASE.render(row) : '';
       if (row.role === 'host_notice') return HOST_JOBS && typeof HOST_JOBS.renderNotice === 'function' ? HOST_JOBS.renderNotice(row) : '';
       if (row.role === 'saved_run') {
         // A saved run with no message of its own says what became of it: a
@@ -237,6 +240,14 @@
         .filter(record => !(typedSource && record.code === 'data_chosen')));
     }
 
+    // Each quick-answer or multi-database card follows the turn that
+    // produced it (owners: screens-guided-pi-quick-answers.js and
+    // screens-guided-pi-multi-database.js).
+    function withQuickAnswers(timeline) {
+      const placed = QUICK_ANSWERS ? QUICK_ANSWERS.place(timeline, QUICK_ANSWERS.rows(state.session)) : timeline;
+      return MULTI_DATABASE ? MULTI_DATABASE.place(placed, MULTI_DATABASE.rows(state.session)) : placed;
+    }
+
     // A refused automatic plan configuration shows the plan card and the
     // cohort decision together; otherwise the cohort decision, when the plan
     // needs one, replaces the confirmation card.
@@ -299,7 +310,7 @@
       const showProjectContinuationCards = !workspace && !freshTask && !ideaExplorationTurn;
       const dataConsentRequired = showProjectContinuationCards
         && DATA_CONSENT && DATA_CONSENT.requiresConfirmation(session);
-      const fullTimeline = freshTask ? [] : withDecisionRecords(RUN_FILES.timeline(state.messages.concat(state.workflowReceipts)));
+      const fullTimeline = freshTask ? [] : withQuickAnswers(withDecisionRecords(RUN_FILES.timeline(state.messages.concat(state.workflowReceipts))));
       const timeline = state.regenerating && REGENERATION
         ? REGENERATION.visibleRows(fullTimeline, state.regeneration)
         : fullTimeline;

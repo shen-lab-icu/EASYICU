@@ -124,6 +124,7 @@ _CONTEXT_FIELDS = {
     "confirmations",
     "cohort_eligibility_authority",
     "idea_handoff",
+    "quick_answer_handoff",
     "literature_authority",
 }
 _TEXT_LIMITS = {
@@ -333,6 +334,7 @@ _LITERATURE_SCOPE_FIELDS_V2 = (
     "idea_handoff",
 )
 _SCIENTIFIC_CONFIGURATION_FIELDS = (
+    "quick_answer_handoff",
     "attached_skills",
     "mentioned_objects",
     *_LITERATURE_SCOPE_FIELDS_V2,
@@ -1320,6 +1322,7 @@ def validate_context_update(
     _server_concept_selection_authority_write: bool = False,
     _server_causal_trial_reading_write: bool = False,
     _server_study_family_reading_write: bool = False,
+    _server_quick_answer_handoff_write: bool = False,
     _server_question_wording_write: bool = False,
     _server_design_variance_basis_write: bool = False,
     _server_skill_attachments_write: bool = False,
@@ -1345,6 +1348,7 @@ def validate_context_update(
         ),
         allow_causal_trial_reading=_server_causal_trial_reading_write,
         allow_study_family_reading=_server_study_family_reading_write,
+        allow_quick_answer_handoff=_server_quick_answer_handoff_write,
         allow_question_wording=_server_question_wording_write,
         allow_design_variance_basis=_server_design_variance_basis_write,
     )
@@ -1435,6 +1439,7 @@ def _sanitize_patch(
     allow_causal_trial_reading: bool = False,
     allow_study_family_reading: bool = False,
     allow_skill_attachments: bool = False,
+    allow_quick_answer_handoff: bool = False,
     allow_question_wording: bool = False,
     allow_design_variance_basis: bool = False,
 ) -> Dict[str, Any]:
@@ -1449,6 +1454,16 @@ def _sanitize_patch(
         )
 
     patch: Dict[str, Any] = {}
+    if "quick_answer_handoff" in raw:
+        if not allow_quick_answer_handoff:
+            raise StudyContextError({"error": "quick_handoff_server_owned"})
+        from easyicu.webserver.quick_answer.contracts import StudyHandoff
+
+        try:
+            value = raw["quick_answer_handoff"]
+            patch["quick_answer_handoff"] = StudyHandoff.model_validate(value).model_dump(mode="json") if value else None
+        except ValueError as exc:
+            raise StudyContextError({"error": "quick_handoff_invalid"}) from exc
     if "mentioned_objects" in raw:
         if not allow_skill_attachments:
             raise StudyContextError({"error": "mention_server_owned", "field": "mentioned_objects"})
@@ -1908,6 +1923,7 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             allow_causal_trial_reading=True,
             allow_study_family_reading=True,
             allow_skill_attachments=True,
+            allow_quick_answer_handoff=True,
             allow_question_wording=True,
             allow_design_variance_basis=True,
         )
@@ -2271,6 +2287,7 @@ def upsert_context(
     _server_target_trial_design_write: bool = False,
     _server_causal_trial_reading_write: bool = False,
     _server_study_family_reading_write: bool = False,
+    _server_quick_answer_handoff_write: bool = False,
     _server_question_wording_write: bool = False,
     _server_design_variance_basis_write: bool = False,
     _server_agent_landmark_decision: bool = False,
@@ -2294,6 +2311,7 @@ def upsert_context(
         allow_target_trial_design=_server_target_trial_design_write,
         allow_causal_trial_reading=_server_causal_trial_reading_write,
         allow_study_family_reading=_server_study_family_reading_write,
+        allow_quick_answer_handoff=_server_quick_answer_handoff_write,
         allow_question_wording=_server_question_wording_write,
         allow_design_variance_basis=_server_design_variance_basis_write,
     )
@@ -2455,6 +2473,9 @@ def upsert_context(
             check = context.get(QUESTION_FAMILY_CHECK_FIELD)
             if check and str(check.get("words") or "") not in str(context.get("question") or ""):
                 context[QUESTION_FAMILY_CHECK_FIELD] = None
+            handoff = context.get("quick_answer_handoff")
+            if handoff and handoff["reading"]["question"] != context.get("question"):
+                context["quick_answer_handoff"] = None
             wording = context.get("question_wording")
             if wording and wording.get("question_sha256") != question_sha256(str(context.get("question") or "")):
                 context["question_wording"] = None
@@ -2868,8 +2889,11 @@ def _scientific_fields_sha256(
         allow_concept_selection_authority=True,
         allow_target_trial_design=True,
         allow_question_wording=True,
+        allow_quick_answer_handoff=True,
     )
     sanitized.pop("id", None)
+    if not sanitized.get("quick_answer_handoff"):
+        sanitized.pop("quick_answer_handoff", None)
     if not sanitized.get("attached_skills"):
         sanitized.pop("attached_skills", None)
     if not sanitized.get("mentioned_objects"):

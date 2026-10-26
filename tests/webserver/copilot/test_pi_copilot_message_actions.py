@@ -361,9 +361,10 @@ def test_preview_plan_confirmation_routes_to_data_preparation_not_same_plan_runn
 
 
 def test_copilot_public_projection_hides_internal_pi_codes_and_owner_paths() -> None:
-    owner = _read("js/screens-guided-pi.js")
+    owner = _read("js/screens-guided-pi-public-text.js")
     activity = _read("js/screens-guided-pi-activity.js")
 
+    assert "MODULES.require('assistantText').create({ tr })" in _read("js/screens-guided-pi.js")
     assert "function publicAssistantText" in owner
     assert "pi_action_authorization_required" in owner
     assert "EasyICU 内部状态" in owner
