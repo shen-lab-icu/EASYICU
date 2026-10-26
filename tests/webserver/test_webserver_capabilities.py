@@ -172,7 +172,7 @@ def test_builtin_method_skill_package_exposes_reviewed_documentation(
 
     assert response.status_code == 200
     package = response.json()
-    assert package["schema_version"] == "easyicu.method-skill-package/3"
+    assert package["schema_version"] == "easyicu.method-skill-package/4"
     assert package["skill_id"] == "survival-time-to-event"
     assert package["kind"] == "research_workflow"
     assert package["read_only"] is True
@@ -180,22 +180,21 @@ def test_builtin_method_skill_package_exposes_reviewed_documentation(
     files = {row["path"]: row for row in package["files"]}
     assert set(files) == {
         "SKILL.md",
+        "SKILL.zh.md",
+        "examples/public_demo.md",
+        "examples/public_demo.zh.md",
         "references/composition.md",
         "references/validation_framework.md",
         "references/workflow_contract.md",
     }
-    assert "capability: `survival_time_to_event_v1`".lower() in files[
-        "SKILL.md"
-    ]["content"].lower()
+    assert '"capability_id": "survival_time_to_event_v1"' in files["references/workflow_contract.md"]["content"]
     skill_markdown = files["SKILL.md"]["content"]
-    assert "## When to use this workflow" in skill_markdown
-    assert "## Required data and decisions" in skill_markdown
-    assert "## Workflow" in skill_markdown
-    assert "## Methods and implementation" in skill_markdown
-    assert "## Validation and quality checks" in skill_markdown
-    assert "## Evidence and claim boundary" in skill_markdown
-    assert "## Failure behavior" in skill_markdown
-    assert "## Start this workflow" in skill_markdown
+    for heading in ("When to use", "When not to use", "How it works", "What the plan will propose for your review",
+                    "Steps and their checks", "Per-database notes", "Common stops", "Boundary"):
+        assert f"## {heading}" in skill_markdown
+    assert "survival_time_to_event_v1" not in skill_markdown
+    assert package["overview_paths"]["zh"] == "SKILL.zh.md"
+    assert package["not_for"][0]["sibling_skill_id"] == "time-varying-exposure-survival-study"
     assert len(skill_markdown.encode("utf-8")) > 2500
     assert all(not path.startswith("scripts/") for path in files)
     assert all(len(row["sha256"]) == 64 for row in files.values())
@@ -222,16 +221,14 @@ def test_builtin_method_component_package_and_unknown_id(monkeypatch) -> None:
     assert payload["kind"] == "method_component"
     assert {row["path"] for row in payload["files"]} == {
         "SKILL.md",
+        "SKILL.zh.md",
         "references/method_contract.md",
         "references/validation_framework.md",
     }
     markdown = next(row for row in payload["files"] if row["path"] == "SKILL.md")
-    assert "`prediction.decision_curve`" in markdown["content"]
-    assert "## When to use this method" in markdown["content"]
-    assert "## Method and implementation" in markdown["content"]
-    assert "does not define the cohort, estimand, or complete article workflow" in (
-        markdown["content"]
-    )
+    assert "## When to use" in markdown["content"]
+    assert "## Steps and their checks" in markdown["content"]
+    assert "Use this as a supporting method in a reviewed study" in markdown["content"]
     assert missing.status_code == 404
     assert missing.json()["detail"]["error"] == "method_skill_package_not_found"
 
@@ -284,27 +281,28 @@ def test_composed_association_workflow_package_exposes_ordered_project_phases(
     assert package["kind"] == "research_workflow"
     assert set(files) == {
         "SKILL.md",
+        "SKILL.zh.md",
+        "examples/public_demo.md",
+        "examples/public_demo.zh.md",
         "references/composition.md",
         "references/validation_framework.md",
         "references/workflow_contract.md",
     }
     skill = files["SKILL.md"]["content"]
     phases = [
-        "Freeze the cohort, exposure, outcome, time zero",
-        "Describe the cohort with Table 1",
-        "Report exposure prevalence and outcome absolute risks",
-        "Fit the exact typed adjusted model",
-        "Run the registered diagnostics and sensitivity analyses",
-        "Publish the descriptive and adjusted products",
+        "1. **Cohort characterization and Table 1**",
+        "2. **Missingness and measurement audit**",
+        "3. **Exposure and outcome distribution**",
+        "4. **Exposure–outcome association study**",
     ]
     assert all(phase in skill for phase in phases)
     assert [skill.index(phase) for phase in phases] == sorted(
         skill.index(phase) for phase in phases
     )
     composition = files["references/composition.md"]["content"]
-    assert "cohort-characterization-table-one" in composition
-    assert "missingness-measurement-audit" in composition
-    assert "exposure-outcome-distribution" in composition
+    assert "Cohort characterization and Table 1" in composition
+    assert "Missingness and measurement audit" in composition
+    assert "Exposure and outcome distribution" in composition
 
 
 def test_capability_tool_check_blocks_unknown_and_external_tools(monkeypatch) -> None:
