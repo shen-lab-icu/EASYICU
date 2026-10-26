@@ -20,7 +20,7 @@
       authorizeDataSource, sendText, continueAfterDataSourceConfirmation,
       governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
       togglePresentationPin, configureProvider, rememberSession, recordHostAction,
-      HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP, MESSAGE_QUEUE,
+      HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP, MESSAGE_QUEUE, QUICK_ANSWERS, MULTI_DATABASE,
     } = options;
 
     // Outside presses, Escape, and opening another menu are handled for every
@@ -142,6 +142,8 @@
         if (HELP && HELP.handleClick(event)) return;
         if (PROVIDER_CONTROL && PROVIDER_CONTROL.handleClick(event)) return;
         if (RUN_FILES && RUN_FILES.handleClick(event)) return;
+        if (QUICK_ANSWERS && QUICK_ANSWERS.handleClick(event)) return;
+        if (MULTI_DATABASE && MULTI_DATABASE.handleClick(event)) return;
         const append = event.target.closest('[data-gpi-result-append]');
         if (append) {
           if (!state.session || state.busy || state.childJobId || state.session.stale?.stale) return;

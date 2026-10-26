@@ -55,9 +55,11 @@ from .contracts import (
 )
 from . import cohort_eligibility
 from . import extraction_handoff
+from .quick_answers import submit_quick_question
 from .literature_tool_projection import compile_literature_tool_projection
 from .install import packaged_app_dir
 from .message_input import prepare_user_message
+from .multi_database_tool import propose_same_study
 from .projections import (
     bounded_json_projection,
     ensure_safe_projection,
@@ -4817,6 +4819,8 @@ def _preview_project_file(
 
 
 _DISPATCH = {
+    "easyicu_quick_answer": submit_quick_question,
+    "easyicu_propose_multi_database": propose_same_study,
     "easyicu_workspace_status": _workspace_status,
     "easyicu_list_data_sources": _list_data_sources,
     "easyicu_list_source_concepts": _list_source_concepts,

@@ -519,6 +519,15 @@ function dataSourceSelectionText(language, catalog, text = "") {
  * already owns source selection and the candidate-plan confirmation.
  */
 export function hostPostToolFinalization(model, context, language) {
+  const latest = context?.messages?.at(-1);
+  const quick = latest?.details?.details?.quick_answer;
+  if (latest?.role === "toolResult" && latest.toolName === "easyicu_quick_answer"
+      && latest.isError !== true && quick?.proposal
+      && ["approval_required", "stopped", "full_study"].includes(quick.proposal.status)) {
+    // The host owns the card, evidence and copy. End this turn without asking
+    // a model to improvise an answer or turn chat agreement into approval.
+    return completedStream(finalizedMessage(model, ""));
+  }
   const zeroDirection = zeroDirectionEntryText(context, language);
   if (zeroDirection) {
     return completedStream(finalizedMessage(model, zeroDirection));

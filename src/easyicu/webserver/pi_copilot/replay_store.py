@@ -492,6 +492,26 @@ class PiConversationReplayStore:
             self._write(payload)
             return dict(job)
 
+    def record_multi_database_batch(
+        self, *, session_id: str, project_id: str, reference: Mapping[str, Any],
+    ) -> None:
+        """Keep the full batch coordinate beside this conversation's job references.
+
+        References survive turn pagination, compaction and regeneration: those
+        operations cannot erase a pending approval or cancel an admitted batch.
+        The existing replay byte limit bounds storage without silently dropping
+        a batch. No plan, approval, source path or scientific result is copied.
+        """
+        from easyicu.webserver.research_multi_contracts import MultiDatabaseReference
+
+        row = MultiDatabaseReference.model_validate(reference).model_dump(mode="json")
+        with self._lock:
+            payload = self._read(session_id, project_id)
+            references = payload.setdefault("multi_database_batches", [])
+            if not any(item["batch_id"] == row["batch_id"] for item in references):
+                references.append(row)
+                self._write(payload)
+
     @staticmethod
     def _turn_page(
         turns: list[Any],
@@ -570,6 +590,7 @@ class PiConversationReplayStore:
             # not a second independent history. Superseded branches remain in
             # the private audit file but must not reappear in the Web dialogue.
             "child_jobs": active_child_jobs,
+            "multi_database_batches": list(payload.get("multi_database_batches") or []),
         }
         public = {
             **digest_payload,

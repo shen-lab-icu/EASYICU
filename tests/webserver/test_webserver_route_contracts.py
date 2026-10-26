@@ -338,6 +338,16 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "POST",
+        "/api/copilot/pi/sessions/{session_id}/quick-answers/{quick_answer_id}/approve",
+        "post_pi_quick_answer_approval",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/quick-answers/{quick_answer_id}/expand",
+        "post_pi_quick_answer_expand",
+    ),
+    (
+        "POST",
         "/api/copilot/pi/sessions/{session_id}/abort",
         "post_pi_copilot_abort",
     ),

@@ -2454,5 +2454,121 @@
     "protection": "no path inputs",
     "writes": "none",
     "write_owner": "Read-only handler or in-memory response; no filesystem destination."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/multi-database",
+    "fields": [
+      "body:project_id",
+      "body:session_id",
+      "body:study_context_id",
+      "body:source_run_id",
+      "body:targets[].database",
+      "body:targets[].source_id"
+    ],
+    "reaches": "research_multi_actions.propose -> host_action_session -> _scoped_record (opt-in and research mode required) -> admission write -> replay reference -> durable job prepares one review card per registered target source",
+    "protection": "hosted.guard_request + owner check: open_batch/host_action_session binds session, project and study context to the admission record; project/session/study ids are Code-pattern bounded; databases are a closed Literal set and source_id names a server registration, never a path",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Batch admission, card, approval and per-database state under state_paths.state_root()/multi-database/<batch_id>, where batch_id is a server-computed SHA-256 (client batch_ids must match ^[a-f0-9]{64}$ and an existing admission bound to the same project/session); per-database runs use the bound instance project's recorded run folder and registered sources resolved by the server. Client values never choose a path."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/multi-database/follow-up",
+    "fields": [
+      "body:project_id",
+      "body:session_id",
+      "body:run_id",
+      "body:suggestion_id",
+      "body:expected_source_sha256",
+      "body:targets[].database",
+      "body:targets[].source_id"
+    ],
+    "reaches": "research_multi_actions.dispatch_followup -> result_followups(recorded project run) offers other_database suggestions -> propose with the matched suggestion",
+    "protection": "hosted.guard_request + owner check: open_batch/host_action_session binds session, project and study context to the admission record; project/session/study ids are Code-pattern bounded; databases are a closed Literal set and source_id names a server registration, never a path; suggestion_id must be one the recorded run offers and expected_source_sha256 its sealed source digest",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Batch admission, card, approval and per-database state under state_paths.state_root()/multi-database/<batch_id>, where batch_id is a server-computed SHA-256 (client batch_ids must match ^[a-f0-9]{64}$ and an existing admission bound to the same project/session); per-database runs use the bound instance project's recorded run folder and registered sources resolved by the server. Client values never choose a path."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/multi-database/approve",
+    "fields": [
+      "body:project_id",
+      "body:session_id",
+      "body:batch_id",
+      "body:card_sha256"
+    ],
+    "reaches": "research_multi_actions.approve -> open_batch -> MultiDatabaseRun.approve(card digest must equal the stored card, server reviewer identity) -> durable execute job",
+    "protection": "hosted.guard_request + owner check: open_batch/host_action_session binds session, project and study context to the admission record; project/session/study ids are Code-pattern bounded; databases are a closed Literal set and source_id names a server registration, never a path",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Batch admission, card, approval and per-database state under state_paths.state_root()/multi-database/<batch_id>, where batch_id is a server-computed SHA-256 (client batch_ids must match ^[a-f0-9]{64}$ and an existing admission bound to the same project/session); per-database runs use the bound instance project's recorded run folder and registered sources resolved by the server. Client values never choose a path."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/multi-database/cancel",
+    "fields": [
+      "body:project_id",
+      "body:session_id",
+      "body:batch_id",
+      "body:database"
+    ],
+    "reaches": "research_multi_actions.cancel -> open_batch -> MultiDatabaseRun.cancel(one database of the batch) -> status",
+    "protection": "hosted.guard_request + owner check: open_batch/host_action_session binds session, project and study context to the admission record; project/session/study ids are Code-pattern bounded; databases are a closed Literal set and source_id names a server registration, never a path",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Batch admission, card, approval and per-database state under state_paths.state_root()/multi-database/<batch_id>, where batch_id is a server-computed SHA-256 (client batch_ids must match ^[a-f0-9]{64}$ and an existing admission bound to the same project/session); per-database runs use the bound instance project's recorded run folder and registered sources resolved by the server. Client values never choose a path."
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/multi-database/{batch_id}",
+    "fields": [
+      "path:batch_id",
+      "query:project_id",
+      "query:session_id"
+    ],
+    "reaches": "research_multi_actions.status -> open_batch -> stored card, batch state and research_multi_results.combined_answer (aggregate estimates only)",
+    "protection": "hosted.guard_request + owner check: open_batch/host_action_session binds session, project and study context to the admission record; project/session/study ids are Code-pattern bounded; databases are a closed Literal set and source_id names a server registration, never a path",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "none",
+    "write_owner": "Read-only: reads the batch directory chosen by the validated digest; no filesystem destination."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/quick-answers/{quick_answer_id}/approve",
+    "fields": [
+      "path:session_id",
+      "body:project_id",
+      "path:quick_answer_id",
+      "body:card_sha256",
+      "body:accept_substitutions"
+    ],
+    "reaches": "QuickAnswerService.approve_quick_answer -> _scoped_record -> data clearance and bound study source -> stored card digest must equal card_sha256 -> execute_quick_answer on the registered source (aggregate rows) -> replay host action",
+    "protection": "hosted.guard_request + owner check: _scoped_record verifies session/project; the record's binding and producing turn must still be current; the registered source identity must equal the card's; quick_answer_id is pattern-bounded",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "QuickAnswerStore under the session store's server-owned .quick-answers directory, named by sha256(session_id) and a quick_answer_id that must match ^qa_[a-f0-9]{32}$; execution files go to that record's own directory; the conversation replay and session index stay under state_paths. Client values never choose a path."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/quick-answers/{quick_answer_id}/expand",
+    "fields": [
+      "path:session_id",
+      "body:project_id",
+      "path:quick_answer_id"
+    ],
+    "reaches": "QuickAnswerService.expand_quick_answer -> _scoped_record -> study_contexts.upsert_context(expected revision, server quick-answer handoff write) -> rebinding the session -> replay host action",
+    "protection": "hosted.guard_request + owner check: _scoped_record verifies session/project; the record's binding and producing turn must still be current; the study revision must match; quick_answer_id is pattern-bounded",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "QuickAnswerStore under the session store's server-owned .quick-answers directory, named by sha256(session_id) and a quick_answer_id that must match ^qa_[a-f0-9]{32}$; execution files go to that record's own directory; the conversation replay and session index stay under state_paths. Client values never choose a path. The study context is updated through study_contexts under the instance home."
   }
 ]

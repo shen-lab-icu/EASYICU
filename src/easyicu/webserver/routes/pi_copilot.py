@@ -390,6 +390,18 @@ class PiTargetTrialApprovalRequest(BaseModel):
     n_lines_confirmed: StrictInt = Field(ge=1)
 
 
+class PiQuickApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project_id: ShortText
+    card_sha256: Sha256Text
+    accept_substitutions: StrictBool = False
+
+
+class PiQuickExpandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project_id: ShortText
+
+
 class PiPresentationPinRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1390,6 +1402,26 @@ def post_pi_copilot_target_trial_approval(
             expected_revision=body.expected_revision,
             compile_sha256=body.compile_sha256,
             n_lines_confirmed=body.n_lines_confirmed,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/quick-answers/{quick_answer_id}/approve")
+def post_pi_quick_answer_approval(session_id: ShortText, quick_answer_id: ShortText, body: PiQuickApprovalRequest) -> dict:
+    try:
+        return get_pi_copilot_service().approve_quick_answer(
+            session_id, quick_answer_id=quick_answer_id, **body.model_dump(),
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/quick-answers/{quick_answer_id}/expand")
+def post_pi_quick_answer_expand(session_id: ShortText, quick_answer_id: ShortText, body: PiQuickExpandRequest) -> dict:
+    try:
+        return get_pi_copilot_service().expand_quick_answer(
+            session_id, quick_answer_id=quick_answer_id, **body.model_dump(),
         )
     except PiCopilotError as exc:
         _raise_http(exc)

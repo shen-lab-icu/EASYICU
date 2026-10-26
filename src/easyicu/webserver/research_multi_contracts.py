@@ -37,6 +37,15 @@ class MultiDatabaseRequest(Contract):
         return self
 
 
+class MultiDatabaseReference(Contract):
+    """Conversation coordinate only; status and approval stay with the batch."""
+    batch_id: Digest
+    study_context_id: Code
+    source_run_id: Code | None = None
+    message_job_id: Code | None = None
+    created_at: str
+
+
 class EgressGrant(Contract):
     source_id: Code
     source_sha256: Digest

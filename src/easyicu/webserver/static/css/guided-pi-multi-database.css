@@ -1,0 +1,18 @@
+/* Owner: multi-database batch cards (js/screens-guided-pi-multi-database.js). */
+.gpi-multi-database .gpi-message-body{padding:12px 14px;border:1px solid var(--hair);border-radius:10px;background:var(--paper)}
+.gpi-multi-head{margin-bottom:8px}
+.gpi-multi-head strong{color:var(--ink);font-size:13.5px;font-weight:650}
+.gpi-multi-targets{display:grid;gap:8px;margin:0;padding:0;list-style:none}
+.gpi-multi-targets>li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:baseline;padding-top:8px;border-top:1px solid var(--hair);font-size:12.5px}
+.gpi-multi-targets>li:first-child{padding-top:0;border-top:0}
+.gpi-multi-targets>li>strong{color:var(--ink);font-weight:600}
+.gpi-multi-targets>li>span{color:var(--ink-3);justify-self:end}
+.gpi-multi-targets>li.is-adjusted>span{color:#81520a}
+.gpi-multi-targets>li>b,.gpi-multi-targets>li>p,.gpi-multi-targets>li>ul{grid-column:1/-1}
+.gpi-multi-targets>li>b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.gpi-multi-targets>li>p{margin:0;color:var(--ink-3);font-size:12px;line-height:1.45}
+.gpi-multi-targets>li>button{grid-column:2;justify-self:end}
+.gpi-multi-swaps{display:grid;gap:6px;margin:4px 0 0;padding:0;list-style:none}
+.gpi-multi-swaps li p{margin:2px 0 0;color:var(--ink-3);font-size:12px}
+.gpi-multi-note{margin:8px 0 0;color:var(--ink-3);font-size:12px;line-height:1.45}
+.gpi-multi-actions{display:flex;justify-content:flex-end;margin-top:10px}

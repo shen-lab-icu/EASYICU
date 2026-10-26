@@ -1,0 +1,19 @@
+/* Owner: quick-answer cards (js/screens-guided-pi-quick-answers.js). */
+.gpi-quick-answer .gpi-message-body{padding:12px 14px;border:1px solid var(--hair);border-radius:10px;background:var(--paper)}
+.gpi-quick-head{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
+.gpi-quick-head strong{color:var(--ink);font-size:13.5px;font-weight:650}
+.gpi-quick-head span{color:var(--ink-3);font-size:12.5px}
+.gpi-quick-question{margin:0 0 8px;color:var(--ink-2);font-size:13px;line-height:1.5}
+.gpi-quick-plan{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 12px;margin:0 0 8px;font-size:12.5px;line-height:1.45}
+.gpi-quick-plan dt{color:var(--ink-3)}
+.gpi-quick-plan dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
+.gpi-quick-measure{margin:0 0 6px;color:var(--ink);font-size:13px;font-weight:600}
+.gpi-quick-table{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
+.gpi-quick-table th,.gpi-quick-table td{padding:5px 8px 5px 0;border-top:1px solid var(--hair);text-align:left;vertical-align:top}
+.gpi-quick-table th{color:var(--ink-2);font-weight:550}
+.gpi-quick-table td:nth-child(2){color:var(--ink);font-size:13.5px;font-weight:650}
+.gpi-quick-table td:nth-child(3){color:var(--ink-3)}
+.gpi-quick-test{margin:6px 0 0;color:var(--ink-2);font-size:12.5px}
+.gpi-quick-scope{margin:8px 0 0;color:var(--ink-3);font-size:12px;line-height:1.45}
+.gpi-quick-reason{margin:0;color:var(--ink-2);font-size:13px;line-height:1.5}
+.gpi-quick-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:10px}

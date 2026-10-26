@@ -29,6 +29,7 @@ from easyicu.webserver.personal_preferences import PersonalPreferences
 
 if TYPE_CHECKING:
     from easyicu.extensions import ExtensionRegistry
+    from easyicu.webserver.research_multi_contracts import MultiDatabaseRequest
     from .workspace import ProjectWorkspace
 
 PROTOCOL_VERSION = "easyicu.pi-copilot/1"
@@ -503,12 +504,17 @@ class ToolExecutionContext:
         extension_registry: Optional["ExtensionRegistry"] = None,
         data_handling: str = "unspecified",
         note_credentialed_history: Optional[Callable[[], None]] = None,
+        quick_answer_submit: Optional[Callable[..., Dict[str, Any]]] = None,
+        propose_multi_database: Optional[Callable[[MultiDatabaseRequest], Dict[str, Any]]] = None,
     ) -> None:
         self.session = session
+        self.quick_answer_submit = quick_answer_submit
         from easyicu.research_agent.providers.client_trust import DataHandling
 
         self.data_handling = DataHandling(data_handling)
         self.note_credentialed_history = note_credentialed_history
+        # This callback binds the service and message job, never model input.
+        self.propose_multi_database = propose_multi_database
         # Host-captured text from the current user turn.  Tools may use this
         # bounded, PHI-screened value as user-intent authority; the model
         # cannot supply or rewrite it through tool arguments.

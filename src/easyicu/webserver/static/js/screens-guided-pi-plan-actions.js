@@ -809,6 +809,10 @@
 
     async function confirmWorkflow(confirmation) {
       if (!confirmation) return;
+      if (confirmation.code === 'approve_quick_answer' || confirmation.code === 'expand_into_full_study') {
+        await quickAnswerAction(confirmation);
+        return;
+      }
       if (confirmation.code === 'bound_export_cohort_mismatch') {
         await useOfficialDemoPlanningSource();
         return;
@@ -960,7 +964,41 @@
       return planGrants.length ? planGrants : null;
     }
 
+    // Called by the same explicit card-click surface as plan approval. Never
+    // reached by chat continuation or automatic plan progression.
+    async function quickAnswerAction(choice) {
+      if (unavailable()) return;
+      const session = host.session();
+      const projectId = host.projectId();
+      const attachment = (session.quick_answers || []).find(row => row.quick_answer_id === choice.quick_answer_id);
+      if (!attachment) return;
+      const approving = choice.code === 'approve_quick_answer';
+      if (!approving && choice.code !== 'expand_into_full_study') return;
+      const card = attachment.proposal && attachment.proposal.card;
+      if (approving && (!card || choice.card_sha256 !== card.sha256)) return;
+      host.setBusy(true);
+      try {
+        if (approving) {
+          await host.api().approvePiQuickAnswer(session.session_id, choice.quick_answer_id, {
+            project_id: projectId, card_sha256: choice.card_sha256,
+            accept_substitutions: choice.accept_substitutions === true,
+          });
+        } else {
+          await host.api().expandPiQuickAnswer(session.session_id, choice.quick_answer_id, { project_id: projectId });
+        }
+        if (host.session()?.session_id !== session.session_id || host.projectId() !== projectId) return;
+        await host.refreshSession();
+        await host.loadWorkflow();
+      } catch (error) {
+        if (host.session()?.session_id === session.session_id) host.setError(host.errorText(error));
+      } finally {
+        host.setBusy(false);
+        host.render();
+      }
+    }
+
     return Object.freeze({
+      quickAnswerAction,
       confirmDecision,
       confirmWorkflow,
       continueSystemOwnedPlanProgression,
