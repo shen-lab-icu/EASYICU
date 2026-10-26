@@ -21,10 +21,12 @@ def test_result_actions_are_bound_to_source_and_only_propose(source, monkeypatch
     from easyicu.webserver.research_append_run import append_run_for_id, pending_append_review
 
     calls = []
+    attention = []
     service = SimpleNamespace(
         _research_run_row=lambda project, run: {"project_dir": str(source.wrapper), "study_id": "study"},
         rebind_session=lambda *args, **kwargs: None,
         host_action_session=lambda session, **kw: calls.append((session, kw)),
+        replay_store=SimpleNamespace(attention=SimpleNamespace(record=attention.extend)),
     )
     monkeypatch.setattr(study_contexts, "get_context", lambda _: {"id": "study"})
     options = append_options(service, project_id="project", run_id=source.seal["run_id"])
@@ -38,6 +40,9 @@ def test_result_actions_are_bound_to_source_and_only_propose(source, monkeypatch
     assert not (child.run_dir / "steps").exists()
     assert pending_append_review(result["run_id"])["is_append_run"] is True
     assert calls[0][1]["study_context_id"] == "study"
+    # The proposed addition waits for the researcher's plan review.
+    assert [(row.run_id, row.kind, row.reason_code) for row in attention] == [
+        (result["run_id"], "needs_review", "human_plan_review_required")]
     again = propose_for_conversation(service, session_id="session", project_id="project",
                                     run_id=source.seal["run_id"], kind="subgroup", expected_source_sha256=source.digest)
     assert again["run_id"] == result["run_id"]
