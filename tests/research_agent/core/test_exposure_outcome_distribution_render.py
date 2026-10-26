@@ -248,6 +248,40 @@ def test_a_chinese_display_label_keeps_the_sealed_group_name_in_the_caption(tmp_
     assert "Lower band" in svg and "Upper band" in svg
 
 
+def test_the_exposure_name_heads_the_category_column(tmp_path, monkeypatch):
+    # The variable's name is the category labels' column head: right-aligned
+    # with them, above the first row, and wrapped to balanced lines.
+    from easyicu.research_agent.execution.runners import exposure_outcome_distribution_render as owner
+    table = _produced_table(tmp_path, monkeypatch)
+    run_dir, manifest = _bound(tmp_path, table)
+    name = "Anticoagulant exposure recorded during the first 24 hours"
+    labels = {EXPOSURE: name, f"{EXPOSURE}=0": "Without a recorded anticoagulant", f"{EXPOSURE}=1": "With a recorded anticoagulant"}
+    exporter = owner.save_publication_figure
+
+    def check(fig, *args, **kwargs):
+        fig.canvas.draw()
+        canvas = fig.canvas.get_renderer()
+        ax = fig.axes[0]
+        head = next(text for text in ax.texts if " ".join(text.get_text().split()) == name)
+        ticks = [label for label in ax.get_yticklabels() if label.get_visible()]
+        head_box = head.get_window_extent(canvas)
+        tick_boxes = [label.get_window_extent(canvas) for label in ticks]
+        assert abs(head_box.x1 - max(box.x1 for box in tick_boxes)) <= 1.0
+        assert head.get_fontsize() >= 7
+        assert all(not head_box.overlaps(box) for box in tick_boxes)
+        lines = head.get_text().split("\n")
+        if len(lines) > 1:
+            widths = [len(line) for line in lines]
+            assert min(widths) >= 0.5 * max(widths)
+        return exporter(fig, *args, **kwargs)
+
+    monkeypatch.setattr(owner, "save_publication_figure", check)
+    run_exposure_outcome_distribution_figure(
+        out_dir=tmp_path / "head", run_dir=run_dir, resolved_inputs=manifest,
+        step_id=STEP_ID, figure_product=PRODUCT, display_labels=labels,
+    )
+
+
 def _tampered(tmp_path: Path, monkeypatch, mutate) -> tuple[Path, dict]:
     """Rebind a table after ``mutate`` has changed one published number."""
 

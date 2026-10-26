@@ -1001,12 +1001,29 @@ def run_exposure_outcome_distribution_figure(
             else:
                 high_width, wrapped_labels = candidate_width, candidates
     ax_a.set_yticklabels(wrapped_labels)
+    # The column head is set at 7 pt and wrapped to balanced lines, like the
+    # labels below it, instead of leaving a short last line.
+    header_font = label_font.copy()
+    header_font.set_size(7)
     header = _wrap_category_label(
-        exposure_name, renderer=canvas, font=label_font, width=label_width
+        exposure_name, renderer=canvas, font=header_font, width=label_width
     )
+    header_lines = header.count("\n") + 1
+    if header_lines > 1:
+        low_width, high_width = label_width / header_lines, label_width
+        for _ in range(8):
+            candidate_width = (low_width + high_width) / 2
+            candidate = _wrap_category_label(
+                exposure_name, renderer=canvas, font=header_font, width=candidate_width
+            )
+            if candidate.count("\n") + 1 > header_lines:
+                low_width = candidate_width
+            else:
+                high_width, header = candidate_width, candidate
     rendered_width = max(
-        canvas.get_text_width_height_descent(part, label_font, False)[0]
-        for label in [*wrapped_labels, header] for part in label.split("\n")
+        canvas.get_text_width_height_descent(part, font, False)[0]
+        for label, font in [*((label, label_font) for label in wrapped_labels), (header, header_font)]
+        for part in label.split("\n")
     )
     fig.subplots_adjust(left=max(0.12, (rendered_width + fig.dpi * 0.24) / fig.bbox.width))
     # One aligned category axis serves both panels. Repeating a long clinical
@@ -1093,11 +1110,21 @@ def run_exposure_outcome_distribution_figure(
             if left_inches is not None else -0.14 / width_inches
         )
         add_panel_label(axis, letter, x=x, y=1.0 + 5.0 / 72.0 / height_inches)
-    # The variable's name heads the category column, flush with letter A.
-    box = ax_a.get_position()
+    # The variable's name heads the category column: right-aligned with the
+    # category labels it names, so it reads as their column head rather than a
+    # stray line under letter A. Its measured width sets a left anchor, so the
+    # SVG text box an export audit estimates grows into the plot, not off the
+    # canvas.
+    pad_pixels = float(matplotlib.rcParams["ytick.major.pad"]) * fig.dpi / 72.0
+    header_pixels = max(
+        canvas.get_text_width_height_descent(part, header_font, False)[0]
+        for part in header.split("\n")
+    )
+    axis_pixels = ax_a.get_position().width * fig.bbox.width
     ax_a.text(
-        (0.04 - box.x0 * 7.2) / (box.width * 7.2), 1.0, header,
-        transform=ax_a.transAxes, ha="left", va="top", fontsize=6.3, color=ink_3,
+        -(pad_pixels + header_pixels) / axis_pixels, 1.0, header,
+        transform=ax_a.transAxes, ha="left", va="top", ma="right",
+        fontproperties=header_font, color=ink_2,
     )
     if contrast is not None:
         coverage = 100.0 * float(contrast["confidence_level"])

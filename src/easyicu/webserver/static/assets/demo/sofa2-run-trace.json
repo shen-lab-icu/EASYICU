@@ -1625,7 +1625,7 @@
    "source_table": "table_step_artifact_257971d9f784c410",
    "source_sha256": "b663b010f57fae01a3550c1c7183698448112795a73adf0054f2ff79ec3b2d37",
    "png": "sofa2-phenotype-mortality-rerendered.png",
-   "png_sha256": "514c737fdea7c0802bf126bea982e082aab98ac46a983cb131f7f6d4dab99046",
+   "png_sha256": "af17ce8d66c5e23c01d2dfddd8e9f1ba8cc42f9dd5c28e9d130acd521c8a833e",
    "added_empty_columns": [
     "exposure_interval_cluster_size_square_sum",
     "outcome_interval_cluster_size_square_sum",

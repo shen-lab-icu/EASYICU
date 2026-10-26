@@ -7,7 +7,7 @@
   const SOURCE_RUN_ID = 'run_20260815T061842_5049c6';
   // The answer shows the registered result table drawn by the current figure
   // renderer; the run's own figure stays unchanged and one click away.
-  const FIGURE_URL = 'assets/demo/sofa2-phenotype-mortality-rerendered.png?v=20261026-fig1';
+  const FIGURE_URL = 'assets/demo/sofa2-phenotype-mortality-rerendered.png?v=20261026-fig2';
   const ORIGINAL_FIGURE_URL = 'assets/demo/sofa2-phenotype-mortality.png?v=20260922-demo2';
   // The registered result laid out as a journal-style descriptive report
   // (tools/build_demo_study_report.py); it is not the withheld manuscript.
