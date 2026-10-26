@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from ...figures.display_labels import figure_language_labels
 from ...planning.exposure_group_reader_names import exposure_group_reader_names
 from ...research_context.typed import parse_research_context_json
 from .typed_input_binding import contained_regular_file, sha256_file
@@ -123,3 +124,28 @@ def load_bound_variable_display(
         raise ValueError("variable display label must be nonempty text")
     unit = variable.unit.strip() if variable.unit else None
     return BoundVariableDisplay(column, label.strip(), unit, context_sha, plan_sha)
+
+
+def load_bound_outcome_label(
+    *, run_dir: Path, resolved_inputs: Path | Mapping[str, Any], step_id: str,
+) -> str | None:
+    """Name the context's endpoint with its digest-bound plan display label.
+
+    Older table-only figure inputs have no endpoint metadata. Keep their
+    generic label; a present context/plan binding must pass the usual checks.
+    """
+    manifest = (
+        resolved_inputs if isinstance(resolved_inputs, Mapping)
+        else json.loads(Path(resolved_inputs).read_text(encoding="utf-8"))
+    )
+    if not isinstance(manifest, Mapping) or manifest.get("context") is None:
+        return None
+    raw, _ = _bound_bytes(run_dir, manifest, "context")
+    context = parse_research_context_json(raw)
+    if not context.target_outcome:
+        return None
+    display = load_bound_variable_display(
+        run_dir=run_dir, manifest=manifest, step_id=step_id, column=context.target_outcome,
+    )
+    descriptions = {variable.name: variable.description for variable in context.variables}
+    return figure_language_labels({display.column: display.label}, descriptions).get(display.column)
