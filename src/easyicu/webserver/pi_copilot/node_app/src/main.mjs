@@ -1351,12 +1351,13 @@ async function createSession(params) {
   }
   let unsubscribe = null;
   try {
-    unsubscribe = session.subscribe((event) => {
+    const emitSessionEvent = (event) => {
       const requestId = activeRequestBySession.get(externalId);
       if (!requestId) return;
       const normalized = normalizePiEvent(event);
       if (normalized) emit({ kind: "event", request_id: requestId, session_id: externalId, event: normalized });
-    });
+    };
+    unsubscribe = session.subscribe(emitSessionEvent);
     const record = {
       externalId,
       agentMode,
@@ -1397,7 +1398,7 @@ async function createSession(params) {
             ...options,
             maxRetries: 0,
           });
-        }, { signal: options.signal });
+        }, { signal: options.signal, onRetry: emitSessionEvent });
       },
     );
     sessions.set(externalId, record);
