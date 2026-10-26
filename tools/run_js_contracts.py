@@ -211,6 +211,9 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_pi_run_answer_group_names.test.js": [],
     "guided_pi_provider_stop_copy.test.js": [],
     "guided_pi_connection_test_message_copy.test.js": [],
+    "guided_pi_demo_walkthrough.test.js": [
+        "html-escape.js", "screens-guided-pi-demo.js", "screens-guided-pi-demo-trace.js", "screens-guided-pi-demo-walkthrough.js",
+    ],
     "guided_pi_stratified_answer_labels.test.js": [],
     "guided_pi_run_answer.test.js": [
         "screens-agent-reader-vocab.js",

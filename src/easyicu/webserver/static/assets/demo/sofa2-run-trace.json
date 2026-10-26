@@ -1,0 +1,1626 @@
+{
+ "schema_version": "easyicu.demo-walkthrough-trace/1",
+ "source_run_id": "run_20260815T061842_5049c6",
+ "sources": {
+  "run_manifest_sha256": "df36ffc11ef816bc41f830d9bfb8466fc30039d081b482ebddcd406e59803b23",
+  "audit_log_sha256": "bdd36f41a57d9d6df0dce2d38967c0b6e1b73fa18fa763ddc61c2f6ee47a3b8b",
+  "concept_dict": {
+   "commit": "190ab8f69c26693ec5c395789c3e85bf3b48564b",
+   "sha256": "22039e19c9b499d635dce956298550cecb1fdf55059304736cca73ee42bf129a"
+  },
+  "sofa2_dict": {
+   "commit": "7f7ba49a221943f98c86e355a6a735ef2c876561",
+   "sha256": "998a14c70c8a983c71ce6af2da8408fe22063cc042e8cde69f572083880bdaf8"
+  }
+ },
+ "started_at": "2026-08-15T06:18:45.882411Z",
+ "finished_at": "2026-08-15T06:28:29.985278Z",
+ "spans": {
+  "p-scope": [
+   "2026-08-15T06:18:45.882411Z",
+   "2026-08-15T06:18:47.106662Z"
+  ],
+  "p-cohort": [
+   "2026-08-15T06:18:47.106662Z",
+   "2026-08-15T06:18:47.250429Z"
+  ],
+  "p-literature": [
+   "2026-08-15T06:18:47.251133Z",
+   "2026-08-15T06:18:49.040855Z"
+  ],
+  "p-draft": [
+   "2026-08-15T06:18:49.040855Z",
+   "2026-08-15T06:20:14.247181Z"
+  ],
+  "review-wait": [
+   "2026-08-15T06:20:14.376668Z",
+   "2026-08-15T06:25:43.900020Z"
+  ],
+  "e-2": [
+   "2026-08-15T06:25:44.136779Z",
+   "2026-08-15T06:26:00.356643Z"
+  ],
+  "e-3": [
+   "2026-08-15T06:26:00.358385Z",
+   "2026-08-15T06:26:07.492241Z"
+  ],
+  "e-4": [
+   "2026-08-15T06:26:07.494092Z",
+   "2026-08-15T06:26:14.996530Z"
+  ],
+  "e-5": [
+   "2026-08-15T06:26:14.999424Z",
+   "2026-08-15T06:26:20.305362Z"
+  ],
+  "e-6": [
+   "2026-08-15T06:26:20.309096Z",
+   "2026-08-15T06:26:27.070500Z"
+  ],
+  "e-figures": [
+   "2026-08-15T06:26:27.136177Z",
+   "2026-08-15T06:26:28.153662Z"
+  ],
+  "e-writer": [
+   "2026-08-15T06:26:28.153662Z",
+   "2026-08-15T06:28:29.464120Z"
+  ],
+  "e-register": [
+   "2026-08-15T06:28:29.464120Z",
+   "2026-08-15T06:28:29.985278Z"
+  ],
+  "p-review": [
+   "2026-08-15T06:20:14.247181Z",
+   "2026-08-15T06:20:14.295314Z"
+  ]
+ },
+ "dictionary": {
+  "database": "miiv",
+  "window_hours": [
+   0.0,
+   24.0
+  ],
+  "terms": [
+   {
+    "id": "phenotype",
+    "concept": "sep3_sofa2"
+   },
+   {
+    "id": "death",
+    "concept": "death"
+   },
+   {
+    "id": "adult",
+    "concept": "age"
+   }
+  ],
+  "concepts": {
+   "sep3_sofa2": {
+    "description": "experimental Sepsis-3 sensitivity phenotype using SOFA-2; not the canonical 2016 definition",
+    "class_name": "rec_cncpt",
+    "category": "outcome",
+    "definition_source": "SOFA-2 Table 2 + Sepsis-3 sensitivity adaptation",
+    "definition_version": "2025-sensitivity-v1",
+    "clinical_status": "experimental",
+    "canonical_definition": false,
+    "callback": "sep3_sofa2",
+    "dictionary": "sofa2",
+    "children": [
+     "sofa2",
+     "susp_inf"
+    ]
+   },
+   "death": {
+    "description": "in hospital mortality",
+    "class_name": "lgl_cncpt",
+    "category": "outcome",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "admissions",
+      "val_var": "hospital_expire_flag",
+      "index_var": "deathtime",
+      "callback": "transform_fun(comp_na(`==`, 1L))"
+     }
+    ]
+   },
+   "age": {
+    "description": "patient age",
+    "unit": "years",
+    "min": 0,
+    "max": 100,
+    "category": "demographics",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "patients",
+      "val_var": "anchor_age"
+     }
+    ]
+   },
+   "sofa2": {
+    "description": "Database operationalization of SOFA-2 (2025) with conservative handling of unconfirmed delirium-treatment proxies",
+    "class_name": "rec_cncpt",
+    "category": "outcome",
+    "definition_source": "JAMA 2025 SOFA-2 Table 2",
+    "definition_version": "2025",
+    "clinical_status": "source_bound_golden",
+    "canonical_definition": false,
+    "callback": "sofa2_score",
+    "dictionary": "sofa2",
+    "children": [
+     "sofa2_resp",
+     "sofa2_coag",
+     "sofa2_liver",
+     "sofa2_cardio",
+     "sofa2_cns",
+     "sofa2_renal"
+    ]
+   },
+   "susp_inf": {
+    "description": "suspected infection",
+    "class_name": "rec_cncpt",
+    "category": "outcome",
+    "callback": "susp_inf",
+    "dictionary": "concept",
+    "children": [
+     "abx",
+     "samp",
+     "infection_icd"
+    ]
+   },
+   "sofa2_resp": {
+    "description": "SOFA-2 respiratory component; valid P/F or S/F observations use the published thresholds unless explicitly documented as a transient <1h episode; scores 3/4 additionally require advanced support or documented support-unavailable/treatment-ceiling evidence; any ECMO auto-4",
+    "class_name": "rec_cncpt",
+    "category": "outcome",
+    "definition_source": "JAMA 2025 SOFA-2 Table 2",
+    "definition_version": "2025",
+    "clinical_status": "source_bound_golden",
+    "canonical_definition": true,
+    "callback": "sofa2_resp",
+    "dictionary": "sofa2",
+    "children": [
+     "pafi",
+     "spo2",
+     "fio2",
+     "adv_resp",
+     "ecmo",
+     "ecmo_indication"
+    ]
+   },
+   "sofa2_coag": {
+    "description": "SOFA-2 hemostasis component (updated thresholds: ≤150/100/80/50)",
+    "class_name": "rec_cncpt",
+    "category": "outcome",
+    "definition_source": "JAMA 2025 SOFA-2 Table 2",
+    "definition_version": "2025",
+    "clinical_status": "source_bound_golden",
+    "canonical_definition": true,
+    "callback": "sofa2_coag",
+    "dictionary": "sofa2",
+    "children": [
+     "plt"
+    ]
+   },
+   "sofa2_liver": {
+    "description": "SOFA-2 liver component (relaxed 1pt threshold: ≤3.0 mg/dL vs ≤1.9 in SOFA-1)",
+    "class_name": "rec_cncpt",
+    "category": "outcome",
+    "definition_source": "JAMA 2025 SOFA-2 Table 2",
+    "definition_version": "2025",
+    "clinical_status": "source_bound_golden",
+    "canonical_definition": true,
+    "callback": "sofa2_liver",
+    "dictionary": "sofa2",
+    "children": [
+     "bili"
+    ]
+   },
+   "sofa2_cardio": {
+    "description": "SOFA-2 cardiovascular component (combined norepi+epi; any dopamine/dobutamine/other adjunct escalates low/medium tiers; dopamine dose tiers apply only when dopamine is the sole vasoactive drug)",
+    "class_name": "rec_cncpt",
+    "category": "outcome",
+    "definition_source": "JAMA 2025 SOFA-2 Table 2",
+    "definition_version": "2025",
+    "clinical_status": "source_bound_golden",
+    "canonical_definition": true,
+    "callback": "sofa2_cardio",
+    "dictionary": "sofa2",
+    "children": [
+     "map",
+     "norepi60",
+     "epi60",
+     "dopa60",
+     "dobu60",
+     "other_vaso",
+     "mech_circ_support",
+     "ecmo",
+     "ecmo_indication"
+    ]
+   },
+   "sofa2_cns": {
+    "description": "Database operationalization of the SOFA-2 brain component with conservative handling of unconfirmed delirium-treatment proxies; GCS=15 gains a treatment point only from confirmed attributable evidence",
+    "class_name": "rec_cncpt",
+    "category": "outcome",
+    "definition_source": "JAMA 2025 SOFA-2 Table 2",
+    "definition_version": "2025",
+    "clinical_status": "source_bound_golden",
+    "canonical_definition": false,
+    "callback": "sofa2_cns",
+    "dictionary": "sofa2",
+    "children": [
+     "gcs",
+     "delirium_tx_proxy",
+     "delirium_tx_evidence",
+     "delirium_positive",
+     "motor_response",
+     "sedated_gcs"
+    ]
+   },
+   "sofa2_renal": {
+    "description": "SOFA-2 renal component with duration-based UO. RRT event evidence scores the active treatment time; intermittent off-days/chronic state and non-renal-only exclusion require explicit episode/indication inputs and remain database ascertainment limitations.",
+    "class_name": "rec_cncpt",
+    "category": "outcome",
+    "definition_source": "JAMA 2025 SOFA-2 Table 2",
+    "definition_version": "2025",
+    "clinical_status": "source_bound_golden",
+    "canonical_definition": true,
+    "callback": "sofa2_renal",
+    "dictionary": "sofa2",
+    "children": [
+     "crea",
+     "rrt",
+     "uo_6h",
+     "uo_12h",
+     "uo_24h",
+     "potassium",
+     "ph",
+     "bicarb"
+    ]
+   },
+   "abx": {
+    "description": "antibiotics",
+    "class_name": "lgl_cncpt",
+    "category": "medications",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "prescriptions",
+      "sub_var": "drug",
+      "val_var": "drug",
+      "callback": "transform_fun(set_val(TRUE))",
+      "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifampin|sulfadiazine|timentin|trimethoprim|(amika|gentami|vanco)cin|(amoxi|ampi|dicloxa|naf|oxa|peni|pipera)cillin|(azithro|clarithro|erythro|clinda|strepto|tobra|vanco)mycin|cef(azolin|tazidime|adroxil|epime|otetan|otaxime|podoxime|uroxime)|(doxy|mino|tetra)cycline|(levofl|moxifl|ofl)oxacin|macro(bid|dantin)|(una|zo)syn"
+     },
+     {
+      "table": "inputevents",
+      "ids": [
+       225798,
+       225837,
+       225838,
+       225840,
+       225842,
+       225843,
+       225844,
+       225845,
+       225847,
+       225848,
+       225850,
+       225851,
+       225853,
+       225855,
+       225857,
+       225859,
+       225860,
+       225862,
+       225863,
+       225865,
+       225866,
+       225868,
+       225869,
+       225871,
+       225873,
+       225875,
+       225876,
+       225877,
+       225879,
+       225881,
+       225882,
+       225883,
+       225884,
+       225885,
+       225886,
+       225888,
+       225889,
+       225890,
+       225892,
+       225893,
+       225895,
+       225896,
+       225897,
+       225898,
+       225899,
+       225900,
+       225902,
+       225903,
+       225905,
+       227691,
+       228003
+      ],
+      "sub_var": "itemid",
+      "callback": "transform_fun(set_val(TRUE))"
+     }
+    ]
+   },
+   "samp": {
+    "description": "body-fluid specimen collection event; True denotes collection regardless of culture result, while culture positivity is exported separately",
+    "class_name": "lgl_cncpt",
+    "category": "microbiology",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "microbiologyevents",
+      "val_var": "org_itemid",
+      "callback": "mimic_sampling"
+     }
+    ]
+   },
+   "infection_icd": {
+    "description": "infection present per keyword match on eICU diagnosisstring (NOT the Angus 2001 ICD-9 code list - see _comment)",
+    "class_name": "lgl_cncpt",
+    "category": "outcome",
+    "dictionary": "concept"
+   },
+   "pafi": {
+    "description": "Horowitz index",
+    "class_name": "rec_cncpt",
+    "category": "respiratory",
+    "callback": "pafi",
+    "dictionary": "concept",
+    "children": [
+     "po2",
+     "fio2"
+    ]
+   },
+   "spo2": {
+    "description": "oxygen saturation",
+    "unit": [
+     "%",
+     "% Sat."
+    ],
+    "min": 50,
+    "max": 100,
+    "category": "respiratory",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": [
+       220277,
+       226253
+      ],
+      "sub_var": "itemid",
+      "index_var": "charttime"
+     }
+    ]
+   },
+   "fio2": {
+    "description": "fraction of inspired oxygen",
+    "unit": "%",
+    "min": 21,
+    "max": 100,
+    "category": "blood gas",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": 223835,
+      "sub_var": "itemid",
+      "index_var": "charttime",
+      "callback": "transform_fun(percent_as_numeric)"
+     },
+     {
+      "table": "labevents",
+      "ids": 50816,
+      "sub_var": "itemid",
+      "index_var": "charttime",
+      "callback": "transform_fun(percent_as_numeric)"
+     }
+    ]
+   },
+   "adv_resp": {
+    "description": "Advanced respiratory support (IMV/NIV/HFNC/CPAP/BiPAP) - validated: 39364 with PEEP, 39280 with Ventilator Type, 30177 Total PEEP, 4056 HFNC, 5762 BiPap, 2993 CPAP",
+    "class_name": "lgl_cncpt",
+    "category": "respiratory",
+    "dictionary": "sofa2",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": [
+       223848,
+       223849,
+       229314,
+       220339,
+       224700,
+       227577,
+       227578,
+       227579,
+       227580,
+       227583,
+       225949
+      ],
+      "sub_var": "itemid",
+      "callback": "transform_fun(set_val(TRUE))"
+     },
+     {
+      "table": "chartevents",
+      "ids": [
+       226732
+      ],
+      "sub_var": "itemid",
+      "val_var": "value",
+      "callback": "transform_fun(set_val(TRUE))",
+      "regex": "High flow|HFNC|Bipap|CPAP|Endotracheal|Tracheostomy"
+     }
+    ]
+   },
+   "ecmo": {
+    "description": "Extracorporeal membrane oxygenation in use - validated: 155 stays with Circuit Config, 150 with ECMO category items, 147 with Flow/Speed",
+    "class_name": "lgl_cncpt",
+    "category": "respiratory",
+    "dictionary": "sofa2",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": [
+       229268,
+       229270,
+       229277,
+       229278,
+       229280,
+       229274,
+       229266,
+       228193,
+       224660
+      ],
+      "sub_var": "itemid",
+      "callback": "transform_fun(set_val(TRUE))"
+     }
+    ]
+   },
+   "ecmo_indication": {
+    "description": "ECMO indication - MIMIC-IV 229268 has explicit VV/VA values (17950 VV, 9926 VA)",
+    "class_name": "chr_cncpt",
+    "category": "respiratory",
+    "dictionary": "sofa2",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": [
+       229268
+      ],
+      "sub_var": "itemid",
+      "val_var": "value",
+      "callback": "apply_map(c(`VV` = 'respiratory', `VA` = 'cardiovascular', `VAV` = 'cardiovascular'), var = 'value')"
+     }
+    ]
+   },
+   "plt": {
+    "description": "platelet count",
+    "unit": [
+     "K/uL",
+     "G/l",
+     "10(3)/mcL",
+     "10^3/mcL"
+    ],
+    "min": 5,
+    "max": 1200,
+    "category": "hematology",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "labevents",
+      "ids": [
+       51265,
+       53189
+      ],
+      "sub_var": "itemid",
+      "index_var": "charttime"
+     },
+     {
+      "table": "chartevents",
+      "ids": [
+       227457
+      ],
+      "sub_var": "itemid",
+      "index_var": "charttime"
+     }
+    ]
+   },
+   "bili": {
+    "description": "total bilirubin",
+    "unit": "mg/dL",
+    "min": 0,
+    "max": 100,
+    "category": "chemistry",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "labevents",
+      "ids": [
+       50885,
+       53089
+      ],
+      "sub_var": "itemid",
+      "index_var": "charttime"
+     },
+     {
+      "table": "chartevents",
+      "ids": 225690,
+      "sub_var": "itemid",
+      "index_var": "charttime"
+     }
+    ]
+   },
+   "map": {
+    "description": "mean arterial pressure",
+    "unit": [
+     "mmHg",
+     "mm Hg"
+    ],
+    "min": 0,
+    "max": 250,
+    "category": "vitals",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": [
+       220052,
+       220181,
+       225312
+      ],
+      "sub_var": "itemid"
+     }
+    ]
+   },
+   "norepi60": {
+    "description": "norepinephrine rate during administrations lasting at least 1h",
+    "class_name": "rec_cncpt",
+    "unit": [
+     "mcg/kg/min",
+     "mcgkgmin"
+    ],
+    "category": "medications",
+    "callback": "vaso60",
+    "dictionary": "concept",
+    "children": [
+     "norepi_rate",
+     "norepi_dur"
+    ]
+   },
+   "epi60": {
+    "description": "epinephrine rate during administrations lasting at least 1h",
+    "class_name": "rec_cncpt",
+    "unit": [
+     "mcg/kg/min",
+     "mcgkgmin"
+    ],
+    "category": "medications",
+    "callback": "vaso60",
+    "dictionary": "concept",
+    "children": [
+     "epi_rate",
+     "epi_dur"
+    ]
+   },
+   "dopa60": {
+    "description": "dopamine rate during administrations lasting at least 1h",
+    "class_name": "rec_cncpt",
+    "unit": [
+     "mcg/kg/min",
+     "mcgkgmin"
+    ],
+    "category": "medications",
+    "callback": "vaso60",
+    "dictionary": "concept",
+    "children": [
+     "dopa_rate",
+     "dopa_dur"
+    ]
+   },
+   "dobu60": {
+    "description": "dobutamine rate during administrations lasting at least 1h",
+    "class_name": "rec_cncpt",
+    "unit": [
+     "mcg/kg/min",
+     "mcgkgmin"
+    ],
+    "category": "medications",
+    "callback": "vaso60",
+    "dictionary": "concept",
+    "children": [
+     "dobu_rate",
+     "dobu_dur"
+    ]
+   },
+   "other_vaso": {
+    "description": "Other vasoactive medication - validated: Phenylephrine (14428 stays), Vasopressin (5626), Milrinone (1279)",
+    "class_name": "lgl_cncpt",
+    "category": "cardiovascular",
+    "dictionary": "sofa2",
+    "miiv": [
+     {
+      "table": "inputevents",
+      "ids": [
+       221749,
+       222315,
+       221986,
+       229630,
+       229632,
+       229709,
+       229764
+      ],
+      "sub_var": "itemid",
+      "callback": "transform_fun(set_val(TRUE))"
+     }
+    ]
+   },
+   "mech_circ_support": {
+    "description": "Mechanical circulatory support - validated: IABP (1232 stays with Assisted Systole), Impella (223), Tandem (41), LVAD (11), RVAD (6)",
+    "class_name": "lgl_cncpt",
+    "category": "cardiovascular",
+    "dictionary": "sofa2",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": [
+       224309,
+       224652,
+       224654,
+       224311,
+       224310,
+       224322,
+       227980,
+       228866,
+       225979,
+       228154,
+       228156,
+       228151,
+       228158,
+       228198,
+       229254,
+       220128
+      ],
+      "sub_var": "itemid",
+      "callback": "transform_fun(set_val(TRUE))"
+     }
+    ]
+   },
+   "gcs": {
+    "description": "Glasgow coma scale (non-sedated)",
+    "class_name": "rec_cncpt",
+    "category": "neurological",
+    "callback": "gcs",
+    "dictionary": "concept",
+    "children": [
+     "egcs",
+     "mgcs",
+     "vgcs",
+     "tgcs",
+     "ett_gcs"
+    ]
+   },
+   "delirium_tx_proxy": {
+    "description": "Candidate exposure to medications that may be used for delirium. Indication is not established, so this proxy must not be treated as confirmed delirium treatment.",
+    "class_name": "lgl_cncpt",
+    "category": "neurology",
+    "dictionary": "sofa2",
+    "miiv": [
+     {
+      "table": "inputevents",
+      "ids": [
+       221824
+      ],
+      "sub_var": "itemid",
+      "callback": "transform_fun(set_val(TRUE))"
+     },
+     {
+      "table": "prescriptions",
+      "sub_var": "drug",
+      "callback": "transform_fun(set_val(TRUE))",
+      "regex": "[Hh]aloperidol|[Qq]uetiapine|[Ss]eroquel|[Oo]lanzapine|[Zz]yprexa|[Rr]isperidone|[Rr]isperdal|[Zz]iprasidone|[Gg]eodon|[Aa]ripiprazole|[Aa]bilify"
+     }
+    ]
+   },
+   "delirium_tx_evidence": {
+    "description": "Four-state attributable delirium-treatment evidence. Current medication-only mappings can emit proxy_only but cannot infer not_detected without verified source and time coverage.",
+    "class_name": "rec_cncpt",
+    "category": "neurology",
+    "callback": "delirium_tx_evidence",
+    "levels": [
+     "confirmed",
+     "proxy_only",
+     "not_detected",
+     "unavailable"
+    ],
+    "dictionary": "sofa2",
+    "children": [
+     "delirium_tx_proxy"
+    ]
+   },
+   "delirium_positive": {
+    "description": "Positive delirium assessment (CAM-ICU positive) - 72944 stays with assessment, 22462 stays with Positive result",
+    "class_name": "lgl_cncpt",
+    "category": "neurology",
+    "dictionary": "sofa2",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": [
+       228332
+      ],
+      "sub_var": "itemid",
+      "val_var": "value",
+      "callback": "transform_fun(set_val(TRUE))",
+      "regex": "^Positive$"
+     },
+     {
+      "table": "chartevents",
+      "ids": [
+       229326,
+       228337,
+       228300
+      ],
+      "sub_var": "itemid",
+      "val_var": "value",
+      "callback": "transform_fun(set_val(TRUE))",
+      "regex": "^Yes|Positive|Acute"
+     }
+    ]
+   },
+   "motor_response": {
+    "description": "GCS Motor Response (1-6 scale) - for SOFA-2 when full GCS unavailable",
+    "class_name": "num_cncpt",
+    "unit": "score",
+    "min": 1,
+    "max": 6,
+    "category": "neurology",
+    "dictionary": "sofa2",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": [
+       223901
+      ],
+      "sub_var": "itemid"
+     }
+    ]
+   },
+   "sedated_gcs": {
+    "description": "GCS before sedation (for sedated patients)",
+    "class_name": "num_cncpt",
+    "unit": "score",
+    "min": 3,
+    "max": 15,
+    "category": "neurology",
+    "dictionary": "concept"
+   },
+   "crea": {
+    "description": "creatinine",
+    "unit": "mg/dL",
+    "min": 0,
+    "max": 15,
+    "category": "chemistry",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "labevents",
+      "ids": [
+       50912,
+       52546,
+       52024
+      ],
+      "sub_var": "itemid",
+      "index_var": "charttime"
+     },
+     {
+      "table": "chartevents",
+      "ids": [
+       220615,
+       229761
+      ],
+      "sub_var": "itemid",
+      "index_var": "charttime"
+     }
+    ]
+   },
+   "rrt": {
+    "description": "Renal replacement therapy - active RRT evidence only; dialysis access/catheter placement is excluded",
+    "class_name": "lgl_cncpt",
+    "category": "renal",
+    "dictionary": "sofa2",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": [
+       224144,
+       224149,
+       224150,
+       224151,
+       224152,
+       224153,
+       224154,
+       224191,
+       225806,
+       225807,
+       225810,
+       225976,
+       225977,
+       226457,
+       226499,
+       228005,
+       228006,
+       229247,
+       229248,
+       230083,
+       230084,
+       230085,
+       230177,
+       227290
+      ],
+      "sub_var": "itemid",
+      "callback": "transform_fun(set_val(TRUE))"
+     },
+     {
+      "table": "procedureevents",
+      "ids": [
+       225441,
+       225802,
+       225803,
+       225809,
+       225805,
+       225955
+      ],
+      "sub_var": "itemid",
+      "callback": "transform_fun(set_val(TRUE))"
+     }
+    ]
+   },
+   "uo_6h": {
+    "description": "6-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for 6-12h → Score 1)",
+    "class_name": "rec_cncpt",
+    "category": "output",
+    "callback": "uo_6h",
+    "dictionary": "sofa2",
+    "children": [
+     "urine",
+     "weight"
+    ]
+   },
+   "uo_12h": {
+    "description": "12-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for ≥12h → Score 2; anuria ≥12h → Score 3)",
+    "class_name": "rec_cncpt",
+    "category": "output",
+    "callback": "uo_12h",
+    "dictionary": "sofa2",
+    "children": [
+     "urine",
+     "weight"
+    ]
+   },
+   "uo_24h": {
+    "description": "24-hour average urine output in mL/kg/h (for SOFA-2: <0.3 for ≥24h → Score 3)",
+    "class_name": "rec_cncpt",
+    "category": "output",
+    "callback": "uo_24h",
+    "dictionary": "sofa2",
+    "children": [
+     "urine",
+     "weight"
+    ]
+   },
+   "potassium": {
+    "description": "Alias for k (potassium) - SOFA-2 compatibility",
+    "unit": [
+     "mEq/L",
+     "mmol/l"
+    ],
+    "min": 0,
+    "max": 10,
+    "category": "chemistry",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "labevents",
+      "ids": [
+       50971
+      ],
+      "sub_var": "itemid",
+      "index_var": "charttime"
+     }
+    ]
+   },
+   "ph": {
+    "description": "pH of blood",
+    "min": 6.8,
+    "max": 8,
+    "category": "blood gas",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "labevents",
+      "ids": 50820,
+      "sub_var": "itemid",
+      "index_var": "charttime"
+     },
+     {
+      "table": "chartevents",
+      "ids": [
+       220274,
+       223830
+      ],
+      "sub_var": "itemid",
+      "index_var": "charttime"
+     }
+    ]
+   },
+   "bicarb": {
+    "description": "Alias for bicar (bicarbonate) - SOFA-2 compatibility",
+    "unit": [
+     "mEq/L",
+     "mmol/l"
+    ],
+    "min": 5,
+    "max": 50,
+    "category": "chemistry",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "labevents",
+      "ids": [
+       50882
+      ],
+      "sub_var": "itemid",
+      "index_var": "charttime"
+     }
+    ]
+   },
+   "po2": {
+    "description": "O2 partial pressure",
+    "unit": [
+     "mmHg",
+     "mm Hg"
+    ],
+    "min": 40,
+    "max": 600,
+    "category": "blood gas",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "labevents",
+      "ids": 50821,
+      "sub_var": "itemid",
+      "index_var": "charttime"
+     }
+    ]
+   },
+   "norepi_rate": {
+    "description": "norepinephrine rate",
+    "unit": [
+     "mcg/kg/min",
+     "mcgkgmin"
+    ],
+    "min": 0,
+    "max": 3,
+    "category": "medications",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "inputevents",
+      "ids": 221906,
+      "sub_var": "itemid",
+      "callback": "mimic_rate_mv"
+     }
+    ]
+   },
+   "norepi_dur": {
+    "description": "norepinephrine continuous-infusion episode duration in hours; MIMIC MetaVision uses status-filtered explicit intervals merged across <=5-minute gaps and clipped to ICU outtime; MIMIC CareVue uses positive-rate points, explicit stop/zero-rate boundaries, and <=5-hour gaps to report an inferred rate-set span (not exact pump-on time) with singleton duration unknown; AUMC uses explicit continuous intervals and eICU singleton duration is unknown",
+    "unit": "hours",
+    "min": 0,
+    "category": "medications",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "inputevents",
+      "ids": 221906,
+      "sub_var": "itemid",
+      "callback": "mimic_dur_inmv"
+     }
+    ]
+   },
+   "epi_rate": {
+    "description": "epinephrine rate",
+    "unit": [
+     "mcg/kg/min",
+     "mcgkgmin"
+    ],
+    "min": 0,
+    "max": 1.5,
+    "category": "medications",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "inputevents",
+      "ids": [
+       221289,
+       229617
+      ],
+      "sub_var": "itemid",
+      "callback": "mimic_rate_mv"
+     }
+    ]
+   },
+   "epi_dur": {
+    "description": "epinephrine continuous-infusion episode duration in hours; MIMIC MetaVision uses status-filtered explicit intervals merged across <=5-minute gaps and clipped to ICU outtime; MIMIC CareVue uses positive-rate points, explicit stop/zero-rate boundaries, and <=5-hour gaps to report an inferred rate-set span (not exact pump-on time) with singleton duration unknown; AUMC uses explicit continuous intervals and eICU singleton duration is unknown",
+    "unit": "hours",
+    "min": 0,
+    "category": "medications",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "inputevents",
+      "ids": 221289,
+      "sub_var": "itemid",
+      "callback": "mimic_dur_inmv"
+     }
+    ]
+   },
+   "dopa_rate": {
+    "description": "dopamine rate",
+    "unit": [
+     "mcg/kg/min",
+     "mcgkgmin"
+    ],
+    "min": 0,
+    "max": 50,
+    "category": "medications",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "inputevents",
+      "ids": 221662,
+      "sub_var": "itemid",
+      "callback": "mimic_rate_mv"
+     }
+    ]
+   },
+   "dopa_dur": {
+    "description": "dopamine continuous-infusion episode duration in hours; MIMIC MetaVision uses status-filtered explicit intervals merged across <=5-minute gaps and clipped to ICU outtime; MIMIC CareVue uses positive-rate points, explicit stop/zero-rate boundaries, and <=5-hour gaps to report an inferred rate-set span (not exact pump-on time) with singleton duration unknown; AUMC uses explicit continuous intervals and eICU singleton duration is unknown",
+    "unit": "hours",
+    "min": 0,
+    "category": "medications",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "inputevents",
+      "ids": 221662,
+      "sub_var": "itemid",
+      "callback": "mimic_dur_inmv"
+     }
+    ]
+   },
+   "dobu_rate": {
+    "description": "dobutamine rate",
+    "unit": [
+     "mcg/kg/min",
+     "mcgkgmin"
+    ],
+    "min": 0,
+    "max": 50,
+    "category": "medications",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "inputevents",
+      "ids": 221653,
+      "sub_var": "itemid",
+      "callback": "mimic_rate_mv"
+     }
+    ]
+   },
+   "dobu_dur": {
+    "description": "dobutamine continuous-infusion episode duration in hours; MIMIC MetaVision uses status-filtered explicit intervals merged across <=5-minute gaps and clipped to ICU outtime; MIMIC CareVue uses positive-rate points, explicit stop/zero-rate boundaries, and <=5-hour gaps to report an inferred rate-set span (not exact pump-on time) with singleton duration unknown; AUMC uses explicit continuous intervals and eICU singleton duration is unknown",
+    "unit": "hours",
+    "min": 0,
+    "category": "medications",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "inputevents",
+      "ids": 221653,
+      "sub_var": "itemid",
+      "callback": "mimic_dur_inmv"
+     }
+    ]
+   },
+   "egcs": {
+    "description": "GCS eye",
+    "min": 1,
+    "max": 4,
+    "category": "neurological",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": 220739,
+      "sub_var": "itemid"
+     }
+    ]
+   },
+   "mgcs": {
+    "description": "GCS motor",
+    "min": 1,
+    "max": 6,
+    "category": "neurological",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": 223901,
+      "sub_var": "itemid"
+     }
+    ]
+   },
+   "vgcs": {
+    "description": "GCS verbal",
+    "min": 1,
+    "max": 5,
+    "category": "neurological",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": 223900,
+      "sub_var": "itemid"
+     }
+    ]
+   },
+   "tgcs": {
+    "description": "GCS total",
+    "min": 3,
+    "max": 15,
+    "category": "neurological",
+    "dictionary": "concept"
+   },
+   "ett_gcs": {
+    "description": "tracheostomy",
+    "class_name": "lgl_cncpt",
+    "category": "respiratory",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": "No Response-ETT",
+      "sub_var": "value",
+      "callback": "combine_callbacks(\n               transform_fun(set_val(TRUE)),\n               ts_to_win_tbl(mins(1L))\n             )"
+     }
+    ]
+   },
+   "urine": {
+    "description": "urine output",
+    "unit": "mL",
+    "min": 0,
+    "max": 2000,
+    "category": "output",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "outputevents",
+      "ids": [
+       226557,
+       226558,
+       226559,
+       226560,
+       226561,
+       226563,
+       226564,
+       226565,
+       226567,
+       226584
+      ],
+      "sub_var": "itemid"
+     }
+    ]
+   },
+   "weight": {
+    "description": "patient weight",
+    "unit": "kg",
+    "min": 1,
+    "max": 500,
+    "category": "demographics",
+    "dictionary": "concept",
+    "miiv": [
+     {
+      "table": "chartevents",
+      "ids": 226512,
+      "sub_var": "itemid"
+     }
+    ]
+   }
+  }
+ },
+ "cohort": {
+  "name": "adult_icu_stays_first_24h",
+  "inclusion": [
+   {
+    "concept": "age",
+    "op": ">=",
+    "value": 18,
+    "window_hours": [
+     0.0,
+     24.0
+    ]
+   }
+  ],
+  "n_stays": 94458,
+  "n_extracted": 94458,
+  "cohort_sha256": "38a79eb80ffef83fc9b04a3b7a4b46726ee896f0594d1cd78fa355bc3868b026",
+  "export_manifest_sha256": "aac68926710f712b9f65fac969f08f4b4e063fb0395fa1161948450da656ae3a"
+ },
+ "plan": {
+  "revision": 1,
+  "steps": [
+   {
+    "step_id": "01_define_analysis_cohort",
+    "role": "auxiliary",
+    "method": "cohort_definition_and_attrition",
+    "citations": [],
+    "claim_ceiling": null,
+    "limitations": []
+   },
+   {
+    "step_id": "02_missingness_and_measurement_audit",
+    "role": "auxiliary",
+    "method": "measurement_audit",
+    "citations": [],
+    "claim_ceiling": null,
+    "limitations": []
+   },
+   {
+    "step_id": "03_exposure_outcome_distribution",
+    "role": "primary",
+    "method": "descriptive",
+    "citations": [
+     "strobe_2007",
+     "record_2015",
+     "anderson_landmark_1983",
+     "suissa_immortal_time_2008"
+    ],
+    "claim_ceiling": "descriptive_only",
+    "limitations": [
+     "post_baseline_exposure_opportunity_unresolved"
+    ]
+   },
+   {
+    "step_id": "04_visualize_exposure_outcome_distribution",
+    "role": "auxiliary",
+    "method": "visualization",
+    "citations": [],
+    "claim_ceiling": null,
+    "limitations": []
+   },
+   {
+    "step_id": "05_visualize_cohort_accounting",
+    "role": "auxiliary",
+    "method": "visualization",
+    "citations": [],
+    "claim_ceiling": null,
+    "limitations": []
+   },
+   {
+    "step_id": "06_visualize_data_quality",
+    "role": "auxiliary",
+    "method": "visualization",
+    "citations": [],
+    "claim_ceiling": null,
+    "limitations": []
+   }
+  ],
+  "bindings": [
+   {
+    "step_id": "03_exposure_outcome_distribution",
+    "key": "strobe_2007",
+    "elements": [
+     "reporting"
+    ],
+    "application": "Apply observational reporting standards to state the cohort, denominators, variable definitions, and descriptive-only interpretation.",
+    "application_zh": "按观察性研究报告规范写明队列、分母、变量定义，并把解读限定为描述性。",
+    "divergence": null,
+    "divergence_zh": null
+   },
+   {
+    "step_id": "03_exposure_outcome_distribution",
+    "key": "record_2015",
+    "elements": [
+     "reporting"
+    ],
+    "application": "Report the routinely collected database source and the reproducible extraction and variable-construction process.",
+    "application_zh": "报告常规采集数据库的来源，以及可复现的抽取和变量构建过程。",
+    "divergence": null,
+    "divergence_zh": null
+   },
+   {
+    "step_id": "03_exposure_outcome_distribution",
+    "key": "anderson_landmark_1983",
+    "elements": [
+     "time_zero",
+     "exposure",
+     "estimand"
+    ],
+    "application": "Treat phenotype classification as determined over the prespecified first 24 hours after ICU admission and keep interpretation limited to the resulting descriptive landmark population.",
+    "application_zh": "表型按入 ICU 后预先规定的前 24 小时判定，解读只限于由此得到的描述性 landmark 人群。",
+    "divergence": "No landmark survival estimator is fitted; the source informs temporal alignment of the descriptive classification.",
+    "divergence_zh": "没有拟合 landmark 生存估计；这篇文献只用于对齐描述性分类的时间。"
+   },
+   {
+    "step_id": "03_exposure_outcome_distribution",
+    "key": "suissa_immortal_time_2008",
+    "elements": [
+     "time_zero",
+     "exposure",
+     "estimand"
+    ],
+    "application": "Flag the post-ICU-admission exposure-ascertainment period as a limitation and avoid interpreting the grouped mortality proportions as ordinary baseline exposure effects.",
+    "application_zh": "把入 ICU 后才确定暴露的这段时间标为局限，不把分组死亡比例解读为普通的基线暴露效应。",
+    "divergence": "No causal or time-to-event effect estimate is attempted.",
+    "divergence_zh": "不做因果或时间-事件效应估计。"
+   }
+  ],
+  "review": {
+   "score": 85,
+   "approval_allowed": true,
+   "dimension_scores": {
+    "literature": 40,
+    "novelty": 70,
+    "literature_to_plan": 100,
+    "icu_clinical_design": 100,
+    "statistical_design": 100,
+    "robustness": 70,
+    "figures": 100,
+    "content_completeness": 100
+   },
+   "findings": [
+    {
+     "code": "TOP_JOURNAL_LITERATURE_SEARCH_NOT_ESTABLISHED",
+     "severity": "major",
+     "dimension": "literature",
+     "message": "No dated retrieval source returned current literature for this plan.",
+     "message_zh": "没有带日期的检索来源为这份计划返回当前文献。"
+    },
+    {
+     "code": "DIRECT_COMPARATOR_NOT_ESTABLISHED",
+     "severity": "major",
+     "dimension": "literature",
+     "message": "No retrieved study passed all population, exposure, outcome, and design-excerpt checks as a direct comparator.",
+     "message_zh": "没有检索到的研究在人群、暴露、结局和设计上都通过核对，可作为直接对照。"
+    },
+    {
+     "code": "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
+     "severity": "major",
+     "dimension": "robustness",
+     "message": "The study-family playbook calls for robustness evidence, but no typed, executable sensitivity authority was prespecified for this study version.",
+     "message_zh": "这类研究需要稳健性证据，但这个研究版本没有预先规定可执行的敏感性分析。"
+    },
+    {
+     "code": "NOVELTY_NOT_ESTABLISHED",
+     "severity": "major",
+     "dimension": "novelty",
+     "message": "Without a direct comparator, the system cannot distinguish a genuinely novel design from a new database instantiation.",
+     "message_zh": "没有直接对照，系统无法区分真正新颖的设计和换一个数据库重做。"
+    }
+   ]
+  }
+ },
+ "literature": [
+  {
+   "key": "singer_sepsis3_2016",
+   "title": "The Third International Consensus Definitions for Sepsis and Septic Shock (Sepsis-3).",
+   "year": "2016",
+   "venue": "JAMA",
+   "pmid": "26903338",
+   "source_url": "https://pubmed.ncbi.nlm.nih.gov/26903338/"
+  },
+  {
+   "key": "strobe_2007",
+   "title": "The Strengthening the Reporting of Observational Studies in Epidemiology (STROBE) statement: guidelines for reporting observational studies.",
+   "year": "2007",
+   "venue": "Annals of Internal Medicine / BMJ / Lancet (co-published)",
+   "pmid": "17938396",
+   "source_url": "https://pubmed.ncbi.nlm.nih.gov/17938396/"
+  },
+  {
+   "key": "record_2015",
+   "title": "The REporting of studies Conducted using Observational Routinely-collected health Data (RECORD) statement.",
+   "year": "2015",
+   "venue": "PLoS Medicine",
+   "pmid": "26440803",
+   "source_url": "https://pubmed.ncbi.nlm.nih.gov/26440803/"
+  },
+  {
+   "key": "suissa_immortal_time_2008",
+   "title": "Immortal time bias in pharmacoepidemiology.",
+   "year": "2008",
+   "venue": "American Journal of Epidemiology",
+   "pmid": "18056625",
+   "source_url": "https://pubmed.ncbi.nlm.nih.gov/18056625/"
+  },
+  {
+   "key": "anderson_landmark_1983",
+   "title": "Analysis of survival by tumor response and other comparisons of time-to-event by outcome variables.",
+   "year": "1983",
+   "venue": "Journal of Clinical Oncology",
+   "pmid": "6668489",
+   "source_url": "https://pubmed.ncbi.nlm.nih.gov/6668489/"
+  },
+  {
+   "key": "durrleman_splines_1989",
+   "title": "Flexible regression models with cubic splines.",
+   "year": "1989",
+   "venue": "Statistics in Medicine",
+   "pmid": "2657958",
+   "source_url": "https://pubmed.ncbi.nlm.nih.gov/2657958/"
+  },
+  {
+   "key": "sterne_missing_data_2009",
+   "title": "Multiple imputation for missing data in epidemiological and clinical research: potential and pitfalls.",
+   "year": "2009",
+   "venue": "BMJ",
+   "pmid": "19564179",
+   "source_url": "https://pubmed.ncbi.nlm.nih.gov/19564179/"
+  },
+  {
+   "key": "ricu_2023",
+   "title": "ricu: R's interface to intensive care data.",
+   "year": "2023",
+   "venue": "Software",
+   "pmid": null,
+   "source_url": "https://github.com/eth-mds/ricu"
+  },
+  {
+   "key": "johnson_mimiciv_2023",
+   "title": "MIMIC-IV, a freely accessible electronic health record dataset.",
+   "year": "2023",
+   "venue": "Scientific Data",
+   "pmid": null,
+   "source_url": null
+  }
+ ],
+ "evidence": {
+  "count": 125,
+  "chain": [
+   "table_step_artifact_257971d9f784c410",
+   "code_analysis_27260fbc62111090",
+   "figure_step_artifact_1c86f17d397e23b3",
+   "table_step_artifact_15c34169dc846f9a",
+   "code_analysis_8de4337c99d89a1b"
+  ],
+  "records": {
+   "table_step_artifact_257971d9f784c410": {
+    "kind": "table",
+    "step": "03_exposure_outcome_distribution",
+    "sha256": "b663b010f57fae01a3550c1c7183698448112795a73adf0054f2ff79ec3b2d37",
+    "file": "exposure_outcome_distribution.csv",
+    "inputs": [
+     "analysis_cohort_execute_repair"
+    ],
+    "script": "code_analysis_27260fbc62111090",
+    "producer": "runner",
+    "generation_mode": "deterministic_standard",
+    "created_at": "2026-08-15T06:26:06.793993Z"
+   },
+   "code_analysis_27260fbc62111090": {
+    "kind": "code",
+    "step": "03_exposure_outcome_distribution",
+    "sha256": "58fc0719647c4fe11aa0f3f1f427b80b5e59d3c216753591972cdd4690564e33",
+    "file": "analysis.py",
+    "inputs": [
+     "analysis_cohort_execute_repair"
+    ],
+    "script": null,
+    "producer": "standard_executor",
+    "generation_mode": "deterministic_standard",
+    "created_at": "2026-08-15T06:26:06.364044Z"
+   },
+   "figure_step_artifact_1c86f17d397e23b3": {
+    "kind": "figure",
+    "step": "04_visualize_exposure_outcome_distribution",
+    "sha256": "37a29be80f07397760f40d6b23a9cb8adfc2305ab55923617b5333c8968fcc4f",
+    "file": "sep3_sofa2_mortality_distribution.png",
+    "inputs": [
+     "table_step_artifact_257971d9f784c410"
+    ],
+    "script": "code_analysis_8de4337c99d89a1b",
+    "producer": "runner",
+    "generation_mode": "deterministic_standard",
+    "created_at": "2026-08-15T06:26:14.524903Z"
+   },
+   "table_step_artifact_15c34169dc846f9a": {
+    "kind": "table",
+    "step": "04_visualize_exposure_outcome_distribution",
+    "sha256": "15afb7ad960f80719e695be75d79496ca070009d08eda9b68b8de72e5e5ded1f",
+    "file": "sep3_sofa2_mortality_distribution_outcome_source_data.csv",
+    "inputs": [
+     "table_step_artifact_257971d9f784c410"
+    ],
+    "script": "code_analysis_8de4337c99d89a1b",
+    "producer": "runner",
+    "generation_mode": "deterministic_standard",
+    "created_at": "2026-08-15T06:26:14.568176Z"
+   },
+   "code_analysis_8de4337c99d89a1b": {
+    "kind": "code",
+    "step": "04_visualize_exposure_outcome_distribution",
+    "sha256": "f4c8c369bbcd397f1dde89d4b55eb9f865e6311824b53ffb9870b1856b012eac",
+    "file": "analysis.py",
+    "inputs": [
+     "table_step_artifact_257971d9f784c410"
+    ],
+    "script": null,
+    "producer": "standard_executor",
+    "generation_mode": "deterministic_standard",
+    "created_at": "2026-08-15T06:26:13.172179Z"
+   }
+  },
+  "result_rows": [
+   {
+    "role": "exposure_level",
+    "level": 0,
+    "stays": 60461,
+    "denominator": 94458,
+    "share_pct": 64.008342,
+    "deaths": 4986,
+    "outcome_denominator": 60461,
+    "rate_pct": 8.246638,
+    "interval_method": "none_counts_only"
+   },
+   {
+    "role": "exposure_level",
+    "level": 1,
+    "stays": 33997,
+    "denominator": 94458,
+    "share_pct": 35.991658,
+    "deaths": 4480,
+    "outcome_denominator": 33997,
+    "rate_pct": 13.177633,
+    "interval_method": "none_counts_only"
+   },
+   {
+    "role": "overall",
+    "level": null,
+    "stays": 94458,
+    "denominator": 94458,
+    "share_pct": 100.0,
+    "deaths": 9466,
+    "outcome_denominator": 94458,
+    "rate_pct": 10.021385,
+    "interval_method": "none_counts_only"
+   }
+  ],
+  "code_excerpt": [
+   "from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (",
+   "    run_exposure_outcome_distribution_from_env,",
+   ")",
+   "",
+   "run_exposure_outcome_distribution_from_env(",
+   "    spec_payload={'schema_version': 'easyicu.exposure_outcome_distribution/3', 'exposure': 'sep3_sofa2_max', 'exposure_levels': [0, 1], 'outcome': 'death', 'outcome_levels': [0, 1], 'outcome_positive_value': 1, 'level_match_policy': 'exact_typed', 'denominator_policy': 'all_declared_rows', 'missing_exposure_policy': 'fail_closed', 'missing_outcome_policy': 'structural_absence_is_non_event', 'undeclared_outcome_policy': 'fail_closed', 'interval_method': 'none_counts_only', 'repeated_unit_interval_method': None, 'risk_difference_contrast': None, 'dependence': None, 'confidence_level': None},",
+   "    typed_cohort_input='artifact:analysis_cohort',",
+   "    analysis_role='primary',",
+   "    require_consumption_contract=False,",
+   ")",
+   "",
+   "import json"
+  ]
+ },
+ "writer": {
+  "event": "STRICT evidence enforcement blocked manuscript generation."
+ }
+}

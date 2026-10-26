@@ -281,6 +281,8 @@
         })) return;
         const session = event.target.closest('[data-gpi-session]');
         if (session) { openSession(session.dataset.gpiSession); return; }
+        const walkthrough = window.EasyICU.guidedPi.optional('demoWalkthrough');
+        if (walkthrough && walkthrough.handleClick(event)) return;
         if (event.target.closest('[data-gpi-demo-exit]')) { closeDemo(); return; }
         if (event.target.closest('[data-gpi-demo]')) { openDemo(); return; }
         // A finished run's 运行记录 N scrolls to the run record in the right rail.
