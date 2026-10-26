@@ -18,7 +18,7 @@ from easyicu.research_agent.research_context.builder import build_research_conte
 from easyicu.webserver import dataio, sources
 
 from .contracts import QuickProposal, QuickReading, QuickStop, StudyHandoff
-from .planning import _effective, _requirements, prepare_quick_answer, qualification_stop
+from .planning import _effective, _requirements, bind_concept_names, prepare_quick_answer, qualification_stop
 from .source import PreparedSource, bind_prepared_source
 
 MAX_PREPARATION_BYTES = 256 * 1024 * 1024
@@ -47,6 +47,7 @@ def prepare_registered_question(
     identity = sources.registered_source_identity(export_path)
     if identity is None or identity.database != database:
         raise QuickStop("quick_source_identity_mismatch")
+    reading = bind_concept_names(reading)
     if question != reading.question:
         reading = reading.model_copy(update={
             "question": question, "ambiguities": (*reading.ambiguities, "question_mismatch"),

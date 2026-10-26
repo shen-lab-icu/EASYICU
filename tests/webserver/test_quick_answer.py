@@ -204,6 +204,37 @@ def test_original_question_cannot_be_replaced_by_a_simpler_reading(prepared):
     assert proposal.expand.reading.question == "Adjust the proportion for age."
 
 
+def test_a_clinical_name_binds_to_the_concept_the_question_names(prepared, tmp_path):
+    # pilot1 10-26: the interpreter typed this question completely, but by
+    # clinical name, and filed its conventional readings as ambiguities.
+    question = "在 eICU demo 中，入 ICU 第一天最高乳酸的中位数是多少？男女之间有差别吗？"
+    request = reading(question, intent="compare", grouping=["gender"], measure={
+        "concept": "lactate", "statistic": "median", "summary": "max",
+        "window": {"start_hours": 0, "end_hours": 24},
+    })
+    proposal = prepare_quick_answer(request, source=prepared, provider=None, question=question)
+    assert proposal.status == "approval_required", proposal.reason
+    plan = proposal.card.plan
+    assert (plan.measure_column, plan.group_column) == ("lact_max", "sex")
+    assert (plan.reading.measure.concept, plan.reading.grouping) == ("lact", ("sex",))
+    assert run(proposal, prepared, tmp_path).status == "ok"
+
+
+def test_a_name_that_reads_as_no_concept_stays_as_typed(prepared):
+    request = reading("Summarize the first-day peak glucose.", measure={
+        "concept": "glucose", "statistic": "median", "summary": "max",
+        "window": {"start_hours": 0, "end_hours": 24},
+    })
+    proposal = prepare_quick_answer(request, source=prepared, provider=None)
+    assert proposal.card is None and proposal.reason == "quick_capability_unassessed"
+    assert proposal.expand.reading.measure.concept == "glucose"
+
+
+def test_the_interpreter_is_told_a_conventional_reading_is_not_an_ambiguity():
+    text = QuickReading.model_json_schema()["properties"]["ambiguities"]["description"]
+    assert "is not an ambiguity" in text and "stops the quick answer" in text
+
+
 def test_missing_window_falls_back_without_guessing(prepared):
     proposal = prepare_quick_answer(reading(measure={"concept": "lact", "statistic": "median", "summary": "max"}),
                                     source=prepared, provider=None)

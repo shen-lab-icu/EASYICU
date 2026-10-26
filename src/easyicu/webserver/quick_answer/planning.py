@@ -36,6 +36,33 @@ _COMPLEXITY = (
 _OUTCOMES = {"hospital_death", "icu_death", "death_within_72h_after_icu_discharge"}
 
 
+def bind_concept_names(reading: QuickReading) -> QuickReading:
+    """Name the reading's measure and groups by their EasyICU concept ids.
+
+    The interpreter sees no concept roster, so it may type a clinical name
+    ("lactate", "gender") where the materializer and the prepared source take
+    an id (``lact``, ``sex``); pilot1 10-26 stopped a fully typed reading that
+    way. An id stays as typed. Any other name binds only when the question
+    reader reads it as exactly one concept (``concept_named_by``); otherwise it
+    stays as typed and the source lookup refuses it, as before.
+    """
+    from easyicu.concept.loader import load_concept_dict_cached
+    from easyicu.webserver.study_intent import concept_named_by
+
+    known = load_concept_dict_cached().keys() | _OUTCOMES
+
+    def bind(name: str) -> str:
+        return name if not name or name in known else concept_named_by(name) or name
+
+    concept = bind(reading.measure.concept)
+    grouping = tuple(bind(name) for name in reading.grouping)
+    if concept == reading.measure.concept and grouping == reading.grouping:
+        return reading
+    return reading.model_copy(update={
+        "measure": reading.measure.model_copy(update={"concept": concept}), "grouping": grouping,
+    })
+
+
 def qualification_stop(reading: QuickReading) -> str | None:
     from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
 
@@ -215,7 +242,7 @@ def prepare_quick_answer(reading: QuickReading, *, source: PreparedSource, provi
     Full-study dispositions carry the reading for normal setup/Planner; stops
     retain a precise remedy. Neither disposition executes or calls a provider.
     """
-    reading = QuickReading.model_validate(reading.model_dump(mode="json"))
+    reading = bind_concept_names(QuickReading.model_validate(reading.model_dump(mode="json")))
     question_mismatch = question is not None and question != reading.question
     if question_mismatch:
         reading = reading.model_copy(update={"question": question, "ambiguities": (*reading.ambiguities, "question_mismatch")})
