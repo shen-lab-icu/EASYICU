@@ -100,12 +100,42 @@ def test_study_families_retain_the_owners_decision_and_requirements():
     for row in build(concept="hr")["databases"]:
         assert [s["family"] for s in row["studies"]] == [s.key for s in list_analysis_types()]
         for study in row["studies"]:
-            expected = assess_study(research_capability_profile(row["database"]), StudyRequirements(family=study["family"]))
+            from easyicu.webserver.research_capability_scope import study_requirements
+            from easyicu.databases.research_requirements import family_requirements
+
+            requirements = (study_requirements({"execution_concepts": {"outcome": "death"}}, family=study["family"])
+                            if "event_time" in family_requirements(study["family"]) else StudyRequirements(family=study["family"]))
+            expected = assess_study(research_capability_profile(row["database"]), requirements)
             assert study["decision"] == expected.model_dump(mode="json")
             assert study["status"] == ("refused" if expected.status == "refusal" else expected.status)
             assert study["scope"] == "family_minimum_requirements"
             states.add(study["status"])
-    assert states == {"exact", "substitution", "refused"}
+    assert states == {"exact", "refused"}
+
+
+@pytest.mark.parametrize("database,status", [
+    ("mimic", "exact"), ("miiv", "exact"), ("eicu", "refused"),
+    ("hirid", "refused"), ("aumc", "refused"), ("sic", "refused"),
+])
+def test_survival_map_agrees_with_default_death_question_and_plan(database, status):
+    from easyicu.databases.research_plan_requirements import plan_capability_decision
+    from easyicu.research_agent.schema import AnalysisPlan, CohortDescriptor, ResearchContext
+    from easyicu.webserver.research_capability_scope import study_requirements
+    from easyicu.webserver.study_family_scope import study_family_database_gap
+
+    question = "Estimate time to death."
+    study = {"analysis_design": {"analysis_family": "survival"}, "execution_concepts": {"outcome": "death"}}
+    cell, = build(database=database, concept="death", family="survival")["databases"][0]["studies"]
+    decision = assess_study(research_capability_profile(database), study_requirements(study, family="survival", question=question))
+    context = ResearchContext(research_question=question, target_outcome="death",
+        cohort=CohortDescriptor(cohort_name="synthetic", database=database, n_stays=0), variables=[])
+    plan = AnalysisPlan(research_question=question, analysis_type="survival", steps=[])
+    assert cell["status"] == status
+    assert cell["decision"] == decision.model_dump(mode="json") == plan_capability_decision(context, plan).model_dump(mode="json")
+    gap = study_family_database_gap(study, question=question, database=database)
+    assert (gap is not None) == (status == "refused")
+    if gap is not None:
+        assert gap["missing_capabilities"] == cell["decision"]["missing"]
 
 
 def test_filters_aliases_pagination_and_empty_tail():

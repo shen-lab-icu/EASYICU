@@ -48,7 +48,7 @@ class MortalityCapability(Fact):
     meaning: Literal["hospital_death", "icu_death", "death_within_72h_after_icu_discharge"]
     status: SourceField
     event_time: SourceField | None
-    time_kind: Literal["recorded", "date", "last_observation_proxy", "unavailable"]
+    time_kind: Literal["recorded", "date", "last_observation_proxy", "icu_discharge_proxy", "unavailable"]
 
 
 class ConceptAvailability(Fact):
@@ -256,6 +256,27 @@ def _mortality(config) -> MortalityCapability | None:
             if status else None)
 
 
+def _icu_death_timing(mortality: MortalityCapability, icu_end: SourceField | None) -> MortalityCapability:
+    """Preserve an endpoint's existing time; otherwise propose its ICU exit.
+
+    An ICU death ends that ICU stay. For an ICU-death status without its own
+    event time, a registered ICU discharge time is a defensible proxy, never
+    a recorded death time. The requirements owner makes non-recorded timing
+    an explicit substitution requiring whole-plan approval. Hospital status
+    cannot use this rule: hospital death can occur after ICU discharge.
+
+    Native ICU mortality with this proxy takes precedence over switching to
+    another timed mortality definition (such as a post-discharge death date),
+    because it preserves the requested endpoint. Existing recorded times,
+    dates and last-observation proxies are retained. Without an ICU end, leave
+    time unavailable; a timed alternative must not conceal missing follow-up.
+    This rule uses profile facts, not database names, and supplies no censoring.
+    """
+    if mortality.meaning == "icu_death" and mortality.event_time is None and icu_end is not None:
+        return mortality.model_copy(update={"event_time": icu_end, "time_kind": "icu_discharge_proxy"})
+    return mortality
+
+
 @lru_cache(maxsize=32)
 def research_capability_profile(database: str) -> ResearchCapabilityProfile:
     """Describe a registered source, or miiv_demo's explicitly inherited schema.
@@ -275,6 +296,8 @@ def research_capability_profile(database: str) -> ResearchCapabilityProfile:
     icu_end = _identifier_field(config, "icustay", "end")
     hospital_end = _identifier_field(config, "hadm", "end")
     mortality = _mortality(config)
+    if mortality is not None:
+        mortality = _icu_death_timing(mortality, icu_end)
     outcomes = [mortality] if mortality else []
     # eICU independently records ICU discharge status. A hospital status's
     # index is still not a recorded time of death for either endpoint.
@@ -293,6 +316,7 @@ def research_capability_profile(database: str) -> ResearchCapabilityProfile:
             outcomes.append(MortalityCapability(meaning="icu_death", status=status,
                 event_time=_field(config, table, timing) if timing else None,
                 time_kind="recorded" if timing else "unavailable"))
+    outcomes = [_icu_death_timing(item, icu_end) for item in outcomes]
     concepts = _concepts(config)
     mapped = {item.concept for item in concepts if item.mapped}
     # These are source clock declarations, grounded in the registry's typed

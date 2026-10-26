@@ -1092,6 +1092,7 @@ _DATABASE_TERMS = {
     "recorded_death_time": ("recorded death time", "记录的死亡时间"),
     "date": ("date of death without a precise time", "仅有死亡日期，无精确时刻"),
     "last_observation_proxy": ("last observation time used as a proxy for death time", "以最后观察时间近似死亡时间"),
+    "icu_discharge_proxy": ("ICU discharge time used as a proxy for death time", "以 ICU 出科时间近似死亡时间"),
     "icu_stay": ("ICU stay", "ICU 住院"), "hospitalization": ("hospital admission", "医院住院"),
     "event_time": ("event time", "事件时间"), "censor_time": ("end of follow-up", "随访结束时间"),
     "time_zero": ("ICU admission time", "入 ICU 时间"), "analysis_unit": ("study unit identifier", "分析单位标识"),

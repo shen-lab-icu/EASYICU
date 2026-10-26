@@ -75,7 +75,14 @@ def family_requirements(family: str) -> tuple[str, ...]:
 
 
 def assess_study(profile: ResearchCapabilityProfile, requirements: StudyRequirements) -> CapabilityDecision:
-    """Return exactly one disposition; missing facts dominate proposals."""
+    """Return exactly one disposition; missing facts dominate proposals.
+
+    Prefer the named native mortality, including its stated ICU-discharge
+    proxy, over the default mortality's different meaning or time. Only an
+    absent native endpoint falls back to the default with an outcome-meaning
+    substitution. An untimed native endpoint is refused, not silently changed
+    to a different timed endpoint; censoring requirements remain independent.
+    """
     missing: list[MissingCapability] = []
     substitutions: list[CapabilitySubstitution] = []
     unassessed_concepts: list[ConceptAvailability] = []

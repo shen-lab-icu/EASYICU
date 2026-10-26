@@ -18,6 +18,8 @@
   };
   const DEATH_TIME = {
     recorded_death_time: ['Recorded time of death', '记录的死亡时间'],
+    icu_discharge_proxy: ['ICU discharge time used as a proxy for death time', '以 ICU 出科时间近似死亡时间'],
+    last_observation_proxy: ['Last observation time used as a proxy for death time', '以最后观察时间近似死亡时间'],
     date: ['Date of death only', '只有死亡日期'],
     date_only: ['Date of death only', '只有死亡日期'],
     proxy: ['Discharge time standing in for the time of death', '以出院时间代替死亡时间'],

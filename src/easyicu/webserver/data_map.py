@@ -9,7 +9,7 @@ use the owner's minimum requirements, not an invented example study.
 from easyicu.concept import catalog
 from easyicu.databases.profiles import get_database_profile, iter_database_profiles
 from easyicu.databases.research_capabilities import ResearchCapabilityProfile, research_capability_profile
-from easyicu.databases.research_requirements import StudyRequirements, assess_study
+from easyicu.databases.research_requirements import StudyRequirements, assess_study, family_requirements
 from easyicu.research_agent.planning.analysis_types import list_analysis_types
 from easyicu.research_agent.research_context.export_selection import SourceIdentity
 from easyicu.webserver import sources
@@ -56,7 +56,17 @@ def _concept_cell(profile: ResearchCapabilityProfile, name: str, definitions: di
 
 
 def _study_cell(profile: ResearchCapabilityProfile, family: str) -> StudyCell:
-    decision = assess_study(profile, StudyRequirements(family=family))
+    """Time-to-event cells assess the conversation's default ``death`` request.
+
+    Generic death retains its source meaning and hospital follow-up requirement,
+    even where a named ICU endpoint is also available. Use the conversation's
+    requirements owner so the map cannot silently substitute ICU censoring.
+    """
+    from easyicu.webserver.research_capability_scope import study_requirements
+
+    requirements = (study_requirements({"execution_concepts": {"outcome": "death"}}, family=family)
+                    if "event_time" in family_requirements(family) else StudyRequirements(family=family))
+    decision = assess_study(profile, requirements)
     return StudyCell(family=family, status="refused" if decision.status == "refusal" else decision.status,
                      decision=decision)
 

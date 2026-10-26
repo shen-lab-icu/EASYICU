@@ -63,6 +63,20 @@ def test_hirid_monitoring_values_do_not_encode_death(tmp_path):
     assert frame.icu_death_time_hours.iloc[1:].isna().all()
 
 
+@pytest.mark.parametrize("database,hours", [("eicu", 24), ("aumc", 100_000_000 / 3_600_000)])
+def test_icu_discharge_time_is_a_proxy_only_for_icu_deaths(tmp_path, database, hours):
+    from easyicu.databases.research_capabilities import research_capability_profile
+    from easyicu.scores.icu_mortality import load_icu_death
+
+    frame = load_icu_death(database, source(tmp_path / database, database))
+    profile = research_capability_profile(database)
+    native = next(item for item in profile.mortality_outcomes if item.meaning == "icu_death")
+    assert native.event_time == profile.icu_discharge
+    assert native.time_kind == frame.attrs["event_time_kind"] == "icu_discharge_proxy"
+    assert frame.icu_death_time_hours.iloc[0] == pytest.approx(hours)
+    assert frame.icu_death_time_hours.iloc[1:].isna().all()
+
+
 @pytest.mark.parametrize("database,table,field", [
     ("aumc", "admissions", "destination"), ("sic", "cases", "ICUOffset"),
     ("eicu", "patient", "unitdischargestatus"), ("hirid", "general", "discharge_status"),

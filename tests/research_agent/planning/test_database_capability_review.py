@@ -357,3 +357,92 @@ def test_the_generic_death_builder_keeps_its_actual_meaning_even_if_another_stat
     assert decision["substitutions"][0]["substitute"] == "hospital_death"
     with pytest.raises(CapabilityApprovalError, match="capability_substitution_approval_required"):
         require_approved_database_capabilities(SimpleNamespace(context=context, plan=plan, evidence=EvidenceStore(tmp_path)), tmp_path)
+
+
+@pytest.mark.parametrize("database,display,table,column", [
+    ("aumc", "AmsterdamUMCdb", "admissions", "dischargedat"),
+    ("eicu", "eICU", "patient", "unitdischargeoffset"),
+])
+def test_icu_survival_reviews_its_discharge_proxy_before_approval(tmp_path, monkeypatch, database, display, table, column):
+    from easyicu.research_agent.orchestration import scientific_plan_review_gate as gate
+    from easyicu.webserver.study_family_scope import study_family_database_gap
+    from easyicu.databases.research_substitutions import bind_source_substitutions, source_binding
+
+    question = f"Estimate time to ICU death in {display}."
+    study = {"analysis_design": {"analysis_family": "survival"},
+             "execution_concepts": {"outcome": "icu_death"}}
+    assert study_family_database_gap(study, question=question, database=database) is None
+    context = ResearchContext(research_question=question, target_outcome="icu_death",
+        cohort=CohortDescriptor(cohort_name="synthetic", database=database, n_stays=0), variables=[])
+    plan = AnalysisPlan(research_question=question, analysis_type="survival", steps=[])
+    original = _review(context, plan).model_copy(update={"facts": {}})
+    monkeypatch.setattr(gate, "build_plan_scientific_review", lambda **kwargs: original)
+    evidence = EvidenceStore(tmp_path)
+    reviewed = gate.prepare_scientific_plan_review_gate(run_dir=tmp_path, evidence=evidence,
+        context=context, plan=plan, literature=None, figure_strategy=None,
+        require_reportable_capability=False, reuse_existing_review=False, runtime_authority=None, model_retention=None)
+    decision = reviewed.review.facts["database_capability_review"]["decision"]
+    assert decision["status"] == "substitution"
+    timing, = decision["substitutions"]
+    assert (timing["capability"], timing["original"], timing["substitute"], timing["reason_code"]) == (
+        "event_time", "recorded_death_time", "icu_discharge_proxy", "event_time_is_proxy_or_date")
+    assert (timing["source_field"]["table"], timing["source_field"]["column"]) == (table, column)
+    assert timing["source_field"]["source"]
+    assert reviewed.review.approval_allowed
+    result = SimpleNamespace(context=context, plan=plan, evidence=evidence)
+    with pytest.raises(CapabilityApprovalError, match="capability_substitution_approval_required"):
+        require_approved_database_capabilities(result, tmp_path)
+    require_approved_database_capabilities(_approve(tmp_path, evidence, context, plan, reviewed.review), tmp_path)
+
+    # The preplanner binding carries the same timing and keeps the ICU endpoint.
+    proposed = context.model_copy(update={"user_preferences": UserPreferences(data_constraints=json.dumps(
+        {"database_study_requirements": decision["requirements"]}))})
+    bound = bind_source_substitutions(proposed)
+    assert bound.target_outcome == "icu_death"
+    timing = source_binding(bound)["mortality_timing"]
+    assert timing["time_kind"] == "icu_discharge_proxy"
+    assert (timing["event_time"]["table"], timing["event_time"]["column"]) == (table, column)
+
+
+@pytest.mark.parametrize("database,icu_status,hospital_status,hospital_meaning,hospital_time", [
+    ("mimic", "exact", "exact", None, None),
+    ("miiv", "exact", "exact", None, None),
+    ("eicu", "substitution", "refusal", None, None),
+    ("hirid", "refusal", "refusal", "icu_death", "last_observation_proxy"),
+    ("aumc", "substitution", "refusal", "death_within_72h_after_icu_discharge", "date"),
+    ("sic", "exact", "refusal", None, None),
+])
+@pytest.mark.parametrize("outcome", ["icu_death", "death"])
+def test_survival_question_scope_and_review_agree_for_each_mortality(
+    database, icu_status, hospital_status, hospital_meaning, hospital_time, outcome,
+):
+    from easyicu.webserver.study_family_scope import study_family_database_gap
+
+    meaning = "ICU death" if outcome == "icu_death" else "hospital death"
+    question = f"Estimate time to {meaning}."
+    study = {"analysis_design": {"analysis_family": "survival"}, "execution_concepts": {"outcome": outcome}}
+    context = ResearchContext(research_question=question, target_outcome=outcome,
+        cohort=CohortDescriptor(cohort_name="synthetic", database=database, n_stays=0), variables=[])
+    plan = AnalysisPlan(research_question=question, analysis_type="survival", steps=[])
+    review = _review(context, plan)
+    decision = review.facts["database_capability_review"]["decision"]
+    expected = icu_status if outcome == "icu_death" else hospital_status
+    assert decision["status"] == expected
+    gap = study_family_database_gap(study, question=question, database=database)
+    if expected == "refusal":
+        capability = "event_time" if database == "eicu" else "censor_time"
+        assert [(item["capability"], item["code"]) for item in decision["missing"]] == [
+            (capability, capability + "_unavailable")]
+        assert gap["missing_capabilities"] == decision["missing"]
+        assert not review.approval_allowed
+    else:
+        assert gap is None
+        assert decision["missing"] == []
+        assert review.approval_allowed
+    substitutions = {item["capability"]: item["substitute"] for item in decision["substitutions"]}
+    if outcome == "icu_death":
+        timing = "last_observation_proxy" if database == "hirid" else "icu_discharge_proxy"
+        assert substitutions == ({"event_time": timing} if database in {"eicu", "hirid", "aumc"} else {})
+    else:
+        assert substitutions == ({"outcome_meaning": hospital_meaning, "event_time": hospital_time}
+                                 if hospital_meaning else {})

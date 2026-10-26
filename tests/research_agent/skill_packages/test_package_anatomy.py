@@ -41,6 +41,18 @@ def test_workflow_has_clinical_bilingual_task_package(row):
     assert package == skills.method_skill_package(row.skill_id, enabled=True)
 
 
+def test_an_icu_survival_package_names_the_discharge_proxy_in_both_languages(monkeypatch):
+    from easyicu.databases.research_requirements import StudyRequirements
+
+    key = "survival-time-to-event"
+    monkeypatch.setitem(skills.WORKFLOW_GUIDES, key, replace(skills.WORKFLOW_GUIDES[key],
+        requirements=StudyRequirements(family="survival", outcome="icu_death")))
+    files = {item["path"]: item["content"] for item in skills.method_skill_package(key, enabled=True)["files"]}
+    assert "ICU discharge time used as a proxy for death time" in files["SKILL.md"]
+    assert "以 ICU 出科时间近似死亡时间" in files["SKILL.zh.md"]
+    assert "last observation time used as a proxy for death time" in files["SKILL.md"]
+
+
 @pytest.mark.parametrize("target", ["unknown-sibling", "survival-time-to-event"])
 def test_registry_rejects_bad_sibling(monkeypatch, target):
     rows = tuple(

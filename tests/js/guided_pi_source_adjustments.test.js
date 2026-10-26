@@ -99,3 +99,20 @@ test('values are escaped and English reads naturally', () => {
   assert.match(html, /<s>Recorded time of death<\/s>[\s\S]*<strong>Date of death only<\/strong>/);
   assert.match(html, /Approving the plan accepts these changes\./);
 });
+
+test('ICU discharge and last observation proxies are named before plan approval in both languages', () => {
+  for (const [substitute, en, zh, table, column] of [
+    ['icu_discharge_proxy', 'ICU discharge time used as a proxy for death time', '以 ICU 出科时间近似死亡时间', 'stays', 'exit_time'],
+    ['last_observation_proxy', 'Last observation time used as a proxy for death time', '以最后观察时间近似死亡时间', 'measurements', 'time'],
+  ]) {
+    for (const [language, label] of [['en', en], ['zh', zh]]) {
+      const html = owner(language).render(review({ status: 'substitution', database: 'synthetic', missing: [],
+        substitutions: [{ capability: 'event_time', original: 'recorded_death_time', substitute,
+          reason_code: 'event_time_is_proxy_or_date', source_field: field(table, column) }] }));
+      assert.ok(html.includes(`<strong>${label}</strong>`));
+      assert.ok(html.includes(`<code>${table}.${column}</code>`));
+      assert.ok(html.includes(language === 'zh' ? '批准计划即同意' : 'Approving the plan accepts'));
+      assert.ok(!html.includes(substitute));
+    }
+  }
+});

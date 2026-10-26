@@ -27,12 +27,15 @@
   };
   const CONCEPT = { available: ['Mapped', '可用'], substituted: ['Substitute', '替代'], missing: ['Missing', '缺失'] };
   const CAPABILITIES = {
+    outcome_meaning: ['outcome definition', '结局定义'],
     event_time: ['event time', '事件发生时间'], censor_time: ['censoring time', '删失时间'],
     mortality: ['mortality', '死亡结局'], icu_admission: ['ICU admission time', 'ICU 入科时间'],
     icu_discharge: ['ICU discharge time', 'ICU 出科时间'], hospital_discharge: ['hospital discharge time', '出院时间'],
   };
   const SUBSTITUTES = {
-    date: ['a date only', '只有日期'], last_observation_proxy: ['the last observation time', '最后一次观测时间'],
+    icu_death: ['death in the ICU', 'ICU 内死亡'],
+    death_within_72h_after_icu_discharge: ['death up to 72 h after ICU discharge', '出 ICU 后 72 小时内死亡'],
+    date: ['a date only', '只有日期'], last_observation_proxy: ['the last observation time as a proxy', '最后一次观测时间作为近似'],
   };
   const CONCEPT_SUBSTITUTES = {
     capped_or_shifted: ['Values above a limit are capped or shifted', '超过上限的值被截断或平移'],
