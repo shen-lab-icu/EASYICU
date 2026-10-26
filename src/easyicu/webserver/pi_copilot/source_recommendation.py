@@ -18,16 +18,12 @@ from typing import Any, Dict, Literal, Mapping, Optional, Sequence
 from easyicu.databases.profiles import get_database_profile
 from easyicu.webserver import sources
 from easyicu.webserver.sources import source_reader_label
-from easyicu.webserver.study_family_scope import scope_database_key
 
 SelectionReason = Literal[
     "most_complete_local_dataset",
     "active_local_dataset",
     "latest_local_dataset",
 ]
-# Product scope already stated by the research entry (screens-guided-pi-starters).
-# Extraction support and a registered export do not enable research on these.
-_RESEARCH_EXCLUDED_DATABASES = frozenset({"hirid", "aumc", "sic"})
 
 
 @dataclass(frozen=True)
@@ -199,10 +195,6 @@ def registered_sources_for_database(
             ))
             if len(choices) >= 40:
                 break
-    if scope_database_key(database) in _RESEARCH_EXCLUDED_DATABASES:
-        # Keep the catalog's physical availability truthful, but offer no
-        # research selection. The card and narration explain the scope limit.
-        return choices, RegisteredExportRecommendation()
     return choices, recommend_registered_export(
         choices, allow_official_demo=bool(database) and not profile.is_public,
     )
