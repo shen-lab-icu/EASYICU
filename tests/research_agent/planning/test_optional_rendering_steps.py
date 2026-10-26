@@ -71,9 +71,7 @@ def test_host_checks_the_final_compiled_plan_without_exempting_rendering(obligat
     payload["robustness_intents"] = []
     context = _context()
     if obligation == "requested":
-        context = context.model_copy(update={
-            "user_preferences": UserPreferences(must_have_outputs="figure:primary_results"),
-        })
+        context.user_preferences.must_have_outputs = "figure:primary_results"
     if obligation == "consumed":
         consumer = deepcopy(payload["steps"][-1])
         consumer.update(
@@ -218,13 +216,7 @@ def test_compiler_retains_consumed_or_required_figures(obligation):
         )
         payload["steps"].append(consumer)
     elif obligation == "requested":
-        context = context.model_copy(
-            update={
-                "user_preferences": UserPreferences(
-                    must_have_outputs="figure:primary_results"
-                )
-            }
-        )
+        context.user_preferences.must_have_outputs = "figure:primary_results"
     else:
         kwargs["required_visualization_step"] = True
     plan, receipt = compile_progressive_plan(

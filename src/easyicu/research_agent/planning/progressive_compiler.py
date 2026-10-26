@@ -72,8 +72,10 @@ from .analysis_types import (
     validate_host_authorized_analysis_family,
 )
 from .adjustment_authority import (
+    ADJUSTED_ASSOCIATION_SUBGROUP_GUIDANCE,
     AdjustmentSetAuthority,
     host_proven_temporal_roles,
+    stated_subgroup_columns,
 )
 from .cohort_contract import (
     CohortDefinition,
@@ -2014,6 +2016,32 @@ def _compile_adjusted_association(
                 detail={"ineligible_covariates": nonbaseline},
             )
     if adjustment_authority.selection == "exact":
+        bound = list(adjustment_authority.operational_covariates)
+        if covariates != bound:
+            missing = [name for name in bound if name not in covariates]
+            extra = [name for name in covariates if name not in bound]
+            subgroups = [name for name in extra if name in stated_subgroup_columns(context)]
+            message = (
+                f"model_terms covariates must match the bound exact roster in order: "
+                f"bound={bound!r}; planned={covariates!r}; missing={missing!r}; "
+                f"extra={extra!r}. Return every bound covariate in order without "
+                "adding other terms. "
+                + (f"Extra stratifier/modifier columns {subgroups!r} belong to the "
+                   "stratified/subgroup analysis, not this adjustment set. "
+                   + ADJUSTED_ASSOCIATION_SUBGROUP_GUIDANCE if subgroups else "")
+            )
+            raise _fail(
+                "progressive_adjustment_roster_mismatch",
+                # Replay messages are bounded; the live repair retains every
+                # name in the structured detail lists below.
+                message[:2000],
+                step=step, step_index=step_index, path="model_terms",
+                detail={
+                    "bound_covariates": bound, "planned_covariates": covariates,
+                    "missing_covariates": missing, "extra_covariates": extra,
+                    "subgroup_covariates": subgroups, "repair_scope": "current_step_only",
+                },
+            )
         authority_rationales = adjustment_authority.operational_rationales
         authority_temporal_roles = adjustment_authority.operational_temporal_roles
         covariate_rationales = {
