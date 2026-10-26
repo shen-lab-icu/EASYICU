@@ -9,7 +9,7 @@ model, materialised the result and executed the declared PH diagnostic.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Literal, Sequence
+from typing import Any, Dict, List, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -18,12 +18,49 @@ from .model_tokens import (
     SURVIVAL_COX_ESTIMATOR,
     SURVIVAL_PH_DIAGNOSTIC,
     canonical_survival_ph_diagnostic,
+    normalise_model_contract_token,
 )
 
 
 SURVIVAL_ANALYSIS_RECEIPT_PRODUCT = "log:survival_analysis_receipt"
 SURVIVAL_PH_DIAGNOSTIC_PRODUCT = "table:survival_ph_diagnostic"
 SURVIVAL_PRIMARY_OWNER = "easyicu.host.survival_primary_cox_v1"
+
+
+COMPETING_RISK_STRATEGY = "cause_specific_and_subdistribution"
+LOGRANK_PRODUCT = "table:survival_logrank"
+CIF_PRODUCT = "table:survival_cumulative_incidence"
+GRAY_PRODUCT = "table:survival_gray_test"
+FINE_GRAY_PRODUCT = "table:survival_fine_gray"
+COMPETING_PRODUCTS = frozenset({CIF_PRODUCT, GRAY_PRODUCT, FINE_GRAY_PRODUCT})
+
+
+def validate_competing_event(
+    strategy: str, event_value: int, competing_event_value: int | None,
+    competing_event_definition: str | None,
+) -> bool:
+    """Refuse implicit competing-event censoring and ambiguous event codes."""
+    strategy = normalise_model_contract_token(strategy)
+    if strategy in {"none", "no_competing_risk"}:
+        if competing_event_value is not None or competing_event_definition is not None:
+            raise ValueError("a competing event requires cause_specific_and_subdistribution")
+        return False
+    if strategy != COMPETING_RISK_STRATEGY:
+        raise ValueError("unsupported competing-risk strategy")
+    if (isinstance(competing_event_value, bool) or not isinstance(competing_event_value, int)
+            or competing_event_value <= 0 or competing_event_value == event_value
+            or not str(competing_event_definition or "").strip()):
+        raise ValueError("competing event requires a distinct positive code and explicit definition")
+    return True
+
+
+def survival_supplement_products(requirement: Any) -> frozenset[str]:
+    if getattr(requirement, "competing_event_value", None) is not None:
+        return COMPETING_PRODUCTS
+    terms = getattr(requirement, "model_terms", None) or ()
+    if any(term.role == "exposure" and term.coding != "continuous" for term in terms):
+        return frozenset({LOGRANK_PRODUCT})
+    return frozenset()
 
 
 def canonical_survival_formula(
@@ -105,6 +142,10 @@ class SurvivalAnalysisReceipt(BaseModel):
     event_definition: str
     censoring_strategy: str
     competing_risk_strategy: str
+    competing_event_value: int | None = None
+    competing_event_definition: str | None = None
+    supplementary_sha256: Dict[str, str] = Field(default_factory=dict)
+    competing_analysis_frame_sha256: str | None = None
     time_horizon: str
     time_horizon_value: float = Field(gt=0)
     estimator: str
@@ -242,6 +283,19 @@ class SurvivalAnalysisReceipt(BaseModel):
 
     @model_validator(mode="after")
     def _validate_execution_relationships(self) -> "SurvivalAnalysisReceipt":
+        competing = validate_competing_event(
+            self.competing_risk_strategy, self.event_value,
+            self.competing_event_value, self.competing_event_definition,
+        )
+        if competing and (
+            set(self.supplementary_sha256) != COMPETING_PRODUCTS
+            or not re.fullmatch(r"[0-9a-f]{64}", self.competing_analysis_frame_sha256 or "")
+        ):
+            raise ValueError("competing-risk receipt requires every product and its analysis frame")
+        if not competing and (set(self.supplementary_sha256) - {LOGRANK_PRODUCT}):
+            raise ValueError("unexpected survival supplement")
+        if any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in self.supplementary_sha256.values()):
+            raise ValueError("survival supplement digests must be SHA-256")
         if self.n_analysis_rows > self.n_source_rows:
             raise ValueError("n_analysis_rows cannot exceed n_source_rows")
         if self.n_events > self.n_analysis_rows:

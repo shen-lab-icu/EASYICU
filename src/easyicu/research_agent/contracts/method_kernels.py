@@ -342,16 +342,17 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
             "cif_difference",
             "CIFResult",
             "CIFDifferenceResult",
+            "fit_fine_gray",
+            "FineGrayError",
         ),
         capability=(
             "cumulative incidence functions via lifelines Aalen-Johansen plus "
-            "descriptive group differences with bootstrap CIs. There is no "
-            "Gray test here, so group contrasts stay descriptive"
+            "descriptive group differences with bootstrap CIs; baseline Fine-Gray "
+            "subdistribution HR via local R survival::finegray+coxph, with subject sandwich SEs"
         ),
         families=("time_to_event", "survival"),
         fallback=(
-            "1-minus-Kaplan-Meier (biased upward under competition) with an "
-            "explicit note that competition was ignored"
+            "fail closed if the declared competing-event model or local R runtime is unavailable"
         ),
     ),
     MethodKernel(

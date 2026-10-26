@@ -43,7 +43,7 @@ ABSENT_R_PACKAGES: Dict[str, str] = {
     "WeightIt": "not installed; weighting stays in methods/propensity_weighting.py",
     "tableone": "not installed; Table One stays in methods/table_one.py",
     "rms": "not installed; no caller needs it yet",
-    "cmprsk": "not installed; competing risks stay descriptive (methods/competing_risks.py)",
+    "cmprsk": "not installed; Fine-Gray uses survival::finegray+coxph; CIF and Gray use in-tree kernels",
     "mediation": "not installed; mediation stays in methods/mediation.py",
     "geepack": "not installed; no caller needs it yet",
     "cobalt": "not installed; balance diagnostics stay in methods/propensity_weighting.py",

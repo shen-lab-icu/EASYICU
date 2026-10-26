@@ -101,7 +101,7 @@ class EstimatorResult:
     #: silently rebinds those arguments.
     separation_detected: Optional[bool] = None
     #: Covariance estimator that produced ``se``/confidence intervals.
-    variance_estimator: Literal["model_based", "cluster_robust"] = "model_based"
+    variance_estimator: Literal["model_based", "cluster_robust", "sandwich_robust"] = "model_based"
     #: Distinct groups among the exact complete rows used by a clustered fit.
     cluster_count: Optional[int] = None
     # The covariance of the one fitted model, for prespecified linear
@@ -302,7 +302,7 @@ def fit_estimator(
     kind: EstimatorKind | str,
     term: Optional[str] = None,
     source_by_design_column: Optional[Mapping[str, str]] = None,
-    variance_estimator: Literal["model_based", "cluster_robust"] = "model_based",
+    variance_estimator: Literal["model_based", "cluster_robust", "sandwich_robust"] = "model_based",
     cluster_groups: Any = None,
 ) -> EstimatorResult:
     """Fit a supported estimator and capture failures as non-converged results.
@@ -339,10 +339,14 @@ def fit_estimator(
         )
 
     kind = str(kind or "logistic")
-    if kind not in {"logistic", "linear"}:
+    if kind not in {"logistic", "linear", "glm_poisson"}:
         raise NotImplementedError(f"estimator kind {kind!r} is not implemented")
 
-    if variance_estimator not in {"model_based", "cluster_robust"}:
+    if kind == "glm_poisson" and variance_estimator == "model_based":
+        variance_estimator = "sandwich_robust"
+    if variance_estimator not in {"model_based", "cluster_robust", "sandwich_robust"} or (
+        variance_estimator == "sandwich_robust" and kind != "glm_poisson"
+    ):
         raise NotImplementedError(
             f"variance estimator {variance_estimator!r} is not implemented"
         )
@@ -477,7 +481,7 @@ def fit_estimator(
         )
 
     n_events: Optional[int] = None
-    if kind == "logistic":
+    if kind in {"logistic", "glm_poisson"}:
         numeric_y = pd.to_numeric(y_series, errors="coerce")
         is_binary = bool(
             not numeric_y.isna().any() and numeric_y.isin((0.0, 1.0)).all()
@@ -491,7 +495,7 @@ def fit_estimator(
                 n,
                 False,
                 _join_notes(
-                    "logistic estimator requires a binary 0/1 outcome; "
+                    f"{kind} estimator requires a binary 0/1 outcome; "
                     "the adapter will not change the declared method or mix "
                     "effect scales implicitly",
                     cohort_note,
@@ -586,29 +590,35 @@ def fit_estimator(
                 False,
                 _join_notes("binary outcome has fewer than two classes", cohort_note),
             )
-        logistic_fit = sm.Logit(y_series.astype(float), x_const)
-        result = logistic_fit.fit(
-            disp=False,
-            maxiter=100,
-            **(
-                {
-                    "cov_type": "cluster",
-                    "cov_kwds": {"groups": used_groups},
-                }
-                if variance_estimator == "cluster_robust"
-                else {}
-            ),
+        covariance = (
+            {"cov_type": "cluster", "cov_kwds": {"groups": used_groups}}
+            if variance_estimator == "cluster_robust" else {}
         )
-        separated, separation_note = _logistic_separation(result)
+        if kind == "glm_poisson":
+            import warnings
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                result = sm.GLM(
+                    y_series.astype(float), x_const,
+                    family=sm.families.Poisson(link=sm.families.links.Log()),
+                ).fit(maxiter=100, **(covariance or {"cov_type": "HC0"}))
+            converged = bool(result.converged)
+            separated, separation_note = False, "modified Poisson binary risk ratio"
+        else:
+            result = sm.Logit(y_series.astype(float), x_const).fit(
+                disp=False, maxiter=100, **covariance,
+            )
+            converged = bool(getattr(result, "mle_retvals", {}).get("converged", True))
+            separated, separation_note = _logistic_separation(result)
         coef = float(result.params[coefficient_name])
         ci_low, ci_high = _conf_interval_for(result, coefficient_name)
         se = _float_or_none(result.bse[coefficient_name])
         point = float(np.exp(coef))
         low = float(np.exp(ci_low)) if ci_low is not None else None
         high = float(np.exp(ci_high)) if ci_high is not None else None
-        converged = bool(getattr(result, "mle_retvals", {}).get("converged", True))
         if not math.isfinite(coef):
-            raise ValueError("non-finite logistic coefficient")
+            raise ValueError("non-finite binary-model coefficient")
         if not converged:
             # Carrying the verdict here too: complete separation is the reason a
             # logistic fit most often fails to converge, and "did not converge"
@@ -621,7 +631,7 @@ def fit_estimator(
                 n,
                 False,
                 _join_notes(
-                    _join_notes("logistic fit did not converge", fit_note),
+                    _join_notes(f"{kind} fit did not converge", fit_note),
                     separation_note,
                 ),
                 separation_detected=separated,
@@ -790,6 +800,12 @@ def fit_robustness_rows_from_records(
         )
     primary_row = _primary_row_from_step_records(successful_records)
     primary_measure = _primary_effect_measure_from_records(successful_records)
+    if primary_row is not None and primary_measure == "RR" and kind != "glm_poisson":
+        return [primary_row], [
+            *warnings,
+            "skipped incompatible robustness refits for a risk-ratio primary estimand; "
+            "odds ratios cannot be substituted for declared modified-Poisson RRs",
+        ]
     if (
         primary_row is not None
         and primary_measure == "HR"

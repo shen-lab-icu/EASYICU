@@ -51,6 +51,7 @@ from .model_tokens import (
     ADJUSTED_ASSOCIATION_OUTPUT,
     ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
+    ASSOCIATION_RR_ESTIMATOR,
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
     canonical_association_method,
     normalise_model_contract_token,
@@ -180,6 +181,8 @@ def association_estimator_support(requirement: Any) -> AssociationEstimatorSuppo
     outcome_type = str(getattr(requirement, "outcome_type", "") or "").strip()
     declared = canonical_association_method(getattr(requirement, "method_family", None))
     expected = ASSOCIATION_HOST_ESTIMATORS.get(outcome_type, "")
+    if outcome_type == "binary" and declared == ASSOCIATION_RR_ESTIMATOR:
+        expected = ASSOCIATION_RR_ESTIMATOR
     if not expected:
         return AssociationEstimatorSupport(
             supported=False,
@@ -207,7 +210,10 @@ def association_estimator_support(requirement: Any) -> AssociationEstimatorSuppo
         )
     return AssociationEstimatorSupport(
         supported=True,
-        runtime_kind="logistic" if outcome_type == "binary" else "linear",
+        runtime_kind=(
+            "glm_poisson" if declared == ASSOCIATION_RR_ESTIMATOR
+            else "logistic" if outcome_type == "binary" else "linear"
+        ),
         declared_outcome_type=outcome_type,
         canonical_method_family=declared,
         expected_estimator=expected,

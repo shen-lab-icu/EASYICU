@@ -405,6 +405,7 @@ _SURVIVAL = MethodSuite(
             produces="kaplan_meier curve data + log-rank; KM panel",
             runner="time_to_event",  # deterministic figure renderer
             reporting_items=("STROBE 15",),
+            notes="The survival primary owner emits log-rank for declared discrete groups on the Cox complete-case cohort and horizon; continuous exposure is not grouped implicitly.",
             software_packages=("lifelines",),
         ),
         AnalysisMethod(
@@ -456,25 +457,27 @@ _SURVIVAL = MethodSuite(
         ),
         AnalysisMethod(
             key="competing_risks_cif",
-            name="Aalen-Johansen competing-risk CIF + Gray comparison",
-            purpose="Describe cause-specific cumulative incidence when a competing event precludes the outcome.",
+            name="Competing risks: Aalen-Johansen CIF, Gray, cause-specific Cox and Fine-Gray",
+            purpose="Separate event-free cause-specific hazards from subdistribution hazards and cumulative incidence.",
             tier="standard_supporting",
-            implementation="llm_coded",
-            produces="cause-specific CIF curves + descriptive group difference + Gray test",
-            runner=None,
+            implementation="deterministic",
+            produces="group CIF + Gray test + cause-specific Cox HR + Fine-Gray subdistribution HR + digest receipt",
+            runner="survival_primary_cox",
             notes=(
-                "The reviewed kernels provide analysis-only Aalen-Johansen CIFs, "
-                "bootstrap descriptive group differences and an experimental "
-                "Gray K-sample test. They do not fit a Fine-Gray regression and "
-                "must never substitute a cause-naive Cox HR."
+                "Declare competing_risk_strategy=cause_specific_and_subdistribution, "
+                "competing_event_value and competing_event_definition in the survival primary contract. "
+                "The same complete-case cohort/horizon feeds CIF, Gray and local R survival::finegray+coxph. "
+                "Gray retains its kernel's analysis-only ceiling and pooled censoring limitation. "
+                "A cause-naive Cox HR must never substitute for cumulative incidence."
             ),
             kernel_modules=("competing_risks", "gray_test"),
             software_packages=("lifelines",),
             required_inputs=(
                 "non-negative follow-up time from a declared time origin",
                 "closed event coding with 0=censoring and positive competing-event codes",
-                "declared event of interest and optional comparison group",
-                "fixed timeline/bootstrap/seed policy for reported contrasts",
+                "distinct event of interest and competing event with an explicit definition",
+                "declared discrete exposure levels and complete-case horizon cohort",
+                "local R survival with finegray and coxph",
             ),
         ),
         AnalysisMethod(
@@ -650,14 +653,14 @@ _ASSOCIATION = MethodSuite(
         ),
         AnalysisMethod(
             key="adjusted_association",
-            name="Adjusted association (logistic / linear)",
+            name="Adjusted association (logistic / modified Poisson RR / linear)",
             purpose="Primary confounder-adjusted effect for a general (non-graded) exposure.",
             tier="primary",
             implementation="deterministic",
             produces="host-bound adjusted effect + typed model/coefficient contract + deterministic forest",
             runner="adjusted_association_estimates",
             reporting_items=("STROBE 16",),
-            notes="The sealed owner claims only one exact supported estimator with explicit coding for every term; interactions, splines and multi-model/free-form kernels remain agent-coded.",
+            notes="Logistic remains the binary default. The Planner may declare statsmodels_glm_poisson_log_robust for an adjusted RR, particularly when observed outcome proportion exceeds 0.10. Report the complete-case proportion; use sandwich SEs or declared patient clusters. Never change estimator automatically.",
         ),
         AnalysisMethod(
             key="multiple_adjustment",

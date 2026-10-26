@@ -1,877 +1,128 @@
 {
   "baseline_change_summary": {
-    "source_digest_changes": [],
-    "summary_changes": {}
+    "source_digest_changes": [
+      "src/easyicu/data/concept-dict.json",
+      "src/easyicu/data/sofa2-dict.json",
+      "src/easyicu/research_agent/agents/core.py",
+      "src/easyicu/research_agent/agents/planner.py",
+      "src/easyicu/research_agent/graph.py",
+      "src/easyicu/research_agent/know_how/registry.py",
+      "src/easyicu/research_agent/learning/runtime.py",
+      "src/easyicu/research_agent/learning/store.py",
+      "src/easyicu/research_agent/planning/analysis_blueprint.py",
+      "src/easyicu/research_agent/planning/analysis_types.py",
+      "src/easyicu/research_agent/planning/cohort_contract.py",
+      "src/easyicu/research_agent/planning/figure_strategy.py",
+      "src/easyicu/research_agent/planning/study_design.py",
+      "src/easyicu/research_agent/planning/study_design_playbook.py",
+      "src/easyicu/research_agent/providers/prompts/v1/system.txt",
+      "src/easyicu/research_agent/reporting/article_contract.py",
+      "src/easyicu/research_agent/research_context/outbound.py",
+      "src/easyicu/research_agent/resources/capability.py",
+      "src/easyicu/research_agent/resources/capability_runtime.py",
+      "src/easyicu/research_agent/resources/catalog.py",
+      "src/easyicu/research_agent/resources/coder.py",
+      "src/easyicu/research_agent/resources/context.py",
+      "src/easyicu/research_agent/resources/scheduler.py",
+      "src/easyicu/research_agent/resources/schema.py",
+      "src/easyicu/research_agent/schema.py",
+      "tools/research_agent_resource_baseline.py"
+    ],
+    "summary_changes": {
+      "coder_resource_provider_calls": {
+        "now": 0,
+        "was": null
+      },
+      "max_coder_resource_prompt_bytes": {
+        "now": 2255,
+        "was": null
+      },
+      "max_planner_with_resources_bytes": {
+        "now": 64145,
+        "was": null
+      },
+      "max_planner_without_resources_bytes": {
+        "now": 59737,
+        "was": null
+      },
+      "max_resource_added_bytes": {
+        "now": 4565,
+        "was": null
+      },
+      "selected_resource_count": {
+        "now": 7,
+        "was": null
+      },
+      "task_count": {
+        "now": 9,
+        "was": null
+      }
+    }
   },
   "baseline_history": [
     {
-      "reason": "Re-adjudicated the offline Canonical9 context envelope after typed input, host executor, and scientific-contract additions since the 2026-07-22 fixture. The measurement remains provider-free and patient-data-free; all nine prompts remain below the 80,000-byte limit and coder resource prompts below 8,000 bytes. This move records exact summary and source-digest changes in append-only history.",
+      "reason": "mg1: declared competing risks, log-rank and modified-Poisson RR",
       "source_digest_changes": [
         "src/easyicu/data/concept-dict.json",
         "src/easyicu/data/sofa2-dict.json",
         "src/easyicu/research_agent/agents/core.py",
-        "src/easyicu/research_agent/planning/analysis_types.py",
-        "src/easyicu/research_agent/planning/cohort_contract.py",
-        "src/easyicu/research_agent/planning/study_design.py",
-        "src/easyicu/research_agent/reporting/article_contract.py",
-        "src/easyicu/research_agent/research_context/outbound.py",
-        "src/easyicu/research_agent/resources/coder.py",
-        "tools/research_agent_resource_baseline.py"
-      ],
-      "summary_changes": {
-        "max_coder_resource_prompt_bytes": {
-          "now": 2255,
-          "was": 611
-        },
-        "max_planner_with_resources_bytes": {
-          "now": 61345,
-          "was": 46589
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56703,
-          "was": 42066
-        }
-      }
-    },
-    {
-      "reason": "Remove the duplicate Planner input roster from the initial Coder binding contract; Step inputs remains authoritative and the wide-trajectory payload now passes the 42 KB transport gate without dropping coordinates.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/agents/core.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Remove benchmark case identifiers from shared agent source; the planner fixture envelopes shrink by 22 bytes while limits, selected resources, and provider-free measurement remain unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/agents/core.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 61323,
-          "was": 61345
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56681,
-          "was": 56703
-        }
-      }
-    },
-    {
-      "reason": "Generalize the remaining benchmark-specific measured notes in shared agent modules; source digests change while planner envelopes, limits, selected resources, provider-free measurement, and patient-data-free measurement remain unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/reporting/article_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Re-adjudicate the provider-free Canonical9 source digests after the SOFA-2 production-conformance contract correction and previously committed concept-dictionary changes; prompt-byte summaries, provider-call count, and patient-data reads remain unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/data/concept-dict.json",
-        "src/easyicu/data/sofa2-dict.json"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Re-adjudicate the provider-free Canonical9 context envelope after the reviewed SOFA-2 evidence-contract expansion and Planner prompt compression. The SOFA-2 change adds 147 bytes only to the M3 phenotyping fixture; the prompt compression removes 40 bytes from every fixture, leaving the measured maximum at 61,430 of the 120,000-byte production Planner limit. Provider calls and patient-data reads remain zero.",
-      "source_digest_changes": [
-        "src/easyicu/data/sofa2-dict.json",
-        "src/easyicu/research_agent/agents/core.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 61430,
-          "was": 61323
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56788,
-          "was": 56681
-        }
-      }
-    },
-    {
-      "reason": "bind E2 H2 H3 scientific protocol revisions",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/know_how/registry.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 61288,
-          "was": 61430
-        }
-      }
-    },
-    {
-      "reason": "Re-adjudicated the provider-free and patient-data-free Canonical9 resource envelope after digest-bound E2/H2/H3 runtime authority registration; measured summary limits are unchanged and only the know-how registry source digest moved.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/know_how/registry.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Re-adjudicate the provider-free, patient-data-free Canonical9 resource envelope after moving case-neutral descriptive Planner guidance from the core agent module into the typed plan-payload owner. Only E1 receives the conditional guidance; the measured global maxima decrease by 2 bytes and remain below frozen limits.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/agents/core.py",
-        "src/easyicu/research_agent/planning/analysis_types.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 61286,
-          "was": 61288
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56786,
-          "was": 56788
-        }
-      }
-    },
-    {
-      "reason": "agents/core.py decomposition batch split the monolith into owner modules behind the core.py facade (only core.py's digest is in SOURCE_FILES; measured planner envelopes did not grow — max bytes decreased). Deltas in learning/planning/resources digests and task bundles are committed improvements from HEAD 26bdcdc..223d45c absorbed by this refresh; all summary ceilings moved down, none up.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/agents/core.py",
+        "src/easyicu/research_agent/agents/planner.py",
+        "src/easyicu/research_agent/graph.py",
+        "src/easyicu/research_agent/know_how/registry.py",
         "src/easyicu/research_agent/learning/runtime.py",
         "src/easyicu/research_agent/learning/store.py",
         "src/easyicu/research_agent/planning/analysis_blueprint.py",
         "src/easyicu/research_agent/planning/analysis_types.py",
+        "src/easyicu/research_agent/planning/cohort_contract.py",
         "src/easyicu/research_agent/planning/figure_strategy.py",
+        "src/easyicu/research_agent/planning/study_design.py",
+        "src/easyicu/research_agent/planning/study_design_playbook.py",
+        "src/easyicu/research_agent/providers/prompts/v1/system.txt",
         "src/easyicu/research_agent/reporting/article_contract.py",
         "src/easyicu/research_agent/research_context/outbound.py",
         "src/easyicu/research_agent/resources/capability.py",
+        "src/easyicu/research_agent/resources/capability_runtime.py",
+        "src/easyicu/research_agent/resources/catalog.py",
         "src/easyicu/research_agent/resources/coder.py",
-        "src/easyicu/research_agent/resources/scheduler.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 59785,
-          "was": 61286
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 55145,
-          "was": 56786
-        }
-      }
-    },
-    {
-      "reason": "Add the typed descriptive_claim object to the Planner worked example so deterministic distribution ownership can validate the emitted shape. All nine provider-free, patient-data-free fixture prompts grow by 167 bytes; the measured maximum remains 59,952 of the 120,000-byte production limit, with resource selection and coder envelopes unchanged.",
-      "source_digest_changes": [],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 59952,
-          "was": 59785
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 55312,
-          "was": 55145
-        }
-      }
-    },
-    {
-      "reason": "Record the analysis-family authority guidance in the provider-free, patient-data-free Canonical9 Planner envelope. The shared locked-family guide now states that caller-bound family authority cannot be replaced; all nine fixture prompts grow by 81 bytes, and the measured maximum moves from 59,952 to 60,033 of the 120,000-byte production limit. Selected resources, coder envelopes, Provider calls, and patient-data reads remain unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/analysis_types.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 60033,
-          "was": 59952
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 55393,
-          "was": 55312
-        }
-      }
-    },
-    {
-      "reason": "Add typed counts-only planning and point-only descriptive figure authority; the provider-free, patient-data-free Canonical9 maximum grows by 338 bytes to 60,371 of the 120,000-byte Planner limit, with resource selection and coder envelopes unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/figure_strategy.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 60371,
-          "was": 60033
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 55731,
-          "was": 55393
-        }
-      }
-    },
-    {
-      "reason": "Tighten counts-only Planner guidance to reject Table One and untyped descriptive summaries; the offline Canonical9 envelope remains provider-free and patient-data-free and below the 120,000-byte limit.",
-      "source_digest_changes": [],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 60565,
-          "was": 60371
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 55925,
-          "was": 55731
-        }
-      }
-    },
-    {
-      "reason": "Record the counts-only article display contract added for the governed reviewer-demo branch: build_article_analysis_contract now removes baseline_context and distribution_prevalence modules when typed counts-only authority is active, preventing duplicate untyped or mislabeled result products. This adds 193 bytes to each provider-free, patient-data-free Canonical9 Planner envelope; the maximum is 60,758 of the unchanged 120,000-byte limit. Selected resources, coder envelopes, Provider calls, and patient-data reads remain unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/reporting/article_contract.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 60758,
-          "was": 60565
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56118,
-          "was": 55925
-        }
-      }
-    },
-    {
-      "reason": "Re-adjudicate the provider-free, patient-data-free Canonical9 context envelope after capability-contract compilation and system-prompt compaction. The maximum Planner envelope is 60,830 of 120,000 bytes (+72), while the system prompt shrinks by 60 bytes; provider calls and patient-data reads remain zero. Bind the split Planner owner, live schema, and system-prompt file in source_sha256 so future drift is attributable.",
-      "source_digest_changes": [
-        "src/easyicu/data/concept-dict.json",
-        "src/easyicu/data/sofa2-dict.json",
-        "src/easyicu/research_agent/agents/core.py",
-        "src/easyicu/research_agent/agents/planner.py",
-        "src/easyicu/research_agent/providers/prompts/v1/system.txt",
-        "src/easyicu/research_agent/reporting/article_contract.py",
+        "src/easyicu/research_agent/resources/context.py",
+        "src/easyicu/research_agent/resources/scheduler.py",
+        "src/easyicu/research_agent/resources/schema.py",
         "src/easyicu/research_agent/schema.py",
         "tools/research_agent_resource_baseline.py"
       ],
       "summary_changes": {
+        "coder_resource_provider_calls": {
+          "now": 0,
+          "was": null
+        },
+        "max_coder_resource_prompt_bytes": {
+          "now": 2255,
+          "was": null
+        },
         "max_planner_with_resources_bytes": {
-          "now": 60830,
-          "was": 60758
+          "now": 64145,
+          "was": null
         },
         "max_planner_without_resources_bytes": {
-          "now": 56190,
-          "was": 56118
-        }
-      }
-    },
-    {
-      "reason": "Accept the finalized seven-day AKI dictionary digest and 9-byte case-neutral Planner prompt compaction; no provider calls or paper-input authority.",
-      "source_digest_changes": [
-        "src/easyicu/data/concept-dict.json",
-        "src/easyicu/research_agent/agents/planner.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 60821,
-          "was": 60830
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56181,
-          "was": 56190
-        }
-      }
-    },
-    {
-      "reason": "Reviewed generic E1 contract extensions changed the schema source digest; the offline Canonical9 resource selection and context-size envelope is unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/schema.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Accept the case-neutral scientific-action article-role binding in the offline Canonical9 context fixture. The Planner envelope increases by 20 bytes; provider calls and patient-data reads remain zero.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/reporting/article_contract.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 60841,
-          "was": 60821
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56201,
-          "was": 56181
-        }
-      }
-    },
-    {
-      "reason": "Bind the optional pre-result research-design selection in schema.py while removing redundant Method Adapter ids from the case-neutral Planner action projection. The provider-free Canonical9 maximum decreases by 67 bytes to 60,774 of the 120,000-byte production limit; resource selection, coder envelopes, provider calls, and patient-data reads are unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/schema.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 60774,
-          "was": 60841
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56134,
-          "was": 56201
-        }
-      }
-    },
-    {
-      "reason": "Ratchet reviewed Dev9 reportable method owners and exact planning contracts",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/analysis_types.py",
-        "src/easyicu/research_agent/planning/figure_strategy.py",
-        "src/easyicu/research_agent/reporting/article_contract.py",
-        "src/easyicu/research_agent/research_context/outbound.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 60812,
-          "was": 60774
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56172,
-          "was": 56134
-        }
-      }
-    },
-    {
-      "reason": "Re-adjudicate the provider-free, patient-data-free Canonical9 resource envelope against this exact checkout after typed design planning, figure strategy, reviewed method-resource, and orchestration updates. The current package source is explicitly bound through PYTHONPATH=src; all nine prompts remain below 80,000 bytes, coder prompts remain below 8,000 bytes, and Provider calls and patient-data reads remain zero.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/analysis_blueprint.py",
-        "src/easyicu/research_agent/planning/figure_strategy.py",
-        "src/easyicu/research_agent/planning/study_design.py",
-        "src/easyicu/research_agent/planning/study_design_playbook.py",
-        "src/easyicu/research_agent/reporting/article_contract.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 61241,
-          "was": 60812
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56601,
-          "was": 56172
-        }
-      }
-    },
-    {
-      "reason": "Re-adjudicate the provider-free and patient-data-free offline Canonical9 resource envelope after the reviewed Planner, capability, typed-context, and prompt-scope owner changes in the current integration checkpoint. The measured maximum Planner prompt decreases from 61,241 to 60,841 bytes and the without-resources maximum decreases from 56,601 to 56,201 bytes; selected resources, nine-task scope, zero Provider calls, zero patient-data reads, and existing hard limits remain unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/figure_strategy.py",
-        "src/easyicu/research_agent/reporting/article_contract.py",
-        "src/easyicu/research_agent/schema.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 60841,
-          "was": 61241
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56201,
-          "was": 56601
-        }
-      }
-    },
-    {
-      "reason": "Correct the immediately preceding baseline entry, which was generated without PYTHONPATH=src and therefore measured the ambient editable primary checkout instead of this unified checkout. This entry binds the exact local source tree: the actual maximum Planner prompt is 61,262 bytes and the without-resources maximum is 56,622 bytes, each 21 bytes above the prior valid 61,241/56,601 checkpoint; all nine tasks remain below existing limits with seven selected resources, zero Provider calls, and zero patient-data reads.",
-      "source_digest_changes": [],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 61262,
-          "was": 60841
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56622,
-          "was": 56201
-        }
-      }
-    },
-    {
-      "reason": "Re-adjudicate the provider-free, patient-data-free Canonical9 context envelope after the committed planning, execution, figure, and prompt-contract repairs. All nine fixtures remain within existing limits; this baseline is architecture evidence only and grants no scientific or publication authority.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/reporting/article_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Re-adjudicate the provider-free, patient-data-free Canonical9 envelope after current typed planning, reporting, resource-owner, and dictionary changes. Both measured Planner maxima decrease (61,262 to 60,841 bytes with resources; 56,622 to 56,201 without), coder prompt size and selected-resource count remain unchanged, and provider calls and patient-data reads remain zero.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/cohort_contract.py",
-        "src/easyicu/research_agent/reporting/article_contract.py",
-        "src/easyicu/research_agent/schema.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 60841,
-          "was": 61262
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56201,
-          "was": 56622
-        }
-      }
-    },
-    {
-      "reason": "Correct the immediately prior snapshot to measure the live src checkout, matching pytest and production source resolution rather than an older installed package. The provider-free, patient-data-free Canonical9 maxima remain at 61,262 bytes with resources and 56,622 without; coder size, selected resources, provider calls, and patient-data reads are unchanged.",
-      "source_digest_changes": [],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 61262,
-          "was": 60841
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56622,
-          "was": 56201
-        }
-      }
-    },
-    {
-      "reason": "Refresh deterministic prompt-resource hashes after extracting planner and manuscript prompt owners; provider and patient-data counts remain zero.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/agents/core.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Re-adjudicate the provider-free and patient-data-free resource envelope after E1/E2 integration, Guided Copilot session ownership, and typed planning/execution owner refactors.",
-      "source_digest_changes": [
-        "src/easyicu/data/concept-dict.json"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Rebind the offline context fixture to the audited 2026-09-04 concept dictionary after main reconciliation.",
-      "source_digest_changes": [
-        "src/easyicu/data/concept-dict.json"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Reconcile the offline context fixture with the reviewed SOFA-2 dictionary description from the extraction branch. Only the sofa2-dict.json source digest changes; prompt sizes, selected resources, zero provider calls and zero patient-data reads remain unchanged. Preserve prior baseline history and frozen profile coordinates.",
-      "source_digest_changes": [
-        "src/easyicu/data/sofa2-dict.json"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Record reviewed authority closure changes in figure strategy, article contract, outbound requested endpoints and schema owner; measured resource summaries and existing budgets remain unchanged, with no Provider or patient-data calls.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/figure_strategy.py",
-        "src/easyicu/research_agent/reporting/article_contract.py",
-        "src/easyicu/research_agent/research_context/outbound.py",
-        "src/easyicu/research_agent/schema.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Refresh after reviewed planner, typed-analysis, figure-strategy, context-projection, schema, and concept-dictionary changes; maximum planner prompt envelopes decreased.",
-      "source_digest_changes": [
-        "src/easyicu/data/concept-dict.json",
-        "src/easyicu/research_agent/agents/planner.py",
-        "src/easyicu/research_agent/planning/analysis_types.py",
-        "src/easyicu/research_agent/planning/figure_strategy.py",
-        "src/easyicu/research_agent/research_context/outbound.py",
-        "src/easyicu/research_agent/schema.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 61107,
-          "was": 61262
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56467,
-          "was": 56622
-        }
-      }
-    },
-    {
-      "reason": "Review 2026-09-17: crea ceiling 15->25 widens the bound concept dictionary; new 20260917 E1 submission profiles re-lock to it. Review 2026-09-17 uncommitted working-tree fixes (SICdb death clock, novelty/publication chain, Copilot turn authority, usage bindings, frontend ownership splits) are separate source changes not covered by this resource measurement.",
-      "source_digest_changes": [
-        "src/easyicu/data/concept-dict.json"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "P0/P1/P2 fix program 2026-09-17: re-measured after reviewed fixes (replaces not-covered disclaimer)",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/cohort_contract.py",
-        "src/easyicu/research_agent/schema.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Bind corrected know-how card aliases and review-packet digests from the 2026-09-17 audit closure.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/schema.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "restock wave: shap/xgboost/lightgbm/torch importable and 8 new curated kernels enter Coder selection (M2 now selects lasso_selection+shap_attribution); prompt_bytes within existing limits",
-      "source_digest_changes": [],
-      "summary_changes": {}
-    },
-    {
-      "reason": "R-roundup: msm/gformula/rcs kernels enter Coder selection; PSM vectorised byte-identical so its bundle bytes unchanged",
-      "source_digest_changes": [],
-      "summary_changes": {}
-    },
-    {
-      "reason": "R-roundup follow-ups: msm/gformula/rcs kernels + r_runtime rails enter selection; DR/gformula/MSM parked unreachable with reason",
-      "source_digest_changes": [],
-      "summary_changes": {}
-    },
-    {
-      "reason": "second restock wave: GAM/Gray/nomogram kernels enter Coder selection (gee+mixed parked); RCS card loaded",
-      "source_digest_changes": [],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Merge current main bcb5032f2 concept dictionary changes into Dev9 expansion; Canonical9 resource selections and prompt-size metrics are unchanged, only concept-dict source digest moves",
-      "source_digest_changes": [
-        "src/easyicu/data/concept-dict.json"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Align source digest with v6 foundation dictionaries merged from main@4f759a0c1",
-      "source_digest_changes": [
-        "src/easyicu/data/concept-dict.json",
-        "src/easyicu/data/sofa2-dict.json"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 61166,
-          "was": 61107
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 56526,
-          "was": 56467
-        }
-      }
-    },
-    {
-      "reason": "Method-family closure 2026-09-22 (family_spec_v1 lane): planning and review owners changed -- figure strategy cluster_selection role and phenotyping coverage-heatmap alias, sealed-suite role projection in study_design, playbook and article-contract formal result scope for the sealed feasibility family, per-figure-output panel ids in schema. Only the H3 planning contract moves (+92 bytes, +23 approx tokens, from the cluster_selection role); all summary maxima are unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/figure_strategy.py",
-        "src/easyicu/research_agent/planning/study_design.py",
-        "src/easyicu/research_agent/planning/study_design_playbook.py",
-        "src/easyicu/research_agent/reporting/article_contract.py",
-        "src/easyicu/research_agent/schema.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Registered-plan re-read (2026-09-25): planning/cohort_contract.py gains cohort_definition_concept_ids so finalization can re-read a plan whose cohort filters a materialized column; Canonical9 resource selections and prompt-size metrics are unchanged, only this source digest moves",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/cohort_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Run-scoped cohort columns (2026-09-25): planning/cohort_contract.py gains sealed_cohort_concept_ids and a scoped cohort digest, and the Planner parses a plan with the run's sealed roster; Canonical9 resource selections and prompt-size metrics are unchanged, only these source digests move",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/agents/planner.py",
-        "src/easyicu/research_agent/planning/cohort_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "r22: the Writer transport encoding (research_context/outbound.py::compact_variable_field_names) lists variables that share every field except their name in one row. Canonical9 resource selection and every measured Planner/Coder prompt and resource byte count are unchanged; only the outbound.py source digest moves.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/research_context/outbound.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "rob1: planning/figure_strategy.py declines to credit a robustness panel whose own grid shows no independent variant (role_evidence_absent); the Canonical9 prompt and context envelope is unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/figure_strategy.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "fixB: planning/analysis_types.py reads whether the question asks how often its exposure occurs (requested_exposure_occurrence_cues, used by the review and the landmark family request); the Canonical9 prompt and context envelope is unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/analysis_types.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "T (frozen trajectory class description): planning/scientific_action_catalog.py states that phenotyping.outcome_by_cluster describes frozen trajectory labels on the run cohort and counts the stays not clustered (+81 bytes in Canonical9 task H3's Planner contract); resource selections and every other task are unchanged.",
-      "source_digest_changes": [],
-      "summary_changes": {}
-    },
-    {
-      "reason": "U (family router bound): planning/analysis_types.py reads whether the research question asks how its variables change over time (longitudinal_trajectory_requested, used by the family router so the cross-sectional phenotyping template never claims a trajectory question); the Canonical9 prompt and context envelope is unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/analysis_types.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "AA (best-of-10 trajectory fit engine): schema.py's TrajectoryStabilitySpec.refit_engine admits the best-of-10 engine, which the host's signed trajectory policy names; a spec naming no engine keeps the single-start default. Only schema.py's source digest changes; the Canonical9 planner/resource envelope is unchanged. Precedent: B, U.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/schema.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "AD (mixed-mode latent class model for declared ordinal trajectory coordinates): schema.py's TrajectoryStabilitySpec.refit_engine admits the mixed-mode best-of-10 engine, which the host's signed trajectory policy names when a coordinate is declared ordinal; a spec naming no engine keeps the single-start default. Only schema.py's source digest changes; the Canonical9 planner/resource envelope is unchanged. Precedent: B, U, AA.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/schema.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "reporting/article_contract.py credits data_quality to a sealed survival suite that declares its own measurement audit; source digest only, no resource or context size change",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/reporting/article_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "planning/figure_strategy.py lets the survival_effect role accept the interval hazard-ratio forest that the signed survival suite draws when its PH test rejects; source digest only, no resource or context size change",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/figure_strategy.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "planning/analysis_types.py gains requested_dose_response_cues (QF): plan review reads the question's dose-response cues. Only that source digest moves; no planner or coder context size changes.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/analysis_types.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "planning/analysis_types.py reads outcome-free discovery wordings (OF-1): the fixed M3 question (\"Discover candidate sepsis subphenotypes from labs and vital signs.\") now infers trajectory_clustering instead of the data_quality_audit fallback, so its planning contract carries that family's guidance: M3 planning contract 5,224 -> 6,797 bytes, Planner prompt 55,410 -> 59,701 bytes without resources and 59,910 -> 64,201 with (limit 120,000). No other task, resource selection or coder context changes; provider-free and patient-data-free.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/analysis_types.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 64201,
-          "was": 61166
-        },
-        "max_planner_without_resources_bytes": {
-          "now": 59701,
-          "was": 56526
-        }
-      }
-    },
-    {
-      "reason": "research_context/outbound.py sends a typed event status's first-present event time (S1): <c>_onset_time joins the companion suffixes and first_truthy_event_time joins the representations sent out. Only that file's source digest moves; every fixed task's planning contract, Planner prompt, resource selection and coder context are unchanged; provider-free and patient-data-free.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/research_context/outbound.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "planning/cohort_contract.py: CohortDefinition carries the population criteria a plan states and no predicate applies (UP); they stay out of the cohort's record and digest and out of the Planner's transport schema. Only that file's source digest moves; every fixed task's planning contract, Planner prompt, resource selection and coder context are unchanged; provider-free and patient-data-free.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/cohort_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "planning/figure_strategy.py: a survival effect may be drawn as a hazard-ratio curve, the per-unit panel of the continuous-exposure landmark survival suite (CS), so H1's planning contract lists that chart type (+20 bytes); reporting/article_contract.py: the continuous suite owns its reader roles and its measurement audit. No resource selection changes.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/figure_strategy.py",
-        "src/easyicu/research_agent/reporting/article_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "resources/coder.py: the Coder's guidance on a windowed cohort-flow row names its event_time_reading and how an absence row was applied, so a replay of the ledger reproduces its counts (DR); source digest only, no measured context size changes.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/resources/coder.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "resources/coder.py: the Coder is told a windowed cohort-flow row's event time lies in [event_time_start_hours, event_time_end_hours), as the host reads it: an hourly event time at the end hour was charted after the window; source digest only, no measured context size changes.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/resources/coder.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "resources/coder.py: the Coder is told a cohort-flow row's n_excluded_missing describes its exclusion and selects no rows; source digest only, no measured context size changes.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/resources/coder.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "planning/cohort_contract.py: the planning contract owns the event-status reading rule (event_status_reading) that the cohort builder and the time-zero rule share; source digest only, no measured context size changes.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/cohort_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "planning/cohort_contract.py: a window's offsets serialize as TimeWindow.to_dict writes them (an unbounded end as \"inf\") and a NaN offset is refused; source digest only, no measured context size changes.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/cohort_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "planning/cohort_contract.py: the comment on unapplied_population_criteria names the second reason a criterion goes unapplied (the input does not record it over the window it states); source digest only, no measured context size changes.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/cohort_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "2026-10-09 architecture close-out item 4: describe_article_contract_family_switch moves from agents/planner.py to agents/article_contract_switch.py, and the agents/core.py facade re-exports it from there; source digests only, resource selections and prompt sizes are unchanged",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/agents/core.py",
-        "src/easyicu/research_agent/agents/planner.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "2026-10-09 causal steps 2+3: reporting/article_contract.py registers the signed target trial suite's article roles; source digests only, resource selections and prompt sizes are unchanged",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/reporting/article_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "ExposureGroupSpec step 2: the capability runtime states whether its review stops a run before any Provider call, so the exposure grouping phase asks nothing then; no resource or context measurement moves.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/resources/capability_runtime.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Prediction validity round, theme 2 of 8 (a prediction splits and folds a patient's stays together): lasso_selection's folds keep a patient's stays together, so its software resource digest moves every coder bundle, and M2's coder prompt grows from 1,909 to 2,026 bytes (lasso and SHAP swap rank). No summary maximum moves.",
-      "source_digest_changes": [],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Prediction validity round, theme 4 of 8 (a prediction is compared with the score its question names): the prediction family contract states the benchmark comparator, so M2's planner context grows by 401 bytes (about 100 tokens). No summary maximum moves.",
-      "source_digest_changes": [],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Reviewed Dev9 aggregate: explicit designs remain authoritative; the minimal E3 fixture without a declared design or recognized family now uses the descriptive fallback instead of data-quality audit. Only its Planner context grows by 2242 bytes; resource selections, Coder prompts, all nine fixtures, maximum envelopes and byte limits remain unchanged. Planner and analysis_types source digests track the integrated host routing fixes. Review: outputs/easyicu_dev9_aggregate_20261015/resource-baseline-review.json; offline engineering evidence only.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/agents/planner.py",
-        "src/easyicu/research_agent/planning/analysis_types.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "P0-3 study-type cue owner: analysis_types.py source digest changed (shared decline/scope/incidental masks, question-only data-quality reading, context basis); Canonical9 family readings, prompt/context sizes and limits unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/analysis_types.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Chinese subtype-discovery cue: analysis_types.py source digest changed (patients clustered into or split into subtypes read as discovery); context envelope unchanged",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/analysis_types.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Table 1 reads a dictionary factor as a category (pilot1 round 2 A4)",
-      "source_digest_changes": [],
-      "summary_changes": {}
-    },
-    {
-      "reason": "The baseline association family omits the generic robustness display while typed sensitivity requirements retain their existing review gate; refresh the article-contract source digest.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/reporting/article_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Bind the Planner provider-clearance guard and shared outbound small-cell projector after the credentialed-data egress policy merge. Only these two source digests change; all nine fixture payloads, prompt byte summaries, selections, limits and zero provider/data-read counts remain unchanged. Preserve the existing baseline history from 1bd6d3767.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/agents/planner.py",
-        "src/easyicu/research_agent/research_context/outbound.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Credit closed step-scoped auxiliary cohort summaries as baseline content; refresh only the article-contract source digest, preserving all resource selections and prompt byte budgets.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/reporting/article_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "declined-mortality-setting reading in research_context builder",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/analysis_types.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Verify ported population contracts and share dense-status lineage semantics; refresh import and resource provenance after scoped review fixes.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/reporting/article_contract.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Verify ported population contracts and share dense-status lineage semantics; refresh import and resource provenance after scoped review fixes.",
-      "source_digest_changes": [],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Bind the tier-aware study-design source identity; article prompt and resource measurements are unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/study_design.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Bind live planner response identities on the host and remove redundant digest/version echoes from transport. Refresh exact source and schema identities; all measured sizes are unchanged or smaller, with no raised budget, provider call, or patient-data read.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/agents/planner.py"
-      ],
-      "summary_changes": {
-        "max_planner_with_resources_bytes": {
-          "now": 64109,
-          "was": 64201
+          "now": 59737,
+          "was": null
         },
         "max_resource_added_bytes": {
           "now": 4565,
-          "was": 4657
+          "was": null
+        },
+        "selected_resource_count": {
+          "now": 7,
+          "was": null
+        },
+        "task_count": {
+          "now": 9,
+          "was": null
         }
       }
-    },
-    {
-      "reason": "Record descriptive family review applicability: only the study_design_playbook.py source identity changes; all task measurements, budgets and summary metrics remain unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/planning/study_design_playbook.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Record the Planner source identity for repairable scientific authority feedback on 790cbf09d; preserve the descriptive-review history, all task measurements, budgets, and summary metrics.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/agents/planner.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "Refresh only the outbound.py source identity after projecting bound family adjustment rosters; all offline task measurements, summary sizes, and budgets remain unchanged.",
-      "source_digest_changes": [
-        "src/easyicu/research_agent/research_context/outbound.py"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "User-approved cal1b MIMIC-IV ICU-admission age reseal; only the concept-dict source digest changes, with no budget growth.",
-      "source_digest_changes": [
-        "src/easyicu/data/concept-dict.json"
-      ],
-      "summary_changes": {}
-    },
-    {
-      "reason": "cal1b: user-approved MIMIC-IV age-at-admission dictionary reseal",
-      "source_digest_changes": [],
-      "summary_changes": {}
     }
   ],
-  "baseline_reason": "cal1b: user-approved MIMIC-IV age-at-admission dictionary reseal",
+  "baseline_reason": "mg1: declared competing risks, log-rank and modified-Poisson RR",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -911,8 +162,8 @@
   "summary": {
     "coder_resource_provider_calls": 0,
     "max_coder_resource_prompt_bytes": 2255,
-    "max_planner_with_resources_bytes": 64109,
-    "max_planner_without_resources_bytes": 59701,
+    "max_planner_with_resources_bytes": 64145,
+    "max_planner_without_resources_bytes": 59737,
     "max_resource_added_bytes": 4565,
     "selected_resource_count": 7,
     "task_count": 9
@@ -931,7 +182,7 @@
   "tasks": [
     {
       "coder_resources": {
-        "bundle_sha256": "db17d96f3891e529fc8fc93feb6621655cdbf3f69042ed655883c0f9faa6750b",
+        "bundle_sha256": "9f032527b6fe04ae46a70e92fe210c11f87eb8b4c57d7ffee9637363fe7277d3",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 369,
         "prompt_limit_bytes": 8000,
@@ -951,9 +202,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "0dcc51c642bf00e696d5a74b84369911cecf4b489e9a4e5d02cb4c62f709441f",
-          "c14e7956262d507b36f886f9db9aab0c2ad19c0cae656ce2603b99614e0314b7",
-          "21a402a4aed7d577c6b8b9487f115816e3bcff8e6c353b8494204170c9ca7e5d"
+          "fece8ee5e852bc6af2d7209cf3fa0d976cb1a2eb3dfa6eac4eb6ad004a13f883",
+          "a8303ff3af3b366227ac73b6acaabdd67a8ed724c09dce5942e3de4ecefa2ad1",
+          "54b4ac737dc22697d9a965f23b18d40dd60c23793bb376edce4b8a3d4bf88bed"
         ]
       },
       "fixture_concepts": [
@@ -965,15 +216,15 @@
       "know_how_prompt_bytes": 4029,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14658,
+        "approx_input_tokens": 14667,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 45620,
+            "bytes": 45656,
             "included": true,
             "required": true,
-            "sha256": "fdf8bfebb0c6aec8a72850282e3f2ef09ba0ad37b28476dbf980b9e14bd4fb18"
+            "sha256": "d06d2519405120908e19e1a137a77a30550cec1b69e3498d261e0126ba659e02"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -984,27 +235,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 58629,
+        "total_bytes": 58665,
         "truncated_strings": false,
-        "user_bytes": 50185
+        "user_bytes": 50221
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13516,
+        "approx_input_tokens": 13525,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 45620,
+            "bytes": 45656,
             "included": true,
             "required": true,
-            "sha256": "fdf8bfebb0c6aec8a72850282e3f2ef09ba0ad37b28476dbf980b9e14bd4fb18"
+            "sha256": "d06d2519405120908e19e1a137a77a30550cec1b69e3498d261e0126ba659e02"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 54064,
+        "total_bytes": 54100,
         "truncated_strings": false,
-        "user_bytes": 45620
+        "user_bytes": 45656
       },
       "planning_contract_bytes": 6128,
       "planning_contract_sha256": "703681b904a34c690aacf7f56dedb766cf1d8f311dabbc8988ef54d93dfb9d4f",
@@ -1027,7 +278,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "85c8cd02d7df2012692839fe910c40f34fa01f7d96be3eb30e167c7876036ba4",
+        "bundle_sha256": "d11af7bef7c99069b0947f514d8f031c24a510fd61e5b11ef08da6008dbe93bb",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1138,
         "prompt_limit_bytes": 8000,
@@ -1065,9 +316,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "d14436b7d621dce63ec56d26dcce3b3610fd00c83d4153b550977eed9d0d3d8e",
-          "fee4379d060c38bab673a15708b52717dfa8b4afc8aa517e7d534ccac86ce2c9",
-          "918b8eef7b789617485b0b87baa7a10ec4e93c35f16e2b1bcfa3e547045ce087"
+          "18bca7c67119913159e2fdf1be4d2fbd10102106c643c7e04d8c3fb296ecd1e9",
+          "cfeaebe116147f044967aa571610e3f1b200ebb85e42f698f329cd707735bda7",
+          "7c8484b94f429bfd964d5296982d89933af3e38e4b62fd840f63b6b6629e00eb"
         ]
       },
       "fixture_concepts": [
@@ -1079,15 +330,15 @@
       "know_how_prompt_bytes": 3791,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15022,
+        "approx_input_tokens": 15036,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47315,
+            "bytes": 47373,
             "included": true,
             "required": true,
-            "sha256": "3bc9ee9326b626dcb947df20317699dc01bb34d49fbe9043c3325fc80e955dc1"
+            "sha256": "99542a4958048fabe9b46a74987f51480fc0b76ec3d51b3a31765d72c736c974"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1098,27 +349,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60086,
+        "total_bytes": 60144,
         "truncated_strings": false,
-        "user_bytes": 51642
+        "user_bytes": 51700
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13940,
+        "approx_input_tokens": 13955,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47315,
+            "bytes": 47373,
             "included": true,
             "required": true,
-            "sha256": "3bc9ee9326b626dcb947df20317699dc01bb34d49fbe9043c3325fc80e955dc1"
+            "sha256": "99542a4958048fabe9b46a74987f51480fc0b76ec3d51b3a31765d72c736c974"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 55759,
+        "total_bytes": 55817,
         "truncated_strings": false,
-        "user_bytes": 47315
+        "user_bytes": 47373
       },
       "planning_contract_bytes": 7541,
       "planning_contract_sha256": "50e21b7661aafd128d44ec79f5ee5b0828e92a427a3c6c505273ad900529caa3",
@@ -1141,7 +392,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "cdf29abb1e0fb1c6f4d47daf3947c47f2204ac572eb9ee836cc3eb3388637118",
+        "bundle_sha256": "092aa4f81b2017fc1f107aa42ef707fd66bb79a533a28cd8f2eb61daaf2eb4ab",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1138,
         "prompt_limit_bytes": 8000,
@@ -1179,9 +430,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "8dc57fec93d748c6aa8fb43d5679567e0a54f409492a426812b509d650961608",
-          "3558a4e8af15615d242c0abdec67d4e4874063e6d0cf09d2e26f5702d45b2572",
-          "4e9b27fef78f86d6df87aae5e0efec67785118e2c99e334a57fb416d2f5effc2"
+          "b15e4b8062c101a899b6f9842b10c2e0a3ea2c3b5a29a4de63c6ffd3b7fd3745",
+          "0134c7b758fa614cfc838f01c29c79e478c01ac25029bfbc48bc5f1bc78f78b8",
+          "03cf04ae37d2165dff633db4b6b6eccf610e0447d14bad2866f55c92e43a5513"
         ]
       },
       "fixture_concepts": [
@@ -1194,39 +445,39 @@
       "know_how_prompt_bytes": 0,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13456,
+        "approx_input_tokens": 13465,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 45379,
+            "bytes": 45415,
             "included": true,
             "required": true,
-            "sha256": "ccec768fc9118d37c9251137df90285e19cee949d25bd252455654b76925be65"
+            "sha256": "a3e514d0be72538901e3e586887905284fcf775ad0497a907fdea51a0724a31a"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 53823,
+        "total_bytes": 53859,
         "truncated_strings": false,
-        "user_bytes": 45379
+        "user_bytes": 45415
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13456,
+        "approx_input_tokens": 13465,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 45379,
+            "bytes": 45415,
             "included": true,
             "required": true,
-            "sha256": "ccec768fc9118d37c9251137df90285e19cee949d25bd252455654b76925be65"
+            "sha256": "a3e514d0be72538901e3e586887905284fcf775ad0497a907fdea51a0724a31a"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 53823,
+        "total_bytes": 53859,
         "truncated_strings": false,
-        "user_bytes": 45379
+        "user_bytes": 45415
       },
       "planning_contract_bytes": 5784,
       "planning_contract_sha256": "9ec94c6b086f85e8708e27dfb0e64c1720dc0b6edbeb2df65752f710c7795862",
@@ -1241,7 +492,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "d5da3c3916c16f18d2a07749566a547ffcb36c2f7af6238b1469ce39c5cb3c46",
+        "bundle_sha256": "7d2537343105270f19b37fdfdff44b08fcff451177ff0a26af7091f1e2708081",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1138,
         "prompt_limit_bytes": 8000,
@@ -1279,9 +530,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "482c99f118c73f312118cbc217dc006187e9d5f7dd7961cebeab5abf44bc69b7",
-          "c3b17c169b633151ce49e24cd7c18251babcb6c1e02ddb09e9d15c50b866f1e4",
-          "6c24f44361186885700109dea3aada10de43eb19e2fb66621108e83f82433162"
+          "9f671cf313bd3f9f8effa173701baf0ec0f184be1171659e41aa1dcd74bf73b8",
+          "21d52fd6e005ded319dbdaa0e0e2337a270e9faf96e527d6cd0ce03b23c24ebd",
+          "9c4373b485f84d35ae24445598ad789ffda1867663ea9f0c92329447f59d44aa"
         ]
       },
       "fixture_concepts": [
@@ -1294,39 +545,39 @@
       "know_how_prompt_bytes": 0,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13048,
+        "approx_input_tokens": 13057,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 43746,
+            "bytes": 43782,
             "included": true,
             "required": true,
-            "sha256": "7b40c742dcc0a826d0500c0ed1730afdfd60ffe38abdc366a09d4bdfbec76b6e"
+            "sha256": "64c407d67d483be8ff4c24b2bcd65224bf5e615f2720d9159139689150d157c5"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 52190,
+        "total_bytes": 52226,
         "truncated_strings": false,
-        "user_bytes": 43746
+        "user_bytes": 43782
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13048,
+        "approx_input_tokens": 13057,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 43746,
+            "bytes": 43782,
             "included": true,
             "required": true,
-            "sha256": "7b40c742dcc0a826d0500c0ed1730afdfd60ffe38abdc366a09d4bdfbec76b6e"
+            "sha256": "64c407d67d483be8ff4c24b2bcd65224bf5e615f2720d9159139689150d157c5"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 52190,
+        "total_bytes": 52226,
         "truncated_strings": false,
-        "user_bytes": 43746
+        "user_bytes": 43782
       },
       "planning_contract_bytes": 5559,
       "planning_contract_sha256": "7787cb4516d89155e10167ef38a1fe6a75c18f2cab1dd33029a381712f6093de",
@@ -1341,7 +592,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "f2158cad4e57be03e835d7dad003eeb5688542037b4e9b422cfa4f8729044f32",
+        "bundle_sha256": "ce66e6adc09333b083d745312fb4a1821d8b69e47ee4972b10c49066fcf96056",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 2026,
         "prompt_limit_bytes": 8000,
@@ -1379,9 +630,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "29652826ec0ebfb627b12c32cf36b6874cb97814e2f4cff620949c5c1134d12c",
-          "983039c37b01d82f70111e079964e2b75e3d79b661aa7456b5d4899dbe5763cc",
-          "6f7fa0ceb2bd080548ea26fb4d2d5e758e585302486c7d20f1afbdc8f40068c5"
+          "c5d8095ee1b68f1824886750c86dcb84270ffafbd26f653c123d1736d942149c",
+          "ee3872cf2420bafc00238a3dca1d33bd56a7828cbb11237edd1d163c410ac1c8",
+          "6105e972b7e677375a9213f9d9ebed6f063120de5fb73f4aa01166faf774365c"
         ]
       },
       "fixture_concepts": [
@@ -1394,15 +645,15 @@
       "know_how_prompt_bytes": 4012,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15369,
+        "approx_input_tokens": 15378,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 48483,
+            "bytes": 48519,
             "included": true,
             "required": true,
-            "sha256": "5d49bcb5ac2050f1923b96d779098b709b40415aa3e4eb86067eb4629e4db4d7"
+            "sha256": "a74d6378dc9b8eb67277899c494a870e42e8d40eee8ce0432331a18f4e5be22c"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1413,27 +664,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 61475,
+        "total_bytes": 61511,
         "truncated_strings": false,
-        "user_bytes": 53031
+        "user_bytes": 53067
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14232,
+        "approx_input_tokens": 14241,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 48483,
+            "bytes": 48519,
             "included": true,
             "required": true,
-            "sha256": "5d49bcb5ac2050f1923b96d779098b709b40415aa3e4eb86067eb4629e4db4d7"
+            "sha256": "a74d6378dc9b8eb67277899c494a870e42e8d40eee8ce0432331a18f4e5be22c"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 56927,
+        "total_bytes": 56963,
         "truncated_strings": false,
-        "user_bytes": 48483
+        "user_bytes": 48519
       },
       "planning_contract_bytes": 7361,
       "planning_contract_sha256": "bfe258634fb7add9efb0ddfc113cde254a7772148b59c47af0f3f0182c0cc8bc",
@@ -1456,7 +707,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "f1ea7d8ae8958ce5c6e9349d7ab915c5787113f1bec82892375dfdb66dd42469",
+        "bundle_sha256": "6df2941bc73178f3ec373a4a0e6fe7455604c7b7e302eef5eed664b802cfddc9",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1280,
         "prompt_limit_bytes": 8000,
@@ -1488,9 +739,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "279ac4d2ba8b683a533245b2d46f4fe181c92d28bb238b12ec8cf5d67f4b22e3",
-          "19d23d7e62fe752e64f31abc22cad1c50e88ebdc42be3dc742b85999ddc0ca13",
-          "ba8ed69cecd4b9d7ca35fa263ec62a49154779ee5dc2a2a134a5c1053d48b167"
+          "73a387a2c514d6c2de93e58b51dc72b1c2e144a5328831fcbcf23c9ac929a61c",
+          "79d90d160287ae0c6d3c0beb863965137df9f39576cba349a67fc03a3806f04e",
+          "fbb546a70041a0b77ea5bedc2b7cd4363f1374b8d19f9e07c18d9a8c65faf353"
         ]
       },
       "fixture_concepts": [
@@ -1503,15 +754,15 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 16028,
+        "approx_input_tokens": 16037,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 51257,
+            "bytes": 51293,
             "included": true,
             "required": true,
-            "sha256": "770ffc7fc360779baeac3d0007d8eef2627f67e1e2056927d3d81d6bf250bc71"
+            "sha256": "25832506bebebe031dc47d04abecf0a6e6df77853c4f4106cfffe2c9120f04ff"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1522,27 +773,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 64109,
+        "total_bytes": 64145,
         "truncated_strings": false,
-        "user_bytes": 55665
+        "user_bytes": 55701
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14926,
+        "approx_input_tokens": 14935,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 51257,
+            "bytes": 51293,
             "included": true,
             "required": true,
-            "sha256": "770ffc7fc360779baeac3d0007d8eef2627f67e1e2056927d3d81d6bf250bc71"
+            "sha256": "25832506bebebe031dc47d04abecf0a6e6df77853c4f4106cfffe2c9120f04ff"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 59701,
+        "total_bytes": 59737,
         "truncated_strings": false,
-        "user_bytes": 51257
+        "user_bytes": 51293
       },
       "planning_contract_bytes": 6797,
       "planning_contract_sha256": "e004ee08cb5fce9b9e1486479caf6db5074f9447cb5585bc479936bd53464d7d",
@@ -1565,7 +816,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "e754c1200da8982c702f438f2f661df2e301d5d207f443ad3f967af9ee65782e",
+        "bundle_sha256": "2400513473b0a55e48a9320686f652e9c8da3ad02e2cd4e5c0443c8afdf77bf6",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 2255,
         "prompt_limit_bytes": 8000,
@@ -1603,9 +854,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "43f5098f3e6a9f1aac340a93fc121ae118820e71db4d2d963cd345cbcef32a0b",
-          "482de80127aeb768135c88fc2b03223423a86e329dcd56294995871105004dca",
-          "32ebd5bfcf67fa6fff869197e88478ca8f99826b952559dc87efe7072991221a"
+          "a668ba5b750c1f8ece812fce4023cb77f120fb3a28dd23df1b94e6bd027d1d25",
+          "e7c037b1a46d6c74e638942370c3a8481e1e848d0deb082cc882379fece74222",
+          "b7b5002053e72ea07d2f6be46782d07a047c78432efa406d12b97bec25d84a27"
         ]
       },
       "fixture_concepts": [
@@ -1617,15 +868,15 @@
       "know_how_prompt_bytes": 4015,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14808,
+        "approx_input_tokens": 14828,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 46236,
+            "bytes": 46317,
             "included": true,
             "required": true,
-            "sha256": "49567c25cbac8a23578e662f26853a108487d777e6aad288c22facfb089fecb6"
+            "sha256": "fd0ca03dac04aa13ab4e3e59c9b949485c8a84f53b7ad0b5376530868e47b75e"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1636,27 +887,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 59231,
+        "total_bytes": 59312,
         "truncated_strings": false,
-        "user_bytes": 50787
+        "user_bytes": 50868
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13670,
+        "approx_input_tokens": 13691,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 46236,
+            "bytes": 46317,
             "included": true,
             "required": true,
-            "sha256": "49567c25cbac8a23578e662f26853a108487d777e6aad288c22facfb089fecb6"
+            "sha256": "fd0ca03dac04aa13ab4e3e59c9b949485c8a84f53b7ad0b5376530868e47b75e"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 54680,
+        "total_bytes": 54761,
         "truncated_strings": false,
-        "user_bytes": 46236
+        "user_bytes": 46317
       },
       "planning_contract_bytes": 6777,
       "planning_contract_sha256": "7426aa9258538c2435537b62ad55d33c38c7c0acffa9624978eddce8b2f6dd06",
@@ -1679,7 +930,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "cbbbb89cf887775821250ce25ef293e0e2186edd1fd19c0f27c3bd6dc7734cc1",
+        "bundle_sha256": "72ced3b9f1d42fcd8e7854bbe14ccc4e2eab80bd4ec8e4802a8440fba4e9159a",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1337,
         "prompt_limit_bytes": 8000,
@@ -1717,9 +968,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "e2dc238860ad591a8e92fcb10fae9c962c98ba481f8d6ed26c394dff05107e8a",
-          "5aa791790197ae791803f7a00b1536f88ec71da38c5be380a8bf51e8bbec34a6",
-          "0e3244aedac847df9104b5f99b062f1a78830552479b65536203383445302b0f"
+          "23df2935ac1e9f400a9d7b561983227badbc1daba290a64e28bcda7c3109b905",
+          "27b4f6eba6ff26cc387565eb976d1630221f6f47ada5fd78d28acbea64f3bc06",
+          "49d2c0339a4388982a61537c03c354264c368c57058c4fb5cffa67da3d99cf85"
         ]
       },
       "fixture_concepts": [
@@ -1732,15 +983,15 @@
       "know_how_prompt_bytes": 3905,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14994,
+        "approx_input_tokens": 15003,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47090,
+            "bytes": 47126,
             "included": true,
             "required": true,
-            "sha256": "52af048bea7afbaac52c1f4f654b08926b00c0c470b257bbb70622e8d9a5e00c"
+            "sha256": "3f61cb6eb2039610c885f4d71227bd605c812eb1f5868ae435826a606d7bb30a"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1751,27 +1002,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 59975,
+        "total_bytes": 60011,
         "truncated_strings": false,
-        "user_bytes": 51531
+        "user_bytes": 51567
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13884,
+        "approx_input_tokens": 13893,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47090,
+            "bytes": 47126,
             "included": true,
             "required": true,
-            "sha256": "52af048bea7afbaac52c1f4f654b08926b00c0c470b257bbb70622e8d9a5e00c"
+            "sha256": "3f61cb6eb2039610c885f4d71227bd605c812eb1f5868ae435826a606d7bb30a"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 55534,
+        "total_bytes": 55570,
         "truncated_strings": false,
-        "user_bytes": 47090
+        "user_bytes": 47126
       },
       "planning_contract_bytes": 7064,
       "planning_contract_sha256": "aafe0c660d3095ecd5bb1da2d748f729f6bb180d98012f6af64edc302a9de199",
@@ -1794,7 +1045,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "42bc41e626a6ed8803ec15d06dfa99a021173e22fc570423c989ac6679e1102c",
+        "bundle_sha256": "33e9b5baf6d4da2727e8b45537a71d62020306e2563d3bf9d29a4a879f98369e",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1280,
         "prompt_limit_bytes": 8000,
@@ -1826,9 +1077,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "7e07fd753c50e33b375196a5f241ce2b049dbd5a3478c685e44dfbdc7de84df2",
-          "6f61c125d00cf770ec06890ce44d76179fe39e5986b0badb6671cb453ce7dc91",
-          "704c2c9736b2ff738f50ef4d79b4d757a36191e8fe43a858a0ac7bf038cb0ed8"
+          "579b9f7f468f52ebcec074db6d9ed1dc76715393747b42014893262c08ef82a5",
+          "bb9683c06310a17272fb1668cb5d08f9c39652bec3dd01eff8f777df2c3e9df6",
+          "70ca975ec921c2ddfc19c0a6b9b055b8e98b03d4215911beebd2a3c0c715c9f1"
         ]
       },
       "fixture_concepts": [
@@ -1839,15 +1090,15 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15093,
+        "approx_input_tokens": 15102,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47518,
+            "bytes": 47554,
             "included": true,
             "required": true,
-            "sha256": "8d92abc079e1eaaeea198b28514fecfbace0568ebc317c94c0630514cfb47ec6"
+            "sha256": "b3fbaa8e0ef2a774f25a7a6c61175f988af29517114e44402248697ee96001d6"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1858,27 +1109,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60370,
+        "total_bytes": 60406,
         "truncated_strings": false,
-        "user_bytes": 51926
+        "user_bytes": 51962
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13991,
+        "approx_input_tokens": 14000,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47518,
+            "bytes": 47554,
             "included": true,
             "required": true,
-            "sha256": "8d92abc079e1eaaeea198b28514fecfbace0568ebc317c94c0630514cfb47ec6"
+            "sha256": "b3fbaa8e0ef2a774f25a7a6c61175f988af29517114e44402248697ee96001d6"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 55962,
+        "total_bytes": 55998,
         "truncated_strings": false,
-        "user_bytes": 47518
+        "user_bytes": 47554
       },
       "planning_contract_bytes": 6791,
       "planning_contract_sha256": "62e1d3ad93ceab51cf7fcb9c872658398efcd2b4de7fe3d55fe660a6d87aaeb2",

@@ -331,15 +331,14 @@ def validate_required_primary_result(
                 }
             except (TypeError, ValueError):
                 integral_levels = set()
-            if (
-                len(levels) != 2
-                or len(integral_levels) != 2
-                or integral_levels != {0, int(requirement.event_value)}
-            ):
+            declared_levels = {0, int(requirement.event_value)}
+            if requirement.competing_event_value is not None:
+                declared_levels.add(requirement.competing_event_value)
+            if len(levels) != len(declared_levels) or integral_levels != declared_levels:
                 raise ValueError(
-                    "The host Cox executor requires a binary EndpointSpec whose "
-                    "closed levels are exactly censor code 0 and "
-                    "family_primary_result_requirement.event_value"
+                    "The host Cox executor requires an EndpointSpec whose closed "
+                    "levels are exactly censor code 0, event_value and the "
+                    "explicit competing_event_value when declared"
                 )
             verdict = survival_execution_verdict(
                 requirement=requirement,

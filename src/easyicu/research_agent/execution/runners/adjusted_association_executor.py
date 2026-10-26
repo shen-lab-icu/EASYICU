@@ -59,6 +59,7 @@ from ...contracts.model_tokens import (
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
     ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
+    ASSOCIATION_RR_ESTIMATOR,
     canonical_association_method,
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
@@ -135,6 +136,7 @@ ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS = (
     "analysis_set",
     "n",
     "n_events",
+    "outcome_proportion",
     "standard_error",
     "variance_estimator",
     "cluster_count",
@@ -215,6 +217,7 @@ _MISSING_CATEGORY_POLICY = "explicit_missing_category"
 _FIT_METHODS = {
     "logistic": ASSOCIATION_LOGIT_ESTIMATOR,
     "linear": ASSOCIATION_OLS_ESTIMATOR,
+    "glm_poisson": ASSOCIATION_RR_ESTIMATOR,
 }
 
 
@@ -240,7 +243,7 @@ def _estimator_kind(requirement: PlannedModelRequirement) -> str:
 
 
 def _effect_scale(kind: str) -> str:
-    return "odds_ratio" if kind == "logistic" else "coefficient"
+    return {"logistic": "odds_ratio", "glm_poisson": "risk_ratio", "linear": "coefficient"}[kind]
 
 
 def adjusted_association_executor_verdict(step: AnalysisStep) -> OwnershipVerdict:
@@ -636,10 +639,7 @@ def run_adjusted_association_from_env(
             typed_cohort_input=typed_cohort_input
         )
     canonical_method = canonical_association_method(method_family)
-    expected_method = {
-        "logistic": ASSOCIATION_LOGIT_ESTIMATOR,
-        "linear": ASSOCIATION_OLS_ESTIMATOR,
-    }.get(estimator_kind)
+    expected_method = _FIT_METHODS.get(estimator_kind)
     if expected_method is None or canonical_method != expected_method:
         raise AdjustedAssociationError(
             f"declared estimator {canonical_method!r} does not exactly dispatch "
@@ -750,7 +750,7 @@ def run_adjusted_association_from_env(
     # the study's primary estimate was computed, was correct, and was thrown
     # away over a count this function had no business deriving.
     n_events = result.n_events
-    if estimator_kind == "logistic" and n_events is None:
+    if estimator_kind in {"logistic", "glm_poisson"} and n_events is None:
         raise AdjustedAssociationError(
             f"declared model {requirement_id!r} fitted a binary outcome without "
             "reporting the events among the rows it used; refusing to report a "
@@ -771,6 +771,7 @@ def run_adjusted_association_from_env(
         "analysis_set": analysis_set,
         "n": int(result.n),
         "n_events": n_events,
+        "outcome_proportion": n_events / result.n if n_events is not None else None,
         "variance_estimator": result.variance_estimator,
         "cluster_count": result.cluster_count,
         "notes": result.notes or "",
@@ -852,7 +853,7 @@ def run_adjusted_association_from_env(
         # Derived from the estimator that actually ran, not copied from the
         # plan: a logistic fit only reaches here after refusing anything but a
         # binary 0/1 outcome, so this reports what was fitted.
-        "outcome_type": "binary" if estimator_kind == "logistic" else "continuous",
+        "outcome_type": "continuous" if estimator_kind == "linear" else "binary",
         # Passed through after exact-token resolution. ``_estimator_kind``
         # already refused every method family except the canonical estimator
         # (or one of its reviewed aliases), so this echo names the fit that ran.
@@ -963,6 +964,18 @@ def run_adjusted_association_from_env(
     if estimator_kind == "logistic":
         summary["primary_or"] = estimate
         summary["primary_or_ci"] = [ci_low, ci_high]
+    if n_events is not None:
+        summary["outcome_proportion"] = n_events / result.n
+        summary["risk_ratio_recommendation"] = {
+            "recommended": n_events / result.n > 0.1,
+            "threshold": 0.1,
+            "outcome_proportion": n_events / result.n,
+            "denominator": "model_complete_cases",
+            "estimator": ASSOCIATION_RR_ESTIMATOR,
+        }
+    if estimator_kind == "glm_poisson":
+        summary["primary_rr"] = estimate
+        summary["primary_rr_ci"] = [ci_low, ci_high]
     if not emit_step_summary:
         return summary
     (out_dir / "step_summary.json").write_text(

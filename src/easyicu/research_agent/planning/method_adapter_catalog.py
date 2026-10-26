@@ -213,10 +213,13 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
             "one digest-bound typed cohort",
             "exact time origin, unit, event and censoring contract",
             "one Cox model requirement and proportional-hazards policy",
+            "competing events require explicit code/definition and cause_specific_and_subdistribution",
         ),
         validation_test_refs=(
             "tests/research_agent/core/test_survival_primary_executor.py::test_primary_survival_contract_selects_a_fully_sealed_host_executor",
             "tests/research_agent/core/test_survival_primary_executor.py::test_primary_survival_plan_cannot_fall_back_to_coder_without_bound_input",
+            "tests/research_agent/core/test_survival_method_extensions.py::test_logrank_is_computed_on_the_cox_complete_cases_and_horizon",
+            "tests/research_agent/core/test_survival_method_extensions.py::test_declared_competition_is_owned_and_matches_existing_kernels",
         ),
         typed_subcontracts=(
             "time_to_event.km_logrank",
