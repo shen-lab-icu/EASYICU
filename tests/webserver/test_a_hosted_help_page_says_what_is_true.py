@@ -111,8 +111,8 @@ def test_the_local_page_keeps_desktop_guidance_and_entry_points() -> None:
     assert "第一次打开研究对话时，选择一个模型服务" in body
     assert "从 PhysioNet 下载官方 eICU Demo（130.6 MB）" in body
     assert 'data-help-question="在 eICU demo 中，不同 ICU 类型的患者，ICU 住院时长有什么差别？"' in body
-    # Credentialed data needs the model connection's declaration first.
-    assert "在模型连接的「需授权的数据」里声明：模型在本机运行，或服务不保留数据" in body
+    # Credentialed data needs the model's declaration, asked when first used.
+    assert "研究第一次用到这些数据时，EasyICU 会问你：模型是否在本机运行，或服务是否不保留数据" in body
     assert "eICU：描述、关联和预测研究" in body
     # The hosted page's server and administrator claims are not made here.
     for hosted_claim in ("医院服务器", "管理员"):

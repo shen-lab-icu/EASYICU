@@ -12,7 +12,7 @@
   function optionLabel(value, tr) {
     if (value === 'on_device') return tr('The model runs on this computer', '模型在本机运行');
     if (value === 'zero_retention_declared') return tr('The service keeps no data', '服务不保留数据');
-    return tr('Not declared', '未声明');
+    return tr('Neither', '都不是');
   }
 
   // The radio the page shows: an unsaved choice first, then the record.
@@ -66,10 +66,10 @@
           <label class="gpi-declaration-option"><input type="radio" name="declaration" value="${value}" ${value === shown ? 'checked' : ''} ${locked || busy ? 'disabled' : ''}><span>${esc(optionLabel(value, tr))}</span></label>`).join('');
     return `
       <form class="gpi-provider-section gpi-declaration" data-gpi-declaration-form aria-labelledby="gpi-declaration-title">
-        <div class="gpi-provider-heading"><h3 id="gpi-declaration-title">${tr('Credentialed data', '需授权的数据')}</h3></div>
+        <div class="gpi-provider-heading"><h3 id="gpi-declaration-title">${tr('Can this model handle MIMIC-IV or eICU data?', '这个模型能处理 MIMIC-IV、eICU 数据吗？')}</h3></div>
         <p class="gpi-declaration-notice">${tr(
-          'For credentialed databases such as MIMIC-IV and eICU, EasyICU uses a model only if it runs on this computer or its service keeps no data, as the PhysioNet data use agreement requires. Choose an option only after confirming it in the service’s terms.',
-          '对于 MIMIC-IV、eICU 等需授权的数据库，只有当模型在本机运行、或其服务不保留数据时，EasyICU 才会使用它，这是 PhysioNet 数据使用协议的要求。请先在服务条款中确认，再作选择。',
+          'PhysioNet allows only a model on this computer or a service that keeps no data.',
+          'PhysioNet 只允许本机运行或不保留数据的模型。',
         )}</p>
         <fieldset class="gpi-declaration-options" aria-labelledby="gpi-declaration-title" ${locked ? 'disabled' : ''}>${radios}
         </fieldset>

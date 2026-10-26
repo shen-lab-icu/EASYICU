@@ -1,5 +1,8 @@
 """The connection form names the saved model only on the saved connection.
 
+A stopped run's "choose how the model handles data" opens the API connection
+page with the credentialed-data question first.
+
 With a verified DeepSeek connection saved, the form on DeepSeek shows its
 model and offers to reuse its credential. Switched to another service, it does
 neither: that model and key belong to DeepSeek. Runtime readiness codes are
@@ -57,3 +60,33 @@ def test_the_saved_model_and_credential_stay_with_their_connection() -> None:
 
     assert out["saved"] == {"model": True, "reuse": True, "blockers": False}
     assert out["other"] == {"model": False, "reuse": False, "blockers": False}
+
+
+_ASK = r"""
+global.window = { EU_LANG: 'zh' };
+require(process.argv[1]);
+require(process.argv[2]);
+const state = { researchProvider: 'codex', showSetup: false, error: 'old', host: { querySelector: () => null } };
+let renders = 0;
+const control = window.EasyICU.guidedPi.require('providerControl').create({
+  state, api: () => ({}), tr: (en, zh) => zh, render: () => { renders += 1; },
+  runtimeReady: () => true, shellReady: () => true, connectionConfigured: () => true,
+  connectionReady: () => true, errorText: e => String(e),
+});
+const handled = control.handleClick({ target: { closest: sel => (sel === '[data-gpi-stop-declare]' ? {} : null) } });
+process.stdout.write(JSON.stringify({ handled, renders, state: { asked: state.declarationAsked, provider: state.researchProvider, setup: state.showSetup, error: state.error } }));
+"""
+
+
+@pytest.mark.requires_node
+@pytest.mark.usefixtures("_load_guided_pi_module_harness")
+def test_a_stopped_run_asks_the_declaration_on_the_connection_page() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    js = STATIC / "js"
+    out = json.loads(run_node(
+        node, _ASK, str(js / "screens-guided-pi-provider.js"), str(js / "screens-guided-pi-provider-control.js"), check=True,
+    ).stdout)
+
+    assert out == {"handled": True, "renders": 1, "state": {"asked": True, "provider": "api", "setup": True, "error": ""}}

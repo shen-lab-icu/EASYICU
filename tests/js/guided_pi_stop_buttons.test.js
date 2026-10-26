@@ -72,6 +72,12 @@ for (language of ['zh', 'en']) {
   'the workflow authority wins over a stale local latest-run pointer');
   const data = { ...run, next_actions: [action('reexport_data', 'data_extraction', { requires_explicit_choice: true })] };
   assert.ok(owner.render({ savedRuns: [data] }).includes('href="#extraction"'));
+  // A model not cleared for credentialed data: the stop asks the question on
+  // the connection page instead of sending the researcher to general settings.
+  const declare = owner.render({ savedRuns: [{ ...run, next_actions: [action('open_provider_settings', 'provider_settings')] }] });
+  assert.ok(declare.includes('data-gpi-stop-declare'));
+  assert.ok(declare.includes(tr('Choose how the model handles data', '选择模型的数据处理方式')));
+  assert.ok(!declare.includes('href="#settings"'));
   const forged = { ...run, next_actions: [{ ...edit, params: { ...edit.params, route: 'retry' } }] };
   assert.ok(!owner.render({ savedRuns: [forged] }).includes('data-gpi-stop-action'));
   const unknown = { ...run, next_actions: [action('imagined_action', 'retry')] };

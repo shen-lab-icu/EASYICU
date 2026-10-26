@@ -55,7 +55,7 @@ for (const language of ['en', 'zh']) {
   assert.equal((html.match(/name="declaration"/g) || []).length, 3);
   assert.equal(checked(html), 'unspecified');
   assert.match(html, /gpi-declaration-save" type="submit" disabled/);
-  assert.ok(html.includes(tr('For credentialed databases such as MIMIC-IV and eICU', '对于 MIMIC-IV、eICU 等需授权的数据库')));
+  assert.ok(html.includes(tr('Can this model handle MIMIC-IV or eICU data?', '这个模型能处理 MIMIC-IV、eICU 数据吗？')));
 
   // A changed choice can be saved.
   html = render({ declaration: record(), declarationChoice: 'zero_retention_declared' });
@@ -80,14 +80,18 @@ for (const language of ['en', 'zh']) {
   assert.ok(render({ declaration: recorded }, { connection_verified: false }).includes(verifyNote));
   assert.equal(render({ declaration: recorded }, { connection_verified: true }).includes(verifyNote), false);
 
-  // The connection page shows the section only for an API connection.
-  const pageOptions = researchProvider => ({
-    state: { researchProvider, declaration: record() }, tr, esc, config: {}, runtime: {}, runtimeMissing: [],
+  // The connection page asks only when a stopped run sent the researcher
+  // there, only for an API connection, and then the question leads the page.
+  const pageOptions = (researchProvider, declarationAsked) => ({
+    state: { researchProvider, declaration: record(), declarationAsked }, tr, esc, config: {}, runtime: {},
     option: (value, selected, label) => `<option value="${value}">${label}</option>`,
     providerPreset: () => 'cliproxyapi',
   });
-  assert.ok(owners.provider.renderConnectionBody(pageOptions('api')).includes('data-gpi-declaration-form'));
-  assert.equal(owners.provider.renderConnectionBody(pageOptions('codex')).includes('data-gpi-declaration-form'), false);
+  assert.equal(owners.provider.renderConnectionBody(pageOptions('api', false)).includes('data-gpi-declaration-form'), false);
+  const asked = owners.provider.renderConnectionBody(pageOptions('api', true));
+  assert.ok(asked.includes('data-gpi-declaration-form'));
+  assert.ok(asked.indexOf('data-gpi-declaration-form') < asked.indexOf('data-gpi-provider-form'));
+  assert.equal(owners.provider.renderConnectionBody(pageOptions('codex', true)).includes('data-gpi-declaration-form'), false);
 
   // Every refusal code has its own sentence in both languages.
   const errors = owners.errorText.create({ tr, staticPreview: () => false });

@@ -189,7 +189,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/screens-extraction.js?v=20261023-demo-identity1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261023-stop-attribution1" in index_html
-    assert "js/screens-help.js?v=20261025-local-start1" in index_html
+    assert "js/screens-help.js?v=20261026-ask-on-use1" in index_html
 
 
 def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
@@ -337,7 +337,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert "How a study moves through EasyICU</h2>" not in help_js
 
     assert "js/app.js?v=20261022-help1" in index_html
-    assert "js/screens-help.js?v=20261025-local-start1" in index_html
+    assert "js/screens-help.js?v=20261026-ask-on-use1" in index_html
 
 
 def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
@@ -921,7 +921,7 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     assert provider_pos != -1 and control_pos != -1 and main_pos != -1
     assert provider_pos < control_pos < main_pos
     assert (
-        "js/screens-guided-pi-provider.js?v=20261026-plain-connect1"
+        "js/screens-guided-pi-provider.js?v=20261026-ask-on-use1"
         in index_html
     )
 
