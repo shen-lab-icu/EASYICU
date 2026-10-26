@@ -1493,6 +1493,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderSessions();
       return true;
     },
+    // Repaints the project rail (its rows carry attention marks).
+    refreshProjects() { renderSessions(); },
     snapshot() {
     const guidedExtract = EXTRACT.state();
     const guidedDesign = EXTRACT.design();

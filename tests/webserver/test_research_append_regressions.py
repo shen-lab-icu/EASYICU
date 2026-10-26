@@ -8,6 +8,7 @@ from tests.support.result_append import completed_source
 from easyicu.webserver import agent_pipeline_runs, agent_runs, study_contexts
 from easyicu.webserver.research_append_run import approve_append_run, propose_append_run
 from easyicu.webserver.research_append_source import read_json, seal_completed_source
+from easyicu.webserver.pi_copilot.replay_store import PiConversationReplayStore
 
 
 def source_at(tmp_path, *, study=None):
@@ -38,6 +39,7 @@ def test_result_click_keeps_the_conversation_bound_to_the_review_it_created(tmp_
     study = {'id': 'study', 'revision': 0}
     record = SimpleNamespace(project_id='project', agent_mode='other', binding=AuthorityBinding(study_context_id='study', study_revision=0, run_id='source'))
     service = object.__new__(PiCopilotService)
+    service.replay_store = PiConversationReplayStore(tmp_path / "replay")
     service.project_store = SimpleNamespace(assert_matches=lambda *args: 'study')
     monkeypatch.setattr(service, '_scoped_record', lambda *args, **kwargs: record)
     saved = []
@@ -58,6 +60,15 @@ def test_result_click_keeps_the_conversation_bound_to_the_review_it_created(tmp_
     stale = service._binding_stale_details(record.binding, project_id='project')
     assert stale['stale'] is False, (response, stale)
     assert saved[-1]['run_id'] == response['run_id']
+    item, = service.replay_store.attention.page(client_id="browser-1")["items"]
+    assert (item["run_id"], item["kind"], item["reason_code"]) == (
+        response["run_id"], "needs_review", "human_plan_review_required",
+    )
+    service.replay_store.attention.acknowledge(client_id="browser-1", sequences=[item["sequence"]])
+    repeated = propose_for_conversation(service, session_id='conversation', project_id='project', run_id='source',
+                                        kind='subgroup', expected_source_sha256=source.digest)
+    assert repeated == response
+    assert service.replay_store.attention.page(client_id="browser-1")["items"] == []
 
 
 def test_completed_addition_merges_source_and_new_results_without_writing_the_source(finished):
@@ -163,6 +174,7 @@ def test_next_addition_preserves_both_earlier_runs(finished, monkeypatch, kind):
     before = {str(p): p.read_bytes() for root in (source.wrapper, prior.wrapper)
               for p in root.rglob('*') if p.is_file()}
     service = SimpleNamespace(_research_run_row=lambda *args: {'project_dir': str(prior.wrapper), 'study_id': 'study'},
+                              replay_store=PiConversationReplayStore(source.wrapper.parent / "replay"),
                               host_action_session=lambda *args, **kw: None, rebind_session=lambda *args, **kw: None)
     monkeypatch.setattr(study_contexts, 'get_context', lambda _: {'id': 'study'})
     offered = append_options(service, project_id='project', run_id=prior.checkpoint.run_id)

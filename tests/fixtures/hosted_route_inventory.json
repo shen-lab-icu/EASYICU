@@ -244,6 +244,26 @@
   },
   {
     "method": "GET",
+    "route": "/api/attention",
+    "fields": ["query:client_id", "query:after", "query:limit"],
+    "reaches": "attention_service.attention_for_service -> AttentionStore page for this client under the instance home; reconciles bounded session/replay metadata and terminal bound jobs",
+    "protection": "hosted.guard_request + require_instance_path on the feed store; client_id is a bounded opaque token, never a user or path; items carry ids and codes only",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "AttentionStore journal and reconciliation under the server-owned instance home; reads never acknowledge."
+  },
+  {
+    "method": "POST",
+    "route": "/api/attention/ack",
+    "fields": ["body:client_id", "body:sequences"],
+    "reaches": "attention_service.attention_for_service -> AttentionStore.acknowledge (exact, idempotent, atomic)",
+    "protection": "hosted.guard_request + require_instance_path on the feed store; 1-100 known sequences for this client or the whole request is refused",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "AttentionStore acknowledgements for this client under the server-owned instance home."
+  },
+  {
+    "method": "GET",
     "route": "/api/capabilities",
     "fields": [],
     "reaches": "fixed capability probes including administrator-enabled localhost Zotero API",

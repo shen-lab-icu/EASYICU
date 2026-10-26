@@ -45,6 +45,7 @@ from easyicu.webserver.agent_review_recovery import (
 )
 from easyicu.webserver.routes.agent import artifact_router as agent_artifact_router
 from easyicu.webserver.routes.agent import control_router as agent_control_router
+from easyicu.webserver.routes.attention import router as attention_router
 from easyicu.webserver.routes.copilot import router as copilot_router
 from easyicu.webserver.routes.demo_sources import (
     catalog_router as demo_source_catalog_router,
@@ -318,6 +319,7 @@ async def native_ui_security_headers(request: Request, call_next):
 # Registration order is a compatibility contract; keep the root static mount last.
 app.include_router(system_router)
 app.include_router(search_router)
+app.include_router(attention_router)
 app.include_router(extensions_router)
 app.include_router(local_data_router)
 app.include_router(reviews_router)

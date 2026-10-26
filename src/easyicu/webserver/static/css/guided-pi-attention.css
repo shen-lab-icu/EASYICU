@@ -1,0 +1,7 @@
+/* Owner: js/screens-guided-pi-attention.js — attention marks on project and conversation rows. */
+.gpi-attention-mark{display:inline-block;flex:none;align-self:start;width:8px;height:8px;margin:6px 6px 0 0;border-radius:50%;background:var(--ink-4)}
+.gpi-attention-mark.is-needs_review{background:var(--warn)}
+.gpi-attention-mark.is-failed{background:var(--bad)}
+.gpi-attention-mark.is-completed{background:var(--ok)}
+.gpi-attention-mark.is-cancelled{background:var(--ink-4)}
+.gd-sess .gpi-attention-mark{margin-top:5px}

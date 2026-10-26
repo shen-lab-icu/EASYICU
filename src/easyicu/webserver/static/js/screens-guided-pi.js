@@ -642,7 +642,10 @@
       visible: state.shell !== 'legacy', title: navigationSessionTitle, status: STUDY_WORKSPACE.sessionStatusLabel,
       time: STUDY_WORKSPACE.compactSessionTime, open: openSession, create: startEntry, search: openSearch,
       resources: RUN_OUTCOME.collection(state.latestRun, state.workflow), openResource: EVENTS.openResource,
-      materialsInteractive: !emptySessionFocused, rename: renameSession, remove: removeEmptySession });
+      materialsInteractive: !emptySessionFocused, rename: renameSession, remove: removeEmptySession,
+      mark: id => { const attention = MODULES.optional('attention'); return attention ? attention.conversationMarkHtml(projectId(), id) : ''; } });
+    const attention = MODULES.optional('attention');
+    if (attention) void attention.seen();
     requestAnimationFrame(() => {
       STUDY_WORKSPACE.restoreMaterials(state.host); CONNECT.focusDialog(state.host);
       // Opening a deep-linked artifact while the project/session is still
@@ -1758,6 +1761,12 @@
     // seeding before it completed made Open from Skill Hub silently disappear.
     if (state.conv) state.conv.classList.add('pi-active');
     wire(); document.addEventListener('click', dismissHeaderOverflow, true);
+    // Plans to review and finished runs, marked on their rows (owner: attention).
+    const attention = MODULES.optional('attention');
+    if (attention) attention.bind({
+      projectId, selectedId: () => (state.session && state.session.session_id) || '', openSession: id => openSession(id),
+      onChange: () => { render(); if (window.EU_GUIDED_CONTEXT && window.EU_GUIDED_CONTEXT.refreshProjects) window.EU_GUIDED_CONTEXT.refreshProjects(); },
+    });
     const capabilitiesReady = api().loadCapabilities
       ? Promise.resolve(api().loadCapabilities()).catch(() => null)
       : Promise.resolve(null);

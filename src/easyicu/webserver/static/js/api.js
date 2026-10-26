@@ -597,6 +597,14 @@
   function loadPiRunUsage(projectId, runId) {
     return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/runs/' + encodeURIComponent(runId) + '/usage');
   }
+  // Runs and plans that need the researcher, per persistent client id.
+  function loadAttention(params) {
+    const query = new URLSearchParams({ client_id: String(params && params.client_id || ''), after: String(params && params.after || 0), limit: String(params && params.limit || 100) });
+    return getJSON('/api/attention?' + query.toString());
+  }
+  function acknowledgeAttention(body) {
+    return postJSON('/api/attention/ack', body || {});
+  }
   // One search over this instance's projects, conversations, runs and files.
   function searchWorkspace(params) {
     const query = new URLSearchParams({ q: String(params && params.q || '').slice(0, 200) });
@@ -951,6 +959,8 @@
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
   window.EU_API.loadPiSessionSkills = loadPiSessionSkills;
   window.EU_API.searchWorkspace = searchWorkspace;
+  window.EU_API.loadAttention = loadAttention;
+  window.EU_API.acknowledgeAttention = acknowledgeAttention;
   window.EU_API.loadPersonalPreferences = loadPersonalPreferences;
   window.EU_API.updatePersonalPreferences = updatePersonalPreferences;
   window.EU_API.loadPiSessionUsage = loadPiSessionUsage;

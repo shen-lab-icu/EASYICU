@@ -512,6 +512,7 @@ class PiCopilotService(SkillAttachmentService):
                 os.fsync(handle.fileno())
             tmp.chmod(0o600)
             tmp.replace(self.store_path)
+            self.replay_store.attention.publish_sessions(payload["sessions"])
             try:
                 self.store_path.chmod(0o600)
             except OSError:

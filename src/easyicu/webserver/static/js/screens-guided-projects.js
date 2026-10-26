@@ -156,6 +156,11 @@
   // per-callsite defaults — extend PROJECT_DEFAULT_TITLES instead.
   const GUIDED_ROW_FALLBACK = ['Guided study', '研究项目'];
 
+  // Plans to review and finished runs (owner: screens-guided-pi-attention.js).
+  function attentionMark(projectId) {
+    const owner = window.EasyICU && window.EasyICU.guidedPi ? window.EasyICU.guidedPi.optional('attention') : null;
+    return owner ? owner.projectMarkHtml(String(projectId || '')) : '';
+  }
   function projectMeta(row, t) {
     // A Guided draft remains metadata-only storage even after Copilot binds a real
     // StudyContext and Research Agent run.  Do not expose that persistence
@@ -263,7 +268,7 @@
               <button class="gd-sess draft ${active ? 'active' : ''} ${configurationMissing ? 'configuration-missing' : ''}" data-localdraft="${i}" title="${configurationMissing ? t('Configuration is missing; open recovery options', '研究配置已失效；打开恢复选项') : t('Open research project', '打开研究项目')}: ${esc(title)}" ${active ? 'aria-current="true"' : ''}>
                 <span class="gd-sess-status" aria-hidden="true"></span>
                 <span class="gd-sess-body"><span class="ss-t">${esc(title)}</span><span class="ss-m">${esc(meta)}</span></span>
-                <span class="ss-time">${esc(time)}</span>
+                ${attentionMark(row.id)}<span class="ss-time">${esc(time)}</span>
               </button>
               ${projectManagementActive ? '' : `<button class="gd-sess-action danger" type="button" data-remove-localdraft="${i}" title="${t('Remove from project list', '从项目列表移除')}" aria-label="${t('Remove from project list', '从项目列表移除')}: ${esc(title)}">${icon('close', 12)}</button>`}
             </div>`;
