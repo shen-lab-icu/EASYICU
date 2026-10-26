@@ -202,6 +202,7 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-question-requirements.js", "screens-guided-pi-study-readings.js",
         "screens-guided-pi-target-trial-copy.js", "screens-guided-pi-target-trial.js",
         "screens-guided-pi-confirmation.js", "screens-guided-pi-error-text.js",
+        "screens-guided-pi-source-adjustments.js",
     ],
     # Requires the module registry, the data-binding and host-jobs owners,
     # and the StudyContext store they write through.

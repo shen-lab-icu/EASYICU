@@ -609,7 +609,7 @@ def test_a_candidate_plan_the_launch_refuses_reads_as_its_cause(lang: str, line:
         (
             {"status": "done", "target_trial_compile": {"status": "stopped", "reason_code": "target_trial_database_out_of_scope"}},
             "目标试验没有编成",
-            "本版本只在 MIMIC-IV 中模拟目标试验",
+            "这个数据库缺少目标试验模拟所需的数据",
             True,
         ),
         (

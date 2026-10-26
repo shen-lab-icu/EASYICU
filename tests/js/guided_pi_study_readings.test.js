@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const files = process.argv.slice(2);
-assert.equal(files.length, 8, 'Run through tools/run_js_contracts.py with all eight owners');
+assert.equal(files.length, 9, 'Run through tools/run_js_contracts.py with all nine owners');
 const modules = {};
 const sandbox = {
   window: { EU_LANG: 'zh', EasyICU: { guidedPi: {
@@ -87,20 +87,35 @@ for (const language of ['zh', 'en']) {
   const errors = modules.errorText.create({ tr: helpers.tr, staticPreview: () => false });
   assert.ok(errors.errorText({ code: 'study_causal_trial_design_unset' })
     .includes(language === 'zh' ? '目标试验' : 'target-trial'));
-  assert.ok(errors.errorText({ code: 'target_trial_database_out_of_scope' }).includes('MIMIC-IV'));
-  // A family v1 does not offer on eICU names the family, the database and where to ask.
-  const scope = errors.errorText({ code: 'study_family_database_out_of_scope', details: { study_family_gap: {
-    code: 'study_family_database_out_of_scope', family: 'trajectory_clustering', database: 'eicu', supported_databases: ['miiv'],
+  const trialScope = errors.errorText({ code: 'target_trial_database_out_of_scope' });
+  assert.ok(trialScope.includes(language === 'zh' ? '因果效应估计' : 'a causal effect estimate'));
+  assert.doesNotMatch(trialScope, /MIMIC-IV/);
+  // A capability gap names the database, the family, what is missing and where it runs.
+  const scopeOf = gap => errors.errorText({ code: 'study_family_database_out_of_scope', details: { study_family_gap: {
+    code: 'study_family_database_out_of_scope', ...gap,
   } } });
-  assert.ok(scope.includes('eICU') && scope.includes('MIMIC-IV'));
-  assert.ok(scope.includes(language === 'zh' ? '亚型或轨迹聚类分析' : 'subtype or trajectory clustering'));
+  const scope = scopeOf({ family: 'trajectory_clustering', database: 'eicu', supported_databases: ['miiv'],
+    missing_capabilities: [{ capability: 'observation_timing', code: 'observation_timing_unavailable' }] });
+  assert.ok(scope.includes('eICU-CRD') && scope.includes('MIMIC-IV'));
+  assert.ok(scope.includes(language === 'zh' ? '亚型或轨迹聚类' : 'subtype or trajectory clustering'));
+  assert.ok(scope.includes(language === 'zh' ? '观测记录没有时间' : 'its measurements carry no times'));
   assert.ok(errors.errorText({ code: 'study_family_database_out_of_scope' }).includes(language === 'zh' ? '这类研究' : 'this kind of study'));
   // The public demo is named, and the offered database is stated, not prescribed.
-  const demoScope = errors.errorText({ code: 'study_family_database_out_of_scope', details: { study_family_gap: {
-    code: 'study_family_database_out_of_scope', family: 'survival', database: 'eicu_demo', supported_databases: ['miiv'],
-  } } });
-  assert.ok(demoScope.includes('eICU demo') && !demoScope.includes(language === 'zh' ? '这个数据库' : 'this database'));
-  assert.ok(demoScope.includes(language === 'zh' ? '只在 MIMIC-IV 上提供' : 'only on MIMIC-IV'));
+  const demoScope = scopeOf({ family: 'survival', database: 'eicu_demo', supported_databases: ['miiv', 'miiv_demo', 'aumc'] });
+  assert.ok(demoScope.includes('eICU-CRD Demo') && !demoScope.includes(language === 'zh' ? '这个数据库' : 'this database'));
+  assert.ok(demoScope.includes(language === 'zh' ? '本版本可在 MIMIC-IV、AmsterdamUMCdb 上做这类研究' : 'supports it on MIMIC-IV, AmsterdamUMCdb'));
+  assert.equal(demoScope.includes('MIMIC-IV Demo'), false);
+  // An empty list says no database offers it; a missing list says nothing about where.
+  assert.ok(scopeOf({ family: 'survival', database: 'hirid', supported_databases: [] })
+    .includes(language === 'zh' ? '本版本还没有能做这类研究的数据库' : 'No database supports it'));
+  assert.doesNotMatch(scopeOf({ family: 'survival', database: 'hirid' }), /MIMIC|本版本可在|supports it on/);
+  // The run gate's capability codes read as causes, never raw codes.
+  for (const code of ['study_capability_refused', 'capability_substitution_approval_required',
+    'capability_substitution_not_applied', 'capability_substitution_review_mismatch']) {
+    const text = errors.runFailureText(code);
+    assert.ok(text.includes(language === 'zh' ? '尚未运行任何分析' : 'No analysis has been run') || text.includes('no analysis has been run'));
+    assert.equal(text.includes(code), false);
+  }
   // The plan step says the same refusal before any plan is offered: a card
   // with the refusal and what to ask instead, no approval, and the edit route.
   const gapWorkflow = { next_action_code: 'study_family_database_out_of_scope', study_family_gap: {
@@ -114,7 +129,7 @@ for (const language of ['zh', 'en']) {
   const refusal = refusalCard.workflowConfirmation();
   assert.equal(refusal.grants.length, 0);
   assert.equal(refusal.nonApprovable, true);
-  assert.equal(refusal.title, language === 'zh' ? '本版本在 eICU 上不支持生存分析（时间到事件）' : 'This version does not offer survival (time-to-event) analysis on eICU');
+  assert.equal(refusal.title, language === 'zh' ? 'eICU-CRD 缺少生存分析（时间到事件）所需的数据' : 'eICU-CRD lacks data that a survival analysis (time to event) needs');
   assert.ok(refusal.note.includes('MIMIC-IV'));
   const refusalHtml = refusalCard.workflowConfirmationHtml();
   assert.equal(refusalHtml.includes('data-gpi-confirm-action'), false);
