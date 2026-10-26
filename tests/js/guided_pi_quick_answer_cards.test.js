@@ -26,7 +26,7 @@ function owners(language = 'zh') {
   let off = false;
   const tr = (en, zh) => (language === 'zh' ? zh : en);
   const cards = declared.quickAnswers.create({ tr, esc, act: async choice => acts.push(choice), disabled: () => off });
-  return { cards, acts, disable: () => { off = true; } };
+  return { cards, acts, disable: () => { off = true; }, owner: declared.quickAnswers };
 }
 
 const READING = {
@@ -150,4 +150,27 @@ test('each card follows the turn that produced it', () => {
     { id: 'u2', role: 'user', timelineAt: Date.parse('2026-10-26T10:05:00Z') },
   ], cards.rows(session));
   assert.deepEqual(placed.map(row => row.id), ['u1', 'quick-answer-qa_1', 'u2', 'quick-answer-qa_2']);
+});
+
+test('a qualified card holds the automatic full plan until it becomes a full study', () => {
+  const { owner } = owners();
+  const card = (overrides = {}) => attachment({ study_context_id: null, ...overrides });
+  const asked = { study_setup_receipt: { configuration: { question: READING.question } } };
+  const other = { study_setup_receipt: { configuration: { question: '另一个研究问题：乳酸与死亡的关系？' } } };
+  // The card the turn just made, and a card on the study's own question.
+  assert.equal(owner.holdsAutomaticPlan({ last_message_job_id: 'job-1', quick_answers: [card()] }, other), true);
+  assert.equal(owner.holdsAutomaticPlan({ last_message_job_id: 'job-later', quick_answers: [card()] }, asked), true);
+  const answered = card({ answer: { status: 'ok', rows: [] } });
+  assert.equal(owner.holdsAutomaticPlan({ last_message_job_id: 'job-later', quick_answers: [answered] }, asked), true);
+  // Expanded into a full study, an earlier card on another question, or none.
+  assert.equal(owner.holdsAutomaticPlan({ last_message_job_id: 'job-1', quick_answers: [card({ study_context_id: 'study-1' })] }, asked), false);
+  assert.equal(owner.holdsAutomaticPlan({ last_message_job_id: 'job-later', quick_answers: [card()] }, other), false);
+  assert.equal(owner.holdsAutomaticPlan({ last_message_job_id: 'job-1', quick_answers: [] }, asked), false);
+  assert.equal(owner.holdsAutomaticPlan(null, null), false);
+  // A proposal the host stopped or handed to a full study holds nothing.
+  for (const status of ['stopped', 'full_study']) {
+    const stopped = card({ proposal: { status, reason: 'quick_requires_adjusted_study', card: null,
+      expand: { action: 'expand_into_full_study', reading: READING, source: SOURCE } } });
+    assert.equal(owner.holdsAutomaticPlan({ last_message_job_id: 'job-1', quick_answers: [stopped] }, asked), false);
+  }
 });

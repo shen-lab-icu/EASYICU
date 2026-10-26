@@ -647,6 +647,10 @@
     function workflowConfirmationHtml() {
       const confirmation = workflowConfirmation();
       if (host.busy() || !confirmation) return '';
+      // A held quick-answer card carries its own full-study button.
+      const quick = window.EasyICU.guidedPi.optional('quickAnswers');
+      if (confirmation.code === 'provider_ready_to_generate_plan' && quick
+        && quick.holdsAutomaticPlan(host.session(), host.workflow())) return '';
       if (sessionIsStale()) return staleConfirmationHtml(confirmation);
       const reviewResourceButtons = (confirmation.reviewResources || [])
         .filter(resource => resource.run_id)

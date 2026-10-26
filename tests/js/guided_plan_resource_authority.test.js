@@ -333,3 +333,31 @@ test('failure notice cannot drift onto another reviewed candidate', () => {
   });
   assert.doesNotMatch(owner.workflowConfirmationHtml(), /gpi-confirmation-failure/);
 });
+
+test('a held quick-answer card hides the plan-generation card beside it', () => {
+  const context = { window: {} };
+  vm.createContext(context);
+  for (const name of ['modules', 'quick-answers', 'confirmation']) {
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname,
+      `../../src/easyicu/webserver/static/js/screens-guided-pi-${name}.js`), 'utf8'), context);
+  }
+  const workflow = {
+    next_action_code: 'provider_ready_to_generate_plan',
+    study_setup_receipt: { configuration: { question: 'Median first-day lactate by sex?' } },
+  };
+  const card = {
+    message_job_id: 'job-1',
+    proposal: { status: 'approval_required', card: { sha256: 'c'.repeat(64) },
+      expand: { reading: { question: 'Median first-day lactate by sex?' } } },
+  };
+  const owner = session => context.window.EasyICU.guidedPi.require('confirmation').create({
+    workflow: () => workflow, session: () => session, busy: () => false,
+    tr: en => en, esc: String, iconHtml: () => '', resourceButton: () => '',
+    sessionIsStale: () => false,
+  });
+  assert.match(owner({}).workflowConfirmationHtml(), /Generate a candidate research plan now\?/);
+  assert.equal(owner({ quick_answers: [card], last_message_job_id: 'job-1' }).workflowConfirmationHtml(), '');
+  // Once the card became a full study, the plan card is the next step again.
+  assert.match(owner({ quick_answers: [{ ...card, study_context_id: 'study-2' }], last_message_job_id: 'job-1' })
+    .workflowConfirmationHtml(), /Generate a candidate research plan now\?/);
+});

@@ -207,5 +207,23 @@
     return { rows, place, render, handleClick, reasonText };
   }
 
-  window.EasyICU.guidedPi.declare('quickAnswers', { create });
+  // A card the host qualified waits for the researcher's click instead of an
+  // automatic full plan: the card the turn just made, and a card on the
+  // study's own question until it becomes a full study. A stopped or
+  // full-study proposal holds nothing (plan-actions.js).
+  function holdsAutomaticPlan(session, workflow) {
+    const list = Array.isArray(session && session.quick_answers) ? session.quick_answers : [];
+    const lastJob = String(session && session.last_message_job_id || '');
+    const configuration = workflow && workflow.study_setup_receipt && workflow.study_setup_receipt.configuration;
+    const question = String(configuration && configuration.question || '').trim();
+    return list.some(item => {
+      const proposal = item && item.proposal || {};
+      if (proposal.status !== 'approval_required' || !proposal.card || item.study_context_id) return false;
+      const reading = proposal.expand && proposal.expand.reading || {};
+      return (Boolean(lastJob) && item.message_job_id === lastJob)
+        || (Boolean(question) && String(reading.question || '').trim() === question);
+    });
+  }
+
+  window.EasyICU.guidedPi.declare('quickAnswers', { create, holdsAutomaticPlan });
 })();

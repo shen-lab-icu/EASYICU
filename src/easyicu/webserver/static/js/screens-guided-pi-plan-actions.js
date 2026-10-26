@@ -573,6 +573,12 @@
       ) return false;
       if (actionCode === 'provider_ready_to_generate_plan') {
         if (startedTransitions.has(transitionKey(actionCode))) return false;
+        // A qualified quick-answer card is the next step; its full-study
+        // button or the plan card starts the plan (quick-answers owner).
+        const modules = window.EasyICU && window.EasyICU.guidedPi;
+        const quick = modules && typeof modules.optional === 'function' ? modules.optional('quickAnswers') : null;
+        if (quick && typeof quick.holdsAutomaticPlan === 'function'
+          && quick.holdsAutomaticPlan(host.session(), host.workflow())) return false;
         return startFormalPlanGeneration(actionCode, {automatic: true});
       }
       if (actionCode === 'plan_execution_upgrade_required') {

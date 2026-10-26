@@ -13,6 +13,7 @@ from easyicu.webserver.host_action_contracts import host_action_id
 from easyicu.webserver.quick_answer import QuickApproval, QuickStop, execute_quick_answer
 from easyicu.webserver.quick_answer.contracts import QuickProposal, StudyHandoff
 from easyicu.webserver.quick_answer.preparation import prepare_registered_question
+from easyicu.webserver.study_question_wording import normalize_question_text
 
 from .contracts import PiToolResult, ToolExecutionContext, utc_now
 from .quick_answer_store import QuickAnswerStore, QuickQuestionInput, error, public_attachment, source_record, stored_source
@@ -76,7 +77,35 @@ class QuickAnswerService:
             raise error("quick_bound_source_unavailable")
         return study
 
+    def _transition_quick_question(self, context: ToolExecutionContext) -> str:
+        """The saved question the data-source transition may offer as a quick answer.
+
+        Only a study question that is, word for word, one message the
+        researcher typed on the active branch: the step-one save may keep a
+        part of a message, join several, or carry a confirmed model wording,
+        and none of those is their question as asked. No text is classified
+        here; the conversation's model reads the question and the quick-answer
+        owner qualifies it. Empty means the transition offers nothing.
+        """
+
+        record = context.session
+        if record.agent_mode != "research" or record.data_source_authorization.status in {"pending", "selection_in_progress"}:
+            return ""
+        study = study_contexts.get_context(record.binding.study_context_id) or {}
+        question = str(study.get("question") or "")
+        if not question or not (study.get("data_source") or {}).get("path") or study.get("active_job_id"):
+            return ""
+        typed = {
+            normalize_question_text(str(turn.get("text") or "")) for turn in context.user_turns
+            if turn.get("message_origin") == "typed" and not turn.get("superseded")
+        }
+        return question if normalize_question_text(question) in typed else ""
+
     def _submit_quick_answer(self, context, reading, *, message_job_id):
+        # The reading restates the turn's bound question: the typed message,
+        # or the transition's saved question. A turn without one offers none.
+        if not context.quick_question:
+            raise error("quick_question_unbound")
         record = self._scoped_record(context.session.session_id, project_id=context.session.project_id)
         study = self._quick_study(record)
         context.assert_authority_fresh()
@@ -87,7 +116,7 @@ class QuickAnswerService:
             directory = store.path(record.session_id, identity).parent
             try:
                 proposal, prepared = prepare_registered_question(
-                    reading, question=context.user_message, export_path=source["path"],
+                    reading, question=context.quick_question, export_path=source["path"],
                     database=source["database"], output_dir=directory / "prepared",
                     provider=self._quick_provider(record, source["database"]),
                 )

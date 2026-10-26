@@ -15,6 +15,9 @@ const HOST_SECTION_PREFIX = "\n\n[EASYICU_";
 // main.mjs writes this line into the data-source confirmation transition, the
 // one host transition whose reply only acknowledges what was saved.
 export const DATA_SOURCE_CONFIRMED_MARKER = "[EASYICU_DATA_SOURCE_CONFIRMED_V1]";
+// main.mjs adds this line to that transition only when the host bound the
+// study's saved question to the researcher's own typed message (quick_question).
+export const QUICK_ANSWER_OFFER_MARKER = "[EASYICU_QUICK_ANSWER_OFFER_V1]";
 const DEMO_WORD = "(?:demo|演示|示例)";
 
 function latestStudyContextUpdate(context) {
@@ -209,6 +212,78 @@ function confirmedSourceText(workflow, language) {
   const label = boundedLabel(workflow?.study_setup_receipt?.configuration?.data_source?.label);
   if (language === "zh") return label ? `已确认使用 ${label} 数据。` : "已确认数据来源。";
   return label ? `The study now uses the ${label} data.` : "The data source is confirmed.";
+}
+
+// The transition that also offers the saved question to the quick-answer
+// owner. It stays the latest prompt while its one tool call runs.
+function quickAnswerOffered(context) {
+  const prompt = latestUserPrompt(context);
+  const at = prompt.indexOf(HOST_SECTION_PREFIX);
+  return at >= 0 && prompt.includes(DATA_SOURCE_CONFIRMED_MARKER, at)
+    && prompt.includes(QUICK_ANSWER_OFFER_MARKER, at);
+}
+
+/**
+ * The acknowledgement for the provider call that decides a quick-answer
+ * offer, or "" when this call decides none. main.mjs then settles the model's
+ * answer with settleQuickAnswerOffer instead of streaming it.
+ */
+export function quickAnswerOfferReply(context, language) {
+  const workflow = sourceConfirmationWorkflow(context);
+  return quickAnswerOffered(context) && sourceConfirmationCardFollows(workflow)
+    ? confirmedSourceText(workflow, language)
+    : "";
+}
+
+function messageStream(message) {
+  const stream = createAssistantMessageEventStream();
+  stream.push({ type: "start", partial: message });
+  message.content.forEach((part, contentIndex) => {
+    if (part.type === "text") {
+      stream.push({ type: "text_start", contentIndex, partial: message });
+      stream.push({ type: "text_delta", contentIndex, delta: part.text, partial: message });
+      stream.push({ type: "text_end", contentIndex, content: part.text, partial: message });
+    } else {
+      stream.push({ type: "toolcall_start", contentIndex, partial: message });
+      stream.push({ type: "toolcall_delta", contentIndex, delta: JSON.stringify(part.arguments ?? {}), partial: message });
+      stream.push({ type: "toolcall_end", contentIndex, toolCall: part, partial: message });
+    }
+  });
+  stream.push({ type: "done", reason: message.stopReason, message });
+  return stream;
+}
+
+/**
+ * Settle the model's decision on a quick-answer offer. Its own words are
+ * never shown: the host's acknowledgement is the reply, followed by the first
+ * easyicu_quick_answer call when the model made one (the host then qualifies
+ * it). No call, a failed call or any other reply leaves the acknowledgement
+ * alone, as the transition without an offer. The model's usage is kept; an
+ * aborted call stays aborted.
+ */
+export async function settleQuickAnswerOffer(model, open, reply, signal) {
+  let message;
+  try {
+    const stream = await open();
+    for await (const event of stream) {
+      if (event?.type === "done") message = event.message;
+      else if (event?.type === "error") message = event.error;
+    }
+  } catch (error) {
+    if (signal?.aborted) throw error;
+  }
+  if (message?.stopReason === "aborted") {
+    const stream = createAssistantMessageEventStream();
+    stream.push({ type: "error", reason: "aborted", error: message });
+    return stream;
+  }
+  const settled = { ...finalizedMessage(model, reply), usage: message?.usage ?? ZERO_USAGE };
+  const call = message?.stopReason === "toolUse" && Array.isArray(message.content)
+    ? message.content.find((part) => part?.type === "toolCall" && part.name === "easyicu_quick_answer")
+    : undefined;
+  return call
+    ? messageStream({ ...settled, content: [...settled.content, call], stopReason: "toolUse" })
+    : messageStream(settled);
 }
 
 // The design the update owner withheld while saving the rest
@@ -528,6 +603,11 @@ export function hostPostToolFinalization(model, context, language) {
     // a model to improvise an answer or turn chat agreement into approval.
     return completedStream(finalizedMessage(model, ""));
   }
+  if (latest?.role === "toolResult" && quickAnswerOffered(context)) {
+    // An offer allows one call; its acknowledgement is already written. A
+    // call the host refused leaves the transition as it is without an offer.
+    return completedStream(finalizedMessage(model, ""));
+  }
   const zeroDirection = zeroDirectionEntryText(context, language);
   if (zeroDirection) {
     return completedStream(finalizedMessage(model, zeroDirection));
@@ -543,7 +623,8 @@ export function hostPostToolFinalization(model, context, language) {
       model, familyChoiceText(confirmedSourceText(confirmed, language), confirmedChoices.choices, language),
     ));
   }
-  if (sourceConfirmationCardFollows(confirmed)) {
+  // With a quick-answer offer the model decides first (quickAnswerOfferReply).
+  if (sourceConfirmationCardFollows(confirmed) && !quickAnswerOffered(context)) {
     return completedStream(finalizedMessage(model, confirmedSourceText(confirmed, language)));
   }
   const choice = !latestStudyContextUpdate(context) && context?.messages?.at(-1)?.role === "user"
