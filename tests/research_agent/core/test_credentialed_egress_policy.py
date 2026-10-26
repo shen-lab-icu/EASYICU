@@ -43,7 +43,7 @@ def test_an_unknown_profile_has_a_typed_refusal(database):
         with pytest.raises(ProviderConfigurationError) as caught:
             check(database)
         assert caught.value.reason_code == "unknown_source_database"
-    for handling in ("unspecified", "on_device", "zero_retention_declared"):
+    for handling in ("unspecified", "on_device", "zero_retention_declared", "user_accepted_external"):
         with pytest.raises(ProviderConfigurationError) as caught:
             require_data_handling(database, handling)
         assert caught.value.reason_code == "unknown_source_database"
@@ -245,7 +245,7 @@ def _loopback_client(monkeypatch, *, declaration="unspecified", response="unused
     return client, calls
 
 
-@pytest.mark.parametrize("declaration", ["unspecified", "zero_retention_declared", "on_device"])
+@pytest.mark.parametrize("declaration", ["unspecified", "zero_retention_declared", "on_device", "user_accepted_external"])
 @pytest.mark.parametrize("database", ["miiv", "eicu", "hirid", "aumc", "sic", "mimic_demo", "eicu_demo", "synthetic"])
 def test_clearance_uses_source_and_explicit_declaration(monkeypatch, declaration, database):
     from easyicu.research_agent.providers.client_trust import (

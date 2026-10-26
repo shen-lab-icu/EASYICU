@@ -2,16 +2,18 @@
 /* The local user's statement of how the connected API model handles data.
    The host owns the record, its binding to one exact connection, and what
    the statement permits (pi_copilot/provider_config.py): a credentialed
-   source is used only with on_device or zero_retention_declared. This owner
+   source is used only with on_device, zero_retention_declared or the
+   user's own user_accepted_external. This owner
    shows the current record and submits a change from the settings page. */
 (function () {
   'use strict';
 
-  const VALUES = ['unspecified', 'on_device', 'zero_retention_declared'];
+  const VALUES = ['unspecified', 'on_device', 'zero_retention_declared', 'user_accepted_external'];
 
   function optionLabel(value, tr) {
     if (value === 'on_device') return tr('The model runs on this computer', '模型在本机运行');
     if (value === 'zero_retention_declared') return tr('The service keeps no data', '服务不保留数据');
+    if (value === 'user_accepted_external') return tr('An external service I accept for these data', '外部服务（我确认可以使用）');
     return tr('Neither', '都不是');
   }
 
@@ -68,8 +70,8 @@
       <form class="gpi-provider-section gpi-declaration" data-gpi-declaration-form aria-labelledby="gpi-declaration-title">
         <div class="gpi-provider-heading"><h3 id="gpi-declaration-title">${tr('Can this model handle MIMIC-IV or eICU data?', '这个模型能处理 MIMIC-IV、eICU 数据吗？')}</h3></div>
         <p class="gpi-declaration-notice">${tr(
-          'PhysioNet allows only a model on this computer or a service that keeps no data.',
-          'PhysioNet 只允许本机运行或不保留数据的模型。',
+          'PhysioNet allows only a model on this computer or a service that keeps no data. The third choice is your own decision.',
+          'PhysioNet 只允许本机运行或不保留数据的模型；第三项由你自行决定。',
         )}</p>
         <fieldset class="gpi-declaration-options" aria-labelledby="gpi-declaration-title" ${locked ? 'disabled' : ''}>${radios}
         </fieldset>

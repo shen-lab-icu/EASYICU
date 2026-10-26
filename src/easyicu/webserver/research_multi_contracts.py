@@ -42,7 +42,7 @@ class EgressGrant(Contract):
     source_sha256: Digest
     database: Database
     provider_sha256: Digest
-    data_handling: Literal["on_device", "zero_retention_declared", "unspecified"]
+    data_handling: Literal["on_device", "zero_retention_declared", "user_accepted_external", "unspecified"]
     clearance: Literal["provider_required", "verified_public_or_synthetic"]
     grants: tuple[Literal["prepare_source", "review_plan", "execute_plan", "provider_egress"], ...] = Field(min_length=1, max_length=4)
 

@@ -74,7 +74,7 @@ _CONFIG_KEYS = frozenset(
     }
 )
 _MAX_VERIFICATION_RESPONSE_BYTES = 1024 * 1024
-DECLARATION_NOTICE_VERSION = "1"
+DECLARATION_NOTICE_VERSION = "2"
 _POLICY_ENV_KEYS = frozenset({"EASYICU_PI_DATA_HANDLING", "EASYICU_PI_INFERENCE_LOCATION"})
 _DECLARATION_MESSAGES = {
     "settings_only": "The data-handling declaration can be changed only in the model settings.",
@@ -127,7 +127,8 @@ class PiProviderDeclarationRecord(BaseModel):
     connection: PiProviderConnection
     value: DataHandling
     notice_key: Literal["physionet_llm_data_handling_declaration"]
-    notice_version: Literal["1"]
+    # 2 adds the user-accepted external service to the notice; 1 stays valid.
+    notice_version: Literal["1", "2"]
     lapsed_at: str | None = None
 
 

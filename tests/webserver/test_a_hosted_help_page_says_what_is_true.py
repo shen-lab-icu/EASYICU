@@ -78,7 +78,8 @@ def test_the_hosted_page_names_the_server_the_prepared_data_and_the_administrato
     assert "这台服务器上已准备好：MIMIC-IV、eICU-CRD。" in body
     assert "患者的逐行记录不会发给模型" in body
     assert "隐藏了极小计数的汇总统计" in body
-    assert "只有在管理员声明该模型运行在本服务器上、或其服务不保留数据时才会使用" in body
+    assert "只有在管理员声明该模型运行在本服务器上、其服务不保留数据，或确认这个外部服务可以处理这些数据时才会使用" in body
+    assert "PhysioNet 数据使用协议要求的是前两种" in body
     assert page["disclosure"] == {
         "noticeKey": "physionet_llm_data_handling_declaration",
         "sent": [
@@ -114,7 +115,7 @@ def test_the_local_page_keeps_desktop_guidance_and_entry_points() -> None:
     assert "从 PhysioNet 下载官方 eICU Demo（130.6 MB）" in body
     assert 'data-help-question="在 eICU demo 中，不同 ICU 类型的患者，ICU 住院时长有什么差别？"' in body
     # Credentialed data needs the model's declaration, asked when first used.
-    assert "研究第一次用到这些数据时，EasyICU 会问你：模型是否在本机运行，或服务是否不保留数据" in body
+    assert "研究第一次用到这些数据时，EasyICU 会问你：模型是否在本机运行、服务是否不保留数据，或你是否确认这个外部服务可以处理这些数据" in body
     # All six databases are offered; none is claimed as accepted on real data yet.
     assert "目前六个库都还没有通过正常入口的真实数据运行验收" in body
     assert "已在真实数据上验收的是" not in body

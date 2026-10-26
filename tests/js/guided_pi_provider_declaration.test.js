@@ -35,7 +35,7 @@ function record(overrides) {
   return {
     connection, value: 'unspecified', lapsed: false, may_change: true,
     change_authority: 'local_user', source: 'settings', status_code: 'pi_provider_declaration_unspecified',
-    notice_key: 'physionet_llm_data_handling_declaration', notice_version: '1', ...overrides,
+    notice_key: 'physionet_llm_data_handling_declaration', notice_version: '2', ...overrides,
   };
 }
 const checked = html => (html.match(/value="([a-z_]+)" checked/) || [])[1] || '';
@@ -50,12 +50,19 @@ for (const language of ['en', 'zh']) {
   assert.equal(render({ declaration: record({ status_code: 'pi_provider_declaration_connection_required' }) }), '');
   assert.equal(view.renderSection({ state: { declaration: record() }, tr, esc, staticPreview: true }), '');
 
-  // An undeclared desktop connection: three choices, nothing to save yet.
+  // An undeclared desktop connection: four choices, nothing to save yet.
   let html = render({ declaration: record() });
-  assert.equal((html.match(/name="declaration"/g) || []).length, 3);
+  assert.equal((html.match(/name="declaration"/g) || []).length, 4);
   assert.equal(checked(html), 'unspecified');
   assert.match(html, /gpi-declaration-save" type="submit" disabled/);
   assert.ok(html.includes(tr('Can this model handle MIMIC-IV or eICU data?', '这个模型能处理 MIMIC-IV、eICU 数据吗？')));
+
+  // The user's own acceptance of an external service is its own choice, named as such.
+  html = render({ declaration: record({ value: 'user_accepted_external', status_code: 'pi_provider_declaration_recorded' }) });
+  assert.equal(checked(html), 'user_accepted_external');
+  assert.ok(html.includes(tr('An external service I accept for these data', '外部服务（我确认可以使用）')));
+  assert.ok(html.includes(tr('The third choice is your own decision.', '第三项由你自行决定。')));
+  assert.match(html, /value="user_accepted_external"[^>]*><span>(An external service I accept for these data|外部服务（我确认可以使用）)<\/span>/);
 
   // A changed choice can be saved.
   html = render({ declaration: record(), declarationChoice: 'zero_retention_declared' });
@@ -131,7 +138,7 @@ for (const language of ['en', 'zh']) {
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), ['save', {
     connection, value: 'zero_retention_declared', notice_key: 'physionet_llm_data_handling_declaration',
-    notice_version: '1', channel: 'settings_ui',
+    notice_version: '2', channel: 'settings_ui',
   }]);
   assert.deepEqual(calls[1], ['status']);
   assert.equal(state.declaration.value, 'zero_retention_declared');

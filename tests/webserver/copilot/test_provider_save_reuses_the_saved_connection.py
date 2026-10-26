@@ -138,7 +138,7 @@ def test_saved_settings_declaration_keeps_its_journal_authority(connection, mode
     )
     store.declare_data_handling(
         value="zero_retention_declared", connection=config.connection().model_dump(),
-        notice_key="physionet_llm_data_handling_declaration", notice_version="1",
+        notice_key="physionet_llm_data_handling_declaration", notice_version="2",
         channel="settings_ui",
     )
     before = store.declaration_path.read_bytes()

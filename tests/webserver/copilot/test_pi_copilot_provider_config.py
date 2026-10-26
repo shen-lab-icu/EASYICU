@@ -30,7 +30,7 @@ def test_cliproxyapi_default_uses_the_reported_model_identifier() -> None:
     assert DEFAULT_MODEL == "gpt-5.6-luna"
 
 
-@pytest.mark.parametrize("handling", ["on_device", "zero_retention_declared", "unspecified"])
+@pytest.mark.parametrize("handling", ["on_device", "zero_retention_declared", "user_accepted_external", "unspecified"])
 def test_data_handling_declaration_survives_save_reload_and_model_switch(tmp_path, handling):
     store = PiProviderConfigStore(config_path=tmp_path / "fixture-config",
                                   receipt_path=tmp_path / "fixture-receipt.json")

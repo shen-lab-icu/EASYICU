@@ -96,7 +96,7 @@ def store(tmp_path, monkeypatch):
 def _declare(store, **changes):
     return store.declare_data_handling(**({
         "value": "zero_retention_declared", "connection": CONNECTION,
-        "notice_key": NOTICE, "notice_version": "1", "channel": "settings_ui",
+        "notice_key": NOTICE, "notice_version": "2", "channel": "settings_ui",
     } | changes))
 
 
@@ -108,7 +108,7 @@ def test_a_settings_choice_is_recorded_and_used_after_restart(store):
     assert record["connection"] == CONNECTION
     assert record["value"] == "zero_retention_declared"
     assert record["notice_key"] == NOTICE
-    assert record["notice_version"] == "1"
+    assert record["notice_version"] == "2"
     assert before <= datetime.fromisoformat(record["recorded_at"].replace("Z", "+00:00"))
     assert state["recorded_at"] == record["recorded_at"]
     assert state["lapsed"] is False
@@ -184,7 +184,7 @@ def test_reverification_keeps_the_choice_and_clearing_appends_a_record(store):
     assert store.public_status()["connection_verified"] is False
 
 
-@pytest.mark.parametrize("value", ["on_device", "zero_retention_declared"])
+@pytest.mark.parametrize("value", ["on_device", "zero_retention_declared", "user_accepted_external"])
 def test_withdrawing_a_choice_restores_the_unchanged_undeclared_receipt(store, value):
     receipt = store.receipt_path.read_bytes()
     _declare(store, value=value)
@@ -327,7 +327,7 @@ def test_settings_routes_use_the_owner_and_update_the_running_gateway(store, mon
     service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway, provider_store=store)
     monkeypatch.setattr(routes, "get_pi_copilot_service", lambda: service)
     body = routes.PiProviderDeclarationRequest(
-        value="on_device", connection=CONNECTION, notice_key=NOTICE, notice_version="1",
+        value="on_device", connection=CONNECTION, notice_key=NOTICE, notice_version="2",
     )
     state = routes.post_pi_copilot_provider_declaration(body)
     assert state == routes.get_pi_copilot_provider_declaration()
@@ -450,7 +450,7 @@ def test_the_service_cannot_change_policy_under_an_active_turn(store, tmp_path, 
     with pytest.raises(PiCopilotError) as error:
         service.declare_provider_data_handling(
             value="on_device", connection=CONNECTION, channel="settings_ui",
-            notice_key=NOTICE, notice_version="1",
+            notice_key=NOTICE, notice_version="2",
         )
     assert error.value.code == f"pi_provider_declaration_{blocked}"
     assert store.declaration_path.read_bytes() == original
@@ -502,7 +502,7 @@ def test_the_connection_service_also_refuses_unrecorded_policy_writes(store, tmp
 def test_the_settings_contract_does_not_accept_client_identity(extra):
     with pytest.raises(ValidationError):
         routes.PiProviderDeclarationRequest(
-            connection=CONNECTION, value="on_device", notice_key=NOTICE, notice_version="1", **extra,
+            connection=CONNECTION, value="on_device", notice_key=NOTICE, notice_version="2", **extra,
         )
 
 
@@ -522,3 +522,34 @@ def test_invalid_administrator_policy_returns_a_typed_failure(store, monkeypatch
     with pytest.raises(PiCopilotError) as error:
         _save(store)
     assert error.value.code == "pi_provider_connection_not_configured"
+
+
+def test_an_accepted_external_service_is_recorded_as_that_and_clears_the_gate(store):
+    from easyicu.research_agent.providers.client_trust import ProviderAuthorization
+
+    state = _declare(store, value="user_accepted_external")
+    record = json.loads(store.declaration_path.read_text().splitlines()[-1])
+    # The record says what the user decided, never zero retention or on-device.
+    assert record["value"] == state["value"] == "user_accepted_external"
+    _save(store)
+    projected = store.research_agent_environment(external_llm_opt_in=True)
+    assert projected["EASYICU_PROVIDER_DATA_HANDLING"] == "user_accepted_external"
+    require_data_handling("miiv", projected["EASYICU_PROVIDER_DATA_HANDLING"])
+    authorization = ProviderAuthorization.create(
+        provider="fixture", model="model-a", base_url=CONNECTION["base_url"], destination="external",
+        authorization_mode="authorization", data_handling="user_accepted_external",
+    )
+    # It stays an external destination, so every egress restriction still applies.
+    assert authorization.destination == "external"
+    assert authorization.inference_location.value == "unspecified"
+
+
+def test_a_declaration_made_under_the_first_notice_still_applies(store):
+    _declare(store, value="on_device", notice_version="2")
+    lines = store.declaration_path.read_text().splitlines()
+    legacy = json.loads(lines[-1]) | {"notice_version": "1"}
+    store.declaration_path.write_text("\n".join([*lines[:-1], json.dumps(legacy)]) + "\n")
+    assert store.declaration_status()["value"] == "on_device"
+    with pytest.raises(PiCopilotError) as error:
+        _declare(store, value="unspecified", notice_version="1")
+    assert error.value.code == "pi_provider_declaration_notice_mismatch"
