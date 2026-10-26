@@ -143,6 +143,20 @@ HOST_OWNED_RUNNER_ENV_KEYS = frozenset(
     }
 )
 _RUNNER_ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+# Every runner pins numeric runtimes to one thread. Single-thread BLAS/OpenMP
+# keeps generated analyses deterministic, so the host and image runners
+# produce the same products, and a container never sizes a thread pool from
+# the host's core count: on a 384-core server, Arrow and BLAS pools exceeded
+# the container's --pids-limit and aborted a step (std::system_error, EAGAIN).
+_SINGLE_THREAD_RUNTIME_ENV = {
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+    "NUMEXPR_NUM_THREADS": "1",
+    "JOBLIB_MULTIPROCESSING": "0",
+    "KMP_INIT_AT_FORK": "FALSE",
+}
 
 
 def _parquet_row_count(path: Path) -> Optional[int]:
@@ -1485,19 +1499,13 @@ class CodeRunner:
         env["MPLCONFIGDIR"] = str(mpl_config_dir)
         env["PYTHONIOENCODING"] = "utf-8"
         # macOS sandbox-exec can block shared-memory paths used by threaded
-        # BLAS/OpenMP runtimes. Single-thread defaults keep generated ICU
-        # analyses deterministic and avoid OMP SHM crashes inside the sandbox.
-        # Force, rather than default, because users' shells often export
-        # multi-threaded BLAS/OpenMP settings. Under macOS sandbox-exec those
-        # inherited settings can abort before Python reaches user code
-        # (for example: ``OMP: Error #179: Can't open SHM2``).
-        env["OMP_NUM_THREADS"] = "1"
-        env["MKL_NUM_THREADS"] = "1"
-        env["OPENBLAS_NUM_THREADS"] = "1"
-        env["VECLIB_MAXIMUM_THREADS"] = "1"
-        env["NUMEXPR_NUM_THREADS"] = "1"
-        env["JOBLIB_MULTIPROCESSING"] = "0"
-        env["KMP_INIT_AT_FORK"] = "FALSE"
+        # BLAS/OpenMP runtimes, so single-thread defaults also avoid OMP SHM
+        # crashes inside the sandbox. Force, rather than default, because
+        # users' shells often export multi-threaded BLAS/OpenMP settings.
+        # Under macOS sandbox-exec those inherited settings can abort before
+        # Python reaches user code (for example: ``OMP: Error #179: Can't
+        # open SHM2``).
+        env.update(_SINGLE_THREAD_RUNTIME_ENV)
         env.update(self.extra_env)
         if resolved_inputs_path is not None:
             env["EASYICU_RESOLVED_INPUTS_JSON"] = str(resolved_inputs_path)
@@ -2271,6 +2279,7 @@ class DockerRunner:
             "HOME": "/tmp",
             "MPLCONFIGDIR": "/tmp/matplotlib",
             "XDG_CACHE_HOME": "/tmp/.cache",
+            **_SINGLE_THREAD_RUNTIME_ENV,
         }
         cohort_rows = _parquet_row_count(self.cohort_parquet)
         if cohort_rows is not None:

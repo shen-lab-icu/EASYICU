@@ -350,6 +350,11 @@ def test_build_command_has_safety_knobs(
     assert env_dict["MPLBACKEND"] == "Agg"
     assert env_dict["HOME"] == "/tmp"
     assert env_dict["MPLCONFIGDIR"] == "/tmp/matplotlib"
+    # Thread pools never size from the host's cores (a 384-core server
+    # exceeded --pids-limit), and match the host runner's single thread.
+    for key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        assert env_dict[key] == "1"
 
 
 def test_build_command_maps_resolved_inputs_manifest_into_container(
