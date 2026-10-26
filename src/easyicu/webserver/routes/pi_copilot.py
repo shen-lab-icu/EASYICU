@@ -428,7 +428,7 @@ class PiProviderConfigRequest(BaseModel):
         "openai-responses",
     ] = "openai-completions"
     enable_ai: StrictBool = False
-    data_handling: Literal["on_device", "zero_retention_declared", "unspecified"] = "unspecified"
+    data_handling: Literal["on_device", "zero_retention_declared", "user_accepted_external", "unspecified"] = "unspecified"
     inference_location: Literal["on_device", "unspecified"] = "unspecified"
     credential_source: Literal["typed", "openrouter_login"] = "typed"
 

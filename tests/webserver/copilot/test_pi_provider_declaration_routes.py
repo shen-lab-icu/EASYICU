@@ -14,7 +14,7 @@ ENDPOINT = "/api/copilot/pi/provider-config/declaration"
 CONNECTION = {"provider": "fixture", "base_url": "http://localhost:8317/v1", "model": "fixture-model"}
 BODY = {
     "connection": CONNECTION, "value": "on_device",
-    "notice_key": "physionet_llm_data_handling_declaration", "notice_version": "1",
+    "notice_key": "physionet_llm_data_handling_declaration", "notice_version": "2",
 }
 
 

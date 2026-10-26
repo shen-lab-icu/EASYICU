@@ -109,7 +109,7 @@
         return tr('EasyICU could not reach the model service.', 'EasyICU 无法连接到模型服务，请检查地址和服务状态。');
       }
       if (error.code === 'provider_not_cleared_for_credentialed_data') {
-        return tr('This model is not cleared for credentialed data such as MIMIC-IV or eICU, so this step did not call it. The PhysioNet data use agreement allows only a model that runs on this computer or one whose service keeps no data.', '这个模型未获准处理 MIMIC-IV、eICU 等需授权的数据，所以这一步没有调用它。按 PhysioNet 数据使用协议，只能使用在本机运行的模型，或服务方不保留数据的模型。');
+        return tr('This model is not cleared for credentialed data such as MIMIC-IV or eICU, so this step did not call it. In Settings, declare that the model runs on this computer, that its service keeps no data, or that you accept this external service for these data.', '这个模型未获准处理 MIMIC-IV、eICU 等需授权的数据，所以这一步没有调用它。请在设置里声明：模型在本机运行、服务不保留数据，或你确认这个外部服务可以处理这些数据。');
       }
       // The credentialed-data declaration (pi_copilot/provider_config.py).
       const declaration = {

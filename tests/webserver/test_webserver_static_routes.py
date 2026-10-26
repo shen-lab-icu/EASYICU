@@ -189,7 +189,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/screens-extraction.js?v=20261026-icudeath1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
-    assert "js/screens-help.js?v=20261026-six7" in index_html
+    assert "js/screens-help.js?v=20261026-eg2" in index_html
 
 
 def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
@@ -337,7 +337,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert "How a study moves through EasyICU</h2>" not in help_js
 
     assert "js/app.js?v=20261026-src1" in index_html
-    assert "js/screens-help.js?v=20261026-six7" in index_html
+    assert "js/screens-help.js?v=20261026-eg2" in index_html
 
 
 def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:

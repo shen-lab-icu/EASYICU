@@ -172,7 +172,7 @@ def test_original_model_declaration_is_not_transferred(model_session):
     _, _, _, store, _, study = model_session
     store.declare_data_handling(
         value="zero_retention_declared", connection={"provider": "fixture", "base_url": "http://localhost:8317/v1", "model": "model-a"},
-        notice_key="physionet_llm_data_handling_declaration", notice_version="1", channel="settings_ui",
+        notice_key="physionet_llm_data_handling_declaration", notice_version="2", channel="settings_ui",
     )
     before = store.declaration_path.read_bytes()
     study["data_source"] = {"database": "miiv", "path": "/synthetic/source"}
@@ -331,7 +331,7 @@ def test_account_identity_lookup_does_not_lapse_the_api_declaration(model_sessio
     _, service, _, store, _, _ = model_session
     store.declare_data_handling(
         value="zero_retention_declared", connection={"provider": "fixture", "base_url": "http://localhost:8317/v1", "model": "model-a"},
-        notice_key="physionet_llm_data_handling_declaration", notice_version="1", channel="settings_ui",
+        notice_key="physionet_llm_data_handling_declaration", notice_version="2", channel="settings_ui",
     )
     before = store.declaration_path.read_bytes()
     assert service._conversation_connection_sha256(object()) is None
@@ -343,7 +343,7 @@ def test_switching_back_uses_the_original_models_current_declaration(model_sessi
     assert switch(model_session).status_code == 200
     store.declare_data_handling(
         value="zero_retention_declared", connection={"provider": "fixture", "base_url": "http://localhost:8317/v1", "model": "model-a"},
-        notice_key="physionet_llm_data_handling_declaration", notice_version="1", channel="settings_ui",
+        notice_key="physionet_llm_data_handling_declaration", notice_version="2", channel="settings_ui",
     )
     study["data_source"] = {"database": "miiv", "path": "/synthetic/source"}
     assert switch(model_session, model="model-a").status_code == 200

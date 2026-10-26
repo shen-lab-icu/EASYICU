@@ -64,6 +64,10 @@ PROVIDER_POLICY_NOTICE_KEY = "physionet_llm_data_handling_declaration"
 class DataHandling(str, Enum):
     ON_DEVICE = "on_device"
     ZERO_RETENTION_DECLARED = "zero_retention_declared"
+    # The user's own decision to use an external service that is neither of
+    # the above; recorded as that, never as zero retention. It clears the
+    # same gate and changes nothing about what content may leave.
+    USER_ACCEPTED_EXTERNAL = "user_accepted_external"
     UNSPECIFIED = "unspecified"
 
 
