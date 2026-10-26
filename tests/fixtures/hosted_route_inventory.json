@@ -1,6 +1,39 @@
 [
   {
     "method": "GET",
+    "route": "/api/copilot/pi/sessions/{session_id}/mentions",
+    "fields": ["path:session_id", "query:project_id", "query:kind", "query:query", "query:limit"],
+    "reaches": "PiCopilotService.search_mentions -> scoped session -> database profiles, concept catalogue, stored source registrations as identities, ProjectWorkspace file listing, attachable Skills",
+    "protection": "hosted.guard_request + project/session registry lookup; mention identities are bounded catalogue keys, registration IDs or opaque ProjectWorkspace file IDs, never client paths; digests are checked before use; query at most 120 characters and 1-40 results",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Server-owned session index and ProjectAuthorityStore active/archive paths under state_paths; lazy service initialization may reconcile session state. User Skills load only frozen content-addressed objects in ExtensionRegistry."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/mentions/resolve",
+    "fields": ["path:session_id", "body:project_id", "body:kind", "body:id", "body:source", "body:role", "body:digest"],
+    "reaches": "PiCopilotService.resolve_mention -> mention_objects owners: concept definition and packaged availability, database label or registration identity hashes, ProjectWorkspace bounded text reader metadata, sk2 attachment reference",
+    "protection": "hosted.guard_request + project/session registry lookup; mention identities are bounded catalogue keys, registration IDs or opaque ProjectWorkspace file IDs, never client paths; digests are checked before use; data files and directories keep the workspace reader's refusals; no host path or file content is returned",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Server-owned session index and ProjectAuthorityStore active/archive paths under state_paths; lazy service initialization may reconcile session state. User Skills load only frozen content-addressed objects in ExtensionRegistry."
+  },
+  {
+    "method": "PUT",
+    "route": "/api/copilot/pi/sessions/{session_id}/draft-mentions",
+    "fields": ["path:session_id", "body:project_id", "body:mentions"],
+    "reaches": "PiCopilotService.set_draft_mentions -> scoped session + revalidated references (at most 16) -> session draft record",
+    "protection": "hosted.guard_request + project/session registry lookup; mention identities are bounded catalogue keys, registration IDs or opaque ProjectWorkspace file IDs, never client paths; digests are checked before use; a mention grants no run, extraction or substitution approval",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Server-owned session index and ProjectAuthorityStore active/archive paths under state_paths; lazy service initialization may reconcile session state. User Skills load only frozen content-addressed objects in ExtensionRegistry."
+  },
+  {
+    "method": "GET",
     "route": "/api/capabilities/method-skills/clinical-concept-definitions/projection",
     "fields": ["query:concepts[]", "query:database"],
     "reaches": "clinician_skills.get_clinical_definitions -> concept_catalog.clinical_definitions -> packaged definition and database registries only",

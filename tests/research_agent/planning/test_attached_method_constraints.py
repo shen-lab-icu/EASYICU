@@ -101,7 +101,11 @@ def test_the_pipeline_refuses_a_plan_that_drops_a_pin(change, code):
         PipelineServices().validate_plan_revision(plan=plan, context=context)
 
 
-@pytest.mark.parametrize("spec", METHOD_SKILLS, ids=lambda spec: spec.skill_id)
+STUDY_METHODS = [spec for spec in METHOD_SKILLS if spec.layer in {"research_workflow", "analysis_module"}]
+TOOL_SKILLS = [spec for spec in METHOD_SKILLS if spec not in STUDY_METHODS]
+
+
+@pytest.mark.parametrize("spec", STUDY_METHODS, ids=lambda spec: spec.skill_id)
 def test_every_catalog_method_has_a_canonical_design_coordinate(spec):
     from easyicu.research_agent.planning.analysis_types import canonical_analysis_family
 
@@ -113,6 +117,14 @@ def test_every_catalog_method_has_a_canonical_design_coordinate(spec):
     assert setup["analysis_design"]["analysis_family"] == family
     assert constraints[0]["capability_id"] == spec.capability_id
     assert constraints[0]["action_ids"] == list(spec.action_ids)
+
+
+@pytest.mark.parametrize("spec", TOOL_SKILLS, ids=lambda spec: spec.skill_id)
+def test_a_data_or_planning_tool_is_not_a_study_method_to_attach(spec):
+    from easyicu.extensions.contracts import ExtensionRegistryError
+
+    with pytest.raises(ExtensionRegistryError, match="skill_attachment_disabled"):
+        method_constraints([builtin_attachment(spec.skill_id)])
 
 
 def test_a_researcher_choice_can_override_the_attachment_but_keeps_its_receipt():

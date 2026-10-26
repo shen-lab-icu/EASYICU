@@ -42,7 +42,9 @@ def method_constraints(attachments: object) -> list[dict]:
             raise ExtensionRegistryError("skill_attachment_stale", "skill_attachment_stale")
         spec = next(item for item in METHOD_SKILLS if item.skill_id == ref.id)
         capability = get_capability_by_id(spec.capability_id)
-        assert capability is not None
+        if capability is None:
+            # Data-definition and planning tools have no study design to pin.
+            raise ExtensionRegistryError("skill_attachment_disabled", "skill_attachment_disabled")
         subtypes = [item for item in list_analysis_types() if item.capability_id == spec.capability_id]
         subtype = subtypes[0] if len(subtypes) == 1 else None
         family = subtype.key if subtype else canonical_analysis_family(capability.family)
