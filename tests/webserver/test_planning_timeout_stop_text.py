@@ -34,7 +34,7 @@ def test_invalid_retry_counts_are_never_public_coordinates(count):
 
 
 @pytest.mark.parametrize("count", [0, 1, 2])
-def test_chinese_stop_names_the_retries_already_made(count):
+def test_timeout_stop_names_provider_and_detail_keeps_the_retry_count(count):
     script = r"""
 const modules = {};
 global.window = { EU_HTML: {esc: x => x}, EasyICU: {guidedPi: {declare: (name, api) => {modules[name] = api;}}}};
@@ -42,18 +42,19 @@ require(process.argv[1]);
 require(process.argv[3]);
 const owner = modules.errorText.create({tr: (en, zh) => zh, staticPreview: false});
 const stop = modules.runStop.create({tr: (en, zh) => zh, runFailureText: owner.runFailureText});
-console.log(JSON.stringify(stop.render({savedRuns:[{
+console.log(JSON.stringify([stop.render({savedRuns:[{
   run_id:'synthetic', run_status:'failed', error_code:'research_pipeline_provider_timeout',
   gate_transport_retries:Number(process.argv[2]),
-}]})));
+}]}), owner.runFailureText('research_pipeline_provider_timeout', {transportRetries:Number(process.argv[2])})]));
 """
     path = Path(__file__).resolve().parents[2] / "src/easyicu/webserver/static/js/screens-guided-pi-error-text.js"
     result = run_node("node", script, str(path), str(count),
                       str(path.with_name("screens-guided-pi-run-stop.js")), check=True)
-    text = json.loads(result.stdout)
-    assert "未及时返回" in text
-    assert f"重试 {count} 次" in text
-    assert "请稍后重试" not in text
+    top_line, detail = json.loads(result.stdout)
+    assert "模型服务返回错误，本次运行已停止。网络或服务恢复后可直接重试。" in top_line
+    assert "未及时返回" in detail
+    assert f"重试 {count} 次" in detail
+    assert "请稍后重试" not in detail
 
 
 def test_recovery_text_names_the_actual_planning_restart():

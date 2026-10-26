@@ -70,6 +70,18 @@
     return owner ? owner.reader(context, window.t || (en => en)) : null;
   }
 
+  // Distribution and estimate sentences use one registered name; an
+  // unlabelled code keeps its variable so it is never presented as a name.
+  function levelLabel(variable, value, labels, levels) {
+    const text = String(value == null ? '' : value);
+    const numeric = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(text);
+    const keys = [`${variable}=${JSON.stringify(value)}`, `${variable}=${text}`,
+      ...(numeric ? [`${variable}=${Number(text)}`, `${variable}=${JSON.stringify(String(Number(text)))}`] : [])];
+    const registered = keys.map(key => labels[key]).find(label => typeof label === 'string' && label.trim());
+    return (levels && levels.levelName(variable, value)) || registered
+      || `${variable}=${numeric ? Number(text) : text}`;
+  }
+
   function claim(sourceField, value, displayValue, source) {
     if (value == null || displayValue === '') return null;
     const table = source && source.table;
@@ -276,13 +288,6 @@
     const measure = scales.size === 1 ? MEASURES[[...scales][0]] : null;
     if (!measure || !fitted.some(item => isTrue(item.record.is_primary_contrast))) return [];
     const labels = plan && plan.display_labels || {};
-    const levelLabel = (exposure, level) => {
-      const key = `${exposure}=${JSON.stringify(level)}`;
-      const numeric = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(level) ? `${exposure}=${JSON.stringify(Number(level))}` : '';
-      const grouped = levels && levels.has(exposure) ? levels.levelName(exposure, level) : '';
-      return grouped || (typeof labels[key] === 'string' ? labels[key]
-        : (numeric && typeof labels[numeric] === 'string' ? labels[numeric] : level));
-    };
     return fitted
       .sort((a, b) => Number(isTrue(b.record.is_primary_contrast)) - Number(isTrue(a.record.is_primary_contrast)))
       .map(item => {
@@ -292,7 +297,7 @@
         const reference = String(record.reference_level == null ? '' : record.reference_level).trim();
         const contrast = String(record.contrast || '').trim() || (level && reference ? `${level} vs ${reference}` : level);
         const label = (levels && levels.contrastName(exposure, contrast)) || (level && reference
-          ? `${levelLabel(exposure, level)} vs ${levelLabel(exposure, reference)}`
+          ? `${levelLabel(exposure, level, labels, levels)} vs ${levelLabel(exposure, reference, labels, levels)}`
           : contrast || (typeof labels[exposure] === 'string' ? labels[exposure] : (levels && levels.variableName(exposure)) || exposure));
         const value = finite(record.estimate);
         const low = finite(record.ci_low);
@@ -344,29 +349,33 @@
     const specs = (Array.isArray(plan && plan.steps) ? plan.steps : [])
       .filter(step => step && step.planned_analysis_role === 'primary' && step.exposure_outcome_distribution_spec)
       .map(step => step.exposure_outcome_distribution_spec);
-    const spec = specs.length === 1 ? specs[0] : null;
+    // Model-led plans register the same exposure on their primary model,
+    // without a separate primary distribution step (absolute risk is context).
+    const requirements = (plan?.steps || []).filter(step => step?.planned_analysis_role === 'primary')
+      .flatMap(step => step.model_requirements || [])
+      .filter(row => row?.analysis_role === 'primary' && row.exposure_source);
+    const model = specs.length === 0 && requirements.length === 1 ? requirements[0] : null;
+    const spec = specs.length === 1 ? specs[0] : model ? {
+      exposure: model.exposure_source, outcome: model.outcome, exposure_levels: model.exposure_levels,
+    } : null;
     const labels = plan && plan.display_labels || {};
     const overall = distribution.find(item => String(item.record.row_role || '') === 'overall') || null;
     const exposureLevels = distribution
       .filter(item => String(item.record.row_role || '') === 'exposure_level')
       .map(item => {
         const raw = item.record.exposure_level;
-        const matches = (Array.isArray(spec && spec.exposure_levels) ? spec.exposure_levels : [])
-          .filter(level => String(level) === String(raw)
-            || (typeof level === 'number' && typeof raw === 'string'
-              && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(raw) && Number(raw) === level));
-        const key = matches.length === 1 ? `${spec.exposure}=${JSON.stringify(matches[0])}` : '';
-        const grouped = levels && spec && levels.has(spec.exposure) ? levels.levelName(spec.exposure, raw) : '';
+        const variable = spec?.exposure || item.record.exposure || item.table.group_by || 'exposure';
         return {
-        level: String(item.record.exposure_level == null ? '' : item.record.exposure_level),
-        label: grouped || (key && typeof labels[key] === 'string' ? labels[key] : String(raw == null ? '' : raw)),
-        n: finite(item.record.n_rows),
-        sharePct: finite(item.record.exposure_pct),
-        events: finite(item.record.outcome_events),
-        denominator: finite(item.record.outcome_denominator),
-        missingN: finite(item.record.outcome_missing_n),
-        outcomeRatePct: finite(item.record.outcome_rate_pct),
-      }; });
+          level: String(raw == null ? '' : raw),
+          label: levelLabel(variable, raw, labels, levels),
+          n: finite(item.record.n_rows),
+          sharePct: finite(item.record.exposure_pct),
+          events: finite(item.record.outcome_events),
+          denominator: finite(item.record.outcome_denominator),
+          missingN: finite(item.record.outcome_missing_n),
+          outcomeRatePct: finite(item.record.outcome_rate_pct),
+        };
+      });
     // A population-flow ledger is a typed contract.  Audit summaries may also
     // expose generic `stage`/`n` columns, but those counts describe audited
     // concepts rather than patients and must never drive clinical denominators.
@@ -410,6 +419,7 @@
           distribution.filter(item => String(item.record.row_role || '') === 'exposure_level')[index],
         )),
       ].filter(Boolean),
+      exposureSpec: spec,
       exposureLevels,
       continuousGroups: continuousGroups(records, plan),
       categoricalGroups: categoricalGroups(records, plan),
@@ -434,5 +444,5 @@
     };
   }
 
-  window.EasyICU.guidedPi.declare('resultSummary', { summarize });
+  window.EasyICU.guidedPi.declare('resultSummary', { summarize, levelLabel });
 })();

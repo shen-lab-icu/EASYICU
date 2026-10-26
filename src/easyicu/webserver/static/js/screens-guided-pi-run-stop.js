@@ -101,6 +101,16 @@
       const code = gateReason(run) || String(run.error_code || '')
         || (status === 'cancelled' ? 'research_pipeline_cancelled' : '');
       const detail = run.gate_detail && typeof run.gate_detail === 'object' ? run.gate_detail : {};
+      const reason = detail.reason_code || run.gate_detail_code;
+      if (reason === 'provider_http_error' || reason === 'provider_timeout'
+        || code === 'research_pipeline_provider_timeout') {
+        const message = tr(
+          'The model service returned an error, so the run stopped. Retry once the connection or service is back.',
+          '模型服务返回错误，本次运行已停止。网络或服务恢复后可直接重试。',
+        );
+        return message + ((detail.runner_kind || run.gate_detail_runner_kind) === 'not_started'
+          ? tr(' Analysis has not started.', '分析尚未开始。') : '');
+      }
       const text = code ? String(runFailureText(code, {
         code: detail.reason_code || run.gate_detail_code,
         missing: detail.missing_concepts || run.gate_missing_concepts,
