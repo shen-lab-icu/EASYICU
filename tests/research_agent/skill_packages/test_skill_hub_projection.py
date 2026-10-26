@@ -59,7 +59,9 @@ def test_fixed_landmark_package_ships_executable_reference_scripts() -> None:
     assert "✓ Analysis completed successfully!" in skill
     assert "=== Export Complete ===" in skill
     assert "key_metrics.csv" in skill
-    assert "## Workflow" in skill  # generated sections are retained
+    assert "## Steps and their checks" in skill
+    assert files["SKILL.zh.md"]["content"] == (PACKAGE_ROOT / "SKILL.zh.md").read_text(encoding="utf-8")
+    assert "examples/public_demo.md" in files
     assert all(len(row["sha256"]) == 64 for row in files.values())
 
 
