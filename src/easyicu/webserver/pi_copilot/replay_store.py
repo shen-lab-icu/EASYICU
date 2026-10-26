@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 from easyicu.extensions.skill_attachments import attachment_payload
+from easyicu.webserver.mention_objects import resolved_payload
 
 from .contracts import PiCopilotError, utc_now
 from .projections import project_pi_replay_event
@@ -156,6 +157,7 @@ class PiConversationReplayStore:
         user_message: str = "",
         message_origin: str = "unknown",
         attached_skills: object = (),
+        mentioned_objects: object = (),
     ) -> None:
         with self._lock:
             payload = self._read(session_id, project_id)
@@ -174,6 +176,7 @@ class PiConversationReplayStore:
                     "user_message": str(user_message)[:12_000],
                     "message_origin": str(message_origin or "unknown"),
                     "attached_skills": attachment_payload(attached_skills),
+                    "mentioned_objects": resolved_payload(mentioned_objects),
                     "events": [],
                 }
             )
@@ -186,6 +189,13 @@ class PiConversationReplayStore:
             turns = [row for row in self._read(session_id, project_id)["turns"]
                      if not row.get("superseded") and row.get("kind") != "host_action"]
             return attachment_payload(turns[turn_index].get("attached_skills", [])) if 0 <= turn_index < len(turns) else []
+
+    def mentions_for_turn(self, *, session_id: str, project_id: str, turn_index: int) -> list[dict]:
+        with self._lock:
+            turns = [row for row in self._read(session_id, project_id)["turns"]
+                     if not row.get("superseded") and row.get("kind") != "host_action"]
+            rows = resolved_payload(turns[turn_index].get("mentioned_objects", [])) if 0 <= turn_index < len(turns) else []
+            return [row["reference"] for row in rows]
 
     def record_host_action(
         self,

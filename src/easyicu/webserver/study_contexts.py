@@ -21,6 +21,8 @@ from easyicu.webserver import primary_cohort, state_paths
 from easyicu.extensions.contracts import ExtensionRegistryError
 from easyicu.extensions.skill_attachments import attachment_payload
 from easyicu.webserver.skill_setup import apply_skill_setup
+from easyicu.webserver.mention_objects import resolved_payload
+from easyicu.webserver.mention_setup import apply_mention_setup
 from easyicu.webserver.causal_trial_reading import (
     normalize_causal_trial_reading,
     reading_rests_on,
@@ -82,6 +84,7 @@ _ROW_LEVEL_KEYS = {
 }
 _CONTEXT_FIELDS = {
     "attached_skills",
+    "mentioned_objects",
     "id",
     "title",
     "question",
@@ -331,6 +334,7 @@ _LITERATURE_SCOPE_FIELDS_V2 = (
 )
 _SCIENTIFIC_CONFIGURATION_FIELDS = (
     "attached_skills",
+    "mentioned_objects",
     *_LITERATURE_SCOPE_FIELDS_V2,
     "cohort_eligibility_authority",
     "literature_authority",
@@ -1370,8 +1374,10 @@ def validate_context_update(
 def _apply_attached_setup(patch: Dict[str, Any], candidate: Mapping[str, Any], previous=None) -> None:
     try:
         patch.update(apply_skill_setup(candidate, previous))
+        patch.update(apply_mention_setup(candidate))
     except ExtensionRegistryError as exc:
-        raise StudyContextError({"error": exc.code, "field": "attached_skills"}) from exc
+        field = "mentioned_objects" if exc.code.startswith("mention_") else "attached_skills"
+        raise StudyContextError({"error": exc.code, "field": field}) from exc
 
 
 def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
@@ -1443,6 +1449,13 @@ def _sanitize_patch(
         )
 
     patch: Dict[str, Any] = {}
+    if "mentioned_objects" in raw:
+        if not allow_skill_attachments:
+            raise StudyContextError({"error": "mention_server_owned", "field": "mentioned_objects"})
+        try:
+            patch["mentioned_objects"] = resolved_payload(raw["mentioned_objects"] or [])
+        except ExtensionRegistryError as exc:
+            raise StudyContextError({"error": exc.code, "field": "mentioned_objects"}) from exc
     if "attached_skills" in raw:
         if not allow_skill_attachments:
             raise StudyContextError({"error": "skill_attachment_server_owned", "field": "attached_skills"})
@@ -2819,6 +2832,7 @@ def build_agent_context_binding(
                 "execution_concepts",
                 "analysis_design",
                 "attached_skills",
+                "mentioned_objects",
                 "sensitivity_specs",
                 "time_window",
                 "comparator",
@@ -2858,6 +2872,8 @@ def _scientific_fields_sha256(
     sanitized.pop("id", None)
     if not sanitized.get("attached_skills"):
         sanitized.pop("attached_skills", None)
+    if not sanitized.get("mentioned_objects"):
+        sanitized.pop("mentioned_objects", None)
     # An undeclared trajectory design contributes nothing, so every digest
     # recorded before this field existed stays byte-identical; declaring one
     # is a scientific change and does move the digest.
@@ -3080,6 +3096,7 @@ def restore_turn_configuration_snapshot(
 
     defaults: Dict[str, Any] = {
         "attached_skills": [],
+        "mentioned_objects": [],
         "question_family_check": None,
         "question": "",
         "stated_adjustments": [],
