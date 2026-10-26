@@ -12,7 +12,7 @@ import json
 from .profiles import get_database_profile
 from .research_capabilities import research_capability_profile
 from .research_plan_requirements import _constraints, plan_capability_decision
-from .research_requirements import CapabilityDecision, StudyRequirements, ThresholdRequirement, assess_study
+from .research_requirements import CapabilityDecision, StudyRequirements, ThresholdRequirement, assess_study, family_requirements
 
 BINDING_FIELD = "database_capability_binding"
 
@@ -29,11 +29,14 @@ def registered_source_profile(database):
 def source_decision(profile, requirements):
     """Select a named native endpoint for a new executable source proposal.
 
-    The base assessment continues to describe generic dictionary ``death``.
-    Refused studies cannot be repaired by choosing a different endpoint.
+    Time-to-event alternatives belong to assess_study, including their order.
+    Other families retain their existing native status proposal. Refusals
+    cannot be repaired here by choosing a different endpoint.
     """
     decision = assess_study(profile, requirements)
     if decision.status == "refusal":
+        return decision
+    if "event_time" in family_requirements(requirements.family):
         return decision
     if any(item.capability == "outcome_meaning" for item in decision.substitutions):
         native = next((item for item in profile.mortality_outcomes if item.meaning == "icu_death"), None)

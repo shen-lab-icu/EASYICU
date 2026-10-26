@@ -188,7 +188,7 @@ def test_capability_projection_keeps_an_undeclared_adjustment_set_undeclared(cov
 
 
 def test_missing_source_capability_cannot_be_overridden_by_approval(tmp_path):
-    context, plan = _case("eicu")
+    context, plan = _case("hirid")
     plan = plan.model_copy(update={"analysis_type": "survival"})
     review = _review(context, plan)
     assert review.approval_allowed is False
@@ -407,10 +407,10 @@ def test_icu_survival_reviews_its_discharge_proxy_before_approval(tmp_path, monk
 @pytest.mark.parametrize("database,icu_status,hospital_status,hospital_meaning,hospital_time", [
     ("mimic", "exact", "exact", None, None),
     ("miiv", "exact", "exact", None, None),
-    ("eicu", "substitution", "refusal", None, None),
+    ("eicu", "substitution", "substitution", "icu_death", "icu_discharge_proxy"),
     ("hirid", "refusal", "refusal", "icu_death", "last_observation_proxy"),
-    ("aumc", "substitution", "refusal", "death_within_72h_after_icu_discharge", "date"),
-    ("sic", "exact", "refusal", None, None),
+    ("aumc", "substitution", "substitution", "icu_death", "icu_discharge_proxy"),
+    ("sic", "exact", "substitution", "mort_28d", "followup_days_28d"),
 ])
 @pytest.mark.parametrize("outcome", ["icu_death", "death"])
 def test_survival_question_scope_and_review_agree_for_each_mortality(
@@ -438,11 +438,45 @@ def test_survival_question_scope_and_review_agree_for_each_mortality(
     else:
         assert gap is None
         assert decision["missing"] == []
-        assert review.approval_allowed
+        assert review.approval_allowed == (outcome == "icu_death" or expected == "exact")
     substitutions = {item["capability"]: item["substitute"] for item in decision["substitutions"]}
     if outcome == "icu_death":
         timing = "last_observation_proxy" if database == "hirid" else "icu_discharge_proxy"
         assert substitutions == ({"event_time": timing} if database in {"eicu", "hirid", "aumc"} else {})
     else:
         assert substitutions == ({"outcome_meaning": hospital_meaning, "event_time": hospital_time}
+                                 | ({"censor_time": "followup_days_28d" if database == "sic" else "icu_discharge"}
+                                    if expected == "substitution" else {})
                                  if hospital_meaning else {})
+
+
+@pytest.mark.parametrize("database,endpoint", [("eicu", "icu_death"), ("aumc", "icu_death"), ("sic", "mort_28d")])
+def test_default_survival_offer_requires_applied_endpoint_and_digest_bound_approval(tmp_path, database, endpoint):
+    from easyicu.databases.research_substitutions import bind_source_substitutions, source_binding
+    from easyicu.research_agent.schema import ConceptDescriptor
+
+    context, plan = _case(database)
+    plan = plan.model_copy(update={"analysis_type": "survival"})
+    unbound_review = _review(context, plan)
+    assert unbound_review.facts["database_capability_review"]["decision"]["status"] == "substitution"
+    assert not unbound_review.approval_allowed
+    result = SimpleNamespace(context=context, plan=plan, evidence=EvidenceStore(tmp_path))
+    with pytest.raises(CapabilityApprovalError, match="capability_substitution_not_applied"):
+        require_approved_database_capabilities(result, tmp_path)
+    requirements = unbound_review.facts["database_capability_review"]["decision"]["requirements"]
+    context = context.model_copy(update={
+        "variables": [ConceptDescriptor(name=endpoint, dtype="boolean", role="outcome", source_concept=endpoint)],
+        "user_preferences": UserPreferences(data_constraints=json.dumps({"database_study_requirements": requirements})),
+    })
+    bound = bind_source_substitutions(context)
+    assert context.target_outcome == "death"
+    assert bound.target_outcome == endpoint
+    assert source_binding(bound)["decision"]["requirements"] == requirements
+    assert bind_source_substitutions(bound, restoring=True) == bound
+    review = _review(bound, plan)
+    assert review.approval_allowed
+    assert review.facts["database_capability_review"]["decision"]["status"] == "substitution"
+    result.context = bound
+    with pytest.raises(CapabilityApprovalError, match="capability_substitution_approval_required"):
+        require_approved_database_capabilities(result, tmp_path)
+    require_approved_database_capabilities(_approve(tmp_path, result.evidence, bound, plan, review), tmp_path)

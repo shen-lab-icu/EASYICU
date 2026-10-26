@@ -58,9 +58,8 @@ def _concept_cell(profile: ResearchCapabilityProfile, name: str, definitions: di
 def _study_cell(profile: ResearchCapabilityProfile, family: str) -> StudyCell:
     """Time-to-event cells assess the conversation's default ``death`` request.
 
-    Generic death retains its source meaning and hospital follow-up requirement,
-    even where a named ICU endpoint is also available. Use the conversation's
-    requirements owner so the map cannot silently substitute ICU censoring.
+    Keep the original hospital endpoint requirements and the assessor's explicit
+    alternatives, so both the cell and its detail match the conversation.
     """
     from easyicu.webserver.research_capability_scope import study_requirements
 

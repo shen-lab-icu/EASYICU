@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from easyicu.databases.profiles import get_database_profile
 from easyicu.databases.research_capabilities import research_capability_profile
 from easyicu.research_agent.planning.analysis_types import infer_analysis_type
-from .research_requirements import StudyRequirements, ThresholdRequirement, assess_study
+from .research_requirements import StudyRequirements, ThresholdRequirement, assess_study, family_requirements
 
 if TYPE_CHECKING:
     from easyicu.research_agent.schema import AnalysisPlan, ResearchContext
@@ -78,7 +78,9 @@ def plan_capability_decision(context: ResearchContext, plan: AnalysisPlan) -> Ca
             "concepts": tuple(sorted(set(stated.concepts) | concepts)),
             "thresholds": tuple(dict.fromkeys((*stated.thresholds, *thresholds))),
         })
-    if "death" in concepts:
+    if "death" in concepts and not (
+        requirements.outcome == "hospital_death" and "event_time" in family_requirements(requirements.family)
+    ):
         # The generic death builder has this dictionary meaning even when the
         # source records another mortality status that needs a separate builder.
         profile = profile.model_copy(update={"mortality_outcomes": (profile.mortality,) if profile.mortality else ()})
@@ -103,7 +105,10 @@ def unapplied_substitution_capabilities(decision: CapabilityDecision, context: R
         if (item.capability == "analysis_unit" and "database_capability_binding" in _constraints(context)
                 and not ({item.source_field.column, "stay_id"} & set(context.cohort.id_columns))):
             missing.append(item.capability)
-        if item.capability == "outcome_meaning" and "database_capability_binding" in _constraints(context):
+        if item.capability == "outcome_meaning" and (
+            "database_capability_binding" in _constraints(context)
+            or "event_time" in family_requirements(decision.requirements.family)
+        ):
             targets = [context.target_outcome, *(requirement.outcome for step in plan.steps
                         for requirement in step.model_requirements)]
             targets.extend(step.exposure_outcome_distribution_spec.outcome for step in plan.steps

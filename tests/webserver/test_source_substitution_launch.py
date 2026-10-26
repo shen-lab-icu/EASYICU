@@ -48,6 +48,22 @@ def test_preparing_a_candidate_twice_does_not_lose_original_unit_or_outcome():
     assert prepare_source_population(candidate) == candidate
 
 
+@pytest.mark.parametrize("database,endpoint", [("eicu", "icu_death"), ("aumc", "icu_death"), ("sic", "mort_28d")])
+def test_survival_preparation_retains_the_default_request_and_proposes_the_supported_endpoint(database, endpoint):
+    original = study(database)
+    original["analysis_design"] = {"analysis_family": "survival", "analysis_unit": "icu_stay"}
+    candidate = prepare_source_population(original)
+    assert original["execution_concepts"]["outcome"] == "death"
+    assert candidate["execution_concepts"]["outcome"] == candidate["outcome"] == endpoint
+    assert candidate["_database_study_requirements"]["outcome"] == "hospital_death"
+    assert candidate["_database_study_requirements"]["censoring_unit"] == "hospitalization"
+    assert candidate["_database_capability_decision"]["status"] == "substitution"
+    assert prepare_source_population(candidate) == candidate
+    candidate["execution_concepts"]["outcome"] = "death"
+    with pytest.raises(ValueError, match="capability_substitution_binding_drift"):
+        prepare_source_population(candidate)
+
+
 @pytest.mark.parametrize("database", ["hirid", "aumc", "sic"])
 def test_launch_does_not_convert_a_refused_hospital_los_into_an_icu_endpoint(database):
     original = study(database)

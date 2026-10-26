@@ -27,12 +27,12 @@ def test_a_hospital_los_request_retains_the_legacy_refusal_code_with_a_capabilit
     assert gap["missing_capabilities"][0]["capability"] == "hospital_los"
 
 
-def test_a_missing_death_time_is_a_capability_refusal():
+def test_a_missing_censor_time_without_a_supported_alternative_is_a_capability_refusal():
     gap = study_family_database_gap({"analysis_design": {"analysis_family": "survival"},
                                      "execution_concepts": {"outcome": "death"}},
-                                    question="Estimate time to death.", database="eicu")
+                                    question="Estimate time to death.", database="hirid")
     assert gap["code"] == "study_family_database_out_of_scope"
-    assert "event_time" in {item["capability"] for item in gap["missing_capabilities"]}
+    assert "censor_time" in {item["capability"] for item in gap["missing_capabilities"]}
 
 
 def test_an_unknown_export_exposure_does_not_refuse_planning_but_a_known_unmapped_one_does():
