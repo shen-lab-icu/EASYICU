@@ -1260,6 +1260,7 @@
     const map = {
       compatible: '可对比',
       descriptive_only: '仅描述性',
+      raw_feature_distribution_only: '仅特征分布',
       blocked: '已拦截',
       blocked_until_numeric_evidence_gate: '待数值证据核验通过前拦截',
       matched_cohort: '匹配队列',
@@ -1281,7 +1282,9 @@
       done: '完成',
       failed: '失败',
     };
-    return t(raw, map[raw] || raw);
+    // A code with no label still reads as words, not as an identifier.
+    const words = raw.replace(/_/g, ' ');
+    return t(words, map[raw] || words);
   }
 
   function crossProgressMessage(value) {

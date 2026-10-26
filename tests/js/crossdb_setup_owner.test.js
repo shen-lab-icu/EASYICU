@@ -104,13 +104,18 @@ function fakeButton() {
     setError(value) { errorMessage = value; },
   };
 
-  assert.equal(setup.featureScope(), 'all', 'raw comparison defaults to the complete catalog');
+  assert.equal(setup.featureScope(), 'core', 'a raw comparison starts with the core features');
   setup.setSelectedKeys(['miiv', 'eicu']);
   const defaultSetupHtml = setup.renderReal(config);
   assert.match(defaultSetupHtml, /data-crossdb-source-path="registered"/);
   assert.doesNotMatch(defaultSetupHtml, /data-crossdb-run-raw/);
   setup.setSourceMethod('raw');
   assert.equal(setup.sourceMethod(), 'raw');
+  // Its primary action names what it runs; the full catalog is a choice.
+  const rawDefaultHtml = setup.renderReal(config);
+  assert.match(rawDefaultHtml, /Start quick comparison/);
+  assert.match(rawDefaultHtml, /12 core features/);
+  assert.doesNotMatch(rawDefaultHtml, /Start complete comparison/);
   setup.changeRawRoot('/scan-a');
   const staleScan = setup.scan('/scan-a', config);
   assert.equal(typeof resolveStaleScan, 'function');

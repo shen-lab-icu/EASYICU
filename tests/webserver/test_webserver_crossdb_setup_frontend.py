@@ -65,7 +65,7 @@ def test_crossdb_setup_owner_is_unique_and_wired_in_dependency_order() -> None:
         "scanRequestSeq: 0",
         "operationSeq: 0",
         "sampleMode: 'quick'",
-        "featureScope: 'all'",
+        "featureScope: 'core'",
         "registeredLoading: false",
     ):
         assert state_marker in setup

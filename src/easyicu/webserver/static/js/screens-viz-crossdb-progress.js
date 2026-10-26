@@ -15,6 +15,13 @@
     databaseStates: Object.create(null),
   };
 
+  // The owner names every database, so a database still waiting reads the
+  // same as one whose progress event has arrived.
+  function databaseName(key, label) {
+    const names = window.EU_DATABASE_NAMES;
+    return (names && names.name(key)) || String(label || key || '');
+  }
+
   function clear() {
     state.jobId = '';
     state.progress = null;
@@ -62,7 +69,7 @@
       state.databaseStates[database] = {
         ...previous,
         database,
-        label: String(event.database_label || previous.label || database),
+        label: databaseName(database, event.database_label || previous.label),
         status: String(event.database_status || previous.status || 'loading'),
         chunkCurrent: Number(event.chunk_current || previous.chunkCurrent || 0),
         chunkTotal: Number(event.chunk_total || previous.chunkTotal || 0),
@@ -190,7 +197,7 @@
     const sampleText = !registeredSummary && sample.maxPatients && sample.sampleSize
       ? ` · ≤${fmtInt(sample.maxPatients)} ${t('entities/db', '实体/库')} · ≤${fmtInt(sample.sampleSize)} ${t('values/feature', '值/特征')}`
       : '';
-    const currentDatabase = String(p.database_label || p.database || '').trim();
+    const currentDatabase = p.database ? databaseName(String(p.database).trim(), p.database_label) : String(p.database_label || '').trim();
     const chunkCurrent = Number(p.chunk_current || 0);
     const chunkTotal = Number(p.chunk_total || 0);
     const sourceStep = Math.min(databaseTotal || 1, completedDatabases + 1);
@@ -213,7 +220,7 @@
         const status = state.cancelRequested && row.status === 'loading' ? 'stopping' : row.status;
         const chunk = row.chunkTotal ? `${row.chunkCurrent || 1}/${row.chunkTotal}` : '';
         return `<li class="crossdb-progress-db is-${esc(status)}">
-          <span class="crossdb-progress-db-name">${esc(row.label || row.database)}</span>
+          <span class="crossdb-progress-db-name">${esc(row.label || databaseName(row.database))}</span>
           <span class="crossdb-progress-db-chunk mono">${esc(chunk)}</span>
           <span class="crossdb-progress-db-status">${esc(statusLabel(status))}</span>
         </li>`;

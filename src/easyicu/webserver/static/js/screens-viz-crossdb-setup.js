@@ -49,7 +49,9 @@
     scanRequestSeq: 0,
     operationSeq: 0,
     sampleMode: 'quick',
-    featureScope: 'all',
+    // The quick path is quick: 12 core features take ~35 s across six local
+    // databases; the complete catalog (~325 features) is ~10x the reads.
+    featureScope: 'core',
     registeredLoading: false,
   };
 
