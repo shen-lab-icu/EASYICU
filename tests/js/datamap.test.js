@@ -1,0 +1,92 @@
+'use strict';
+
+// The Data map lays out the host's decisions: a study type the data cannot
+// support says what is missing, a substitute says what stands in, variables
+// page through the host's catalogue, and every database is marked as not yet
+// accepted on real data until the host says otherwise. Synthetic fixtures
+// are not counted as registrations.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+const vm = require('node:vm');
+
+const JS = path.resolve(__dirname, '../../src/easyicu/webserver/static/js');
+const settle = async () => { for (let i = 0; i < 6; i += 1) await new Promise(resolve => setImmediate(resolve)); };
+
+function row(database, survival, extra = {}) {
+  return {
+    database, profile: { reference_release: '3.1' }, real_data_acceptance: 'not_accepted', sources: extra.sources || [], source_next_offset: null,
+    studies: [{ family: 'survival', status: survival.status, decision: survival.decision }, { family: 'descriptive_epidemiology', status: 'exact', decision: { status: 'exact' } }],
+    concepts: [{ concept: 'age', unit: 'years', status: extra.ageStatus || 'available', substitute: extra.ageStatus === 'substituted' ? { kind: 'capped_or_shifted' } : null }],
+  };
+}
+const VIEW = {
+  concept_total: 41, concept_next_offset: 40,
+  databases: [
+    row('miiv', { status: 'exact', decision: {} }, { sources: [{ kind: 'public_demo' }, { kind: 'unrecorded' }, { kind: 'synthetic' }] }),
+    row('eicu', { status: 'refused', decision: { missing: [{ capability: 'event_time', code: 'event_time_unavailable' }], substitutions: [] } }, { ageStatus: 'substituted' }),
+    row('aumc', { status: 'substitution', decision: { missing: [], substitutions: [{ capability: 'event_time', substitute: 'date', source_field: { table: 'admissions', column: 'dateofdeath' } }] } }),
+  ],
+};
+
+function harness(overrides = {}) {
+  const calls = [];
+  const host = { innerHTML: '', dataset: {}, listeners: {}, addEventListener(name, handler) { this.listeners[name] = handler; } };
+  const window = {
+    EU_LANG: 'zh',
+    EU_DATABASE_NAMES: { name: key => ({ miiv: 'MIMIC-IV', eicu: 'eICU-CRD', aumc: 'AmsterdamUMCdb' }[key] || ''), abbr: key => ({ miiv: 'M-IV', eicu: 'eICU', aumc: 'AUMC' }[key] || '') },
+    EU_CATALOG: { dict: { age: ['Age', '年龄', 'years'] } },
+    EU_API: { loadDataMap: async page => { calls.push(JSON.parse(JSON.stringify(page))); if (overrides.failure) throw overrides.failure; return VIEW; } },
+  };
+  const document = { querySelector: selector => (selector === '[data-dmap-root]' ? host : null) };
+  const context = vm.createContext({ window, document });
+  for (const file of ['html-escape.js', 'study-family-names.js', 'screens-datamap.js']) {
+    vm.runInContext(fs.readFileSync(path.join(JS, file), 'utf8'), context, { filename: file });
+  }
+  const screen = window.SCREENS.datamap;
+  const root = { querySelector: () => host };
+  return { screen, root, host, calls };
+}
+const clickOn = (host, attribute, value, extra = {}) => host.listeners.click({ target: { closest: selector => (selector === `[${attribute}]` ? { dataset: value, ...extra } : null) } });
+
+test('the map loads one page and names databases, study types and variables', async () => {
+  const { screen, root, host, calls } = harness();
+  assert.match(screen.render(), /<h1>数据地图<\/h1>/);
+  screen.afterRender(root);
+  await settle();
+  assert.deepEqual(calls, [{ concept_offset: 0, concept_limit: 40 }]);
+  assert.match(host.innerHTML, /<h3>MIMIC-IV<\/h3>\s*<p>参考版本 3\.1<\/p>\s*<p>本机已登记 2 个<\/p>\s*<span class="dmap-chip is-pending">尚未在真实数据上验收<\/span>/);
+  assert.match(host.innerHTML, /<p>本机未登记<\/p>/);
+  // Known families sort first in the owner's order; the column heads are the databases.
+  assert.match(host.innerHTML, /<th scope="row">描述性研究<\/th>.*<th scope="row">生存分析<\/th>/s);
+  assert.match(host.innerHTML, /<th scope="col" title="eICU-CRD">eICU<\/th>/);
+  assert.match(host.innerHTML, /<code>age<\/code><span>年龄<\/span><\/th><td class="dmap-unit">years<\/td><td><span class="dmap-chip is-available">可用<\/span><\/td><td title="超过上限的值被截断或平移"><span class="dmap-chip is-substituted">替代<\/span><\/td>/);
+  assert.match(host.innerHTML, /1–1 \/ 共 41 个/);
+});
+
+test('a decision explains itself when opened; an exact one has nothing to open', async () => {
+  const { screen, root, host } = harness();
+  screen.afterRender(root);
+  await settle();
+  assert.doesNotMatch(host.innerHTML, /data-dmap-study="miiv\|survival"/);
+  clickOn(host, 'data-dmap-study', { dmapStudy: 'eicu|survival' });
+  assert.match(host.innerHTML, /<h3>生存分析 · eICU-CRD <span class="dmap-chip is-refused">不满足<\/span><\/h3>\s*<ul><li>没有记录事件发生时间。<\/li><\/ul>/);
+  clickOn(host, 'data-dmap-study', { dmapStudy: 'aumc|survival' });
+  assert.match(host.innerHTML, /<li>事件发生时间使用只有日期（admissions\.dateofdeath）。<\/li>/);
+  assert.match(host.innerHTML, /会写明替代内容，需要你确认后才运行/);
+});
+
+test('paging asks the host for the next page; a failed read offers a retry', async () => {
+  const { screen, root, host, calls } = harness();
+  screen.afterRender(root);
+  await settle();
+  clickOn(host, 'data-dmap-page', { dmapPage: 'next' }, { disabled: false });
+  await settle();
+  assert.deepEqual(calls[1], { concept_offset: 40, concept_limit: 40 });
+
+  const failed = harness({ failure: new Error('x') });
+  failed.screen.afterRender(failed.root);
+  await settle();
+  assert.match(failed.host.innerHTML, /暂时读不到数据地图。.*data-dmap-retry/s);
+});

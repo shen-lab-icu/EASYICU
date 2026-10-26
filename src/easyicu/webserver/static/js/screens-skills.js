@@ -38,6 +38,7 @@
     executionMode: row.execution_mode, claimCeiling: row.claim_ceiling,
     scope: row.scope || '', inputs: row.inputs || [], outputs: row.outputs || [],
     diagnostics: row.diagnostics || [], prompt: window.EU_LANG === 'zh' ? row.prompt_zh : row.prompt,
+    useAction: row.use_action || null,
   }));
   const methodComponents = () => (Array.isArray(methodCapabilities().components) ? methodCapabilities().components : []).map(row => ({
     id: `builtin:${row.id}`, name: row.id,
@@ -102,8 +103,12 @@
     ['phenotyping', tr('Phenotyping', '表型与亚型')],
   ];
   const familyName = family => (methodFamilySpecs().find(([key]) => key === family) || [])[1] || family;
-  const layerLabel = skill => skill.skillLayer === 'analysis_module'
-    ? tr('Single analysis', '单项分析') : tr('Complete study', '完整研究');
+  // Data-definition and planning Skills carry a working tool (screens-skills-tools.js).
+  const TOOL_LAYERS = new Set(['data_definition', 'planning_aid']);
+  const isTool = skill => skill.kind === 'method' && TOOL_LAYERS.has(skill.skillLayer);
+  const tools = () => window.EU_SKILL_TOOLS || null;
+  const layerLabel = skill => skill.skillLayer === 'analysis_module' ? tr('Single analysis', '单项分析')
+    : TOOL_LAYERS.has(skill.skillLayer) ? tr('Tool', '工具') : tr('Complete study', '完整研究');
 
   function rail() {
     if (window.EU_DESKTOP_MODULE_SHELL) return window.EU_DESKTOP_MODULE_SHELL.rail('skills');
@@ -119,10 +124,11 @@
   function catalog() {
     const workflowEntries = methodSkills().filter(item => item.skillLayer === 'research_workflow');
     const analysisModuleEntries = methodSkills().filter(item => item.skillLayer === 'analysis_module');
+    const toolEntries = methodSkills().filter(isTool);
     const publicationEntries = publicationSkills();
     const personalEntries = userSkills();
     const methodEntries = methodComponents();
-    const skillEntries = [...workflowEntries, ...analysisModuleEntries, ...publicationEntries, ...personalEntries];
+    const skillEntries = [...workflowEntries, ...analysisModuleEntries, ...toolEntries, ...publicationEntries, ...personalEntries];
     const all = ui.catalogMode === 'methods' ? methodEntries : skillEntries;
     const categories = [...new Set(all.map(item => item.category))].sort((a, b) => a.localeCompare(b));
     const query = ui.query.trim().toLocaleLowerCase();
@@ -136,6 +142,7 @@
     const builtinGroups = [
       ['workflow', 'builtin', tr('Complete studies', '完整研究')],
       ['module', 'builtin', tr('Single analyses', '单项分析')],
+      ['tools', 'builtin', tr('Data and planning', '数据与规划')],
       ['publication', 'builtin', tr('Writing and figures', '写作与图件')],
     ];
     const groupSpecs = ui.catalogMode === 'methods'
@@ -146,6 +153,7 @@
     const cards = groupSpecs.map(([group, source, heading]) => {
       const rows = filtered.filter(item => item.source === source && (group === 'workflow' ? item.kind === 'method' && item.skillLayer === 'research_workflow'
         : group === 'module' ? item.kind === 'method' && item.skillLayer === 'analysis_module'
+        : group === 'tools' ? isTool(item)
         : group.startsWith('component:') ? item.kind === 'method_component' && item.methodFamily === group.slice(10)
           : group === 'publication' ? item.kind === 'publication' : true));
       if (!rows.length) return '';
@@ -153,7 +161,7 @@
         <div class="eusk-grid">${rows.map(item => `<article class="eusk-card ${item.enabled ? '' : 'disabled'}">
           <button type="button" class="eusk-card-open" data-sk-open="${esc(item.id)}" aria-label="${tr('Inspect skill', '查看技能')} ${esc(item.title)}">
             <strong>${esc(item.title)}</strong><small>${esc(item.category)}</small><p>${esc(item.description)}</p>
-          </button><div class="eusk-card-foot"><span>${esc(source === 'user' ? (item.copiedFrom ? copiedFromLabel(item) + (item.sourceUpdated ? tr(' · source updated', ' · 原技能已更新') : '') : date(item.updated_at)) : item.kind === 'method' ? ceilingLabel(item) : item.kind === 'method_component' ? tierLabel(item) : '')}</span>
+          </button><div class="eusk-card-foot"><span>${esc(source === 'user' ? (item.copiedFrom ? copiedFromLabel(item) + (item.sourceUpdated ? tr(' · source updated', ' · 原技能已更新') : '') : date(item.updated_at)) : isTool(item) ? '' : item.kind === 'method' ? ceilingLabel(item) : item.kind === 'method_component' ? tierLabel(item) : '')}</span>
           <span class="eusk-state ${item.enabled ? 'on' : ''}">${item.enabled ? tr('Enabled', '已启用') : tr('Off', '未启用')}</span></div>
         </article>`).join('')}</div></section>`;
     }).join('');
@@ -196,7 +204,7 @@
       <div class="eusk-detail-actions">${stateOnly
         ? `<span class="eusk-state-button ${skill.enabled ? 'on' : ''}" aria-label="${skill.enabled ? tr('Available', '可用') : tr('Unavailable', '不可用')}">${skill.enabled ? '✓ ' + tr('Available', '可用') : tr('Unavailable', '不可用')}</span>`
         : `<button type="button" class="eusk-state-button ${skill.enabled ? 'on' : ''}" data-sk-toggle="${esc(skill.id)}" ${ui.busy || masterOff ? 'disabled' : ''}>${skill.enabled ? '✓ ' + tr('Enabled', '已启用') : tr('Enable', '启用')}</button>`}
-      <button type="button" class="eusk-use" data-sk-use="${esc(skill.id)}" ${skill.enabled ? '' : 'disabled'}>${workflow ? tr('Start workflow', '启动工作流') : method || (user && skill.enabled && skill.stages.includes('conversation')) ? tr('Use in new task', '在新任务中使用') : tr('Ask in new task', '在新任务中询问')} ↗</button>
+      <button type="button" class="eusk-use" data-sk-use="${esc(skill.id)}" ${skill.enabled ? '' : 'disabled'}>${skill.useAction && skill.useAction.owner === 'data_extraction' ? tr('Open Data Extraction', '打开数据提取') : workflow ? tr('Start workflow', '启动工作流') : method || (user && skill.enabled && skill.stages.includes('conversation')) ? tr('Use in new task', '在新任务中使用') : tr('Ask in new task', '在新任务中询问')} ↗</button>
       ${method && !window.EasyICU?.guidedPi?.optional('hosted')?.active() ? `<button type="button" class="eusk-copy" data-sk-copy="${esc(skill.id)}" ${ui.busy ? 'disabled' : ''}>${tr('Copy to my skills', '复制为我的技能')}</button>` : ''}
       ${user ? `<details class="eusk-actions-menu" data-popover-menu><summary aria-label="${tr('Skill actions', '技能操作')}">···</summary><div><button type="button" data-sk-edit-with aria-label="${tr('Edit with EasyICU', '使用 EasyICU 修订')}">${tr('Edit with EasyICU', '使用 EasyICU 修订')}</button><button type="button" data-sk-edit aria-label="${tr('Edit SKILL.md directly', '直接编辑 SKILL.md')}">${tr('Edit SKILL.md', '直接编辑 SKILL.md')}</button><button type="button" data-sk-download aria-label="${tr('Download SKILL.md', '下载 SKILL.md')}">${tr('Download SKILL.md', '下载 SKILL.md')}</button><button type="button" data-sk-remove aria-label="${tr('Remove skill', '移除技能')}">${tr('Remove skill', '移除技能')}</button></div></details>` : ''}</div></div>
       <div class="eusk-tabs" role="tablist"><button type="button" role="tab" aria-selected="${ui.tab === 'overview'}" data-sk-tab="overview">${tr('Overview', '概览')}</button><button type="button" role="tab" aria-selected="${ui.tab === 'files'}" data-sk-tab="files">${tr('Files', '文件')}</button></div>
@@ -205,7 +213,7 @@
           ? `<div class="eusk-file-preview"><h2>SKILL.md</h2><pre>${esc(detail.skill_md || '')}</pre></div>`
           : `<p>${tr('This file could not be read.', '无法读取这个文件。')}</p>`}`
         : `<div class="eusk-empty"><strong>${tr('Host contract', '内置契约')}</strong><p>${tr('This built-in capability is implemented in EasyICU code and has no installable SKILL.md package.', '此内置能力由 EasyICU 代码实现，没有可安装的 SKILL.md 文件包。')}</p></div>`}</div>`
-      : method ? `<div class="eusk-detail-body">${methodOverview(skill, component)}</div>`
+      : method ? `<div class="eusk-detail-body">${isTool(skill) && tools() ? tools().html(skill.name) : ''}${methodOverview(skill, component)}</div>`
       : `<div class="eusk-detail-body"><h2>${tr('When to use', '适用场景')}</h2><p>${esc(user ? skill.description : skill.scope)}</p>
         ${user ? `<div class="eusk-contract"><div><h3>${tr('Activation stages', '启用阶段')}</h3>${list(skill.stages)}</div><div><h3>${tr('Version', '版本')}</h3><code>sha256:${esc(String(skill.digest || '').slice(0, 16))}</code></div></div>`
           : `<div class="eusk-contract"><div><h3>${tr('Inputs', '输入')}</h3>${list(skill.inputs)}</div><div><h3>${tr('Outputs', '输出')}</h3>${list(skill.outputs)}</div><div><h3>${tr('Evidence rules', '证据规则')}</h3>${list(skill.invariants)}</div></div>`}
@@ -426,6 +434,9 @@
       if (target.dataset.skCreateWith !== undefined) { openBuilder('create'); return; }
       if (target.dataset.skUse) {
         const skill = allSkills().find(item => item.id === target.dataset.skUse);
+        // A Skill whose host action opens Data Extraction goes there, not to a conversation.
+        const action = skill && skill.useAction;
+        if (action && action.kind === 'open_owner' && action.owner === 'data_extraction') { location.hash = '#extraction'; return; }
         if (skill) try {
           if (skill.kind === 'method' || skill.kind === 'method_component') {
             window.sessionStorage.setItem('easyicu.skillHub.method', JSON.stringify({
