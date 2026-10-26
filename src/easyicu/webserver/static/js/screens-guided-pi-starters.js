@@ -85,10 +85,10 @@
       {
         id: 'example-lactate-death', database: 'eICU', kind: tr('Association', '关联分析'),
         title: tr('Lactate and in-hospital death', '乳酸与院内死亡'),
-        gets: tr('Adjusted association estimates, association figure, baseline table', '调整后的关联估计、关联图、基线表'),
+        gets: tr('Adjusted risk ratio (modified Poisson regression), absolute risk per group, association figure', '调整后的风险比（修正泊松回归）、各组绝对风险、关联图'),
         prompt: tr(
-          'In eICU, is the highest lactate on the first ICU day associated with in-hospital death? Does the association hold after adjusting for age, sex and illness severity?',
-          '在 eICU 中，入 ICU 第一天的最高乳酸与院内死亡是否相关？调整年龄、性别和疾病严重程度后还成立吗？',
+          'In eICU, is the highest lactate on the first ICU day associated with in-hospital death? Does the association hold after adjusting for age, sex and illness severity? Report it as a risk ratio.',
+          '在 eICU 中，入 ICU 第一天的最高乳酸与院内死亡是否相关？调整年龄、性别和疾病严重程度后还成立吗？用风险比（RR）表示。',
         ),
       },
       {
@@ -143,6 +143,15 @@
         prompt: tr(
           'In MIMIC-III, taking the start of invasive mechanical ventilation during the ICU stay as an exposure that changes over time, how is it related to death in the ICU after adjusting for age and sex?',
           '在 MIMIC-III 中，把 ICU 期间开始有创机械通气作为随时间变化的暴露，调整年龄和性别后，它与 ICU 内死亡的关系如何？',
+        ),
+      },
+      {
+        id: 'example-creatinine-competing', database: 'SICdb', kind: tr('Competing risks', '竞争风险'),
+        title: tr('Creatinine and ICU death: competing risks', '肌酐与 ICU 死亡的竞争风险'),
+        gets: tr('Cumulative incidence curves with Gray\'s test, cause-specific Cox and Fine–Gray models', '累积发生率曲线与 Gray 检验、原因别 Cox 与 Fine–Gray 模型'),
+        prompt: tr(
+          'In SICdb, how is the highest creatinine on the first ICU day related to death in the ICU, treating discharge alive from the ICU as a competing event and adjusting for age and sex?',
+          '在 SICdb 中，入 ICU 第一天的最高肌酐与 ICU 内死亡有什么关系？把活着转出 ICU 作为竞争事件，调整年龄和性别。',
         ),
       },
       {

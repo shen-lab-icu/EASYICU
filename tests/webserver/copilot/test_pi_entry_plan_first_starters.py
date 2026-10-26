@@ -87,6 +87,8 @@ _EXAMPLE_REQUIREMENTS = {
                                                      "censoring_unit": "hospitalization"}),
     "example-ventilation-time-varying": ("mimic", "survival", {"outcome": "icu_death", "concepts": ("mech_vent", "age", "sex"),
                                                                "censoring_unit": "icu_stay"}),
+    "example-creatinine-competing": ("sic", "survival", {"outcome": "icu_death", "concepts": ("crea", "age", "sex"),
+                                                         "censoring_unit": "icu_stay"}),
     "example-predict-death": ("sic", "prediction_model", {"outcome": "hospital_death", "concepts": ("age", "sex", "map", "hr", "lact", "crea")}),
     "example-dynamic-prediction": ("aumc", "dynamic_prediction", {"outcome": "icu_death", "concepts": ("map", "hr", "lact", "crea", "age")}),
     "example-early-norepinephrine": ("miiv", "causal_inference", {"outcome": "mort_28d", "concepts": ("age", "sex", "lact", "map"),
