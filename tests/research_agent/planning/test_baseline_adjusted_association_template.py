@@ -118,6 +118,30 @@ def test_a_stated_adjustment_absent_from_the_roster_is_refused():
         )
 
 
+@pytest.mark.parametrize("fixed,refused", [(("age", "sex"), None), (("age",), "sex")])
+def test_a_partial_question_reading_is_a_subset_of_the_fixed_roster(fixed, refused):
+    from easyicu.research_agent.planning.family_spec import FamilySpecError
+
+    context = baseline_context("chronic_flag", covariates=fixed)
+    context.user_preferences.covariate_authority = "user"
+    context.user_preferences.data_constraints = json.dumps({"stated_adjustments": [
+        {"variable": "sex", "concept": "sex", "words": "adjusted for sex", "source_status": "available"},
+    ]})
+    def build():
+        return build_family_spec_request(
+            context, analysis_types=("association_study",),
+            variable_roster=[v.name for v in context.variables], allowed_literature_citation_keys=(),
+        )
+
+    if refused is None:
+        assert build().exact_roster == list(fixed)
+        return
+    with pytest.raises(FamilySpecError, match="exact_roster_mismatch") as stopped:
+        build()
+    assert (stopped.value.stated_variable, stopped.value.cause_code) == (
+        refused, "stated_adjustment_outside_exact_roster")
+
+
 def test_the_planner_cannot_supply_host_owned_subgroup_terms():
     from easyicu.research_agent.agents.plan_payload import (
         PlannerHostOwnedFieldError, _planner_transport_schema,

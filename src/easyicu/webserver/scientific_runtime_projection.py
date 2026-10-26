@@ -469,6 +469,26 @@ def _published_column_domain(
     return ()
 
 
+def _planned_without_rows(universe_path: Path, column: str) -> bool:
+    """Whether the universe is a metadata-only planning catalog.
+
+    Only a catalog that holds no row and no materialized authority plans on
+    metadata alone; prepared data always carry their verified authority.
+    """
+
+    try:
+        import pyarrow.parquet as pq
+
+        rows = pq.read_metadata(universe_path).num_rows
+    except Exception as exc:  # noqa: BLE001 - retyped at this owner boundary
+        raise WebScientificRuntimeProjectionError(
+            "web_scientific_runtime_schema_unavailable",
+            "The materialized universe schema could not be read for exposure routing.",
+            details={"artifact": Path(universe_path).name, "reason": str(exc)[:500]},
+        ) from exc
+    return rows == 0 and _published_column_domain(universe_path, column) is None
+
+
 def exposure_kind_for_dtype(
     *,
     primary_exposure: str | None,
@@ -956,6 +976,16 @@ def compile_landmark_categorical_runtime_projection(
             details={"exposure_kind": exposure_kind.value},
         )
     if not levels:
+        if grouped is None and _planned_without_rows(universe_path, str(primary_exposure)):
+            # Metadata planning compiles this before the run's grouping phase
+            # (orchestration.exposure_grouping_phase). A source without a
+            # closed level set, such as a total score's integer range, has no
+            # contract to sign yet: a grouping the study states gives its
+            # column level codes, and the run that binds the reviewed grouping
+            # signs it, as a landmark spline yields to a grouped contract
+            # (ScientificRuntimeAuthorities.for_planning_context). Prepared
+            # data without a closed level set still stop below.
+            return None
         raise WebScientificRuntimeProjectionError(
             "web_landmark_categorical_levels_unavailable",
             "The categorical landmark runtime requires a source-owned closed level set.",

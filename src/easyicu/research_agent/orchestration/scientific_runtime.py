@@ -11,6 +11,7 @@ from ..authority.baseline_association_runtime import BaselineAssociationRuntimeA
 from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificAuthorityError,
     CurrentCaseScientificRuntimeAuthority,
+    LandmarkCategoricalAssociationRuntimeAuthority,
     LandmarkSplineRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
@@ -457,9 +458,10 @@ class ScientificRuntimeAuthorities:
         grouping owner verifies the run's record against its empty input; only
         that exact primary column, derived from the signed source, can change
         this authority. Baseline designs re-sign the grouping while retaining
-        adjustment and dependence; landmark splines yield to grouped contracts.
-        Execution on an accepted candidate already has its categorical
-        authority and never takes this path.
+        adjustment and dependence; a landmark spline, or a categorical
+        contract signed on the source's own levels, yields to the grouped
+        contract. Execution on an accepted candidate already has its
+        categorical authority on the grouped column and never takes this path.
         """
 
         from ..authority.evidence_store import sha256_of_file
@@ -468,7 +470,10 @@ class ScientificRuntimeAuthorities:
         from .exposure_grouping_phase import planning_run_groupings
 
         authority = self.current_case
-        if not isinstance(authority, (LandmarkSplineRuntimeAuthority, BaselineAssociationRuntimeAuthority)) or not planned_on_metadata(context):
+        if not isinstance(authority, (
+            LandmarkSplineRuntimeAuthority, LandmarkCategoricalAssociationRuntimeAuthority,
+            BaselineAssociationRuntimeAuthority,
+        )) or not planned_on_metadata(context):
             return self
         if isinstance(authority, BaselineAssociationRuntimeAuthority) and (
             authority.model_requirement_sha256 or authority.exposure_column == context.primary_exposure

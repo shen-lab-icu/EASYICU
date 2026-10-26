@@ -176,6 +176,13 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
       assert.match(zh, /数据/);
     }
   }
+  // A fixed study roster that leaves out a stated variable names it; the plan is not blamed.
+  const omitted = { code: 'progressive_family_spec_exact_roster_mismatch',
+    cause: 'stated_adjustment_outside_exact_roster', statedVariable: '性别' };
+  assert.equal(runFailure('research_pipeline_progressive_compile_failed', omitted),
+    "The study's fixed adjustment variables leave out “性别”, which the question asks to adjust for. Add it to the adjustment variables, or remove it from the question. Planning stopped and no analysis was run. Generate the plan again after that change.");
+  assert.equal(runFailureZh('research_pipeline_progressive_compile_failed', omitted),
+    '研究设置中固定的调整变量没有包含问题要求调整的「性别」。请把它加入调整变量，或在问题中去掉它。规划已停止，没有运行分析。修改后请重新生成计划。');
   [
     ['progressive_unknown_variable', /variable outside the study's available inputs/],
     ['progressive_model_levels_unavailable', /category levels that the data description has not established/],
