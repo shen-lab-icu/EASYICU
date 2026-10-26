@@ -47,13 +47,41 @@
     ];
   }
 
-  /* Example questions, one per study kind, spread over the six databases.
+  /* Example questions, one per method, spread over the six databases.
      Each is chosen so that its database records what it asks for (the
-     capability owner assesses it exact, with no substituted definition).
-     "You get" names only what that study kind's reviewed method produces;
+     capability owner assesses it exact, with no substituted definition, and
+     every variable it names is fully derivable there).
+     "You get" names only what that method's reviewed workflow produces;
      no duration is shown until run records give a typical one. */
   function exampleQuestions(tr) {
     return [
+      {
+        id: 'example-quick-lactate', database: 'HiRID', kind: tr('Quick answer', '快速回答'),
+        title: tr('First-day lactate by sex', '首日乳酸的男女差别'),
+        gets: tr('One answer card: median and quartiles per group, patients and missing; it can grow into a full study', '一张回答卡：各组中位数与四分位数、人数与缺失，可再展开为完整研究'),
+        prompt: tr(
+          'In HiRID, what is the median of the highest lactate on the first ICU day, and does it differ between men and women?',
+          '在 HiRID 中，入 ICU 第一天最高乳酸的中位数是多少？男女之间有差别吗？',
+        ),
+      },
+      {
+        id: 'example-ventilation-table-one', database: 'MIMIC-III', kind: tr('Descriptive', '描述性研究'),
+        title: tr('Who is ventilated on the first day', '首日机械通气患者的特征'),
+        gets: tr('Table 1 by group, each variable\'s denominator and missingness', '分组 Table 1、每个变量的分母与缺失'),
+        prompt: tr(
+          'In MIMIC-III, how do baseline characteristics differ between patients who did and did not receive invasive mechanical ventilation on the first ICU day?',
+          '在 MIMIC-III 中，入 ICU 第一天接受与未接受有创机械通气的患者，基线特征有什么不同？',
+        ),
+      },
+      {
+        id: 'example-measurement-audit', database: 'HiRID', kind: tr('Measurement audit', '缺失与测量审计'),
+        title: tr('How completely first-day measurements are recorded', '首日化验与生命体征的记录情况'),
+        gets: tr('Patients measured and share missing per variable, when the measurements are taken', '逐个变量的有记录人数与缺失比例、测量时间分布'),
+        prompt: tr(
+          'In HiRID, how many patients have lactate, creatinine, arterial oxygen pressure, mean arterial pressure and heart rate recorded on the first ICU day, how much is missing, and at what times are they measured?',
+          '在 HiRID 中，入 ICU 第一天的乳酸、肌酐、动脉血氧分压、平均动脉压和心率，各有多少患者有记录？缺失多少，多在什么时间测得？',
+        ),
+      },
       {
         id: 'example-lactate-death', database: 'eICU', kind: tr('Association', '关联分析'),
         title: tr('Lactate and in-hospital death', '乳酸与院内死亡'),
@@ -64,12 +92,57 @@
         ),
       },
       {
+        id: 'example-sofa-trend', database: 'eICU', kind: tr('Ordinal trend', '有序趋势'),
+        title: tr('First-day SOFA strata and death', '首日 SOFA 分层与院内死亡'),
+        gets: tr('Risk and denominator per stratum, trend test, adjusted estimates', '各层死亡风险与分母、趋势检验、调整后的估计'),
+        prompt: tr(
+          'In eICU, grouping the first-day SOFA score as 0–5, 6–9 and 10 or more, does the risk of in-hospital death rise step by step across the groups after adjusting for age and sex?',
+          '在 eICU 中，把入 ICU 第一天的 SOFA 评分分为 0–5、6–9、10 分及以上三层，调整年龄和性别后，院内死亡风险是否逐层升高？',
+        ),
+      },
+      {
+        id: 'example-lactate-dose-response', database: 'SICdb', kind: tr('Dose–response', '剂量反应'),
+        title: tr('How lactate level relates to death', '乳酸高低与院内死亡'),
+        gets: tr('Spline dose–response curve, comparison with a linear model, adjusted estimates', '样条剂量反应曲线、与线性模型的比较、调整后的估计'),
+        prompt: tr(
+          'In SICdb, is the highest lactate in the first 24 ICU hours related to in-hospital death in a non-linear way after adjusting for age and sex?',
+          '在 SICdb 中，入 ICU 24 小时内的最高乳酸与院内死亡之间，调整年龄和性别后是否呈非线性关系？',
+        ),
+      },
+      {
+        id: 'example-landmark-lactate', database: 'MIMIC-IV', kind: tr('Landmark', '界标分析'),
+        title: tr('Lactate at 48 hours and 28-day death', '48 小时界标：乳酸与 28 天死亡'),
+        gets: tr('Landmark cohort and its size, adjusted association estimates, association figure', '界标队列与入组人数、调整后的关联估计、关联图'),
+        prompt: tr(
+          'In MIMIC-IV, among patients still in the ICU at 48 hours, is the highest lactate in those 48 hours associated with death within 28 days after adjusting for age, sex, blood pressure and creatinine?',
+          '在 MIMIC-IV 中，入 ICU 48 小时仍在 ICU 的患者，48 小时内的最高乳酸与 28 天内死亡是否相关？调整年龄、性别、血压和肌酐后还成立吗？',
+        ),
+      },
+      {
         id: 'example-aki-survival', database: 'MIMIC-IV', kind: tr('Survival', '生存分析'),
         title: tr('Acute kidney injury and 28-day survival', '急性肾损伤与 28 天生存'),
-        gets: tr('Survival curves, Cox model results, proportional-hazards check', '生存曲线、Cox 模型结果、比例风险检验'),
+        gets: tr('Kaplan–Meier curves with log-rank test, Cox model results, proportional-hazards check', 'Kaplan–Meier 曲线与 log-rank 检验、Cox 模型结果、比例风险检验'),
         prompt: tr(
           'In MIMIC-IV, do patients with acute kidney injury (KDIGO criteria) on the first ICU day have worse 28-day survival?',
           '在 MIMIC-IV 中，入 ICU 第一天发生急性肾损伤（KDIGO 标准）的患者，28 天生存是否更差？',
+        ),
+      },
+      {
+        id: 'example-ventilation-rmst', database: 'SICdb', kind: tr('Restricted mean survival', '限制性平均生存时间'),
+        title: tr('Ventilation and days alive in 28 days', '机械通气与 28 天内存活天数'),
+        gets: tr('Restricted mean survival time per group and their difference, survival curves', '各组限制性平均生存时间及差值、生存曲线'),
+        prompt: tr(
+          'In SICdb, how many of the first 28 days do patients ventilated on the first ICU day live on average, compared with those who are not, after adjusting for age and sex?',
+          '在 SICdb 中，入 ICU 第一天接受有创机械通气的患者，28 天内平均存活多少天？与未通气的患者相比，调整年龄和性别后差多少？',
+        ),
+      },
+      {
+        id: 'example-ventilation-time-varying', database: 'MIMIC-III', kind: tr('Time-varying exposure', '时变暴露'),
+        title: tr('Starting ventilation and ICU death', 'ICU 期间开始机械通气与 ICU 死亡'),
+        gets: tr('Time-varying Cox model results, follow-up split at the start of exposure', '时变 Cox 模型结果、按开始时间切分的随访'),
+        prompt: tr(
+          'In MIMIC-III, taking the start of invasive mechanical ventilation during the ICU stay as an exposure that changes over time, how is it related to death in the ICU after adjusting for age and sex?',
+          '在 MIMIC-III 中，把 ICU 期间开始有创机械通气作为随时间变化的暴露，调整年龄和性别后，它与 ICU 内死亡的关系如何？',
         ),
       },
       {
@@ -79,6 +152,15 @@
         prompt: tr(
           'Using the first 24 hours of ICU data in SICdb, build a model that predicts in-hospital death. How well does it discriminate and how well is it calibrated?',
           '用 SICdb 中入 ICU 前 24 小时的数据建立一个预测院内死亡的模型，它的区分度和校准怎么样？',
+        ),
+      },
+      {
+        id: 'example-dynamic-prediction', database: 'AmsterdamUMCdb', kind: tr('Dynamic prediction', '动态预测'),
+        title: tr('Updating the risk of ICU death', '随时间更新的 ICU 死亡风险'),
+        gets: tr('Discrimination and calibration at each landmark, patients at risk at each', '各时点的区分度与校准、各时点的在险人数'),
+        prompt: tr(
+          'In AmsterdamUMCdb, at 24, 48 and 72 hours after ICU admission, how well do the vital signs and laboratory results up to that moment predict death in the ICU over the next 7 days?',
+          '在 AmsterdamUMCdb 中，在入 ICU 第 24、48、72 小时，用到当时为止的生命体征和化验，预测之后 7 天内 ICU 死亡的效果如何？',
         ),
       },
       {
@@ -100,24 +182,6 @@
         ),
       },
       {
-        id: 'example-ventilation-table-one', database: 'MIMIC-III', kind: tr('Descriptive', '描述性研究'),
-        title: tr('Who is ventilated on the first day', '首日机械通气患者的特征'),
-        gets: tr('Table 1 by group, each variable\'s denominator and missingness', '分组 Table 1、每个变量的分母与缺失'),
-        prompt: tr(
-          'In MIMIC-III, how do baseline characteristics differ between patients who did and did not receive invasive mechanical ventilation on the first ICU day?',
-          '在 MIMIC-III 中，入 ICU 第一天接受与未接受有创机械通气的患者，基线特征有什么不同？',
-        ),
-      },
-      {
-        id: 'example-lactate-dose-response', database: 'SICdb', kind: tr('Dose–response', '剂量反应'),
-        title: tr('How lactate level relates to death', '乳酸高低与院内死亡'),
-        gets: tr('Spline dose–response curve, comparison with a linear model, adjusted estimates', '样条剂量反应曲线、与线性模型的比较、调整后的估计'),
-        prompt: tr(
-          'In SICdb, is the highest lactate in the first 24 ICU hours related to in-hospital death in a non-linear way after adjusting for age and sex?',
-          '在 SICdb 中，入 ICU 24 小时内的最高乳酸与院内死亡之间，调整年龄和性别后是否呈非线性关系？',
-        ),
-      },
-      {
         id: 'example-pressure-trajectories', database: 'eICU', kind: tr('Trajectories', '轨迹分型'),
         title: tr('Blood-pressure trajectories', '血压变化轨迹分型'),
         gets: tr('Trajectory groups and how many, stability check, early identification', '轨迹分组与分组数、稳定性检验、早期识别'),
@@ -133,6 +197,16 @@
         prompt: tr(
           'In HiRID, how do the share of patients given norepinephrine during the ICU stay and the time to the first dose differ between patients with and without invasive mechanical ventilation?',
           '在 HiRID 中，接受与未接受有创机械通气的患者，ICU 期间使用去甲肾上腺素的比例和首次用药时间有什么不同？',
+        ),
+      },
+      {
+        id: 'example-replicate-lactate', database: tr('MIMIC-IV, eICU, SICdb', 'MIMIC-IV、eICU、SICdb'),
+        kind: tr('Multi-database replication', '多库验证'),
+        title: tr('Does the lactate finding hold elsewhere?', '乳酸的结论在其他库也成立吗'),
+        gets: tr('Each database\'s own estimate beside the original, whether the directions agree (not pooled)', '各库分别的估计与原研究并列、方向是否一致（不合并）'),
+        prompt: tr(
+          'In MIMIC-IV, study whether the highest lactate on the first ICU day is associated with in-hospital death after adjusting for age and sex; then repeat the same study in eICU and in SICdb.',
+          '在 MIMIC-IV 中研究入 ICU 第一天最高乳酸与院内死亡的关联（调整年龄和性别），再在 eICU 和 SICdb 上分别重复同一研究。',
         ),
       },
     ];
