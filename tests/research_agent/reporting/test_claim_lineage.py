@@ -6,85 +6,10 @@ import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.reporting.manuscript_provenance import build_manuscript_provenance
-from easyicu.webserver.demo_source_contracts import get_source
+from tests.support.claim_lineage import MANUSCRIPT, project, register, source_store
 
 
 KINDS = ["statistic", "analysis_input", "cohort", "column_definitions", "concept_dictionary", "data_source"]
-MANUSCRIPT = (
-    "The synthetic mean was 2.5[^value].\n\n"
-    "[^value]: value=2.5; step=estimate; field=mean; evidence=summary\n"
-)
-
-
-def register(store, evidence_id, payload, *, kind="log", inputs=(), step=None):
-    path = store.root / f"{evidence_id}.json"
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    return store.register_file(
-        source_path=path, evidence_id=evidence_id, kind=kind,
-        description="Synthetic aggregate receipt", inputs=list(inputs),
-        produced_by_step=step, producer="pipeline", generation_mode="system",
-    )
-
-
-def source_store(tmp_path, *, change=None, capsule_change=None, derived=False):
-    store = EvidenceStore(tmp_path, enforcement_mode="strict")
-    table = tmp_path / "cohort.parquet"
-    # No reader may decode this as a table; its registered bytes identify it.
-    table.write_bytes(b"synthetic-table-identity-only")
-    cohort = store.register_file(
-        source_path=table, evidence_id="cohort", kind="table", description="Synthetic cohort",
-        producer="pipeline", generation_mode="system",
-    )
-    analysis_input = cohort
-    if derived:
-        table = tmp_path / "derived.parquet"
-        table.write_bytes(b"synthetic-derived-table-identity")
-        analysis_input = store.register_file(
-            source_path=table, evidence_id="derived_cohort", kind="table", description="Synthetic subset",
-            inputs=[cohort.evidence_id], producer="pipeline", generation_mode="system",
-        )
-    official = get_source("eicu_demo_v2_0_1")
-    source = {
-        "source_id": official.id, "database": official.database,
-        "version": official.version, "archive_sha256": official.archive_sha256,
-        "registration_id": "synthetic_registration",
-        "path": "/private/not-for-the-browser", "credential": "not-for-the-browser",
-    }
-    context = {
-        "cohort": {"database": official.database, "n_stays": 8, "provenance": {
-            "materialized_cohort_window_hours": [0, 24], "source_identity": source,
-            "cohort_path": "/home/synthetic/cohort.parquet",
-        }},
-        "materialized_inputs": {"cohort": {
-            "cohort_sha256": cohort.sha256, "cohort_rows": 8,
-            "column_bindings": {"synthetic_measure": {}, "synthetic_outcome": {}},
-        }},
-    }
-    fingerprint = {"concept_dict_sha": "a" * 64, "sofa2_dict_sha": "b" * 64,
-                   "concept_count": 3, "concept_dict_path": "/home/private/dictionary.json"}
-    summary = {"mean": 2.5, "method": "synthetic_mean", "input_bindings": [{
-        "input_key": "artifact:analysis_cohort", "evidence_id": analysis_input.evidence_id,
-        "sha256": analysis_input.sha256, "loaded": True, "row_count": 8,
-    }]}
-    if change:
-        change(context, fingerprint, summary)
-    context_record = register(store, "research_context", context)
-    capsule = {
-        "schema_version": "easyicu.run_input_capsule/2",
-        "context_evidence_id": context_record.evidence_id, "context_sha256": context_record.sha256,
-        "cohort_sha256": cohort.sha256, "scientific_identity": {"database": official.database},
-    }
-    if capsule_change:
-        capsule_change(capsule)
-    register(store, "run_input_capsule", capsule)
-    register(store, "concept_dict_fingerprint", fingerprint)
-    register(store, "summary", summary, kind="statistic", inputs=[analysis_input.evidence_id], step="estimate")
-    store.register_numeric_claim(value="2.5", canonical=2.5, evidence_id="summary", step_id="estimate", source_field="mean")
-    return store
-
-
-def project(store):
-    return build_manuscript_provenance(manuscript=MANUSCRIPT, evidence=store, verify="mark")["claims"][0]
 
 
 def test_every_claim_has_an_ordered_openable_source_chain(tmp_path):
@@ -213,7 +138,7 @@ def test_unrecorded_facts_and_unsafe_scalars_are_omitted(tmp_path):
         fingerprint.pop("concept_count")
         fingerprint.pop("sofa2_dict_sha")
     chain = project(source_store(tmp_path, change=change))["lineage"]
-    assert chain[0]["facts"] == {"step_id": "estimate"}
+    assert chain[0]["facts"] == {"step_id": "estimate", "method_missing_reason": "method_not_displayable"}
     assert chain[1]["facts"] == chain[2]["facts"] == {}
     assert chain[3]["status"] == "missing"
     assert chain[3]["missing_reason"] == "column_definitions_not_recorded"
@@ -336,3 +261,35 @@ def test_database_name_without_a_source_identity_keeps_the_source_link_missing(t
     assert node["status"] == "missing"
     assert node["missing_reason"] == "source_identity_not_recorded"
     assert node["facts"] == {"database": "eicu_demo"}
+
+
+def test_statistic_keeps_the_recorded_method_with_a_percent_interval(tmp_path):
+    method = "Synthetic estimate with a 95% confidence interval."
+
+    def change(context, fingerprint, summary):
+        summary["method"] = method
+
+    node = project(source_store(tmp_path, change=change))["lineage"][0]
+    assert node["status"] == "current"
+    assert node["facts"]["method"] == method
+
+
+def test_an_unrecorded_method_has_a_reason_without_inventing_a_name(tmp_path):
+    def change(context, fingerprint, summary):
+        summary.pop("method")
+
+    node = project(source_store(tmp_path, change=change))["lineage"][0]
+    assert node["facts"]["method_missing_reason"] == "method_not_recorded"
+    assert "method" not in node["facts"]
+
+
+def test_a_legacy_source_without_registration_fields_stays_missing(tmp_path):
+    def change(context, fingerprint, summary):
+        context["cohort"]["provenance"]["source_identity"] = {"database": "eicu_demo"}
+        fingerprint.pop("concept_count")
+
+    chain = project(source_store(tmp_path, change=change))["lineage"]
+    assert chain[-1]["status"] == "missing"
+    assert chain[-1]["missing_reason"] == "source_identity_not_recorded"
+    assert "official_sha256_matches" not in chain[-1]["facts"]
+    assert "concept_count" not in chain[4]["facts"]

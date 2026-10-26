@@ -17,6 +17,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping
 
+from easyicu.research_agent.research_context.export_selection import SourceIdentity
 from easyicu.webserver import state_paths
 from easyicu.webserver import dataio
 from easyicu.webserver import settings as settings_store
@@ -132,6 +133,25 @@ def _source_id(path: str) -> str:
     return "src_" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:12]
 
 
+def _registration_fields(source: Mapping[str, Any]) -> Dict[str, str]:
+    identity = SourceIdentity.from_record({**source, "registration_id": source.get("id")})
+    if identity is None:
+        return {}
+    fields = identity.to_dict()
+    fields["id"] = fields.pop("registration_id")
+    return fields
+
+
+def registered_source_identity(export_path: str) -> SourceIdentity | None:
+    """Snapshot only the exact selected registration, never the active source."""
+    selected = _norm_path(export_path)
+    matches = [row for row in load_registry()["sources"]
+               if row.get("ok") and row.get("path") == selected]
+    if len(matches) != 1:
+        return None
+    return SourceIdentity.from_record({**matches[0], "registration_id": matches[0].get("id")})
+
+
 def _source_timestamp(source: Dict[str, Any]) -> float:
     generated = str(source.get("generated") or source.get("registered_at") or "")
     if generated:
@@ -207,6 +227,7 @@ def _source_from_path(
         item.update(
             {
                 "database": desc.get("database"),
+                "version": desc.get("version"),
                 "generated": desc.get("generated"),
                 "modules": desc.get("modules", []),
                 "summary": desc.get("summary", {}),
@@ -313,6 +334,7 @@ def load_registry() -> Dict[str, Any]:
             label=item.get("label"),
             registered_at=item.get("registered_at"),
         )
+        source.update(_registration_fields(item))
         by_path[source["path"]] = source
     for path in _autodiscovered_paths():
         if _norm_path(path) in removed_paths:
@@ -517,7 +539,9 @@ def _registered_path_hash(path: str) -> str:
 
 
 @_registry_locked
-def save_registry(patch: Dict[str, Any]) -> Dict[str, Any]:
+def save_registry(
+    patch: Dict[str, Any], *, _registered_identity: SourceIdentity | None = None,
+) -> Dict[str, Any]:
     raw = _read_raw()
     removed_paths = set(_raw_removed_paths(raw))
     current = load_registry()
@@ -531,6 +555,12 @@ def save_registry(patch: Dict[str, Any]) -> Dict[str, Any]:
             continue
         if path:
             source = _source_from_path(str(path), label=label)
+            # UI patches can edit labels/selections, never manufacture release receipts.
+            source.update(_registration_fields(existing.get(source["path"], {})))
+            if _registered_identity is not None and source["id"] == _registered_identity.registration_id:
+                for key in ("version", "source_id", "archive_sha256"):
+                    source.pop(key, None)
+                source.update(_registration_fields({**_registered_identity.to_dict(), "id": source["id"]}))
             existing[source["path"]] = source
             removed_paths.discard(source["path"])
 
@@ -550,6 +580,7 @@ def save_registry(patch: Dict[str, Any]) -> Dict[str, Any]:
             "path": s["path"],
             "label": s.get("label"),
             "registered_at": s.get("registered_at"),
+            **_registration_fields(s),
         }
         for s in existing.values()
     ]
@@ -568,8 +599,14 @@ def save_registry(patch: Dict[str, Any]) -> Dict[str, Any]:
 
 @_registry_locked
 def register_source(
-    path: str, label: str | None = None, active: bool = True, crossdb: bool = True
+    path: str, label: str | None = None, active: bool = True, crossdb: bool = True,
+    *, source_identity: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
+    """Register an export; only host preparation may supply a release receipt.
+
+    A fresh registration replaces any earlier release claim at this path.
+    Browser registration/patch routes never accept ``source_identity``.
+    """
     source = _source_from_path(path, label=label)
     if not source.get("ok"):
         return {"ok": False, "error": source.get("error"), "source": source}
@@ -585,7 +622,11 @@ def register_source(
                 "registered_source" if active else registry.get("active_source")
             ),
             "crossdb_paths": next_paths,
-        }
+        },
+        _registered_identity=SourceIdentity.from_record({
+            **source, **dict(source_identity or {}),
+            "database": source.get("database"), "registration_id": source["id"],
+        }),
     )
 
 
@@ -619,6 +660,7 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
                     "label": clean_label,
                     "registered_at": item.get("registered_at")
                     or current.get("registered_at"),
+                    **_registration_fields(current),
                 }
             )
             updated = True
@@ -628,6 +670,7 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
                     "path": item_path,
                     "label": item.get("label"),
                     "registered_at": item.get("registered_at"),
+                    **_registration_fields(item),
                 }
             )
     if not updated:
@@ -636,6 +679,7 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
                 "path": norm,
                 "label": clean_label,
                 "registered_at": current.get("registered_at") or _now(),
+                **_registration_fields(current),
             }
         )
 
@@ -724,6 +768,7 @@ def remove_source(path: str) -> Dict[str, Any]:
             "path": _norm_path(str(item.get("path"))),
             "label": item.get("label"),
             "registered_at": item.get("registered_at"),
+            **_registration_fields(item),
         }
         for item in stored
         if isinstance(item, dict)

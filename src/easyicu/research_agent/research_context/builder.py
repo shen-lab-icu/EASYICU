@@ -91,6 +91,7 @@ from .typed import (
     materialized_research_inputs_from_authority,
     project_research_context_variables,
 )
+from .export_selection import source_identity_provenance
 from easyicu.concept.metadata_projection import CATEGORICAL_UNIT
 from easyicu.outcome_availability import (
     StatedHorizon,
@@ -1144,6 +1145,7 @@ def build_research_context(
         requested_outcome_columns=requested_outcome_columns,
         provenance={
             **episode.provenance,
+            **source_identity_provenance(user_preferences),
             **granularity.provenance(),
             **planning_catalog_provenance,
             **_exposure_group_projections(verified_cohort, planning_catalog_provenance),
@@ -2023,6 +2025,7 @@ def build_naive_research_context(
         ),
         provenance={
             **granularity.provenance(),
+            **source_identity_provenance(user_preferences),
             **_planning_catalog_provenance(df),
         },
     )

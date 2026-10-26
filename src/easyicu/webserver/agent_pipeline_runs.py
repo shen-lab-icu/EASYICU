@@ -2610,6 +2610,7 @@ def _research_user_preferences(
     source_selection_basis: Optional[SelectionBasis] = None,
     event_time_semantics: Optional[Mapping[str, str]] = None,
     source_selection_report: Optional[Mapping[str, Any]] = None,
+    source_identity: Optional[Mapping[str, str]] = None,
     question_named_concepts: Sequence[Mapping[str, Any]] = (),
     question_substance_forms: Sequence[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
@@ -2631,6 +2632,9 @@ def _research_user_preferences(
     is, as its producer labels it (``bound_export_event_time_semantics``);
     ``data_constraints.event_time_semantics`` carries it, empty when the
     export labels none.
+    ``source_identity`` is the selected registration frozen by launch
+    preparation, including only its recorded release coordinates. The context
+    builder copies it into cohort provenance before the run seals its evidence.
     """
 
     preferences: Dict[str, Any] = {}
@@ -2719,6 +2723,8 @@ def _research_user_preferences(
         preferences["covariates"] = list(covariates)
 
     constraints: Dict[str, Any] = {}
+    if source_identity is not None:
+        constraints["source_identity"] = dict(source_identity)
     for field in ("stated_adjustments", "stated_subgroups"):
         if study.get(field):
             from easyicu.webserver.research_launch_scientific import (
@@ -3130,7 +3136,8 @@ def _require_first_icu_stay_materialized(acquisition: Any, binding: Any, *, per_
 
 
 def research_context_declarations(
-    scientific: PreparedScientificLaunch, *, export_path: str
+    scientific: PreparedScientificLaunch, *, export_path: str,
+    source_identity: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     """What a run declares on its research context besides its rows and coordinates.
 
@@ -3179,6 +3186,7 @@ def research_context_declarations(
             source_selection_basis=selection_basis,
             event_time_semantics=bound_export_event_time_semantics(export_path),
             source_selection_report=bound_export_selection_report(export_path),
+            source_identity=source_identity,
             question_named_concepts=(
                 scientific.metadata_planning_coordinates.get("question_named_concepts")
                 or ()
@@ -3289,7 +3297,11 @@ def target_trial_research_context(
     )
 
     coordinates = target_trial_run_coordinates(scientific, acquisition)
-    declarations = research_context_declarations(scientific, export_path=export_path)
+    source_identity = sources.registered_source_identity(export_path)
+    declarations = research_context_declarations(
+        scientific, export_path=export_path,
+        source_identity=source_identity.to_dict() if source_identity is not None else None,
+    )
     return build_research_context(
         research_question=scientific.question,
         cohort=Path(acquisition.universe_path),
@@ -7528,7 +7540,8 @@ def make_research_pipeline_run_runner(
                 _register_recoverable_work_root(root)
                 put_recovery_seed(recovery_seed)
             declarations = research_context_declarations(
-                replace(scientific, patient_grouping=patient_grouping), export_path=export_path
+                replace(scientific, patient_grouping=patient_grouping), export_path=export_path,
+                source_identity=prepared.source_identity.to_dict() if prepared.source_identity is not None else None,
             )
             _progress(
                 job,
