@@ -46,6 +46,8 @@ from .typed_input_binding import (
 )
 
 __all__ = [
+    "cohort_summary_table",
+    "descriptive_partitions",
     "cohort_summary_executor_code",
     "cohort_summary_executor_owns_step",
     "load_cohort_summary_frame",
@@ -288,7 +290,7 @@ def _row(
     }
 
 
-def _cohort_summary_table(
+def cohort_summary_table(
     frame: pd.DataFrame, columns: Sequence[str], metadata_by_name: Dict[str, Dict[str, Any]],
     *, numeric_only: bool = False,
 ) -> pd.DataFrame:
@@ -391,7 +393,7 @@ def _cohort_summary_table(
     return pd.DataFrame(rows)
 
 
-def _primary_partitions(
+def descriptive_partitions(
     frame: pd.DataFrame, grouping_variable: str | None, grouping_levels: Sequence[Any],
 ) -> Iterator[tuple[str, str, pd.DataFrame]]:
     yield "Overall", "overall", frame
@@ -451,7 +453,7 @@ def validate_primary_descriptive_tables(
         require(summary["group_variable"].eq(grouping_variable).all())
         require(distribution["group_variable"].eq(grouping_variable).all())
         summary_rows = distribution_rows = 0
-        for group, role, partition in _primary_partitions(frame, grouping_variable, grouping_levels):
+        for group, role, partition in descriptive_partitions(frame, grouping_variable, grouping_levels):
             selected_summary = summary.loc[summary["group"].eq(group) & summary["row_role"].eq(role)]
             selected_distribution = distribution.loc[distribution["group"].eq(group) & distribution["row_role"].eq(role)]
             validate_primary_descriptive_tables(
@@ -594,7 +596,7 @@ def run_cohort_summary_from_env(
     cohort_n = int(len(frame))
 
     table_path = out_dir / f"{summary_product_id.split(':', 1)[1]}.csv"
-    summary_table = _cohort_summary_table(frame, columns, metadata_by_name, numeric_only=primary_summary)
+    summary_table = cohort_summary_table(frame, columns, metadata_by_name, numeric_only=primary_summary)
     summary_table.to_csv(table_path, index=False)
     summary = {
         "status": "ok",
@@ -616,9 +618,9 @@ def run_cohort_summary_from_env(
         distribution = _empirical_distribution_table(frame, columns)
         if grouping_variable is not None:
             summaries, distributions = [], []
-            for group, role, partition in _primary_partitions(frame, grouping_variable, grouping_levels):
+            for group, role, partition in descriptive_partitions(frame, grouping_variable, grouping_levels):
                 identity = {"group_variable": grouping_variable, "group": group, "row_role": role}
-                summaries.append(_cohort_summary_table(partition, columns, metadata_by_name, numeric_only=True).assign(**identity))
+                summaries.append(cohort_summary_table(partition, columns, metadata_by_name, numeric_only=True).assign(**identity))
                 distributions.append(_empirical_distribution_table(partition, columns).assign(**identity))
             summary_table = pd.concat(summaries, ignore_index=True)
             distribution = pd.concat(distributions, ignore_index=True)
