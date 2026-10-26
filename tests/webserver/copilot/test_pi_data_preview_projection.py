@@ -82,5 +82,6 @@ def test_source_prohibition_is_visible_even_if_other_data_are_ready():
     }]})
 
     assert "来源不支持" in html
-    assert "列非空不代表可用" in html
+    # e24524afc reworded the refusal for readers; records present are still not availability.
+    assert "有记录也不能直接用于分析" in html
     assert "0.0%" not in html
