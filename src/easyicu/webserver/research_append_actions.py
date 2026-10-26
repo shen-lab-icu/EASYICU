@@ -25,12 +25,15 @@ def _resolve(service, project_id, run_id):
 
 
 def append_options(service, *, project_id, run_id):
+    from .research_followups import result_followups
+
+    followups = result_followups(service, project_id=project_id, run_id=run_id)
     # Project authorization happens even when the old run has no append seal.
     row = service._research_run_row(project_id, run_id)
     try:
         source, predecessor = resolve_result_source(Path(row["project_dir"]), run_id=run_id, study_id=row["study_id"])
     except (ValueError, OSError, KeyError):
-        return dict(run_id=run_id, source_run_sha256=None, options=[_option(kind) for kind in LABELS])
+        return dict(run_id=run_id, source_run_sha256=None, options=[_option(kind) for kind in LABELS], followups=followups)
     study = study_contexts.get_context(source.seal["study_id"]) or {}
     options = []
     for kind in LABELS:
@@ -45,7 +48,7 @@ def append_options(service, *, project_id, run_id):
             options.append(_option(kind, detail=str(exc)))
     changed = registered_source_changed(source, study)
     return dict(run_id=run_id, source_run_sha256=predecessor["sha256"] if predecessor else source.digest, options=options,
-                source_changed=changed, source_notice=source.earlier_export_notice(changed=changed))
+                source_changed=changed, source_notice=source.earlier_export_notice(changed=changed), followups=followups)
 
 
 def propose_for_conversation(service, *, session_id, project_id, run_id, kind, expected_source_sha256):

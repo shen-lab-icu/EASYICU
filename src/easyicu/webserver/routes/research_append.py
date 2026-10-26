@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from easyicu.webserver.pi_copilot import get_pi_copilot_service
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
 from easyicu.webserver.research_append_actions import append_options, propose_for_conversation
+from easyicu.webserver.research_followups import result_followups
 
 router = APIRouter()
 
@@ -31,6 +32,11 @@ def _call(fn, **kwargs):
 @router.get("/api/copilot/pi/projects/{project_id}/runs/{run_id}/append-options")
 def get_append_options(project_id: str, run_id: str):
     return _call(append_options, project_id=project_id, run_id=run_id)
+
+
+@router.get("/api/copilot/pi/projects/{project_id}/runs/{run_id}/follow-ups")
+def get_result_followups(project_id: str, run_id: str):
+    return _call(result_followups, project_id=project_id, run_id=run_id)
 
 
 @router.post("/api/copilot/pi/sessions/{session_id}/append-run")
