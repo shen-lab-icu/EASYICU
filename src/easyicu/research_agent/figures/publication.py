@@ -18,6 +18,7 @@ dashboards with no reviewable scientific logic.
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 import zipfile
 from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence
@@ -786,7 +787,117 @@ def add_panel_label(
         fontsize=fontsize,
         fontweight="bold",
         color=color,
+        gid="publication-panel-label",
     )
+
+
+def finish_publication_layout(fig: Any) -> list[Any]:
+    """Measure titles and reserve an external gutter for interval legends.
+
+    The gutter sits below *all* axes and their labels, including in multirow
+    figures. Excluding these legends from constrained layout avoids shrinking
+    data axes to accommodate another row's legend. The export owner includes
+    the returned artists explicitly in its tight bounding box.
+    """
+    from matplotlib.collections import LineCollection, PolyCollection
+    from matplotlib.container import ErrorbarContainer
+
+    legends = [
+        (axis, axis.get_legend()) for axis in fig.axes
+        if axis.get_legend() is not None and (
+            any(isinstance(item, ErrorbarContainer) for item in axis.containers)
+            or any(isinstance(item, (LineCollection, PolyCollection)) for item in axis.collections)
+        )
+    ]
+    for _, legend in legends:
+        legend.set_in_layout(False)
+
+    # Constrained layout can change the available width after the first wrap.
+    for _ in range(3):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        gap = renderer.points_to_pixels(3)
+        for axis in fig.axes:
+            width = axis.get_window_extent(renderer).width - 2 * gap
+            titles = [axis._left_title, axis.title, axis._right_title]
+            for title in titles:
+                if title.get_visible() and title.get_text():
+                    title.set_text(wrap_figure_label(
+                        title.get_text(), renderer=renderer,
+                        font=title.get_fontproperties(), width=max(width, gap),
+                    ))
+            title_top = max(
+                (title.get_window_extent(renderer).y1 for title in titles if title.get_text()),
+                default=axis.get_window_extent(renderer).y1,
+            )
+            for letter in axis.texts:
+                if letter.get_gid() == "publication-panel-label":
+                    left = axis.get_window_extent(renderer).x0
+                    letter_width = letter.get_window_extent(renderer).width
+                    letter.set_position(axis.transAxes.inverted().transform(
+                        (left - letter_width - gap, title_top)
+                    ))
+                    letter.set_verticalalignment("top")
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    boxes = [axis.get_tightbbox(renderer) for axis in fig.axes if axis.get_visible()]
+    boxes.extend(text.get_window_extent(renderer) for text in [*fig.texts, *fig.legends]
+                 if text.get_visible())
+    bottom = min((box.y0 for box in boxes if box is not None), default=fig.bbox.y0) - gap
+    placed = []
+    for axis, legend in legends:
+        legend.set_loc("upper center")
+        x = axis.get_window_extent(renderer).x0 + axis.get_window_extent(renderer).width / 2
+        y = bottom
+        while True:
+            legend.set_bbox_to_anchor(fig.transFigure.inverted().transform((x, y)),
+                                      transform=fig.transFigure)
+            box = legend.get_window_extent(renderer)
+            collisions = [other for other in placed if box.padded(gap).overlaps(other)]
+            if not collisions:
+                break
+            y = min(other.y0 for other in collisions) - gap
+        placed.append(box)
+    return [legend for _, legend in legends]
+
+
+def wrap_figure_label(label: str, *, renderer: Any, font: Any, width: float) -> str:
+    """Fit full labels by rendered width, including unspaced Unicode text."""
+
+    lines: list[str] = []
+    line = ""
+    # A run of non-space Latin text is one token, so punctuation stays with
+    # its word ("(arterial)", "availability:"). Each CJK character remains
+    # its own token because unspaced CJK text may break between characters.
+    tokens = re.findall(
+        r"[^\s぀-ヿ㐀-鿿가-힯豈-﫿]+|[^\S\n]+|\n|.",
+        label,
+    )
+    for token in tokens:
+        if token == "\n":
+            lines.append(line.rstrip())
+            line = ""
+            continue
+        candidate = line + token
+        measured, _, _ = renderer.get_text_width_height_descent(candidate, font, False)
+        if line and measured > width:
+            lines.append(line.rstrip())
+            line = ""
+            token = token.lstrip()
+        elif measured <= width:
+            line = candidate
+            continue
+        # Only a token wider than the entire column may be split internally.
+        for character in token:
+            candidate = line + character
+            measured, _, _ = renderer.get_text_width_height_descent(candidate, font, False)
+            if line and measured > width:
+                lines.append(line)
+                line = character
+            else:
+                line = candidate
+    lines.append(line.rstrip())
+    return "\n".join(lines)
 
 
 def save_publication_figure(
@@ -1013,6 +1124,9 @@ def save_publication_figure(
             saved["contract"] = contract_path
         return saved
 
+    layout_artists = finish_publication_layout(fig)
+    if layout_artists:
+        layout_artists = [*fig.get_default_bbox_extra_artists(), *layout_artists]
     for fmt in requested:
         path = stem_path.with_suffix(f".{fmt}")
         if fmt == "pptx":
@@ -1020,7 +1134,7 @@ def save_publication_figure(
             cleanup_png = False
             if png_path is None:
                 png_path = stem_path.with_suffix(".pptx_source.png")
-                fig.savefig(png_path, dpi=dpi, bbox_inches="tight")  # type: ignore[attr-defined]
+                fig.savefig(png_path, dpi=dpi, bbox_inches="tight", bbox_extra_artists=layout_artists)  # type: ignore[attr-defined]
                 cleanup_png = True
             _write_single_image_pptx(
                 image_path=png_path,
@@ -1035,6 +1149,8 @@ def save_publication_figure(
             saved[fmt] = path
             continue
         kwargs = {"bbox_inches": "tight", "pad_inches": float(pad_inches)}
+        if layout_artists:
+            kwargs["bbox_extra_artists"] = layout_artists
         if fmt == "png":
             kwargs["dpi"] = dpi
         elif fmt == "tiff":

@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import math
-import re
 from typing import Any, Sequence
 
 from ..contracts.figure_plan import FigurePresentationSpec, PlannedFigurePanelSpec
-from .publication import PALETTE_CLINICAL, apply_publication_style
+from .publication import (
+    PALETTE_CLINICAL,
+    apply_publication_style,
+    finish_publication_layout,
+    wrap_figure_label as wrap_figure_label,
+)
 
 
 def presentation_from_panels(
@@ -101,43 +105,4 @@ def finish_presented_figure(
             text.set_fontfamily(spec.font_family)
     for axis in fig.axes:
         apply_presented_legend(axis, spec)
-    fig.canvas.draw()
-
-
-def wrap_figure_label(label: str, *, renderer: Any, font: Any, width: float) -> str:
-    """Fit full labels by rendered width, including unspaced Unicode text."""
-
-    lines: list[str] = []
-    line = ""
-    # A run of non-space Latin text is one token, so punctuation stays with
-    # its word ("(arterial)", "availability:"). Each CJK character remains
-    # its own token because unspaced CJK text may break between characters.
-    tokens = re.findall(
-        r"[^\s぀-ヿ㐀-鿿가-힯豈-﫿]+|[^\S\n]+|\n|.",
-        label,
-    )
-    for token in tokens:
-        if token == "\n":
-            lines.append(line.rstrip())
-            line = ""
-            continue
-        candidate = line + token
-        measured, _, _ = renderer.get_text_width_height_descent(candidate, font, False)
-        if line and measured > width:
-            lines.append(line.rstrip())
-            line = ""
-            token = token.lstrip()
-        elif measured <= width:
-            line = candidate
-            continue
-        # Only a token wider than the entire column may be split internally.
-        for character in token:
-            candidate = line + character
-            measured, _, _ = renderer.get_text_width_height_descent(candidate, font, False)
-            if line and measured > width:
-                lines.append(line)
-                line = character
-            else:
-                line = candidate
-    lines.append(line.rstrip())
-    return "\n".join(lines)
+    finish_publication_layout(fig)

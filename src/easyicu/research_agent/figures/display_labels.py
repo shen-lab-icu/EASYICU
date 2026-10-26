@@ -19,7 +19,7 @@ from ..contracts.exposure_group_rules import ExposureGroupRuleError, read_groupi
 _FOREIGN_SCRIPT_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯豈-﫿]")
 _CLINICAL_ACRONYMS = {
     token.casefold(): token
-    for token in ("AKI", "BUN", "CI", "CNS", "HR", "ICU", "KDIGO", "MAP",
+    for token in ("AKI", "APACHE", "BUN", "CI", "CNS", "HR", "ICU", "KDIGO", "MAP",
                   "OR", "RR", "RRT", "SOFA", "SpO2", "WBC", "pH")
 }
 

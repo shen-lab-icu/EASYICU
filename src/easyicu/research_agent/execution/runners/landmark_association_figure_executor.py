@@ -21,7 +21,7 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
-from ...figures.display_labels import display_label
+from ...figures.display_labels import display_label, figure_language_labels
 from ...figures.robustness import (
     draw_robustness_coverage,
     prepare_robustness_coverage,
@@ -29,6 +29,7 @@ from ...figures.robustness import (
 from ...research_context.concept_hints import classify_variable
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
+from .bound_variable_display import load_bound_outcome_label
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
 from ._shared import figure_product as _figure_product
 
@@ -296,7 +297,7 @@ def _continuous_exposure_label(column: str) -> str:
         "lact": "Lactate",
         "bili": "Bilirubin",
     }
-    concept = clinical_names.get(token, _label(token).title())
+    concept = clinical_names.get(token, display_label(token))
     summary_labels = {
         "max": "Maximum",
         "min": "Minimum",
@@ -307,7 +308,7 @@ def _continuous_exposure_label(column: str) -> str:
         "value": "",
     }
     if summary and summary_labels[summary]:
-        concept = f"{summary_labels[summary]} {concept.lower()}"
+        concept = display_label(f"{summary_labels[summary]} {concept}")
     if unit is None:
         unit = classify_variable(str(column or ""), "float64").unit
     return f"{concept} ({unit})" if unit else concept
@@ -370,15 +371,11 @@ def _draw_exposure_distribution(
         raise ValueError("exposure density fractions must be finite and non-negative")
     if not np.isclose(float(fractions.sum()), 1.0, rtol=0.0, atol=1e-8):
         raise ValueError("displayed exposure density fractions must sum to one")
-    ax.fill_between(
-        x,
-        100.0 * fractions,
-        color=color,
-        alpha=0.24,
-        linewidth=0,
-        step="mid",
-    )
-    ax.plot(x, 100.0 * fractions, color=color, alpha=0.72, linewidth=0.55)
+    # The producer bins at grid midpoints and clips the end bins to the
+    # displayed range. Reuse those edges and the exact published fractions.
+    edges = np.concatenate(([x[0]], (x[:-1] + x[1:]) / 2.0, [x[-1]]))
+    ax.bar(edges[:-1], 100.0 * fractions, width=np.diff(edges), align="edge",
+           color=color, alpha=0.35, linewidth=0)
     ax.set_xlim(float(x.min()), float(x.max()))
     ax.set_ylim(0, max(float((100.0 * fractions).max()) * 1.14, 1.0))
     ax.set_yticks([])
@@ -553,7 +550,7 @@ def _draw_sensitivity_forest(
             for item in records
         ],
     )
-    ax.invert_yaxis()
+    ax.set_ylim(len(records) - 0.5, -0.5)
     ax.set_xlabel("Adjusted odds ratio (95% CI)")
     ax.set_title(
         "Sensitivity to covariate\nfunctional form",
@@ -1148,7 +1145,10 @@ def run_landmark_association_figure(
         min(100.0, float(risk_high.max()) + 0.08 * risk_span),
     )
     ax.set_xlim(float(risk_x.min()), float(risk_x.max()))
-    ax.set_ylabel("Model-standardised outcome risk (%)")
+    outcome = load_bound_outcome_label(
+        run_dir=Path(run_dir), resolved_inputs=resolved_inputs, step_id=step_id,
+    ) or "outcome risk"
+    ax.set_ylabel(figure_language_labels({"risk": f"Model-standardised {outcome} (%)"})["risk"])
     ax.set_title(
         "Absolute risk",
         loc="left",
