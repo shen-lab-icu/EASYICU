@@ -5,8 +5,9 @@ Owner
 The typed :class:`~easyicu.research_agent.schema.UserPreferences` contract owns
 whether an adjustment set is still open to Planner selection or was fixed by
 the user-facing study configuration.  This module compiles that small public
-contract and validates Planner output.  It does not select covariates, inspect
-rows, or infer an adjustment set from available demographic columns.
+contract and validates Planner output. When adjustment is unstated, it binds
+the study family's versioned minimal set before either Planner strategy runs.
+This metadata-only rule never inspects rows or searches arbitrary covariates.
 
 The host's structured question reading is a separate required subset in
 ``data_constraints.stated_adjustments``. The shared variable receipt also
@@ -25,12 +26,12 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping, Optional, Sequence
+from typing import Any, Callable, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from ..authority.declared_levels import observed_levels_for
-from ..concept_availability import concept_records_one_value_per_stay
+from ..concept_availability import concept_records_one_value_per_stay, variable_source_unavailability
 from ..contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORMS, read_grouping_rules
 from ..research_context.materialization_window import bound_feature_window_end_hours, context_column_windows
 from ..research_context.stay_events import (
@@ -388,10 +389,95 @@ def _matches_declared_covariate(declared: str, observed: str) -> bool:
     )
 
 
+def concept_relatives(context: Any) -> Callable[[str], frozenset[str]]:
+    """The run's columns the concept dictionary relates to a column.
+
+    A column's identity is its name, its source concept and the concepts it
+    derives from; two columns are related when their identities meet.
+    """
+
+    identities = {
+        str(variable.name): frozenset(
+            str(value)
+            for value in (
+                variable.name,
+                getattr(variable, "source_concept", None),
+                *(getattr(variable, "derived_from_concepts", None) or ()),
+            )
+            if str(value or "").strip()
+        )
+        for variable in context.variables
+    }
+
+    def relatives(column: str) -> frozenset[str]:
+        own = identities.get(column, frozenset({column}))
+        return frozenset(
+            {column, *(name for name, ids in identities.items() if ids & own)}
+        )
+
+    return relatives
+
+
 class AdjustmentAuthorityError(ValueError):
-    """A plan changed a user-locked adjustment set."""
+    """A plan changed a user-locked or host-bound adjustment set."""
 
     code = "adjustment_set_authority_mismatch"
+
+
+FAMILY_MINIMAL_ADJUSTMENT_RULE = "family_minimal_adjustment/1"
+FAMILY_MINIMAL_ADJUSTMENTS = {
+    "association_study": ("age", "sex"),
+    "ordinal_dose_response": ("age", "sex"),
+}
+
+
+def _family_default_adjustment(context: Any) -> "AdjustmentSetAuthority | None":
+    """Bind the same minimal roster for family templates and general planning.
+
+    Use the existing study-family router and source metadata. An incomplete
+    context cannot establish a default; other families retain their owners.
+    A modifier's main effect and interaction remain its model owner's job.
+    """
+    from .analysis_types import infer_analysis_type
+
+    if (not getattr(context, "primary_exposure", None) or not getattr(context, "target_outcome", None)
+            or context.variable(context.primary_exposure) is None
+            or context.variable(context.target_outcome) is None):
+        return None
+    family = infer_analysis_type(context).key
+    if family not in FAMILY_MINIMAL_ADJUSTMENTS:
+        return None
+    relatives = concept_relatives(context)
+    excluded = set(exposure_adjustment_columns(context))
+    for name in (context.primary_exposure, context.target_outcome, *context.cohort.outcome_columns):
+        excluded.update(relatives(name))
+    for item in context_stated_variables(context, "stated_subgroups"):
+        if item.concept:
+            excluded.update(relatives(item.concept))
+    selected = []
+    for concept in FAMILY_MINIMAL_ADJUSTMENTS[family]:
+        candidates = [v.name for v in context.variables
+                      if v.name not in excluded and owner_declared_baseline_static(v)
+                      and not v.derived_from_concepts
+                      and (v.source_concept == concept or (v.name == concept and v.source_concept is None))
+                      and not variable_source_unavailability(v, str(context.cohort.database or ""))]
+        if concept in candidates:
+            selected.append(concept)
+        elif len(candidates) == 1:
+            selected.append(candidates[0])
+    reason = (
+        f"{FAMILY_MINIMAL_ADJUSTMENT_RULE}; family={family}: prespecified age, sex "
+        "in that order when uniquely available as baseline demographics, excluding "
+        "exposure sources, outcomes and modifiers. No adjustment was stated. "
+        "This minimal association model does not eliminate residual confounding."
+    )
+    return AdjustmentSetAuthority(
+        selection="exact", covariates=tuple(selected), authority="agent_plan",
+        rationales=tuple((name, reason) for name in selected),
+        temporal_roles=tuple((name, "baseline_static") for name in selected),
+        operationalizations=tuple((name, name) for name in selected),
+        rule=FAMILY_MINIMAL_ADJUSTMENT_RULE,
+    )
 
 
 @dataclass(frozen=True)
@@ -404,12 +490,11 @@ class AdjustmentSetAuthority:
     rationales: tuple[tuple[str, str], ...] = ()
     temporal_roles: tuple[tuple[str, str], ...] = ()
     operationalizations: tuple[tuple[str, str], ...] = ()
+    rule: Optional[str] = None  # Host-only provenance; not a Planner output field.
 
     @classmethod
     def from_context(cls, context: Any) -> "AdjustmentSetAuthority":
         preferences = getattr(context, "user_preferences", None)
-        if preferences is None:
-            return cls(selection="planner_selectable", covariates=())
         selection = str(
             getattr(preferences, "covariate_selection", "planner_selectable")
             or "planner_selectable"
@@ -430,6 +515,10 @@ class AdjustmentSetAuthority:
             getattr(preferences, "covariate_operationalizations", {}) or {}
         )
         authority = getattr(preferences, "covariate_authority", None)
+        if selection != "exact" and not context_stated_adjustments(context):
+            default = _family_default_adjustment(context)
+            if default is not None:
+                return default
         return cls(
             selection=selection,
             covariates=covariates,
@@ -471,6 +560,8 @@ class AdjustmentSetAuthority:
 
         if self.selection != "exact":
             boundary = "Planner-selectable; available variables are not user-specified covariates."
+        elif self.rule:
+            boundary = f"Host family default {self.rule}, not user-specified; preserve the bound roster."
         elif self.authority == "agent_plan":
             boundary = "Agent-selected, not user-specified; describe this as the Agent's proposed adjustment set."
         elif self.authority == "user":
@@ -484,7 +575,21 @@ class AdjustmentSetAuthority:
             "operational_covariates": list(self.operational_covariates),
             "operationalizations": dict(self.operationalizations),
             "authorship_boundary": boundary + " This binding is not a plan-approval receipt.",
+            **({"selection_rule": self.rule} if self.rule else {}),
         }
+
+    def plan_rationale(self, rationale: str) -> str:
+        """Persist the host decision even for an empty default or an LLM omission."""
+        if not self.rule:
+            return rationale
+        return (
+            f"{rationale} Adjustment policy {self.rule}: no adjustment was stated; "
+            "bind age then sex when uniquely available as baseline demographics, "
+            "excluding exposure sources, outcomes and modifiers. The bound roster is "
+            f"{list(self.operational_covariates)!r}. Stated/exact study rosters take priority, "
+            "including explicit no adjustment. Additions require a recorded rationale "
+            "and a reviewed study revision. This minimal set does not eliminate residual confounding."
+        )
 
     def validate_plan(self, plan: Any) -> None:
         """Require every declared fitted model to honor an exact roster.
@@ -528,9 +633,9 @@ class AdjustmentSetAuthority:
 
         if not mismatches:
             return
+        binding = f"host rule {self.rule}" if self.rule else "user_preferences.covariate_selection='exact'"
         raise AdjustmentAuthorityError(
-            f"{AdjustmentAuthorityError.code}: "
-            "user_preferences.covariate_selection='exact' binds "
+            f"{AdjustmentAuthorityError.code}: {binding} binds "
             f"every planned model to covariates={list(self.covariates)!r}; "
             "the Planner may not add, remove, infer, or reorder covariates. "
             "Mismatches: "

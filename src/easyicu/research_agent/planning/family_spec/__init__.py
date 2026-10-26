@@ -20,9 +20,9 @@ compile fails closed with the compiler's own reason code.
 
 Boundaries
 ----------
-* The template never selects covariates, exposures, outcomes, or sensitivity
-  axes: covariates come from the spec (or the exact user roster), everything
-  else from typed StudyContext facts.
+* Association requests bind stated/exact adjustment first, otherwise the
+  versioned family minimal set before planning. The templates preserve that
+  roster; exposures, outcomes and sensitivity axes come from typed facts.
 * Timing authority for Planner-selected covariates is the host's
   :func:`~easyicu.research_agent.planning.adjustment_authority.host_proven_temporal_roles`;
   a rationale never widens it.

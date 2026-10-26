@@ -1090,7 +1090,8 @@ def _candidates(
                     allowed_codings=codings,
                     closed_domain_size=row.get("closed_domain_size") if row else None,
                     selectable=True,
-                    boundary="exact user-reviewed roster; timing and rationale are user authority",
+                    boundary=("exact bound roster; origin and rule are recorded in exact_rationales; "
+                              "changing it requires a reviewed study revision"),
                     missing_share=shares.get(name),
                 )
             )
@@ -2036,11 +2037,11 @@ def _binary_level_label_keys(context: ResearchContext, exposure: str) -> list[st
 def _association_adjustment(
     context: ResearchContext, roster: Sequence[str],
 ) -> AdjustmentSetAuthority:
-    """Bind baseline and landmark associations to the same exact stated roster.
+    """Bind stated/exact rosters first, otherwise the declared family default.
 
     Resolve stated concepts using the adjustment owner. An unavailable or
-    ambiguous reading stays a refusal; availability never authorizes extra
-    covariates. A question receipt grants no measurement-time authority.
+    ambiguous reading stays a refusal; availability never expands a stated
+    roster. A question receipt grants no measurement-time authority.
     """
     from dataclasses import replace
 
@@ -2052,6 +2053,9 @@ def _association_adjustment(
 
     available = set(_structurally_available_roster(context, roster))
     adjustment = AdjustmentSetAuthority.from_context(context)
+    if adjustment.rule and not set(adjustment.operational_covariates).issubset(available):
+        raise FamilySpecError("family_spec_covariate_unavailable",
+                              "Retrieval must retain the family default adjustment columns.", path="adjustment_set")
     forbidden = exposure_adjustment_columns(context)
     def require_distinct(columns):
         if forbidden.intersection(columns):

@@ -1,6 +1,7 @@
 """Shared typed context and payload builders for progressive planner contracts."""
 
 from __future__ import annotations
+import json
 from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePlanOutline,
 )
@@ -9,13 +10,14 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ConceptDescriptor,
     ResearchContext,
+    UserPreferences,
     VariableRole,
 )
 
 
 def _context() -> ResearchContext:
     return ResearchContext(
-        research_question="Estimate an exposure-outcome association with audit context.",
+        research_question="Estimate an exposure-outcome association adjusted for age_years and sex_code, with audit context.",
         cohort=CohortDescriptor(
             cohort_name="synthetic",
             database="miiv",
@@ -63,6 +65,12 @@ def _context() -> ResearchContext:
         ],
         primary_exposure="exposure_flag",
         target_outcome="outcome_flag",
+        user_preferences=UserPreferences(data_constraints=json.dumps({
+            "stated_adjustments": [
+                {"variable": name, "concept": name, "words": f"adjusted for {name}", "source_status": "available"}
+                for name in ("age_years", "sex_code")
+            ],
+        })),
     )
 
 

@@ -126,7 +126,7 @@ def build_baseline_association_skeleton(
     outline = ProgressivePlanOutline(
         analysis_type="association_study", cohort_objective=estimand,
         design_selection=ResearchDesignSelection(candidates=[selected, rejected]),
-        steps=outline_steps, rationale="The host fixes the seven steps; the spec supplies only the bound roster and reader labels.",
+        steps=outline_steps, rationale="The host fixes the steps and adjustment roster; the spec supplies reader labels.",
     )
     if bind_outline is not None:
         outline = bind_outline(outline)

@@ -103,6 +103,7 @@ def _context(
     constraints = (
         json.dumps(
             {
+                **json.loads(base.user_preferences.data_constraints or "{}"),
                 "materialization_window": {
                     "role": "outer_observation_window",
                     "anchor": "ICU admission",
@@ -111,7 +112,7 @@ def _context(
             }
         )
         if window is not None
-        else None
+        else base.user_preferences.data_constraints
     )
     return base.model_copy(
         update={

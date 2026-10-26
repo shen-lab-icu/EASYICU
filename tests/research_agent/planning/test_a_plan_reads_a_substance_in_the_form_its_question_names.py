@@ -218,6 +218,7 @@ def test_a_planning_run_holds_its_plan_to_the_named_form(tmp_path: Path) -> None
                 update={
                     "data_constraints": json.dumps(
                         {
+                            **json.loads(base.user_preferences.data_constraints or "{}"),
                             "question_substance_forms": [
                                 {
                                     "concepts": ["exposure_given"],

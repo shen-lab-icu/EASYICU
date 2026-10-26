@@ -3519,7 +3519,7 @@ def compile_progressive_plan(
                     "know_how_decisions": [
                         item.model_dump(mode="json") for item in know_how_decisions
                     ],
-                    "rationale": skeleton.rationale,
+                    "rationale": AdjustmentSetAuthority.from_context(context).plan_rationale(skeleton.rationale),
                     "revision": 1,
                     **(
                         {"adjustment_proposal": adjustment_proposal.model_dump(mode="json")}
