@@ -697,6 +697,10 @@ def selected_counts_only_inference_coordinate(
 
 
 _COORDINATE_OWNED_FIELD_GUIDANCE = {
+    "bootstrap_spec": (
+        'Set bootstrap_spec to {"replicates": 200, "seed": 1729} for full-pipeline '
+        "patient bootstrap optimism correction in the development partition, or null for split validation only. "
+    ),
     "repeated_unit_interval_method": (
         "For this distribution, null retains patient_cluster_robust_wald. "
         "patient_weighted_hoeffding is an explicit option only when its "
@@ -800,6 +804,7 @@ def step_materialization_shape_contract(
         "primary_contrast_level_index": None, "denominator_policy": None,
         "missing_exposure_policy": None, "missing_outcome_policy": None,
         "confidence_level": None, "sensitivity_spec_ids": [], "functional_form_spec": None,
+        "bootstrap_spec": None,
         "repeated_unit_interval_method": None,
         "patient_weighted_interval_assumptions": None,
         "phenotyping_feature_columns": None,

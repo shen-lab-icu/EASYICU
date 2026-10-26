@@ -162,6 +162,7 @@ _RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
     "prediction.internal_validation": ScientificActionRuntimeContract(
         outputs=(("table:validation", "custom"),),
         required_product_inputs=("table:prediction_scores",),
+        alternative_product_inputs=(("table:prediction_scores", "table:model_performance"),),
         article_roles=("validation",),
         standard_executor="prediction_model",
     ),

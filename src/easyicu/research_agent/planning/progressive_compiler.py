@@ -44,6 +44,7 @@ from ..contracts.primary_cohort import (
     locked_primary_cohort_product,
 )
 from ..contracts.product_identity import typed_product
+from ..contracts.prediction_execution import prediction_bootstrap_method
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -2925,7 +2926,7 @@ def _compile_one_step(
         "intent": step.objective,
         "inputs": inputs,
         "expected_outputs": [product for product, _role in output_pairs],
-        "method": method,
+        "method": prediction_bootstrap_method(step.bootstrap_spec) if step.bootstrap_spec else method,
         "scientific_action_id": step.scientific_action_id,
         "icu_rule_refs": [],
         "sensitivity_spec_ids": sensitivity_spec_ids,

@@ -71,7 +71,7 @@ from ..literature_design_authority import (
     LiteratureDesignEvidenceCard,
 )
 from ..ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
-from ..benchmark_comparator import benchmark_comparator_facts
+from ..benchmark_comparator import benchmark_comparator_facts, benchmark_source_omission
 from ..question_requirements import (
     QuestionRequirementsError,
     bind_named_question_concepts,
@@ -2893,6 +2893,8 @@ def _benchmark_candidates(
         facts = benchmark_comparator_facts(concept)
         if facts is None or facts.kind is None:
             continue
+        if benchmark_source_omission(column=name, concept=concept, database=context.cohort.database):
+            continue
         candidates.append(
             BenchmarkCandidate(
                 name=name,
@@ -2971,6 +2973,15 @@ def _build_prediction_request(
         counts_only=False,
         feature_candidates=feature_candidates,
         benchmark_candidates=benchmark_candidates,
+        benchmark_omissions=[
+            omission for name in roster
+            if (variable := variables.get(name)) is not None
+            and (facts := benchmark_comparator_facts(variable.source_concept or name)) is not None
+            and facts.kind is not None
+            and (omission := benchmark_source_omission(
+                column=name, concept=facts.concept, database=context.cohort.database,
+            )) is not None
+        ],
         membership_candidates=[],
         adjustment_selection="planner_selectable",
         adjustment_candidates=[],

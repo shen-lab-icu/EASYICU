@@ -19,6 +19,8 @@ import pytest
 from easyicu.research_agent.agents.family_spec_planner import family_spec_user_prompt
 from easyicu.research_agent.contracts.prediction_execution import (
     PREDICTION_BENCHMARK_PRODUCT,
+    prediction_bootstrap_method,
+    static_prediction_bootstrap_spec,
     static_prediction_owns_step,
 )
 from easyicu.research_agent.planning.family_spec.contract import (
@@ -49,6 +51,7 @@ def _context() -> ResearchContext:
     base = _prediction_context()
     return base.model_copy(
         update={
+            "cohort": base.cohort.model_copy(update={"database": "eicu"}),
             "research_question": base.research_question.rstrip("?") + f", {QUOTE}?",
             "variables": [
                 *base.variables,
@@ -148,6 +151,38 @@ def test_a_plan_without_a_benchmark_is_unchanged() -> None:
         "calibration_metrics", "internal_validation", "clinical_utility", "visualization",
         "report",
     ]
+
+
+def test_template_declares_bootstrap_budget_seed_and_consumed_performance() -> None:
+    plan = _plan(_context(), _requirement(APACHE))
+    steps = {s.step_id: s for s in plan.steps}
+    spec = static_prediction_bootstrap_spec(steps["primary_performance"])
+    assert spec is not None
+    assert spec.replicates == 200
+    assert spec.seed == 1729
+    assert steps["primary_performance"].method == prediction_bootstrap_method(spec)
+    assert steps["internal_validation"].inputs == ["table:prediction_scores", "table:model_performance"]
+    assert static_prediction_owns_step(steps["internal_validation"])
+
+
+def test_source_unavailable_benchmark_is_declared_as_omitted_in_plan() -> None:
+    from easyicu.databases.profiles import iter_database_profiles
+    from easyicu.research_agent.concept_availability import explain_concept_availability
+
+    context = _context()
+    database = next(p.key for p in iter_database_profiles(public_only=True)
+                    if not explain_concept_availability(concept=APACHE, database=p.key).available)
+    context = context.model_copy(update={"cohort": context.cohort.model_copy(update={"database": database})})
+    request = _request(context, cohort_mode=None)
+    assert request.benchmark_candidates == []
+    assert request.benchmark_omissions[0]["reason"] == "benchmark_comparator_source_unavailable"
+    plan = _plan(context, _requirement(APACHE))
+    assert "benchmark_comparison" not in {s.step_id for s in plan.steps}
+    report_intent = next(s.intent for s in plan.steps if s.step_id == "report")
+    assert "benchmark_comparator_source_unavailable" in report_intent
+    assert APACHE in report_intent
+    assert database in report_intent
+    assert request.benchmark_omissions[0]["availability_reason"] in report_intent
 
 
 def test_a_benchmark_is_never_also_a_predictor() -> None:

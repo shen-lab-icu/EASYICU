@@ -17,6 +17,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ..canonical_json import canonical_sha256
 
 
+class BootstrapSpec(BaseModel):
+    """Declared enhanced patient bootstrap in the primary development partition."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    replicates: int = Field(ge=20, le=2000, strict=True)
+    seed: int = Field(ge=0, le=4294967295, strict=True)
+
+
 class PredictionValidationReason(str, Enum):
     """Stable owner diagnostics for prediction-validation failures."""
 
@@ -676,6 +684,7 @@ class PredictionValidationFinding(BaseModel):
 
 
 __all__ = [
+    "BootstrapSpec",
     "CalibrationStatus",
     "PredictionValidationAnalysisBundle",
     "PredictionValidationAnalysisPolicy",

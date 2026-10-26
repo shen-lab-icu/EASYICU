@@ -41,6 +41,7 @@ from types import MappingProxyType
 from typing import Literal, Mapping, Optional
 
 from ..research_context.materialization_window import column_window_from_label
+from ..concept_availability import explain_concept_availability
 
 ComparatorKind = Literal["probability", "score"]
 #: The stated direction of a score this owner compares.
@@ -139,6 +140,19 @@ def calibration_reason(
     if facts.predicts != str(outcome_concept or "").strip():
         return "predicts_another_outcome"
     return None
+
+
+def benchmark_source_omission(*, column: str, concept: str, database: str) -> Optional[dict[str, str]]:
+    """Packaged mappings decide source availability; never infer it from values."""
+
+    availability = explain_concept_availability(concept=concept, database=database)
+    if availability.available:
+        return None
+    return {
+        "column": column, "concept": concept, "database": database,
+        "reason": "benchmark_comparator_source_unavailable",
+        "availability_reason": str(availability.reason or "unavailable"),
+    }
 
 
 def comparator_information_window(

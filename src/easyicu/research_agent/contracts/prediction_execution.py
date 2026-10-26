@@ -13,11 +13,13 @@ roster from every raw input on the step.
 
 from __future__ import annotations
 
+import re
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Optional
 
 from .cohort_product_keys import is_closed_cohort_product_key, sole_typed_cohort_input
 from .ownership_verdict import OwnershipVerdict
+from .prediction_validation import BootstrapSpec
 
 PREDICTION_MODEL_ANALYSIS_KIND = "static_prediction_model"
 PREDICTION_PRIMARY_ACTION = "prediction.discrimination_calibration"
@@ -30,6 +32,34 @@ PREDICTION_BENCHMARK_ACTION = "prediction.benchmark_comparison"
 PREDICTION_BENCHMARK_PRODUCT = "table:benchmark_comparison"
 #: The comparator columns one benchmark comparison step may read.
 MAX_BENCHMARK_COMPARATORS = 3
+_BOOTSTRAP_METHOD = "prediction_bootstrap_optimism"
+
+
+def prediction_bootstrap_method(spec: BootstrapSpec) -> str:
+    """Compile the typed option into the existing sealed step's method coordinate."""
+
+    return f"{_BOOTSTRAP_METHOD}(replicates={spec.replicates},seed={spec.seed})"
+
+
+def static_prediction_bootstrap_spec(step: object) -> Optional[BootstrapSpec]:
+    """Read an exact declared option, never infer resampling from free prose.
+
+    AnalysisStep belongs to the sealed scorer core. Its existing method field
+    carries this closed serialization; the unsealed progressive contract owns
+    the typed option and the executor validates it again before code generation.
+    Historical method declarations retain the split-only default.
+    """
+
+    method = str(getattr(step, "method", None) or "")
+    if not method.startswith(_BOOTSTRAP_METHOD):
+        return None
+    match = re.fullmatch(r"prediction_bootstrap_optimism\(replicates=([0-9]+),seed=([0-9]+)\)", method)
+    if match is None:
+        raise ValueError("prediction_bootstrap_method_invalid")
+    if (getattr(step, "scientific_action_id", None) != PREDICTION_PRIMARY_ACTION
+            or getattr(step, "planned_analysis_role", None) != "primary"):
+        raise ValueError("bootstrap_spec belongs only to the static prediction primary")
+    return BootstrapSpec(replicates=int(match[1]), seed=int(match[2]))
 
 #: Action -> the exact ordered products the static prediction owner writes.
 STATIC_PREDICTION_ACTION_OUTPUTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
@@ -154,6 +184,10 @@ def static_prediction_owns_step(step: object) -> bool:
     if action == PREDICTION_BENCHMARK_ACTION:
         if not static_prediction_benchmark_columns(step):
             return False
+    elif action == "prediction.internal_validation" and typed_inputs == (
+        PREDICTION_SCORES_PRODUCT, PREDICTION_PERFORMANCE_PRODUCT,
+    ):
+        pass
     elif typed_inputs != (PREDICTION_SCORES_PRODUCT,):
         return False
     return bool(
@@ -252,8 +286,10 @@ __all__ = [
     "PREDICTION_PRIMARY_ACTION",
     "PREDICTION_SCORES_PRODUCT",
     "STATIC_PREDICTION_ACTION_OUTPUTS",
+    "prediction_bootstrap_method",
     "static_prediction_benchmark_cohort_input",
     "static_prediction_benchmark_columns",
+    "static_prediction_bootstrap_spec",
     "static_prediction_execution_verdict",
     "static_prediction_executes_robustness_spec",
     "static_prediction_features",

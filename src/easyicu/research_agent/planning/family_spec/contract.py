@@ -858,6 +858,9 @@ class FamilySpecRequest(BaseModel):
     benchmark_candidates: list[BenchmarkCandidate] = Field(
         default_factory=list, exclude_if=lambda value: not value
     )
+    benchmark_omissions: list[dict[str, str]] = Field(
+        default_factory=list, exclude_if=lambda value: not value
+    )
 
     @field_validator(
         "exposure_levels",
