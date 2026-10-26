@@ -20,7 +20,12 @@ import pandas as pd
 
 @dataclass
 class ICUTable:
-    """Wrap a :class:`pandas.DataFrame` together with column metadata."""
+    """Wrap a :class:`pandas.DataFrame` together with column metadata.
+
+    ``time_basis`` and ``interval`` describe a producer-declared time grid.
+    Unknown metadata stays unset; a column name alone does not prove that two
+    tables share the same origin, unit or resampling interval.
+    """
 
     data: pd.DataFrame
     id_columns: List[str] = field(default_factory=list)
@@ -29,6 +34,8 @@ class ICUTable:
     unit_column: Optional[str] = None
     time_columns: List[str] = field(default_factory=list)
     _owns_data: bool = field(default=False, repr=False)  # 🚀 标记是否拥有数据
+    time_basis: Optional[str] = None
+    interval: Optional[pd.Timedelta] = None
 
     def __post_init__(self) -> None:
         # 🚀 优化：避免不必要的copy，大部分情况下数据是只读的
@@ -59,6 +66,8 @@ class ICUTable:
             value_column=self.value_column,
             unit_column=self.unit_column,
             time_columns=list(self.time_columns),
+            time_basis=self.time_basis,
+            interval=self.interval,
         )
 
     def dataframe(self) -> pd.DataFrame:
@@ -77,6 +86,8 @@ class ICUTable:
             value_column=self.value_column,
             unit_column=self.unit_column,
             time_columns=self.time_columns,
+            time_basis=self.time_basis,
+            interval=self.interval,
         )
 
     def iter_groups(self) -> Iterator[pd.DataFrame]:
@@ -351,6 +362,8 @@ class TsTbl(IdTbl):
         >>> tbl = TsTbl(df, id_vars=['patient_id'], index_var='time')
     """
     
+    time_basis: Optional[str] = None
+
     def __init__(
         self,
         data: pd.DataFrame,
@@ -481,13 +494,15 @@ class TsTbl(IdTbl):
     
     def copy(self) -> "TsTbl":
         """Create a copy of this table."""
-        return TsTbl(
+        result = TsTbl(
             self.data.copy(), 
             self.id_vars.copy(),
             self.index_var,
             self.interval,
             by_ref=False
         )
+        result.time_basis = self.time_basis
+        return result
     
     def __repr__(self) -> str:
         """美化输出 (R ricu print.ts_tbl)."""
@@ -677,7 +692,7 @@ class WinTbl(TsTbl):
     
     def copy(self) -> "WinTbl":
         """Create a copy of this table."""
-        return WinTbl(
+        result = WinTbl(
             self.data.copy(),
             self.id_vars.copy(),
             self.index_var,
@@ -685,6 +700,8 @@ class WinTbl(TsTbl):
             self.interval,
             by_ref=False
         )
+        result.time_basis = self.time_basis
+        return result
     
     def __repr__(self) -> str:
         """美化输出 (R ricu print.win_tbl)."""
