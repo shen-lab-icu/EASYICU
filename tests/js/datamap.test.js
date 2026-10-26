@@ -32,7 +32,9 @@ const VIEW = {
 
 function harness(overrides = {}) {
   const calls = [];
-  const host = { innerHTML: '', dataset: {}, listeners: {}, addEventListener(name, handler) { this.listeners[name] = handler; } };
+  const detail = { scrolled: [], scrollIntoView(options) { this.scrolled.push(options); } };
+  const host = { innerHTML: '', dataset: {}, listeners: {}, addEventListener(name, handler) { this.listeners[name] = handler; },
+    querySelector: selector => (selector === '.dmap-detail' && host.innerHTML.includes('dmap-detail') ? detail : null) };
   const window = {
     EU_LANG: 'zh',
     EU_DATABASE_NAMES: { name: key => ({ miiv: 'MIMIC-IV', eicu: 'eICU-CRD', aumc: 'AmsterdamUMCdb' }[key] || ''), abbr: key => ({ miiv: 'M-IV', eicu: 'eICU', aumc: 'AUMC' }[key] || '') },
@@ -46,7 +48,7 @@ function harness(overrides = {}) {
   }
   const screen = window.SCREENS.datamap;
   const root = { querySelector: () => host };
-  return { screen, root, host, calls };
+  return { screen, root, host, calls, detail };
 }
 const clickOn = (host, attribute, value, extra = {}) => host.listeners.click({ target: { closest: selector => (selector === `[${attribute}]` ? { dataset: value, ...extra } : null) } });
 
@@ -66,12 +68,14 @@ test('the map loads one page and names databases, study types and variables', as
 });
 
 test('a decision explains itself when opened; an exact one has nothing to open', async () => {
-  const { screen, root, host } = harness();
+  const { screen, root, host, detail } = harness();
   screen.afterRender(root);
   await settle();
   assert.doesNotMatch(host.innerHTML, /data-dmap-study="miiv\|survival"/);
   clickOn(host, 'data-dmap-study', { dmapStudy: 'eicu|survival' });
   assert.match(host.innerHTML, /<h3>生存分析 · eICU-CRD <span class="dmap-chip is-refused">不满足<\/span><\/h3>\s*<ul><li>没有记录事件发生时间。<\/li><\/ul>/);
+  // The explanation is below the matrix, so opening it brings it into view.
+  assert.deepEqual(JSON.parse(JSON.stringify(detail.scrolled)), [{ block: 'nearest' }]);
   clickOn(host, 'data-dmap-study', { dmapStudy: 'aumc|survival' });
   assert.match(host.innerHTML, /<li>事件发生时间使用只有日期（admissions\.dateofdeath）。<\/li>/);
   assert.match(host.innerHTML, /会写明替代内容，需要你确认后才运行/);

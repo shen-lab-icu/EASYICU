@@ -43,10 +43,10 @@
 .eusk-head h1,.eusk-detail-head h1,.eudata-head h1,.euh-settings-main h1{color:var(--skin-ink);font:400 30px/1.2 var(--skin-serif);letter-spacing:0}
 .eusk-head p,.eusk-detail-head p,.eudata-head p{color:var(--skin-muted);font-size:15px;line-height:22px}
 .eusk-eyebrow,.eudata-eyebrow{color:var(--skin-muted);font:500 10px/15px var(--skin-font);letter-spacing:.5px;text-transform:uppercase}
-.eusk-new,.eusk-use,.eudata-shell .btn.primary,.eudata-shell .express .btn.primary,.euh-shell .btn.primary{
+.eusk-new,.eusk-use,.eusk-tool-primary,.eudata-shell .btn.primary,.eudata-shell .express .btn.primary,.euh-shell .btn.primary{
   border:1px solid var(--skin-ink);border-radius:6px;background:var(--skin-primary);color:var(--skin-ink);font-weight:500;box-shadow:0 0 0 2px transparent;transition:box-shadow .15s ease
 }
-.eusk-new:hover,.eusk-use:hover,.eudata-shell .btn.primary:hover,.eudata-shell .express .btn.primary:hover,.euh-shell .btn.primary:hover{background:var(--skin-primary);border-color:var(--skin-ink);color:var(--skin-ink);box-shadow:0 0 0 2px var(--skin-ink)}
+.eusk-new:hover,.eusk-use:hover,.eusk-tool-primary:not(:disabled):hover,.eudata-shell .btn.primary:hover,.eudata-shell .express .btn.primary:hover,.euh-shell .btn.primary:hover{background:var(--skin-primary);border-color:var(--skin-ink);color:var(--skin-ink);box-shadow:0 0 0 2px var(--skin-ink)}
 .euh-shell .btn,.eudata-shell .btn{border:1px solid var(--skin-ink);border-radius:6px;background:var(--skin-paper);color:var(--skin-ink);box-shadow:none}
 .euh-shell .btn:hover,.eudata-shell .btn:hover{background:var(--skin-sunken)}
 .euh-shell .btn.ghost,.eudata-shell .btn.ghost,.eudata-shell .handoff .btn{border-color:transparent;background:transparent}

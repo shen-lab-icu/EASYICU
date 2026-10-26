@@ -228,9 +228,25 @@
   function methodOverview(skill, component) {
     if (ui.loadingPackage) return `<div class="eusk-document-loading"><span></span><p>${tr('Loading the reviewed SKILL.md…', '正在读取已审阅的 SKILL.md…')}</p></div>`;
     const pkg = ui.packageDetail && ui.packageDetail.skill_id === skill.name ? ui.packageDetail : null;
-    const main = pkg && Array.isArray(pkg.files) ? pkg.files.find(file => file.path === 'SKILL.md') : null;
+    const files = pkg && Array.isArray(pkg.files) ? pkg.files : [];
+    const preferred = pkg && pkg.overview_paths && pkg.overview_paths[window.EU_LANG === 'zh' ? 'zh' : 'en'];
+    const main = files.find(file => file.path === preferred) || files.find(file => file.path === 'SKILL.md') || null;
     if (!main) return `<div class="eusk-package-fallback">${methodContract(skill, component)}</div>`;
-    return `<article class="eusk-rendered-markdown eusk-overview-document" data-sk-overview-source="SKILL.md">${instructionHtml(packageMarkdown(main.content))}</article>`;
+    return `<article class="eusk-rendered-markdown eusk-overview-document" data-sk-overview-source="${esc(main.path)}">${linkSiblings(packageMarkdown(main.content), pkg)}</article>`;
+  }
+  // A guide's "when not to use" line names the Skill that fits instead; that
+  // name opens it. Lines the guide words differently stay plain text.
+  function linkSiblings(markdown, pkg) {
+    const links = [];
+    const text = (Array.isArray(pkg.not_for) ? pkg.not_for : []).reduce((out, item) => {
+      const sibling = item && item.sibling_skill_id ? methodSkills().find(row => row.name === item.sibling_skill_id) : null;
+      const situation = item && tr(item.situation_en, item.situation_zh);
+      const line = sibling ? `- ${situation} → ${sibling.title}` : '';
+      if (!line || !out.includes(line)) return out;
+      links.push(`<button type="button" class="eusk-sibling" data-sk-open="${esc(sibling.id)}">${esc(sibling.title)}</button>`);
+      return out.replace(line, `- ${situation} → EUSKSIBLING${links.length - 1}X`);
+    }, markdown);
+    return links.reduce((html, link, index) => html.replace(`EUSKSIBLING${index}X`, link), instructionHtml(text));
   }
   function methodContract(skill, component) {
     return `<div class="eusk-method-summary"><div><span>${component ? tr('Method family', '方法族') : tr('Capability', '能力')}</span>${component ? `<strong>${esc(familyName(skill.methodFamily))}</strong>` : `<code>${esc(skill.capabilityId)}</code>`}</div><div><span>${tr('Execution', '执行方式')}</span><strong>${esc(executionLabel(skill))}</strong></div><div><span>${component ? tr('Method role', '方法角色') : tr('Use of results', '结果用途')}</span><strong>${esc(component ? tierLabel(skill) : ceilingLabel(skill))}</strong></div></div>

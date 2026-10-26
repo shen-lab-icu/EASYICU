@@ -66,7 +66,7 @@ def test_skills_use_the_research_workspace_palette() -> None:
     index = _read("index.html")
     css = _read("css", "skills-hub.css")
 
-    assert "css/skills-hub.css?v=20261026-skills2" in index
+    assert "css/skills-hub.css?v=20261026-skills3" in index
     for token in (
         "--sk-canvas:#f7f6f2",
         "--sk-surface:#fbfaf7",
