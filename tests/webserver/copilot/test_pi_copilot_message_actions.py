@@ -14,6 +14,25 @@ from tests.webserver.copilot.pi_copilot_static_fixtures import (
 )
 
 
+def test_mimic_iii_demo_next_step_uses_the_existing_prepare_action():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    owner = _read("js/screens-guided-pi-next-actions.js")
+    script = f"""
+      global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
+      eval({owner!r});
+      const owner = window.EU_GUIDED_PI_NEXT_ACTIONS;
+      const projected = owner.project('Next step:\\n- Use MIMIC-III Demo\\n- Continue planning');
+      console.log(owner.render(projected, {{ language: 'en' }}));
+    """
+    rendered = run_node(node, script, check=True).stdout
+    assert "Download and prepare MIMIC-III Demo" in rendered
+    assert "Use an already downloaded MIMIC-III Demo" in rendered
+    assert 'data-gpi-next-grants="extract"' in rendered
+
+
 def test_copilot_next_step_owner_projects_clickable_choices_and_safe_fallback() -> None:
     node = shutil.which("node")
     if node is None:

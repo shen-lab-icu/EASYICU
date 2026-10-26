@@ -1,4 +1,4 @@
-"""Tiny invented raw tables standing in for both public demo downloads.
+"""Tiny invented raw tables standing in for the public demo downloads.
 
 All source table schemas come from the packaged configuration. Unobserved
 tables have headers only; the two invented ICU stays have demographics,
@@ -16,16 +16,30 @@ def synthetic_demo_download(source: Any, paths: Any, job: Any) -> None:
     from easyicu.config import load_src_cfg
 
     cfg = load_src_cfg(source.database)
-    rows = _mimic_rows() if source.database == "miiv" else _eicu_rows()
+    rows = {"miiv": _mimic_rows, "eicu_demo": _eicu_rows, "mimic_demo": _mimic_iii_rows}[source.database]()
     paths.raw.mkdir(parents=True, exist_ok=True)
     for name, table in cfg.tables.items():
         columns = list(table.columns or {})
         if not columns:
             continue
-        with (paths.raw / f"{name}.csv").open("w", newline="", encoding="utf-8") as handle:
+        filename = f"{name.upper() if source.database == 'mimic_demo' else name}.csv"
+        with (paths.raw / filename).open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=columns)
-            writer.writeheader()
+            writer.writerow({column: column.upper() if source.database == "mimic_demo" else column for column in columns})
             writer.writerows(rows.get(name, []))
+
+
+def _mimic_iii_rows() -> dict[str, list[dict]]:
+    rows = _mimic_rows()
+    for index, patient in enumerate(rows["patients"], 1):
+        patient.pop("anchor_age")
+        patient.pop("anchor_year")
+        patient.pop("anchor_year_group")
+        patient["dob"] = f"{2060 - index}-01-01 00:00:00"
+    for name in ("icustays", "chartevents"):
+        for row in rows[name]:
+            row["icustay_id"] = row.pop("stay_id")
+    return rows
 
 
 def _mimic_rows() -> dict[str, list[dict]]:

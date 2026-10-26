@@ -53,8 +53,9 @@ def test_demo_catalog_is_fixed_safe_and_path_free(
     assert [row["id"] for row in payload["sources"]] == [
         "mimic_iv_demo_v2_2",
         "eicu_demo_v2_0_1",
+        "mimic_iii_demo_v1_4",
     ]
-    mimic, eicu = payload["sources"]
+    mimic, eicu, mimic_iii = payload["sources"]
     assert mimic["version"] == "2.2"
     assert mimic["database"] == "miiv"
     assert mimic["scope"]["patients"] == 100
@@ -63,6 +64,9 @@ def test_demo_catalog_is_fixed_safe_and_path_free(
     assert eicu["database"] == "eicu_demo"
     assert eicu["scope"]["icu_stays"] == ">2500"
     assert eicu["download"]["size_label"] == "130.6 MB"
+    assert mimic_iii["database"] == "mimic_demo"
+    assert mimic_iii["version"] == "1.4"
+    assert mimic_iii["scope"]["icu_stays"] == "136"
     assert all(
         row["provenance"]["provider"] == "PhysioNet"
         and row["provenance"]["download_url"].startswith("https://physionet.org/")
@@ -103,7 +107,7 @@ def test_demo_catalog_status_does_not_rescan_every_registered_export(
 
     payload = demo_sources.demo_sources_catalog()
 
-    assert len(seen) == 2
+    assert len(seen) == 3
     assert all(row["status"]["state"] == "prepared" for row in payload["sources"])
     assert all(row["status"]["registered"] is True for row in payload["sources"])
 

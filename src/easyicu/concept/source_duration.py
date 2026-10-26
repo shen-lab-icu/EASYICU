@@ -45,6 +45,10 @@ def normalize_source_dur_var_hours(
     )
 
     declared = get_dur_var_unit(frame) or get_dur_var_unit(source_frame)
+    if frame.empty:
+        frame["dur_var"] = pd.Series(index=frame.index, dtype="float64")
+        set_dur_var_unit(frame, UNIT_HOURS)
+        return frame
     if declared:
         set_dur_var_unit(frame, declared)
     if pd.api.types.is_numeric_dtype(

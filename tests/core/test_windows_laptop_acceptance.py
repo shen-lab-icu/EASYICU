@@ -85,7 +85,7 @@ def test_desktop_boundary_uses_host_profile_and_never_claims_a_result(tmp_path, 
         bindings.append((path, kwargs))
         return {"ok": True, "path": "private", "binding": {"files": [{"relative_path": "private"}]}}
     monkeypatch.setattr(dataio, "validate_research_pipeline_source", validate)
-    result = acceptance.probe_desktop_first_result([tmp_path / "miiv", tmp_path / "eicu"])
+    result = acceptance.probe_desktop_first_result([tmp_path / "miiv", tmp_path / "eicu", tmp_path / "mimic_demo"])
     assert probes == ["docker", "docker", "host"]
     assert bindings == [(str(tmp_path / "eicu"), {"database": "eicu_demo"})]
     assert result["profile_ref"] == DESKTOP_FIRST_RESULT.ref
@@ -601,7 +601,7 @@ def test_failure_receipts_survive_an_unexpected_research_preflight_error(tmp_pat
     monkeypatch.setattr(acceptance, "probe_web", lambda *args: pytest.fail("partial demo used"))
     report = acceptance.run_acceptance(work, work / "cache", tmp_path / "receipt", memory_pressure_gb=0, fetch=fetch)
     assert report["status"] == "failed"
-    assert len(fetches) == 2
+    assert len(fetches) == 3
     assert report["research"]["status"] == "failed"
     assert report["memory"]["released"]["total_bytes"] > 0
     assert Path.cwd() == original_dir

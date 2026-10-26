@@ -81,7 +81,7 @@ logger = logging.getLogger(__name__)
 
 _PATIENT_ID_PRIORITY = {
     "mimic": ("icustay_id", "hadm_id", "subject_id"),
-    "mimic_demo": ("stay_id", "hadm_id", "subject_id"),
+    "mimic_demo": ("icustay_id", "hadm_id", "subject_id"),
     "miiv": ("stay_id", "hadm_id", "subject_id"),
     "eicu": ("patientunitstayid", "patienthealthsystemstayid", "uniquepid"),
     "eicu_demo": ("patientunitstayid", "patienthealthsystemstayid", "uniquepid"),
@@ -2919,7 +2919,7 @@ def _apply_callback(
                     # frame's 'stay_id' column contains 'icustay_id' values (already joined/replaced)
                     # We need to merge with icustays on icustay_id to get intime
                     
-                    db_name = data_source.config.name if hasattr(data_source, 'config') else 'mimic'
+                    restore_stay_id = 'stay_id' in frame.columns
                     
                     # Load icustays with intime
                     icustays = data_source.load_table(
@@ -2980,8 +2980,8 @@ def _apply_callback(
                         age_years = np.where(age_years > 90, 90, age_years)
                         frame[concept_name] = age_years
                         
-                        # Use icustay_id as the final stay_id
-                        if 'icustay_id' in frame.columns:
+                        # Preserve the identifier supplied by the source owner.
+                        if restore_stay_id and 'icustay_id' in frame.columns:
                             frame = frame.rename(columns={'icustay_id': 'stay_id'})
                         
                         # Clean up temporary columns

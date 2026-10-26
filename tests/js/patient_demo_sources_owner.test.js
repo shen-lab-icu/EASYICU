@@ -48,6 +48,21 @@ const catalogPayload = {
       },
       status: { state: 'prepared', registered: true, active: false },
     },
+    {
+      id: 'mimic_iii_demo_v1_4',
+      title: 'MIMIC-III Clinical Database Demo',
+      version: '1.4',
+      database: 'mimic_demo',
+      description: 'Official deidentified MIMIC-III demonstration release for testing the complete EasyICU concept and visualization workflow.',
+      scope: { summary: '100 patients, 136 ICU stays', patients: 100, icu_stays: '136' },
+      download: { size_label: '10.8 MB', preferred_transport: 'physionet', mirror_url: null },
+      provenance: {
+        provider: 'PhysioNet',
+        landing_page: 'https://physionet.org/content/mimiciii-demo/1.4/',
+        license: { name: 'ODbL 1.0' },
+      },
+      status: { state: 'not_downloaded', registered: false },
+    },
   ],
 };
 
@@ -134,6 +149,10 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   const html = owner.render({ t: en => en, esc: value => String(value) });
   assert.match(html, /mimic_iv_demo_v2_2/);
   assert.match(html, /eicu_demo_v2_0_1/);
+  assert.match(html, /data-demo-source-prepare="mimic_iii_demo_v1_4"/);
+  assert.match(html, /MIMIC-III Clinical Database Demo/);
+  assert.match(html, /10\.8 MB/);
+  assert.match(html, /100 patients, 136 ICU stays/);
   assert.match(html, /Official dataset page/);
   assert.match(html, /Deidentified real records/);
   // Descriptions come from the owner's own copy, not the English release text.

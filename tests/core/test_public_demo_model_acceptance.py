@@ -25,10 +25,14 @@ def test_cassette_reaches_the_acceptance_owner(tmp_path, monkeypatch):
         return {"status": "passed", "reason_code": "public_demo_replay_result_verified",
                 "evidence_bound_result": True, "provider_kind": "replay", "cassette_sha256": "a" * 64}
     monkeypatch.setattr(owner, "replay_public_demo", replay)
+    from easyicu.webserver.demo_source_contracts import SOURCES
+
     cassette = tmp_path / "recorded.json"
-    result = acceptance.probe_desktop_first_result([tmp_path / "miiv", tmp_path / "eicu"], cassette_path=cassette)
+    # One prepared export per registered demo source, in registry order.
+    exports = [tmp_path / source.database for source in SOURCES]
+    result = acceptance.probe_desktop_first_result(exports, cassette_path=cassette)
     assert calls[0]["cassette_path"] == cassette
-    assert calls[0]["export_path"] == tmp_path / "eicu"
+    assert calls[0]["export_path"] == tmp_path / "eicu_demo"
     assert result["first_result"]["evidence_bound_result"] is True
     assert result["provider_kind"] == "replay"
     assert result["cassette_sha256"] == "a" * 64

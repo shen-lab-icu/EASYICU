@@ -240,6 +240,38 @@ SOURCES: tuple[DemoSourceSpec, ...] = (
             "official-eicu-collaborative-research-database-demo-2.0.1.zip"
         ),
     ),
+    DemoSourceSpec(
+        id="mimic_iii_demo_v1_4",
+        title="MIMIC-III Clinical Database Demo",
+        version="1.4",
+        database="mimic_demo",
+        description=(
+            "Official deidentified MIMIC-III demonstration release for testing "
+            "the complete EasyICU concept and visualization workflow."
+        ),
+        scope_summary="100 patients, 136 ICU stays",
+        patients=100,
+        icu_stays="136",
+        size_label="10.8 MB",
+        size_bytes=11_350_216,
+        download_url=(
+            "https://physionet.org/static/published-projects/mimiciii-demo/"
+            "mimic-iii-clinical-database-demo-1.4.zip"
+        ),
+        landing_page="https://physionet.org/content/mimiciii-demo/1.4/",
+        archive_filename="mimic-iii-clinical-database-demo-1.4.zip",
+        attribution=(
+            "Johnson A, Pollard T, Mark R. MIMIC-III Clinical Database Demo "
+            "(version 1.4). PhysioNet. 2019."
+        ),
+        citation_url="https://doi.org/10.13026/C2HM2Q",
+        license_url="https://physionet.org/content/mimiciii-demo/view-license/1.4/",
+        max_download_bytes=32 * 1024 * 1024,
+        max_uncompressed_bytes=256 * 1024 * 1024,
+        archive_sha256=(
+            "f7f973de40324e84377226fe54d472e137f5351ba31563e4cef13bc6716b9012"
+        ),
+    ),
 )
 SOURCE_BY_ID: Mapping[str, DemoSourceSpec] = MappingProxyType(
     {source.id: source for source in SOURCES}

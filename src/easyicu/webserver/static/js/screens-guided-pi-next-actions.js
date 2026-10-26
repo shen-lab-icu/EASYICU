@@ -39,7 +39,7 @@
 
   function demoSubject(value) {
     const choice = plainLabel(value);
-    const match = choice.match(/((?:mimic[\s-]*iv|eicu)[^。.;；]*?\bdemo(?:\s+data)?(?:\s*[（(][^）)]*[）)])?)/i);
+    const match = choice.match(/((?:mimic[\s-]*(?:iv|iii)\b|eicu)[^。.;；]*?\bdemo(?:\s+data)?(?:\s*[（(][^）)]*[）)])?)/i);
     return match ? match[1].trim() : '';
   }
 

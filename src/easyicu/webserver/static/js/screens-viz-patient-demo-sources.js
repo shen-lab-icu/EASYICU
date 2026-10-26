@@ -147,6 +147,7 @@
   const DESCRIPTIONS = {
     mimic_iv_demo_v2_2: ['Deidentified MIMIC-IV demonstration release from PhysioNet; enough to try every step from extraction to figures.', 'PhysioNet 官方发布的去标识化 MIMIC-IV 演示数据，可完整体验从抽取到出图的流程。'],
     eicu_demo_v2_0_1: ['Deidentified multi-centre eICU demonstration release from PhysioNet.', 'PhysioNet 官方发布的去标识化 eICU 多中心演示数据。'],
+    mimic_iii_demo_v1_4: ['Deidentified MIMIC-III demonstration release from PhysioNet; the same extraction-to-figures workflow on the older MIMIC structure.', 'PhysioNet 官方发布的去标识化 MIMIC-III 演示数据，可在旧版 MIMIC 结构上体验从抽取到出图的流程。'],
   };
   function describe(source, helpers) {
     const row = DESCRIPTIONS[source && source.id];
@@ -155,6 +156,7 @@
 
   function scopeText(source, helpers) {
     const scope = (source && source.scope) || {};
+    if (scope.summary) return String(scope.summary);
     if (scope.patients) return `${scope.patients} ${hT(helpers, 'patients', '名患者')}`;
     if (scope.icu_stays) return `${scope.icu_stays} ${hT(helpers, 'ICU stays', '次 ICU 住院')}`;
     return hT(helpers, 'bounded public cohort', '公开演示队列');

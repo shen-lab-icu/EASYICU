@@ -413,6 +413,7 @@ def test_a_question_that_names_an_official_demo_is_offered_that_demo() -> None:
       const rows = [
         {{ id: 'mimic_iv_demo_v2_2', title: 'MIMIC-IV Clinical Database Demo', version: '2.2', status: {{ export_ready: true }} }},
         {{ id: 'eicu_demo_v2_0_1', title: 'eICU Collaborative Research Database Demo', version: '2.0.1', status: {{ export_ready: false }} }},
+        {{ id: 'mimic_iii_demo_v1_4', title: 'MIMIC-III Clinical Database Demo', database: 'mimic_demo', version: '1.4', status: {{ export_ready: false }} }},
       ];
       let messages = [];
       let pending = true;
@@ -437,6 +438,9 @@ def test_a_question_that_names_an_official_demo_is_offered_that_demo() -> None:
         out.matches = {{
           eicuDemo: ask('在 eICU demo 数据里，评估最高乳酸与 ICU 死亡率'),
           mimicDemo: ask('用 MIMIC-IV Demo 看看乳酸分布'),
+          mimicIIIDemo: ask('Use MIMIC-III Demo for an invented example'),
+          mimicIIITitle: ask('Use MIMIC-III Clinical Database Demo v1.4 for an invented example'),
+          ambiguousMimic: ask('Compare MIMIC-III Demo and MIMIC-IV Demo'),
           chineseWord: ask('用mimic iv 演示数据做一个描述'),
           eicuOfficialTitle: ask('Use official eICU Collaborative Research Database Demo v2.0.1 for a synthetic descriptive example.'),
           mimicOfficialTitle: ask('Use MIMIC-IV Clinical Database Demo v2.2 to describe ICU stays.'),
@@ -475,6 +479,9 @@ def test_a_question_that_names_an_official_demo_is_offered_that_demo() -> None:
         "matches": {
             "eicuDemo": "eicu_demo_v2_0_1",
             "mimicDemo": "mimic_iv_demo_v2_2",
+            "mimicIIIDemo": "mimic_iii_demo_v1_4",
+            "mimicIIITitle": "mimic_iii_demo_v1_4",
+            "ambiguousMimic": None,
             "chineseWord": "mimic_iv_demo_v2_2",
             "eicuOfficialTitle": "eicu_demo_v2_0_1",
             "mimicOfficialTitle": "mimic_iv_demo_v2_2",
