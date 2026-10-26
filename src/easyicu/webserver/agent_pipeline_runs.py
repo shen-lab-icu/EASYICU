@@ -1219,8 +1219,11 @@ def _pipeline_failure_category(exc: BaseException) -> str:
 
 def _receipt_typed_failure(exc: BaseException, code: str) -> Dict[str, Any]:
     typed = _safe_pipeline_typed_failure(exc)
-    if code in EXECUTION_FAILURE_CODES:
-        return {**execution_failure_diagnostic(_pipeline_exception_chain(exc)), **typed}
+    if code in EXECUTION_FAILURE_CODES or code == "research_pipeline_provider_timeout":
+        return {**execution_failure_diagnostic(
+            _pipeline_exception_chain(exc),
+            observed_coordinates_only=code == "research_pipeline_provider_timeout",
+        ), **typed}
     return typed
 
 

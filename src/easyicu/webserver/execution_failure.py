@@ -85,10 +85,12 @@ def call_with_failure_location(operation, *args, runner_kind=None, **kwargs):
         return operation(*args, **{**kwargs, "progress_callback": progress})
 
 
-def execution_failure_diagnostic(chain):
+def execution_failure_diagnostic(chain, *, observed_coordinates_only=False):
     """A closed fallback when no more specific typed owner diagnosed the stop.
 
-    Missing coordinates are explicitly unknown. Classifying from exception
+    Missing coordinates are explicitly unknown for execution fallbacks. A
+    provider timeout takes only observed coordinates, preserving its typed
+    owner's classification. Classifying from exception
     prose, traceback locals, or an arbitrary diagnostic dict would turn data
     into authority and potentially disclose it.
     """
@@ -101,9 +103,12 @@ def execution_failure_diagnostic(chain):
     runner = _runner(location.runner_kind)
     if phase in {"context", "plan", "human_review"}:
         runner = "not_started"
+    coordinates = {"step_id": step, "phase": phase, "runner_kind": runner}
+    if observed_coordinates_only:
+        return {key: value for key, value in coordinates.items() if value != "unknown"}
     return {
         "owner": "easyicu.execution.pipeline_v1",
         "reason_code": "execution_step_raised" if phase == "execute" and step != "unknown" else "pipeline_operation_raised",
-        "step_id": step, "phase": phase, "runner_kind": runner,
+        **coordinates,
         "exception_type": _EXCEPTIONS.get(type(error), "UnclassifiedError"),
     }

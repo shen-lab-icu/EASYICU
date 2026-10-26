@@ -401,6 +401,8 @@ def safe_stop_coordinates(payload: Any) -> dict[str, Any]:
     }
     if mismatch_fields:
         result["mismatch_fields"] = mismatch_fields
+    if payload.get("runner_kind") == "not_started":
+        result["runner_kind"] = "not_started"
     variable = payload.get("stated_variable")
     if (isinstance(variable, str) and 0 < len(variable.strip()) <= 160
             and not any(ord(char) < 32 or ord(char) == 127 for char in variable)):

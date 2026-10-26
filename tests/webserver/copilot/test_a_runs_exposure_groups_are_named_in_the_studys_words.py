@@ -732,14 +732,14 @@ def test_an_ungrouped_exposure_keeps_the_plans_labels() -> None:
     labels = {"death": "院内死亡", "lact_max_group": "最高乳酸分层", "lact_max_group=1": "低乳酸"}
     view = _answer_view({}, labels=labels)
 
-    assert "eICU 中按最高乳酸分层的院内死亡：「低乳酸」10.00%（60/600）；「2」20.00%（60/300）" in view["card"]
+    assert "eICU 中按最高乳酸分层的院内死亡：「低乳酸」10.00%（60/600）；「lact_max_group=2」20.00%（60/300）" in view["card"]
     assert view["followUps"][0] == "在调整年龄、性别后，最高乳酸分层与院内死亡的关联还成立吗？"
 
 
 def test_the_run_answer_says_when_the_grouping_record_cannot_be_read() -> None:
     card = _answer({"exposure_groups": UNREADABLE})
 
-    assert "「1」10.00%" in card
+    assert "「lact_max_group=1」10.00%" in card
     assert UNREADABLE_ZH in card
 
 
@@ -766,7 +766,7 @@ process.stdout.write(JSON.stringify([summary.estimates[0].label, summary.groupsU
         ))
 
     assert summarize(CONTEXT) == ["乳酸 ≥2.5 vs 乳酸 <2.5（参照）", False]
-    assert summarize({"exposure_groups": UNREADABLE}) == ["2 vs 1", True]
+    assert summarize({"exposure_groups": UNREADABLE}) == ["lact_max_group=2 vs lact_max_group=1", True]
 
 
 # --- the page ---------------------------------------------------------------------

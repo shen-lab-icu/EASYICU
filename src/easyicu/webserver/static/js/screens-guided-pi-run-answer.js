@@ -16,6 +16,8 @@
   // baseline characteristic a follow-up question could adjust for.
   const NON_COVARIATE = /^artifact:|^table:|(?:^|_)(?:id|n|measured|time)$/;
   const AGGREGATE_SUFFIX = /_(?:first|last|min|max|mean|median)$/;
+  const AGGREGATE_NAMES = { max: ['Maximum', '最高'], min: ['Minimum', '最低'], mean: ['Mean', '平均'],
+    median: ['Median', '中位'], first: ['First', '首次'], last: ['Last', '末次'] };
   const GROUPED_COLUMN = /^(.+)_group_[a-z0-9]+$/;
   const CJK = /[\u3400-\u9fff]/;
   // Reader names for the result-table kinds a file note mentions, in the
@@ -86,6 +88,11 @@
       return String(value || '').replace(/\s*[（(][^）)]*[）)]\s*$/, '').trim();
     }
 
+    function spacedZh(text) {
+      return text.replace(/([\u3400-\u9fff])([A-Za-z0-9])/g, '$1 $2')
+        .replace(/([A-Za-z0-9])([\u3400-\u9fff])/g, '$1 $2');
+    }
+
     // The name a Chinese reader sees for one plan column. The plan registers
     // its display labels for the English manuscript; a Chinese label stays as
     // registered. Otherwise a column that is itself a catalog concept (an
@@ -117,8 +124,6 @@
       const concept = dict[column] || dict[display.source_concept] || dict[String(column).replace(AGGREGATE_SUFFIX, '')];
       const localized = Array.isArray(concept) ? tr(concept[0], concept[1]) : '';
       const aggregation = /^window_numeric_(max|min|mean|median|first|last)$/.exec(display.unit_normalization || '')?.[1];
-      const summaries = { max: ['Maximum', '最高'], min: ['Minimum', '最低'], mean: ['Mean', '平均'],
-        median: ['Median', '中位'], first: ['First', '首次'], last: ['Last', '末次'] };
       const windowMatch = /^(icu_admission|hospital_admission)\[(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\]h$/.exec(display.analysis_window || '');
       if (localized && aggregation && windowMatch && Number(windowMatch[3]) > Number(windowMatch[2])) {
         const [, origin, start, end] = windowMatch;
@@ -127,8 +132,8 @@
           : `${Number(start)}–${Number(end)} h after ${anchor} admission`;
         const windowZh = `${anchor} ${Number(start) === 0 ? Number(end) : `${Number(start)}–${Number(end)}`} 小时内`;
         const english = localized.replace(/^[A-Z][a-z]+(?=\s|$)/, word => word.toLowerCase());
-        return tr(`${summaries[aggregation][0]} ${english} ${windowEn}`,
-          `${windowZh}${summaries[aggregation][1]}${localized}`);
+        return tr(`${AGGREGATE_NAMES[aggregation][0]} ${english} ${windowEn}`,
+          `${windowZh}${AGGREGATE_NAMES[aggregation][1]}${localized}`);
       }
       return tr((registered && !CJK.test(registered) ? registered : '') || localized || display.description || column,
         (CJK.test(registered) ? registered : '') || localized || column);
@@ -145,9 +150,7 @@
       const group = row.group && row.groupVariable ? row.groupLabel : '';
       const measured = unit ? tr(` (${unit})`, `（${unit}）`) : '';
       // Space only the sentence's labels, never its registered group values.
-      const chineseLabel = `${group ? `各${group}` : ''}${row.label}`
-        .replace(/([\u3400-\u9fff])([A-Za-z0-9])/g, '$1 $2')
-        .replace(/([A-Za-z0-9])([\u3400-\u9fff])/g, '$1 $2');
+      const chineseLabel = spacedZh(`${group ? `各${group}` : ''}${row.label}`);
       return tr(`${row.label}${measured}${group ? ` by ${group}` : ''}, ${statistic}: `,
         `${chineseLabel}${measured}，${statistic}：`);
     }
@@ -240,6 +243,36 @@
         .filter(row => row && row.analysis_role === 'primary' && row.exposure_source)
         .map(row => String(row.exposure_source));
       return sources.length === 1 ? sources[0] : '';
+    }
+
+    // The verified stratum product states the same scale for every stratum.
+    // Read its structured per-unit/level clause in the page's language; the
+    // registered exposure and level display owners supply all reader names.
+    function stratifiedContrast(result, plan, labels, levels, summarizer) {
+      const text = String(result.contrast || '').trim();
+      const prefixed = /^([A-Za-z_][A-Za-z0-9_]*):\s*(.+)$/.exec(text);
+      const exposure = prefixed ? prefixed[1] : primaryModelExposure(plan) || primarySpec(plan)?.exposure || '';
+      const contrast = prefixed ? prefixed[2] : text;
+      const perUnit = /^per\s+(\d+(?:\.\d+)?)\s+(.+?)\s+increase$/i.exec(contrast);
+      if (perUnit) {
+        const registered = shortLabel(readerLabel(labels, exposure));
+        let catalog = conceptName(exposure);
+        const aggregation = AGGREGATE_SUFFIX.exec(exposure)?.[0].slice(1);
+        if (catalog && aggregation && !window.EU_CATALOG?.dict?.[exposure]) {
+          catalog = tr(`${AGGREGATE_NAMES[aggregation][0]} ${catalog.replace(/^[A-Z][a-z]+(?=\s|$)/, word => word.toLowerCase())}`,
+            `${AGGREGATE_NAMES[aggregation][1]}${catalog}`);
+        }
+        const name = tr(registered || catalog || 'exposure',
+          (CJK.test(registered) ? registered : '') || (CJK.test(catalog) ? catalog : '') || '暴露变量');
+        const unit = window.VIZ_DEMO?.catalogUnitText?.(perUnit[2], exposure.replace(AGGREGATE_SUFFIX, '')) ?? perUnit[2];
+        const english = name.replace(/^[A-Z][a-z]+(?=\s|$)/, word => word.toLowerCase());
+        return tr(`per ${perUnit[1]} ${unit} higher ${english}`, spacedZh(`${name}每升高 ${perUnit[1]} ${unit}`));
+      }
+      const pair = /^(.+?)\s+vs\.?\s+(.+)$/i.exec(contrast);
+      if (pair && exposure && summarizer?.levelLabel) {
+        return pair.slice(1).map(value => summarizer.levelLabel(exposure, value, labels, levels)).join(' vs ');
+      }
+      return prefixed ? shortLabel(readerLabel(labels, exposure)) || conceptName(exposure) || tr('exposure', '暴露变量') : contrast;
     }
 
     // The levels the concept dictionary declares for sex, by their Chinese names.
@@ -388,7 +421,7 @@
       const claims = (!firstResult && Array.isArray(provenance.claims) ? provenance.claims : [])
         .concat(Array.isArray(summary.claims) ? summary.claims : []);
       const claim = field => claims.find(row => row && row.source_field === field) || null;
-      const spec = primarySpec(plan);
+      const spec = summary.exposureSpec || primarySpec(plan);
       const labels = plan.display_labels && typeof plan.display_labels === 'object' ? plan.display_labels : {};
       const grouped = !!(spec && levels && levels.has(spec.exposure));
       const exposureLabel = !spec ? '' : grouped ? levels.variableName(spec.exposure)
@@ -403,7 +436,9 @@
         (SEX_LEVELS_ZH[String(exposure || '')] || {})[label] || label);
       const groups = (Array.isArray(summary.exposureLevels) ? summary.exposureLevels : [])
         .filter(row => row && row.label && finite(row.n) != null)
-        .map(row => ({ ...row, label: levelName(spec && spec.exposure, row.label) }));
+        .map(row => ({ ...row, label: levelName(spec && spec.exposure,
+          SEX_LEVELS_ZH[spec?.exposure]?.[row.level] && row.label === `${spec.exposure}=${row.level}`
+            ? row.level : row.label) }));
       const figures = mainFigure(payload('figure_gallery.json'));
       const tables = Array.isArray(payload('result_tables.json').tables) ? payload('result_tables.json').tables : [];
       const total = claim('exposure_distribution.n_total') || claim('n_total');
@@ -446,6 +481,7 @@
         estimate: primaryEstimate(summary, claims, labels),
         stratified: summary.stratified ? { ...summary.stratified,
           label: readerLabel(labels, summary.stratified.variable) || conceptName(summary.stratified.variable) || summary.stratified.variable,
+          contrast: stratifiedContrast(summary.stratified, plan, labels, levels, summarizer),
           strata: summary.stratified.strata.map(row => ({ ...row,
             level: levelName(summary.stratified.variable, labels[`${summary.stratified.variable}=${JSON.stringify(row.level)}`] || row.level) })),
         } : null,
@@ -573,16 +609,17 @@
       if (groups.length === 2) {
         const reference = groups[0];
         const focal = groups[1];
+        const name = row => view.groupedConcept ? row.label : `「${row.label}」`;
         if (view.total && focal.n != null && focal.sharePct != null) {
           sentences.push(tr(
             `Of ${view.total} ICU stays in ${source}, ${count(focal.n)} (${percent(focal.sharePct)}) were in the group “${focal.label}”.`,
-            `在 ${source} 的 ${view.total} 个 ICU 入住记录中，「${focal.label}」有 ${count(focal.n)} 个（${percent(focal.sharePct)}）。`,
+            `在 ${source} 的 ${view.total} 个 ICU 入住记录中，${name(focal)}有 ${count(focal.n)} 个（${percent(focal.sharePct)}）。`,
           ));
         }
         if (focal.outcomeRatePct != null && reference.outcomeRatePct != null) {
           const part = row => tr(
             `${percent(row.outcomeRatePct)} (${count(row.events)}/${count(row.denominator)}) in “${row.label}”`,
-            `「${row.label}」组 ${percent(row.outcomeRatePct)}（${count(row.events)}/${count(row.denominator)}）`,
+            `${name(row)}组 ${percent(row.outcomeRatePct)}（${count(row.events)}/${count(row.denominator)}）`,
           );
           const outcome = view.outcomeLabel || tr('Outcome', '结局');
           const overall = view.overallRisk ? tr(`; overall ${view.overallRisk}`, `；总体 ${view.overallRisk}`) : '';
@@ -633,7 +670,7 @@
           const p = result.p.startsWith('<') ? result.p : `= ${result.p}`;
           sentences.push(tr(
             `Stratified by ${result.label} (${result.contrast}): ${strata.join('; ')}; interaction p ${p}.`,
-            `按 ${result.label} 分层（${result.contrast}）：${strata.join('；')}；交互作用 p ${p}。`,
+            `${spacedZh(`按${result.label}分层`)}（${result.contrast}）：${strata.join('；')}；交互作用 p ${p}。`,
           ));
         }
         if (view.firstResult && Number.isSafeInteger(view.estimate.n) && view.estimate.n >= 0) {
