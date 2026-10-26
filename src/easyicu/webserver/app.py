@@ -48,6 +48,7 @@ from easyicu.webserver.routes.agent import control_router as agent_control_route
 from easyicu.webserver.routes.attention import router as attention_router
 from easyicu.webserver.routes.clinician_skills import router as clinician_skills_router
 from easyicu.webserver.routes.copilot import router as copilot_router
+from easyicu.webserver.routes.data_map import router as data_map_router
 from easyicu.webserver.routes.demo_sources import (
     catalog_router as demo_source_catalog_router,
 )
@@ -322,6 +323,7 @@ async def native_ui_security_headers(request: Request, call_next):
 # Registration order is a compatibility contract; keep the root static mount last.
 app.include_router(system_router)
 app.include_router(clinician_skills_router)
+app.include_router(data_map_router)
 app.include_router(search_router)
 app.include_router(attention_router)
 app.include_router(trust_help_router)

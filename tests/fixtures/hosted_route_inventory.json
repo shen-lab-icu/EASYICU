@@ -30,6 +30,16 @@
     "write_owner": "Pure scalar calculation on user assumptions; no data loader, model call, export read, submission or persistence."
   },
   {
+    "method": "GET",
+    "route": "/api/data-map",
+    "fields": ["query:database", "query:concept", "query:family", "query:concept_offset", "query:concept_limit", "query:source_offset", "query:source_limit"],
+    "reaches": "routes.data_map.get_data_map -> data_map.build_data_map -> packaged database profiles, concept catalogue, capability profiles and study-family decisions; stored source registrations as identities only",
+    "protection": "hosted.guard_request + selectors capped at 160 characters and checked against the profile, catalogue and family registries; bounded offsets and page sizes; no paths, export inspection or patient reads",
+    "guarded_fields": [],
+    "writes": "none",
+    "write_owner": "Read-only metadata projection of the instance's stored registrations; no extraction, model call, export read or persistence."
+  },
+  {
     "method": "POST",
     "route": "/api/agent-runs/download-replay",
     "fields": ["body:run_ref"],

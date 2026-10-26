@@ -152,6 +152,26 @@ def registered_source_identity(export_path: str) -> SourceIdentity | None:
     return SourceIdentity.from_record({**matches[0], "registration_id": matches[0].get("id")})
 
 
+@_registry_locked
+def stored_registration_metadata() -> tuple[Dict[str, Any], ...]:
+    """Path-free saved metadata, without rediscovery or export inspection.
+
+    Paths were normalized on persistence. These are historical registrations,
+    not a validation that an export still exists. Legacy records without a
+    saved synthetic flag retain unknown provenance until registered again.
+    """
+    raw = _read_raw()
+    removed = {value for value in raw.get("removed_paths", []) if isinstance(value, str)}
+    stored = raw.get("sources") if isinstance(raw.get("sources"), list) else []
+    fields = ("id", "database", "version", "source_id", "archive_sha256", "label", "source_kind")
+    return tuple(
+        {key: row[key] for key in fields if key in row}
+        for row in stored if isinstance(row, dict) and isinstance(row.get("path"), str)
+        and row["path"] and row["path"] not in removed
+        and path_allowed(row["path"], instance_owned=True)
+    )
+
+
 def _source_timestamp(source: Dict[str, Any]) -> float:
     generated = str(source.get("generated") or source.get("registered_at") or "")
     if generated:
@@ -585,6 +605,7 @@ def save_registry(
             "label": s.get("label"),
             "registered_at": s.get("registered_at"),
             **_registration_fields(s),
+            **({"source_kind": "synthetic"} if s.get("source_kind") == "synthetic" else {}),
         }
         for s in existing.values()
     ]
