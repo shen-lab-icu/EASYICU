@@ -58,17 +58,32 @@ def test_unit_proposal_binds_native_icu_identity_and_requires_approval(database,
         require_approved_database_capabilities(SimpleNamespace(context=original, plan=compiled, evidence=evidence), tmp_path)
 
 
-@pytest.mark.parametrize("database,requested,aligned", [("aumc", 65, 60), ("mimic", 95, 90), ("miiv", 95, 90), ("eicu", 95, 90)])
+@pytest.mark.parametrize("database,requested,aligned", [("aumc", 65, 60), ("mimic", 95, 90), ("miiv", 95, 90), ("eicu", 95, 90),
+                                                       ("hirid", 63, 65), ("sic", 63, 65), ("hirid", 18, 20), ("sic", 18, 20)])
 def test_age_proposal_is_compiled_before_approval(database, requested, aligned, tmp_path):
     from easyicu.databases.research_substitutions import bind_source_substitutions
 
     requirement = ThresholdRequirement(concept="age", operator=">=", value=requested)
     ctx = bind_source_substitutions(context(database, thresholds=(requirement,)))
     spec = PopulationSpec.model_validate({"criteria": [{"id": "c1", "kind": "age_years", "role": "include",
-        "source": "question", "quote": "Include the requested older age group.", "min_years": requested}]})
+        "source": "question", "quote": "Include the requested age group.", "min_years": requested}]})
     compiled = plan(ctx, spec)
     assert [(p.op, p.value) for p in compiled.cohort.inclusion] == [(">=", aligned)]
-    require_approved_database_capabilities(_approve(tmp_path, EvidenceStore(tmp_path), ctx, compiled, _review(ctx, compiled)), tmp_path)
+    review = _review(ctx, compiled)
+    decision = review.facts["database_capability_review"]["decision"]
+    assert decision["status"] == "substitution"
+    change, = (item for item in decision["substitutions"] if item["capability"] == "threshold:age")
+    assert change["original"] == requirement.model_dump(mode="json")
+    assert change["substitute"] == {"concept": "age", "operator": ">=", "value": aligned}
+    assert change["reason_code"] == "numeric_threshold_aligned_to_band"
+    if requested == 18:
+        from easyicu.research_agent.cohort.schema import build_cohort
+
+        # Retaining only complete bands excludes 18–19 with the 15–19 band;
+        # aligning down to 15 would also admit 15–17, changing the proposal.
+        rows = pd.DataFrame({ctx.cohort.id_columns[0]: [1, 2, 3], "age": [15, 20, 25]})
+        assert build_cohort(compiled.cohort, rows).age.tolist() == [20, 25]
+    require_approved_database_capabilities(_approve(tmp_path, EvidenceStore(tmp_path), ctx, compiled, review), tmp_path)
 
 
 @pytest.mark.parametrize("database", ["hirid", "aumc"])

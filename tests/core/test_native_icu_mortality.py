@@ -7,6 +7,22 @@ import pytest
 from tests.support.source_mortality import source
 
 
+def test_sic_documented_dispositions_preserve_survivors_and_unknowns(tmp_path):
+    from easyicu.scores.icu_mortality import load_icu_death
+
+    root = source(tmp_path / "sic", "sic")
+    rows = pd.read_parquet(root / "cases.parquet").iloc[[0] * 10].reset_index(drop=True)
+    rows["CaseID"] = range(1, 11)
+    rows["HospitalDischargeType"] = [2026, 2028, 2028, 2028, 2027, 9999, None, 2027, 9999, None]
+    rows["OffsetOfDeath"] = [None, 90000, 90001, None, None, None, None, 90000, 90001, 90000]
+    rows.to_parquet(root / "cases.parquet", index=False)
+    result = load_icu_death("sic", root)
+    assert result.icu_death.iloc[:3].notna().all()
+    assert result.icu_death.iloc[:3].tolist() == [False, True, False]
+    assert result.icu_death.iloc[3:].isna().all()
+    assert result.icu_death_time_hours.dropna().tolist() == [24.0]
+
+
 @pytest.mark.parametrize("database", ["mimic", "miiv", "eicu", "hirid", "aumc", "sic"])
 def test_named_outcome_uses_icu_status_and_keeps_unknowns(tmp_path, database):
     from easyicu.scores.icu_mortality import load_icu_death
@@ -50,6 +66,7 @@ def test_sic_icu_window_includes_boundaries_but_not_pre_admission(tmp_path):
     root = source(tmp_path / "sic", "sic")
     frame = pd.read_parquet(root / "cases.parquet")
     frame["OffsetOfDeath"] = [3600, 3599, 90000, 90001]
+    frame["HospitalDischargeType"] = 2028
     frame.to_parquet(root / "cases.parquet", index=False)
     assert load_icu_death("sic", root).icu_death.tolist() == [True, False, True, False]
 

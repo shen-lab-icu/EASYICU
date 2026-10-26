@@ -116,7 +116,8 @@ def assess_study(profile: ResearchCapabilityProfile, requirements: StudyRequirem
                 reason_code="fixed_horizon_event_and_censor_time", source_field=end_field,
             ))
         changes.append(CapabilitySubstitution(
-            capability="censor_time", original="hospital_discharge",
+            capability="censor_time", original=("hospital_discharge" if requirements.censoring_unit == "hospitalization"
+                                                 else "icu_discharge"),
             substitute=endpoint.followup_concept if endpoint else "icu_discharge",
             reason_code="mortality_censoring_differs", source_field=end_field,
         ))
@@ -218,6 +219,16 @@ def _assess_requested_study(profile: ResearchCapabilityProfile, requirements: St
     if "censor_time" in required and not fixed_followup:
         end = (profile.hospital_discharge if requirements.censoring_unit == "hospitalization"
                else profile.icu_discharge)
+        if mortality is not None and mortality.meaning != "icu_death" and requirements.censoring_unit != "hospitalization":
+            # ICU exit cannot censor survivors of an endpoint that includes
+            # post-ICU deaths. Keep the endpoint when hospital follow-up fits;
+            # otherwise the existing complete-candidate search owns alternatives.
+            end = profile.hospital_discharge
+            if end is not None:
+                substitutions.append(CapabilitySubstitution(
+                    capability="censor_time", original="icu_discharge", substitute="hospital_discharge",
+                    reason_code="mortality_censoring_differs", source_field=end,
+                ))
         if end is None:
             absent("censor_time", "censor_time_unavailable", "data-sources.json#/id_cfg")
     if "observation_timing" in required and not any(item.mapped and item.timed for item in profile.concepts):

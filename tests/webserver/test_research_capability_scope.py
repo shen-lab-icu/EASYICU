@@ -7,6 +7,27 @@ from easyicu.webserver.target_trial_setup import target_trial_database_gap
 KEYS = ("mimic", "mimic_demo", "miiv", "miiv_demo", "eicu", "eicu_demo", "hirid", "aumc", "sic")
 
 
+@pytest.mark.parametrize("database,outcome,censor", [
+    ("eicu", "icu_death", "icu_discharge"),
+    ("aumc", "icu_death", "icu_discharge"),
+    ("sic", "mort_28d", "followup_days_28d"),
+])
+def test_generic_survival_scope_keeps_databases_with_a_named_substitution(database, outcome, censor):
+    from easyicu.databases.research_capabilities import research_capability_profile
+    from easyicu.databases.research_requirements import StudyRequirements, assess_study
+    from easyicu.webserver.research_capability_scope import eligible_family_databases
+
+    requirements = StudyRequirements(family="survival", outcome="hospital_death")
+    decision = assess_study(research_capability_profile(database), requirements)
+    assert decision.status == "substitution"
+    assert decision.requirements == requirements
+    changes = {item.capability: item.substitute for item in decision.substitutions}
+    assert changes["outcome_meaning"] == outcome
+    assert changes["censor_time"] == censor
+    assert database in eligible_family_databases("survival")
+    assert database in eligible_family_databases("survival", requirements=requirements)
+
+
 @pytest.mark.parametrize("database", KEYS)
 @pytest.mark.parametrize("family", ["descriptive_epidemiology", "association_study", "prediction_model", "trajectory_clustering"])
 def test_no_whole_database_or_trajectory_ban(database, family):

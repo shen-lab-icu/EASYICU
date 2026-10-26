@@ -11,6 +11,56 @@ from easyicu.databases.research_requirements import (
 KEYS = ("mimic", "mimic_demo", "miiv", "miiv_demo", "eicu", "eicu_demo", "hirid", "aumc", "sic")
 
 
+@pytest.mark.parametrize("database", ["hirid", "sic"])
+@pytest.mark.parametrize("concept,value,aligned", [("age", 18, 20), ("age", 63, 65), ("age", 95, 90), ("weight", 73, 75)])
+def test_published_five_unit_bands_require_an_explicit_threshold_proposal(database, concept, value, aligned):
+    threshold = ThresholdRequirement(concept=concept, operator=">=", value=value)
+    decision = assess_study(research_capability_profile(database), StudyRequirements(
+        family="association_study", thresholds=(threshold,)))
+    assert decision.status == "substitution"
+    change, = decision.substitutions
+    assert change.original == threshold
+    assert change.reason_code == "numeric_threshold_aligned_to_band"
+    assert (change.substitute.operator, change.substitute.value) == (">=", aligned)
+
+
+@pytest.mark.parametrize("database", ["mimic", "miiv", "sic"])
+@pytest.mark.parametrize("unit", ["icu_stay", None])
+def test_hospital_death_never_uses_icu_censoring_as_exact(database, unit):
+    profile = research_capability_profile(database)
+    requirements = StudyRequirements(family="survival", outcome="hospital_death", censoring_unit=unit)
+    decision = assess_study(profile, requirements)
+    assert decision.status == "substitution"
+    assert decision.requirements == requirements
+    changes = {item.capability: item for item in decision.substitutions}
+    censor = changes["censor_time"]
+    assert censor.original == "icu_discharge"
+    assert censor.reason_code == "mortality_censoring_differs"
+    if database == "sic":
+        assert changes["outcome_meaning"].substitute == "mort_28d"
+        assert censor.substitute == "followup_days_28d"
+    else:
+        assert set(changes) == {"censor_time"}
+        assert censor.substitute == "hospital_discharge"
+        assert censor.source_field == profile.hospital_discharge
+    native = assess_study(profile, requirements.model_copy(update={"outcome": "icu_death"}))
+    assert native.status == "exact"
+    assert native.substitutions == ()
+
+
+def test_censoring_mismatch_uses_source_facts_and_refuses_when_no_complete_alternative_exists():
+    profile = research_capability_profile("sic").model_copy(update={
+        "database": "invented_source", "mortality_outcomes": (),
+        "concepts": tuple(item.model_copy(update={"mapped": False})
+                          for item in research_capability_profile("sic").concepts),
+    })
+    decision = assess_study(profile, StudyRequirements(
+        family="survival", outcome="hospital_death", censoring_unit="icu_stay"))
+    assert decision.status == "refusal"
+    assert [(item.capability, item.code) for item in decision.missing] == [
+        ("censor_time", "censor_time_unavailable")]
+
+
 @pytest.mark.parametrize("database,status,endpoint,table,status_column,time_column", [
     ("mimic", "exact", None, None, None, None),
     ("miiv", "exact", None, None, None, None),

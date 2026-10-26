@@ -41,6 +41,8 @@ class NumericRepresentation(Fact):
     bin_edges: tuple[float, ...] = ()
     bin_labels: tuple[str, ...] = ()
     bin_values: tuple[int, ...] = ()
+    bin_width: float | None = None
+    top_code: float | None = None
     exact_through: float | None = None
 
 
@@ -62,6 +64,7 @@ class ConceptAvailability(Fact):
     category: str | None = None
     derivation_status: Literal["full", "degraded", "blocked"] | None = None
     derivation_reason_code: str | None = None
+    missing_dependencies: tuple[str, ...] = ()
 
 
 class MonitoringItem(Fact):
@@ -104,18 +107,18 @@ class ResearchCapabilityProfile(Fact):
     def concept(self, name: str) -> ConceptAvailability:
         matched = next((item for item in self.concepts if item.concept == name), None)
         if matched is not None and matched.mapped is None:
-            status, reason = _derivation_status(name, self.schema_database)
+            status, reason, missing = _derivation_status(name, self.schema_database)
             return matched.model_copy(update={"mapped": status == "full", "derivation_status": status,
-                                              "derivation_reason_code": reason})
+                                              "derivation_reason_code": reason, "missing_dependencies": missing})
         return matched if matched is not None else _loader_output(name, self.schema_database)
 
 
 @lru_cache(maxsize=512)
-def _derivation_status(name: str, database: str) -> tuple[str, str | None]:
+def _derivation_status(name: str, database: str) -> tuple[str, str | None, tuple[str, ...]]:
     from easyicu.research_agent.concept_availability import explain_concept_availability
 
     availability = explain_concept_availability(concept=name, database=database)
-    return availability.status, availability.reason
+    return availability.status, availability.reason, tuple(availability.missing_dependencies)
 
 
 @lru_cache(maxsize=512)
@@ -124,11 +127,11 @@ def _loader_output(name: str, database: str) -> ConceptAvailability:
     from easyicu.concept_output_sources import COMPOSITE_CONCEPT_OUTPUT_SOURCES
 
     if name in COMPOSITE_CONCEPT_OUTPUT_SOURCES:
-        status, reason = _derivation_status(name, database)
+        status, reason, missing = _derivation_status(name, database)
         # Partial derivability cannot be presented as an exact definition.
         return ConceptAvailability(concept=name, mapped=status == "full", defined=True,
             source=f"easyicu.concept_output_sources.COMPOSITE_CONCEPT_OUTPUT_SOURCES#{name}",
-            derivation_status=status, derivation_reason_code=reason)
+            derivation_status=status, derivation_reason_code=reason, missing_dependencies=missing)
     return ConceptAvailability(concept=name, mapped=False, defined=False, source="concept-dict.json+sofa2-dict.json")
 
 
@@ -212,7 +215,19 @@ def _numeric(config, name: str) -> NumericRepresentation:
     if not entries:
         return NumericRepresentation(kind="unavailable", source=source)
     entry = entries[0]
-    field = _field(config, entry.table, entry.value_var or entry.sub_var or "", source=source)
+    column = entry.value_var or config.tables[entry.table].defaults.val_var or entry.sub_var or ""
+    field = _field(config, entry.table, column, source=source)
+    if config.name in {"hirid", "sic"}:
+        # Public release deidentification groups age/weight in five-year/kg
+        # bands; the age band 90 includes all older ages. Stored numbers are
+        # band codes, not exact measurements. Weight has no declared top code;
+        # enumerate its codes within the dictionary's accepted value domain.
+        top = 90 if name == "age" else int(definition.maximum)
+        values = tuple(range(0, top + 1, 5))
+        labels = tuple("90+" if name == "age" and value == 90 else f"{value}-{value + 4}" for value in values)
+        return NumericRepresentation(kind="binned", source=source, field=field,
+            bin_edges=values, bin_labels=labels, bin_values=values, bin_width=5,
+            top_code=90 if name == "age" else None)
     labels = tuple(re.findall(r"`(\d+(?:-\d+|\+|-))`", entry.callback or ""))
     if labels:
         edges = tuple(float(label.split("-")[0].rstrip("+")) for label in labels if not label.endswith("-"))

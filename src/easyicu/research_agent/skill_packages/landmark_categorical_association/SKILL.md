@@ -83,9 +83,9 @@ For the public-demo plan illustrated in examples/public_demo.md; the actual plan
 - **MIMIC-IV — Exact**. Real-data acceptance not verified by the source profile.
 - **eICU-CRD — Exact**. Real-data acceptance not verified by the source profile.
 - **AmsterdamUMCdb — Substitution proposed**. death before hospital discharge → death within 72 hours after ICU discharge; Real-data acceptance not verified by the source profile.
-- **HiRID — Substitution proposed**. death before hospital discharge → death before ICU discharge; Real-data acceptance not verified by the source profile.
+- **HiRID — Substitution proposed**. death before hospital discharge → death before ICU discharge; age >= 18 → age >= 20; Real-data acceptance not verified by the source profile.
 - **MIMIC-III — Exact**. Real-data acceptance not verified by the source profile.
-- **SICdb — Exact**. Real-data acceptance not verified by the source profile.
+- **SICdb — Substitution proposed**. age >= 18 → age >= 20; Real-data acceptance not verified by the source profile.
 Any substitution changes the definition and requires review of a revised plan. Mapping does not establish observed coverage or adequate sample size.
 These source facts do not verify local data access, landmark eligibility or whether a model can be fitted.
 

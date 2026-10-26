@@ -76,7 +76,17 @@ def test_binned_and_capped_measurements_remain_distinct_from_exact_values():
     for key in ("miiv", "mimic", "eicu"):
         assert research_capability_profile(key).age.kind == "capped_or_shifted"
         assert research_capability_profile(key).age.exact_through == 89
-    assert research_capability_profile("sic").weight.kind == "exact"
+    for database in ("hirid", "sic"):
+        profile = research_capability_profile(database)
+        assert profile.age.kind == profile.weight.kind == "binned"
+        assert profile.age.bin_width == profile.weight.bin_width == 5
+        assert profile.age.top_code == 90
+        assert profile.weight.top_code is None
+        assert profile.age.bin_edges == tuple(range(0, 91, 5))
+        assert profile.age.bin_values == tuple(range(0, 91, 5))
+        assert profile.age.bin_labels[-1] == "90+"
+        assert profile.weight.bin_values == tuple(range(0, 501, 5))
+    assert research_capability_profile("hirid").weight.field.column == "value"
 
 
 def test_los_and_admission_type_require_their_actual_source():

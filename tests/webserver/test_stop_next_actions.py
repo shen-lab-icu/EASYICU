@@ -641,13 +641,14 @@ def test_provider_stops_keep_retry_even_when_other_details_suggest_removal() -> 
     ],
 )
 def test_scope_choices_use_the_scope_owner(reason, family, key) -> None:
+    from easyicu.webserver.research_capability_scope import eligible_family_databases
+
     actions = owner.next_actions_for_stop(reason, {"family": family}, database="eicu")
     assert [action.kind for action in actions] == ["rephrase_in_scope"]
     assert actions[0].params.scope_owner == "easyicu.webserver.study_family_scope"
     assert actions[0].params.scope_label_key == key
     assert actions[0].params.database == "eicu"
-    expected = ("miiv", "eicu", "aumc", "hirid", "mimic", "sic") if family == "causal_inference" else ("miiv", "aumc", "mimic", "sic")
-    assert actions[0].params.supported_databases == expected
+    assert actions[0].params.supported_databases == eligible_family_databases(family)
 
 
 def test_a_scope_refusal_before_any_run_still_offers_a_conversation_choice() -> None:

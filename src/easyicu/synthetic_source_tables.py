@@ -46,10 +46,10 @@ def _demographics(database, p):
     return {"CaseID": p["stay"], "PatientID": p["patient"], "ICUOffset": origin,
             "TimeOfStay": origin + p["length"] * 3600,
             "OffsetOfDeath": origin + death_hours * 3600,
-            "HospitalDischargeType": np.where(p["dead"], 2028, 2027),
+            "HospitalDischargeType": np.where(p["dead"], 2028, 2026),
             "EstimatedSurvivalObservationTime": 3077, "Sex": np.where(p["male"], 735, 736),
-            "WeightOnAdmission": p["weight"] * 1000, "HeightOnAdmission": 174.,
-            "AgeOnAdmission": p["age"], "saps3": 30 + p["severity"] * 10,
+            "WeightOnAdmission": np.round(p["weight"] / 5) * 5000, "HeightOnAdmission": 174.,
+            "AgeOnAdmission": np.minimum(90, np.round(p["age"] / 5) * 5), "saps3": 30 + p["severity"] * 10,
             "AdmissionYear": 2020, "OffsetAfterFirstAdmission": np.where(
                 np.r_[False, p["patient"][1:] == p["patient"][:-1]], 240 * 3600, 0)}
 
@@ -83,6 +83,8 @@ def _events(database, config, concepts, p):
             time_col = source.get("index_var", defaults.get("index_var"))
             value_col = source.get("val_var", source.get("value_var", defaults.get("val_var", "value")))
             value = raw_values(name, definition, source, p, index, hour, rng)
+            if database == "hirid" and name == "weight":
+                value = np.round(value / 5) * 5
             if table in {"listitems", "processitems", "procedureorderitems"}:
                 value = category_values(name, source, count, database)
             if database == "hirid" and name in {"mech_vent", "vent_mode", "vent_breath_seq"}:
