@@ -350,6 +350,19 @@
     const searchedAt = String(search.searched_at || '').trim();
     const queries = search.queries && typeof search.queries === 'object' ? search.queries : {};
     const queryRows = Object.entries(queries).flatMap(([source, rows]) => (Array.isArray(rows) ? rows : []).map(query => ({ source, query })));
+    // A recorded search reads as its screening steps; bars are relative to what the search retrieved.
+    const stage = key => prisma && Number.isInteger(prisma[key]) && prisma[key] >= 0 ? prisma[key] : null;
+    const retrieved = stage('identified');
+    const funnel = searched && prisma ? `<ol class="gpi-lit-funnel" aria-label="${esc(tr('Screening steps', '筛选过程'))}">${[
+      ['identified', tr('Retrieved this search', '本次检索')],
+      ['screened', tr('Screened after duplicates', '去重后筛选')],
+      ['eligible', tr('Met the criteria', '符合条件')],
+      ['included', tr('Included for comparison', '纳入对照')],
+    ].map(([key, label], index) => {
+      const value = stage(key);
+      const width = value !== null && retrieved ? Math.round((value / retrieved) * 1000) / 10 : 0;
+      return `<li style="--i:${index}"><span>${esc(label)}</span><span class="gpi-lit-bar" aria-hidden="true"><i style="width:${width}%"></i></span><strong>${esc(value === null ? tr('Not recorded', '未记录') : value)}</strong></li>`;
+    }).join('')}</ol>` : '';
     return `<section class="gpi-lit-search ${searched ? 'searched' : 'curated'}">
       <div><span class="gpi-lit-status-dot" aria-hidden="true"></span><strong>${esc(title)}</strong></div>
       ${payload.research_question ? `<p class="gpi-lit-question"><strong>${esc(tr('Research question: ', '研究问题：'))}</strong>${esc(payload.research_question)}</p>` : ''}
@@ -358,7 +371,8 @@
         : searched
           ? tr(`${identified} record(s) were retrieved and ${screened} screened; none matched all parts of the question. The plan must not claim direct literature support.`, `共检索到 ${identified} 篇候选、完成 ${screened} 篇筛选；没有一篇同时匹配问题的全部要素。当前计划不能声称有同题文献直接支持。`)
           : tr('Only general definitions or reporting guidance may be present.', '当前最多只有通用定义或报告规范，不能当作同题研究证据。'))}</p>
-      <div class="gpi-lit-counts"><span>${esc(tr('Retrieved this search', '本次检索'))}<strong>${esc(identified)}</strong></span><span>${esc(tr('Preset references', '系统预置参考'))}<strong>${esc(curated)}</strong></span><span>${esc(tr('Screened', '已筛选'))}<strong>${esc(screened)}</strong></span><span>${esc(tr('Direct matches', '直接匹配'))}<strong>${directCount}</strong></span></div>
+      ${funnel || `<div class="gpi-lit-counts"><span>${esc(tr('Retrieved this search', '本次检索'))}<strong>${esc(identified)}</strong></span><span>${esc(tr('Preset references', '系统预置参考'))}<strong>${esc(curated)}</strong></span><span>${esc(tr('Screened', '已筛选'))}<strong>${esc(screened)}</strong></span><span>${esc(tr('Direct matches', '直接匹配'))}<strong>${directCount}</strong></span></div>`}
+      ${funnel ? `<div class="gpi-lit-counts is-compact"><span>${esc(tr('Preset references', '系统预置参考'))}<strong>${esc(curated)}</strong></span><span>${esc(tr('Direct matches', '直接匹配'))}<strong>${directCount}</strong></span></div>` : ''}
       <small>${esc(searchedAt ? tr('Search recorded at: ', '检索时间：') + searchedAt : tr('Search time not recorded', '检索时间未记录'))}</small>
       ${sources.length ? `<small>${esc(tr('Literature database: ', '检索来源：'))}${sources.map(esc).join(', ')}</small>` : ''}
       ${queryRows.length ? `<details class="gpi-lit-queries"><summary>${esc(tr('Technical search query (for audit)', '专业检索式（供复核）'))}</summary>${queryRows.map(row => `<div><strong>${esc(row.source)}</strong><code>${esc(row.query)}</code></div>`).join('')}</details>` : ''}
