@@ -92,7 +92,26 @@ control = window.EasyICU.guidedPi.require('providerControl').create({
   connectionConfigured: () => false, connectionReady: () => false, errorText: e => String((e && e.code) || e),
 });
 const out = {};
+const pick = key => {
+  current.presetField.value = key;
+  control.handleChange({ target: { value: key, closest: () => current.form, matches: sel => sel === '[data-gpi-provider-preset]' } });
+};
+const beforeAdvanced = () => markup.split('<details class="gpi-api-advanced">')[0];
 render();
+// A first visit has no saved connection: the host's built-in proxy default
+// is not the researcher's choice, so the form opens on DeepSeek.
+out.firstVisit = {
+  deepseekFirstAndSelected: /<select data-gpi-provider-preset><option value="deepseek" selected>/.test(markup),
+  address: current.form.fields.base_url.value,
+  provider: current.form.fields.provider.value,
+  addressUnderAdvanced: !beforeAdvanced().includes('name="base_url"'),
+};
+// Services on this computer and institutional clouds show their address.
+pick('ollama');
+out.local = { address: current.form.fields.base_url.value, visible: beforeAdvanced().includes('name="base_url"'), hint: markup.includes('它不校验凭据') };
+pick('azure');
+out.azure = { address: current.form.fields.base_url.value, visible: beforeAdvanced().includes('name="base_url"'), hint: markup.includes('模型请选择你的部署名') };
+pick('cliproxyapi');
 out.first = {
   connectButton: markup.includes('连接并读取模型'),
   noModelField: !markup.includes('name="model"'),
@@ -175,6 +194,12 @@ def test_connecting_lists_models_then_the_choice_is_verified_and_saved() -> None
     )
     out = json.loads(completed.stdout)
 
+    assert out["firstVisit"] == {
+        "deepseekFirstAndSelected": True, "address": "https://api.deepseek.com/v1",
+        "provider": "deepseek", "addressUnderAdvanced": True,
+    }
+    assert out["local"] == {"address": "http://127.0.0.1:11434/v1", "visible": True, "hint": True}
+    assert out["azure"] == {"address": "", "visible": True, "hint": True}
     assert out["first"] == {
         "connectButton": True, "noModelField": True, "noPresetModel": True,
         "proxyAddressVisible": True, "proxyHint": True, "notice": True,

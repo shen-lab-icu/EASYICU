@@ -265,6 +265,15 @@ const cases = [
   [{ base_url: '' }, {}, 'custom-openai'],
   [{}, { api_transport: 'anthropic-messages' }, 'anthropic'],
   [{}, { api_transport: 'google-generative-ai' }, 'google'],
+  [{ base_url: 'https://my-lab.openai.azure.com/openai/v1' }, {}, 'azure'],
+  [{ base_url: 'https://my-lab.services.ai.azure.com/openai/v1' }, {}, 'azure'],
+  [{ base_url: 'https://openai.azure.com.evil.example/v1' }, {}, 'custom-openai'],
+  [{ base_url: 'https://bedrock-mantle.us-east-1.api.aws/v1' }, {}, 'bedrock'],
+  [{ base_url: 'https://bedrock-runtime.eu-west-1.amazonaws.com/openai/v1' }, {}, 'bedrock'],
+  [{ base_url: 'https://bedrock-mantle.us-east-1.api.aws.evil.example/v1' }, {}, 'custom-openai'],
+  [{ base_url: 'http://127.0.0.1:11434/v1' }, {}, 'ollama'],
+  [{ base_url: 'http://localhost:1234/v1' }, {}, 'lmstudio'],
+  [{ base_url: 'https://127.0.0.1.evil.example:11434/' }, {}, 'custom-openai'],
 ];
 process.stdout.write(JSON.stringify(cases.map(([c, r]) => providerPreset(c, r))));
 """
@@ -275,4 +284,6 @@ process.stdout.write(JSON.stringify(cases.map(([c, r]) => providerPreset(c, r)))
         "openai", "custom-openai", "custom-openai", "openrouter", "custom-openai",
         "deepseek", "cliproxyapi", "cliproxyapi", "custom-openai", "custom-openai",
         "custom-openai", "custom-openai", "anthropic", "google",
+        "azure", "azure", "custom-openai", "bedrock", "bedrock", "custom-openai",
+        "ollama", "lmstudio", "custom-openai",
     ]
