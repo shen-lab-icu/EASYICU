@@ -30,6 +30,7 @@
     susp_inf: ['Suspected infection', '疑似感染'],
     abx: ['Antibiotics', '抗生素'],
     samp: ['Body-fluid sampling', '体液标本采集'],
+    infection_icd: ['Infection diagnosis text', '感染诊断文本'],
     death: ['In-hospital death', '院内死亡'],
     age: ['Age', '年龄'],
   };
@@ -50,8 +51,12 @@
     rate: ['outcome_rate_pct', ['In-hospital mortality', '院内死亡率']],
   };
 
+  // A longer itemid list folds behind its count; the full list is one click away.
+  const ITEMIDS_INLINE = 8;
+
   function create(deps) {
     const { tr, icon, button } = deps;
+    const durationText = deps.durationText || null;
     const pair = value => tr(value[0], value[1]);
     const count = value => Number(value).toLocaleString('en-US');
     const pct = value => `${Number(value).toFixed(2)}%`;
@@ -77,15 +82,28 @@
       if (source.val_var) return `${table}.${source.val_var}${source.index_var ? ` · ${tr('time', '时间')} ${source.index_var}` : ''}`;
       return table;
     }
+    function sourceHtml(source) {
+      const list = source.sub_var === 'itemid' && source.ids != null ? ids(source.ids) : [];
+      const text = list.length > ITEMIDS_INLINE
+        ? `<details class="gpi-dict-ids"><summary>${esc(`${source.table || ''} · ${tr(`${list.length} itemids`, `${list.length} 个 itemid`)}`)}</summary><span>${esc(list.join(', '))}</span></details>`
+        : `<span>${esc(sourceText(source))}</span>`;
+      return `<li class="gpi-dict-source" title="${esc(source.callback || '')}">${icon('db', 12)}${text}</li>`;
+    }
+    function sourcesHtml(entry) {
+      return (entry.miiv || []).map(sourceHtml).join('');
+    }
     function conceptNode(code, concepts, depth, seen) {
       const entry = concepts[code] || { missing: true };
       const name = CONCEPTS[code] ? pair(CONCEPTS[code]) : String(entry.description || '');
       const head = `<code>${esc(code)}</code><span>${esc(name)}</span>${entry.unit ? `<em>${esc(ids(entry.unit)[0])}</em>` : ''}`;
-      const sources = (entry.miiv || []).map(source => `<li class="gpi-dict-source" title="${esc(source.callback || '')}">${icon('db', 12)}<span>${esc(sourceText(source))}</span></li>`).join('');
+      const sources = sourcesHtml(entry);
       const children = (entry.children || []).filter(child => !seen.has(child));
       if (!children.length) {
-        const none = entry.children ? '' : `<p class="gpi-dict-none">${esc(tr('No MIMIC-IV source in this dictionary', '字典里没有 MIMIC-IV 来源'))}</p>`;
-        return `<li class="gpi-dict-leaf"><div class="gpi-dict-head">${head}</div>${sources ? `<ul class="gpi-dict-sources">${sources}</ul>` : none}</li>`;
+        // A component with no MIMIC-IV source serves other databases; this run cannot read it.
+        if (!sources && !entry.children) {
+          return `<li class="gpi-dict-leaf is-unread"><div class="gpi-dict-head">${head}<span class="gpi-dict-none">${esc(tr('no MIMIC-IV source; this run does not read it', 'MIMIC-IV 没有这一项的来源，本次运行不读取'))}</span></div></li>`;
+        }
+        return `<li class="gpi-dict-leaf"><div class="gpi-dict-head">${head}</div>${sources ? `<ul class="gpi-dict-sources">${sources}</ul>` : ''}</li>`;
       }
       const next = new Set(seen).add(code);
       return `<li><details${depth < 1 ? ' open' : ''}><summary class="gpi-dict-head">${head}<span class="gpi-dict-count">${children.length}</span></summary>
@@ -96,7 +114,7 @@
     function termBody(code, concepts) {
       const entry = concepts[code] || {};
       const children = (entry.children || []).map(child => conceptNode(child, concepts, 0, new Set([code]))).join('');
-      const sources = (entry.miiv || []).map(source => `<li class="gpi-dict-source" title="${esc(source.callback || '')}">${icon('db', 12)}<span>${esc(sourceText(source))}</span></li>`).join('');
+      const sources = sourcesHtml(entry);
       return `${children}${sources ? `<li class="gpi-dict-leaf"><ul class="gpi-dict-sources">${sources}</ul></li>` : ''}`;
     }
     function termMeta(term, trace) {
@@ -260,11 +278,27 @@
       });
       return figures.length ? `<div class="gpi-walk-figures">${figures.join('')}</div>` : '';
     }
+    // From the recorded start to the registered result, split into the
+    // system's time and the researcher's plan review; whole seconds, so the
+    // two parts add up to the total shown.
+    function timingLine(trace) {
+      const seconds = span => (Array.isArray(span) ? Math.round((Date.parse(span[1]) - Date.parse(span[0])) / 1000) : NaN);
+      const total = seconds([trace.started_at, trace.finished_at]);
+      const wait = seconds(trace.spans && trace.spans['review-wait']);
+      if (!durationText || !Number.isFinite(total) || !Number.isFinite(wait) || wait < 0 || wait > total) return '';
+      // Anchored on the recorded start: the shared formatter reads a zero start as "now".
+      const start = Date.parse(trace.started_at);
+      const text = value => durationText(start, start + value * 1000);
+      return `<p class="gpi-walk-timing">${esc(tr(
+        `From the question to the registered result: ${text(total)}. The system worked for ${text(total - wait)}; the researcher spent ${text(wait)} reviewing the plan.`,
+        `从提问到结果登记共 ${text(total)}：系统用时 ${text(total - wait)}，研究者看计划 ${text(wait)}。`,
+      ))}</p>`;
+    }
     function resultCard(trace, selection, demo) {
       const figureSelected = selectionKey(selection) === 'figure';
       return card('result', tr('Traceable · result evidence', '可追溯 · 结果证据'),
         tr('Click any number or the figure to see where it comes from', '点表格里的任意数字或图，看它从哪来'),
-        `<figure class="gpi-run-answer-figure gpi-walk-figure">
+        `${timingLine(trace)}<figure class="gpi-run-answer-figure gpi-walk-figure">
           <button type="button" class="gpi-walk-figure-button${figureSelected ? ' is-selected' : ''}" data-gpi-walk="select" data-gpi-walk-target="figure" aria-pressed="${figureSelected}">
             <img src="${esc(demo.FIGURE_URL)}" alt="${esc(tr('Phenotype share and in-hospital mortality by phenotype', '表型占比与各组院内死亡率'))}" decoding="async">
           </button>

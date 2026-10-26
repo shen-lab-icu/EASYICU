@@ -32,7 +32,8 @@ const deps = {
   workflowHtml: () => '<nav></nav>',
   iconHtml: () => '',
   button: (resource, label) => `<button data-resource="${resource && resource.artifact}">${label || ''}</button>`,
-  durationText: (start, end) => `${((end - start) / 1000).toFixed(1)} s`,
+  // The shared formatter reads a falsy start as "now"; so does this stand-in.
+  durationText: (start, end) => `${((end - (start || end)) / 1000).toFixed(1)} s`,
   syncAside: () => { asideSyncs += 1; },
 };
 async function settle() {
@@ -61,6 +62,11 @@ test('the replay stops at each card and waits for the reader to confirm the plan
   assert.match(html(), /问题里的每个词，用的是 MIMIC-IV 的哪些数据/);
   assert.match(html(), /admissions\.hospital_expire_flag · 时间 deathtime/);
   assert.match(html(), /chartevents · itemid 220052, 220181, 225312/);
+  // A long itemid list folds behind its count and keeps every id one click away.
+  assert.match(html(), /<summary>inputevents · 51 个 itemid<\/summary><span>225798, 225837, [^<]*228003<\/span>/);
+  // A component MIMIC-IV has no source for reads as unread here, not as a gap in the data.
+  assert.match(html(), /<li class="gpi-dict-leaf is-unread"><div class="gpi-dict-head"><code>infection_icd<\/code><span>感染诊断文本<\/span><span class="gpi-dict-none">MIMIC-IV 没有这一项的来源，本次运行不读取<\/span>/);
+  assert.doesNotMatch(html(), /eICU diagnosisstring|字典里没有 MIMIC-IV 来源/);
   assert.match(html(), new RegExp(trace.sources.concept_dict.commit.slice(0, 9)));
   assert.match(html(), /2 \/ 6 · 数据映射/);
 
@@ -89,6 +95,8 @@ test('the replay stops at each card and waits for the reader to confirm the plan
   assert.equal(state.skipped, false);
   assert.match(html(), /已确认方案：「确认方案并准备数据」/);
   assert.match(html(), /4,480 ÷ 33,997 = 13\.18%/);
+  // The run's recorded total, split so the two parts add up to it.
+  assert.match(html(), /从提问到结果登记共 584\.0 s：系统用时 254\.0 s，研究者看计划 330\.0 s。/);
   assert.match(html(), /table_step_artifact_257971d9f784c410/);
   assert.match(html(), /列 outcome_rate_pct，行 exposure = 1/);
   // The run's other figures sit under the main one, each its own redrawn table.
