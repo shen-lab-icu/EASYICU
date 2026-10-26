@@ -7,6 +7,7 @@ so the conversation can offer that exact source.
 """
 
 import json
+import re
 import shutil
 
 import pytest
@@ -71,26 +72,67 @@ def _render_with(lang, capabilities):
     return run_node(node, script, check=True).stdout
 
 
-def test_the_home_offers_clinician_questions_inside_v1_scope():
+# What each example asks of its database, as the capability owner reads it.
+_EXAMPLE_REQUIREMENTS = {
+    "example-lactate-death": ("eicu", "association_study", {"outcome": "hospital_death", "concepts": ("lact", "age", "sex", "sofa")}),
+    "example-aki-survival": ("miiv", "survival", {"outcome": "mort_28d", "concepts": ("aki_stage_reference", "age", "sex"),
+                                                  "censoring_unit": "hospitalization"}),
+    "example-predict-death": ("sic", "prediction_model", {"outcome": "hospital_death", "concepts": ("age", "sex", "map", "hr", "lact", "crea")}),
+    "example-early-norepinephrine": ("miiv", "causal_inference", {"outcome": "mort_28d", "concepts": ("age", "sex", "lact", "map"),
+                                                                  "treatment_concepts": ("norepi_rate",)}),
+    "example-first-day-phenotypes": ("aumc", "trajectory_clustering", {"outcome": "icu_death",
+                                                                       "concepts": ("map", "hr", "lact", "crea", "glu", "plt")}),
+    "example-ventilation-table-one": ("mimic", "descriptive_epidemiology", {"concepts": ("mech_vent", "age", "sex", "lact", "map", "crea")}),
+    "example-lactate-dose-response": ("sic", "association_study", {"outcome": "hospital_death", "concepts": ("lact", "age", "sex")}),
+    "example-pressure-trajectories": ("eicu", "trajectory_clustering", {"concepts": ("map", "age", "sex", "lact")}),
+    "example-norepinephrine-use": ("hirid", "descriptive_epidemiology", {"concepts": ("norepi_rate", "mech_vent")}),
+}
+_DATABASE_KEYS = {"MIMIC-IV": "miiv", "MIMIC-III": "mimic", "eICU": "eicu", "HiRID": "hirid",
+                  "AmsterdamUMCdb": "aumc", "SICdb": "sic"}
+
+
+def _example_cards(html):
+    return {
+        card.split('"', 2)[1]: re.search(r'class="gpi-starter-category">([^<]+)</span>', card).group(1)
+        for card in html.split("data-gpi-starter-example=")[1:]
+    }
+
+
+def test_the_home_offers_one_question_per_study_kind_across_the_six_databases():
     html = _render("zh")
-    assert html.count('data-gpi-starter-example=') == 5
-    # Each card names its database and what a run of it produces.
-    assert html.count('class="gpi-starter-gets"') == 5
-    assert html.count(">eICU<") == 3 and html.count(">MIMIC-IV<") == 2
-    assert "在 eICU 中，按入 ICU 第一天的血糖分为低血糖、仅高血糖和血糖正常三组" in html
-    # eICU questions stay within eICU's v1 types: no survival or causal card names eICU.
-    cards = html.split("data-gpi-starter-example=")[1:]
-    eicu_cards = [card for card in cards if ">eICU<" in card]
-    assert len(eicu_cards) == 3
-    assert not any("生存" in card or "降低" in card for card in eicu_cards)
+    cards = _example_cards(html)
+    assert set(cards) == set(_EXAMPLE_REQUIREMENTS)
+    # Each card names its database and study kind, and what a run of it produces.
+    assert html.count('class="gpi-starter-gets"') == len(cards) == 9
+    databases = [label.split(" · ")[0] for label in cards.values()]
+    kinds = [label.split(" · ")[1] for label in cards.values()]
+    assert set(databases) == set(_DATABASE_KEYS)
+    assert len(set(kinds)) == len(kinds)
+    for example, label in cards.items():
+        assert _DATABASE_KEYS[label.split(" · ")[0]] == _EXAMPLE_REQUIREMENTS[example][0], example
+    assert "在 SICdb 中，入 ICU 24 小时内的最高乳酸与院内死亡之间" in html
     # A card fills the composer; it neither sends nor names a method template.
-    assert html.count('data-gpi-starter-method=""') == 6
+    assert html.count('data-gpi-starter-method=""') == 10
     assert "data-gpi-starter-search" not in html and "data-gpi-starter-shuffle" not in html
-    # The notes name all six databases and claim no real-data acceptance yet.
-    assert "使用前须知" in html and "AmsterdamUMCdb、SICdb 上的" in html
-    assert "六个库都还没有通过正常入口的真实数据运行验收" in html and "已验收" not in html
+    # No before-you-start block: per-database status lives on the Data map.
+    assert "gpi-entry-notes" not in html and "使用前须知" not in html
+    assert "尚未验收" not in html and "口径不同" not in html
     en = _render("en")
-    assert "Before you start" in en and "Use this question" in en
+    assert "Before you start" not in en and "Use this question" in en
+
+
+def test_every_example_asks_only_what_its_database_records():
+    from easyicu.databases.research_capabilities import research_capability_profile
+    from easyicu.databases.research_requirements import StudyRequirements, assess_study
+
+    for example, (database, family, fields) in _EXAMPLE_REQUIREMENTS.items():
+        profile = research_capability_profile(database)
+        decision = assess_study(profile, StudyRequirements(family=family, **fields))
+        # Exact: no substituted endpoint, unit, timing or threshold to approve.
+        assert decision.status == "exact", (example, decision.substitutions, decision.missing)
+        for concept in (*fields.get("concepts", ()), *fields.get("treatment_concepts", ())):
+            availability = profile.concept(concept)
+            assert availability.mapped and availability.derivation_status in (None, "full"), (example, concept)
 
 
 def test_the_demo_card_is_offered_only_without_a_registered_full_source():

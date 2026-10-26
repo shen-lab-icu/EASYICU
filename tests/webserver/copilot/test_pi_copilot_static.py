@@ -92,12 +92,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-next-actions.js?v=20261022-nofiller1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2" in index
-    assert "js/screens-guided-pi-starters.js?v=20261026-six7" in index
+    assert "js/screens-guided-pi-starters.js?v=20261026-ex9" in index
     assert "js/screens-guided-pi-idea-source.js?v=20261026-mention1" in index
     assert "js/screens-guided-pi-header.js?v=20261021-help1" in index
     assert "js/screens-guided-pi-model-menu.js?v=20260923-keep-open1" in index
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
-    assert "css/guided-pi-workspace.css?v=20261026-mention1" in index
+    assert "css/guided-pi-workspace.css?v=20261026-ex9" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
     assert "js/screens-guided-pi-demo.js?v=20261026-fig2" in index
     assert "js/screens-guided-pi-demo-trace.js?v=20261026-demo3" in index
@@ -1197,7 +1197,7 @@ def test_new_research_session_starters_minimize_interaction_cost() -> None:
     assert "开始一项 ICU 研究" in completed.stdout
     assert "写下你的临床问题，选择数据，再核对分析计划。" in completed.stdout
     assert "试试这些问题" in completed.stdout
-    assert "血糖分组与院内死亡" in completed.stdout
+    assert "乳酸与院内死亡" in completed.stdout and "AmsterdamUMCdb · 表型与亚型" in completed.stdout
     assert "浏览全部技能与方法" in completed.stdout
     # The home offers example questions, not a workflow search or shuffle.
     assert "data-gpi-starter-search" not in completed.stdout

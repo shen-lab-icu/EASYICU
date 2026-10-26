@@ -1,6 +1,6 @@
 /* Owner: Guided Pi session starter widget. */
 /* The signed-in entry canvas offers example questions in a clinician's words
-   (each names its database and what a run of it produces) and the reviewed
+   (each names its database, its study kind and what a run of it produces) and the reviewed
    Method Skills behind a quiet link.
    Selecting a card never sends or grants data access: it only fills the composer. */
 (function () {
@@ -47,22 +47,15 @@
     ];
   }
 
-  /* Example questions inside v1's scope, one per study kind a clinician asks
-     first. "You get" names only what that study kind's reviewed method
-     produces; no duration is shown until run records give a typical one. */
+  /* Example questions, one per study kind, spread over the six databases.
+     Each is chosen so that its database records what it asks for (the
+     capability owner assesses it exact, with no substituted definition).
+     "You get" names only what that study kind's reviewed method produces;
+     no duration is shown until run records give a typical one. */
   function exampleQuestions(tr) {
     return [
       {
-        id: 'example-glucose-groups-death', database: 'eICU',
-        title: tr('Glucose groups and in-hospital death', '血糖分组与院内死亡'),
-        gets: tr('Baseline table by group, death rate per group with CI, distribution figure', '分组基线表、各组死亡率与置信区间、分布图'),
-        prompt: tr(
-          'In eICU, group patients by their first-day ICU glucose into hypoglycaemia, hyperglycaemia only and normal glucose. How does in-hospital mortality differ across the three groups?',
-          '在 eICU 中，按入 ICU 第一天的血糖分为低血糖、仅高血糖和血糖正常三组，各组的院内死亡率有什么不同？',
-        ),
-      },
-      {
-        id: 'example-lactate-death', database: 'eICU',
+        id: 'example-lactate-death', database: 'eICU', kind: tr('Association', '关联分析'),
         title: tr('Lactate and in-hospital death', '乳酸与院内死亡'),
         gets: tr('Adjusted association estimates, association figure, baseline table', '调整后的关联估计、关联图、基线表'),
         prompt: tr(
@@ -71,30 +64,75 @@
         ),
       },
       {
-        id: 'example-predict-death', database: 'eICU',
+        id: 'example-aki-survival', database: 'MIMIC-IV', kind: tr('Survival', '生存分析'),
+        title: tr('Acute kidney injury and 28-day survival', '急性肾损伤与 28 天生存'),
+        gets: tr('Survival curves, Cox model results, proportional-hazards check', '生存曲线、Cox 模型结果、比例风险检验'),
+        prompt: tr(
+          'In MIMIC-IV, do patients with acute kidney injury (KDIGO criteria) on the first ICU day have worse 28-day survival?',
+          '在 MIMIC-IV 中，入 ICU 第一天发生急性肾损伤（KDIGO 标准）的患者，28 天生存是否更差？',
+        ),
+      },
+      {
+        id: 'example-predict-death', database: 'SICdb', kind: tr('Prediction', '预测模型'),
         title: tr('Predicting in-hospital death', '预测院内死亡'),
         gets: tr('Discrimination (AUC), calibration curve, important variables', '区分度（AUC）、校准曲线、重要变量'),
         prompt: tr(
-          'Using the first 24 hours of ICU data in eICU, build a model that predicts in-hospital death. How well does it discriminate and how well is it calibrated?',
-          '用 eICU 中入 ICU 前 24 小时的数据建立一个预测院内死亡的模型，它的区分度和校准怎么样？',
+          'Using the first 24 hours of ICU data in SICdb, build a model that predicts in-hospital death. How well does it discriminate and how well is it calibrated?',
+          '用 SICdb 中入 ICU 前 24 小时的数据建立一个预测院内死亡的模型，它的区分度和校准怎么样？',
         ),
       },
       {
-        id: 'example-sofa2-survival', database: 'MIMIC-IV',
-        title: tr('SOFA-2 and 28-day survival', 'SOFA-2 与 28 天生存'),
-        gets: tr('Survival curves, Cox model results, proportional-hazards check', '生存曲线、Cox 模型结果、比例风险检验'),
-        prompt: tr(
-          'Among patients with sepsis in MIMIC-IV, how is the SOFA-2 score on the first ICU day related to 28-day survival?',
-          '在 MIMIC-IV 的脓毒症患者中，入 ICU 第一天的 SOFA-2 评分与 28 天生存有什么关系？',
-        ),
-      },
-      {
-        id: 'example-early-norepinephrine', database: 'MIMIC-IV',
+        id: 'example-early-norepinephrine', database: 'MIMIC-IV', kind: tr('Causal inference', '因果推断'),
         title: tr('Early norepinephrine and death', '早期去甲肾上腺素与死亡'),
         gets: tr('Target-trial setup, weighted effect estimate, balance diagnostics', '目标试验设定、加权后的效应估计、平衡诊断'),
         prompt: tr(
-          'Among patients with septic shock in MIMIC-IV, does starting norepinephrine within 6 hours of ICU admission lower 28-day mortality?',
-          '在 MIMIC-IV 的脓毒症休克患者中，入 ICU 6 小时内开始使用去甲肾上腺素，是否降低 28 天死亡？',
+          'In MIMIC-IV, among patients whose mean arterial pressure is below 65 mmHg at ICU admission, does starting norepinephrine within 6 hours lower 28-day mortality?',
+          '在 MIMIC-IV 中，入 ICU 时平均动脉压低于 65 mmHg 的患者，6 小时内开始使用去甲肾上腺素是否降低 28 天死亡？',
+        ),
+      },
+      {
+        id: 'example-first-day-phenotypes', database: 'AmsterdamUMCdb', kind: tr('Phenotypes', '表型与亚型'),
+        title: tr('Clinical phenotypes on the first ICU day', '入 ICU 第一天的临床表型'),
+        gets: tr('Phenotypes and how many, stability check, each phenotype\'s profile and ICU death rate', '表型与分组数、稳定性检验、各表型特征与 ICU 死亡率'),
+        prompt: tr(
+          'In AmsterdamUMCdb, which phenotypes do first-day vital signs and laboratory results reveal, and how does ICU mortality differ between them?',
+          '在 AmsterdamUMCdb 中，入 ICU 首日的生命体征和化验能分出哪几种表型？各型 ICU 死亡率有何不同？',
+        ),
+      },
+      {
+        id: 'example-ventilation-table-one', database: 'MIMIC-III', kind: tr('Descriptive', '描述性研究'),
+        title: tr('Who is ventilated on the first day', '首日机械通气患者的特征'),
+        gets: tr('Table 1 by group, each variable\'s denominator and missingness', '分组 Table 1、每个变量的分母与缺失'),
+        prompt: tr(
+          'In MIMIC-III, how do baseline characteristics differ between patients who did and did not receive invasive mechanical ventilation on the first ICU day?',
+          '在 MIMIC-III 中，入 ICU 第一天接受与未接受有创机械通气的患者，基线特征有什么不同？',
+        ),
+      },
+      {
+        id: 'example-lactate-dose-response', database: 'SICdb', kind: tr('Dose–response', '剂量反应'),
+        title: tr('How lactate level relates to death', '乳酸高低与院内死亡'),
+        gets: tr('Spline dose–response curve, comparison with a linear model, adjusted estimates', '样条剂量反应曲线、与线性模型的比较、调整后的估计'),
+        prompt: tr(
+          'In SICdb, is the highest lactate in the first 24 ICU hours related to in-hospital death in a non-linear way after adjusting for age and sex?',
+          '在 SICdb 中，入 ICU 24 小时内的最高乳酸与院内死亡之间，调整年龄和性别后是否呈非线性关系？',
+        ),
+      },
+      {
+        id: 'example-pressure-trajectories', database: 'eICU', kind: tr('Trajectories', '轨迹分型'),
+        title: tr('Blood-pressure trajectories', '血压变化轨迹分型'),
+        gets: tr('Trajectory groups and how many, stability check, early identification', '轨迹分组与分组数、稳定性检验、早期识别'),
+        prompt: tr(
+          'In eICU, into which groups do mean arterial pressure trajectories over the first 48 ICU hours fall, and can admission features tell which group a patient will follow?',
+          '在 eICU 中，入 ICU 后 48 小时的平均动脉压轨迹可分为哪几类？能否在入 ICU 时就判断患者属于哪一类？',
+        ),
+      },
+      {
+        id: 'example-norepinephrine-use', database: 'HiRID', kind: tr('Treatment patterns', '治疗模式'),
+        title: tr('How norepinephrine is used', '去甲肾上腺素的使用情况'),
+        gets: tr('Share treated per group with denominators, time to first dose', '各组用药比例与分母、首次用药时间'),
+        prompt: tr(
+          'In HiRID, how do the share of patients given norepinephrine during the ICU stay and the time to the first dose differ between patients with and without invasive mechanical ventilation?',
+          '在 HiRID 中，接受与未接受有创机械通气的患者，ICU 期间使用去甲肾上腺素的比例和首次用药时间有什么不同？',
         ),
       },
     ];
@@ -102,7 +140,7 @@
 
   function exampleCard(row, disabled, tr) {
     return `<button type="button" class="gpi-starter-card gpi-starter-example" data-gpi-starter-card data-gpi-starter-method="" data-gpi-starter-example="${esc(row.id)}" data-gpi-starter-intent="implement_scientific_question" data-gpi-starter-compose="${esc(row.prompt)}" ${disabled}>
-      <span class="gpi-starter-category">${esc(row.database)}</span>
+      <span class="gpi-starter-category">${esc(row.database)} · ${esc(row.kind)}</span>
       <strong>${esc(row.title)}</strong>
       <small>${esc(row.prompt)}</small>
       <span class="gpi-starter-gets"><b>${esc(tr('You get', '会得到'))}</b>${esc(row.gets)}</span>
@@ -110,40 +148,12 @@
     </button>`;
   }
 
-  /* What EasyICU does and does not do, before the first question. Open on a
-     viewer's first visit; the viewer's own choice is remembered per browser. */
-  const NOTES_KEY = 'easyicu.entryNotes.closed';
-  function notesClosed() {
-    try { return window.localStorage.getItem(NOTES_KEY) === '1'; } catch (error) { return false; }
-  }
-  function rememberNotes(closed) {
-    try {
-      if (closed) window.localStorage.setItem(NOTES_KEY, '1');
-      else window.localStorage.removeItem(NOTES_KEY);
-    } catch (error) { /* a blocked store keeps the default */ }
-  }
-  if (typeof document !== 'undefined' && document.addEventListener) {
-    // toggle does not bubble; one capturing listener owns the block's state.
-    document.addEventListener('toggle', event => {
-      const target = event.target;
-      if (target && target.matches && target.matches('[data-gpi-entry-notes]')) rememberNotes(!target.open);
-    }, true);
-  }
-  function entryNotes(tr) {
-    const workflow = window.EasyICU.guidedPi.optional('hosted')?.active()
-      ? tr('Confirm the data and review the analysis plan. After approval, analysis runs on the server.', '先确认数据，再核对分析计划。批准后在服务器上运行分析。')
-      : tr('Confirm the data and review the analysis plan. After approval, analysis runs on this computer.', '先确认数据，再核对分析计划。批准后在本机运行分析。');
-    const lines = [
-      [tr('Can do', '能做'), tr('descriptive, association, prediction, survival, subtyping and causal studies on MIMIC-III, MIMIC-IV, eICU, HiRID, AmsterdamUMCdb and SICdb, as far as each database records what the question needs.', 'MIMIC-III、MIMIC-IV、eICU、HiRID、AmsterdamUMCdb、SICdb 上的描述、关联、预测、生存、亚型与因果分析，以该库记录了问题所需的信息为限。')],
-      [tr('Not yet accepted', '尚未验收'), tr('no database has yet passed acceptance through a normal real-data run; the Data map marks each one.', '六个库都还没有通过正常入口的真实数据运行验收，数据地图逐库标明。')],
-      [tr('When data differ', '口径不同'), tr('If a database lacks what the question asks for, such as in-hospital death or exact age, the plan states the substitute and runs only after you approve it; otherwise EasyICU says what is missing.', '某个库缺少问题要求的信息时（例如没有院内死亡或只有年龄段），计划会写明替代口径，你批准后才运行；无法替代时会说明缺少什么。')],
-      [tr('How it works', '流程'), workflow],
-      [tr('Results', '结果'), tr('analysis-level evidence; review them before any publication use.', '分析级证据。用于发表前需要人工复核。')],
-    ];
-    return `<details class="gpi-entry-notes" data-gpi-entry-notes${notesClosed() ? '' : ' open'}>
-      <summary>${esc(tr('Before you start', '使用前须知'))}</summary>
-      <dl>${lines.map(([term, text]) => `<div><dt>${esc(term)}</dt><dd>${esc(text)}</dd></div>`).join('')}</dl>
-    </details>`;
+  // Where an approved analysis runs is read at render time: a hosted
+  // instance runs it on the server, the desktop app on this computer.
+  function introLine(tr) {
+    return window.EasyICU.guidedPi.optional('hosted')?.active()
+      ? tr('Describe your clinical question, choose the data, then review the analysis plan. After approval, analysis runs on the server.', '写下你的临床问题，选择数据，再核对分析计划。批准后在服务器上运行分析。')
+      : tr('Describe your clinical question, choose the data, then review the analysis plan. After approval, analysis runs on this computer.', '写下你的临床问题，选择数据，再核对分析计划。批准后在本机运行分析。');
   }
 
   // The official demo is the way in without data; an instance holding a
@@ -202,13 +212,12 @@
     return `<section class="gpi-research-start gpi-entry-home" aria-label="${esc(tr('Start a research conversation', '开始研究对话'))}">
       <header class="gpi-entry-intro">
         <div class="gpi-entry-title"><h2>${esc(tr('Start an ICU research task', '开始一项 ICU 研究'))}</h2></div>
-        <p>${esc(tr('Describe your clinical question, choose the data, then review the analysis plan.', '写下你的临床问题，选择数据，再核对分析计划。'))}</p>
+        <p>${esc(introLine(tr))}</p>
       </header>
       ${options.composer || ''}
       ${offersDemo() ? demoCard(disabled, tr) : ''}
       <div class="gpi-capability-head"><strong>${esc(tr('Try one of these questions', '试试这些问题'))}</strong></div>
       <div class="gpi-starter-actions gpi-starter-examples">${exampleQuestions(tr).map(row => exampleCard(row, disabled, tr)).join('')}</div>
-      ${entryNotes(tr)}
       <button class="gpi-starter-browse" type="button" data-gpi-starter-browse>${esc(tr('Browse all Skills and methods', '浏览全部技能与方法'))}</button>
     </section>`;
   }
