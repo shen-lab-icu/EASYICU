@@ -22,6 +22,7 @@ ROUTES_WITHOUT_SESSION = {
     "cohort": "/#cohort",
     "crossdb": "/#crossdb",
     "dictionary": "/#dictionary",
+    "datamap": "/#datamap",
     "tutorial": "/#tutorial",
 }
 SESSION_ROUTE = "guided"

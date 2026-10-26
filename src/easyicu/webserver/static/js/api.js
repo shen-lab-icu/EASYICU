@@ -401,6 +401,20 @@
   function loadBuiltinSkillPackage(skillId) {
     return getJSON('/api/capabilities/method-skills/' + encodeURIComponent(skillId || '') + '/package');
   }
+  function loadClinicalDefinitions(database) {
+    return getJSON('/api/capabilities/method-skills/clinical-concept-definitions/projection?database=' + encodeURIComponent(database || ''));
+  }
+  function loadExtractionProjection(database) {
+    return getJSON('/api/capabilities/method-skills/six-database-cohort-extraction/projection?database=' + encodeURIComponent(database || ''));
+  }
+  function calculateSampleSize(body) {
+    return postJSON('/api/capabilities/method-skills/sample-size-and-power/calculate', body || {});
+  }
+  function loadDataMap(page) {
+    const query = new URLSearchParams();
+    Object.entries(page || {}).forEach(([key, value]) => { if (value != null && value !== '') query.set(key, String(value)); });
+    return getJSON('/api/data-map' + (query.toString() ? '?' + query.toString() : ''));
+  }
   async function installExtensionSkill(body) {
     const result = await postJSON('/api/extensions/skills/install', body || {});
     if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
@@ -927,6 +941,10 @@
   window.EU_API.loadExtensions = loadExtensions;
   window.EU_API.loadExtensionSkill = loadExtensionSkill;
   window.EU_API.loadBuiltinSkillPackage = loadBuiltinSkillPackage;
+  window.EU_API.loadClinicalDefinitions = loadClinicalDefinitions;
+  window.EU_API.loadExtractionProjection = loadExtractionProjection;
+  window.EU_API.calculateSampleSize = calculateSampleSize;
+  window.EU_API.loadDataMap = loadDataMap;
   window.EU_API.installExtensionSkill = installExtensionSkill;
   window.EU_API.installExtensionMcp = installExtensionMcp;
   window.EU_API.setExtensionState = setExtensionState;

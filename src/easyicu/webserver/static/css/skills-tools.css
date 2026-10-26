@@ -1,0 +1,49 @@
+/* Owner: the working tools on data-definition and planning Skill pages (js/screens-skills-tools.js). */
+.eusk-tool{display:grid;gap:12px;margin:0 0 28px;padding:18px;border:1px solid var(--sk-line);border-radius:10px;background:var(--sk-surface)}
+.eusk-tool-bar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
+.eusk-tool-field{display:grid;gap:5px;min-width:0;color:var(--sk-ink-2);font-size:12px;font-weight:600}
+.eusk-tool-field small{color:var(--sk-muted);font-weight:500}
+.eusk-tool-field select,.eusk-tool-field input{box-sizing:border-box;width:100%;min-height:36px;padding:0 10px;border:1px solid var(--sk-line-strong);border-radius:7px;background:#fff;color:var(--sk-ink);font-size:13px}
+.eusk-tool-search{display:flex;flex:1 1 220px;align-items:center;gap:8px;min-height:36px;padding:0 10px;border:1px solid var(--sk-line-strong);border-radius:7px;background:#fff;color:var(--sk-muted)}
+.eusk-tool-search input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--sk-ink);font-size:13px}
+.eusk-tool-primary{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 15px;border:1px solid var(--sk-accent);border-radius:999px;background:var(--sk-accent);color:#fff;font-size:13px;font-weight:650}
+.eusk-tool-primary:disabled{opacity:.55;cursor:default}
+.eusk-tool-bar .eusk-tool-primary{margin-left:auto}
+.eusk-tool-note{margin:0;color:var(--sk-muted);font-size:12px;line-height:1.5}
+.eusk-tool-note code,.eusk-tool code{font-size:11.5px;overflow-wrap:anywhere}
+.eusk-tool-split{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:12px;min-height:0}
+.eusk-tool-list{max-height:420px;overflow:auto;border:1px solid var(--sk-line);border-radius:8px;background:#fff}
+.eusk-tool-list ul{margin:0;padding:0;list-style:none}
+.eusk-tool-list button{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;width:100%;padding:9px 12px;border:0;border-bottom:1px solid var(--sk-wash);background:transparent;color:var(--sk-ink);text-align:left}
+.eusk-tool-list button strong{font-size:13px;overflow-wrap:anywhere}
+.eusk-tool-list button span:not(.eusk-tool-status){grid-column:1;color:var(--sk-muted);font-size:12px;line-height:1.4}
+.eusk-tool-list button .eusk-tool-status{grid-column:2;grid-row:1}
+.eusk-tool-list button:hover,.eusk-tool-list button:focus-visible{background:var(--sk-wash);outline:0}
+.eusk-tool-list button[aria-current="true"]{background:var(--sk-accent-soft)}
+.eusk-tool-detail{min-width:0;padding:4px 2px}
+.eusk-tool-detail header{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.eusk-tool-detail h3{margin:0;font-size:16px;overflow-wrap:anywhere}
+.eusk-tool-detail p{margin:6px 0;font-size:13px}
+.eusk-tool-detail dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 12px;margin:10px 0;font-size:12.5px}
+.eusk-tool-detail dt{color:var(--sk-muted)}
+.eusk-tool-detail dd{margin:0}
+.eusk-tool-contract{margin-top:12px;padding-top:10px;border-top:1px solid var(--sk-line)}
+.eusk-tool-contract h4{margin:0 0 4px;font-size:13px}
+.eusk-tool-contract h4 small{color:var(--sk-muted);font-weight:500}
+.eusk-tool-status{display:inline-flex;align-items:center;height:21px;padding:0 8px;border-radius:999px;background:var(--sk-wash);color:var(--sk-ink-2);font-size:11px;font-weight:650;white-space:nowrap}
+.eusk-tool-status.is-full{background:var(--sk-accent-soft);color:var(--sk-accent-ink)}
+.eusk-tool-status.is-degraded{background:#f3ead7;color:#6b4d12}
+.eusk-tool-status.is-blocked,.eusk-tool-status.is-unavailable{background:#f2e1de;color:#7a2d22}
+.eusk-tool-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.eusk-tool-table th,.eusk-tool-table td{padding:7px 9px;border-bottom:1px solid var(--sk-line);text-align:left;vertical-align:middle}
+.eusk-tool-table thead th{color:var(--sk-muted);font-size:11px;font-weight:700}
+.eusk-tool-table tbody th{font-weight:600}
+.eusk-tool-form{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+.eusk-tool-wide{grid-column:1/-1;max-width:360px}
+.eusk-tool-actions{grid-column:1/-1}
+.eusk-tool-result{display:grid;gap:10px;padding-top:4px}
+.eusk-tool-result dl{display:flex;flex-wrap:wrap;gap:10px;margin:0}
+.eusk-tool-result dl>div{min-width:120px;padding:10px 14px;border:1px solid var(--sk-line);border-radius:8px;background:#fff}
+.eusk-tool-result dt{color:var(--sk-muted);font-size:11px;font-weight:700}
+.eusk-tool-result dd{margin:3px 0 0;font-size:20px;font-weight:650;font-variant-numeric:tabular-nums}
+@media(max-width:860px){.eusk-tool-split{grid-template-columns:1fr}.eusk-tool-list{max-height:280px}.eusk-tool-bar .eusk-tool-primary{margin-left:0}}
