@@ -53,7 +53,10 @@ def _with_selection(context: ResearchContext, record: object) -> ResearchContext
     return context.model_copy(
         update={
             "user_preferences": preferences.model_copy(
-                update={"data_constraints": json.dumps({"source_selection": record})}
+                update={"data_constraints": json.dumps({
+                    **json.loads(preferences.data_constraints or "{}"),
+                    "source_selection": record,
+                })}
             )
         }
     )

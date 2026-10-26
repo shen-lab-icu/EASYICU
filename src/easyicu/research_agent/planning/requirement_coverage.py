@@ -16,11 +16,12 @@ both without the Planner-facing question-requirement owner.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..methods.descriptive_inputs import REQUESTED_CONCEPT_NO_DATA, context_columns_without_data
+from .adjustment_authority import concept_relatives
 
 if TYPE_CHECKING:
     from ..schema import AnalysisPlan, ResearchContext
@@ -406,34 +407,6 @@ def stated_subgroup_coverage(context: ResearchContext, plan: AnalysisPlan) -> Pl
         complete=all(record.status == "covered" for record in records.values()),
     )
 
-
-def concept_relatives(context: ResearchContext) -> Callable[[str], frozenset[str]]:
-    """The run's columns the concept dictionary relates to a column.
-
-    A column's identity is its name, its source concept and the concepts it
-    derives from; two columns are related when their identities meet.
-    """
-
-    identities = {
-        str(variable.name): frozenset(
-            str(value)
-            for value in (
-                variable.name,
-                getattr(variable, "source_concept", None),
-                *(getattr(variable, "derived_from_concepts", None) or ()),
-            )
-            if str(value or "").strip()
-        )
-        for variable in context.variables
-    }
-
-    def relatives(column: str) -> frozenset[str]:
-        own = identities.get(column, frozenset({column}))
-        return frozenset(
-            {column, *(name for name, ids in identities.items() if ids & own)}
-        )
-
-    return relatives
 
 __all__ = [
     "ANALYSIS_ROLES",

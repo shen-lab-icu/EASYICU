@@ -64,7 +64,10 @@ def _with_constraints(context: ResearchContext, constraints: dict) -> ResearchCo
     return context.model_copy(
         update={
             "user_preferences": preferences.model_copy(
-                update={"data_constraints": json.dumps(constraints)}
+                update={"data_constraints": json.dumps({
+                    **json.loads(preferences.data_constraints or "{}"),
+                    **constraints,
+                })}
             )
         }
     )

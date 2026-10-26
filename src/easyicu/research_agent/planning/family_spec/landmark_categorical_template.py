@@ -1301,9 +1301,8 @@ def build_landmark_categorical_skeleton(
         steps=outline_steps,
         rationale=(
             f"Family template {request.family_id}: the host projected every executable "
-            "coordinate from typed StudyContext facts; the Planner supplied the adjustment roster with "
-            "rationales, reader labels, and comparator applications. All results stay at plan level "
-            "with the analysis-only claim ceiling."
+            "coordinate from typed StudyContext facts, including the bound adjustment roster; "
+            "the Planner supplied reader labels and comparator applications. "
         ),
     )
     if bind_outline is not None:

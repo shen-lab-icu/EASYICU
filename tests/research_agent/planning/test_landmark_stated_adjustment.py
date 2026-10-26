@@ -297,7 +297,7 @@ def _runtime(context, *, clustered=False):
 def test_first_request_binds_exactly_the_stated_roster(roster):
     request = _request(_study(roster))
     assert request.adjustment_selection == "exact"
-    assert request.exact_roster == list(roster)
+    assert request.exact_roster == (list(roster) if roster else ["age", "sex"])
 
 
 @pytest.mark.parametrize("roster", [("sex",), ("age",)])
@@ -401,13 +401,13 @@ def test_an_exact_roster_cannot_add_to_or_omit_the_question_roster():
             _request(context)
 
 
-def test_no_stated_field_still_binds_an_unadjusted_model():
+def test_no_stated_field_binds_the_family_minimal_adjustment():
     context = _study(())
     constraints = json.loads(context.user_preferences.data_constraints)
     del constraints["stated_adjustments"]
     context.user_preferences.data_constraints = json.dumps(constraints)
     draft = _first_plan(context, ())
-    assert _runtime(context).seal_for_plan(draft).current_case.required_adjustment_columns == ()
+    assert _runtime(context).seal_for_plan(draft).current_case.required_adjustment_columns == ("age", "sex")
 
 
 @pytest.mark.parametrize("role", ["demographic", "lab"])
@@ -443,7 +443,7 @@ def test_an_untimed_lab_is_not_baseline_even_if_an_exact_roster_calls_it_static(
         _request(context)
 
 
-def test_a_categorical_landmark_with_no_stated_roster_also_compiles_without_adjustment():
+def test_a_categorical_landmark_with_no_stated_roster_uses_the_family_default():
     context = _context(exact=False)
     constraints = json.loads(context.user_preferences.data_constraints)
     constraints["stated_adjustments"] = []
@@ -451,7 +451,7 @@ def test_a_categorical_landmark_with_no_stated_roster_also_compiles_without_adju
     request = _request(context)
     _, result = _run(context, [json.dumps(_spec_payload(request))])
     primary = next(s for s in result.output.steps if s.planned_analysis_role == "primary")
-    assert primary.model_requirements[0].covariates == []
+    assert primary.model_requirements[0].covariates == ["age", "sex"]
 
 
 @pytest.mark.parametrize("window,allowed", [
@@ -505,6 +505,7 @@ def test_an_input_column_outside_the_signed_adjustment_set_does_not_cover_adjust
     from easyicu.research_agent.planning.requirement_coverage import stated_adjustment_coverage
 
     context = _study(())
+    context.user_preferences.covariate_selection = "exact"
     draft = _first_plan(context, ())
     runtime = _runtime(context).seal_for_plan(draft)
     bound, _ = runtime.bind_plan(draft)
@@ -538,6 +539,8 @@ def test_signed_model_fits_its_adjustment_and_publishes_a_valid_receipt(tmp_path
     from easyicu.research_agent.execution.runners import landmark_spline_executor as executor
 
     context = _study(roster)
+    if not roster:
+        context.user_preferences.covariate_selection = "exact"
     draft = _first_plan(context, roster)
     authority = _runtime(context, clustered=clustered).seal_for_plan(draft).current_case
     rng = np.random.default_rng(31)

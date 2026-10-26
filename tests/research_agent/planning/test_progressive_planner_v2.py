@@ -4421,7 +4421,7 @@ def test_outline_prompt_resolves_functional_form_targets_case_insensitively() ->
             ],
             "user_preferences": UserPreferences(
                 covariates=["age_years", "Charlson"],
-                covariate_selection="planner_selectable",
+                covariate_selection="exact",
             ),
         }
     )
@@ -4947,7 +4947,8 @@ def test_outline_prompt_projects_explicit_figure_obligation() -> None:
     context = _context().model_copy(
         update={
             "user_preferences": UserPreferences(
-                must_have_outputs="Required outputs: one publication figure."
+                must_have_outputs="Required outputs: one publication figure.",
+                data_constraints=_context().user_preferences.data_constraints,
             )
         }
     )
@@ -6394,7 +6395,8 @@ def test_missing_visualization_outline_is_retried_before_foundation() -> None:
     context = _context().model_copy(
         update={
             "user_preferences": UserPreferences(
-                must_have_outputs="Required outputs: one publication figure."
+                must_have_outputs="Required outputs: one publication figure.",
+                data_constraints=_context().user_preferences.data_constraints,
             )
         }
     )
@@ -6434,7 +6436,8 @@ def test_outline_uses_fourth_attempt_after_three_distinct_contract_repairs() -> 
     context = _context().model_copy(
         update={
             "user_preferences": UserPreferences(
-                must_have_outputs="Required outputs: one publication figure."
+                must_have_outputs="Required outputs: one publication figure.",
+                data_constraints=_context().user_preferences.data_constraints,
             )
         }
     )
@@ -6948,7 +6951,8 @@ def test_agent_repairs_primary_model_to_the_exact_adjustment_roster() -> None:
 def test_agent_repairs_final_plan_dependent_method_layer_locally() -> None:
     payload = _payload()
     context = _context().model_copy(update={
-        "user_preferences": UserPreferences(must_have_outputs="Required figure"),
+        "user_preferences": UserPreferences(must_have_outputs="Required figure",
+                                            data_constraints=_context().user_preferences.data_constraints),
     })
 
     def binding(
