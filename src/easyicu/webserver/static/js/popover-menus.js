@@ -12,7 +12,10 @@
    state lives in its owner rather than in a <details> registers
    { isOpen, contains, close } and gets the same press and Escape rules. An
    owner that rebuilds its markup wraps the rebuild in keepOpen so an open
-   menu survives the repaint. */
+   menu survives the repaint. An open menu also keeps to the room it has:
+   a panel that would run past the window or the scrolling region holding
+   it takes that room and scrolls inside it. Owners' CSS still picks the
+   side a menu opens on (composer menus: guided-pi-composer-menus.css). */
 (function () {
   'use strict';
 
@@ -90,6 +93,43 @@
     return result;
   }
 
+  // The room is the window narrowed by every ancestor of the panel that
+  // scrolls or clips; a fixed panel answers to the window alone.
+  const EDGE = 8;
+  function room(panel) {
+    const style = node => window.getComputedStyle(node);
+    let top = 0;
+    let bottom = window.innerHeight;
+    if (style(panel).position !== 'fixed') {
+      for (let node = panel.parentElement; node && node !== document.body && node !== document.documentElement;
+        node = node.parentElement) {
+        if (style(node).overflowY === 'visible') continue;
+        const box = node.getBoundingClientRect();
+        top = Math.max(top, box.top);
+        bottom = Math.min(bottom, box.bottom);
+      }
+    }
+    return { top, bottom };
+  }
+
+  // A panel that opens below its summary may reach the room's bottom edge, one
+  // that opens above it the top edge; past that, it scrolls inside.
+  function fit(menu) {
+    if (typeof window.getComputedStyle !== 'function') return;
+    const panel = Array.from(menu.children || []).find(child => child.tagName !== 'SUMMARY');
+    const summary = menu.querySelector(':scope > summary');
+    if (!panel || !summary || typeof panel.getBoundingClientRect !== 'function') return;
+    panel.style.removeProperty('max-height');
+    const box = panel.getBoundingClientRect();
+    const { top, bottom } = room(panel);
+    const below = box.top >= summary.getBoundingClientRect().top;
+    const space = Math.floor(below ? bottom - box.top - EDGE : box.bottom - top - EDGE);
+    if (space > 0 && box.height > space) {
+      panel.style.maxHeight = `${space}px`;
+      panel.style.overflowY = 'auto';
+    }
+  }
+
   // `toggle` does not bubble, so this listens in the capture phase.
   function onToggle(event) {
     const menu = event.target;
@@ -97,6 +137,7 @@
     openMenus().forEach(other => {
       if (other !== menu && !contains(other, menu) && !contains(menu, other)) close(other);
     });
+    fit(menu);
   }
 
   // A press outside closes on the way down, like a native menu; the press
@@ -121,6 +162,6 @@
 
   mount();
   window.EU_POPOVER_MENUS = Object.freeze({
-    ATTRIBUTE, SELECTOR, mount, register, closeAll, closeOutside, keepOpen, onToggle, onPointerDown, onFocusIn, onKeyDown,
+    ATTRIBUTE, SELECTOR, mount, register, closeAll, closeOutside, keepOpen, fit, onToggle, onPointerDown, onFocusIn, onKeyDown,
   });
 })();
