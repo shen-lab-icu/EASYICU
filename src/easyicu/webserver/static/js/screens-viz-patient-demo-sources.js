@@ -36,7 +36,17 @@
     const rows = Array.isArray(registryRows) ? registryRows : [];
     return ((state.catalog && state.catalog.sources) || []).map(source => {
       const label = registryLabel(source);
-      const registry = rows.find(row => row && row.ok && row.path && row.label === label);
+      const registry = rows.find(row => {
+        if (!row || !row.ok || !row.path) return false;
+        if (row.source_kind && row.source_kind !== 'public_demo') return false;
+        if ('source_id' in row || 'archive_sha256' in row) {
+          const digest = (source.download || {}).sha256;
+          return row.source_id === source.id && (row.source_kind === 'public_demo'
+            || !digest || row.archive_sha256 === digest);
+        }
+        // Legacy registrations have no release receipt; keep their title match.
+        return String(row.label || '').trim().toLowerCase() === label.toLowerCase();
+      });
       return registry ? {
         database: source.database || registry.database || '',
         label,

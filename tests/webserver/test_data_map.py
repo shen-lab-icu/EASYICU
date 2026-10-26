@@ -173,14 +173,16 @@ def test_invalid_selectors_fail_with_codes_before_reading_registrations(monkeypa
     assert error.value.code == code
 
 
-def test_registration_identity_and_flags_are_path_free_bounded_snapshots():
+@pytest.mark.parametrize("verified", [True, False])
+def test_registration_identity_and_flags_are_path_free_bounded_snapshots(verified):
     from easyicu.webserver.demo_source_contracts import get_source
 
     demo = get_source("mimic_iv_demo_v2_2")
+    digest = demo.archive_sha256 if verified else "a" * 64
     records = [
         {"id": "src_a", "database": "miiv", "path": "/private/synthetic", "label": "Private label", "source_kind": "synthetic"},
         {"id": "src_b", "database": "miiv", "path": "/private/demo", "label": f"{demo.title} v{demo.version}",
-         "source_id": demo.id, "version": demo.version, "archive_sha256": "a" * 64},
+         "source_id": demo.id, "version": demo.version, "archive_sha256": digest},
         {"id": "src_c", "database": "eicu_demo", "path": "/private/legacy", "label": "Demo without receipt"},
         {"id": "src_d", "database": "miiv", "path": "/private/unrecorded", "label": "Private label"},
         {"id": "src_removed", "database": "miiv", "path": "/private/removed"},
@@ -200,8 +202,8 @@ def test_registration_identity_and_flags_are_path_free_bounded_snapshots():
     next_page = build(database="miiv", concept="hr", source_offset=1, source_limit=1)["databases"][0]
     official = next_page["sources"][0]
     assert official["identity"] == {"database": "miiv", "registration_id": "src_b", "version": demo.version,
-                                   "source_id": demo.id, "archive_sha256": "a" * 64}
-    assert official["kind"] == "public_demo"
+                                   "source_id": demo.id, "archive_sha256": digest}
+    assert official["kind"] == ("public_demo" if verified else "unrecorded")
     last = build(database="miiv", concept="hr", source_offset=2)["databases"][0]
     assert last["sources"][0]["kind"] == "unrecorded"
     assert last["source_next_offset"] is None
