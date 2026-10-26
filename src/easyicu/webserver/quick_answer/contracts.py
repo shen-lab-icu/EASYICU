@@ -36,7 +36,18 @@ class QuickReading(Contract):
     analysis_unit: Literal["icu_stay", "patient", "hospitalization"] = "icu_stay"
     adjustments: tuple[str, ...] = ()
     endpoint_kind: Literal["observed", "time_to_event", "fixed_horizon"] = "observed"
-    ambiguities: tuple[str, ...] = ()
+    # Any entry stops the quick answer (``qualification_stop``). A model that
+    # files its own conventional reading here stops a question it typed
+    # completely (pilot1 10-26: "the first day" as hours 0-24 and "men and
+    # women" as sex were both typed and both listed, and the card never formed).
+    ambiguities: tuple[str, ...] = Field(default=(), description=(
+        "Only a choice the question leaves open that would change the answer, such as two "
+        "different measures or groupings its words could each mean. A conventional reading "
+        "you applied, such as a first day as hours 0 to 24 after ICU admission or men and "
+        "women as sex, is not an ambiguity: type it in measure, window and grouping, where "
+        "the card shows it, and leave this empty. Any entry stops the quick answer and "
+        "offers the full study instead."
+    ))
 
 
 class StudyHandoff(Contract):

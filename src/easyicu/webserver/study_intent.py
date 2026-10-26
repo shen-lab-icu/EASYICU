@@ -51,6 +51,7 @@ __all__ = [
     "OUTCOME_TYPES",
     "StudyIntentError",
     "catalog_named_concepts",
+    "concept_named_by",
     "extract_study_intent",
     "deterministic_intent",
     "explicit_outcome_concepts",
@@ -1139,6 +1140,24 @@ def catalog_named_concepts(text: str) -> Tuple[str, ...]:
             continue
         found.append(resolved[0])
     return tuple(found)
+
+
+def concept_named_by(name: str) -> Optional[str]:
+    """The one concept a bare clinical name denotes, or ``None``.
+
+    Reads ``name`` ("lactate", "heart_rate", "gender") with the same phrase
+    table as a question, so a typed reader that names a measurement in words
+    binds to the concept the question's own words would. A name that reads as
+    no concept, or as more than one, denotes none.
+    """
+
+    try:
+        text = _clean_question(str(name or "").replace("_", " "))
+    except StudyIntentError:
+        return None
+    readings = {concept for concept, _phrase in _match_concept(text.lower())}
+    concept = next(iter(readings)) if len(readings) == 1 else None
+    return concept if isinstance(concept, str) else None
 
 
 # --------------------------------------------------------------------------
