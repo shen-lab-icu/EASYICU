@@ -36,10 +36,10 @@ function harness(overrides = {}) {
   const host = { innerHTML: '', dataset: {}, listeners: {}, addEventListener(name, handler) { this.listeners[name] = handler; },
     querySelector: selector => (selector === '.dmap-detail' && host.innerHTML.includes('dmap-detail') ? detail : null) };
   const window = {
-    EU_LANG: 'zh',
+    EU_LANG: overrides.language || 'zh',
     EU_DATABASE_NAMES: { name: key => ({ miiv: 'MIMIC-IV', eicu: 'eICU-CRD', aumc: 'AmsterdamUMCdb' }[key] || ''), abbr: key => ({ miiv: 'M-IV', eicu: 'eICU', aumc: 'AUMC' }[key] || '') },
     EU_CATALOG: { dict: { age: ['Age', '年龄', 'years'] } },
-    EU_API: { loadDataMap: async page => { calls.push(JSON.parse(JSON.stringify(page))); if (overrides.failure) throw overrides.failure; return VIEW; } },
+    EU_API: { loadDataMap: async page => { calls.push(JSON.parse(JSON.stringify(page))); if (overrides.failure) throw overrides.failure; return overrides.view || VIEW; } },
   };
   const document = { querySelector: selector => (selector === '[data-dmap-root]' ? host : null) };
   const context = vm.createContext({ window, document });
@@ -93,4 +93,44 @@ test('paging asks the host for the next page; a failed read offers a retry', asy
   failed.screen.afterRender(failed.root);
   await settle();
   assert.match(failed.host.innerHTML, /暂时读不到数据地图。.*data-dmap-retry/s);
+});
+
+test('default mortality refusals retain the changed meaning, date and missing follow-up', async () => {
+  for (const [language, meaning, date, missing] of [
+    ['zh', '出 ICU 后 72 小时内死亡', '只有日期', '没有记录删失时间'],
+    ['en', 'death up to 72 h after ICU discharge', 'a date only', 'No censoring time'],
+  ]) {
+    const view = { ...VIEW, databases: [row('aumc', { status: 'refused', decision: {
+      missing: [{ capability: 'censor_time' }], substitutions: [
+        { capability: 'outcome_meaning', substitute: 'death_within_72h_after_icu_discharge', source_field: { table: 'admissions', column: 'dateofdeath' } },
+        { capability: 'event_time', substitute: 'date' },
+      ],
+    } })] };
+    const { screen, root, host } = harness({ view, language });
+    screen.afterRender(root);
+    await settle();
+    clickOn(host, 'data-dmap-study', { dmapStudy: 'aumc|survival' });
+    for (const text of [meaning, date, missing, 'admissions.dateofdeath']) assert.ok(host.innerHTML.includes(text));
+    assert.doesNotMatch(host.innerHTML, /outcome_meaning|death_within_72h_after_icu_discharge/);
+  }
+});
+
+test('HiRID default mortality keeps its ICU meaning and observation proxy explicit', async () => {
+  for (const [language, meaning, timing] of [
+    ['zh', 'ICU 内死亡', '最后一次观测时间作为近似'],
+    ['en', 'death in the ICU', 'the last observation time as a proxy'],
+  ]) {
+    const view = { ...VIEW, databases: [row('hirid', { status: 'refused', decision: {
+      missing: [{ capability: 'censor_time' }], substitutions: [
+        { capability: 'outcome_meaning', substitute: 'icu_death' },
+        { capability: 'event_time', substitute: 'last_observation_proxy', source_field: { table: 'observations', column: 'datetime' } },
+      ],
+    } })] };
+    const { screen, root, host } = harness({ view, language });
+    screen.afterRender(root);
+    await settle();
+    clickOn(host, 'data-dmap-study', { dmapStudy: 'hirid|survival' });
+    for (const text of [meaning, timing, 'observations.datetime']) assert.ok(host.innerHTML.includes(text));
+    assert.doesNotMatch(host.innerHTML, /outcome_meaning|icu_death|last_observation_proxy/);
+  }
 });

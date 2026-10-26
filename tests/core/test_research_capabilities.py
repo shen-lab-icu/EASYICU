@@ -137,7 +137,55 @@ def test_eicu_has_separate_hospital_and_icu_mortality_statuses():
     assert {item.meaning: item.status.column for item in profile.mortality_outcomes} == {
         "hospital_death": "hospitaldischargestatus", "icu_death": "unitdischargestatus",
     }
-    assert all(item.event_time is None for item in profile.mortality_outcomes)
+    assert profile.mortality.event_time is None
+    native = next(item for item in profile.mortality_outcomes if item.meaning == "icu_death")
+    assert native.event_time == profile.icu_discharge
+    assert native.time_kind == "icu_discharge_proxy"
+
+
+@pytest.mark.parametrize("database", ["eicu", "aumc"])
+def test_icu_proxy_requires_a_registered_icu_end_even_when_another_endpoint_has_time(monkeypatch, database):
+    from easyicu.databases import research_capabilities as owner
+    from easyicu.databases.research_requirements import StudyRequirements, assess_study
+
+    identifier = owner._identifier_field
+    monkeypatch.setattr(owner, "_identifier_field", lambda config, unit, attribute:
+                        None if (unit, attribute) == ("icustay", "end") else identifier(config, unit, attribute))
+    profile = owner.research_capability_profile.__wrapped__(database)
+    decision = assess_study(profile, StudyRequirements(family="survival", outcome="icu_death"))
+    assert decision.status == "refusal"
+    assert {(item.capability, item.code) for item in decision.missing} == {
+        ("event_time", "event_time_unavailable"), ("censor_time", "censor_time_unavailable")}
+    assert decision.substitutions == ()
+
+
+def test_icu_proxy_rule_reads_profile_facts_not_database_names():
+    from easyicu.databases.research_capabilities import MortalityCapability, SourceField, _icu_death_timing
+
+    status = SourceField(source="synthetic/status", table="stays", column="exit_status")
+    end = SourceField(source="synthetic/end", table="stays", column="exit_time")
+    native = MortalityCapability(meaning="icu_death", status=status, event_time=None, time_kind="unavailable")
+    timed = _icu_death_timing(native, end)
+    assert (timed.meaning, timed.status, timed.event_time, timed.time_kind) == (
+        "icu_death", status, end, "icu_discharge_proxy")
+    assert _icu_death_timing(native, None) == native
+    for kind in ("recorded", "date", "last_observation_proxy"):
+        existing = native.model_copy(update={"event_time": status, "time_kind": kind})
+        assert _icu_death_timing(existing, end) == existing
+    hospital = native.model_copy(update={"meaning": "hospital_death"})
+    assert _icu_death_timing(hospital, end) == hospital
+
+
+def test_default_icu_mortality_uses_the_same_proxy_rule_as_named_mortality(monkeypatch):
+    from easyicu.databases import research_capabilities as owner
+
+    original = research_capability_profile("eicu")
+    native = next(item for item in original.mortality_outcomes if item.meaning == "icu_death")
+    untimed = native.model_copy(update={"event_time": None, "time_kind": "unavailable"})
+    monkeypatch.setattr(owner, "_mortality", lambda config: untimed)
+    profile = owner.research_capability_profile.__wrapped__("eicu")
+    assert profile.mortality == native
+    assert all(item == native for item in profile.mortality_outcomes)
 
 
 @pytest.mark.parametrize("database,clock,anchor", [

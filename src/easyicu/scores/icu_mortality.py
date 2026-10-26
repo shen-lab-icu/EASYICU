@@ -100,12 +100,12 @@ def load_icu_death(database, data_path, *, patient_ids=None, max_patients=None):
         status = (destination == "overleden").astype("boolean").mask(destination == "")
         start, end = (pd.to_numeric(frame[c], errors="coerce") for c in ("admittedat", "dischargedat"))
         status = status.mask(start.isna() | end.isna() | (end < start))
-        times, kind = (end - start) / 3_600_000, "icu_discharge_status"
+        times, kind = (end - start) / 3_600_000, "icu_discharge_proxy"
     elif base == "eicu":
         _columns(frame, "unitdischargestatus", "unitdischargeoffset")
         status = _status(frame.unitdischargestatus, {"expired": True, "alive": False})
         times = pd.to_numeric(frame.unitdischargeoffset, errors="coerce") / 60
-        kind = "icu_discharge_status"
+        kind = "icu_discharge_proxy"
     elif base == "sic":
         _columns(frame, "OffsetOfDeath", "ICUOffset", "TimeOfStay", "HospitalDischargeType")
         event, start, end = (pd.to_numeric(frame[c], errors="coerce")
