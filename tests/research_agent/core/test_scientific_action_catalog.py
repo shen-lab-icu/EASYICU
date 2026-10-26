@@ -204,8 +204,8 @@ def test_survival_rmst_and_analysis_only_competing_risk_cif_are_reachable():
     assert rmst.execution_mode == "host_owned"
     assert rmst.runner == "signed_rmst_contrast"
     assert rmst.kernel_imports == ("easyicu.research_agent.methods.rmst",)
-    assert cif.execution_mode == "coder_generated"
-    assert cif.runner is None
+    assert cif.execution_mode == "host_owned"
+    assert cif.runner == "survival_primary_cox"
     assert cif.kernel_imports == (
         "easyicu.research_agent.methods.competing_risks",
         "easyicu.research_agent.methods.gray_test",
@@ -215,7 +215,7 @@ def test_survival_rmst_and_analysis_only_competing_risk_cif_are_reachable():
     assert "competing_risks_cif" in guide
     assert "coder_generated" in guide
     assert "Aalen-Johansen" in guide
-    assert "Fine-Gray" in cif.notes
+    assert "survival::finegray+coxph" in cif.notes
     assert "cause-naive Cox" in cif.notes
 
 

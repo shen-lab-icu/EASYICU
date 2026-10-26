@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 import re
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
+from ..contracts.survival_execution import survival_execution_verdict
 
 from ..contracts.capability_ids import (
     CAPABILITY_FAMILIES,
@@ -248,7 +249,7 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         family="time_to_event",
         label="Survival / time-to-event",
         primary_analysis="deterministic",
-        primary_estimand="Host-computed Cox hazard ratio under an exact Planner-owned, digest-bound survival contract",
+        primary_estimand="Declared Cox HR with unadjusted log-rank; explicit competition adds group CIF, Gray, cause-specific HR and Fine-Gray subdistribution HR",
         primary_runner="survival_primary_cox",
         primary_runner_module="execution.runners.survival_primary_executor",
         figure="deterministic",
@@ -263,13 +264,14 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
             "Plan validation refuses any primary survival contract the sealed Cox "
             "owner cannot execute; digest, fit, PH or evidence mismatch fails closed."
         ),
-        notes="The sealed primary owner fits only the exact declared Cox contract; the survival renderer remains a separate consumer.",
+        notes="Discrete exposure groups share the Cox complete-case cohort and horizon. Competing events require an explicit code/definition; missing competitors fail closed. Gray remains analysis-only; Fine-Gray uses local R survival.",
         capability_id="survival_time_to_event_v1",
-        result_contract="host-issued digest-bound survival receipt + primary CSV + PH table",
+        result_contract="host-issued digest-bound receipt + Cox/PH + log-rank or declared CIF/Gray/Fine-Gray products",
         required_diagnostics=(
             "event/censoring closure",
             "time-origin binding",
             "proportional-hazards diagnostic when Cox is declared",
+            "explicit competing-event estimands and supplemental product digests",
         ),
         scientific_validation="reportable",
         scientific_validator_owner="execution.runners.survival_primary_executor",
@@ -413,7 +415,7 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         family="association",
         label="Association — exact single-model adjusted",
         primary_analysis="deterministic",
-        primary_estimand="Host-computed adjusted association under one exact Planner-owned estimator and typed model-term contract",
+        primary_estimand="Declared logistic OR, modified-Poisson RR with sandwich or patient-clustered SEs, or linear coefficient",
         primary_runner="adjusted_association_estimates",
         primary_runner_module="execution.runners.adjusted_association_executor",
         figure="deterministic",
@@ -436,6 +438,7 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
             "model-term coding receipt",
             "primary model contract",
             "effect/interval reconciliation",
+            "binary outcome proportion and covariance method for RR",
         ),
         scientific_validation="reportable",
         scientific_validator_owner="execution.runners.adjusted_association_executor",
@@ -1151,11 +1154,10 @@ AUXILIARY_DETERMINISTIC_RUNNERS: Tuple[AuxiliaryRunner, ...] = (
 
 KNOWN_UNSUPPORTED_ESTIMANDS: Tuple[Tuple[str, str], ...] = (
     (
-        "Fine-Gray competing-risk regression as a primary/reportable estimand",
-        "No deterministic/reportable primary Fine-Gray owner. EasyICU exposes "
-        "analysis-only Aalen-Johansen CIF and Gray comparison as a supporting "
-        "Coder action; a cause-naive Cox HR must not substitute for Fine-Gray "
-        "regression or primary competing-risk authority.",
+        "Fine-Gray competing-risk regression with time-varying covariates or recurrent events",
+        "The survival owner supports one terminal competing event and baseline covariates "
+        "on a declared complete-case cohort. Extended risk processes require another contract; "
+        "a cause-specific Cox HR cannot substitute for a subdistribution HR.",
     ),
 )
 
@@ -1999,7 +2001,17 @@ def assess_scientific_capability(
             and getattr(endpoint, "kind", None) == "time_to_event"
         )
         levels = list(getattr(endpoint, "levels", None) or [])
-        if len(levels) > 2:
+        declared_competing = any(
+            (requirement := getattr(step, "family_primary_result_requirement", None)) is not None
+            and requirement.competing_event_value is not None
+            and set(levels) == {0, requirement.event_value, requirement.competing_event_value}
+            and survival_execution_verdict(
+                requirement=requirement, planned_analysis_role=step.planned_analysis_role,
+                expected_outputs=step.expected_outputs, inputs=step.inputs,
+            ).claimed
+            for step in (getattr(plan, "steps", None) or ())
+        )
+        if len(levels) > 2 and not declared_competing:
             return ScientificCapabilityAssessment(
                 capability_id=capability.capability_id,
                 analysis_type=canonical,
@@ -2014,11 +2026,9 @@ def assess_scientific_capability(
                 claim_ceiling="unsupported",
                 issue_code="competing_risk_estimator_unavailable",
                 reason=(
-                    "The endpoint declares multiple event types, but EasyICU has "
-                    "no registered primary/reportable Fine-Gray capability. The "
-                    "supporting Aalen-Johansen/Gray action does not grant primary "
-                    "estimand authority, and a cause-naive Cox model must not stand "
-                    "in for a competing-risk claim."
+                    "The endpoint declares multiple event types without a closed "
+                    "survival primary contract naming the competing code and definition. "
+                    "A cause-naive Cox model cannot stand in for a competing-risk claim."
                 ),
             )
 

@@ -42,7 +42,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | Proportional-hazards check (Schoenfeld residuals / PH test) | standard_supporting | deterministic ✅ | schoenfeld_test.csv (covariate, chi2, p) + schoenfeld_plot (diagnostics panel slot) | `survival_primary_cox` |
 | Subgroup hazard ratios / interaction forest | standard_supporting | LLM-coded ⚠️ | subgroup HR forest | — |
 | Restricted mean survival time (RMST) | standard_supporting | deterministic ✅ | rmst_summary.csv (group rmst/ci + difference) + receipt | `signed_rmst_contrast` |
-| Aalen-Johansen competing-risk CIF + Gray comparison | standard_supporting | LLM-coded ⚠️ | cause-specific CIF curves + descriptive group difference + Gray test | — |
+| Competing risks: Aalen-Johansen CIF, Gray, cause-specific Cox and Fine-Gray | standard_supporting | deterministic ✅ | group CIF + Gray test + cause-specific Cox HR + Fine-Gray subdistribution HR + digest receipt | `survival_primary_cox` |
 | Time-varying coefficients / landmark survival | planned | planned ⛔ | time-varying HR / landmark curves | — |
 
 ## Causal inference / target-trial emulation
@@ -64,7 +64,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | Method | Tier | Implementation | Produces | Runner |
 | --- | --- | --- | --- | --- |
 | Ordinal dose-response (OR per +1 stage, per-stage forest, monotonicity) | primary | LLM-coded ⚠️ | agent-declared ordered trend + dose_response.csv; deterministic forest | — |
-| Adjusted association (logistic / linear) | primary | deterministic ✅ | host-bound adjusted effect + typed model/coefficient contract + deterministic forest | `adjusted_association_estimates` |
+| Adjusted association (logistic / modified Poisson RR / linear) | primary | deterministic ✅ | host-bound adjusted effect + typed model/coefficient contract + deterministic forest | `adjusted_association_estimates` |
 | Multiple adjustment sets (crude / minimal / full) | standard_supporting | LLM-coded ⚠️ | nested-model effect table | — |
 | Effect modification / interaction + subgroup forest | standard_supporting | deterministic ✅ | interaction test + subgroup forest | `baseline_association` |
 | Missing-data audit + complete-case vs imputation sensitivity | standard_supporting | deterministic ✅ | missingness_summary.csv + sensitivity contrast | `missing_data` |
@@ -127,4 +127,3 @@ These exact coordinates are published to Planner through the scientific-action c
 | phenotyping | Mixed-effects / growth-mixture trajectory models | Random-effects longitudinal models with latent classes. |
 | phenotyping | DTW / time-series distance clustering | Cluster raw trajectories under a shape-aware (dynamic time warping) distance. |
 | phenotyping | Landmark trajectory prediction | Predict outcome from trajectory shape up to a landmark time. |
-

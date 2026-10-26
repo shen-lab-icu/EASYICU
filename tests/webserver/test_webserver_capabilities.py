@@ -121,8 +121,11 @@ def test_method_skill_catalog_projects_registered_method_contracts(monkeypatch) 
     ]
     assert components["prediction.decision_curve"]["implementation"] == "llm_coded"
     assert components["prediction.decision_curve"]["claim_ceiling"] == "analysis_only"
+    # Competing risks run inside the deterministic survival owner; Gray stays analysis-only.
+    assert components["time_to_event.competing_risks_cif"]["implementation"] == "deterministic"
+    assert components["time_to_event.competing_risks_cif"]["kernel_modules"] == ["competing_risks", "gray_test"]
+    assert components["time_to_event.competing_risks_cif"]["claim_ceiling"] == "analysis_only"
     promoted = {
-        "time_to_event.competing_risks_cif": ["competing_risks", "gray_test"],
         "causal_emulation.propensity_adjustment": ["propensity_weighting"],
         "causal_emulation.doubly_robust": ["survival_inputs", "doubly_robust"],
         "causal_emulation.mediation": ["mediation"],

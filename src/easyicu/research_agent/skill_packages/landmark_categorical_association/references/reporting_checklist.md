@@ -1,6 +1,6 @@
 # Reporting references / 报告依据
 
-- STROBE 16: Adjusted association (logistic / linear).
+- STROBE 16: Adjusted association (logistic / modified Poisson RR / linear).
 - STROBE 12c: Missing-data audit + complete-case vs imputation sensitivity.
 - STROBE 14a: Baseline-characteristics table (Table 1).
 - STROBE 12c: Missing-data / completeness audit.

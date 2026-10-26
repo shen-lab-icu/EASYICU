@@ -220,6 +220,8 @@ def _survival_receipt_findings(
         "event_definition": requirement.event_definition,
         "censoring_strategy": requirement.censoring_strategy,
         "competing_risk_strategy": requirement.competing_risk_strategy,
+        "competing_event_value": requirement.competing_event_value,
+        "competing_event_definition": requirement.competing_event_definition,
         "time_horizon": requirement.time_horizon,
         "time_horizon_value": requirement.time_horizon_value,
         "estimator": requirement.estimator,
@@ -274,6 +276,10 @@ def _survival_receipt_findings(
         digest_mismatches["result_sha256"] = receipt.result_sha256
     if receipt.ph_diagnostic_sha256 != _sha256_file(ph_path):
         digest_mismatches["ph_diagnostic_sha256"] = receipt.ph_diagnostic_sha256
+    for product, digest in receipt.supplementary_sha256.items():
+        path = _materialised_path(out_dir=out_dir, raw_path=output_files.get(product), expected_suffix=".csv")
+        if path is None or _sha256_file(path) != digest:
+            digest_mismatches[product] = digest
     if digest_mismatches:
         return [
             _finding(

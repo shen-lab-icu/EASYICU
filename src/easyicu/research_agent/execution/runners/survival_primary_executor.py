@@ -16,7 +16,7 @@ import json
 import math
 import os
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
@@ -31,6 +31,9 @@ from ...contracts.model_terms import (
 from ...contracts.model_tokens import (
     SURVIVAL_COX_ESTIMATOR,
     SURVIVAL_PH_DIAGNOSTIC,
+)
+from ...contracts.survival import (
+    CIF_PRODUCT, FINE_GRAY_PRODUCT, GRAY_PRODUCT, LOGRANK_PRODUCT, validate_competing_event,
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...contracts.survival_execution import (
@@ -51,6 +54,115 @@ from ..model_matrix import ModelTermCompilationError, compile_model_terms
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import read_frame, sha256_file
 
+
+def logrank_by_group(durations, events, groups) -> Any:
+    """Use lifelines for inference; accumulate expected events at tied risk sets.
+
+    Follow-up and administrative censoring must already be closed by the owner.
+    At each event time, expected group events are d(t) Y_g(t) / Y(t).
+    All subjects censored at that time remain in its risk set.
+    """
+    import numpy as np
+    import pandas as pd
+    from lifelines.statistics import logrank_test, multivariate_logrank_test
+
+    t, e, g = np.asarray(durations, float), np.asarray(events, float), np.asarray(groups)
+    if any(v.ndim != 1 for v in (t, e, g)) or not (len(t) == len(e) == len(g)):
+        raise ValueError("log-rank requires equally sized one-dimensional vectors")
+    if not len(t) or not np.isfinite(t).all() or (t < 0).any():
+        raise ValueError("log-rank requires finite nonnegative follow-up")
+    if not np.isin(e, [0, 1]).all() or not e.sum() or pd.isna(g).any():
+        raise ValueError("log-rank requires binary events, observed events and complete groups")
+    labels = sorted(set(g), key=repr)
+    if len(labels) < 2:
+        raise ValueError("log-rank requires at least two observed groups")
+    if len(labels) == 2:
+        a, b = g == labels[0], g == labels[1]
+        test = logrank_test(t[a], t[b], event_observed_A=e[a], event_observed_B=e[b])
+        method = "lifelines_logrank_test"
+    else:
+        test = multivariate_logrank_test(t, g, e)
+        method = "lifelines_multivariate_logrank_test"
+    if not np.isfinite([test.test_statistic, test.p_value]).all():
+        raise ValueError("log-rank returned nonfinite inference")
+    exits = pd.crosstab(t, g).reindex(columns=labels, fill_value=0).sort_index()
+    risk = exits.iloc[::-1].cumsum().iloc[::-1]
+    failures = pd.crosstab(t[e == 1], g[e == 1]).reindex(
+        index=exits.index, columns=labels, fill_value=0,
+    )
+    expected = risk.mul(failures.sum(axis=1) / risk.sum(axis=1), axis=0).sum()
+    return pd.DataFrame({
+        "group": labels, "n": exits.sum().to_numpy(),
+        "observed_events": failures.sum().to_numpy(),
+        "expected_events": expected.to_numpy(),
+        "statistic": float(test.test_statistic), "df": len(labels) - 1,
+        "p_value": float(test.p_value), "method": method,
+    })
+
+
+CAUSE_SPECIFIC_QUESTION = "Instantaneous event rate among subjects still event-free."
+SUBDISTRIBUTION_QUESTION = "Association with cumulative incidence in the presence of the competing event."
+
+
+@dataclass(frozen=True)
+class SurvivalGroupProducts:
+    tables: dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+def survival_group_products(
+    analysis: Any, *, time_column: str, event_column: str,
+    groups: Any, design_columns: list[str], competing: bool, discrete: bool,
+) -> SurvivalGroupProducts:
+    """Never choose a grouping cutpoint or reinterpret competing events as censoring."""
+    import pandas as pd
+
+    if not discrete:
+        if competing:
+            raise ValueError("competing-risk group comparisons require declared discrete exposure levels")
+        return SurvivalGroupProducts(details={"logrank_status": "not_applicable_continuous_exposure"})
+    time, events = analysis[time_column], analysis[event_column]
+    if not competing:
+        return SurvivalGroupProducts({LOGRANK_PRODUCT: logrank_by_group(time, events, groups)})
+    from ...methods.competing_risks import estimate_cif, fit_fine_gray
+    from ...methods.gray_test import gray_test
+
+    curves = []
+    for group in sorted(groups.unique(), key=repr):
+        mask = groups.eq(group)
+        if events[mask].eq(1).any():
+            cif = estimate_cif(time[mask], events[mask], event_of_interest=1, random_state=0)
+            knots, values = cif.times, cif.cif
+        else:
+            # No observed target event in this group: its empirical CIF is zero.
+            # The shared kernel deliberately refuses that special case.
+            knots = sorted({0.0, *time[mask].tolist()})
+            values = [0.0] * len(knots)
+        curves.append(pd.DataFrame({
+            "group": group, "time": knots, "cumulative_incidence": values,
+            "n": int(mask.sum()), "n_events": int(events[mask].eq(1).sum()),
+            "n_competing": int(events[mask].eq(2).sum()), "method": "aalen_johansen_lifelines",
+        }))
+    gray = gray_test(time, events, groups)
+    fg = fit_fine_gray(analysis, duration_col=time_column, event_col=event_column,
+                       covariates=design_columns)
+    estimates = fg.estimates.assign(
+        estimand="subdistribution_hazard_ratio", estimand_question=SUBDISTRIBUTION_QUESTION,
+        n_analysis_rows=len(analysis), n_events=int(events.eq(1).sum()),
+    )
+    return SurvivalGroupProducts(
+        tables={CIF_PRODUCT: pd.concat(curves, ignore_index=True),
+                GRAY_PRODUCT: pd.DataFrame([{
+                    "statistic": gray.statistic, "df": gray.df, "p_value": gray.p_value,
+                    "n": gray.n, "n_events": gray.n_interest, "n_competing": gray.n_competing,
+                    "method": gray.method, "claim_ceiling": gray.claim_ceiling,
+                    "censoring_weights": "pooled",
+                }]), FINE_GRAY_PRODUCT: estimates},
+        details={"fine_gray": fg.receipt, "gray_claim_ceiling": gray.claim_ceiling,
+                 "logrank_status": "replaced_by_gray_for_competing_events",
+                 "cause_specific_question": CAUSE_SPECIFIC_QUESTION,
+                 "subdistribution_question": SUBDISTRIBUTION_QUESTION},
+    )
 
 _RESULT_FILENAME = "survival_effect_estimates.csv"
 _PH_FILENAME = "survival_ph_diagnostic.csv"
@@ -138,6 +250,8 @@ def survival_primary_executor_scaffold(
         "event_definition": requirement.event_definition,
         "censoring_strategy": requirement.censoring_strategy,
         "competing_risk_strategy": requirement.competing_risk_strategy,
+        "competing_event_value": requirement.competing_event_value,
+        "competing_event_definition": requirement.competing_event_definition,
         "time_horizon": requirement.time_horizon,
         "time_horizon_value": requirement.time_horizon_value,
         "estimator": requirement.estimator,
@@ -332,12 +446,21 @@ def run_survival_primary(
     ph_diagnostic: str,
     ph_alpha: float,
     ph_policy: str,
+    competing_event_value: int | None = None,
+    competing_event_definition: str | None = None,
     emit_step_summary: bool = True,
 ) -> Dict[str, Any]:
     """Fit, diagnose and receipt-bind the exact Planner-declared Cox model."""
 
     import pandas as pd
 
+    try:
+        competing = validate_competing_event(
+            competing_risk_strategy, event_value,
+            competing_event_value, competing_event_definition,
+        )
+    except ValueError as exc:
+        raise SurvivalPrimaryExecutionError("survival_competing_declaration_invalid", str(exc)) from exc
     input_path = Path(input_path)
     if sha256_file(input_path) != input_sha256:
         raise SurvivalPrimaryExecutionError(
@@ -460,10 +583,11 @@ def run_survival_primary(
             "Event codes must be integral",
         )
     observed_codes = set(event_codes.astype(int).unique().tolist())
-    if not observed_codes.issubset({0, int(event_value)}):
+    allowed_codes = {0, int(event_value)} | ({competing_event_value} if competing else set())
+    if not observed_codes.issubset(allowed_codes):
         raise SurvivalPrimaryExecutionError(
             "survival_event_code_unexpected",
-            "Observed event codes do not match the declared binary endpoint",
+            "Observed event codes do not match the declared endpoint",
         )
     if analysis[exposure_design_column].nunique(dropna=True) < 2:
         raise SurvivalPrimaryExecutionError(
@@ -476,6 +600,15 @@ def run_survival_primary(
     analysis[event_column] = (
         event_codes.eq(int(event_value)) & ~censored_at_horizon
     ).astype(int)
+    competing_analysis = analysis.copy()
+    if competing:
+        competing_rows = event_codes.eq(competing_event_value) & ~censored_at_horizon
+        if not competing_rows.any():
+            raise SurvivalPrimaryExecutionError(
+                "survival_competing_event_absent",
+                "No declared competing event remains in the complete-case horizon cohort",
+            )
+        competing_analysis.loc[competing_rows, event_column] = 2
     n_events = int(analysis[event_column].sum())
     if n_events < 2:
         raise SurvivalPrimaryExecutionError(
@@ -569,7 +702,19 @@ def run_survival_primary(
     ph_table["ph_decision_rule"] = "exposure_or_global"
     ph_table["ph_status"] = ph_status
     ph_table["paper_authorization_allowed"] = paper_authorization_allowed
+    ph_table["estimand"] = "cause_specific_hazard_ratio" if competing else "hazard_ratio"
 
+    try:
+        supplements = survival_group_products(
+            competing_analysis, time_column=time_column, event_column=event_column,
+            groups=source.loc[analysis.index, exposure].astype(str),
+            design_columns=list(compiled.design.columns), competing=competing,
+            discrete=exposure_term.coding != "continuous",
+        )
+    except ValueError as exc:
+        raise SurvivalPrimaryExecutionError(
+            getattr(exc, "code", "survival_group_comparison_failed"), str(exc),
+        ) from exc
     out_dir = Path(os.environ["STEP_OUT_DIR"])
     out_dir.mkdir(parents=True, exist_ok=True)
     result_path = out_dir / _RESULT_FILENAME
@@ -588,12 +733,36 @@ def run_survival_primary(
         "formula": formula,
         "covariates": ";".join(adjustment),
         "exposure_design_column": exposure_design_column,
+        "estimand": "cause_specific_hazard_ratio" if competing else "hazard_ratio",
+        "estimand_question": CAUSE_SPECIFIC_QUESTION,
+        "competing_event_definition": competing_event_definition,
     }
+    if competing:
+        fine_gray = supplements.tables[FINE_GRAY_PRODUCT].set_index("term").loc[exposure_design_column]
+        result_row.update({
+            "subdistribution_hazard_ratio": float(fine_gray.hazard_ratio),
+            "subdistribution_ci_low": float(fine_gray.ci_low),
+            "subdistribution_ci_high": float(fine_gray.ci_high),
+            "subdistribution_p_value": float(fine_gray.p_value),
+            "subdistribution_question": SUBDISTRIBUTION_QUESTION,
+        })
     pd.DataFrame([result_row]).to_csv(result_path, index=False)
     result_sha256 = sha256_file(result_path)
     ph_path = out_dir / _PH_FILENAME
     ph_table.to_csv(ph_path, index=False)
     ph_sha256 = sha256_file(ph_path)
+    supplementary_files, supplementary_sha256 = {}, {}
+    for product, table in supplements.tables.items():
+        path = out_dir / (product.partition(":")[2] + ".csv")
+        table.to_csv(path, index=False)
+        supplementary_files[product] = path.name
+        supplementary_sha256[product] = sha256_file(path)
+    package_versions = _package_versions()
+    if competing:
+        package_versions.update({
+            "R": supplements.details["fine_gray"]["r_version"],
+            "R:survival": supplements.details["fine_gray"]["survival_version"],
+        })
     applied_filter = canonical_survival_applied_filter(
         time_column=time_column,
         event_column=event_column,
@@ -634,6 +803,10 @@ def run_survival_primary(
         event_definition=event_definition,
         censoring_strategy=censoring_strategy,
         competing_risk_strategy=competing_risk_strategy,
+        competing_event_value=competing_event_value,
+        competing_event_definition=competing_event_definition,
+        supplementary_sha256=supplementary_sha256,
+        competing_analysis_frame_sha256=_canonical_frame_sha256(competing_analysis) if competing else None,
         time_horizon=time_horizon,
         time_horizon_value=time_horizon_value,
         estimator=estimator,
@@ -644,7 +817,7 @@ def run_survival_primary(
         design_columns=list(compiled.design.columns),
         exposure_design_column=exposure_design_column,
         applied_filter=applied_filter,
-        package_versions=_package_versions(),
+        package_versions=package_versions,
         proportional_hazards_diagnostic=ph_diagnostic,
         proportional_hazards_tested=True,
         proportional_hazards_p_value=global_p,
@@ -701,10 +874,16 @@ def run_survival_primary(
         "proportional_hazards_policy": ph_policy,
         "proportional_hazards_status": ph_status,
         "paper_authorization_allowed": paper_authorization_allowed,
+        "estimand": result_row["estimand"],
+        "estimand_question": CAUSE_SPECIFIC_QUESTION,
+        "competing_event_value": competing_event_value,
+        "competing_event_definition": competing_event_definition,
+        "survival_group_comparisons": supplements.details,
         "output_files": {
             result_product: result_path.name,
             SURVIVAL_PH_DIAGNOSTIC_PRODUCT: ph_path.name,
             SURVIVAL_ANALYSIS_RECEIPT_PRODUCT: receipt_path.name,
+            **supplementary_files,
         },
     }
     if not emit_step_summary:

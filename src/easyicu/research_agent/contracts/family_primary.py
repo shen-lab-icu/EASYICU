@@ -12,6 +12,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .model_terms import ModelTermSpec, validate_model_term_roster
+from .survival import validate_competing_event
 from .model_tokens import (
     SURVIVAL_COX_ESTIMATOR,
     SURVIVAL_PH_DIAGNOSTIC,
@@ -45,6 +46,8 @@ class FamilyPrimaryResultRequirement(BaseModel):
     event_definition: Optional[str] = None
     censoring_strategy: Optional[str] = None
     competing_risk_strategy: Optional[str] = None
+    competing_event_value: Optional[int] = Field(default=None, strict=True, gt=0)
+    competing_event_definition: Optional[str] = Field(default=None, min_length=1)
     time_horizon: Optional[str] = None
     effect_measure: Optional[str] = None
     proportional_hazards_diagnostic: Optional[str] = None
@@ -150,6 +153,10 @@ class FamilyPrimaryResultRequirement(BaseModel):
                     "causal primary-result contract requires " + ", ".join(missing)
                 )
         else:
+            validate_competing_event(
+                self.competing_risk_strategy, self.event_value,
+                self.competing_event_value, self.competing_event_definition,
+            )
             if self.model_terms is not None:
                 _, adjustment_terms = validate_model_term_roster(
                     terms=self.model_terms,

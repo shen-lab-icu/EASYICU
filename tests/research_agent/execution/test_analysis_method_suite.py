@@ -178,23 +178,20 @@ def test_deterministic_primary_runner_agrees_with_capability_registry():
             )
 
 
-def test_competing_risks_exposes_cif_without_claiming_fine_gray_regression():
-    # The reviewed Aalen-Johansen/Gray kernels may now support an analysis-only
-    # secondary action.  That promotion must not silently claim a Fine-Gray
-    # regression or allow a cause-naive Cox model to stand in for the CIF.
+def test_competing_risks_exposes_the_declared_survival_owner():
     survival = ams.get_suite("time_to_event")
     assert survival is not None
     cif = next(m for m in survival.methods if m.key == "competing_risks_cif")
     assert cif.tier == "standard_supporting"
-    assert cif.implementation == "llm_coded"
-    assert cif.runner is None
+    assert cif.implementation == "deterministic"
+    assert cif.runner == "survival_primary_cox"
     assert cif.kernel_modules == ("competing_risks", "gray_test")
-    assert "fine-gray" in cif.notes.lower()
-    assert "do not fit" in cif.notes.lower()
+    assert "survival::finegray+coxph" in cif.notes.lower()
+    assert "competing_event_value" in cif.notes
     assert "cause-naive cox" in cif.notes.lower()
     assert any(
         "fine-gray" in name.lower() for name, _why in cr.KNOWN_UNSUPPORTED_ESTIMANDS
-    ), "primary/reportable Fine-Gray authority must remain explicitly unsupported"
+    ), "unsupported extended Fine-Gray risk processes must remain explicit"
 
 
 def test_trajectory_is_present_and_not_mislabelled_lcga():

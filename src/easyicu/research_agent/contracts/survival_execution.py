@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 from .model_terms import validate_model_term_roster
+from .survival import survival_supplement_products, validate_competing_event
 from .model_tokens import (
     SURVIVAL_COX_ESTIMATOR,
     SURVIVAL_PH_DIAGNOSTIC,
@@ -43,7 +44,7 @@ def survival_execution_verdict(
         SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
         SURVIVAL_PH_DIAGNOSTIC_PRODUCT,
     }
-    if set(expected_outputs or ()) != expected:
+    if set(expected_outputs or ()) - survival_supplement_products(requirement) != expected:
         return OwnershipVerdict.wrong_shape(
             SURVIVAL_PRIMARY_ANALYSIS_KIND,
             reason=(
@@ -78,10 +79,13 @@ def survival_execution_verdict(
         "wald_95_ci",
     }:
         unsupported.append("uncertainty_method")
-    if normalise_model_contract_token(requirement.competing_risk_strategy) not in {
-        "none",
-        "no_competing_risk",
-    }:
+    try:
+        competing = validate_competing_event(
+            requirement.competing_risk_strategy, requirement.event_value,
+            requirement.competing_event_value, requirement.competing_event_definition,
+        )
+    except ValueError:
+        competing = False
         unsupported.append("competing_risk_strategy")
     if requirement.proportional_hazards_diagnostic != SURVIVAL_PH_DIAGNOSTIC:
         unsupported.append("proportional_hazards_diagnostic")
@@ -113,6 +117,8 @@ def survival_execution_verdict(
     else:
         if exposure_term.coding == "categorical":
             unsupported.append("categorical_exposure_product_shape")
+        if competing and exposure_term.coding == "continuous":
+            unsupported.append("competing_risk_group_declaration")
     if unsupported:
         return OwnershipVerdict.wrong_shape(
             SURVIVAL_PRIMARY_ANALYSIS_KIND,

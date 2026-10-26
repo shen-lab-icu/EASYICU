@@ -1,4 +1,4 @@
-"""Cumulative incidence (CIF) under competing risks (analysis only).
+"""Cumulative incidence and baseline Fine-Gray regression under competing risks.
 
 With competing events (e.g. death from another cause precludes the event of
 interest), ``1 - Kaplan-Meier`` overestimates the absolute risk of the event
@@ -23,6 +23,10 @@ deliberately provides **no Gray test**: lifelines 0.30 ships none, and this
 kernel will not impersonate one. Any hypothesis test over CIF curves needs a
 separately validated implementation.
 
+``fit_fine_gray`` uses local R ``survival::finegray`` and weighted ``coxph``
+with subject-clustered sandwich SEs. It consumes a closed 0/1/2 endpoint and
+baseline covariates; the caller owns the cohort and administrative horizon.
+
 Fail-closed validation: length mismatch, non-finite or negative durations,
 non-integral or negative event codes, an unobserved ``event_of_interest``,
 or anything other than exactly two groups for the comparison all raise
@@ -42,10 +46,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Sequence, Tuple
 import warnings
+import shutil
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from lifelines import AalenJohansenFitter
+
+from ..r_runtime import run_rscript
 
 
 @dataclass(frozen=True)
@@ -355,8 +364,120 @@ def cif_difference(
 
 
 __all__ = [
+    "fit_fine_gray",
+    "FineGrayFit",
+    "FineGrayError",
     "CIFDifferenceResult",
     "CIFResult",
     "cif_difference",
     "estimate_cif",
 ]
+
+
+_FINE_GRAY_RSCRIPT = r'''
+suppressPackageStartupMessages(library(survival))
+args <- commandArgs(trailingOnly=TRUE)
+d <- read.csv(args[1], check.names=FALSE)
+terms <- grep("^easyicu_cov_", names(d), value=TRUE)
+d$easyicu_status <- factor(d$easyicu_event, levels=0:2,
+                          labels=c("censor", "interest", "competing"))
+fit <- withCallingHandlers({
+  expanded <- finegray(as.formula(paste(
+    "Surv(easyicu_time, easyicu_status) ~",
+    paste(c(terms, "easyicu_id"), collapse=" + ")
+  )), data=d, etype="interest")
+  coxph(as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~",
+                         paste(terms, collapse=" + "))),
+        data=expanded, weights=fgwt, cluster=easyicu_id, robust=TRUE,
+        ties="efron", singular.ok=FALSE)
+}, warning=function(w) {
+  stop(paste("EASYICU_FINE_GRAY_WARNING:", conditionMessage(w)), call.=FALSE)
+})
+s <- summary(fit)$coefficients
+if (!"robust se" %in% colnames(s)) stop("robust covariance unavailable")
+write.csv(data.frame(term=rownames(s), coefficient=s[,"coef"],
+                    standard_error=s[,"robust se"], p_value=s[,"Pr(>|z|)"],
+                    r_version=as.character(getRversion()),
+                    survival_version=as.character(packageVersion("survival"))),
+          args[2], row.names=FALSE)
+'''
+
+
+class FineGrayError(ValueError):
+    """The declared subdistribution model cannot be fitted reportably."""
+
+    def __init__(self, message: str, *, code: str = "fine_gray_input_invalid"):
+        self.code = code
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class FineGrayFit:
+    estimates: pd.DataFrame
+    receipt: dict[str, Any]
+
+
+def fit_fine_gray(
+    frame: pd.DataFrame, *, duration_col: str, event_col: str, covariates: Sequence[str],
+) -> FineGrayFit:
+    """Fit cause 1 vs cause 2 on complete numeric, baseline covariates.
+
+    Each original row is one subject. Sandwich SEs cluster the expanded rows
+    by that subject; censoring weights are pooled across subjects. The caller
+    owns event recoding, horizon, and the complete-case population.
+    """
+    columns = list(covariates)
+    required = [duration_col, event_col, *columns]
+    if not columns or len(set(required)) != len(required) or not set(required) <= set(frame):
+        raise FineGrayError("Fine-Gray requires distinct declared time, event and model columns")
+    values = frame[required].apply(pd.to_numeric, errors="raise")
+    if values.empty or not np.isfinite(values.to_numpy()).all():
+        raise FineGrayError("Fine-Gray requires complete finite input")
+    if (values[duration_col] <= 0).any() or not values[event_col].isin([0, 1, 2]).all():
+        raise FineGrayError("Fine-Gray requires positive time and 0/1/2 event codes")
+    if not {1, 2} <= set(values[event_col]):
+        raise FineGrayError("Fine-Gray requires observed interest and competing events")
+    rscript = shutil.which("Rscript")
+    if rscript is None:
+        raise FineGrayError("local Rscript is unavailable", code="fine_gray_runtime_unavailable")
+    mapping = {f"easyicu_cov_{i}": name for i, name in enumerate(columns)}
+    local = pd.DataFrame({
+        "easyicu_id": np.arange(len(values)),
+        "easyicu_time": values[duration_col].to_numpy(),
+        "easyicu_event": values[event_col].to_numpy(),
+        **{alias: values[name].to_numpy() for alias, name in mapping.items()},
+    })
+    with tempfile.TemporaryDirectory(prefix="easyicu-fine-gray-") as directory:
+        root = Path(directory)
+        local.to_csv(root / "input.csv", index=False)
+        completed = run_rscript(
+            rscript=rscript, script=_FINE_GRAY_RSCRIPT,
+            args=[str(root / "input.csv"), str(root / "estimates.csv")], timeout_s=60,
+        )
+        if completed.timed_out:
+            raise FineGrayError("Fine-Gray fit timed out", code="fine_gray_fit_timeout")
+        if "EASYICU_FINE_GRAY_WARNING:" in completed.stderr:
+            raise FineGrayError("Fine-Gray fit emitted a warning", code="fine_gray_fit_warning")
+        if completed.returncode != 0 or not (root / "estimates.csv").is_file():
+            raise FineGrayError("Fine-Gray fit failed", code="fine_gray_fit_failed")
+        result = pd.read_csv(root / "estimates.csv")
+    required_result = {"term", "coefficient", "standard_error", "p_value", "r_version", "survival_version"}
+    if not required_result <= set(result) or result.term.tolist() != list(mapping):
+        raise FineGrayError("Fine-Gray coefficient roster mismatch", code="fine_gray_result_invalid")
+    result["hazard_ratio"] = np.exp(result.coefficient)
+    result["ci_low"] = np.exp(result.coefficient - 1.959963984540054 * result.standard_error)
+    result["ci_high"] = np.exp(result.coefficient + 1.959963984540054 * result.standard_error)
+    numeric = result[["coefficient", "standard_error", "hazard_ratio", "ci_low", "ci_high", "p_value"]]
+    if (not np.isfinite(numeric.to_numpy()).all() or (result.standard_error <= 0).any()
+            or (result.ci_low <= 0).any() or not result.p_value.between(0, 1).all()):
+        raise FineGrayError("Fine-Gray returned invalid inference", code="fine_gray_result_invalid")
+    receipt = {
+        "method": "survival::finegray+coxph", "ties": "efron",
+        "variance_estimator": "subject_cluster_robust", "censoring_weights": "pooled",
+        "n": len(values), "n_events": int(values[event_col].eq(1).sum()),
+        "r_version": str(result.r_version.iloc[0]),
+        "survival_version": str(result.survival_version.iloc[0]),
+        "proportional_subdistribution_hazards_tested": False,
+    }
+    result["term"] = result.term.map(mapping)
+    return FineGrayFit(result.drop(columns=["r_version", "survival_version"]), receipt)

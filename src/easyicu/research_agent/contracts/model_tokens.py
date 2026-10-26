@@ -10,6 +10,7 @@ ADJUSTED_ASSOCIATION_ANALYSIS_KIND = "adjusted_association_estimates"
 ASSOCIATION_LOGIT_ESTIMATOR = "statsmodels_logit_mle"
 ASSOCIATION_GLM_BINOMIAL_ESTIMATOR = "statsmodels_glm_binomial"
 ASSOCIATION_OLS_ESTIMATOR = "statsmodels_ols"
+ASSOCIATION_RR_ESTIMATOR = "statsmodels_glm_poisson_log_robust"
 SURVIVAL_COX_ESTIMATOR = "cox_proportional_hazards"
 SURVIVAL_PH_DIAGNOSTIC = "schoenfeld_per_covariate_with_bonferroni_summary"
 
@@ -35,6 +36,8 @@ _ASSOCIATION_METHOD_ALIASES = {
     "ordinary_least_squares": ASSOCIATION_OLS_ESTIMATOR,
     "ols": ASSOCIATION_OLS_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR: ASSOCIATION_OLS_ESTIMATOR,
+    "modified_poisson": ASSOCIATION_RR_ESTIMATOR,
+    ASSOCIATION_RR_ESTIMATOR: ASSOCIATION_RR_ESTIMATOR,
     "quantile_regression": "statsmodels_quantreg",
     "median_quantile_regression": "statsmodels_quantreg_median_vcov_robust",
     "statsmodels_quantreg": "statsmodels_quantreg",
@@ -99,6 +102,7 @@ __all__ = [
     "ASSOCIATION_GLM_BINOMIAL_ESTIMATOR",
     "ASSOCIATION_LOGIT_ESTIMATOR",
     "ASSOCIATION_OLS_ESTIMATOR",
+    "ASSOCIATION_RR_ESTIMATOR",
     "SURVIVAL_COX_ESTIMATOR",
     "SURVIVAL_PH_DIAGNOSTIC",
     "canonical_association_method",

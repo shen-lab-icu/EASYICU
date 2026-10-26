@@ -100,6 +100,7 @@ def test_adapter_contracts_project_into_the_planner_action_surface() -> None:
         if action.adapter_status == "supporting_only"
     }
     assert support_only == {
+        "time_to_event.competing_risks_cif",
         "association.multiple_testing",
         "association.evalue",
         # The signed baseline family owns this supporting interaction analysis.

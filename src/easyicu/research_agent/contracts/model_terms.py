@@ -16,6 +16,7 @@ from .model_tokens import (
     ASSOCIATION_GLM_BINOMIAL_ESTIMATOR,
     ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
+    ASSOCIATION_RR_ESTIMATOR,
     canonical_association_method as _canonical_association_method,
     normalise_model_contract_token as _normalise_model_contract_token,
 )
@@ -235,6 +236,7 @@ ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES = frozenset(
     {
         ASSOCIATION_LOGIT_ESTIMATOR,
         ASSOCIATION_GLM_BINOMIAL_ESTIMATOR,
+        ASSOCIATION_RR_ESTIMATOR,
     }
 )
 ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES = frozenset(
@@ -492,7 +494,7 @@ class PlannedModelRequirement(BaseModel):
         method_family = _normalise_model_contract_token(self.method_family)
         if method_family not in supported:
             raise ValueError(
-                "model_requirements currently support only binary logistic "
+                "model_requirements currently support only binary logistic/modified-Poisson "
                 "or continuous linear/quantile adjusted-association families; "
                 f"outcome_type={self.outcome_type!r} is incompatible with "
                 f"method_family={self.method_family!r}"
