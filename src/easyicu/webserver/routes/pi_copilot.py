@@ -12,6 +12,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints, field_validator, model_validator
 
 from easyicu.databases.profiles import iter_database_profiles
+from easyicu.extensions.skill_attachments import AttachedSkills
 from easyicu.webserver.pi_copilot import get_pi_copilot_service
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.pi_copilot.contracts import (
@@ -31,9 +32,11 @@ from easyicu.webserver.pi_copilot.provider_config import (
 from easyicu.webserver import codex_account_sessions
 from easyicu.webserver.pi_copilot import openrouter_login
 from .research_append import router as append_router
+from .skill_attachments import router as skill_router
 
 router = APIRouter()
 router.include_router(append_router)
+router.include_router(skill_router)
 
 ShortText = Annotated[
     str,
@@ -241,6 +244,7 @@ class PiMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     queue_if_busy: StrictBool = False
+    attached_skills: AttachedSkills | None = None
 
     project_id: ShortText
     message: MessageText
@@ -1154,6 +1158,7 @@ def post_pi_copilot_message(session_id: ShortText, body: PiMessageRequest) -> di
             idea_source=(body.idea_source.model_dump() if body.idea_source else None),
             message_origin=body.message_origin,
             queue_if_busy=body.queue_if_busy,
+            attached_skills=body.attached_skills,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

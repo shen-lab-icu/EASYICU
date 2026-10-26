@@ -441,6 +441,9 @@ def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
             "confirmations",
         )
     }
+    from easyicu.extensions.skill_attachments import attachment_payload
+
+    configuration["attached_skills"] = attachment_payload(study.get("attached_skills") or [])
     for field in (
         "crossdb_selection",
         "covariate_rationales",

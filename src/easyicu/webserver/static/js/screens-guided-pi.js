@@ -728,6 +728,13 @@
       if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
       state.session = payload.session; state.messages = transcriptMessages(state.session);
       STUDY_WORKSPACE.applyHubIntent(expectedProjectId, state.session);
+      const hubAttachment = STUDY_WORKSPACE.takeHubAttachment(expectedProjectId, state.session);
+      const attachOwner = MODULES.optional('skillAttach');
+      if (hubAttachment && attachOwner) {
+        const session = state.session;
+        void attachOwner.toggle(expectedProjectId, session, hubAttachment.source, hubAttachment.id)
+          .then(() => { if (state.session === session) render(true); });
+      }
       state.agentMode = state.session.agent_mode || state.agentMode;
       hydrateProjectedJob(state.workflow && state.workflow.active_job);
       state.projectInitialization = null;
@@ -1396,6 +1403,8 @@
       });
       if (!isCurrent()) return;
       if (ideaSource && IDEA_SOURCE) IDEA_SOURCE.consume();
+      // The host consumed the attached-Skill draft with this message.
+      if (visibleUserMessage && state.session && Array.isArray(state.session.draft_attached_skills)) state.session.draft_attached_skills = [];
       state.pendingEntryIntent = '';
       state.jobId = payload.job_id; watchJob(payload.job_id);
     } catch (error) {

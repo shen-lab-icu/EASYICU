@@ -9,6 +9,9 @@
     let skill = null;
     let builder = null;
     let method = null;
+    let hubAttachment = null;
+    // Skills attached as typed identities (sk2); without the owner, the older prose path stays.
+    const attachOwner = () => window.EasyICU.guidedPi.optional('skillAttach');
     let skillPicker = { context: '', open: false, query: '', catalog: 'skills', category: 'all', focused: false };
     const contextKey = (projectId, sessionId) => JSON.stringify([projectId, sessionId]);
     const materialKey = resource => JSON.stringify([resource.kind, resource.run_id, resource.artifact, resource.sha256]);
@@ -121,8 +124,8 @@
         <label class="gpi-composer-drawer-search"><span aria-hidden="true">⌕</span><input type="search" data-gpi-skill-search aria-label="${tr('Search Skills', '搜索技能')}" placeholder="${tr('Search Skills and methods…', '搜索技能与方法……')}" value="${esc(skillPicker.query)}" autocomplete="off"></label>
         <div class="gpi-composer-drawer-tabs" role="tablist"><button type="button" role="tab" data-gpi-skill-catalog="skills" aria-selected="${skillPicker.catalog === 'skills'}">${tr('Skills', '技能')} <span>${methodSkills().length + frozen.length}</span></button><button type="button" role="tab" data-gpi-skill-catalog="methods" aria-selected="${skillPicker.catalog === 'methods'}">${tr('Method library', '方法库')} <span>${methodComponents().length}</span></button></div>
         <div class="gpi-composer-drawer-body"><nav aria-label="${tr('Skill categories', '技能分类')}"><button type="button" data-gpi-skill-category="all" aria-pressed="${skillPicker.category === 'all'}">${tr('All', '全部')}</button>${categories.map(category => `<button type="button" data-gpi-skill-category="${esc(category)}" aria-pressed="${skillPicker.category === category}">${esc(category)}</button>`).join('')}</nav>
-          <div class="gpi-composer-drawer-list">${rows.map(row => `<button type="button" class="gpi-composer-drawer-row" data-gpi-skill-row data-gpi-skill-kind="${esc(row.kind)}" data-gpi-skill-id="${esc(row.id)}" data-gpi-skill-name="${esc(row.name || '')}" data-gpi-skill-digest="${esc(row.digest || '')}" data-gpi-skill-category-value="${esc(row.category || '')}" data-gpi-skill-search-text="${esc(`${row.title} ${row.description || ''} ${row.category || ''}`.toLowerCase())}" ${row.kind === 'frozen_skill' ? `data-gpi-skill-select="${esc(row.name)}" aria-pressed="${Boolean(selected && selected.name === row.name)}"` : 'data-gpi-catalog-select'}><strong>${esc(row.title)}</strong><span>${esc(row.description || row.category)}</span><small>${esc(row.category)}</small></button>`).join('')}<p data-gpi-skill-empty role="status" hidden>${tr('No matching Skills.', '没有匹配的技能。')}</p></div>
-        </div><footer><button type="button" data-gpi-skill-hub>${tr('Open the full Skill Hub', '打开完整技能目录')} →</button></footer>
+          <div class="gpi-composer-drawer-list">${rows.map(row => `<button type="button" class="gpi-composer-drawer-row" data-gpi-skill-row data-gpi-skill-kind="${esc(row.kind)}" data-gpi-skill-id="${esc(row.id)}" data-gpi-skill-name="${esc(row.name || '')}" data-gpi-skill-digest="${esc(row.digest || '')}" data-gpi-skill-category-value="${esc(row.category || '')}" data-gpi-skill-search-text="${esc(`${row.title} ${row.description || ''} ${row.category || ''}`.toLowerCase())}" ${attachOwner() && row.kind !== 'method_component' ? `data-gpi-attach-toggle="${row.kind === 'frozen_skill' ? `user:${esc(row.name)}` : `builtin:${esc(row.id)}`}" aria-pressed="${attachOwner().attached(session, row.kind === 'frozen_skill' ? 'user' : 'builtin', row.kind === 'frozen_skill' ? row.name : row.id)}"` : row.kind === 'frozen_skill' ? `data-gpi-skill-select="${esc(row.name)}" aria-pressed="${Boolean(selected && selected.name === row.name)}"` : 'data-gpi-catalog-select'}><strong>${esc(row.title)}</strong><span>${esc(row.description || row.category)}</span><small>${esc(row.category)}</small></button>`).join('')}<p data-gpi-skill-empty role="status" hidden>${tr('No matching Skills.', '没有匹配的技能。')}</p></div>
+        </div><footer><button type="button" data-gpi-skill-hub>${tr('Open the full Skill Hub', '打开完整技能目录')} →</button>${attachOwner() ? attachOwner().defaultsControl(projectId, session) : ''}</footer>
       </section>`;
     }
     function filterSkills(host, query) {
@@ -195,11 +198,19 @@
           window.sessionStorage.removeItem('easyicu.skillHub.builder');
         }
         const intent = JSON.parse(window.sessionStorage.getItem('easyicu.skillHub.use') || 'null');
-        if (intent && selectFrozenSkill(projectId, session, intent.name, intent.digest)) {
+        if (intent && session && attachOwner() && availableSkills(session).some(row => row.name === intent.name && row.digest === intent.digest)) {
+          hubAttachment = { context: contextKey(projectId, session.session_id), source: 'user', id: String(intent.name) };
+          window.sessionStorage.removeItem('easyicu.skillHub.use');
+        } else if (intent && selectFrozenSkill(projectId, session, intent.name, intent.digest)) {
           window.sessionStorage.removeItem('easyicu.skillHub.use');
         }
         const methodIntent = JSON.parse(window.sessionStorage.getItem('easyicu.skillHub.method') || 'null');
-        if (methodIntent && session && methodIntent.id && (methodIntent.capability_id || methodIntent.method_family)) {
+        if (methodIntent && session && attachOwner() && methodIntent.kind === 'method' && methodIntent.id) {
+          // The hub's task-starter sentence is no longer needed: the Skill itself is attached.
+          hubAttachment = { context: contextKey(projectId, session.session_id), source: 'builtin', id: String(methodIntent.id) };
+          window.sessionStorage.removeItem('easyicu.skillHub.method');
+          window.sessionStorage.removeItem('easyicu.skillHub.question');
+        } else if (methodIntent && session && methodIntent.id && (methodIntent.capability_id || methodIntent.method_family)) {
           method = { context: contextKey(projectId, session.session_id),
             id: String(methodIntent.id), title: String(methodIntent.title || methodIntent.id),
             kind: String(methodIntent.kind || 'method'),
@@ -211,6 +222,12 @@
           window.sessionStorage.removeItem('easyicu.skillHub.method');
         }
       } catch (_) { /* A malformed or unavailable browser store cannot change the frozen session. */ }
+    }
+    function takeHubAttachment(projectId, session) {
+      const pending = hubAttachment;
+      if (!pending || !session || pending.context !== contextKey(projectId, session.session_id)) return null;
+      hubAttachment = null;
+      return { source: pending.source, id: pending.id };
     }
     function hasHubIntent() {
       try { return Boolean(window.sessionStorage.getItem('easyicu.skillHub.use')
@@ -234,7 +251,8 @@
       const builderChip = currentBuilder ? `<div class="gpi-composer-skill gpi-builder-context" role="status">✧ <strong>${esc(currentBuilder.title)}</strong>${currentBuilder.name ? `<span>${esc(currentBuilder.name)}</span>` : ''}<button type="button" data-gpi-builder-hub>${tr('Skill Hub', '技能目录')} ↗</button><button type="button" data-gpi-builder-remove aria-label="${tr('Remove builder context', '移除技能开发上下文')}">×</button></div>` : '';
       const methodChip = currentMethod ? `<div class="gpi-composer-skill gpi-method-context" role="status"><span>${currentMethod.kind === 'method_component' ? tr('Component', '组件') : tr('Method', '方法')}</span><strong>${esc(currentMethod.title)}</strong><button type="button" data-gpi-method-remove aria-label="${tr('Remove method', '移除方法')}">×</button></div>` : '';
       const skillChip = selected ? `<div class="gpi-composer-skill" role="status">✧ <strong>${esc(selected.name)}</strong><button type="button" data-gpi-skill-remove aria-label="${tr('Remove Skill', '移除技能')}">×</button></div>` : '';
-      return builderChip + methodChip + skillChip;
+      const attachedChips = attachOwner() && session ? attachOwner().chips(session) : '';
+      return builderChip + methodChip + skillChip + attachedChips;
     }
     function decorateSkillMessage(text, projectId, session) {
       const selected = currentSkill(projectId, session);
@@ -521,7 +539,7 @@
     function consume(projectId, sessionId) { if (current(projectId, sessionId)) reference = null; }
     function removeReference() { reference = null; }
     return { sessionStatusLabel, compactSessionTime, capture, syncNavigation, messageView, openMaterials, renderMaterials, filterMaterials, setMaterialCategory, restoreMaterials, selectedMaterial, closeMaterials,
-      openSkills, renderSkillPicker, filterSkills, setSkillCatalog, setSkillCategory, selectCatalog, selectSkill, selectFrozenSkill, selectMethodTemplate, applyHubIntent, hasHubIntent, closeSkills, renderSkillReference, decorateSkillMessage, consumeSkill, removeSkill, removeBuilder, removeMethod, renderAccessMode,
+      openSkills, renderSkillPicker, filterSkills, setSkillCatalog, setSkillCategory, selectCatalog, selectSkill, selectFrozenSkill, selectMethodTemplate, applyHubIntent, takeHubAttachment, hasHubIntent, closeSkills, renderSkillReference, decorateSkillMessage, consumeSkill, removeSkill, removeBuilder, removeMethod, renderAccessMode,
       hasReference: (projectId, sessionId) => Boolean(current(projectId, sessionId)), canReference, setReference, renderReference, decorateMessage, consume, removeReference,
       isEmptyConversation };
   }

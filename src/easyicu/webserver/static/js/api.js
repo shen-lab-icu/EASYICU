@@ -60,6 +60,19 @@
     }
     return res.json();
   }
+  async function putJSON(path, body) {
+    const res = await fetch(path, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    if (!res.ok) {
+      let d = null;
+      try { const payload = await res.json(); d = payload && payload.detail; } catch (e) {}
+      throw apiError(path, res, d);
+    }
+    return res.json();
+  }
   async function postBlob(path, body) {
     const res = await fetch(path, {
       method: 'POST',
@@ -558,6 +571,19 @@
   function cancelPiCopilotFollowup(sessionId, itemId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/followups/' + encodeURIComponent(itemId) + '/cancel', body || {});
   }
+  // Skills attached to a conversation's next message, and a project's defaults.
+  function loadPiSessionSkills(sessionId, projectId) {
+    return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/skills?project_id=' + encodeURIComponent(projectId));
+  }
+  function setPiDraftSkills(sessionId, body) {
+    return putJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/draft-skills', body || {});
+  }
+  function loadProjectDefaultSkills(projectId) {
+    return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/default-skills');
+  }
+  function setProjectDefaultSkills(projectId, body) {
+    return putJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/default-skills', body || {});
+  }
   function sendPiCopilotMessage(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/message', body || {});
   }
@@ -889,6 +915,10 @@
   window.EU_API.saveGuidedProjectNotes = saveGuidedProjectNotes;
   window.EU_API.deleteEmptyPiCopilotSession = deleteEmptyPiCopilotSession;
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
+  window.EU_API.loadPiSessionSkills = loadPiSessionSkills;
+  window.EU_API.setPiDraftSkills = setPiDraftSkills;
+  window.EU_API.loadProjectDefaultSkills = loadProjectDefaultSkills;
+  window.EU_API.setProjectDefaultSkills = setProjectDefaultSkills;
   window.EU_API.loadPiCopilotFollowups = loadPiCopilotFollowups;
   window.EU_API.cancelPiCopilotFollowup = cancelPiCopilotFollowup;
   window.EU_API.confirmPiCopilotCohortEligibility = confirmPiCopilotCohortEligibility;

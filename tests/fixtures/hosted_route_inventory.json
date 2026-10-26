@@ -414,6 +414,33 @@
   },
   {
     "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/default-skills",
+    "fields": [
+      "path:project_id"
+    ],
+    "reaches": "SkillAttachmentService.project_default_skills -> initialized project binding",
+    "protection": "hosted.guard_request + project/session registry lookup; skill identities are bounded catalog keys, never client paths",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Server-owned session index and ProjectAuthorityStore active/archive paths under state_paths; lazy service initialization may reconcile session state. User Skills load only frozen content-addressed objects in ExtensionRegistry."
+  },
+  {
+    "method": "PUT",
+    "route": "/api/copilot/pi/projects/{project_id}/default-skills",
+    "fields": [
+      "path:project_id",
+      "body:attached_skills"
+    ],
+    "reaches": "SkillAttachmentService.project_default_skills -> initialized project + bounded catalog/digest validation -> ProjectAuthorityStore.set_default_skills",
+    "protection": "hosted.guard_request + project/session registry lookup; skill identities are bounded catalog keys, never client paths",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Server-owned session index and ProjectAuthorityStore active/archive paths under state_paths; lazy service initialization may reconcile session state. User Skills load only frozen content-addressed objects in ExtensionRegistry."
+  },
+  {
+    "method": "GET",
     "route": "/api/copilot/pi/projects/{project_id}/runs/{run_id}/artifacts/{artifact_name}",
     "fields": [
       "path:project_id",
@@ -769,6 +796,21 @@
     "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
   },
   {
+    "method": "PUT",
+    "route": "/api/copilot/pi/sessions/{session_id}/draft-skills",
+    "fields": [
+      "path:session_id",
+      "body:project_id",
+      "body:attached_skills"
+    ],
+    "reaches": "SkillAttachmentService.set_draft_skills -> scoped session + bounded catalog/digest validation + session record",
+    "protection": "hosted.guard_request + project/session registry lookup; skill identities are bounded catalog keys, never client paths",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Server-owned session index and ProjectAuthorityStore active/archive paths under state_paths; lazy service initialization may reconcile session state. User Skills load only frozen content-addressed objects in ExtensionRegistry."
+  },
+  {
     "method": "GET",
     "route": "/api/copilot/pi/sessions/{session_id}/followups",
     "fields": [
@@ -796,6 +838,37 @@
     "guarded_errors": {},
     "writes": "instance home",
     "write_owner": "FollowupQueue atomically replaces state_paths.state_root()/pi_copilot_sessions.followups.json via a temporary file in the same server-owned directory; project/session/item identifiers never select the destination."
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/runs/{run_id}/append-options",
+    "fields": [
+      "path:project_id",
+      "path:run_id"
+    ],
+    "reaches": "research_append_actions.append_options -> PiCopilotService._research_run_row -> resolve_result_source(recorded project run) -> compile_result_append per offered kind",
+    "protection": "hosted.guard_request + owner check: the project registry selects the run row before any read; run_id resolves only among that project's recorded runs and the sealed source",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "none",
+    "write_owner": "Read-only handler: compiles candidate additions in memory from the sealed source; no filesystem destination."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/append-run",
+    "fields": [
+      "path:session_id",
+      "body:project_id",
+      "body:run_id",
+      "body:kind",
+      "body:expected_source_sha256"
+    ],
+    "reaches": "research_append_actions.propose_for_conversation -> host_action_session scope -> study_contexts.get_context -> propose_append_run -> rebind_session",
+    "protection": "hosted.guard_request + owner check: host_action_session binds session, project and the sealed study; expected_source_sha256 must equal the sealed source digest; run_id is pattern-bounded and kind is a closed set",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Proposal receipts and locks under state_paths.state_root()/result-appends, named by a canonical digest of project, session, source digest and kind; the addition's run directory is created beside the source run inside that project's recorded run folder. Client values never choose a path."
   },
   {
     "method": "POST",
@@ -949,6 +1022,20 @@
     "protection": "owner check: typed project/session registry binding + ProjectWorkspace; source readers via dataio; fixed argv and reviewed runner grants",
     "writes": "instance home",
     "write_owner": "PiCopilotService state/index/replay and ProjectWorkspace use server-owned state_paths roots; session maintenance checks instance-only coordinates. Run artifacts use bound instance projects; literature receipts use the instance authority store."
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/sessions/{session_id}/skills",
+    "fields": [
+      "path:session_id",
+      "query:project_id"
+    ],
+    "reaches": "SkillAttachmentService.attachable_skills -> scoped session + builtin catalog + frozen extension activation",
+    "protection": "hosted.guard_request + project/session registry lookup; skill identities are bounded catalog keys, never client paths",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "Server-owned session index and ProjectAuthorityStore active/archive paths under state_paths; lazy service initialization may reconcile session state. User Skills load only frozen content-addressed objects in ExtensionRegistry."
   },
   {
     "method": "POST",

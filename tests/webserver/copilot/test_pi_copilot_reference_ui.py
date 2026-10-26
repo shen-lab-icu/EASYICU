@@ -1498,7 +1498,7 @@ def test_copilot_plus_menu_keeps_article_url_entry_in_the_conversation() -> None
     assert "if (requestedTab && capabilityTabs().some(([id]) => id === requestedTab)) {" in settings
     assert "return /(^|\\s)[@/]$/.test(text) ? text.slice(-1) : '';" in events
     assert "if (trigger === '@') STUDY_WORKSPACE.openMaterials(projectId(), state.session.session_id);" in events
-    assert "else STUDY_WORKSPACE.openSkills(projectId(), state.session);" in events
+    assert "else { STUDY_WORKSPACE.openSkills(projectId(), state.session); loadAttachable(); }" in events
     assert "event.target.value = event.target.value.slice(0, -1);" in events
     assert "!event.isComposing" in events
     assert payload["handled"] is True

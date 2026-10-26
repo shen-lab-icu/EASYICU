@@ -97,7 +97,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-header.js?v=20261021-help1" in index
     assert "js/screens-guided-pi-model-menu.js?v=20260923-keep-open1" in index
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
-    assert "css/guided-pi-workspace.css?v=20261021-entry-examples1" in index
+    assert "css/guided-pi-workspace.css?v=20261026-attach1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
     assert "js/screens-guided-pi-demo.js?v=20261026-fig2" in index
     assert "js/screens-guided-pi-demo-trace.js?v=20261026-demo3" in index
@@ -130,8 +130,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-provider-control.js") < index.index(
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
-    assert "js/screens-guided-pi-study-workspace.js?v=20261021-decision-records1" in index
-    assert "js/screens-guided-pi-events.js?v=20261026-append3" in index
+    assert "js/screens-guided-pi-study-workspace.js?v=20261026-attach1" in index
+    assert "js/screens-guided-pi-events.js?v=20261026-attach1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261026-dbnames1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
@@ -151,17 +151,18 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-confirmation.js?v=20261026-six2" in index
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-dbnames1" in index
+    assert "js/screens-guided-pi-skill-attach.js?v=20261026-attach1" in index
     assert "css/guided-pi-source-adjustments.css?v=20261026-six1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261024-demo-raw-plan1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261026-dbnames1" in index
-    assert "js/screens-guided-pi.js?v=20261026-walk1" in index
+    assert "js/screens-guided-pi.js?v=20261026-attach1" in index
     assert "js/screens-guided.js?v=20261022-legacy1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20261026-append2" in index
+    assert "js/api.js?v=20261026-attach1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -4864,6 +4865,7 @@ def test_pi_frontend_javascript_parses() -> None:
         "js/screens-guided-pi-workbench-preview.js",
         "js/screens-guided-pi-literature.js",
         "js/screens-guided-pi-source-adjustments.js",
+        "js/screens-guided-pi-skill-attach.js",
         "js/screens-guided-pi-markdown.js",
         "js/screens-guided-pi-next-actions.js",
         "js/screens-guided-pi-message-actions.js",
@@ -6576,7 +6578,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261024-terminal1" in index
-    assert "screens-guided-pi.js?v=20261026-walk1" in index
+    assert "screens-guided-pi.js?v=20261026-attach1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

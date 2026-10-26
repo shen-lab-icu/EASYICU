@@ -220,6 +220,23 @@
         if (event.target.closest('[data-gpi-skill-remove]')) { STUDY_WORKSPACE.removeSkill(); render(true); return; }
         if (event.target.closest('[data-gpi-builder-remove]')) { STUDY_WORKSPACE.removeBuilder(); render(true); return; }
         if (event.target.closest('[data-gpi-method-remove]')) { STUDY_WORKSPACE.removeMethod(); render(true); return; }
+        // Attached Skills live in the host's draft for the next message (screens-guided-pi-skill-attach.js).
+        const attachOwner = window.EasyICU.guidedPi.optional('skillAttach');
+        const attachedRemove = event.target.closest('[data-gpi-attached-remove]');
+        if (attachedRemove && attachOwner && state.session && !state.busy) {
+          void attachOwner.remove(projectId(), state.session, attachedRemove.dataset.gpiAttachedRemove).then(() => render(true));
+          return;
+        }
+        const attachToggle = event.target.closest('[data-gpi-attach-toggle]');
+        if (attachToggle && attachOwner && state.session && !state.busy && !state.childJobId) {
+          const [source, ...rest] = String(attachToggle.dataset.gpiAttachToggle || '').split(':');
+          void attachOwner.toggle(projectId(), state.session, source, rest.join(':')).then(() => render(true));
+          return;
+        }
+        if (event.target.closest('[data-gpi-attached-defaults]') && attachOwner && state.session && !state.busy) {
+          void attachOwner.saveDefaults(projectId(), state.session).then(() => render(true));
+          return;
+        }
         if (event.target.closest('[data-gpi-builder-hub]')) { location.hash = '#skills'; return; }
         if (event.target.closest('[data-gpi-method-hub]')) { location.hash = '#skills'; return; }
         if (event.target.closest('[data-gpi-skill-hub]')) { location.hash = '#skills'; return; }
@@ -236,6 +253,7 @@
             STUDY_WORKSPACE.openMaterials(projectId(), state.session.session_id);
           } else {
             STUDY_WORKSPACE.openSkills(projectId(), state.session);
+            loadAttachable();
           }
           render(true);
           return;
@@ -484,6 +502,14 @@
           void startEntry();
         }
       });
+      // The picker marks what is attached at once; titles and project defaults arrive after one read.
+      function loadAttachable() {
+        const attachOwner = window.EasyICU.guidedPi.optional('skillAttach');
+        if (!attachOwner || !state.session) return;
+        const session = state.session;
+        void Promise.all([attachOwner.load(projectId(), session), attachOwner.loadDefaults(projectId())])
+          .then(() => { if (state.session === session) render(true); }, () => {});
+      }
       function composerPickerTrigger(value) {
         const text = String(value || '');
         return /(^|\s)[@/]$/.test(text) ? text.slice(-1) : '';
@@ -501,7 +527,7 @@
             event.target.value = event.target.value.slice(0, -1);
             state.draft = event.target.value;
             if (trigger === '@') STUDY_WORKSPACE.openMaterials(projectId(), state.session.session_id);
-            else STUDY_WORKSPACE.openSkills(projectId(), state.session);
+            else { STUDY_WORKSPACE.openSkills(projectId(), state.session); loadAttachable(); }
             render(true);
             return;
           }

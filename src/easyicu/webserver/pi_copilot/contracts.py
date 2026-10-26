@@ -24,6 +24,7 @@ from easyicu.extensions.contracts import (
     EMPTY_EXTENSION_ACTIVATION,
     ExtensionActivationSnapshot,
 )
+from easyicu.extensions.skill_attachments import AttachedSkills
 
 if TYPE_CHECKING:
     from easyicu.extensions import ExtensionRegistry
@@ -312,6 +313,9 @@ class PiSessionRecord(BaseModel):
     extension_activation: ExtensionActivationSnapshot = Field(
         default_factory=lambda: EMPTY_EXTENSION_ACTIVATION
     )
+    default_attached_skills: AttachedSkills = Field(default_factory=list, frozen=True)
+    draft_attached_skills: AttachedSkills = Field(default_factory=list)
+    last_attached_skills: AttachedSkills = Field(default_factory=list)
     research_provider: ResearchProviderBinding = Field(
         default_factory=ResearchProviderBinding,
         frozen=True,
