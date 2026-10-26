@@ -1,0 +1,36 @@
+/* Owner: js/screens-agent-run-file-reader.js — reader views of a run's own record files. */
+.ag-runfile { display:flex; flex-direction:column; gap:14px; color:var(--ink); }
+.ag-runfile-lede { margin:0; font-size:14px; line-height:1.55; color:var(--ink); }
+.ag-runfile-empty { margin:0; font-size:13px; color:var(--ink-3); }
+
+.ag-runfile-question { margin:0; padding:2px 0 2px 12px; border-left:2px solid var(--hair-3); }
+.ag-runfile-question > span { display:block; margin-bottom:4px; font-size:11.5px; color:var(--ink-3); }
+.ag-runfile-question > p { margin:0; font-size:13.5px; line-height:1.6; color:var(--ink); }
+
+/* A wrapped row stretches its last cells, so no empty cell is left in the grid. */
+.ag-runfile-facts {
+  display:flex; flex-wrap:wrap; gap:1px; margin:0; overflow:hidden;
+  border:1px solid var(--hair); border-radius:var(--r-2); background:var(--hair);
+}
+.ag-runfile-facts > div { flex:1 1 170px; min-width:0; padding:10px 12px; background:var(--surface); }
+.ag-runfile-facts > div.is-wide { flex-basis:100%; }
+.ag-runfile-facts dt { margin:0 0 3px; font-size:11.5px; color:var(--ink-3); }
+.ag-runfile-facts dd { margin:0; font-size:13.5px; line-height:1.45; color:var(--ink); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+
+.ag-runfile-points h4 { margin:0 0 6px; font-size:12.5px; font-weight:700; color:var(--ink); }
+.ag-runfile-points ul { margin:0; padding-left:18px; }
+.ag-runfile-points li { margin:0 0 4px; font-size:13px; line-height:1.55; color:var(--ink-2); }
+
+.ag-runfile-checks { margin:0; padding:0; list-style:none; border:1px solid var(--hair); border-radius:var(--r-2); }
+.ag-runfile-checks li { display:grid; grid-template-columns:18px minmax(0,1fr) auto; gap:10px; align-items:baseline; padding:9px 12px; border-top:1px solid var(--hair); }
+.ag-runfile-checks li:first-child { border-top:0; }
+.ag-runfile-checks li > span { font-weight:700; text-align:center; color:var(--ink-4); }
+.ag-runfile-checks li.is-pass > span { color:var(--ok); }
+.ag-runfile-checks strong { font-size:13px; font-weight:600; color:var(--ink); }
+.ag-runfile-checks small { display:block; margin-top:2px; font-size:12px; color:var(--ink-3); }
+.ag-runfile-checks em { font-style:normal; font-size:12px; color:var(--ink-3); white-space:nowrap; }
+.ag-runfile-checks li.is-pass em { color:var(--ok); }
+
+.ag-runfile > .ag-artifact-disclosure { margin:0; }
+.ag-runfile .ag-artifact-disclosure .ag-artifact-table { min-width:0; }
+.ag-runfile .ag-artifact-disclosure .ag-artifact-table td:first-child { width:34%; color:var(--ink-3); }

@@ -767,8 +767,8 @@ def test_agent_report_reader_owns_figures_and_manuscript_with_explicit_helpers()
     assert scripts.index("html-escape.js") < scripts.index("screens-agent-report-reader.js")
     assert scripts.index("screens-agent-report-reader.js") + 1 == scripts.index("screens-agent-render.js")
     assert scripts.index("screens-agent-render.js") < scripts.index("screens-guided-pi-run-files.js")
-    assert "js/screens-agent-report-reader.js?v=20261026-lineage1" in index
-    assert "js/screens-agent-render.js?v=20261025-owner-split1" in index
+    assert "js/screens-agent-report-reader.js?v=20261026-run-files1" in index
+    assert "js/screens-agent-render.js?v=20261026-run-files1" in index
 
 
 def test_clinical_card_styles_have_one_owner_before_route_overrides() -> None:

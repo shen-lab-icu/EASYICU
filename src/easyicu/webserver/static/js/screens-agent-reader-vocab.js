@@ -355,8 +355,14 @@
       patient_stratified_bootstrap_percentile_95pct: ['resampled by patient', '按患者重抽样'],
     },
     interval_method: {
+      none_counts_only: ['counts only, no interval', '仅计数，无区间'],
+      wilson: ['Wilson', 'Wilson'],
       delong_paired_normal_95pct: ['paired DeLong', '配对 DeLong'],
       patient_stratified_bootstrap_percentile_95pct: ['resampled by patient', '按患者重抽样'],
+    },
+    row_role: {
+      exposure_level: ['exposure group', '暴露组'],
+      overall: ['all records', '全部记录'],
     },
     comparator_kind: {
       probability: ['probability', '概率'],

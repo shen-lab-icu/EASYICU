@@ -715,14 +715,14 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     assert "css/agent-capabilities.css?v=20260627-agent-capabilities" in index_html
     # Artifact renderers live in the screens-agent-render.js owner file.
     assert "function artifactStructuredView(name, payload, context)" in render_js
-    assert "Readable artifact summary" in render_js
-    assert "可读产物摘要" in render_js
+    assert "t('Overview', '概览')" in render_js
+    assert "可读产物摘要" not in render_js
     assert "row.step_id || row.id || row.step" in render_js
     assert "row.intent || row.title || row.name" in render_js
     assert "Array.isArray(row.expected_outputs)" in render_js
-    assert (
-        "Raw JSON is kept for audit, but the default view is table-based." in render_js
-    )
+    # The preview's own header and audit view say what the file is; the
+    # reader does not repeat it above every table.
+    assert "Raw JSON is kept for audit, but the default view is table-based." not in render_js
     # The raw-JSON <details> lives in artifactViewer, which stays in main.
     assert "Project Monitor route-owned layout fixes" in agent_css
     assert ".ag-pipe .pline" in agent_layout_css
@@ -864,12 +864,12 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     ), "agent fixtures and renderer must load before screens-guided-pi-run-files.js"
     # Reader vocabulary (review findings, column and table names) is read by
     # the renderer at call time, so it must be defined before it.
-    vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261020-prepared-grouping2")
+    vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261026-run-files1")
     assert fixtures_pos < vocab_pos < render_pos
-    assert "js/screens-agent-report-reader.js?v=20261026-lineage1" in index_html
-    assert "js/screens-agent-render.js?v=20261025-owner-split1" in index_html
+    assert "js/screens-agent-report-reader.js?v=20261026-run-files1" in index_html
+    assert "js/screens-agent-render.js?v=20261026-run-files1" in index_html
     assert "js/screens-agent-question-requirements.js?v=20261010-exposure-labels1" in index_html
-    assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html
+    assert "css/agent-plan.css?v=20261026-run-files1" in index_html
 
 
 def test_candidate_plan_styles_have_one_explicit_owner() -> None:

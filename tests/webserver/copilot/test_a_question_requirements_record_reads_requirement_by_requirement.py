@@ -371,8 +371,8 @@ def test_other_artifacts_are_not_read_as_question_requirements() -> None:
     html = _render("cohort_summary.json", {"summary": "1,234 stays", "judged": []})
 
     assert "题面要求" not in html
-    # A cohort summary keeps its own readable table (fa10), not the requirements reader.
-    assert "ag-artifact-readable" in html and "已准备的概念数" in html
+    # A cohort summary keeps its own reader, not the requirements reader.
+    assert "ag-artifact-readable" in html
 
 
 def test_the_reader_loads_before_the_renderer_that_asks_it() -> None:

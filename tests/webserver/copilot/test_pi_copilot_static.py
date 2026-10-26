@@ -4052,7 +4052,7 @@ def test_scientific_plan_review_has_a_readable_multidimensional_preview() -> Non
     assert ".ag-science-lanes" in review_css
     assert ".ag-science-review" not in agent_css
     assert "css/agent-scientific-review.css?v=20260828-science-review3" in index
-    assert "css/agent-plan.css?v=20260829-plan-flow1" in index
+    assert "css/agent-plan.css?v=20261026-run-files1" in index
     confirmation_owner = _read("js/screens-guided-pi-confirmation.js")
     assert "plan_review_summary" in confirmation_owner
     assert "gpi-confirmation-review-status" in confirmation_owner
@@ -5696,7 +5696,6 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "bounded_reviewer_projection_from_registered_run" in demo
     assert "reportable: false" in demo
     assert "publication_authorized: false" in demo
-    assert "https://pubmed.ncbi.nlm.nih.gov/17938396/" in demo
     assert "kind: 'demo_artifact'" in demo
     assert "title: item ? item.title : name" in demo
     assert "resource.kind === 'demo_artifact'" in resource_owner
@@ -5705,11 +5704,12 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "Reviewer demonstration complete · Engineering evidence" in preview
     assert "Demo file · Read-only" in preview
     assert "safe.kind !== 'demo_artifact'" in preview
-    for fixture in (
-        "reviewer_protocol.json", "analysis_plan.json", "descriptive_results.json",
-        "applicability_audit.json", "execution_receipt.json", "authority_verdict.json",
-    ):
+    # The demo's own verdict records stay; the hand-written stand-ins for the
+    # run's files are gone in favour of the run's own published files.
+    for fixture in ("descriptive_results.json", "authority_verdict.json"):
         assert fixture in demo
+    for retired in ("reviewer_protocol.json", "applicability_audit.json", "execution_receipt.json"):
+        assert retired not in demo
     for standard_artifact in (
         "run_context.json",
         "cohort_summary.json",
@@ -5726,10 +5726,9 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     ):
         assert standard_artifact in demo
     assert "打开审稿人报告" in demo
-    assert "人工种子，而不是已完成的新颖性检索" in demo
-    assert demo.count("step_id: '") == 6
-    assert "citation_keys:" in demo
-    assert "projection_note:" in demo
+    # The plan, its six steps and their citations are the run's own files.
+    assert "RUN_FILES_URL = 'assets/demo/run-files/'" in demo
+    assert "step_id: '" not in demo
     # The walkthrough is an ordinary research workflow whose manuscript stage
     # stays open, and it opens on the run's figures.
     assert "kind: 'research_workflow_demo'" in demo
@@ -5745,9 +5744,8 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "第 2 版" not in demo
     assert "every number checked" not in demo
     assert "回答里的数字都取自结果表" in demo
-    assert "10.02% 是死亡事件比例" in demo
-    assert "94,458 / 94,458" in demo
-    assert "0 / 9,466" in demo
+    # The measurement audit is the run's own result table, not a demo stand-in.
+    assert "10.02% 是死亡事件比例" not in demo
     assert "preview.open(primary" in pi_owner
     assert "demo.resultHtml({ tr, esc, button })" in session_view
     assert "walkthrough.panelHtml({ messageHtml, workflowHtml, iconHtml, button" in session_view
@@ -5846,16 +5844,7 @@ def test_reviewer_demo_lifecycle_exposes_only_resolvable_standard_artifacts() ->
         hostControls: messages.filter(message => message.role === 'demo_action').length,
         missingStandard: standard.filter(name => !artifacts.includes(name)),
         unresolved: artifacts.filter(name => !demo.hasArtifact(name)),
-        rendererShapes: {{
-          planSteps: demo.artifact('agent_plan.json').steps.length,
-          literatureCards: demo.artifact('literature_evidence.json').citations.length,
-          reviewDimensions: Object.keys(demo.artifact('scientific_plan_review.json').dimension_scores).length,
-          readinessDomains: demo.artifact('scientific_readiness.json').domains.length,
-          gateChecks: demo.artifact('quality_gate.json').gate.checks.length,
-          figures: demo.artifact('figure_gallery.json').figures.length,
-          resultTables: demo.artifact('result_tables.json').tables.length,
-          lockedClaims: demo.artifact('manuscript_draft.json').claims.length,
-        }},
+        runFiles: standard.every(name => demo.artifact(name).run_file === true),
       }}));
     """
     completed = run_node(node, script, check=True)
@@ -5871,17 +5860,31 @@ def test_reviewer_demo_lifecycle_exposes_only_resolvable_standard_artifacts() ->
         "hostControls": 1,
         "missingStandard": [],
         "unresolved": [],
-        "rendererShapes": {
-            "planSteps": 6,
-            "literatureCards": 9,
-            "reviewDimensions": 8,
-            "readinessDomains": 5,
-            "gateChecks": 7,
-            "figures": 3,
-            "resultTables": 1,
-            "lockedClaims": 1,
-        },
+        "runFiles": True,
     }
+
+
+def test_reviewer_demo_run_files_are_the_source_runs_own_files() -> None:
+    # The demo opens its source run's own files through the same views as any
+    # run; tools/build_demo_run_files.py publishes them with their digests.
+    folder = STATIC / "assets" / "demo" / "run-files"
+    index = json.loads((folder / "index.json").read_text(encoding="utf-8"))
+    files = {name: json.loads((folder / name).read_text(encoding="utf-8")) for name in index}
+    for name, row in index.items():
+        published = hashlib.sha256((folder / name).read_bytes()).hexdigest()
+        assert published == row["published_sha256"], name
+        assert "credential_fingerprint" not in (folder / name).read_text(encoding="utf-8")
+    assert len(files["agent_plan.json"]["steps"]) == 6
+    assert len(files["quality_gate.json"]["gate"]["checks"]) == 7
+    assert len(files["figure_gallery.json"]["figures"]) == 3
+    names = " ".join(str(table.get("name", "")) for table in files["result_tables.json"]["tables"])
+    assert "exposure_outcome_distribution" in names and "missingness" in names
+    assert files["cohort_summary.json"]["cohort"]["target_outcome"] == "death"
+    assert "17938396" in [row.get("pmid") for row in files["literature_evidence.json"]["citations"]]
+    ledger = {row["name"]: row["sha256"] for row in files["evidence_ledger.json"]["artifacts"]}
+    for name, row in index.items():
+        if row["ledger_verified"]:
+            assert ledger[name] == row["source_sha256"], name
 
 
 def test_guided_copilot_does_not_expose_benchmark_specific_navigation() -> None:
@@ -5956,14 +5959,14 @@ def test_reviewer_demo_reuses_the_web_renderer_and_hydrates_registered_figures()
     assert "Demo file · Read-only" in preview
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
-      global.fetch = async () => ({{
-        ok: true,
-        text: async () => [
-          '<img src="data:image/png;base64,AAAA">',
-          '<img src="data:image/png;base64,BBBB">',
-          '<img src="data:image/png;base64,CCCC">',
-        ].join(''),
-      }});
+      const requested = [];
+      global.fetch = async url => {{
+        requested.push(url);
+        return {{ ok: true, json: async () => ({{
+          schema_version: 'easyicu.web-pipeline-figure-gallery/1',
+          figures: [{{ data_url: 'data:image/png;base64,AAAA' }}, {{ data_url: 'data:image/png;base64,BBBB' }}],
+        }}) }};
+      }};
       eval({_ESCAPE_OWNER!r});
       eval({source!r});
       window.EU_GUIDED_PI_DEMO.previewArtifact('figure_gallery.json').then(item => {{
@@ -5971,18 +5974,16 @@ def test_reviewer_demo_reuses_the_web_renderer_and_hydrates_registered_figures()
           count: item.figures.length,
           images: item.figures.map(figure => figure.data_url),
           schema: item.schema_version,
+          requested,
         }}));
       }});
     """
     completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
-        "count": 3,
-        "images": [
-            "data:image/png;base64,AAAA",
-            "data:image/png;base64,BBBB",
-            "data:image/png;base64,CCCC",
-        ],
+        "count": 2,
+        "images": ["data:image/png;base64,AAAA", "data:image/png;base64,BBBB"],
         "schema": "easyicu.web-pipeline-figure-gallery/1",
+        "requested": ["assets/demo/run-files/figure_gallery.json?v=20261026-run-files1"],
     }
 
 

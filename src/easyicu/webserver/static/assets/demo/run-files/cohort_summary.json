@@ -1,0 +1,1 @@
+{"cohort":{"criteria":["Adult ICU stays","age range: 18 to *"],"target_outcome":"death","time_window_hours":24.0},"summary":{"coverage_sufficient":true,"materialized_concept_count":1,"selected_concepts":["age","sep3_sofa2","death"]}}

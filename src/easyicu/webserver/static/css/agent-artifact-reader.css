@@ -183,3 +183,6 @@
   .ag-result-glance { grid-template-columns:1fr; }
   .ag-result-reader-head { flex-direction:column; }
 }
+
+/* A result number never breaks inside itself; a wide table scrolls in its frame. */
+.ag-result-reader .ag-artifact-table td { overflow-wrap:normal; }

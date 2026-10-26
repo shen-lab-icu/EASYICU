@@ -28,6 +28,7 @@ def render(name, payload, *, lang="zh"):
         icon: () => '',
       }};
       eval({json.dumps(_read('js/screens-agent-reader-vocab.js'))});
+      eval({json.dumps(_read('js/screens-agent-run-file-reader.js'))});
       eval({json.dumps(_read('js/screens-agent-render.js'))});
       process.stdout.write(window.AGENT_RENDER.artifactStructuredView({json.dumps(name)}, {json.dumps(payload)}));
     """
@@ -220,9 +221,10 @@ def test_cohort_summary_reads_recorded_concepts_outcome_and_window():
         assert text in html, text
     assert "4 字段" not in html and "3 字段" not in html
     assert "入住数" not in html and "患者数" not in html  # no denominator was recorded
+    assert "未记录" not in html and "排除条件" not in html  # an unrecorded row is left out
     missing = render("cohort_summary.json", {"cohort": {}, "summary": {}})
-    assert "未记录" in missing
-    assert "0 小时" not in missing
+    assert "没有记录队列定义" in missing
+    assert "未记录" not in missing and "0 小时" not in missing
 
 
 def test_core_estimates_and_bounded_table_omissions_are_named():
@@ -236,3 +238,51 @@ def test_core_estimates_and_bounded_table_omissions_are_named():
     for text in ("调整后关联估计", "结局分母", "结局事件数", "结局风险 (%)", "部分行", "部分列", "3", "未展示"):
         assert text in html, text
     assert "有界预览" in html
+
+
+def test_run_context_leads_with_the_question_and_keeps_identifiers_in_the_audit_block():
+    html = render("run_context.json", {
+        "question": "Synthetic question", "run_id": "run_x", "run_type": "full",
+        "engine": "easyicu.research_agent.pipeline", "local_first": {"uploads": 0},
+        "scientific_configuration_sha256": "a" * 64,
+        "source": {"database": "miiv", "label": "synthetic export"},
+        "summary": {"selected_concepts": ["age", "death"]},
+    })
+    for text in ("本次运行回答的问题", "Synthetic question", "MIMIC-IV", "年龄、院内死亡", "完整运行", "审计信息", "run_x"):
+        assert text in html, text
+    assert html.index("审计信息") > html.index("MIMIC-IV")
+    for noise in ("表格视图", "原始 JSON", "字段</td>", "schema version", "1 字段", "a" * 64):
+        assert noise not in html, noise
+
+
+def test_quality_gate_reads_each_check_once_in_words():
+    html = render("quality_gate.json", {"gate": {"status": "blocked", "reportable": False, "checks": [
+        {"id": "execution_complete", "passed": True, "reason": None},
+        {"id": "numeric_verified", "passed": False, "reason": "numeric_verified_not_satisfied"},
+    ]}, "quality": []})
+    for text in ("分析已执行完成", "分析步骤执行完成", "报告数值与结果一致", "已通过", "未满足"):
+        assert text in html, text
+    assert "numeric_verified_not_satisfied" not in html and "5 字段" not in html
+
+
+def test_saved_plan_without_a_design_selection_is_not_judged_for_approval():
+    html = render("agent_plan.json", {
+        "research_question": "Synthetic saved plan", "analysis_type": "descriptive_epidemiology",
+        "endpoint": None, "robustness_specs": [], "display_labels": {"death": "In-hospital death", "death=1": "Died"},
+        "steps": [{"step_id": "s1", "intent": "Count stays.", "expected_outputs": ["table:cohort_flow"]}],
+    })
+    assert "为什么这一版还不能批准" not in html and "EasyICU 需要修订" not in html
+    assert "要估计什么" not in html and "<p>—</p>" not in html
+    assert "In-hospital death" in html and "尚未明确" not in html
+
+
+def test_result_tables_leave_out_empty_and_index_columns_and_name_row_roles():
+    html = render("result_tables.json", {"tables": [{
+        "name": "table_x__exposure_outcome_distribution.csv",
+        "headers": ["row_role", "exposure_level", "n_rows", "interval_method", "exposure_level_index", "exposure_ci_low_pct"],
+        "rows": [["exposure_level", "0", "60461", "none_counts_only", "0", ""], ["overall", "", "94458", "none_counts_only", "", ""]],
+    }]})
+    for text in ("暴露组", "全部记录", "仅计数，无区间", "60,461"):
+        assert text in html, text
+    for hidden in ("exposure_level_index", "none_counts_only", ">exposure_level<"):
+        assert hidden not in html, hidden
