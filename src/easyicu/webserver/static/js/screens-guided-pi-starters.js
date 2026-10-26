@@ -65,12 +65,12 @@
         ),
       },
       {
-        id: 'example-lactate-threshold-share', database: 'MIMIC-III', kind: tr('Descriptive', '描述性研究'),
-        title: tr('How often first-day lactate is raised', '首日乳酸升高的比例'),
-        gets: tr('Share per group with 95% CI, denominators and missingness', '各组比例与 95% 置信区间、分母与缺失'),
+        id: 'example-mortality-by-sex', database: 'MIMIC-III', kind: tr('Descriptive', '描述性研究'),
+        title: tr('In-hospital mortality by sex', '男女的院内死亡率'),
+        gets: tr('Mortality per group with 95% CI and denominators, their difference', '各组院内死亡率与 95% 置信区间、分母，组间差值'),
         prompt: tr(
-          'In MIMIC-III, what share of patients have a highest first-day lactate above 2 mmol/L, and does it differ between men and women?',
-          '在 MIMIC-III 中，入 ICU 第一天最高乳酸超过 2 mmol/L 的患者占多少？男女之间有差别吗？',
+          'In MIMIC-III, what is the in-hospital mortality, and does it differ between men and women?',
+          '在 MIMIC-III 中，院内死亡率是多少？男性和女性之间有差别吗？',
         ),
       },
       {
