@@ -46,11 +46,8 @@ for (const language of ['zh', 'en']) {
       const html = modules.require('starters').render({ tr });
       const location = hosted ? (zh ? '服务器上' : 'the server') : (zh ? '本机' : 'this computer');
       assert.ok(html.includes(zh
-        ? `先确认数据，再核对分析计划。批准后在${location}运行分析。`
-        : `Confirm the data and review the analysis plan. After approval, analysis runs on ${location}.`));
-      assert.ok(html.includes(zh
-        ? '写下你的临床问题，选择数据，再核对分析计划。'
-        : 'Describe your clinical question, choose the data, then review the analysis plan.'));
+        ? `写下你的临床问题，选择数据，再核对分析计划。批准后在${location}运行分析。`
+        : `Describe your clinical question, choose the data, then review the analysis plan. After approval, analysis runs on ${location}.`));
       assert.doesNotMatch(html, /两次确认|可以关闭|both|twice|two confirmations|close the (?:page|app|application)/i);
       if (!hosted) assert.doesNotMatch(html, /服务器|on the server/);
     });
