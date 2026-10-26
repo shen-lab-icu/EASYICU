@@ -62,6 +62,7 @@ from easyicu.webserver.routes.local_data import router as local_data_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
 from easyicu.webserver.routes.pi_copilot import router as pi_copilot_router
 from easyicu.webserver.routes.reviews import router as reviews_router
+from easyicu.webserver.routes.search import router as search_router
 from easyicu.webserver.routes.study_contexts import router as study_contexts_router
 from easyicu.webserver.routes.system import router as system_router
 from easyicu.webserver.routes.workspaces import router as workspaces_router
@@ -316,6 +317,7 @@ async def native_ui_security_headers(request: Request, call_next):
 
 # Registration order is a compatibility contract; keep the root static mount last.
 app.include_router(system_router)
+app.include_router(search_router)
 app.include_router(extensions_router)
 app.include_router(local_data_router)
 app.include_router(reviews_router)

@@ -1958,6 +1958,15 @@
   },
   {
     "method": "GET",
+    "route": "/api/search",
+    "fields": ["query:q", "query:scope", "query:project", "query:limit"],
+    "reaches": "SearchIndex -> SearchCatalog -> instance registries and allowlisted project metadata",
+    "protection": "owner check: require_instance_path on every metadata coordinate; registered projects only; symlink rejection; no client filesystem paths or user identity",
+    "writes": "none",
+    "write_owner": "Bounded in-memory index only; no filesystem destination."
+  },
+  {
+    "method": "GET",
     "route": "/api/settings",
     "fields": [],
     "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",

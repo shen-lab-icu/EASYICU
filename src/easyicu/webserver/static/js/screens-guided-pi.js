@@ -640,7 +640,7 @@
     STUDY_WORKSPACE.syncNavigation({ projectId: projectId(), sessions: state.sessions.filter(sessionMatchesUiLanguage), otherLanguageSessions: state.sessions.filter(row => !sessionMatchesUiLanguage(row)).length, switchLanguage: () => window.setLang && window.setLang(uiLanguage() === 'zh' ? 'en' : 'zh'),
       selectedId: state.session && state.session.session_id, loading: restoring, disabled: state.busy || Boolean(state.childJobId) || state.projectLoading,
       visible: state.shell !== 'legacy', title: navigationSessionTitle, status: STUDY_WORKSPACE.sessionStatusLabel,
-      time: STUDY_WORKSPACE.compactSessionTime, open: openSession, create: startEntry,
+      time: STUDY_WORKSPACE.compactSessionTime, open: openSession, create: startEntry, search: openSearch,
       resources: RUN_OUTCOME.collection(state.latestRun, state.workflow), openResource: EVENTS.openResource,
       materialsInteractive: !emptySessionFocused, rename: renameSession, remove: removeEmptySession });
     requestAnimationFrame(() => {
@@ -798,6 +798,18 @@
       state.error = errorText(error);
       render();
     }
+  }
+
+  // Search across projects; a hit in this project opens through openSession.
+  function openSearch() {
+    const search = MODULES.optional('globalSearch');
+    if (!search) return;
+    search.open({
+      projectId,
+      projectTitle: () => (state.project && state.project.title) || '',
+      openSession: id => openSession(id),
+      canOpen: () => !(state.busy || state.childJobId || state.projectLoading),
+    });
   }
 
   async function openSession(sessionId, selectionRevision, refreshWorkflow) {
