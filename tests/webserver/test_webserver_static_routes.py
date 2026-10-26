@@ -2322,18 +2322,21 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     deepdive_css = _static_css("deepdive.css")
     index_html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
-    assert catalog["conceptCoverage"]["hr"]["kind"] == "audited"
-    assert catalog["conceptCoverage"]["hr"]["databases"] == 6
+    # Each concept names the databases the dictionary maps it to; a derived
+    # concept reads its inputs' mappings. An earlier audit's count stays beside it.
+    supported = catalog["supportedDbs"]
+    assert catalog["conceptCoverage"]["hr"]["kind"] == "mapped"
+    assert catalog["conceptCoverage"]["hr"]["declared_databases"] == supported
+    assert catalog["conceptCoverage"]["hr"]["data_audit_databases"] == 6
+    assert catalog["conceptCoverage"]["abx"]["declared_databases"] == supported
+    assert "data_audit_databases" not in catalog["conceptCoverage"]["abx"]
+    assert catalog["conceptCoverage"]["icu_unit_type"]["declared_databases"] == ["eicu"]
     assert catalog["conceptCoverage"]["sofa2_resp"]["kind"] == "derived"
-    assert (
-        catalog["conceptCoverage"]["sofa2_resp"]["basis"] == "score_or_rule_component"
-    )
-    assert (
-        catalog["coverageSummary"]["audited"]
-        + catalog["coverageSummary"]["derived"]
-        + catalog["coverageSummary"]["notAudited"]
-        == catalog["totalConcepts"]
-    )
+    assert catalog["conceptCoverage"]["sofa2_resp"]["declared_databases"]
+    summary = catalog["coverageSummary"]
+    assert summary["mappedAll"] + summary["mappedPartial"] + summary["unmapped"] == catalog["totalConcepts"]
+    assert summary["unmapped"] < 10
+    assert "notAudited" not in summary
     assert catalog["activeExportCoverage"]["payload_scope"] == "aggregate_only_no_rows"
     assert catalog["activeExportCoverage"]["status"] in {
         "ready",
@@ -2351,10 +2354,10 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert "Object.prototype.hasOwnProperty.call" in dict_js
     assert "C().cov[k] || 0" not in dict_js
     assert "coverage unknown" not in dict_js
-    assert "Database coverage" in dict_js
-    assert "数据库覆盖" in dict_js
-    assert "Dictionary database coverage" in dict_js
-    assert "This column counts how many supported ICU databases" in dict_js
+    assert "Mapped databases" in dict_js
+    assert "映射的数据库" in dict_js
+    assert "Dictionary mappings" in dict_js and "No catalog audit" not in dict_js
+    assert "This column shows which ICU databases the dictionary maps each feature to" in dict_js
     assert "Active export coverage" not in dict_js
     assert "当前导出覆盖" not in dict_js
     assert "not extracted" not in dict_js
@@ -2367,10 +2370,10 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
     assert "api.js?v=20261026-openrouter1" in index_html
-    assert "screens-dict.js?v=20261022-audience1" in index_html
+    assert "screens-dict.js?v=20261026-db-names1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
-    assert "deepdive.css?v=20261022-legacy1" in index_html
+    assert "deepdive.css?v=20261026-db-names1" in index_html
 
 
 def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations() -> (

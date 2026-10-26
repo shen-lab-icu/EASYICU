@@ -109,72 +109,64 @@ def _registered_source_concepts(source: Dict[str, Any]) -> Optional[frozenset[st
     )
 
 
+def _declared_databases(key: str, definitions: Dict[str, Any]) -> list[str]:
+    """Supported databases the concept dictionary maps ``key`` to, demos folded in."""
+    declared = concept_databases(key, definitions)
+    return [
+        database for database in cc.SUPPORTED_DB_KEYS
+        if database in declared or f"{database}_demo" in declared
+    ]
+
+
 def _coverage_metadata(
     concept_dict: Dict[str, Any],
+    definitions: Optional[Dict[str, Any]] = None,
 ) -> tuple[Dict[str, Dict[str, Any]], Dict[str, int]]:
-    """Classify catalog coverage without inventing database support counts."""
-    cov = dict(cc.CONCEPT_DB_COVERAGE)
+    """Name the databases the concept dictionary maps each concept to.
+
+    ``declared_databases`` is dictionary provenance (a declared source mapping,
+    or for a derived concept its inputs' mappings), not observed coverage; the
+    active export's coverage is reported separately. ``data_audit_databases``
+    keeps the count an earlier data audit recorded (CONCEPT_DB_COVERAGE) where
+    one exists; it names no database, so it never replaces the declared list.
+    """
+    definitions = catalog_definitions() if definitions is None else definitions
+    audit = dict(cc.CONCEPT_DB_COVERAGE)
     supported_count = len(cc.SUPPORTED_DB_KEYS)
-    derived_rule_prefixes = ("sofa_", "sofa2_", "sep3_")
-    derived_rule_concepts = {
-        "susp_inf",
-        "culture_positive",
-        "bld_culture_positive",
-    }
     metadata: Dict[str, Dict[str, Any]] = {}
     summary = {
         "supportedDatabases": supported_count,
-        "audited": 0,
-        "auditedAll": 0,
-        "auditedFive": 0,
-        "auditedPartial": 0,
+        "mappedAll": 0,
+        "mappedPartial": 0,
+        "unmapped": 0,
         "derived": 0,
-        "notAudited": 0,
+        "dataAudited": 0,
     }
 
     for key in concept_dict:
-        if key in cov:
-            databases = int(cov[key])
-            metadata[key] = {
-                "kind": "audited",
-                "databases": databases,
-                "basis": "CONCEPT_DB_COVERAGE",
-            }
-            summary["audited"] += 1
-            if databases == supported_count:
-                summary["auditedAll"] += 1
-            elif databases == supported_count - 1:
-                summary["auditedFive"] += 1
-            else:
-                summary["auditedPartial"] += 1
-            continue
-
-        if key in cc.COMPOSITE_CONCEPT_OUTPUT_SOURCES:
-            metadata[key] = {
-                "kind": "derived",
-                "databases": None,
-                "basis": "COMPOSITE_CONCEPT_OUTPUT_SOURCES",
-                "source": cc.COMPOSITE_CONCEPT_OUTPUT_SOURCES[key],
-            }
-            summary["derived"] += 1
-            continue
-
-        if key.startswith(derived_rule_prefixes) or key in derived_rule_concepts:
-            metadata[key] = {
-                "kind": "derived",
-                "databases": None,
-                "basis": "score_or_rule_component",
-                "source": "rule_based_output",
-            }
-            summary["derived"] += 1
-            continue
-
-        metadata[key] = {
-            "kind": "not_audited",
-            "databases": None,
-            "basis": "missing_from_CONCEPT_DB_COVERAGE",
+        declared = _declared_databases(key, definitions)
+        definition = definitions.get(key) or {}
+        direct = any(mappings for mappings in (definition.get("sources") or {}).values())
+        entry: Dict[str, Any] = {
+            "kind": "mapped" if direct else ("derived" if declared or key not in definitions else "unmapped"),
+            "databases": len(declared),
+            "declared_databases": declared,
+            "basis": "concept_dictionary",
         }
-        summary["notAudited"] += 1
+        if not direct and key in cc.COMPOSITE_CONCEPT_OUTPUT_SOURCES:
+            entry["source"] = cc.COMPOSITE_CONCEPT_OUTPUT_SOURCES[key]
+        if key in audit:
+            entry["data_audit_databases"] = int(audit[key])
+            summary["dataAudited"] += 1
+        metadata[key] = entry
+        if entry["kind"] == "derived":
+            summary["derived"] += 1
+        if not declared:
+            summary["unmapped"] += 1
+        elif len(declared) == supported_count:
+            summary["mappedAll"] += 1
+        else:
+            summary["mappedPartial"] += 1
 
     return metadata, summary
 
@@ -497,7 +489,8 @@ def build_catalog() -> Dict[str, Any]:
     concept_dict = {k: list(v) for k, v in cc.CONCEPT_DICTIONARY.items()}
     desc = {k: list(v) for k, v in cc.CONCEPT_DESCRIPTIONS.items()}
     cov = dict(cc.CONCEPT_DB_COVERAGE)
-    concept_coverage, coverage_summary = _coverage_metadata(concept_dict)
+    definitions = catalog_definitions()
+    concept_coverage, coverage_summary = _coverage_metadata(concept_dict, definitions)
     registry = sources.load_registry()
     registered_sources = [
         source
@@ -517,7 +510,6 @@ def build_catalog() -> Dict[str, Any]:
     # A mixed registry is labelled conservatively: some of its availability
     # decisions still rely on declarations, including negative decisions.
     instance_basis = "declared_mapping" if fallback_databases else "export_manifest"
-    definitions = catalog_definitions()
     for key, coverage in concept_coverage.items():
         coverage["audience"] = concept_audience(key, definitions.get(key, {}))
         supported = native_support.get(key, set())

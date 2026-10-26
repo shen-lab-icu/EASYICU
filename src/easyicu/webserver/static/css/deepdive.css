@@ -65,7 +65,7 @@
   border: 1px solid var(--hair); border-radius: var(--r-3); overflow: hidden; background: var(--surface);
 }
 .dict-row {
-  display: grid; grid-template-columns: 120px 1.7fr 90px 150px 1fr;
+  display: grid; grid-template-columns: 120px 1.7fr 90px 214px 1fr;
   gap: 14px; align-items: center; padding: 11px 16px;
   border-bottom: 1px solid var(--hair); font-size: 13.5px;
 }
@@ -75,7 +75,7 @@
   text-transform: uppercase; letter-spacing: .04em; color: var(--ink-4); padding: 9px 16px;
   position: sticky; top: 0; z-index: 1;
 }
-.dict-row .dc-code { color: var(--accent-ink); font-size: 13px; }
+.dict-row .dc-code { color: var(--accent-ink); font-size: 13px; overflow-wrap: anywhere; }
 .dict-head .dc-code { color: var(--ink-4); }
 .dict-row .dn-t { display: block; font-weight: 550; color: var(--ink); }
 .dict-row .dn-d { display: block; font-size: 12.5px; color: var(--ink-4); margin-top: 3px; line-height: 1.45; text-wrap: pretty; }
@@ -91,6 +91,12 @@
 .cov-badge.mid .cov-dots i.on { background: var(--warn); }
 .cov-badge.lo .cov-dots i.on { background: var(--bad); }
 .cov-badge .cov-n { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-3); }
+.cov-badge.cov-declared { flex-wrap: wrap; gap: 4px 6px; }
+.cov-badge .cov-dbs { display: inline-flex; gap: 3px; }
+.cov-badge .cov-dbs i { padding: 2px 3px; border-radius: 3px; font: 600 10px/1.1 var(--font-mono); font-style: normal; color: var(--ink-4); background: var(--surface-2); opacity: .5; }
+.cov-badge .cov-dbs i.on { opacity: 1; color: var(--ok); background: var(--ok-soft); }
+.cov-badge .cov-kind, .cov-badge .cov-audit { font-size: 10.5px; color: var(--ink-3); }
+.cov-badge .cov-audit { color: var(--warn); }
 .cov-badge.none { color: var(--ink-4); font-family: var(--font-mono); }
 .cov-badge.derived,
 .cov-badge.unaudited {
@@ -231,7 +237,7 @@
 @media (max-width: 1080px) {
   .audit-cols, .rc-cols { grid-template-columns: 1fr; }
   .audit-cards, .rc-kpis { grid-template-columns: repeat(2, 1fr); }
-  .dict-row { grid-template-columns: 90px 1.6fr 70px 120px; }
+  .dict-row { grid-template-columns: 90px 1.6fr 70px 200px; }
   .dict-row .dc-cat, .dict-head .dc-cat { display: none; }
   .icd-inputs, .icd-cards { grid-template-columns: 1fr; }
 }
