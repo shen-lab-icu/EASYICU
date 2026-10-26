@@ -150,6 +150,8 @@ global.window = {
 global.t = window.t;
 global.icon = () => '';
 global.document = { readyState: 'complete', addEventListener() {}, querySelector() { return null; } };
+// index.html loads the database-name owner ahead of every screen.
+require(process.argv[1].replace(/[^/]+$/, 'database-names.js'));
 require(process.argv[1]);
 require(process.argv[2]);
 const page = window.SCREENS.settings;

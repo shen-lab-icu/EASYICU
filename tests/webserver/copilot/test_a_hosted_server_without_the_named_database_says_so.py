@@ -26,6 +26,7 @@ def _card(*, hosted: bool, reply: dict, contact: str = "") -> str:
       window.EU_CAPABILITIES = {{ deployment: {{ hosted: {json.dumps(hosted)} }} }};
       window.EU_SETTINGS = {{ support_contact: {json.dumps(contact)} }};
       eval({_ESCAPE_OWNER!r});
+      eval({_read("js/database-names.js")!r});
       eval({_read("js/screens-guided-pi-hosted.js")!r});
       eval({_read("js/screens-guided-pi-next-actions.js")!r});
       eval({_read("js/screens-guided-pi-host-jobs.js")!r});

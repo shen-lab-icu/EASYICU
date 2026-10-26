@@ -133,7 +133,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-study-workspace.js?v=20261021-decision-records1" in index
     assert "js/screens-guided-pi-events.js?v=20261026-append3" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20261023-demo-identity1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20261026-dbnames1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
     assert "js/screens-guided-pi-session-view.js?v=20261026-walk2" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
@@ -150,11 +150,11 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-confirmation.js?v=20261026-six2" in index
     # The plan-approval card renders the database capability review through this owner.
-    assert "js/screens-guided-pi-source-adjustments.js?v=20261026-six1" in index
+    assert "js/screens-guided-pi-source-adjustments.js?v=20261026-dbnames1" in index
     assert "css/guided-pi-source-adjustments.css?v=20261026-six1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261024-demo-raw-plan1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261026-six-copy1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261026-dbnames1" in index
     assert "js/screens-guided-pi.js?v=20261026-walk1" in index
     assert "js/screens-guided.js?v=20261022-legacy1" in index
     assert (

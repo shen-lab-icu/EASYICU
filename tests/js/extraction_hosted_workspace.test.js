@@ -17,6 +17,7 @@ const file = (arg, name) => fs.readFileSync(arg ? path.resolve(arg) : path.join(
 const source = file(process.argv[2], OWNER);
 const hostedCopy = file(process.argv[3], 'screens-extraction-hosted.js');
 const html = file(process.argv[4], 'html-escape.js');
+const names = fs.readFileSync(path.join(process.argv[2] ? path.dirname(path.resolve(process.argv[2])) : root, 'database-names.js'), 'utf8');
 
 function section(begin, end) {
   const a = source.indexOf(begin), b = source.indexOf(end, a + begin.length);
@@ -34,6 +35,7 @@ function page(hosted, values = {}) {
     advRow: (k, v) => `${k}${v}`, switchEl: () => '', pathDisplay: x => x, exPath: '/data/eicu',
     ...values,
   });
+  vm.runInContext(names, ctx);
   vm.runInContext(html, ctx);
   vm.runInContext(hostedCopy, ctx);
   ctx.escHtml = ctx.window.EU_HTML.esc;

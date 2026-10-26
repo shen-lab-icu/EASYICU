@@ -8,10 +8,6 @@
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
 
-  const DATABASE_NAMES = {
-    miiv: 'MIMIC-IV', miiv_demo: 'MIMIC-IV Demo', eicu: 'eICU-CRD', eicu_demo: 'eICU-CRD Demo',
-    mimic: 'MIMIC-III', mimic_demo: 'MIMIC-III Demo', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sic: 'SICdb',
-  };
   const UNITS = {
     patient: ['patients', '按患者'], hospitalization: ['hospitalizations', '按住院'], icu_stay: ['ICU stays', '按 ICU 入住'],
   };
@@ -43,7 +39,7 @@
 
   function databaseName(key) {
     const text = String(key || '');
-    return DATABASE_NAMES[text] || text;
+    return window.EU_DATABASE_NAMES.name(text) || text;
   }
   function pair(map, key) {
     const row = map[String(key || '')];

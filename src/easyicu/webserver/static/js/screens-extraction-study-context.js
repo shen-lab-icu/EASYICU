@@ -4,13 +4,6 @@
 (function () {
   'use strict';
 
-  const DATABASE_ALIASES = {
-    miiv: 'miiv', mimiciv: 'miiv', mimic_iv: 'miiv',
-    mimic: 'mimic', miii: 'mimic', mimiciii: 'mimic', mimic_iii: 'mimic',
-    eicu: 'eicu', eicu_crd: 'eicu',
-    aumc: 'aumc', amsterdamumcdb: 'aumc',
-    hirid: 'hirid', sic: 'sic', sicdb: 'sic',
-  };
   const COHORT_FIELDS = [
     'preset', 'age_min', 'age_max', 'min_icu_los_hours',
     'observation_window_hours', 'max_patients', 'exclude_readmissions',
@@ -18,8 +11,10 @@
   ];
 
   function cleanDatabase(value) {
+    // A study coordinate names a full database; a demo key does not clean to one.
     const key = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
-    return DATABASE_ALIASES[key] || '';
+    const names = window.EU_DATABASE_NAMES;
+    return names.isDemo(key) ? '' : names.key(key);
   }
 
   function cleanTextList(value, limit) {

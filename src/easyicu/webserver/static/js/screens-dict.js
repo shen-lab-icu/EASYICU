@@ -14,8 +14,7 @@
   let dictLineageLoading = false;
   let dictLineageError = '';
   let dictShowInternal = false;
-  const DATABASE_NAMES = { miiv: 'MIMIC-IV', eicu: 'eICU-CRD', mimic: 'MIMIC-III', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sic: 'SICdb' };
-  const DATABASE_SHORT = { miiv: 'M-IV', mimic: 'M-III', eicu: 'eICU', aumc: 'AUMC', hirid: 'HiRID', sic: 'SIC' };
+  const DB_NAMES = () => window.EU_DATABASE_NAMES;
 
   function L(en, zh) { return t(en, zh); }
   function html(v) {
@@ -35,7 +34,7 @@
   function hostedServer() { return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true; }
   // A hosted instance counts coverage over the databases it actually has.
   function instanceDbs() { const dbs = C().instanceDatabases || []; return hostedServer() && dbs.length ? dbs : null; }
-  function dbName(key) { const base = String(key || '').replace(/_demo$/, ''); return DATABASE_NAMES[base] || key; }
+  function dbName(key) { return DB_NAMES().name(DB_NAMES().key(key)) || key; }
   // Bookkeeping concepts (receipts, evidence flags, helper series) stay out of
   // the list until asked for; the catalog's audience field decides.
   function isInternal(k) { const meta = (C().conceptCoverage || {})[k]; return !!(meta && meta.audience === 'internal'); }
@@ -92,7 +91,7 @@
     if (!declared.length) {
       return `<span class="cov-badge unaudited" title="${html(L('The dictionary declares no source mapping for this concept.', '字典没有为这个概念声明来源映射。'))}">${L('No mapping', '未声明映射')}</span>`;
     }
-    const all = C().supportedDbs && C().supportedDbs.length ? C().supportedDbs : Object.keys(DATABASE_SHORT);
+    const all = C().supportedDbs && C().supportedDbs.length ? C().supportedDbs : DB_NAMES().keys();
     const names = declared.map(dbName).join(window.EU_LANG === 'zh' ? '、' : ', ');
     const derived = meta.kind === 'derived';
     const title = derived
@@ -102,7 +101,7 @@
     const audit = Number.isFinite(audited) && audited < declared.length
       ? `<span class="cov-audit" title="${html(L(`An earlier data audit confirmed usable data in ${audited} of these ${declared.length} databases.`, `早期数据核对只在这 ${declared.length} 个库中的 ${audited} 个确认有可用数据。`))}">${L(`data ${audited}/${declared.length}`, `数据核对 ${audited}/${declared.length}`)}</span>`
       : '';
-    return `<span class="cov-badge cov-declared${derived ? ' is-derived' : ''}" title="${html(title)}"><span class="cov-dbs">${all.map(db => `<i class="${declared.includes(db) ? 'on' : ''}">${html(DATABASE_SHORT[db] || dbName(db))}</i>`).join('')}</span>${derived ? `<span class="cov-kind">${L('derived', '派生')}</span>` : ''}${audit}</span>`;
+    return `<span class="cov-badge cov-declared${derived ? ' is-derived' : ''}" title="${html(title)}"><span class="cov-dbs">${all.map(db => `<i class="${declared.includes(db) ? 'on' : ''}">${html(DB_NAMES().abbr(db) || dbName(db))}</i>`).join('')}</span>${derived ? `<span class="cov-kind">${L('derived', '派生')}</span>` : ''}${audit}</span>`;
   }
 
   function covBadge(k) {

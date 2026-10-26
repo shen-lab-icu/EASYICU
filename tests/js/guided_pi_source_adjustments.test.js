@@ -18,7 +18,7 @@ function owner(language = 'zh') {
     EasyICU: { guidedPi: { declare: (name, api) => { declared[name] = api; } } },
   };
   const context = vm.createContext({ window });
-  for (const file of ['html-escape.js', 'screens-guided-pi-source-adjustments.js']) {
+  for (const file of ['database-names.js', 'html-escape.js', 'screens-guided-pi-source-adjustments.js']) {
     vm.runInContext(fs.readFileSync(path.join(JS, file), 'utf8'), context, { filename: file });
   }
   return declared.sourceAdjustments;

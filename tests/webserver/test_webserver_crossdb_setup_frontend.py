@@ -56,7 +56,7 @@ def test_crossdb_setup_owner_is_unique_and_wired_in_dependency_order() -> None:
     assert "const crossSetup = window.EU_CROSSDB_SETUP" in shell
     assert "const crossResults = window.EU_CROSSDB_RESULTS" in shell
     for state_marker in (
-        "const DATABASES = [",
+        "let DATABASES = null;",
         "sourceMethod: 'registered'",
         "rawRootDraft: ''",
         "rawRootScan: null",

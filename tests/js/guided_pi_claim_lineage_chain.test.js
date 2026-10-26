@@ -16,7 +16,7 @@ function reader(language = 'en') {
     icon: () => '',
   };
   const context = vm.createContext({ window, Intl });
-  for (const file of ['html-escape.js', 'screens-agent-report-reader.js']) {
+  for (const file of ['database-names.js', 'html-escape.js', 'screens-agent-report-reader.js']) {
     vm.runInContext(fs.readFileSync(path.join(JS, file), 'utf8'), context, { filename: file });
   }
   return window.AGENT_REPORT_READER;

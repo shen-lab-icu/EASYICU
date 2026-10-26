@@ -31,6 +31,8 @@ global.window = {
   },
 };
 
+const namesPath = require('node:path').join(require('node:path').dirname(ownerPath), 'database-names.js');
+vm.runInThisContext(fs.readFileSync(namesPath, 'utf8'), { filename: namesPath });
 vm.runInThisContext(fs.readFileSync(ownerPath, 'utf8'), { filename: ownerPath });
 
 const context = {

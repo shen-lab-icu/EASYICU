@@ -3,12 +3,16 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(process.argv[2], 'utf8');
+const names = path.join(path.dirname(process.argv[2]), 'database-names.js');
 const context = { console, EU_DATA: 'real' };
 context.window = context;
-vm.runInNewContext(source, vm.createContext(context), { filename: process.argv[2] });
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(names, 'utf8'), context, { filename: names });
+vm.runInContext(source, context, { filename: process.argv[2] });
 
 const setup = context.EU_CROSSDB_SETUP;
 assert(setup, 'Cross-DB setup owner must publish window.EU_CROSSDB_SETUP');
