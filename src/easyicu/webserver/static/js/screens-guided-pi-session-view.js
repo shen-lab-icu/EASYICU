@@ -90,7 +90,7 @@
         <div class="gpi-kicker">EASYICU PROJECT · COPILOT CONVERSATIONS</div>
         <h2>${tr('Select a research project first', '请先选择研究项目')}</h2>
         <p>${tr('Use the Research projects list on the left, or create a new project. EasyICU keeps study setup, runs, evidence, and conversation history in that project.', '请从左侧“研究项目”中选择一个项目，或新建项目。EasyICU 会在项目中保存研究配置、运行、证据和对话历史。')}</p>
-        <button class="btn primary gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 16)} ${tr('View the complete research workflow demo', '查看完整科研流程演示')}</button>
+        <button class="btn primary gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 16)} ${tr('Demo: from question to result', '演示：从提问到结果')}</button>
       </div>`;
     }
 

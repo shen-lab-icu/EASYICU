@@ -133,7 +133,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261023-demo-identity1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261026-walk1" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261026-walk2" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -532,7 +532,7 @@ def test_new_research_conversation_keeps_chat_open_until_data_is_needed() -> Non
     assert "dataConsentRequired ? '' : `<div class=\"gpi-compose\">" not in session_panel
     assert "DATA_CONSENT.requiresConfirmation" not in send_text
     assert "Reviewer demo" not in header
-    assert "查看完整科研流程演示" in shell
+    assert "演示：从提问到结果" in shell
     assert "Full demo" not in header
 
 
@@ -1293,7 +1293,7 @@ def test_guided_header_and_progress_keep_secondary_controls_available() -> None:
         assert selector in header
     for selector in ("data-gpi-presentation-pin", "data-gpi-demo"):
         assert selector not in header
-    assert "查看完整科研流程演示" in shell
+    assert "演示：从提问到结果" in shell
     assert "HEADER.render(headerOptions)" in shell
     assert "HEADER.renderModelControl(headerOptions)" in shell
     assert "function dismissHeaderOverflow(event)" in events
@@ -2384,7 +2384,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "本次只提交“拒绝”审核决定" in confirmation_owner
     assert "data-gpi-demo" in pi_owner
     assert "data-gpi-demo-exit" in pi_owner
-    assert "查看完整科研流程演示" in pi_owner
+    assert "演示：从提问到结果" in pi_owner
     assert "开始研究对话" in pi_owner
     assert "研究进度会自动保存" in pi_owner
     assert "开始前，先创建空白研究配置" not in pi_owner
