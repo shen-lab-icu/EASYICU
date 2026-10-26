@@ -50,6 +50,18 @@ function job(events, extra) {
 for (language of ['zh', 'en']) {
   window.EU_LANG = language;
 
+  const privacyCode = 'research_pipeline_projection_privacy_blocked';
+  const privacySentence = tr(
+    'For privacy, this result page is withheld: the page data contained content that must not be shown. The analysis output is kept. Send the failure receipt to support.',
+    '为保护隐私，本次结果页面暂不显示：页面数据中检测到不应展示的内容，分析结果已保留。请把失败回执发给支持人员。');
+  assert.equal(runFailureText(privacyCode), privacySentence);
+  const privacyStop = modules.require('runStop').create({ tr, runFailureText });
+  const privacyHtml = privacyStop.render({ savedRuns: [{
+    run_id: 'synthetic-withheld', run_status: 'blocked', gate_reason: privacyCode,
+  }] });
+  assert.ok(privacyHtml.includes(`<p>${esc(privacySentence)}</p>`));
+  assert.ok(!visible(privacyHtml).includes(privacyCode));
+
   const budgetCode = 'research_pipeline_provider_budget_exhausted';
   const budgetSentence = tr(
     'The run used up its model budget before it finished, and repeated connection failures count against that budget; try again once the connection is stable.',

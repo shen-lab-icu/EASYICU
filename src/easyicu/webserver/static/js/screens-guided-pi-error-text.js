@@ -986,6 +986,10 @@
           'The run stopped before finishing. Send the failure receipt to support and retry once the cause is found.',
           '本次运行未完成。请把失败回执发给支持人员，查明原因后再重试。',
         ),
+        research_pipeline_projection_privacy_blocked: tr(
+          'For privacy, this result page is withheld: the page data contained content that must not be shown. The analysis output is kept. Send the failure receipt to support.',
+          '为保护隐私，本次结果页面暂不显示：页面数据中检测到不应展示的内容，分析结果已保留。请把失败回执发给支持人员。',
+        ),
         research_pipeline_provider_budget_exhausted: tr(
           'The run used up its model budget before it finished, and repeated connection failures count against that budget; try again once the connection is stable.',
           '本次运行在完成前用完了模型预算，反复连接失败也会计入预算，请在连接稳定后重试。',
