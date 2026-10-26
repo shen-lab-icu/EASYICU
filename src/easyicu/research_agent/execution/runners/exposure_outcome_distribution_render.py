@@ -46,7 +46,13 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
-from ...figures.display_labels import figure_language_labels, label_lookup, scoped_label_lookup
+from ...figures.display_labels import (
+    binary_level,
+    display_label,
+    figure_language_labels,
+    label_lookup,
+    scoped_label_lookup,
+)
 from ...figures.presentation import wrap_figure_label as _wrap_category_label
 from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .bound_variable_display import load_bound_variable_descriptions
@@ -803,6 +809,18 @@ def _labels(
     return [str(value) for value in values]
 
 
+def _nice_axis_ceiling(value: float) -> tuple[float, float]:
+    """The smallest round axis end at or above ``value`` and its tick step."""
+
+    value = max(float(value), 1.0)
+    magnitude = 10 ** math.floor(math.log10(value))
+    for step in (0.1, 0.2, 0.25, 0.5, 1.0, 2.0, 2.5, 5.0, 10.0):
+        tick = step * magnitude
+        if value / tick <= 5:
+            return tick * math.ceil(value / tick), tick
+    return 10 * magnitude, 2 * magnitude
+
+
 def run_exposure_outcome_distribution_figure(
     *,
     out_dir: Path,
@@ -905,38 +923,60 @@ def run_exposure_outcome_distribution_figure(
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style()
-    labels = _labels(levels, level_labels, exposure=str(design["exposure_column"]),
+    exposure_column = str(design["exposure_column"])
+    labels = _labels(levels, level_labels, exposure=exposure_column,
                      display_labels=display_labels)
-    positions = list(range(len(levels)))
+    # Reader names: the Planner's label, else the identifier in plain words.
+    exposure_name = display_label(exposure_column, display_labels)
+    outcome_name = display_label(design["outcome_column"], display_labels)
+    # A 0/1 indicator without Planner level names reads Yes/No under the
+    # variable's own name. Rows keep the order the design declared.
+    indicator = [binary_level(value) for value in levels["exposure_level"]]
+    unnamed_indicator = (
+        sorted(code for code in indicator if code is not None) == [0, 1]
+        and labels == [str(value) for value in levels["exposure_level"]]
+    )
+    binary = sorted(code for code in indicator if code is not None) == [0, 1]
+    if unnamed_indicator:
+        labels = ["Yes" if code == 1 else "No" for code in indicator]
+    drawn = levels
+    # One accent colour for the groups; an indicator's absent level is the
+    # neutral comparator, so the two panels read the same group the same way.
+    colours = [
+        palette["neutral"] if binary and code == 0 else palette["blue"] for code in indicator
+    ]
+    ink, ink_2, ink_3 = palette["baseline"], palette["ink_2"], palette["ink_3"]
+    mask = {"facecolor": "white", "edgecolor": "none", "pad": 0.3}
+    positions = list(range(len(drawn)))
+    bar_height = 0.56
 
-    fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(7.2, 3.4), sharey=True)
+    row_height = 0.42 if len(drawn) <= 3 else 0.3
+    height = 1.15 + row_height * len(drawn) + (0.45 if contrast is not None else 0.0)
+    fig, (ax_a, ax_b) = plt.subplots(
+        1, 2, figsize=(7.2, height), sharey=True,
+        gridspec_kw={"width_ratios": [1.0, 1.1]},
+    )
+    bottom_inches = 0.42 + (0.45 if contrast is not None else 0.0)
     fig.subplots_adjust(
-        left=0.30,
-        right=0.98,
-        bottom=0.29 if contrast is not None else 0.20,
-        top=0.84,
-        wspace=0.35,
+        left=0.30, right=0.97, bottom=bottom_inches / height,
+        top=1.0 - 0.36 / height, wspace=0.1,
     )
+    for axis in (ax_a, ax_b):
+        axis.spines["left"].set_visible(False)
+        axis.tick_params(axis="y", length=0)
 
-    prevalence = levels["exposure_pct"].astype(float)
-    prevalence_low = (
-        levels["exposure_ci_low_pct"].astype(float) if not counts_only else prevalence
-    )
-    prevalence_high = (
-        levels["exposure_ci_high_pct"].astype(float) if not counts_only else prevalence
-    )
-    ax_a.barh(
-        positions,
-        prevalence,
-        xerr=(
-            [prevalence - prevalence_low, prevalence_high - prevalence]
-            if not counts_only
-            else None
-        ),
-        color=palette["blue"],
-        error_kw={"ecolor": palette["neutral"], "capsize": 2.0, "elinewidth": 1.0},
-        height=0.38,
-    )
+    prevalence = drawn["exposure_pct"].astype(float)
+    prevalence_low = drawn["exposure_ci_low_pct"].astype(float) if not counts_only else prevalence
+    prevalence_high = drawn["exposure_ci_high_pct"].astype(float) if not counts_only else prevalence
+    ax_a.barh(positions, [100.0] * len(positions), height=bar_height,
+              color=palette["track"], zorder=1)
+    ax_a.barh(positions, prevalence, height=bar_height, color=colours, zorder=2)
+    if not counts_only:
+        ax_a.errorbar(
+            prevalence, positions,
+            xerr=[prevalence - prevalence_low, prevalence_high - prevalence],
+            fmt="none", ecolor=ink_2, elinewidth=0.8, zorder=3,
+        )
     ax_a.set_yticks(positions)
     label_font = ax_a.get_yticklabels()[0].get_fontproperties()
     canvas = fig.canvas.get_renderer()
@@ -961,80 +1001,104 @@ def run_exposure_outcome_distribution_figure(
             else:
                 high_width, wrapped_labels = candidate_width, candidates
     ax_a.set_yticklabels(wrapped_labels)
+    header = _wrap_category_label(
+        exposure_name, renderer=canvas, font=label_font, width=label_width
+    )
     rendered_width = max(
         canvas.get_text_width_height_descent(part, label_font, False)[0]
-        for label in wrapped_labels for part in label.split("\n")
+        for label in [*wrapped_labels, header] for part in label.split("\n")
     )
-    fig.subplots_adjust(left=max(0.16, (rendered_width + fig.dpi * 0.18) / fig.bbox.width))
+    fig.subplots_adjust(left=max(0.12, (rendered_width + fig.dpi * 0.24) / fig.bbox.width))
     # One aligned category axis serves both panels. Repeating a long clinical
     # label in the inter-panel gutter can cover the neighbouring data marks.
-    ax_a.set_ylim(len(labels) - 0.3, -0.5)
-    ax_a.set_xlim(
-        min(0.0, float(prevalence_low.min()) * 1.05),
-        max(100.0, float(prevalence_high.max()) * 1.05),
-    )
-    ax_a.set_xlabel("Share of the analysed cohort (%)")
-    ax_a.set_title("Exposure distribution", loc="left", pad=4)
-    ax_a.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
-    for position, pct, n_rows, denominator in zip(
-        positions,
-        levels["exposure_pct"],
-        levels["n_rows"],
-        levels["exposure_denominator"],
-    ):
-        ax_a.text(
-            0.98,
-            position + 0.26,
-            f"{float(pct):.2f}%  {int(n_rows):,}/{int(denominator):,}",
-            transform=ax_a.get_yaxis_transform(),
-            ha="right",
-            va="top",
-            fontsize=7.2,
+    ax_a.set_ylim(len(labels) - 0.35, -0.65)
+    ax_a.set_xlim(0.0, 100.0)
+    ax_a.set_xticks([0, 25, 50, 75, 100])
+    ax_a.set_xlabel(f"Share of {int(total['n_rows']):,} analysed records (%)")
+    ax_a.set_title("Exposure distribution", pad=6)
+    for position, pct, high in zip(positions, prevalence, prevalence_high):
+        # Inside a long bar's end when no interval runs through it.
+        inside = counts_only and float(pct) > 72.0
+        ax_a.annotate(
+            f"{float(pct):.1f}%", xy=(float(pct if inside else high), position),
+            xytext=(-3 if inside else 3, 0), textcoords="offset points",
+            ha="right" if inside else "left", va="center", fontsize=7, fontweight="bold",
+            color="white" if inside else ink, zorder=4,
         )
-    add_panel_label(ax_a, "A", x=-0.14, y=1.04)
 
-    rate = levels["outcome_rate_pct"].astype(float)
-    low = levels["ci_low_pct"].astype(float) if not counts_only else rate
-    high = levels["ci_high_pct"].astype(float) if not counts_only else rate
-    if counts_only:
-        ax_b.plot(rate, positions, "o", color=palette["blue"], markersize=4.2)
-    else:
+    rate = drawn["outcome_rate_pct"].astype(float)
+    low = drawn["ci_low_pct"].astype(float) if not counts_only else rate
+    high = drawn["ci_high_pct"].astype(float) if not counts_only else rate
+    overall_rate = _finite(total.get("outcome_rate_pct"))
+    ax_b.barh(positions, rate, height=bar_height, color=colours, zorder=2)
+    if not counts_only:
         ax_b.errorbar(
-            rate,
-            positions,
-            xerr=[rate - low, high - rate],
-            fmt="o",
-            color=palette["blue"],
-            ecolor=palette["neutral"],
-            elinewidth=1.0,
-            capsize=2.0,
-            markersize=4.2,
+            rate, positions, xerr=[rate - low, high - rate],
+            fmt="none", ecolor=ink_2, elinewidth=0.8, zorder=3,
         )
     ax_b.tick_params(axis="y", left=False, labelleft=False)
-    lower = min(0.0, float(low.min()) * 1.15)
-    upper = max(5.0, float(high.max()) * 1.35)
-    ax_b.set_xlim(lower, upper)
-    ax_b.set_xlabel("Observed outcome proportion (%)")
-    ax_b.set_title("Outcome proportion by group", loc="left", pad=4)
-    ax_b.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
-    for position, estimate, events, denominator, missing in zip(
-        positions,
-        rate,
-        levels["outcome_events"],
-        levels["outcome_denominator"],
-        levels["outcome_missing_n"],
-    ):
-        suffix = f"\n({int(missing):,} unobserved)" if int(missing) else ""
-        ax_b.text(
-            0.98,
-            position + 0.26,
-            f"{float(estimate):.2f}%  {int(events):,}/{int(denominator):,}{suffix}",
-            transform=ax_b.get_yaxis_transform(),
-            va="top",
-            ha="right",
-            fontsize=7.2,
+    # Room for the value and count after the longest mark (about 80 pt at
+    # these sizes, more with an unobserved note); a proportion ends at 100%.
+    axis_points = ax_b.get_position().width * 7.2 * 72.0
+    label_points = 80.0 + (60.0 if int(drawn["outcome_missing_n"].max()) else 0.0)
+    room = min(label_points / axis_points, 0.6)
+    longest = max(float(high.max()), overall_rate or 0.0)
+    upper, step = _nice_axis_ceiling(min(longest / (1.0 - room), 100.0))
+    ax_b.set_xlim(min(0.0, float(low.min())), upper)
+    ax_b.set_xticks([step * index for index in range(int(round(upper / step)) + 1)])
+    ax_b.set_xlabel(f"{outcome_name} (%)")
+    ax_b.set_title(f"{outcome_name} by group", pad=6)
+    if overall_rate is not None and len(drawn) > 1:
+        ax_b.axvline(overall_rate, color=ink_2, linewidth=0.6, linestyle=(0, (2.5, 2)), zorder=1)
+        ax_b.annotate(
+            f"All records {overall_rate:.1f}%", xy=(overall_rate, len(labels) - 0.35),
+            xytext=(3, 2), textcoords="offset points", ha="left", va="bottom",
+            fontsize=6.0, color=ink_2,
         )
-    add_panel_label(ax_b, "B", x=-0.14, y=1.04)
+    for position, estimate, end, events, denominator, missing in zip(
+        positions, rate, high, drawn["outcome_events"],
+        drawn["outcome_denominator"], drawn["outcome_missing_n"],
+    ):
+        suffix = f" · {int(missing):,} unobserved" if int(missing) else ""
+        count = f"{int(events):,} / {int(denominator):,}{suffix}"
+        if float(end) > (1.0 - room) * upper:
+            # Near the axis end the pair reads right-aligned at the edge, masked
+            # over any interval line it crosses.
+            note = ax_b.annotate(
+                count, xy=(upper, position), xytext=(0, 0), textcoords="offset points",
+                ha="right", va="center", fontsize=6.0, color=ink_3, zorder=4, bbox=mask,
+            )
+            ax_b.annotate(
+                f"{float(estimate):.1f}%", xy=(0.0, 0.5), xycoords=note, xytext=(-7, 0),
+                textcoords="offset points", ha="right", va="center", fontsize=7,
+                fontweight="bold", color=ink, zorder=4, bbox=mask,
+            )
+            continue
+        value = ax_b.annotate(
+            f"{float(estimate):.1f}%", xy=(float(end), position), xytext=(4, 0),
+            textcoords="offset points", ha="left", va="center", fontsize=7,
+            fontweight="bold", color=ink, zorder=4, bbox=mask,
+        )
+        ax_b.annotate(
+            count, xy=(1.0, 0.5), xycoords=value, xytext=(4, 0), textcoords="offset points",
+            ha="left", va="center", fontsize=6.0, color=ink_3, zorder=4, bbox=mask,
+        )
+    # Each letter sits on its title's line: A at the figure's edge, B just
+    # left of its title.
+    for axis, letter, left_inches in ((ax_a, "A", 0.04), (ax_b, "B", None)):
+        box = axis.get_position()
+        width_inches, height_inches = box.width * 7.2, box.height * height
+        x = (
+            (left_inches - box.x0 * 7.2) / width_inches
+            if left_inches is not None else -0.14 / width_inches
+        )
+        add_panel_label(axis, letter, x=x, y=1.0 + 5.0 / 72.0 / height_inches)
+    # The variable's name heads the category column, flush with letter A.
+    box = ax_a.get_position()
+    ax_a.text(
+        (0.04 - box.x0 * 7.2) / (box.width * 7.2), 1.0, header,
+        transform=ax_a.transAxes, ha="left", va="top", fontsize=6.3, color=ink_3,
+    )
     if contrast is not None:
         coverage = 100.0 * float(contrast["confidence_level"])
         contrast_annotation = (
@@ -1045,21 +1109,16 @@ def run_exposure_outcome_distribution_figure(
             f"{float(contrast['risk_difference_ci_high_pct']):.1f}); "
             f"{contrast['risk_difference_covariance']}"
         )
-        ax_b.text(
-            0.0,
-            -0.23,
+        ax_b.annotate(
             textwrap.fill(
                 contrast_annotation,
-                width=54,
+                width=70,
                 break_long_words=False,
                 break_on_hyphens=False,
             ),
-            transform=ax_b.transAxes,
-            ha="left",
-            va="top",
-            fontsize=6.0,
-            linespacing=1.25,
-            color=palette["neutral"],
+            xy=(0.0, 0.0), xycoords="axes fraction", xytext=(0, -24),
+            textcoords="offset points", ha="left", va="top",
+            fontsize=6.0, linespacing=1.25, color=ink_2,
         )
     source_data = [full_source.name, prevalence_source.name, outcome_source.name]
     if contrast is not None:

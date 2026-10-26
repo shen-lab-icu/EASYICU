@@ -179,6 +179,10 @@ def _sentence_case(text: str) -> str:
         # Keep unknown acronyms and mixed-case notation (e.g. CRP, eGFR).
         if word.isupper() or (not word.islower() and not word.istitle()):
             return word
+        # A capitalised word with a version suffix names a definition
+        # (Sepsis-3), not an ordinary noun.
+        if word.istitle() and re.match(r"-\d", text[match.end():match.end() + 2]):
+            return word
         return word.capitalize() if match.start() == 0 else word.lower()
 
     return re.sub(r"[A-Za-z][A-Za-z0-9]*", word_case, text)
@@ -272,6 +276,12 @@ def _binary_level(value: Any) -> Optional[int]:
     if token in {"1", "1.0", "true", "yes", "y", "present", "positive"}:
         return 1
     return None
+
+
+def binary_level(value: Any) -> Optional[int]:
+    """1 or 0 for a value that spells a binary indicator's level, else None."""
+
+    return _binary_level(value)
 
 
 def scoped_label_lookup(
@@ -389,7 +399,7 @@ def display_label(
         "rrt": "RRT",
         "sep3": "Sepsis-3",
         "sofa": "SOFA",
-        "sofa2": "SOFA",
+        "sofa2": "SOFA-2",
         "spo2": "SpO2",
         "susp": "Suspected",
         "temp": "Temperature",
@@ -401,6 +411,7 @@ def display_label(
 
 __all__ = [
     "binary_contrast_label",
+    "binary_level",
     "binary_scope_label",
     "display_label",
     "figure_language_labels",

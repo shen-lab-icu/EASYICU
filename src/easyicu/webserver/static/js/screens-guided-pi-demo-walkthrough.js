@@ -9,7 +9,7 @@
   'use strict';
 
   const { esc } = window.EU_HTML;
-  const TRACE_URL = 'assets/demo/sofa2-run-trace.json?v=20261026-walk1';
+  const TRACE_URL = 'assets/demo/sofa2-run-trace.json?v=20261026-fig1';
   // Replay pacing (ms). A row whose recorded time is long holds a little
   // longer so the difference is felt; the row itself shows the real time.
   const PACE = { message: 900, user: 600, step: 650, longStep: 1500, card: 700, chapter: 500 };
@@ -175,7 +175,7 @@
     if (beat.card === 'dictionary') return cards().dictionaryCard(trace);
     if (beat.card === 'literature') return cards().literatureCard(trace, { resource });
     if (beat.card === 'result') return cards().resultCard(trace, walk.selection, owner);
-    if (beat.card === 'boundary') return cards().boundaryCard(trace);
+    if (beat.card === 'boundary') return cards().boundaryCard(trace, owner);
     return '';
   }
   function beatHtml(beat, partialSteps) {

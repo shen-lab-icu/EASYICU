@@ -279,6 +279,15 @@ def build(run_dir: Path) -> dict[str, Any]:
     demo_figure = ROOT / "src/easyicu/webserver/static/assets/demo/sofa2-phenotype-mortality.png"
     if sha256_bytes(demo_figure.read_bytes()) != records[CHAIN[2]]["sha256"]:
         fail("the demo's main figure is not the run's registered figure")
+    # The demo shows the same result table drawn by the current renderer; the
+    # registered figure above stays the run's record.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from rerender_demo_figure import rerender_all
+
+    rerendered = rerender_all(run_dir)
+    main = rerendered.pop("main")
+    if main["source_table"] != CHAIN[0] or main["source_sha256"] != records[CHAIN[0]]["sha256"]:
+        fail("the re-rendered figure was not drawn from the registered result table")
 
     return {
         "schema_version": SCHEMA,
@@ -328,6 +337,8 @@ def build(run_dir: Path) -> dict[str, Any]:
             "records": records,
             "result_rows": result_rows(table_bytes),
             "code_excerpt": code_bytes.decode("utf-8").splitlines()[:CODE_EXCERPT_LINES],
+            "rerender": main,
+            "rerender_supporting": rerendered,
         },
         "writer": {"event": next(row["event"] for row in audit if row["event"].startswith("STRICT evidence"))},
     }

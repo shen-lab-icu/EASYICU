@@ -27,6 +27,7 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from ...numeric_scalars import coerce_optional_finite_float as _finite
 from ...schema import AnalysisStep
 from ._shared import figure_product as _figure_product, method_head as _method_head
 
@@ -417,6 +418,19 @@ def _humanize_token(value: Any) -> str:
     return f"{text[:1].upper()}{text[1:]}" if text else ""
 
 
+_PREDICATE_SYMBOLS = {">=": "≥", "<=": "≤", ">": ">", "<": "<", "==": "=", "!=": "≠"}
+
+
+def _predicate_text(row: Mapping[str, Any]) -> str:
+    """`` ≥ 18`` for a bound comparison; nothing when the ledger has none."""
+
+    symbol = _PREDICATE_SYMBOLS.get(str(row.get("op") or "").strip())
+    value = _finite(row.get("value")) if symbol else None
+    if value is None:
+        return ""
+    return f" {symbol} {value:g}"
+
+
 def _landmark_hours(frame: pd.DataFrame) -> float | None:
     """Read time only from the digest-bound table, never a nearby summary."""
 
@@ -509,7 +523,7 @@ def _display_labels(frame: pd.DataFrame, *, complete: bool) -> list[str]:
             continue
         concept = _humanize_token(row.get("concept_id"))
         label = (
-            f"{_humanize_token(kind)} · {concept}"
+            f"{_humanize_token(kind)} · {concept}{_predicate_text(row)}"
             if concept and kind.casefold() in {"inclusion", "exclusion"}
             else _humanize_token(kind)
         )
@@ -747,10 +761,11 @@ def _add_flow_node(
                 f"round,pad={min(0.006, height * 0.05)},"
                 f"rounding_size={min(0.012, height * 0.15)}"
             ),
-            linewidth=1.4 if final else 0.9,
-            edgecolor=PALETTE_CLINICAL["blue"],
-            facecolor=PALETTE_CLINICAL["blue_soft"],
-            alpha=0.85 if final else 0.45,
+            # Stages read as quiet grey cards; the analysed population is the
+            # one accented box.
+            linewidth=1.0 if final else 0.6,
+            edgecolor=PALETTE_CLINICAL["blue"] if final else PALETTE_CLINICAL["rule"],
+            facecolor=_FINAL_NODE_FILL if final else PALETTE_CLINICAL["track"],
             zorder=2,
         )
     )
@@ -778,13 +793,15 @@ def _add_flow_node(
         va="center",
         fontsize=count_fontsize,
         fontweight="bold",
-        color=PALETTE_CLINICAL["blue"],
+        color=PALETTE_CLINICAL["blue"] if final else PALETTE_CLINICAL["baseline"],
         zorder=3,
     )
 
 
 # Space between a side box's edge and its text, in points.
 _NOTE_BOX_PAD_PT = 3.0
+#: The analysed population's box: a light tint of the accent blue.
+_FINAL_NODE_FILL = "#E4EBF5"
 
 
 def _add_exclusion_box(
@@ -821,7 +838,7 @@ def _add_exclusion_box(
     ax.plot(
         [hub_x, left],
         [middle, middle],
-        color=PALETTE_CLINICAL["neutral"],
+        color=PALETTE_CLINICAL["rule"],
         linewidth=0.6,
         zorder=0,
     )
@@ -832,7 +849,7 @@ def _add_exclusion_box(
             top - bottom,
             boxstyle="round,pad=0,rounding_size=0.006",
             linewidth=0.6,
-            edgecolor=PALETTE_CLINICAL["neutral_light"],
+            edgecolor=PALETTE_CLINICAL["rule"],
             facecolor="white",
             zorder=1,
         )
@@ -844,7 +861,8 @@ def _add_exclusion_box(
         ha="left",
         va="bottom",
         fontsize=fontsize,
-        color=PALETTE_CLINICAL["red"],
+        fontweight="bold",
+        color=PALETTE_CLINICAL["baseline"],
         zorder=3,
     )
     if missing_note:
@@ -855,7 +873,7 @@ def _add_exclusion_box(
             ha="left",
             va="top",
             fontsize=fontsize,
-            color=PALETTE_CLINICAL["red"],
+            color=PALETTE_CLINICAL["ink_2"],
             zorder=3,
         )
     if shares:
@@ -866,7 +884,7 @@ def _add_exclusion_box(
             ha="left",
             va="top",
             fontsize=fontsize,
-            color=PALETTE_CLINICAL["neutral"],
+            color=PALETTE_CLINICAL["ink_3"],
             zorder=3,
         )
 
@@ -912,13 +930,16 @@ def render_cohort_flow_axis(
     missing = (
         [0] * len(counts) if compact else _excluded_missing_counts(frame, excluded)
     )
-    body_fontsize = 6.0 if compact else 8.5
-    count_fontsize = 6.4 if compact else 9.0
+    body_fontsize = 6.0 if compact else 7.5
+    count_fontsize = 6.4 if compact else 8.0
     note_fontsize = 5.4 if compact else 7.5
-    wrap = 24 if compact else 36
+    wrap = 24 if compact else 40
     hub_x = 0.36 if compact else 0.40
-    side_x = 0.66 if compact else 0.74
-    width = 0.56 if compact else 0.52
+    side_x = 0.66 if compact else 0.70
+    width = 0.56 if compact else 0.44
+    if not any(excluded[1:]) and not any(missing):
+        # Nothing leaves the flow, so no side column: the stages sit centred.
+        hub_x = 0.5
     if not complete:
         _add_flow_node(
             ax,
@@ -996,9 +1017,9 @@ def render_cohort_flow_axis(
                 (hub_x, y_previous - height / 2),
                 (hub_x, y + height / 2),
                 arrowstyle="-|>",
-                mutation_scale=11 if not compact else 8,
-                linewidth=0.9 if not compact else 0.7,
-                color=PALETTE_CLINICAL["baseline"],
+                mutation_scale=9 if not compact else 7,
+                linewidth=0.7 if not compact else 0.6,
+                color=PALETTE_CLINICAL["ink_2"],
                 shrinkA=0.0,
                 shrinkB=0.0,
                 zorder=1,
@@ -1092,7 +1113,7 @@ def run_cohort_flow_figure(
 
     apply_publication_style()
     # The caption names the figure, so the canvas holds only the flow.
-    height = max(2.4, 0.8 * len(frame) + 0.8)
+    height = max(1.7, 0.62 * len(frame) + 0.55)
     fig, ax = plt.subplots(figsize=(7.2, height))
     render_cohort_flow_axis(ax, frame, display_labels, complete=complete)
     fig.tight_layout(pad=0.4)

@@ -60,8 +60,8 @@ def test_display_label_fallback_does_not_invent_endpoint_semantics() -> None:
 
 
 def test_fallback_display_labels_expand_common_icu_tokens() -> None:
-    assert display_label("sep3_sofa2") == "Sepsis-3 SOFA"
-    assert display_label("sofa2_resp") == "SOFA respiratory"
+    assert display_label("sep3_sofa2") == "Sepsis-3 SOFA-2"
+    assert display_label("sofa2_resp") == "SOFA-2 respiratory"
     assert display_label("lact") == "Lactate"
     assert display_label("spo2") == "SpO2"
 
@@ -100,7 +100,7 @@ def test_figure_labels_use_sentence_case_and_preserve_acronyms(identifier, decla
     ("in_hospital_mortality", "In-hospital mortality"),
     ("sofa_score", "SOFA score"),
     ("kdigo_aki_stage", "KDIGO AKI stage"),
-    ("sofa2_resp", "SOFA respiratory"),
+    ("sofa2_resp", "SOFA-2 respiratory"),
     ("lactate_tertile", "Lactate tertile"),
     ("ph", "pH"),
     ("spo2", "SpO2"),

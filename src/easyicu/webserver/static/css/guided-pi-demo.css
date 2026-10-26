@@ -24,9 +24,12 @@
 .gpi-demo-result .gpi-run-answer-figure{max-width:680px}
 .gpi-demo-result .gpi-run-answer-figure img{display:block;width:100%;height:auto;padding:6px;border:1px solid var(--line);border-radius:8px;background:#fff;box-sizing:border-box}
 .gpi-demo-table{margin:14px 0 4px;overflow-x:auto}
-.gpi-demo-table table{width:100%;border-collapse:collapse;font-size:13px}
-.gpi-demo-table th,.gpi-demo-table td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
-.gpi-demo-table thead th{color:var(--ink-3);font-weight:550}
+/* A journal three-line table: heavy top and bottom rules, a light rule under the head. */
+.gpi-demo-table table{width:100%;border-collapse:collapse;font-size:13px;border-top:1.5px solid var(--ink-1);border-bottom:1.5px solid var(--ink-1)}
+.gpi-demo-table th,.gpi-demo-table td{padding:6px 10px;text-align:left;white-space:nowrap}
+.gpi-demo-table thead th{color:var(--ink-2);font-weight:600;border-bottom:.75px solid var(--ink-2)}
+.gpi-demo-table thead th:not(:first-child),.gpi-demo-table td{text-align:right}
+.gpi-demo-table tbody tr:last-child>*{border-top:.5px solid var(--line)}
 .gpi-demo-table td{font-variant-numeric:tabular-nums}
 .gpi-demo-followups .gpi-followup-prompt{cursor:default}
 .gpi-demo-governance-body{padding:4px 16px 12px;font-size:13px;line-height:1.65;color:var(--ink-2)}

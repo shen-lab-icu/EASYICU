@@ -91,11 +91,18 @@ test('the replay stops at each card and waits for the reader to confirm the plan
   assert.match(html(), /4,480 ÷ 33,997 = 13\.18%/);
   assert.match(html(), /table_step_artifact_257971d9f784c410/);
   assert.match(html(), /列 outcome_rate_pct，行 exposure = 1/);
+  // The run's other figures sit under the main one, each its own redrawn table.
+  assert.match(html(), /sofa2-cohort-flow-rerendered\.png/);
+  assert.match(html(), /数据完整性（补充）/);
 
   click('select', { gpiWalkTarget: 'figure' });
   assert.match(html(), /这张图从哪来/);
   assert.match(html(), new RegExp(trace.evidence.records.figure_step_artifact_1c86f17d397e23b3.sha256.slice(0, 9)));
   assert.match(html(), /B 图的数据/);
+  // The shown figure is the result table redrawn; the run's own figure is named beside it.
+  assert.match(html(), /上面这张图由当前绘图程序根据下方结果表绘制/);
+  assert.match(html(), new RegExp(trace.evidence.rerender.png_sha256.slice(0, 9)));
+  assert.match(html(), /运行原图/);
   click('select', { gpiWalkTarget: 'cell:1:stays' });
   assert.match(html(), /94,458 个 ICU 入住中的 60,461 个/);
 
@@ -106,6 +113,8 @@ test('the replay stops at each card and waits for the reader to confirm the plan
   assert.match(html(), /data-gpi-demo-exit/);
   assert.match(html(), /这个结果能读到哪一步/);
   assert.match(html(), /descriptive_only/);
+  assert.match(html(), /sofa2-study-report\.zh\.html/);
+  assert.match(html(), /打开研究结果报告/);
   click('followup', { gpiWalkIndex: '0' });
   assert.match(html(), /连接模型后，就能在你自己的项目里接着问/);
   assert.ok(asideSyncs >= 5, `the right rail followed ${asideSyncs} chapter changes`);
@@ -163,5 +172,6 @@ test('without the trace record the conversation still replays and claims no reco
   assert.equal(fresh.state().finished, true);
   const page = fresh.panelHtml(deps);
   assert.doesNotMatch(page, /data-gpi-trace-card="dictionary"/);
+  assert.match(page, /assets\/demo\/sofa2-phenotype-mortality-rerendered\.png/);
   assert.match(page, /assets\/demo\/sofa2-phenotype-mortality\.png/);
 });
