@@ -86,9 +86,9 @@ def test_the_home_offers_clinician_questions_inside_v1_scope():
     # A card fills the composer; it neither sends nor names a method template.
     assert html.count('data-gpi-starter-method=""') == 6
     assert "data-gpi-starter-search" not in html and "data-gpi-starter-shuffle" not in html
-    # The notes name all six databases and keep acceptance apart from availability.
+    # The notes name all six databases and claim no real-data acceptance yet.
     assert "使用前须知" in html and "AmsterdamUMCdb、SICdb 上的" in html
-    assert "其余组合可以运行，但尚未在真实数据上验收" in html
+    assert "六个库都还没有通过正常入口的真实数据运行验收" in html and "已验收" not in html
     en = _render("en")
     assert "Before you start" in en and "Use this question" in en
 

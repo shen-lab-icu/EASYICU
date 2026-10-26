@@ -135,7 +135,7 @@
       : tr('Confirm the data and review the analysis plan. After approval, analysis runs on this computer.', '先确认数据，再核对分析计划。批准后在本机运行分析。');
     const lines = [
       [tr('Can do', '能做'), tr('descriptive, association, prediction, survival, subtyping and causal studies on MIMIC-III, MIMIC-IV, eICU, HiRID, AmsterdamUMCdb and SICdb, as far as each database records what the question needs.', 'MIMIC-III、MIMIC-IV、eICU、HiRID、AmsterdamUMCdb、SICdb 上的描述、关联、预测、生存、亚型与因果分析，以该库记录了问题所需的信息为限。')],
-      [tr('Accepted', '已验收'), tr('every study type on MIMIC-IV, and descriptive, association and prediction studies on eICU. Other combinations run but are not yet accepted on real data.', 'MIMIC-IV 的全部研究类型，以及 eICU 的描述、关联与预测分析。其余组合可以运行，但尚未在真实数据上验收。')],
+      [tr('Not yet accepted', '尚未验收'), tr('no database has yet passed acceptance through a normal real-data run; the Data map marks each one.', '六个库都还没有通过正常入口的真实数据运行验收，数据地图逐库标明。')],
       [tr('When data differ', '口径不同'), tr('If a database lacks what the question asks for, such as in-hospital death or exact age, the plan states the substitute and runs only after you approve it; otherwise EasyICU says what is missing.', '某个库缺少问题要求的信息时（例如没有院内死亡或只有年龄段），计划会写明替代口径，你批准后才运行；无法替代时会说明缺少什么。')],
       [tr('How it works', '流程'), workflow],
       [tr('Results', '结果'), tr('analysis-level evidence; review them before any publication use.', '分析级证据。用于发表前需要人工复核。')],
