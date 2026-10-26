@@ -1,0 +1,12 @@
+/* Owner: plan-review card for how the selected database changes a study (screens-guided-pi-source-adjustments.js). */
+.gpi-source-adjustments{margin:10px 0;padding:10px 12px;border:1px solid color-mix(in srgb,var(--warn) 35%,var(--hair));border-radius:8px;background:var(--warn-soft)}
+.gpi-source-adjustments h4{margin:0 0 8px;color:var(--ink);font-size:13px;font-weight:650}
+.gpi-source-adjustments ul{display:grid;gap:8px;margin:0;padding:0;list-style:none}
+.gpi-source-swap{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:13px}
+.gpi-source-swap s{color:var(--ink-4)}.gpi-source-swap span{color:var(--ink-4)}.gpi-source-swap strong{color:var(--ink);font-weight:650}
+.gpi-source-adjustments li p{margin:2px 0 0;color:var(--ink-3);font-size:12px;line-height:1.45}
+.gpi-source-adjustments code{color:var(--ink-4);font-size:11px;overflow-wrap:anywhere}
+.gpi-source-adjustments>p{margin:8px 0 0;color:var(--ink-2);font-size:12px}
+.gpi-source-adjustments>p.is-blocked{color:#81520a;font-weight:600}
+.gpi-source-adjustments.is-refusal{border-color:var(--hair);background:var(--surface-2)}
+.gpi-source-adjustments.is-refusal ul{gap:4px;padding-left:18px;list-style:disc;color:var(--ink-2);font-size:12.5px}
