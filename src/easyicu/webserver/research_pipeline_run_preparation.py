@@ -24,10 +24,12 @@ from easyicu.extensions import (
 from easyicu.research_agent.publication_skills import (
     publication_skill_flags_from_settings,
 )
+from easyicu.research_agent.research_context.export_selection import SourceIdentity
 from easyicu.webserver import (
     capabilities as capability_policy,
     dataio,
     provider_adapter,
+    sources,
 )
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.landmark_survival_runtime_projection import (
@@ -184,6 +186,7 @@ class PreparedResearchPipelineRun:
     authority: PreparedLaunchAuthority
     execution: PreparedLaunchExecution
     prepared_plan_revision: Optional[PreparedPlanRevision] = None
+    source_identity: SourceIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -831,4 +834,5 @@ def prepare_research_pipeline_run(
         authority=authority,
         execution=execution,
         prepared_plan_revision=revision,
+        source_identity=sources.registered_source_identity(request.export_path),
     )

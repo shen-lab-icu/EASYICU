@@ -5204,9 +5204,10 @@ def test_extraction_job_registers_finished_export_as_active(
 
         return runner
 
-    def fake_register_source(path, label=None, active=True, crossdb=True):
+    def fake_register_source(path, label=None, active=True, crossdb=True, source_identity=None):
         calls.append(
-            {"path": path, "label": label, "active": active, "crossdb": crossdb}
+            {"path": path, "label": label, "active": active, "crossdb": crossdb,
+             "source_identity": source_identity}
         )
         return {"ok": True, "active_path": path, "sources": [{"path": path}]}
 
@@ -5235,6 +5236,8 @@ def test_extraction_job_registers_finished_export_as_active(
             "label": "Latest export",
             "active": True,
             "crossdb": True,
+            # No study context bound this extraction, so there is no registration to freeze.
+            "source_identity": None,
         }
     ]
     assert snapshot["result"]["registered_source"]["active_path"] == str(export_dir)

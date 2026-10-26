@@ -213,6 +213,7 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
     study_context_id = str(body.get("study_context_id") or "").strip()
     expected_revision = body.get("study_context_revision")
     study_context = None
+    source_identity = None
     if study_context_id:
         try:
             study_context = context_store.get_context(study_context_id)
@@ -260,6 +261,8 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
                     "study_context_id": study_context_id,
                 },
             )
+        # Freeze the registration only after its raw extraction binding agrees.
+        source_identity = source_store.registered_source_identity(str(bound_source.get("path") or ""))
     start_gate = threading.Event()
     start_abort: Dict[str, Any] = {}
 
@@ -283,6 +286,7 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
                     # Registered, but selected for comparison only when the gate can
                     # line it up and the instance is not hosted (crossdb_review owns it).
                     crossdb=crossdb_review.selects_finished_extraction(exported),
+                    source_identity=source_identity.to_dict() if source_identity is not None else None,
                 )
                 result["registered_source"] = {
                     "ok": bool(registry.get("ok")),

@@ -265,11 +265,16 @@ def register_export(
     check_cancelled(job, "register")
     job.emit({"type": "progress", "phase": "register", "stage": "starting"})
     label = f"{source.title} v{source.version}"
+    prepared = read_marker(paths.prepared_marker, source) or {}
     registry = source_store.register_source(
         str(paths.export),
         label=label,
         active=True,
         crossdb=True,
+        source_identity={
+            "source_id": source.id, "version": source.version,
+            "archive_sha256": prepared.get("archive_sha256"),
+        },
     )
     if not registry.get("ok"):
         raise DemoSourceError("Prepared demo export could not be registered")

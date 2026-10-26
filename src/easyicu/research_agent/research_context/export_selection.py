@@ -50,7 +50,9 @@ identifier or in the order its source lists them, never a random sample.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import re
+from dataclasses import asdict, dataclass
 from typing import Any, Literal, Mapping, Optional, Sequence, get_args
 
 from ..schema import ResearchContext
@@ -59,6 +61,57 @@ from .concept_population import (
     concept_cohort_window,
     context_data_constraints,
 )
+
+
+def _source_identity_token(value: Any) -> str | None:
+    return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", value) else None
+
+
+@dataclass(frozen=True)
+class SourceIdentity:
+    """Path-free registration coordinates frozen by the host before launch.
+
+    Release facts come only from registration, never a label, path or catalog
+    default. This receipt is not a Planner structured-output contract.
+    """
+
+    database: str
+    registration_id: str
+    version: str | None = None
+    source_id: str | None = None
+    archive_sha256: str | None = None
+
+    def to_dict(self) -> dict[str, str]:
+        return {key: value for key, value in asdict(self).items() if value is not None}
+
+    @classmethod
+    def from_record(cls, record: Any) -> SourceIdentity | None:
+        if not isinstance(record, Mapping):
+            return None
+        database = _source_identity_token(record.get("database"))
+        registration = _source_identity_token(record.get("registration_id"))
+        if not database or not registration:
+            return None
+        digest = record.get("archive_sha256")
+        return cls(
+            database=database, registration_id=registration,
+            version=_source_identity_token(record.get("version")), source_id=_source_identity_token(record.get("source_id")),
+            archive_sha256=(digest if isinstance(digest, str) and re.fullmatch(r"[a-f0-9]{64}", digest) else None),
+        )
+
+
+def source_identity_provenance(preferences: Any) -> dict[str, Any]:
+    """Read only the launch snapshot; archived contexts never consult a registry."""
+    raw = (preferences.get("data_constraints") if isinstance(preferences, Mapping)
+           else getattr(preferences, "data_constraints", None))
+    try:
+        constraints = json.loads(raw) if isinstance(raw, str) else None
+    except ValueError:
+        return {}
+    identity = SourceIdentity.from_record(
+        constraints.get("source_identity") if isinstance(constraints, Mapping) else None
+    )
+    return {"source_identity": identity.to_dict()} if identity is not None else {}
 
 
 #: ``data_constraints.cohort`` fields that hold the study's own words.

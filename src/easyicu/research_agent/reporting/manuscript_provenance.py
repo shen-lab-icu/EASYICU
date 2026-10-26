@@ -486,8 +486,12 @@ class _ClaimLineage:
         if _lineage_token(claim.step_id):
             nodes[0]["facts"]["step_id"] = claim.step_id
         method = summary.get("method", method_summary.get("intent"))
-        if isinstance(method, str) and re.fullmatch(r"[\w .()+-]{1,160}", method):
+        if isinstance(method, str) and re.fullmatch(r"[\w .()%+-]{1,160}", method):
             nodes[0]["facts"]["method"] = method
+        else:
+            nodes[0]["facts"]["method_missing_reason"] = (
+                "method_not_recorded" if method is None else "method_not_displayable"
+            )
         bindings = self._input_bindings(summary)
         if len(bindings) != 1:
             nodes[1]["missing_reason"] = "analysis_input_ambiguous" if bindings else "analysis_input_not_recorded"
