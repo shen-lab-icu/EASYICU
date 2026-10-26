@@ -32,6 +32,7 @@
     registryActivePath: () => null,
     sourceLine: () => '',
     sourceRegistryBlock: () => '',
+    officialDemoOffers: () => '',
     bindSourceRegistry: () => {},
     repaintScreen: () => {},
     skeletonWorkspace: () => '',
@@ -51,6 +52,7 @@
   const registryActivePath = () => host.registryActivePath();
   const sourceLine = source => host.sourceLine(source);
   const sourceRegistryBlock = mode => host.sourceRegistryBlock(mode);
+  const officialDemoOffers = scope => host.officialDemoOffers(scope);
   const bindSourceRegistry = (root, screenId) => host.bindSourceRegistry(root, screenId);
   const repaintScreen = id => host.repaintScreen(id);
   const skeletonWorkspace = mode => host.skeletonWorkspace(mode);
@@ -62,16 +64,7 @@
   let vizErr = null;
 
   function patientDrilldown() {
-    if (window.EU_PATIENT_DRILLDOWN) return window.EU_PATIENT_DRILLDOWN;
-    /* In demo mode every entry path (incl. the global "load demo workspace", which only
-       seeds the thin EU_VIZ_WORKSPACE) should still get the rich catalog-shaped drill so
-       Tables / Time Series / Quality render full review content instead of thin fallbacks.
-       Build once and cache; buildDemoPatientDrilldown is hoisted. */
-    if (window.EU_DATA !== 'real' && patientView === 'loaded') {
-      window.EU_PATIENT_DRILLDOWN = buildDemoPatientDrilldown();
-      return window.EU_PATIENT_DRILLDOWN;
-    }
-    return null;
+    return window.EU_PATIENT_DRILLDOWN || null;
   }
   function patientTablePreviews(payload) {
     const tables = (payload || patientDrilldown() || {}).data_tables || {};
@@ -428,17 +421,14 @@
   function hostedServer() { return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true; }
   function patientSourceReadyCard() {
     const hosted = hostedServer();
-    const payload = patientSourcePayload();
     const active = patientActiveSourceMeta();
-    const sourceCount = payload ? payload.source_count : registrySources().length;
     if (!active) {
       return `
       <div class="note warn mt-12" data-patient-source-ready="false">
         <div class="ico">${icon('alert', 14)}</div>
         <div class="body">
-          <div class="t">${hosted ? t('No prepared data is ready yet', '还没有可用的数据') : t('No active local export is ready', '还没有可用的本地导出')}</div>
-          <div class="d">${hosted ? t('Choose one of the prepared datasets below, extract data in Data Extraction, or contact the administrator.', '请在下方选择一份已准备的数据，或在「数据抽取」里提取数据；如果没有，请联系管理员。') : t('Add or choose an EasyICU export folder below, or run Data Extraction first.', '请在下方添加或选择一个 EasyICU 导出文件夹，或先运行数据抽取。')}</div>
-          ${hosted ? '' : `<div class="d mono" style="margin-top:4px;">registered_sources=${fmtInt(sourceCount)}</div>`}
+          <div class="t">${t('No data chosen yet', '还没有选中数据')}</div>
+          <div class="d">${hosted ? t('Choose one of the prepared datasets below, extract data in Data Extraction, or contact the administrator.', '请在下方选择一份已准备的数据，或在「数据抽取」里提取数据；如果没有，请联系管理员。') : t('Choose prepared data below, prepare an official public demo, or export your own database in Data Extraction.', '在下方选择已准备的数据、准备一份官方公开 Demo，或在数据抽取中导出你自己的数据库。')}</div>
           <div class="row mt-8"><button class="btn sm" data-nav="extraction" type="button">${icon('extract', 13)} ${t('Open Data Extraction', '打开数据抽取')}</button></div>
         </div>
       </div>`;
@@ -454,9 +444,8 @@
       <div class="note ${patientReady ? 'ok' : 'warn'} mt-12" data-patient-source-ready="${patientReady ? 'true' : 'false'}">
         <div class="ico">${icon(patientReady ? 'check' : 'alert', 14)}</div>
         <div class="body">
-          <div class="t">${patientReady ? (hosted ? t('Ready to load', '数据已就绪，可以加载') : t('Ready to load local export', '本地导出已就绪，可以加载')) : t('Registered export needs review', '已注册导出需要检查')}</div>
-          <div class="d"><b>${esc(active.label || active.database || (hosted ? t('Prepared data', '已准备的数据') : t('Local export', '本地导出')))}</b> · ${esc(readyLine)}</div>
-          ${hosted ? '' : `<div class="d mono" style="margin-top:4px;">path_hash=${esc(active.path_hash || '—')} · ${t('local-only metadata', '仅本地元数据')}</div>`}
+          <div class="t">${patientReady ? t('Ready to load', '数据已就绪，可以加载') : t('This data needs review before loading', '这份数据需要检查后才能加载')}</div>
+          <div class="d"><b>${esc(active.label || active.database || t('Prepared data', '已准备的数据'))}</b> · ${esc(readyLine)}</div>
         </div>
       </div>`;
   }
@@ -1071,10 +1060,6 @@
     render() {
       if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) window.EU_GUIDED_HANDOFF.take('patient');
       const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('patient') : '';
-      const dataMode = window.getDataMode
-        ? window.getDataMode()
-        : (window.EU_DATA === 'real' ? 'real' : 'demo');
-      const realMode = dataMode === 'real';
       /* Every render branch below opens with this. Patient Review is a dense
          workspace whose visible title lives in the card eyebrow and the loaded
          bar, so the route heading is screen-reader-only — same treatment the
@@ -1084,7 +1069,7 @@
          any level at all. */
       const patientHeading = `<h1 class="shell-sr-only" tabindex="-1">${t('Patient Review', '患者审阅')}</h1>`;
       if (patientView === 'loading') {
-        return `${patientHeading}${guidedNote}<div class="card pad">${skeletonWorkspace(window.EU_DATA)}</div>`;
+        return `${patientHeading}${guidedNote}<div class="card pad">${skeletonWorkspace()}</div>`;
       }
       if (patientView === 'loaded') {
         const drill = patientDrilldown();
@@ -1113,23 +1098,6 @@
             ? `${fmtInt(s.entities)} ${t('synthetic entities', '个合成实体')} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(loadedFeatureCount)} ${t('catalog features', '个目录特征')}`
             : `${entityStats} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(s.total_rows)} ${t('rows', '行')}`)
           : `48 ${t('synthetic entities', '个合成实体')} · 19 ${t('modules', '个模块')} · ${t('catalog features', '目录特征')}`;
-        const demoLoadedNote = (drill && drill.demo) ? `
-        <div class="note warn mt-12">
-          <div class="ico">${icon('beaker', 16)}</div>
-          <div class="body">
-            <div class="t">${t('Synthetic example data', '合成示例数据')}</div>
-            <div class="d">${t('These ICU trajectories come from one synthetic model. They are not real records and must not be used for clinical inference or a manuscript.', '这些 ICU 轨迹由同一个合成模型生成，不是真实记录，不能用于临床推断或论文结果。')}</div>
-          </div>
-          <button class="btn sm" data-patient-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
-        </div>` : (!drill && !ws) ? `
-        <div class="note warn mt-12">
-          <div class="ico">${icon('beaker', 16)}</div>
-          <div class="body">
-            <div class="t">${t('Synthetic example data', '合成示例数据')}</div>
-            <div class="d">${t('Open an official demo or your own export to see real module tables, feature matrices and quality metrics.', '打开官方演示数据或你自己的导出，才能看到真实的模块表、特征矩阵和质量指标。')}</div>
-          </div>
-          <button class="btn sm" data-patient-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
-        </div>` : '';
         // Hosted: patient-level rows are not downloadable (user decision 2026-10-22), so no Export.
         return `
         ${patientHeading}
@@ -1140,7 +1108,6 @@
           ${hostedServer() ? '' : `<button class="btn sm" data-patient-export>${icon('download', 13)} ${t('Export', '导出')}</button>`}
         </div>
         ${guidedNote}
-        ${demoLoadedNote}
         <div class="mt-16">${patientTabs()}</div>
         <div id="ptbody">${patientTabBody()}</div>
         <div class="nextbar accent mt-16">
@@ -1151,10 +1118,6 @@
         </div>`;
       }
       /* idle */
-      const demoSourceOwner = window.EU_PATIENT_DEMO_SOURCES;
-      const officialDemoSources = demoSourceOwner && typeof demoSourceOwner.render === 'function'
-        ? demoSourceOwner.render({ t, esc })
-        : `<div class="note warn"><div class="body"><div class="d">${t('The official demo list could not be loaded; synthetic example data is still available.', '官方演示数据列表暂时无法加载；仍可使用合成示例数据。')}</div></div><button class="btn sm" data-gen>${t('Use synthetic data', '使用合成数据')}</button></div>`;
       return `
       ${patientHeading}
       ${guidedNote}
@@ -1166,30 +1129,17 @@
                  margin-bottom is zeroed because there is no global heading
                  reset, and the UA default would otherwise add ~14px here. -->
             <h2 class="panel-title" style="margin-top:4px;margin-bottom:0;font-size:17px;">${t('Choose data to review', '选择要审阅的数据')}</h2>
-            <div class="panel-sub">${realMode ? (hostedServer() ? t('Load the data the administrator prepared on the server.', '加载管理员在服务器上准备好的数据。') : t('Load a local EasyICU export folder. Nothing is uploaded.', '加载本地 EasyICU 导出文件夹，不上传任何数据。')) : t('Open an official deidentified demo, or learn the screens with synthetic data.', '打开一份官方去标识化演示数据，或先用合成数据熟悉界面。')}</div>
+            <div class="panel-sub">${t('Data is read on this computer; nothing is uploaded.', '数据在本机读取，不会上传。')}</div>
           </div>
         </div>`}
 
-        <div style="border-top:1px solid var(--hair);padding-top:16px;" data-datamode-switch>
-          <div class="eyebrow" style="margin-bottom:10px;">${t('Data source', '数据源')}</div>
-          <div class="radio-row">
-            <label class="radio ${realMode ? 'on' : ''}" role="button" tabindex="0" data-datamode="real"><span class="mk"></span> ${t('Previously exported data', '此前导出的数据')}</label>
-            <label class="radio ${!realMode ? 'on' : ''}" role="button" tabindex="0" data-datamode="demo"><span class="mk"></span> ${t('Demo data', '演示数据')}</label>
-          </div>
-        </div>
-
-        ${realMode ? `
-        <div class="${hostedServer() ? '' : 'card sunken pad mt-16'}">
-          ${hostedServer() ? '' : `<div class="eyebrow" style="margin-bottom:4px;">${t('Local export', '本地导出')}</div>
-          <div style="font-weight:600;font-size:14px;">${t('Load exported EasyICU tables', '加载已导出的 EasyICU 数据表')}</div>
-          <div class="panel-sub" style="margin-top:2px;">${t('Pick a registered local export, or add one by path.', '选择已注册的本地导出，或按路径添加一个。')}</div>`}
+        <div class="${hostedServer() ? '' : 'mt-16'}">
           ${vizErr ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(vizErr)}</div></div></div>` : ''}
           ${hostedServer() ? '' : patientSourceReadyCard()}
           ${sourceRegistryBlock('single')}
-          ${hostedServer() ? '' : `<p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">${t('Use Data Extraction first to create or refresh this folder. The last successful export is remembered locally.', '请先用数据抽取创建或刷新该文件夹。上次成功的导出会被本地记住。')}</p>`}
-          <button class="btn primary block lg mt-16" data-gen>${icon('folder', 14)} ${hostedServer() ? t('Load this data', '加载这份数据') : t('Load local export', '加载本地导出')}</button>
-        </div>` : `
-        <div class="card sunken pad mt-16">${officialDemoSources}</div>`}
+          <button class="btn primary block lg mt-16" data-gen${patientActiveSourceMeta() ? '' : ' disabled'}>${icon('folder', 14)} ${t('Load this data', '加载这份数据')}</button>
+        </div>
+        ${officialDemoOffers('patient')}
       </div>
 
       <div class="empty mt-16">
@@ -1199,20 +1149,16 @@
       </div>`;
     },
     afterRender(root) {
-      const dataMode = window.getDataMode
-        ? window.getDataMode()
-        : (window.EU_DATA === 'real' ? 'real' : 'demo');
-      const realMode = dataMode === 'real';
       bindSourceRegistry(root, 'patient');
-      if (realMode && patientView === 'idle' && !window.EU_PATIENT_SOURCES && !window.EU_PATIENT_SOURCES_LOADING) {
+      if (patientView === 'idle' && !window.EU_PATIENT_SOURCES && !window.EU_PATIENT_SOURCES_LOADING) {
         loadPatientSources(ok => {
           if (ok && window.location.hash === '#patient' && patientView === 'idle') repaintScreen('patient');
         });
       }
       const demoSourceOwner = window.EU_PATIENT_DEMO_SOURCES;
-      if (!realMode && patientView === 'idle' && demoSourceOwner) {
+      if (!hostedServer() && patientView === 'idle' && demoSourceOwner) {
         demoSourceOwner.ensureLoaded(() => {
-          if (window.location.hash === '#patient' && patientView === 'idle' && window.getDataMode() !== 'real') {
+          if (window.location.hash === '#patient' && patientView === 'idle') {
             repaintScreen('patient');
           }
         });
@@ -1255,49 +1201,15 @@
           },
         });
       }
-      root.querySelectorAll('.radio[data-datamode]').forEach(b => b.addEventListener('keydown', e => {
-        if (e.key !== 'Enter' && e.key !== ' ') return;
-        e.preventDefault();
-        if (window.setDataMode) window.setDataMode(b.dataset.datamode);
-      }));
       root.querySelectorAll('[data-gen]').forEach(b => b.addEventListener('click', () => {
         if (patientView === 'loading') return;
-        const rerunningLoadedWorkspace = patientView === 'loaded';
-        const useSourceBackedPipeline = window.EU_DATA === 'real'
-          && (realMode || rerunningLoadedWorkspace);
         resetPatientBrowseOwners();
         patientView = 'loading';
         repaintScreen('patient');
-        if (useSourceBackedPipeline) {
-          loadRealPatient(ok => { patientView = ok ? 'loaded' : 'idle'; repaintScreen('patient'); });
-        } else {
-          if (window.setDataModeContext) window.setDataModeContext(null);
-          window.EU_DATA = 'demo';
-          try { localStorage.setItem('easyicu_home_data', 'demo'); } catch (e) {}
-          setTimeout(() => {
-            const payload = buildDemoPatientDrilldown();
-            window.EU_PATIENT_DRILLDOWN = payload;
-            window.EU_VIZ_WORKSPACE = patientWorkspaceFromDrilldown(payload);
-            patientView = 'loaded';
-            window.EU_HASWORK = true;
-            vizErr = null;
-            repaintScreen('patient');
-          }, 450);
-        }
+        loadRealPatient(ok => { patientView = ok ? 'loaded' : 'idle'; repaintScreen('patient'); });
       }));
       root.querySelectorAll('[data-viz-reset]').forEach(b => b.addEventListener('click', () => {
         patientView = 'idle'; resetPatientBrowseOwners(); window.EU_VIZ_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; repaintScreen('patient');
-      }));
-      root.querySelectorAll('[data-patient-use-real]').forEach(b => b.addEventListener('click', () => {
-        patientView = 'idle';
-        resetPatientBrowseOwners();
-        if (window.setDataModeContext) window.setDataModeContext(null);
-        window.EU_DATA = 'real';
-        window.EU_VIZ_WORKSPACE = null;
-        window.EU_PATIENT_DRILLDOWN = null;
-        window.EU_PATIENT_SOURCES = null;
-        try { localStorage.setItem('easyicu_home_data', 'real'); } catch (e) {}
-        repaintScreen('patient');
       }));
       root.querySelectorAll('[data-patient-export]').forEach(b => b.addEventListener('click', () => {
         const payload = patientDrilldown();

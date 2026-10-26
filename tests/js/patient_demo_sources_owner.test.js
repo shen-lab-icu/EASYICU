@@ -163,9 +163,10 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   assert.match(html, /Resume download and prepare/);
   // The download transport is the host's concern, not the researcher's.
   assert.doesNotMatch(html, /GitHub fast mirror/);
-  assert.match(html, /Use synthetic data/);
+  // No synthetic fallback: a public demo is prepared data, not a mode.
+  assert.doesNotMatch(html, /synthetic/i);
   assert.match(html, /4\.0 MB saved/);
-  assert.match(html, /data-gen/);
+  assert.doesNotMatch(html, /data-gen/);
   assert.match(html, /data-demo-source-prepare="eicu_demo_v2_0_1"/);
   assert.match(html, /data-demo-source-open-after-prepare="true"/);
   assert.match(html, /Activate and open/);
@@ -349,7 +350,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
     shared_owner_contract: true,
     official_pair_resolved: true,
     user_mode_remains_demo: true,
-    synthetic_fallback_explicit: true,
+    no_synthetic_fallback: true,
   }));
 })().catch(error => {
   process.stderr.write(String(error && error.stack || error));

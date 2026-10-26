@@ -108,7 +108,6 @@ def test_crossdb_setup_owner_stays_route_pure_and_bounded() -> None:
         "function invalidateOperations(",
         "function operationCurrent(",
         "function renderReal(",
-        "function renderDemo(",
         "function bind(",
         "data-crossdb-run-raw",
         "data-crossdb-root-scan",
@@ -142,7 +141,7 @@ def test_crossdb_setup_owner_stays_route_pure_and_bounded() -> None:
     assert "e.key !== 'Tab' || !sourcePickerEl" in shell
     assert "Close folder picker" in shell
     assert "data-crossdb-run-registered" in source
-    assert "compactOfficialPair" in source
+    assert "${offersHtml}" in source
     assert "data-crossdb-result-tab" in results
     assert "data-crossdb-feature-query" in results
     assert "data-crossdb-feature-workspace" not in shell
@@ -151,8 +150,6 @@ def test_crossdb_setup_owner_stays_route_pure_and_bounded() -> None:
         assert foreign_marker not in results
     for selector in (
         ".crossdb-method-grid",
-        ".crossdb-source-summary",
-        ".crossdb-source-detail",
         ".xdb-result-tabs",
         ".xdb-feature-workspace",
     ):

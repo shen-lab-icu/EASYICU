@@ -345,9 +345,16 @@
     if (state.loading && !state.catalog) {
       return `<div class="official-demo-loading"><span class="spin accent"></span>${hEsc(helpers, hT(helpers, 'Checking official demo sources…', '正在检查官方演示数据源…'))}</div>`;
     }
-    const sources = ((state.catalog && state.catalog.sources) || []);
-    const showFallback = options.showFallback !== false;
-    const fallbackAttribute = String(options.fallbackAttribute || 'data-gen').replace(/[^a-z0-9_-]/gi, '');
+    // pendingOnly lists the demos still to prepare: a prepared or registered
+    // one is already a row in the page's prepared data, and nothing left
+    // means no section.
+    const registered = new Set(registeredSources(options.registryRows).map(row => row.source_id));
+    const sources = ((state.catalog && state.catalog.sources) || []).filter(source => {
+      if (!options.pendingOnly) return true;
+      const status = sourceStatus(source);
+      return !(status.state === 'prepared' && status.registered) && !registered.has(source.id);
+    });
+    if (options.pendingOnly && !sources.length && !state.error) return '';
     return `
       <div class="official-demo-sources" data-official-demo-sources data-demo-source-scope="${hEsc(helpers, options.scope || 'patient')}">
         <div class="official-demo-sources-head">
@@ -364,13 +371,6 @@
         <div class="official-demo-source-grid">
           ${sources.map(source => renderSource(source, helpers, options)).join('')}
         </div>
-        ${showFallback ? `<div class="official-demo-fallback">
-          <div>
-            <b>${hEsc(helpers, hT(helpers, 'Synthetic example data', '合成示例数据'))}</b>
-            <span>${hEsc(helpers, hT(helpers, 'Without a download, a synthetic cohort lets you learn the screens. It is not real records and gives no research result.', '不下载也可以先用一组合成数据熟悉界面；它不是真实记录，不产生研究结果。'))}</span>
-          </div>
-          <button class="btn sm" type="button" ${fallbackAttribute}>${hEsc(helpers, hT(helpers, 'Use synthetic data', '使用合成数据'))}</button>
-        </div>` : ''}
       </div>`;
   }
 

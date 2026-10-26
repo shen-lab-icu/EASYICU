@@ -145,15 +145,12 @@ def test_patient_review_sections_sit_under_the_route_heading() -> None:
     assert "margin:0;" in _asset("css", "patient.css")
 
 
-def test_data_and_language_segments_publish_pressed_state() -> None:
+def test_language_segments_publish_pressed_state() -> None:
     app_js = _asset("js", "app.js")
 
-    assert "root.querySelectorAll('[data-datamode], [data-hd]')" in app_js
-    assert "control.dataset.datamode || control.dataset.hd" in app_js
+    assert "data-datamode" not in app_js
     assert "root.querySelectorAll('[data-lang]')" in app_js
     assert "control.setAttribute('aria-pressed'" in app_js
-    assert 'data-datamode="demo" aria-pressed=' in app_js
-    assert 'data-datamode="real" aria-pressed=' in app_js
     assert 'data-lang="en" aria-pressed=' in app_js
     assert 'data-lang="zh" aria-pressed=' in app_js
 

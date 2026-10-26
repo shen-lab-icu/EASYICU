@@ -180,11 +180,6 @@
     if (!scr) return '';
     return typeof scr.actionHtml === 'function' ? scr.actionHtml() : (scr.actionHtml || '');
   };
-  const displayedDataMode = () => (
-    window.getDataMode
-      ? window.getDataMode()
-      : (window.EU_DATA === 'real' ? 'real' : 'demo')
-  );
 
   function syncShellAccessibility(root, fullScreen) {
     if (fullScreen && root.firstElementChild) {
@@ -195,11 +190,6 @@
       const current = control.dataset.nav === route;
       if (current) control.setAttribute('aria-current', 'page');
       else control.removeAttribute('aria-current');
-    });
-    const dataMode = displayedDataMode();
-    root.querySelectorAll('[data-datamode], [data-hd]').forEach((control) => {
-      const value = control.dataset.datamode || control.dataset.hd;
-      control.setAttribute('aria-pressed', String(value === dataMode));
     });
     const language = window.EU_LANG === 'zh' ? 'zh' : 'en';
     root.querySelectorAll('[data-lang]').forEach((control) => {
@@ -299,12 +289,6 @@
 
   function topbar() {
     const scr = screenOf(route);
-    const dataMode = displayedDataMode();
-    const demoMode = dataMode === 'demo';
-    const officialDemo = demoMode
-      && window.EU_DATA_MODE_CONTEXT
-      && window.EU_DATA_MODE_CONTEXT.kind === 'official_demo';
-    const consequential = !!window.EU_HASWORK;
     const crumbs = (scr.crumbs || []).map((c, i, arr) => {
       const label = crumbLabel(c);
       if (i === arr.length - 1) return `<span class="cur" aria-current="page">${label}</span>`;
@@ -319,15 +303,6 @@
       <div class="crumbs">${crumbs}</div>
       <div class="spacer"></div>
       ${scr.status || ''}
-      <!-- This control sits between "EasyICU Copilot" and the EN/中 toggle, but it
-           is not a display preference: flipping it swaps the data source,
-           marks every downstream cohort/extraction/review stale and cancels a
-           running Cross-DB scan. Once there IS downstream work, give it the
-           weight of a destructive action so it stops reading like EN/中. -->
-      <div class="mode-seg ${demoMode ? 'demo-active' : ''} ${consequential ? 'consequential' : ''}" data-datamode-switch role="group" aria-label="Data mode" title="${consequential ? t('Switching the data source will mark your current cohort, extraction and review as out of date.', '切换数据源会把当前的队列、抽取与审阅标记为过期。') : (demoMode ? t('Demo mode uses official public deidentified demo datasets or clearly labelled seeded examples. It is never your local data; switch to Real to load a local export.', '演示模式使用官方公开去标识 Demo 数据集，或明确标注的种子示例；都不是你的本地数据。切换到真实模式可加载本地导出。') : t('Real mode: screens compute from your local EasyICU export. Nothing is uploaded.', '真实模式：各页面从你本地的 EasyICU 导出计算，不上传任何数据。'))}">
-        <button type="button" class="${demoMode ? 'on' : ''}" data-datamode="demo" aria-pressed="${demoMode}">${icon('flask', 12)} ${officialDemo ? t('Official demo', '官方演示') : (demoMode ? t('Demo data', '演示数据') : t('Demo', '演示'))}</button>
-        <button type="button" class="${!demoMode ? 'on' : ''}" data-datamode="real" aria-pressed="${!demoMode}">${icon('db', 12)} ${t('Real', '真实')}</button>
-      </div>
       <div class="lang-seg" role="group" aria-label="Language">
         <button type="button" class="${window.EU_LANG !== 'zh' ? 'on' : ''}" data-lang="en" aria-pressed="${window.EU_LANG !== 'zh'}">EN</button>
         <button type="button" class="${window.EU_LANG === 'zh' ? 'on' : ''}" data-lang="zh" aria-pressed="${window.EU_LANG === 'zh'}">中</button>
@@ -495,8 +470,6 @@
     if (langEl) { if (window.setLang) window.setLang(langEl.dataset.lang); return; }
     const langToggleEl = e.target.closest('[data-lang-toggle]');
     if (langToggleEl) { if (window.setLang) window.setLang(window.EU_LANG === 'zh' ? 'en' : 'zh'); return; }
-    const dmEl = e.target.closest('[data-datamode]');
-    if (dmEl) { if (window.setDataMode) window.setDataMode(dmEl.dataset.datamode); return; }
     const goalEl = e.target.closest('[data-goal-cycle]');
     if (goalEl) { if (window.cycleGoal) window.cycleGoal(); return; }
     const wsEl = e.target.closest('[data-ws-toggle]');

@@ -28,8 +28,6 @@
 .eudata-head-actions{display:flex;align-items:center;gap:9px;padding-top:4px;white-space:nowrap}
 .eudata-dictionary-link{padding:5px 7px;border:0;background:transparent;color:var(--sk-muted);font:inherit;font-size:12px;cursor:pointer}
 .eudata-dictionary-link:hover{color:var(--accent-ink);text-decoration:underline}
-.eudata-head .mode-seg{min-height:34px;padding:3px;border-color:var(--sk-line);border-radius:999px;background:#f7f8f4}
-.eudata-head .mode-seg button{height:28px;padding:0 12px;border-radius:999px;font-size:12px}
 .eudata-workspace{min-width:0;padding-top:18px}
 .eudata-shell .express{border-color:#d7dfdc;border-radius:17px;background:linear-gradient(180deg,#f6f9f8,#fff);box-shadow:0 7px 22px #203f400c}
 .eudata-shell .express::before{height:2px;background:#6b989a}

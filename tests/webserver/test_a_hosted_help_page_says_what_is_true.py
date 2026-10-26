@@ -142,32 +142,21 @@ def test_a_hosted_instance_drops_single_key_shortcuts_and_the_states_catalogue()
 
 def test_a_hosted_instance_offers_no_demo_data_switch() -> None:
     js = STATIC / "js"
-    shell_css = (STATIC / "css" / "shell.css").read_text(encoding="utf-8")
     app = (js / "app.js").read_text(encoding="utf-8")
     i18n = (js / "i18n.js").read_text(encoding="utf-8")
-    api = (js / "api.js").read_text(encoding="utf-8")
 
-    assert ":root[data-eu-hosted] [data-datamode-switch]{ display:none; }" in shell_css
     assert "document.documentElement.toggleAttribute('data-eu-hosted', hostedInstance());" in app
-    # Every page that renders a demo switch marks it for the shell rule.
+    # No page renders a Demo/Real switch, hosted or local: every source takes
+    # the one source-backed path and a public demo is a labelled source.
     rendering = [
-        path for path in sorted(js.glob("*.js"))
-        if 'data-datamode="demo"' in path.read_text(encoding="utf-8")
+        path.name for path in sorted(js.glob("*.js"))
+        if "data-datamode=" in path.read_text(encoding="utf-8")
     ]
-    assert {path.name for path in rendering} == {
-        "app.js", "screens-extraction.js", "screens-viz.js", "screens-viz-patient.js",
-    }
-    for path in rendering:
-        text = path.read_text(encoding="utf-8")
-        assert text.count("data-datamode-switch") >= text.count('data-datamode="demo"'), path.name
-    assert "data-ex-sample data-datamode-switch" in (js / "screens-extraction.js").read_text(encoding="utf-8")
-    # No code path switches a hosted instance to demo data, and a browser that
-    # remembers demo mode opens it on the prepared data.
-    assert (
-        "if (m === 'demo' && ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true) return;"
-        in i18n
-    )
-    assert "window.setDataMode('real', { force: true });" in api.split("await hydrateCapabilities();", 1)[1]
+    assert rendering == []
+    assert "data-ex-sample" not in (js / "screens-extraction.js").read_text(encoding="utf-8")
+    # No code path switches any instance to synthetic data.
+    assert "window.EU_DATA = 'real';" in i18n
+    assert "if (m !== 'real') return;" in i18n
 
 
 _PICKER = r"""
@@ -216,18 +205,20 @@ def test_hosted_review_names_the_prepared_data_without_paths_or_registration() -
     assert "t('Prepared data', '已准备的数据')" in block
     assert "'检查管理员准备的各份数据之间的概念覆盖和聚合分布。'" in viz
     # No server path, no rename/remove and no add-by-path on a hosted row.
-    assert "${hosted ? '' : `<span class=\"src-path mono\">${esc(s.path)}</span>`}" in block
+    assert "const pathLine = hosted || kind.kind !== 'own' ? '' : `<span class=\"src-path mono\">${esc(s.path)}</span>`;" in block
     assert "${hosted ? '' : `<span class=\"src-actions\">" in block
     assert "${hosted ? '' : `<div class=\"path-field editable src-add\">" in block
-    assert "t('Load the data the administrator prepared on the server.', '加载管理员在服务器上准备好的数据。')" in patient
-    assert "${hosted ? '' : `<div class=\"d mono\" style=\"margin-top:4px;\">path_hash=" in patient
-    assert "hostedServer() ? t('Load this data', '加载这份数据')" in patient
+    assert "path_hash=" not in patient
+    assert "${hostedServer() ? '' : patientSourceReadyCard()}" in patient
+    assert "t('Load this data', '加载这份数据')" in patient
+    assert "Load local export" not in patient
     cohort = (STATIC / "js" / "screens-viz-cohort.js").read_text(encoding="utf-8")
     # Hosted: one source list and its button; no eyebrow, card title or subline around them.
-    assert "${hostedServer() ? '' : `<div class=\"eyebrow\">${t('Local export', '本地导出')}</div>" in cohort
-    assert "hostedServer() ? t('Load this data', '加载这份数据') : t('Load local export', '加载本地导出')" in cohort
+    assert "t('Local export', '本地导出')}</div>" not in cohort
+    assert "${t('Load this data', '加载这份数据')}</button>" in cohort
+    assert "Load local export" not in cohort
     # A full database's first summary takes minutes; the wait says so.
-    assert "${realMode ? `<div class=\"note-line mt-8\" data-cohort-first-load>${t('The first load of a full database can take two to three minutes; opening it again is quick.', '第一次打开一份完整数据可能需要 2–3 分钟；之后再打开会很快。')}</div>` : ''}" in cohort
+    assert "<div class=\"note-line mt-8\" data-cohort-first-load>${t('The first load of a full database can take two to three minutes; opening it again is quick.', '第一次打开一份完整数据可能需要 2–3 分钟；之后再打开会很快。')}</div>" in cohort
     cohort_view = (STATIC / "js" / "screens-viz-cohort-view.js").read_text(encoding="utf-8")
     assert "if (hosted && Object.prototype.hasOwnProperty.call(HOSTED_TEXT, raw)) return t(...HOSTED_TEXT[raw]);" in cohort_view
     assert "'Local export': ['Prepared data', '已准备的数据']," in cohort_view

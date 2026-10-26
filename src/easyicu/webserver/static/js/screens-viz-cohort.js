@@ -26,11 +26,11 @@
   let fmtNum;
   let fmtPct;
   let fmtP;
-  let displayDataMode;
   let officialDemoContext;
   let registryActivePath;
   let bindSourceRegistry;
-  let sourceModeSelector;
+  let officialDemoOffers;
+  let activeSourceKind;
   let sourceRegistryBlock;
   let repaintScreen;
   let vizRail;
@@ -41,10 +41,10 @@
   }
   function cohortLoaded() {
     const review = cohortReview();
-    return state.view === 'loaded' && (window.EU_DATA !== 'real' || !!(review && review.summary));
+    return state.view === 'loaded' && !!(review && review.summary);
   }
   function reloadStaleRealCohortIfNeeded(review) {
-    if (window.EU_DATA !== 'real' || state.view !== 'loaded' || (review && review.summary)) return false;
+    if (state.view !== 'loaded' || (review && review.summary)) return false;
     if (!registryActivePath()) {
       state.view = 'idle';
       return false;
@@ -66,10 +66,6 @@
     if (ids.length) state.selectedFeatures = ids;
   }
   function reloadCohortForFeatureSelection() {
-    if (window.EU_DATA !== 'real') {
-      repaintScreen('cohort');
-      return;
-    }
     state.view = 'loading';
     repaintScreen('cohort');
     loadRealCohort(ok => {
@@ -101,7 +97,7 @@
   }
   function cohortMissingExportMessage() {
     return hostedServer() ? t('Choose one of the prepared datasets before loading Cohort Statistics.', '请先选择一份已准备的数据，再加载队列统计。')
-      : t('Choose or add a local EasyICU export before loading Cohort Statistics.', '请先选择或添加本地 EasyICU 导出，再加载队列统计。');
+      : t('Choose prepared data, or prepare a public demo below, before loading Cohort Statistics.', '请先选择一份已准备的数据，或准备下方的公开 Demo，再加载队列统计。');
   }
   function loadRealCohort(done) {
     if (!(window.EU_API && window.EU_API.loadCohortReviewSummary)) {
@@ -147,12 +143,11 @@
     rail: () => vizRail('cohort'),
     afterRender(root) {
       if (cohortCharts && typeof cohortCharts.mount === 'function') cohortCharts.mount(root);
-      const realMode = displayDataMode() === 'real';
       bindSourceRegistry(root, 'cohort');
       const demoSourceOwner = window.EU_OFFICIAL_DEMO_SOURCES || window.EU_PATIENT_DEMO_SOURCES;
-      if (!realMode && state.view === 'idle' && demoSourceOwner) {
+      if (!hostedServer() && state.view === 'idle' && demoSourceOwner) {
         demoSourceOwner.ensureLoaded(() => {
-          if (window.location.hash === '#cohort' && state.view === 'idle' && displayDataMode() !== 'real') {
+          if (window.location.hash === '#cohort' && state.view === 'idle') {
             repaintScreen('cohort');
           }
         });
@@ -196,38 +191,16 @@
       }
       root.querySelectorAll('[data-cohort-run]').forEach(b => b.addEventListener('click', () => {
         if (state.view === 'loading') return;
-        if (window.EU_DATA === 'real') {
-          if (!registryActivePath()) {
-            state.view = 'idle';
-            window.EU_COHORT_REVIEW = null;
-            window.EU_VIZ_WORKSPACE = null;
-            state.error = cohortMissingExportMessage();
-            repaintScreen('cohort');
-            return;
-          }
-          state.view = 'loading'; repaintScreen('cohort');
-          loadRealCohort(ok => { state.view = ok ? 'loaded' : 'idle'; repaintScreen('cohort'); });
-        } else {
-          state.error = null;
-          state.view = 'loading'; repaintScreen('cohort');
-          setTimeout(() => { state.view = 'loaded'; window.EU_HASWORK = true; repaintScreen('cohort'); }, 1300);
-        }
-      }));
-      root.querySelectorAll('[data-cohort-demo-fallback]').forEach(b => b.addEventListener('click', () => {
-        if (state.view === 'loading') return;
-        if (window.setDataModeContext) window.setDataModeContext(null);
-        window.EU_DATA = 'demo';
-        window.EU_COHORT_REVIEW = null;
-        window.EU_VIZ_WORKSPACE = null;
-        resetCohortFeatureSelection();
-        state.error = null;
-        state.view = 'loading';
-        repaintScreen('cohort');
-        setTimeout(() => {
-          state.view = 'loaded';
-          window.EU_HASWORK = true;
+        if (!registryActivePath()) {
+          state.view = 'idle';
+          window.EU_COHORT_REVIEW = null;
+          window.EU_VIZ_WORKSPACE = null;
+          state.error = cohortMissingExportMessage();
           repaintScreen('cohort');
-        }, 450);
+          return;
+        }
+        state.view = 'loading'; repaintScreen('cohort');
+        loadRealCohort(ok => { state.view = ok ? 'loaded' : 'idle'; repaintScreen('cohort'); });
       }));
       const tabsEl = root.querySelector('#cohtabs');
       if (tabsEl) tabsEl.addEventListener('click', e => {
@@ -245,16 +218,6 @@
         state.featureScope = 'recommended';
         window.EU_COHORT_REVIEW = null;
         window.EU_VIZ_WORKSPACE = null;
-        repaintScreen('cohort');
-      }));
-      root.querySelectorAll('[data-cohort-use-real]').forEach(b => b.addEventListener('click', () => {
-        state.view = 'idle';
-        if (window.setDataModeContext) window.setDataModeContext(null);
-        window.EU_DATA = 'real';
-        window.EU_COHORT_REVIEW = null;
-        window.EU_VIZ_WORKSPACE = null;
-        state.featureScope = 'recommended';
-        try { localStorage.setItem('easyicu_home_data', 'real'); } catch (e) {}
         repaintScreen('cohort');
       }));
       root.querySelectorAll('[data-cohort-feature-scope]').forEach(b => b.addEventListener('click', () => {
@@ -338,47 +301,34 @@
       if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) window.EU_GUIDED_HANDOFF.take('cohort');
       const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('cohort') : '';
       const ws = window.EU_VIZ_WORKSPACE;
-      const dataMode = displayDataMode();
-      const realMode = dataMode === 'real';
-      const officialDemo = officialDemoContext();
+      const kind = activeSourceKind ? activeSourceKind() : null;
+      const kindLabel = kind && kind.label ? kind.label : (officialDemoContext() ? t('Public demo', '公开 Demo') : '');
       let review = cohortReview();
       if (reloadStaleRealCohortIfNeeded(review)) review = null;
       const loaded = cohortLoaded();
       const head = `${guidedNote}
       <div class="row gap-8" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px;white-space:nowrap;flex-wrap:wrap;row-gap:2px;">
-        <span>${view.text('Workspace')}</span> ${icon('chevron', 11)} ${loaded ? `<span>${realMode ? view.text('Local export') : (officialDemo ? t('Official demo', '官方演示') : view.text('Demo cohort'))}</span> ${icon('chevron', 11)} ` : ''}<span style="color:var(--ink-2);">${view.text('Cohort statistics')}</span>
+        <span>${view.text('Workspace')}</span> ${icon('chevron', 11)} ${loaded ? `<span>${kindLabel || (hostedServer() ? t('Prepared data', '已准备的数据') : view.text('Local export'))}</span> ${icon('chevron', 11)} ` : ''}<span style="color:var(--ink-2);">${view.text('Cohort statistics')}</span>
       </div>
       <div class="page-head" style="margin-bottom:16px;">
         <h1 style="margin-top:0;">${t('Cohort Statistics', '队列统计')}</h1>
-        ${loaded && review && realMode ? '' : `<p class="lead">${loaded ? (review ? t('Official deidentified demo cohort · source-backed aggregate review', '官方去标识化演示队列 · 有来源支撑的聚合审阅') : t('Synthetic example data · not a research result', '合成示例数据 · 不是研究结果')) : (hostedServer() ? t('Choose one of the datasets the administrator prepared to view group contrasts, coverage, survival curves and SOFA reclassification.', '选择管理员准备的一份数据，查看组间对照、覆盖率、生存曲线和 SOFA 重分层。') : t('Choose one official demo or one registered export before viewing group contrasts, coverage, survival curves, and SOFA reclassification.', '选择一个官方演示或一个已注册导出，再查看组间对照、覆盖率、生存曲线和 SOFA 重分层。'))}</p>`}
+        ${loaded && !(kind && kind.kind === 'synthetic') ? '' : `<p class="lead">${loaded ? t('Synthetic test data · not a research result', '合成测试数据 · 不是研究结果') : (hostedServer() ? t('Choose one of the datasets the administrator prepared to view group contrasts, coverage, survival curves and SOFA reclassification.', '选择管理员准备的一份数据，查看组间对照、覆盖率、生存曲线和 SOFA 重分层。') : t('Choose prepared data to view group contrasts, coverage, survival curves and SOFA reclassification.', '选择一份已准备的数据，查看组间对照、覆盖率、生存曲线和 SOFA 重分层。'))}</p>`}
       </div>`;
       if (state.view !== 'loading' && !loaded) {
-        const demoSourceOwner = window.EU_OFFICIAL_DEMO_SOURCES || window.EU_PATIENT_DEMO_SOURCES;
-        const officialDemoSources = demoSourceOwner && typeof demoSourceOwner.render === 'function'
-          ? demoSourceOwner.render(
-            { t, esc },
-            { scope: 'cohort', fallbackAttribute: 'data-cohort-demo-fallback' },
-          )
-          : `<div class="note warn"><div class="body"><div class="d">${t('Official demo-source controls are unavailable.', '官方演示数据源控件暂不可用。')}</div></div></div>`;
         return head + `<div class="card pad" data-cohort-config-required="true">
             ${hostedServer() ? '' : `<div class="panel-head">
               <div>
                 <div class="panel-title" style="font-size:17px;">${t('Choose one cohort data source', '选择一个队列数据源')}</div>
-                <div class="panel-sub mt-4">${realMode ? (hostedServer() ? t('Use one of the datasets the administrator prepared.', '使用管理员准备好的一份数据。') : t('Use one registered local EasyICU export.', '使用一个已注册的本地 EasyICU 导出。')) : t('Open one official deidentified demo.', '打开一份官方去标识化演示数据。')}</div>
+                <div class="panel-sub mt-4">${t('Patient Review uses the same current data.', '患者审阅使用的也是这份当前数据。')}</div>
               </div>
-            </div>
-            <div style="border-top:1px solid var(--hair);padding-top:16px;">
-              ${sourceModeSelector(realMode)}
             </div>`}
             ${state.error ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(state.error)}</div></div></div>` : ''}
-            ${realMode ? `<div class="${hostedServer() ? '' : 'card sunken pad mt-16'}">
-              ${hostedServer() ? '' : `<div class="eyebrow">${t('Local export', '本地导出')}</div>
-              <div class="panel-title mt-4">${t('Load one exported cohort snapshot', '加载一个已导出的队列快照')}</div>
-              <div class="panel-sub mt-4">${t('Patient Review uses the same current data.', '患者审阅使用的也是这份当前数据。')}</div>`}
+            <div class="${hostedServer() ? '' : 'mt-16'}">
               ${!registryActivePath() ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('No current data selected', '尚未选择当前数据')}</div><div class="d">${cohortMissingExportMessage()}</div></div></div>` : ''}
               ${sourceRegistryBlock('single')}
-              <button class="btn primary mt-16" data-cohort-run ${!registryActivePath() ? 'aria-disabled="true"' : ''}>${icon('folder', 14)} ${hostedServer() ? t('Load this data', '加载这份数据') : t('Load local export', '加载本地导出')}</button>
-            </div>` : `<div class="card sunken pad mt-16">${officialDemoSources}</div>`}
+              <button class="btn primary mt-16" data-cohort-run ${!registryActivePath() ? 'aria-disabled="true"' : ''}>${icon('folder', 14)} ${t('Load this data', '加载这份数据')}</button>
+            </div>
+            ${officialDemoOffers ? officialDemoOffers('cohort') : ''}
           </div>
           ${hostedServer() ? '' : `<div class="empty mt-16" data-cohort-empty-preview="true">
             <div class="glyph">${icon('cohort', 22)}</div>
@@ -392,7 +342,7 @@
             <span class="spin accent"></span>
             <div class="grow"><div style="font-weight:600;font-size:12.75px;">${t('Recomputing cohort statistics…', '正在重新计算队列统计…')}</div>${hostedServer() ? '' : `<div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('reproducible · no outbound calls', '可复现 · 无外部调用')}</div>`}</div>
           </div>
-          ${realMode ? `<div class="note-line mt-8" data-cohort-first-load>${t('The first load of a full database can take two to three minutes; opening it again is quick.', '第一次打开一份完整数据可能需要 2–3 分钟；之后再打开会很快。')}</div>` : ''}
+          <div class="note-line mt-8" data-cohort-first-load>${t('The first load of a full database can take two to three minutes; opening it again is quick.', '第一次打开一份完整数据可能需要 2–3 分钟；之后再打开会很快。')}</div>
           <div class="indet mt-12"></div>
           <div class="st-stats mt-16">${[0,1,2,3].map(() => `<div class="sk-stat"><div class="sk sk-line sm" style="width:52%"></div><div class="sk" style="height:22px;width:64%;margin-top:10px;"></div></div>`).join('')}</div>
           <div class="sk-table mt-16">${[0,1,2,3,4].map(() => `<div class="sk-trow">${[60,40,40,40,30].map(w => `<div class="sk sk-line" style="width:${w}%"></div>`).join('')}</div>`).join('')}</div>
@@ -419,11 +369,11 @@
     fmtNum = config.fmtNum;
     fmtPct = config.fmtPct;
     fmtP = config.fmtP;
-    displayDataMode = config.displayDataMode;
     officialDemoContext = config.officialDemoContext;
     registryActivePath = config.registryActivePath;
     bindSourceRegistry = config.bindSourceRegistry;
-    sourceModeSelector = config.sourceModeSelector;
+    officialDemoOffers = config.officialDemoOffers;
+    activeSourceKind = config.activeSourceKind;
     sourceRegistryBlock = config.sourceRegistryBlock;
     repaintScreen = config.repaintScreen;
     vizRail = config.vizRail;

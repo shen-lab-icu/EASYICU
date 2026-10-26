@@ -84,8 +84,8 @@ def test_new_home_starts_create_fresh_study_contexts() -> None:
     assert "startHomeStudy('guided', { question, analysis_goal: analysisGoal })" in source
     assert "data-home-new-study=\"${newStudy}\"" in source
     assert "target === 'ideas' ? { purpose: 'idea_mining' } : {}" in source
-    assert "target === 'extraction' && window.setDataMode" in source
-    assert "window.setDataMode('real', { force: true })" in source
+    # There is no data mode to switch before Data Extraction.
+    assert "setDataMode" not in source
 
 
 def test_resume_prefers_allowlisted_study_context_then_maps_legacy_branches() -> None:

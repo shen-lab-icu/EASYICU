@@ -6,13 +6,6 @@
   const S = (window.SCREENS = window.SCREENS || {});
   const escHtml = window.EU_HTML.esc;
 
-  function homeDataMode() { return window.EU_DATA || 'demo'; }
-  function setHomeData(mode) {
-    if (window.setDataMode) { window.setDataMode(mode); return; }
-    window.EU_DATA = mode;
-    try { localStorage.setItem('easyicu_home_data', mode); } catch (_) {}
-  }
-
   const HOME_BRANCH_GOALS = Object.freeze({
     predict: 'Model an outcome', crossdb: 'Compare databases', quality: 'Audit data quality',
   });
@@ -31,7 +24,7 @@
     const analysisGoal = question || HOME_BRANCH_GOALS[branchHint] || '';
     startHomeStudy('guided', { question, analysis_goal: analysisGoal });
     try {
-      window.__cpBridge = { ts: Date.now(), route: 'entry', lastUser: question || null, dataMode: homeDataMode(), branchHint: branchHint || null };
+      window.__cpBridge = { ts: Date.now(), route: 'entry', lastUser: question || null, dataMode: 'real', branchHint: branchHint || null };
     } catch (_) {}
     location.hash = '#guided';
   }
@@ -60,7 +53,6 @@
     section: 'entry',
     full: true,
     render() {
-      const dm = homeDataMode();
       const inner = `
         <div class="home-inner" style="max-width:1180px;">
           <h1 class="home-h1">${t('Welcome to EasyICU', '欢迎使用 EasyICU')}</h1>
@@ -101,16 +93,6 @@
                       <span class="ce-go">${icon('arrow', 14)}</span>
                     </button>`).join('')}
                 </div>
-                <div class="col-foot">
-                  <div class="home-datamode">
-                    <span class="hdm-lab">${t('Data', '数据')}</span>
-                    <div class="seg home-data-seg" id="homeData" role="group" aria-label="${t('Data mode', '数据模式')}">
-                      <button type="button" class="${dm === 'demo' ? 'on' : ''}" data-hd="demo" aria-pressed="${dm === 'demo'}">${t('Demo', '演示')}</button>
-                      <button type="button" class="${dm === 'real' ? 'on' : ''}" data-hd="real" aria-pressed="${dm === 'real'}">${t('Real', '真实')}</button>
-                    </div>
-                    <span class="col-dataline">${icon('shield', 12)} ${dm === 'demo' ? t('Demo data · reproducible', '演示数据 · 可复现') : t('Real data · local-only', '真实数据 · 仅本地')}</span>
-                  </div>
-                </div>
               </div>
             </div>
           </div>
@@ -139,17 +121,11 @@
       return `<div class="entry-shell">${homeHeader()}<div class="home-wrap">${inner}</div></div>`;
     },
     afterRender(root) {
-      const dataEl = root.querySelector('#homeData');
-      if (dataEl) dataEl.addEventListener('click', event => {
-        const button = event.target.closest('[data-hd]');
-        if (button) setHomeData(button.dataset.hd);
-      });
       const input = root.querySelector('#homeInput');
       const send = root.querySelector('#homeSend');
       const firstTime = root.querySelector('[data-firsttime]');
       if (firstTime) firstTime.addEventListener('click', () => {
         try { localStorage.setItem('easyicu_onboarded', '1'); } catch (_) {}
-        if (window.setDataMode) window.setDataMode('demo', { force: true });
         location.hash = '#tutorial';
       });
       const nudge = root.querySelector('#firstTimeNudge');
@@ -169,7 +145,6 @@
       root.querySelectorAll('[data-home-new-study]').forEach(button => button.addEventListener('click', () => {
         const target = button.dataset.homeNewStudy;
         startHomeStudy(target, target === 'ideas' ? { purpose: 'idea_mining' } : {});
-        if (target === 'extraction' && window.setDataMode) window.setDataMode('real', { force: true });
       }));
       function submit() { launchCopilot(((input && input.value) || '').trim() || null); }
       if (send) send.addEventListener('click', submit);

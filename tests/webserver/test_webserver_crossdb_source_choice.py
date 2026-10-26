@@ -32,14 +32,14 @@ def test_crossdb_source_choice_owner_is_explicitly_wired() -> None:
     setup = _read("js/screens-viz-crossdb-setup.js")
     owner = _read("js/screens-viz-crossdb-source.js")
 
-    owner_src = "js/screens-viz-crossdb-source.js?v=20261026-data1"
+    owner_src = "js/screens-viz-crossdb-source.js?v=20261026-src1"
     assert owner_src in index
     assert index.index("js/screens-viz.js?") < index.index(owner_src)
     assert index.index(owner_src) < index.index("js/screens-viz-study-context.js?")
 
     assert "window.EU_CROSSDB_SOURCE_HOST" in viz
     assert "window.EU_CROSSDB_SOURCE_CHOICE" in setup
-    assert "sourceChoice.render({ registryHtml })" in setup
+    assert "sourceChoice.render({\n        registryHtml,\n        offersHtml:" in setup
     assert "sourceChoice.renderLoading()" in setup
     assert "sourceChoice.wire(root)" in setup
     assert "data-crossdb-run-registered" not in viz
@@ -58,7 +58,7 @@ def test_crossdb_source_choice_owner_is_explicitly_wired() -> None:
         "data-crossdb-registered-loading",
         "selected exports",
         "Start consistency check",
-        "Add and select at least two EasyICU exports.",
+        "Select at least two prepared datasets; public demos count.",
     ):
         assert marker in owner
 
@@ -124,8 +124,7 @@ def test_crossdb_registered_action_executes_owner_contract() -> None:
         text=True,
     )
     assert json.loads(result.stdout) == {
-        "official_pair_ready": True,
-        "official_run_count": 1,
+        "opened_official": "eicu_demo",
         "ready_sources": 2,
         "run_count": 1,
     }

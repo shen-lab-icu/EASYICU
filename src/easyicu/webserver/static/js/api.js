@@ -104,27 +104,21 @@
 
   async function hydrateSettings() {
     window.EU_SETTINGS = await getJSON('/api/settings');
-    // Browser language/data-mode selection is the source of truth for the
-    // current UI. If it differs from the backend settings file, keep the UI
-    // responsive now and persist the browser choice in the background.
+    // Browser language selection is the source of truth for the current UI.
+    // If it differs from the backend settings file, keep the UI responsive now
+    // and persist the browser choice in the background. There is no data mode
+    // to read: every source takes the same source-backed path.
     let browserLang = null;
-    let browserMode = null;
     try { browserLang = localStorage.getItem('easyicu_lang'); } catch (e) {}
-    try { browserMode = localStorage.getItem('easyicu_home_data'); } catch (e) {}
     const serverLang = window.EU_SETTINGS.language;
-    const serverMode = window.EU_SETTINGS.data_mode;
     const validLang = l => l === 'en' || l === 'zh';
-    const validMode = m => m === 'demo' || m === 'real';
     const lang = validLang(browserLang) ? browserLang : (validLang(serverLang) ? serverLang : (validLang(window.EU_LANG) ? window.EU_LANG : 'en'));
-    const mode = validMode(browserMode) ? browserMode : (validMode(serverMode) ? serverMode : (validMode(window.EU_DATA) ? window.EU_DATA : 'demo'));
     window.EU_LANG = lang;
-    window.EU_DATA = mode;
+    window.EU_DATA = 'real';
     window.EU_SETTINGS.language = lang;
-    window.EU_SETTINGS.data_mode = mode;
     if (window.applySettingsState) window.applySettingsState(window.EU_SETTINGS);
     const syncPatch = {};
     if (validLang(browserLang) && browserLang !== serverLang) syncPatch.language = browserLang;
-    if (validMode(browserMode) && browserMode !== serverMode) syncPatch.data_mode = browserMode;
     if (Object.keys(syncPatch).length) {
       postJSON('/api/settings', syncPatch).then(settings => {
         window.EU_SETTINGS = Object.assign({}, window.EU_SETTINGS || {}, settings || {}, syncPatch);
@@ -133,9 +127,6 @@
     }
     if (!validLang(browserLang)) {
       try { localStorage.setItem('easyicu_lang', lang); } catch (e) {}
-    }
-    if (!validMode(browserMode)) {
-      try { localStorage.setItem('easyicu_home_data', mode); } catch (e) {}
     }
     return window.EU_SETTINGS;
   }
@@ -252,24 +243,17 @@
   async function boot() {
     try {
       const initialLanguage = window.EU_LANG;
-      const initialDataMode = window.EU_DATA;
       await Promise.all([hydrateCatalog(), hydrateSettings(), hydrateWorkspaceRegistry()]);
       try {
         await hydrateCapabilities();
       } catch (err) {
         console.warn('[EasyICU] capability fetch failed:', err);
       }
-      // A browser that remembers demo mode opens a hosted instance on the
-      // administrator's prepared data (setDataMode refuses demo there).
-      if (((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true && window.EU_DATA === 'demo' && window.setDataMode) {
-        window.setDataMode('real', { force: true });
-      }
       // Guided owns a live conversation DOM. Rebuilding the whole screen after
       // catalog hydration destroys that DOM and starts project restoration a
-      // second time. Settings that change its language or data mode still need
-      // the normal render; otherwise the already-mounted screen is current.
-      if (!document.getElementById('gdPiShell')
-        || initialLanguage !== window.EU_LANG || initialDataMode !== window.EU_DATA) {
+      // second time. A setting that changes its language still needs the
+      // normal render; otherwise the already-mounted screen is current.
+      if (!document.getElementById('gdPiShell') || initialLanguage !== window.EU_LANG) {
         rerender();
       }
       console.info('[EasyICU] hydrated: %d concepts, settings loaded (ai_enabled=%s)',

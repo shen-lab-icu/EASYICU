@@ -179,5 +179,5 @@ def test_patient_official_demo_source_owner_contract_executes() -> None:
         "official_pair_resolved": True,
         "shared_owner_contract": True,
         "user_mode_remains_demo": True,
-        "synthetic_fallback_explicit": True,
+        "no_synthetic_fallback": True,
     }

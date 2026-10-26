@@ -9,16 +9,15 @@ global.EU_LANG = 'en';
 
 let paths = ['/exports/mimic-iv', '/exports/eicu', '/exports/mimic-iv'];
 let runCount = 0;
-let officialRunCount = 0;
+let openedOfficial = null;
 let officialBindConfig = null;
 let officialEnsureCount = 0;
 global.EU_CROSSDB_SOURCE_HOST = {
   registeredPaths: () => paths,
   runRegistered: () => { runCount += 1; },
   officialPaths: () => [],
-  openOfficial: () => {},
+  openOfficial: sourceId => { openedOfficial = sourceId; },
   repaint: () => {},
-  runOfficial: () => { officialRunCount += 1; },
 };
 global.EU_OFFICIAL_DEMO_SOURCES = {
   ensureLoaded(callback) {
@@ -101,19 +100,15 @@ const loadingHtml = owner.renderLoading();
 assert.match(loadingHtml, /data-crossdb-registered-loading/);
 assert.match(loadingHtml, /2 local exports · aggregate-only/);
 assert.match(loadingHtml, /data-crossdb-cancel/);
-const demoHtml = owner.renderDemo({
-  sourceModeHtml: '<div data-test-source-mode>source mode</div>',
-  syntheticHtml: '<div data-test-synthetic>synthetic fallback</div>',
+// Public demos are prepared data like any other: the unprepared ones are
+// offered under the picker, and there is no separate demo or synthetic path.
+assert.equal(owner.renderDemo, undefined);
+const offersHtml = owner.render({
+  registryHtml: '<div data-test-registry>picker</div>',
+  offersHtml: '<div data-official-demo-sources>official demos</div>',
 });
-assert.match(demoHtml, /data-crossdb-demo-source-choice/);
-assert.match(demoHtml, /data-official-demo-sources/);
-assert.match(demoHtml, /Start consistency check/);
-assert.match(demoHtml, /MIMIC-IV Clinical Database Demo/);
-assert.match(demoHtml, /eICU Collaborative Research Database Demo/);
-assert.match(demoHtml, /2 \/ 2 ready/);
-assert.doesNotMatch(demoHtml, /data-demo-source-prepare/);
-assert.match(demoHtml, /data-crossdb-synthetic-fallback/);
-assert.match(demoHtml, /Not real records/);
+assert.ok(offersHtml.indexOf('data-crossdb-run-registered') < offersHtml.indexOf('data-official-demo-sources'));
+assert.doesNotMatch(offersHtml, /synthetic|Synthetic/);
 
 const readyButton = fakeButton(false);
 const readyRoot = { querySelectorAll: () => [readyButton] };
@@ -122,26 +117,22 @@ owner.wire(readyRoot);
 readyButton.click();
 assert.equal(runCount, 1, 'one click must invoke the registered-export host exactly once');
 
-const officialButton = fakeButton(false);
 const officialRoot = {
   querySelector(selector) {
-    return selector === '[data-crossdb-demo-source-choice]' ? {} : null;
+    return selector === '[data-crossdb-source-choice]' ? {} : null;
   },
-  querySelectorAll(selector) {
-    return selector === '[data-crossdb-run-official]' ? [officialButton] : [];
-  },
+  querySelectorAll: () => [],
 };
 owner.wire(officialRoot);
-officialButton.click();
-assert.equal(officialRunCount, 1);
 assert.equal(officialEnsureCount, 1);
-assert.equal(typeof officialBindConfig.openPrepared, 'function');
+officialBindConfig.openPrepared('eicu_demo');
+assert.equal(openedOfficial, 'eicu_demo');
 
 paths = ['/exports/mimic-iv'];
 const blockedHtml = owner.render();
 assert.match(blockedHtml, /1 selected export/);
 assert.match(blockedHtml, /data-crossdb-run-registered aria-disabled="true"/);
-assert.match(blockedHtml, /at least two EasyICU exports/);
+assert.match(blockedHtml, /at least two prepared datasets; public demos count/);
 
 const blockedButton = fakeButton(true);
 owner.wire({ querySelectorAll: () => [blockedButton] });
@@ -149,8 +140,7 @@ blockedButton.click();
 assert.equal(runCount, 1, 'fewer than two registered exports must not invoke the host');
 
 process.stdout.write(JSON.stringify({
-  official_pair_ready: true,
-  official_run_count: officialRunCount,
+  opened_official: openedOfficial,
   ready_sources: 2,
   run_count: runCount,
 }));

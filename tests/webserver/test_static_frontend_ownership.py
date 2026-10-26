@@ -662,7 +662,6 @@ def test_patient_review_owner_contains_state_effects_render_and_route() -> None:
         "function patientTabBody(",
         "function bindPatientSeriesControls(",
         "data-patient-export",
-        "data-patient-use-real",
     ):
         assert marker in owner, marker
         assert marker not in shell, marker
