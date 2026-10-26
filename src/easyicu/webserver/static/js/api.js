@@ -653,6 +653,21 @@
   function setPiDraftSkills(sessionId, body) {
     return putJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/draft-skills', body || {});
   }
+  // Databases, variables and project files mentioned in a conversation's next message.
+  function searchPiMentions(sessionId, params) {
+    const query = new URLSearchParams({
+      project_id: String(params && params.project_id || ''), kind: String(params && params.kind || ''),
+      query: String(params && params.query || '').slice(0, 120),
+    });
+    if (params && params.limit) query.set('limit', String(params.limit));
+    return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/mentions?' + query.toString());
+  }
+  function resolvePiMention(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/mentions/resolve', body || {});
+  }
+  function setPiDraftMentions(sessionId, body) {
+    return putJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/draft-mentions', body || {});
+  }
   function loadProjectDefaultSkills(projectId) {
     return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/default-skills');
   }
@@ -1009,6 +1024,9 @@
   window.EU_API.loadPiSessionUsage = loadPiSessionUsage;
   window.EU_API.loadPiRunUsage = loadPiRunUsage;
   window.EU_API.setPiDraftSkills = setPiDraftSkills;
+  window.EU_API.searchPiMentions = searchPiMentions;
+  window.EU_API.resolvePiMention = resolvePiMention;
+  window.EU_API.setPiDraftMentions = setPiDraftMentions;
   window.EU_API.loadProjectDefaultSkills = loadProjectDefaultSkills;
   window.EU_API.setProjectDefaultSkills = setProjectDefaultSkills;
   window.EU_API.loadPiCopilotFollowups = loadPiCopilotFollowups;
