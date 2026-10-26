@@ -25,6 +25,8 @@
         || (state.session && state.session.streaming)),
       hosted: () => { const owner = MODULES.optional('hosted'); return Boolean(owner && owner.active()); },
     });
+    const usageOwner = MODULES.optional('usage');
+    if (usageOwner) usageOwner.bind({ session: () => state.session, projectId });
     // A stopped run's block (owner: screens-guided-pi-run-stop.js).
     const stopOwner = MODULES.optional('runStop');
     const RUN_STOP = stopOwner ? stopOwner.create({ tr, runFailureText,

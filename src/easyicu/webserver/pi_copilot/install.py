@@ -28,6 +28,8 @@ RUNTIME_SOURCE_FILES = (
     "src/event-projection.mjs",
     "src/post-tool-finalization.mjs",
     "src/shell-budget.mjs",
+    "src/shell-usage.mjs",
+    "src/personal-preferences.mjs",
     "src/provider-retry.mjs",
     "src/session-lifecycle.mjs",
     "src/research-context.mjs",

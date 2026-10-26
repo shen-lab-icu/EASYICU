@@ -143,6 +143,10 @@
 .gpi-model-note.is-error{color:var(--ink-2)}
 .gpi-model-settings{min-height:35px;display:flex;align-items:center;padding:0 10px;margin-top:3px;border:0;border-top:1px solid var(--hair);border-radius:7px;background:transparent;color:var(--ink-3);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
 .gpi-model-settings:hover{background:var(--wash);color:var(--ink-1)}
+/* Owner: js/screens-guided-pi-usage.js — usage lines at the foot of the model menu. */
+.gpi-model-usage{display:grid;gap:4px;margin-top:3px;padding:8px 10px 6px;border-top:1px solid var(--hair);color:var(--ink-3);font-size:12px;line-height:17px}
+.gpi-model-usage p{margin:0}
+.gpi-model-usage span{display:block;color:var(--ink-2);font-weight:600}
 .gpi-model-popover [data-gpi-pick-model]:focus-visible,.gpi-model-settings:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
 .gpi-workflow{
   flex:0 0 auto;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:16px;

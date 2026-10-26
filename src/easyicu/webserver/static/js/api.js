@@ -73,6 +73,19 @@
     }
     return res.json();
   }
+  async function patchJSON(path, body) {
+    const res = await fetch(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    if (!res.ok) {
+      let d = null;
+      try { const payload = await res.json(); d = payload && payload.detail; } catch (e) {}
+      throw apiError(path, res, d);
+    }
+    return res.json();
+  }
   async function postBlob(path, body) {
     const res = await fetch(path, {
       method: 'POST',
@@ -571,6 +584,19 @@
   function cancelPiCopilotFollowup(sessionId, itemId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/followups/' + encodeURIComponent(itemId) + '/cancel', body || {});
   }
+  // Personal preferences (frozen into each new conversation) and model usage.
+  function loadPersonalPreferences() {
+    return getJSON('/api/copilot/pi/preferences');
+  }
+  function updatePersonalPreferences(body) {
+    return patchJSON('/api/copilot/pi/preferences', body || {});
+  }
+  function loadPiSessionUsage(sessionId, projectId) {
+    return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/usage?project_id=' + encodeURIComponent(projectId));
+  }
+  function loadPiRunUsage(projectId, runId) {
+    return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/runs/' + encodeURIComponent(runId) + '/usage');
+  }
   // One search over this instance's projects, conversations, runs and files.
   function searchWorkspace(params) {
     const query = new URLSearchParams({ q: String(params && params.q || '').slice(0, 200) });
@@ -925,6 +951,10 @@
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
   window.EU_API.loadPiSessionSkills = loadPiSessionSkills;
   window.EU_API.searchWorkspace = searchWorkspace;
+  window.EU_API.loadPersonalPreferences = loadPersonalPreferences;
+  window.EU_API.updatePersonalPreferences = updatePersonalPreferences;
+  window.EU_API.loadPiSessionUsage = loadPiSessionUsage;
+  window.EU_API.loadPiRunUsage = loadPiRunUsage;
   window.EU_API.setPiDraftSkills = setPiDraftSkills;
   window.EU_API.loadProjectDefaultSkills = loadProjectDefaultSkills;
   window.EU_API.setProjectDefaultSkills = setProjectDefaultSkills;

@@ -55,6 +55,7 @@
   }
   function T(en, zh) { return t(en, zh); }
   function extensionUi() { return window.EU_SETTINGS_EXTENSIONS || {}; }
+  function personalSection() { return window.EU_SETTINGS_PERSONALIZATION ? window.EU_SETTINGS_PERSONALIZATION.section() : ''; }
 
   function row(t, d, ctl) {
     return `<div class="set-row"><div class="sr-main"><div class="sr-t">${t}</div><div class="sr-d">${d}</div></div><div class="sr-ctl">${ctl}</div></div>`;
@@ -572,6 +573,7 @@
             [T('Data mode', '数据模式'), 'flask', 'set-data-mode'],
             [T('Privacy', '隐私'), 'shield', 'set-privacy'],
             [T('Research Agent', '研究代理'), 'agent', 'set-research-agent'],
+            [T('Personal', '个人'), 'edit', 'set-personal'],
             [T('Language', '语言'), 'globe', 'set-language'],
             [T('About', '关于'), 'help', 'set-about'],
           ].map(([label, ic, target]) =>
@@ -627,6 +629,7 @@
           `<button class="btn sm" data-settings-open="guided">${icon('spark', 12)} ${T('Open Guided Copilot', '打开研究引导')}</button>`)}
       </div>
 
+      ${personalSection()}
       ${languageSection()}
 
       ${aboutSection(false)}
@@ -638,6 +641,7 @@
       if (root.querySelector('[data-ext-manager]') && extensionUi().bind) {
         extensionUi().bind(root, { rerender, setNotice });
       }
+      if (window.EU_SETTINGS_PERSONALIZATION) window.EU_SETTINGS_PERSONALIZATION.bind(root);
       const persist = (key, value, msg) => {
         if (key && window.EU_API && window.EU_API.saveSetting) {
           window.EU_API.saveSetting(key, value).then(() => {

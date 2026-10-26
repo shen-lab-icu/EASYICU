@@ -32,11 +32,13 @@ from easyicu.webserver.pi_copilot.provider_config import (
 from easyicu.webserver import codex_account_sessions
 from easyicu.webserver.pi_copilot import openrouter_login
 from .research_append import router as append_router
+from .personal_preferences import router as preferences_router
 from .skill_attachments import router as skill_router
 
 router = APIRouter()
 router.include_router(append_router)
 router.include_router(skill_router)
+router.include_router(preferences_router)
 
 ShortText = Annotated[
     str,
@@ -137,7 +139,7 @@ class PiSessionCreateRequest(BaseModel):
     project_id: ShortText
     title: str = "EasyICU Copilot"
     agent_mode: Literal["research", "workspace"] = "research"
-    language: Literal["en", "zh"] = "en"
+    language: Literal["en", "zh"] | None = None
     thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "medium"
     external_llm_opt_in: StrictBool = False
     research_provider: Literal["api", "codex"] = "api"

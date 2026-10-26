@@ -70,7 +70,7 @@ process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20261026-plain-connect1" in index
+    assert "css/guided-pi.css?v=20261026-personal1" in index
     assert "css/guided-pi-clinical-card.css?v=20261025-owner-split1" in index
     # The connection dialog sheet reads the provider tokens the base sheet defines.
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261026-openrouter1") < index.index("css/guided-pi-header.css?v=")
@@ -135,7 +135,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261026-dbnames1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261026-walk2" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261026-personal1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -154,6 +154,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-skill-attach.js?v=20261026-attach1" in index
     assert "js/screens-guided-pi-search.js?v=20261026-search1" in index
     assert "css/guided-pi-search.css?v=20261026-search1" in index
+    assert "js/screens-guided-pi-usage.js?v=20261026-personal1" in index
     assert "css/guided-pi-source-adjustments.css?v=20261026-six1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261024-demo-raw-plan1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
@@ -164,7 +165,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20261026-search1" in index
+    assert "js/api.js?v=20261026-personal1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -4869,6 +4870,7 @@ def test_pi_frontend_javascript_parses() -> None:
         "js/screens-guided-pi-source-adjustments.js",
         "js/screens-guided-pi-skill-attach.js",
         "js/screens-guided-pi-search.js",
+        "js/screens-guided-pi-usage.js",
         "js/screens-guided-pi-markdown.js",
         "js/screens-guided-pi-next-actions.js",
         "js/screens-guided-pi-message-actions.js",

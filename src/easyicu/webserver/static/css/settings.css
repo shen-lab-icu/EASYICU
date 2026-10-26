@@ -354,3 +354,12 @@
 /* The settings section rail jumps by anchor; the page keeps enough room below
    the last section so every anchor, not only the first two, can reach the top. */
 .settings-page{padding-bottom:min(60vh,640px)}
+
+/* Owner: js/screens-settings-personalization.js — standing instructions for the Copilot. */
+.set-personal{display:grid;gap:10px}
+.set-personal label{color:var(--ink-2);font-size:13px;line-height:19px}
+.set-personal textarea{box-sizing:border-box;width:100%;min-height:112px;padding:9px 11px;border:1px solid var(--hair);border-radius:var(--r-2,6px);background:var(--surface);color:var(--ink);font:13px/20px inherit;resize:vertical}
+.set-personal textarea:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:1px}
+.set-personal-foot{display:flex;align-items:center;gap:12px;color:var(--ink-3);font-size:12px}
+.set-personal-foot button{margin-left:auto}
+.set-personal-foot .is-over,.set-personal-error{color:var(--danger,#b42318)}

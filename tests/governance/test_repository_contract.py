@@ -183,6 +183,8 @@ def test_native_webserver_static_assets_are_packaged() -> None:
         "pi_copilot/node_app/src/event-projection.mjs",
         "pi_copilot/node_app/src/post-tool-finalization.mjs",
         "pi_copilot/node_app/src/shell-budget.mjs",
+        "pi_copilot/node_app/src/shell-usage.mjs",
+        "pi_copilot/node_app/src/personal-preferences.mjs",
         "pi_copilot/node_app/src/provider-retry.mjs",
         "pi_copilot/node_app/src/session-lifecycle.mjs",
         "pi_copilot/node_app/src/research-context.mjs",
