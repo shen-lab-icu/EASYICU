@@ -819,6 +819,13 @@ def step_materialization_shape_contract(
     if outline_step.module_id == "absolute_risk_context":
         step["population_scope"] = outline_step.population_scope
         step["population_scope_change_reason"] = outline_step.population_scope_change_reason
+    population_guidance = (
+        "Use the existing step.population_scope and "
+        "step.population_scope_change_reason fields: copy explicit outline "
+        "values exactly; otherwise choose analysis_cohort or primary_model "
+        "for population_scope. Do not create a separate key for outline values.\n"
+        if outline_step.module_id == "absolute_risk_context" else ""
+    )
     template = {
         "schema_version": "easyicu.progressive_step_materialization/1",
         "foundation": None,
@@ -827,9 +834,16 @@ def step_materialization_shape_contract(
     return (
         "ProgressiveStepMaterialization shape template (preserve this root wrapper; emit only the step keys permitted by the current structured schema):\n"
         + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
-        + "\nCopy schema_version, foundation=null, and the outline-owned scientific coordinates exactly, including an explicit outline population_scope and its population_scope_change_reason. The host binds the current step ID and digest. Do not re-decide or erase these scientific choices. Replace only the module-specific executable null/empty defaults required by the current method card. Inapplicable keys omitted from the current structured schema retain their host defaults; do not add them back from this template. Never return variable_names, literature_citation_keys, literature_design_bindings, cohort, or expected_outputs inside step. raw_inputs may contain only sealed variable names, never kind:product tokens; governed products belong only in product_inputs.\n"
-        "population_scope belongs exclusively to module_id='absolute_risk_context': that module must choose analysis_cohort or primary_model. Omit this field for every other module_id, whatever the step_id is called; primary-model eligibility is governed by its cohort and method contracts, not this descriptive-table selector.\n"
-        "Nested item shapes, when used: product_inputs items are exactly "
+        + "\nCopy schema_version, foundation=null, and the outline-owned scientific coordinates exactly. The host binds the current step ID and digest. Do not re-decide or erase these scientific choices. Replace only the module-specific executable null/empty defaults required by the current method card. Inapplicable keys omitted from the current structured schema retain their host defaults; do not add them back from this template. Never return variable_names, literature_citation_keys, literature_design_bindings, cohort, or expected_outputs inside step. raw_inputs may contain only sealed variable names, never kind:product tokens; governed products belong only in product_inputs.\n"
+        "Allowed step keys are only those shown in this template and permitted "
+        "by the current structured schema. To repair a validator rejection, "
+        "edit the existing field or nested item it names; for extra_forbidden, "
+        "remove the extra key. Do not add explanatory keys. When outputs are "
+        "required, replace step.outputs=[] with a non-empty array using the "
+        "outputs item shape below and the current module's allowed roles. "
+        "Return the complete corrected wrapper.\n"
+        + population_guidance
+        + "Nested item shapes, when used: product_inputs items are exactly "
         '{"producer_step_id":"<preceding step id>","product_id":"<kind:product>"}; outputs items are exactly '
         '{"product_id":"<kind:product>","semantic_role":"<allowed role>"}; table_one_variables items are exactly '
         '{"name":"<sealed variable>","summary":"<mean_sd|median_iqr|both|count_percent>"}; model_terms items are exactly '
