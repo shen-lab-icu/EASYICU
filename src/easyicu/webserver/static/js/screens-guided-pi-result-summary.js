@@ -370,6 +370,8 @@
           label: levelLabel(variable, raw, labels, levels),
           n: finite(item.record.n_rows),
           sharePct: finite(item.record.exposure_pct),
+          shareDenominator: finite(item.record.exposure_denominator),
+          missingExposureExcludedN: finite(item.record.missing_exposure_excluded_n),
           events: finite(item.record.outcome_events),
           denominator: finite(item.record.outcome_denominator),
           missingN: finite(item.record.outcome_missing_n),

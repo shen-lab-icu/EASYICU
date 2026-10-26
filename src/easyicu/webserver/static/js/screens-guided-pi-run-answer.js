@@ -606,6 +606,14 @@
           `每次住院首次 ICU 筛选：准备数据 ${count(preparation.stays_before)} 条，保留 ${count(preparation.stays_after)} 条；排除：${exclusions}。这些数量按 ICU 入住记录计，同一患者不同住院可分别计数。`,
         ));
       }
+      // Group counts and shares cover the records whose group was recorded;
+      // say how many the exposure could not place, right after the groups,
+      // instead of letting the base shrink unseen.
+      const unplacedN = groups.map(row => row.missingExposureExcludedN).find(n => n > 0);
+      const unplaced = unplacedN ? tr(
+        `Another ${count(unplacedN)} ICU stays had no recorded group and are not counted in these groups.`,
+        `另有 ${count(unplacedN)} 个 ICU 入住记录没有记录分组，未计入以上各组。`,
+      ) : '';
       if (groups.length === 2) {
         const reference = groups[0];
         const focal = groups[1];
@@ -616,6 +624,7 @@
             `在 ${source} 的 ${view.total} 个 ICU 入住记录中，${name(focal)}有 ${count(focal.n)} 个（${percent(focal.sharePct)}）。`,
           ));
         }
+        if (unplaced) sentences.push(unplaced);
         if (focal.outcomeRatePct != null && reference.outcomeRatePct != null) {
           const part = row => tr(
             `${percent(row.outcomeRatePct)} (${count(row.events)}/${count(row.denominator)}) in “${row.label}”`,
@@ -638,6 +647,7 @@
           `${outcome} by ${view.exposureLabel || 'group'} in ${source}: ${rows.join('; ')}.`,
           `${source} 中按${view.exposureLabel || '分组'}的${outcome}：${rows.join('；')}。`,
         ));
+        if (unplaced) sentences.push(unplaced);
       }
       const missingGroups = groups.filter(row => row.missingN > 0).map(row => tr(
         `“${row.label}” ${count(row.missingN)}`,
