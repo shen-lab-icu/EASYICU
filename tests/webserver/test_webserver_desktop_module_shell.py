@@ -22,7 +22,7 @@ def test_data_and_skills_share_the_same_persistent_desktop_shell() -> None:
     extraction = _read("js", "screens-extraction.js")
     skills = _read("js", "screens-skills.js")
 
-    assert "js/desktop-module-shell.js?v=20261026-datamap1" in index
+    assert "js/desktop-module-shell.js?v=20261027-old1" in index
     assert index.index("js/desktop-module-shell.js?") < index.index(
         "js/screens-extraction.js?"
     )
@@ -90,7 +90,7 @@ def test_desktop_modules_share_rail_geometry_and_route_motion() -> None:
     app = _read("js", "app.js")
 
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
-    assert "js/app.js?v=20261026-src1" in index
+    assert "js/app.js?v=20261027-old1" in index
     assert "--workspace-global-rail-width: 59px" in canvas
     assert "--workspace-project-rail-width: clamp(330px, 15vw, 380px)" in canvas
     assert "var(--workspace-global-rail-width,59px)" in skills
@@ -121,15 +121,16 @@ def test_visualization_routes_stay_inside_the_data_workspace_shell() -> None:
     assert "active: 'settings'" in app
 
 
-def test_hosted_get_started_sits_in_the_module_shell_under_help() -> None:
+def test_get_started_sits_in_the_module_shell_under_help() -> None:
     shell = _read("js", "desktop-module-shell.js")
     app = _read("js", "app.js")
     css = _read("css", "skills-hub.css")
 
-    # Only a hosted instance renders Get Started in this shell, so only it
-    # shows the rail item; a local install keeps its full-page tutorial.
-    assert "${hostedInstance() ? navItem(moduleActive, 'tutorial', 'help', 'Help', '帮助') : ''}" in shell
-    assert "const sharedHelpRoute = moduleShell && route === 'tutorial' && hostedInstance();" in app
+    # Every deployment renders Get Started in this shell with Help in its
+    # rail; the retired sidebar shell no longer hosts a full-page tutorial.
+    assert "${navItem(moduleActive, 'tutorial', 'help', 'Help', '帮助')}" in shell
+    assert "hostedInstance() ? navItem(moduleActive, 'tutorial'" not in shell
+    assert "const sharedHelpRoute = moduleShell && route === 'tutorial';" in app
     assert "active: 'tutorial'" in app
     assert "aside: scr.contextAside ? scr.contextAside() : ''" in app
     assert "active === 'tutorial' ? tr('Help', '帮助')" in shell

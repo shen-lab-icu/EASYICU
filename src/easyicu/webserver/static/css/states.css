@@ -1,64 +1,19 @@
 /* ============================================================
-   EasyICU — Workspace States
+   EasyICU — shared state components
    Global states: loading / empty / no-data / error / blocked / success.
    Builds on tokens.css + app.css. All implementable in shell CSS.
    ============================================================ */
 
 /* ---------- States control bar ---------- */
-.st-controls{
-  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-  padding: 12px 14px;
-  border: 1px solid var(--hair);
-  border-radius: var(--r-3);
-  background: var(--surface);
-  box-shadow: var(--sh-1);
-}
-.st-controls .ctl-lbl{
-  font-family: var(--font-mono);
-  font-size: 10px; font-weight: 500; letter-spacing: 0.08em;
-  text-transform: uppercase; color: var(--ink-4);
-  margin-right: -6px;
-}
-.st-controls .grow{ flex: 1; }
-.ctl-group{ display: flex; align-items: center; gap: 10px; }
-.st-divider{ width: 1px; align-self: stretch; background: var(--hair); margin: -4px 2px; }
 @media (max-width: 760px){
-  .st-divider{ display: none; }
-  .st-controls{ gap: 10px; }
-  .st-controls .grow{ flex-basis: 100%; height: 0; }
-  .ctl-group{ flex-basis: 100%; justify-content: space-between; }
-  .ctl-group .seg{ flex: 1; }
-  .ctl-group .seg button{ flex: 1; justify-content: center; padding: 0 8px; }
   .seg.state{ display: grid; grid-template-columns: repeat(3, 1fr); width: 100%; padding: 4px; }
   .seg.state button{ padding: 0 6px; justify-content: center; }
 }
 
 @media (max-width: 520px){
-  .st-controls{
-    display: grid;
-    grid-template-columns: 1fr;
-    align-items: stretch;
-  }
-  .st-controls .grow{
-    display: none;
-  }
-  .ctl-group{
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 6px;
-    width: 100%;
-  }
-  .st-controls .ctl-lbl{
-    margin-right: 0;
-  }
-  .ctl-group .seg,
   .seg.state{
     width: 100%;
     min-width: 0;
-  }
-  .ctl-group .seg{
-    display: grid;
-    grid-template-columns: 1fr;
   }
   #modeSeg{
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -66,64 +21,12 @@
   .seg.state{
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .st-controls .seg button{
-    min-width: 0;
-    width: 100%;
-    white-space: normal;
-    padding: 0 7px;
-    line-height: 1.15;
   }
-  .st-head{
-    flex-wrap: wrap;
-    align-items: flex-start;
-  }
-  .st-head .grow{
-    flex: 1 1 calc(100% - 42px);
-  }
-  .st-stage .row.gap-8.mt-16{
-    flex-wrap: wrap;
-  }
-  .st-stage .row.gap-8.mt-16 .btn{
-    flex: 1 1 100%;
-    min-width: 0;
-  }
-  .st-stage .row.gap-8.mt-16 .mono{
-    flex: 1 1 100%;
-    min-width: 0;
-    text-align: left;
-  }
-}
 
 /* segmented state switcher carries a status hue on the active item */
 .seg.state button.active[data-state="error"]{ color: var(--bad); }
 .seg.state button.active[data-state="blocked"]{ color: #845000; }
 .seg.state button.active[data-state="success"]{ color: var(--ok); }
-
-/* ---------- Stage frame (the screen being demonstrated) ---------- */
-.st-stage{
-  position: relative;
-  margin-top: 16px;
-  border: 1px solid var(--hair);
-  border-radius: var(--r-4);
-  background: var(--surface);
-  box-shadow: var(--sh-1);
-  overflow: hidden;
-}
-.st-head{
-  display: flex; align-items: center; gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--hair);
-  background: color-mix(in srgb, var(--surface-2) 45%, var(--surface));
-}
-.st-head .st-mark{
-  width: 30px; height: 30px; border-radius: var(--r-2); flex: none;
-  background: var(--surface-3); color: var(--ink-3);
-  display: grid; place-items: center;
-}
-.st-head .st-title{ font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; }
-.st-head .st-sub{ font-size: 11px; color: var(--ink-4); margin-top: 1px; }
-.st-body{ padding: 22px; }
-.st-body.tight{ padding: 0; }
 
 /* ---------- Skeleton / shimmer (loading) ---------- */
 .sk{
@@ -207,8 +110,6 @@
   display: flex; align-items: center; justify-content: center;
   gap: 10px; flex-wrap: wrap; margin-top: 22px;
 }
-.state-hero .st-meta{ margin-top: 18px; }
-
 /* solid (non-dashed) variant for terminal states */
 .state-hero.solid{ border-style: solid; border-color: var(--hair); background: var(--surface); }
 
@@ -216,21 +117,7 @@
 .state-hero.error .glyph{ background: var(--bad-soft); color: var(--bad); border-color: #f7cbc7; }
 .state-hero.blocked .glyph{ background: var(--warn-soft); color: #8a5600; border-color: #efd3ac; }
 .state-hero.success .glyph{ background: var(--ok-soft); color: var(--ok); border-color: #c1e1c6; }
-.state-hero.empty-state .glyph{ background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent-border); }
 .state-hero.nodata .glyph{ background: var(--surface-3); color: var(--ink-3); }
-
-/* error / detail code block */
-.detail-box{
-  text-align: left;
-  font-family: var(--font-mono);
-  font-size: 11px; line-height: 1.6; color: var(--ink-3);
-  background: var(--surface-2); border: 1px solid var(--hair);
-  border-radius: var(--r-2); padding: 11px 13px;
-  max-width: 540px; margin: 18px auto 0;
-  white-space: pre-wrap; word-break: break-word;
-}
-.detail-box .ln-bad{ color: var(--bad); }
-.detail-box .ln-key{ color: var(--ink-2); }
 
 /* filter chips that produced no-data */
 .filter-recap{
@@ -238,9 +125,6 @@
   align-items: center; justify-content: center;
   margin: 16px auto 0; max-width: 560px;
 }
-
-/* ---------- Blocked: checklist gate ---------- */
-.gate-block{ max-width: 620px; margin: 0 auto; text-align: left; }
 
 /* ---------- Success: loaded preview ---------- */
 .ok-banner{
@@ -256,48 +140,7 @@
 }
 
 /* toast docked inside the stage (prototype-safe, not page-fixed) */
-.st-toast{
-  position: absolute; right: 16px; bottom: 16px; z-index: 5;
-  display: flex; align-items: center; gap: 11px;
-  padding: 11px 14px 11px 12px; max-width: 320px;
-  background: var(--ink); color: #fff;
-  border-radius: var(--r-2); box-shadow: var(--sh-3);
-  animation: toast-in .35s cubic-bezier(.2,.8,.2,1) both;
-}
-.st-toast .mk{
-  width: 22px; height: 22px; border-radius: 50%; flex: none;
-  background: rgba(255,255,255,.14); color: #76cf8a;
-  display: grid; place-items: center;
-}
-.st-toast .tt{ font-size: 12.5px; font-weight: 600; }
-.st-toast .td{ font-size: 11px; color: rgba(255,255,255,.6); margin-top: 1px; }
-.st-toast .x{ color: rgba(255,255,255,.5); cursor: pointer; margin-left: 4px; display: grid; place-items: center; }
 @keyframes toast-in{ from{ opacity: 0; transform: translateY(8px); } to{ opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce){ .st-toast{ animation: none; } }
-@media (max-width: 520px){
-  .st-toast{
-    position: static;
-    max-width: 100%;
-    margin-top: 12px;
-  }
-}
-
-/* ---------- Primitives catalog ---------- */
-.prim-grid{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-@media (max-width: 980px){ .prim-grid{ grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 600px){ .prim-grid{ grid-template-columns: 1fr; } }
-.prim{
-  border: 1px solid var(--hair); border-radius: var(--r-3);
-  background: var(--surface); box-shadow: var(--sh-1);
-  padding: 14px 15px; min-height: 116px;
-  display: flex; flex-direction: column; gap: 12px;
-}
-.prim .pk{
-  font-family: var(--font-mono); font-size: 10px; font-weight: 500;
-  letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink-4);
-}
-.prim .pdemo{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1; }
-
 /* small responsive tweak: stage stat row */
 .st-stats{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 @media (max-width: 860px){ .st-stats{ grid-template-columns: repeat(2, 1fr); } }

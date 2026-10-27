@@ -4,8 +4,8 @@ The local page describes computing on the reader's machine and setting up
 their own model. Neither applies to a clinician on the hospital server, so the hosted page names
 where the data is, which databases the administrator prepared, that the
 conversation uses the administrator's model, and whom to ask. A hosted
-instance also drops the expert single-key shortcuts, the design-reference
-page and the demo data switches; a local build keeps all of them. The first
+instance also drops the expert single-key shortcuts and the demo data
+switches; a local build keeps the shortcuts. The first
 paint, before /api/capabilities answers, is already the hosted page, in the
 language the administrator set for the instance.
 """
@@ -48,7 +48,7 @@ require(process.argv[1].replace(/[^/]+$/, 'database-names.js'));
 require(process.argv[1]);
 require(process.argv[2]);
 const page = window.SCREENS.tutorial;
-process.stdout.write(JSON.stringify({ action: page.actionHtml(), rail: page.rail(), body: page.render(), aside: page.contextAside(), disclosure: window.SCREENS.llmEgressDisclosure }));
+process.stdout.write(JSON.stringify({ action: page.actionHtml(), rail: typeof page.rail, body: page.render(), aside: page.contextAside(), disclosure: window.SCREENS.llmEgressDisclosure }));
 """
 
 
@@ -71,7 +71,7 @@ def _page(deployment: str) -> dict:
 @pytest.mark.requires_node
 def test_the_hosted_page_names_the_server_the_prepared_data_and_the_administrator() -> None:
     page = _page("hosted")
-    body, rail = page["body"], page["rail"]
+    body = page["body"]
 
     assert "运行在医院服务器上" in body
     assert "研究数据保存在医院服务器上" in body
@@ -97,8 +97,8 @@ def test_the_hosted_page_names_the_server_the_prepared_data_and_the_administrato
         assert local_claim not in body
     assert 'data-nav="guided"' in page["action"]
     assert "data-help-startdemo" not in page["action"]
-    assert "快捷键" not in rail
-    assert "信息科 &lt;王老师&gt; 8123" in rail
+    # The page sits in the module shell; the old sidebar rail is gone.
+    assert page["rail"] == "undefined"
     # In the module shell the Help aside names the administrator.
     assert page["aside"] == '<div class="euh-context-contact"><span>管理员</span><strong>信息科 &lt;王老师&gt; 8123</strong></div>'
 
@@ -124,7 +124,7 @@ def test_the_local_page_keeps_desktop_guidance_and_entry_points() -> None:
         assert hosted_claim not in body
     assert 'data-nav="guided"' in page["action"]
     assert "data-help-startdemo" not in page["action"]
-    assert "快捷键" in page["rail"]
+    assert page["rail"] == "undefined"
     assert page["aside"] == ""
     # The replay request is one-shot: Help sets it, the conversation consumes it on mount.
     guided = (STATIC / "js" / "screens-guided-pi.js").read_text(encoding="utf-8")
@@ -137,8 +137,9 @@ def test_the_local_page_keeps_desktop_guidance_and_entry_points() -> None:
 def test_a_hosted_instance_drops_single_key_shortcuts_and_the_states_catalogue() -> None:
     app = (STATIC / "js" / "app.js").read_text(encoding="utf-8")
 
-    assert "const HOSTED_HIDDEN_ROUTES = new Set(['states']);" in app
-    assert "if (hostedInstance() && HOSTED_HIDDEN_ROUTES.has(route)) {" in app
+    # The design-state catalogue is retired everywhere; its link lands in the conversation.
+    assert "const RETIRED_ROUTES = new Set(['entry', 'ideas', 'states']);" in app
+    assert not (STATIC / "js" / "screens-states.js").exists()
     assert "if (typing || e.metaKey || e.ctrlKey || e.altKey || hostedInstance()) return;" in app
     assert "tgt.tagName === 'SELECT'" in app
 
@@ -228,10 +229,12 @@ def test_hosted_review_names_the_prepared_data_without_paths_or_registration() -
     crossdb = (STATIC / "js" / "screens-viz-crossdb-setup.js").read_text(encoding="utf-8")
     assert "hostedServer() ? h.t('Read raw databases on the server and compare a sample.'" in crossdb
     projects = (STATIC / "js" / "screens-guided-projects.js").read_text(encoding="utf-8")
-    # The project list names the hospital server, and a hosted project's row
-    # does not call the administrator's prepared data "local".
-    assert "? `<strong>${t('Your research workspace', '你的研究工作区')}</strong>" in projects
-    assert "'研究配置、运行、证据和对话历史都保存在医院服务器上。'" in projects
+    # The project list carries no summary subline; Help says where the data is
+    # kept. A hosted project's row does not call the administrator's prepared
+    # data "local".
+    assert "gd-project-summary" not in projects
+    help_js = (STATIC / "js" / "screens-help.js").read_text(encoding="utf-8")
+    assert "[t('Where is the data?', '数据在哪里？'), t('The research data is kept on the hospital server" in help_js
     assert "? (hostedOwner() ? '' : t('Local data', '本地数据'))" in projects
 
 

@@ -16,59 +16,22 @@ def _asset(*parts: str) -> str:
     return STATIC.joinpath(*parts).read_text(encoding="utf-8")
 
 
-def test_sidebar_navigation_uses_native_controls_and_named_landmarks() -> None:
+def test_pages_sit_in_the_module_shell_with_named_landmarks() -> None:
+    """app.js draws no page chrome of its own: the old sidebar, top bar and
+    mobile bars are retired, and every non-full page uses the module shell."""
     app_js = _asset("js", "app.js")
+    shell = _asset("js", "desktop-module-shell.js")
 
-    assert '<aside class="sidebar" aria-label=' in app_js
-    assert '<nav class="shell-nav" aria-label=' in app_js
-    assert '<header class="topbar" aria-label=' in app_js
-    assert '<header class="mtopbar" aria-label=' in app_js
-    assert '<main class="main" aria-label=' in app_js
-    assert '<nav class="mbottomnav" aria-label=' in app_js
-
-    # aria-label is required here, not incidental: the brand button wraps a
-    # name span and a tagline span, so its computed accessible name was the
-    # two run together ("EasyICUICU Research Workspace").
-    assert '<button type="button" class="brand" data-nav="entry" aria-label=' in app_js
-    assert '<button type="button" class="nav-item ${route ===' in app_js
-    assert '<button type="button" class="icobtn" title=' in app_js
-    assert '<button type="button" class="mark" data-nav="entry" aria-label=' in app_js
-    assert '<div class="brand" data-nav=' not in app_js
-    assert '<div class="nav-item ${route ===' not in app_js
-    assert '<div class="icobtn' not in app_js
-    assert '<div class="mark" data-nav=' not in app_js
-    assert '<button type="button" class="crumb-link" data-nav="entry">' in app_js
-    assert '<a data-nav="entry">' not in app_js
-
-
-def test_nav_entries_separate_their_title_from_their_sublabel() -> None:
-    """Title + sublabel spans concatenate into one run-together name.
-
-    "Patient Reviewtables · trends · patients" is what a screen reader
-    announced. navLabel rejoins them with a separator instead of hiding the
-    sublabel, and keeps the visible title first so voice control still matches
-    on it (WCAG 2.5.3 Label in Name).
-    """
-
-    app_js = _asset("js", "app.js")
-
-    assert "const navLabel = (label, sub) =>" in app_js
-    # Every sidebar entry that renders a sublabel must supply the joined name.
-    assert 'data-nav="${c.id}" aria-label="${navLabel(c.label, c.sub)}"' in app_js
-    assert 'data-nav="guided" aria-label="${navLabel(' in app_js
-    assert 'data-nav="agent"' not in app_js
-
-
-def test_shell_exposes_current_route_and_disclosure_state() -> None:
-    app_js = _asset("js", "app.js")
-
-    assert "root.querySelectorAll('.sidebar [data-nav], .mbottomnav [data-nav]')" in app_js
-    assert "control.setAttribute('aria-current', 'page')" in app_js
-    assert "control.removeAttribute('aria-current')" in app_js
-    assert '<span class="cur" aria-current="page">' in app_js
-    assert 'data-ws-toggle aria-expanded="${wsOpen}"' in app_js
-    assert 'aria-controls="data-workspace-links"' in app_js
-    assert 'id="data-workspace-links"' in app_js
+    assert '<nav class="euh-rail" aria-label=' in shell
+    assert '<main class="${opts.mainClass || \'euh-main\'}" aria-label=' in shell
+    assert 'aria-current="page"' in shell
+    assert "moduleShell.render({ active: route, content: scr.render() })" in app_js
+    for retired in (
+        'class="sidebar"', 'class="topbar"', 'class="mtopbar"', 'class="mbottomnav"',
+        "function sidebar()", "function topbar()", "function mobileChrome()", "navLabel",
+        "data-ws-toggle", "data-cpopen",
+    ):
+        assert retired not in app_js, retired
 
 
 def test_spa_navigation_updates_title_announces_route_and_moves_focus() -> None:
@@ -114,10 +77,8 @@ ROUTE_HEADINGS = {
     "screens-viz.js": [
         "<h1 style=\"margin-top:0;\">${t('Cross-database comparison', '跨库对比')}</h1>",
     ],
-    "screens-ideas.js": ["<h1"],
     "screens-settings.js": ["<h1"],
     "screens-dict.js": ["<h1"],
-    "screens-states.js": ["<h1"],
     "screens-help.js": ["<h1"],
 }
 
@@ -145,19 +106,8 @@ def test_patient_review_sections_sit_under_the_route_heading() -> None:
     assert "margin:0;" in _asset("css", "patient.css")
 
 
-def test_language_segments_publish_pressed_state() -> None:
-    app_js = _asset("js", "app.js")
-
-    assert "data-datamode" not in app_js
-    assert "root.querySelectorAll('[data-lang]')" in app_js
-    assert "control.setAttribute('aria-pressed'" in app_js
-    assert 'data-lang="en" aria-pressed=' in app_js
-    assert 'data-lang="zh" aria-pressed=' in app_js
-
-
 def test_button_conversion_keeps_shell_visual_resets_in_owner_css() -> None:
     app_css = _asset("css", "app.css")
 
-    assert "border: 0; background: transparent; color: inherit; font: inherit; text-align: left;" in app_css
+    # .nav-item is a <button> (Settings section jumps); its UA chrome is reset here.
     assert "width: 100%; border: 0; background: transparent; font: inherit; text-align: left;" in app_css
-    assert "padding: 0; background: transparent; font: inherit;" in app_css

@@ -45,7 +45,6 @@ PATH_ROUTES = [
     ("POST", "/api/guided/project/open", "project_dir"),
     ("POST", "/api/guided/session", "project_dir"),
     ("POST", "/api/agent-runs/review", "project_dir"),
-    ("POST", "/api/agent-runs/science-workbench", "project_dir"),
     ("POST", "/api/agent-runs/signoff", "project_dir"),
     ("POST", "/api/agent-runs/artifact", "project_dir"),
     ("POST", "/api/agent-runs/download-artifact", "project_dir"),

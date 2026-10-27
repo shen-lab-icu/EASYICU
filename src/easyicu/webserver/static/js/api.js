@@ -386,9 +386,6 @@
   function loadAgentRunReview(run) {
     return postJSON('/api/agent-runs/review', runCoordinate(run));
   }
-  function loadAgentScienceWorkbench(body) {
-    return postJSON('/api/agent-runs/science-workbench', body || {});
-  }
   function loadCapabilities() {
     return hydrateCapabilities();
   }
@@ -968,7 +965,6 @@
   window.EU_API.cancelJob = cancelJob;
   window.EU_API.openExtractionOutput = openExtractionOutput;
   window.EU_API.loadAgentRunReview = loadAgentRunReview;
-  window.EU_API.loadAgentScienceWorkbench = loadAgentScienceWorkbench;
   window.EU_API.loadCapabilities = loadCapabilities;
   window.EU_API.loadExtensions = loadExtensions;
   window.EU_API.loadExtensionSkill = loadExtensionSkill;

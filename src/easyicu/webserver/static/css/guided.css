@@ -54,7 +54,6 @@
 .gd-card .gc-t{ font-size: 14px; font-weight: 600; }
 .gd-card .gc-sub{ font-size: 12px; color: var(--ink-4); font-family: var(--font-mono); }
 .gd-card .gc-body{ padding: 14px; }
-.gd-card .gc-body.tight{ padding: 0; }
 .gd-frontdoor{
   display: grid;
   gap: 12px;

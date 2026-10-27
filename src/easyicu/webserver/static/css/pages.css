@@ -4,10 +4,6 @@
    interactive loaded-workspace pieces. Builds on tokens + app.
    ============================================================ */
 
-/* active footer utility icon */
-.rail-foot .icobtn.on{ background: var(--ink); color: #fff; }
-.rail-foot .icobtn.on:hover{ background: #000; color: #fff; }
-
 /* ---------- Toggle switch ---------- */
 .switch{
   position: relative; display: inline-flex; flex: none;
@@ -170,6 +166,8 @@
 .assist-aside{ display: flex; flex-direction: column; gap: 12px; }
 
 /* ---------- Get Started / tutorial ---------- */
+.mode-mark{ width: 38px; height: 38px; border-radius: 10px; background: var(--ink); color:#fff; display:grid; place-items:center; }
+.mode-mark.accent{ background: var(--accent); }
 .guide-hero{
   border: 1px solid var(--hair); border-radius: var(--r-4);
   background: linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 60%, var(--surface)), var(--surface));
@@ -206,11 +204,6 @@
 .faq-item.open .fq-chev{ transform: rotate(90deg); }
 .faq-a{ padding: 0 16px 16px 44px; font-size: 12.75px; color: var(--ink-3); line-height: 1.6; }
 .faq-item:not(.open) .faq-a{ display: none; }
-
-/* shortcut keys row */
-.shortcut-row{ display: flex; align-items: center; justify-content: space-between; padding: 9px 2px; border-bottom: 1px solid var(--hair); font-size: 12.5px; }
-.shortcut-row:last-child{ border-bottom: 0; }
-.shortcut-row .keys{ display: flex; gap: 4px; }
 
 /* ---------- Loaded patient workspace ---------- */
 .loaded-bar{

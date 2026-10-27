@@ -201,7 +201,7 @@ def test_product_label_calls_are_defensive_and_share_one_default() -> None:
     projects = _read("js/screens-guided-projects.js")
     assert "GUIDED_ROW_FALLBACK" in projects
     assert "t('Guided project', '研究项目')" not in projects
-    assert projects.count("t(...GUIDED_ROW_FALLBACK)") == 3
+    assert projects.count("t(...GUIDED_ROW_FALLBACK)") == 2
 
 
 def test_error_text_return_value_must_pass_through_esc() -> None:

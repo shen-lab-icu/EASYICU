@@ -300,12 +300,7 @@
         ${capabilitySummaryTile('gear', dual('Compute', '计算'), settingOn('remote_compute_enabled', false), computeStateText(remote))}
       </div>
       <div class="settings-cap-actions">
-        <!-- Destination names must match the ones app.js puts in the rail
-             ('Copilot conversation' / 'Copilot 对话', 'Idea Mining' / '想法挖掘'). A button
-             that opens #agent while calling it something the sidebar never
-             says reads as a fourth feature, not a link to an existing one. -->
-        <button class="btn sm" data-settings-open="agent">${icon('agent', 12)} ${dual('Open conversation', '打开研究对话')}</button>
-        <button class="btn sm" data-settings-open="ideas">${icon('spark', 12)} ${dual('Open Idea Mining', '打开想法挖掘')}</button>
+        <button class="btn sm" data-settings-open="guided">${icon('agent', 12)} ${dual('Open conversation', '打开研究对话')}</button>
       </div>
     </div>`;
   }
@@ -665,9 +660,7 @@
         btn.addEventListener('click', e => {
           e.preventDefault();
           const target = btn.getAttribute('data-settings-open');
-          if (target === 'agent') location.hash = '#agent';
           if (target === 'guided') location.hash = '#guided';
-          if (target === 'ideas') location.hash = '#ideas';
         });
       });
       root.querySelectorAll('[data-settings-zotero-test]').forEach(btn => {

@@ -24,7 +24,6 @@ from easyicu.webserver import research_run_submission
 from easyicu.webserver import run_refs
 from easyicu.webserver import codex_account_sessions
 from easyicu.webserver import settings as settings_store
-from easyicu.webserver import science_workbench
 from easyicu.webserver import sources as source_store
 from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.host_action_contracts import (
@@ -1062,25 +1061,6 @@ def post_agent_run_review(body: Dict[str, Any]) -> dict:
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=_addressed(result, ref))
     return _addressed(result, ref)
-
-
-@control_router.post("/api/agent-runs/science-workbench")
-def post_agent_run_science_workbench(body: Dict[str, Any]) -> dict:
-    """Return Claude-Science-style artifact history/reviewer summaries.
-
-    The endpoint is a bounded presentation adapter over local Agent artifacts.
-    It does not create runs, read raw patient rows, or unlock manuscript drafts.
-    """
-    result = science_workbench.build_science_workbench(
-        str(body.get("project_dir") or "").strip() or None
-    )
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
-    capabilities.record_tool_event(
-        "science_workbench_loaded",
-        {"project_dir": str(body.get("project_dir") or "").strip() or None},
-    )
-    return result
 
 
 @control_router.post("/api/agent-runs/scientific-review")

@@ -13,7 +13,7 @@ import re
 import zipfile
 from pathlib import Path
 
-from easyicu.webserver import agent_runs, run_file_guide as guide_owner, science_workbench
+from easyicu.webserver import agent_runs, run_file_guide as guide_owner
 from easyicu.webserver.run_file_guide import bundle_files, run_file_guide
 
 _PNG = b"\x89PNG\r\n\x1a\n" + bytes(16)
@@ -135,25 +135,6 @@ def test_the_download_and_the_review_read_one_report_rule(tmp_path) -> None:
     [plan] = [row for row in review["file_guide"] if row["name"] == "agent_plan.json"]
     assert plan["title"] == {"en": "Analysis plan", "zh": "分析计划"}
     assert plan["bundle_path"] == "plan/agent_plan.json"
-
-
-def test_the_workbench_reads_titles_from_the_guide(monkeypatch) -> None:
-    def titles():
-        history = science_workbench._artifact_history(
-            artifacts=[{"name": "agent_plan.json"}, {"name": "future_summary.json"}],
-            payloads={}, ledger={}, project_dir=None,
-        )
-        return {row["name"]: row["title"] for row in history["items"]}
-
-    assert titles() == {
-        "agent_plan.json": "Analysis plan", "future_summary.json": "Future Summary",
-    }
-    assert science_workbench._artifact_title("") == ""
-    monkeypatch.setitem(
-        guide_owner._FILES, "agent_plan.json",
-        ("plan", "Synthetic owner title", "合成标题", "", ""),
-    )
-    assert titles()["agent_plan.json"] == "Synthetic owner title"
 
 
 _JS_ENTRY = re.compile(r"'([^']+)': t\('((?:[^'\\]|\\.)*)', '((?:[^'\\]|\\.)*)'\)")

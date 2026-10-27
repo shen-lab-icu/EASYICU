@@ -1,62 +1,9 @@
-/* App shell and navigation owner styles. Do not put route-specific panels here. */
+/* App shell owner styles. Do not put route-specific panels here. */
 
 .shell-sr-only{
   position:absolute; width:1px; height:1px; padding:0; margin:-1px;
   overflow:hidden; clip:rect(0, 0, 0, 0); white-space:nowrap; border:0;
 }
-
-.nav-sec{ margin:12px 12px 4px; }
-
-/* Stage status on the three nav sections. The sections already were the main
-   line (plan -> data -> draft); this makes their state visible instead of
-   leaving the user to guess how far they had got. */
-.stage-sec{ display:flex; align-items:center; gap:8px; }
-.stage-sec > span:first-child{ flex:1; min-width:0; }
-.stage-chip{
-  display:inline-flex; align-items:center; gap:3px; flex:none;
-  font-size:9.5px; line-height:1; letter-spacing:0; text-transform:none;
-  padding:3px 6px; border-radius:999px; border:1px solid var(--hair-2);
-  color:var(--ink-4); background:var(--surface);
-}
-.stage-chip.done{ color:#185b37; border-color:#b2d5bd; background:#ebf9ef; }
-.stage-chip.active{ color:#0b517f; border-color:#adcfed; background:#e9f7ff; }
-.stage-chip.stale{ color:#814800; border-color:#e8bf98; background:#fff2e1; }
-.stage-chip svg{ flex:none; }
-
-.shared-note.plan-only{ margin-top:6px; }
-
-.ideas-entry{ background:var(--surface); border-color:var(--hair-2); margin-top:3px; }
-.ideas-entry:hover{ border-color:#5daecc; box-shadow:var(--sh-1); }
-.ideas-entry.on{ border-color:#3a99ba; box-shadow:var(--sh-1); background:linear-gradient(180deg, oklch(97% 0.018 225), var(--surface)); }
-.ideas-entry .cp-ico{ background:#006888; }
-.ideas-entry .cp-d{ color:var(--ink-4); }
-.ideas-entry .cp-go{ color:#006888; }
-
-/* Data Workspace: one producer, three consumers. Rendering them as four peers
-   hid the order of operations, so a new user's first click could only fail. */
-.wsg-step{
-  margin:5px 0 3px 11px; padding-left:9px;
-  border-left:1px solid var(--hair-2);
-  font-size:9.5px; letter-spacing:.02em; color:var(--ink-4);
-}
-.wsitem.ws-reads{ margin-left:11px; }
-
-.wsitem{ align-items:flex-start; min-height:44px; padding:8px 11px; }
-.wsi-copy{ min-width:0; display:flex; flex-direction:column; gap:1px; }
-.wsitem .wsi-sub{ font-size:10.5px; line-height:1.25; color:var(--ink-4); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.wsitem.active .wsi-sub{ color:var(--ink-3); }
-
-/* Moved verbatim out of redesign.css. The sibling .ideas-entry rules were
-   already here; .agent-entry was stranded in the bucket. Nothing else
-   defines it, and shell.css loads after redesign.css did. */
-.agent-entry{ background:var(--surface); border-color:var(--hair-2); margin-top:8px; }
-.agent-entry:hover{ border-color:var(--hair-3); box-shadow:var(--sh-1); }
-.agent-entry.on{ border-color:var(--ink-3); box-shadow:var(--sh-1); }
-.agent-entry .cp-ico{ background:var(--ink); }
-.agent-entry .cp-t{ color:var(--ink); }
-.agent-entry .cp-d{ color:var(--ink-4); }
-.agent-entry .cp-go{ color:var(--ink-4); }
-
 
 /* The hosted login session ended (js/hosted-session.js). The page stays
    put so unsent text can be copied; the notice links back to the login. */

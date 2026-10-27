@@ -9,8 +9,7 @@
 
    Owner rule: a selector belongs here ONLY if 3+ screens use it. A
    selector used by ONE route belongs in that route's owner CSS
-   (agent.css, states.css, ...), never here. The Entry/Home landing
-   page moved to home.css on 2026-06-26 — do not re-add page-specific
+   (agent.css, states.css, ...), never here. Do not add page-specific
    styles to this file.
    ============================================================ */
 

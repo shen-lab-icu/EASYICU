@@ -98,7 +98,6 @@ def test_crossdb_progress_owner_and_css_stay_route_pure() -> None:
             "cohort.css",
             "extraction.css",
             "guided.css",
-            "ideas.css",
             "patient.css",
             "settings.css",
         ):

@@ -1,6 +1,13 @@
-"""Static contracts for the native WebApp home and navigation flow."""
+"""The research conversation is the home; retired pages land there."""
 
+import json
+import re
+import shutil
 from pathlib import Path
+
+import pytest
+
+from tests.support.node import run_node
 
 
 STATIC = (
@@ -11,43 +18,26 @@ STATIC = (
     / "static"
 )
 
+RETIRED_FILES = (
+    "js/screens-entry.js",
+    "js/screens-ideas.js",
+    "js/screens-ideas-zotero.js",
+    "js/screens-states.js",
+    "js/screens-agent-science.js",
+    "js/screens-agent-run-history.js",
+    "js/gate-remedy.js",
+    "js/study-progress.js",
+    "css/ideas.css",
+    "css/ideas-review.css",
+    "css/ideas-connectors.css",
+    "css/agent-science.css",
+    "css/agent-science-detail.css",
+    "css/gate-remedy.css",
+)
+
 
 def _asset(*parts: str) -> str:
     return STATIC.joinpath(*parts).read_text(encoding="utf-8")
-
-
-def _home_owner() -> str:
-    source = _asset("js", "screens-entry.js")
-    return source.split("S.entry =", 1)[1]
-
-
-def test_entry_owner_is_loaded_before_extraction_without_duplicate_route_owner() -> None:
-    index = _asset("index.html")
-    entry = _asset("js", "screens-entry.js")
-    extraction = _asset("js", "screens-extraction.js")
-
-    assert index.index("js/screens-entry.js?") < index.index(
-        "js/screens-extraction.js?"
-    )
-    assert "S.entry =" in entry
-    assert "S.entry =" not in extraction
-
-
-def test_home_leads_with_copilot_and_keeps_expert_tools_secondary() -> None:
-    home = _home_owner()
-
-    assert "Start with EasyICU Copilot" in home
-    assert "one sentence, article URL, or PDF" in home
-    assert "I have local ICU data" in home
-    assert "candidate innovation directions with literature and data boundaries" in home
-    assert "Mine a feasible question in Idea Mining" not in home
-    assert "Validate and extract analysis-ready tables" in home
-    assert "data-home-new-study" in home
-
-    # Demo remains available, but it follows the real starting choices.
-    assert home.index('<div class="home-split">') < home.index(
-        '<div class="entry-firsttime" id="firstTimeNudge"'
-    )
 
 
 def test_browser_title_uses_the_product_name_not_an_internal_polish_label() -> None:
@@ -57,73 +47,69 @@ def test_browser_title_uses_the_product_name_not_an_internal_polish_label() -> N
     assert "Polished Workspace" not in index
 
 
-def test_home_classic_entry_names_the_real_patient_destination() -> None:
-    home = _home_owner()
+def test_index_loads_no_retired_page_and_every_asset_it_names_exists() -> None:
+    index = _asset("index.html")
+    named = re.findall(r'(?:src|href)="((?:js|css)/[^"?]+)\?v=', index)
 
-    assert "t('Patient Review', '患者审阅')" in home
-    assert "Review patients, tables, and trends from an export" in home
-    assert "t('Data Workspace', '数据工作台')" not in home
-
-
-def test_home_question_survives_language_rerender() -> None:
-    source = _asset("js", "screens-entry.js")
-    home = _home_owner()
-
-    assert "let homeQuestionDraft = '';" in source
-    assert "${escHtml(homeQuestionDraft)}</textarea>" in home
-    assert "input.addEventListener('input', () => { homeQuestionDraft = input.value; });" in home
+    assert named
+    for path in RETIRED_FILES:
+        assert path not in named, path
+        assert not (STATIC / path).exists(), path
+    assert [path for path in named if not (STATIC / path).is_file()] == []
 
 
-def test_new_home_starts_create_fresh_study_contexts() -> None:
-    source = _asset("js", "screens-entry.js")
-
-    assert "typeof store.startNew !== 'function'" in source
-    assert "store.startNew(Object.assign({" in source
-    assert "last_route: route" in source
-    assert "current_stage: 'study_setup'" in source
-    assert "startHomeStudy('guided', { question, analysis_goal: analysisGoal })" in source
-    assert "data-home-new-study=\"${newStudy}\"" in source
-    assert "target === 'ideas' ? { purpose: 'idea_mining' } : {}" in source
-    # There is no data mode to switch before Data Extraction.
-    assert "setDataMode" not in source
+def test_no_live_screen_registers_or_links_a_retired_route() -> None:
+    sources = {path.name: path.read_text(encoding="utf-8") for path in (STATIC / "js").glob("*.js")}
+    for name, source in sources.items():
+        for route in ("entry", "ideas", "states"):
+            assert f"S.{route} = {{" not in source, (name, route)
+        assert 'data-nav="ideas"' not in source, name
+        assert "location.hash = '#ideas'" not in source, name
+        assert 'data-settings-open="ideas"' not in source, name
 
 
-def test_resume_prefers_allowlisted_study_context_then_maps_legacy_branches() -> None:
-    source = _asset("js", "screens-entry.js")
-    resume = source.split("// Resume banner", 1)[1].split("setTimeout", 1)[0]
-
-    assert (
-        "new Set(['guided', 'ideas', 'extraction', 'patient', 'cohort', "
-        "'crossdb', 'agent'])"
-    ) in source
-    assert (
-        "Object.freeze({ predict: 'patient', crossdb: 'crossdb', "
-        "quality: 'cohort' })"
-    ) in source
-    assert "RESUME_ROUTE_ALLOWLIST.has(activeContext.last_route)" in source
-    assert "const resumeRoute = contextRoute || legacyRoute || null" in source
-    assert "location.hash = '#' + resumeRoute" in source
-    assert "startHomeStudy(" not in resume
+_ROUTER = r"""
+const source = require('fs').readFileSync(process.argv[1], 'utf8');
+const start = source.indexOf('  const FALLBACK_ROUTE');
+const end = source.indexOf('  function rawRouteFromHash()');
+global.window = {};
+const normRoute = new Function(`${source.slice(start, end)}; return normRoute;`)();
+const out = {};
+for (const route of ['entry', 'ideas', 'states', 'agent', 'help', 'guided', 'patient']) {
+  window.__euAlias = false;
+  out[route] = [normRoute(route), window.__euAlias];
+}
+process.stdout.write(JSON.stringify(out));
+"""
 
 
-def test_sidebar_follows_research_lifecycle_with_one_copilot_entry() -> None:
-    source = _asset("js", "app.js")
-    sidebar = source.split("function sidebar()", 1)[1].split("function topbar()", 1)[0]
+def test_retired_hashes_resolve_to_the_conversation() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    result = run_node(node, _ROUTER, str(STATIC / "js" / "app.js"), check=False)
+    assert result.returncode == 0, result.stderr or result.stdout
+    routes = json.loads(result.stdout)
 
-    discovery = sidebar.index("Discovery & Plan")
-    guided = sidebar.index('data-nav="guided"')
-    data_review = sidebar.index("Data & Review")
-    workspace = sidebar.index('class="wsnav"')
-    reference = sidebar.index("Reference")
-
-    assert discovery < guided < data_review < workspace < reference
-    assert 'data-nav="ideas"' not in sidebar
-    assert 'data-nav="agent"' not in sidebar
+    for retired in ("entry", "ideas", "states"):
+        assert routes[retired] == ["guided", True], retired
+    assert routes["agent"] == ["guided", True]
+    assert routes["help"][0] == "tutorial"
+    assert routes["guided"] == ["guided", False]
+    assert routes["patient"] == ["patient", False]
 
 
-def test_data_workspace_breadcrumb_is_a_non_clickable_group_label() -> None:
-    source = _asset("js", "app.js")
+def test_get_started_sits_in_the_module_shell_with_help_in_its_rail() -> None:
+    app_js = _asset("js", "app.js")
+    shell = _asset("js", "desktop-module-shell.js")
 
-    assert "'Data Workspace': 'patient'" not in source
-    assert "CRUMB_NAV" not in source
-    assert 'else node = `<span class="mid">${label}</span>`;' in source
+    assert "const sharedHelpRoute = moduleShell && route === 'tutorial';" in app_js
+    assert "${navItem(moduleActive, 'tutorial', 'help', 'Help', '帮助')}" in shell
+    assert "hostedInstance() ? navItem(moduleActive, 'tutorial'" not in shell
+
+
+def test_single_key_shortcuts_reach_live_sections_only() -> None:
+    app_js = _asset("js", "app.js")
+
+    assert "const SHORTCUT_SECTIONS = ['guided', 'extraction', 'patient', 'crossdb'];" in app_js
+    assert "if (e.key >= '1' && e.key <= '4')" in app_js

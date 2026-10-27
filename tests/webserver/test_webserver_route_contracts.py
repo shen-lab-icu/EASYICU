@@ -528,11 +528,6 @@ EXPECTED_AGENT_CONTROL_ROUTES = [
         "post_agent_run_provider_config",
     ),
     ("POST", "/api/agent-runs/review", "post_agent_run_review"),
-    (
-        "POST",
-        "/api/agent-runs/science-workbench",
-        "post_agent_run_science_workbench",
-    ),
     ("POST", "/api/agent-runs/scientific-review", "post_agent_run_scientific_review"),
     ("POST", "/api/agent-runs/signoff", "post_agent_run_signoff"),
     ("POST", "/api/agent-runs/history", "post_agent_run_history"),
