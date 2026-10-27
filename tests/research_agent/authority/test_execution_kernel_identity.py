@@ -130,6 +130,40 @@ def test_figure_renderers_do_not_bind_host_publication_workflows() -> None:
     assert not (paths & host_workflows), sorted(paths & host_workflows)
 
 
+def test_execution_kernel_planning_and_agents_allowlist() -> None:
+    package_root = Path(__file__).resolve().parents[3] / "src" / "easyicu"
+    paths = set(execution_kernel_relative_paths(package_root))
+    # Existing runtime dependencies only. Shrinking this set is allowed; adding
+    # a control-plane dependency must fail even if it is not a known workflow.
+    allowed = {
+        "research_agent/planning/__init__.py",
+        "research_agent/planning/adjustment_authority.py",
+        "research_agent/planning/analysis_method_suite.py",
+        "research_agent/planning/analysis_types.py",
+        "research_agent/planning/baseline_requirements.py",
+        "research_agent/planning/benchmark_comparator.py",
+        "research_agent/planning/capability_registry.py",
+        "research_agent/planning/cohort_contract.py",
+        "research_agent/planning/dependence_authority.py",
+        "research_agent/planning/design_selection.py",
+        "research_agent/planning/exposure_group_reader_names.py",
+        "research_agent/planning/figure_step_contract.py",
+        "research_agent/planning/literature_contract.py",
+        "research_agent/planning/literature_design_authority.py",
+        "research_agent/planning/method_vocabulary.py",
+        "research_agent/planning/robustness_contract.py",
+        "research_agent/planning/robustness_plan_mutation.py",
+        "research_agent/planning/sensitivity_authority.py",
+        "research_agent/planning/study_design.py",
+        "research_agent/planning/study_design_playbook.py",
+    }
+    control_plane = {
+        path for path in paths
+        if path.startswith(("research_agent/planning/", "research_agent/agents/"))
+    }
+    assert not (control_plane - allowed), sorted(control_plane - allowed)
+
+
 def test_execution_kernel_identity_separates_host_source_and_runner_inputs(
     tmp_path: Path,
 ) -> None:

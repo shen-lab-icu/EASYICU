@@ -14,6 +14,7 @@ from typing import Callable, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ...authority.baseline_association_runtime import BaselineAssociationRuntimeAuthority, build_baseline_authority
+from ...contracts.association_execution import baseline_sensitivity_parent_step
 from ...contracts.model_terms import ModelTermSpec
 from ...schema import AnalysisPlan, AnalysisStep, ArtifactConsumptionContract, ResearchContext
 from ..sensitivity_authority import PrespecifiedSensitivitySpec
@@ -281,15 +282,7 @@ def _authority(authority, requirement, *, exposure_encoding=None):
 
 @dataclass(frozen=True)
 class SensitivityAppend:
-    @staticmethod
-    def parent_step(source, authority):
-        primary = authority.governed_primary_step(source)
-        if authority.exposure_encoding != "treatment_contrast" or authority.subgroup_terms:
-            raise ValueError("The sensitivity owner needs a categorical model without existing interactions.")
-        # The generic sensitivity owner implements this exact linear model.
-        # Supply its capability spelling while retaining every model term and
-        # the source product's approval/digest in the append runtime contract.
-        return primary.model_copy(deep=True, update={"scientific_capability": "association_adjusted_v1"})
+    parent_step = staticmethod(baseline_sensitivity_parent_step)
 
     def compile(self, source: AnalysisPlan, context: ResearchContext, authority) -> AppendCompilation:
         from ...contracts.association_execution import association_binary_sensitivity_plan_verdict
