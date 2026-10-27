@@ -266,32 +266,6 @@
   border-color: var(--hair-2);
   background: var(--surface-2);
 }
-.gd-folder-tabs{
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid var(--hair);
-  border-radius: var(--r-2);
-  background: var(--surface-2);
-}
-.gd-folder-tabs button{
-  height: 32px;
-  border: 1px solid transparent;
-  border-radius: var(--r-1);
-  background: transparent;
-  color: var(--ink-3);
-  font: inherit;
-  font-size: 13.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.gd-folder-tabs button.active{
-  border-color: var(--hair);
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: var(--shadow-1);
-}
 @media (max-width: 620px){
   .gd-folder-dialog{
     top: 54px;
@@ -301,9 +275,6 @@
   }
   .gd-folder-dialog-head{
     grid-template-columns: auto 1fr auto;
-  }
-  .gd-folder-tabs{
-    grid-template-columns: 1fr;
   }
 }
 .gds-head{
@@ -342,114 +313,6 @@
   font-size: 12.25px;
   line-height: 1.35;
 }
-.gds-known{
-  display: grid;
-  gap: 8px;
-  padding: 9px;
-  border: 1px solid var(--hair);
-  border-radius: var(--r-2);
-  background: color-mix(in srgb, var(--surface-2) 48%, var(--surface));
-}
-.gds-known.collapsed{
-  background: var(--surface);
-}
-.gds-known-head{
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-.gds-known-head strong{
-  display: block;
-  font-size: 13.5px;
-  line-height: 1.3;
-}
-.gds-known-head span{
-  display: block;
-  margin-top: 2px;
-  color: var(--ink-4);
-  font-size: 12px;
-  line-height: 1.35;
-}
-.gds-known-list{
-  display: grid;
-  gap: 5px;
-  max-height: 220px;
-  overflow: auto;
-}
-.gds-known-row{
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  min-height: 54px;
-  padding: 8px 9px;
-  border: 1px solid var(--hair);
-  border-radius: var(--r-2);
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.gds-known-row:hover{
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-}
-.gds-known-row strong{
-  display: block;
-  font-size: 13.5px;
-  line-height: 1.25;
-}
-.gds-known-row small,
-.gds-known-row code{
-  display: block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-4);
-}
-.gds-known-row small{
-  margin-top: 1px;
-  font-size: 11.75px;
-}
-.gds-known-row code{
-  margin-top: 2px;
-  font-family: var(--font-mono);
-  font-size: 11.75px;
-}
-.gds-known-kind{
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--hair);
-  border-radius: var(--r-1);
-  display: grid;
-  place-items: center;
-  color: var(--accent-ink);
-  background: color-mix(in srgb, var(--accent-soft) 56%, var(--surface));
-}
-.gds-known-open{
-  color: var(--ink-4);
-}
-.gds-known-empty{
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  min-height: 34px;
-  padding: 8px 9px;
-  border: 1px dashed var(--hair);
-  border-radius: var(--r-2);
-  color: var(--ink-4);
-  font-size: 12.25px;
-  line-height: 1.35;
-}
-.gds-known-empty.warn{
-  border-color: color-mix(in srgb, var(--warn) 36%, var(--hair));
-  background: var(--warn-soft);
-  color: color-mix(in srgb, var(--warn) 72%, var(--ink));
-}
 .gds-path-row{
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -457,8 +320,7 @@
   align-items: end;
 }
 .gds-field{ display: grid; gap: 5px; }
-.gds-field span,
-.gds-path span{
+.gds-field span{
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.08em;
@@ -480,16 +342,6 @@
   border-color: var(--accent-border);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
-.gds-path{
-  display: grid; grid-template-columns: auto 1fr; gap: 4px 8px;
-  align-items: center;
-  padding: 9px 10px;
-  border: 1px solid var(--hair);
-  border-radius: var(--r-2);
-  background: color-mix(in srgb, var(--surface) 78%, transparent);
-}
-.gds-path code{ font-family: var(--font-mono); font-size: 13px; color: var(--ink-2); }
-.gds-path small{ grid-column: 2; color: var(--ink-4); font-size: 12.25px; line-height: 1.35; }
 .gds-browser{
   display: grid;
   gap: 8px;

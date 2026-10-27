@@ -23,11 +23,23 @@ from pydantic import BaseModel, ConfigDict, Field
 from send2trash import send2trash as _send2trash
 
 from easyicu.webserver import state_paths
-from easyicu.webserver.hosted import is_hosted, require_instance_path, unavailable
+from easyicu.webserver.hosted import (
+    deployment_kind,
+    is_hosted,
+    require_instance_path,
+    unavailable,
+)
 
 _CONFIG_DIR = state_paths.state_root()
 _CONFIG_PATH = _CONFIG_DIR / "webserver_guided_drafts.json"
 _PROJECTS_ROOT = state_paths.projects_root()
+# Folder names Windows reserves for devices, with or without an extension.
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+_MAX_FOLDER_NAME = 80
 
 _VALID_BRANCHES = {"predict", "crossdb", "quality"}
 _VALID_DEPTHS = {"extract", "review", "full"}
@@ -623,17 +635,38 @@ def _safe_project_dir(
     return None
 
 
+def default_project_parent() -> Path:
+    """Where a new local project folder goes when the user names no parent.
+
+    ``Documents/EasyICU`` (or ``EasyICU`` in the home folder when there is no
+    Documents folder): a place a clinician finds in Finder or Explorer. The
+    desktop app points ``EASYICU_HOME`` at its private state folder, so there
+    the OS user's home is used; elsewhere ``user_home()`` keeps test and
+    instance isolation. A hosted instance keeps its own projects root.
+    """
+
+    if is_hosted():
+        return _PROJECTS_ROOT
+    home = Path.home() if deployment_kind() == "desktop" else state_paths.user_home()
+    documents = home / "Documents"
+    return (documents if documents.is_dir() else home) / "EasyICU"
+
+
 def _safe_project_parent_dir(value: Any) -> Path | None:
     text = str(value or "").strip()
-    require_instance_path(text or _PROJECTS_ROOT)
+    default_parent = default_project_parent()
+    require_instance_path(text or default_parent)
     if not text:
-        return _PROJECTS_ROOT
+        return default_parent
     try:
         candidate = Path(text).expanduser().resolve()
-        root = _PROJECTS_ROOT.expanduser().resolve()
+        roots = {
+            _PROJECTS_ROOT.expanduser().resolve(),
+            default_parent.expanduser().resolve(),
+        }
     except OSError:
         return None
-    if candidate == root:
+    if candidate in roots:
         return candidate
     if (
         candidate == candidate.parent
@@ -1341,24 +1374,45 @@ def _draft_id(seed: str) -> str:
     return "draft_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
 
 
-def _slug(value: Any, fallback: str = "guided-study") -> str:
-    text = unicodedata.normalize("NFKC", str(value or "").strip().lower())
-    text = "".join(ch if (ch.isalnum() or ch in "._-") else "-" for ch in text)
-    text = re.sub(r"-{2,}", "-", text).strip("-._")
-    return (text or fallback)[:64].strip("-._") or fallback
+def _folder_name(value: Any, fallback: str) -> str:
+    """The project title as a folder name that every desktop OS accepts.
 
+    Letters in any script and the title's own case and spacing are kept;
+    path separators, characters Windows forbids, control characters, and
+    leading or trailing dots and spaces are removed.
+    """
 
-def _project_dir_for(
-    draft_id: str, title: str, requested_slug: Any = None, parent_dir: Any = None
-) -> Path | None:
-    slug = _slug(requested_slug or title)
-    suffix = (
-        str(draft_id or "")[-6:] or hashlib.sha1(title.encode("utf-8")).hexdigest()[:6]
+    text = unicodedata.normalize("NFC", str(value or ""))
+    text = "".join(
+        " " if ch in '/\\:*?"<>|' or unicodedata.category(ch)[0] == "C" else ch
+        for ch in text
     )
+    text = re.sub(r"\s+", " ", text).strip(" .")[:_MAX_FOLDER_NAME].strip(" .")
+    if not text:
+        return fallback
+    if text.split(".", 1)[0].strip().upper() in _WINDOWS_RESERVED_NAMES:
+        text = f"{text}_"
+    return text
+
+
+def _project_dir_for(title: str, requested_name: Any = None, parent_dir: Any = None) -> Path | None:
+    """The first free folder named after the project inside the parent."""
+
     parent = _safe_project_parent_dir(parent_dir)
     if parent is None:
         return None
-    return parent / f"guided-{slug}-{suffix}"
+    base = _folder_name(requested_name or title, "New study")
+    registered = {
+        str(row.get("project_dir") or "").casefold()
+        for row in (_read_raw().get("drafts") or [])
+        if isinstance(row, dict)
+    }
+    for index in range(1, 1000):
+        name = base if index == 1 else f"{base} {index}"
+        candidate = parent / name
+        if not candidate.exists() and str(candidate).casefold() not in registered:
+            return candidate
+    return None
 
 
 def _normalise_draft(
@@ -1372,9 +1426,7 @@ def _normalise_draft(
     depth = _choice(body.get("depth"), _VALID_DEPTHS, "full")
     data_mode = _choice(body.get("data_mode"), _VALID_DATA_MODES, "real" if is_hosted() else "demo")
     draft_id = existing_id or _draft_id("|".join([created, title, branch, depth]))
-    project_dir = _project_dir_for(
-        draft_id, title, body.get("folder_slug"), body.get("parent_dir")
-    )
+    project_dir = _project_dir_for(title, body.get("folder_slug"), body.get("parent_dir"))
     if project_dir is None:
         raise ValueError("invalid_guided_parent_dir")
     payload: Dict[str, Any] = {
@@ -1478,7 +1530,7 @@ def list_guided_drafts(limit: int = 20) -> Dict[str, Any]:
         "ok": True,
         "drafts": projected_drafts,
         "count": len(drafts),
-        "default_parent_dir": str(_PROJECTS_ROOT.expanduser().resolve()),
+        "default_parent_dir": str(default_project_parent().expanduser().resolve()),
         "config_path": str(_CONFIG_PATH),
         "storage": "metadata_only",
     }
@@ -1614,13 +1666,14 @@ def _trash_guided_project_folder(project_dir_value: Any, draft_id: str) -> None:
     try:
         project_dir = raw_path.resolve(strict=True)
         projects_root = _PROJECTS_ROOT.expanduser().resolve()
+        default_parent = default_project_parent().expanduser().resolve()
         home_dir = state_paths.user_home().resolve()
     except OSError as exc:
         raise GuidedProjectTrashError(
             "project_folder_not_found",
             "The registered local project folder no longer exists.",
         ) from exc
-    if project_dir in {Path(project_dir.anchor), home_dir, projects_root}:
+    if project_dir in {Path(project_dir.anchor), home_dir, projects_root, default_parent}:
         raise GuidedProjectTrashError(
             "project_folder_scope_not_allowed",
             "EasyICU will not move a filesystem root, home folder, or projects root to the system trash.",
@@ -1744,6 +1797,11 @@ def remove_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def create_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
+    with _LOCK:
+        return _create_guided_draft(body)
+
+
+def _create_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
     try:
         draft = _normalise_draft(body if isinstance(body, dict) else {})
     except ValueError as exc:
@@ -1758,7 +1816,8 @@ def create_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
     project_dir = Path(str(draft["project_dir"]))
     require_instance_path(project_dir / "guided_draft.json")
     try:
-        project_dir.mkdir(parents=True, exist_ok=True)
+        # A new project never adopts a folder that appeared since it was named.
+        project_dir.mkdir(parents=True, exist_ok=False)
         (project_dir / "guided_draft.json").write_text(
             json.dumps(draft, indent=2, ensure_ascii=False), encoding="utf-8"
         )

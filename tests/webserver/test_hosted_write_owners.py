@@ -45,24 +45,28 @@ def test_legacy_copilot_project_writes_are_instance_only(boundary, monkeypatch, 
 @pytest.mark.parametrize("child", ["project", "guided_draft.json"])
 def test_guided_creation_rechecks_the_final_child(boundary, monkeypatch, enabled, child):
     root, home = boundary
-    monkeypatch.setenv("EASYICU_HOSTED", "0")
-    monkeypatch.setattr(guided_sessions, "_draft_id", lambda value: "draft_synthetic")
-    project = guided_sessions._project_dir_for("draft_synthetic", "Synthetic")
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if enabled else "0")
+    project = guided_sessions._project_dir_for("Synthetic")
     project.parent.mkdir(parents=True)
     if child == "project":
         project.symlink_to(root, target_is_directory=True)
     else:
         project.mkdir()
         (project / child).symlink_to(root / "new.json")
-    monkeypatch.setenv("EASYICU_HOSTED", "1" if enabled else "0")
+    # A planted name is never chosen: the project takes the next free name.
+    chosen = guided_sessions.create_guided_draft({"title": "Synthetic"})
+    assert chosen["ok"] and Path(chosen["draft"]["project_dir"]).name == "Synthetic 2"
+    assert list(root.iterdir()) == []
+    # One planted after the name was chosen is rechecked, then never adopted.
+    monkeypatch.setattr(guided_sessions, "_project_dir_for", lambda *args: project)
     if enabled:
         with pytest.raises(HTTPException) as error:
             guided_sessions.create_guided_draft({"title": "Synthetic"})
         denied(error.value)
-        assert list(root.iterdir()) == []
     else:
-        assert guided_sessions.create_guided_draft({"title": "Synthetic"})["ok"]
-        assert list(root.iterdir())
+        refused = guided_sessions.create_guided_draft({"title": "Synthetic"})
+        assert refused["error"] == "guided_project_folder_create_failed"
+    assert list(root.iterdir()) == []
 
 
 @pytest.mark.parametrize("enabled", [True, False])

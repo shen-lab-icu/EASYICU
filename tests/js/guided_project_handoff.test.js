@@ -60,7 +60,7 @@ assert.match(host.innerHTML, /Existing E1 project/);
 assert.match(host.innerHTML, /<summary title="Switch research project"><small>Project<\/small><span title="Existing E1 project">Existing E1 project<\/span>/);
 assert.doesNotMatch(shellRail, /gd-rail-brand/);
 assert.match(host.innerHTML, /Bound StudyContext · r9/);
-assert.doesNotMatch(host.innerHTML, /No study folders yet/);
+assert.doesNotMatch(host.innerHTML, /No projects yet/);
 assert.doesNotMatch(host.innerHTML, /data-project-id="study-e1" open/);
 previousPicker = { dataset: { projectId: 'study-e1' }, open: true };
 global.EU_GUIDED_PROJECTS.renderProjectRail(context({ id: 'study-e1', title: 'Existing E1 project' }));
@@ -74,10 +74,10 @@ assert.match(host.innerHTML, /<span title="Unbound idea project">Unbound idea pr
 assert.match(host.innerHTML, /Project selected · setup continues here/);
 assert.doesNotMatch(host.innerHTML, /data-project-id="idea-unbound" open/);
 previousPicker = null;
-assert.doesNotMatch(host.innerHTML, /No study folders yet/);
+assert.doesNotMatch(host.innerHTML, /No projects yet/);
 
 global.EU_GUIDED_PROJECTS.renderProjectRail(context(null));
-assert.match(host.innerHTML, /No study folders yet/);
+assert.match(host.innerHTML, /No projects yet/);
 
 const allRows = Array.from({ length: 12 }, (_, index) => ({
   id: `project-${index}`,

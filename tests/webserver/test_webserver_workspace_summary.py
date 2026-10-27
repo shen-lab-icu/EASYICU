@@ -726,7 +726,7 @@ def test_guided_draft_registry_writes_metadata_only_without_row_payload(
     assert draft["project_kind"] == "guided_draft_folder"
     assert draft["project_artifact"] == "guided_draft.json"
     assert draft["project_parent_dir"] == str(parent_dir)
-    assert draft["project_dir"].startswith(str(parent_dir / "guided-aki-onset-review-"))
+    assert draft["project_dir"] == str(parent_dir / "aki-onset-review")
     assert (Path(draft["project_dir"]) / "guided_draft.json").exists()
     opened = client.post(
         "/api/guided/project/open", json={"project_dir": draft["project_dir"]}
@@ -888,7 +888,7 @@ def test_guided_draft_registry_preserves_unicode_folder_slug(
     assert created.status_code == 200
     draft = created.json()["draft"]
     assert draft["project_parent_dir"] == str(parent_dir)
-    assert draft["project_dir"].startswith(str(parent_dir / "guided-测试1-"))
+    assert draft["project_dir"] == str(parent_dir / "测试1")
     assert (Path(draft["project_dir"]) / "guided_draft.json").exists()
 
 

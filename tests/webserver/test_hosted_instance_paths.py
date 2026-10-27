@@ -159,9 +159,10 @@ def test_default_project_is_instance_owned_and_keeps_chinese_slug(isolated, monk
     assert response.status_code == 200, response.text
     assert response.json()["draft"]["data_mode"] == ("real" if hosted else "demo")
     project = Path(response.json()["draft"]["project_dir"])
-    assert project.parent == state_paths.projects_root()
+    expected_parent = state_paths.projects_root() if hosted else home / "EasyICU"
+    assert project.parent == expected_parent
     assert project.is_relative_to(home) and not project.is_relative_to(root)
-    assert "我的研究" in project.name
+    assert project.name == "我的研究"
     assert (project / "guided_draft.json").is_file()
 
 

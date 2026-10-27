@@ -96,9 +96,8 @@ out.dismissed = state.connectPrompt === null;
 const projects = window.EU_GUIDED_PROJECTS;
 const ctx = {
   t: tr, esc, attr: esc, icon: () => '', compactPath: value => String(value || ''),
-  slugifyDraftFolder: value => String(value || ''),
   guidedDrafts: { data: { default_parent_dir: '/home/zhuhb/easyicu_dev9/users/a/home/projects' } },
-  guidedFolderDialogMode: 'new', guidedFolderSeedTitle: '血糖与死亡', guidedFolderMenuOpen: true,
+  guidedFolderDialogMode: 'new', guidedFolderSeedTitle: '血糖与死亡',
 };
 projects.renderFolderControls(ctx);
 const controls = hosts.gdFolderControls.innerHTML;
@@ -120,8 +119,9 @@ gate.ask('start_conversation');
 out.localDialogForm = gate.dialogHtml().includes('data-gpi-provider-form');
 projects.renderFolderControls(ctx);
 projects.renderFolderDialog(ctx);
+// Local projects are created and opened from the project list's foot.
 out.localProjects = {
-  openOffered: hosts.gdFolderControls.innerHTML.includes('data-folder-choice="open"'),
+  controls: hosts.gdFolderControls.innerHTML,
   parentField: hosts.gdFolderDialogHost.innerHTML.includes('data-draft-parent-dir'),
 };
 process.stdout.write(JSON.stringify(out));
@@ -184,7 +184,7 @@ def test_a_local_build_keeps_the_connection_page_and_the_folder_dialog() -> None
 
     assert out["localPage"] is True
     assert out["localDialogForm"] is True
-    assert out["localProjects"] == {"openOffered": True, "parentField": True}
+    assert out["localProjects"] == {"controls": "", "parentField": False}
 
 
 def test_the_shell_opens_the_hosted_project_and_conversation_through_their_owners() -> None:
