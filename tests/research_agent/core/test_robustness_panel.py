@@ -1580,6 +1580,75 @@ def test_the_real_fresh27_panel_is_reported_as_a_hole() -> None:
     assert unexecuted_locked_spec_ids(panel) == ["alt_missing_complete_case"]
 
 
+def test_only_a_closed_reason_on_a_row_without_an_estimate_is_not_a_hole() -> None:
+    """A host owner may say its rows admit no estimate, in closed words only.
+
+    The reason excuses nothing else: an unknown code, a row that reported a
+    number, or a blank row all stay locked specifications nobody estimated,
+    and a not-estimable row never counts as an estimated variant.
+    """
+
+    from easyicu.research_agent.robustness.panel import (
+        RobustnessPanel,
+        RobustnessPanelRow,
+        not_estimable_locked_specs,
+        row_not_estimable_reason,
+        unexecuted_locked_spec_ids,
+    )
+
+    def _row(spec_id: str, *, estimate=None, reason: str = "") -> RobustnessPanelRow:
+        return RobustnessPanelRow(
+            spec_id=spec_id,
+            axis="missing",
+            n=0,
+            point_estimate=estimate,
+            ci_low=None,
+            ci_high=None,
+            se=None,
+            evidence_id="",
+            converged=False,
+            not_estimable_reason=reason,
+        )
+
+    panel = RobustnessPanel.from_rows(
+        [
+            _row("alt_not_estimable", reason="complete_case_partition_empty"),
+            _row("alt_unknown_reason", reason="too_few_events"),
+            _row(
+                "alt_not_converged",
+                estimate=1.05,
+                reason="complete_case_partition_single_outcome_class",
+            ),
+            _row("alt_blank"),
+        ],
+        locked_at="2026-10-27T00:00:00Z",
+    )
+    holes = ["alt_blank", "alt_not_converged", "alt_unknown_reason"]
+    disclosed = [("alt_not_estimable", "complete_case_partition_empty")]
+
+    assert unexecuted_locked_spec_ids(panel) == holes
+    assert not_estimable_locked_specs(panel) == disclosed
+    assert panel.n_variants == 0
+
+    # The persisted panel is what readiness and the writer read back.
+    restored = RobustnessPanel.from_dict(panel.to_dict())
+    assert unexecuted_locked_spec_ids(restored) == holes
+    assert not_estimable_locked_specs(restored) == disclosed
+
+    # A reason cannot ride on a row that reports an estimate.
+    claimed = RobustnessPanelRow.from_dict(
+        {
+            "spec_id": "alt_claimed",
+            "axis": "missing",
+            "n": 10,
+            "point_estimate": 0.71,
+            "converged": True,
+            "not_estimable_reason": "complete_case_partition_empty",
+        }
+    )
+    assert row_not_estimable_reason(claimed) == ""
+
+
 def test_the_hole_is_reported_as_an_error_where_the_panel_is_built() -> None:
     """The predicate is only worth having if the host acts on it.
 

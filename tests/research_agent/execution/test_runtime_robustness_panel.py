@@ -47,6 +47,7 @@ def test_finalizer_returns_findings_and_manifest_projection(
         lambda **kwargs: captured.setdefault("write", kwargs),
     )
     monkeypatch.setattr(runtime_panel, "unexecuted_locked_spec_ids", lambda _panel: [])
+    monkeypatch.setattr(runtime_panel, "not_estimable_locked_specs", lambda _panel: [])
 
     result = runtime_panel.finalize_run_robustness_panel(
         run_dir=tmp_path,
@@ -102,6 +103,7 @@ def test_finalizer_fails_closed_when_locked_spec_was_not_estimated(
         "unexecuted_locked_spec_ids",
         lambda _panel: ["alt_locked"],
     )
+    monkeypatch.setattr(runtime_panel, "not_estimable_locked_specs", lambda _panel: [])
 
     result = runtime_panel.finalize_run_robustness_panel(
         run_dir=tmp_path,
@@ -119,6 +121,66 @@ def test_finalizer_fails_closed_when_locked_spec_was_not_estimated(
     assert finding.severity == "error"
     assert finding.detail["unexecuted_spec_ids"] == ["alt_locked"]
     assert finding.detail["locked_spec_count"] == 1
+
+
+def test_finalizer_discloses_a_variant_its_owner_found_not_estimable(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A host-declared not-estimable variant is a limitation, not a hole.
+
+    It is reported with its closed reason as a warning so the run's analysis
+    can validate, and the panel is still written; nothing about it becomes an
+    estimated variant.
+    """
+
+    locked_spec = SimpleNamespace(spec_id="complete_case_model_roster")
+    plan = SimpleNamespace(robustness_specs=[locked_spec], cohort=None)
+    panel = SimpleNamespace(
+        primary_spec_id="primary", n_variants=0, range_low=None, range_high=None,
+    )
+    written = {}
+
+    monkeypatch.setattr(
+        runtime_panel, "robustness_specs_for_execution", lambda **_kwargs: [locked_spec],
+    )
+    monkeypatch.setattr(
+        runtime_panel, "fit_robustness_rows_from_records", lambda **_kwargs: ([], []),
+    )
+    monkeypatch.setattr(
+        runtime_panel, "build_robustness_panel_from_records", lambda **_kwargs: panel,
+    )
+    monkeypatch.setattr(
+        runtime_panel,
+        "write_robustness_panel",
+        lambda **kwargs: written.setdefault("panel", kwargs["panel"]),
+    )
+    monkeypatch.setattr(runtime_panel, "unexecuted_locked_spec_ids", lambda _panel: [])
+    monkeypatch.setattr(
+        runtime_panel,
+        "not_estimable_locked_specs",
+        lambda _panel: [("complete_case_model_roster", "complete_case_partition_empty")],
+    )
+
+    result = runtime_panel.finalize_run_robustness_panel(
+        run_dir=tmp_path,
+        plan=plan,
+        per_step_records=[],
+        cohort_path=None,
+        context=None,
+        evidence=SimpleNamespace(),
+        prompt_pack_version=None,
+    )
+
+    assert written["panel"] is panel
+    assert [(item.validator, item.severity) for item in result.findings] == [
+        ("robustness_panel", "warning"),
+    ]
+    finding = result.findings[0]
+    assert finding.detail["not_estimable_spec_reasons"] == {
+        "complete_case_model_roster": "complete_case_partition_empty",
+    }
+    assert "complete_case_model_roster (complete_case_partition_empty)" in finding.message
+    assert result.manifest_update()["robustness_n_variants"] == 0
 
 
 def test_finalizer_isolates_panel_construction_failure(

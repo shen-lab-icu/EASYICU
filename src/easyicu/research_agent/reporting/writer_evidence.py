@@ -31,8 +31,10 @@ from ..authority.target_trial_scientific_claims import (
 from .readiness import _blocked_outcome_step_ids
 from .manuscript_provenance import verified_evidence_json as _verified_evidence_json
 from ..robustness.panel import (
+    ROBUSTNESS_NOT_ESTIMABLE_REASONS,
     RobustnessPanel,
     load_robustness_panel,
+    not_estimable_locked_specs,
     row_was_estimated,
     unexecuted_locked_spec_ids,
 )
@@ -1738,10 +1740,16 @@ def _render_robustness_panel_block(
             "placeholder is not evidence that a primary model was executed "
             "or failed to converge."
         )
+    not_estimable = not_estimable_locked_specs(panel)
+    # A variant its data could not answer has no fit that could converge, so
+    # the convergence wording below never covers it.
+    not_estimable_ids = {spec_id for spec_id, _reason in not_estimable}
     variant_rows = [
         row
         for row in panel.rows
-        if row.spec_id != panel.primary_spec_id and row.independent_variant
+        if row.spec_id != panel.primary_spec_id
+        and row.independent_variant
+        and row.spec_id not in not_estimable_ids
     ]
     if any(row_was_estimated(row) for row in variant_rows):
         lines.append(
@@ -1761,6 +1769,11 @@ def _render_robustness_panel_block(
             "no robustness variants converged "
             "(see robustness_panel.json for MVP boundary reasons)"
         )
+    elif not_estimable:
+        lines.append(
+            "variants: n_variants=0, no variant was estimated; do not claim an "
+            "executed robustness range."
+        )
     else:
         lines.append(
             "variants: n_variants=0, no independent sensitivity variant result rows were "
@@ -1776,6 +1789,17 @@ def _render_robustness_panel_block(
             "not carry out, for the reason its row's notes record; none of them "
             "is among the n_variants analyses or in any count of sensitivity "
             "analyses."
+        )
+    if not_estimable:
+        lines.append(
+            "pre-specified, run, and not estimable on this data: "
+            + "; ".join(
+                f"{spec_id} ({ROBUSTNESS_NOT_ESTIMABLE_REASONS[reason]})"
+                for spec_id, reason in not_estimable
+            )
+            + ". Report each as a pre-specified sensitivity analysis the data "
+            "could not answer, for that reason; it has no estimate and is not "
+            "among the n_variants analyses."
         )
     for row in panel.rows:
         if row.spec_id == panel.primary_spec_id:

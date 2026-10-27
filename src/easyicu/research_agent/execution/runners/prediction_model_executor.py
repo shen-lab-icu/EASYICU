@@ -70,7 +70,10 @@ from ...prediction_validation_owner import (
     run_prediction_validation,
     run_prediction_validation_csv,
 )
-from ...robustness.panel import load_locked_robustness_specs
+from ...robustness.panel import (
+    ROBUSTNESS_NOT_ESTIMABLE_REASONS,
+    load_locked_robustness_specs,
+)
 from ...research_context.materialization_window import bound_feature_window_end_hours
 from ...research_context.typed import (
     ResearchContextAuthority,
@@ -478,6 +481,9 @@ def run_prediction_robustness_specs(
     The model, split, outcome, and feature roster are inherited unchanged from
     the primary owner.  A spec that changes any other coordinate is left
     unexecuted so the run-level robustness gate retains its fail-closed error.
+    A spec it does understand whose complete rows leave a partition empty or
+    one-class is run to that point and recorded as not estimable, with the
+    closed reason and its counts, so the panel discloses why it has no value.
     """
 
     panel_rows: list[dict[str, Any]] = []
@@ -495,12 +501,50 @@ def run_prediction_robustness_specs(
         complete = frame.loc[:, list(variables)].notna().all(axis=1).to_numpy()
         development = complete & (split == "development")
         validation = complete & (split == "validation")
-        if (
-            int(development.sum()) == 0
-            or int(validation.sum()) == 0
-            or outcome.loc[development].nunique() != 2
-            or outcome.loc[validation].nunique() != 2
-        ):
+        not_estimable = _complete_case_not_estimable(
+            outcome=outcome, development=development, validation=validation
+        )
+        if not_estimable is not None:
+            reason, partition = not_estimable
+            results.append(
+                {
+                    "spec_id": str(getattr(spec, "spec_id", "")),
+                    "axis": "missing",
+                    "analysis": "complete_case_refit_same_patient_split",
+                    "estimability_status": "not_estimable",
+                    "not_estimable_reason": reason,
+                    "not_estimable_partition": partition,
+                    "predictors": list(features),
+                    "development_n": int(development.sum()),
+                    "validation_n": int(validation.sum()),
+                    "development_event_n": int(outcome.loc[development].sum()),
+                    "validation_event_n": int(outcome.loc[validation].sum()),
+                    "authority_scope": "analysis_only",
+                }
+            )
+            panel_rows.append(
+                {
+                    "spec_id": str(getattr(spec, "spec_id", "")),
+                    "axis": "missing",
+                    # No estimate rests on any row; the result keeps the
+                    # partition counts.
+                    "n": 0,
+                    "point_estimate": None,
+                    "ci_low": None,
+                    "ci_high": None,
+                    "se": None,
+                    "evidence_id": "",
+                    "converged": False,
+                    "not_estimable_reason": reason,
+                    "notes": (
+                        f"Not estimable on this run's data ({partition} "
+                        "partition): "
+                        + ROBUSTNESS_NOT_ESTIMABLE_REASONS[reason]
+                        + ". The primary model, outcome, predictor roster and "
+                        "patient split were not changed to make it estimable."
+                    ),
+                }
+            )
             continue
         probabilities = _fit_probabilities(
             frame=frame,
@@ -573,6 +617,23 @@ def run_prediction_robustness_specs(
             }
         )
     return panel_rows, results
+
+
+def _complete_case_not_estimable(
+    *, outcome: pd.Series, development: np.ndarray, validation: np.ndarray
+) -> tuple[str, str] | None:
+    """Why the complete rows admit no refit or evaluation, and where; else None.
+
+    The refit needs both outcome classes among the development rows and the
+    evaluation both among the validation rows; nothing else is judged here.
+    """
+
+    for partition, rows in (("development", development), ("validation", validation)):
+        if int(rows.sum()) == 0:
+            return "complete_case_partition_empty", partition
+        if outcome.loc[rows].nunique() < 2:
+            return "complete_case_partition_single_outcome_class", partition
+    return None
 
 
 def _bootstrap_columns(result: Mapping[str, Any] | None) -> dict[str, Any]:

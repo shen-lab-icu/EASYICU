@@ -19,6 +19,7 @@ import math
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from ..authority.lock_contract import (
@@ -26,6 +27,7 @@ from ..authority.lock_contract import (
     assert_lock_matches_evidence_anchor,
     rehydrate_timestamp_only_legacy_lock,
 )
+from ..contracts.prediction_execution import PREDICTION_MODEL_ANALYSIS_KIND
 from ..planning.cohort_contract import CohortDefinition
 from ..planning.robustness_contract import (
     MIN_AXIS_COUNTS,
@@ -37,6 +39,25 @@ from ..planning.robustness_contract import (
 
 PRIMARY_SPEC_ID = "primary"
 LOCK_FILENAME = "robustness_specs_locked.json"
+#: Why the static prediction owner found that a locked complete-case refit
+#: admits no estimate on this run's rows, in reader words.  Each names a
+#: property of the data the owner was handed.  A spec the owner does not
+#: understand, a missing column, a fit that failed or did not converge is not
+#: here: those stay unexecuted holes.  Only that owner may record one, and only
+#: for a complete-case spec (see ``_owner_may_declare_not_estimable``).
+ROBUSTNESS_NOT_ESTIMABLE_REASONS: Mapping[str, str] = MappingProxyType(
+    {
+        "complete_case_partition_empty": (
+            "no row of a partition of the primary patient split has every "
+            "listed variable observed"
+        ),
+        "complete_case_partition_single_outcome_class": (
+            "the complete rows of a partition of the primary patient split "
+            "carry one outcome class only, so the model can be neither "
+            "refitted nor evaluated there"
+        ),
+    }
+)
 PANEL_FILENAME = "robustness_panel.json"
 
 
@@ -220,6 +241,9 @@ class RobustnessPanelRow:
     effect_unit: str = ""
     # Appended to preserve positional construction of the pre-existing fields.
     ci_source: str = ""
+    #: A closed ROBUSTNESS_NOT_ESTIMABLE_REASONS code a host owner recorded for
+    #: a variant its data admit no estimate of; "" for every other row.
+    not_estimable_reason: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -241,6 +265,7 @@ class RobustnessPanelRow:
             converged=bool(data.get("converged")),
             notes=str(data.get("notes") or ""),
             ci_source=str(data.get("ci_source") or "").strip(),
+            not_estimable_reason=str(data.get("not_estimable_reason") or "").strip(),
             independent_variant=independent,
             **{key: str(data.get(key) or "").strip() for key in (
                 "effect_scale", "estimand_id", "contrast_id", "effect_unit",
@@ -586,7 +611,8 @@ def build_robustness_panel_from_records(
     if primary is not None:
         rows.append(primary)
         existing.add(primary.spec_id)
-    for row in _declared_rows_from_records(successful_records):
+    specs_by_id = {spec.spec_id: spec for spec in specs}
+    for row in _declared_rows_from_records(successful_records, specs_by_id=specs_by_id):
         # The canonical primary row requires a complete typed effect contract;
         # free-form panel rows cannot replace it. Variant rows, however, are the
         # agent/step-owned scientific products and outrank auxiliary refits.
@@ -848,8 +874,30 @@ def _primary_row_from_records(
     )
 
 
+def _owner_may_declare_not_estimable(
+    record: Mapping[str, Any], spec: Optional[RobustnessSpec]
+) -> bool:
+    """Whether this record's owner produces the not-estimable verdict for this spec.
+
+    The record's owner is the host's own selection, never the step's words:
+    only the static prediction owner records these reasons, and only for a
+    locked complete-case refit.
+    """
+
+    missing = getattr(spec, "missing_override", None)
+    return bool(
+        record.get("deterministic_standard_analysis") == PREDICTION_MODEL_ANALYSIS_KIND
+        and spec is not None
+        and spec.axis == "missing"
+        and isinstance(missing, Mapping)
+        and str(missing.get("strategy") or "") == "complete_case"
+    )
+
+
 def _declared_rows_from_records(
     per_step_records: Sequence[Dict[str, Any]],
+    *,
+    specs_by_id: Mapping[str, RobustnessSpec],
 ) -> Iterable[RobustnessPanelRow]:
     for record in _successful_step_records(per_step_records):
         summary = record.get("step_summary")
@@ -868,6 +916,11 @@ def _declared_rows_from_records(
             # contains this row.  A free-form row must not redirect its values to
             # an unrelated evidence id such as a replay log.
             data["evidence_id"] = str(record.get("step_summary_evidence_id") or "")
+            spec = specs_by_id.get(str(data.get("spec_id") or "").strip())
+            if not _owner_may_declare_not_estimable(record, spec):
+                # The same words from generated code, another owner, or about
+                # another kind of spec stay a hole.
+                data.pop("not_estimable_reason", None)
             yield RobustnessPanelRow.from_dict(data)
 
 
@@ -1043,19 +1096,52 @@ def _first_float(summary: Dict[str, Any], keys: Sequence[str]) -> Optional[float
     return None
 
 
+def row_not_estimable_reason(row: RobustnessPanelRow) -> str:
+    """The closed code of a row its owner found not estimable, else "".
+
+    A row that converged or carries any number is a result, so no code
+    attached to it excuses anything.
+    """
+
+    if row.converged or any(
+        value is not None for value in (row.point_estimate, row.ci_low, row.ci_high, row.se)
+    ):
+        return ""
+    reason = row.not_estimable_reason
+    return reason if reason in ROBUSTNESS_NOT_ESTIMABLE_REASONS else ""
+
+
 def unexecuted_locked_spec_ids(panel: "RobustnessPanel") -> list[str]:
     """Return the locked specifications the run never actually estimated.
 
     A blank variant row is not a small result, it is the absence of one: the
     protocol pre-specified the analysis and nothing carried it out.  Keyed on
     the panel's own spec ids and its declared primary, so no method label or
-    product name decides whether the hole is visible.
+    product name decides whether the hole is visible.  The one exception is a
+    row whose host owner ran the variant and recorded a closed reason why its
+    rows admit no estimate (see :func:`not_estimable_locked_specs`).
     """
 
     return sorted(
         row.spec_id
         for row in panel.rows
-        if row.spec_id != panel.primary_spec_id and not row_was_estimated(row)
+        if row.spec_id != panel.primary_spec_id
+        and not row_was_estimated(row)
+        and not row_not_estimable_reason(row)
+    )
+
+
+def not_estimable_locked_specs(panel: "RobustnessPanel") -> list[tuple[str, str]]:
+    """Locked variants a host owner ran and found not estimable, with the code.
+
+    Each is a pre-specified sensitivity analysis the data could not answer: it
+    is disclosed with its reason, never counted among the estimated variants.
+    """
+
+    return sorted(
+        (row.spec_id, row_not_estimable_reason(row))
+        for row in panel.rows
+        if row.spec_id != panel.primary_spec_id and row_not_estimable_reason(row)
     )
 
 
@@ -1063,6 +1149,7 @@ __all__ = [
     "MIN_AXIS_COUNTS",
     "PANEL_FILENAME",
     "PRIMARY_SPEC_ID",
+    "ROBUSTNESS_NOT_ESTIMABLE_REASONS",
     "RobustnessPanel",
     "RobustnessPanelRow",
     "RobustnessPlanError",
@@ -1073,7 +1160,9 @@ __all__ = [
     "ensure_robustness_specs",
     "load_locked_robustness_specs",
     "load_robustness_panel",
+    "not_estimable_locked_specs",
     "numeric_digest_for_panel",
+    "row_not_estimable_reason",
     "row_was_estimated",
     "robustness_specs_for_execution",
     "unexecuted_locked_spec_ids",
