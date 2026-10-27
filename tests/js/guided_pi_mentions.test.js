@@ -77,21 +77,12 @@ test('a chosen variable is resolved by the host and sent as its reference', asyn
   // The draft is replaced whole, and the Skill mention it already held is kept.
   assert.deepEqual(calls[2][2], { project_id: 'p1', mentions: [SKILL, { kind: 'concept', id: 'lactate', digest: 'a'.repeat(64), role: 'candidate' }] });
   const chips = mentions.chips('p1', session);
-  assert.match(chips, /<span>变量<\/span><strong>乳酸<\/strong><select data-gpi-mention-role="concept:lactate"/);
-  assert.match(chips, /<option value="candidate" selected>未指定<\/option><option value="exposure">暴露<\/option>/);
+  // The chip names the variable; the study reading assigns its role.
+  assert.match(chips, /<span>变量<\/span><strong>乳酸<\/strong><button type="button" data-gpi-mention-remove="concept:lactate"/);
+  assert.doesNotMatch(chips, /<select|data-gpi-mention-role|未指定/);
   assert.doesNotMatch(chips, /survival-time-to-event/);
   // An item already in the draft cannot be chosen twice.
   assert.match(mentions.listHtml('p1', session, 'concept'), /data-gpi-mention-add="0" aria-pressed="true" disabled/);
-});
-
-test('choosing a role resolves the variable again with that role', async () => {
-  const { mentions, calls } = owner();
-  const session = { session_id: 's1', draft_mentions: [{ kind: 'concept', id: 'lactate', digest: 'a'.repeat(64), role: 'candidate' }] };
-  assert.equal(await mentions.setRole('p1', session, 'concept:lactate', 'exposure'), true);
-  assert.deepEqual(calls[0], ['resolve', 's1', { project_id: 'p1', kind: 'concept', id: 'lactate', role: 'exposure' }]);
-  assert.equal(calls[1][2].mentions[0].role, 'exposure');
-  assert.match(mentions.chips('p1', session), /<option value="exposure" selected>暴露<\/option>/);
-  assert.equal(await mentions.setRole('p1', session, 'concept:lactate', 'exposure'), false);
 });
 
 test('a local dataset and a file are named after one lookup; removing keeps the rest', async () => {

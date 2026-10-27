@@ -2,9 +2,8 @@
    a project file. The host resolves each one to an exact identity and owns
    the draft (/api/copilot/pi/sessions/{id}/draft-mentions); this file searches
    the host, shows the draft as chips beside the attached Skills and sends
-   references, never names or file text. A variable can be pinned as the
-   exposure, outcome or a covariate. A mention says what the question is about;
-   it grants no run, extraction or substitution approval. Skills attach
+   references, never names or file text. A mention says what the question is
+   about; it grants no run, extraction or substitution approval. Skills attach
    through "/" (screens-guided-pi-skill-attach.js). */
 (function () {
   'use strict';
@@ -14,15 +13,10 @@
   function api() { return window.EU_API || {}; }
 
   const KINDS = ['database', 'concept', 'file'];
-  const ROLES = ['candidate', 'exposure', 'outcome', 'covariate'];
   const PAGE = 30;
   const kindLabel = kind => ({
     database: tr('Databases', '数据库'), concept: tr('Variables', '变量'), file: tr('Project files', '项目文件'),
   })[kind] || kind;
-  const roleLabel = role => ({
-    candidate: tr('Any role', '未指定'), exposure: tr('Exposure', '暴露'),
-    outcome: tr('Outcome', '结局'), covariate: tr('Covariate', '协变量'),
-  })[role] || role;
 
   const labels = new Map();
   const hydrating = new Set();
@@ -166,14 +160,6 @@
   function remove(projectId, session, key) {
     return write(projectId, session, async () => all(session).filter(ref => keyOf(ref) !== key));
   }
-  function setRole(projectId, session, key, role) {
-    const ref = all(session).find(item => keyOf(item) === key);
-    if (!ref || ref.kind !== 'concept' || !ROLES.includes(role) || (ref.role || 'candidate') === role) return Promise.resolve(false);
-    return write(projectId, session, async () => {
-      const resolved = await resolve(projectId, session, { kind: 'concept', id: ref.id }, role);
-      return all(session).map(item => (keyOf(item) === key ? resolved.reference : item));
-    });
-  }
   // After a reload a file or local dataset is known only by its identity; one
   // resolution names it.
   function hydrate(projectId, session) {
@@ -190,19 +176,17 @@
     if (!rows.length && !error) return '';
     return rows.map(ref => {
       const key = keyOf(ref);
+      // The study reading assigns each variable's role; the chip only names it.
       const kind = ref.kind === 'concept' ? tr('Variable', '变量') : ref.kind === 'file' ? tr('File', '文件')
         : ref.source === 'registered_source' ? tr('Local data', '本机数据') : tr('Database', '数据库');
-      const role = ref.kind === 'concept'
-        ? `<select data-gpi-mention-role="${esc(key)}" aria-label="${esc(tr('Role in the study', '在研究中的角色'))}"${busy ? ' disabled' : ''}>${ROLES.map(value => `<option value="${value}"${(ref.role || 'candidate') === value ? ' selected' : ''}>${esc(roleLabel(value))}</option>`).join('')}</select>`
-        : '';
-      return `<div class="gpi-composer-skill gpi-mention-chip"><span>${esc(kind)}</span><strong>${esc(label(ref) || '…')}</strong>${role}<button type="button" data-gpi-mention-remove="${esc(key)}" aria-label="${esc(tr('Remove mention', '移除引用'))}"${busy ? ' disabled' : ''}>×</button></div>`;
+      return `<div class="gpi-composer-skill gpi-mention-chip"><span>${esc(kind)}</span><strong>${esc(label(ref) || '…')}</strong><button type="button" data-gpi-mention-remove="${esc(key)}" aria-label="${esc(tr('Remove mention', '移除引用'))}"${busy ? ' disabled' : ''}>×</button></div>`;
     }).join('') + (error ? `<div class="gpi-attached-skill-error" role="alert">${esc(error)}</div>` : '');
   }
 
   function reset() { results = { key: '', items: [], hasMore: false, loading: false, failed: false }; error = ''; }
 
   window.EasyICU.guidedPi.declare('mentions', {
-    KINDS, kindLabel, search, listHtml, add, remove, setRole, chips, reset,
+    KINDS, kindLabel, search, listHtml, add, remove, chips, reset,
     onChange(fn) { listener = fn; },
     hasDraft: session => shown(session).length > 0,
   });
