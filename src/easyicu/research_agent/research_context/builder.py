@@ -94,9 +94,12 @@ from .typed import (
 from .export_selection import source_identity_provenance
 from easyicu.concept.metadata_projection import CATEGORICAL_UNIT
 from easyicu.outcome_availability import (
+    HOSPITAL_DEATH,
+    ICU_DEATH,
     StatedHorizon,
     fixed_horizon_mortality_endpoint,
     stated_mortality_horizons,
+    stated_mortality_settings,
 )
 
 from ..concept_availability import normalize_database_name
@@ -1554,40 +1557,6 @@ _NAMED_HORIZON_OUTCOMES = {
 }
 
 
-_ICU_MORTALITY_TERMS = ("icu mortality", "icu死亡", "icu 死亡", "重症监护病房死亡")
-_HOSPITAL_MORTALITY_TERMS = ("in-hospital mortality", "hospital mortality", "院内死亡", "住院死亡")
-
-_DECLINED_MORTALITY_SETTING = re.compile(
-    r"(?:"
-    r"\b(?:not|never|cannot|can't|don't)\s+"
-    r"(?:(?:use|using|substitute|substituting|report|reporting|measure|measuring)\s+)?"
-    r"|\b(?:rather than|instead of)\s+"
-    r"|(?:不能|不得|不要|不应|不用|不使用|不采用|不以|不是|而非|而不是|并非)\s*"
-    r"(?:(?:使用|采用|报告|分析|计算|用|以)\s*)?"
-    r")(?P<endpoint>"
-    + "|".join(re.escape(term) for term in (*_ICU_MORTALITY_TERMS, *_HOSPITAL_MORTALITY_TERMS))
-    + r")",
-    re.IGNORECASE,
-)
-
-
-def _affirmed_mortality_setting_text(question: str) -> str:
-    """Ignore only an endpoint mention directly governed by explicit rejection.
-
-    A prohibition on substituting ICU mortality does not request it. Mask the
-    named endpoint alone, so later affirmative clauses and population wording
-    ("do not exclude patients with ICU mortality") retain their meaning.
-    This projection cannot change the physical concept's owner definition.
-    """
-
-    def omit(match: re.Match[str]) -> str:
-        prefix = match.group(0)[:match.start("endpoint") - match.start()]
-        return prefix + " " * len(match.group("endpoint"))
-
-    return _DECLINED_MORTALITY_SETTING.sub(omit, question)
-
-
-
 def _stated_horizon_request(
     horizons: Sequence[StatedHorizon],
     outcome_name: Optional[str],
@@ -1619,17 +1588,66 @@ def _stated_horizon_request(
     return request
 
 
+def _within_prediction_window(
+    semantics: Dict[str, Any], window: Sequence[StatedHorizon]
+) -> Dict[str, Any]:
+    """The endpoint a landmark prediction states, over its own window.
+
+    「第 24、48、72 小时…预测之后 7 天内 ICU 死亡」 predicts ICU death within 7 days
+    of each prediction time: the endpoint is ICU mortality, and the window is
+    part of the request (``prediction_window``), so a plan predicting death at
+    any later time does not answer it.
+    """
+
+    if not window:
+        return semantics
+    span = " or ".join(horizon.noun for horizon in window)
+    # The window is the horizon, so an unspecified mortality lacks only its setting.
+    label = (
+        "mortality without a specified setting"
+        if semantics["source_concept"] == "mortality_unspecified"
+        else semantics["label"]
+    )
+    return {
+        **semantics,
+        "label": f"{label} within {span} after each prediction time",
+        "prediction_window": tuple(window),
+        "prediction_window_note": (
+            f"Prediction window: the question predicts the event within {span} after "
+            "each prediction time; each landmark's label is the event in [landmark, "
+            f"landmark + {span}) with follow-up to the end of that window, never death "
+            "at any later time."
+        ),
+    }
+
+
 def _infer_outcome_semantics(
     *,
     research_question: str,
     outcome_name: Optional[str],
 ) -> Dict[str, Any]:
-    question = _affirmed_mortality_setting_text((research_question or "").lower())
+    question = (research_question or "").lower()
+    # The setting the question asks death in ("ICU mortality", 「ICU 内死亡」,
+    # "death in hospital"), read by the shared vocabulary owner; a setting
+    # the question directly declines ("do not use ICU mortality") is not
+    # requested, while later affirmative mentions keep their meaning.
+    settings = stated_mortality_settings(research_question or "")
     outcome = (outcome_name or "").lower()
     # The horizons the question states for death or survival ("survival to
     # day 28", "one-year mortality"): a request names its horizon as well as
     # its endpoint.
     stated = stated_mortality_horizons(research_question)
+    window: tuple[StatedHorizon, ...] = ()
+    if stated:
+        from ..planning.analysis_types import landmark_prediction_framing
+
+        if landmark_prediction_framing(research_question or ""):
+            # A dynamic prediction states the horizon that follows each of its
+            # prediction times (「第 24、48、72 小时…预测之后 7 天内 ICU 死亡」):
+            # the prediction's own target window, not a horizon counted from
+            # ICU admission.  The endpoint it names is the setting's mortality,
+            # and the window stays part of the request.
+            window, stated = stated, ()
     if any(
         term in question
         for term in ("survival", "time-to-event", "time to event", "cox", "hazard")
@@ -1660,23 +1678,40 @@ def _infer_outcome_semantics(
                 "or unrelated follow-up horizon for this time-to-event endpoint."
             ),
         }
+    if len(settings) > 1:
+        # The question names both ICU and hospital death ("an ICU mortality
+        # model predicting in-hospital death"): no one endpoint answers it, so
+        # neither setting wins and any binding is a recorded conflict.
+        return {
+            "label": "both ICU and hospital mortality",
+            "description": "The question names both ICU and hospital mortality.",
+            "source_concept": "mortality_setting_conflict",
+            "substitution_note": (
+                "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
+                f"for one another when using '{outcome_name}'."
+            ),
+        }
     if stated:
         # A stated horizon is part of the request ("48-hour in-hospital
         # mortality", "in-hospital mortality within 48 hours"): whole-stay ICU
         # or hospital mortality is another endpoint, whichever setting the
-        # question or the outcome column names.
+        # question names.
         setting = (
-            "ICU" if any(term in question for term in _ICU_MORTALITY_TERMS)
-            else "in-hospital" if any(term in question for term in _HOSPITAL_MORTALITY_TERMS)
+            "ICU" if ICU_DEATH in settings
+            else "in-hospital" if HOSPITAL_DEATH in settings
             else None
         )
         return _stated_horizon_request(stated, outcome_name, setting)
-    if any(term in question for term in _ICU_MORTALITY_TERMS) or outcome in {
-        "death_icu",
-        "icu_death",
-        "icu_mortality",
-    }:
-        return {
+    # The setting the question states decides; the bound column's name only
+    # when the question states none (a question asking hospital death bound to
+    # ``icu_death`` requests hospital mortality, and so conflicts).
+    if settings:
+        icu, hospital = settings == (ICU_DEATH,), settings == (HOSPITAL_DEATH,)
+    else:
+        icu = outcome in {"death_icu", "icu_death", "icu_mortality"}
+        hospital = outcome in {"death_hosp", "hospital_death", "hospital_mortality"}
+    if icu:
+        return _within_prediction_window({
             "label": "ICU mortality",
             "description": "Binary outcome flag operationalizing ICU mortality for this analysis.",
             "source_concept": "icu_mortality",
@@ -1684,13 +1719,9 @@ def _infer_outcome_semantics(
                 "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
                 f"for one another when using '{outcome_name}'."
             ),
-        }
-    if any(term in question for term in _HOSPITAL_MORTALITY_TERMS) or outcome in {
-        "death_hosp",
-        "hospital_death",
-        "hospital_mortality",
-    }:
-        return {
+        }, window)
+    if hospital:
+        return _within_prediction_window({
             "label": "hospital mortality",
             "description": "Binary outcome flag operationalizing hospital mortality for this analysis.",
             "source_concept": "hospital_mortality",
@@ -1698,12 +1729,12 @@ def _infer_outcome_semantics(
                 "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
                 f"for one another when using '{outcome_name}'."
             ),
-        }
+        }, window)
     named = _NAMED_HORIZON_OUTCOMES.get(outcome)
     if named is not None:
         return _stated_horizon_request((named,), outcome_name)
     if outcome in {"death", "mortality"}:
-        return {
+        return _within_prediction_window({
             "label": "mortality without a specified setting or horizon",
             "description": "Binary mortality outcome flag; confirm whether this refers to ICU, hospital, or fixed-horizon mortality before interpretation.",
             "source_concept": "mortality_unspecified",
@@ -1711,7 +1742,7 @@ def _infer_outcome_semantics(
                 "Do not silently substitute ICU, hospital, fixed-horizon, or "
                 "analysis-specific mortality definitions without an explicit protocol."
             ),
-        }
+        }, window)
     if any(
         term in question for term in ("length of stay", "los", "duration of stay")
     ) or outcome in {
@@ -1943,6 +1974,9 @@ def _enrich_target_outcome_descriptor(
             )
         if explicit_note not in descriptor.clinical_caveats:
             descriptor.clinical_caveats.append(explicit_note)
+        window_note = semantics.get("prediction_window_note")
+        if window_note and window_note not in descriptor.clinical_caveats:
+            descriptor.clinical_caveats.append(window_note)
         harmonization_note = semantics.get(
             "substitution_note",
             (

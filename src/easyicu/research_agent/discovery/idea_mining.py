@@ -38,6 +38,7 @@ from pydantic import (
 )
 
 from ..concept_availability import (
+    concept_changes_mortality_setting,
     normalize_concept_name,
     real_data_concept_feasibility,
 )
@@ -3314,6 +3315,11 @@ def _resolve_embedded_alias(term: str, lookup: Mapping[str, str]) -> Optional[st
 
 
 def _resolve_concept(term: str, lookup: Mapping[str, str]) -> Optional[str]:
+    resolved = _resolve_concept_in_lookup(term, lookup)
+    return None if resolved and concept_changes_mortality_setting(term, resolved) else resolved
+
+
+def _resolve_concept_in_lookup(term: str, lookup: Mapping[str, str]) -> Optional[str]:
     exact = _resolve_concept_exact(term, lookup)
     if exact is not None:
         return exact
@@ -3413,34 +3419,23 @@ def _concept_lookup_variants(value: str) -> List[str]:
     canonical = normalize_concept_name(value)
     compact = re.sub(r"[^a-z0-9]+", "_", canonical).strip("_")
     variants = [canonical, compact]
-    stripped = _strip_derived_feature_markers(compact)
+    stripped = _strip_concept_words(compact, _DERIVED_FEATURE_REQUIREMENTS)
     if stripped:
         variants.append(stripped)
-    generic_stripped = _strip_generic_concept_words(stripped or compact)
+    generic_stripped = _strip_concept_words(stripped or compact, _GENERIC_CONCEPT_WORDS)
     if generic_stripped:
         variants.append(generic_stripped)
     suffix_stripped = re.sub(r"\d+$", "", generic_stripped or stripped or compact)
     if suffix_stripped:
         variants.append(suffix_stripped)
+    # A stripped spelling keeps where death is counted: "icu_death" is not "death".
+    variants[2:] = [v for v in variants[2:] if not concept_changes_mortality_setting(canonical, v)]
     return _ordered_unique(variants)
 
 
-def _strip_derived_feature_markers(value: str) -> str:
-    tokens = [
-        token
-        for token in re.split(r"[^a-z0-9]+", normalize_concept_name(value))
-        if token and token not in _DERIVED_FEATURE_REQUIREMENTS
-    ]
-    return "_".join(tokens)
-
-
-def _strip_generic_concept_words(value: str) -> str:
-    tokens = [
-        token
-        for token in re.split(r"[^a-z0-9]+", normalize_concept_name(value))
-        if token and token not in _GENERIC_CONCEPT_WORDS
-    ]
-    return "_".join(tokens)
+def _strip_concept_words(value: str, words: Mapping[str, Any] | set[str]) -> str:
+    tokens = re.split(r"[^a-z0-9]+", normalize_concept_name(value))
+    return "_".join(token for token in tokens if token and token not in words)
 
 
 def _concept_signal_tokens(value: str) -> set[str]:

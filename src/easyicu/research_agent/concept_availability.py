@@ -15,6 +15,7 @@ dictionary lacks, are resolved through ``easyicu.concept_output_sources``.
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence
@@ -22,8 +23,10 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Mapping, O
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from easyicu.outcome_availability import (
+    ICU_DEATH,
     OUTCOME_CONCEPT_SUPPORTED_DATABASES,
     OutcomeConceptUnavailability,
+    stated_mortality_settings,
     structural_outcome_unavailability,
 )
 
@@ -66,7 +69,8 @@ _CONCEPT_ALIASES = {
     "sofa-2": "sofa2",
     "mortality": "death",
     "hospital_mortality": "death",
-    "icu_mortality": "death",
+    # ICU mortality is native ICU death, never the dictionary's hospital death.
+    "icu_mortality": "icu_death",
 }
 
 # Sparse, full-cohort event indicators where an exported wide-table NaN can
@@ -202,6 +206,25 @@ def normalize_database_name(database: str) -> str:
 def normalize_concept_name(concept: str) -> str:
     key = (concept or "").strip().lower().replace(" ", "_")
     return _CONCEPT_ALIASES.get(key, key)
+
+
+def _mortality_setting(value: str) -> tuple[str, ...]:
+    return stated_mortality_settings(re.sub(r"_+", " ", str(value or "")))
+
+
+def concept_changes_mortality_setting(term: str, concept: str) -> bool:
+    """Whether reading ``term`` as ``concept`` changes where death is counted.
+
+    ICU mortality and hospital mortality are different endpoints.  A term naming
+    ICU death is answered only by a concept naming it -- never the dictionary's
+    hospital ``death``, whose id names no setting -- and a term naming hospital
+    death is never answered by ICU death.  A term naming no setting changes none.
+    """
+    stated = _mortality_setting(term) or _mortality_setting(normalize_concept_name(term))
+    if not stated:
+        return False
+    named = _mortality_setting(concept)
+    return set(named) != set(stated) if named else ICU_DEATH in stated
 
 
 def variable_source_unavailability(
@@ -1247,6 +1270,7 @@ __all__ = [
     "ConceptSourceUnavailableError",
     "PUBLIC_DATABASES",
     "RealDataConceptFeasibility",
+    "concept_changes_mortality_setting",
     "concept_database_availability_from_load_record",
     "cross_database_concept_availability",
     "default_public_databases",

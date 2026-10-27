@@ -34,8 +34,13 @@ def test_mortality_description_expands_to_mortality_alias() -> None:
     assert "mortality" in aliases
     assert "hospital mortality" in aliases
     assert "in-hospital mortality" in aliases
-    assert "intensive-care unit mortality" in aliases
-    assert "intensive care unit mortality" in aliases
+    # ICU mortality is death before ICU discharge: the native icu_death
+    # endpoint owns its phrases, and hospital death never answers to them.
+    icu = [a.lower() for a in cat.concept_aliases["icu_death"]]
+    for phrase in ("icu mortality", "intensive-care unit mortality", "intensive care unit mortality"):
+        assert phrase in icu
+        assert phrase not in aliases
+    assert cat.outcome_determinability["icu_death"]["status"] == "known_0_1"
 
 
 def test_binary_outcomes_are_declared_known_0_1() -> None:
@@ -300,7 +305,8 @@ def test_core_concept_disambiguates_exposure_from_qualifier() -> None:
         "norepi_equiv",
     }
     assert exe.resolved_predictor_concept != "lact"
-    assert exe.resolved_outcome_concept == "death"
+    # "ICU mortality" is the native ICU death endpoint, not hospital death.
+    assert exe.resolved_outcome_concept == "icu_death"
 
 
 def test_missing_core_concept_falls_back_to_full_phrase() -> None:

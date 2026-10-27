@@ -978,6 +978,113 @@ _CLUSTERING_NUISANCE_PATTERNS = (
 )
 
 
+_PREDICTION_REQUEST = re.compile(r"预测|预警|\bpredict\w*|\bforecast\w*", re.IGNORECASE)
+_LANDMARK_UNIT = r"(?:小时|h|hours?|hrs?|天|日|d|days?)"
+_LANDMARK_SEPARATOR = r"(?:\s*(?:、|,|，|/|和|及|与|或|以及)\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)"
+_LANDMARK_NUMBER = r"\d{1,3}(?:\.\d)?"
+#: Several prediction times measured on one clock: 「第 24、48、72 小时」,
+#: 「在 24 和 48 小时时」, "at 24, 48 and 72 hours", "at hours 24, 48 and 72",
+#: "on days 1, 2 and 3".
+_PREDICTION_TIMES = re.compile(
+    rf"(?:第|在|于|\b(?:at|on|by)\s+(?P<unit_first>(?:hours?|days?)\s+)?)\s*"
+    rf"(?P<times>{_LANDMARK_NUMBER}(?:\s*{_LANDMARK_UNIT})?"
+    rf"(?:{_LANDMARK_SEPARATOR}(?:第\s*)?{_LANDMARK_NUMBER}(?:\s*{_LANDMARK_UNIT})?){{1,7}})",
+    re.IGNORECASE,
+)
+#: A prediction refreshed on a schedule: 「每 24 小时」「每天」, "every 24 hours".
+_PREDICTION_SCHEDULE = re.compile(
+    r"每\s*(?:\d{1,3}\s*(?:个)?\s*)?(?:小时|天|日)|\bevery\s+(?:\d{1,3}\s*)?(?:hours?|h|days?)\b",
+    re.IGNORECASE,
+)
+#: The horizon that follows each prediction time: 「之后 7 天内」「接下来 24
+#: 小时」, "over the next 7 days", "within the following 24 hours".
+_HORIZON_AFTER = re.compile(
+    r"(?:之后|此后|随后|接下来|其后|往后|未来|后续)\s*的?\s*"
+    r"(?:\d{1,3}|[一二两三四五六七八九十]{1,3})\s*(?:个)?\s*(?:小时|h|天|日|周)"
+    r"|\b(?:next|following|subsequent|ensuing|coming)\s+"
+    r"(?:\d{1,3}|one|two|three|four|five|six|seven|ten|fourteen)[\s-]*"
+    r"(?:hours?|hrs?|h|days?|d|weeks?)\b",
+    re.IGNORECASE,
+)
+
+
+#: A time list or schedule that dates a measurement, not a prediction: "lactate
+#: measured at 6 and 24 hours", "glucose measured every 4 hours",
+#: 「第 6、24 小时测得的乳酸」「每 4 小时测量一次血糖」.
+_MEASURED_BEFORE = re.compile(
+    r"\b(?:measured|recorded|obtained|collected|sampled|drawn|charted|taken|assessed|"
+    r"checked|tested|monitored|documented)\s+(?:\w+\s+)?$",
+    re.IGNORECASE,
+)
+_MEASURED_AFTER = re.compile(
+    r"^\s*(?:时|时点|时刻)?\s*(?:所|的)?\s*(?:测得|测量|检测|采集|记录|抽取|监测|采样)",
+)
+_MEASUREMENT_WORD = re.compile(
+    r"\b(?:measured|measurements?|recorded|obtained|collected|sampled|drawn|charted)\b"
+    r"|测得|测量|检测|采集|记录|监测|采样",
+    re.IGNORECASE,
+)
+_CLAUSE_BREAK = re.compile(r"[;；。！？!?]|\.(?=\s|$)")
+
+
+def _dates_a_measurement(source: str, start: int, end: int) -> bool:
+    """Whether the times at ``source[start:end]`` date a measurement, not the prediction.
+
+    They do when a measurement word governs them ("measured at 6 and 24
+    hours", 「第 6、24 小时测得的」), or when their own sentence states a
+    measurement and no prediction ("Every 4 hours glucose was measured;
+    predict death in the next 7 days").
+    """
+
+    if _MEASURED_BEFORE.search(source[max(0, start - 40):start]):
+        return True
+    if _MEASURED_AFTER.search(source[end:end + 12]):
+        return True
+    breaks = [match.end() for match in _CLAUSE_BREAK.finditer(source, 0, start)]
+    clause_start = breaks[-1] if breaks else 0
+    following = _CLAUSE_BREAK.search(source, end)
+    clause = source[clause_start:following.start() if following else len(source)]
+    return bool(_MEASUREMENT_WORD.search(clause)) and _PREDICTION_REQUEST.search(clause) is None
+
+
+def landmark_prediction_framing(text: str) -> bool:
+    """Whether ``text`` asks for one prediction made at several times.
+
+    A dynamic (landmark) prediction states its prediction times on one clock
+    -- two or more of them (「在入 ICU 第 24、48、72 小时」, "at 24 and 48 hours")
+    or a schedule (「每 24 小时」, "every 24 hours") -- and a horizon that
+    follows each (「预测之后 7 天内 ICU 死亡」, "over the next 24 hours").  A
+    prediction from one time or one window ("use the first 24 hours to
+    predict hospital death", 「在入 ICU 第 24 小时预测之后 7 天内死亡」) is a
+    static prediction model, and listed horizons of one endpoint ("mortality
+    at 24 and 48 hours") are not prediction times.
+    """
+
+    from easyicu.outcome_availability import mortality_horizon_spans
+
+    source = str(text or "")
+    if _PREDICTION_REQUEST.search(source) is None or _HORIZON_AFTER.search(source) is None:
+        return False
+    if any(
+        not _dates_a_measurement(source, *match.span())
+        for match in _PREDICTION_SCHEDULE.finditer(source)
+    ):
+        return True
+    endpoint_horizons = mortality_horizon_spans(source)
+    for match in _PREDICTION_TIMES.finditer(source):
+        start, end = match.span("times")
+        if any(begin < end and start < stop for begin, stop in endpoint_horizons):
+            continue
+        if _dates_a_measurement(source, match.start(), end):
+            continue
+        times = match.group("times")
+        if not (match.group("unit_first") or re.search(_LANDMARK_UNIT, times, re.IGNORECASE)):
+            continue
+        if len(set(re.findall(_LANDMARK_NUMBER, times))) >= 2:
+            return True
+    return False
+
+
 def strong_trajectory_clustering_framing(text: str) -> bool:
     """Return whether text asks to *discover groups*, not adjust SEs by group.
 
@@ -1995,7 +2102,10 @@ def _infer_analysis_type_with_basis(
         return _REGISTRY["trajectory_clustering"], FAMILY_BASIS_KEYWORD
     if strong_survival_framing:
         return _REGISTRY["survival"], FAMILY_BASIS_KEYWORD
-    if _has_any("dynamic_prediction"):
+    # A prediction made at several times, each over the horizon that follows
+    # it, is a dynamic prediction in any wording (pilot1 10-27: 「在入 ICU 第
+    # 24、48、72 小时…预测之后 7 天内 ICU 死亡」 was planned as one static model).
+    if _has_any("dynamic_prediction") or landmark_prediction_framing(primary_question_text):
         return _REGISTRY["dynamic_prediction"], FAMILY_BASIS_KEYWORD
     if _has_any("multimodal"):
         return _REGISTRY["multimodal"], FAMILY_BASIS_KEYWORD
@@ -2348,6 +2458,7 @@ __all__ = [
     "requested_exposure_occurrence_cues",
     "requested_dose_response_cues",
     "infer_analysis_type",
+    "landmark_prediction_framing",
     "longitudinal_trajectory_requested",
     "strong_trajectory_clustering_framing",
     "planner_analysis_type_guide",

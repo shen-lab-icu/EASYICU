@@ -38,6 +38,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from easyicu.outcome_availability import ICU_DEATH, stated_mortality_settings
+
 from .concept_availability import explain_concept_availability, normalize_concept_name
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -149,6 +151,21 @@ DERIVED_CONCEPT_HINTS: Dict[str, Tuple[List[str], bool]] = {
     ),
     "icu_readmission": (
         ["ICU readmission", "readmission to the ICU", "return to the ICU"],
+        True,
+    ),
+    # Native ICU mortality (``scores.icu_mortality``): death before ICU
+    # discharge.  It owns the ICU-mortality phrases; the dictionary's
+    # ``death`` is hospital mortality and never answers to them.
+    "icu_death": (
+        [
+            "ICU death",
+            "ICU mortality",
+            "death in the ICU",
+            "intensive care unit mortality",
+            "intensive-care unit mortality",
+            "intensive care mortality",
+            "critical care mortality",
+        ],
         True,
     ),
     "mort_28d": (["28-day mortality", "mortality at 28 days"], True),
@@ -389,18 +406,22 @@ def _aliases_from_description(description: str) -> List[str]:
     core = [t for t in tokens if t not in _ALIAS_STRIP_WORDS]
     if core and core != tokens:
         aliases.append(" ".join(core))
-    # mortality phrasings: "in hospital mortality" -> "hospital mortality", "mortality"
+    # mortality phrasings: "in hospital mortality" -> "hospital mortality",
+    # "mortality".  ICU mortality is another endpoint (death before ICU
+    # discharge), owned by the native ``icu_death`` concept; a description
+    # gains its phrases only when it states that setting itself.
     if "mortality" in tokens:
         aliases.append("mortality")
-        aliases.extend(
-            [
-                "ICU mortality",
-                "intensive care unit mortality",
-                "intensive-care unit mortality",
-                "intensive care mortality",
-                "critical care mortality",
-            ]
-        )
+        if stated_mortality_settings(desc) == (ICU_DEATH,):
+            aliases.extend(
+                [
+                    "ICU mortality",
+                    "intensive care unit mortality",
+                    "intensive-care unit mortality",
+                    "intensive care mortality",
+                    "critical care mortality",
+                ]
+            )
         idx = tokens.index("mortality")
         if idx > 0 and tokens[idx - 1] not in _ALIAS_STRIP_WORDS:
             aliases.append(f"{tokens[idx - 1]} mortality")

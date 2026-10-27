@@ -1579,18 +1579,18 @@ def test_dry_run_uses_dictionary_catalog_by_default(tmp_path) -> None:
     result = run_idea_mining_dry_run(
         materials=[material],
         llm=llm,
-        available_concepts=["adh_rate", "death"],
+        available_concepts=["adh_rate", "icu_death"],
         output_dir=tmp_path / "dry_run",
         feasibility_probe=fake_probe,
     )
 
-    assert calls == [("adh_rate", "death")]
+    assert calls == [("adh_rate", "icu_death")]
     assert result.yield_report.n_executable == 1
     candidate = result.executable_candidates[0]
     assert candidate.resolved_predictor_concept == "adh_rate"
-    assert candidate.resolved_outcome_concept == "death"
+    assert candidate.resolved_outcome_concept == "icu_death"
     assert candidate.outcome_determinability_status == "known_0_1"
-    assert candidate.feasibility_pair_key == ("adh_rate", "death")
+    assert candidate.feasibility_pair_key == ("adh_rate", "icu_death")
     assert candidate.non_executable_reasons == []
 
 
@@ -1681,7 +1681,7 @@ def test_dry_run_warns_on_degenerate_exposure_contrast(tmp_path) -> None:
     result = run_idea_mining_dry_run(
         materials=[material],
         llm=llm,
-        available_concepts=["adh_rate", "death"],
+        available_concepts=["adh_rate", "icu_death"],
         output_dir=tmp_path / "dry_run",
         feasibility_probe=fake_probe,
     )
@@ -1739,7 +1739,7 @@ def test_dry_run_tolerates_legacy_probe_without_contrast_kwarg(tmp_path) -> None
     result = run_idea_mining_dry_run(
         materials=[material],
         llm=llm,
-        available_concepts=["adh_rate", "death"],
+        available_concepts=["adh_rate", "icu_death"],
         output_dir=tmp_path / "dry_run",
         feasibility_probe=legacy_probe,
     )
@@ -1800,7 +1800,7 @@ def test_dry_run_surfaces_structural_unavailable_feasibility_note(tmp_path) -> N
     result = run_idea_mining_dry_run(
         materials=[material],
         llm=llm,
-        available_concepts=["adh_rate", "death"],
+        available_concepts=["adh_rate", "icu_death"],
         output_dir=tmp_path / "dry_run",
         feasibility_probe=fake_probe,
         prior_art_search_client=FakePriorArtSearchClient(),
@@ -2130,7 +2130,7 @@ def test_dry_run_scope_retrieves_corpus_and_freezes_query(tmp_path) -> None:
     out_dir = tmp_path / "dry_run"
     result = run_idea_mining_dry_run(
         llm=llm,
-        available_concepts=["adh_rate", "death"],
+        available_concepts=["adh_rate", "icu_death"],
         output_dir=out_dir,
         feasibility_probe=fake_probe,
         scope=scope,
