@@ -181,8 +181,12 @@ class ObservedWindowEligibilityOutcome(_RuleOutcome):
     #: What makes a window count.  The representation owner counts a window
     #: when any SOFA-2 coordinate has an owner-available value in it, directly
     #: observed or carried forward by the SOFA-2 owner; other coordinates do
-    #: not count.  An envelope written before this field omits it.
-    window_evidence: Literal["any_available_sofa2_score"] | None = None
+    #: not count.  A design without a SOFA-2 coordinate counts a window when
+    #: any coordinate has a recorded value in it.  An envelope written before
+    #: this field omits it.
+    window_evidence: (
+        Literal["any_available_sofa2_score", "any_recorded_coordinate_value"] | None
+    ) = None
 
     @model_serializer(mode="wrap")
     def _preserve_unstated_window_evidence(self, handler):
@@ -229,10 +233,15 @@ class ObservedWindowEligibilityOutcome(_RuleOutcome):
                 f"and entered the class model; {_reader_count(self.excluded_n)} were "
                 "excluded."
             )
+        evidence = (
+            "at least one recorded value of a model coordinate"
+            if self.window_evidence == "any_recorded_coordinate_value"
+            else "at least one SOFA-2 score available"
+        )
         return (
             f"Of {_reader_count(self.input_n)} records in the study cohort, "
-            f"{_reader_count(self.included_n)} had at least one SOFA-2 score "
-            f"available in at least {self.minimum_observed_windows} of the "
+            f"{_reader_count(self.included_n)} had {evidence} "
+            f"in at least {self.minimum_observed_windows} of the "
             f"{self.n_windows} prespecified {self.window_width_hours}-hour windows "
             f"from {self._span()} and entered the class model; "
             f"{_reader_count(self.excluded_n)} were excluded."
@@ -243,6 +252,12 @@ class ObservedWindowEligibilityOutcome(_RuleOutcome):
             return (
                 "Class membership was estimated only for records meeting the "
                 "prespecified observed-window rule."
+            )
+        if self.window_evidence == "any_recorded_coordinate_value":
+            return (
+                "Class membership was estimated only for records with at least one "
+                "recorded value of a model coordinate in the prespecified minimum "
+                "number of windows."
             )
         return (
             "Class membership was estimated only for records with at least one "

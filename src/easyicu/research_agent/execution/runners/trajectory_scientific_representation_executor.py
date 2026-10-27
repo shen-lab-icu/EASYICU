@@ -23,6 +23,7 @@ from ...contracts.executed_method_design import (
     executed_method_design_payload,
     validate_executed_method_design,
 )
+from ...contracts.trajectory_design import trajectory_eligibility_basis
 from ...schema import AnalysisPlan, AnalysisStep
 from ...trajectory.plan_contract import trajectory_step_roles
 from ...trajectory.scientific_runtime_authority import (
@@ -195,9 +196,13 @@ def run_trajectory_scientific_representation(
         )
     )
     matrix.index = pd.Index(cohort_ids.to_numpy(), name=_IDENTITY_COLUMN)
+    # A window counts on owner-available SOFA-2 evidence when the design has
+    # a SOFA-2 coordinate; a design without one counts the recorded values of
+    # its coordinates, each a charted measurement by the design owner's rule.
     sofa_concepts = tuple(
         concept for concept in sealed.coordinate_concepts if concept.startswith("sofa2")
     )
+    basis_concepts = trajectory_eligibility_basis(sealed.coordinate_concepts)
     sofa_columns = [
         column
         for column in sealed.representation_columns
@@ -209,7 +214,7 @@ def run_trajectory_scientific_representation(
                 [
                     f"{concept}__h{sealed.window_start_hours + index * sealed.grid_width_hours}_"
                     f"{sealed.window_start_hours + (index + 1) * sealed.grid_width_hours}"
-                    for concept in sofa_concepts
+                    for concept in basis_concepts
                 ]
             ]
             .notna()
@@ -228,7 +233,9 @@ def run_trajectory_scientific_representation(
             "exclusion_reason": np.where(
                 eligible,
                 "",
-                "fewer_than_signed_minimum_owner_available_sofa2_windows",
+                "fewer_than_signed_minimum_owner_available_sofa2_windows"
+                if sofa_concepts
+                else "fewer_than_signed_minimum_recorded_coordinate_windows",
             ),
         }
     )
@@ -358,8 +365,12 @@ def run_trajectory_scientific_representation(
         "window_width_hours": sealed.grid_width_hours,
         "n_windows": n_windows,
         "minimum_observed_windows": sealed.minimum_available_windows,
-        # A window counts on SOFA-2 evidence only (``available_windows``).
-        "window_evidence": "any_available_sofa2_score",
+        # A window counts on SOFA-2 evidence only when the design has a
+        # SOFA-2 coordinate, else on any recorded coordinate value
+        # (``available_windows``).
+        "window_evidence": (
+            "any_available_sofa2_score" if sofa_concepts else "any_recorded_coordinate_value"
+        ),
     }
     eligibility_outcome = validate_rule_outcome(
         {

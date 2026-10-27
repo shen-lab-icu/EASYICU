@@ -99,7 +99,9 @@ def test_availability_follows_the_published_review_facts() -> None:
         (_facts(executable=False), "agent_plan_trajectory_coordinates_unavailable"),
         # A tampered or stale fact still has to satisfy the owner's rule.
         (_facts(["sofa_resp", "sofa_cardio"]), "agent_plan_trajectory_coordinates_unavailable"),
-        (_facts(["sofa2_resp"]), "agent_plan_trajectory_coordinates_unavailable"),
+        # A derived score beside a measurement, with no SOFA-2 component:
+        # no window of the score shows a recorded value.
+        (_facts(["map", "gcs"]), "agent_plan_trajectory_coordinates_unavailable"),
     ],
 )
 def test_coordinates_the_review_did_not_publish_are_never_guessed(facts, code) -> None:

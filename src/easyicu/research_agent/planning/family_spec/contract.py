@@ -371,7 +371,7 @@ class SealedTrajectoryCoordinates(BaseModel):
 
     representation_owner: str = Field(pattern=r"^signed_[a-z][a-z0-9_]{0,79}$")
     candidate_owner: str = Field(pattern=r"^[a-z][a-z0-9_]{0,119}$")
-    coordinate_concepts: list[str] = Field(min_length=2)
+    coordinate_concepts: list[str] = Field(min_length=1)
     descriptive_only_concepts: list[str] = Field(default_factory=list)
     window_hours: tuple[int, int]
     grid_width_hours: int = Field(gt=0)
@@ -1283,6 +1283,18 @@ def design_field_max_length(field: str) -> int:
 MAX_FIT_FEATURES = design_field_max_length("required_variables") - 2
 
 
+def fit_roster_budget(request: "FamilySpecRequest") -> int:
+    """Design variables a phenotyping or prediction Planner may add.
+
+    The host names the row identity and any outcome; the fit features, the
+    baseline descriptors and any cohort-membership column share the rest.  The
+    validator and the response shape read this one budget, so the Planner is
+    told the bound its roster is checked against.
+    """
+
+    return design_field_max_length("required_variables") - (2 if request.outcome else 1)
+
+
 def landmark_design_roster(request: "FamilySpecRequest", covariates: Sequence[str]) -> list[str]:
     """Every variable a landmark design names, in the order the plan lists them.
 
@@ -1595,13 +1607,13 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
                 path="feature_variables",
             )
         design_limit = design_field_max_length("required_variables")
-        roster = (
-            (2 if request.outcome else 1)  # the row identity and any outcome
-            + (1 if spec.cohort_membership_column else 0)
+        planner_added = (
+            (1 if spec.cohort_membership_column else 0)
             + len(spec.baseline_variables)
             + len(features)
         )
-        if roster > design_limit:
+        roster = design_limit - fit_roster_budget(request) + planner_added
+        if planner_added > fit_roster_budget(request):
             raise FamilySpecError(
                 "family_spec_roster_exceeds_design",
                 f"the design names at most {design_limit} variables including the row identity "
@@ -2242,6 +2254,7 @@ __all__ = [
     "accepted_baseline_additions",
     "benchmark_comparators",
     "family_effect_measures",
+    "fit_roster_budget",
     "landmark_ordinal_trend_present",
     "literature_design_card_keys_by_dimension",
     "population_required",

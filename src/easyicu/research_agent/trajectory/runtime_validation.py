@@ -361,7 +361,7 @@ def signed_trajectory_runtime_bundle_errors(
     columns = rep.get("representation_columns")
     if not (
         isinstance(families, list)
-        and len(families) >= 2
+        and len(families) >= 1
         and len(families) == len(set(families))
         and isinstance(columns, list)
         and len(columns) >= len(families) * 2

@@ -59,8 +59,11 @@ from ..planning.family_spec.contract import (
     POPULATION_ANCHOR,
     DistributionMissingPolicies,
     FamilyPlanSpec,
+    MAX_FIT_FEATURES,
     FamilySpecRequest,
+    design_field_max_length,
     family_effect_measures,
+    fit_roster_budget,
     literature_design_card_keys_by_dimension,
     planner_selects_adjustment,
     population_required,
@@ -973,6 +976,27 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
                 else ""
             )
         )
+        # State the roster bound the validator applies when the offered
+        # candidates can exceed it, so a broad roster is trimmed on the first
+        # draft instead of after a refusal.
+        budget = fit_roster_budget(request)
+        describes = request.family_id == PHENOTYPING_FAMILY_ID
+        offered = len(features) + (
+            len(selectable) + (1 if request.membership_candidates else 0) if describes else 0
+        )
+        if offered > budget or len(features) > MAX_FIT_FEATURES:
+            fixed = "the row identity and the outcome" if request.outcome else "the row identity"
+            lines.append(
+                f"  The design names at most {design_field_max_length('required_variables')} "
+                f"variables, {fixed} included: "
+                + (
+                    f"feature_variables (at most {MAX_FIT_FEATURES}), baseline_variables and any "
+                    f"cohort_membership_column together name at most {budget}"
+                    if describes
+                    else f"at most {min(budget, MAX_FIT_FEATURES)} feature_variables"
+                )
+                + "; keep the most informative."
+            )
     if request.family_id == PHENOTYPING_FAMILY_ID:
         lines.append(
             '- "cohort_membership_column": one of '

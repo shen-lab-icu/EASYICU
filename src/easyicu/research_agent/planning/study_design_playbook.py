@@ -1135,10 +1135,27 @@ def display_modules_for_family(family: StudyDesignFamily) -> List[DisplayModuleS
     return [module.model_copy(deep=True) for module in _FAMILY_DISPLAY_MODULES[family]]
 
 
-def triggered_generic_modules(triggers: Sequence[str]) -> List[DisplayModuleSpec]:
+#: Generic conditional modules a family's own display module already answers.
+#: Phenotyping has no exposure contrast and no adjusted model: an outcome or
+#: event rate the question asks about is described per discovered group by its
+#: ``outcome_characterization`` module (``phenotyping.outcome_by_cluster``,
+#: required by the phenotyping outline rules when an outcome is requested), so
+#: the exposure-prevalence / outcome-by-exposure module has no owner there.
+_GENERIC_MODULES_SUPERSEDED_BY_FAMILY: Dict[StudyDesignFamily, frozenset[str]] = {
+    "phenotyping": frozenset({"exposure_outcome_distribution"}),
+}
+
+
+def triggered_generic_modules(
+    triggers: Sequence[str],
+    family: StudyDesignFamily | None = None,
+) -> List[DisplayModuleSpec]:
     trigger_blob = " ".join(triggers).lower()
+    superseded = _GENERIC_MODULES_SUPERSEDED_BY_FAMILY.get(family, frozenset()) if family else frozenset()
     modules: List[DisplayModuleSpec] = []
     for module in _GENERIC_CONDITIONAL_MODULES:
+        if module.module_id in superseded:
+            continue
         if module.module_id == "cross_database_heterogeneity":
             is_active = any(
                 token in trigger_blob

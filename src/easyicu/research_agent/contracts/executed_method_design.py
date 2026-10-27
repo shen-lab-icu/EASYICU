@@ -104,8 +104,11 @@ class FixedWindowRepresentationDesign(_ExecutedDesign):
     minimum_observed_windows: int = Field(ge=1)
     #: What makes a window count toward the minimum: any SOFA-2 coordinate with
     #: an owner-available value, directly observed or carried forward by the
-    #: SOFA-2 owner.  A design written before this field omits it.
-    window_evidence: Literal["any_available_sofa2_score"] | None = None
+    #: SOFA-2 owner; or, for a design without a SOFA-2 coordinate, any recorded
+    #: value of a coordinate.  A design written before this field omits it.
+    window_evidence: (
+        Literal["any_available_sofa2_score", "any_recorded_coordinate_value"] | None
+    ) = None
 
     @model_serializer(mode="wrap")
     def _preserve_unstated_window_evidence(self, handler):

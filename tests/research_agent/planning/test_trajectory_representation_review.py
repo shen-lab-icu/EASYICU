@@ -135,14 +135,37 @@ def test_other_coordinates_keep_the_plan_and_state_the_limitation() -> None:
     assert facts["study_eligibility_coordinates"] == ["sofa2_cardio", "sofa2_resp"]
 
 
-def test_a_question_about_other_measurements_is_not_pushed_to_sofa2() -> None:
+def test_a_question_about_recorded_measurements_is_handed_to_the_host_on_them() -> None:
+    # The owner counts a design without SOFA-2 components on its recorded
+    # measurements, so one measured coordinate is a design, and the study is
+    # not steered to SOFA-2 it does not ask about.
     context = _context(("stay_id", "lact", "death"))
-    _review_, findings = _review(context, _plan(_step(("lact",))))
+    review, findings = _review(context, _plan(_step(("lact",))))
 
     [finding] = findings
+    assert finding.code == "TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED"
+    assert finding.severity == "blocker"
+    assert remediation_route_for_finding(finding) == "runtime_capability"
+    facts = review.facts["trajectory_representation"]
+    assert facts["executable"] is True
+    assert facts["proposed_coordinates"] == ["lact"]
+    assert facts["unrecorded_coordinates"] == []
+
+
+def test_a_derived_score_without_sofa2_states_the_limitation() -> None:
+    # A derived score carries no per-window receipt and no recorded value, so
+    # without a SOFA-2 component no window of it can be counted.
+    context = _context(("stay_id", "sofa_resp", "lact", "death"))
+    review, findings = _review(context, _plan(_step(("sofa_resp", "lact"))))
+
+    [finding] = findings
+    assert finding.code == "TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL"
     assert finding.severity == "major"
-    assert "fewer than two time-varying coordinates" in finding.message
     assert "this study's variables include none" in finding.message
+    assert "sofa_resp is not directly measured" in finding.message
+    facts = review.facts["trajectory_representation"]
+    assert facts["executable"] is False
+    assert facts["unrecorded_coordinates"] == ["sofa_resp"]
 
 
 @pytest.mark.parametrize(

@@ -219,8 +219,10 @@ def test_a_study_without_a_trajectory_declaration_is_not_a_trajectory_study(tmp_
                     "variance_estimator": "model_based",
                 },
                 "trajectory_design": study_context_owner.normalize_trajectory_design(
+                    # Neither is a SOFA-2 component nor a recorded
+                    # measurement: no window of either shows a recorded value.
                     _design(
-                        coordinate_concepts=["lact", "map"],
+                        coordinate_concepts=["gcs", "vaso_ind"],
                         descriptive_only_concepts=[],
                     )
                 ),
@@ -290,6 +292,25 @@ def test_a_study_whose_population_the_owners_analyze_is_admitted(cohort):
     assert validate_trajectory_design_declaration(study) is not None
 
 
+def test_a_design_on_recorded_measurements_is_admitted_and_a_derived_one_is_named():
+    measured = _study(
+        trajectory_design=study_context_owner.normalize_trajectory_design(
+            _design(coordinate_concepts=["map"], descriptive_only_concepts=[])
+        )
+    )
+    assert validate_trajectory_design_declaration(measured).coordinate_concepts == ("map",)
+
+    mixed = _study(
+        trajectory_design=study_context_owner.normalize_trajectory_design(
+            _design(coordinate_concepts=["map", "gcs"], descriptive_only_concepts=[])
+        )
+    )
+    with pytest.raises(WebScientificRuntimeProjectionError) as excinfo:
+        validate_trajectory_design_declaration(mixed)
+    assert excinfo.value.code == "web_trajectory_eligibility_coordinate_missing"
+    assert excinfo.value.details["unrecorded_coordinates"] == ["gcs"]
+
+
 def test_projection_requires_the_materialized_panel(tmp_path):
     universe, _frame = _panel(tmp_path)
     trajectory_provenance_path(universe).unlink()
@@ -342,7 +363,7 @@ def test_the_study_owner_validates_the_design_and_keeps_old_digests(tmp_path):
     assert declared != absent
 
     for payload, code in (
-        ({"coordinate_concepts": ["sofa2_resp"]}, "study_trajectory_concepts_insufficient"),
+        ({"coordinate_concepts": []}, "study_trajectory_concepts_insufficient"),
         (
             {"coordinate_concepts": ["sofa2_resp", "lact"], "window_end_hours": 50},
             "study_trajectory_grid_invalid",
