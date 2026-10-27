@@ -24,6 +24,16 @@ _NUMERIC_METADATA_DTYPE = re.compile(
 
 
 @dataclass(frozen=True)
+class OrdinalBinaryTrendDomain:
+    """Closed planning coordinates for an ordered exposure and a 0/1 endpoint."""
+
+    exposure: str
+    binary_outcome: str
+    exposure_levels: tuple[Any, ...]
+    binary_levels: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
 class OrdinalMultiOutcomeContract:
     """Closed planning coordinates for one supported ordinal gradient study."""
 
@@ -63,15 +73,13 @@ def _is_continuous_outcome_candidate(variable: ConceptDescriptor) -> bool:
     )
 
 
-def resolve_ordinal_multi_outcome_contract(
+def resolve_ordinal_binary_trend_domain(
     context: ResearchContext,
-) -> OrdinalMultiOutcomeContract | None:
-    """Resolve an unambiguous metadata-only ordinal multi-outcome contract.
+) -> OrdinalBinaryTrendDomain | None:
+    """Resolve the ordered exposure and 0/1 endpoint an ordered trend reads.
 
-    The v1 deterministic ordered-trend owner requires a >=3-level ordinal
-    exposure and a 0/1 primary endpoint.  Exactly one other cohort outcome may
-    be admitted as the continuous outcome.  Ambiguity returns ``None`` rather
-    than choosing a column by name or position.
+    The deterministic ordered-trend owner requires a >=3-level ordinal
+    exposure and a 0/1 primary endpoint; anything else returns ``None``.
     """
 
     exposure = str(context.primary_exposure or "").strip()
@@ -103,7 +111,29 @@ def resolve_ordinal_multi_outcome_contract(
         return None
     if observed_binary_levels and list(observed_binary_levels) != [0, 1]:
         return None
+    return OrdinalBinaryTrendDomain(
+        exposure=exposure,
+        binary_outcome=binary_outcome,
+        exposure_levels=exposure_levels,
+        binary_levels=binary_levels,
+    )
 
+
+def resolve_ordinal_multi_outcome_contract(
+    context: ResearchContext,
+) -> OrdinalMultiOutcomeContract | None:
+    """Resolve an unambiguous metadata-only ordinal multi-outcome contract.
+
+    The binary trend domain (``resolve_ordinal_binary_trend_domain``) plus
+    exactly one other cohort outcome admitted as the continuous outcome.
+    Ambiguity returns ``None`` rather than choosing a column by name or
+    position.
+    """
+
+    domain = resolve_ordinal_binary_trend_domain(context)
+    if domain is None:
+        return None
+    binary_outcome = domain.binary_outcome
     time_columns = set(context.cohort.time_columns)
     continuous_outcomes: list[str] = []
     for name in context.cohort.outcome_columns:
@@ -115,16 +145,55 @@ def resolve_ordinal_multi_outcome_contract(
     if len(continuous_outcomes) != 1:
         return None
     return OrdinalMultiOutcomeContract(
-        exposure=exposure,
+        exposure=domain.exposure,
         binary_outcome=binary_outcome,
         continuous_outcome=continuous_outcomes[0],
-        exposure_levels=exposure_levels,
-        binary_levels=binary_levels,
+        exposure_levels=domain.exposure_levels,
+        binary_levels=domain.binary_levels,
+    )
+
+
+def resolve_ordered_trend_binding(
+    context: ResearchContext,
+    *,
+    exposure: str,
+    binary_outcome: str,
+    continuous_outcome: str | None = None,
+) -> OrdinalBinaryTrendDomain | None:
+    """The closed coordinates an ordered trend over exactly these columns binds.
+
+    One answer for every planner of the ``association.ordinal_trend`` step and
+    for the compiler that judges it: a binary-only trend needs the binary
+    trend domain on (exposure, outcome); a trend with a continuous companion
+    needs the multi-outcome contract on all three.  ``None`` means the
+    compiler would refuse the step, so a template must not plan it.
+    """
+
+    if continuous_outcome is None:
+        domain = resolve_ordinal_binary_trend_domain(context)
+        if domain is None or (domain.exposure, domain.binary_outcome) != (
+            exposure, binary_outcome,
+        ):
+            return None
+        return domain
+    contract = resolve_ordinal_multi_outcome_contract(context)
+    if contract is None or contract.variables != (
+        exposure, binary_outcome, continuous_outcome,
+    ):
+        return None
+    return OrdinalBinaryTrendDomain(
+        exposure=contract.exposure,
+        binary_outcome=contract.binary_outcome,
+        exposure_levels=contract.exposure_levels,
+        binary_levels=contract.binary_levels,
     )
 
 
 __all__ = [
+    "OrdinalBinaryTrendDomain",
     "OrdinalMultiOutcomeContract",
     "is_numeric_metadata_dtype",
+    "resolve_ordered_trend_binding",
+    "resolve_ordinal_binary_trend_domain",
     "resolve_ordinal_multi_outcome_contract",
 ]

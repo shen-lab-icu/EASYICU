@@ -134,11 +134,12 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
         required_declarations=(
             "one digest-bound typed cohort",
             "one upstream primary model requirement",
-            "closed ordered levels plus binary and continuous outcomes",
+            "closed ordered levels, a binary outcome and an optional continuous outcome",
         ),
         validation_test_refs=(
             "tests/research_agent/core/test_ordered_stratified_executor.py::test_typed_owner_executes_and_replays_without_coder",
             "tests/research_agent/core/test_ordered_stratified_executor.py::test_method_label_without_typed_spec_does_not_select_owner",
+            "tests/research_agent/core/test_ordered_trend_refit_matches_statsmodels.py::test_the_trend_refit_matches_an_independent_statsmodels_fit",
         ),
         typed_subcontracts=("association.ordinal_trend",),
     ),

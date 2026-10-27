@@ -6,7 +6,7 @@ table, or decide what belongs in a manuscript.  Those remain agent decisions.
 The functions here only provide reusable, deterministic calculations that an
 agent-authored analysis can call and that a validator can independently replay.
 
-Two tests are exposed:
+Two tests are exposed, plus ``normal_tail_probability`` for a Wald statistic:
 
 ``cochran_armitage_trend``
     A score test for a binary outcome across ordered groups.  Its scores are an
@@ -153,6 +153,19 @@ def _normal_tail(z_statistic: float, alternative: Alternative) -> dict[str, Any]
         "negative_log10_p": -log_p / math.log(10.0),
         "p_value_bounded": bounded,
     }
+
+
+def normal_tail_probability(
+    z_statistic: float, alternative: str = "two-sided"
+) -> dict[str, Any]:
+    """The bounded normal-tail p-value record for one Wald statistic.
+
+    The same serialization the trend tests use: a nonzero ``p_value`` with
+    its ``log_p_value`` and display form, so a model-based trend p-value is
+    reported exactly like a test-based one.
+    """
+
+    return _normal_tail(z_statistic, _validate_alternative(alternative))
 
 
 def wilson_interval(
@@ -485,5 +498,6 @@ __all__ = [
     "WilsonInterval",
     "cochran_armitage_trend",
     "jonckheere_terpstra_trend",
+    "normal_tail_probability",
     "wilson_interval",
 ]

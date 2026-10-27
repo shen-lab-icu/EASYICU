@@ -32,12 +32,11 @@ from ..contracts.cohort_summary_products import auxiliary_summary_product
 from ..contracts.cohort_summary import DESCRIPTIVE_SUMMARY_ACTION, DESCRIPTIVE_SUMMARY_OUTPUTS
 from ..contracts.claim_ceiling import DescriptiveClaimContract
 from ..contracts.model_terms import AdjustmentProposal, ModelTermSpec, level_spelling
+from ..contracts.ordered_stratified_spec import OrderedTrendUnsupported, ordered_trend_model_for
 from ..contracts.functional_form import RCS_LINEAR_SENSITIVITY_METHODS
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from ..contracts.model_tokens import (
-    ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
-    ASSOCIATION_RR_ESTIMATOR,
     BINARY_ESTIMATOR_BY_EFFECT_MEASURE,
 )
 from ..contracts.primary_cohort import (
@@ -103,7 +102,7 @@ from .distribution_authority import distribution_policy_issues
 from .progressive_module_ids import descriptive_custom_module_allowed
 from .literature_contract import LiteratureDesignBinding
 from .method_literature import METHOD_CARDS, method_binding_support
-from .ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
+from .ordinal_multi_outcome import resolve_ordered_trend_binding
 from .population_compile import CompiledPopulation, compile_population
 from .population_spec import (
     PopulationSpec,
@@ -1066,21 +1065,25 @@ def _compile_ordered_stratified_contract(
     remaining = [
         name for name in step.raw_inputs if name not in {exposure, binary_outcome}
     ]
-    if len(remaining) != 1:
+    if len(remaining) > 1:
         raise _fail(
             "progressive_ordered_trend_continuous_outcome_ambiguous",
-            "association.ordinal_trend requires exactly one additional continuous outcome",
+            "association.ordinal_trend admits at most one additional continuous outcome",
             step=step,
             step_index=step_index,
             path="raw_inputs",
         )
-    contract = resolve_ordinal_multi_outcome_contract(context)
-    continuous_outcome = remaining[0]
-    if contract is None or (
-        exposure,
-        binary_outcome,
-        continuous_outcome,
-    ) != contract.variables:
+    # The same binding the family templates plan from
+    # (``resolve_ordered_trend_binding``): a binary-only trend reads the
+    # ordered exposure and its 0/1 endpoint, a continuous companion the
+    # multi-outcome contract.
+    binding = resolve_ordered_trend_binding(
+        context,
+        exposure=exposure,
+        binary_outcome=binary_outcome,
+        continuous_outcome=remaining[0] if remaining else None,
+    )
+    if remaining and binding is None:
         raise _fail(
             "progressive_ordered_trend_continuous_outcome_invalid",
             "the additional ordered-trend input must match the typed ordinal "
@@ -1089,8 +1092,8 @@ def _compile_ordered_stratified_contract(
             step_index=step_index,
             path="raw_inputs",
         )
-    levels = list(contract.exposure_levels)
-    binary_levels = list(contract.binary_levels)
+    levels = list(binding.exposure_levels) if binding is not None else []
+    binary_levels = list(binding.binary_levels) if binding is not None else []
     # Adjusted models encode the numeric binary outcome directly; their
     # contract does not require the distribution module's event index. Reuse
     # that model authority only after the shared outcome contract has proved
@@ -1099,34 +1102,35 @@ def _compile_ordered_stratified_contract(
         context=context, variables=variables, step=parent,
         step_index=skeleton.steps.index(parent),
     )
-    if any(item.method_family == ASSOCIATION_RR_ESTIMATOR for item in parent_requirements):
-        # The trend owner tests a logistic slope across ordered levels. A
-        # risk-ratio primary would need a different trend model, so refuse
-        # rather than test on a scale the primary does not report.
-        raise _fail(
-            "progressive_ordered_trend_risk_ratio_unsupported",
-            "association.ordinal_trend tests a logistic (odds-ratio) slope; it "
-            "cannot inherit a risk-ratio primary. Keep the primary's "
-            "effect_measure=risk_ratio and omit the ordered trend, or declare "
-            "effect_measure=null for an odds-ratio primary with its trend",
-            step=step,
-            step_index=step_index,
-            path="scientific_action_id",
-        )
     if (
         len(levels) < 3 or binary_levels != [0, 1]
         or parent.event_level_index not in (None, 1)
         or len(parent_requirements) != 1
-        or parent_requirements[0].method_family != ASSOCIATION_LOGIT_ESTIMATOR
     ):
         raise _fail(
             "progressive_ordered_trend_domain_unsupported",
-            "the v1 deterministic owner requires >=3 ordered exposure levels "
-            "and a typed 0/1 binary outcome with event index 1",
+            "the deterministic ordered-trend owner requires >=3 ordered exposure "
+            "levels and a typed 0/1 binary outcome with event index 1",
             step=step,
             step_index=step_index,
             path="raw_inputs",
         )
+    # The owner refits the primary model with the exposure as one per-level
+    # term under the primary's own estimator, so a logistic primary reports
+    # its trend as an odds ratio and a modified-Poisson primary as a risk
+    # ratio; its crude Cochran-Armitage and Jonckheere-Terpstra tests are
+    # scale-free.  The owner applies this same predicate, so a primary it
+    # cannot refit stops here instead of leaving the step unowned.
+    try:
+        ordered_trend_model_for(parent_requirements[0])
+    except OrderedTrendUnsupported as exc:
+        raise _fail(
+            "progressive_ordered_trend_primary_binding_invalid",
+            f"association.ordinal_trend refits its primary model per level: {exc}",
+            step=step,
+            step_index=step_index,
+            path="depends_on",
+        ) from exc
     declared_trends = [
         product for product, _role in output_pairs if product.startswith("table:")
     ]

@@ -28,6 +28,7 @@ from easyicu.research_agent.reporting.writer_evidence import (
 )
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+from tests.support.host_runner_cases import ordered_stratified_primary_binding
 
 
 def _step() -> AnalysisStep:
@@ -89,7 +90,9 @@ def _plan(step: AnalysisStep | None = None) -> AnalysisPlan:
     return AnalysisPlan(research_question="Test", steps=[primary, child])
 
 
-def _bind(tmp_path: Path, frame: pd.DataFrame) -> tuple[Path, Path]:
+def _bind(
+    tmp_path: Path, frame: pd.DataFrame, *, primary_frame: pd.DataFrame | None = None,
+) -> tuple[Path, Path]:
     run_dir = tmp_path / "run"
     out_dir = run_dir / "steps" / "ordered_trend" / "outputs"
     out_dir.mkdir(parents=True)
@@ -116,7 +119,12 @@ def _bind(tmp_path: Path, frame: pd.DataFrame) -> tuple[Path, Path]:
                     "columns": list(frame.columns),
                     "row_count": len(frame),
                 },
-            }
+            },
+            # The host binds the primary's estimates beside the cohort; the
+            # trend refit must reproduce their rows and events.
+            "table:adjusted_association_estimates": ordered_stratified_primary_binding(
+                _plan(), _frame() if primary_frame is None else primary_frame, run_dir,
+            ),
         },
     }
     resolved_path = run_dir / "resolved_inputs.json"
@@ -177,8 +185,13 @@ def test_typed_owner_executes_and_replays_without_coder(monkeypatch, tmp_path: P
     reporting = summary["reportable_secondary_results"]
     assert reporting["ordered_exposure"] == "severity"
     assert reporting["continuous_outcome"] == "duration"
-    assert reporting["interpretation_ceiling"] == (
-        "secondary_unadjusted_not_causal"
+    # Crude tests beside an adjusted per-level ratio: an association, never causal.
+    assert reporting["interpretation_ceiling"] == "secondary_association_not_causal"
+    assert reporting["binary_trend"]["adjustment"] == "crude"
+    assert reporting["continuous_trend"]["adjustment"] == "crude"
+    assert "adjusted_p" not in reporting["binary_trend"]
+    assert reporting["adjusted_trend"]["interpretation_ceiling"] == (
+        "secondary_adjusted_association_not_causal"
     )
     assert reporting["continuous_level_summaries"] == [
         {"level": 0, "n": 2, "median": 1.5, "q25": 1.25, "q75": 1.75},
@@ -244,7 +257,7 @@ def test_typed_owner_fails_closed_on_undeclared_exposure_level(
 ) -> None:
     frame = _frame()
     frame.loc[0, "severity"] = 9
-    out_dir, resolved_path = _bind(tmp_path, frame)
+    out_dir, resolved_path = _bind(tmp_path, frame, primary_frame=_frame())
     monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
     monkeypatch.setenv("EASYICU_RUN_DIR", str(resolved_path.parent))
     monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(resolved_path))

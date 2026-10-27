@@ -214,10 +214,70 @@ def ordered_stratified_frame() -> pd.DataFrame:
     )
 
 
+def ordered_stratified_primary_binding(
+    plan: AnalysisPlan,
+    frame: pd.DataFrame,
+    run_dir: Path,
+    *,
+    requirement_update: dict | None = None,
+) -> dict:
+    """Fit the plan's primary model on ``frame`` and bind its estimates table.
+
+    The ordered-trend owner reads the primary's
+    ``table:adjusted_association_estimates`` to prove its refit used the same
+    rows; the host binds it beside the cohort.  ``requirement_update`` fits a
+    deliberately different primary, for the owner's mismatch stop.
+    """
+
+    from easyicu.research_agent.contracts.association_execution import (
+        association_estimator_kind,
+    )
+    from easyicu.research_agent.execution.runners.adjusted_association_executor import (
+        run_adjusted_association_from_env,
+    )
+
+    primary = next(step for step in plan.steps if step.planned_analysis_role == "primary")
+    requirement = primary.model_requirements[0]
+    if requirement_update:
+        requirement = requirement.model_copy(update=requirement_update)
+    out_dir = Path(run_dir) / "steps" / primary.step_id / "outputs"
+    run_adjusted_association_from_env(
+        requirement_id=requirement.requirement_id,
+        exposure=requirement.exposure_source,
+        outcome=requirement.outcome,
+        covariates=list(requirement.covariates or []),
+        model_terms=list(requirement.model_terms or []),
+        estimator_kind=association_estimator_kind(requirement),
+        analysis_set=requirement.analysis_set,
+        analysis_role=requirement.analysis_role,
+        method_family=requirement.method_family,
+        primary_contrast_level=requirement.primary_contrast_level,
+        dependence=requirement.dependence,
+        missing_category_covariates=list(requirement.missing_category_covariates()),
+        frame=frame,
+        emit_step_summary=False,
+        output_dir=out_dir,
+    )
+    path = out_dir / "adjusted_association_estimates.csv"
+    table = pd.read_csv(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return {
+        "relative_path": path.relative_to(run_dir).as_posix(),
+        "sha256": digest,
+        "declared_kind": "table",
+        "product": "adjusted_association_estimates",
+        "evidence_kind": "table",
+        "evidence_id": "ev-primary-estimates",
+        "produced_by_step": primary.step_id,
+        "product_contract": {"columns": list(table.columns), "row_count": len(table)},
+    }
+
+
 ordered_stratified = SimpleNamespace(
     _step=ordered_stratified_step,
     _plan=ordered_stratified_plan,
     _frame=ordered_stratified_frame,
+    _primary_binding=ordered_stratified_primary_binding,
 )
 
 

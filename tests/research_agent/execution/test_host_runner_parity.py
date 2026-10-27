@@ -272,6 +272,12 @@ def test_typed_executor_products_match_code_runner(tmp_path, family):
     sha = hashlib.sha256(cohort.read_bytes()).hexdigest()
     inputs = {}
     for key in selected.consumed_input_keys:
+        if family == "ordered" and key == "table:adjusted_association_estimates":
+            # The trend refit is checked against the primary's own estimates.
+            inputs[key] = host_runner_cases.ordered_stratified._primary_binding(
+                plan, frame, tmp_path,
+            )
+            continue
         inputs[key] = {
             "relative_path": cohort.name,
             "sha256": sha,

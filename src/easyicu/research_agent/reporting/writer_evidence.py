@@ -549,6 +549,11 @@ def _descriptive_reporting_is_authorized(
     return bool(raw_owner_authority or envelope_owner_authority)
 
 
+#: The ordered-trend owner's current reporting envelope (owner constant:
+#: ``contracts.ordered_stratified.SECONDARY_REPORTING_SCHEMA_VERSION``).
+_ORDERED_TREND_REPORTING_V2 = "easyicu.ordered_stratified_reporting/2"
+
+
 def _secondary_reporting_is_authorized(
     *,
     record: Mapping[str, Any],
@@ -559,12 +564,27 @@ def _secondary_reporting_is_authorized(
 ) -> bool:
     if not isinstance(payload, Mapping) or not isinstance(ordered_contract, Mapping):
         return False
-    if not isinstance(payload.get("continuous_level_summaries"), list):
+    version = payload.get("schema_version")
+    # /2 always carries the binary trend (crude and adjusted); its continuous
+    # outcome is optional.  /1 was the continuous outcome alone.
+    continuous_required = (
+        version != _ORDERED_TREND_REPORTING_V2
+        or payload.get("continuous_outcome") is not None
+    )
+    if version == _ORDERED_TREND_REPORTING_V2 and not (
+        isinstance(payload.get("binary_level_summaries"), list)
+        and isinstance(payload.get("binary_trend"), Mapping)
+        and isinstance(payload.get("adjusted_trend"), Mapping)
+    ):
         return False
-    if not isinstance(payload.get("continuous_trend"), Mapping):
+    if continuous_required and not (
+        isinstance(payload.get("continuous_level_summaries"), list)
+        and isinstance(payload.get("continuous_trend"), Mapping)
+    ):
         return False
     raw_owner_authority = (
-        payload.get("schema_version") == "easyicu.ordered_stratified_reporting/1"
+        version
+        in {"easyicu.ordered_stratified_reporting/1", _ORDERED_TREND_REPORTING_V2}
         and ordered_contract.get("execution_owner")
         == "ordered_stratified_executor_v1"
     )

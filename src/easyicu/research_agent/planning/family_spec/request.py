@@ -70,7 +70,10 @@ from ..literature_design_authority import (
     LITERATURE_DESIGN_DIMENSIONS,
     LiteratureDesignEvidenceCard,
 )
-from ..ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
+from ..ordinal_multi_outcome import (
+    resolve_ordered_trend_binding,
+    resolve_ordinal_multi_outcome_contract,
+)
 from ..benchmark_comparator import benchmark_comparator_facts, benchmark_source_omission
 from ..question_requirements import (
     QuestionRequirementsError,
@@ -1928,6 +1931,22 @@ def _family_spec_request(
         if family_id == LANDMARK_CATEGORICAL_FAMILY_ID
         else None
     )
+    # The template plans its ordered trend from this flag alone, so it holds
+    # only where the compiler binds that step: an ordinal exposure whose
+    # levels, 0/1 outcome and any secondary continuous outcome resolve through
+    # the same ordered-trend binding the compiler reads.  An ordinal exposure
+    # whose outcome levels are not a closed 0/1 domain keeps its plan without
+    # a trend rather than stopping it.
+    exposure_is_ordered = bool(
+        exposure_kind == "categorical"
+        and (
+            variables[exposure].is_ordinal
+            or str(getattr(variables[exposure].role, "value", variables[exposure].role)) == "ordinal_score"
+        )
+        and resolve_ordered_trend_binding(
+            context, exposure=exposure, binary_outcome=outcome, continuous_outcome=secondary,
+        ) is not None
+    )
     return FamilySpecRequest(
         family_id=family_id,
         research_question=str(context.research_question or "").strip() or "(no question text)",
@@ -1940,13 +1959,7 @@ def _family_spec_request(
         exposure_levels=exposure_levels,
         reference_level_index=reference_index,
         primary_contrast_level_index=contrast_index,
-        exposure_is_ordered=bool(
-            exposure_kind == "categorical"
-            and (
-                variables[exposure].is_ordinal
-                or str(getattr(variables[exposure].role, "value", variables[exposure].role)) == "ordinal_score"
-            )
-        ),
+        exposure_is_ordered=exposure_is_ordered,
         exposure_companion_columns=companions,
         outcome=outcome,
         outcome_levels=outcome_levels,

@@ -10,8 +10,8 @@ ordinary Progressive validators and compiler judge the result; this module
 never relaxes them.
 
 Two exposure kinds share the layout. A **categorical** exposure (closed
-levels) gets treatment contrasts, an ordered trend when a secondary continuous
-outcome exists, and alternate-definition replays. A **continuous** exposure
+levels) gets treatment contrasts, an ordered trend when its levels are ordered
+(at least three), and alternate-definition replays. A **continuous** exposure
 gets a continuous primary term that the signed landmark spline runtime later
 binds to its restricted-cubic-spline estimator, the exposure's companion
 aggregates in the measurement audit, and a baseline table grouped by outcome.
@@ -31,7 +31,8 @@ Step layout (mirrors the family's reference workflow):
 5. ``absolute_risk_context``  absolute risk by level in the primary population
 6. ``robustness_replay``      the prespecified complete-case refit
 7. ``<covariate>_functional_form`` one RCS-vs-linear check per continuous covariate
-8. ``ordinal_trend``          typed ordered trend for the binary + continuous outcomes
+8. ``ordinal_trend``          ordered trend: the primary refitted per level increment,
+   a crude Cochran-Armitage test, and a secondary continuous outcome if any
 9. ``visualization`` / ``report``
 """
 
@@ -332,7 +333,14 @@ def _design_selection(
     spline_covariates: list[str],
     required_variables: list[str],
     method_keys: list[str],
+    ordered_trend: bool,
 ) -> ResearchDesignSelection:
+    """The selected and rejected designs, worded from the steps the plan runs.
+
+    ``ordered_trend`` says whether the plan carries its ``ordinal_trend`` step;
+    no sentence claims a trend, gradient or per-level estimate without it.
+    """
+
     language = plan_language(request.research_question)
     exposure = _label(spec, request.primary_exposure)
     outcome = _label(spec, request.outcome)
@@ -403,6 +411,31 @@ def _design_selection(
         else "暴露未知的行只做描述、不进入模型；协变量缺失的行从主模型中排除并报告，因此主模型"
         "本身就是完整病例分析。"
     )
+    measure_words = "risk ratio" if risk_ratio else "odds ratio"
+    measure_words_zh = "风险比" if risk_ratio else "比值比"
+    secondary_label = (
+        _label(spec, request.secondary_continuous_outcome)
+        if request.secondary_continuous_outcome
+        else ""
+    )
+    trend_text = (
+        f" The model is also refitted with {exposure} as one ordinal-linear term (one unit per "
+        f"level, the same adjustment and estimator) for the adjusted {measure_words} per level "
+        "increment with its 95% CI and trend p-value, beside a crude Cochran–Armitage trend test"
+        + (f" and a Jonckheere–Terpstra test of {secondary_label}" if secondary_label else "")
+        + "."
+        if ordered_trend
+        else ""
+    )
+    trend_text_zh = (
+        f"另将 {exposure} 作为有序线性项（每级一个单位，调整集与估计方法不变）重拟合模型，报告每升高一级的"
+        f"校正{measure_words_zh}及其 95% CI 和趋势 P 值，并辅以未校正的 Cochran–Armitage 趋势检验"
+        + (f"；{secondary_label} 用 Jonckheere–Terpstra 检验" if secondary_label else "")
+        + "。"
+        if ordered_trend
+        else ""
+    )
+    trend_method_text = ", an adjusted per-level ordered trend refit" if ordered_trend else ""
     # Only the covariates that really get a functional-form step: a spline
     # promised for a binary or categorical covariate would be a check the
     # plan never runs (and could not run).
@@ -464,11 +497,11 @@ def _design_selection(
             "risks along the exposure range, and prespecified sensitivity refits."
             if continuous_exposure
             else "Prespecified categorical-exposure modified Poisson model (log link, robust standard "
-            "errors) for the adjusted risk ratio after the landmark, with absolute risks by level and "
-            "prespecified sensitivity refits."
+            "errors) for the adjusted risk ratio after the landmark, with absolute risks by level"
+            f"{trend_method_text}, and prespecified sensitivity refits."
             if risk_ratio
             else "Prespecified categorical-exposure logistic association model after the landmark, "
-            "with absolute risks by level, a typed ordered trend, and prespecified sensitivity refits."
+            f"with absolute risks by level{trend_method_text}, and prespecified sensitivity refits."
         ),
         required_variables=required_variables,
         assumptions=[
@@ -487,15 +520,19 @@ def _design_selection(
             "The adjusted exposure–risk curve and absolute risk along the exposure range as the reader "
             "entry point, followed by the linear sensitivity, robustness grid, and measurement audit."
             if continuous_exposure
+            # The figure reads the primary, absolute-risk, robustness and audit
+            # products only; the ordered trend is a table, never a panel.
             else "Exposure ascertainment and absolute risk by level as the reader entry point, followed by "
-            "the adjusted association, ordered trend, robustness grid, and measurement audit."
+            "the adjusted association, robustness grid, and measurement audit."
         ),
         supports=(
             f"A prespecified adjusted observational association between {exposure} and {outcome} after "
             f"the {hours} h landmark, with its functional form and adjusted absolute risks along the range."
             if continuous_exposure
-            else f"A prespecified adjusted observational association and ordered gradient between {exposure} "
-            f"and {outcome} after the {hours} h landmark, with level-specific absolute risks"
+            else "A prespecified adjusted observational association"
+            + (" and ordered gradient" if ordered_trend else "")
+            + f" between {exposure} and {outcome} after the {hours} h landmark, with level-specific "
+            "absolute risks"
             + (
                 f", and how often each {exposure} level occurs in the study cohort."
                 if occurrence
@@ -532,10 +569,10 @@ def _design_selection(
                     f"为参照），另做每单位线性敏感性分析；{adjustment_text_zh}。"
                     if continuous_exposure
                     else f"修正 Poisson 模型（log 连接，稳健标准误）估计校正风险比（RR），采用处理对比"
-                    f"（{contrast} vs {reference}），{adjustment_text_zh}。"
+                    f"（{contrast} vs {reference}），{adjustment_text_zh}。{trend_text_zh}"
                     if risk_ratio
-                    else f"logistic 模型，采用处理对比（{contrast} vs {reference}），{adjustment_text_zh}；"
-                    "另按每级增量报告有序线性趋势项。"
+                    else f"logistic 模型，采用处理对比（{contrast} vs {reference}），{adjustment_text_zh}。"
+                    f"{trend_text_zh}"
                 ),
                 missing_text_zh,
                 (
@@ -570,9 +607,10 @@ def _design_selection(
                     if continuous_exposure
                     else f"Modified Poisson model (log link, robust standard errors) for the adjusted "
                     f"risk ratio with treatment contrasts ({contrast} vs {reference}), {adjustment_text}."
+                    f"{trend_text}"
                     if risk_ratio
                     else f"Logistic model with treatment contrasts ({contrast} vs {reference}), "
-                    f"{adjustment_text}; an ordinal-linear trend term is reported per level increment."
+                    f"{adjustment_text}.{trend_text}"
                 ),
                 missing_text,
                 sentence(
@@ -1097,6 +1135,7 @@ def build_landmark_categorical_skeleton(
             f"{len(required_variables)}",
             path="adjustment_set",
         )
+    ordinal_present = landmark_ordinal_trend_present(request)
     design = _design_selection(
         request,
         spec,
@@ -1104,6 +1143,7 @@ def build_landmark_categorical_skeleton(
         spline_covariates=continuous,
         required_variables=required_variables,
         method_keys=[k for k in method_keys if k in set(primary_keys)][:6],
+        ordered_trend=ordinal_present,
     )
     hours = f"{request.landmark_hours:g}"
     exposure_label = _label(spec, exposure)
@@ -1112,7 +1152,6 @@ def build_landmark_categorical_skeleton(
     applications = spec.applications
     reference = request.exposure_levels[request.reference_level_index] if not continuous_exposure else ""
     contrast = request.exposure_levels[request.primary_contrast_level_index] if not continuous_exposure else ""
-    ordinal_present = landmark_ordinal_trend_present(request)
     risk_ratio = spec.effect_measure == "risk_ratio"
     if risk_ratio and "risk_ratio" not in family_effect_measures(request):
         # The spec contract refuses this first; a template must never fit an
@@ -1123,6 +1162,7 @@ def build_landmark_categorical_skeleton(
             path="effect_measure",
         )
     functional_step_ids = [f"{name}_functional_form" for name in continuous]
+    trend_variables = [exposure, outcome, *([secondary] if secondary else [])]
 
     # Pass 1: the outline (scientific intent only).  Objectives are shared with
     # the materializations below so the compiler sees one statement per step.
@@ -1179,10 +1219,18 @@ def build_landmark_categorical_skeleton(
             "analysis."
         ),
         "ordinal_trend": (
-            f"Estimate the ordered trend of {outcome_label} and describe "
-            f"{_label(spec, secondary) if secondary else ''} across {exposure_label} levels with per-level "
-            "total and evaluable denominators, median and IQR, prespecified ordered trend tests, and "
-            "explicit handling of deaths before and after the landmark."
+            f"Estimate the ordered trend of {outcome_label} across {exposure_label} levels: refit the "
+            "primary model with the exposure as one ordinal-linear term (same adjustment and estimator) "
+            f"for the adjusted {'risk' if risk_ratio else 'odds'} ratio per level increment with its 95% "
+            "CI and Wald p-value, beside per-level risks with Wilson intervals and a crude "
+            "Cochran–Armitage test"
+            + (
+                f"; describe {_label(spec, secondary)} by level (median, IQR) with a "
+                "Jonckheere–Terpstra test"
+                if secondary
+                else ""
+            )
+            + "."
         ),
         "visualization": (
             "Assemble the complementary main and supplementary displays: the adjusted exposure–risk curve "
@@ -1284,7 +1332,7 @@ def build_landmark_categorical_skeleton(
                 _outline_step(
                     step_id="ordinal_trend", role="secondary", module_id="custom_analysis",
                     objective=objectives["ordinal_trend"], depends_on=["adjusted_association"],
-                    variable_names=[exposure, outcome, secondary], citations=ordinal_keys,
+                    variable_names=trend_variables, citations=ordinal_keys,
                     action=ORDINAL_TREND_ACTION,
                 )
             ]
@@ -1316,7 +1364,9 @@ def build_landmark_categorical_skeleton(
             f"(0–{hours} h) and {outcome_label} after the {hours} h landmark in the study cohort, "
             "keeping unmeasured exposure, repeated stays, missingness, and measurement limits visible for review."
             if continuous_exposure
-            else f"Estimate the observational association and ordered gradient between {exposure_label} "
+            else "Estimate the observational association"
+            + (" and ordered gradient" if ordinal_present else "")
+            + f" between {exposure_label} "
             f"(0–{hours} h) and {outcome_label} after the {hours} h landmark in the study cohort, "
             "keeping unknown exposure, repeated stays, missingness, and measurement limits visible for review."
         ),
@@ -1520,7 +1570,7 @@ def build_landmark_categorical_skeleton(
             ProgressiveSkeletonStep(
                 step_id="ordinal_trend", planned_analysis_role="secondary", module_id="custom_analysis",
                 objective=objectives["ordinal_trend"], depends_on=["adjusted_association"],
-                raw_inputs=[exposure, outcome, secondary],
+                raw_inputs=trend_variables,
                 product_inputs=[_ref("adjusted_association", "table:adjusted_association_estimates")],
                 outputs=[ProgressiveOutputIntent(product_id="table:ordinal_trend", semantic_role="custom")],
                 scientific_action_id=ORDINAL_TREND_ACTION, custom_method=ORDINAL_TREND_METHOD,
