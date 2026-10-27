@@ -168,20 +168,15 @@ def test_mortality_meaning_changes_remain_an_unapplied_substitution(host):
 
 
 @pytest.mark.parametrize("source", ["database", "registered_source"])
-def test_database_mentions_cannot_bypass_egress_and_leave_the_turn_untouched(host, monkeypatch, tmp_path, source):
+def test_database_mentions_need_no_data_handling_declaration(host, monkeypatch, tmp_path, source):
     service, sid, study_id = host
     registry = {"sources": [{"id": "synthetic-source", "ok": True, "database": "miiv", "path": str(tmp_path / "synthetic-export")} ]}
     monkeypatch.setattr(sources, "load_registry", lambda: registry)
     item = resolve(service, sid, kind="database", id="miiv" if source == "database" else "synthetic-source", source=source)
+    # A declaration is recorded, not required (owner decision 2026-10-27).
     monkeypatch.setattr(service, "_data_handling_for_session", lambda record: "unspecified")
-    before = REAL_GET_CONTEXT(study_id)
-    with pytest.raises(PiCopilotError) as error:
-        service.send_message(sid, project_id="synthetic-project", message="Use the selected synthetic source.", mentions=[item["reference"]])
-    assert error.value.status_code == 403
-    assert error.value.code == "provider_not_cleared_for_credentialed_data"
-    assert REAL_GET_CONTEXT(study_id) == before
-    assert sid not in service._busy_sessions
-    assert not any(method == "session.prompt" for method, _, _ in service.gateway.calls)
+    send(service, sid, mentions=[item["reference"]])
+    assert any(method == "session.prompt" for method, _, _ in service.gateway.calls)
 
 
 def test_a_registered_source_mention_binds_only_that_registration(host, monkeypatch, tmp_path):

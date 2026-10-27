@@ -33,23 +33,16 @@ from easyicu.webserver.research_run_submission import ResearchRunSubmissionReque
 from easyicu.webserver.run_record import RunGate
 
 
-def test_uncleared_provider_offers_only_settings_without_execution_authority() -> None:
+def test_no_stop_asks_for_a_data_handling_declaration() -> None:
+    # A declaration is recorded, not required (owner decision 2026-10-27), so
+    # no stop, including an old saved one, sends the user to declare it.
     reason = "provider_not_cleared_for_credentialed_data"
-    gate = {
-        "status": "blocked", "reason": reason,
-        "detail": {"reason_code": "concept_unavailable", "missing_concepts": ["age"]},
-    }
-    projected = owner.project_stop_next_actions(gate)
-    assert len(projected) == 1
-    action = owner.StopNextAction.model_validate(projected[0])
-    assert action.kind == "open_provider_settings"
-    assert action.label_key == "stop_next_actions.open_provider_settings"
-    assert action.params.model_dump() == {"route": "provider_settings"}
-    assert reason in owner.STOP_POLICIES
-    assert owner.project_stop_next_actions(gate) == projected
-    assert project_job({"id": "fixture", "status": "failed", "error": reason})["next_actions"] == projected
-    with pytest.raises(ValidationError):
-        action.params.route = "retry"
+    assert reason not in owner.STOP_POLICIES
+    assert "provider_settings" not in owner.STOP_POLICIES.values()
+    gate = {"status": "blocked", "reason": reason}
+    for projected in (owner.project_stop_next_actions(gate),
+                      project_job({"id": "fixture", "status": "failed", "error": reason})["next_actions"]):
+        assert all(action["kind"] != "open_provider_settings" for action in projected)
 
 
 @pytest.mark.parametrize("params", [{"route": "retry"}, {"route": "plan_edit"},

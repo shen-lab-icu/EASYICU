@@ -124,7 +124,6 @@
       pi_session_busy: ['Wait for the current reply to finish.', '请等待当前回复结束。'],
       pi_session_model_unavailable: ['This model is not available on the saved connection.', '已保存的连接中没有此模型。'],
       pi_session_project_mismatch: ['This conversation belongs to another project.', '本对话属于另一个项目。'],
-      provider_not_cleared_for_credentialed_data: ['This model’s declared data handling does not permit this data source.', '此模型声明的数据处理方式不允许使用当前数据源。'],
       pi_session_connection_changed: ['The saved connection changed. Reopen this conversation.', '已保存的连接已变化，请重新打开对话。'],
       pi_session_connection_unpinned: ['This conversation predates model switching. Start a new conversation to use another model.', '这条对话创建于旧版本，不能切换模型。新建对话即可选择其他模型。'],
     };

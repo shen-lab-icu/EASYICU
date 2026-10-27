@@ -309,11 +309,17 @@ def test_refusal_names_the_missing_capability(prepared):
     assert proposal.capability.missing[0].code == "hospital_los_unavailable"
 
 
-@pytest.mark.parametrize("provider", [None, object()])
-def test_credentialed_source_needs_existing_provider_clearance(prepared, provider):
-    proposal = prepare_quick_answer(reading(), source=rebound(prepared, database="eicu"), provider=provider)
+def test_credentialed_source_needs_a_model_connection(prepared):
+    proposal = prepare_quick_answer(reading(), source=rebound(prepared, database="eicu"), provider=None)
     assert proposal.reason == "quick_qualifying_provider_required"
     assert proposal.card is None
+
+
+def test_credentialed_source_needs_no_data_handling_declaration(prepared):
+    # Recorded, not required (owner decision 2026-10-27).
+    proposal = prepare_quick_answer(reading(), source=rebound(prepared, database="eicu"), provider=object())
+    assert proposal.reason == "quick_qualified"
+    assert proposal.card is not None
 
 
 def test_source_identity_must_be_the_contexts_exact_registration(prepared):

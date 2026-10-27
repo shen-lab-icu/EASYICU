@@ -301,7 +301,6 @@ for (const [code, en, zh] of [
   ['pi_session_busy', 'Wait for the current reply', '请等待当前回复'],
   ['pi_session_model_unavailable', 'not available', '没有此模型'],
   ['pi_session_project_mismatch', 'another project', '另一个项目'],
-  ['provider_not_cleared_for_credentialed_data', 'declared data handling', '数据处理方式'],
   ['pi_session_connection_changed', 'saved connection changed', '连接已变化'],
   ['pi_session_connection_unpinned', 'Start a new conversation', '这条对话创建于旧版本，不能切换模型。新建对话即可选择其他模型。'],
 ]) test('typed refusal ' + code + ' is localized and preserves the model', async () => {

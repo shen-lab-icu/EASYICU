@@ -20,7 +20,6 @@ from easyicu.concept.selection_policy import concept_selection_policy
 from easyicu.research_agent.authority.baseline_association_runtime import BaselineAssociationAuthorityError
 from easyicu.research_agent.concept_availability import explain_concept_availability
 from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
-from easyicu.research_agent.providers.client_trust import PROVIDER_NOT_CLEARED
 from easyicu.webserver.research_pipeline_run_errors import WINDOWED_SUMMARY_STOP_MESSAGES
 from easyicu.webserver.study_family_scope import v1_scope_description
 
@@ -368,7 +367,6 @@ _SCOPE_CODES = frozenset(
     }
 )
 STOP_POLICIES = {
-    PROVIDER_NOT_CLEARED: "provider_settings",
     **dict.fromkeys(_EDIT_CODES, "edit_plan"),
     **dict.fromkeys(_RETRY_CODES, "retry"),
     **dict.fromkeys(_REPAIR_CODES, "repair"),

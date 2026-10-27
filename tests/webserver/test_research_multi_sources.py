@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from easyicu.research_agent.providers.client_trust import ProviderConfigurationError, require_data_handling
+from easyicu.research_agent.providers.client_trust import source_requires_clearance
 from easyicu.webserver.research_multi_sources import egress_grant, select_source
 from easyicu.webserver.research_multi_contracts import DatabaseTarget, MultiDatabaseError
 
@@ -17,11 +17,9 @@ def test_verified_db6b_fixture_is_exempt_only_for_its_own_database(tmp_path, dat
     source = dict(id="fixture_" + database, database=database, path=str(path))
     grant = egress_grant(source, "a" * 64, provider_sha256="b" * 64, data_handling="unspecified")
     assert grant.clearance == "verified_public_or_synthetic"
-    with pytest.raises(ProviderConfigurationError):
-        require_data_handling(database, "unspecified")
+    assert source_requires_clearance(database)
     neighbour = {**source, "id": "credentialed", "database": "miiv", "path": str(tmp_path / "credentialed")}
-    with pytest.raises(ProviderConfigurationError):
-        egress_grant(neighbour, "c" * 64, provider_sha256="b" * 64, data_handling="unspecified")
+    assert egress_grant(neighbour, "c" * 64, provider_sha256="b" * 64, data_handling="unspecified").clearance == "provider_required"
 
 
 def test_public_demo_does_not_clear_a_credentialed_target(tmp_path, monkeypatch):
@@ -37,14 +35,12 @@ def test_public_demo_does_not_clear_a_credentialed_target(tmp_path, monkeypatch)
     source = dict(id="demo", database=public.database, path=str(paths.export))
     assert egress_grant(source, "a" * 64, provider_sha256="b" * 64, data_handling="unspecified").clearance == "verified_public_or_synthetic"
     source["path"] = str(tmp_path / "credentialed")
-    with pytest.raises(ProviderConfigurationError):
-        egress_grant(source, "c" * 64, provider_sha256="b" * 64, data_handling="unspecified")
+    assert egress_grant(source, "c" * 64, provider_sha256="b" * 64, data_handling="unspecified").clearance == "provider_required"
 
 
-def test_credentialed_target_requires_its_qualifying_provider(tmp_path):
+def test_a_credentialed_target_is_marked_provider_required(tmp_path):
     source = dict(id="credentialed", database="aumc", path=str(tmp_path / "credentialed"))
-    with pytest.raises(ProviderConfigurationError):
-        egress_grant(source, "a" * 64, provider_sha256="b" * 64, data_handling="unspecified")
+    assert egress_grant(source, "a" * 64, provider_sha256="b" * 64, data_handling="unspecified").clearance == "provider_required"
     assert egress_grant(source, "a" * 64, provider_sha256="b" * 64, data_handling="on_device").clearance == "provider_required"
 
 

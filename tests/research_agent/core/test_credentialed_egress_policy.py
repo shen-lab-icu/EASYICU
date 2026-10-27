@@ -17,20 +17,14 @@ from easyicu.research_agent.reporting.writer_evidence import _summarise_table_on
 
 
 @pytest.mark.parametrize("profile", iter_database_profiles(), ids=lambda profile: profile.key)
-def test_only_profiled_public_demos_are_exempt_from_clearance(profile):
-    from easyicu.research_agent.providers.client_trust import (
-        ProviderConfigurationError, credentialed_source, require_data_handling,
-    )
+def test_only_profiled_public_demos_are_not_credentialed(profile):
+    from easyicu.research_agent.providers.client_trust import credentialed_source, require_data_handling
 
     is_demo = not profile.is_public and profile.parent_key is not None
     for name in (profile.key, profile.display_name, *profile.aliases):
         assert credentialed_source(name) is not is_demo
-        if is_demo:
-            require_data_handling(name, "unspecified")
-        else:
-            with pytest.raises(ProviderConfigurationError) as caught:
-                require_data_handling(name, "unspecified")
-            assert caught.value.reason_code == "provider_not_cleared_for_credentialed_data"
+        # A declaration is recorded, not required (owner decision 2026-10-27).
+        require_data_handling(name, "unspecified")
 
 
 @pytest.mark.parametrize("database", ["unregistered_icu", "unregistered_icu_demo", ""])
@@ -260,24 +254,20 @@ def test_clearance_uses_source_and_explicit_declaration(monkeypatch, declaration
         with pytest.raises(ProviderConfigurationError) as error:
             require_credentialed_data_clearance(client, database)
         assert error.value.reason_code == "unknown_source_database"
-    elif declaration == "unspecified" and database in {"miiv", "eicu", "hirid", "aumc", "sic"}:
-        with pytest.raises(ProviderConfigurationError) as error:
-            require_credentialed_data_clearance(client, database)
-        assert error.value.reason_code == "provider_not_cleared_for_credentialed_data"
     else:
         require_credentialed_data_clearance(client, database)
     assert calls == []
 
 
 @pytest.mark.parametrize("role", ["planner", "coder", "repair", "writer"])
-def test_agents_refuse_before_a_credentialed_prompt_is_sent(ra, monkeypatch, role):
+def test_agents_refuse_an_unknown_source_before_a_prompt_is_sent(ra, monkeypatch, role):
     from easyicu.research_agent.agents.core import PlannerAgent, CoderAgent, WriterAgent
     from easyicu.research_agent.providers.client_trust import ProviderConfigurationError
 
     context, step = _context_and_step(ra)
-    context.cohort.database = "miiv"
+    context.cohort.database = "unregistered_icu"
     client, calls = _loopback_client(monkeypatch)
-    with pytest.raises(ProviderConfigurationError, match="provider_not_cleared_for_credentialed_data"):
+    with pytest.raises(ProviderConfigurationError, match="unknown_source_database"):
         if role == "planner":
             PlannerAgent(client).run(context)
         elif role == "coder":
@@ -292,7 +282,7 @@ def test_agents_refuse_before_a_credentialed_prompt_is_sent(ra, monkeypatch, rol
     assert calls == []
 
 
-def test_pipeline_refuses_before_reading_a_credentialed_cohort(monkeypatch, tmp_path):
+def test_pipeline_refuses_an_unknown_source_before_reading_its_cohort(monkeypatch, tmp_path):
     import inspect
     from easyicu.research_agent.pipeline import ResearchAgentPipeline
     from easyicu.research_agent.providers.client_trust import ProviderConfigurationError
@@ -300,8 +290,8 @@ def test_pipeline_refuses_before_reading_a_credentialed_cohort(monkeypatch, tmp_
     pipeline = ResearchAgentPipeline.__new__(ResearchAgentPipeline)
     pipeline._llm, calls = _loopback_client(monkeypatch)
     pipeline._llm_concept_auditor_client = None
-    with pytest.raises(ProviderConfigurationError, match="provider_not_cleared_for_credentialed_data"):
-        inspect.unwrap(ResearchAgentPipeline.run)(pipeline, question="Describe synthetic records.", database="miiv", cohort=tmp_path / "absent.parquet")
+    with pytest.raises(ProviderConfigurationError, match="unknown_source_database"):
+        inspect.unwrap(ResearchAgentPipeline.run)(pipeline, question="Describe synthetic records.", database="unregistered_icu", cohort=tmp_path / "absent.parquet")
     assert calls == []
 
 
@@ -410,27 +400,31 @@ def test_no_small_counts_reach_agent_messages_or_copilot_results(ra, count, tmp_
         assert '"suppressed"' in text if 0 < count < SMALL_CELL_BELOW else True
 
 
-def test_copilot_and_run_gate_refuse_uncleared_source_with_settings_action(monkeypatch):
+def test_copilot_and_run_gate_admit_an_undeclared_credentialed_source(monkeypatch):
     from easyicu.webserver.pi_copilot import tools
     from easyicu.webserver.pi_copilot.contracts import PiSessionRecord, ToolExecutionContext, PiCopilotError
     from easyicu.webserver.provider_gate import resolve_provider_gate, ProviderGateError
 
+    study = {"data_source": {"database": "miiv", "path": "/synthetic-unused-export"}}
     context = ToolExecutionContext(session=PiSessionRecord(session_id="fixture", project_id="fixture"))
-    monkeypatch.setattr(tools, "_bound_context", lambda _: {"data_source": {"database": "miiv", "path": "/synthetic-unused-export"}})
+    monkeypatch.setattr(tools, "_bound_context", lambda _: study)
     calls = []
     monkeypatch.setitem(tools._DISPATCH, "easyicu_inspect_context", lambda *_: calls.append(True))
+    tools.execute_tool("easyicu_inspect_context", {}, context)
+    assert calls == [True] and context.session.credentialed_data_in_history is True
+    gate = resolve_provider_gate(run_type="full", llm_provider="openai", external_llm_opt_in=True,
+                                 ai_enabled=True, database="miiv")
+    assert gate["provider_gate"] == "credential_lookup_allowed"
+    # An unknown source identity still fails closed at both gates.
+    study["data_source"]["database"] = "unregistered_icu"
     with pytest.raises(PiCopilotError) as error:
         tools.execute_tool("easyicu_inspect_context", {}, context)
-    assert error.value.code == "provider_not_cleared_for_credentialed_data"
-    assert error.value.details["next_actions"][0]["kind"] == "open_provider_settings"
-    assert error.value.details["next_actions"][0]["params"] == {"route": "provider_settings"}
-    assert calls == []
+    assert error.value.code == "unknown_source_database"
+    assert calls == [True]
     with pytest.raises(ProviderGateError) as error:
         resolve_provider_gate(run_type="full", llm_provider="openai", external_llm_opt_in=True,
-                              ai_enabled=True, database="miiv")
-    assert error.value.detail["error"] == "provider_not_cleared_for_credentialed_data"
-    assert error.value.detail["next_actions"][0]["kind"] == "open_provider_settings"
-    assert error.value.detail["next_actions"][0]["params"] == {"route": "provider_settings"}
+                              ai_enabled=True, database="unregistered_icu")
+    assert error.value.detail["error"] == "unknown_source_database"
 
 
 @pytest.mark.parametrize("source_index", [0, 1])
@@ -455,10 +449,8 @@ def test_pinned_public_demo_is_scoped_without_trusting_a_source_label(tmp_path, 
     with storage.public_demo_egress_scope(str(paths.export)):
         require_data_handling(source.database, "unspecified")
         assert not source_requires_clearance(source.database)
-        with pytest.raises(ProviderConfigurationError):
-            require_data_handling("eicu", "unspecified")
-    with pytest.raises(ProviderConfigurationError):
-        require_data_handling("miiv", "unspecified")
+        assert source_requires_clearance("eicu")
+    assert source_requires_clearance("miiv")
     storage.write_export_marker(paths, source, archive_sha256="unverified", export={})
     assert storage.egress_source_database(str(paths.export), "miiv") == "miiv"
 
@@ -545,13 +537,16 @@ def test_copilot_retains_credentialed_history_after_switching_to_demo(monkeypatc
     assert saved and context.session.credentialed_data_in_history is True
     study["data_source"]["database"] = "eicu_demo"
     context.data_handling = "unspecified"
-    with pytest.raises(PiCopilotError, match="declare data handling"):
+    # A demo label without its pinned manifest proves nothing; history stays.
+    with pytest.raises(PiCopilotError, match="could not be verified") as error:
         tools.require_copilot_data_clearance(context)
+    assert error.value.code == "public_demo_manifest_invalid"
+    assert context.session.credentialed_data_in_history is True
 
 
 def test_source_listing_checks_the_source_inferred_from_the_user_message(monkeypatch):
     from easyicu.webserver.pi_copilot import tools
-    from easyicu.webserver.pi_copilot.contracts import PiSessionRecord, ToolExecutionContext, PiCopilotError
+    from easyicu.webserver.pi_copilot.contracts import PiSessionRecord, ToolExecutionContext
 
     monkeypatch.setattr(tools, "_bound_context", lambda _: None)
     monkeypatch.setattr(tools.sources, "load_registry", lambda: {"sources": [{
@@ -562,8 +557,8 @@ def test_source_listing_checks_the_source_inferred_from_the_user_message(monkeyp
         session=PiSessionRecord(session_id="fixture", project_id="fixture"),
         user_message="Show all registered MIMIC-IV sources.",
     )
-    with pytest.raises(PiCopilotError, match="declare data handling"):
-        tools.execute_tool("easyicu_list_data_sources", {}, context)
+    tools.execute_tool("easyicu_list_data_sources", {}, context)
+    assert context.session.credentialed_data_in_history is True
 
 
 def test_selected_export_catalog_is_checked_before_reading(monkeypatch):
@@ -573,11 +568,11 @@ def test_selected_export_catalog_is_checked_before_reading(monkeypatch):
 
     monkeypatch.setattr(tools, "_bound_context", lambda _: {})
     monkeypatch.setattr(tools.sources, "load_registry", lambda: {"sources": [{
-        "id": "synthetic-source", "database": "miiv", "path": "/synthetic-unused-export", "ok": True,
+        "id": "synthetic-source", "database": "unregistered_icu", "path": "/synthetic-unused-export", "ok": True,
     }]})
     calls = []
     monkeypatch.setattr(catalog, "build_available_catalog", lambda *_: calls.append(True))
     context = ToolExecutionContext(session=PiSessionRecord(session_id="fixture", project_id="fixture"))
-    with pytest.raises(PiCopilotError, match="declare data handling"):
+    with pytest.raises(PiCopilotError, match="could not be verified"):
         tools.execute_tool("easyicu_list_source_concepts", {"source_id": "synthetic-source"}, context)
     assert calls == []

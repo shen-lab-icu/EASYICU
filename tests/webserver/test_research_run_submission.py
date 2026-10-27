@@ -472,7 +472,7 @@ def test_submission_reports_source_proof_refusals_before_enqueuing(start_gate_la
 
 @pytest.mark.parametrize("source_index", [0, 1])
 def test_submission_keeps_the_pinned_demo_clearance_scope(start_gate_launch, tmp_path, monkeypatch, source_index):
-    from easyicu.research_agent.providers.client_trust import require_data_handling
+    from easyicu.research_agent.providers.client_trust import require_data_handling, source_requires_clearance
     from easyicu.webserver import demo_source_storage as storage
     from easyicu.webserver.demo_source_contracts import SOURCES
 
@@ -497,8 +497,7 @@ def test_submission_keeps_the_pinned_demo_clearance_scope(start_gate_launch, tmp
     launch.runner_result.result(timeout=2)
     assert receipt.job_id == launch.job.id
     assert seen == [source.database]
-    with pytest.raises(ValueError):
-        require_data_handling("miiv", "unspecified")
+    assert source_requires_clearance("miiv")
 
 
 @pytest.mark.parametrize("authorized", [True, False])

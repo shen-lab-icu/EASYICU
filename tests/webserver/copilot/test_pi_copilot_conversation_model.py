@@ -148,15 +148,14 @@ def test_refusal_has_no_binding_replay_or_global_mutation(model_session, case, c
 
 
 @pytest.mark.parametrize("database", ["miiv", "eicu"])
-@pytest.mark.parametrize("handling,accepted", [("unspecified", False), ("zero_retention_declared", True), ("on_device", True)])
-def test_credentialed_source_uses_existing_clearance_owner(model_session, monkeypatch, database, handling, accepted):
+@pytest.mark.parametrize("handling", ["unspecified", "zero_retention_declared", "on_device"])
+def test_a_credentialed_source_switches_models_whatever_the_declaration(model_session, monkeypatch, database, handling):
+    # A declaration is recorded, not required (owner decision 2026-10-27).
     _, _, _, _, _, study = model_session
     study["data_source"] = {"database": database, "path": "/synthetic/credentialed-source"}
     monkeypatch.setenv("EASYICU_PI_DATA_HANDLING", handling)
     response = switch(model_session)
-    assert response.status_code == (200 if accepted else 403), response.text
-    if not accepted:
-        assert response.json()["detail"]["error"] == "provider_not_cleared_for_credentialed_data"
+    assert response.status_code == 200, response.text
 
 
 def test_source_removal_does_not_clear_credentialed_history(model_session):
@@ -165,39 +164,28 @@ def test_source_removal_does_not_clear_credentialed_history(model_session):
     record.credentialed_data_in_history = True
     service._save_record(record)
     response = switch(model_session)
-    assert response.status_code == 403
+    assert response.status_code == 200, response.text
+    assert service._get_record(session["session_id"]).credentialed_data_in_history is True
 
 
-@pytest.mark.parametrize("handling,status", [("unspecified", "blocked"), ("zero_retention_declared", "cleared")])
-def test_the_session_says_before_a_model_step_whether_it_is_cleared(model_session, monkeypatch, handling, status):
+@pytest.mark.parametrize("handling", ["unspecified", "zero_retention_declared"])
+def test_a_model_step_on_credentialed_data_needs_no_declaration(model_session, monkeypatch, handling):
     from easyicu.webserver.pi_copilot.contracts import ToolExecutionContext
     from easyicu.webserver.pi_copilot.tools import require_copilot_data_clearance
 
     client, service, gateway, _, session, study = model_session
     study["data_source"] = {"database": "miiv", "path": "/synthetic/credentialed-source"}
-    # The running connection carries the declaration, as apply_provider_config sets it.
     monkeypatch.setitem(gateway.environ, "EASYICU_PI_DATA_HANDLING", handling)
     response = client.get(f"/api/copilot/pi/sessions/{session['session_id']}", params={"project_id": "project-model"})
     assert response.status_code == 200, response.text
-    clearance = response.json()["session"]["data_clearance"]
-    if status == "blocked":
-        assert clearance == {
-            "status": "blocked", "reason_code": "provider_not_cleared_for_credentialed_data", "declarable": True,
-        }
-    else:
-        assert clearance == {"status": "cleared"}
-    # Reading the projection records nothing; only a model call marks history.
+    # No projection tells a card to ask for a declaration.
+    assert "data_clearance" not in response.json()["session"]
     record = service._get_record(session["session_id"])
     assert not record.credentialed_data_in_history
-    # The gate at a model call reads the same session and decides the same.
+    # A model call proceeds and records that credentialed data were used.
     context = ToolExecutionContext(session=record, data_handling=service._data_handling_for_session(record))
-    if status == "blocked":
-        with pytest.raises(PiCopilotError) as refused:
-            require_copilot_data_clearance(context)
-        assert refused.value.code == "provider_not_cleared_for_credentialed_data"
-    else:
-        require_copilot_data_clearance(context)
-        assert record.credentialed_data_in_history is True
+    require_copilot_data_clearance(context)
+    assert record.credentialed_data_in_history is True
 
 
 def test_original_model_declaration_is_not_transferred(model_session):
@@ -208,7 +196,7 @@ def test_original_model_declaration_is_not_transferred(model_session):
     )
     before = store.declaration_path.read_bytes()
     study["data_source"] = {"database": "miiv", "path": "/synthetic/source"}
-    assert switch(model_session).status_code == 403
+    assert switch(model_session).status_code == 200
     assert store.declaration_path.read_bytes() == before
 
 

@@ -13,7 +13,6 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from easyicu.research_agent.providers.client_trust import (
-    ProviderConfigurationError,
     require_data_handling,
 )
 from easyicu.webserver.pi_copilot import provider_config as owner
@@ -131,13 +130,12 @@ def test_a_settings_choice_is_recorded_and_used_after_restart(store):
 
 
 @pytest.mark.parametrize("base_url", ["http://localhost:8317/v1", "http://127.0.0.1:8317/v1"])
-def test_a_loopback_relay_without_a_choice_is_not_cleared(store, base_url):
+def test_a_loopback_relay_without_a_choice_is_recorded_unspecified(store, base_url):
     _save(store, base_url=base_url)
     assert store.declaration_status()["value"] == "unspecified"
     assert store.resolved_config().inference_location.value == "unspecified"
-    with pytest.raises(ProviderConfigurationError) as error:
-        require_data_handling("miiv", store.resolved_config().data_handling)
-    assert error.value.issue == "provider_not_cleared_for_credentialed_data"
+    # Recorded, not required (owner decision 2026-10-27).
+    require_data_handling("miiv", store.resolved_config().data_handling)
 
 
 @pytest.mark.parametrize("changes", [
@@ -298,7 +296,7 @@ def test_a_tool_cannot_declare_even_with_a_forged_settings_channel(store):
 
 
 @pytest.mark.parametrize("initial_value,code", [
-    ("unspecified", "provider_not_cleared_for_credentialed_data"),
+    ("unspecified", "pi_action_unknown"),
     ("zero_retention_declared", "pi_action_unknown"),
 ])
 def test_a_conversation_cannot_grant_itself_a_declaration(store, monkeypatch, tmp_path, initial_value, code):

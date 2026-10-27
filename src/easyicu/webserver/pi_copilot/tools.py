@@ -4969,18 +4969,6 @@ def _copilot_clearance_scan(
     return credentialed, None
 
 
-def copilot_data_clearance(context: ToolExecutionContext) -> dict[str, Any]:
-    """Whether the next model step in this conversation is cleared, without recording it.
-
-    A plan card reads this to offer the declaration before the step is tried;
-    require_copilot_data_clearance stays the gate at every model call.
-    """
-    _credentialed, refusal = _copilot_clearance_scan(context)
-    if refusal is None:
-        return {"status": "cleared"}
-    return {"status": "blocked", "reason_code": refusal.issue}
-
-
 def require_copilot_data_clearance(
     context: ToolExecutionContext, arguments: Mapping[str, Any] | None = None,
 ) -> None:
@@ -4990,7 +4978,7 @@ def require_copilot_data_clearance(
     credentialed, refusal = _copilot_clearance_scan(context, arguments)
     if refusal is not None:
         raise PiCopilotError(
-            refusal.issue, "Open provider settings and declare data handling before using credentialed data.",
+            refusal.issue, "The selected data source could not be verified.",
             status_code=403, details={"next_actions": project_stop_next_actions({
                 "status": "blocked", "reason": refusal.issue,
             })},

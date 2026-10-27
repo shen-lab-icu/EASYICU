@@ -37,7 +37,7 @@
     quick_population_empty: ['No ICU stays meet these criteria.', '没有符合这些条件的 ICU 入住。'],
     quick_capability_refused: ['This database does not record what the question needs.', '这个数据库没有记录问题所需的数据。'],
     quick_capability_unassessed: ['What the question needs has not been assessed for this database yet.', '问题所需的数据在这个数据库上还没有评估。'],
-    quick_qualifying_provider_required: ['This database needs a model connection that qualifies for credentialed data.', '这个数据库需要符合受控数据要求的模型连接。'],
+    quick_qualifying_provider_required: ['This database needs a working model connection.', '这个数据库需要可用的模型连接。'],
     quick_identifier_forbidden: ['Questions about an individual patient are not answered here.', '不回答针对单个患者的问题。'],
     quick_two_groups_required: ['A comparison needs at least two groups.', '比较至少需要两组。'],
     quick_grouping_scope_exceeded: ['The grouping is wider than a quick answer covers.', '分组超出了快速回答的范围。'],

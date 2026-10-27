@@ -54,7 +54,6 @@ INVALID_PROVIDER_BASE_URL_OVERRIDE = "invalid_provider_base_url_override"
 OPENROUTER_BASE_URL_OVERRIDE = "openrouter_base_url_override"
 UNSUPPORTED_PROVIDER = "unsupported_provider"
 EXTERNAL_LLM_NOT_AUTHORIZED = "external_llm_not_authorized"
-PROVIDER_NOT_CLEARED = "provider_not_cleared_for_credentialed_data"
 UNKNOWN_SOURCE_DATABASE = "unknown_source_database"
 PUBLIC_DEMO_MANIFEST_INVALID = "public_demo_manifest_invalid"
 PUBLIC_DEMO_MANIFEST_DATABASE_MISMATCH = "public_demo_manifest_database_mismatch"
@@ -122,35 +121,21 @@ def source_requires_clearance(source: str) -> bool:
 
 
 def require_data_handling(source: str, data_handling: DataHandling | str) -> None:
-    if source_requires_clearance(source) and DataHandling(data_handling) is DataHandling.UNSPECIFIED:
-        raise ProviderConfigurationError(PROVIDER_NOT_CLEARED, "configured_provider")
+    """Check a source's identity and a recorded declaration's value.
+
+    A data-handling declaration is recorded, not required: an undeclared
+    connection may call the model for any source (owner decision 2026-10-27).
+    What content may leave is unchanged (small-cell suppression; no
+    patient-level rows), and an unknown source identity still fails closed.
+    """
+    source_requires_clearance(source)
+    DataHandling(data_handling)
 
 
 def require_credentialed_data_clearance(client: Any, source: str) -> None:
-    """Check every possible provider leaf before deriving a credentialed prompt."""
+    """Check a replayed client's source and the source identity before deriving a prompt."""
     _require_replay_source(client, source)
-    if not source_requires_clearance(source):
-        return
-    stack = [client]
-    seen: set[int] = set()
-    while stack:
-        item = stack.pop()
-        if id(item) in seen:
-            continue
-        seen.add(id(item))
-        record = _trusted_client_record(item)
-        if record is not None and record.kind in {"offline", "external_capture"}:
-            continue
-        if record is not None and record.kind == "wrapper" and record.children_getter:
-            stack.extend(record.children_getter())
-            continue
-        authorization = record.authorization if record else None
-        handling = (
-            authorization.data_handling
-            if _valid_provider_authorization(authorization)
-            else DataHandling.UNSPECIFIED
-        )
-        require_data_handling(source, handling)
+    source_requires_clearance(source)
 
 
 def require_run_clearance(database: str, additional_sources: Sequence[str] | None, *clients: Any) -> None:
@@ -1076,7 +1061,7 @@ class ProviderConfigurationError(ValueError):
                 "provider endpoint and outbound data policy"
             )
         elif issue in {
-            PROVIDER_NOT_CLEARED, UNKNOWN_SOURCE_DATABASE,
+            UNKNOWN_SOURCE_DATABASE,
             PUBLIC_DEMO_MANIFEST_INVALID, PUBLIC_DEMO_MANIFEST_DATABASE_MISMATCH,
             "agentic_coder_credentialed_source_forbidden",
         }:
