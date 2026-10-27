@@ -103,8 +103,8 @@
      The clinician's own computer: their model, their PhysioNet data and the
      public demos. Conversation first; the data workspace modules stay in the
      rail. Facts come from their owners: the demo catalogue
-     (demo_source_contracts.py), the model connection and its credentialed-data
-     declaration (screens-guided-pi-provider*.js), the conversation's source
+     (demo_source_contracts.py), the model connection
+     (screens-guided-pi-provider*.js), the conversation's source
      offer (screens-guided-pi-data-consent.js). */
   const LOCAL_EXAMPLES = Object.freeze([
     ['In the eICU demo, how does ICU length of stay differ across ICU types?',
@@ -123,8 +123,8 @@
         t('Name the “eICU demo” in your question. EasyICU offers to download the official eICU demo (130.6 MB) from PhysioNet, checks it and prepares it on this computer. The public demo needs no data use agreement. Click a question below to start a conversation with it.',
           '在问题里写上「eICU demo」，EasyICU 会提出从 PhysioNet 下载官方 eICU Demo（130.6 MB），校验后在本机准备好。公开 Demo 不需要签数据使用协议。点下面的问题，会用它开始一次对话。')],
       [t('Use your own database', '接入你自己的数据库'),
-        t('If you have access to MIMIC-IV or eICU-CRD, choose that database in the conversation and select the folder you downloaded from PhysioNet; EasyICU prepares it on this computer. The first preparation of a full database takes a while; later studies reuse it. The first time a study uses these data, EasyICU asks whether the model runs on this computer, whether its service keeps no data, or whether you accept this external service for these data. The PhysioNet data use agreement asks for one of the first two; without an answer, EasyICU does not use the model for these data.',
-          '已获得 MIMIC-IV 或 eICU-CRD 使用资格的，在研究对话里选择这个数据库，再选中你从 PhysioNet 下载的文件夹，EasyICU 会在本机准备好。完整数据库第一次准备要花较长时间，之后的研究会复用。研究第一次用到这些数据时，EasyICU 会问你：模型是否在本机运行、服务是否不保留数据，或你是否确认这个外部服务可以处理这些数据。PhysioNet 数据使用协议要求的是前两种；没有回答时，EasyICU 不会用这个模型处理这些数据。')],
+        t('If you have access to MIMIC-IV or eICU-CRD, choose that database in the conversation and select the folder you downloaded from PhysioNet; EasyICU prepares it on this computer. The first preparation of a full database takes a while; later studies reuse it. The PhysioNet data use agreement expects a model that runs on this computer or a service that keeps no data; choose your model connection with that in mind.',
+          '已获得 MIMIC-IV 或 eICU-CRD 使用资格的，在研究对话里选择这个数据库，再选中你从 PhysioNet 下载的文件夹，EasyICU 会在本机准备好。完整数据库第一次准备要花较长时间，之后的研究会复用。PhysioNet 数据使用协议要求模型运行在本机，或其服务不保留数据；请按这一点选择模型连接。')],
     ];
     const steps = [
       [t('Say what you want to study', '说出研究问题'), t('Describe the patients, the factor you care about and the outcome, in your own words. If something is missing, EasyICU asks.', '用自己的话说出研究人群、关心的因素和结局。缺什么，EasyICU 会问你。')],
