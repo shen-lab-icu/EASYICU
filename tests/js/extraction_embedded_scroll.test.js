@@ -30,7 +30,6 @@ global.window = {
   EU_EXTRACTION_NATIVE_OWNER: {
     render: () => '<section></section>',
     bind: () => {},
-    isReal: () => true,
     isPreparedExport: () => false,
   },
 };

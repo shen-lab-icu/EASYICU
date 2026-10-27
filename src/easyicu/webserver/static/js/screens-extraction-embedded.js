@@ -123,19 +123,8 @@
     root.querySelectorAll('.ex-copilot-prefill,.handoff').forEach(node => node.remove());
     const workspace = root.querySelector('.eudata-workspace');
     if (!workspace) return;
-    if (!snapshot.ready) {
-      // Binding needs a validated local folder. In Demo mode the owner would
-      // show its module wizard instead of the folder step, which is not a
-      // data-source choice; offer the switch here rather than the wizard.
-      if (typeof owner.isReal === 'function' && !owner.isReal()) {
-        workspace.innerHTML = `<div class="note info gpi-source-binding-mode"><div class="ico">${icon('db', 14)}</div><div class="body">
-          <div class="t">${t('This conversation needs real data', '这项研究需要真实数据')}</div>
-          <div class="d">${t('Switch to real data to choose the ICU data folder. No patient rows are returned to the conversation.', '切换到真实数据后即可选择 ICU 数据文件夹；对话里不会返回患者行。')}</div>
-          <button class="btn sm primary mt-16" type="button" data-gpi-extraction-real>${icon('db', 12)} ${t('Use real data', '使用真实数据')}</button>
-        </div></div>`;
-      }
-      return;
-    }
+    // Binding needs a validated local folder; until then the owner shows its folder step.
+    if (!snapshot.ready) return;
     const source = snapshot.data_source || {};
     workspace.innerHTML = `<div class="cfg gpi-source-binding-confirm">
       <div class="cfg-head">
@@ -176,7 +165,6 @@
         + '。下一轮 Copilot 会读取这份结构化状态；文件夹路径不会作为模型文字发送。'
     ) : '';
     const extractionActions = sourceBinding ? '' : `
-      ${owner.isReal() ? '' : `<button class="btn sm" type="button" data-gpi-extraction-real>${icon('db', 12)} ${t('Use real data', '使用真实数据')}</button>`}
       ${sourceId ? `<button class="btn sm" type="button" data-gpi-extraction-download>${icon('download', 12)} ${t('Download data package', '下载数据包')}</button>` : ''}
       <button class="btn sm primary" type="button" data-gpi-extraction-sync>${icon(options.syncReceipt ? 'check' : 'agent', 12)} ${options.syncReceipt ? t('Synced to Copilot', '已同步到 Copilot') : syncLabel}</button>`;
     host.innerHTML = `<div class="gpi-extraction-embed" data-gpi-extraction-embed>
@@ -203,8 +191,6 @@
         control.innerHTML = `${icon('check', 13)} ${t('Prepared export is ready — sync to Copilot', '已准备导出可直接使用 — 同步回 Copilot')}`;
       });
     }
-    const realButton = host.querySelector('[data-gpi-extraction-real]');
-    if (realButton) realButton.addEventListener('click', () => { owner.useRealData(); paint(); });
     const syncButton = host.querySelector('[data-gpi-extraction-sync]');
     if (syncButton) syncButton.addEventListener('click', syncToCopilot);
     const downloadButton = host.querySelector('[data-gpi-extraction-download]');
@@ -301,9 +287,6 @@
       options = Object.assign({}, nextOptions || {});
       const owner = window.EU_EXTRACTION_NATIVE_OWNER;
       hydrateStudyContext();
-      if (options.resource && options.resource.state === 'setup' && owner && !owner.isReal()) {
-        owner.useRealData();
-      }
       if (isSourceBinding() && owner && typeof owner.beginSourceBinding === 'function') {
         const coordinate = bindingCoordinate();
         // Registering a prepared export refreshes the whole shell.  That

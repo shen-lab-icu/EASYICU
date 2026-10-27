@@ -526,7 +526,7 @@ def test_source_binding_projection_targets_the_current_extraction_markup() -> No
     assert "root.querySelector('.eudata-workspace')" in source_binding
     assert ".page-head" not in source_binding and ".express" not in source_binding
     assert "data-gpi-source-binding-confirm" in source_binding
-    assert "data-gpi-extraction-real" in source_binding
+    assert "data-gpi-extraction-real" not in embedded
     assert ".handoff" in source_binding
     # The desktop module shell must not nest a second navigation in the reader.
     assert "unwrapModuleShell(host)" in paint

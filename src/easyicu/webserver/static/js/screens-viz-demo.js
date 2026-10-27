@@ -5,8 +5,10 @@
 
    Split out of screens-viz.js 2026-06-26 as the first owner-file
    carve-out (see file-size budget rule in CLAUDE.md / AGENTS.md).
-   Pure deterministic demo-data generators + their DEMO_* constants;
-   the only external dependency is the global window.t (i18n).
+   Catalog label helpers for the review screens, plus the deterministic
+   seeded generator (demoTimeLanes, demoSignal, demoTableValue) that the
+   JS contracts use as fixture data; no page renders generated values.
+   The only external dependency is the global window.t (i18n).
 
    Exposed via window.VIZ_DEMO; screens-viz.js rebinds the names at
    the top of its IIFE so call sites stay unchanged. This file MUST
@@ -64,7 +66,6 @@
     return { name, unit: hit ? hit[2] : '' };
   }
 
-  const DEMO_ENTITY_COUNT = 48;
   const DEMO_DURATION_HOURS = 48;
   // Irregular, bounded offsets mirror how ICU exports are actually sampled:
   // dense near admission, then progressively wider gaps. These are synthetic
@@ -137,41 +138,6 @@
   function demoIsTimeIndexed(module) {
     return !['demographics', 'outcome', 'sepsis3_sofa1', 'sepsis3_sofa2'].includes(module);
   }
-  function demoFeatureModule(feature) {
-    const modules = demoCatalogModules();
-    const hit = modules.find(m => (m.features || []).includes(feature));
-    return hit ? hit.module : 'catalog';
-  }
-  function demoCoverageForFeature(feature, offset) {
-    const cov = ((window.EU_CATALOG || {}).conceptCoverage || {})[feature] || {};
-    const dbs = Number(cov.databases);
-    const support = Number.isFinite(dbs) ? dbs : (cov.kind === 'derived' ? 5 : 4);
-    return Math.max(52, Math.min(100, 58 + support * 6 + ((offset || 0) % 7)));
-  }
-  function demoRowsForModule(module, featureCount, coverage) {
-    const entityRows = Math.max(1, Math.round(DEMO_ENTITY_COUNT * (coverage || 90) / 100));
-    if (!demoIsTimeIndexed(module)) return entityRows;
-    const density = Math.max(1, Math.min(3, Math.ceil(featureCount / 12)));
-    return entityRows * DEMO_CHART_HOURS.length * density;
-  }
-  function demoReviewStatus(coverage, featureCount) {
-    if (!featureCount) return 'empty';
-    if (coverage >= 80) return 'ready';
-    if (coverage >= 50) return 'partial';
-    return 'sparse';
-  }
-  function demoQualityStatus(missing, outlier, duplicate) {
-    if ((missing || 0) >= 50 || (outlier || 0) >= 5 || (duplicate || 0) >= 2) return 'bad';
-    if ((missing || 0) >= 20 || (outlier || 0) >= 1 || (duplicate || 0) >= 0.5) return 'warn';
-    return 'ok';
-  }
-  function demoRateTone(value, warn, danger) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return 'neutral';
-    if (n >= danger) return 'bad';
-    if (n >= warn) return 'warn';
-    return 'ok';
-  }
   function demoThresholds(feature) {
     return (DEMO_THRESHOLDS[feature] || []).map(row => ({ value: row[0], label: row[1] }));
   }
@@ -223,12 +189,6 @@
     const value = bounded ? Math.max(0, raw) : raw;
     if (Math.abs(value) < 1) return Number(value.toFixed(2));
     return Number(value.toFixed(1));
-  }
-  function demoCharttimeAt(rowIndex) {
-    const idx = Math.max(0, Number(rowIndex) || 0);
-    const cycle = Math.floor(idx / DEMO_CHART_HOURS.length);
-    const hour = DEMO_CHART_HOURS[idx % DEMO_CHART_HOURS.length] + cycle * DEMO_DURATION_HOURS;
-    return Number(hour.toFixed(2));
   }
   function demoHash(feature, entityIndex, timeIndex) {
     const token = `${feature}|${Number(entityIndex) || 0}|${Number(timeIndex) || 0}`;
@@ -520,9 +480,6 @@
     if (DEMO_SCORE_FEATURES.has(key)) return 6 + offset;
     return 6 + offset;
   }
-  function demoBaseValue(feature, entityIndex) {
-    return demoClinicalValue(feature, entityIndex, 1);
-  }
   function demoTableValue(feature, entityIndex, timeIndex) {
     const meta = catalogFeatureMeta(feature);
     const key = String(feature || '').toLowerCase();
@@ -604,51 +561,9 @@
       ? Number((last - first).toFixed(2))
       : null;
   }
-  function demoFeatureTone(feature, value) {
-    if (['sep3_sofa1', 'sep3_sofa2', 'susp_inf', 'infection_icd'].includes(feature)) return value >= 1 ? 'bad' : 'ok';
-    if (feature === 'mech_vent') return String(value || '').toLowerCase() === 'invasive' ? 'warn' : 'ok';
-    if (['vent_ind', 'rrt', 'vaso_ind'].includes(feature)) return value >= 1 ? 'warn' : 'ok';
-    if (['sofa', 'sofa2', 'qsofa', 'sirs', 'mews', 'news'].includes(feature)) {
-      return value < 6 ? 'ok' : (value < 10 ? 'warn' : 'bad');
-    }
-    return 'neutral';
-  }
-  function demoCategorySection(id, title, features, signalIndex) {
-    const cards = features.map(feature => {
-      const signal = signalIndex[feature];
-      if (!signal) return null;
-      return {
-        feature,
-        label: signal.name || feature,
-        unit: signal.unit || '',
-        current: signal.current,
-        delta: demoSignalDelta(signal.values || []),
-        tone: demoFeatureTone(feature, signal.current),
-        values: (signal.values || []).slice(0, 12),
-        thresholds: signal.thresholds || [],
-      };
-    }).filter(Boolean);
-    return { id, title, available_count: cards.length, cards };
-  }
-  function demoQualityPanelRows(rows, metric) {
-    return rows.slice(0, 8).map(row => ({
-      feature: row.feature,
-      name: row.name,
-      module: row.module,
-      value: row[metric],
-      records: row.records,
-      entities: row.entities,
-      status: row.status,
-    }));
-  }
 
   window.VIZ_DEMO = {
     catalogModuleLabel, catalogFeatureMeta, catalogConceptLabel, catalogModuleText, catalogUnitText,
-    DEMO_ENTITY_COUNT, DEMO_DURATION_HOURS, DEMO_CHART_HOURS, DEMO_CLINICAL_LANES, DEMO_THRESHOLDS,
-    demoCatalogModules, demoIsTimeIndexed, demoFeatureModule, demoCoverageForFeature,
-    demoRowsForModule, demoReviewStatus, demoQualityStatus, demoRateTone,
-    demoThresholds, demoBaseValue, demoTableValue, demoCharttimeAt, demoSignal, demoTimeLanes, demoSignalDelta,
-    demoHasClinicalModel, demoScenarioName, demoTypicalPointCount,
-    demoFeatureTone, demoCategorySection, demoQualityPanelRows,
+    DEMO_CHART_HOURS, demoCatalogModules, demoTableValue, demoSignal, demoTimeLanes, demoSignalDelta,
   };
 })();

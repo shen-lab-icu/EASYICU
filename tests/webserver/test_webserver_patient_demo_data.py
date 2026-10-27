@@ -31,7 +31,6 @@ def test_patient_seeded_demo_uses_clinical_table_shape() -> None:
         "const DEMO_CHART_HOURS = [-1, 0.5, 2, 4, 7, 11, 16, 22, 29, 36, 43, 48];"
         in demo_js
     )
-    assert "function demoCharttimeAt(rowIndex)" in demo_js
     assert "function demoTableValue(feature, entityIndex, timeIndex)" in demo_js
     assert "function demoScenarioState(entityIndex, hour)" in demo_js
     assert "function demoHasClinicalModel(feature)" in demo_js

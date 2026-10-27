@@ -1985,7 +1985,6 @@
   window.EU_EXTRACTION_NATIVE_OWNER = {
     render: () => S.extraction.render(),
     bind: host => S.extraction.afterRender(host),
-    isReal: () => true,
     isPreparedExport: () => exSource === 'module' && exReal === 'ready',
     setupSummary: extractionSetupSummary,
     sourceBindingSnapshot,
@@ -2008,10 +2007,6 @@
       exScanResult = null;
       exScanError = null;
       exDatabaseMismatch = null;
-    },
-    useRealData() {
-      if (window.setDataMode) window.setDataMode('real', { force: true });
-      else window.EU_DATA = 'real';
     },
   };
 })();
