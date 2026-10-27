@@ -82,12 +82,10 @@ LICENSE). These are build-machine requirements. End users need no Python,
 Node, Git, Docker, source checkout, or administrator rights. The installer
 includes the WebView2 offline installer for machines missing that runtime.
 
-**Lock generation is pending.** `requirements-windows-x64-py311.lock` is an
-explicit placeholder, not a resolved dependency set. The offline worker could
-not download or verify Windows distributions. The build refuses a missing or
-placeholder lock before invoking any build tool. A maintainer with network
-access must run this exact command from the repository root, review the pins
-and hashes, and commit the resulting lock before dispatching CI:
+`requirements-windows-x64-py311.lock` is the resolved, hash-pinned dependency
+set; the build refuses a missing or placeholder lock before invoking any build
+tool. To refresh it, run this exact command from the repository root, review
+the pins and hashes, and commit the resulting lock:
 
 ```powershell
 uv pip compile pyproject.toml desktop/build-requirements.in --extra webapp --python-version 3.11 --python-platform x86_64-pc-windows-msvc --generate-hashes --no-emit-package easyicu --output-file desktop/requirements-windows-x64-py311.lock
@@ -185,10 +183,10 @@ The installer does not silently erase those files. Production Windows releases
 should use a maintainer's Authenticode signing setup; this lane produces an
 unsigned internal-test installer and does not claim SmartScreen/Defender approval.
 
-`.github/workflows/desktop_windows_build.yml` is **workflow_dispatch only** on
-`windows-latest`. After lock generation it builds the installer, silently
-installs into a temporary profile path containing spaces and Chinese characters,
-and runs the installed app with `--smoke-test`. This mode creates no WebView;
+`.github/workflows/desktop_windows_build.yml` runs on every dev9 push, on `v*`
+tags and on manual dispatch. Its Windows job runs on `windows-latest`: it builds
+the installer, silently installs into a temporary profile path containing
+spaces and Chinese characters, and runs the installed app with `--smoke-test`. This mode creates no WebView;
 it launches the bundled loopback backend, waits for the authenticated
 `/api/catalog` readiness endpoint, checks rejection of an invalid token, and
 stops/reaps the backend. The smoke process has no Python, Node, Git, or Docker
@@ -197,7 +195,16 @@ state/export sentinels remain. It uploads the installer and receipt only after
 success; synthetic smoke diagnostics, including `longest-paths.json` even if
 the build fails before installation, are retained on failure. This uses the
 runner account with temporary profile/environment paths, not a new Windows
-account. Run it manually after the real lock lands.
+account. When startup fails, the job log shows the end of the backend log and
+names the exception the backend raised.
+
+The same workflow's macOS job runs on `macos-15` (Apple Silicon). It builds
+the DMG, copies `EasyICU.app` out of it into a temporary profile, verifies the
+signature, and starts the bundled backend with the arguments and token header
+the shell uses (`desktop/scripts/smoke_macos.py`). It checks the same
+readiness, invalid-token rejection and frozen durable startup with only system
+paths on PATH. The macOS shell has no headless mode, so this does not open the
+app window.
 
 ## Updating Python dependencies
 
@@ -232,14 +239,27 @@ Public distribution requires an Apple Developer ID, hardened-runtime signing,
 and notarization; set `APPLE_SIGNING_IDENTITY` and use the standard Tauri/Apple
 release credentials when producing a public release.
 
+Releases come from tags. Pushing a `v*` tag builds and smoke-tests both
+installers at that commit, binds each to the tag's commit through its build
+receipt (`desktop/scripts/verify_desktop_artifact.py`), and creates a **draft**
+GitHub release with the Windows installer, the macOS DMG and one
+`SHA256SUMS.txt`. A `v0.*` tag is labelled Pre-release. A maintainer reviews
+the draft and publishes it. The version comes from `pyproject.toml`,
+`desktop/package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`;
+change all four together before tagging.
+
+Both signing hooks stay disabled until certificates exist. An unsigned Windows
+installer triggers a SmartScreen warning, and an ad-hoc-signed, un-notarized
+DMG must be opened from Finder's context menu (or allowed under Privacy &
+Security) the first time.
+
 ## Current platform boundary
 
-The existing release target is macOS Apple Silicon. Windows x64 has an opt-in
-CI build/install/readiness/uninstall lane, currently blocked by the placeholder
-dependency lock. No Windows build was run in the offline Linux worker, and
-Windows has **not yet been validated on a clinician's PC**. After its first
-successful dispatch, describe the artifact as "built and smoke-tested in CI,
-not yet validated on a clinician's PC"; do not claim that result in advance.
+Windows x64 and macOS Apple Silicon each have a CI build, install and
+readiness lane, as described above. Neither has **yet been validated on a
+clinician's PC**. After a lane's first successful run, describe its artifact
+as "built and smoke-tested in CI, not yet validated on a clinician's PC"; do
+not claim that result in advance.
 
 Desktop startup requires no Docker. Research execution without Docker depends
 on the host runner delivered separately in task `t7a`; packaging and the

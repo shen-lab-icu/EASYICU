@@ -1,4 +1,4 @@
-name: Windows desktop installer (opt-in)
+name: Desktop installers (opt-in)
 
 on:
   workflow_dispatch:
@@ -13,6 +13,11 @@ on:
 
 permissions:
   contents: read
+
+# A newer dev9 push supersedes an unfinished branch build; tag builds always finish.
+concurrency:
+  group: desktop-installers-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 jobs:
   installer:
@@ -78,6 +83,62 @@ jobs:
             ${{ env.EASYICU_DESKTOP_BUILD_DIR }}/longest-paths.json
             ${{ runner.temp }}/easyicu-smoke-diag/
 
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 75
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - name: Select build directories
+        run: |
+          echo "EASYICU_DESKTOP_BUILD_DIR=$RUNNER_TEMP/easyicu-build" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/easyicu-cargo" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+          architecture: arm64
+      # The official Node build links only macOS system libraries, so the app can bundle it.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.19.0'
+          architecture: arm64
+      - name: Select macOS Rust target
+        run: rustup default stable-aarch64-apple-darwin
+      - name: Build app, DMG and receipt
+        run: python desktop/scripts/build_macos.py
+      - name: Apple Developer ID signing and notarization hook (disabled until credentials are available)
+        if: ${{ false }}
+        run: |
+          echo 'Signing is not configured; sign, notarize and refresh the DMG digest before enabling this hook.'
+          exit 1
+      - name: Prove frozen durable startup and readiness from the installed DMG
+        run: |
+          shopt -s nullglob
+          dmgs=("$CARGO_TARGET_DIR"/release/bundle/dmg/*.dmg)
+          if [ "${#dmgs[@]}" -ne 1 ]; then echo 'Expected exactly one DMG'; exit 1; fi
+          python -I desktop/scripts/smoke_macos.py --dmg "${dmgs[0]}" --profile-root "$RUNNER_TEMP/EasyICU 临床 profile"
+      - name: Retain DMG and build receipt after successful smoke test
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: EasyICU-macos-arm64
+          if-no-files-found: error
+          path: |
+            ${{ env.CARGO_TARGET_DIR }}/release/bundle/dmg/*.dmg
+            ${{ env.EASYICU_DESKTOP_BUILD_DIR }}/build-inputs.json
+      - name: Retain synthetic smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: EasyICU-macos-smoke-diagnostics
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/EasyICU 临床 profile/Library/Logs/org.easyicu.desktop/desktop-smoke.log
+            ${{ runner.temp }}/EasyICU 临床 profile/Library/Application Support/org.easyicu.desktop/runtime/desktop-smoke-result.json
+            ${{ env.EASYICU_DESKTOP_BUILD_DIR }}/longest-paths.json
+
   acceptance:
     needs: installer
     if: github.ref == 'refs/heads/codex/dev9-expansion-20260917'
@@ -91,7 +152,7 @@ jobs:
       model_cassette: ${{ inputs.model_cassette || '' }}
 
   release:
-    needs: installer
+    needs: [installer, macos]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     timeout-minutes: 15
@@ -113,6 +174,11 @@ jobs:
         with:
           name: EasyICU-windows-x64
           path: ${{ runner.temp }}/windows-installer
+      - name: Download this tag build's smoked DMG
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: EasyICU-macos-arm64
+          path: ${{ runner.temp }}/macos-dmg
       - name: Verify provenance, compute SHA-256 and create a draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -120,8 +186,13 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $releaseDir = "$env:RUNNER_TEMP\windows-release"
-          $installer = python -I desktop/scripts/verify_windows_artifact.py "$env:RUNNER_TEMP\windows-installer" --source-commit "$env:GITHUB_SHA" --release-dir "$releaseDir"
+          $releaseDir = "$env:RUNNER_TEMP\desktop-release"
+          $installer = python -I desktop/scripts/verify_desktop_artifact.py windows "$env:RUNNER_TEMP\windows-installer" --source-commit "$env:GITHUB_SHA" --release-dir "$releaseDir"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh release create "$env:RELEASE_TAG" "$installer" "$releaseDir\SHA256SUMS.txt" --draft --verify-tag --generate-notes --target "$env:GITHUB_SHA"
+          $dmg = python -I desktop/scripts/verify_desktop_artifact.py macos "$env:RUNNER_TEMP\macos-dmg" --source-commit "$env:GITHUB_SHA" --release-dir "$releaseDir"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # A 0.x version is a preview: GitHub labels it Pre-release, never Latest.
+          $stage = @()
+          if ($env:RELEASE_TAG -like 'v0.*') { $stage = @('--prerelease') }
+          gh release create "$env:RELEASE_TAG" "$installer" "$dmg" "$releaseDir\SHA256SUMS.txt" --draft @stage --verify-tag --generate-notes --target "$env:GITHUB_SHA"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

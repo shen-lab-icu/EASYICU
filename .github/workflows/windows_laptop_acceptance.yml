@@ -2,7 +2,7 @@ name: Windows laptop acceptance
 
 on:
   workflow_run:
-    workflows: ["Windows desktop installer (opt-in)"]
+    workflows: ["Desktop installers (opt-in)"]
     types: [completed]
     branches: [codex/dev9-expansion-20260917]
   # workflow_run, like workflow_dispatch, is discovered on the default branch.
@@ -156,7 +156,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $runtime = "$env:EASYICU_DESKTOP_BUILD_DIR\venv\Scripts\python.exe"
-          $installer = & $runtime -I desktop/scripts/verify_windows_artifact.py "$env:WINDOWS_INSTALLER_DIR" --source-commit "$env:SOURCE_COMMIT"
+          $installer = & $runtime -I desktop/scripts/verify_desktop_artifact.py windows "$env:WINDOWS_INSTALLER_DIR" --source-commit "$env:SOURCE_COMMIT"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $installDir = "$env:RUNNER_TEMP\EasyICU 数据\installed app"
           $install = Start-Process -FilePath $installer -ArgumentList "/S /D=$installDir" -PassThru
