@@ -184,10 +184,10 @@
       {
         id: 'example-pressure-trajectories', database: 'eICU', kind: tr('Trajectories', '轨迹分型'),
         title: tr('Blood-pressure trajectories', '血压变化轨迹分型'),
-        gets: tr('Trajectory groups and how many, stability check, early identification', '轨迹分组与分组数、稳定性检验、早期识别'),
+        gets: tr('Trajectory groups and how many, stability check, in-hospital death rate per group', '轨迹分组与分组数、稳定性检验、各类院内死亡率'),
         prompt: tr(
-          'In eICU, into which groups do mean arterial pressure trajectories over the first 48 ICU hours fall, and can admission features tell which group a patient will follow?',
-          '在 eICU 中，入 ICU 后 48 小时的平均动脉压轨迹可分为哪几类？能否在入 ICU 时就判断患者属于哪一类？',
+          'In eICU, into which groups do mean arterial pressure trajectories over the first 48 ICU hours fall, and how does in-hospital mortality differ between them?',
+          '在 eICU 中，入 ICU 后 48 小时的平均动脉压轨迹可分为哪几类？各类患者院内死亡率有何不同？',
         ),
       },
       {
