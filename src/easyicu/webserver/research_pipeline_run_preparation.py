@@ -85,6 +85,7 @@ from easyicu.webserver.scientific_runtime_projection import (
     WebScientificRuntimeProjectionError,
 )
 from easyicu.webserver.target_trial_runtime_projection import approved_target_trial
+from easyicu.webserver.question_named_levels import stop_undistinguished_named_levels
 
 _RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
 _DEVELOPMENT_RESUME_JOB_ENV = "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID"
@@ -250,6 +251,10 @@ def _prepare_scientific_launch(
         or request.development_resume_source_job_id
         or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV)
     ):
+        # A question that names a kind of a concept the analysis data do not
+        # separate (invasive ventilation) is never planned on every kind
+        # (``question_named_levels``).
+        stop_undistinguished_named_levels(question)
         # A question read as causal is planned as its trial, never from the
         # question's keywords (``causal_trial_design``).
         stop_unset_causal_design(study, question=question, database=database)

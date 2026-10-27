@@ -957,6 +957,10 @@
           'The prepared data covers a different time window from the one the question states, so the summary would not match the question. No analysis was run. Prepare the data again for the stated window.',
           '已准备的数据覆盖的时间窗与问题写明的不一致，汇总结果会与问题不符。尚未运行任何分析。请按问题写明的时间窗重新准备数据。',
         ),
+        question_named_level_undistinguished: tr(
+          'The question names one kind of a clinical measure, such as invasive or non-invasive ventilation, but the prepared data record only whether it happened, not which kind. A plan would answer a broader question, so planning stopped and no analysis was run. Ask again without naming the kind, for example “mechanical ventilation”; the result then covers every kind.',
+          '问题指定了某项临床指标的一种类型（例如有创或无创通气），但准备好的数据只记录是否发生，不区分类型；按这些数据做的计划会回答一个更宽的问题，因此规划已停止，没有运行分析。请去掉类型再问，例如写“机械通气”；结果将包含所有类型。',
+        ),
         research_pipeline_planning_identity_unavailable: tr(
           'The selected database has no ICU-stay identity definition for planning. Choose a supported database family and generate the plan again.',
           '所选数据库缺少可用于规划的 ICU 住院身份定义。请改用受支持的数据库家族后重新生成计划。',

@@ -132,6 +132,9 @@ _EDIT_CODES = frozenset(
         *PLAN_APPROVAL_STOPS,
         # Unbound measurement summaries need a new explicit design choice.
         *WINDOWED_SUMMARY_STOP_MESSAGES,
+        # A kind of a concept the analysis data do not separate needs the
+        # question asked without it (question_named_levels).
+        "question_named_level_undistinguished",
         # An unverified restriction cannot be silently dropped or retried.
         "research_pipeline_hospital_first_stay_restriction_unverified",
         # A revision whose source plan is gone or changed starts from a fresh plan.
