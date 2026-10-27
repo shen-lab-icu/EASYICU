@@ -105,6 +105,85 @@ def test_a_missing_column_is_named():
     assert exc.value.code == "first_icu_stay_identity_columns_missing"
 
 
+def _declared(rows, *, first_order_value=0):
+    """A table whose order column is an offset from each patient's first admission."""
+
+    return derive_first_icu_stay(
+        pd.DataFrame(rows, columns=["CaseID", "PatientID", "offset"]),
+        stay_column="CaseID",
+        patient_column="PatientID",
+        order_column="offset",
+        identity_table_name="cases",
+        first_order_value=first_order_value,
+    )
+
+
+def test_a_declared_first_value_marks_the_first_stay_and_never_promotes_a_readmission():
+    derived = _declared(
+        [
+            (32, 70, 86_400),
+            (31, 70, 0),  # listed second, the patient's first admission
+            (41, 71, 0),
+            (51, 72, 3_600),  # a readmission whose first admission is not in the table
+        ]
+    )
+
+    flags = derived.frame.set_index(COORDINATE_STAY_COLUMN)[COORDINATE_FLAG_COLUMN]
+    assert flags.to_dict() == {31: True, 32: False, 41: True, 51: False}
+    receipt = dict(derived.receipt)
+    assert receipt["order_rule"] == "declared_first_admission_value_per_patient"
+    assert receipt["first_order_value"] == 0
+    assert (receipt["stays"], receipt["patients"], receipt["first_icu_stays"]) == (4, 3, 2)
+    assert receipt["patients_without_first_icu_stay_in_source"] == 1
+    assert receipt["tie_policy"] == receipt["missing_order_policy"] == "fail_closed"
+    assert receipt["identifier_values_returned"] is False
+
+
+def test_an_admission_number_declares_its_first_value_as_one():
+    derived = _declared([(2, 1, 2), (1, 1, 1), (3, 2, 1)], first_order_value=1)
+
+    assert derived.frame.set_index(COORDINATE_STAY_COLUMN)[COORDINATE_FLAG_COLUMN].to_dict() == {
+        1: True,
+        2: False,
+        3: True,
+    }
+    assert derived.receipt["patients_without_first_icu_stay_in_source"] == 0
+
+
+def test_the_earliest_time_rule_keeps_its_receipt_shape():
+    receipt = dict(_derive(_stays([(11, 5, "2150-01-01")])).receipt)
+
+    assert receipt["order_rule"] == "earliest_order_time_per_patient"
+    assert "first_order_value" not in receipt
+    assert "patients_without_first_icu_stay_in_source" not in receipt
+
+
+@pytest.mark.parametrize(
+    ("rows", "code"),
+    [
+        # Two stays of one patient both claim the first admission.
+        ([(31, 70, 0), (32, 70, 0)], "first_icu_stay_order_tied"),
+        # A single stay still needs its value: absolute order cannot be guessed.
+        ([(31, 70, 0), (41, 71, None)], "first_icu_stay_order_time_missing"),
+        ([(31, 70, 0), (41, 71, -5)], "first_icu_stay_order_value_invalid"),
+        ([(31, 70, 0), (41, 71, 1.5)], "first_icu_stay_order_value_invalid"),
+        ([(31, 70, 0), (31, 71, 0)], "first_icu_stay_stay_identity_duplicate"),
+    ],
+)
+def test_a_declared_first_value_fails_the_whole_coordinate_when_unprovable(rows, code):
+    with pytest.raises(FirstIcuStayError) as exc:
+        _declared(rows)
+
+    assert exc.value.code == code
+
+
+def test_a_declared_first_value_must_be_an_integer():
+    with pytest.raises(FirstIcuStayError) as exc:
+        _declared([(31, 70, 0)], first_order_value=True)
+
+    assert exc.value.code == "first_icu_stay_order_value_invalid"
+
+
 def _written(tmp_path, frame):
     path = tmp_path / "first.parquet"
     frame.to_parquet(path, index=False)
