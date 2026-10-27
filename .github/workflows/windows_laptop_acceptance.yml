@@ -175,7 +175,7 @@ jobs:
             if (-not [string]::IsNullOrWhiteSpace($env:MODEL_CASSETTE_PATH)) {
               $replayArgs = @('--model-cassette', $env:MODEL_CASSETTE_PATH)
             }
-            & $runtime -I tools/windows_laptop_acceptance.py `
+            & $runtime -I -X utf8 tools/windows_laptop_acceptance.py `
               --memory-pressure-gb "$env:MEMORY_PRESSURE_GB" `
               --work-dir "$env:RUNNER_TEMP\EasyICU 数据" `
               --output-dir "$env:GITHUB_WORKSPACE\acceptance-results" `

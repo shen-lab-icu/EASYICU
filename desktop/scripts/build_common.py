@@ -608,6 +608,10 @@ def build_backend(python, *, build_root, desktop_root, run, windows=False):
         # dependency metadata includes every baseline analysis package plus
         # transitive numerical dependencies; psutil belongs to the web extra.
         "--recursive-copy-metadata", "easyicu",
+        # UTF-8 mode, as on macOS/Linux: default text I/O is UTF-8 rather than
+        # the Windows code page (cp1252, or GBK on Chinese Windows). Spawned
+        # frozen children start through the same bootloader and inherit it.
+        "--python-option", "X utf8",
         "--copy-metadata", "psutil",
         # DBOS loads SQLite's SQLAlchemy dialect dynamically; its SDK imports
         # psycopg even for a local SQLite workflow database.
