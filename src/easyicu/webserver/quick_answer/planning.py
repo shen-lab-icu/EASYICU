@@ -74,6 +74,12 @@ def qualification_stop(reading: QuickReading) -> str | None:
         return "quick_requires_survival_study"
     if fixed_horizon_mortality_endpoint(reading.measure.concept) is not None:
         return "quick_requires_survival_study"
+    from easyicu.webserver.question_named_levels import undistinguished_named_levels
+
+    # A named kind the prepared data do not separate (invasive ventilation)
+    # is never answered on every kind, as a full study's launch refuses it.
+    if undistinguished_named_levels(reading.question):
+        return "quick_named_level_undistinguished"
     for kind, pattern in _COMPLEXITY:
         if kind == "interval" and counts_only_request(reading.question):
             continue

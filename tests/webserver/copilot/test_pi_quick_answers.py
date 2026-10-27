@@ -313,6 +313,86 @@ def test_preparation_budget_stops_before_allocating_any_rows(host, monkeypatch):
     assert attachment["proposal"]["card"] is None
 
 
+COMPARE = "What is the median first-day peak lactate, and does it differ between men and women?"
+FIRST_STAYS = "In each patient's first ICU stay, what is the median first-day peak lactate, and does it differ by sex?"
+
+
+def verified_identity(monkeypatch, tmp_path, patients, *, first_stays=None):
+    """Hand the quick path a synthetic grouping (and first-stay coordinate) as the source owner would."""
+    import hashlib
+
+    from easyicu.research_agent.acquisition.first_icu_stay import FirstIcuStayBinding
+    from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
+    from easyicu.webserver import source_identity_authority
+
+    def written(name, frame):
+        path = tmp_path / name
+        frame.to_parquet(path, index=False)
+        return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+    path, digest = written("grouping.parquet", pd.DataFrame({"stay_id": range(60), "patient_key": patients}))
+    grouping = PatientGroupingBinding(
+        mapping_path=path, mapping_sha256=digest, mapping_stay_column="stay_id", mapping_patient_column="patient_key",
+        authority_coordinates={"schema_version": "easyicu.patient_grouping_runtime_authority/1",
+                               "authority_ref": "synthetic/patient_grouping", "mapping_sha256": digest,
+                               "grouping_derivation": "prefix_before_:s", "provider_visible_values": False},
+    )
+    calls = []
+
+    def resolve(binding):
+        def resolver(**kwargs):
+            calls.append(kwargs)
+            return binding
+        return resolver
+
+    monkeypatch.setattr(source_identity_authority, "resolve_study_patient_grouping", resolve(grouping))
+    first = None
+    if first_stays is not None:
+        path, digest = written("first.parquet", pd.DataFrame({"stay_id": range(60), "first_icu_stay": first_stays}))
+        first = FirstIcuStayBinding(coordinate_path=path, coordinate_sha256=digest,
+                                    authority_coordinates={"authority_ref": "synthetic/first_icu_stay"})
+    monkeypatch.setattr(source_identity_authority, "resolve_study_first_icu_stay", resolve(first))
+    return calls
+
+
+def test_a_comparison_reads_patients_from_the_sources_verified_grouping(host, monkeypatch, tmp_path):
+    service, record, registry = host
+    calls = verified_identity(monkeypatch, tmp_path, range(60))
+    attachment = submit(host, reading(COMPARE, intent="compare", grouping=["sex"]))
+    assert attachment["proposal"]["status"] == "approval_required", attachment["proposal"]["reason"]
+    assert calls == [{"export_path": registry["sources"][0]["path"], "database": "eicu_demo"}]
+    prepared = service._quick_store().read(record.session_id, record.project_id, attachment["quick_answer_id"])["prepared"]
+    assert (prepared["unit_column"], prepared["patient_column"]) == ("patient_stay_id", "patient_stay_id")
+    answer = approve(host, attachment)["answer"]
+    assert answer["status"] == "ok", answer["reason"]
+    assert [row["group"] for row in answer["rows"] if row["statistic"].startswith("p_value:")] == ["Comparison"]
+
+
+def test_repeated_patients_stop_the_comparison_and_their_first_stays_answer_it(host, monkeypatch, tmp_path):
+    verified_identity(monkeypatch, tmp_path, [stay // 2 for stay in range(60)],
+                      first_stays=[stay % 2 == 0 for stay in range(60)])
+    attachment = submit(host, reading(COMPARE, intent="compare", grouping=["sex"]))
+    assert attachment["proposal"]["status"] == "approval_required", attachment["proposal"]["reason"]
+    answer = approve(host, attachment)["answer"]
+    assert answer["reason"] == "quick_repeated_units_require_full_study" and not answer["rows"]
+    first = submit(host, reading(FIRST_STAYS, intent="compare", grouping=["sex"], population={"criteria": [{
+        "id": "c1", "kind": "first_icu_stay", "source": "question", "role": "include",
+        "quote": "each patient's first ICU stay",
+    }]}), job_id="message-first")
+    assert first["proposal"]["status"] == "approval_required", first["proposal"]["reason"]
+    answer = approve(host, first)["answer"]
+    assert answer["status"] == "ok", answer["reason"]
+    assert {row["group"]: row["value"] for row in answer["rows"] if row["statistic"] == "cohort_n"} == {
+        "Overall": 30, "Male": 15, "Female": 15,
+    }
+
+
+def test_without_a_verified_grouping_a_comparison_keeps_its_refusal(host):
+    attachment = submit(host, reading(COMPARE, intent="compare", grouping=["sex"]))
+    assert attachment["proposal"]["reason"] == "quick_independent_units_unverified"
+    assert attachment["proposal"]["card"] is None
+
+
 def test_cross_session_click_does_not_find_another_sessions_card(host):
     service, record, _ = host
     attachment = submit(host)

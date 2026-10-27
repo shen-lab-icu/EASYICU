@@ -129,6 +129,24 @@ test('a question that is not quick says why and offers the full study, never a c
   assert.doesNotMatch(unknown, /quick_unlisted_code/);
 });
 
+test('a stopped comparison over repeated stays offers the first-stay question only where it can be prepared', () => {
+  const cases = [
+    ['quick_repeated_units_ask_first_stay', 'zh', /同一患者有多次 ICU 入住。可改问每位患者的首次 ICU 入住，或改为完整研究。/],
+    ['quick_repeated_units_ask_first_stay', 'en', /The same patient has several ICU stays\. Ask about each patient's first ICU stay, or make it a full study\./],
+    ['quick_repeated_units_require_full_study', 'zh', /同一患者有多次 ICU 入住，这个比较需要在完整研究里处理。/],
+    ['quick_repeated_units_require_full_study', 'en', /The same patient has several ICU stays; this comparison needs the full study\./],
+  ];
+  for (const [reason, language, pattern] of cases) {
+    const { cards } = owners(language);
+    const html = rendered(cards, attachment({ answer: { status: 'stopped', reason,
+      source: SOURCE, rows: [], sentences: [], expand: { reading: READING, source: SOURCE } } }));
+    assert.match(html, pattern);
+    if (reason === 'quick_repeated_units_require_full_study') assert.doesNotMatch(html, /首次 ICU 入住|first ICU stay/);
+    assert.match(html, /data-gpi-quick-expand="qa_1"/);
+    assert.doesNotMatch(html, /data-gpi-quick-approve/);
+  }
+});
+
 test('a busy or stale conversation dispatches nothing', () => {
   const { cards, acts, disable } = owners();
   disable();

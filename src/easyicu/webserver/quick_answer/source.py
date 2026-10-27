@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from easyicu.research_agent.canonical_json import canonical_sha256, sha256_file
+from easyicu.research_agent.contracts.dependence import (
+    PatientGroupResolutionError, PlannedDependenceRequirement, resolve_patient_groups,
+)
+from easyicu.research_agent.planning.dependence_authority import context_patient_group_authority
 from easyicu.research_agent.providers.client_trust import (
     ProviderConfigurationError, require_credentialed_data_clearance, source_requires_clearance,
 )
@@ -56,12 +60,43 @@ def bind_prepared_source(path: Path, *, context: ResearchContext, identity: Sour
     declared = set(context.cohort.id_columns)
     if unit_column not in declared or patient_column is not None and patient_column not in declared:
         raise QuickStop("quick_unit_identity_missing")
+    _patient_requirement(context, unit_column, patient_column)
     # Detach mutable context children from the preparation caller.
     source = PreparedSource(path.resolve(), context.model_copy(deep=True), identity,
                             unit_column, patient_column, analysis_unit, sha256_file(path), "")
     from dataclasses import replace
 
     return replace(source, binding=binding_digest(source))
+
+
+def _patient_requirement(context, unit_column, patient_column):
+    """How a row's patient is read from ``patient_column``.
+
+    A column the context's owner-issued grouping names is read by that
+    grouping's derivation (a verified ``p<patient>:s<stay>`` row key, for
+    one); any other declared column holds the patient itself. A stay key
+    never counts as its own patient.
+    """
+    if patient_column is None:
+        return None
+    issued = context_patient_group_authority(context)
+    if issued is not None and issued.group_source == patient_column:
+        return issued
+    if patient_column == unit_column:
+        raise QuickStop("quick_unit_identity_missing")
+    return PlannedDependenceRequirement(group_source=patient_column, group_derivation="identity")
+
+
+def patient_groups(source: PreparedSource, frame) -> dict:
+    """Each prepared unit's patient, read through the shared dependence contract."""
+    requirement = _patient_requirement(source.context, source.unit_column, source.patient_column)
+    if requirement is None:
+        raise QuickStop("quick_independent_units_unverified")
+    try:
+        groups = resolve_patient_groups(frame[requirement.group_source].tolist(), requirement=requirement).groups
+    except PatientGroupResolutionError as exc:
+        raise QuickStop("quick_unit_identity_invalid") from exc
+    return dict(zip(frame[source.unit_column].tolist(), groups, strict=True))
 
 
 def require_source(source: PreparedSource, provider: object) -> None:

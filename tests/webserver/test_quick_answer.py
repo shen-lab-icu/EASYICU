@@ -235,6 +235,16 @@ def test_the_interpreter_is_told_a_conventional_reading_is_not_an_ambiguity():
     assert "is not an ambiguity" in text and "stops the quick answer" in text
 
 
+@pytest.mark.parametrize("question", [
+    "入 ICU 第一天接受有创机械通气的患者占多少？",
+    "What share of stays received invasive ventilation on the first day?",
+])
+def test_a_named_kind_the_data_do_not_separate_is_not_answered_on_every_kind(prepared, question):
+    proposal = prepare_quick_answer(reading(question), source=prepared, provider=None)
+    assert proposal.status == "full_study" and proposal.reason == "quick_named_level_undistinguished"
+    assert proposal.card is None
+
+
 def test_missing_window_falls_back_without_guessing(prepared):
     proposal = prepare_quick_answer(reading(measure={"concept": "lact", "statistic": "median", "summary": "max"}),
                                     source=prepared, provider=None)
@@ -399,6 +409,61 @@ def test_comparison_requires_verified_patient_identity(prepared):
     request = reading(intent="compare", grouping=["sex"], measure={"concept": "age", "statistic": "mean"})
     proposal = prepare_quick_answer(request, source=rebound(prepared, patient_column=None), provider=None)
     assert proposal.reason == "quick_independent_units_unverified"
+
+
+def grouped(source, patients, *, issued=True):
+    """Key the rows as a verified grouping does: ``p<patient>:s<stay>``, named by the context."""
+    frame = pd.read_parquet(source.path).drop(columns=["subject_id"])
+    frame.insert(0, "patient_stay_id", [f"p{p}:s{s}" for p, s in zip(patients, frame.pop("stay_id"), strict=True)])
+    frame.to_parquet(source.path, index=False)
+    variables = [ConceptDescriptor(name="patient_stay_id", dtype="object", role="id"),
+                 *(v for v in source.context.variables if v.name not in {"stay_id", "subject_id"})]
+    provenance = {"replacement_row_identity": {
+        "output_identity_column": "patient_stay_id", "mapping_file_sha256": "a" * 64, "mapped_cohort_rows": len(frame),
+        "patient_group_derivation": {"algorithm": "prefix_before_:s", "delimiter": ":s"},
+    }} if issued else {}
+    context = source.context.model_copy(update={"variables": variables, "cohort": source.context.cohort.model_copy(
+        update={"id_columns": ["patient_stay_id"], "provenance": provenance})})
+    return bind_prepared_source(source.path, context=context, identity=source.identity,
+                                unit_column="patient_stay_id", patient_column="patient_stay_id")
+
+
+def test_a_verified_grouping_key_names_each_stays_patient(prepared, tmp_path):
+    source = grouped(prepared, range(60))
+    request = reading(intent="compare", grouping=["sex"], measure={"concept": "age", "statistic": "median"})
+    proposal = prepare_quick_answer(request, source=source, provider=None)
+    assert proposal.status == "approval_required", proposal.reason
+    answer = run(proposal, source, tmp_path)
+    assert answer.status == "ok", answer.reason
+    assert any(row.statistic.startswith("p_value:") for row in answer.rows)
+
+
+def test_a_patient_with_two_stays_stops_the_comparison(prepared, tmp_path):
+    source = grouped(prepared, [0, *range(59)])
+    request = reading(intent="compare", grouping=["sex"], measure={"concept": "age", "statistic": "median"})
+    proposal = prepare_quick_answer(request, source=source, provider=None)
+    assert proposal.status == "approval_required", proposal.reason
+    answer = run(proposal, source, tmp_path)
+    assert answer.reason == "quick_repeated_units_require_full_study" and not answer.rows
+
+
+def test_a_repeated_patient_stop_offers_the_first_stay_only_where_it_can_be_prepared(prepared, tmp_path):
+    source = grouped(prepared, [0, *range(59)])
+    constraints = json.loads(source.context.user_preferences.data_constraints)
+    orderable = source.context.model_copy(update={"user_preferences": UserPreferences(
+        data_constraints=json.dumps({**constraints, "first_icu_stays_orderable": True}))})
+    source = bind_prepared_source(source.path, context=orderable, identity=source.identity,
+                                  unit_column=source.unit_column, patient_column=source.patient_column)
+    request = reading(intent="compare", grouping=["sex"], measure={"concept": "age", "statistic": "median"})
+    proposal = prepare_quick_answer(request, source=source, provider=None)
+    assert run(proposal, source, tmp_path).reason == "quick_repeated_units_ask_first_stay"
+
+
+def test_a_stay_key_is_never_its_own_patient(prepared):
+    with pytest.raises(QuickStop, match="quick_unit_identity_missing"):
+        grouped(prepared, range(60), issued=False)
+    with pytest.raises(QuickStop, match="quick_unit_identity_missing"):
+        rebound(prepared, patient_column="stay_id")
 
 
 def test_one_run_is_not_executed_twice(prepared, tmp_path):
