@@ -114,10 +114,14 @@ def test_runtime_replan_rebinds_signed_science_before_contract_review() -> None:
 
     source = inspect.getsource(phase_support._step_maybe_replan)
     normalized = source.index("normalize_replan_candidate(")
-    rebound = source.index("_scientific_runtime_authorities.bind_plan(revised)")
+    rebound = source.index("_scientific_runtime_authorities.bind_plan(")
     validated = source.index("_scientific_runtime_authorities.validate_plan(revised)")
     contract_review = source.index("replan_candidate_contract_findings(")
     registered = source.index("register_plan_revision(revised, reason=reason)")
 
     assert normalized < rebound < validated < contract_review < registered
+    # The rebind binds the revised plan on the run's source, as the first bind does.
+    call = source[rebound:validated].split("bind_plan(", 1)[1]
+    assert call.lstrip().startswith("revised,")
+    assert "context=context" in call
     assert "replanner_scientific_runtime_rebind_failed" in source

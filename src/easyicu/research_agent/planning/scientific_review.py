@@ -106,6 +106,7 @@ from ..trajectory.plan_contract import trajectory_context_is_bound
 from ..trajectory.runtime_validation import (
     signed_trajectory_plan_claimed,
     signed_trajectory_plan_contract_errors,
+    signed_trajectory_stay_identities,
 )
 from .association_scope import post_baseline_exposure
 from .cohort_contract import CohortDefinition
@@ -3625,6 +3626,11 @@ def build_plan_scientific_review(
                     raise ValueError("phenotype_comparison_primary_source_invalid")
             elif not signed_suite or signed_trajectory_plan_contract_errors(plan):
                 raise ValueError("phenotype_comparison_trajectory_source_invalid")
+            elif step.phenotype_comparison_spec.identity_column not in signed_trajectory_stay_identities(
+                context.cohort.database
+            ):
+                # Frozen labels join the run cohort on this source's ICU stay only.
+                raise ValueError("phenotype_comparison_identity_invalid")
             compared_outcomes.update(step.phenotype_comparison_spec.outcome_columns)
         except ValueError as exc:
             findings.append(PlanScientificFinding(

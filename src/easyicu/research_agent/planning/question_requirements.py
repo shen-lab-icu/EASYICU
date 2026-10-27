@@ -26,7 +26,11 @@ What the host can verify, it verifies:
   analysis step that reports the outcome in each level of that very grouping
   (its exposure-outcome distribution's exposure);
 * a requirement of any other kind (an estimand, another analysis) is
-  unanswered when no analysis step reads one of its concepts.
+  unanswered when no analysis step reads one of its concepts.  A sealed
+  owner that analyses concepts through its authority rather than naming them
+  in its inputs (the signed trajectory candidate owner fits the sealed
+  coordinates' representation) reads them, as the authority's disclosure
+  says (``sealed_owner_concepts``).
 
 What it cannot verify, it shows as a claim, never as verified, and a note is
 not evidence: an estimand or analysis whose concepts analysis steps read, or
@@ -694,8 +698,13 @@ def judge_question_requirements(
     family_template: bool,
     relatives: Callable[[str], frozenset[str]],
     check_gap: GapCheck,
+    sealed_owner_concepts: Mapping[str, Collection[str]] | None = None,
 ) -> tuple[JudgedRequirement, ...]:
-    """Decide how the compiled plan answers each stated requirement."""
+    """Decide how the compiled plan answers each stated requirement.
+
+    ``sealed_owner_concepts`` maps a sealed owner's method to the concepts it
+    analyses through its authority, which its inputs do not name.
+    """
 
     return tuple(
         _judge(
@@ -704,6 +713,7 @@ def judge_question_requirements(
             family_template=family_template,
             relatives=relatives,
             check_gap=check_gap,
+            sealed_owner_concepts=sealed_owner_concepts or {},
         )
         for item in requirements
     )
@@ -716,15 +726,21 @@ def _judge(
     family_template: bool,
     relatives: Callable[[str], frozenset[str]],
     check_gap: GapCheck,
+    sealed_owner_concepts: Mapping[str, Collection[str]],
 ) -> JudgedRequirement:
     denoted = [relatives(concept) for concept in item.concepts]
     analysing = [
         step for step in plan.steps if step.planned_analysis_role in ANALYSIS_ROLES
     ]
+
+    def reads(step: Any) -> set[str]:
+        method = str(getattr(step, "method", None) or "").strip()
+        return {*step.inputs, *sealed_owner_concepts.get(method, ())}
+
     reading = tuple(
         step.step_id
         for step in analysing
-        if any(columns & set(step.inputs) for columns in denoted)
+        if any(columns & reads(step) for columns in denoted)
     )
     if item.kind == "definition":
         return JudgedRequirement(
@@ -821,7 +837,7 @@ def _judge(
             reading_step_ids=reading,
         )
     if actions is None and all(
-        any(columns & set(step.inputs) for step in analysing) for columns in denoted
+        any(columns & reads(step) for step in analysing) for columns in denoted
     ):
         # Reading its concepts is not doing the analysis the question names.
         return JudgedRequirement(
@@ -1339,14 +1355,20 @@ def question_requirements_record(
     sealed: Sequence[str],
     stated_measures: Sequence[StatedEffectMeasure] = (),
     measures: Sequence[EffectMeasureJudgment] = (),
+    sealed_owner_concepts: Mapping[str, Collection[str]] | None = None,
 ) -> dict[str, Any]:
     """The run's record of what the question asked and how the compiled plan answers it.
 
     It carries everything the judgment read of the study (the columns each
-    concept denotes, the sealed coordinates, how each declared gap was
-    checked, the study's digest), so another plan is judged from it alone.
+    concept denotes, the sealed coordinates, the concepts a sealed owner
+    analyses, how each declared gap was checked, the study's digest), so
+    another plan is judged from it alone.
     """
 
+    owner_concepts = {
+        str(method): sorted({str(concept) for concept in concepts})
+        for method, concepts in sorted((sealed_owner_concepts or {}).items())
+    }
     return {
         "schema_version": QUESTION_REQUIREMENTS_SCHEMA_VERSION,
         "route": route,
@@ -1358,6 +1380,9 @@ def question_requirements_record(
             for concept, columns in sorted(denoted.items())
         },
         "sealed": [str(value) for value in sealed],
+        # Only a run with a sealed owner carries it, so every other record
+        # keeps its bytes; a record without it credits no sealed owner.
+        **({"sealed_owner_concepts": owner_concepts} if owner_concepts else {}),
         # Always present on a record this owner writes, so a plan under review
         # is judged on it; a record written before it was read lacks it.
         "question_effect_measures": [item.row() for item in stated_measures],
@@ -1421,6 +1446,15 @@ def judge_recorded_requirements(
             for concept, columns in dict(record["denoted_columns"]).items()
         }
         sealed = tuple(str(value) for value in record["sealed"])
+        owner_concepts = record.get("sealed_owner_concepts", {})
+        if not isinstance(owner_concepts, Mapping) or not all(
+            isinstance(concepts, list) for concepts in owner_concepts.values()
+        ):
+            raise ValueError("its sealed owners' concepts are not lists by method")
+        sealed_owner_concepts = {
+            str(method): frozenset(str(concept) for concept in concepts)
+            for method, concepts in owner_concepts.items()
+        }
         verdicts = {
             str(row["id"]): (row["gap_verification"], row["gap_fact"])
             for row in record["judged"]
@@ -1466,6 +1500,7 @@ def judge_recorded_requirements(
         family_template=route == "family_template",
         relatives=lambda column: denoted[column],
         check_gap=lambda gap: checks[_gap_key(gap)],
+        sealed_owner_concepts=sealed_owner_concepts,
     )
     unstated = (
         ()

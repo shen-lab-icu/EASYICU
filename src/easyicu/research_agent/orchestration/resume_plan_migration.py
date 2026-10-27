@@ -300,6 +300,7 @@ def _migrate_resume_scientific_runtime_binding(
     evidence: EvidenceStore,
     prompt_version: str,
     llm_signature: str,
+    context: Optional[ResearchContext] = None,
 ) -> tuple[AnalysisPlan, Optional[Path], tuple[str, ...], list[ValidationFinding]]:
     """Recompile a signed host binding only on steps selected for replay.
 
@@ -308,9 +309,10 @@ def _migrate_resume_scientific_runtime_binding(
     same or the two paths disagree.  This migration remains fail closed: step
     identity and order may not change, plan-level science may not change, and
     no step that remains completed across the requested resume cut may change.
+    It binds on the run's ``context``, as the fresh-plan path does.
     """
 
-    rebound, compile_findings = scientific_runtime_authorities.bind_plan(plan)
+    rebound, compile_findings = scientific_runtime_authorities.bind_plan(plan, context=context)
     if rebound == plan:
         return plan, None, (), list(compile_findings)
 
@@ -352,11 +354,7 @@ def _migrate_resume_scientific_runtime_binding(
             + ", ".join(completed_changes)
         )
 
-    revision = _next_analysis_plan_revision(
-        run_dir=run_dir,
-        plan=plan,
-        evidence=evidence,
-    )
+    revision = _next_analysis_plan_revision(run_dir=run_dir, plan=plan, evidence=evidence)
     rebound = rebound.model_copy(update={"revision": revision})
     revision_path = run_dir / f"analysis_plan_revision_{revision}.json"
     if revision_path.exists():
