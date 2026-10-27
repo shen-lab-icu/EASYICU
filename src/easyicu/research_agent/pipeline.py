@@ -2803,7 +2803,7 @@ class ResearchAgentPipeline:
             )
             findings.extend(scientific_runtime_compile_findings)
             plan = _figure_plan.apply_runtime_bound_figure_contracts(plan, findings)
-        self._services.validate_plan_revision(plan=plan, context=agent_context)
+        self._services.validate_plan_revision(plan=plan, context=agent_context, run_dir=run_dir)
         # The endpoint half of the same declaration, checked for every plan
         # rather than only inside the cohort branch above: a family can require
         # a typed endpoint whether or not it also defines an analysis cohort.

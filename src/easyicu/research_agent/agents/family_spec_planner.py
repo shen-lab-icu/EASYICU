@@ -113,6 +113,7 @@ from ..providers.strict_json_schema import (
 )
 from ..providers.structured_retry import call_llm_with_structured_retry
 from ..reporting.article_contract import build_article_analysis_contract
+from ..planning.publication_readiness import render_required_plan_shape
 from ..schema import AnalysisPlan, ResearchContext
 from ._support import _dump_raw
 from .progressive_attempt import ProgressivePlannerAttemptState
@@ -208,6 +209,7 @@ def _candidate_rows(request: FamilySpecRequest) -> list[dict[str, Any]]:
 def family_spec_user_prompt(
     request: FamilySpecRequest,
     *,
+    context: ResearchContext | None = None,
     variable_descriptions: dict[str, str],
     know_how_context: str = "",
     planning_contract_context: str = "",
@@ -221,6 +223,8 @@ def family_spec_user_prompt(
 
     sections: list[str] = []
     sections.append("Research question:\n" + request.research_question)
+    if context is not None:
+        sections.append(render_required_plan_shape(context))
     host_design: dict[str, Any] = {
         "family_id": request.family_id,
         "primary_exposure": request.primary_exposure,
@@ -470,6 +474,7 @@ def family_spec_user_prompt(
 def family_spec_messages(
     request: FamilySpecRequest,
     *,
+    context: ResearchContext | None = None,
     variable_descriptions: dict[str, str],
     know_how_context: str = "",
     planning_contract_context: str = "",
@@ -481,7 +486,7 @@ def family_spec_messages(
             role="user",
             content=family_spec_user_prompt(
                 request,
-                variable_descriptions=variable_descriptions,
+                context=context, variable_descriptions=variable_descriptions,
                 know_how_context=know_how_context,
                 planning_contract_context=planning_contract_context,
                 response_shape=response_shape,
@@ -1188,7 +1193,7 @@ def run_family_spec_attempt(
         else None
     )
     messages = family_spec_messages(
-        request,
+        request, context=article_context,
         variable_descriptions=descriptions,
         know_how_context=know_how_context,
         planning_contract_context=planning_contract_context,

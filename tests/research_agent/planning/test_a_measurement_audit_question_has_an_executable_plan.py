@@ -383,3 +383,17 @@ def test_the_audit_led_plan_executes_through_its_typed_owner(tmp_path, monkeypat
     table = pd.read_csv(out_dir / summary["output_files"]["table:measurement_missingness"])
     counts = {row.concept: (int(row.n_total), int(row.value_missing_n)) for row in table.itertuples()}
     assert counts == {name: (8, absent) for name, absent in missing.items()}
+
+
+def test_a_one_measurement_record_question_owes_no_value_summary():
+    """Its audit answers it, so the one-measurement primary summary is not missing."""
+
+    context = _context()
+    context = context.model_copy(update={"variables": [
+        variable for variable in context.variables if variable.name in {"stay_id", "lact"}
+    ]})
+    plan = _plan(context, _skeleton_step("cohort"), {**_skeleton_step("audit"), "raw_inputs": ["lact"]})
+    assert measurement_audit_answers_plan(plan)
+    review = _review(context, plan, "first_result")
+    assert "DESCRIPTIVE_PRIMARY_SUMMARY_MISSING" not in {finding.code for finding in review.findings}
+    assert review.approval_allowed, _blockers(review)

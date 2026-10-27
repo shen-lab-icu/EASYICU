@@ -185,6 +185,7 @@ from .progressive_prompt_contracts import (
     foundation_shape_contract as _foundation_shape_contract,
     declared_cohort_concept_domains,
     outline_study_anchors,
+    render_required_plan_shape,
     source_selection_statement,
     outline_shape_contract as _outline_shape_contract,
     selected_counts_only_inference_coordinate as _selected_counts_only_inference_coordinate,
@@ -1392,6 +1393,7 @@ class ProgressivePlannerAgent:
             "the post-extraction replan. Do not borrow a cross-family action. "
             "Do not omit a required role merely because "
             "the article requirement id differs from the executable module id.",
+            render_required_plan_shape(contract_context),
             "Research question and sealed study anchors:\n"
             + outline_study_anchors(context)
             + question_anchor_rule_text(
