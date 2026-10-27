@@ -76,10 +76,10 @@
       {
         id: 'example-lactate-death', database: 'eICU', kind: tr('Association', '关联分析'),
         title: tr('Raised lactate and in-hospital death', '乳酸升高与院内死亡'),
-        gets: tr('Adjusted risk ratio (modified Poisson regression), absolute risk per group, association figure', '调整后的风险比（修正泊松回归）、各组绝对风险、关联图'),
+        gets: tr('Adjusted risk ratio (modified Poisson regression), absolute risk per group, association figure', '调整后的相对危险度（RR，修正泊松回归）、各组绝对风险、关联图'),
         prompt: tr(
           'In eICU, do patients whose highest lactate on the first ICU day is above 2 mmol/L have a higher risk of in-hospital death? Report it as a risk ratio after adjusting for age, sex and illness severity.',
-          '在 eICU 中，入 ICU 第一天最高乳酸超过 2 mmol/L 的患者，院内死亡风险是否更高？调整年龄、性别和疾病严重程度后，用风险比（RR）表示。',
+          '在 eICU 中，入 ICU 第一天最高乳酸超过 2 mmol/L 的患者，院内死亡风险是否更高？调整年龄、性别和疾病严重程度后，用相对危险度（RR）表示。',
         ),
       },
       {
