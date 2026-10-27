@@ -6,6 +6,9 @@ machine.
 
 Invariant: ``ai_enabled`` (the external-LLM opt-in gate) defaults to
 **False**. Any code path about to make an external LLM call must check it.
+Connecting a model records the same consent as ``copilot_enabled``; the two
+are one opt-in (``_ONE_OPT_IN``), so the conversation and its research runs
+are allowed or refused together, and turning ``ai_enabled`` off revokes both.
 
 Invariant: **every key in ``DEFAULTS`` has a consumer outside this module.**
 A setting the API accepts, coerces and persists but nothing ever reads is an
@@ -43,7 +46,7 @@ _LOCK = threading.RLock()
 DEFAULTS: Dict[str, Any] = {
     "support_contact": "",  # administrator-owned, read-only in the browser
     "ai_enabled": False,  # external-LLM opt-in gate — OFF by default
-    "copilot_enabled": False,  # conversational shell only; no Research Agent grant
+    "copilot_enabled": False,  # recorded when a model is connected; same opt-in as ai_enabled
     "language": "en",  # "en" | "zh"
     "data_mode": "demo",  # "demo" | "real"
     "export_dir": None,
@@ -295,10 +298,25 @@ def _merged_from_disk(config_path: Path | None = None) -> Dict[str, Any]:
     return merged
 
 
+# The external-model opt-in is one consent with two names: ``ai_enabled`` (the
+# Settings switch) and ``copilot_enabled`` (recorded when the researcher
+# connects a model).  From 2026-10-23 a connection granted only the
+# conversation, so a research run could be refused after the researcher had
+# connected the model; with no declaration step (2026-10-27) the split has no
+# purpose.  Either name read as granted grants both; a write sets both.
+_ONE_OPT_IN = ("ai_enabled", "copilot_enabled")
+
+
+def _one_opt_in(settings: Dict[str, Any]) -> Dict[str, Any]:
+    granted = any(bool(settings.get(key)) for key in _ONE_OPT_IN)
+    settings.update(dict.fromkeys(_ONE_OPT_IN, granted))
+    return settings
+
+
 def load_settings() -> Dict[str, Any]:
     """Return defaults merged with whatever is persisted on disk."""
     with _LOCK:
-        return _merged_from_disk()
+        return _one_opt_in(_merged_from_disk())
 
 
 def update_settings(patch: Dict[str, Any], *, config_path: Path | None = None) -> Dict[str, Any]:
@@ -312,8 +330,12 @@ def update_settings(patch: Dict[str, Any], *, config_path: Path | None = None) -
     # The administrator can target an inactive instance without changing this
     # process's EASYICU_HOME or the browser's settings store.
     with _LOCK, _file_lock(config_path):
-        current = _merged_from_disk(config_path)
+        current = _one_opt_in(_merged_from_disk(config_path))
         current.update(accepted)
+        written = [bool(accepted[key]) for key in _ONE_OPT_IN if key in accepted]
+        if written:
+            # A patch naming both with different values revokes.
+            current.update(dict.fromkeys(_ONE_OPT_IN, all(written)))
         _write_settings(current, config_path)
         return current
 
