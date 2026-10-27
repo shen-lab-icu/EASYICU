@@ -574,11 +574,6 @@
       });
       state.host.addEventListener('change', event => {
         if (RUN_FILES && RUN_FILES.handleChange(event)) return;
-        const mentionRole = event.target.closest('[data-gpi-mention-role]');
-        if (mentionRole && MENTIONS && state.session && !state.busy) {
-          void MENTIONS.setRole(projectId(), state.session, mentionRole.dataset.gpiMentionRole, mentionRole.value).then(() => render(true));
-          return;
-        }
         if (IDEA_SOURCE && IDEA_SOURCE.handleChange(event, {
           host: () => state.host, render, tr,
           onReady: () => {

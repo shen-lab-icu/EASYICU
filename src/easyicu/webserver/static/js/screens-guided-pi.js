@@ -642,7 +642,10 @@
       }
       const log = state.host && state.host.querySelector('[data-gpi-log]');
       if (log) {
-        log.scrollTop = previousTop !== null ? previousTop : state.demoScrollTopPending ? 0 : log.scrollHeight;
+        // A conversation opens at its latest turn; the start page (examples,
+        // no messages yet) opens at its top.
+        log.scrollTop = previousTop !== null ? previousTop
+          : state.demoScrollTopPending || log.classList.contains('gpi-log-start') ? 0 : log.scrollHeight;
         state.demoScrollTopPending = false;
       }
       const connectionPage = state.host && state.host.querySelector('[data-gpi-connection-page]');
