@@ -11,6 +11,7 @@ from ..research_context.export_selection import export_applied_selection
 from ..research_context.outbound import outbound_safe_context_payload
 from ..research_context.typed import declared_domain_for_variable
 from ..schema import ResearchContext
+from ..planning.publication_readiness import render_required_plan_shape as render_required_plan_shape
 from ..planning.progressive_contract import (
     COORDINATE_OWNED_STEP_FIELDS,
     ProgressiveCohortIntent,

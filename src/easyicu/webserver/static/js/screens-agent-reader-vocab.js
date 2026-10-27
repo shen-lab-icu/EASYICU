@@ -39,6 +39,7 @@
     DESCRIPTIVE_INTERVALS_WITHHELD_WITHOUT_PATIENT_GROUPING: ['患者分组依据未核实，暂不报告区间', '同一位患者可能有多次 ICU 住院，但患者分组依据未经核实或未通过校验。保留全部住院，只报告计数与比例，不报告不确定性区间；完整方案审阅和报告局限中需说明这一原因。'],
     DESCRIPTIVE_INTERVAL_LIMITATION_MISSING: ['未写明描述性区间受限原因', '当前数据条件下不能报告不确定性区间，但分布步骤尚未写明原因。需由系统补全区间受限原因，并在完整方案审阅和报告局限中披露。'],
     DESCRIPTIVE_VARIANCE_DESIGN_CONFLICT: ['区间方法与研究设计不一致', '研究设计要求报告不确定性，但分布步骤只提供计数与比例。方案需要按研究设计补全区间方法，并验证所需的数据条件后再执行。'],
+    DESCRIPTIVE_PRIMARY_SUMMARY_MISSING: ['缺少描述性主要汇总', '这个问题需要一个主要步骤汇总指定测量的取值（总体或按已声明的分组）；问题要求的分组汇总仍由次要步骤报告。'],
     DESCRIPTIVE_POPULATION_SCOPE_UNRESOLVED: ['描述性步骤的人群未确定', '描述性风险步骤没有可执行的人群选择，分母无法确定。'],
     DESIGN_ANALOGUE_NOT_BOUND_TO_PRIMARY_PLAN: ['可参照研究没有约束主分析', '已筛到可参照的研究，但它没有约束任何主分析步骤；需写明借鉴或有意不同的设计要素。'],
     DIRECT_COMPARATOR_NOT_BOUND_TO_PRIMARY_PLAN: ['可比研究没有约束主分析', '已筛到直接可比的研究，但它没有约束任何主分析步骤；需写明借鉴或有意不同的设计要素。'],

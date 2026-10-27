@@ -37,7 +37,7 @@ from easyicu.research_agent.planning.scientific_review import (
     remediation_route_for_finding,
     timing_design_closed,
 )
-from easyicu.research_agent.planning.requirement_coverage import SUBGROUP_ACTIONS, concept_relatives, stated_subgroup_coverage
+from easyicu.research_agent.planning.requirement_coverage import PlanRevisionReceipt, SUBGROUP_ACTIONS, concept_relatives, stated_subgroup_coverage
 from easyicu.research_agent.planning.sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
 from easyicu.research_agent.planning.robustness_contract import complete_case_variables
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, ResearchContext
@@ -48,6 +48,7 @@ from easyicu.webserver.research_launch_resume import _slug
 from easyicu.webserver.research_launch_scientific import _configured_sensitivity_specs
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 from easyicu.webserver.run_record import RunRecordReadError
+from easyicu.webserver.plan_revision_remediation import StructuralRepairScope
 
 
 def _module(step: Mapping[str, Any]) -> str:
@@ -236,9 +237,9 @@ class PlanRevisionGuard:
             "- Repair or remove existing analyses. Add a step only to satisfy a typed question requirement or a blocking finding's required remediation.",
             "- Do not add optional sensitivities, functional-form exploration, subgroup analyses, ordinal trends, E-values, imputation, figures or tables.",
             "- source_plan_json: " + self.source_plan_json,
-        ))
+        )) + StructuralRepairScope(self.review, self.previous_plan).prompt()
 
-    def validate_plan(self, *, plan: AnalysisPlan, context: ResearchContext) -> None:
+    def validate_plan(self, *, plan: AnalysisPlan, context: ResearchContext) -> PlanRevisionReceipt | None:
         if self.append_plan_json is not None:
             if canonical_sha256(plan.model_dump(mode="json")) != canonical_sha256(json.loads(self.append_plan_json)):
                 raise ResearchPipelineRunError(
@@ -247,6 +248,7 @@ class PlanRevisionGuard:
             return
         previous = self.previous_plan
         revised = plan.model_dump(mode="json")
+        structural = StructuralRepairScope(self.review, previous)
         remaining = [(step, _step_coordinate(step, previous)) for step in previous["steps"]]
         source_columns = {value for step in previous["steps"] for value in step.get("inputs", ()) if ":" not in value}
         non_scientific_columns = {v.name for v in context.variables if v.role.value in {"id", "index", "meta"}}
@@ -268,8 +270,11 @@ class PlanRevisionGuard:
                 match = next((index for index in matches if remaining[index][0]["step_id"] == step.step_id), matches[0])
                 remaining.pop(match)
                 continue
+            authorized, related = structural.authorize(step, remaining)
+            if authorized:
+                continue
             single = plan.model_copy(update={"steps": [step]})
-            if self._question_requires(single, context) or self._blocker_requires(single, context):
+            if not related and (self._question_requires(single, context) or self._blocker_requires(single, context)):
                 continue
             raise ResearchPipelineRunError(
                 "revision_added_unrequested_analysis",
@@ -283,6 +288,8 @@ class PlanRevisionGuard:
                          "review_item_codes": sorted({finding.code for finding in self.review.findings
                              if remediation_route_for_finding(finding) == "agent_plan_revision"})},
             )
+
+        return structural.receipt(plan)
 
     def _question_requires(self, plan: AnalysisPlan, context: ResearchContext) -> bool:
         step = plan.steps[0]

@@ -155,8 +155,12 @@ from .distribution_authority import (
 )
 from .method_literature import method_binding_support
 from .novelty_contract import NOVELTY_REVIEW_DIMENSIONS
-from .publication_readiness import build_publication_readiness_facts
+from .publication_readiness import (
+    DESCRIPTIVE_PRIMARY_SUMMARY_MISSING, bind_required_plan_shape, build_publication_readiness_facts,
+    required_plan_shape, requested_outcomes,
+)
 from .study_design_playbook import family_requires_novelty_review
+from .requirement_coverage import PlanShapeRemediation
 from .sensitivity_authority import (
     EXECUTABLE_METHODS_BY_STRATEGY,
     FUNCTIONAL_FORM_EXECUTABLE_METHODS,
@@ -191,6 +195,9 @@ class PlanScientificFinding(BaseModel):
     message: str
     evidence_refs: list[str] = Field(default_factory=list, max_length=20)
     remediation: str
+    structural_remediations: tuple[PlanShapeRemediation, ...] = Field(
+        default=(), exclude_if=lambda value: not value,
+    )
     remediation_route: ScientificRemediationRoute = "unclassified"
     requires_user_authorization: bool = False
     authorization_question: Optional[str] = None
@@ -372,20 +379,6 @@ def planned_model_outcomes(
                 if descriptor is not None and descriptor.role.value == "outcome" and outcome not in values:
                     values.append(outcome)
     return tuple(values)
-
-
-def requested_outcomes(context: ResearchContext) -> tuple[str, ...]:
-    """Project explicitly requested endpoints, never infer intent from availability."""
-
-    values = [
-        str(value).strip()
-        for value in context.cohort.requested_outcome_columns or ()
-        if str(value).strip()
-    ]
-    primary = str(context.target_outcome or "").strip()
-    if primary and primary not in values:
-        values.append(primary)
-    return tuple(dict.fromkeys(values))
 
 
 def requested_exposure_occurrence(
@@ -791,6 +784,41 @@ _FIRST_STAY_RULE_METHODS = frozenset(
     }
 )
 
+
+def _missing_primary_summary_findings(
+    context: ResearchContext, plan: AnalysisPlan,
+) -> list[PlanScientificFinding]:
+    """A context that requires one primary descriptive summary and a plan with none.
+
+    Only absence is judged here: the scope of a primary summary the plan does
+    declare is PRIMARY_DESCRIPTIVE_SUMMARY_SCOPE_UNRESOLVED's, so one plan
+    never draws two findings for one primary.  A plan answered by its
+    measurement audit alone needs no summary.
+    """
+
+    required = any(
+        item.kind == "primary_summary"
+        for item in required_plan_shape(
+            context, analysis_type=plan.analysis_type,
+            execution_tier=getattr(plan.design_selection, "execution_tier", "article"),
+        )
+    )
+    if (
+        not required
+        or measurement_audit_answers_plan(plan)
+        or any(is_primary_descriptive_summary_step(step) for step in plan.steps)
+    ):
+        return []
+    return [PlanScientificFinding(
+        code=DESCRIPTIVE_PRIMARY_SUMMARY_MISSING, severity="blocker", dimension="statistical_design",
+        message="No primary step summarizes the requested measurement's values.",
+        evidence_refs=["analysis_plan.json.steps"],
+        remediation=(
+            "Add one primary descriptive.descriptive_summary of that one measurement, overall or within "
+            "the declared grouping; keep the grouped continuous summary as the answering secondary when requested."
+        ),
+        remediation_route="agent_plan_revision",
+    )]
 
 def measurement_audit_answers_plan(plan: Optional[AnalysisPlan]) -> bool:
     """Whether typed measurement-audit counts are the plan's whole result.
@@ -2117,7 +2145,9 @@ def render_agent_plan_revision_contract(review: PlanScientificReview) -> str:
         "- fix these plan-owned findings with executable typed steps:",
     ]
     lines.extend(
-        f"  - {item.code}: {item.remediation}" for item in automatic
+        f"  - {item.code}: {item.remediation}"
+        + (" Structural scope: " + json.dumps([repair.model_dump(mode="json") for repair in item.structural_remediations])
+           if item.structural_remediations else "") for item in automatic
     )
     return "\n".join(lines)
 
@@ -4968,6 +4998,11 @@ def build_plan_scientific_review(
             ),
             remediation_route="runtime_capability" if unavailable else "agent_plan_revision",
         ))
+    findings.extend(_missing_primary_summary_findings(context, plan))
+    findings, required_shape = bind_required_plan_shape(
+        context=context, plan=plan, findings=findings, missing_outcomes=missing_model_outcomes,
+        missing_roles=content_roles["missing_roles"],
+    )
     findings.extend(primary_model_retention_findings(model_retention))
     findings.extend(_missing_category_complete_case_findings(plan))
     findings.extend(_complete_case_repeats_primary_findings(plan))
@@ -5085,6 +5120,7 @@ def build_plan_scientific_review(
             ),
             "primary_covariates": list(covariates),
             "requested_outcomes": list(expected_outcomes),
+            "required_plan_shape": [item.model_dump(mode="json") for item in required_shape],
             "requested_estimate_coverage": {
                 "schema_version": "easyicu.requested_estimate_coverage/1",
                 "exposure_occurrence": {

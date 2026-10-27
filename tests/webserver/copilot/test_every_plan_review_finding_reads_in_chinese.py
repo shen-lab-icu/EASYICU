@@ -92,6 +92,16 @@ def test_a_requested_variable_without_data_has_the_reviewed_next_step() -> None:
     ) in html
 
 
+def test_the_context_required_descriptive_primary_shape_reads_in_chinese() -> None:
+    html = _render_zh([{
+        "code": "DESCRIPTIVE_PRIMARY_SUMMARY_MISSING", "severity": "blocker",
+        "message": "Host message for the context-required empirical summary.",
+    }])
+    assert "缺少描述性主要汇总" in html
+    assert "主要步骤汇总指定测量的取值（总体或按已声明的分组）" in html
+    assert "问题要求的分组汇总仍由次要步骤报告" in html
+
+
 def test_unimplemented_sensitivity_is_shown_in_the_runtime_lane() -> None:
     html = _render_zh([{
         "code": "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED", "severity": "major",

@@ -456,6 +456,188 @@ def _blocker(code, **kwargs):
     })
 
 
+def test_a_finding_authorizes_only_its_exact_structural_repair():
+    from tests.research_agent.planning.scientific_review_fixtures import _context
+
+    previous = _revision_plan()
+    remediation = {
+        "operation": "add_step", "module": "continuous_outcome_summary", "action": None,
+        "planned_analysis_role": "secondary", "inputs": ["exposure", "death", "age"],
+    }
+    finding = _blocker("REQUESTED_OUTCOME_COVERAGE_INCOMPLETE", structural_remediations=[remediation])
+    guard = _revision_guard(previous, finding)
+    step = _revision_step("continuous_outcome_summary", "secondary", inputs=["exposure", "death"])
+    receipt = guard.validate_plan(plan=_revision_plan(step), context=_context())
+    assert receipt.structural_changes[0].finding_code == finding.code
+    assert receipt.structural_changes[0].step_id == step.step_id
+    assert "continuous_outcome_summary" in guard.prompt_contract()
+    for steps in (
+        [step.model_copy(update={"inputs": [*step.inputs, "charlson"]})],
+        [step, step.model_copy(update={"step_id": "duplicate"})],
+        [step, _revision_step("charlson_score", "auxiliary", step_id="charlson")],
+        [step.model_copy(update={"method": "charlson_score"})],
+        [step.model_copy(update={"planned_analysis_role": "sensitivity"})],
+        [step.model_copy(update={"scientific_action_id": "association.effect_modification"})],
+    ):
+        with pytest.raises(owner.ResearchPipelineRunError, match="unrequested"):
+            guard.validate_plan(plan=_revision_plan(*steps), context=_context())
+
+
+def test_a_finding_replaces_only_the_named_source_step():
+    from tests.research_agent.planning.scientific_review_fixtures import _context
+
+    previous = _revision_plan(_revision_step("wrong_summary", "secondary"))
+    finding = _blocker("REQUESTED_OUTCOME_COVERAGE_INCOMPLETE", structural_remediations=[{
+        "operation": "replace_module", "step_id": "extra", "module": "continuous_outcome_summary",
+        "planned_analysis_role": "secondary", "inputs": ["exposure", "death"],
+    }])
+    step = _revision_step("continuous_outcome_summary", "secondary", inputs=["exposure", "death"])
+    guard = _revision_guard(previous, finding)
+    receipt = guard.validate_plan(plan=_revision_plan(step), context=_context())
+    assert receipt.structural_changes[0].remediation.operation == "replace_module"
+    with pytest.raises(owner.ResearchPipelineRunError):
+        guard.validate_plan(plan=_revision_plan(step.model_copy(update={"step_id": "different"})), context=_context())
+    with pytest.raises(owner.ResearchPipelineRunError):
+        guard.validate_plan(plan=_revision_plan(
+            previous.steps[-1].model_copy(update={"step_id": "retained_elsewhere"}), step,
+        ), context=_context())
+
+
+def test_a_legacy_finding_and_guard_keep_their_serialized_behavior():
+    from tests.research_agent.planning.scientific_review_fixtures import _context
+
+    previous = _revision_plan()
+    finding = _blocker("REQUESTED_OUTCOME_COVERAGE_INCOMPLETE")
+    assert "structural_remediations" not in finding.model_dump(mode="json")
+    guard = _revision_guard(previous, finding)
+    before = guard.review.model_dump_json()
+    assert guard.validate_plan(plan=previous, context=_context()) is None
+    assert guard.review.model_dump_json() == before
+    with pytest.raises(owner.ResearchPipelineRunError):
+        guard.validate_plan(plan=_revision_plan(_revision_step("continuous_outcome_summary", "secondary")), context=_context())
+
+
+@pytest.mark.parametrize("change", ["route", "authorization"])
+def test_a_structural_scope_cannot_override_the_findings_authority_lane(change):
+    from tests.research_agent.planning.scientific_review_fixtures import _context
+
+    finding = _blocker("REQUESTED_OUTCOME_COVERAGE_INCOMPLETE", structural_remediations=[{
+        "operation": "add_step", "module": "continuous_outcome_summary",
+        "planned_analysis_role": "secondary", "inputs": ["exposure", "death"],
+    }], **({"remediation_route": "runtime_capability"} if change == "route" else {"requires_user_authorization": True}))
+    step = _revision_step("continuous_outcome_summary", "secondary", inputs=["exposure", "death"])
+    with pytest.raises(owner.ResearchPipelineRunError):
+        _revision_guard(_revision_plan(), finding).validate_plan(plan=_revision_plan(step), context=_context())
+
+
+@pytest.mark.parametrize("reordered", [False, True])
+def test_equivalent_remediations_on_two_findings_do_not_authorize_two_steps(reordered):
+    from tests.research_agent.planning.scientific_review_fixtures import _context
+
+    remediation = {
+        "operation": "add_step", "module": "continuous_outcome_summary",
+        "planned_analysis_role": "secondary", "inputs": ["exposure", "death"],
+    }
+    findings = [
+        _blocker("FIRST", structural_remediations=[remediation]),
+        _blocker("SECOND", structural_remediations=[{
+            **remediation, "inputs": list(reversed(remediation["inputs"])) if reordered else remediation["inputs"],
+        }]),
+    ]
+    step = _revision_step("continuous_outcome_summary", "secondary", inputs=["exposure", "death"])
+    guard = _revision_guard(_revision_plan(), *findings)
+    with pytest.raises(owner.ResearchPipelineRunError):
+        guard.validate_plan(plan=_revision_plan(step, step.model_copy(update={"step_id": "duplicate"})), context=_context())
+
+
+def test_the_final_admission_persists_each_authorizing_finding(tmp_path):
+    from easyicu.research_agent.orchestration.services import PipelineServices
+    from tests.research_agent.planning.scientific_review_fixtures import _context
+
+    finding = _blocker("REQUESTED_OUTCOME_COVERAGE_INCOMPLETE", structural_remediations=[{
+        "operation": "add_step", "module": "continuous_outcome_summary",
+        "planned_analysis_role": "secondary", "inputs": ["exposure", "death"],
+    }])
+    step = _revision_step("continuous_outcome_summary", "secondary", inputs=["exposure", "death"])
+    guard = _revision_guard(_revision_plan(), finding)
+    plan = _revision_plan(step)
+    services = PipelineServices(plan_revision_guard=guard)
+    services.validate_plan_revision(plan=plan, context=_context(), run_dir=tmp_path)
+    receipt = json.loads((tmp_path / "plan_revision_receipt.json").read_text())
+    assert receipt["source_plan_sha256"] == guard.review.plan_sha256
+    assert receipt["revised_plan_sha256"] == owner.canonical_sha256(plan.model_dump(mode="json"))
+    assert [(change["finding_code"], change["step_id"]) for change in receipt["structural_changes"]] == [(finding.code, "extra")]
+
+
+@pytest.mark.parametrize("payload", [
+    {"operation": "replace_module"},
+    {"operation": "add_step", "step_id": "old"},
+    {"operation": "add_step", "module": None},
+    {"operation": "add_step", "inputs": ["death", "death"]},
+    {"operation": "add_step", "inputs": [""]},
+])
+def test_structural_remediation_requires_an_exact_bounded_operation(payload):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        _blocker("REQUESTED_OUTCOME_COVERAGE_INCOMPLETE", structural_remediations=[{
+            "operation": "add_step", "module": "continuous_outcome_summary",
+            "planned_analysis_role": "secondary", "inputs": ["exposure", "death"], **payload,
+        }])
+
+
+def test_an_add_scope_cannot_replace_an_existing_step_identity():
+    from tests.research_agent.planning.scientific_review_fixtures import _context
+
+    previous = _revision_plan(_revision_step("wrong_summary", "secondary"))
+    finding = _blocker("REQUESTED_OUTCOME_COVERAGE_INCOMPLETE", structural_remediations=[{
+        "operation": "add_step", "module": "continuous_outcome_summary",
+        "planned_analysis_role": "secondary", "inputs": ["exposure", "death"],
+    }])
+    step = _revision_step("continuous_outcome_summary", "secondary", inputs=["exposure", "death"])
+    with pytest.raises(owner.ResearchPipelineRunError):
+        _revision_guard(previous, finding).validate_plan(plan=_revision_plan(step), context=_context())
+
+
+def test_a_consumed_model_scope_cannot_fall_back_to_the_old_question_path():
+    from easyicu.research_agent.contracts.model_terms import ModelTermSpec
+    from easyicu.research_agent.schema import ConceptDescriptor
+    from tests.research_agent.planning.scientific_review_fixtures import _context, _plan
+
+    context = _context()
+    context = context.model_copy(update={
+        "variables": [*context.variables, ConceptDescriptor(name="response", role="outcome", dtype="float64")],
+        "cohort": context.cohort.model_copy(update={"requested_outcome_columns": ["death", "response"]}),
+    })
+    previous = _plan()
+    primary = previous.steps[0]
+    secondary = primary.model_copy(update={
+        "step_id": "response_model", "planned_analysis_role": "secondary",
+        "inputs": ["exposure", "response", "age"],
+        "model_requirements": [primary.model_requirements[0].model_copy(update={
+            "requirement_id": "response_model", "outcome": "response", "analysis_role": "secondary",
+            "outcome_type": "continuous", "method_family": "statsmodels_ols",
+        })],
+    })
+    finding = _blocker("REQUESTED_OUTCOME_COVERAGE_INCOMPLETE", structural_remediations=[{
+        "operation": "add_step", "module": primary.method, "action": primary.scientific_action_id,
+        "planned_analysis_role": "secondary", "inputs": secondary.inputs,
+    }])
+    guard = _revision_guard(previous, finding)
+    revised = previous.model_copy(update={"steps": [*previous.steps, secondary]})
+    assert len(guard.validate_plan(plan=revised, context=context).structural_changes) == 1
+    hidden = secondary.model_copy(update={"model_requirements": [secondary.model_requirements[0].model_copy(update={
+        "covariates": ["age", "charlson"], "model_terms": [*secondary.model_requirements[0].model_terms,
+            ModelTermSpec(name="charlson", role="covariate", coding="continuous", transform="identity")],
+    })]})
+    with pytest.raises(owner.ResearchPipelineRunError):
+        guard.validate_plan(plan=previous.model_copy(update={"steps": [*previous.steps, hidden]}), context=context)
+    with pytest.raises(owner.ResearchPipelineRunError):
+        guard.validate_plan(plan=revised.model_copy(update={"steps": [
+            *revised.steps, secondary.model_copy(update={"step_id": "duplicate_model"}),
+        ]}), context=context)
+
+
 @pytest.mark.parametrize("change", ["remove", "rename", "reorder", "binding"])
 def test_revision_allows_removal_and_binding_repair_without_using_step_ids(change):
     from tests.research_agent.planning.scientific_review_fixtures import _context, _plan

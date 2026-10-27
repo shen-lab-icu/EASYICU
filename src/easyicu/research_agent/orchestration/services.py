@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -58,6 +59,7 @@ class PipelineServices:
     def validate_plan_revision(
         self, *, plan: Any, context: Any,
         before_runtime_binding: Optional[ScientificRuntimeAuthorities] = None,
+        run_dir: Path | None = None,
     ) -> None:
         """Compare repairs at the same stage as the reviewed source plan.
 
@@ -71,12 +73,15 @@ class PipelineServices:
             or before_runtime_binding.trajectory is not None
         ):
             return
+        receipt = None
         if self.plan_revision_guard is not None:
-            self.plan_revision_guard.validate_plan(plan=plan, context=context)
+            receipt = self.plan_revision_guard.validate_plan(plan=plan, context=context)
         from easyicu.extensions.method_attachments import validate_attached_methods
 
         if before_runtime_binding is None:
             validate_attached_methods(plan=plan, context=context)
+        if receipt is not None and run_dir is not None:
+            (run_dir / "plan_revision_receipt.json").write_text(receipt.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
     def canonical_payload(self) -> Dict[str, Optional[str]]:
         """Return type identities only; never serialize live object state."""
