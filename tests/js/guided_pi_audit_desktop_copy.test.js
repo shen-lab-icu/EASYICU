@@ -69,7 +69,7 @@ for (const language of ['zh', 'en']) {
     assert.ok(html.includes(zh ? 'aria-label="思考深度：中"' : 'aria-label="Reasoning depth：Medium"'));
     assert.ok(html.includes(zh ? 'aria-label="本对话的思考深度"' : 'aria-label="Reasoning depth for this conversation"'));
     assert.doesNotMatch(html.replace(/<[^>]+>/g, ''), /努力|Effort|每轮更慢|slower and uses more/i);
-    assert.ok(html.includes(zh ? '回复可能更慢，用量也会增加。' : 'Replies may take longer and use more tokens.'));
+    assert.ok(html.includes(zh ? '对话助手对疑难问题想得更深；回复更慢，用量更多。' : 'replies are slower and use more tokens.'));
   });
 
   for (const applied of ['minimal', 'off']) {

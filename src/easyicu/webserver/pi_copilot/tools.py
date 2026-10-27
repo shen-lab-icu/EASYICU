@@ -222,6 +222,10 @@ def _privileged_action_inferred(context: ToolExecutionContext, action: str) -> b
 def _consume_action(
     context: ToolExecutionContext, action: str
 ) -> Optional[Dict[str, Any]]:
+    details = {
+        "required_action": action,
+        "grantable_by_turn": action not in _PRIVILEGED_ONE_SHOT_ACTIONS,
+    }
     if not _privileged_action_inferred(context, action):
         return _result(
             context,
@@ -229,6 +233,7 @@ def _consume_action(
             code="pi_action_authorization_required",
             summary=f"This action requires a one-use {action} grant for the current message.",
             owner="easyicu.webserver.pi_copilot",
+            details=details,
         )
     outcome = context.grant.consume_once(action)
     if outcome == "granted":
@@ -240,6 +245,7 @@ def _consume_action(
             code="pi_action_grant_consumed",
             summary=f"The one-use {action} grant for this message was already consumed.",
             owner="easyicu.webserver.pi_copilot",
+            details=details,
         )
     return _result(
         context,
@@ -247,6 +253,7 @@ def _consume_action(
         code="pi_action_authorization_required",
         summary=f"This action requires a one-use {action} grant for the current message.",
         owner="easyicu.webserver.pi_copilot",
+        details=details,
     )
 
 
@@ -3946,6 +3953,9 @@ def _run(
             ),
             summary="This provider run requires its explicit one-use action grant.",
             owner="easyicu.webserver.provider_gate",
+            details={"required_action": provider_action, "grantable_by_turn": False}
+            if report_source_run_id or context.grant.was_provided(provider_action)
+            else None,
         )
     if not study or not study.get("id"):
         return _result(
@@ -4014,6 +4024,8 @@ def _run(
                             f"This action requires a one-use {action} grant for the current message."
                         ),
                         "owner": "easyicu.webserver.pi_copilot",
+                        "required_action": action,
+                        "grantable_by_turn": False,
                     }
                 )
             outcome = context.grant.consume_once(action)
@@ -4033,6 +4045,8 @@ def _run(
                         else f"This action requires a one-use {action} grant for the current message."
                     ),
                     "owner": "easyicu.webserver.pi_copilot",
+                    "required_action": action,
+                    "grantable_by_turn": False,
                 }
             )
 

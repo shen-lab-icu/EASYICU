@@ -16,8 +16,8 @@
           '官方 Demo 准备流程',
         ))
         .replace(/\bpi_action_authorization_required\b/gi, tr(
-          'the required EasyICU data authorization is not active for this turn',
-          '本轮数据准备授权尚未生效',
+          'this step needs your go-ahead',
+          '这一步需要你同意',
         ))
         .replace(/\bpi_session_data_source_confirmation_required\b/gi, tr(
           'this conversation still needs the selected data source to be confirmed',

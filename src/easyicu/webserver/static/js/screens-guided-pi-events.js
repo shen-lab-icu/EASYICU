@@ -21,6 +21,7 @@
       governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
       togglePresentationPin, configureProvider, rememberSession, recordHostAction,
       HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP, MESSAGE_QUEUE, QUICK_ANSWERS, MULTI_DATABASE,
+      ACCESS, turnGrants,
     } = options;
 
     // Outside presses, Escape, and opening another menu are handled for every
@@ -332,6 +333,12 @@
         if (IDEA_SOURCE && IDEA_SOURCE.handleClick(event, {
           host: () => state.host, render, tr,
         })) return;
+        if (ACCESS && ACCESS.handleClick(event, {
+          busy: () => Boolean(state.busy || state.childJobId),
+          setMode: mode => { state.accessMode = mode; },
+          grants: turnGrants,
+          send: (text, grants) => sendText(text, grants, undefined, true, 'host_prompt'),
+        })) return;
         if (EFFORT_MENU && EFFORT_MENU.handleClick(event, {
           session: () => state.session, busy: () => Boolean(state.busy || state.childJobId),
           projectId, api, render, setSession: value => { state.session = value; },
@@ -389,7 +396,9 @@
         if (accessMode) {
           const menu = accessMode.closest('details[data-popover-menu]');
           if (menu) menu.removeAttribute('open');
-          state.accessMode = accessMode.dataset.gpiAccessMode || 'assist'; render(); return;
+          state.accessMode = ACCESS ? ACCESS.normalize(accessMode.dataset.gpiAccessMode) : accessMode.dataset.gpiAccessMode || 'assist';
+          if (ACCESS) ACCESS.remember(state.accessMode);
+          render(); return;
         }
         const researchProvider = event.target.closest('[data-gpi-research-provider]');
         if (researchProvider) {

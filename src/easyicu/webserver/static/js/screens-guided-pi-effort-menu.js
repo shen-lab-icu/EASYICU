@@ -4,7 +4,9 @@
    start at the remembered choice (default medium); changing it mid-
    conversation goes through the host route so the session record and the
    bridge agree. Whatever the level, the trace shows only the bounded,
-   sanitized reasoning summary the bridge projects. */
+   sanitized reasoning summary the bridge projects. The level is the
+   conversation assistant's only: Research Agent planning and review calls
+   use their own per-role effort profile. */
 (function () {
   'use strict';
 
@@ -46,9 +48,9 @@
     return {
       off: tr('No effort level is sent; the model service applies its own default (where a model without an effort setting clamps to).', '不向模型指定推理档位，由模型服务按自身默认处理（所选模型不接受推理档位时会收敛到此状态）。'),
       minimal: tr('The model selected this level automatically.', '模型自动采用此档位。'),
-      low: tr('Brief reasoning, faster replies; enough for status checks and rewording.', '简短推理，回复更快；查看状态、改措辞时够用。'),
-      medium: tr('Default. Routine reasoning for planning research steps and explaining results.', '默认。规划研究步骤、解释结果的常规推理。'),
-      high: tr('Deep reasoning for plan reviews and hard questions. Replies may take longer and use more tokens.', '深入思考，用于核对计划和疑难问题。回复可能更慢，用量也会增加。'),
+      low: tr('The conversation assistant reasons briefly and replies faster.', '对话助手简短推理，回复更快。'),
+      medium: tr('Default for the conversation assistant.', '对话助手的默认档位。'),
+      high: tr('The conversation assistant thinks harder about difficult questions; replies are slower and use more tokens.', '对话助手对疑难问题想得更深；回复更慢，用量更多。'),
     }[normalize(level)];
   }
 

@@ -65,6 +65,12 @@ def _result(
 def _consume_action(
     context: ToolExecutionContext, action: str
 ) -> Optional[Dict[str, Any]]:
+    from .service import PRIVILEGED_ONE_SHOT_TURN_ACTIONS
+
+    details = {
+        "required_action": action,
+        "grantable_by_turn": action not in PRIVILEGED_ONE_SHOT_TURN_ACTIONS,
+    }
     outcome = context.grant.consume_once(action)
     if outcome == "granted":
         return None
@@ -75,6 +81,7 @@ def _consume_action(
             code="pi_action_grant_consumed",
             summary=f"The one-use {action} grant for this message was already consumed.",
             owner="easyicu.webserver.pi_copilot",
+            details=details,
         )
     return _result(
         context,
@@ -82,6 +89,7 @@ def _consume_action(
         code="pi_action_authorization_required",
         summary=f"This action requires a one-use {action} grant for the current message.",
         owner="easyicu.webserver.pi_copilot",
+        details=details,
     )
 
 
