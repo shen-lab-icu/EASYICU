@@ -21,7 +21,8 @@ ROUTES_WITHOUT_SESSION = {
     "cohort": "/#cohort",
     "crossdb": "/#crossdb",
     "dictionary": "/#dictionary",
-    "datamap": "/#datamap",
+    # The data dictionary's study-type view (the retired Data map's links open it).
+    "dictionary/studies": "/#dictionary/studies",
     "tutorial": "/#tutorial",
 }
 SESSION_ROUTE = "guided"

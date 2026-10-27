@@ -106,7 +106,7 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_pi_project_open.test.js": [],
     "help_whats_new.test.js": [],
     "skills_tools.test.js": [],
-    "datamap.test.js": [],
+    "dictionary_study_types.test.js": [],
     "guided_pi_review_items.test.js": [],
     "guided_pi_result_followups.test.js": [],
     "settings_personalization.test.js": [],
@@ -327,6 +327,9 @@ CONTRACTS: dict[str, list[str]] = {
     ],
     "dictionary_hosted_instance.test.js": ["database-names.js", "screens-dict.js"],
     "dictionary_variant_fold.test.js": ["database-names.js", "screens-dict.js"],
+    "dictionary_substitutes_and_study_view.test.js": [
+        "html-escape.js", "database-names.js", "study-family-names.js", "screens-dict-studies.js", "screens-dict.js",
+    ],
     "review_echarts_owners.test.js": [
         "screens-viz-echarts.js",
         "screens-viz-crossdb-charts.js",

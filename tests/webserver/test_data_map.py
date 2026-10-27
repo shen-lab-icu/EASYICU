@@ -33,7 +33,7 @@ def build(**kwargs):
     return build_data_map(**kwargs).model_dump(mode="json")
 
 
-def test_map_projects_the_six_profiles_without_claiming_real_data_acceptance():
+def test_map_projects_the_six_profiles_and_claims_no_acceptance():
     result = build(concept="hr")
     profiles = iter_database_profiles(public_only=True)
     assert [row["database"] for row in result["databases"]] == [p.key for p in profiles]
@@ -42,7 +42,8 @@ def test_map_projects_the_six_profiles_without_claiming_real_data_acceptance():
         facts = research_capability_profile(profile.key)
         assert row["profile"] == profile.model_dump(mode="json")
         assert row["capabilities"] == facts.model_dump(mode="json", exclude={"concepts"})
-        assert row["real_data_acceptance"] == "not_accepted"
+        # Acceptance on real data is tracked internally, never stated in the map.
+        assert "real_data_acceptance" not in row
         for name in ("years", "population_size", "sampling_resolution"):
             assert row[name] == {"value": None, "reason_code": "not_declared_by_metadata_owners"}
         assert row["sources"] == []
@@ -245,3 +246,28 @@ def test_projection_never_changes_the_sealed_dictionary():
     before = path.read_bytes()
     build()
     assert path.read_bytes() == before
+
+
+def test_the_dictionary_names_each_variable_a_database_holds_only_as_a_substitute(monkeypatch):
+    from easyicu.webserver.catalog import build_catalog
+    from easyicu.webserver.data_map import concept_substitutes
+
+    substitutes = concept_substitutes()
+    # Bands named by their width or, when uneven, by their labels; an age
+    # exact only up to a limit; another mortality endpoint than hospital death.
+    assert substitutes["age"]["hirid"] == {"kind": "binned", "bin_width": 5.0, "top_code": 90.0}
+    assert substitutes["age"]["aumc"]["bin_labels"][0] == "18-39"
+    assert substitutes["age"]["miiv"] == {"kind": "capped_or_shifted", "exact_through": 89.0}
+    assert substitutes["death"]["hirid"]["meaning"] == "icu_death"
+    assert "miiv" not in substitutes["death"] and "miiv" not in substitutes.get("weight", {})
+    assert set(substitutes) <= {"age", "weight", "death"}
+    # The data map's cells and the dictionary read the same facts.
+    for name, by_database in substitutes.items():
+        for row in build(concept=name)["databases"]:
+            cell, = row["concepts"]
+            assert (cell["status"] == "substituted") == (row["database"] in by_database)
+    # The dictionary itself reads the registry; this one has no sources.
+    monkeypatch.setattr(sources, "load_registry", lambda *args, **kwargs: {"sources": []})
+    coverage = build_catalog()["conceptCoverage"]
+    assert coverage["age"]["substitutes"] == substitutes["age"]
+    assert "substitutes" not in coverage["hr"]

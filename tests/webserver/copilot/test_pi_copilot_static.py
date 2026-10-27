@@ -151,7 +151,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-confirmation.js?v=20261027-dc1" in index
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
-    assert "js/screens-datamap.js?v=20261026-cal1copy" in index
+    assert "js/screens-dict-studies.js?v=20261027-dmap1" in index
     assert "js/screens-guided-pi-skill-attach.js?v=20261026-attach1" in index
     # "@" mentions: databases, variables and project files resolved by the host (mt1).
     assert "js/screens-guided-pi-mentions.js?v=20261027-chip1" in index
