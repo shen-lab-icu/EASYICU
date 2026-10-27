@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 
 import pandas as pd
@@ -21,6 +22,16 @@ from easyicu.research_agent.schema import TableOneSpec, TableOneVariableSpec
 
 from .contracts import QuickStop
 from .planning import population_receipt
+from .source import patient_groups
+
+
+def _first_stays_orderable(context) -> bool:
+    """What preparation recorded: whether a first-ICU-stay question can be prepared."""
+    try:
+        constraints = json.loads(context.user_preferences.data_constraints or "{}")
+    except (TypeError, ValueError):
+        return False
+    return constraints.get("first_icu_stays_orderable") is True
 
 
 def _load(source, plan):
@@ -52,12 +63,18 @@ def _load(source, plan):
         raise QuickStop("quick_source_metadata_mismatch")
     if frame[source.unit_column].isna().any() or frame[source.unit_column].duplicated().any():
         raise QuickStop("quick_unit_identity_invalid")
+    # Patients are read over every prepared stay, then looked up for the
+    # population's stays: a test needs each of them to be a different patient.
+    patients = patient_groups(source, frame) if plan.test else {}
     frame = build_cohort(definition, frame, column_bindings=bindings,
                          whole_stay_columns=tuple(whole_stay_event_columns(context)))
     if frame.empty:
         raise QuickStop("quick_population_empty")
-    if plan.test and (frame[source.patient_column].isna().any() or frame[source.patient_column].duplicated().any()):
-        raise QuickStop("quick_repeated_units_require_full_study")
+    if plan.test:
+        rows = frame[source.unit_column].map(patients)
+        if frame[source.patient_column].isna().any() or rows.isna().any() or rows.duplicated().any():
+            raise QuickStop("quick_repeated_units_ask_first_stay" if _first_stays_orderable(context)
+                            else "quick_repeated_units_require_full_study")
     for name, levels in ((plan.measure_column, plan.measure_levels), (plan.group_column, plan.group_levels)):
         if name is None:
             continue

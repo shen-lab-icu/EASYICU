@@ -12,10 +12,12 @@ from pathlib import Path
 from easyicu.databases.research_capabilities import research_capability_profile
 from easyicu.databases.research_requirements import assess_study
 from easyicu.research_agent.acquisition.foundation import acquire_universe_for_question
+from easyicu.research_agent.planning.dependence_authority import context_patient_group_authority
 from easyicu.research_agent.planning.population_compile import population_spec_concepts
+from easyicu.research_agent.planning.population_spec import FirstIcuStay
 from easyicu.research_agent.providers.client_trust import require_credentialed_data_clearance
 from easyicu.research_agent.research_context.builder import build_research_context
-from easyicu.webserver import dataio, sources
+from easyicu.webserver import dataio, source_identity_authority, sources
 
 from .contracts import QuickProposal, QuickReading, QuickStop, StudyHandoff
 from .planning import _effective, _requirements, bind_concept_names, prepare_quick_answer, qualification_stop
@@ -37,6 +39,43 @@ def _preparation_budget(receipt, export_path):
         size += sum(metadata.row_group(i).total_byte_size for i in range(metadata.num_row_groups))
         if metadata.num_rows > 2_000_000 or size > MAX_PREPARATION_BYTES:
             raise QuickStop("quick_prepared_source_too_large")
+
+
+def _verified_identity(export_path, database, population):
+    """The source's verified patient grouping and, when asked, first-stay coordinate.
+
+    Both come from the owners a full study binds; a source without one (or
+    whose authority fails its checks) is unverified, never guessed.
+    """
+    authority = source_identity_authority
+    try:
+        grouping = authority.resolve_study_patient_grouping(export_path=export_path, database=database)
+    except authority.PatientGroupingAuthorityError:
+        grouping = None
+    first_stay = None
+    if any(isinstance(item, FirstIcuStay) for item in population.criteria):
+        try:
+            first_stay = authority.resolve_study_first_icu_stay(export_path=export_path, database=database)
+        except authority.PatientGroupingAuthorityError:
+            first_stay = None
+    return grouping, first_stay
+
+
+def _first_stays_orderable(export_path, database) -> bool:
+    """Whether the bound raw source can order each patient's ICU stays.
+
+    A repeated-patient stop offers "ask about each patient's first ICU stay"
+    only where that criterion can be prepared (``resolve_study_first_icu_stay``).
+    """
+    from easyicu.webserver import raw_source_authority
+
+    try:
+        binding = raw_source_authority.resolve_raw_hospital_source_binding(
+            export_path=export_path, database=database,
+        )
+    except raw_source_authority.RawSourceAuthorityError:
+        return False
+    return bool(binding is not None and getattr(binding, "first_icu_stay_available", False))
 
 
 def prepare_registered_question(
@@ -80,6 +119,7 @@ def prepare_registered_question(
         # static demographic module, preserving stays with missing measures.
         static = tuple(dict.fromkeys(("age", *(c for c in concepts if c != effective.measure.concept or effective.measure.summary == "value"))))
         window = effective.measure.window
+        grouping, first_stay = _verified_identity(export_path, database, effective.population)
         acquired = acquire_universe_for_question(
             export_dir=export_path, question=reading.question, llm=None, output_dir=output_dir,
             database=database, target_outcome=None, outcome_concepts=(), require_outcome=False,
@@ -87,18 +127,24 @@ def prepare_registered_question(
             static_concepts=static,
             concept_selection_authority="host_exact", emit_trajectory=False,
             cohort_window=(window.start_hours, window.end_hours) if window else (0.0, 24.0),
+            patient_grouping=grouping, first_icu_stay=first_stay,
         )
         if acquired.blocked or acquired.universe_path is None:
             raise QuickStop("quick_prepared_source_required")
+        # A grouped universe keys each stay as p<patient>:s<stay>.
+        unit = grouping.output_identity_column if grouping is not None else "stay_id"
         context = build_research_context(
             research_question=reading.question, cohort=acquired.universe_path,
-            cohort_name="quick_answer", database=database, id_columns=["stay_id"],
+            cohort_name="quick_answer", database=database, id_columns=[unit],
             outcome_columns=[], user_preferences={"data_constraints": json.dumps({
                 "source_identity": identity.to_dict(),
+                "first_icu_stays_orderable": grouping is not None and _first_stays_orderable(export_path, database),
             })},
         )
+        issued = context_patient_group_authority(context)
         source = bind_prepared_source(
-            acquired.universe_path, context=context, identity=identity, unit_column="stay_id",
+            acquired.universe_path, context=context, identity=identity, unit_column=unit,
+            patient_column=issued.group_source if issued is not None else None,
         )
         return prepare_quick_answer(reading, source=source, provider=provider, question=question), source
     except ProviderConfigurationError:
