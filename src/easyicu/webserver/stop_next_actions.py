@@ -30,7 +30,6 @@ ActionKind = Literal[
     "drop_variable",
     "retry",
     "rephrase_in_scope",
-    "open_provider_settings",
     "reexport_data",
 ]
 _CODE = re.compile(r"[a-z][a-z0-9_]{0,79}")
@@ -57,12 +56,6 @@ class RetryParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     route: Literal["retry"] = "retry"
-
-
-class ProviderSettingsParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    route: Literal["provider_settings"] = "provider_settings"
 
 
 class DataExtractionParams(BaseModel):
@@ -92,12 +85,11 @@ class StopNextAction(BaseModel):
     action_id: str = Field(pattern=r"^[a-z_]+_[a-f0-9]{16}$")
     kind: ActionKind
     label_key: str
-    params: PlanEditParams | RetryParams | ScopeParams | ProviderSettingsParams | DataExtractionParams
+    params: PlanEditParams | RetryParams | ScopeParams | DataExtractionParams
 
     @model_validator(mode="after")
     def _matching_params(self) -> StopNextAction:
         expected = {
-            "open_provider_settings": ProviderSettingsParams,
             "reexport_data": DataExtractionParams,
             "retry": RetryParams,
             "rephrase_in_scope": ScopeParams,
@@ -458,7 +450,7 @@ def source_stop_coordinates(payload: Any) -> dict[str, Any]:
 
 def _action(
     kind: ActionKind,
-    params: PlanEditParams | RetryParams | ScopeParams | ProviderSettingsParams | DataExtractionParams,
+    params: PlanEditParams | RetryParams | ScopeParams | DataExtractionParams,
 ) -> StopNextAction:
     content = json.dumps(
         [kind, params.model_dump(mode="json", exclude_none=True)], sort_keys=True
@@ -515,8 +507,6 @@ def next_actions_for_stop(
     }:
         return [_action("reexport_data", DataExtractionParams())]
     policy = STOP_POLICIES.get(reason, "edit_plan")
-    if policy == "provider_settings":
-        return [_action("open_provider_settings", ProviderSettingsParams())]
     if reason not in _RETRY_CODES and inner in _SCOPE_CODES:
         policy = "scope"
     if reason not in _RETRY_CODES and (inner in _DATA_CODES or cause in _DATA_CODES):

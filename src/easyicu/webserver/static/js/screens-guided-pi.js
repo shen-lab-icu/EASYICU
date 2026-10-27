@@ -656,7 +656,6 @@
       state.runtime = payload && payload.runtime;
       restoreConfiguredResearchProvider();
       await loadCodexResearchStatus(false);
-      await PROVIDER_CONTROL.declaration.load(false);
       if (projectId()) {
         try { await prepareProject(); }
         catch (error) { state.error = errorText(error); }

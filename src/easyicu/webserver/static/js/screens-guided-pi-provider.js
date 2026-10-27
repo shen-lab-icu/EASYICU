@@ -188,22 +188,11 @@
       </form>`;
   }
 
-  // How the saved API connection handles credentialed data
-  // (screens-guided-pi-provider-declaration.js).
-  function declarationSection(options) {
-    const owner = window.EasyICU.guidedPi.optional('providerDeclaration');
-    return owner ? owner.renderSection(options) : '';
-  }
-
   // The choice, form and error, shared by the connection page and the
-  // connection dialog that a step needing a model opens. The credentialed-data
-  // declaration is asked only when a run needed it (state.declarationAsked,
-  // set by the stopped run's action), and then it leads the page.
+  // connection dialog that a step needing a model opens.
   function renderConnectionBody(options) {
     const { state, tr, esc } = options;
-    const asked = state.researchProvider === 'api' && state.declarationAsked === true;
     return `
-      ${asked ? declarationSection(options) : ''}
       ${connectionChoice({ state, tr, esc })}
       ${state.researchProvider === 'api' ? apiConnectionForm(options) : ''}
       ${state.error ? `<div class="gpi-error inline">${esc(state.error)}</div>` : ''}`;

@@ -45,7 +45,6 @@
       return 'edit';
     }
     if (kind === 'reexport_data' && params.route === 'data_extraction' && params.requires_explicit_choice === true) return 'data';
-    if (kind === 'open_provider_settings' && params.route === 'provider_settings') return 'settings';
     return '';
   }
 
@@ -77,11 +76,7 @@
           const route = actionRoute(action, workflow);
           if (!route || seen.has(route)) continue;
           seen.add(route);
-          if (route === 'settings') {
-            // The declaration is asked on the connection page, at this moment
-            // (screens-guided-pi-provider-control.js handles the click).
-            controls.push(`<button class="btn sm" type="button" data-gpi-stop-declare>${esc(labels.stopAction(action.kind, tr))}</button>`);
-          } else if (route === 'data') {
+          if (route === 'data') {
             controls.push(`<a class="btn sm" href="#extraction">${esc(labels.stopAction(action.kind, tr))}</a>`);
           } else {
             const label = route === 'retry' ? 'retry' : action.kind === 'edit_plan' && (route === 'confirm' || workflow.next_action_code === 'failed_pipeline_execution_retry_available') ? 'edit_plan' : 'plan_edit';
