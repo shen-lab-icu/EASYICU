@@ -1,0 +1,20 @@
+/* Owner: the Data Dictionary's study-type view (js/screens-dict-studies.js). */
+.dst{display:grid;gap:10px;min-width:0}
+.dst-note{margin:0;color:var(--ink-3);font-size:12.5px;line-height:1.5}
+.dst-scroll{max-width:100%;overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.dst-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.dst-table th,.dst-table td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle;white-space:nowrap}
+.dst-table thead th{position:sticky;top:0;background:var(--surface-2);color:var(--ink-3);font-size:11px;font-weight:700}
+.dst-table tbody tr:last-child>*{border-bottom:0}
+.dst-table tbody th{font-weight:600}
+.dst-table td button{display:inline-flex;align-items:center;min-height:24px;padding:0;border:0;background:transparent;cursor:pointer}
+.dst-table td button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:999px}
+.dst-table td button[aria-expanded="true"] .dst-chip{box-shadow:0 0 0 2px var(--accent-border)}
+.dst-chip{display:inline-flex;align-items:center;height:21px;padding:0 8px;border-radius:999px;background:var(--surface-3);color:var(--ink-2);font-size:11px;font-weight:650;white-space:nowrap}
+.dst-chip.is-exact{background:var(--ok-soft);color:var(--ok)}
+.dst-chip.is-substitution{background:var(--warn-soft);color:var(--warn)}
+.dst-chip.is-refused{background:var(--surface-3);color:var(--ink-3)}
+.dst-detail{padding:12px 14px;border:1px solid var(--accent-border);border-radius:10px;background:var(--accent-soft)}
+.dst-detail h3{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 6px;font-size:13.5px}
+.dst-detail ul{margin:0 0 6px;padding-left:18px;font-size:12.5px}
+.dst-detail p{margin:0;color:var(--ink-3);font-size:12.5px}

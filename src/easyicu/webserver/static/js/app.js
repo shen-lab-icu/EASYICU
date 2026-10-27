@@ -25,6 +25,8 @@
     if (r === 'audit')       { window.__euCohortPanel = 'coverage'; window.__euAlias = true; return 'cohort'; }
     if (r === 'sofareclass') { window.__euCohortPanel = 'sofa';     window.__euAlias = true; return 'cohort'; }
     if (r === 'icd')         { window.__euExtractFocusICD = true;   window.__euAlias = true; return 'extraction'; }
+    // The Data map is the data dictionary's study-type view.
+    if (r === 'datamap')     { window.__euDictView = 'studies';     window.__euAlias = true; return 'dictionary'; }
     return r;
   }
   function rawRouteFromHash() {
@@ -41,7 +43,8 @@
   function resolveRoute(raw, opts = {}) {
     const id = normRoute(raw || FALLBACK_ROUTE);
     if (window.SCREENS[id]) {
-      if (opts.rewrite && (raw === 'agent' || RETIRED_ROUTES.has(raw))) replaceHash(id);
+      if (opts.rewrite && raw === 'datamap') replaceHash('dictionary/studies');
+      else if (opts.rewrite && (raw === 'agent' || RETIRED_ROUTES.has(raw))) replaceHash(id);
       return { id, fallback: false };
     }
     const fallback = window.SCREENS[FALLBACK_ROUTE] ? FALLBACK_ROUTE : Object.keys(window.SCREENS)[0];

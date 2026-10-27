@@ -51,7 +51,6 @@
     ['cohort', 'cohort', 'Cohort statistics', '队列统计'],
     ['crossdb', 'benchmark', 'Cross-database', '跨库对比'],
     ['dictionary', 'list', 'Data dictionary', '数据字典'],
-    ['datamap', 'map', 'Data map', '数据地图'],
   ]);
 
   function isDataRoute(route) {

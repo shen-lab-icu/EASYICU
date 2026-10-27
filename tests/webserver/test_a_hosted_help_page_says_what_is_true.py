@@ -116,9 +116,10 @@ def test_the_local_page_keeps_desktop_guidance_and_entry_points() -> None:
     assert 'data-help-question="在 eICU demo 中，不同 ICU 类型的患者，ICU 住院时长有什么差别？"' in body
     # Credentialed data needs the model's declaration, asked when first used.
     assert "研究第一次用到这些数据时，EasyICU 会问你：模型是否在本机运行、服务是否不保留数据，或你是否确认这个外部服务可以处理这些数据" in body
-    # All six databases are offered; none is claimed as accepted on real data yet.
-    assert "目前六个库都还没有通过正常入口的真实数据运行验收" in body
-    assert "已在真实数据上验收的是" not in body
+    # All six databases are offered; the data dictionary shows what each records,
+    # and acceptance on real data is tracked internally, not claimed either way.
+    assert "各库记录了哪些变量、具备哪些研究类型的数据条件，见数据字典" in body
+    assert "验收" not in body and "数据地图" not in body
     # The hosted page's server and administrator claims are not made here.
     for hosted_claim in ("医院服务器", "管理员"):
         assert hosted_claim not in body

@@ -57,7 +57,6 @@ class DatabaseMapRow(Fact):
     years: UndeclaredMetadata = Field(default_factory=UndeclaredMetadata)
     population_size: UndeclaredMetadata = Field(default_factory=UndeclaredMetadata)
     sampling_resolution: UndeclaredMetadata = Field(default_factory=UndeclaredMetadata)
-    real_data_acceptance: Literal["not_accepted"] = "not_accepted"
     concepts: tuple[ConceptCell, ...]
     studies: tuple[StudyCell, ...]
     sources: tuple[RegisteredSource, ...]

@@ -24,7 +24,7 @@ def test_filtered_metadata_serializes_as_json(client):
     assert result["schema_version"] == "easyicu.data-map/1"
     assert [row["database"] for row in result["databases"]] == ["miiv"]
     row, = result["databases"]
-    assert row["real_data_acceptance"] == "not_accepted"
+    assert "real_data_acceptance" not in row
     assert "concepts" not in row["capabilities"]
     assert len(row["concepts"]) == len(row["studies"]) == 1
 

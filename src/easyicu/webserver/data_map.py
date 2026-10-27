@@ -1,5 +1,7 @@
 """Bounded metadata projection; mapping support is not execution acceptance.
 
+The Data Dictionary reads it: its study-type view the family decisions, its
+variables the substitutes (:func:`concept_substitutes`).
 The catalogue owns the concept vocabulary and units; db6a owns capability
 decisions. Stored source registrations supply identity only, with no discovery,
 manifest inspection, observed coverage, or patient rows. Family assessments
@@ -8,7 +10,9 @@ use the owner's minimum requirements, not an invented example study.
 
 from easyicu.concept import catalog
 from easyicu.databases.profiles import get_database_profile, iter_database_profiles
-from easyicu.databases.research_capabilities import ResearchCapabilityProfile, research_capability_profile
+from easyicu.databases.research_capabilities import (
+    MortalityCapability, ResearchCapabilityProfile, research_capability_profile,
+)
 from easyicu.databases.research_requirements import StudyRequirements, assess_study, family_requirements
 from easyicu.research_agent.planning.analysis_types import list_analysis_types
 from easyicu.research_agent.research_context.export_selection import SourceIdentity
@@ -36,16 +40,55 @@ def _next_offset(offset: int, limit: int, total: int) -> int | None:
     return offset + limit if offset + limit < total else None
 
 
-def _concept_cell(profile: ResearchCapabilityProfile, name: str, definitions: dict) -> ConceptCell:
-    fact = profile.concept(name)
-    representation = getattr(profile, name) if name in {"age", "weight"} else None
-    substitute = (representation if fact.mapped and representation is not None
-                  and representation.kind not in {"exact", "unavailable"} else None)
+# The only concepts a database can hold as a substitute: a numeric
+# representation (age, weight) or another mortality endpoint (death).
+_SUBSTITUTABLE = ("age", "weight", "death")
+
+
+def _substitute(profile: ResearchCapabilityProfile, name: str, fact=None):
+    fact = profile.concept(name) if fact is None else fact
+    if not fact.mapped:
+        return None
+    if name in {"age", "weight"}:
+        representation = getattr(profile, name)
+        return (representation if representation is not None
+                and representation.kind not in {"exact", "unavailable"} else None)
     # The catalogue calls death "In-hospital Mortality". Retain the capability
     # owner's actual endpoint, as the existing study-requirements owner does.
-    if (name == "death" and fact.mapped and profile.mortality is not None
-            and profile.mortality.meaning != "hospital_death"):
-        substitute = profile.mortality
+    if name == "death" and profile.mortality is not None and profile.mortality.meaning != "hospital_death":
+        return profile.mortality
+    return None
+
+
+def concept_substitutes() -> dict[str, dict[str, dict]]:
+    """Per concept, the public databases that hold it only as a substitute, and how.
+
+    Only the facts a reader needs: a band width, top band or band labels, the
+    value an exact age runs to, or the mortality meaning and its timing.
+    """
+    found: dict[str, dict[str, dict]] = {}
+    for profile in iter_database_profiles(public_only=True):
+        facts = research_capability_profile(profile.key)
+        for name in _SUBSTITUTABLE:
+            substitute = _substitute(facts, name)
+            if substitute is None:
+                continue
+            if isinstance(substitute, MortalityCapability):
+                fields = {"meaning": substitute.meaning, "time_kind": substitute.time_kind}
+            else:
+                fields = substitute.model_dump(
+                    mode="json", include={"kind", "bin_width", "top_code", "bin_labels", "exact_through"})
+                # Even-width bands are named by their width; labels only otherwise.
+                if fields["bin_width"] is not None:
+                    fields.pop("bin_labels")
+                fields = {key: value for key, value in fields.items() if value not in (None, [])}
+            found.setdefault(name, {})[profile.key] = fields
+    return found
+
+
+def _concept_cell(profile: ResearchCapabilityProfile, name: str, definitions: dict) -> ConceptCell:
+    fact = profile.concept(name)
+    substitute = _substitute(profile, name, fact)
     status = "substituted" if substitute is not None else "available" if fact.mapped else "missing"
     return ConceptCell(
         concept=name, unit=catalog.CONCEPT_DICTIONARY[name][2],

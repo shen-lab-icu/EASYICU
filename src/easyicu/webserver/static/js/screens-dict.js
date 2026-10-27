@@ -1,7 +1,8 @@
 /* Owner: Data Dictionary route. */
 /* Screen: Data Dictionary — the real concept catalog, searchable.
    Native catalog browser with search + category
-   browser over the 19 concept groups, with units and per-database coverage). */
+   browser over the 19 concept groups, with units and per-database coverage).
+   Its study-type view is js/screens-dict-studies.js (window.EU_DICT_STUDIES). */
 (function () {
   const S = (window.SCREENS = window.SCREENS || {});
   const C = () => window.EU_CATALOG;
@@ -14,6 +15,19 @@
   let dictLineageLoading = false;
   let dictLineageError = '';
   let dictShowInternal = false;
+  let dictView = 'concepts';   // 'concepts' | 'studies'
+  // The study-type view has its own address, #dictionary/studies.
+  function hashView() {
+    const hash = typeof location !== 'undefined' ? String(location.hash || '') : '';
+    return hash === '#dictionary/studies' ? 'studies' : hash.startsWith('#dictionary') ? 'concepts' : null;
+  }
+  function showView(view) {
+    dictView = view;
+    if (typeof history !== 'undefined' && typeof location !== 'undefined') {
+      history.replaceState(null, '', `${location.pathname}${location.search}#dictionary${view === 'studies' ? '/studies' : ''}`);
+    }
+    window.__euRender();
+  }
   const DB_NAMES = () => window.EU_DATABASE_NAMES;
 
   function L(en, zh) { return t(en, zh); }
@@ -53,6 +67,37 @@
   function internalCount() { return Object.keys(C().dict || {}).filter(isInternal).length; }
 
   function supportedDbCount() { return (C().supportedDbs || []).length || 6; }
+
+  // How a database holds a variable only as a substitute: the host's facts
+  // (webserver/data_map.py, carried as the catalog's ``substitutes``) — a value
+  // recorded in bands or capped above a limit, or a death counted elsewhere.
+  const UNIT_WORDS = { years: ['year', '岁'], kg: ['kg', 'kg'] };
+  function substituteOf(k, db) { return (((C().conceptCoverage || {})[k] || {}).substitutes || {})[db] || null; }
+  function substituteText(k, sub) {
+    if (!sub) return '';
+    if (sub.meaning) {
+      const words = window.EU_DICT_STUDIES ? window.EU_DICT_STUDIES.meaning(sub.meaning) : '';
+      return words ? L(`Counts ${words}`, `口径为${/^[\x20-\x7e]/.test(words) ? ' ' : ''}${words}`) : '';
+    }
+    const unit = UNIT_WORDS[unitOf(k)] ? L(...UNIT_WORDS[unitOf(k)]) : '';
+    const zhUnit = unit && /^[\x20-\x7e]+$/.test(unit) ? `${unit} ` : unit;
+    if (sub.kind === 'binned' && Number(sub.bin_width) > 0) {
+      const top = sub.top_code == null ? NaN : Number(sub.top_code);
+      return L(`Recorded in ${sub.bin_width}-${unit} bands`, `每 ${sub.bin_width} ${zhUnit}记为一段`)
+        + (Number.isFinite(top) ? L(`; ${top} and above form one band`, `；${top} ${zhUnit}及以上为一段`) : '');
+    }
+    if (sub.kind === 'binned' && Array.isArray(sub.bin_labels) && sub.bin_labels.length) {
+      return L(`Recorded in bands: ${sub.bin_labels.join(', ')}`, `按区间记录：${sub.bin_labels.join('、')}`);
+    }
+    if (sub.kind === 'binned') return L('Recorded in bands', '按区间记录');
+    if (sub.kind === 'capped_or_shifted') {
+      const through = sub.exact_through == null ? NaN : Number(sub.exact_through);
+      return Number.isFinite(through)
+        ? L(`Values above ${through} are capped or shifted`, `${through} ${zhUnit}以上的值被截断或平移`)
+        : L('Values above a limit are capped or shifted', '超过上限的值被截断或平移');
+    }
+    return '';
+  }
 
   function hasOwn(obj, key) {
     return Object.prototype.hasOwnProperty.call(obj || {}, key);
@@ -111,7 +156,14 @@
     const audit = Number.isFinite(audited) && audited < declared.length
       ? `<span class="cov-audit" title="${html(L(`An earlier data audit confirmed usable data in ${audited} of these ${declared.length} databases.`, `早期数据核对只在这 ${declared.length} 个库中的 ${audited} 个确认有可用数据。`))}">${L(`data ${audited}/${declared.length}`, `数据核对 ${audited}/${declared.length}`)}</span>`
       : '';
-    return `<span class="cov-badge cov-declared${derived ? ' is-derived' : ''}" title="${html(title)}"><span class="cov-dbs">${all.map(db => `<i class="${declared.includes(db) ? 'on' : ''}">${html(DB_NAMES().abbr(db) || dbName(db))}</i>`).join('')}</span>${derived ? `<span class="cov-kind">${L('derived', '派生')}</span>` : ''}${audit}</span>`;
+    const mark = db => {
+      if (!declared.includes(db)) return `<i>${html(DB_NAMES().abbr(db) || dbName(db))}</i>`;
+      const note = substituteText(meta.key, substituteOf(meta.key, db));
+      return note
+        ? `<i class="on sub" title="${html(`${dbName(db)}${L(': ', '：')}${note}`)}">${html(DB_NAMES().abbr(db) || dbName(db))}</i>`
+        : `<i class="on">${html(DB_NAMES().abbr(db) || dbName(db))}</i>`;
+    };
+    return `<span class="cov-badge cov-declared${derived ? ' is-derived' : ''}" title="${html(title)}"><span class="cov-dbs">${all.map(mark).join('')}</span>${derived ? `<span class="cov-kind">${L('derived', '派生')}</span>` : ''}${audit}</span>`;
   }
 
   function covBadge(k) {
@@ -119,10 +171,12 @@
     if (inst) {
       const covered = ((C().conceptCoverage || {})[k] || {}).instance_databases_covered || [];
       const cls = covered.length === inst.length ? 'hi' : covered.length ? 'mid' : 'lo';
-      return `<span class="cov-badge ${cls}"><span class="cov-n">${covered.length ? covered.map(dbName).join(' · ') : L('Not in this instance', '本实例无')}</span></span>`;
+      const notes = covered.map(db => [db, substituteText(k, substituteOf(k, db))]).filter(([, note]) => note)
+        .map(([db, note]) => `${dbName(db)}${L(': ', '：')}${note}`);
+      return `<span class="cov-badge ${cls}"${notes.length ? ` title="${html(notes.join(L('; ', '；')))}"` : ''}><span class="cov-n">${covered.length ? covered.map(dbName).join(' · ') : L('Not in this instance', '本实例无')}</span></span>`;
     }
     const meta = coverageOf(k);
-    if (Array.isArray(meta.declared_databases)) return declaredBadge(meta);
+    if (Array.isArray(meta.declared_databases)) return declaredBadge({ ...meta, key: k });
     if (meta.kind === 'derived') {
       return `<span class="cov-badge derived" title="${L('Derived or rule-based output. It is not a separate raw database mapping count.', '派生或规则输出,不是单独的原始数据库映射数量。')}">${L('derived', '派生')}</span>`;
     }
@@ -221,10 +275,12 @@
       [L('Bounds', '边界'), `${canonical.minimum == null ? '−∞' : canonical.minimum} – ${canonical.maximum == null ? '+∞' : canonical.maximum}`],
       [L('Canonical output', '标准输出'), `${dictLineage.concept}${canonical.unit ? ` · ${canonical.unit}` : ''}`],
     ];
+    const substitute = substituteText(dictLineage.concept, substituteOf(dictLineage.concept, active.database));
     return `<section class="dict-lineage" data-dict-lineage>
       <div class="dict-lineage-head"><div><div class="eyebrow">${L('Feature provenance', '特征血缘')}</div><h2>${html(window.EU_LANG === 'zh' ? zhOf(dictLineage.concept) : dictLineage.name)} <span class="mono">${html(dictLineage.concept)}</span></h2><p>${L('Declared catalog mappings only. Fields marked “not declared” are left explicit instead of guessed.', '仅展示字典声明的映射；未声明的字段保持明确空缺，不做猜测。')}</p></div><span class="pill ok">${lanes.length} ${L('databases', '个数据库')}</span></div>
       <div class="dict-lineage-tabs" role="tablist">${lanes.map(lane=>`<button type="button" class="${lane.database===active.database?'active':''}" data-dict-lineage-db="${html(lane.database)}">${html(lane.label)}</button>`).join('')}</div>
       <div class="dict-audit-track" data-dict-audit-track>${steps.map(([label,value],index)=>`<div class="dict-audit-step"><i>${index+1}</i><div><b>${html(label)}</b><span>${html(value)}</span></div></div>`).join('')}</div>
+      ${substitute ? `<p class="dict-lineage-sub" data-dict-substitute>${html(`${active.label}${L(': ', '：')}${substitute}`)}</p>` : ''}
       <div class="dict-lineage-lanes" data-dict-lineage-lanes>${lanes.map((lane,index)=>`<article style="--dict-lane-color:${window.EU_PALETTE.color(index)}"><div><i></i><b>${html(lane.label)}</b><span>${html(lane.database)}</span></div><strong>${html(mappingSummary(lane))}</strong><em>${html(Array.from(new Set((lane.mappings||[]).map(mapping=>mapping.callback).filter(Boolean))).join('；') || L('no callback declared', '未声明回调'))}</em><small>→ ${html(dictLineage.concept)}${canonical.unit?` · ${html(canonical.unit)}`:''}</small></article>`).join('')}</div>
     </section>`;
   }
@@ -278,13 +334,21 @@
     },
     render() {
       const cat = C();
-      const rows = matchedRows();
-      return `
+      // The retired Data map's links open the study-type view (app.js).
+      if (window.__euDictView) { dictView = window.__euDictView; window.__euDictView = null; }
+      else if (hashView()) dictView = hashView();
+      const studies = dictView === 'studies' && window.EU_DICT_STUDIES;
+      const tab = (view, en, zh) => `<button type="button" role="tab" class="tab${dictView === view ? ' active' : ''}" aria-selected="${dictView === view}" data-dict-view="${view}">${t(en, zh)}</button>`;
+      const head = `
       <div class="page-head" style="margin-bottom:16px;">
         <div class="eyebrow">${t('Data', '数据')}</div>
         <h1 style="margin-top:6px;">${t('Data dictionary', '数据字典')}</h1>
         ${instanceDbs() ? '' : `<p class="lead">${t(cat.totalConcepts + ' concepts across ' + cat.groups.length + ' feature groups — abbreviations, full names, units, and database coverage from the EasyICU concept dictionary.', cat.totalConcepts + ' 个概念，分属 ' + cat.groups.length + ' 个特征分组：缩写、全称、单位，以及 EasyICU 字典中的数据库覆盖。')}</p>`}
       </div>
+      ${window.EU_DICT_STUDIES ? `<div class="tabs dict-views" role="tablist" aria-label="${t('Dictionary views', '字典视图')}">${tab('concepts', 'Variables', '变量')}${tab('studies', 'Study types', '研究类型')}</div>` : ''}`;
+      if (studies) return head + window.EU_DICT_STUDIES.html();
+      const rows = matchedRows();
+      return `${head}
 
       ${instanceDbs() ? '' : `<div class="dict-catalog-note">
         ${icon('help', 14)}
@@ -308,6 +372,10 @@
       </div>`;
     },
     afterRender(root) {
+      root.querySelectorAll('[data-dict-view]').forEach(b => b.addEventListener('click', () => {
+        if (dictView !== b.dataset.dictView) showView(b.dataset.dictView);
+      }));
+      if (dictView === 'studies' && window.EU_DICT_STUDIES) { window.EU_DICT_STUDIES.bind(root); return; }
       const input = root.querySelector('#dictSearchInput');
       const clr = root.querySelector('[data-dict-clear]');
       // Never replace the search input from its own input event: a full

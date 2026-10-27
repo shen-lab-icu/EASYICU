@@ -143,8 +143,8 @@
       [
         t('Which studies does this version run?', '这个版本能做哪些研究？'),
         t(
-          'Descriptive, association, prediction, survival, subtype or trajectory, and causal studies (target trial emulation) on MIMIC-III, MIMIC-IV, eICU, HiRID, AmsterdamUMCdb and SICdb. What a study can do depends on what the database records: when it lacks something the question needs, the plan states the substitute and runs only after you approve it, or the conversation says what is missing before planning. None of the six has yet passed acceptance through a normal real-data run; the Data map marks each database.',
-          'MIMIC-III、MIMIC-IV、eICU、HiRID、AmsterdamUMCdb、SICdb 上的描述、关联、预测、生存分析、亚型或轨迹，以及因果研究（目标试验模拟）。能做到哪一步取决于该库记录了哪些信息：缺少问题需要的信息时，计划会写明替代口径，你批准后才运行；无法替代时，对话会在拟定计划前说明缺少什么。目前六个库都还没有通过正常入口的真实数据运行验收，数据地图逐库标明。',
+          'Descriptive, association, prediction, survival, subtype or trajectory, and causal studies (target trial emulation) on MIMIC-III, MIMIC-IV, eICU, HiRID, AmsterdamUMCdb and SICdb. What a study can do depends on what the database records: when it lacks something the question needs, the plan states the substitute and runs only after you approve it, or the conversation says what is missing before planning. The data dictionary shows what each database records, variable by variable and study type by study type.',
+          'MIMIC-III、MIMIC-IV、eICU、HiRID、AmsterdamUMCdb、SICdb 上的描述、关联、预测、生存分析、亚型或轨迹，以及因果研究（目标试验模拟）。能做到哪一步取决于该库记录了哪些信息：缺少问题需要的信息时，计划会写明替代口径，你批准后才运行；无法替代时，对话会在拟定计划前说明缺少什么。各库记录了哪些变量、具备哪些研究类型的数据条件，见数据字典。',
         ),
       ],
       [

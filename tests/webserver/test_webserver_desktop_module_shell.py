@@ -22,7 +22,7 @@ def test_data_and_skills_share_the_same_persistent_desktop_shell() -> None:
     extraction = _read("js", "screens-extraction.js")
     skills = _read("js", "screens-skills.js")
 
-    assert "js/desktop-module-shell.js?v=20261027-old1" in index
+    assert "js/desktop-module-shell.js?v=20261027-dmap1" in index
     assert index.index("js/desktop-module-shell.js?") < index.index(
         "js/screens-extraction.js?"
     )
@@ -90,7 +90,7 @@ def test_desktop_modules_share_rail_geometry_and_route_motion() -> None:
     app = _read("js", "app.js")
 
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
-    assert "js/app.js?v=20261027-old1" in index
+    assert "js/app.js?v=20261027-dmap2" in index
     assert "--workspace-global-rail-width: 59px" in canvas
     assert "--workspace-project-rail-width: clamp(330px, 15vw, 380px)" in canvas
     assert "var(--workspace-global-rail-width,59px)" in skills

@@ -178,13 +178,13 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260827-no-fab1" in index_html
-    assert "js/app.js?v=20261027-old1" in index_html
+    assert "js/app.js?v=20261027-dmap2" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
     assert "js/screens-extraction.js?v=20261026-icudeath1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
-    assert "js/screens-help.js?v=20261027-dc1" in index_html
+    assert "js/screens-help.js?v=20261027-dmap1" in index_html
 
 
 def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> None:
@@ -213,8 +213,8 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20261027-old1" in index_html
-    assert "js/screens-help.js?v=20261027-dc1" in index_html
+    assert "js/app.js?v=20261027-dmap2" in index_html
+    assert "js/screens-help.js?v=20261027-dmap1" in index_html
 
 
 def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
@@ -1997,10 +1997,10 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20261026-akifold1" in index_html
     assert "api.js?v=20261027-dl1" in index_html
-    assert "screens-dict.js?v=20261026-akifold1" in index_html
+    assert "screens-dict.js?v=20261027-dmap2" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
-    assert "deepdive.css?v=20261026-akifold1" in index_html
+    assert "deepdive.css?v=20261027-dmap1" in index_html
 
 
 def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations() -> (
