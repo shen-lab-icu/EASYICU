@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Any, Callable, Dict, Iterator, List, Literal, Mapping, Optional, Tuple
 
@@ -36,8 +36,10 @@ from easyicu.ai_optin import AIOptInError
 from easyicu.outcome_availability import (
     fixed_horizon_mortality_endpoint_stated_by,
     mortality_horizon_spans,
+    stated_mean_survival_mentions,
     stated_mortality_horizon_mentions,
 )
+from easyicu.research_agent.planning.analysis_types import COMPETING_EVENT_TERMS
 from easyicu.research_agent.research_context.temporal_semantics import (
     event_anchored_spans,
 )
@@ -58,6 +60,8 @@ __all__ = [
     "explicit_exposure_aggregation",
     "explicit_landmark_hours",
     "stated_comparison_groupings",
+    "stated_treatment_uses",
+    "StatedTreatmentUse",
     "named_study_concepts",
     "substance_forms",
     "substance_reading",
@@ -242,7 +246,23 @@ _FAMILY_PATTERNS: Tuple[Tuple[str, str], ...] = (
     (r"missing|coverage|data quality|数据质量|缺失|覆盖率", "data_quality"),
     (r"predict|prognostic|risk score|auroc|discrimination|预测|预后模型", "prediction"),
     (r"causal|confound|treatment effect|因果|混杂|倾向性评分|propensity", "causal"),
-    (r"survival|time-?to-?event|hazard|cox|生存|风险比", "survival"),
+    # 风险比 is a hazard ratio only beside HR ("风险比（HR）"); otherwise it is
+    # a risk ratio, the effect measure of an association study.  A competing
+    # event or risk exists only over follow-up time (the planner's own
+    # vocabulary, ``COMPETING_EVENT_TERMS``); "风险"/"risk" alone names none.
+    # A mean survival time (「平均存活多少天」, "RMST") is a time-to-event
+    # estimand too (``outcome_availability.stated_mean_survival_mentions``,
+    # read in ``deterministic_intent``).
+    (
+        r"survival|time-?to-?event|hazard|cox|生存"
+        r"|风险比\s*[（(]\s*(?:HR|hazard)|(?<![A-Za-z])HR\s*[（(]\s*风险比"
+        r"|竞争风险|\bcompeting[\s_-]+risks?\b|"
+        + "|".join(
+            re.escape(term).replace(r"\ ", r"[\s_-]+").replace(r"\-", r"[\s_-]+")
+            for term in COMPETING_EVENT_TERMS
+        ),
+        "survival",
+    ),
     (r"trajectory|over time|longitudinal|轨迹|随时间|纵向", "trajectory"),
     (r"associat|correlat|relationship|related to|相关|关联", "association"),
     (r"describe|distribution|prevalence|characteris|描述|分布|患病率", "description"),
@@ -623,17 +643,18 @@ _CONCENTRATION_REACH = 40
 
 
 class _Undecided(str):
-    """A substance named without saying whether it is measured or given.
+    """A substance or treatment named without saying which of its forms.
 
-    Its value is the substance's measured concept, so a reading of the same
-    substance is one reading; ``denotes`` is every concept the words can
-    mean.  It is never a slot's value: the exposure it would be stays unread.
+    Its value is the substance's measured concept (a treatment's use
+    status), so a reading of the same substance is one reading; ``denotes``
+    is every concept the words can mean.  It is never a slot's value: the
+    exposure it would be stays unread.
     """
 
     denotes: Tuple[str, ...]
 
-    def __new__(cls, measured: str, denotes: Tuple[str, ...]) -> "_Undecided":
-        reading = super().__new__(cls, measured)
+    def __new__(cls, value: str, denotes: Tuple[str, ...]) -> "_Undecided":
+        reading = super().__new__(cls, value)
         reading.denotes = denotes
         return reading
 
@@ -752,6 +773,346 @@ def substance_forms(question: str) -> Tuple[Dict[str, Any], ...]:
     return tuple(found)
 
 
+#: Treatments the readers name whose use and whose dose are different
+#: concepts: each treatment's use status -- a concept its owner declares an
+#: event status, given or not in a window -- and the dose or rate quantities
+#: of the same treatment.  ``None`` where no concept records the treatment's
+#: use, only its rate.  A test checks the table against the dictionary.
+_USE_OR_DOSE: Tuple[Tuple[Optional[str], Tuple[str, ...]], ...] = (
+    ("vaso_ind", ("norepi_equiv",)),
+    ("insulin", ("ins",)),
+    ("propofol", ("propofol_rate",)),
+    ("fentanyl", ("fentanyl_rate",)),
+    ("midazolam", ("midazolam_rate",)),
+    (None, ("norepi_rate",)),
+    (None, ("epi_rate",)),
+    (None, ("dopa_rate",)),
+    (None, ("dobu_rate",)),
+    (None, ("adh_rate",)),
+    (None, ("phn_rate",)),
+)
+_TREATMENT_OF: Dict[str, Tuple[Optional[str], Tuple[str, ...]]] = {
+    concept: entry
+    for entry in _USE_OR_DOSE
+    for concept in (entry[0], *entry[1])
+    if concept is not None
+}
+#: Words that say a treatment was used, or ask whether it was.
+_USE_WORDS = re.compile(
+    r"使用|应用|接受|给予|给药|用药|用了|用过|是否用|需要|治疗|开始|启动|启用|暴露"
+    r"|\buse[sd]?\b|\busing\b|\busage\b|\breceiv\w*|\breceipt\b|\bgiven\b"
+    r"|\btreat(?:ed|ment)\b|\btherapy\b|\bstart(?:s|ed|ing)?\b|\binitiat\w*"
+    r"|\brequir\w*|\bneed(?:s|ed|ing)?\b|\badminist\w*|\bexpos(?:ure|ed)\b",
+    re.IGNORECASE,
+)
+#: Use said by the word joined to the treatment: 「用血管活性药」, "on
+#: vasopressors", "any vasopressor".  "Based on X", "depending on X" relate
+#: something to X; they say no use.
+_USE_JOINED_BEFORE = re.compile(
+    r"(?<![㐀-鿿])用(?:了|过)?\s*$|\b(?:on|any)\s+(?:an?\s+|any\s+)?$", re.IGNORECASE,
+)
+_ON_RELATES_BEFORE = re.compile(
+    r"\b(?:based|depend\w*|conditional|focus\w*|effects?|impacts?|influences?|rel(?:y|ies|ied|ying)"
+    r"|stratif\w*|grouped|ranked|sorted|data|information)\s+on\s+(?:an?\s+|any\s+|the\s+)?$",
+    re.IGNORECASE,
+)
+#: Words that say how much of a treatment was given.
+_DOSE_WORDS = re.compile(
+    r"剂量|用量|速率|速度|当量|累积|累计|总量|最大|最高|峰值|强度"
+    r"|\bdos(?:e|es|ed|ing|age)\b|\brates?\b|\bequivalents?\b|\bmax(?:imum|imal)?\b"
+    r"|\bpeak\b|\bhighest\b|\bcumulative\b|\btotal\b|\bintensity\b|\bamount\b"
+    r"|(?:[µμu]g|mcg|mg)\s*/\s*kg|\bunits?\s*/\s*(?:h|hr|hour|min)\b",
+    re.IGNORECASE,
+)
+#: Dose words no other quantity is said with: one in the treatment's clause
+#: says its dose, whatever use word stands nearer (「血管活性药使用剂量」,
+#: 「使用血管活性药的患者的最大剂量」, "the dose of vasopressor used",
+#: "vasopressor therapy intensity").  "Rate", "maximum", 「最高」 also qualify
+#: a mortality or a lactate, so they decide only as the nearest word.
+_DOSE_ONLY_WORDS = re.compile(
+    r"剂量|用量|速率|当量"
+    r"|\bdos(?:e|es|ed|ing|age)\b|\bequivalents?\b"
+    r"|(?:[µμu]g|mcg|mg)\s*/\s*kg|\bunits?\s*/\s*(?:h|hr|hour|min)\b",
+    re.IGNORECASE,
+)
+#: Dose words that also count or grade other things (「患者总量」, "amount of
+#: patients", "amount of time", "nurse staffing intensity"): a dose only when
+#: they belong to the treatment -- joined to it (「血管活性药总量」,
+#: 「血管活性药治疗强度」, "vasopressor therapy intensity") or of it ("the
+#: amount of vasopressor").  Otherwise they decide only as the nearest word.
+_DOSE_IF_ITS_OWN = re.compile(r"强度|总量|\bintensity\b|\bamounts?\b", re.IGNORECASE)
+_JOINED_TO_TREATMENT = re.compile(
+    r"^\s*的?\s*(?:(?:therapy|treatment|support|use|usage|infusion|治疗|使用|支持|用药|给药|输注)\s*)?的?\s*$",
+    re.IGNORECASE,
+)
+_OF_TREATMENT = re.compile(r"^\s+of\s+(?:the\s+|a\s+|an\s+|any\s+)?$", re.IGNORECASE)
+#: A dose the question sets aside: "use rather than dose", "regardless of
+#: dose", "at any dose", 「（无论剂量）」, 「而非其剂量」, 「不考虑剂量」.  The
+#: yes/no form 「是不是剂量越大…」 asks the dose; its 不是 sets nothing aside.
+_DOSE_DECLINED_BEFORE = re.compile(
+    r"(?:\brather\s+than|\binstead\s+of|\bnot|\bregardless\s+of|\birrespective\s+of"
+    r"|\bindependent(?:ly)?\s+of|\bwithout\s+regard\s+to|\bno\s+matter|\bat\s+any|\bwhatever"
+    r"|不论|无论|不管|而非|而不是|并非|(?<!是)不是|不考虑|不计|不限)"
+    r"(?:\s+(?:the|its|their|a|an|any|what|which))*\s*(?:其|它的|的)?\s*$",
+    re.IGNORECASE,
+)
+#: A use that says whom the question is about: "patients receiving
+#: vasopressors", "among those on vasopressors", 「使用血管活性药的患者」.
+_POPULATION_USE_BEFORE = re.compile(
+    r"\b(?:patients?|stays?|those|subjects|individuals|people|admissions|cases)\s+"
+    r"(?:who\s+|that\s+)?(?:(?:were|was|are|is|had|have)\s+(?:been\s+)?)?"
+    r"(?:receiv\w*|given|treated\s+with|on|using|requir\w*|exposed\s+to|administered)\s+"
+    r"(?:an?\s+|any\s+)?$",
+    re.IGNORECASE,
+)
+_POPULATION_USE_AFTER = re.compile(r"^\s*(?:治疗)?\s*的?\s*(?:患者|病人|人群|病例|者|组)")
+#: A treatment named as an example of another: 「血管活性药（如去甲肾上腺素）」,
+#: "vasopressors (e.g., norepinephrine)", "vasopressors such as norepinephrine".
+_EXAMPLE_BEFORE = re.compile(
+    r"(?:[（(]\s*(?:如|例如|比如|包括|e\.?\s*g\.?,?|i\.?\s*e\.?,?|such\s+as|including)?"
+    r"|如|例如|比如|包括|such\s+as|including|e\.?\s*g\.?,?)\s*$",
+    re.IGNORECASE,
+)
+
+
+#: How far a dose-only word or a population's words are read, within the clause.
+_TREATMENT_CLAUSE_REACH = 32
+
+
+def _clause_treatment_form(text: str, concept: str, start: int, end: int) -> Optional[str]:
+    """The form the words of one mention's own clause say: ``use``, ``dose`` or ``None``."""
+
+    before, after = _clause_around(text, start, end, _TREATMENT_CLAUSE_REACH)
+    mention = text[start:end]
+    origin = start - len(before)
+
+    def declined(at: int) -> bool:
+        return _DOSE_DECLINED_BEFORE.search(text[max(0, at - 24):at]) is not None
+
+    # A dose-only word of the clause, with no other concept between it and
+    # the mention, says the dose, unless the question sets the dose aside.
+    others = [
+        (begin, finish) for _other, begin, finish in _outermost_readings(text)
+        if (begin, finish) != (start, end) and not (begin <= start and end <= finish)
+    ]
+    for found in _DOSE_ONLY_WORDS.finditer(before):
+        if not declined(origin + found.start()) and not any(
+            origin + found.end() <= begin and finish <= start for begin, finish in others
+        ):
+            return "dose"
+    for found in _DOSE_ONLY_WORDS.finditer(after):
+        if not declined(end + found.start()) and not any(
+            end <= begin and finish <= end + found.start() for begin, finish in others
+        ):
+            return "dose"
+    if _DOSE_ONLY_WORDS.search(mention):
+        return "dose"
+    # A count or a grade that belongs to the treatment says its dose.
+    for found in _DOSE_IF_ITS_OWN.finditer(before):
+        if _OF_TREATMENT.match(before[found.end():]) and not declined(origin + found.start()):
+            return "dose"
+    for found in _DOSE_IF_ITS_OWN.finditer(after):
+        if _JOINED_TO_TREATMENT.match(after[:found.start()]) and not declined(end + found.start()):
+            return "dose"
+    before, after = _clause_around(text, start, end, _SUBSTANCE_REACH)
+    origin = start - len(before)
+    nearest: Dict[str, int] = {}
+    for kind, words in (("use", _USE_WORDS), ("dose", _DOSE_WORDS)):
+        distances = [0] if words.search(mention) else []
+        distances += [
+            len(before) - found.end() for found in words.finditer(before)
+            if kind == "use" or not declined(origin + found.start())
+        ]
+        distances += [
+            found.start() for found in words.finditer(after)
+            if kind == "use" or not declined(end + found.start())
+        ]
+        if distances:
+            nearest[kind] = min(distances)
+    if _USE_JOINED_BEFORE.search(before) and not _ON_RELATES_BEFORE.search(before):
+        nearest["use"] = 0
+    said = sorted(nearest, key=nearest.__getitem__)
+    if not said or (len(said) == 2 and nearest["use"] == nearest["dose"]):
+        return None
+    return said[0]
+
+
+def _treatment_form(
+    text: str, concept: str, start: int, end: int
+) -> Tuple[Optional[str], str]:
+    """Whether a reading of a treatment names its use or its dose, and the concept it names.
+
+    The clause decides (``_clause_treatment_form``): a dose-only word
+    (剂量、用量、强度、dose、intensity) with nothing else named between says the
+    dose, whatever use word stands nearer; otherwise the nearest word, as for
+    a substance measured or given: a use word (使用、接受、用了、给予、
+    received、administration、exposure、on) reads the treatment's use status,
+    a dose word (最大、速率、maximum、rate) its dose.  A use that says whom the
+    question is about ("patients receiving vasopressors", 「使用血管活性药的患
+    者」) reads the dose when another mention of the treatment asks its dose:
+    the users are the population of a dose question.  A treatment named with
+    neither word is its use, the ordinary sense of a treatment as an exposure
+    (「血管活性药与院内死亡的关系」), when a concept records its use; a tie
+    leaves it undecided.  A treatment no concept records the use of keeps its
+    dose concept for a use reading: the form says what the words asked, so the
+    launch can stop (``question_treatment_use``) rather than answer a use with
+    a dose.  Any other concept is returned with no form.
+    """
+
+    entry = _TREATMENT_OF.get(concept)
+    if entry is None:
+        return None, concept
+    status, doses = entry
+    form = _clause_treatment_form(text, concept, start, end)
+    if form == "use":
+        before, after = _clause_around(text, start, end, _TREATMENT_CLAUSE_REACH)
+        if (_POPULATION_USE_BEFORE.search(before) or _POPULATION_USE_AFTER.match(after)) and any(
+            _TREATMENT_OF.get(other) is entry and (begin, finish) != (start, end)
+            and _clause_treatment_form(text, other, begin, finish) == "dose"
+            for other, begin, finish in _outermost_readings(text)
+        ):
+            form = "dose"
+    if concept == status:
+        # Read by the use status's own name ("丙泊酚"); a dose word reads its dose.
+        if form == "dose" and len(doses) == 1:
+            return "dose", doses[0]
+        return ("use" if form == "use" else None), concept
+    if form == "dose":
+        return "dose", concept
+    if form == "use":
+        return "use", status or concept
+    if status is not None:
+        tie = _clause_treatment_form(text, concept, start, end) is None and _tied(text, start, end)
+        return None, (_Undecided(status, (status, *doses)) if tie else status)
+    return None, concept
+
+
+def _tied(text: str, start: int, end: int) -> bool:
+    """Whether a use word and a dose word stand equally near a mention."""
+
+    before, after = _clause_around(text, start, end, _SUBSTANCE_REACH)
+    mention = text[start:end]
+    return all(
+        words.search(mention) or words.search(before) or words.search(after)
+        for words in (_USE_WORDS, _DOSE_WORDS)
+    )
+
+
+def _used_or_dosed(text: str, concept: str, start: int, end: int) -> str:
+    """The concept a reading of a treatment names (``_treatment_form``)."""
+
+    return _treatment_form(text, concept, start, end)[1]
+
+
+#: Words that ask when a treatment was first given: 「首次使用多在入 ICU 后几小时」,
+#: 「开始使用的时间」, "how many hours after admission were vasopressors first
+#: started", "time to first vasopressor".  Both a first-use word and a time
+#: asked must stand in the treatment's sentence.
+_FIRST_USE_WORDS = re.compile(
+    r"首次|初次|第一次|最早|开始|启动|起始|启用"
+    r"|\bfirst\b|\binitiat\w*|\bstart(?:s|ed|ing)?\b|\bonset\b",
+    re.IGNORECASE,
+)
+_TIME_ASKED = re.compile(
+    r"几(?:个)?小时|多少(?:个)?小时|几天|何时|什么时候|多久|多长时间|时间|时点|时刻"
+    r"|\bhow\s+(?:many\s+hours|long|soon|early)\b|\bwhen\b|\btime\s+(?:to|of|until|from)\b"
+    r"|\btiming\b",
+    re.IGNORECASE,
+)
+_SENTENCE = re.compile(r"[^。；;？?！!\n]+")
+
+
+@dataclass(frozen=True)
+class StatedTreatmentUse:
+    """A treatment the question names by its use or by its dose.
+
+    ``concept_id`` is the concept the words read: the use status for a use,
+    the dose quantity for a dose -- or, for a use of a treatment no concept
+    records the use of (``status`` is ``None``), its dose concept still.
+    ``first_use`` says the question asks when the treatment was first used.
+    """
+
+    concept_id: str
+    form: Literal["use", "dose"]
+    status: Optional[str]
+    doses: Tuple[str, ...]
+    first_use: bool
+    evidence: str
+
+    def record(self) -> Dict[str, Any]:
+        return {
+            "concept": self.concept_id,
+            "form": self.form,
+            "status": self.status,
+            "doses": list(self.doses),
+            "first_use": self.first_use,
+            "evidence": self.evidence,
+        }
+
+
+def _named_as_example(text: str, readings: Tuple[Tuple[str, int, int], ...], start: int) -> bool:
+    """Whether the treatment at ``start`` is an example of a treatment named just before.
+
+    「使用血管活性药（如去甲肾上腺素）的患者」 asks the use of vasopressors;
+    norepinephrine only illustrates the class.
+    """
+
+    head = text[max(0, start - 12):start]
+    example = _EXAMPLE_BEFORE.search(head)
+    if example is None:
+        return False
+    cue = start - len(head) + example.start()
+    return any(
+        concept in _TREATMENT_OF and finish <= cue and not text[finish:cue].strip(" 　)）")
+        for concept, _begin, finish in readings
+    )
+
+
+def stated_treatment_uses(question: str) -> Tuple[StatedTreatmentUse, ...]:
+    """Each treatment the question names by its use or by its dose, in text order.
+
+    「入 ICU 第一天使用血管活性药的患者占多少」 reads vasopressor use
+    (``vaso_ind``), 「血管活性药最大剂量」 its norepinephrine-equivalent dose,
+    and 「用了血管活性药的患者，首次使用多在入 ICU 后几小时」 the time of its
+    first use.  A treatment named without saying use or dose, or named in a
+    negated phrase, has no record.  A reading aid, not a role.
+    """
+
+    text = str(question or "").strip()[:_MAX_QUESTION_CHARS]
+    lowered = text.lower()
+    readings = _outermost_readings(text)
+    spans = [(start, end) for _concept, start, end in readings]
+    found: Dict[Tuple[str, str], StatedTreatmentUse] = {}
+    for concept, start, end in readings:
+        entry = _TREATMENT_OF.get(concept)
+        if entry is None or _negated(lowered, start):
+            continue
+        form, read = _treatment_form(text, concept, start, end)
+        if form is None or _named_as_example(text, readings, start):
+            continue
+        sentence = next(
+            (match for match in _SENTENCE.finditer(text) if match.start() <= start < match.end()),
+            None,
+        )
+        first_use = form == "use" and sentence is not None and bool(
+            _FIRST_USE_WORDS.search(sentence.group(0))
+        ) and any(
+            not any(begin < sentence.start() + asked.end() and sentence.start() + asked.start() < finish
+                    for begin, finish in spans)
+            for asked in _TIME_ASKED.finditer(sentence.group(0))
+        )
+        key = (str(read), form)
+        if key in found:
+            if first_use and not found[key].first_use:
+                found[key] = replace(found[key], first_use=True)
+            continue
+        found[key] = StatedTreatmentUse(
+            concept_id=str(read), form=form, status=entry[0], doses=entry[1],
+            first_use=first_use, evidence=text[start:end],
+        )
+    return tuple(found.values())
+
+
 def _match_concept(text: str) -> List[Tuple[str, str]]:
     """Return concept/phrase pairs in dictionary-specificity order.
 
@@ -777,7 +1138,9 @@ def _match_concept(text: str) -> List[Tuple[str, str]]:
                 or _population_restriction(text, concept, start, end)
             ):
                 continue
-            concept = _measured_or_given(text, concept, start, end)
+            concept = _used_or_dosed(
+                text, _measured_or_given(text, concept, start, end), start, end
+            )
             undecided = next(
                 (
                     index
@@ -860,6 +1223,32 @@ _SETTING_AFTER = re.compile(
 )
 
 
+def _reading_spans(text: str) -> Dict[str, List[Tuple[int, int]]]:
+    """Where the phrase table reads each concept in ``text``, read as ``_match_concept`` reads it.
+
+    Keyed by the concept a reading names once resolved and its form decided
+    (an undecided substance or treatment by its value), in text order.
+    """
+
+    spans: Dict[str, List[Tuple[int, int]]] = {}
+    for pattern, entry in _PHRASE_TO_CONCEPT:
+        for reading in _entry_readings(pattern, entry, text):
+            resolved = _resolved_reading(text, *reading)
+            if resolved is None:
+                continue
+            concept, start, end = resolved
+            concept = _used_or_dosed(
+                text, _measured_or_given(text, concept, start, end), start, end
+            )
+            # An undecided mention is a place of each concept it can name: a
+            # later mention may decide which (``_match_concept``).
+            for name in dict.fromkeys(
+                (str(concept), *getattr(concept, "denotes", ()))
+            ):
+                spans.setdefault(name, []).append((start, end))
+    return {concept: sorted(set(found)) for concept, found in spans.items()}
+
+
 def _exposure_candidates_in_text_order(
     text: str, candidates: List[Tuple[str, str]]
 ) -> List[Tuple[str, str]]:
@@ -873,25 +1262,26 @@ def _exposure_candidates_in_text_order(
     """
 
     positioned = []
+    readings = _reading_spans(text)
     for rank, (concept, phrase) in enumerate(candidates):
-        for match in re.finditer(re.escape(phrase), text, re.IGNORECASE):
-            if _negated(text, match.start()) or _population_restriction(
-                text, concept, match.start(), match.end()
-            ):
+        # Each place the reader reads the concept, never the words inside
+        # another word: "age" in "average" is no reading of age.
+        for start, end in readings.get(str(concept), ()):
+            if _negated(text, start) or _population_restriction(text, concept, start, end):
                 continue
-            after = text[match.end():]
-            before = text[max(0, match.start() - 35):match.start()]
+            after = text[end:]
+            before = text[max(0, start - 35):start]
             if re.match(r"\s*(?:patients?\b|cohort\b|患者|人群|病人)", after, re.IGNORECASE):
                 continue
             if re.search(r"\bpatients?\s+with\s*$", before, re.IGNORECASE):
                 continue
-            if _ADJUSTMENT_CLAUSE.search(text[max(0, match.start() - 60):match.start()]):
+            if _ADJUSTMENT_CLAUSE.search(text[max(0, start - 60):start]):
                 continue
             if concept in _CONDITION_CONCEPTS and (
-                _SETTING_BEFORE.search(text[:match.start()]) or _SETTING_AFTER.match(after)
+                _SETTING_BEFORE.search(text[:start]) or _SETTING_AFTER.match(after)
             ):
                 continue
-            positioned.append((match.start(), rank, concept, phrase))
+            positioned.append((start, rank, concept, phrase))
             break
     return [(concept, phrase) for _, _, concept, phrase in sorted(positioned)]
 
@@ -1244,18 +1634,38 @@ _GROUPING_PAIR_REVERSED = re.compile(
     rf"|[a-z\-]*\s*(?:{_GROUPING_NOUN_EN}\s*)?{_GROUPING_AND_EN}{_GROUPING_MODIFIER_EN}",
     re.IGNORECASE,
 )
+# A comparison with the group without it: 「与未接受机械通气的患者相比」,
+# 「较未接受 X 的患者」, "compared with non-ventilated patients", "compared with
+# patients not receiving X", "versus those without X".  「与」 alone joins a
+# list, so with it the comparison word must follow (相比、比较、对比).
+_GROUPING_VERSUS = r"(?:与|和|跟|同)"
+_GROUPING_THAN = r"(?:较|相较于?|相比于?|比起)"
+_GROUPING_VERSUS_NOT_BEFORE = re.compile(
+    rf"(?:(?P<than>{_GROUPING_THAN})|{_GROUPING_VERSUS})\s*{_NOT_HALF}$"
+    r"|\b(?:compared\s+(?:with|to)|versus|vs\.?|relative\s+to|than)\s+"
+    r"(?:(?:the|those|patients|stays|subjects)\s+)?"
+    rf"(?:(?:who\s+(?:did|were|was|had)\s+)?(?:not|never)\s+(?:{_GROUPING_VERB_EN}\s+)?"
+    rf"|without\s+|non-?|un-?|no\s+){_GROUPING_MODIFIER_EN}$",
+    re.IGNORECASE,
+)
+_GROUPING_VERSUS_AFTER = re.compile(
+    rf"{_GROUPING_MODIFIER}(?:的)?\s*{_GROUPING_NOUN}?\s*(?:相比|比较|对比|相较)"
+)
+# 「与未通气的患者相比」: the negated half names the concept by the head word
+# of its name (通气 of 机械通气), which another mention names in full.
+_GROUPING_HEAD_SIZE = 2
 # 「不按 X 分组」, "not stratified by X": a refused grouping states none.
 _GROUPING_REFUSAL = re.compile(
     r"(?:不|无需|不需要|不要|别|勿|\bnot\b|\bno\b|n't|\bwithout\b)\s*$", re.IGNORECASE,
 )
 
 
-def _concept_spans(text: str) -> List[Tuple[str, int, int]]:
+@lru_cache(maxsize=64)
+def _outermost_readings(text: str) -> Tuple[Tuple[str, int, int], ...]:
     """Every concept reading of ``text`` with its span, outermost readings only.
 
     Phrase-table and catalog-name readings, each resolved to the longest
-    catalog name containing it (``_resolved_reading``).  A substance the
-    sentence does not say is measured or given is no concept here.
+    catalog name containing it (``_resolved_reading``), in text order.
     """
 
     readings = set()
@@ -1268,12 +1678,26 @@ def _concept_spans(text: str) -> List[Tuple[str, int, int]]:
         resolved = _resolved_reading(text, *reading)
         if resolved is not None:
             readings.add(resolved)
+    return tuple(
+        (concept, start, end)
+        for concept, start, end in sorted(readings, key=lambda row: (row[1], -row[2], row[0]))
+        if not any(begin <= start and end <= finish and finish - begin > end - start
+                   for _other, begin, finish in readings)
+    )
+
+
+def _concept_spans(text: str) -> List[Tuple[str, int, int]]:
+    """Every concept reading of ``text`` with its span, outermost readings only.
+
+    A substance the sentence does not say is measured or given, or a
+    treatment it does not say is used or dosed, is no concept here.
+    """
+
     spans = []
-    for concept, start, end in sorted(readings, key=lambda row: (row[1], -row[2], row[0])):
-        if any(begin <= start and end <= finish and finish - begin > end - start
-               for _other, begin, finish in readings):
-            continue
-        concept = _measured_or_given(text, concept, start, end)
+    for concept, start, end in _outermost_readings(text):
+        concept = _used_or_dosed(
+            text, _measured_or_given(text, concept, start, end), start, end
+        )
         if not isinstance(concept, _Undecided):
             spans.append((concept, start, end))
     return spans
@@ -1327,6 +1751,12 @@ def stated_comparison_groupings(question: str) -> Tuple[StatedComparisonGrouping
         tail = _GROUPING_AFTER.match(after)
         if tail is not None:
             state(concept, start, end + tail.end())
+        framed = _GROUPING_VERSUS_NOT_BEFORE.search(before)
+        tail = _GROUPING_VERSUS_AFTER.match(after)
+        if framed is not None and (
+            framed.group("than") or tail is not None or not _CJK.search(framed.group(0))
+        ):
+            state(concept, framed.start(), end + (tail.end() if tail is not None else 0))
         for other, begin, finish in spans[index + 1:]:
             if other != concept:
                 continue
@@ -1337,6 +1767,28 @@ def stated_comparison_groupings(question: str) -> Tuple[StatedComparisonGrouping
             elif negative is not None and _GROUPING_PAIR_REVERSED.fullmatch(between):
                 state(concept, negative.start(), finish)
             break
+    for concept, start, end in spans:
+        if concept in found:
+            continue
+        name = text[start:end]
+        if not re.fullmatch(r"[\u3400-\u9fff]+", name):
+            continue
+        for size in range(len(name) - 1, _GROUPING_HEAD_SIZE - 1, -1):
+            versus = re.compile(
+                rf"(?:(?P<than>{_GROUPING_THAN})|{_GROUPING_VERSUS})\s*{_GROUPING_NOT}\s*"
+                rf"(?:{_GROUPING_VERB}\s*)?(?P<head>{re.escape(name[-size:])})\s*(?:的)?\s*"
+                rf"{_GROUPING_NOUN}(?P<tail>\s*(?:相比|比较|对比|相较))?"
+            )
+            for match in versus.finditer(text):
+                head = match.span("head")
+                if not (match.group("than") or match.group("tail")) or any(
+                    begin < head[1] and head[0] < finish for _other, begin, finish in spans
+                ):
+                    continue
+                state(concept, match.start(), match.end())
+                break
+            if concept in found:
+                break
     return tuple(grouping for _start, grouping in sorted(found.values(), key=lambda row: row[0]))
 
 
@@ -1346,7 +1798,8 @@ def catalog_named_concepts(text: str) -> Tuple[str, ...]:
     The study readers name what a sentence studies from their own phrases;
     this reads only the dictionary's names ("钾" for potassium, as in
     「血钾」), each as a whole phrase and not negated.  It checks a statement
-    against a sentence; it reads no role.
+    against a sentence; it reads no role.  A treatment named by its use or
+    by its dose reads that concept (「使用胰岛素」 is insulin's use).
     """
 
     clean = _clean_question(text)
@@ -1354,9 +1807,14 @@ def catalog_named_concepts(text: str) -> Tuple[str, ...]:
     found: List[str] = []
     for concept, start, end in sorted(_catalog_name_readings(clean), key=lambda row: row[1]):
         resolved = _resolved_reading(clean, concept, start, end)
-        if resolved is None or _negated(lowered, resolved[1]) or resolved[0] in found:
+        if resolved is None or _negated(lowered, resolved[1]):
             continue
-        found.append(resolved[0])
+        # 「使用胰岛素」 names insulin's use, not its rate; a treatment named
+        # without saying either keeps the concept its name names.
+        _form, read = _treatment_form(clean, *resolved)
+        read = resolved[0] if isinstance(read, _Undecided) else str(read)
+        if read not in found:
+            found.append(read)
     return tuple(found)
 
 
@@ -1520,12 +1978,17 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
         slots["time_window_hours"] = _slot(24, KEYWORD_PROVENANCE, "first day")
 
     for pattern, family in _FAMILY_PATTERNS:
-        for match in re.finditer(pattern, lowered, re.IGNORECASE):
+        said = [(match.start(), match.group(0)) for match in re.finditer(pattern, lowered, re.IGNORECASE)]
+        if family == "survival":
+            said = sorted(said + [
+                (mention.start, mention.evidence) for mention in stated_mean_survival_mentions(lowered)
+            ])
+        for start, words in said:
             # "Not a prediction study; is PEEP associated with ..." is an
             # association study. The same negation rule applies here.
-            if _negated(lowered, match.start()):
+            if _negated(lowered, start):
                 continue
-            slots["analysis_family"] = _slot(family, KEYWORD_PROVENANCE, match.group(0))
+            slots["analysis_family"] = _slot(family, KEYWORD_PROVENANCE, words)
             break
         if slots["analysis_family"]["value"]:
             break

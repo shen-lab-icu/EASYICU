@@ -126,6 +126,12 @@ _EDIT_CODES = frozenset(
         # A kind of a concept the analysis data do not separate needs the
         # question asked without it (question_named_levels).
         "question_named_level_undistinguished",
+        # A treatment's use the data record only as a dose needs the question
+        # asked about its dose or a recorded use (question_treatment_use).
+        "question_treatment_use_unrecorded",
+        # A mean survival time needs the question asked for an estimand a
+        # plan answers (question_mean_survival).
+        "question_mean_survival_unplanned",
         # An unverified restriction cannot be silently dropped or retried.
         "research_pipeline_hospital_first_stay_restriction_unverified",
         # A revision whose source plan is gone or changed starts from a fresh plan.

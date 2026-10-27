@@ -949,6 +949,14 @@
           'The prepared data covers a different time window from the one the question states, so the summary would not match the question. No analysis was run. Prepare the data again for the stated window.',
           '已准备的数据覆盖的时间窗与问题写明的不一致，汇总结果会与问题不符。尚未运行任何分析。请按问题写明的时间窗重新准备数据。',
         ),
+        question_treatment_use_unrecorded: tr(
+          'The question asks whether a treatment was given, but the prepared data record only its dose or rate, not whether it was given. A plan would answer a question about the dose, so planning stopped and no analysis was run. Ask about its dose, or about a treatment class whose use is recorded, for example “vasopressors”.',
+          '问题问的是是否用了某种治疗，但准备好的数据只记录它的剂量或速率，不记录是否使用；按这些数据做的计划会回答剂量的问题，因此规划已停止，没有运行分析。请改问它的剂量，或改问记录了使用情况的药物类别，例如“血管活性药”。',
+        ),
+        question_mean_survival_unplanned: tr(
+          'The question asks how long patients lived on average (a restricted mean survival time). A plan would answer it with the share who died by that time or with a hazard ratio, which is a different result, and a mean survival time is not yet planned as a study’s main result. Planning stopped and no analysis was run. Ask about death by that time, for example “28-day mortality”, or for a survival analysis.',
+          '问题问的是平均存活多长时间（限制性平均生存时间）。按现有方法做的计划只能回答到该时间的死亡比例或风险比，结论不同；平均生存时间还不能作为研究的主要结果来规划，因此规划已停止，没有运行分析。请改问到该时间的死亡，例如“28 天死亡”，或改做生存分析。',
+        ),
         question_named_level_undistinguished: tr(
           'The question names one kind of a clinical measure, such as invasive or non-invasive ventilation, but the prepared data record only whether it happened, not which kind. A plan would answer a broader question, so planning stopped and no analysis was run. Ask again without naming the kind, for example “mechanical ventilation”; the result then covers every kind.',
           '问题指定了某项临床指标的一种类型（例如有创或无创通气），但准备好的数据只记录是否发生，不区分类型；按这些数据做的计划会回答一个更宽的问题，因此规划已停止，没有运行分析。请去掉类型再问，例如写“机械通气”；结果将包含所有类型。',
