@@ -84,6 +84,21 @@ ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID = "association_freeform_v1"
 ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT = "table:adjusted_association_estimates"
 
 
+def baseline_sensitivity_parent_step(source: Any, authority: Any) -> Any:
+    """Project the signed baseline model into the shared sensitivity contract.
+
+    Planning and execution use the same projection without importing the host's
+    append compiler. The authority remains responsible for validating the model.
+    """
+    primary = authority.governed_primary_step(source)
+    if authority.exposure_encoding != "treatment_contrast" or authority.subgroup_terms:
+        raise ValueError("The sensitivity owner needs a categorical model without existing interactions.")
+    # The generic sensitivity owner implements this exact linear model.
+    # Supply its capability spelling while retaining every model term and
+    # the source product's approval/digest in the append runtime contract.
+    return primary.model_copy(deep=True, update={"scientific_capability": "association_adjusted_v1"})
+
+
 @dataclass(frozen=True, slots=True)
 class AssociationBinarySensitivityContract:
     """Closed effect boundary for one prespecified binary sensitivity grid."""

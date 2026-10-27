@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ...authority.baseline_association_runtime import BASELINE_METHOD, BASELINE_RISK_METHOD, BaselineAssociationRuntimeAuthority
 from ...authority.current_case_scientific_runtime import load_current_case_scientific_runtime_authority
+from ...contracts.association_execution import baseline_sensitivity_parent_step
 from ...contracts.exposure_outcome_distribution import ExposureOutcomeDistributionSpec
 from ...contracts.model_terms import serialise_model_terms
 from ...authority.evidence_store import sha256_of_file
@@ -258,9 +259,7 @@ def execute_result_append(*, run_dir: Path, plan: AnalysisPlan, authority, input
     compiled = authority.compilation()
     parent = authority.baseline.governed_primary_step(AnalysisPlan.model_validate_json(authority.source_plan_json))
     if compiled.kind == "sensitivity":
-        from ...planning.family_spec.baseline_association_template import SensitivityAppend
-
-        parent = SensitivityAppend.parent_step(AnalysisPlan.model_validate_json(authority.source_plan_json), authority.baseline)
+        parent = baseline_sensitivity_parent_step(AnalysisPlan.model_validate_json(authority.source_plan_json), authority.baseline)
     from ...authority.runtime_artifacts import AuditLogger
 
     audit = AuditLogger(run_dir / "audit_log.jsonl")
