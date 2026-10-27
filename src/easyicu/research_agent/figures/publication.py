@@ -852,10 +852,15 @@ _FONT_PREFERENCE: tuple[str, ...] = (
 
 
 def _installed_font_families() -> list[str]:
-    """The preferred families this host has, so no lookup logs a miss."""
+    """The installed preferred families, with stable ties between font files."""
 
     from matplotlib import font_manager
 
+    # Font discovery is unordered; duplicate family versions can otherwise
+    # win equal match scores differently in independent runner caches.
+    font_manager.fontManager.ttflist.sort(key=lambda entry: entry.fname)
+    # A lookup made before styling must not retain the previous order's winner.
+    font_manager.fontManager._findfont_cached.cache_clear()
     installed = {entry.name for entry in font_manager.fontManager.ttflist}
     families = [name for name in _FONT_PREFERENCE if name in installed]
     return families or ["sans-serif"]
