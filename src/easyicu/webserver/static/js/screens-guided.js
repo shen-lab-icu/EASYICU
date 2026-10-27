@@ -76,18 +76,10 @@
   let selectedGuidedDraft = null;
   let pendingGuidedGoal = null;
   let guidedFrontdoorSeedText = null;
-  let guidedFolderMenuOpen = false;
-  if (window.EU_POPOVER_MENUS) window.EU_POPOVER_MENUS.register({
-    isOpen: () => guidedFolderMenuOpen, contains: node => Boolean(node && node.closest && node.closest('.gd-folder-picker')),
-    close: ({ focus } = {}) => { guidedFolderMenuOpen = false; renderGuidedFolderControls(); if (focus) document.querySelector('[data-folder-menu-toggle]')?.focus(); },
-  });
   let guidedDraftRemoval = null;
   let guidedFolderDialogMode = null;
   let guidedFolderSeedTitle = '';
-  let guidedDraftFolderSlug = '';
-  let guidedDraftParentDir = '';
   let guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
-  let guidedKnownProjectsOpen = false;
   let guidedSlotSaveTimer = null;
   // D-P2-6: background slot-save failures are user-visible (once per reset)
   // instead of console-only, so a broken session memory does not fail silent.
@@ -225,17 +217,16 @@
     thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedAgent = null; IDEA.clearIdeaState(); EXTRACT.clearState(); REVIEW.clearState();
     pendingGuidedGoal = null;
     guidedFrontdoorSeedText = null;
-    guidedFolderMenuOpen = false;
     guidedDraftRemoval = null;
     if (window.EU_GUIDED_PROJECTS && window.EU_GUIDED_PROJECTS.setProjectManagement) {
       window.EU_GUIDED_PROJECTS.setProjectManagement(false);
     }
     guidedFolderDialogMode = null;
     guidedFolderSeedTitle = '';
-    guidedDraftFolderSlug = '';
-    guidedDraftParentDir = '';
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
-    guidedKnownProjectsOpen = false;
+    if (window.EU_GUIDED_PROJECTS && window.EU_GUIDED_PROJECTS.stopProjectNaming) {
+      window.EU_GUIDED_PROJECTS.stopProjectNaming();
+    }
     PIPELINE.resetState();
     guidedSlotSaveWarned = false;
     studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
@@ -2666,7 +2657,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const title = label || defaultStudyTitle();
     return {
       title,
-      folder_slug: slugifyDraftFolder(title),
       branch: branch || 'predict',
       depth: depth || 'full',
       data_mode: 'unbound',
@@ -2703,23 +2693,17 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       BRANCH,
       branch,
       guidedDrafts,
-      guidedFolderMenuOpen,
       guidedDraftRemoval,
       guidedFolderDialogMode,
       guidedFolderSeedTitle,
-      guidedDraftFolderSlug,
-      guidedDraftParentDir,
       guidedFolderBrowser,
-      guidedKnownProjectsOpen,
       selectedGuidedDraft,
       pendingGuidedGoal,
       localDraftRows,
-      guidedKnownProjectRows,
-      slugifyDraftFolder,
-      openFolderDialog: openGuidedFolderDialog,
+      createProject: title => createLocalGuidedDraft(title),
     };
   }
-  function defaultStudyTitle() { return guidedProjectRenderer('defaultStudyTitle', 'New local study'); }
+  function defaultStudyTitle() { return guidedProjectRenderer('defaultStudyTitle', 'New study'); }
   function guidedProjectRenderer(name, fallback) {
     const mod = window.EU_GUIDED_PROJECTS;
     if (!mod || typeof mod[name] !== 'function') return fallback || '';
@@ -2743,44 +2727,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function renderGuidedFolderControls() {
     guidedProjectRenderer('renderFolderControls');
   }
-  function guidedKnownProjectRows() {
-    const seen = new Set();
-    const rows = [];
-    function add(row) {
-      if (!row || !row.project_dir || seen.has(row.project_dir)) return;
-      seen.add(row.project_dir);
-      rows.push({
-        kind: 'draft',
-        project_dir: row.project_dir,
-        title: projectTitle(
-          row.title,
-          row.question || row.study_id || t('Guided Copilot folder', '研究引导文件夹'),
-        ),
-        subtitle: `${row.status || 'metadata_only'} · ${row.depth || 'full'} · ${row.data_mode || 'local'} · ${fmtRunTime(row.updated_at || row.created_at)}`,
-      });
-    }
-    localDraftRows().forEach(row => add(row));
-    return rows.slice(0, 12);
-  }
-  function renderGuidedKnownProjectPicker() {
-    return guidedProjectRenderer('renderKnownProjectPicker');
-  }
   function renderGuidedFolderBrowser() {
     return guidedProjectRenderer('renderFolderBrowser');
   }
-  function captureGuidedDraftDialogState(box) {
-    if (!box) return;
-    const titleEl = box.querySelector('[data-draft-title]');
-    const slugEl = box.querySelector('[data-draft-slug]');
-    const parentEl = box.querySelector('[data-draft-parent-dir]');
-    if (titleEl && titleEl.value.trim()) guidedFolderSeedTitle = titleEl.value.trim();
-    if (slugEl && slugEl.value.trim()) guidedDraftFolderSlug = slugifyDraftFolder(slugEl.value);
-    if (parentEl) guidedDraftParentDir = parentEl.value.trim();
-  }
   function loadGuidedFolderBrowser(path) {
-    if (guidedFolderDialogMode === 'new') {
-      captureGuidedDraftDialogState(document.querySelector('[data-folder-dialog][data-draft-setup]'));
-    }
     guidedFolderBrowser.open = true;
     guidedFolderBrowser.loading = true;
     guidedFolderBrowser.error = null;
@@ -2809,16 +2759,25 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function renderGuidedFolderDialog() {
     guidedProjectRenderer('renderFolderDialog');
   }
+  function hostedInstance() {
+    const hosted = window.EasyICU && window.EasyICU.guidedPi ? window.EasyICU.guidedPi.optional('hosted') : null;
+    return !!(hosted && hosted.active());
+  }
+  // A new local project is named in the project list (one field, default
+  // folder); only a hosted instance asks for its name in a dialog.
+  function startGuidedProjectNaming(seedTitle) {
+    const mod = window.EU_GUIDED_PROJECTS;
+    if (mod && mod.startProjectNaming) mod.startProjectNaming(guidedProjectContext(), seedTitle);
+  }
   function openGuidedFolderDialog(mode, seedTitle) {
-    guidedFolderMenuOpen = false;
+    if (mode !== 'open' && !hostedInstance()) {
+      closeGuidedFolderDialog();
+      startGuidedProjectNaming(seedTitle);
+      return;
+    }
     guidedFolderDialogMode = mode === 'open' ? 'open' : 'new';
     guidedFolderSeedTitle = seedTitle || guidedFolderSeedTitle || defaultStudyTitle();
-    if (guidedFolderDialogMode === 'new') {
-      guidedDraftFolderSlug = slugifyDraftFolder(guidedFolderSeedTitle);
-      guidedDraftParentDir = guidedDraftParentDir || guidedProjectRenderer('defaultParentDir');
-    }
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
-    guidedKnownProjectsOpen = false;
     renderGuidedFolderControls();
     renderGuidedFolderDialog();
     setTimeout(() => {
@@ -2828,10 +2787,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     }, 80);
   }
   function closeGuidedFolderDialog() {
-    guidedFolderMenuOpen = false;
     guidedFolderDialogMode = null;
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
-    guidedKnownProjectsOpen = false;
     renderGuidedFolderControls();
     renderGuidedFolderDialog();
   }
@@ -3025,15 +2982,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       // The project panel stays, and the rail's New research project still works.
     }
   }
-  function createLocalGuidedDraft(label, folderSlug, parentDir, opts) {
+  // The server names the folder after the title, in its default parent.
+  function createLocalGuidedDraft(label, opts) {
     const options = opts || {};
     const text = label || defaultStudyTitle();
-    const parent = String(parentDir || '').trim();
     const payload = blankGuidedDraftPayload(text);
-    payload.folder_slug = folderSlug || payload.folder_slug;
-    payload.parent_dir = parent;
     return window.EU_GUIDED_PROJECTS.createDraft(payload, guidedProjectContext, async result => {
-      pushUser(parent ? `Create local study folder: ${text} in ${parent}` : `Create local study folder: ${text}`);
+      pushUser(`Create local study folder: ${text}`);
       selectedGuidedDraft = result.draft || null;
       loadGuidedDrafts(true);
       const opened = await bindGuidedDraftMemory(selectedGuidedDraft, true);
@@ -3075,8 +3030,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const seed = meta
       ? t(meta.label_en || 'New study', meta.label_zh || meta.label_en || 'New study')
       : t('My first study', '我的第一个研究');
-    guidedDraftParentDir = guidedProjectRenderer('defaultParentDir');
-    return createLocalGuidedDraft(seed, slugifyDraftFolder(seed), guidedDraftParentDir, { continueGoal: !!pend });
+    return createLocalGuidedDraft(seed, { continueGoal: !!pend });
   }
   /* ============== conversation script ============== */
   const STATES = {
@@ -3473,10 +3427,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
 
       const shell = root.querySelector('.gd-shell');
       shell.addEventListener('click', (e) => {
-        const folderToggle = e.target.closest('[data-folder-menu-toggle]');
-        if (folderToggle) {
-          guidedFolderMenuOpen = !guidedFolderMenuOpen;
-          renderGuidedFolderControls();
+        if (e.target.closest('[data-project-new]')) {
+          startGuidedProjectNaming();
           return;
         }
         const folderChoice = e.target.closest('[data-folder-choice]');
@@ -3878,43 +3830,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           openGuidedProjectMemory(row, localDraftEl, 'draft');
           return;
         }
-        if (e.target.closest('[data-newstudy]')) {
-          guidedFolderMenuOpen = !guidedFolderMenuOpen;
-          renderGuidedFolderControls();
-          return;
-        }
-        if (e.target.closest('[data-toggle-known-projects]')) {
-          guidedKnownProjectsOpen = !guidedKnownProjectsOpen;
-          if (guidedKnownProjectsOpen) {
-            loadGuidedDrafts(true);
-          }
-          renderGuidedFolderDialog();
-          return;
-        }
-        if (e.target.closest('[data-refreshfolderchoices]')) {
-          guidedKnownProjectsOpen = true;
-          loadGuidedDrafts(true);
-          return;
-        }
-        const knownProjectEl = e.target.closest('[data-known-project]');
-        if (knownProjectEl) {
-          const row = guidedKnownProjectRows()[Number(knownProjectEl.dataset.knownProject || -1)];
-          if (!row) return;
-          const box = knownProjectEl.closest('[data-draft-setup]');
-          openExistingGuidedProject(row.project_dir, box);
-          return;
-        }
         if (e.target.closest('[data-browseprojectfolder]')) {
           const box = e.target.closest('[data-draft-setup]');
           const pathEl = box ? box.querySelector('[data-existing-project-dir]') : null;
           loadGuidedFolderBrowser((pathEl && pathEl.value) || guidedProjectRenderer('defaultParentDir'));
-          return;
-        }
-        if (e.target.closest('[data-browsedraftparent]')) {
-          const box = e.target.closest('[data-draft-setup]');
-          captureGuidedDraftDialogState(box);
-          const parentEl = box ? box.querySelector('[data-draft-parent-dir]') : null;
-          loadGuidedFolderBrowser((parentEl && parentEl.value) || guidedProjectRenderer('draftParentDir'));
           return;
         }
         if (e.target.closest('[data-folder-browser-close]')) {
@@ -3948,17 +3867,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (e.target.closest('[data-folder-browser-use]')) {
           const box = e.target.closest('[data-draft-setup]');
           const path = (guidedFolderBrowser.data && guidedFolderBrowser.data.path) || guidedFolderBrowser.path;
-          const parentEl = box ? box.querySelector('[data-draft-parent-dir]') : null;
-          if (guidedFolderDialogMode === 'new' && parentEl) {
-            captureGuidedDraftDialogState(box);
-            if (path) {
-              guidedDraftParentDir = path;
-              parentEl.value = path;
-            }
-            guidedFolderBrowser.open = false;
-            renderGuidedFolderDialog();
-            return;
-          }
           const pathEl = box ? box.querySelector('[data-existing-project-dir]') : null;
           if (pathEl && path) pathEl.value = path;
           if (pendingGuidedGoal && pendingGuidedGoal.goal === 'review_data') registerExistingExportForReview(path, box);
@@ -3983,15 +3891,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (createDraftEl) {
           const box = createDraftEl.closest('[data-draft-setup]');
           const titleEl = box ? box.querySelector('[data-draft-title]') : null;
-          const slugEl = box ? box.querySelector('[data-draft-slug]') : null;
-          const parentEl = box ? box.querySelector('[data-draft-parent-dir]') : null;
           const title = (titleEl && titleEl.value || '').trim() || defaultStudyTitle();
-          const slug = slugifyDraftFolder((slugEl && slugEl.value) || title);
-          const parent = (parentEl && parentEl.value || '').trim();
           guidedFolderSeedTitle = title;
-          guidedDraftFolderSlug = slug;
-          guidedDraftParentDir = parent;
-          createLocalGuidedDraft(title, slug, guidedDraftParentDir);
+          createLocalGuidedDraft(title);
           return;
         }
       });
@@ -4046,19 +3948,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           scheduleGuidedSlotSave('edit_idea_field');
           return;
         }
-        const draftParent = e.target.closest('[data-draft-parent-dir]');
-        if (draftParent) {
-          guidedDraftParentDir = draftParent.value.trim();
-          guidedProjectRenderer('updateFolderPreview');
-          return;
-        }
         const title = e.target.closest('[data-draft-title]');
         if (!title) return;
         guidedFolderSeedTitle = title.value.trim() || guidedFolderSeedTitle || defaultStudyTitle();
-        const box = title.closest('[data-draft-setup]');
-        const slug = box ? box.querySelector('[data-draft-slug]') : null;
-        if (slug && !slug.dataset.edited) slug.value = slugifyDraftFolder(title.value);
-        guidedProjectRenderer('updateFolderPreview');
       });
       shell.addEventListener('change', (e) => {
         const projectOwner = window.EU_GUIDED_PROJECTS;
@@ -4099,12 +3991,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           scheduleGuidedSlotSave('toggle_idea_network');
           return;
         }
-        const slug = e.target.closest('[data-draft-slug]');
-        if (!slug) return;
-        slug.dataset.edited = 'true';
-        slug.value = slugifyDraftFolder(slug.value);
-        guidedDraftFolderSlug = slug.value;
-        guidedProjectRenderer('updateFolderPreview');
       });
 
       // composer

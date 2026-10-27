@@ -98,8 +98,6 @@
 .gd-main.gpi-workspace .gd-project-picker[open]>.gd-project-picker-list{border:1px solid var(--skin-border);border-radius:8px;background:var(--skin-paper);box-shadow:var(--skin-shadow)}
 .gd-main.gpi-workspace .gd-project-heading{color:var(--skin-ink);font:500 13px/20px var(--skin-font)}
 /* The one-line definition of a project stays visible in the switcher. */
-.gd-main.gpi-workspace .gd-rail-list:has(.gd-sess) .gd-project-summary span{display:block;color:var(--skin-muted);font-size:12px;line-height:17px}
-.gd-main.gpi-workspace .gd-project-summary strong{color:var(--skin-ink-2);font:500 12px/17px var(--skin-font)}
 
 /* —— Header bar: 56px, ink underline —— */
 .gpi-head{height:56px;min-height:56px;padding:0 16px;border-bottom:1px solid var(--skin-border);background:var(--skin-paper)}

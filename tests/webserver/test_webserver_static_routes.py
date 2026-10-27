@@ -355,13 +355,13 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "打开唯一的 EasyICU 研究助手对话" in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20261026-projects1" in index_html
+        "js/screens-guided-projects.js?v=20261027-proj1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20261026-projects1" in index_html
+    assert "js/screens-guided.js?v=20261027-proj1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -552,12 +552,12 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20261022-legacy1" in index_html
-    assert "css/guided-projects.css?v=20261020-project-root1" in index_html
+    assert "css/guided.css?v=20261027-proj1" in index_html
+    assert "css/guided-projects.css?v=20261027-proj1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
     assert "js/api.js?v=20261026-quick1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20261026-projects1" in index_html
+        "js/screens-guided-projects.js?v=20261027-proj1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -668,7 +668,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20261026-projects1" in index_html
+    assert "js/screens-guided.js?v=20261027-proj1" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -2503,7 +2503,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Prepare Data" in guided_js
     assert "Run a Research Project" in guided_js
     assert "Research projects" in projects_js
-    assert "Local research workspace" in projects_js
+    assert "Local research workspace" not in projects_js
     assert "renderProjectRail" in projects_js
     assert "guidedProjectRenderer('renderProjectRail')" in guided_js
     assert "button class=\"gd-sess draft" not in guided_js
@@ -2517,62 +2517,58 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "data-refreshruns" not in guided_js
     assert "loadAgentRunHistory({ limit: 20 })" not in guided_js
     assert "existing Agent run folder" not in guided_js
-    assert ".gd-project-summary" in projects_css
+    assert ".gd-project-summary" not in projects_css
     assert "~/easyicu/projects" not in guided_project_surface
     assert "/Users/haibo" not in guided_js
     assert "Seeded example · not a local project" not in guided_js
     assert "Seeded examples" not in guided_js
     assert "data-sess" not in guided_js
     assert "That is a seeded example" not in guided_js
-    assert "New / open research project" in projects_js
+    # New and open live at the foot of the project list: one field names a
+    # new project (the server names its folder after it); open is a path
+    # field and Browse. No separate menu, tabs, parent field or preview.
+    assert "New / open research project" not in projects_js
     assert "gdFolderControls" in projects_js
     assert "gdFolderControls" not in guided_js
     assert "gdFolderDialogHost" in guided_js
-    assert "data-folder-menu-toggle" in projects_js
-    assert "data-folder-choice" in projects_js
-    # Outside presses and Escape close the folder menu through the shared
-    # popover owner (its open state stays in the guided screen).
-    assert "isOpen: () => guidedFolderMenuOpen, contains: node => Boolean(node && node.closest && node.closest('.gd-folder-picker'))," in guided_js
+    assert "data-folder-menu-toggle" not in guided_project_surface
+    assert "guidedFolderMenuOpen" not in guided_js
+    assert "data-project-new" in projects_js
+    assert "data-project-new-form" in projects_js
+    assert "${t('New project', '新建项目')}" in projects_js
+    assert "${t('Open existing project…', '打开已有项目…')}" in projects_js
+    assert "data-folder-choice=\"open\"" in projects_js
+    assert "startProjectNaming" in projects_js
+    assert "createProject: title => createLocalGuidedDraft(title)" in guided_js
     assert "guidedDraftRemoval && !guidedDraftRemoval.busy" in guided_js
     assert "data-folder-dialog" in projects_js
-    assert "New blank study folder" in projects_js
-    assert (
-        "Choose a parent folder, then create a metadata-only Guided project subfolder"
-        in projects_js
-    )
-    assert (
-        "Create a metadata-only local folder under the EasyICU projects root"
-        not in guided_project_surface
-    )
-    assert "Use existing folder" in projects_js
-    assert (
-        "Required setup stays here instead of jumping to Classic Workspace"
-        in projects_js
-    )
-    assert "guidedKnownProjectRows" in guided_js
-    assert "ctx.guidedKnownProjectRows()" in projects_js
-    assert "Recent local projects" in projects_js
-    assert "Optional shortcut. The list stays collapsed until you ask" in projects_js
-    assert "Shown only after you ask" in projects_js
-    assert "Detected local project folders" not in guided_project_surface
-    assert "Scanning local project folders" not in guided_project_surface
-    assert "guidedKnownProjectsOpen" in guided_js
-    assert "guidedKnownProjectsOpen" in projects_js
-    assert "data-toggle-known-projects" in projects_js
-    assert "data-known-project" in projects_js
-    assert "data-refreshfolderchoices" in projects_js
-    assert "Path paste remains an advanced fallback" in projects_js
+    for retired in (
+        "New blank study folder",
+        "Use existing folder",
+        "Required setup stays here instead of jumping to Classic Workspace",
+        "Recent local projects",
+        "guidedKnownProjectRows",
+        "guidedKnownProjectsOpen",
+        "data-toggle-known-projects",
+        "data-known-project",
+        "data-refreshfolderchoices",
+        "Path paste remains an advanced fallback",
+        "data-draft-slug",
+        "data-draft-parent-dir",
+        "data-browsedraftparent",
+        "Will create",
+        "guided-${slug",
+        "captureGuidedDraftDialogState",
+        "folder_slug",
+    ):
+        assert retired not in guided_project_surface, retired
     assert "data-browseprojectfolder" in projects_js
     assert "loadGuidedFolderBrowser" in guided_js
     assert "data-guided-folder-browser" in projects_js
     assert "data-folder-browser-entry" in projects_js
     assert "data-folder-browser-shortcut" in projects_js
     assert "data-folder-browser-use" in projects_js
-    assert "Use Browse to choose a folder" in projects_js
-    assert "Choose a local study folder" in projects_js
-    assert "Open project or extracted data folder" in projects_js
-    assert "Local folder path" in projects_js
-    assert "local EasyICU project or export folder" in projects_js
+    assert "${t('Open existing project', '打开已有项目')}" in projects_js
     assert "data-openprojectfolder" in projects_js
     assert "data-reviewexportfolder" in projects_js
     assert "data-existing-project-dir" in projects_js
@@ -2589,16 +2585,8 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         in guided_js
     )
     assert "openExistingGuidedProject" in guided_js
-    assert "Creating study folder…" in projects_js
-    assert "Create new local study folder" in projects_js
-    assert "Choose the parent folder first" in projects_js
-    assert "data-draft-parent-dir" in projects_js
-    assert "data-browsedraftparent" in projects_js
-    assert "Create inside folder" in projects_js
-    assert "Will create" in projects_js
-    assert "guided-${slug || 'study'}-..." in projects_js
-    assert "payload.parent_dir = parent" in guided_js
-    assert "captureGuidedDraftDialogState(box)" in guided_js
+    assert "${busy ? t('Creating…', '正在新建…') : t('Create', '新建')}" in projects_js
+    assert "parent_dir" not in guided_js
     assert "normalize('NFKC')" in guided_js
     assert "\\p{L}\\p{N}" in guided_js
     assert "[^a-z0-9._-]" not in guided_js
@@ -2609,7 +2597,6 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "if (!continuePendingGuidedGoal())" not in guided_js
     assert "data-createdraft" in projects_js
     assert "data-draft-title" in projects_js
-    assert "folder_slug" in guided_js
     assert "createLocalGuidedDraft('New study draft')" not in guided_js
     assert "Studies · local folders" not in guided_project_surface
     assert "Creates a new local project folder" not in guided_project_surface
@@ -2651,17 +2638,14 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gd-data-workspace" in projects_css
     assert ".gd-draft-setup" in guided_css
     assert ".gd-folder-picker" in projects_css
-    assert ".gd-folder-menu" in projects_css
+    assert ".gd-folder-menu" not in projects_css
+    assert ".gd-project-foot-item" in projects_css
+    assert ".gd-project-new input" in projects_css
     assert ".gd-remove-option" in projects_css
     assert ".gd-remove-option" not in guided_css
-    # The folder menu fills its button, so it never overhangs the rail's edge.
-    assert "top:calc(100% + 7px);left:0;right:0;width:auto;" in projects_css
     assert ".gd-folder-dialog" in guided_css
-    assert ".gd-folder-tabs" in guided_css
-    assert ".gds-known" in guided_css
-    assert ".gds-known.collapsed" in guided_css
-    assert ".gds-known-row" in guided_css
-    assert ".gds-known-empty" in guided_css
+    assert ".gd-folder-tabs" not in guided_css
+    assert ".gds-known" not in guided_css
     assert ".gds-browser" in guided_css
     assert ".gds-browser-row" in guided_css
     assert ".gds-browser-actions" in guided_css
@@ -2677,7 +2661,6 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     for selector in (
         ".gd-main.threecol",
         ".gd-rail",
-        ".gd-project-summary",
         ".gd-sessline",
         ".gd-rail-utils",
     ):
@@ -2688,17 +2671,16 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
     assert "api.js?v=20261026-quick1" in index_html
-    assert "screens-guided-projects.js?v=20261026-projects1" in index_html
+    assert "screens-guided-projects.js?v=20261027-proj1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20261026-projects1" in index_html
-    assert "guided.css?v=20261022-legacy1" in index_html
-    assert "guided-projects.css?v=20261020-project-root1" in index_html
+    assert "screens-guided.js?v=20261027-proj1" in index_html
+    assert "guided.css?v=20261027-proj1" in index_html
+    assert "guided-projects.css?v=20261027-proj1" in index_html
     assert "gd-rail-heading" in projects_js
     assert "<summary title=\"${esc(t('Switch research project', '切换研究项目'))}\"><small>${t('Project', '项目')}</small><span title=\"${esc(pickerTitle)}\">${esc(pickerTitle)}</span><i aria-hidden=\"true\">⌄</i></summary>" in projects_js
-    assert "${t('New / open research project', '新建 / 打开研究项目')}" in projects_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
 

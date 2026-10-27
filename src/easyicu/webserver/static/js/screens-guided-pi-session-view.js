@@ -68,7 +68,7 @@
             </div>
           </div>
           <div class="gpi-recovery-actions">
-            <button class="btn primary" type="button" data-newstudy>${tr('Create or open a project', '新建或打开项目')}</button>
+            <button class="btn primary" type="button" data-project-new>${tr('New project', '新建项目')}</button>
             <button class="btn" type="button" data-refreshdrafts>${tr('Refresh project list', '刷新项目列表')}</button>
           </div>
           <div class="gpi-consent">${tr('You can also choose another existing project from the list on the left. Rebinding this old project remains an explicit recovery operation.', '也可以直接从左侧列表选择其他已有项目。若要恢复当前旧项目，仍需执行明确的重新绑定操作。')}</div>

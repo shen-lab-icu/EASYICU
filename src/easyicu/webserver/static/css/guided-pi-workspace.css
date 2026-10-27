@@ -43,8 +43,6 @@
 .gpi-model-binding span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gpi-actions .btn{border-radius:8px;padding:7px 12px;min-height:32px;white-space:nowrap}
 .gpi-compose-card .gpi-access-menu>summary{padding-inline:5px;font-size:12px;font-weight:500}
-.gd-main.gpi-workspace .gd-project-summary{border:0;padding:8px 4px;background:transparent}
-.gd-main.gpi-workspace .gd-project-summary span{font-size:12px}
 .gd-main.gpi-workspace .gd-sess{grid-template-columns:10px minmax(0,1fr);position:relative;border-radius:5px;min-height:56px;padding:8px}
 .gd-main.gpi-workspace .gd-sess .ss-t{font-size:14px}
 .gd-main.gpi-workspace .gd-sess .ss-m{padding-right:84px}
@@ -187,9 +185,6 @@
 .gd-main.gpi-workspace .gd-newbtn{min-height:38px;border-radius:8px;box-shadow:none;font-size:13px;font-weight:500}
 .gd-main.gpi-workspace .gd-project-heading{padding-inline:6px;font-size:12px;font-weight:500}
 .gd-main.gpi-workspace .gd-manage-mini{font-size:11px;font-weight:400}
-.gd-main.gpi-workspace .gd-project-summary{gap:7px;padding:6px 7px 12px}
-.gd-main.gpi-workspace .gd-project-summary strong{font-size:11px;font-weight:400;color:var(--ink-3)}
-.gd-main.gpi-workspace .gd-rail-list:has(.gd-sess) .gd-project-summary span{display:none}
 .gd-main.gpi-workspace .gd-sess{border-radius:8px;padding:11px 10px;gap:8px;min-height:70px;align-items:start}
 .gd-main.gpi-workspace .gd-sess-status{width:6px;height:6px;margin-top:7px;background:#aab3aa}
 .gd-main.gpi-workspace .gd-sess.active .gd-sess-status{background:var(--accent);box-shadow:none}
@@ -398,7 +393,6 @@
 @media(max-width:920px){
  .gd-main.gpi-workspace .gd-rail{max-height:55vh;overflow:auto}
  /* The scrolling rail would clip a floating folder menu: open it in place. */
- .gd-main.gpi-workspace .gd-folder-menu{position:static;margin-top:7px;box-shadow:none}
  .gd-main.gpi-workspace .gd-rail-top{padding:10px 12px;gap:8px}
  .gd-main.gpi-workspace .gd-rail-list{display:block;padding:0 12px 10px;flex:none}
  .gd-main.gpi-workspace .gd-project-picker>summary{padding:8px 30px 8px 10px}

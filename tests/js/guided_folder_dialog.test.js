@@ -1,4 +1,4 @@
-/* Synthetic contracts for the project dialog and its actual shell wiring. */
+/* Synthetic contracts for new/open project and its actual shell wiring. */
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -8,300 +8,214 @@ const { test } = require('node:test');
 const js = path.join(__dirname, '../../src/easyicu/webserver/static/js');
 const shell = fs.readFileSync(path.join(js, 'screens-guided.js'), 'utf8');
 const owner = fs.readFileSync(path.join(js, 'screens-guided-projects.js'), 'utf8');
-const serverRoot = '/synthetic/isolated-home/easyicu/projects';
+const serverRoot = '/synthetic/isolated-home/Documents/EasyICU';
 const escape = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
 
-function harness({ root = serverRoot, language = 'en', create, seed = 'Synthetic study' } = {}) {
-  const host = { innerHTML: '' };
+function fakeHost() {
+  return { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] };
+}
+
+function harness({ language = 'en', hosted = false, create, rows = [] } = {}) {
+  const hosts = { gdSessions: fakeHost(), gdFolderDialogHost: fakeHost(), gdFolderControls: fakeHost() };
+  const picker = { open: false };
+  const nameInput = { focused: false, selected: false, focus() { this.focused = true; }, select() { this.selected = true; } };
   const attempts = [];
-  const bots = [];
   const payloads = [];
-  const ctx = {
+  // The shell's closure state lives on the sandbox; each context reads it
+  // afresh, as guidedProjectContext() does.
+  const base = {
     t: (en, zh) => language === 'zh' ? zh : en,
-    icon: () => '', esc: escape, attr: escape, compactPath: value => value || '',
-    slugifyDraftFolder: () => 'synthetic-study',
-    guidedFolderDialogMode: 'new', guidedFolderSeedTitle: seed,
-    guidedDraftParentDir: '', guidedDrafts: { data: { default_parent_dir: root } },
-    guidedFolderBrowser: {},
+    icon: () => '', esc: escape, attr: escape, compactPath: value => value || '', fmtRunTime: () => '',
+    guidedDrafts: { loading: false, error: null, data: { default_parent_dir: serverRoot } },
+    selectedGuidedDraft: null, pendingGuidedGoal: null, localDraftRows: () => rows,
+    createProject: title => sandbox.createLocalGuidedDraft(title),
   };
-  ctx.openFolderDialog = (mode, title) => {
-    ctx.guidedFolderDialogMode = mode;
-    ctx.guidedFolderSeedTitle = title;
-  };
+  const context = () => ({
+    ...base,
+    guidedFolderDialogMode: sandbox.guidedFolderDialogMode,
+    guidedFolderSeedTitle: sandbox.guidedFolderSeedTitle,
+    guidedFolderBrowser: sandbox.guidedFolderBrowser,
+  });
   const sandbox = {
+    guidedFolderDialogMode: null, guidedFolderSeedTitle: '', guidedFolderBrowser: {},
+    esc: escape, compactPath: value => value || '',
     console, setTimeout, clearTimeout,
-    document: { getElementById: id => id === 'gdFolderDialogHost' ? host : null },
-    ...ctx, selectedGuidedDraft: null, pendingGuidedGoal: null,
-    blankGuidedDraftPayload: title => ({ title }),
-    pushUser: text => attempts.push(text), pushBot: (...text) => bots.push(text),
+    document: {
+      getElementById: id => hosts[id] || null,
+      querySelector: selector => selector === '#gdResearchProjectRail .gd-project-picker' ? picker
+        : (selector === '[data-project-new-title]' && hosts.gdSessions.innerHTML.includes('data-project-new-title') ? nameInput : null),
+    },
+    EasyICU: { guidedPi: { optional: name => name === 'hosted' ? { active: () => hosted } : null } },
+    selectedGuidedDraft: null, pendingGuidedGoal: null,
+    pushUser: text => attempts.push(text), pushBot: () => {},
     renderThread: () => {}, loadGuidedDrafts: () => Promise.resolve(),
     bindGuidedDraftMemory: draft => Promise.resolve({ ok: true, session: {
       draft_id: draft.id, project_title: draft.title, project_dir: draft.project_dir,
     } }),
-    closeGuidedFolderDialog: () => { ctx.guidedFolderDialogMode = null; },
+    closeGuidedFolderDialog: () => { sandbox.guidedFolderDialogMode = null; },
+    renderGuidedFolderControls: () => {}, renderGuidedFolderDialog: () => {},
     piProjectShellActive: () => false,
     startFreshGuidedProjectThread: () => {}, continuePendingGuidedGoal: () => {},
-    guidedProjectContext: () => ctx,
+    guidedProjectContext: context,
     EU_API: { createGuidedDraft: payload => {
       payloads.push(payload);
       return create ? create(payload) : Promise.resolve({ ok: true, draft: {
-        id: 'synthetic-project', title: payload.title,
-        project_dir: `${serverRoot}/guided-synthetic-study`,
+        id: 'synthetic-project', title: payload.title, project_dir: `${serverRoot}/${payload.title}`,
       } });
     } },
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(owner, sandbox);
-  sandbox.guidedProjectRenderer = name => sandbox.EU_GUIDED_PROJECTS[name](ctx);
-  sandbox.defaultStudyTitle = () => sandbox.EU_GUIDED_PROJECTS.defaultStudyTitle(ctx);
-  const start = shell.indexOf('  function createLocalGuidedDraft(');
-  const end = shell.indexOf('  /* ============== conversation script', start);
-  assert.ok(start >= 0 && end > start);
-  vm.runInContext(shell.slice(start, end), sandbox);
-  return { host, ctx, sandbox, payloads, attempts, bots,
-    render: () => sandbox.EU_GUIDED_PROJECTS.renderFolderDialog(ctx) };
-}
-
-function previewHarness(options) {
-  const h = harness(options);
-  const slugStart = shell.indexOf('  function slugifyDraftFolder(');
-  const slugEnd = shell.indexOf('  function guidedProjectContext()', slugStart);
-  const rendererStart = shell.indexOf('  function guidedProjectRenderer(');
-  const rendererEnd = shell.indexOf('  function guidedProjectRailClass()', rendererStart);
-  assert.ok(slugStart >= 0 && slugEnd > slugStart);
-  assert.ok(rendererStart >= 0 && rendererEnd > rendererStart);
-  vm.runInContext(shell.slice(slugStart, slugEnd) + shell.slice(rendererStart, rendererEnd), h.sandbox);
-  h.ctx.slugifyDraftFolder = h.sandbox.slugifyDraftFolder;
-  h.render();
-  const decode = value => value.replaceAll('&quot;', '"').replaceAll('&lt;', '<').replaceAll('&amp;', '&');
-  const code = h.host.innerHTML.match(/<code\b([^>]*)>([^<]*)<\/code>/);
-  assert.ok(code, 'the new-study dialog renders a path preview');
-  const preview = {
-    textContent: decode(code[2]),
-    dataset: { parentDisplay: decode(code[1].match(/data-parent-display="([^"]*)"/)?.[1] || '') },
-    set innerHTML(_) { assert.fail('the preview must be written through textContent'); },
-  };
-  const field = attribute => ({
-    value: decode(h.host.innerHTML.match(new RegExp(`${attribute} value="([^"]*)"`))[1]),
-    dataset: {},
-    closest(selector) {
-      if (selector === `[${attribute}]`) return this;
-      return selector === '[data-draft-setup]' ? box : null;
-    },
-  });
-  const title = field('data-draft-title');
-  const slug = field('data-draft-slug');
-  const parent = field('data-draft-parent-dir');
-  const fields = {
-    '[data-draft-title]': title, '[data-draft-slug]': slug, '[data-draft-parent-dir]': parent,
-    '[data-draft-folder-preview]': code[1].includes('data-draft-folder-preview') ? preview : null,
-  };
-  const box = { querySelector: selector => fields[selector] || null };
-  h.host.querySelector = selector => selector === '[data-draft-setup]' ? box : null;
-  const listeners = {};
-  Object.assign(h.sandbox, {
-    shell: { addEventListener: (name, handler) => { listeners[name] = handler; } },
-    EXTRACT: { handleInput: () => false }, IDEA: { state: () => null },
-  });
-  const start = shell.indexOf("      shell.addEventListener('input', (e) => {");
-  const end = shell.indexOf('\n\n      // composer', start);
-  assert.ok(start >= 0 && end > start);
-  vm.runInContext(shell.slice(start, end), h.sandbox);
-  return { ...h, title, slug, parent, preview,
-    dispatch(name, target, value) { target.value = value; listeners[name]({ target }); } };
-}
-
-test('typing a study title refreshes the preview and keeps Chinese folder names', () => {
-  const h = previewHarness({ language: 'zh', seed: '' });
-  h.dispatch('input', h.title, '合成队列 甲号');
-  assert.equal(h.slug.value, '合成队列-甲号');
-  assert.equal(h.preview.textContent, `${serverRoot}/guided-合成队列-甲号-...`);
-});
-
-test('editing a folder name refreshes the preview and survives later title typing', () => {
-  const h = previewHarness();
-  h.dispatch('change', h.slug, '手动 文件夹');
-  assert.equal(h.slug.value, '手动-文件夹');
-  assert.equal(h.slug.dataset.edited, 'true');
-  assert.equal(h.preview.textContent, `${serverRoot}/guided-手动-文件夹-...`);
-  h.dispatch('input', h.title, '另一个合成标题');
-  assert.equal(h.slug.value, '手动-文件夹');
-  assert.equal(h.preview.textContent, `${serverRoot}/guided-手动-文件夹-...`);
-});
-
-test('parent input refreshes the preview and clearing it restores the rendered parent', () => {
-  const h = previewHarness();
-  assert.equal(h.preview.dataset.parentDisplay, serverRoot);
-  h.dispatch('input', h.parent, ' /synthetic/另一个父目录/ ');
-  assert.equal(h.preview.textContent, '/synthetic/另一个父目录/guided-synthetic-study-...');
-  h.dispatch('input', h.parent, '');
-  assert.equal(h.preview.textContent, `${serverRoot}/guided-synthetic-study-...`);
-});
-
-test('an empty folder-name preview uses the study fallback', () => {
-  const h = previewHarness();
-  h.slug.value = '';
-  h.sandbox.EU_GUIDED_PROJECTS.updateFolderPreview(h.ctx);
-  assert.equal(h.preview.textContent, `${serverRoot}/guided-study-...`);
-});
-
-test('the preview owner applies the same Unicode slug policy as rendering', () => {
-  const h = previewHarness();
-  h.slug.value = ' 自定义 ＡＢ ';
-  h.sandbox.EU_GUIDED_PROJECTS.updateFolderPreview(h.ctx);
-  assert.equal(h.preview.textContent, `${serverRoot}/guided-自定义-ab-...`);
-});
-
-test('title and parent markup are handled as preview text', () => {
-  const h = previewHarness();
-  h.dispatch('input', h.title, '<b>合成 标题</b>');
-  assert.equal(h.preview.textContent, `${serverRoot}/guided-b-合成-标题-b-...`);
-  h.dispatch('input', h.parent, '/synthetic/<b>父目录</b>');
-  assert.equal(h.preview.textContent, '/synthetic/<b>父目录</b>/guided-b-合成-标题-b-...');
-});
-
-test('server root supplies dialog, starter, Browse and path labels', async () => {
-  const h = harness();
-  h.render();
-  assert.match(h.host.innerHTML, new RegExp(`data-draft-parent-dir value="${serverRoot}"`));
-  assert.match(h.host.innerHTML, new RegExp(`${serverRoot}/guided-`));
-  assert.equal(h.sandbox.EU_GUIDED_PROJECTS.defaultParentDir(h.ctx), serverRoot);
-  assert.equal(h.sandbox.EU_GUIDED_PROJECTS.draftParentDir(h.ctx), serverRoot);
-  assert.equal(h.sandbox.EU_GUIDED_PROJECTS.parentPathLabel(h.ctx), serverRoot);
-  await h.sandbox.quickCreateGuidedStarterFolder();
-  assert.equal(h.payloads[0].parent_dir, serverRoot);
-  // Execute the real open/new Browse click branches without a browser/server.
-  for (const [selector, inputSelector] of [
-    ['data-browseprojectfolder', 'data-existing-project-dir'],
-    ['data-browsedraftparent', 'data-draft-parent-dir'],
+  const projects = sandbox.EU_GUIDED_PROJECTS;
+  sandbox.guidedProjectRenderer = name => projects[name](context());
+  sandbox.defaultStudyTitle = () => projects.defaultStudyTitle(context());
+  sandbox.blankGuidedDraftPayload = title => ({ title });
+  for (const [from, to] of [
+    ['  function hostedInstance() {', '  function closeGuidedFolderDialog() {'],
+    ['  function createLocalGuidedDraft(', '  /* ============== conversation script'],
   ]) {
-    const start = shell.indexOf(`        if (e.target.closest('[${selector}]'))`);
-    const end = shell.indexOf('\n        if (', start + 1);
-    let requested;
-    const box = { querySelector: query => query === `[${inputSelector}]` ? { value: '' } : null };
-    h.sandbox.e = { target: { closest: query => query === `[${selector}]` ? {} : box } };
-    h.sandbox.captureGuidedDraftDialogState = () => {};
-    h.sandbox.loadGuidedFolderBrowser = value => { requested = value; };
-    vm.runInContext(`(function () { ${shell.slice(start, end)} })()`, h.sandbox);
-    assert.equal(requested, serverRoot);
+    const start = shell.indexOf(from);
+    const end = shell.indexOf(to, start);
+    assert.ok(start >= 0 && end > start, from);
+    vm.runInContext(shell.slice(start, end), sandbox);
+  }
+  const rail = () => hosts.gdSessions.innerHTML;
+  const submit = value => hosts.gdSessions.onsubmit({
+    target: { matches: selector => selector === '[data-project-new-form]', querySelector: () => ({ value }) },
+    preventDefault() {},
+  });
+  return { hosts, sandbox, projects, picker, nameInput, payloads, attempts, rail, submit,
+    get ctx() { return context(); },
+    renderRail: () => projects.renderProjectRail(context()) };
+}
+
+test('the project list ends with New project and Open existing project; no separate menu', () => {
+  for (const language of ['en', 'zh']) {
+    const h = harness({ language });
+    h.renderRail();
+    h.projects.renderFolderControls(h.ctx);
+    assert.ok(h.rail().includes('data-project-new'));
+    assert.ok(h.rail().includes(language === 'zh' ? '新建项目' : 'New project'));
+    assert.ok(h.rail().includes('data-folder-choice="open"'));
+    assert.ok(h.rail().includes(language === 'zh' ? '打开已有项目…' : 'Open existing project…'));
+    assert.equal(h.hosts.gdFolderControls.innerHTML, '');
+    assert.doesNotMatch(h.rail(), /gd-project-summary|本地研究工作区|Local research workspace/);
+  }
+  assert.doesNotMatch(owner, /新建 \/ 打开研究项目|data-folder-menu-toggle|data-newstudy|新建空白项目/);
+});
+
+test('a hosted instance keeps its single New research project control and no list foot', () => {
+  const h = harness({ hosted: true });
+  h.renderRail();
+  h.projects.renderFolderControls(h.ctx);
+  assert.doesNotMatch(h.rail(), /data-project-new|data-folder-choice="open"/);
+  assert.match(h.hosts.gdFolderControls.innerHTML, /data-folder-choice="new"/);
+});
+
+test('New project opens the list with a selected name field in the interface language', () => {
+  for (const [language, title] of [['zh', '新研究'], ['en', 'New study']]) {
+    const h = harness({ language });
+    h.sandbox.openGuidedFolderDialog('new');
+    assert.equal(h.sandbox.guidedFolderDialogMode, null);
+    assert.equal(h.picker.open, true);
+    assert.ok(h.rail().includes(`data-project-new-title value="${title}"`), language);
+    assert.ok(h.nameInput.focused && h.nameInput.selected);
+    assert.doesNotMatch(h.rail(), /data-draft-slug|data-draft-parent-dir|guided-/);
   }
 });
 
-test('missing server value sends blank parent_dir and never invents a path', async () => {
-  const h = harness({ root: '' });
-  h.render();
-  assert.match(h.host.innerHTML, /data-draft-parent-dir value=""/);
-  assert.doesNotMatch(h.host.innerHTML, /~\/easyicu/);
-  await h.sandbox.quickCreateGuidedStarterFolder();
-  assert.equal(h.payloads[0].parent_dir, '');
+test('submitting the name creates one project named by the server, with no folder or parent fields', async () => {
+  const h = harness({ language: 'zh' });
+  h.projects.startProjectNaming(h.ctx);
+  await h.submit('  合成 队列 甲  ');
+  assert.equal(h.payloads.length, 1);
+  assert.deepEqual(Object.keys(h.payloads[0]), ['title']);
+  assert.equal(h.payloads[0].title, '合成 队列 甲');
+  assert.equal(h.attempts.length, 1);
+  assert.doesNotMatch(h.rail(), /data-project-new-title/);
+  // An empty name falls back to the default title.
+  await h.submit('   ');
+  assert.equal(h.payloads[1].title, '新研究');
 });
 
-test('starter replaces a previously selected parent with the server default', async () => {
-  const h = harness();
-  h.sandbox.guidedDraftParentDir = '/synthetic/previous-parent';
-  await h.sandbox.quickCreateGuidedStarterFolder();
-  assert.equal(h.sandbox.guidedDraftParentDir, serverRoot);
-  assert.equal(h.payloads[0].parent_dir, serverRoot);
-});
-
-test('busy dialog disables create; repeated click sends one request and one success line', async () => {
+test('a create in flight disables the field; a repeated submit sends one request', async () => {
   let complete;
   const pending = new Promise(resolve => { complete = resolve; });
   const h = harness({ create: () => pending });
-  const first = h.sandbox.createLocalGuidedDraft('Synthetic study', 'study', serverRoot);
-  assert.match(h.host.innerHTML, /data-createdraft[^>]*disabled/);
-  assert.match(h.host.innerHTML, /Creating study folder/);
-  const second = h.sandbox.createLocalGuidedDraft('Synthetic study', 'study', serverRoot);
+  h.projects.startProjectNaming(h.ctx);
+  const first = h.submit('Synthetic study');
+  assert.match(h.rail(), /data-project-new-title[^>]*disabled/);
+  assert.match(h.rail(), /Creating…/);
+  const second = h.submit('Synthetic study');
   assert.equal(h.payloads.length, 1);
-  assert.equal(h.attempts.length, 0);
-  complete({ ok: true, draft: { id: 'synthetic', title: 'Synthetic study', project_dir: serverRoot + '/guided-study' } });
+  complete({ ok: true, draft: { id: 'synthetic', title: 'Synthetic study', project_dir: `${serverRoot}/Synthetic study` } });
   await Promise.all([first, second]);
   assert.equal(h.attempts.length, 1);
-  assert.equal(h.ctx.guidedFolderDialogMode, null);
-  assert.equal(h.host.innerHTML, '');
+  assert.doesNotMatch(h.rail(), /data-project-new-title/);
 });
 
-test('blocked create stays open with localized inline reason; retry clears error', async () => {
+test('a refused create keeps the name field with a localized inline reason; retry clears it', async () => {
   for (const language of ['en', 'zh']) {
     for (const [code, en, zh] of [
-      ['invalid_guided_parent_dir', 'The parent must be an existing folder', '父目录必须是已存在的文件夹'],
       ['guided_project_folder_create_failed', 'Check that this folder can be written to', '请检查该目录能否写入'],
       ['unfamiliar_code', 'Could not create the study folder', '无法创建研究文件夹'],
     ]) {
       let fail = true;
       const h = harness({ language, create: () => Promise.resolve(fail
         ? { ok: false, blocked: true, error: code, reason: '<server reason>' }
-        : { ok: true, draft: { id: 'retry', title: 'Retry study', project_dir: serverRoot + '/guided-retry' } }) });
-      await h.sandbox.createLocalGuidedDraft('Synthetic study', 'study', serverRoot);
-      assert.equal(h.ctx.guidedFolderDialogMode, 'new');
-      assert.match(h.host.innerHTML, /data-folder-create-error[^>]*role="alert"/);
-      assert.ok(h.host.innerHTML.includes(language === 'zh' ? zh : en));
-      // A known parent refusal reads in the interface language alone; other
-      // failures keep the server's reason as an escaped detail line.
-      if (code === 'invalid_guided_parent_dir') assert.doesNotMatch(h.host.innerHTML, /server reason/);
-      else assert.match(h.host.innerHTML, /gds-status-detail">&lt;server reason>/);
-      assert.doesNotMatch(h.host.innerHTML, /data-createdraft[^>]*disabled/);
+        : { ok: true, draft: { id: 'retry', title: 'Retry', project_dir: `${serverRoot}/Retry` } }) });
+      h.projects.startProjectNaming(h.ctx);
+      await h.submit('Synthetic study');
+      assert.match(h.rail(), /data-project-new-title value="Synthetic study"/);
+      assert.match(h.rail(), /gd-project-new-error" role="alert"/);
+      assert.ok(h.rail().includes(language === 'zh' ? zh : en));
+      assert.match(h.rail(), /&lt;server reason>/);
       assert.equal(h.attempts.length, 0);
-      assert.equal(h.bots.length, 0);
       fail = false;
-      await h.sandbox.createLocalGuidedDraft('Retry study', 'retry', serverRoot);
-      assert.equal(h.ctx.guidedFolderDialogMode, null);
+      await h.submit('Retry');
+      assert.doesNotMatch(h.rail(), /gd-project-new-error|data-project-new-title/);
       assert.equal(h.attempts.length, 1);
     }
   }
 });
 
-test('missing default Browse remains selectable and explains deferred creation', () => {
-  for (const language of ['en', 'zh']) {
-    const h = harness({ language });
-    h.ctx.guidedFolderBrowser = { open: true, error: 'not_a_directory', data: {
-      ok: false, error: 'not_a_directory', path: serverRoot, entries: [], shortcuts: [],
-    } };
-    h.render();
-    assert.doesNotMatch(h.host.innerHTML, /not_a_directory/);
-    assert.ok(h.host.innerHTML.includes(language === 'zh' ? '创建研究时会自动创建此默认目录' : 'This default folder will be created with your study'));
-    assert.doesNotMatch(h.host.innerHTML, /data-folder-browser-use[^>]*disabled/);
-    h.ctx.guidedFolderBrowser.data.path = '/synthetic/arbitrary-absent-parent';
-    h.render();
-    assert.match(h.host.innerHTML, /not_a_directory/);
-    assert.doesNotMatch(h.host.innerHTML, /This default folder will be created with your study/);
-  }
+test('Escape leaves the name field without closing the project list', () => {
+  const h = harness();
+  h.projects.startProjectNaming(h.ctx);
+  let stopped = false;
+  h.hosts.gdSessions.onkeydown({
+    key: 'Escape', target: { matches: selector => selector === '[data-project-new-title]' },
+    preventDefault() {}, stopPropagation() { stopped = true; },
+  });
+  assert.ok(stopped);
+  assert.doesNotMatch(h.rail(), /data-project-new-title/);
+  assert.ok(h.rail().includes('data-project-new'));
 });
 
-test('transport failure is inline and keeps the dialog open', async () => {
-  const h = harness({ create: () => Promise.reject(new Error('Synthetic network failure')) });
-  await h.sandbox.createLocalGuidedDraft('Synthetic study', 'study', serverRoot);
-  assert.equal(h.ctx.guidedFolderDialogMode, 'new');
-  assert.match(h.host.innerHTML, /data-folder-create-error/);
-  assert.match(h.host.innerHTML, /Synthetic network failure/);
-  assert.equal(h.attempts.length, 0);
+test('Open existing project is a path field, Browse and Open, with no new-project tabs', () => {
+  const h = harness({ language: 'zh' });
+  h.sandbox.openGuidedFolderDialog('open', '');
+  assert.equal(h.sandbox.guidedFolderDialogMode, 'open');
+  h.projects.renderFolderDialog(h.ctx);
+  const dialog = h.hosts.gdFolderDialogHost.innerHTML;
+  assert.match(dialog, /data-existing-project-dir/);
+  assert.match(dialog, /data-browseprojectfolder/);
+  assert.match(dialog, /data-openprojectfolder/);
+  assert.ok(dialog.includes('打开已有项目'));
+  assert.doesNotMatch(dialog, /data-folder-choice|data-draft-title|data-createdraft|gds-known|guided-\*/);
 });
 
-test('one-click starter also opens creation feedback on failure', async () => {
-  const h = harness({ create: () => Promise.resolve({ ok: false,
-    error: 'guided_project_folder_create_failed', reason: 'Synthetic permission failure' }) });
-  h.ctx.guidedFolderDialogMode = null;
-  await h.sandbox.quickCreateGuidedStarterFolder();
-  assert.equal(h.ctx.guidedFolderDialogMode, 'new');
-  assert.match(h.host.innerHTML, /data-folder-create-error/);
-  assert.match(h.host.innerHTML, /Synthetic permission failure/);
+test('a hosted New research project still asks for its name in a dialog', () => {
+  const h = harness({ hosted: true });
+  h.sandbox.openGuidedFolderDialog('new', 'Synthetic hosted study');
+  assert.equal(h.sandbox.guidedFolderDialogMode, 'new');
+  h.projects.renderFolderDialog(h.ctx);
+  assert.match(h.hosts.gdFolderDialogHost.innerHTML, /data-hosted-project-dialog/);
+  assert.match(h.hosts.gdFolderDialogHost.innerHTML, /data-draft-title value="Synthetic hosted study"/);
 });
 
-test('long server reasons wrap within the folder dialog', () => {
+test('long server reasons wrap within the hosted dialog', () => {
   const css = fs.readFileSync(path.join(js, '../css/guided-projects.css'), 'utf8');
   assert.match(css, /\[data-folder-create-error\]\{[^}]*min-width:0;[^}]*overflow-wrap:anywhere/);
-});
-
-test('a study with no title starts with one in the interface language', async () => {
-  for (const [language, title] of [['zh', '新研究'], ['en', 'New local study']]) {
-    const h = harness({ language, seed: '' });
-    h.render();
-    assert.ok(h.host.innerHTML.includes(`value="${title}"`), language);
-    await h.sandbox.createLocalGuidedDraft('', 'study', serverRoot);
-    assert.equal(h.payloads[0].title, title);
-  }
-  // The shell keeps no English seed of its own.
-  assert.doesNotMatch(shell, /guidedFolderSeedTitle = 'New local study'/);
-  assert.equal((shell.match(/'New local study'/g) || []).length, 1);
 });

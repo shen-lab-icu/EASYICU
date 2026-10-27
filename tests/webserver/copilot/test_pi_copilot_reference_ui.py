@@ -864,8 +864,8 @@ def test_rail_reads_as_one_project_switcher_over_its_conversations() -> None:
     assert ".gd-main.gpi-workspace .gd-project-picker{position:static}" in desktop_css
     assert ".gd-main.gpi-workspace .gd-project-picker[open]>.gd-project-picker-list{position:absolute;z-index:60;" in desktop_css
     assert ".gd-main.gpi-workspace .gd-project-picker[open]>.gd-project-picker-list{border:1px solid var(--skin-border);border-radius:8px;" in skin
-    # The one-line definition of a project is shown, not hidden once projects exist.
-    assert ".gd-main.gpi-workspace .gd-rail-list:has(.gd-sess) .gd-project-summary span{display:block;" in skin
+    # No explanatory card above the list; it ends with new/open project.
+    assert ".gd-project-summary" not in skin and ".gd-project-summary" not in projects
     assert ".gd-rail-brand" not in desktop_css and ".gd-rail-brand" not in workspace_css and ".gd-rail-brand" not in skin
     # Vocabulary: conversations under a project; "任务" is the running research job.
     assert "<strong>${tr('Conversations', '对话')}</strong>" in workspace
@@ -1238,14 +1238,11 @@ def test_floating_menus_share_one_dismissal_owner() -> None:
     for disclosure in ('<details class="gpi-idea-source-group"', '<details class="gpi-run-history"'):
         source = idea_source if "idea-source-group" in disclosure else aside
         assert disclosure in source and "data-popover-menu" not in source.split(disclosure, 1)[1].split(">", 1)[0]
-    # A menu whose open state lives in its owner registers with the same
-    # owner: the rail's folder menu, whose re-render used to drop focus to the
-    # body so its shell-scoped Escape branch never ran.
+    # The rail's separate new/open folder menu is gone: the project list's
+    # foot owns new and open, so the guided screen keeps no menu state.
     guided = _read("js/screens-guided.js")
-    assert "if (window.EU_POPOVER_MENUS) window.EU_POPOVER_MENUS.register({" in guided
-    assert "isOpen: () => guidedFolderMenuOpen, contains: node => Boolean(node && node.closest && node.closest('.gd-folder-picker'))," in guided
-    assert "if (guidedFolderMenuOpen && !e.target.closest('.gd-folder-picker')) {" not in guided
-    assert "        if (guidedFolderMenuOpen) {\n          guidedFolderMenuOpen = false;\n          renderGuidedFolderControls();\n          e.preventDefault();" not in guided
+    assert "guidedFolderMenuOpen" not in guided
+    assert "data-folder-menu-toggle" not in guided
     assert index.index("js/popover-menus.js?v=") < index.index("js/screens-guided.js?v=")
     # The route owner no longer reconstructs outside-click or Escape policy.
     assert "!menu.contains(event.target)" not in events
@@ -1381,17 +1378,13 @@ def test_composer_menus_open_inside_the_conversation_panel() -> None:
     # The skin no longer pins a fixed + menu width that could exceed a narrow card.
     assert ".gpi-compose-card .gpi-idea-source-popover{width:min(240px,calc(100% - 20px));" in skin
     assert "min-height:26px;color:var(--skin-muted);font:500 12px/18px var(--skin-font);list-style:none;cursor:pointer}" in skin
-    assert "position:absolute;z-index:70;top:calc(100% + 7px);left:0;right:0;width:auto;" in projects_css
     assert '<details class="gpi-data-consent" data-popover-menu aria-label=' in consent
     # Phone: the trailing group takes its own line; the skin had overridden the
     # workspace phone cap on the model chip with max-width:none.
     assert "@media(max-width:520px){\n .gpi-compose-card .gpi-action-trailing{flex:1 1 100%;justify-content:flex-end}" in skin
     assert " .gpi-compose-card .gpi-model-binding{max-width:min(150px,40vw)}" in skin
-    # Below 921px the rail scrolls, so the folder menu opens in place (the
-    # workspace owner that makes the rail scroll carries the rule).
     workspace_css = _read("css/guided-pi-workspace.css")
-    narrow = workspace_css[workspace_css.index("@media(max-width:920px){\n .gd-main.gpi-workspace .gd-rail{max-height:55vh;overflow:auto}"):]
-    assert " .gd-main.gpi-workspace .gd-folder-menu{position:static;margin-top:7px;box-shadow:none}" in narrow[: narrow.index("\n}")]
+    assert ".gd-folder-menu" not in workspace_css
 
 
 def test_reply_markdown_renders_github_tables() -> None:

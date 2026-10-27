@@ -97,7 +97,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-header.js?v=20261021-help1" in index
     assert "js/screens-guided-pi-model-menu.js?v=20260923-keep-open1" in index
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
-    assert "css/guided-pi-workspace.css?v=20261027-access1" in index
+    assert "css/guided-pi-workspace.css?v=20261027-proj1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
     assert "js/screens-guided-pi-demo.js?v=20261026-fig2" in index
     assert "js/screens-guided-pi-demo-trace.js?v=20261026-demo3" in index
@@ -135,7 +135,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261026-six6" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261027-access1" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261027-proj1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -169,7 +169,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261026-int1" in index
     assert "js/screens-guided-pi.js?v=20261027-access1" in index
-    assert "js/screens-guided.js?v=20261026-projects1" in index
+    assert "js/screens-guided.js?v=20261027-proj1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
@@ -2137,7 +2137,8 @@ def test_activation_initializes_first_use_projects_and_surfaces_failures() -> No
     assert "当前项目保存的研究配置已不存在" in error_text_owner
     assert "关联的研究配置已经失效" in panel
     assert "EasyICU 不会静默创建或绑定另一份配置" in panel
-    assert "data-newstudy" in panel
+    assert "data-project-new" in panel
+    assert "data-newstudy" not in panel
     assert "data-refreshdrafts" in panel
     assert "state.projectIssue === 'pi_project_study_context_missing'" in panel
     assert "state.projectIssue = error.code" in project_owner
@@ -2288,10 +2289,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     )
     assert "Conversation memory" not in guided
     assert "对话记忆" not in guided
-    assert (
-        "Study setup, runs, evidence, and conversation history stay here."
-        in projects_owner
-    )
+    assert "Study setup, runs, evidence, and conversation history stay here." not in projects_owner
     assert "function renderShellRail(ctx)" in projects_owner
     assert 'class="gd-rail"' in projects_owner
     assert 'class="gd-rail"' not in guided
