@@ -178,9 +178,19 @@ _COUNT = r"(?P<count>\d{1,4}|one|two|three|four|five|six|seven|eight|nine|ten|el
 _UNIT = r"(?P<unit>days?|d|weeks?|wks?|months?|mos?|years?|yrs?)"
 _ENDPOINT = r"(?:mortality|survival|deaths?|die[sd]?|dying|alive|survived?|follow(?:ed)?[\s-]*up)"
 # Words that may stand between a horizon and its endpoint ("28-day all-cause
-# mortality", "90 days of follow-up"); any other word means the number
-# qualifies something else ("a 7-day course and survival").
-_QUALIFIER = r"(?:all[\s-]+cause|in[\s-]+hospital|hospital|icu|overall|crude|cumulative|of)"
+# mortality", "90 days of follow-up", "28-day restricted mean survival time");
+# any other word means the number qualifies something else ("a 7-day course
+# and survival").
+_QUALIFIER = (
+    r"(?:all[\s-]+cause|in[\s-]+hospital|hospital|icu|overall|crude|cumulative|of"
+    r"|restricted|mean|average)"
+)
+# Between an endpoint and its relation: "mortality rate at 28 days", "survival
+# time within 28 days", "survive on average within 28 days", "restricted mean
+# survival time (RMST) at 28 days".
+_ENDPOINT_TAIL = (
+    r"(?:(?:rates?|times?|on[\s-]+average)[\s-]+)?(?:\(\s*rmst\s*\)[\s-]*)?"
+)
 # "mortality at 28 days", "death within 48 hours", "mortality in the first
 # 48 hours".  "In" relates an endpoint to a horizon only as "in the first".
 _RELATION = (
@@ -195,6 +205,9 @@ _HOUR_RELATION = (
 _COUNT_ZH = r"(?<![零一二两三四五六七八九十百])(?P<count>\d{1,4}|[一二两三四五六七八九十百]{1,6})"
 _UNIT_ZH = r"(?P<unit>天|日|d|周|星期|个月|年)"
 _ENDPOINT_ZH = r"(?:死亡|病死|生存|存活)"
+# "28 天内平均存活多少天", "28 天限制性平均生存时间": the mean survival over a
+# horizon states that horizon.
+_MEAN_SURVIVAL_ZH = r"(?:限制性?)?平均\s*(?:生存|存活)"
 # "28 天院内死亡", "48 小时 ICU 死亡": a setting may stand between the two.
 _QUALIFIER_ZH = r"(?:全因|院内|住院|ICU)"
 # Hours are read only next to a mortality, death or survival noun or a verb
@@ -251,16 +264,16 @@ _STATED_HORIZON_PATTERNS = (
     ),
     # "mortality at 28 days", "survival to day 28", "followed up for one year".
     re.compile(
-        rf"\b{_ENDPOINT}[\s-]+(?:rates?[\s-]+)?{_RELATION}{_POSTFIX_MEMBERS}?"
+        rf"\b{_ENDPOINT}[\s-]+{_ENDPOINT_TAIL}{_RELATION}{_POSTFIX_MEMBERS}?"
         rf"(?P<head>day[\s-]*(?P<day>\d{{1,4}})\b|{_COUNT}[\s-]*{_UNIT}\b){_POSTFIX_TAIL}?",
         re.IGNORECASE,
     ),
     # "day-28 mortality".
     re.compile(rf"(?P<head>\bday[\s-]*(?P<day>\d{{1,4}}))[\s-]+{_ENDPOINT}", re.IGNORECASE),
-    # "28 天死亡", "一年生存率", "三个月内死亡", "28 天院内死亡".
+    # "28 天死亡", "一年生存率", "三个月内死亡", "28 天院内死亡", "28 天内平均存活".
     re.compile(
         rf"{_ZH_PREFIX_MEMBERS}?(?P<head>{_COUNT_ZH}\s*{_UNIT_ZH})"
-        rf"\s*(?:以内|内)?\s*的?\s*(?:{_QUALIFIER_ZH}\s*)?{_ENDPOINT_ZH}"
+        rf"\s*(?:以内|内)?\s*的?\s*(?:{_QUALIFIER_ZH}\s*)?(?:{_ENDPOINT_ZH}|{_MEAN_SURVIVAL_ZH})"
     ),
     # "第 28 天死亡".
     re.compile(rf"(?P<head>第\s*(?P<day>\d{{1,4}})\s*[天日])\s*的?\s*{_ENDPOINT_ZH}"),
@@ -459,6 +472,7 @@ def stated_mortality_horizon_mentions(text: str) -> tuple[StatedHorizonMention, 
 
     A horizon is read only next to its endpoint word: "28-day mortality",
     "survival to day 90", "death within 28 days", "one-year survival",
+    "survive on average within 28 days", "28 天内平均存活",
     "48-hour mortality", "died within 48 hours", "mortality in the first 48
     hours", "90 天死亡", "随访一年", and each horizon of a list ("48-hour and
     28-day mortality", "mortality at 24 and 48 hours").  Days that qualify
@@ -520,6 +534,94 @@ def stated_mortality_horizons(text: str) -> tuple[StatedHorizon, ...]:
     """The distinct horizons ``text`` states for death or survival, in text order."""
 
     return tuple(dict.fromkeys(mention.horizon for mention in stated_mortality_horizon_mentions(text)))
+
+
+#: Words that ask how long patients lived on average: a restricted mean
+#: survival time.  「28 天内平均存活多少天」, 「限制性平均生存时间」, 「存活天数的
+#: 平均值」, "RMST", "restricted mean survival time", "mean survival time",
+#: "how many days do patients survive on average", "mean days alive", "days
+#: alive within 28 days".  A mean survival is a time-to-event estimand, never a
+#: share of deaths: 「28 天内平均存活」 asks how long patients lived within 28
+#: days, not how many died by day 28.  A rate or a probability (「平均存活率」,
+#: "average survival probability") is a share; "survivors were on average
+#: older" describes survivors, and so does a relative clause ("patients who
+#: survived, on average, spent fewer days ventilated"); "days alive outside
+#: the hospital" or "days alive and free of ventilation" counts other days.
+#: None is one.
+MEAN_SURVIVAL_PATTERN = re.compile(
+    r"(?:限制性?)?平均\s*(?:生存|存活)(?:时间|天数|期)?(?!\s*率)"
+    r"|(?:生存|存活)\s*(?:时间|天数|期)\s*的?\s*(?:均值|平均值|平均数)"
+    r"|\brmst\b|\brestricted[\s-]+mean(?:[\s-]+survival(?:[\s-]+times?)?)?\b"
+    r"|\b(?:mean|average)[\s-]+(?:survival(?:[\s-]+times?)?|time[\s-]+alive)\b"
+    r"(?![\s-]+(?:rates?|proportions?|probabilit(?:y|ies)|chances?|percentages?)\b)"
+    # The verb, never "survivors", with no copula between: "survive on
+    # average", "lived, on average,", "alive on average".  It asks a mean
+    # survival only beside a duration (``_DURATION_ASKED``).
+    r"|(?P<on_average>\b(?:surviv(?:e|es|ed|ing)|li(?:ve|ves|ved|ving)|alive)\b"
+    r"(?:[\s,]+(?!(?:is|are|was|were|be|been|being)\b)[a-z]+){0,2}?[\s,]+on[\s-]+average\b)"
+    r"|\b(?:mean|average)[\s-]+(?:number[\s-]+of[\s-]+)?days?[\s-]+alive\b"
+    r"(?![\s-]+(?:and|&|free|out|outside|without|off|at|in)\b)"
+    r"|\bdays?[\s-]+alive[\s-]+(?:within|by|through|until|over|during|to)[\s-]+"
+    r"(?:the[\s-]+first[\s-]+|day[\s-]+)?\d+(?:[\s-]*days?)?\b",
+    re.IGNORECASE,
+)
+# A duration asked in the sentence: "how long", "how many days", "days", "time".
+_DURATION_ASKED = re.compile(
+    r"\bhow\s+long\b|\bdays?\b|\btime\b|\bduration\b|多久|多长时间|几天|多少天",
+    re.IGNORECASE,
+)
+# The verb of "on average" in a relative clause describes survivors ("patients
+# who survived, on average, spent …", "those alive on average had …"); it asks
+# no mean survival, whatever other days the sentence counts.
+_SURVIVORS_DESCRIBED_BEFORE = re.compile(
+    r"\b(?:who|whom|that|which|those)\s+(?:(?:had|have|has|were|was|are|is|been|still)\s+){0,2}$",
+    re.IGNORECASE,
+)
+# A mean survival the clause declines ("rather than RMST", 「不用 RMST」).
+_MEAN_SURVIVAL_DECLINED = re.compile(
+    r"(?:\bnot|n't|\bno|\bnever|\bwithout|\brather\s+than|\binstead\s+of"
+    r"|不|无需|而不是|而非|并非|代替|取代)"
+    r"(?:\s+(?:an?|the|any|use|using|report|reporting|estimat\w*|as|by|of|a))*\s*"
+    r"(?:用|以|采用|使用|报告|计算|估计)?\s*$",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StatedMeanSurvival:
+    """Where a text asks a restricted mean survival time, in its words."""
+
+    start: int
+    end: int
+    evidence: str
+
+
+def stated_mean_survival_mentions(text: str) -> tuple[StatedMeanSurvival, ...]:
+    """Every place ``text`` asks how long patients lived on average, in text order.
+
+    The words of :data:`MEAN_SURVIVAL_PATTERN`, unless the clause declines
+    them ("use logistic regression rather than RMST", 「不用 RMST」).  A
+    horizon the same words state is read by
+    :func:`stated_mortality_horizon_mentions`; this says the estimand.
+    """
+
+    source = str(text or "")
+    mentions = []
+    for match in MEAN_SURVIVAL_PATTERN.finditer(source):
+        if match.group("on_average") is not None:
+            if _SURVIVORS_DESCRIBED_BEFORE.search(source[max(0, match.start() - 40):match.start()]):
+                continue
+            sentence = re.split(r"[;。；！？!?\n]", source[:match.start()])[-1] + re.split(
+                r"[;。；！？!?\n]", source[match.start():]
+            )[0]
+            if _DURATION_ASKED.search(sentence) is None:
+                continue
+        head = source[max(0, match.start() - 24):match.start()]
+        head = re.split(r"[,;:，。；：！？!?\n]", head)[-1]
+        if _MEAN_SURVIVAL_DECLINED.search(head):
+            continue
+        mentions.append(StatedMeanSurvival(match.start(), match.end(), match.group(0)))
+    return tuple(mentions)
 
 
 def fixed_horizon_mortality_endpoint_stated_by(
@@ -822,17 +924,20 @@ __all__ = [
     "HOSPITAL_DEATH",
     "ICU_DEATH",
     "FOLLOWUP_OUTCOME_DATABASES",
+    "MEAN_SURVIVAL_PATTERN",
     "FixedHorizonMortalityEndpoint",
     "ICU_FREE_DAY_DATABASES",
     "MIMIC_READMISSION_DATABASES",
     "OUTCOME_CONCEPT_SUPPORTED_DATABASES",
     "OutcomeConceptUnavailability",
     "StatedHorizon",
+    "StatedMeanSurvival",
     "StatedHorizonMention",
     "StatedMortalitySetting",
     "fixed_horizon_mortality_endpoint",
     "fixed_horizon_mortality_endpoint_stated_by",
     "mortality_horizon_spans",
+    "stated_mean_survival_mentions",
     "stated_mortality_horizon_mentions",
     "stated_mortality_horizons",
     "stated_mortality_setting_mentions",

@@ -87,6 +87,8 @@ from easyicu.webserver.scientific_runtime_projection import (
 )
 from easyicu.webserver.target_trial_runtime_projection import approved_target_trial
 from easyicu.webserver.question_named_levels import stop_undistinguished_named_levels
+from easyicu.webserver.question_treatment_use import stop_unrecorded_treatment_uses
+from easyicu.webserver.question_mean_survival import stop_unplanned_mean_survival
 
 _RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
 _DEVELOPMENT_RESUME_JOB_ENV = "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID"
@@ -259,6 +261,12 @@ def _prepare_scientific_launch(
         # A question read as causal is planned as its trial, never from the
         # question's keywords (``causal_trial_design``).
         stop_unset_causal_design(study, question=question, database=database)
+        # A question that asks a treatment's use the data record only as a
+        # dose is never planned on the dose (``question_treatment_use``).
+        stop_unrecorded_treatment_uses(question, study=study)
+        # A mean survival time no plan answers is never planned as the share
+        # who died by its horizon (``question_mean_survival``).
+        stop_unplanned_mean_survival(question)
         # A question that states its family in its own words is planned on
         # that family, not on the planner's keyword routing
         # (``study_family_design``).

@@ -31,12 +31,17 @@ from easyicu.webserver.study_scientific_configuration import (
     ScientificConfigurationError,
 )
 
+#: The materializer's companion of a typed event status: the first time in the
+#: window its source recorded it present, in hours from ICU admission
+#: (``cohort.materializer``; ``ConceptColumnRole.EVENT_TIME``).
+_EVENT_ONSET_SUFFIX = "_onset_time"
+
 _MATERIALIZED_FEATURE_SUFFIXES = tuple(
     sorted(
         (
             "_first_time",
             "_last_time",
-            "_onset_time",
+            _EVENT_ONSET_SUFFIX,
             "_measured",
             "_first",
             "_last",
@@ -1393,6 +1398,31 @@ def _study_exposure_reading(
     return reading
 
 
+def _stated_windows(question: str) -> set[tuple[Any, Any, Any]]:
+    """The windows the question states: anchor, start and end hours (shared time parser)."""
+
+    from easyicu.research_agent.research_context.temporal_semantics import TimeWindowSemanticParser
+
+    return {
+        (constraint.anchor_event, constraint.start_hours, constraint.end_hours)
+        for constraint in TimeWindowSemanticParser().parse(question)
+        if constraint.relation in {"first_window", "within_after"}
+    }
+
+
+def _stated_admission_window(question: str) -> Optional[Dict[str, Any]]:
+    """The one window from ICU admission the question states, else ``None``."""
+
+    windows = _stated_windows(question)
+    if len(windows) != 1:
+        return None
+    anchor, start, hours = next(iter(windows))
+    if (anchor != "icu_admission" or start != 0.0 or hours is None
+            or not math.isfinite(hours) or hours <= 0):
+        return None
+    return {"anchor": "icu_admission", "start_hours": 0.0, "end_hours": float(hours)}
+
+
 def _descriptive_window_summary(
     *, question: str, concept: Any, column: str, operation: Any,
 ) -> tuple[Any, Dict[str, Any]]:
@@ -1406,7 +1436,6 @@ def _descriptive_window_summary(
 
     from easyicu.research_agent.acquisition.catalog import catalog_endpoint
     from easyicu.research_agent.cohort.materializer import summary_column_name
-    from easyicu.research_agent.research_context.temporal_semantics import TimeWindowSemanticParser
 
     def stop(reason: str) -> None:
         raise ResearchPipelineRunError(
@@ -1419,11 +1448,7 @@ def _descriptive_window_summary(
         output = summary_column_name(column, operation.aggregation)
     except ValueError:
         stop("windowed_summary_statistic_unsupported")
-    windows = {
-        (constraint.anchor_event, constraint.start_hours, constraint.end_hours)
-        for constraint in TimeWindowSemanticParser().parse(question)
-        if constraint.relation in {"first_window", "within_after"}
-    }
+    windows = _stated_windows(question)
     if not windows:
         stop("windowed_summary_window_required")
     if len(windows) != 1:
@@ -1512,8 +1537,10 @@ def _metadata_only_planning_coordinates(
         explicit_exposure_aggregation,
         named_study_concepts,
         stated_comparison_groupings,
+        stated_treatment_uses,
         substance_forms,
     )
+    from easyicu.research_agent.contracts.endpoint import EndpointSpec
     from easyicu.research_agent.planning.analysis_types import canonical_analysis_family
     from easyicu.webserver.study_family_reading import study_family_reading
 
@@ -1701,6 +1728,17 @@ def _metadata_only_planning_coordinates(
         if target_outcome else None
     )
     outcome_window = None
+    # A descriptive question asking when a treatment was first used
+    # (「用了血管活性药的患者，首次使用多在入 ICU 后几小时？」) asks the onset of its
+    # use status, not how many used it.
+    first_use_asked = (
+        descriptive and configured_catalog is None and target_catalog is not None
+        and target_catalog.column_role == "event_status"
+        and any(
+            reading.form == "use" and reading.first_use and reading.concept_id == target_outcome
+            for reading in stated_treatment_uses(question)
+        )
+    )
     if (
         target_outcome
         and target_catalog is not None
@@ -1711,7 +1749,18 @@ def _metadata_only_planning_coordinates(
             # A stay attribute is already one quantity per episode. "Mean"
             # there summarizes stays, not a second temporal reduction.
             outcome_operation = None
-        if (descriptive and definition is not None and definition.target != "id_tbl"
+        if first_use_asked:
+            # The onset is set where the status was recorded present in the
+            # window, so a stay that never received it has no first use.  A
+            # window the question states is the one it is read over.
+            endpoint = EndpointSpec(
+                name=f"{column}{_EVENT_ONSET_SUFFIX}", kind="continuous",
+                absence_semantics="absent_row_is_unmeasured",
+            )
+            outcome_window = _stated_admission_window(question)
+            outcome_operation = None
+            named_measurement = None
+        elif (descriptive and definition is not None and definition.target != "id_tbl"
                 and target_catalog.column_role != "event_status"
                 and (definition.units or outcome_operation is not None)):
             endpoint, outcome_window = _descriptive_window_summary(

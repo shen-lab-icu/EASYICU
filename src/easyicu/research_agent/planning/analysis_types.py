@@ -66,6 +66,31 @@ class AnalysisTypeSpec:
     capability_id: Optional[str] = None
 
 
+#: Words that name a competing event or its model.  Each exists only over
+#: follow-up time, so a question naming one asks a time-to-event analysis
+#: (pilot1 10-26: 「…把活着转出 ICU 作为竞争事件」 was read as an association).
+#: A bare cumulative incidence (「入 ICU 7 天内 AKI 的累积发生率」, "the
+#: cumulative incidence by risk decile") is a proportion by a time, so it names
+#: none of them.
+COMPETING_EVENT_TERMS: Tuple[str, ...] = (
+    "competing event",
+    "competing events",
+    "竞争事件",
+    "fine-gray",
+    "fine and gray",
+    "subdistribution hazard",
+)
+#: A competing event the question declines to model ("not accounting for
+#: competing events", 「不考虑竞争风险」): those words then name no design.
+_DECLINED_COMPETING_EVENT = re.compile(
+    r"(?:\b(?:not|never|without|ignor(?:e|es|ed|ing)|no)\b(?:[\s_-]+[a-z]+){0,3}?[\s_-]+"
+    r"|(?:不考虑|未考虑|不计|忽略|无需考虑|不纳入|不处理)\s*)"
+    r"(?:competing[\s_-]+(?:events?|risks?)|fine[\s_-]+(?:and[\s_-]+)?gray|subdistribution[\s_-]+hazards?"
+    r"|竞争事件|竞争风险)",
+    re.IGNORECASE,
+)
+
+
 _REGISTRY: Dict[str, AnalysisTypeSpec] = {
     "descriptive_epidemiology": AnalysisTypeSpec(
         key="descriptive_epidemiology",
@@ -216,6 +241,9 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             # plural spelling ("a competing risks analysis").
             "competing risks",
             "竞争风险",
+            # A competing event, a Fine-Gray model or a cumulative incidence
+            # exists only over follow-up time: time-to-event by definition.
+            *COMPETING_EVENT_TERMS,
             "censoring",
             "删失",
             "follow-up",
@@ -2048,7 +2076,9 @@ def _infer_analysis_type_with_basis(
     # itself never mentioned survival, the target outcome was a binary death
     # flag, and the Planner was then required to produce a survival curve for
     # it; five attempts failed in five different ways and nothing executed.
-    survival_estimand_text = mask_survival_eligibility_phrases(text)
+    survival_estimand_text = _DECLINED_COMPETING_EVENT.sub(
+        lambda match: " " * len(match.group(0)), mask_survival_eligibility_phrases(text)
+    )
     strong_survival_framing = (not survival_disclaimer) and any(
         _keyword_present(survival_estimand_text, term)
         for term in (
@@ -2066,9 +2096,17 @@ def _infer_analysis_type_with_basis(
             # plural spelling ("a competing risks analysis").
             "competing risks",
             "竞争风险",
+            *COMPETING_EVENT_TERMS,
             "censoring",
             "删失",
         )
+    )
+    # A mean survival time (「28 天内平均存活多少天」, "RMST") is a
+    # time-to-event estimand, whatever else the question says.
+    from easyicu.outcome_availability import stated_mean_survival_mentions
+
+    strong_survival_framing = strong_survival_framing or (
+        not survival_disclaimer and bool(stated_mean_survival_mentions(survival_estimand_text))
     )
 
     def _has_any(key: str, extras: Iterable[str] = ()) -> bool:
@@ -2447,6 +2485,7 @@ def analysis_type_catalog_markdown() -> str:
 
 __all__ = [
     "AnalysisTypeSpec",
+    "COMPETING_EVENT_TERMS",
     "canonical_analysis_family",
     "normalize_analysis_family",
     "is_concept_set_family",

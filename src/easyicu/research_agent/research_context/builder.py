@@ -1648,10 +1648,14 @@ def _infer_outcome_semantics(
             # ICU admission.  The endpoint it names is the setting's mortality,
             # and the window stays part of the request.
             window, stated = stated, ()
+    # A mean survival time (「28 天内平均存活多少天」, "RMST") asks a
+    # time-to-event endpoint, never a share of deaths by its horizon.
+    from easyicu.outcome_availability import stated_mean_survival_mentions
+
     if any(
         term in question
         for term in ("survival", "time-to-event", "time to event", "cox", "hazard")
-    ) or outcome in {
+    ) or stated_mean_survival_mentions(research_question or "") or outcome in {
         "survival_time",
         "time_to_event",
         "event_time",
