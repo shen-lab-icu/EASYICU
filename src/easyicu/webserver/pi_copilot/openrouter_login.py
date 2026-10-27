@@ -119,7 +119,7 @@ class OpenRouterLoginStore:
         })
         return token, f"{AUTHORIZE_URL}?{query}"
 
-    def complete(self, token: str, code: str, *, exchange: Optional[Exchange] = None) -> None:
+    def exchange_authorization_code(self, token: str, code: str, *, exchange: Optional[Exchange] = None) -> None:
         """Trade the returned code for a key, once, for this browser's login."""
 
         with self._lock:

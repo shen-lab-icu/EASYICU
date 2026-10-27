@@ -216,7 +216,7 @@ def test_a_sign_in_expires():
     now = [1000.0]
     logins = openrouter_login.OpenRouterLoginStore(clock=lambda: now[0])
     token, _url = logins.start("http://127.0.0.1:8765" + openrouter_login.CALLBACK_PATH)
-    logins.complete(token, "synthetic-code", exchange=lambda code, verifier: (200, {"key": KEY}))
+    logins.exchange_authorization_code(token, "synthetic-code", exchange=lambda code, verifier: (200, {"key": KEY}))
     assert logins.resolve_api_key(token, credential_source="openrouter_login", **{k: OPENROUTER[k] for k in ("provider", "base_url")}, api_key="") == KEY
     now[0] += openrouter_login.LOGIN_TTL_SECONDS + 1
     with pytest.raises(PiCopilotError) as expired:

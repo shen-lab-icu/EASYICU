@@ -710,7 +710,7 @@ def get_pi_copilot_openrouter_callback(request: Request) -> Response:
 
     token = request.cookies.get(openrouter_login.COOKIE_NAME, "")
     try:
-        openrouter_login.login_store().complete(token, request.query_params.get("code", ""))
+        openrouter_login.login_store().exchange_authorization_code(token, request.query_params.get("code", ""))
     except PiCopilotError as exc:
         redirect = RedirectResponse(f"/?openrouter_login=failed&reason={exc.code}#guided", status_code=303)
         redirect.delete_cookie(openrouter_login.COOKIE_NAME, path=openrouter_login.COOKIE_PATH)
