@@ -330,7 +330,6 @@ def test_data_paths_and_crossdb_views_share_profile_alias_label_and_order(
     mimic_iii_version.mkdir(parents=True)
     assert find_database_path(str(tmp_path), "mimic") == str(mimic_iii_version)
     assert public_database_keys() == EXPECTED_PUBLIC
-    assert crossdb_review._DEMO_MULTIDB_DATABASES == EXPECTED_PUBLIC
     assert list(crossdb_review._RAW_DB_LABELS) == list(EXPECTED_PUBLIC)
     assert crossdb_review._RAW_DB_LABELS["aumc"] == "AmsterdamUMCdb"
     assert crossdb_review._normalize_database_key("AmsterdamUMCdb") == "aumc"

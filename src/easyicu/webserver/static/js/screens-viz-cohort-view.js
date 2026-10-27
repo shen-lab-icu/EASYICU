@@ -3,7 +3,6 @@
 (function () {
   let state;
   let survival;
-  let demo;
   let t;
   let icon;
   let esc;
@@ -14,11 +13,11 @@
   let workspaceSamplingNote;
   let cohortCharts;
   let cohortReview;
-  const { demoCatalogModules, demoRowsForModule, catalogModuleText } = window.VIZ_DEMO;
+  const { demoCatalogModules, catalogModuleText } = window.VIZ_DEMO;
 
   /* In-page panels (aligned with cohort_redesign.py _SUBTABS): Group contrast,
-     Coverage audit, Cohort profile, SOFA reclassification. Demo-only panels use
-     fixed catalog-shaped previews; real mode still requires a cohort-review payload. */
+     Coverage audit, Cohort profile, SOFA reclassification. The route renders
+     these only once a cohort-review payload is loaded. */
   function cohortTabs() {
     const tabs = [
       ['groups',   t('Group contrast', '组间对照'),       'layers'],
@@ -34,24 +33,13 @@
   function cohortPanelBody() {
     if (cohortCharts && typeof cohortCharts.begin === 'function') cohortCharts.begin();
     const review = cohortReview();
-    const demoLoaded = window.EU_DATA !== 'real' && state.view === 'loaded';
     switch (state.panel) {
-      case 'survival': return review ? survival.body(review) : survival.demoBody();
-      case 'coverage': return review ? cohortCoverageBody(review) : (demoLoaded ? cohortCoverageBody(demo.coverageReview(), { demo: true }) : cohortUnavailablePanel('coverage'));
-      case 'sofa':     return review ? cohortSofaBody(review) : (demoLoaded ? cohortSofaBody(demo.sofaReview(), { demo: true }) : cohortUnavailablePanel('sofa'));
+      case 'survival': return survival.body(review);
+      case 'coverage': return cohortCoverageBody(review);
+      case 'sofa':     return cohortSofaBody(review);
       case 'snapshot': return cohortSnapshotBody();
       default:         return cohortGroupsBody();
     }
-  }
-
-  function cohortUnavailablePanel(kind) {
-    const isSofa = kind === 'sofa';
-    return `
-      <div class="state empty mt-16">
-        <div class="ico">${icon(isSofa ? 'refresh' : 'shield', 18)}</div>
-        <div class="t">${isSofa ? t('SOFA reclassification requires a real cohort review', 'SOFA 重分层需要真实队列审阅') : t('Coverage audit requires a real cohort review', '覆盖审计需要真实队列审阅')}</div>
-        <div class="d">${t('The old seeded audit panel has been removed. Switch to Real mode, register an EasyICU export, then load Cohort Statistics to compute this aggregate-only panel.', '旧的种子审计面板已移除。请切换到真实模式，注册 EasyICU 导出，再加载队列统计以计算这个仅聚合的面板。')}</div>
-      </div>`;
   }
 
   function cohortProfileValue(row, value) {
@@ -137,10 +125,6 @@
       'days': '天',
       'Survival analysis': '生存分析',
       'Kaplan-Meier module': 'Kaplan-Meier 模块',
-      'Demo simulated KM preview': '演示模拟 KM 预览',
-      'Seeded demo only': '仅 seeded 演示',
-      'Demo hospital mortality by Sepsis vs Non-sepsis': '演示院内死亡 · 按 Sepsis vs 非 Sepsis 分组',
-      'Demo follow-up days': '演示随访天数',
       'Kaplan-Meier curves and log-rank': 'Kaplan-Meier 曲线与 log-rank',
       'Hospital mortality': '院内死亡',
       'ICU mortality': 'ICU 死亡',
@@ -176,7 +160,6 @@
       'Real export required': '需要真实导出',
       'Coverage audit': '覆盖审计',
       'Real module coverage and quality': '真实模块覆盖率与质量',
-      'Demo module coverage and quality': '演示模块覆盖率与质量',
       'Modules OK': '正常模块',
       'Watchlist': '观察名单',
       'Median coverage': '覆盖率中位数',
@@ -203,7 +186,6 @@
       'Rate only': '仅比例',
       'SOFA reclassification': 'SOFA 重分层',
       'SOFA-2 aggregate review': 'SOFA-2 聚合审阅',
-      'Demo SOFA-2 aggregate preview': '演示 SOFA-2 聚合预览',
       'Paired entities': '配对实体',
       'SOFA-2 higher': 'SOFA-2 更高',
       'SOFA-2 lower': 'SOFA-2 更低',
@@ -525,14 +507,13 @@
       </details>`;
   }
 
-  function cohortCoverageBody(review, opts = {}) {
+  function cohortCoverageBody(review) {
     const rows = review.coverage || [];
     const q = review.quality || {};
     const metadataOnlyCount = rows.filter(row => row.coverage_basis === 'metadata_row_count_only').length;
     const rateRows = rows.filter(row => row.metric_kind === 'event_rate' || row.metric_kind === 'exposure_rate').length;
     return `
-      <div class="sec-stack"><div class="lbl">${cohortText('Coverage audit')}</div><h2>${cohortText(opts.demo ? 'Demo module coverage and quality' : 'Real module coverage and quality')}</h2></div>
-      ${opts.demo ? demo.panelNote('coverage') : ''}
+      <div class="sec-stack"><div class="lbl">${cohortText('Coverage audit')}</div><h2>${cohortText('Real module coverage and quality')}</h2></div>
       ${metadataOnlyCount ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('Large export coverage optimized', '大导出覆盖率已优化')}</div><div class="d">${t('Some non-Parquet or very large modules are shown with manifest-confirmed row counts first to avoid a slow full stay-id scan. They are loaded modules, not missing modules.', '部分非 Parquet 或超大模块会先显示清单确认的行数，避免缓慢的全量 stay_id 扫描。它们是已加载模块，不是缺失模块。')}</div></div></div>` : ''}
       ${rateRows ? `<div class="note info mt-12"><div class="ico">${icon('activity', 14)}</div><div class="body"><div class="t">${cohortText('Presence-rate modules')}</div><div class="d">${cohortText('Event/exposure rows show cohort incidence or exposure prevalence, not missingness coverage; they are excluded from the coverage watchlist.')}</div></div></div>` : ''}
       ${cohortCoverageForest(review)}
@@ -753,7 +734,7 @@
       <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Cells on the diagonal are patients scored the same by SOFA-1 and SOFA-2; off-diagonal cells are patients the two definitions disagree on — large off-diagonal cells are where switching score versions would change your cohort.', '对角线上的格子是 SOFA-1 与 SOFA-2 评分一致的患者；对角线以外是两套定义不一致的患者 —— 偏离对角线的大格子意味着换用评分版本会改变你的队列。')}</span></div>`;
   }
 
-  function cohortSofaBody(review, opts = {}) {
+  function cohortSofaBody(review) {
     const s = review.summary || {};
     const sofa = s.sofa2 || {};
     const reclass = review.sofa_reclassification || {};
@@ -768,8 +749,7 @@
       [fmtNum(delta.median, 1), 'Median delta', 'SOFA-2 minus SOFA-1', 'delta'],
     ] : [];
     return `
-      <div class="sec-stack"><div class="lbl">${cohortText('SOFA reclassification')}</div><h2>${cohortText(opts.demo ? 'Demo SOFA-2 aggregate preview' : 'SOFA-2 aggregate review')}</h2></div>
-      ${opts.demo ? demo.panelNote('sofa') : ''}
+      <div class="sec-stack"><div class="lbl">${cohortText('SOFA reclassification')}</div><h2>${cohortText('SOFA-2 aggregate review')}</h2></div>
       <div class="rc-kpis">
         ${[
           [fmtNum(sofa.median, 1), 'Median SOFA-2', `${fmtInt(sofa.count)} ${t('entities with score', '个实体有评分')}`, 'delta'],
@@ -1392,12 +1372,10 @@
     cohortCharts = config.cohortCharts;
     cohortReview = config.cohortReview;
     survival = window.EU_VIZ_COHORT_SURVIVAL;
-    demo = window.EU_VIZ_COHORT_DEMO;
     survival.init({
       state, t, icon, esc, fmtInt, fmtNum, fmtPct, fmtP,
       cohortCharts, cohortReview, cohortText, cohortReason,
     });
-    demo.init({ t, icon, esc, fmtInt, cohortText, demoRowsForModule });
   }
 
   window.EU_VIZ_COHORT_VIEW = {
@@ -1406,7 +1384,6 @@
     panelBody: cohortPanelBody,
     text: cohortText,
     reason: cohortReason,
-    demoCatalogScope: cohortDemoCatalogScope,
     coverageBody: cohortCoverageBody,
     survivalBody(review) { return survival.body(review); },
     sofaBody: cohortSofaBody,

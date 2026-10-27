@@ -440,11 +440,6 @@ EXPECTED_REVIEW_ROUTES = [
         "/api/crossdb-review/raw-root-scan",
         "crossdb_raw_root_scan",
     ),
-    (
-        "POST",
-        "/api/crossdb-review/demo-distribution",
-        "crossdb_demo_distribution",
-    ),
 ]
 
 EXPECTED_EXTRACTION_ROUTES = [

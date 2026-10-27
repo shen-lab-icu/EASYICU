@@ -164,7 +164,7 @@ def test_a_hosted_instance_offers_no_demo_data_switch() -> None:
     assert "data-ex-sample" not in (js / "screens-extraction.js").read_text(encoding="utf-8")
     # No code path switches any instance to synthetic data.
     assert "window.EU_DATA = 'real';" in i18n
-    assert "if (m !== 'real') return;" in i18n
+    assert "if (m !== 'real' || !context || context.display_mode !== 'demo') return;" in i18n
 
 
 _PICKER = r"""

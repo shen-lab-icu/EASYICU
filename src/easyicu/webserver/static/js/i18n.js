@@ -150,19 +150,13 @@
     window.EU_DATA_MODE_CONTEXT = value;
     return value;
   };
-  window.getDataMode = function () {
-    const context = window.EU_DATA_MODE_CONTEXT;
-    return context && validMode(context.display_mode)
-      ? context.display_mode
-      : 'real';
-  };
   // becomes true once the user has produced downstream work worth protecting
   window.EU_HASWORK = false;
   window.setDataMode = function (m, opts) {
-    // Only a return to the user's own data remains: there is no synthetic
+    // Only leaving an opened official demo remains: there is no synthetic
     // demo mode to switch to.
-    if (m !== 'real') return;
-    if (window.getDataMode() === m) return;
+    const context = window.EU_DATA_MODE_CONTEXT;
+    if (m !== 'real' || !context || context.display_mode !== 'demo') return;
     const apply = () => {
       window.EU_STALE = true;  // changing the source invalidates downstream
       window.setDataModeContext(null);
@@ -191,7 +185,7 @@
       if (continuity && continuity.isRunning && continuity.isRunning()) runningJobs.push(window.t('the running extraction/conversion job will stop being tracked and cannot resume', '正在运行的抽取/转换任务将不再被跟踪，无法续接'));
     } catch (e) {}
     if ((window.EU_HASWORK || runningJobs.length) && !(opts && opts.force) && window.euConfirm) {
-      const to = m === 'real' ? window.t('Real', '真实') : window.t('Demo', '演示');
+      const to = window.t('Real', '真实');
       window.euConfirm({
         icon: 'refresh', tone: 'warn',
         title: window.t('Switch data source?', '切换数据源?'),

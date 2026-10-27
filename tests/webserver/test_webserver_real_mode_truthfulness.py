@@ -20,8 +20,9 @@ def _js(name: str) -> str:
 def test_real_extraction_never_falls_through_to_demo_completion() -> None:
     source = _js("screens-extraction.js")
 
-    assert "} else if (!real) {" in source
-    assert "Demo mode intentionally uses a seeded, in-browser completion." in source
+    assert "} else if (!real) {" not in source
+    assert "Demo mode intentionally uses a seeded, in-browser completion." not in source
+    assert "function dataMode()" not in source
     assert "Real extraction could not start." in source
     assert "Demo / offline fallback" not in source
 

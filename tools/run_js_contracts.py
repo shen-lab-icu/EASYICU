@@ -296,7 +296,6 @@ CONTRACTS: dict[str, list[str]] = {
     "patient_demo_fidelity.test.js": [
         "data-catalog.js",
         "screens-viz-demo.js",
-        "screens-viz-demo-drilldown.js",
     ],
     "patient_demo_sources_owner.test.js": ["screens-viz-patient-demo-sources.js"],
     "source_kind_identity.test.js": [],
@@ -333,14 +332,12 @@ CONTRACTS: dict[str, list[str]] = {
     "review_screens_zh_labels.test.js": [
         "data-catalog.js",
         "screens-viz-demo.js",
-        "screens-viz-demo-drilldown.js",
         "screens-viz-patient-features.js",
         "screens-viz-patient-series.js",
         "screens-viz-patient-navigation.js",
         "screens-viz-patient-overview.js",
         "screens-viz-patient.js",
         "screens-viz-cohort-survival.js",
-        "screens-viz-cohort-demo.js",
         "screens-viz-cohort-view.js",
         "screens-viz-cohort.js",
     ],

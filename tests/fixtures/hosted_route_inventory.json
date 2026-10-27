@@ -1273,15 +1273,6 @@
   },
   {
     "method": "POST",
-    "route": "/api/crossdb-review/demo-distribution",
-    "fields": [],
-    "reaches": "seeded synthetic aggregates only",
-    "protection": "no path inputs",
-    "writes": "none",
-    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
-  },
-  {
-    "method": "POST",
     "route": "/api/crossdb-review/raw-distribution",
     "fields": [
       "body:data_root",

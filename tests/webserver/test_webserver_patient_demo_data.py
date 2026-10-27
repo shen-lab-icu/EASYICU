@@ -23,7 +23,6 @@ def _static_html(name: str) -> str:
 
 def test_patient_seeded_demo_uses_clinical_table_shape() -> None:
     demo_js = _static_js("screens-viz-demo.js")
-    demo_drilldown_js = _static_js("screens-viz-demo-drilldown.js")
     viz_js = _static_js("screens-viz.js")
     patient_js = _static_js("screens-viz-patient.js")
     index_html = _static_html("index.html")
@@ -42,25 +41,16 @@ def test_patient_seeded_demo_uses_clinical_table_shape() -> None:
     assert "Math.sin(" not in demo_js
     assert "Math.random(" not in demo_js
 
-    assert "if (timeIndexed) out.charttime = context.charttime;" in demo_drilldown_js
-    assert (
-        "out[feature] = demoTableValue(feature, context.entityIndex, context.timeIndex);"
-        in demo_drilldown_js
-    )
-    assert "function buildPatientDrilldown(selectedRef)" in demo_drilldown_js
-    assert "function buildPatientDrilldown(selectedRef)" not in viz_js
+    assert "function buildPatientDrilldown(" not in viz_js
+    assert "VIZ_DEMO_DRILLDOWN" not in patient_js
     assert "featureOwner.augmentLanes(rawLanes, drill)" in patient_js
     assert "const lanes = patientCatalogLanes(" in patient_js
     assert "drill && drill.feature_coverage" in patient_js
     assert "2026-01-01" not in patient_js
 
     assert "js/screens-viz-demo.js?" in index_html
-    assert "js/screens-viz-demo-drilldown.js?" in index_html
-    assert (
-        index_html.index("js/screens-viz-demo.js?")
-        < index_html.index("js/screens-viz-demo-drilldown.js?")
-        < index_html.index("js/screens-viz.js?")
-    )
+    assert "js/screens-viz-demo-drilldown.js" not in index_html
+    assert index_html.index("js/screens-viz-demo.js?") < index_html.index("js/screens-viz.js?")
     assert "js/screens-viz.js?" in index_html
     # A stale pin must stay gone. This asserts the OLD string is absent — my
     # bulk re-pin briefly rewrote it to the current one, which made the two
@@ -79,7 +69,6 @@ def test_patient_demo_fidelity_contract_executes() -> None:
             str(root / "tests" / "js" / "patient_demo_fidelity.test.js"),
             str(STATIC_DIR / "js" / "data-catalog.js"),
             str(STATIC_DIR / "js" / "screens-viz-demo.js"),
-            str(STATIC_DIR / "js" / "screens-viz-demo-drilldown.js"),
         ],
         check=False,
         capture_output=True,

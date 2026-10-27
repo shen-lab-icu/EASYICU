@@ -7,8 +7,7 @@
   'use strict';
 
   const S = (window.SCREENS = window.SCREENS || {});
-  const { DEMO_DURATION_HOURS, catalogConceptLabel, catalogModuleText, catalogUnitText } = window.VIZ_DEMO;
-  const { buildPatientDrilldown: buildDemoPatientDrilldown } = window.VIZ_DEMO_DRILLDOWN;
+  const { catalogConceptLabel, catalogModuleText, catalogUnitText } = window.VIZ_DEMO;
   const {
     signalKey: ptSignalKey,
     catalogLanes: patientCatalogLanes,
@@ -195,7 +194,7 @@
       return `t${index}`;
     };
     const selectedLabel = entityLabel(((drill || {}).selected || {}).label) || t('selected entity', '所选病例');
-    const sourceBadge = (drill && drill.demo) ? t('demo', '演示') : t('real', '真实');
+    const sourceBadge = opts.seeded ? t('demo', '演示') : t('real', '真实');
     if (!signals.length) {
       return `
         <div class="empty mt-16"><div class="glyph">${icon('rows', 22)}</div><div class="t">${t('No feature matrix values', '暂无特征矩阵值')}</div><div class="d">${t('This lane has no bounded numeric time-window values.', '这个分组没有可显示的数值型时间数据。')}</div></div>`;
@@ -207,7 +206,7 @@
             <div style="font-weight:600;font-size:13px;">${esc(catalogModuleText((lane || {}).lane, (lane || {}).label) || t('Selected signals', '已选信号'))}</div>
             <div class="mono" style="font-size:10.5px;color:var(--ink-4);">${fmtInt(shownPoints)} ${t('time windows', '个时间窗口')} × ${fmtInt(signals.length)} ${t('features', '个特征')} · ${esc(selectedLabel)}</div>
           </div>
-          <span class="pill ${(drill && drill.demo) ? 'demo' : 'ok'}" style="height:22px;">${sourceBadge}</span>
+          <span class="pill ${opts.seeded ? 'demo' : 'ok'}" style="height:22px;">${sourceBadge}</span>
         </div>
         <div class="table-wrap table-scroll mt-12">
           <table class="eu-table">
@@ -267,9 +266,7 @@
     const lanes = Array.isArray(lanesOverride) ? lanesOverride : (Array.isArray(review.lanes) ? review.lanes : (drill && Array.isArray(drill.time_lanes) ? drill.time_lanes : []));
     const readyLanes = lanes.filter(lane => (lane.signals || []).some(sig => Array.isArray(sig.values) && sig.values.some(v => Number.isFinite(Number(v)))));
     if (!drill || !readyLanes.length) return '';
-    const signalScope = drill.demo
-      ? t('Seeded matrix values are capped at', '演示矩阵值上限为')
-      : t('Local matrix values are capped at', '矩阵值上限为');
+    const signalScope = t('Local matrix values are capped at', '矩阵值上限为');
     return `
       <details class="pt-matrix-details pt-matrix-audit mt-16">
         <summary>
@@ -291,14 +288,12 @@
       'Quality dashboard': t('Quality dashboard', '质量审阅'),
       'QC concepts': t('QC concepts', '质控特征'),
       'Records': t('Records', '记录'),
-      'Seeded observations': t('Seeded observations', '种子观测值'),
       'Weighted missing': t('Weighted missing', '加权缺失'),
       'Out-of-physio': t('Out-of-physio', '生理范围外'),
       'Duplicate TS': t('Duplicate TS', '重复时间戳'),
       'QC ledger': t('QC ledger', '质控台账'),
       'Catalog concept scope': t('Catalog concept scope', '目录特征范围'),
       'Local concept scope': t('Local concept scope', '本次核查的特征'),
-      'Modeled concept scope': t('Modeled concept scope', '演示特征范围'),
       'Missingness gate': t('Missingness check', '缺失率检查'),
       'Physiologic range': t('Physiologic range', '生理范围'),
       'Temporal integrity': t('Temporal integrity', '时间完整性'),
@@ -309,7 +304,6 @@
       'Per-module review metrics': t('Per-module review metrics', '逐模块审阅指标'),
       'Top concept quality issues': t('Top concept quality issues', '主要特征质量问题'),
       'Local export bounded review': t('Local export bounded review', '真实数据审阅'),
-      'Catalog demo bounded review': t('Catalog demo bounded review', '演示数据审阅'),
     };
     return map[String(value || '')] || value;
   }
@@ -389,7 +383,6 @@
       ok: true,
       route: 'patient',
       mode: payload && payload.mode ? payload.mode : 'real',
-      demo: !!(payload && payload.demo),
       database: payload && payload.source ? payload.source.database : null,
       summary: {
         stays: s.entities,
@@ -552,7 +545,7 @@
         [t('Median SOFA-2', 'SOFA-2 中位数'), fmtNum(s.median_sofa2, 1)],
         [t('Sepsis-3 positive', 'Sepsis-3 阳性'), fmtPct(s.sepsis_pct)],
       ];
-      const reviewModules = (dt.modules && dt.modules.length ? dt.modules : modules).slice(0, drill.demo ? 32 : 64);
+      const reviewModules = (dt.modules && dt.modules.length ? dt.modules : modules).slice(0, 64);
       const activeModule = reviewModules.find(m => m.module === tableState.module) || reviewModules[0] || {};
       const previewFeatures = activeModule.preview_features || [];
       return `
@@ -575,7 +568,7 @@
       </div>
       ${tableOwner && tableOwner.statusHtml ? tableOwner.statusHtml({ t, esc, icon }) : ''}
       <div class="patient-table-frame mt-12">
-        <div class="patient-id-note">${drill.demo ? t('Table preview of synthetic rows.', '表格预览：合成示例行。') : t('Table preview of capped rows; identifiers are replaced by pseudonymous entity tokens and never reach the browser.', '表格预览：只显示部分行，病例以匿名编号显示，病历号等标识不会发送到浏览器。')}</div>
+        <div class="patient-id-note">${t('Table preview of capped rows; identifiers are replaced by pseudonymous entity tokens and never reach the browser.', '表格预览：只显示部分行，病例以匿名编号显示，病历号等标识不会发送到浏览器。')}</div>
         <div class="patient-table-scroll" data-patient-table-preview style="--pt-cols:${Math.max(6, previewColumns.length)};">
         <table class="eu-table patient-preview-table" aria-label="${esc(`${patientModuleLabel(activeModule)} ${t('bounded table preview', '表格预览（部分行）')}`)}">
           <thead><tr>${previewColumns.map(c => `<th${c === 'entity' ? ' class="patient-entity-col"' : ' class="num"'}>${esc(patientColumnLabel(c, activePreview))}</th>`).join('')}</tr></thead>
@@ -693,7 +686,6 @@
       seriesLabel: patientSeriesLabel,
       signalKey: ptSignalKey,
       ...displayHelpers,
-      demoHours: () => (window.EU_DATA !== 'real' && DEMO_DURATION_HOURS) ? DEMO_DURATION_HOURS : null,
     });
   }
   function patientTimeSeriesWorkbench(drill, review, lanes) {
@@ -717,7 +709,6 @@
       seriesLabel: patientSeriesLabel,
       signalKey: ptSignalKey,
       ...displayHelpers,
-      demoHours: () => (window.EU_DATA !== 'real' && DEMO_DURATION_HOURS) ? DEMO_DURATION_HOURS : null,
     });
   }
   function ptSeries() {
@@ -773,7 +764,7 @@
         label: t('Seeded vitals', '演示生命体征'),
         signals: seededSignals,
         signal_count: seededSignals.length,
-      }, { demo: true, selected: { label: t('demo entity', '演示实体') } })}`;
+      }, { selected: { label: t('demo entity', '演示实体') } }, { seeded: true })}`;
   }
 
   function ptPatient() {
@@ -885,10 +876,8 @@
           ...displayHelpers,
         })
         : '';
-      const boundedTitle = drill.demo ? patientQualityText('Catalog demo bounded review') : patientQualityText('Local export bounded review');
-      const boundedDetail = drill.demo
-        ? t('Coverage and quality here describe the synthetic example data. Open an official demo or your own export for real denominators.', '这里的覆盖率和质量只描述合成示例数据。打开官方演示数据或你自己的导出后，才是真实分母。')
-        : t('Shown coverage, missingness, physiologic-range flags and duplicate timestamp rates are computed over the bounded local review sample. Modules without computed entity coverage remain inventory-only; formal claims stay locked to the evidence-bound agent path.', '这里的覆盖率、缺失率、生理范围标记和重复时间比例按本页审阅样本计算；没有计算覆盖率的模块只显示行数。');
+      const boundedTitle = patientQualityText('Local export bounded review');
+      const boundedDetail = t('Shown coverage, missingness, physiologic-range flags and duplicate timestamp rates are computed over the bounded local review sample. Modules without computed entity coverage remain inventory-only; formal claims stay locked to the evidence-bound agent path.', '这里的覆盖率、缺失率、生理范围标记和重复时间比例按本页审阅样本计算；没有计算覆盖率的模块只显示行数。');
       // The ledger restates the summary tiles; it stands in only when no tiles are drawn.
       return `
       ${(review.summary_cards || []).length ? `
@@ -998,13 +987,6 @@
       drill: patientDrilldown,
       sourcePath: registryActivePath,
       repaint: () => repaintScreen('patient'),
-      selectDemo(ref) {
-        const payload = buildDemoPatientDrilldown(ref);
-        window.EU_PATIENT_DRILLDOWN = payload;
-        window.EU_VIZ_WORKSPACE = patientWorkspaceFromDrilldown(payload);
-        patientView = 'loaded';
-        repaintScreen('patient');
-      },
     };
   }
   function resetPatientBrowseOwners() {
@@ -1080,23 +1062,16 @@
           ? demoSourceOwner.activeMetadata(registrySources(), registryActivePath())
           : null;
         const readyTitle = drill
-          ? (drill.demo
-            ? t('Synthetic example data ready', '合成示例数据已就绪')
-            : (officialDemo
-              ? `${officialDemo.title} · ${officialDemo.version}`
-              : (hostedServer() ? t('Patient review ready', '数据已加载，可以审阅患者') : t('Local export patient drilldown ready', '本地导出数据已加载，可以审阅患者'))))
+          ? (officialDemo
+            ? `${officialDemo.title} · ${officialDemo.version}`
+            : (hostedServer() ? t('Patient review ready', '数据已加载，可以审阅患者') : t('Local export patient drilldown ready', '本地导出数据已加载，可以审阅患者')))
           : (ws ? t('Local export workspace ready', '本地导出工作区已就绪') : t('Demo review workspace ready', '演示审阅工作区已就绪'));
         const boundedReview = drill && s && s.review_scope === 'browser_bounded_entity_sample';
         const entityStats = boundedReview
           ? `${t('full cohort', '完整队列')} ${fmtInt(s.entities)} ${t('entities', '例')} · ${t('bounded browser review', '本页审阅')} ${fmtInt(s.review_entities)} ${t('entities', '例')}`
           : `${fmtInt(s && (s.entities != null ? s.entities : s.stays))} ${drill ? t('entities', '例') : t('stays', '次住院')}`;
-        const loadedFeatureCount = drill && drill.data_tables && drill.data_tables.loaded_summary
-          ? drill.data_tables.loaded_summary.review_features
-          : null;
         const readyStats = s
-          ? (drill && drill.demo
-            ? `${fmtInt(s.entities)} ${t('synthetic entities', '个合成实体')} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(loadedFeatureCount)} ${t('catalog features', '个目录特征')}`
-            : `${entityStats} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(s.total_rows)} ${t('rows', '行')}`)
+          ? `${entityStats} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(s.total_rows)} ${t('rows', '行')}`
           : `48 ${t('synthetic entities', '个合成实体')} · 19 ${t('modules', '个模块')} · ${t('catalog features', '目录特征')}`;
         // Hosted: patient-level rows are not downloadable (user decision 2026-10-22), so no Export.
         return `

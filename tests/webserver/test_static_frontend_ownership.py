@@ -701,7 +701,6 @@ def test_cohort_statistics_owner_contains_state_effects_render_and_route() -> No
 
     script_order = [
         "js/screens-viz-cohort-survival.js?",
-        "js/screens-viz-cohort-demo.js?",
         "js/screens-viz-cohort-view.js?",
         "js/screens-viz-cohort.js?",
         "js/screens-viz.js?",

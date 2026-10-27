@@ -254,71 +254,6 @@
       </div>`;
   }
 
-  function cohortSurvivalDemoBody() {
-    const curve = {
-      label: 'Demo hospital mortality by Sepsis vs Non-sepsis',
-      time_label: 'Demo follow-up days',
-      event_column: 'demo_hospital_death',
-      time_column: 'demo_followup_days',
-      logrank: { status: 'ready', chi_square: 5.42, p_value: 0.0198 },
-      groups: [
-        {
-          label: 'Non-sepsis',
-          n: 160,
-          events: 18,
-          points: [
-            { time: 0, survival: 100 },
-            { time: 1, survival: 98.8 },
-            { time: 3, survival: 96.9 },
-            { time: 7, survival: 93.8 },
-            { time: 14, survival: 90.7 },
-            { time: 28, survival: 88.8 },
-          ],
-        },
-        {
-          label: 'Sepsis',
-          n: 140,
-          events: 34,
-          points: [
-            { time: 0, survival: 100 },
-            { time: 1, survival: 97.9 },
-            { time: 3, survival: 93.6 },
-            { time: 7, survival: 88.5 },
-            { time: 14, survival: 81.8 },
-            { time: 28, survival: 75.7 },
-          ],
-        },
-      ],
-      number_at_risk: {
-        times: [0, 1, 3, 7, 14, 28],
-        rows: [
-          { label: 'Non-sepsis', values: [160, 158, 154, 148, 141, 132] },
-          { label: 'Sepsis', values: [140, 137, 129, 119, 105, 92] },
-        ],
-      },
-    };
-    const logrank = curve.logrank;
-    return `
-      <div class="sec-stack"><div class="lbl">${cohortText('Survival analysis')}</div><h2>${cohortText('Demo simulated KM preview')}</h2></div>
-      <div class="note warn mt-12" data-demo-survival-simulated><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Seeded demo only')}</div><div class="d">${t('This Kaplan-Meier curve is a fixed simulated preview for the demo workspace. It exercises the chart, log-rank, and number-at-risk UI only; it is not derived from a local export and must not be used for manuscript claims.', '这条 Kaplan-Meier 曲线是演示工作区的固定模拟预览，只用于展示图表、log-rank 和风险人数表交互；它不是来自本地导出，不能用于稿件结论。')}</div></div></div>
-      <div class="surv-card mt-14">
-        <div class="surv-head">
-          <div>
-            <div class="eyebrow">${cohortText('Seeded demo only')}</div>
-            <h3>${esc(cohortText(curve.label))}</h3>
-            <p>${esc(cohortText(curve.time_label))} · ${t('event', '事件')} <span class="mono">${esc(curve.event_column)}</span> · ${t('time', '时间')} <span class="mono">${esc(curve.time_column)}</span></p>
-          </div>
-          <div class="surv-logrank">
-            <span>${cohortText('Log-rank')}</span>
-            <strong>χ² ${fmtNum(logrank.chi_square, 2)} · p = ${fmtP(logrank.p_value)}</strong>
-            <small>${cohortText('Seeded demo only')}</small>
-          </div>
-        </div>
-        ${cohortSurvivalChart(curve)}
-        ${cohortSurvivalEffect(curve)}
-        ${cohortRiskTable(curve)}
-      </div>`;
-  }
   function init(config) {
     state = config.state;
     t = config.t;
@@ -337,7 +272,6 @@
   window.EU_VIZ_COHORT_SURVIVAL = {
     init,
     body: cohortSurvivalBody,
-    demoBody: cohortSurvivalDemoBody,
   };
 })();
 

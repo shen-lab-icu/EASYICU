@@ -1,4 +1,4 @@
-/* Executable fidelity contract for the offline Patient Review fallback. */
+/* Executable fidelity contract for the seeded catalog generator (VIZ_DEMO). */
 'use strict';
 
 const assert = require('node:assert/strict');
@@ -7,7 +7,6 @@ const vm = require('node:vm');
 
 const catalogSource = fs.readFileSync(process.argv[2], 'utf8');
 const demoSource = fs.readFileSync(process.argv[3], 'utf8');
-const demoDrilldownSource = fs.readFileSync(process.argv[4], 'utf8');
 const context = {
   console,
   Date,
@@ -22,19 +21,11 @@ context.window = context;
 const sandbox = vm.createContext(context);
 vm.runInContext(catalogSource, sandbox, { filename: process.argv[2] });
 vm.runInContext(demoSource, sandbox, { filename: process.argv[3] });
-vm.runInContext(demoDrilldownSource, sandbox, { filename: process.argv[4] });
 
 const demo = context.VIZ_DEMO;
-const demoDrilldown = context.VIZ_DEMO_DRILLDOWN;
 const catalog = context.EU_CATALOG;
-assert(demo && demoDrilldown && catalog);
+assert(demo && catalog);
 assert.doesNotMatch(demoSource, /Math\.(sin|random)\s*\(/);
-assert.deepEqual(Object.keys(demoDrilldown), ['buildPatientDrilldown']);
-
-const drilldown = demoDrilldown.buildPatientDrilldown('demo_ent_3');
-assert.equal(drilldown.selected.ref, 'demo_ent_3');
-assert.equal(drilldown.data_tables.loaded_summary.review_features, catalog.totalConcepts);
-assert.equal(drilldown.data_tables.table_previews.length, catalog.groups.length);
 
 const lanes = demo.demoTimeLanes(0);
 assert.equal(lanes.length, catalog.groups.length);

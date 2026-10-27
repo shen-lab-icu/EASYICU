@@ -1395,7 +1395,7 @@
       cohortBegin: cohortOwner.beginCharts,
       cohortPanels: cohortOwner.panels,
       cohortMount: cohortOwner.mountCharts,
-      patientSeriesHelpers: { t, esc, fmtInt, fmtNum, fmtPct, icon, axisSpark, signalLabel: patientReview.signalLabel, seriesLabel: patientReview.seriesLabel, signalKey: patientReview.signalKey, demoHours: () => null },
+      patientSeriesHelpers: { t, esc, fmtInt, fmtNum, fmtPct, icon, axisSpark, signalLabel: patientReview.signalLabel, seriesLabel: patientReview.seriesLabel, signalKey: patientReview.signalKey },
       crossdbResultsConfig(repaint) { const config = crossResultsConfig(); return { ...config, repaint: typeof repaint === 'function' ? repaint : config.repaint, expandScope: null, exportPayload: null }; },
     });
   }

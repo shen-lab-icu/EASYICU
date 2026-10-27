@@ -200,7 +200,6 @@ def test_native_webserver_static_assets_are_packaged() -> None:
     required_assets = [
         "src/easyicu/webserver/static/index.html",
         "src/easyicu/webserver/static/js/app.js",
-        "src/easyicu/webserver/static/js/screens-viz-demo-drilldown.js",
         "src/easyicu/webserver/static/js/screens-viz-patient-features.js",
         "src/easyicu/webserver/static/css/app.css",
         "src/easyicu/webserver/static/assets/demo/e1-publication-figure.png",

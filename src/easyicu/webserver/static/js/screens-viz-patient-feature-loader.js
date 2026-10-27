@@ -23,10 +23,6 @@
   }
 
   function prime(drill) {
-    if (drill && drill.demo) {
-      if (state.sourceKey || cache.size) reset();
-      return;
-    }
     const sourceKey = String(drill && drill.source && drill.source.path_hash || '');
     if (state.sourceKey && sourceKey && state.sourceKey !== sourceKey) reset();
     state.sourceKey = sourceKey;
@@ -64,7 +60,7 @@
 
   function augmentLanes(lanes, drill) {
     prime(drill);
-    if (!drill || drill.demo) return Array.isArray(lanes) ? lanes : [];
+    if (!drill) return Array.isArray(lanes) ? lanes : [];
     const prefix = [state.sourceKey, selectedRef(drill), ''].join('|');
     const lazyByModule = new Map();
     cache.forEach((payload, key) => {
@@ -152,7 +148,7 @@
 
   function loadMany(config, features, module = '') {
     const drill = config && config.drill && config.drill();
-    if (!drill || drill.demo) return Promise.resolve(false);
+    if (!drill) return Promise.resolve(false);
     prime(drill);
     const requested = Array.from(new Set(
       (Array.isArray(features) ? features : [features])

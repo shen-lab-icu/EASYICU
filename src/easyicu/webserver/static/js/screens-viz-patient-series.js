@@ -100,14 +100,13 @@
     return raw == null || raw === '' ? '' : String(raw);
   }
 
-  function signalTimeLabels(signals, helpers, fallbackEnd = null) {
+  function signalTimeLabels(signals, helpers) {
     const withTimes = (signals || []).find(sig => Array.isArray(sig && sig.times) && sig.times.length);
     const samples = numericSamples(withTimes);
     const times = samples.times;
     const first = times.length ? formatTimeLabel(times[0], helpers) : '';
     const last = times.length ? formatTimeLabel(times[times.length - 1], helpers) : '';
     if (first || last) return [first || '0h', last || hT(helpers, 'last point', '末点')];
-    if (fallbackEnd) return ['0h', `${fallbackEnd}h`];
     return null;
   }
 
@@ -249,7 +248,7 @@
 
     const cards = usable.map((item, moduleIndex) => {
       const visibleSignals = item.signals.slice(0, MAX_SIGNALS_PER_MODULE);
-      const xLabels = signalTimeLabels(visibleSignals, helpers, helpers.demoHours ? helpers.demoHours() : null);
+      const xLabels = signalTimeLabels(visibleSignals, helpers);
       const hidden = Math.max(0, item.signals.length - visibleSignals.length);
       const declared = Number(item.lane && item.lane.signal_count);
       const totalFeatures = Number.isFinite(declared) && declared > 0 ? declared : item.features.length;
@@ -432,7 +431,7 @@
 
   function renderSinglePatient(lanes, selected, helpers) {
     const signals = gallerySignals(lanes, 5);
-    const xLabels = signalTimeLabels(signals.map(row => row.sig), helpers, helpers.demoHours ? helpers.demoHours() : null);
+    const xLabels = signalTimeLabels(signals.map(row => row.sig), helpers);
     const observedTimes = signals.flatMap(row => numericSamples(row.sig).times.map(Number).filter(Number.isFinite));
     const xDomain = observedTimes.length ? [Math.min(...observedTimes), Math.max(...observedTimes)] : null;
     if (!signals.length) return '';
@@ -552,7 +551,7 @@
     const yTicks = [max, min + span * 0.5, min];
     const unit = comparison && comparison.unit ? hUnit(helpers, comparison.unit) : '';
     const label = comparison && hConcept(helpers, comparison.feature, comparison.label || comparison.feature) || hT(helpers, 'Selected feature', '已选特征');
-    const timeLabels = signalTimeLabels(series.map(row => row.trace), helpers, null);
+    const timeLabels = signalTimeLabels(series.map(row => row.trace), helpers);
     const fallbackChart = `
       <div class="pt-multi-chart" role="img" aria-label="${hEsc(helpers, label)}">
         <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
@@ -598,7 +597,7 @@
         <div class="pt-series-panel" data-patient-series-panel="compare">
           <div class="state empty">
             <div class="t">${hEsc(helpers, hT(helpers, 'No multi-patient comparison payload', '暂无多患者对比数据'))}</div>
-            <div class="d">${hEsc(helpers, hT(helpers, 'Load a real export or a bounded demo payload with feature coverage to compare one feature across entities.', '加载真实数据或带特征覆盖的演示数据后，才能比较同一特征在多位患者中的表现。'))}</div>
+            <div class="d">${hEsc(helpers, hT(helpers, 'Load data with feature coverage to compare one feature across entities.', '加载带特征覆盖的数据后，才能比较同一特征在多位患者中的表现。'))}</div>
           </div>
         </div>`;
     }
