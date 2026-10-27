@@ -70,6 +70,7 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-help.js",
     ],
     "crossdb_job_continuity.test.js": ["screens-viz-crossdb-job-continuity.js"],
+    "guided_pi_model_menu_order.test.js": ["screens-guided-pi-model-menu.js"],
     "guided_pi_provider_declaration.test.js": [
         "screens-guided-pi-error-text.js",
         "screens-guided-pi-provider.js",

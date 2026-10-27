@@ -1403,7 +1403,12 @@
     } catch (error) {
       if (!isCurrent()) return;
       state.busy = false; finishActivity('error', null, 'failed');
-      state.error = errorText(error); render();
+      // A credentialed-data refusal opens the declaration in the connection
+      // settings instead of an error banner.
+      const clearance = MODULES.optional('dataClearance');
+      if (clearance && clearance.isRefusal(error)) { state.error = ''; state.showSetup = true; }
+      else state.error = errorText(error);
+      render();
     }
   }
   async function regenerateMessage(userEntryId, text, regenerationIntent, targetMessageId) {

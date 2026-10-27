@@ -6,6 +6,25 @@
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
   function api() { return window.EU_API || {}; }
   function clean(value, limit) { return String(value || '').trim().slice(0, limit || 256); }
+  // The connection decides which models exist; newer versions are listed
+  // first. A name without a version keeps its place after them.
+  function versionOf(model) {
+    const match = /(?:^|[^0-9.])(\d+(?:\.\d+)*)/.exec(model);
+    return match ? match[1].split('.').map(Number) : null;
+  }
+  function newestFirst(models) {
+    const compare = (a, b) => {
+      for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+        const diff = (b[i] || 0) - (a[i] || 0);
+        if (diff) return diff;
+      }
+      return 0;
+    };
+    return models.map((model, index) => ({ model, index, version: versionOf(model) }))
+      .sort((a, b) => (a.version && b.version ? compare(a.version, b.version) || a.index - b.index
+        : a.version ? -1 : b.version ? 1 : a.index - b.index))
+      .map(row => row.model);
+  }
 
   const state = { key: '', models: [], current: '', loading: false, switching: false, error: '', request: 0 };
   let context = null;
@@ -91,7 +110,7 @@
       const payload = await caller(session.session_id, project);
       if (!live(control, key, request)) return;
       const rows = Array.isArray(payload && payload.models) ? payload.models : [];
-      state.models = [...new Set(rows.map(row => clean(typeof row === 'string' ? row : row && row.id)).filter(Boolean))];
+      state.models = newestFirst([...new Set(rows.map(row => clean(typeof row === 'string' ? row : row && row.id)).filter(Boolean))]);
     } catch (error) {
       if (!live(control, key, request)) return;
       state.error = friendlyError(error);
@@ -169,5 +188,5 @@
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') { document.addEventListener('toggle', onToggle, true); document.addEventListener('click', onClick); }
   }
   mount();
-  window.EasyICU.guidedPi.declare('modelMenu', { bind, bindingKey, load, select, state });
+  window.EasyICU.guidedPi.declare('modelMenu', { bind, bindingKey, load, newestFirst, select, state });
 })();

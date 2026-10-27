@@ -4931,15 +4931,17 @@ def execute_tool(
     return result
 
 
-def require_copilot_data_clearance(
+def _copilot_clearance_scan(
     context: ToolExecutionContext, arguments: Mapping[str, Any] | None = None,
-) -> None:
-    """Gate host-bound sources, including a source selected during this turn."""
+) -> tuple[bool, Any]:
+    """Return (credentialed, refusal) for the bound and named sources.
+
+    Reads only; the caller decides whether to raise or record history.
+    """
     from easyicu.research_agent.providers.client_trust import (
         ProviderConfigurationError, require_data_handling, source_requires_clearance,
     )
     from easyicu.webserver.demo_source_storage import egress_source_database, public_demo_egress_scope
-    from easyicu.webserver.stop_next_actions import project_stop_next_actions
 
     study = _bound_context(context.session.binding) or {}
     source = study.get("data_source") or {}
@@ -4963,12 +4965,36 @@ def require_copilot_data_clearance(
                 require_data_handling(database, context.data_handling)
                 credentialed = credentialed or source_requires_clearance(database)
     except ProviderConfigurationError as exc:
+        return credentialed, exc
+    return credentialed, None
+
+
+def copilot_data_clearance(context: ToolExecutionContext) -> dict[str, Any]:
+    """Whether the next model step in this conversation is cleared, without recording it.
+
+    A plan card reads this to offer the declaration before the step is tried;
+    require_copilot_data_clearance stays the gate at every model call.
+    """
+    _credentialed, refusal = _copilot_clearance_scan(context)
+    if refusal is None:
+        return {"status": "cleared"}
+    return {"status": "blocked", "reason_code": refusal.issue}
+
+
+def require_copilot_data_clearance(
+    context: ToolExecutionContext, arguments: Mapping[str, Any] | None = None,
+) -> None:
+    """Gate host-bound sources, including a source selected during this turn."""
+    from easyicu.webserver.stop_next_actions import project_stop_next_actions
+
+    credentialed, refusal = _copilot_clearance_scan(context, arguments)
+    if refusal is not None:
         raise PiCopilotError(
-            exc.issue, "Open provider settings and declare data handling before using credentialed data.",
+            refusal.issue, "Open provider settings and declare data handling before using credentialed data.",
             status_code=403, details={"next_actions": project_stop_next_actions({
-                "status": "blocked", "reason": exc.issue,
+                "status": "blocked", "reason": refusal.issue,
             })},
-        ) from exc
+        ) from refusal
     if credentialed:
         context.session.credentialed_data_in_history = True
         if context.note_credentialed_history:

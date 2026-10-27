@@ -168,6 +168,38 @@ def test_source_removal_does_not_clear_credentialed_history(model_session):
     assert response.status_code == 403
 
 
+@pytest.mark.parametrize("handling,status", [("unspecified", "blocked"), ("zero_retention_declared", "cleared")])
+def test_the_session_says_before_a_model_step_whether_it_is_cleared(model_session, monkeypatch, handling, status):
+    from easyicu.webserver.pi_copilot.contracts import ToolExecutionContext
+    from easyicu.webserver.pi_copilot.tools import require_copilot_data_clearance
+
+    client, service, gateway, _, session, study = model_session
+    study["data_source"] = {"database": "miiv", "path": "/synthetic/credentialed-source"}
+    # The running connection carries the declaration, as apply_provider_config sets it.
+    monkeypatch.setitem(gateway.environ, "EASYICU_PI_DATA_HANDLING", handling)
+    response = client.get(f"/api/copilot/pi/sessions/{session['session_id']}", params={"project_id": "project-model"})
+    assert response.status_code == 200, response.text
+    clearance = response.json()["session"]["data_clearance"]
+    if status == "blocked":
+        assert clearance == {
+            "status": "blocked", "reason_code": "provider_not_cleared_for_credentialed_data", "declarable": True,
+        }
+    else:
+        assert clearance == {"status": "cleared"}
+    # Reading the projection records nothing; only a model call marks history.
+    record = service._get_record(session["session_id"])
+    assert not record.credentialed_data_in_history
+    # The gate at a model call reads the same session and decides the same.
+    context = ToolExecutionContext(session=record, data_handling=service._data_handling_for_session(record))
+    if status == "blocked":
+        with pytest.raises(PiCopilotError) as refused:
+            require_copilot_data_clearance(context)
+        assert refused.value.code == "provider_not_cleared_for_credentialed_data"
+    else:
+        require_copilot_data_clearance(context)
+        assert record.credentialed_data_in_history is True
+
+
 def test_original_model_declaration_is_not_transferred(model_session):
     _, _, _, store, _, study = model_session
     store.declare_data_handling(

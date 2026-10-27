@@ -2417,6 +2417,25 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         self._save_record(record)
         return record
 
+    def _data_clearance(self, record: PiSessionRecord) -> Dict[str, Any]:
+        """Say before a model step whether the clearance gate would refuse it.
+
+        The gate at each model call stays authoritative, so a source that
+        cannot be read here reports ``unknown``, never ``cleared``.
+        """
+        from .tools import copilot_data_clearance
+
+        try:
+            clearance = copilot_data_clearance(ToolExecutionContext(
+                session=record, data_handling=self._data_handling_for_session(record),
+            ))
+        except (PiCopilotError, OSError, ValueError):
+            return {"status": "unknown"}
+        if clearance["status"] == "blocked":
+            # An account sign-in has no declaration; only an API connection does.
+            clearance["declarable"] = record.research_provider.authentication_mode != "chatgpt_account"
+        return clearance
+
     def _data_handling_for_session(self, record: PiSessionRecord) -> str:
         if record.research_provider.authentication_mode == "chatgpt_account":
             return "unspecified"
@@ -5402,6 +5421,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 self._cohort_eligibility_selection_projection(record)
             ),
             "research_provider": record.research_provider.public_projection(),
+            "data_clearance": self._data_clearance(record),
             "model_connection": (
                 record.conversation_provider.public_projection()
                 if record.uses_unified_model_connection
