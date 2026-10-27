@@ -257,8 +257,8 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "POST",
-        "/api/copilot/pi/sessions/{session_id}/delete-empty",
-        "post_pi_copilot_session_delete_empty",
+        "/api/copilot/pi/sessions/{session_id}/delete",
+        "post_pi_copilot_session_delete",
     ),
     (
         "POST",

@@ -871,7 +871,7 @@ def test_rail_reads_as_one_project_switcher_over_its_conversations() -> None:
     assert "<strong>${tr('Conversations', '对话')}</strong>" in workspace
     assert "<span>${tr('Conversation', '对话')}</span></button>" in workspace
     assert "tr('Empty conversations', '空对话')" in workspace
-    assert "tr('Remove empty conversation', '删除空对话')" in workspace
+    assert "tr('Delete conversation', '删除对话')" in workspace
     for stale in ("tr('Tasks', '任务')", "tr('Task', '任务')", "tr('Empty tasks', '空任务')", "tr('Search tasks', '搜索任务')"):
         assert stale not in workspace
     assert "tr('New conversation', '新对话')" in shell and "tr('New conversation', '新对话')" in header

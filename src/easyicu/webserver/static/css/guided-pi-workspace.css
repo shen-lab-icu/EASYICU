@@ -271,12 +271,14 @@
 .gpi-conversation-row[hidden]{display:none}
 .gpi-conversation-row .gpi-conversation-item{grid-column:1/-1;grid-row:1;margin:0;padding-right:34px}
 .gpi-conversation-menu{position:relative;z-index:2;grid-column:2;grid-row:1;margin:8px 5px 0 0}
+.gpi-conversation-menu[open]{z-index:20}
 .gpi-conversation-menu>summary{display:grid;place-items:center;width:24px;height:24px;border-radius:5px;color:var(--ink-4);font-size:10px;letter-spacing:-1px;list-style:none;cursor:pointer}
 .gpi-conversation-menu>summary::-webkit-details-marker{display:none}
 .gpi-conversation-menu>summary:hover,.gpi-conversation-menu>summary:focus-visible,.gpi-conversation-menu[open]>summary{background:var(--surface);color:var(--ink);outline:0}
 .gpi-conversation-menu>div{position:absolute;z-index:12;top:27px;right:0;display:grid;min-width:132px;padding:4px;border:1px solid var(--hair-2);border-radius:7px;background:var(--surface);box-shadow:0 8px 24px rgba(25,31,29,.12)}
 .gpi-conversation-menu button{padding:7px 9px;border:0;border-radius:5px;background:transparent;color:var(--ink-2);font:500 11px/1.3 var(--font);text-align:left;white-space:nowrap;cursor:pointer}
 .gpi-conversation-menu button:hover,.gpi-conversation-menu button:focus-visible{background:var(--surface-2);color:var(--ink);outline:0}
+.gpi-conversation-menu button[data-gpi-rail-remove-armed]{color:var(--danger)}
 .gpi-conversation-menu button:disabled{opacity:.45;cursor:not-allowed}
 .gpi-conversation-item:hover{background:var(--surface-2)}
 .gpi-conversation-item[aria-current]{background:var(--accent-soft);color:var(--accent-ink)}

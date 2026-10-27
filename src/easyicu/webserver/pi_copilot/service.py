@@ -3722,43 +3722,26 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             "session": self._public_session(record, include_replay=False),
         }
 
-    def delete_empty_session(
+    def delete_session(
         self,
         session_id: str,
         *,
         project_id: str,
     ) -> Dict[str, Any]:
-        """Delete only a task that has never accepted a conversation turn."""
+        """Delete a conversation and its transcript; its study results stay.
+
+        Run records, artifacts and project results have their own owners and
+        are kept.  A conversation still replying or running a study, or one
+        pinned for a presentation, is not deleted.
+        """
 
         record = self._scoped_record(session_id, project_id=project_id)
-        if (
-            record.pinned_for_presentation
-            or record.active_message_job_id
-            or record.last_message_job_id
-            or record.last_turn_status
-        ):
-            raise PiCopilotError(
-                "pi_session_not_empty",
-                "Only a task with no conversation history can be removed here.",
-                status_code=409,
-            )
-        state = self._ensure_open(record, transcript_limit=1)
-        public = self._public_session(
-            record,
-            gateway_state=state,
-            replay_limit=8,
-        )
-        if public["streaming"] or public["message_count"] or public["has_history"]:
-            raise PiCopilotError(
-                "pi_session_not_empty",
-                "Only a task with no conversation history can be removed here.",
-                status_code=409,
-            )
+        self._require_deletable(record, active_jobs=self._active_job_ids(record))
         with self._lock:
             if session_id in self._busy_sessions:
                 raise PiCopilotError(
                     "pi_session_busy",
-                    "Wait for the active task to finish before removing it.",
+                    "Wait for the current reply to finish before deleting this conversation.",
                     status_code=409,
                 )
             rows = self._read_records()
@@ -3769,20 +3752,43 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                     "The requested Copilot session does not exist.",
                     status_code=404,
                 )
-            if (
-                latest.pinned_for_presentation
-                or latest.active_message_job_id
-                or latest.last_message_job_id
-                or latest.last_turn_status
-            ):
-                raise PiCopilotError(
-                    "pi_session_not_empty",
-                    "Only a task with no conversation history can be removed here.",
-                    status_code=409,
-                )
+            self._require_deletable(latest, active_jobs=())
             self._write_records(row for row in rows if row.session_id != session_id)
         self._retire_record(record)
         return {"ok": True, "session_id": session_id, "deleted": True}
+
+    def _active_job_ids(self, record: PiSessionRecord) -> tuple[str, ...]:
+        """The reply and study jobs of a conversation that have not finished."""
+
+        replay = self.replay_store.snapshot(
+            session_id=record.session_id, project_id=str(record.project_id),
+        )
+        candidates = {str(record.active_message_job_id or "")}
+        candidates.update(str(turn.get("child_job_id") or "") for turn in replay.get("turns", [])
+                          if isinstance(turn, Mapping))
+        candidates.update(str(row.get("job_id") or "") for row in replay.get("child_jobs", [])
+                          if isinstance(row, Mapping))
+        active = []
+        for job_id in sorted(candidates - {""}):
+            job = jobs.MANAGER.get(job_id)
+            if job is not None and job.status not in {"done", "failed", "cancelled"}:
+                active.append(job_id)
+        return tuple(active)
+
+    @staticmethod
+    def _require_deletable(record: PiSessionRecord, *, active_jobs: tuple[str, ...]) -> None:
+        if record.pinned_for_presentation:
+            raise PiCopilotError(
+                "pi_session_pinned",
+                "Unpin this conversation from the presentation before deleting it.",
+                status_code=409,
+            )
+        if active_jobs:
+            raise PiCopilotError(
+                "pi_session_busy",
+                "Wait for the current reply or study run to finish before deleting this conversation.",
+                status_code=409,
+            )
 
     def get_session(
         self,

@@ -245,7 +245,7 @@ materialWorkspace.syncNavigation({
   open: () => {}, create: () => {}, rename: () => {}, remove: () => {}, resources: [],
 });
 assert.match(taskRail.innerHTML, /data-gpi-rail-rename="pi_history"/);
-assert.doesNotMatch(taskRail.innerHTML, /data-gpi-rail-remove="pi_history"/);
+assert.match(taskRail.innerHTML, /data-gpi-rail-remove="pi_history"/);
 const accessMenu = materialWorkspace.renderAccessMode('assist', key => key, () => '');
 assert.match(accessMenu, /title="Setup, searches and the preflight check go ahead/);
 assert.equal((accessMenu.match(/data-gpi-access-mode=/g) || []).length, 2, 'Two access modes: ask first, routine');

@@ -617,7 +617,7 @@
       visible: state.shell !== 'legacy', title: navigationSessionTitle, status: STUDY_WORKSPACE.sessionStatusLabel,
       time: STUDY_WORKSPACE.compactSessionTime, open: openSession, create: startEntry, search: openSearch,
       resources: RUN_OUTCOME.collection(state.latestRun, state.workflow), openResource: EVENTS.openResource,
-      materialsInteractive: !emptySessionFocused, rename: renameSession, remove: removeEmptySession,
+      materialsInteractive: !emptySessionFocused, rename: renameSession, remove: removeSession,
       mark: id => { const attention = MODULES.optional('attention'); return attention ? attention.conversationMarkHtml(projectId(), id) : ''; } });
     const attention = MODULES.optional('attention');
     if (attention) void attention.seen();
@@ -751,13 +751,15 @@
     render();
   }
 
-  async function removeEmptySession(row) {
-    if (!row || row.has_history || state.busy || state.childJobId || !api().deleteEmptyPiCopilotSession) return;
-    if (!window.confirm(tr('Remove this empty conversation? No message or result will be deleted.', '删除这个空对话吗？此操作不会删除任何消息或研究成果。'))) return;
+  // The ••• menu asks twice (删除对话, then 确认删除); the conversation's
+  // study results stay in the project.
+  async function removeSession(row) {
+    if (!row || !api().deletePiCopilotSession) return;
     const deletingSelected = Boolean(state.session && state.session.session_id === row.session_id);
+    if (deletingSelected && (state.busy || state.childJobId)) return;
     try {
-      await api().deleteEmptyPiCopilotSession(row.session_id, {
-        project_id: projectId(), confirm_empty: true,
+      await api().deletePiCopilotSession(row.session_id, {
+        project_id: projectId(), confirm: true,
       });
       state.sessions = state.sessions.filter(item => item.session_id !== row.session_id);
       state.error = '';
