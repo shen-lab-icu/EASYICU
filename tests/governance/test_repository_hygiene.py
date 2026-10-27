@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 from tools.audit_repository_hygiene import audit_repository
@@ -8,6 +9,21 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def test_repository_layout_has_one_owner_per_content_class() -> None:
     assert audit_repository(REPO_ROOT) == ()
+
+
+def test_a_linked_node_modules_is_ignored_like_an_installed_one() -> None:
+    # Candidate clones link node_modules to a shared install. A directory-only
+    # pattern ("node_modules/") does not match that link, so it was committed.
+    for relative in (
+        "desktop/node_modules",
+        "src/easyicu/webserver/pi_copilot/node_app/node_modules",
+    ):
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", "--no-index", relative],
+            cwd=REPO_ROOT,
+            check=False,
+        )
+        assert ignored.returncode == 0, relative
 
 
 def test_hygiene_audit_rejects_competing_and_generated_tracked_roots(
