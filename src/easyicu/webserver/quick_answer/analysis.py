@@ -109,6 +109,10 @@ def _cell(row, statistic, value, *, unit=""):
     }
 
 
+# A median is reported with its quartiles, the conventional median (IQR).
+_REPORTED = {"median": {"median", "q1", "q3"}, "iqr": {"median", "q1", "q3"}}
+
+
 def descriptive_cells(source, plan):
     """All estimates come from the existing kernels; this code only selects rows."""
     frame, variables = _load(source, plan)
@@ -129,7 +133,7 @@ def descriptive_cells(source, plan):
             cells.append(_cell(row, "denominator", row["denominator"]))
             if measure.statistic == "proportion":
                 cells.append(_cell(row, "percentage", row["percentage"], unit="%"))
-        elif statistic in ({"q1", "q3"} if measure.statistic == "iqr" else {measure.statistic}):
+        elif statistic in _REPORTED.get(measure.statistic, {measure.statistic}):
             cells.append(_cell(row, statistic, row["value"], unit=row.get("unit") or ""))
     if plan.test:
         variable = TableOneVariableSpec(

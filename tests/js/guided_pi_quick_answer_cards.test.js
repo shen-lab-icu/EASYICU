@@ -104,6 +104,22 @@ test('an answer shows only the values of its evidence-bound rows', () => {
   assert.match(html, /data-gpi-quick-expand="qa_1"/);
 });
 
+test('a median is shown with its quartiles from their own rows', () => {
+  const rows = [
+    { statistic: 'cohort_n', variable: '__cohort__', group: 'Overall', level: '', unit: '', value: 60, evidence: evidence('a') },
+    { statistic: 'nonmissing_n', variable: 'lact_max', group: 'Overall', level: '', unit: '', value: 58, evidence: evidence('b') },
+    { statistic: 'median', variable: 'lact_max', group: 'Overall', level: '', unit: 'mmol/L', value: 1.8, evidence: evidence('c') },
+    { statistic: 'q1', variable: 'lact_max', group: 'Overall', level: '', unit: 'mmol/L', value: 1.2, evidence: evidence('d') },
+    { statistic: 'q3', variable: 'lact_max', group: 'Overall', level: '', unit: 'mmol/L', value: 3.1, evidence: evidence('e') },
+  ];
+  const answer = { answer: { status: 'ok', reason: 'quick_answer_ready', source: SOURCE, rows, sentences: [], expand: {} } };
+  const zh = rendered(owners().cards, attachment(answer));
+  assert.match(zh, /<td>1.8（1.2–3.1） mmol\/L<\/td>/);
+  assert.match(zh, /乳酸最高值的中位数（四分位数间距）/);
+  const en = rendered(owners('en').cards, attachment(answer));
+  assert.match(en, /<td>1.8 \(IQR 1.2–3.1\) mmol\/L<\/td>/);
+});
+
 test('a grouped comparison reads each group and the test from their own rows', () => {
   const { cards } = owners('en');
   const rows = [];
