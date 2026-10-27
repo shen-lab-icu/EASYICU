@@ -52,6 +52,9 @@ def test_the_wording_rule_and_save_tool_request_adjustment_words():
     assert "easyicu_list_source_concepts" in rule
     assert "before a source is bound" in rule and "first call easyicu_list_source_concepts without source_id" in rule
     assert "then save those readings with the returned concept identifiers" in rule
+    assert "names a clinical construct rather than one measurement" in rule
+    assert "choose its conventional measure among the looked-up concepts" in rule
+    assert "never write a placeholder such as null" in rule
 
 
 def test_a_name_nothing_resolves_is_unresolved_not_unavailable(monkeypatch):
@@ -74,7 +77,7 @@ def test_the_conversations_lookup_names_a_score_the_dictionary_does_not(monkeypa
     assert record["concept"] == "trial_score" and record["source_status"] == "available"
 
 
-@pytest.mark.parametrize("concept", ["not_in_source", "sex"])
+@pytest.mark.parametrize("concept", ["lact", "sex"])
 def test_a_lookup_the_source_or_the_dictionary_contradicts_is_not_recorded(monkeypatch, concept):
     result, writes = _update(monkeypatch, concepts=("age", "sex"), statements=[{
         "variable": "年龄", "words": "在控制年龄之后", "concept": concept,
@@ -82,6 +85,20 @@ def test_a_lookup_the_source_or_the_dictionary_contradicts_is_not_recorded(monke
     assert result["status"] == "ok"
     assert not writes[0].get("stated_adjustments")
     assert result["details"]["stated_adjustments_unread"][0]["variable"] == "年龄"
+
+
+@pytest.mark.parametrize("concept", ["null", "not_a_concept"])
+def test_an_identifier_naming_no_concept_yields_to_the_dictionary(monkeypatch, concept):
+    """A strict-schema provider writes "null" for an absent identifier (pilot1, 10-27)."""
+
+    result, writes = _update(monkeypatch, concepts=("age", "sex"), statements=[{
+        "variable": "年龄", "words": "在控制年龄之后", "concept": concept,
+    }])
+    assert result["status"] == "ok"
+    assert writes[0]["stated_adjustments"] == [{
+        "variable": "年龄", "words": "在控制年龄之后", "concept": "age", "source_status": "available",
+    }]
+    assert not result["details"].get("stated_adjustments_unread")
 
 
 def test_a_launch_keeps_a_lookup_its_source_lacks_as_unavailable(monkeypatch):

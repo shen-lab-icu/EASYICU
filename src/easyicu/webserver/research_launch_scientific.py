@@ -1153,6 +1153,14 @@ def _stated_reading(item: Mapping[str, Any]) -> dict[str, Any]:
     return reading
 
 
+def _names_a_concept(identifier: str, available: set[str], database_concepts: frozenset[str]) -> bool:
+    """Whether a looked-up identifier is any source's or the dictionary's concept."""
+
+    from easyicu.concept.loader import load_concept_dict_cached
+
+    return identifier in available or identifier in database_concepts or identifier in load_concept_dict_cached()
+
+
 def _checked_stated_variable(
     item: Any,
     *,
@@ -1197,6 +1205,15 @@ def _checked_stated_variable(
     # conversation looked up for them (easyicu_list_source_concepts): many
     # scores and treatments have no dictionary name in every language.
     concept = output(named[0]) if named else None
+    if stated is not None and concept is not None and not _names_a_concept(
+        output(stated.strip()), available, database_concepts,
+    ):
+        # An identifier that names no concept anywhere carries no reading of
+        # its own, so the words' reading stands.  On pilot1 (10-27) a provider
+        # whose strict schema makes every field required wrote "null" for 年龄
+        # and 性别: both adjustments were left unrecorded and every plan
+        # stopped on them.
+        stated = None
     if stated is not None:
         stated = output(stated.strip())
         if concept is not None and stated != concept:
