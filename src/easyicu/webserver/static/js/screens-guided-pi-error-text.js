@@ -182,6 +182,12 @@
       if (error.code === 'external_llm_opt_in_required') {
         return tr('Confirm the use of an external model service before connecting.', '连接前需要你确认使用外部模型服务。');
       }
+      if (error.code === 'pi_session_busy') {
+        return tr('Wait for the current reply or study run to finish, then try again.', '请等当前回复或研究运行结束后再试。');
+      }
+      if (error.code === 'pi_session_pinned') {
+        return tr('Unpin this conversation from the presentation before deleting it.', '这个对话已固定用于演示，取消固定后才能删除。');
+      }
       if (error.code === 'pi_session_project_mismatch') {
         return tr('That Copilot conversation belongs to another research project.', '该研究助手对话属于另一个研究项目，不能在当前项目中打开。');
       }

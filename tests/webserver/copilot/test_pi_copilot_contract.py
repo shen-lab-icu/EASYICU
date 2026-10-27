@@ -2833,7 +2833,7 @@ def test_empty_task_can_be_renamed_and_removed(
     assert renamed["title"] == "Lactate review"
     assert renamed["automatic_title"] is False
 
-    deleted = service.delete_empty_session(
+    deleted = service.delete_session(
         created["session_id"],
         project_id="project-task-maintenance",
     )
@@ -2846,9 +2846,10 @@ def test_empty_task_can_be_renamed_and_removed(
     assert any(method == "session.dispose" for method, _, _ in gateway.calls)
 
 
-def test_task_with_conversation_metadata_cannot_be_removed(
+def test_a_conversation_with_history_can_be_deleted_but_not_while_running(
     tmp_path: Path,
     study_state: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = PiCopilotService(
         store_path=tmp_path / "sessions.json",
@@ -2861,15 +2862,29 @@ def test_task_with_conversation_metadata_cannot_be_removed(
     record = service._get_record(created["session_id"])
     record.last_message_job_id = "job-history"
     record.last_turn_status = "done"
+    record.active_message_job_id = "job-running"
     service._save_record(record)
 
-    with pytest.raises(PiCopilotError) as blocked:
-        service.delete_empty_session(
-            created["session_id"],
-            project_id="project-task-history",
-        )
+    class _Running:
+        status = "running"
 
-    assert blocked.value.code == "pi_session_not_empty"
+    monkeypatch.setattr(service_module.jobs.MANAGER, "get", lambda job_id: _Running() if job_id == "job-running" else None)
+    with pytest.raises(PiCopilotError) as blocked:
+        service.delete_session(created["session_id"], project_id="project-task-history")
+    assert blocked.value.code == "pi_session_busy"
+
+    record.pinned_for_presentation = True
+    record.active_message_job_id = None
+    service._save_record(record)
+    with pytest.raises(PiCopilotError) as blocked:
+        service.delete_session(created["session_id"], project_id="project-task-history")
+    assert blocked.value.code == "pi_session_pinned"
+
+    record.pinned_for_presentation = False
+    service._save_record(record)
+    deleted = service.delete_session(created["session_id"], project_id="project-task-history")
+    assert deleted["deleted"] is True
+    assert service.list_sessions(project_id="project-task-history")["sessions"] == []
 
 
 def test_message_grants_are_host_held_and_message_job_is_not_scientific(

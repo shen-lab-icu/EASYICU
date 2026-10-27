@@ -209,6 +209,11 @@ workspace.syncNavigation({
   remove: row => seen.push(['remove', row.session_id, rowMenu.open]),
 });
 rail.onclick({ target: rowActions().rename });
-rail.onclick({ target: rowActions().remove });
+// Delete asks in place: the first click arms it and keeps the menu open.
+const { remove } = rowActions();
+rail.onclick({ target: remove });
+assert.deepEqual(seen, [['rename', 'pi_empty', false]]);
+assert.equal(rowMenu.open, true);
+rail.onclick({ target: remove });
 assert.deepEqual(seen, [['rename', 'pi_empty', false], ['remove', 'pi_empty', false]]);
 process.stdout.write('Menu actions close their menu before the repaint; menus still in use stay open.\n');

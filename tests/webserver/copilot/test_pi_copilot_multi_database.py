@@ -228,14 +228,12 @@ def test_unrecorded_batch_never_starts_preparation(conversation, monkeypatch):
     assert dispatched == []
 
 
-def test_a_conversation_with_a_batch_is_not_an_empty_deletable_draft(conversation):
+def test_a_conversation_with_a_batch_can_be_deleted(conversation):
     service, _, session_id, _, _ = conversation
     actions.propose(service, request(session_id))
     public = service.get_session(session_id, project_id="project")["session"]
     assert public["has_history"] is True
-    with pytest.raises(PiCopilotError) as error:
-        service.delete_empty_session(session_id, project_id="project")
-    assert error.value.code == "pi_session_not_empty"
+    assert service.delete_session(session_id, project_id="project")["deleted"] is True
 
 
 def test_busy_browser_proposal_and_expired_tool_callback_cannot_dispatch(conversation):

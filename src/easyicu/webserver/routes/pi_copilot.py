@@ -178,7 +178,7 @@ class PiSessionDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     project_id: ShortText
-    confirm_empty: Literal[True]
+    confirm: Literal[True]
 
 
 class CodexLoginRequest(BaseModel):
@@ -1151,13 +1151,13 @@ def post_pi_copilot_session_thinking_level(
         _raise_http(exc)
 
 
-@router.post("/api/copilot/pi/sessions/{session_id}/delete-empty")
-def post_pi_copilot_session_delete_empty(
+@router.post("/api/copilot/pi/sessions/{session_id}/delete")
+def post_pi_copilot_session_delete(
     session_id: ShortText,
     body: PiSessionDeleteRequest,
 ) -> dict:
     try:
-        return get_pi_copilot_service().delete_empty_session(
+        return get_pi_copilot_service().delete_session(
             session_id,
             project_id=body.project_id,
         )

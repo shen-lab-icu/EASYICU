@@ -568,8 +568,8 @@
   function saveGuidedProjectNotes(projectId, text) {
     return postJSON('/api/guided/projects/' + encodeURIComponent(projectId) + '/notes', { text: String(text || '') });
   }
-  function deleteEmptyPiCopilotSession(sessionId, body) {
-    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/delete-empty', body || {});
+  function deletePiCopilotSession(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/delete', body || {});
   }
   function setPiCopilotThinkingLevel(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/thinking-level', body || {});
@@ -1020,7 +1020,7 @@
   window.EU_API.setPiCopilotThinkingLevel = setPiCopilotThinkingLevel;
   window.EU_API.loadGuidedProjectNotes = loadGuidedProjectNotes;
   window.EU_API.saveGuidedProjectNotes = saveGuidedProjectNotes;
-  window.EU_API.deleteEmptyPiCopilotSession = deleteEmptyPiCopilotSession;
+  window.EU_API.deletePiCopilotSession = deletePiCopilotSession;
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
   window.EU_API.loadPiSessionSkills = loadPiSessionSkills;
   window.EU_API.searchWorkspace = searchWorkspace;

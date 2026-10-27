@@ -404,8 +404,7 @@
             const time = typeof ctx.time === 'function' ? ctx.time(row) : '';
             const stateClass = (railState(row) || { cls: '' }).cls;
             const title = ctx.title(row);
-            const canRemove = !row.has_history && !row.active_message_job_id && !row.last_message_job_id && !row.last_turn_status;
-            return `<div class="gpi-conversation-row" data-gpi-rail-session-row data-gpi-rail-session-text="${esc(`${title} ${status}`.toLowerCase())}"><button type="button" class="gpi-conversation-item${stateClass}" data-gpi-rail-session="${esc(row.session_id)}" ${row.session_id === ctx.selectedId ? 'aria-current="page"' : ''} ${locked ? 'disabled' : ''}><span class="gpi-conversation-copy"><strong>${esc(title)}</strong><small><i aria-hidden="true"></i>${esc(status)}</small></span>${typeof ctx.mark === 'function' ? ctx.mark(row.session_id) : ''}${time ? `<time datetime="${esc(row.last_activity_at || row.created_at || '')}">${esc(time)}</time>` : ''}</button><details class="gpi-conversation-menu" data-popover-menu data-popover-key="${esc(row.session_id)}"><summary aria-label="${esc(tr('Conversation actions', '对话操作'))}" title="${esc(tr('Conversation actions', '对话操作'))}">•••</summary><div><button type="button" data-gpi-rail-rename="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Rename', '重命名')}</button>${canRemove ? `<button type="button" data-gpi-rail-remove="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Remove empty conversation', '删除空对话')}</button>` : ''}</div></details></div>`;
+            return `<div class="gpi-conversation-row" data-gpi-rail-session-row data-gpi-rail-session-text="${esc(`${title} ${status}`.toLowerCase())}"><button type="button" class="gpi-conversation-item${stateClass}" data-gpi-rail-session="${esc(row.session_id)}" ${row.session_id === ctx.selectedId ? 'aria-current="page"' : ''} ${locked ? 'disabled' : ''}><span class="gpi-conversation-copy"><strong>${esc(title)}</strong><small><i aria-hidden="true"></i>${esc(status)}</small></span>${typeof ctx.mark === 'function' ? ctx.mark(row.session_id) : ''}${time ? `<time datetime="${esc(row.last_activity_at || row.created_at || '')}">${esc(time)}</time>` : ''}</button><details class="gpi-conversation-menu" data-popover-menu data-popover-key="${esc(row.session_id)}"><summary aria-label="${esc(tr('Conversation actions', '对话操作'))}" title="${esc(tr('Conversation actions', '对话操作'))}">•••</summary><div><button type="button" data-gpi-rail-rename="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Rename', '重命名')}</button><button type="button" data-gpi-rail-remove="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Delete conversation', '删除对话')}</button></div></details></div>`;
             });
             return groupEmptyTaskRows(ctx.sessions, rendered, ctx.selectedId);
           })()
@@ -443,7 +442,23 @@
           return;
         }
         if (locked) return;
-        // Rename and remove ask first and repaint after, so the ••• menu
+        // Delete asks in place first: the item turns into 确认删除 and the
+        // menu stays open; a second click deletes.
+        const removeItem = event.target.closest('[data-gpi-rail-remove]');
+        if (removeItem && removeItem.getAttribute('data-gpi-rail-remove-armed') === null) {
+          const label = removeItem.textContent;
+          removeItem.setAttribute('data-gpi-rail-remove-armed', '');
+          removeItem.textContent = tr('Confirm delete', '确认删除');
+          // Closing the menu without confirming disarms it.
+          const menu = removeItem.closest('details');
+          if (menu && menu.addEventListener) menu.addEventListener('toggle', () => {
+            if (menu.open) return;
+            removeItem.removeAttribute('data-gpi-rail-remove-armed');
+            removeItem.textContent = label;
+          }, { once: true });
+          return;
+        }
+        // Rename and a confirmed delete repaint after, so the ••• menu
         // closes now; a menu open at the repaint is reopened.
         const rowAction = event.target.closest('[data-gpi-rail-rename], [data-gpi-rail-remove]');
         const rowMenu = rowAction && rowAction.closest('details[data-popover-menu]');

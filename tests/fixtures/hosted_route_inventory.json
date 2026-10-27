@@ -950,7 +950,7 @@
   },
   {
     "method": "POST",
-    "route": "/api/copilot/pi/sessions/{session_id}/delete-empty",
+    "route": "/api/copilot/pi/sessions/{session_id}/delete",
     "fields": [
       "query/body:project_id",
       "path:session_id"
