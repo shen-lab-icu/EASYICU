@@ -57,6 +57,7 @@ __all__ = [
     "explicit_outcome_concepts",
     "explicit_exposure_aggregation",
     "explicit_landmark_hours",
+    "stated_comparison_groupings",
     "named_study_concepts",
     "substance_forms",
     "substance_reading",
@@ -289,9 +290,13 @@ def _negated(text: str, start: int) -> bool:
     # a list of excluded endpoints does not. "分别" is never a negation.
     window = re.split(r"[,，]\s*(?:仅|只|而是|instead\b|but\b)", window, flags=re.IGNORECASE)[-1]
     # "非 X 患者的死亡" names a negative-exposure population, not a negated
-    # outcome. Close that noun phrase's scope while retaining any subsequent
-    # explicit negation such as "非 X 患者中，不研究死亡".
-    window = re.sub(r"非[^，,。；;?？]{1,20}?(?:患者|人群|病人)", "", window)
+    # outcome, and so does a negative group (「X 组与非 X 组的死亡比例」).
+    # Close that noun phrase's scope while retaining any subsequent explicit
+    # negation such as "非 X 患者中，不研究死亡".
+    window = re.sub(
+        r"非[^，,。；;?？]{1,20}?(?:患者|人群|病人|(?<![两二三四五六七八九十多各分小本该此每\d])组)",
+        "", window,
+    )
     return bool(_NEGATION.search(window))
 
 
@@ -1124,6 +1129,215 @@ def explicit_exposure_aggregation(
     return ExplicitExposureAggregation(
         concept_id=concept_id, aggregation=operation, evidence=evidence,
     )
+
+
+@dataclass(frozen=True)
+class StatedComparisonGrouping:
+    """A concept whose levels the question compares its patients across.
+
+    The words name the groups, not a result reported within them.  Which role
+    that is in a study is the study's design to decide; this reads words only.
+    """
+
+    concept_id: str
+    evidence: str
+
+
+# Words that state a comparison across a concept's presence or levels:
+# 「接受与未接受 X」「有无 X」「有/无 X」「X 组与非 X 组」「非 X 与 X 患者」
+# 「X 组与对照组」「按（是否）X 分组」「X 与否」「不同 X」, "with and without X",
+# "who did and did not receive X", "X vs non-X", "X and those without",
+# "by X", "across X groups".  "或"/"or" is left out: "with or without X" and
+# 「接受或未接受 X」 usually say whom a cohort includes regardless of X.
+_GROUPING_VERB = (
+    r"(?:接受|使用|应用|进行|给予|需要|发生|出现|合并|伴有|患有|存在|采用|实施|伴|行|需|有)"
+)
+_GROUPING_NOT = r"(?:没有|未|没|无|不|非)"
+_GROUPING_AND = r"\s*(?:与|和|及|对比|、|/|／|\bvs\.?|\bversus\b)\s*"
+_GROUPING_MODIFIER = r"[^\s，,。；;：:？?！!、与和及或的/／]{0,6}"
+# A negated half names the concept itself or a verb on it (「未接受有创 X」),
+# never a modifier alone: 「无创」 is a kind of ventilation, not its absence.
+_NOT_HALF = rf"{_GROUPING_NOT}\s*(?:{_GROUPING_VERB}\s*{_GROUPING_MODIFIER})?"
+_GROUPING_NOUN = r"(?:组|患者|病人|人群)"
+_GROUPING_OTHER = r"(?:对照|其他|其余|其它)"
+_GROUPING_AND_EN = r"\s*(?:\band\b|\bvs\.?|\bversus\b|\bcompared\s+(?:to|with)\b|/)\s*"
+_GROUPING_NOT_EN = r"(?:\bnon-?|\bun-?|\bno\s+|\bnot\s+|\bwithout\s+)"
+_GROUPING_NOUN_EN = r"(?:patients?|groups?|cohorts?|stays?|subjects?)"
+_GROUPING_MODIFIER_EN = (
+    r"(?:(?!(?:of|the|to|at|in|on|for|with|by|after|before|during|and|or|vs|versus)\b)"
+    r"[a-z][a-z\-]*\s+){0,2}"
+)
+_GROUPING_VERB_EN = (
+    r"(?:receiv(?:e|ed|ing)|requir(?:e|ed|ing)|underwent|undergo(?:ing)?|need(?:ed|ing)?"
+    r"|develop(?:ed|ing)?|ha(?:d|ve|ving)|got|given|treated\s+with)"
+)
+_GROUPING_BEFORE = re.compile(
+    "(?:"
+    # 「接受与未接受 X」「有与无 X」「未接受与接受 X」
+    rf"{_GROUPING_VERB}{_GROUPING_AND}{_NOT_HALF}"
+    rf"|{_GROUPING_NOT}\s*{_GROUPING_VERB}{_GROUPING_AND}{_GROUPING_VERB}\s*{_GROUPING_MODIFIER}"
+    # 「有无 X」「有/无 X」, 「不同 X」
+    rf"|有\s*[/／]?\s*无\s*{_GROUPING_MODIFIER}|不同\s*"
+    ")$"
+    # "with and without X", "with vs without X"
+    rf"|\bwith{_GROUPING_AND_EN}without\s+{_GROUPING_MODIFIER_EN}$"
+    # "who did and did not receive X", "receiving and not receiving X"
+    r"|\b(?:did|were|was|had|have)\s+and\s+(?:did|were|was|had|have)\s*(?:not\b|n't)\s*"
+    rf"{_GROUPING_MODIFIER_EN}$"
+    rf"|\b{_GROUPING_VERB_EN}{_GROUPING_AND_EN}(?:not|never|did\s+not|didn't|were\s+not|was\s+not)"
+    rf"(?:\s+{_GROUPING_VERB_EN})?\s+{_GROUPING_MODIFIER_EN}$",
+    re.IGNORECASE,
+)
+# 「按 X 分组」「按是否接受 X 分层」「根据有无 X 分为两组」「以 X 为分组」
+_GROUPING_BY_BEFORE = re.compile(
+    rf"(?:按照?|根据|依据|依照|以)\s*(?:是否\s*{_GROUPING_VERB}?|有\s*[/／]?\s*无)?\s*{_GROUPING_MODIFIER}$"
+)
+_GROUPING_BY_AFTER = re.compile(
+    r"\s*(?:的)?\s*(?:状态|情况|使用情况|与否|有无)?\s*"
+    r"(?:分组|分层|分成|分为|划分|为分组|作为分组|进行分组|进行分层|区分|比较|对比)"
+)
+# "by X", "stratified by X", "according to X", "by the presence or absence of
+# X", "by whether they received X"
+_GROUPING_BY_BEFORE_EN = re.compile(
+    r"(?:\b(?P<lead>[a-z][a-z\-]*)\s+)?\b(?P<by>by|according\s+to)\s+(?:the\s+)?"
+    r"(?:presence\s+(?:and|or|vs\.?|versus)\s+absence\s+of\s+"
+    r"|whether\s+(?:or\s+not\s+)?(?:(?:patients?|they)\s+)?"
+    r"(?:received|had|underwent|required|needed|developed|were\s+on|were\s+given)\s+(?:or\s+not\s+)?)?"
+    rf"{_GROUPING_MODIFIER_EN}$",
+    re.IGNORECASE,
+)
+# Verbs that group or summarize by X; any other participle before "by"
+# ("defined by", "driven by", "adjusted by") names an agent, not groups.
+_GROUPING_BY_LEADS_EN = frozenset({
+    "stratified", "grouped", "classified", "categorized", "categorised", "compared", "split",
+    "down", "described", "summarized", "summarised", "tabulated", "reported",
+})
+_GROUPING_PARTICIPLE = re.compile(r"(?:ed|en|wn)$")
+_GROUPING_ACROSS_BEFORE_EN = re.compile(
+    rf"\b(?:across|between)\s+(?:the\s+)?{_GROUPING_MODIFIER_EN}$", re.IGNORECASE,
+)
+_GROUPING_ACROSS_AFTER_EN = re.compile(
+    r"[a-z\-]*\s+(?:status|use|groups?|categor(?:y|ies)|levels?|strata)\b", re.IGNORECASE,
+)
+_GROUPING_AFTER = re.compile(
+    # 「X 与否」
+    r"\s*与否"
+    # 「X 组与对照组」「X 患者与其他患者」
+    rf"|{_GROUPING_MODIFIER}(?:的)?\s*{_GROUPING_NOUN}{_GROUPING_AND}{_GROUPING_OTHER}\s*{_GROUPING_NOUN}"
+    # "X and those without", "X vs patients not receiving it"
+    rf"|[a-z\-]*\s*(?:{_GROUPING_NOUN_EN}\s*)?{_GROUPING_AND_EN}(?:those|patients|others|ones)\s+"
+    r"(?:without|not\s+(?:receiving|on|given|treated))\b",
+    re.IGNORECASE,
+)
+# Between two mentions of one concept: 「X 组与非 X 组」「接受 X 与未接受 X」, "X vs non-X"
+_GROUPING_PAIR = re.compile(
+    rf"{_GROUPING_MODIFIER}(?:的)?\s*{_GROUPING_NOUN}?{_GROUPING_AND}{_NOT_HALF}"
+    rf"|[a-z\-]*\s*(?:{_GROUPING_NOUN_EN}\s*)?{_GROUPING_AND_EN}{_GROUPING_NOT_EN}\s*{_GROUPING_MODIFIER_EN}",
+    re.IGNORECASE,
+)
+# The same with the negative group first: 「非 X 组与 X 组」, "non-X and X"
+_GROUPING_PAIR_NOT_BEFORE = re.compile(
+    rf"{_NOT_HALF}$|{_GROUPING_NOT_EN}\s*{_GROUPING_MODIFIER_EN}$", re.IGNORECASE,
+)
+_GROUPING_PAIR_REVERSED = re.compile(
+    rf"{_GROUPING_MODIFIER}(?:的)?\s*{_GROUPING_NOUN}?{_GROUPING_AND}{_GROUPING_VERB}?\s*{_GROUPING_MODIFIER}"
+    rf"|[a-z\-]*\s*(?:{_GROUPING_NOUN_EN}\s*)?{_GROUPING_AND_EN}{_GROUPING_MODIFIER_EN}",
+    re.IGNORECASE,
+)
+# 「不按 X 分组」, "not stratified by X": a refused grouping states none.
+_GROUPING_REFUSAL = re.compile(
+    r"(?:不|无需|不需要|不要|别|勿|\bnot\b|\bno\b|n't|\bwithout\b)\s*$", re.IGNORECASE,
+)
+
+
+def _concept_spans(text: str) -> List[Tuple[str, int, int]]:
+    """Every concept reading of ``text`` with its span, outermost readings only.
+
+    Phrase-table and catalog-name readings, each resolved to the longest
+    catalog name containing it (``_resolved_reading``).  A substance the
+    sentence does not say is measured or given is no concept here.
+    """
+
+    readings = set()
+    for pattern, entry in _PHRASE_TO_CONCEPT:
+        for reading in _entry_readings(pattern, entry, text):
+            resolved = _resolved_reading(text, *reading)
+            if resolved is not None:
+                readings.add(resolved)
+    for reading in _catalog_name_readings(text):
+        resolved = _resolved_reading(text, *reading)
+        if resolved is not None:
+            readings.add(resolved)
+    spans = []
+    for concept, start, end in sorted(readings, key=lambda row: (row[1], -row[2], row[0])):
+        if any(begin <= start and end <= finish and finish - begin > end - start
+               for _other, begin, finish in readings):
+            continue
+        concept = _measured_or_given(text, concept, start, end)
+        if not isinstance(concept, _Undecided):
+            spans.append((concept, start, end))
+    return spans
+
+
+def stated_comparison_groupings(question: str) -> Tuple[StatedComparisonGrouping, ...]:
+    """Each concept the question compares its patients across, in text order.
+
+    「接受与未接受有创机械通气的患者」, 「有无 AKI 的患者」, 「机械通气组与非机械通气组」,
+    「按是否接受 X 分组」, "patients with and without mechanical ventilation",
+    "ventilated vs non-ventilated patients", "lactate by ventilation status":
+    each states the groups a result is compared in.  A concept named once
+    without such words ("the proportion of ventilated patients") states no
+    groups, nor does a refused grouping (「不按 X 分组」).  A reading aid, not
+    a role: the study's design decides whether these groups are its grouping.
+    """
+
+    text = str(question or "").strip()[:_MAX_QUESTION_CHARS]
+    lowered = text.lower()
+    spans = _concept_spans(text)
+    found: Dict[str, Tuple[int, StatedComparisonGrouping]] = {}
+
+    def state(concept: str, start: int, end: int) -> None:
+        if _GROUPING_REFUSAL.search(text[max(0, start - 8):start]) or _negated(lowered, start):
+            return
+        while end < len(text) and text[end].isascii() and text[end].isalpha():
+            end += 1  # the whole word: "non-ventilated", not "non-ventilat"
+        if concept not in found:
+            found[concept] = (start, StatedComparisonGrouping(concept, text[start:end].strip()))
+
+    for index, (concept, start, end) in enumerate(spans):
+        before, after = text[:start], text[end:]
+        framed = _GROUPING_BEFORE.search(before)
+        if framed is not None:
+            state(concept, framed.start(), end)
+        framed = _GROUPING_BY_BEFORE.search(before)
+        tail = _GROUPING_BY_AFTER.match(after)
+        if framed is not None and tail is not None:
+            state(concept, framed.start(), end + tail.end())
+        framed = _GROUPING_BY_BEFORE_EN.search(before)
+        if framed is not None:
+            lead = (framed.group("lead") or "").lower()
+            if lead in _GROUPING_BY_LEADS_EN:
+                state(concept, framed.start(), end)
+            elif not _GROUPING_PARTICIPLE.search(lead):
+                state(concept, framed.start("by"), end)
+        framed = _GROUPING_ACROSS_BEFORE_EN.search(before)
+        tail = _GROUPING_ACROSS_AFTER_EN.match(after)
+        if framed is not None and tail is not None:
+            state(concept, framed.start(), end + tail.end())
+        tail = _GROUPING_AFTER.match(after)
+        if tail is not None:
+            state(concept, start, end + tail.end())
+        for other, begin, finish in spans[index + 1:]:
+            if other != concept:
+                continue
+            between = text[end:begin]
+            negative = _GROUPING_PAIR_NOT_BEFORE.search(before)
+            if _GROUPING_PAIR.fullmatch(between):
+                state(concept, start, finish)
+            elif negative is not None and _GROUPING_PAIR_REVERSED.fullmatch(between):
+                state(concept, negative.start(), finish)
+            break
+    return tuple(grouping for _start, grouping in sorted(found.values(), key=lambda row: row[0]))
 
 
 def catalog_named_concepts(text: str) -> Tuple[str, ...]:
