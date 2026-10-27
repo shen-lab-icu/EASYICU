@@ -66,6 +66,28 @@ def primary_descriptive_summary_scope(
     return None, measured[0]
 
 
+def primary_descriptive_summary_scope_error(
+    step: AnalysisStep, *, context: ResearchContext,
+) -> str | None:
+    """Why the executor could not bind this exact primary summary, else ``None``.
+
+    The question is the executor's own, asked of the planning context (with its
+    row-free factor deferral). Any other step is not this owner's to judge.
+    """
+
+    if not is_primary_descriptive_summary_step(step):
+        return None
+    try:
+        primary_descriptive_summary_scope(
+            declared_columns=declared_summary_columns(step),
+            variables={variable.name: variable for variable in context.variables},
+            grouping=context.primary_exposure, planning_context=context,
+        )
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
 def is_primary_descriptive_summary_step(step: AnalysisStep) -> bool:
     """Own empirical measurement summaries, never a model or inferred endpoint.
 

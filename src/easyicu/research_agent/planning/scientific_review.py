@@ -22,7 +22,10 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..canonical_json import canonical_sha256
-from ..contracts.cohort_summary import is_primary_descriptive_summary_step
+from ..contracts.cohort_summary import (
+    is_primary_descriptive_summary_step,
+    primary_descriptive_summary_scope_error,
+)
 from ..contracts.continuous_outcome_summary import continuous_outcome_columns, continuous_outcome_summary_verdict
 from ..contracts.continuous_outcome_metadata import continuous_summary_columns
 from ..authority.declared_levels import closed_planning_levels_for
@@ -789,6 +792,27 @@ _FIRST_STAY_RULE_METHODS = frozenset(
 )
 
 
+def measurement_audit_answers_plan(plan: Optional[AnalysisPlan]) -> bool:
+    """Whether typed measurement-audit counts are the plan's whole result.
+
+    An audit counts recorded, missing and event-timed ICU stays and fits
+    nothing, so, like the empirical summary's stay frequencies, it makes no
+    independent-patient inference. Any other executable result step keeps
+    its own repeat-stay contract.
+    """
+
+    if plan is None or not any(step.measurement_audit_spec is not None for step in plan.steps):
+        return False
+    return all(
+        step.measurement_audit_spec is not None
+        and not step.model_requirements
+        and step.table_one_spec is None
+        and step.exposure_outcome_distribution_spec is None
+        for step in scientific_steps(plan)
+        if executable_scientific_step(step)
+    )
+
+
 def _repeated_stay_step_declared(step: Any, context: Any) -> bool:
     """Whether one step explicitly declares its repeat-stay rule."""
 
@@ -837,12 +861,15 @@ def _repeated_stay_rule_declared(
     remediation promises that confirming clustered/mixed handling clears
     the finding, so those confirmations must count here too): a first-stay
     method, a bound dependence contract, an executed repeated-stays
-    sensitivity axis, a counts-only descriptive projection, or a reviewed
-    signed runtime bound to patient grouping.
+    sensitivity axis, a counts-only descriptive projection, a reviewed
+    signed runtime bound to patient grouping, or a plan answered by
+    measurement-audit counts alone.
     """
 
     if plan is None:
         return False
+    if measurement_audit_answers_plan(plan):
+        return True
     if any(
         _repeated_stay_step_declared(step, context) for step in plan.steps
     ):
@@ -975,7 +1002,7 @@ def repeated_unit_design_closed(
         ):
             continue
         return False
-    return applicable
+    return applicable or measurement_audit_answers_plan(plan)
 
 
 def required_method_layers_for_context(
@@ -3793,6 +3820,31 @@ def build_plan_scientific_review(
                     "deterministic scientific validator, or start a separately "
                     "labelled diagnostic run that permits analysis-only output."
                 ),
+            )
+        )
+    # Every tier executes this primary through the same owner, which binds one
+    # measurement or raises; an analysis-only run would only fail later.
+    for step in plan.steps:
+        scope_error = primary_descriptive_summary_scope_error(step, context=context)
+        if scope_error is None:
+            continue
+        findings.append(
+            PlanScientificFinding(
+                code="PRIMARY_DESCRIPTIVE_SUMMARY_SCOPE_UNRESOLVED",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    f"The primary descriptive summary {step.step_id!r} cannot run: it "
+                    "describes the values of exactly one numeric measurement, optionally "
+                    f"within one declared categorical grouping ({scope_error})."
+                ),
+                evidence_refs=["analysis_plan.json", "research_context.json.variables"],
+                remediation=(
+                    "Plan the availability or missingness (timing only for event-timed concepts) of several measurements "
+                    "as the measurement_audit step and remove this summary; keep a primary "
+                    "descriptive summary only for one measurement's values."
+                ),
+                remediation_route="agent_plan_revision",
             )
         )
 
