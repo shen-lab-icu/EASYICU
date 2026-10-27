@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 
 # Each platform's installer file and the build target its receipt must name.
@@ -33,6 +34,15 @@ def verify_installer(root: Path, source_commit: str, platform: str = "windows") 
     return installer, digest
 
 
+def release_name(name: str) -> str:
+    """The asset name GitHub keeps as uploaded.
+
+    GitHub rewrites other characters (a space becomes "."), and SHA256SUMS
+    must name the file a downloader actually gets.
+    """
+    return re.sub(r"[^A-Za-z0-9._-]+", ".", name).strip(".")
+
+
 def _record_checksum(release_dir: Path, name: str, digest: str) -> None:
     """Add one line to SHA256SUMS.txt, keeping the other platforms' lines."""
     sums = release_dir / "SHA256SUMS.txt"
@@ -56,9 +66,9 @@ def main(argv: list[str] | None = None) -> int:
     installer, digest = verify_installer(args.artifact_dir, args.source_commit, args.platform)
     if args.release_dir is not None:
         args.release_dir.mkdir(parents=True, exist_ok=True)
-        target = args.release_dir / installer.name
+        target = args.release_dir / release_name(installer.name)
         shutil.copy2(installer, target)
-        _record_checksum(args.release_dir, installer.name, digest)
+        _record_checksum(args.release_dir, target.name, digest)
         installer = target.resolve()
     print(installer)
     return 0

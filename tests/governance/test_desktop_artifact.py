@@ -35,12 +35,12 @@ def test_verified_artifact_is_the_exact_installer_and_checksum(artifact, tmp_pat
     platform, root, installer, _ = artifact
     output = tmp_path / "release"
     assert module.main([platform, str(root), "--source-commit", "a" * 40, "--release-dir", str(output)]) == 0
-    published = output / installer.name
+    published = output / module.release_name(installer.name)
     assert capsys.readouterr().out.strip() == str(published.resolve())
     assert published.read_bytes() == installer.read_bytes()
     digest = hashlib.sha256(installer.read_bytes()).hexdigest()
-    assert (output / "SHA256SUMS.txt").read_bytes() == f"{digest}  {installer.name}\n".encode()
-    assert sorted(p.name for p in output.iterdir()) == sorted([installer.name, "SHA256SUMS.txt"])
+    assert (output / "SHA256SUMS.txt").read_bytes() == f"{digest}  {published.name}\n".encode()
+    assert sorted(p.name for p in output.iterdir()) == sorted([published.name, "SHA256SUMS.txt"])
 
 
 def test_one_release_lists_every_platform_in_one_checksum_file(tmp_path, capsys):
@@ -59,10 +59,22 @@ def test_one_release_lists_every_platform_in_one_checksum_file(tmp_path, capsys)
         }))
         for _ in range(2):  # A rerun replaces its own line instead of adding one.
             assert module.main([platform, str(root), "--source-commit", "a" * 40, "--release-dir", str(output)]) == 0
-        lines.append(f"{digest}  {installer.name}\n")
+        lines.append(f"{digest}  {module.release_name(installer.name)}\n")
     capsys.readouterr()
     assert (output / "SHA256SUMS.txt").read_text(encoding="utf-8") == "".join(
         sorted(lines, key=lambda line: line.split("  ", 1)[1]))
+
+
+@pytest.mark.parametrize(("built", "uploaded"), [
+    # v0.1.0: GitHub stored the space as "." and SHA256SUMS named the space.
+    ("EasyICU Desktop_0.1.0_x64-setup.exe", "EasyICU.Desktop_0.1.0_x64-setup.exe"),
+    ("EasyICU_0.1.0_aarch64.dmg", "EasyICU_0.1.0_aarch64.dmg"),
+    ("EasyICU 临床 setup.exe", "EasyICU.setup.exe"),
+])
+def test_the_release_copy_and_its_checksum_use_the_name_github_keeps(built, uploaded):
+    module = load_script("verify_desktop_artifact")
+    assert module.release_name(built) == uploaded
+    assert module.release_name(uploaded) == uploaded
 
 
 def test_acceptance_verifies_without_copying_or_creating_release_files(artifact, capsys):
