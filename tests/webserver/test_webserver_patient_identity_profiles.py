@@ -171,7 +171,7 @@ def test_each_database_groups_stays_by_its_official_patient_identifier(
     assert grouped.nunique() == coordinates["patients"]
 
 
-@pytest.mark.parametrize("database", sorted(CASES))
+@pytest.mark.parametrize("database", sorted(set(CASES) - {"sic"}))
 def test_each_database_proves_the_first_icu_stay_from_its_official_order(
     tmp_path: Path, database: str
 ) -> None:
@@ -198,10 +198,8 @@ def test_each_database_proves_the_first_icu_stay_from_its_official_order(
         assert "first_order_value" not in coordinates
     else:
         assert coordinates["order_rule"] == "declared_first_admission_value_per_patient"
-        assert coordinates["first_order_value"] == (0 if database == "sic" else 1)
-        assert coordinates["patients_without_first_icu_stay_in_source"] == (
-            1 if database == "sic" else 0
-        )
+        assert coordinates["first_order_value"] == 1
+        assert coordinates["patients_without_first_icu_stay_in_source"] == 0
     # Receipts carry counts and digests, never identifier values or paths.
     serialized = json.dumps(coordinates)
     assert str(tmp_path / "raw") not in serialized
@@ -319,7 +317,6 @@ def test_a_repeated_stay_identifier_refuses_the_grouping(
                 )
             },
         ),
-        ("sic", {"cases": _sicdb_cases(offsets=[0, 0, 0, 3_600])}),
         ("aumc", {"admissions": _aumc_admissions(counts=[1, 1, 1])}),
     ],
 )
@@ -430,4 +427,17 @@ def test_a_quick_answer_offers_first_stays_only_where_they_can_be_prepared(
     )
     export = _export(tmp_path, database, tables)
 
-    assert _first_stays_orderable(str(export), database) is (database != "hirid")
+    assert _first_stays_orderable(str(export), database) is (database not in {"hirid", "sic"})
+
+
+def test_sicdb_groups_stays_by_patient_without_claiming_a_first_stay(tmp_path: Path) -> None:
+    """A shared zero offset marks a first admission, not a first ICU stay."""
+
+    export = _export(tmp_path, "sic", {"cases": _sicdb_cases(offsets=[0, 0, 0, 3_600])})
+
+    assert source_identity_authority.resolve_study_patient_grouping(
+        export_path=export, database="sic"
+    ) is not None
+    assert source_identity_authority.resolve_study_first_icu_stay(
+        export_path=export, database="sic"
+    ) is None
