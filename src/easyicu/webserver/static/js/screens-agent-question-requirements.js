@@ -31,6 +31,7 @@
   const TEMPLATE_GAPS_ZH = {
     question_benchmark_step_unavailable_in_family_template: '这份计划所用的模板没有在同一批行上把模型与已有评分或模型比较的步骤',
     question_subgroup_step_unavailable_in_family_template: '这份计划所用的模板没有分析指定亚组的步骤',
+    question_effect_measure_unavailable_in_family_template: '这份计划所用模板的主模型不能报告所要求的效应指标',
   };
 
   // The renderers' own i18n global decides the language.
@@ -67,7 +68,12 @@
   }
 
   function requirementCell(row) {
-    return `${clip(row.id, 8)} · ${kindLabel(row.kind)}${tr(': ', '：')}${quoted(clip(row.quote, QUOTE_LIMIT))}`;
+    // A risk ratio the question does not name has no words of its own to quote.
+    if (row.reason_code === 'question_effect_measure_unrequested') {
+      return `${kindLabel(row.kind)}${tr(': ', '：')}${tr('the question names no risk ratio', '题面没有要求风险比')}`;
+    }
+    const id = row.read_from_question === true ? tr('Read by EasyICU', 'EasyICU 读取') : clip(row.id, 8);
+    return `${id} · ${kindLabel(row.kind)}${tr(': ', '：')}${quoted(clip(row.quote, QUOTE_LIMIT))}`;
   }
 
   // On the judgment of the plan under review a stop refuses approval; the
@@ -94,6 +100,18 @@
     }
     if (row.disposition === 'not_covered') {
       const concepts = conceptNames(row.concepts, levels);
+      // A named effect measure is judged by what the primary model reports.
+      if (row.reason_code === 'question_effect_measure_unrequested') {
+        return tr(
+          'The primary model reports a risk ratio the question does not ask for; a binary outcome is reported as an odds ratio unless the question asks for a risk ratio',
+          '主模型报告了题面没有要求的风险比；除非题面要求风险比，二分类结局报告比值比',
+        );
+      }
+      if (row.effect_measure) {
+        return row.effect_measure === 'risk_ratio'
+          ? tr('No primary step reports a risk ratio', '没有主要分析步骤报告风险比')
+          : tr('No primary step reports an odds ratio', '没有主要分析步骤报告比值比');
+      }
       const why = row.kind === 'benchmark'
         ? tr('No step compares the model with it on the same rows', '没有步骤在同一批行上把模型与它比较')
         : row.kind === 'subgroup'

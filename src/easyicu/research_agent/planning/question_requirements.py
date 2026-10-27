@@ -95,6 +95,8 @@ from pydantic import (
 )
 
 from ..canonical_json import canonical_sha256
+from ..contracts.association_execution import primary_binary_effect_measure
+from ..contracts.model_tokens import BinaryEffectMeasure
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .population_spec import quote_written_in
 from .progressive_contract import (
@@ -183,6 +185,166 @@ QUESTION_REQUIREMENTS_GUIDE = (
 )
 
 
+#: A primary that reports a measure the question names answers it; a measure
+#: the question names that no primary reports, and a risk ratio the question
+#: does not name, stop approval as ``question_requirement_not_covered``.  The
+#: row's reason says which.  Stable codes.
+EFFECT_MEASURE_NOT_REPORTED_REASON = "question_effect_measure_not_reported"
+EFFECT_MEASURE_UNREQUESTED_REASON = "question_effect_measure_unrequested"
+
+
+@dataclass(frozen=True)
+class StatedEffectMeasure:
+    """A binary effect measure the question explicitly asks for, in its words."""
+
+    measure: BinaryEffectMeasure
+    quote: str
+
+    def row(self) -> dict[str, str]:
+        return {"measure": self.measure, "quote": self.quote}
+
+
+# The words that name a measure.  A full name counts wherever it stands, except
+# the Chinese names that are also everyday phrases: 风险比 is "risk than" in
+# 死亡风险比对照组高, 相对风险 is "relatively risky" in 相对风险较高; those count
+# only where they read as a measure.  风险比 next to HR names a hazard ratio.
+_MEASURE_NAMES: tuple[tuple[BinaryEffectMeasure, "re.Pattern[str]", bool], ...] = (
+    ("risk_ratio", re.compile(r"risk[\s\-]+ratios?|relative[\s\-]+risks?", re.IGNORECASE), False),
+    ("risk_ratio", re.compile(r"相对危险度"), False),
+    ("risk_ratio", re.compile(r"风险比|相对风险|相对危险"), True),
+    ("odds_ratio", re.compile(r"odds[\s\-]+ratios?", re.IGNORECASE), False),
+    ("odds_ratio", re.compile(r"比值比|优势比|比数比"), False),
+)
+# An abbreviation counts only as an uppercase token in a measure's context:
+# "or" is a conjunction, "RR" a respiratory rate, "OR" an operating room.
+_MEASURE_ABBREVIATION = re.compile(r"(?<![A-Za-z0-9])a?(RR|OR)s?(?![A-Za-z0-9])")
+_ABBREVIATED = {"RR": "risk_ratio", "OR": "odds_ratio"}
+_CJK_OR_FULLWIDTH = re.compile(r"[、-】㐀-鿿！-？]")
+_CLAUSE_END = re.compile(r"[。；;！!？?\n]")
+_NEGATED = re.compile(
+    r"(?:(?:不|非|勿|别|无需|无须|不必|不需要?|不要|不用|而不是|而非|并非|不是|代替|取代|替代|除了?)"
+    r"\s*(?:用|以|采用|使用|选用|报告|计算|估计|表示|给出|呈现)?"
+    r"|(?:\bnot|n't|\bno|\bnever|\bwithout|\binstead\s+of|\brather\s+than|\bother\s+than"
+    r"|\bavoid(?:ing)?|\bexclud(?:e|ing)|\bexcept)"
+    r"(?:\s+(?:an?|the|any|use|using|report|reporting|express|expressing|as|in|terms|of|by|via))*)"
+    r"\s*$",
+    re.IGNORECASE,
+)
+_COMPARATIVE_AFTER = re.compile(r"\s*(?:较|更|越|高|低|大|小|增|升|降|减|多|少)")
+_HAZARD_NEAR = re.compile(r"^\s*[（(]\s*(?:HR|hazard)", re.IGNORECASE)
+_HAZARD_BEFORE = re.compile(r"(?:HR|hazard\s+ratio)\s*[（(]\s*$", re.IGNORECASE)
+_MEASURE_CN_BEFORE = re.compile(
+    r"(?:用|以|按|计算|报告|估计|给出|呈现|表示为|(?:校正|调整)后?的?|及|和|与|或|、|（|\()\s*$"
+)
+_MEASURE_CN_AFTER = re.compile(
+    r"^\s*(?:$|[（()），,。.；;：:、？?！!]|RR|OR|及|和|与|或|为|是|值|估计|表示|作为)"
+)
+_RESPIRATORY_BEFORE = re.compile(r"respirat|呼吸", re.IGNORECASE)
+_RESPIRATORY_AFTER = re.compile(
+    r"^\s*(?:[<>=≤≥＜＞≦≧]|\d|次|breaths?|/\s*min|bpm|间期|间隔|interval)", re.IGNORECASE
+)
+_OPERATING_ROOM_BEFORE = re.compile(
+    r"operating|手术室|(?:\bfrom|\bto|\bin|\binto|\bleaving|\bleft|\bentering|\bentered)\s+(?:the\s+|an?\s+)?$",
+    re.IGNORECASE,
+)
+_ENGLISH_MEASURE_BEFORE = re.compile(
+    r"(?:\badjusted|\bunadjusted|\bcrude|\breport(?:ed|ing|s)?|\bexpress(?:ed|ing)?|\bpresent(?:ed|ing)?"
+    r"|\bestimat(?:e|ed|es|ing)|\bcalculat(?:e|ed|es|ing)|\bcomput(?:e|ed|es|ing)|\bas|\ban|\bthe"
+    r"|\busing|\bwith|\bterms\s+of)\s*$|[(\[]\s*$",
+    re.IGNORECASE,
+)
+_ENGLISH_MEASURE_AFTER = re.compile(
+    r"^\s*(?:[)\]]|,?\s*\(?\s*95\s*%|with\s+(?:its\s+)?(?:95|confidence|CI)|and\s+(?:its\s+)?(?:95|confidence|CI)"
+    r"|of\b|for\b|value|=)",
+    re.IGNORECASE,
+)
+_MEASURE_JOINER = re.compile(r"^\s*(?:/|,|、|and|or|vs\.?|versus|和|与|或|及)\s*$", re.IGNORECASE)
+
+
+def _clause_before(text: str, start: int) -> str:
+    head = text[max(0, start - 40):start]
+    ends = list(_CLAUSE_END.finditer(head))
+    return head[ends[-1].end():] if ends else head
+
+
+def _neighbour(text: str, index: int, step: int) -> str:
+    while 0 <= index < len(text) and text[index].isspace():
+        index += step
+    return text[index] if 0 <= index < len(text) else ""
+
+
+def _abbreviation_reads_as_measure(text: str, match: "re.Match[str]") -> bool:
+    letters = match.group(1)
+    before = _clause_before(text, match.start())
+    after = text[match.end():match.end() + 24]
+    if letters == "RR" and (_RESPIRATORY_BEFORE.search(before) or _RESPIRATORY_AFTER.match(after)):
+        return False
+    if letters == "OR" and _OPERATING_ROOM_BEFORE.search(before):
+        return False
+    return bool(
+        _CJK_OR_FULLWIDTH.match(_neighbour(text, match.start() - 1, -1))
+        or _CJK_OR_FULLWIDTH.match(_neighbour(text, match.end(), 1))
+        or _ENGLISH_MEASURE_BEFORE.search(before)
+        or _ENGLISH_MEASURE_AFTER.match(after)
+    )
+
+
+def _effect_measure_name(value: Any) -> BinaryEffectMeasure:
+    if value not in get_args(BinaryEffectMeasure):
+        raise ValueError(f"{value!r} is not a binary effect measure")
+    return value
+
+
+def question_effect_measures(question: str) -> tuple[StatedEffectMeasure, ...]:
+    """The binary effect measures a question explicitly asks for, in text order.
+
+    Deterministic and case-neutral; the host reads it from the question itself,
+    never from a Planner's statement.  One reading per measure: the first
+    mention that is not negated ("not", "rather than", "instead of", 不要,
+    而不是, 代替 ...).  A question that names both measures asks for both.
+    """
+
+    text = str(question or "")
+    found: list[tuple[int, int, BinaryEffectMeasure]] = []
+    for measure, pattern, everyday in _MEASURE_NAMES:
+        for match in pattern.finditer(text):
+            after = text[match.end():match.end() + 24]
+            before = _clause_before(text, match.start())
+            if everyday and (
+                _COMPARATIVE_AFTER.match(after)
+                or not (_MEASURE_CN_BEFORE.search(before) or _MEASURE_CN_AFTER.match(after))
+            ):
+                continue
+            if _HAZARD_NEAR.match(after) or _HAZARD_BEFORE.search(before):
+                continue
+            found.append((match.start(), match.end(), measure))
+    candidates = [
+        (match.start(), match.end(), _ABBREVIATED[match.group(1)], match)
+        for match in _MEASURE_ABBREVIATION.finditer(text)
+    ]
+    for start, end, measure, match in candidates:
+        if _abbreviation_reads_as_measure(text, match):
+            found.append((start, end, measure))
+    # An abbreviation joined to a measure already read ("OR or RR", "RR/OR")
+    # is read as one too.
+    for start, end, measure, match in candidates:
+        if (start, end, measure) in found:
+            continue
+        if match.group(1) == "RR" and _RESPIRATORY_AFTER.match(text[end:end + 24]):
+            continue
+        if any(
+            _MEASURE_JOINER.match(text[other_end:start]) or _MEASURE_JOINER.match(text[end:other_start])
+            for other_start, other_end, _ in found
+        ):
+            found.append((start, end, measure))
+    readings: dict[str, StatedEffectMeasure] = {}
+    for start, end, measure in sorted(found, key=lambda item: (item[0], -item[1])):
+        if measure in readings or _NEGATED.search(_clause_before(text, start)):
+            continue
+        readings[measure] = StatedEffectMeasure(measure, text[start:end])
+    return tuple(readings.values())
+
+
 #: How the host checked a gap: ``planning.capability_gap``'s verdicts.
 GapVerification = Literal["verified", "unverified", "unverifiable"]
 #: Checks one declared gap against the study: (verification, what the study shows).
@@ -215,6 +377,11 @@ class QuestionRequirement(BaseModel):
     coverage: CoverageClaim
     gap: Optional[ProgressiveCapabilityGap] = None
     note: Optional[str] = Field(default=None, max_length=300)
+    #: The binary effect measure an estimand asks for; the host judges it by
+    #: the measure the plan's primary reports.  Omitted when absent.
+    effect_measure: Optional[BinaryEffectMeasure] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("quote")
     @classmethod
@@ -250,6 +417,8 @@ class QuestionRequirement(BaseModel):
             raise ValueError("a definition names the concept it defines with")
         if self.kind == "definition" and not self.note:
             raise ValueError("a definition says in its note which element it defines")
+        if self.effect_measure is not None and self.kind != "estimand":
+            raise ValueError("only an estimand requirement names an effect measure")
         if (
             self.kind in {"benchmark", "subgroup", "cohort_accounting"}
             and self.coverage == "plan"
@@ -492,6 +661,9 @@ class JudgedRequirement:
             "gap_verification": self.verification,
             "gap_fact": self.fact,
             "note": item.note,
+            # Only a requirement that names a measure carries it, so the rows
+            # of every other requirement keep their recorded bytes.
+            **({"effect_measure": item.effect_measure} if item.effect_measure else {}),
         }
 
 
@@ -557,6 +729,11 @@ def _judge(
     if item.kind == "definition":
         return JudgedRequirement(
             item, "definition_only", DEFINITION_REASON, reading_step_ids=reading
+        )
+    if item.effect_measure is not None:
+        return _judge_effect_measure(
+            item, plan=plan, family_template=family_template,
+            check_gap=check_gap, reading=reading,
         )
     if item.kind == "cohort_accounting" and item.gap is None:
         from ..contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
@@ -658,6 +835,185 @@ def _judge(
     )
 
 
+def _judge_effect_measure(
+    item: QuestionRequirement,
+    *,
+    plan: AnalysisPlan,
+    family_template: bool,
+    check_gap: GapCheck,
+    reading: tuple[str, ...],
+) -> JudgedRequirement:
+    """An effect measure is answered by a primary step that reports it.
+
+    The host reads the measure from the primary's typed model contract
+    (``primary_binary_effect_measure``), never from a claim.  On the family
+    route the spec contract admits a gap only for a family whose primary
+    cannot report the measure, so a gap there is the host's verdict.
+    """
+
+    owners = tuple(
+        step.step_id
+        for step in plan.steps
+        if step.planned_analysis_role == "primary"
+        and primary_binary_effect_measure(step) == item.effect_measure
+    )
+    if owners:
+        return JudgedRequirement(
+            item, "covered", "typed_plan_owner_present", owners,
+            host_judged=True, reading_step_ids=owners,
+        )
+    if item.gap is not None:
+        if family_template:
+            measure = str(item.effect_measure).replace("_", " ")
+            return JudgedRequirement(
+                item,
+                "capability_gap",
+                "question_effect_measure_unavailable_in_family_template",
+                host_judged=True,
+                gap=ProgressiveCapabilityGap(
+                    requirement="estimand_unsupported",
+                    element="analysis",
+                    detail=(
+                        f"This plan's family template has no primary model that reports a {measure}."
+                    ),
+                ),
+                verification="verified",
+                fact=(
+                    f"no primary step of the plan reports a {item.effect_measure}, and "
+                    "its family template's primary cannot"
+                ),
+                reading_step_ids=reading,
+            )
+        verification, fact = check_gap(item.gap)
+        return JudgedRequirement(
+            item,
+            "capability_gap",
+            "question_requirement_capability_gap_declared",
+            gap=item.gap,
+            verification=verification,
+            fact=fact,
+            reading_step_ids=reading,
+        )
+    return JudgedRequirement(
+        item,
+        "not_covered",
+        QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"],
+        host_judged=True,
+        reading_step_ids=reading,
+    )
+
+
+@dataclass(frozen=True)
+class EffectMeasureJudgment:
+    """The host's judgment of a binary effect measure on the plan.
+
+    Read from the question (``question_effect_measures``) and from the plan's
+    typed primary estimators (``primary_binary_effect_measure``), never from a
+    Planner's claim: a measure the question names that no primary reports, and
+    a risk ratio the question does not name, stop approval.
+    """
+
+    measure: BinaryEffectMeasure
+    #: The question's words; ``None`` for a measure the question does not name.
+    quote: Optional[str]
+    disposition: Literal["covered", "not_covered"]
+    reason_code: str
+    owner_step_ids: tuple[str, ...] = ()
+    #: The question names both measures, and a primary reports one.
+    both_named: bool = False
+
+    def row(self) -> dict[str, Any]:
+        """A row of the record's ``judged`` table, in a requirement row's shape."""
+
+        return {
+            "id": "measure",
+            "kind": "estimand",
+            "quote": self.quote or "",
+            "concepts": [],
+            "claimed_coverage": None,
+            "disposition": self.disposition,
+            "reason_code": self.reason_code,
+            "owner_step_ids": list(self.owner_step_ids),
+            "reading_step_ids": [],
+            "host_judged": True,
+            "verified_by_host": True,
+            "gap": None,
+            "gap_verification": None,
+            "gap_fact": None,
+            "note": None,
+            "effect_measure": self.measure,
+            "read_from_question": self.quote is not None,
+        }
+
+    def sentence(self) -> str:
+        name = self.measure.replace("_", " ")
+        if self.reason_code == EFFECT_MEASURE_UNREQUESTED_REASON:
+            return (
+                f"Primary step {', '.join(self.owner_step_ids)} reports a {name}, which the "
+                "question does not ask for; a binary primary reports the odds ratio unless "
+                "the question names the risk ratio."
+            )
+        return (
+            f"The question asks for a {name} ({self.quote!r}), but no primary step reports one"
+            + (
+                "; a primary model reports one measure, so ask for one of the two."
+                if self.both_named
+                else "."
+            )
+        )
+
+
+def judge_stated_effect_measures(
+    stated: Sequence[StatedEffectMeasure],
+    *,
+    plan: AnalysisPlan,
+    requirements: Sequence[QuestionRequirement],
+) -> tuple[EffectMeasureJudgment, ...]:
+    """Hold the plan's binary primary to the effect measure the question names.
+
+    Only a plan whose primary reports a binary measure is judged: the outcome
+    type is the study's.  A measure the question names is answered by a primary
+    that reports it; a Planner requirement naming that measure is judged on its
+    own (covered, a host-verified gap, or not covered), so it is not judged
+    twice.  Otherwise it stops approval.  A risk ratio the question does not
+    name stops approval too: the odds ratio is the default and the Planner does
+    not switch the estimator on its own.
+    """
+
+    reported: dict[str, str] = {}
+    for step in plan.steps:
+        if step.planned_analysis_role != "primary":
+            continue
+        measure = primary_binary_effect_measure(step)
+        if measure is not None:
+            reported[step.step_id] = measure
+    if not reported:
+        return ()
+    named = {item.measure: item for item in stated}
+    stated_by_planner = {item.effect_measure for item in requirements if item.effect_measure}
+    judged: list[EffectMeasureJudgment] = []
+    for measure, item in named.items():
+        owners = tuple(step_id for step_id, value in reported.items() if value == measure)
+        if owners:
+            judged.append(EffectMeasureJudgment(
+                measure, item.quote, "covered", "typed_plan_owner_present", owners,
+            ))
+        elif measure not in stated_by_planner:
+            judged.append(EffectMeasureJudgment(
+                measure, item.quote, "not_covered", EFFECT_MEASURE_NOT_REPORTED_REASON,
+                both_named=len(named) > 1,
+            ))
+    risk_ratio_owners = tuple(
+        step_id for step_id, value in reported.items() if value == "risk_ratio"
+    )
+    if risk_ratio_owners and "risk_ratio" not in named:
+        judged.append(EffectMeasureJudgment(
+            "risk_ratio", None, "not_covered", EFFECT_MEASURE_UNREQUESTED_REASON,
+            risk_ratio_owners,
+        ))
+    return tuple(judged)
+
+
 @dataclass(frozen=True)
 class UnstatedConcept:
     """A named concept a route that states no requirements leaves to review."""
@@ -719,13 +1075,17 @@ def question_requirement_coverage(
     *,
     context: ResearchContext,
     plan: AnalysisPlan,
+    measures: Sequence[EffectMeasureJudgment] = (),
 ) -> PlanRequirementCoverage:
     """The requirement-coverage rows: one per verifiable requirement and concept."""
 
     from .requirement_coverage import with_requirement_data_availability
 
     return with_requirement_data_availability(
-        _coverage(judged, context_sha256=_sha256(context.model_dump(mode="json")), plan=plan),
+        _coverage(
+            judged, context_sha256=_sha256(context.model_dump(mode="json")), plan=plan,
+            measures=measures,
+        ),
         context,
     )
 
@@ -735,6 +1095,7 @@ def _coverage(
     *,
     context_sha256: str,
     plan: AnalysisPlan,
+    measures: Sequence[EffectMeasureJudgment] = (),
 ) -> PlanRequirementCoverage:
     status: Mapping[str, RequirementCoverageStatus] = {
         "covered": "covered",
@@ -761,6 +1122,19 @@ def _coverage(
                     reason_code=entry.reason_code,
                 )
             )
+    for measure in measures:
+        records.append(
+            PlanRequirementCoverageRecord(
+                requirement_id=f"question:effect_measure:{measure.measure}",
+                kind="question",
+                question_kind="estimand",
+                concept_identity=measure.measure,
+                source_ref="research_context.json.research_question",
+                status=status[measure.disposition],
+                owner_step_ids=measure.owner_step_ids if measure.disposition == "covered" else (),
+                reason_code=measure.reason_code,
+            )
+        )
     return PlanRequirementCoverage(
         context_sha256=context_sha256,
         # The digest a review request's authority binds, as the record's.
@@ -774,6 +1148,7 @@ def question_requirement_findings(
     judged: Sequence[JudgedRequirement],
     *,
     unstated: Sequence[UnstatedConcept] = (),
+    measures: Sequence[EffectMeasureJudgment] = (),
 ) -> list[ValidationFinding]:
     """The approval stops, then the visible records: claims, definitions, unstated names."""
 
@@ -782,8 +1157,17 @@ def question_requirement_findings(
         "not_covered": "no step of the plan answers",
         "capability_gap": "this plan cannot answer",
     }
+    unrequested = [
+        entry for entry in measures if entry.reason_code == EFFECT_MEASURE_UNREQUESTED_REASON
+    ]
     for disposition, reason in QUESTION_REQUIREMENT_APPROVAL_STOPS.items():
-        rows = [entry for entry in judged if entry.disposition == disposition]
+        rows: list[JudgedRequirement | EffectMeasureJudgment] = [
+            entry for entry in judged if entry.disposition == disposition
+        ]
+        rows += [
+            entry for entry in measures
+            if entry.disposition == disposition and entry not in unrequested
+        ]
         if not rows:
             continue
         findings.append(
@@ -794,7 +1178,12 @@ def question_requirement_findings(
                     "This plan cannot be approved: the research question asks for "
                     + ("an analysis " if len(rows) == 1 else "analyses ")
                     + f"that {causes[disposition]}. "
-                    + " ".join(_stated(entry) for entry in rows)
+                    + " ".join(
+                        entry.sentence()
+                        if isinstance(entry, EffectMeasureJudgment)
+                        else _stated(entry)
+                        for entry in rows
+                    )
                 ),
                 evidence_ids=["analysis_plan"],
                 detail={
@@ -802,6 +1191,28 @@ def question_requirement_findings(
                     "human_review_required": True,
                     "approval_allowed": False,
                     "requirements": [entry.row() for entry in rows],
+                },
+            )
+        )
+    if unrequested:
+        # The plan answers with a measure the question did not ask for: the
+        # same remedy as an unanswered requirement, a fresh plan.
+        findings.append(
+            ValidationFinding(
+                validator="question_requirements",
+                severity="error",
+                message=(
+                    "This plan cannot be approved: its primary model reports an effect "
+                    "measure the research question does not ask for. "
+                    + " ".join(entry.sentence() for entry in unrequested)
+                ),
+                evidence_ids=["analysis_plan"],
+                detail={
+                    "reason": QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"],
+                    "reason_code": EFFECT_MEASURE_UNREQUESTED_REASON,
+                    "human_review_required": True,
+                    "approval_allowed": False,
+                    "requirements": [entry.row() for entry in unrequested],
                 },
             )
         )
@@ -893,6 +1304,8 @@ def _stated(entry: JudgedRequirement) -> str:
     why = (
         entry.gap.detail
         if entry.gap is not None and entry.gap.detail
+        else f"no primary step reports a {item.effect_measure.replace('_', ' ')}"
+        if item.effect_measure is not None
         else (
             f"no step that compares models on the same rows reads {', '.join(item.concepts)}"
             if item.kind == "benchmark"
@@ -924,6 +1337,8 @@ def question_requirements_record(
     coverage: PlanRequirementCoverage,
     denoted: Mapping[str, Collection[str]],
     sealed: Sequence[str],
+    stated_measures: Sequence[StatedEffectMeasure] = (),
+    measures: Sequence[EffectMeasureJudgment] = (),
 ) -> dict[str, Any]:
     """The run's record of what the question asked and how the compiled plan answers it.
 
@@ -943,7 +1358,13 @@ def question_requirements_record(
             for concept, columns in sorted(denoted.items())
         },
         "sealed": [str(value) for value in sealed],
-        "judged": [entry.row() for entry in judged],
+        # Always present on a record this owner writes, so a plan under review
+        # is judged on it; a record written before it was read lacks it.
+        "question_effect_measures": [item.row() for item in stated_measures],
+        "judged": [
+            *(entry.row() for entry in judged),
+            *(entry.row() for entry in measures),
+        ],
         "unstated": [item.row() for item in unstated],
         "coverage": coverage.model_dump(mode="json"),
     }
@@ -956,9 +1377,12 @@ class RecordedJudgment:
     judged: tuple[JudgedRequirement, ...]
     unstated: tuple[UnstatedConcept, ...]
     record: dict[str, Any]
+    measures: tuple[EffectMeasureJudgment, ...] = ()
 
     def findings(self) -> list[ValidationFinding]:
-        return question_requirement_findings(self.judged, unstated=self.unstated)
+        return question_requirement_findings(
+            self.judged, unstated=self.unstated, measures=self.measures
+        )
 
 
 def _gap_key(gap: ProgressiveCapabilityGap) -> str:
@@ -1001,6 +1425,17 @@ def judge_recorded_requirements(
             str(row["id"]): (row["gap_verification"], row["gap_fact"])
             for row in record["judged"]
         }
+        read_measures = record.get("question_effect_measures")
+        stated_measures = (
+            None
+            if read_measures is None
+            else tuple(
+                StatedEffectMeasure(
+                    _effect_measure_name(item["measure"]), str(item["quote"])
+                )
+                for item in read_measures
+            )
+        )
         context_sha256 = str(record["coverage"]["context_sha256"])
         if not re.fullmatch(r"[0-9a-f]{64}", context_sha256):
             raise ValueError("its study digest is not a digest")
@@ -1037,16 +1472,28 @@ def judge_recorded_requirements(
         if route == "family_template"
         else outline_route_unstated(named, plan=plan, sealed=sealed)
     )
-    coverage = _coverage(judged, context_sha256=context_sha256, plan=plan)
+    # A record written before the question's measures were read judges none.
+    measures = (
+        ()
+        if stated_measures is None
+        else judge_stated_effect_measures(
+            stated_measures, plan=plan, requirements=requirements
+        )
+    )
+    coverage = _coverage(judged, context_sha256=context_sha256, plan=plan, measures=measures)
     return RecordedJudgment(
         judged=judged,
         unstated=unstated,
+        measures=measures,
         record={
             "schema_version": QUESTION_REQUIREMENTS_REVIEW_SCHEMA_VERSION,
             "plan_sha256": analysis_plan_sha256(plan),
             "planning_record_sha256": record_sha256,
             "route": route,
-            "judged": [entry.row() for entry in judged],
+            "judged": [
+                *(entry.row() for entry in judged),
+                *(entry.row() for entry in measures),
+            ],
             "unstated": [item.row() for item in unstated],
             "coverage": coverage.model_dump(mode="json"),
         },
@@ -1133,8 +1580,14 @@ def _write_record(run_dir: Path, filename: str, record: Mapping[str, Any]) -> Pa
     return target
 
 
-def question_requirements_schema(concepts: Sequence[str]) -> dict[str, Any]:
-    """The strict transport shape of the requirement list over the offered concepts."""
+def question_requirements_schema(
+    concepts: Sequence[str], *, effect_measures: Sequence[str] = ()
+) -> dict[str, Any]:
+    """The strict transport shape of the requirement list over the offered concepts.
+
+    ``effect_measures`` are offered to an estimand only where a binary primary
+    reports one; elsewhere the field is not offered at all.
+    """
 
     names = list(dict.fromkeys(str(value) for value in concepts if str(value))) or [
         "__no_concept__"
@@ -1160,7 +1613,10 @@ def question_requirements_schema(concepts: Sequence[str]) -> dict[str, Any]:
         "items": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["id", "kind", "quote", "concepts", "coverage", "gap", "note"],
+            "required": [
+                "id", "kind", "quote", "concepts", "coverage", "gap", "note",
+                *(["effect_measure"] if effect_measures else []),
+            ],
             "properties": {
                 "id": {
                     "type": "string",
@@ -1187,14 +1643,35 @@ def question_requirements_schema(concepts: Sequence[str]) -> dict[str, Any]:
                 },
                 "gap": {"anyOf": [gap, {"type": "null"}]},
                 "note": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                **(
+                    {
+                        "effect_measure": {
+                            "anyOf": [
+                                {"type": "string", "enum": list(effect_measures)},
+                                {"type": "null"},
+                            ]
+                        }
+                    }
+                    if effect_measures
+                    else {}
+                ),
             },
         },
     }
 
 
-def question_requirements_shape(concepts: Sequence[str]) -> str:
+def question_requirements_shape(
+    concepts: Sequence[str], *, effect_measures: Sequence[str] = ()
+) -> str:
     """The same shape in words, for a route without a schema."""
 
+    measure = (
+        ', "effect_measure": null or one of '
+        + json.dumps(list(effect_measures))
+        + " (an estimand that asks for one)"
+        if effect_measures
+        else ""
+    )
     return (
         '- "question_requirements": array of 0-6 objects, each exactly {"id": "r1".."r6", '
         '"kind": "benchmark"|"subgroup"|"estimand"|"analysis"|"cohort_accounting"|"definition", "quote": "<the '
@@ -1207,7 +1684,9 @@ def question_requirements_shape(concepts: Sequence[str]) -> str:
         "of "
         + ", ".join(get_args(CapabilityGapElement))
         + '>, "detail": "<why this plan cannot, 8-300 characters>"}, "note": null or "<at '
-        'most 300 characters>"}. "gap" is set exactly when coverage is capability_gap, and '
+        'most 300 characters>"'
+        + measure
+        + '}. "gap" is set exactly when coverage is capability_gap, and '
         "its concept only for levels_from_thresholds_unavailable or a stated adjustment's "
         "design_element_unsupported; kind definition goes with "
         "coverage definition_only and a note saying which element it defines; a benchmark "
@@ -1237,6 +1716,8 @@ __all__ = [
     "QUESTION_REQUIREMENTS_SCHEMA_VERSION",
     "QUESTION_REQUIREMENT_APPROVAL_STOPS",
     "QUESTION_REQUIREMENT_STOP_CODES",
+    "EFFECT_MEASURE_NOT_REPORTED_REASON",
+    "EFFECT_MEASURE_UNREQUESTED_REASON",
     "SUBGROUP_ACTIONS",
     "UNACCOUNTED_REASON",
     "UNREADABLE_REASON",
@@ -1247,18 +1728,22 @@ __all__ = [
     "NamedQuestionConcept",
     "QuestionRequirement",
     "QuestionRequirementsError",
+    "EffectMeasureJudgment",
     "RecordedJudgment",
     "RequirementProblem",
+    "StatedEffectMeasure",
     "UnstatedConcept",
     "analysis_plan_sha256",
     "bind_named_question_concepts",
     "concept_relatives",
     "judge_question_requirements",
     "judge_recorded_requirements",
+    "judge_stated_effect_measures",
     "named_question_concepts",
     "outline_route_unstated",
     "question_requirement_coverage",
     "question_requirement_findings",
+    "question_effect_measures",
     "question_requirement_problems",
     "question_requirements_on_plan_under_review",
     "question_requirements_record",

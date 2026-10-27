@@ -61,3 +61,24 @@ def test_ordered_trend_keeps_unsupported_parent_semantics_closed(invalid):
         skeleton.steps[0] = skeleton.steps[0].model_copy(update={"outcome_type": "continuous"})
     with pytest.raises(ProgressivePlanCompileError):
         _compile(context, skeleton, trend)
+
+
+def test_an_ordered_trend_refuses_a_risk_ratio_parent():
+    """The trend owner tests a logistic slope; a risk-ratio primary stops with its own code."""
+
+    context, skeleton, trend = _case()
+    # The question asks for the risk ratio, so the primary may declare it.
+    asked = context.model_copy(update={
+        "research_question": context.research_question.rstrip(".?") + ", reported as a risk ratio.",
+    })
+    skeleton.steps[0] = ProgressiveSkeletonStep.model_validate(
+        {**skeleton.steps[0].model_dump(mode="json"), "effect_measure": "risk_ratio"}
+    )
+    with pytest.raises(ProgressivePlanCompileError) as refused:
+        _compile(asked, skeleton, trend)
+    assert refused.value.reason_code == "progressive_ordered_trend_risk_ratio_unsupported"
+    # An explicit odds ratio is the default model and keeps its trend.
+    skeleton.steps[0] = ProgressiveSkeletonStep.model_validate(
+        {**skeleton.steps[0].model_dump(mode="json"), "effect_measure": "odds_ratio"}
+    )
+    assert _compile(context, skeleton, trend)

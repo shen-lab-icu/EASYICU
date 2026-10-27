@@ -987,7 +987,11 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
                 "reason_code": (
                     item.reason_code
                     if item.reason_code in BaselineAssociationAuthorityError.reason_codes
-                    or item.reason_code == "landmark_spline_binary_sensitivity_unsupported"
+                    or item.reason_code in {
+                        "landmark_spline_binary_sensitivity_unsupported",
+                        "landmark_spline_risk_ratio_unsupported",
+                        "association_model_grid_risk_ratio_unsupported",
+                    }
                     else "current_case_scientific_authority_invalid"
                 ),
                 "exception_type": type(item).__name__,

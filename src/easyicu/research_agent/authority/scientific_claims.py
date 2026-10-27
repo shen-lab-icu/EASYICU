@@ -842,6 +842,10 @@ def derive_scientific_claim_drafts(
     if effect_scale == "odds_ratio":
         null_value = 1.0
         estimand = "adjusted odds ratio"
+    elif effect_scale == "risk_ratio":
+        # The modified-Poisson owner's declared risk ratio, never an OR.
+        null_value = 1.0
+        estimand = "adjusted risk ratio"
     elif effect_scale == "coefficient":
         null_value = 0.0
         estimand = "adjusted linear-regression coefficient"

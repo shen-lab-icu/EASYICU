@@ -12,6 +12,11 @@ the typed step names, and write the ``analysis_rows`` result the
 chooses a variable: a step whose restriction column or spline target cannot be
 derived unambiguously from typed coordinates is not owned and stays on the
 agent-coded path exactly as before.
+
+Each refit uses the parent's declared estimator and reports on its scale: the
+logistic odds ratio by default, the modified-Poisson risk ratio when the parent
+declares that model.  The row names its measure (``effect_measure``) and
+carries the estimate under that name, never under the other one.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from ...contracts.association_execution import (
     ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT,
     association_binary_sensitivity_contract,
     association_binary_sensitivity_plan_verdict,
+    association_estimator_support,
     sole_primary_model_requirement,
 )
 from ...contracts.cohort_product_keys import is_closed_cohort_product_key
@@ -55,6 +61,23 @@ _FALSE_SPELLINGS = frozenset({"0", "0.0", "false", "f", "no", "n"})
 
 class AssociationBinarySensitivityError(RuntimeError):
     """The closed sensitivity variant could not be executed as declared."""
+
+
+#: The effect measure each binary refit reports, and its short key spelling.
+_MEASURE_BY_KIND = {"logistic": "odds_ratio", "glm_poisson": "risk_ratio"}
+_MEASURE_ABBREVIATION = {"odds_ratio": "or", "risk_ratio": "rr"}
+
+
+def _binary_refit(requirement: Any) -> tuple[str, str]:
+    """The parent's declared binary estimator kind and the measure it reports."""
+
+    support = association_estimator_support(requirement)
+    if not support.supported or support.runtime_kind not in _MEASURE_BY_KIND:
+        raise AssociationBinarySensitivityError(
+            "the inherited primary declares no binary estimator this owner refits: "
+            + support.reason
+        )
+    return support.runtime_kind, _MEASURE_BY_KIND[support.runtime_kind]
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,6 +341,7 @@ def _refit_first_stay(
     )
     import pandas as pd
 
+    kind, measure = _binary_refit(requirement)
     column = str(variant.restriction_column)
     if column not in frame.columns:
         raise AssociationBinarySensitivityError(
@@ -336,7 +360,7 @@ def _refit_first_stay(
             outcome=requirement.outcome,
             covariates=list(requirement.covariates or ()),
             model_terms=[term.model_dump(mode="json") for term in (requirement.model_terms or ())],
-            estimator_kind="logistic",
+            estimator_kind=kind,
             analysis_set=requirement.analysis_set,
             analysis_role="sensitivity",
             method_family=requirement.method_family,
@@ -361,10 +385,10 @@ def _refit_first_stay(
         "n_restricted_rows": int(len(restricted)),
         "n_stays": int(summary["n_total"]),
         "n_deaths": int(summary["n_events"]),
-        "odds_ratio": _finite(primary["estimate"]),
+        measure: _finite(primary["estimate"]),
         "ci_low": _finite(primary["ci_low"]),
         "ci_high": _finite(primary["ci_high"]),
-        "effect_measure": "odds_ratio",
+        "effect_measure": measure,
         "exposure_level": str(primary.get("exposure_level", "")),
         "reference_level": str(primary.get("reference_level", "")),
         "variance_estimator": summary.get("variance_estimator"),
@@ -399,6 +423,8 @@ def _refit_functional_form(
     from ...robustness.estimators import fit_estimator
     from ..model_matrix import ModelTermCompilationError, primary_model_rows
 
+    kind, measure = _binary_refit(requirement)
+    short = _MEASURE_ABBREVIATION[measure]
     target = str(variant.target_column)
     terms = [
         term if isinstance(term, ModelTermSpec) else ModelTermSpec.model_validate(term)
@@ -502,7 +528,7 @@ def _refit_functional_form(
         cohort=None,
         X=design,
         y=outcome,
-        kind="logistic",
+        kind=kind,
         term=focal,
         source_by_design_column=source_by_column,
         variance_estimator=variance,
@@ -519,7 +545,7 @@ def _refit_functional_form(
         raise AssociationBinarySensitivityError(
             "spline refit reported no event count for the rows it used"
         )
-    linear_or = _finite(linear_reference.get("estimate"))
+    linear_ratio = _finite(linear_reference.get("estimate"))
     row: dict[str, Any] = {
         "analysis_id": variant.spec_id,
         "strategy": "functional_form",
@@ -529,41 +555,48 @@ def _refit_functional_form(
         "knots": "|".join(f"{float(value):.6g}" for value in basis.knots),
         "n_stays": int(result.n),
         "n_deaths": int(result.n_events),
-        "odds_ratio": estimate,
+        measure: estimate,
         "ci_low": ci_low,
         "ci_high": ci_high,
-        "effect_measure": "odds_ratio",
-        "primary_or_linear_covariate": linear_or,
-        "log_or_delta_vs_linear": (
-            math.log(estimate) - math.log(linear_or)
-            if linear_or is not None and linear_or > 0 and estimate > 0
+        "effect_measure": measure,
+        f"primary_{short}_linear_covariate": linear_ratio,
+        f"log_{short}_delta_vs_linear": (
+            math.log(estimate) - math.log(linear_ratio)
+            if linear_ratio is not None and linear_ratio > 0 and estimate > 0
             else None
         ),
         "nonlinearity_wald_statistic": None,
         "nonlinearity_df": None,
         "nonlinearity_p_value": None,
-        "nonlinearity_covariance": "model_based_without_clustering",
+        "nonlinearity_covariance": (
+            "model_based_without_clustering" if kind == "logistic" else result.variance_estimator
+        ),
         "variance_estimator": result.variance_estimator,
         "cluster_count": result.cluster_count,
         "fit_status": "fitted",
         "note": "",
     }
     try:
-        spline_fit = rcs_fit(
-            outcome.to_numpy(dtype=float),
-            basis,
-            covariates=compiled.design.to_numpy(dtype=float),
-            covariate_names=list(compiled.design.columns),
-            family="binomial",
-        )
-        wald = nonlinearity_wald_test(spline_fit)
-        row.update(
-            {
-                "nonlinearity_wald_statistic": _finite(wald.statistic),
-                "nonlinearity_df": int(wald.df),
-                "nonlinearity_p_value": _finite(wald.p_value),
-            }
-        )
+        if kind == "glm_poisson":
+            # A Poisson model-based covariance is wrong for a binary outcome;
+            # test the nonlinear spline terms with the fit's own robust one.
+            row.update(_robust_nonlinearity_wald(result, [c for c in spline.columns if c != target]))
+        else:
+            spline_fit = rcs_fit(
+                outcome.to_numpy(dtype=float),
+                basis,
+                covariates=compiled.design.to_numpy(dtype=float),
+                covariate_names=list(compiled.design.columns),
+                family="binomial",
+            )
+            wald = nonlinearity_wald_test(spline_fit)
+            row.update(
+                {
+                    "nonlinearity_wald_statistic": _finite(wald.statistic),
+                    "nonlinearity_df": int(wald.df),
+                    "nonlinearity_p_value": _finite(wald.p_value),
+                }
+            )
     except (RCSError, ValueError) as exc:
         row["note"] = f"nonlinearity test not estimable: {exc}"
     receipt = {
@@ -573,6 +606,29 @@ def _refit_functional_form(
         "n_complete_rows": int(len(complete)),
     }
     return row, receipt
+
+
+def _robust_nonlinearity_wald(result: Any, columns: list[str]) -> dict[str, Any]:
+    """Joint Wald test that the nonlinear spline terms are zero, from the fit's covariance."""
+
+    import numpy as np
+    from scipy.stats import chi2
+
+    names = [term.term for term in result.terms]
+    covariance = np.asarray(result.coefficient_covariance or (), dtype=float)
+    if not columns or any(name not in names for name in columns) or covariance.shape != (len(names), len(names)):
+        raise ValueError("the refit does not expose its nonlinear spline terms and covariance")
+    indices = [names.index(name) for name in columns]
+    beta = np.array([math.log(result.terms[index].estimate) for index in indices])
+    block = covariance[np.ix_(indices, indices)]
+    if not np.isfinite(beta).all() or np.linalg.matrix_rank(block) != len(indices):
+        raise ValueError("the nonlinear spline covariance is singular")
+    statistic = float(beta @ np.linalg.solve(block, beta))
+    return {
+        "nonlinearity_wald_statistic": _finite(statistic),
+        "nonlinearity_df": len(indices),
+        "nonlinearity_p_value": _finite(float(chi2.sf(statistic, len(indices)))),
+    }
 
 
 def _named_primary_contrast(requirement: Any) -> Optional[tuple[str, str]]:
@@ -598,7 +654,8 @@ def _sensitivity_reporting(
     envelope, so the Writer has no claim to borrow for it.
     """
 
-    estimate = _finite(row.get("odds_ratio"))
+    measure = str(row.get("effect_measure") or "")
+    estimate = _finite(row.get(measure)) if measure in _MEASURE_ABBREVIATION else None
     lower = _finite(row.get("ci_low"))
     upper = _finite(row.get("ci_high"))
     if (
@@ -619,7 +676,7 @@ def _sensitivity_reporting(
         "analysis_set": requirement.analysis_set,
         "adjustment_covariates": list(requirement.covariates or ()),
         "covariate": row.get("covariate") if variant.strategy == "functional_form" else None,
-        "effect_scale": "odds_ratio",
+        "effect_scale": measure,
         "estimate": estimate,
         "lower": lower,
         "upper": upper,
@@ -713,7 +770,7 @@ def run_association_binary_sensitivity(
         "source_cohort": Path(cohort_path).name if cohort_path is not None else None,
         "analysis_rows": [row],
         "primary_reference": {
-            "odds_ratio": _finite(linear_reference.get("estimate")),
+            str(row["effect_measure"]): _finite(linear_reference.get("estimate")),
             "ci_low": _finite(linear_reference.get("ci_low")),
             "ci_high": _finite(linear_reference.get("ci_high")),
             "n": int(linear_reference.get("n")) if _finite(linear_reference.get("n")) is not None else None,

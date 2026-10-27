@@ -69,6 +69,13 @@ def build_baseline_association_skeleton(
     adjustment = "adjusted for " + ", ".join(labels) if labels else "without adjustment covariates"
     encoding = "restricted cubic spline (10/50/90 knots, median reference)" if continuous else "declared treatment contrasts"
     estimand = f"Observational association of {_label(spec, exposure)} with {_label(spec, outcome)}, {adjustment}."
+    # The odds ratio is the default; a risk ratio is fitted only when the
+    # spec declares it (``family_effect_measures``), never chosen from data.
+    risk_ratio = spec.effect_measure == "risk_ratio"
+    model = (
+        "Modified Poisson model (log link, robust standard errors) for the adjusted risk ratio"
+        if risk_ratio else "Logistic model"
+    )
     keys = list(dict.fromkeys([
         *(key for key in request.allowed_literature_citation_keys if _method_card_elements(key)),
         *request.direct_comparator_literature_keys,
@@ -77,7 +84,7 @@ def build_baseline_association_skeleton(
         design_id=BASELINE_ASSOCIATION_FAMILY_ID, analysis_type="association_study",
         estimand=estimand, time_zero="ICU admission; the exposure is a baseline attribute.",
         observation_window=f"From ICU admission through ascertainment of {_label(spec, outcome)}.",
-        primary_method=f"Logistic model with {encoding}, {adjustment}.",
+        primary_method=f"{model} with {encoding}, {adjustment}.",
         required_variables=roster,
         assumptions=["The exposure is known at baseline.", "Inference follows the declared dependence contract."],
         literature_citation_keys=keys[:8], literature_design_decisions=spec.literature_design_decisions,
@@ -87,7 +94,7 @@ def build_baseline_association_skeleton(
         reviewable_plan=[
             "Apply the typed cohort eligibility and report selection counts.",
             f"Describe baseline characteristics and measurement completeness. {table_one_decision}",
-            f"Fit one logistic model with {encoding}, {adjustment}.",
+            f"Fit one {model[0].lower() + model[1:]} with {encoding}, {adjustment}.",
             "Report complete-case denominators and absolute risks with the count cross-check.",
             "Report stratum-specific contrasts and the interaction test from the same model." if subgroups
             else "Report the prespecified primary contrast without additional exploratory models.",
@@ -106,7 +113,9 @@ def build_baseline_association_skeleton(
         "cohort_definition": "Apply typed cohort eligibility and publish the analysis cohort and selection counts.",
         "table_one": f"Describe baseline characteristics with standardized differences only. {table_one_decision}",
         "measurement_audit": "Audit source, completeness, missingness, measurement process and analytic denominators.",
-        "adjusted_association": f"Estimate {estimand} Use {encoding}." + (
+        "adjusted_association": f"Estimate {estimand} Use {encoding}."
+        + (" Report the adjusted risk ratio from a modified Poisson model with robust standard errors." if risk_ratio else "")
+        + (
             " Report stratum estimates and the interaction test from this same model." if subgroups else ""
         ),
         "absolute_risk_context": "Report absolute risks and risk differences in the primary model population, cross-checked against counts.",
@@ -172,7 +181,7 @@ def build_baseline_association_skeleton(
             reference_exposure_level_index=None if continuous else request.reference_level_index,
             comparison_exposure_level_index=None if continuous else request.primary_contrast_level_index,
             primary_contrast_level_index=None if continuous else request.primary_contrast_level_index,
-            confidence_level=0.95,
+            confidence_level=0.95, effect_measure="risk_ratio" if risk_ratio else None,
             literature_bindings=_step_bindings(bound["adjusted_association"], module="adjusted_association",
                                                coordinate="baseline primary association", comparator_applications=spec.applications),
         ),

@@ -724,6 +724,11 @@ _COORDINATE_OWNED_FIELD_GUIDANCE = {
         "profile-only variables, identifiers and outcomes must not enter that roster. Other actions use null. "
         "When outcomes are requested after phenotyping.cluster_solution, include a separate secondary phenotyping.outcome_by_cluster step. "
     ),
+    "effect_measure": (
+        "For a binary outcome set effect_measure to risk_ratio only when the "
+        "question asks for a risk ratio or relative risk (modified Poisson, "
+        "robust SE); otherwise null keeps the logistic odds ratio. "
+    ),
     "phenotyping_comparison_variables": (
         "Set phenotyping_comparison_variables using the same name/summary item shape as table_one_variables, including the requested outcomes and selected clinical descriptions. "
         "Each name appears once and is also listed in raw_inputs. "
@@ -809,6 +814,7 @@ def step_materialization_shape_contract(
         "patient_weighted_interval_assumptions": None,
         "phenotyping_feature_columns": None,
         "phenotyping_comparison_variables": None,
+        "effect_measure": None,
         "literature_bindings": [],
     }
     owned = coordinate_owned_step_fields(

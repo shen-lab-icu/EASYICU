@@ -211,3 +211,30 @@ def test_result_gate_closes_ids_counts_and_effect_intervals() -> None:
     assert "association_binary_sensitivity_ids_mismatch" in _kinds(findings)
     assert "association_binary_sensitivity_row_invalid" in _kinds(findings)
     assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+def _rows_as(measure: str, *, key: str) -> dict[str, object]:
+    summary = _summary()
+    summary["analysis_rows"] = [
+        {**{k: v for k, v in row.items() if k != "odds_ratio"}, "effect_measure": measure, key: row["odds_ratio"]}
+        for row in summary["analysis_rows"]
+    ]
+    return summary
+
+
+@pytest.mark.parametrize("measure,key,valid", [
+    ("risk_ratio", "risk_ratio", True),
+    ("odds_ratio", "odds_ratio", True),
+    # A row states its measure; an estimate under the other name is not read.
+    ("risk_ratio", "odds_ratio", False),
+    ("odds_ratio", "risk_ratio", False),
+    ("hazard_ratio", "hazard_ratio", False),
+])
+def test_a_row_is_read_on_the_measure_it_states(measure, key, valid) -> None:
+    step = _sensitivity()
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary=_rows_as(measure, key=key),
+        effect_method_authorized=effect_output_authorized(step),
+    )
+    assert ("association_binary_sensitivity_row_invalid" in _kinds(findings)) is not valid

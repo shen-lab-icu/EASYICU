@@ -219,6 +219,7 @@ _SAFE_VALIDATION_FIELDS = frozenset(
         "question_requirements",
         "kind",
         "concepts",
+        "effect_measure",
     }
 )
 

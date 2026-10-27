@@ -6,7 +6,7 @@ import re
 from typing import Any, Dict, List, Sequence
 
 
-from ..replication.metrics import compare_metric_values
+from ..replication.metrics import claim_metric_key, compare_metric_values
 from ..schema import (
     PaperProfile,
     PaperResultLedger,
@@ -68,18 +68,6 @@ class ReplicationResultComparator:
 
     name = "replication_result_comparator"
 
-    _metric_map = {
-        "or": "primary_or",
-        "hr": "primary_or",
-        "rr": "primary_or",
-        "auroc": "auroc",
-        "auc": "auroc",
-        "brier_score": "brier_score",
-        "p_value": "primary_pvalue",
-        "p": "primary_pvalue",
-        "n": "n_stays",
-    }
-
     def compare(
         self,
         *,
@@ -89,7 +77,7 @@ class ReplicationResultComparator:
         rows: List[Dict[str, Any]] = []
         for claim in paper_profile.key_claims:
             easyicu_value = ledger.easyicu_metrics.get(
-                self._metric_map.get((claim.metric or "").lower(), "")
+                claim_metric_key(claim.metric) or ""
             )
             alignment, reason = compare_metric_values(
                 metric=claim.metric,

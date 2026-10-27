@@ -460,6 +460,21 @@ def test_host_inserts_missing_grid_without_repurposing_existing_sensitivity() ->
     ]
 
 
+def test_grid_refuses_a_risk_ratio_parent() -> None:
+    # The grid refits logistic variants; beside a declared risk-ratio primary
+    # it would set odds ratios against a risk ratio, so the owner stops.
+    _, authority, bound, _ = _authority_and_plan()
+    parent = bound.steps[0]
+    requirement = parent.model_requirements[0]
+    risk_ratio = parent.model_copy(update={"model_requirements": [type(requirement).model_validate({
+        **requirement.model_dump(mode="json"),
+        "method_family": "statsmodels_glm_poisson_log_robust",
+    })]})
+    with pytest.raises(CurrentCaseScientificAuthorityError) as refused:
+        authority.bind_plan(bound.model_copy(update={"steps": [risk_ratio, *bound.steps[1:]]}))
+    assert refused.value.reason_code == "association_model_grid_risk_ratio_unsupported"
+
+
 def _measurement_closure_context(bound) -> ResearchContext:
     return ResearchContext(
         research_question=bound.research_question,

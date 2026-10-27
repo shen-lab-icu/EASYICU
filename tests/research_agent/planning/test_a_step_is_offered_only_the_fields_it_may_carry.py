@@ -49,6 +49,7 @@ _VALUES = {
     "functional_form_spec": _FORM,
     "repeated_unit_interval_method": "patient_cluster_robust_wald",
     "patient_weighted_interval_assumptions": ASSUMPTIONS,
+    "effect_measure": "risk_ratio",
 }
 _COORDINATES = {
     "prediction_primary": ("prediction.discrimination_calibration", "primary"),
@@ -166,6 +167,8 @@ def test_the_planner_prompt_names_exactly_the_fields_the_step_owns(name):
     ("custom_analysis", None, "sensitivity", {"functional_form_spec"}),
     ("custom_analysis", None, "primary", set()),
     ("measurement_audit", None, "sensitivity", set()),
+    ("adjusted_association", "association.adjusted_association", "primary", {"effect_measure"}),
+    ("adjusted_association", None, "secondary", {"effect_measure"}),
 ])
 def test_the_ownership_rule(module, action, role, expected):
     assert coordinate_owned_step_fields(
@@ -198,3 +201,30 @@ def _accepts(action, role, field):
         assert re.search(r"belongs? only to", str(exc)), exc
         return False
     return True
+
+
+def test_only_an_adjusted_association_step_is_offered_an_effect_measure():
+    """The measure is the adjusted-association step's; it is shown there, with its rule, in both transports."""
+
+    outline = ProgressiveOutlineStep(
+        step_id="primary_model", module_id="adjusted_association", planned_analysis_role="primary",
+        objective="Estimate the adjusted association.", variable_names=["exposure", "event_flag"],
+        scientific_action_id="association.adjusted_association",
+    )
+    step, text = _template(outline)
+    assert step["effect_measure"] is None
+    assert "set effect_measure to risk_ratio only when" in text
+    request = progressive_step_materialization_request(
+        outline_step=outline, outline_step_sha256=canonical_sha256(outline.model_dump(mode="json")),
+        variable_names=outline.variable_names, scientific_action_ids=["association.adjusted_association"],
+    )
+    schema = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"]
+    branches = [branch["properties"] for branch in schema.get("anyOf", [schema])]
+    assert _offered(branches, "effect_measure")
+    # Every other locked module keeps the odds-ratio default without the field.
+    table = ProgressiveOutlineStep(
+        step_id="baseline_table", module_id="table_one", planned_analysis_role="auxiliary",
+        objective="Describe the baseline characteristics.", variable_names=["exposure", "event_flag"],
+    )
+    assert "effect_measure" not in _template(table)[0]
+    assert not _offered(_schema_branches(table), "effect_measure")

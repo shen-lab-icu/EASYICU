@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal, Optional
 
 
 ADJUSTED_ASSOCIATION_ANALYSIS_KIND = "adjusted_association_estimates"
@@ -12,6 +12,16 @@ ASSOCIATION_GLM_BINOMIAL_ESTIMATOR = "statsmodels_glm_binomial"
 ASSOCIATION_OLS_ESTIMATOR = "statsmodels_ols"
 ASSOCIATION_RR_ESTIMATOR = "statsmodels_glm_poisson_log_robust"
 SURVIVAL_COX_ESTIMATOR = "cox_proportional_hazards"
+
+#: The effect measure a binary-outcome adjusted association reports.  The odds
+#: ratio is the default; a risk ratio is fitted only when a plan declares it,
+#: never because of the data, so the two estimators are never switched
+#: silently.
+BinaryEffectMeasure = Literal["odds_ratio", "risk_ratio"]
+BINARY_ESTIMATOR_BY_EFFECT_MEASURE = {
+    "odds_ratio": ASSOCIATION_LOGIT_ESTIMATOR,
+    "risk_ratio": ASSOCIATION_RR_ESTIMATOR,
+}
 SURVIVAL_PH_DIAGNOSTIC = "schoenfeld_per_covariate_with_bonferroni_summary"
 
 #: The exact step method and product key that name the host-owned primary
@@ -80,6 +90,16 @@ def canonical_association_method(value: Any) -> str:
     return _ASSOCIATION_METHOD_ALIASES.get(token, token)
 
 
+def binary_effect_measure(method_family: Any) -> Optional[str]:
+    """The effect measure a binary estimator token reports, else ``None``."""
+
+    declared = canonical_association_method(method_family)
+    for measure, estimator in BINARY_ESTIMATOR_BY_EFFECT_MEASURE.items():
+        if declared == estimator:
+            return measure
+    return None
+
+
 def canonical_survival_estimator(value: Any) -> str:
     """Canonicalise only aliases that mean the exact unpenalized Cox model."""
 
@@ -103,8 +123,11 @@ __all__ = [
     "ASSOCIATION_LOGIT_ESTIMATOR",
     "ASSOCIATION_OLS_ESTIMATOR",
     "ASSOCIATION_RR_ESTIMATOR",
+    "BINARY_ESTIMATOR_BY_EFFECT_MEASURE",
+    "BinaryEffectMeasure",
     "SURVIVAL_COX_ESTIMATOR",
     "SURVIVAL_PH_DIAGNOSTIC",
+    "binary_effect_measure",
     "canonical_association_method",
     "canonical_survival_estimator",
     "canonical_survival_ph_diagnostic",

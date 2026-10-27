@@ -31,6 +31,7 @@ from ..contracts.association_execution import (
     ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
     association_execution_verdict,
     landmark_categorical_association_execution_verdict,
+    primary_binary_effect_measure,
     sole_primary_model_requirement,
 )
 from ..contracts.capability_ids import (
@@ -67,7 +68,9 @@ class CurrentCaseScientificAuthorityError(ValueError):
 
     def __init__(
         self, message: str, *, reason_code: Literal[
-            "landmark_spline_binary_sensitivity_unsupported"
+            "landmark_spline_binary_sensitivity_unsupported",
+            "landmark_spline_risk_ratio_unsupported",
+            "association_model_grid_risk_ratio_unsupported",
         ] | None = None,
     ) -> None:
         super().__init__(message)
@@ -461,6 +464,14 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             raise CurrentCaseScientificAuthorityError(
                 "association model-grid parent is not one host-owned binary model: "
                 + verdict.reason
+            )
+        if primary_binary_effect_measure(parent) != "odds_ratio":
+            # The grid refits logistic models and reports odds ratios; beside a
+            # risk-ratio primary it would compare different scales.
+            raise CurrentCaseScientificAuthorityError(
+                "association model-grid refits odds ratios and cannot accompany a "
+                "risk-ratio primary",
+                reason_code="association_model_grid_risk_ratio_unsupported",
             )
         return parent
 
@@ -1800,6 +1811,14 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 "landmark spline authority requires exactly one primary step"
             )
         candidate = primary[0]
+        if primary_binary_effect_measure(candidate) == "risk_ratio":
+            # The signed suite is logistic end to end. Replacing a declared
+            # risk-ratio model with it would report odds ratios silently.
+            raise CurrentCaseScientificAuthorityError(
+                "the signed landmark spline suite fits a logistic model and reports "
+                "odds ratios only; it cannot report the declared risk ratio",
+                reason_code="landmark_spline_risk_ratio_unsupported",
+            )
         cohort_input = sole_typed_cohort_input(candidate)
         if not cohort_input:
             raise CurrentCaseScientificAuthorityError(

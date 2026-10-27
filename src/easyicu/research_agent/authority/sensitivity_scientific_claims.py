@@ -40,7 +40,7 @@ class BinarySensitivityReporting(BaseModel):
     analysis_set: Literal["source_aware", "complete_case"]
     adjustment_covariates: list[str]
     covariate: str | None = Field(default=None, min_length=1)
-    effect_scale: Literal["odds_ratio"]
+    effect_scale: Literal["odds_ratio", "risk_ratio"]
     estimate: float = Field(gt=0)
     lower: float = Field(gt=0)
     upper: float = Field(gt=0)
@@ -94,7 +94,9 @@ def derive_sensitivity_claim_payloads(summary: dict) -> list[dict]:
             ),
             "outcome": report.outcome,
             "direction": direction,
-            "estimand": "adjusted odds ratio",
+            "estimand": (
+                "adjusted risk ratio" if report.effect_scale == "risk_ratio" else "adjusted odds ratio"
+            ),
             "population": _POPULATION_BY_STRATEGY[report.strategy].format(
                 analysis_set=report.analysis_set.replace("_", " "),
                 covariate=report.covariate,

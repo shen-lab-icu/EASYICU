@@ -57,6 +57,7 @@ from ...robustness.panel import (
     validate_robustness_specs,
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
+from ...contracts.model_tokens import binary_effect_measure
 from ...contracts.result_envelope import (
     MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY,
     MODEL_SUMMARY_COVARIATE_KEYS,
@@ -864,6 +865,12 @@ def _run_robustness_preflight(
     )
 
     effect_scale = str((primary or {}).get("effect_measure") or "").upper()
+    # Variants are fitted for an odds-ratio primary, and for a declared
+    # risk-ratio primary only by exact replay of its registered code, which
+    # refits the same modified-Poisson model; no adapter switches the scale.
+    variant_fitting = effect_scale == "OR" or (
+        effect_scale == "RR" and structured_source is not None
+    )
     fitted_rows: List[RobustnessPanelRow] = []
     structured_replay: Dict[str, Any] = {}
     executable_specs: List[RobustnessSpec] = []
@@ -871,7 +878,7 @@ def _run_robustness_preflight(
         fitted_rows.append(_primary_panel_row(primary or {}))
 
     primary_cohort = _load_primary_cohort(run_dir)
-    if not blocking_reasons and cohort is not None and effect_scale == "OR":
+    if not blocking_reasons and cohort is not None and variant_fitting:
         executable_specs = _executable_specs(
             specs=specs,
             membership_rows=membership_rows,
@@ -907,7 +914,7 @@ def _run_robustness_preflight(
             )
         warnings.extend(adapter_warnings)
         fitted_rows = adapter_rows
-    elif not blocking_reasons and effect_scale != "OR":
+    elif not blocking_reasons and not variant_fitting:
         warnings.append(
             f"Deterministic variant fitting is not available for {effect_scale or 'an unlabeled'} "
             "effect scale; the validated primary estimate is retained and variants fail closed"
@@ -924,7 +931,7 @@ def _run_robustness_preflight(
             "Locked robustness specifications are not executable under the "
             "registered analysis contract: " + ", ".join(unexecutable_specs)
         )
-    if _complete_primary_payload(primary) and specs and effect_scale != "OR":
+    if _complete_primary_payload(primary) and specs and not variant_fitting:
         blocking_reasons.append(
             "Locked robustness specifications require variant estimates, but "
             "deterministic fitting is unavailable for primary effect scale "
@@ -2812,9 +2819,17 @@ def _structured_primary_effect_payload(
             errors.append(
                 f"{label} sample_size disagrees with the primary model contract"
             )
-        if str(payload.get("effect_measure") or "").strip().upper() != "OR":
-            errors.append(f"{label} effect measure is not the verified OR scale")
+        if str(payload.get("effect_measure") or "").strip().upper() != measure:
+            errors.append(f"{label} effect measure is not the verified {measure} scale")
 
+    # The registered contract's estimator names the scale: a declared
+    # modified-Poisson primary reports a risk ratio, every other primary keeps
+    # the verified odds-ratio label this owner has always required.
+    measure = (
+        "RR"
+        if binary_effect_measure(source["primary_contract"].get("method_family")) == "risk_ratio"
+        else "OR"
+    )
     _payload_disagrees(summary_payload, "Registered step summary")
     _payload_disagrees(reported_payload, "Current manifest")
     if isinstance(reported_payload, dict) and str(
@@ -2838,7 +2853,7 @@ def _structured_primary_effect_payload(
         "primary_or": float(row.point_estimate),
         "primary_ci_low": float(row.ci_low),
         "primary_ci_high": float(row.ci_high),
-        "effect_measure": "OR",
+        "effect_measure": measure,
         "sample_size": int(row.n),
         "evidence_id": str(source["coefficient_evidence_id"]),
     }
