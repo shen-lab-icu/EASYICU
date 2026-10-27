@@ -178,6 +178,8 @@ def test_frozen_backend_preserves_installed_sources_and_kernel_identity(tmp_path
     assert "--paths" not in commands[0]
     options = list(zip(commands[0], commands[0][1:]))
     assert ("--recursive-copy-metadata", "easyicu") in options
+    # Frozen text I/O is UTF-8 on every platform, never the Windows code page.
+    assert ("--python-option", "X utf8") in options
     assert ("--copy-metadata", "psutil") in options
     assert ("--copy-metadata", "dbos") in options
     assert ("--collect-all", "psycopg_binary") in options

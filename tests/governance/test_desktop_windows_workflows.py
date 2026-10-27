@@ -56,6 +56,8 @@ def test_acceptance_downloads_the_completed_runs_artifact_and_matching_sources()
     assert runtime["if"] == download["if"]
     install = next(s for s in steps if "Install and accept" in s.get("name", ""))
     assert "verify_desktop_artifact.py windows" in install["run"]
+    # The driver runs the app's owners in-process, in the frozen app's UTF-8 mode.
+    assert "& $runtime -I -X utf8 tools/windows_laptop_acceptance.py" in install["run"]
     assert "--source-commit" in install["run"]
     assert install["env"]["SOURCE_COMMIT"] == "${{ steps.candidate.outputs.sha }}"
     candidate = next(s for s in steps if s.get("id") == "candidate")

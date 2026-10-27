@@ -234,3 +234,19 @@ def test_the_startup_probe_calls_the_dispatcher_off_the_event_loop(monkeypatch, 
     with caplog.at_level("INFO", logger="uvicorn.error"), TestClient(app):
         assert calls == ["desktop-startup-probe"]
     assert "Durable dispatcher started (frozen=False)" in caplog.text
+
+
+@pytest.mark.parametrize(("frozen", "utf8_mode", "refused"), [
+    (True, 0, True), (True, 1, False), (False, 0, False),
+])
+def test_a_frozen_backend_refuses_to_start_outside_utf8_mode(frozen, utf8_mode, refused):
+    module = _backend_entry_module()
+    flags = SimpleNamespace(utf8_mode=utf8_mode)
+    if refused:
+        with pytest.raises(RuntimeError, match="desktop_backend_utf8_mode_missing"):
+            module._require_utf8_mode(flags, frozen=frozen)
+    else:
+        module._require_utf8_mode(flags, frozen=frozen)
+    source = (Path(__file__).parents[2] / "desktop/backend_entry.py").read_text()
+    # The guard runs for the Web backend before it imports the app.
+    assert source.index("    _require_utf8_mode()\n") < source.index("from easyicu.webserver.app import app")

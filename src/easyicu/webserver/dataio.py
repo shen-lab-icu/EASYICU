@@ -2971,7 +2971,7 @@ def make_export_runner(
             "column_metadata": metadata_ref.to_dict(),
         }
         (out / "_manifest.json").write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False)
+            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
         )
         (out / "README.md").write_text(
             _render_export_readme(

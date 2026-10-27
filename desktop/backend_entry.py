@@ -137,6 +137,16 @@ def _register_startup_probe(app) -> None:
     app.router.add_event_handler("startup", _verify_durable_startup_off_the_event_loop)
 
 
+def _require_utf8_mode(flags=sys.flags, frozen: bool | None = None) -> None:
+    """A frozen backend must run in UTF-8 mode; the build passes ``X utf8``.
+
+    Without it Windows writes text in the local code page, and a path or
+    label outside that code page fails, as the export manifest did.
+    """
+    if (getattr(sys, "frozen", False) if frozen is None else frozen) and not flags.utf8_mode:
+        raise RuntimeError("desktop_backend_utf8_mode_missing")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments[:1] == ["--easyicu-host-worker"]:
@@ -144,6 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return worker_main(arguments[1:])
     args = _parser().parse_args(arguments)
+    _require_utf8_mode()
     if not 1024 <= args.port <= 65535:
         raise ValueError("port must be between 1024 and 65535")
     session_token = os.environ.get("EASYICU_DESKTOP_SESSION_TOKEN", "")
