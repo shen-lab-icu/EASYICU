@@ -215,6 +215,17 @@ def project_study_context(
             value = None
         if value is not None:
             readings[field] = value
+    from easyicu.webserver.unread_stated_variables import (
+        UNREAD_STATED_VARIABLES_FIELD, normalize_unread_stated_variables,
+    )
+
+    try:
+        # Readings the conversation still owes: a plan stops until it saves them.
+        owed = normalize_unread_stated_variables(context.get(UNREAD_STATED_VARIABLES_FIELD))
+    except ValueError:
+        owed = []
+    if owed:
+        readings[UNREAD_STATED_VARIABLES_FIELD] = owed
     return ensure_safe_projection(
         {
             "present": True,
@@ -441,6 +452,9 @@ def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
             "confirmations",
         )
     }
+    if projected.get("stated_variables_unread"):
+        # A rewound turn restores what it still owed (absent: nothing).
+        configuration["stated_variables_unread"] = projected["stated_variables_unread"]
     from easyicu.extensions.skill_attachments import attachment_payload
 
     configuration["attached_skills"] = attachment_payload(study.get("attached_skills") or [])

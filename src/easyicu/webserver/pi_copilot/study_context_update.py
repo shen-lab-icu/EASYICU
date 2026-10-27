@@ -2110,6 +2110,20 @@ def update_study_context(
             except (ValueError, OSError) as exc:
                 unread.append({"variable": "", "reason": str(exc)})
                 patch.pop(field, None)
+    from easyicu.webserver.unread_stated_variables import (
+        UNREAD_STATED_VARIABLES_FIELD, pending_unread, unread_records,
+    )
+
+    # A reading that is not recorded does not vanish: a variable the question
+    # names stays owed, and a plan or run stops, until a later save records it
+    # or the question stops naming it.
+    previously_owed = list((current or {}).get(UNREAD_STATED_VARIABLES_FIELD) or ())
+    owed = pending_unread({**dict(current or {}), **patch}, [*previously_owed, *(
+        record for field, unread in stated_unread.items()
+        for record in unread_records(unread, field=field)
+    )])
+    if owed != previously_owed:
+        patch[UNREAD_STATED_VARIABLES_FIELD] = owed
     causal_receipt = _question_causal_design(params, patch, current)
     family_receipt = (
         {} if causal_receipt else _question_family_design(params, patch, current)
@@ -2302,10 +2316,28 @@ def update_study_context(
                     f"{item['variable'] or 'the list'} ({item['reason']})"
                     for item in unread
                 )
-                + ". State each again with variable and words copied exactly from the "
-                "saved question, and concept set to the identifier "
-                "easyicu_list_source_concepts returns for it."
+                + ". State each again with variable copied exactly from the saved "
+                "question, words quoting the question's whole clause that names it, "
+                "unchanged even when that clause names other variables too (X and Y "
+                "of 「调整X和Y」 or 'adjusted for X and Y' each take that whole clause "
+                "as their words; never rewrite the clause for one variable), "
+                "and concept set to the identifier easyicu_list_source_concepts returns for it."
             )
+    still_owed = updated.get(UNREAD_STATED_VARIABLES_FIELD) or []
+    if still_owed:
+        from easyicu.webserver.unread_stated_variables import blocking_unread
+
+        blocking = blocking_unread(updated)
+        summary += (
+            " Not yet recorded: "
+            + "; ".join(f"{item['variable']} ({item['field']})" for item in still_owed)
+            + (
+                ". A plan or run stops (study_stated_variable_unrecorded) until each is saved."
+                if blocking else
+                ". The study's exact adjustment roster binds it meanwhile; save it from the "
+                "question's own words."
+            )
+        )
     # A reading saved without a concept stays a requirement no one can check
     # (``unresolved`` once a source is bound); the conversation can name it.
     for field in STATED_VARIABLE_FIELDS:
@@ -2352,6 +2384,7 @@ def update_study_context(
             **check_receipt,
             **({"primary_exposure_concept_unread": exposure_unread} if exposure_unread else {}),
             **{f"{field}_unread": unread for field, unread in stated_unread.items() if unread},
+            **({UNREAD_STATED_VARIABLES_FIELD: still_owed} if still_owed else {}),
             **causal_receipt,
             **family_receipt,
             **variance_receipt,
