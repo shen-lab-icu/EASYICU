@@ -156,22 +156,6 @@ test('P2-1 cohort controls consume emitted dataset properties', () => {
   }
 });
 
-test('P2-2 demo completion is invalid after reset, a new run or mode change', async () => {
-  const c = context({ localStorage: { getItem: () => null, removeItem() {} }, location: { hash: '#guided' } });
-  vm.runInContext(read('screens-extraction-job-continuity.js'), c);
-  await c.window.EU_EXTRACTION_JOB_CONTINUITY.ready;
-  c.continuity = c.window.EU_EXTRACTION_JOB_CONTINUITY;
-  const code = section('screens-extraction.js', '      const ticket = continuity.capture();', '    } else {');
-  for (const action of ['reset', 'new-run', 'real', 'normal']) {
-    let callback; c.setTimeout = fn => { callback = fn; }; c.exView = 'running';
-    c.dataMode = () => action === 'real' ? 'real' : 'demo'; c.backgroundRepaint = () => {};
-    vm.runInContext(`(() => {${code}})()`, c);
-    if (action === 'reset') c.continuity.abandon();
-    if (action === 'new-run') c.continuity.prepare({ kind: 'extract', source: { path: '/synthetic' } });
-    callback(); assert.equal(c.exView, action === 'normal' ? 'done' : 'running');
-  }
-});
-
 test('P2-3/4 background progress paints embedded views and preserves other-route input', async () => {
   let embedded = 0, shell = 0;
   const c = context({ location: { hash: '#guided' }, localStorage: { setItem() {} } });

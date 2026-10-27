@@ -100,13 +100,4 @@ def crossdb_raw_root_scan(body: Dict[str, Any]) -> dict:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
 
-@router.post("/api/crossdb-review/demo-distribution")
-def crossdb_demo_distribution(body: Dict[str, Any]) -> dict:
-    """Return bounded legacy-seeded Cross-DB demo density aggregates."""
-    try:
-        return crossdb_review.crossdb_demo_distribution(body)
-    except crossdb_review.CrossdbReviewError as exc:
-        raise HTTPException(status_code=400, detail=exc.detail) from exc
-
-
 __all__ = ["router"]

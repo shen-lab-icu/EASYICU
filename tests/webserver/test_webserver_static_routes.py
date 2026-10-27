@@ -118,8 +118,8 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.setLang(val);" in settings_js
     assert "window.EU_LANG = val;" not in settings_js
     assert "saveSetting('data_mode'" not in i18n_js
-    assert "js/i18n.js?v=20261026-src1" in index_html
-    assert "js/api.js?v=20261027-dcl1" in index_html
+    assert "js/i18n.js?v=20261027-nodemo1" in index_html
+    assert "js/api.js?v=20261027-nodemo1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -181,7 +181,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261027-dmap2" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261026-icudeath1" in index_html
+    assert "js/screens-extraction.js?v=20261027-nodemo1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
     assert "js/screens-help.js?v=20261027-help3" in index_html
@@ -276,7 +276,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20261027-dcl1" in index_html
+    assert "js/api.js?v=20261027-nodemo1" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
 
 
@@ -432,7 +432,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20261027-old1" in index_html
     assert "css/guided-projects.css?v=20261027-proj1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20261027-dcl1" in index_html
+    assert "js/api.js?v=20261027-nodemo1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20261027-proj1" in index_html
     )
@@ -1242,7 +1242,7 @@ def test_native_extraction_uses_separate_feature_cohort_and_export_steps() -> No
     assert ".ex-collapsible .cfg-body[hidden]{ display:none; }" in extraction_css
     assert ".ex-action-dock{" in extraction_css
     assert "exExpandedMod && String(exExpandedMod).startsWith('sepsis3_')" in extraction_js
-    assert "const exportReady = dataMode() === 'demo' || hostedServer() || !!currentExportDir();" in extraction_js
+    assert "const exportReady = hostedServer() || !!currentExportDir();" in extraction_js
     assert ".cohort-preset-grid" not in redesign_css
     assert ".range-ctl" not in redesign_css
     assert ".ex-export-destination" not in redesign_css
@@ -1272,7 +1272,7 @@ def test_native_extraction_prefers_parquet_export_by_default() -> None:
     assert "尚未选择导出目录" in extraction_js
     assert "Choose an export destination before extracting." in extraction_js
     assert "请先选择导出目录再开始抽取。" in extraction_js
-    assert "const exportReady = dataMode() === 'demo' || hostedServer() || !!currentExportDir();" in extraction_js
+    assert "const exportReady = hostedServer() || !!currentExportDir();" in extraction_js
     assert (
         "extractDisabled = !selMods().length || !support.ok || !exportReady"
         in extraction_js
@@ -1779,7 +1779,7 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "js/screens-viz-crossdb-setup.js?v=20261026-xdbq1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz-crossdb-results.js?v=20261026-dbnames1" in index_html
-    assert "js/screens-viz.js?v=20261026-src2" in index_html
+    assert "js/screens-viz.js?v=20261027-nodemo1" in index_html
     assert "css/crossdb.css?v=20261026-src1" in index_html
     for selector in (
         ".crossdb-method-grid",
@@ -1826,7 +1826,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20261026-src2" in index_html
+    assert "js/screens-viz.js?v=20261027-nodemo1" in index_html
 
 
 def test_native_cohort_groups_render_table_one_without_legacy_bars() -> None:
@@ -1873,7 +1873,7 @@ def test_native_patient_time_series_uses_module_grouped_single_feature_charts() 
         index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
         < index_html.index("js/screens-viz-echarts.js?v=20261022-winfont1")
         < index_html.index("js/screens-viz-patient-charts.js?v=20261026-data1")
-        < index_html.index("js/screens-viz-patient-series.js?v=20261026-data1")
+        < index_html.index("js/screens-viz-patient-series.js?v=20261027-nodemo1")
     )
     assert ".pt-module-card" in patient_css
     assert ".pt-matrix-details .table-scroll" in patient_css
@@ -1996,7 +1996,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20261026-akifold1" in index_html
-    assert "api.js?v=20261027-dcl1" in index_html
+    assert "api.js?v=20261027-nodemo1" in index_html
     assert "screens-dict.js?v=20261027-dmap2" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
@@ -2292,7 +2292,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20261027-dcl1" in index_html
+    assert "api.js?v=20261027-nodemo1" in index_html
     assert "screens-guided-projects.js?v=20261027-proj1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -2332,7 +2332,6 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     patient_tables_js = _static_js("screens-viz-patient-tables.js")
     patient_series_js = _static_js("screens-viz-patient-series.js")
     patient_overview_js = _static_js("screens-viz-patient-overview.js")
-    demo_drilldown_js = _static_js("screens-viz-demo-drilldown.js")
     demo_sources_js = _static_js("screens-viz-patient-demo-sources.js")
     api_js = _static_js("api.js")
     i18n_js = _static_js("i18n.js")
@@ -2450,13 +2449,8 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "patientEligibilityFlow" in patient_domain_js
     assert "Eligibility flow (ICU stays)" in patient_domain_js
     assert "入组筛选流程（ICU 住院）" in patient_domain_js
-    assert "Sepsis-3 cohort" in demo_drilldown_js
-    assert "Sepsis-3 脓毒症队列" in demo_drilldown_js
-    assert "suspected infection + SOFA signal" in demo_drilldown_js
-    assert "疑似感染 + SOFA 信号" in demo_drilldown_js
     assert "Review window available" not in viz_js
     assert "可用审阅时间窗" not in viz_js
-    assert "cohort_attrition_metadata_only" in demo_drilldown_js
     assert "patient-flow-diagram" in patient_domain_js
     assert "patient-flow-node" in patient_domain_js
     assert "patient-flow-side-link" in patient_domain_js
@@ -2488,22 +2482,22 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "css/patient.css?v=20261026-data1" in index_html
     assert "css/patient-series.css?v=20261022-legacy1" in index_html
     assert "js/screens-viz-demo.js?v=20261022-zhlabels1" in index_html
-    assert "js/screens-viz-demo-drilldown.js?v=20260727-owner-split" in index_html
+    assert "js/screens-viz-demo-drilldown.js" not in index_html
     assert "js/screens-viz-patient-features.js?v=20261022-zhlabels1" in index_html
     assert "js/screens-viz-patient-charts.js?v=20261026-data1" in index_html
-    assert "js/screens-viz-patient-series.js?v=20261026-data1" in index_html
+    assert "js/screens-viz-patient-series.js?v=20261027-nodemo1" in index_html
     assert (
         "js/screens-viz-patient-demo-sources.js?v=20261026-src2"
         in index_html
     )
     assert "css/official-demo-sources.css?v=20261026-src1" in index_html
     assert (
-        "js/screens-viz-patient-navigation.js?v=20261022-lean1"
+        "js/screens-viz-patient-navigation.js?v=20261027-nodemo1"
         in index_html
     )
-    assert "js/screens-viz-patient-tables.js?v=20261026-data1" in index_html
+    assert "js/screens-viz-patient-tables.js?v=20261027-nodemo1" in index_html
     assert "js/screens-viz-patient-overview.js?v=20261026-data1" in index_html
-    assert "js/screens-viz-patient.js?v=20261026-src1" in index_html
+    assert "js/screens-viz-patient.js?v=20261027-nodemo1" in index_html
     assert index_html.index("js/screens-viz-patient-navigation.js?") < index_html.index(
         "js/screens-viz.js?"
     )
@@ -2513,18 +2507,11 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20261026-src2" in index_html
+    assert "js/screens-viz.js?v=20261027-nodemo1" in index_html
     assert "bounded browser review', '本页审阅" in patient_domain_js
-    assert "function buildPatientDrilldown" in demo_drilldown_js
-    assert "function demoTablePreviewRowContext" in demo_drilldown_js
-    assert "const timepointsPerEntity = 12" in demo_drilldown_js
-    assert "const previewLimit = timeIndexed ? 24 : 8" in demo_drilldown_js
-    assert "entityRef: `demo_ent_${entityIndex + 1}`" in demo_drilldown_js
-    assert "charttime: demoCharttimeAt(timeIndex)" in demo_drilldown_js
-    assert "row_cap: previewRows.length" in demo_drilldown_js
     assert "function buildPatientDrilldown" not in viz_js
     assert "function demoTablePreviewRowContext" not in viz_js
-    assert "Seeded observations" in patient_domain_js
+    assert "Seeded observations" not in patient_domain_js
     # Patient time-series stays per-feature, but is grouped by the backend module
     # lanes instead of a fixed vitals-only shortlist.
     assert "function patientVitalSmallMultiples(" in patient_domain_js
@@ -2586,12 +2573,8 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert ".pt-matrix-details" not in _static_css("cohort.css")
     assert ".pt-module-card" not in pages_css
     assert ".pt-module-card" not in _static_css("cohort.css")
-    assert (
-        "payload_scope: 'clinically_constrained_synthetic_demo_no_real_patient_rows'"
-        in demo_drilldown_js
-    )
-    assert "Synthetic example data ready" in patient_domain_js
-    assert "synthetic entities" in patient_domain_js
+    assert "Synthetic example data ready" not in patient_domain_js
+    assert "selectDemo" not in patient_domain_js
     assert "10 stays · 19 modules · 0 errors" not in viz_js
     assert "Fast demo profile" not in viz_js
     assert (
@@ -2655,7 +2638,6 @@ def test_native_cohort_real_page_is_backend_backed_and_bilingual() -> None:
     cohort_js = _static_js("screens-viz-cohort.js")
     cohort_view_js = _static_js("screens-viz-cohort-view.js")
     cohort_survival_js = _static_js("screens-viz-cohort-survival.js")
-    cohort_demo_js = _static_js("screens-viz-cohort-demo.js")
     api_js = _static_js("api.js")
 
     assert "loadCohortReviewSummary" in api_js
@@ -2714,7 +2696,6 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     cohort_js = _static_js("screens-viz-cohort.js")
     cohort_view_js = _static_js("screens-viz-cohort-view.js")
     cohort_survival_js = _static_js("screens-viz-cohort-survival.js")
-    cohort_demo_js = _static_js("screens-viz-cohort-demo.js")
     cohort_charts_js = _static_js("screens-viz-cohort-charts.js")
     cohort_css = _static_css("cohort.css")
     cohort_charts_css = _static_css("cohort-charts.css")
@@ -2722,7 +2703,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20261026-data1" in index_html
-    assert "js/screens-viz.js?v=20261026-src2" in index_html
+    assert "js/screens-viz.js?v=20261027-nodemo1" in index_html
     assert "view: 'idle'," in cohort_js
     assert "featureScope: 'recommended'," in cohort_js
     assert 'data-cohort-config-required="true"' in cohort_js
@@ -2766,13 +2747,8 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
         in cohort_view_js
     )
     assert "p <0.001" not in cohort_survival_js
-    assert "cohortSurvivalDemoBody" in cohort_survival_js
-    assert "data-demo-survival-simulated" in cohort_survival_js
-    assert "Demo simulated KM preview" in cohort_survival_js
-    assert (
-        "This Kaplan-Meier curve is a fixed simulated preview for the demo workspace"
-        in cohort_survival_js
-    )
+    assert "cohortSurvivalDemoBody" not in cohort_survival_js
+    assert "data-demo-survival-simulated" not in cohort_survival_js
     assert "Demo mode does not fabricate survival curves" not in cohort_survival_js
     assert "function cohortDemoCatalogScope" in cohort_view_js
     assert "function cohortDemoFeaturePicker" in cohort_view_js
@@ -2793,7 +2769,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     assert "function cohortProfileValue" in cohort_view_js
     assert "function cohortSurvivalBody" in cohort_survival_js
     assert "function cohortSurvivalChart" in cohort_survival_js
-    assert "function cohortUnavailablePanel" in cohort_view_js
+    assert "function cohortUnavailablePanel" not in cohort_view_js
     assert "metadata_row_count_only" in cohort_view_js
     assert "Large export coverage optimized" in cohort_view_js
     assert "大导出覆盖率已优化" in cohort_view_js
@@ -2804,29 +2780,21 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
         in cohort_view_js
     )
     assert "同一个导出上继续运行本地审计分析任务" in cohort_view_js
-    assert "function cohortDemoCoverageReview" in cohort_demo_js
-    assert "function cohortDemoSofaReview" in cohort_demo_js
-    assert "function cohortDemoPanelNote" in cohort_demo_js
-    assert "data-demo-cohort-panel" in cohort_demo_js
-    assert "Demo module coverage and quality" in cohort_view_js
-    assert "演示模块覆盖率与质量" in cohort_view_js
+    assert not (STATIC_DIR / "js" / "screens-viz-cohort-demo.js").exists()
+    assert "screens-viz-cohort-demo.js" not in index_html
+    assert "EU_VIZ_COHORT_DEMO" not in cohort_view_js
+    assert "Demo module coverage and quality" not in cohort_view_js
     assert "function cohortCoverageMetricLabel" in cohort_view_js
     assert "function cohortQualityStatusLabel" in cohort_view_js
     assert "Event/exposure rows show cohort incidence or exposure prevalence" in cohort_view_js
     assert "事件/暴露行显示队列发生率或暴露率" in cohort_view_js
     assert "cohortCoverageMetricValue(row)" in cohort_view_js
     assert "esc(row.quality_status || 'unknown')" not in cohort_view_js
-    assert "Demo SOFA-2 aggregate preview" in cohort_view_js
-    assert "演示 SOFA-2 聚合预览" in cohort_view_js
-    assert (
-        "review ? cohortCoverageBody(review) : (demoLoaded ? cohortCoverageBody(demo.coverageReview(), { demo: true })"
-        in cohort_view_js
-    )
-    assert (
-        "review ? cohortSofaBody(review) : (demoLoaded ? cohortSofaBody(demo.sofaReview(), { demo: true })"
-        in cohort_view_js
-    )
-    assert "The old seeded audit panel has been removed." in cohort_view_js
+    assert "Demo SOFA-2 aggregate preview" not in cohort_view_js
+    assert "case 'coverage': return cohortCoverageBody(review);" in cohort_view_js
+    assert "case 'sofa':     return cohortSofaBody(review);" in cohort_view_js
+    assert "demoLoaded" not in cohort_view_js
+    assert "The old seeded audit panel has been removed." not in cohort_view_js
     assert "window.EUAudit" not in cohort_view_js
     assert "window.EUSofa" not in cohort_view_js
     assert "screens-audit.js" not in index_html
@@ -2939,11 +2907,10 @@ def test_retired_landing_page_left_no_styles_behind() -> None:
 
 
 def test_native_viz_demo_layer_is_split_into_owner_file() -> None:
-    """Demo data generation and Patient drilldown assembly have separate owners."""
+    """Seeded catalog generators live in their own owner; no browser drilldown remains."""
     viz_js = _static_js("screens-viz.js")
     patient_domain_js = _static_js("screens-viz-patient.js")
     demo_js = _static_js("screens-viz-demo.js")
-    demo_drilldown_js = _static_js("screens-viz-demo-drilldown.js")
     index_html = _static_html("index.html")
 
     # demo generators + catalog accessors are DEFINED in the demo file
@@ -2961,29 +2928,20 @@ def test_native_viz_demo_layer_is_split_into_owner_file() -> None:
     assert "function catalogModuleLabel(" not in viz_js
     assert "const DEMO_ENTITY_COUNT" not in viz_js
 
-    # Patient drilldown assembly is defined only in its dependency-neutral owner.
-    assert "function buildPatientDrilldown(" in demo_drilldown_js
-    assert "function demoTablePreviewRowContext(" in demo_drilldown_js
-    assert "window.VIZ_DEMO_DRILLDOWN = { buildPatientDrilldown };" in demo_drilldown_js
-    assert "} = window.VIZ_DEMO;" in demo_drilldown_js
+    # Every data source loads through the backend: the synthetic Patient
+    # drilldown and its owner file are gone.
+    assert not (STATIC_DIR / "js" / "screens-viz-demo-drilldown.js").exists()
+    assert "screens-viz-demo-drilldown.js" not in index_html
+    assert "VIZ_DEMO_DRILLDOWN" not in patient_domain_js
+    assert "buildDemoPatientDrilldown" not in patient_domain_js
     assert "function buildPatientDrilldown(" not in viz_js
-    assert "function buildDemoPatientDrilldown(" not in viz_js
-    assert "function demoTablePreviewRowContext(" not in viz_js
-
-    # The Patient domain owner consumes the drilldown contract directly; the
-    # shared shell no longer imports Patient-only demo helpers.
-    assert (
-        "const { buildPatientDrilldown: buildDemoPatientDrilldown } = "
-        "window.VIZ_DEMO_DRILLDOWN;"
-    ) in patient_domain_js
     assert "demoCatalogModules" not in viz_js
 
-    # Generator -> drilldown owner -> main shell load order is explicit.
+    # Generator -> main shell load order is explicit.
     demo_pos = index_html.find("screens-viz-demo.js")
-    drilldown_pos = index_html.find("screens-viz-demo-drilldown.js")
     main_pos = index_html.find("screens-viz.js?")
-    assert demo_pos != -1 and drilldown_pos != -1 and main_pos != -1
-    assert demo_pos < drilldown_pos < main_pos
+    assert demo_pos != -1 and main_pos != -1
+    assert demo_pos < main_pos
 
 
 def test_shell_copilot_entry_opens_the_pi_route_without_a_second_bridge_chat() -> None:
@@ -3311,7 +3269,7 @@ def test_data_kind_is_a_source_label_not_a_global_mode() -> None:
     assert "data-datamode" not in app_js
     assert "set-data-mode" not in settings_js
     assert "window.EU_DATA = 'real';" in i18n_js
-    assert "if (m !== 'real') return;" in i18n_js
+    assert "if (m !== 'real' || !context || context.display_mode !== 'demo') return;" in i18n_js
     assert "window.EU_DATA_MODE_CONTEXT = null;" in i18n_js
     assert "window.setDataModeContext = function" in i18n_js
     assert "window.setDataModeContext(null);" in i18n_js

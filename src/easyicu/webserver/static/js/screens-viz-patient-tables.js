@@ -62,10 +62,7 @@
   }
 
   function prime(drill) {
-    const rawSourceKey = String(drill && drill.source && drill.source.path_hash || '');
-    const sourceKey = drill && drill.demo
-      ? `demo:${String(drill.source && (drill.source.database || drill.source.source_id) || rawSourceKey || 'seeded')}`
-      : rawSourceKey;
+    const sourceKey = String(drill && drill.source && drill.source.path_hash || '');
     if (state.sourceKey && sourceKey && state.sourceKey !== sourceKey) reset();
     state.sourceKey = sourceKey;
     const tables = drill && drill.data_tables || {};
@@ -208,7 +205,7 @@
 
   function load(config, next) {
     const drill = config && config.drill && config.drill();
-    if (!drill || drill.demo) {
+    if (!drill) {
       if (next.module) state.module = next.module;
       state.page = next.page || 1;
       state.pageSize = next.pageSize || state.pageSize;

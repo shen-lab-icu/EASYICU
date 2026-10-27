@@ -325,9 +325,6 @@
   function startCrossdbReviewSummaryJob(body) {
     return postJSON('/api/jobs/crossdb-summary', body || {});
   }
-  function loadCrossdbDemoDistribution(body) {
-    return postJSON('/api/crossdb-review/demo-distribution', body || {});
-  }
   function loadAgentProviderStatus(provider) {
     const q = provider ? '?provider=' + encodeURIComponent(provider) : '';
     return getJSON('/api/agent-runs/provider-status' + q);
@@ -941,7 +938,6 @@
   window.EU_API.scanCrossdbRawRoot = scanCrossdbRawRoot;
   window.EU_API.startCrossdbRawDistributionJob = startCrossdbRawDistributionJob;
   window.EU_API.startCrossdbReviewSummaryJob = startCrossdbReviewSummaryJob;
-  window.EU_API.loadCrossdbDemoDistribution = loadCrossdbDemoDistribution;
   window.EU_API.loadAgentProviderStatus = loadAgentProviderStatus;
   window.EU_API.loadCodexAuthStatus = loadCodexAuthStatus;
   window.EU_API.startCodexAuthLogin = startCodexAuthLogin;

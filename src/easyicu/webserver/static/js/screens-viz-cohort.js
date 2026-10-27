@@ -416,7 +416,6 @@
     init,
     review: cohortReview,
     loaded: cohortLoaded,
-    demoCatalogScope() { return view.demoCatalogScope(); },
     resetForSourceChange,
     reloadAfterSourceChange,
     setError(value) { state.error = value == null ? null : String(value); },

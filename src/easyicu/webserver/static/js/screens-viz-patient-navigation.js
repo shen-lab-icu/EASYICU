@@ -21,10 +21,6 @@
   }
 
   function prime(drill) {
-    if (drill && drill.demo) {
-      if (state.sourceKey || state.page) reset();
-      return;
-    }
     const sourceKey = String(drill && drill.source && drill.source.path_hash || '');
     if (state.sourceKey && sourceKey && state.sourceKey !== sourceKey) reset();
     state.sourceKey = sourceKey;
@@ -57,7 +53,7 @@
     const detail = opts && opts.detail || '';
     const pageNumber = Number(page.page || 1);
     const pageCount = Number(page.page_count || 1);
-    const hasPaging = !drill.demo && pageCount > 1;
+    const hasPaging = pageCount > 1;
     const status = state.loading
       ? h.t('Loading entity…', '正在加载病例…')
       : (state.error || '');
@@ -207,11 +203,6 @@
       event.preventDefault();
       const ref = button.dataset.patientEntity;
       if (!ref || state.loading) return;
-      const drill = config && config.drill && config.drill();
-      if (drill && drill.demo && typeof config.selectDemo === 'function') {
-        config.selectDemo(ref);
-        return;
-      }
       loadEntity(config, ref, button.dataset.patientOrdinal);
     }));
     const previous = root.querySelector('[data-patient-entity-page-prev]');

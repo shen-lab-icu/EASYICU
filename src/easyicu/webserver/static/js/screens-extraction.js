@@ -9,7 +9,6 @@
   const S = (window.SCREENS = window.SCREENS || {});
 
   /* ================= DATA EXTRACTION (simplified) ================= */
-  function dataMode() { return window.EU_DATA || 'real'; }  // always 'real': there is no Demo/Real switch
   // A hosted instance runs on the hospital server (screens-guided-pi-hosted.js).
   function hostedServer() { const owner = window.EasyICU?.guidedPi?.optional('hosted'); return Boolean(owner && owner.active()); }
   function runsWhere() { return hostedServer() ? t('on the server', '在服务器上') : t('on your machine', '在本机'); }
@@ -401,18 +400,16 @@
     const runMode = mode === 'recommended' ? 'recommended' : 'custom';
     const modules = runModuleKeys(runMode);
     if (!modules.length) return;
-    const real = dataMode() === 'real';
     const outDir = currentExportDir();
-    // A real extraction writes files, so it needs a destination; the demo path
-    // is a pure in-browser mock (below) and must not be blocked on one.
-    if (real && !outDir && !hostedServer()) {
+    // An extraction writes files, so it needs a destination.
+    if (!outDir && !hostedServer()) {
       exAdvExport = true;
       exCustomOpen = true;
       repaint();
       return;
     }
     const support = runMode === 'recommended' ? { ok: true, reason: 'recommended' } : cohortExportSupport();
-    if (real && !support.ok) {
+    if (!support.ok) {
       abandonExtractionContinuity();
       exportRunMode = runMode;
       exportRunModules = modules;
@@ -433,9 +430,9 @@
     exView = 'running'; repaint();
     const database = (exScanResult && exScanResult.db_key) || 'miiv';
     const conceptSelection = selectedConceptPayload(modules);
-    // Real path: only in real mode with a scanned/ready folder + live backend.
+    // Needs a scanned/ready folder + live backend.
     const continuity = window.EU_EXTRACTION_JOB_CONTINUITY;
-    if (real && exPath && window.EU_API && window.EU_API.postJSON && window.EventSource && continuity) {
+    if (exPath && window.EU_API && window.EU_API.postJSON && window.EventSource && continuity) {
       const payload = {
         path: exPath, database: database, modules: modules,
         format: hostedServer() ? 'parquet' : exFormat, merge: exMerge === 'merged', max_patients: exMaxPatients,
@@ -472,13 +469,6 @@
         continuity.abandon();
         exportErr = String(err && err.message || err); repaint();
       });
-    } else if (!real) {
-      // Demo mode intentionally uses a seeded, in-browser completion.
-      const ticket = continuity.capture();
-      setTimeout(() => {
-        if (!continuity.isPending(ticket) || dataMode() !== 'demo' || exView !== 'running') return;
-        exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true; backgroundRepaint();
-      }, 1200);
     } else {
       exportErr = t(
         'Real extraction could not start. Reconnect a local source and restart the EasyICU WebApp so the job API and event stream are available.',
@@ -857,8 +847,7 @@
 
   /* ---- the express recommended card ---- */
   function expressCard() {
-    // Demo runs a local mock and needs no destination — only real extraction does.
-    const exportReady = dataMode() === 'demo' || hostedServer() || !!currentExportDir();
+    const exportReady = hostedServer() || !!currentExportDir();
     const cohortLead = t('all ICU stays', '全部 ICU 住院');
     return `
     <div class="express">
@@ -874,13 +863,13 @@
             <span>${t('Cohort', '队列')} · <b>${cohortLead} · ${t('full window', '全窗口')}</b></span>
             <span>${t('Modules', '模块')} · <b>${CORE.length}</b></span>
             <span>${t('Concepts', '概念')} · <b>~${coreConceptN()}</b></span>
-            <span>${dataMode() === 'demo' ? t('Stays', '住院数') + ' · <b>10</b>' : t('Stays', '住院数') + ' · <b>' + escHtml(fmtSampleCap()) + '</b>'}</span>
+            <span>${t('Stays', '住院数')} · <b>${escHtml(fmtSampleCap())}</b></span>
           </div>
         </div>
         <div class="express-cta">
           <button class="btn primary lg" data-ex-run="recommended" ${exportReady ? '' : 'disabled'}>${icon('play', 16)} ${t('Run recommended extraction', '运行推荐抽取')}</button>
           ${exportReady ? '' : `<button class="btn sm ex-express-setdest" data-ex-express-setdest style="margin-top:8px;">${icon('folder', 13)} ${t('Choose export folder', '选择导出目录')}</button>`}
-          <div class="note-line" style="${exportReady ? '' : 'color:var(--warn,#a66a00);'}">${icon(exportReady ? 'shield' : 'alert', 12)} ${exportReady ? (dataMode() === 'demo' ? t('reproducible · no tokens', '可复现 · 不消耗 token') : hostedCopy('readyNote', t('local-only · nothing uploaded', '仅本地 · 不上传'))) : exportDestinationRequiredMessage()}</div>
+          <div class="note-line" style="${exportReady ? '' : 'color:var(--warn,#a66a00);'}">${icon(exportReady ? 'shield' : 'alert', 12)} ${exportReady ? hostedCopy('readyNote', t('local-only · nothing uploaded', '仅本地 · 不上传')) : exportDestinationRequiredMessage()}</div>
         </div>
       </div>
     </div>`;
@@ -958,14 +947,14 @@
     const sourcePath = resultPath || (active && active.path) || '';
     const sourceLabel = (active && active.label) || (resultPath
       ? 'EasyICU extraction'
-      : (exExpectedDatabase ? exExpectedDatabase.toUpperCase() : (dataMode() === 'demo' ? 'Demo data' : 'Local EasyICU data')));
+      : (exExpectedDatabase ? exExpectedDatabase.toUpperCase() : 'Local EasyICU data'));
     const modules = (exportRunModules || runModuleKeys(recommended ? 'recommended' : 'custom')).slice();
     return {
       data_source: {
         source_id: String(active && active.id || ''),
         path: sourcePath,
         label: sourceLabel,
-        database: detectedDatabase || exExpectedDatabase || (dataMode() === 'demo' ? 'demo' : ''),
+        database: detectedDatabase || exExpectedDatabase || '',
       },
       cohort,
       modules,
@@ -1092,7 +1081,6 @@
     },
   };
   function cohortExportSupport() {
-    if (dataMode() !== 'real') return { ok: true, reason: 'demo' };
     if (!cohortPresetIsRealExportReady(exCohortPreset)) {
       return {
         ok: false,
@@ -1123,9 +1111,9 @@
     return `
       <div class="cohort-preset-grid">
         ${COHORT_PRESETS.map(([id, en, zh, den, dzh]) => `
-          <button class="cohort-preset ${exCohortPreset === id ? 'on' : ''} ${dataMode() === 'real' && !cohortPresetIsRealExportReady(id) ? 'pending' : ''}" data-ex-cohort-preset="${id}">
+          <button class="cohort-preset ${exCohortPreset === id ? 'on' : ''} ${!cohortPresetIsRealExportReady(id) ? 'pending' : ''}" data-ex-cohort-preset="${id}">
             <span class="cp-dot"></span>
-            <span class="cp-body"><span class="cp-title">${t(en, zh)}</span><span class="cp-sub">${t(den, dzh)}${dataMode() === 'real' && !cohortPresetIsRealExportReady(id) ? ' · ' + t('planned, not export-ready', '计划中，暂不可真实导出') : ''}${dataMode() === 'real' && cohortPresetUsesConceptPrefilter(id) ? ' · ' + t('concept prefilter, slower', '概念预筛，较慢') : ''}</span></span>
+            <span class="cp-body"><span class="cp-title">${t(en, zh)}</span><span class="cp-sub">${t(den, dzh)}${!cohortPresetIsRealExportReady(id) ? ' · ' + t('planned, not export-ready', '计划中，暂不可真实导出') : ''}${cohortPresetUsesConceptPrefilter(id) ? ' · ' + t('concept prefilter, slower', '概念预筛，较慢') : ''}</span></span>
           </button>`).join('')}
       </div>`;
   }
@@ -1163,10 +1151,8 @@
       : t('full cohort (no cap)', '完整队列（不限）');
   }
   function cohortCountPill() {
-    // Demo mode ships a fixed 10-stay seeded cohort; Real mode computes the
-    // matched count server-side, so surface the sample cap instead of a fake
-    // "10 stays matched" literal.
-    return dataMode() === 'real' ? escHtml(fmtSampleCap()) : t('10 demo stays', '10 条演示住院');
+    // The matched count is computed server-side, so surface the sample cap.
+    return escHtml(fmtSampleCap());
   }
   function sampleCapCtl() {
     const opts = [[200, '200'], [500, '500'], [2000, '2,000'], [0, t('All', '全部')]];
@@ -1203,7 +1189,7 @@
     return {
       database,
       databaseLabel,
-      real: dataMode() === 'real',
+      real: true,
     };
   }
 
@@ -1234,12 +1220,12 @@
             </div>
             ${cohortPresetCards()}
             ${!support.ok ? `<div class="note warn mt-12" style="padding:10px 12px;"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Real export is blocked for this cohort', '此队列暂不能真实导出')}</div><div class="d" style="font-size:11px;margin:0;">${support.message}</div></div></div>` : ''}
-            ${support.ok && dataMode() === 'real' && cohortPresetUsesConceptPrefilter(exCohortPreset) ? `<div class="note info mt-12" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Clinical cohort prefilter', '临床队列预筛')}</div><div class="d" style="font-size:11px;margin:0;">${t('This preset computes the defining concepts on the selected denominator before exporting matched stays, so it may take longer than demographic or ICD filters.', '该预设会先在所选分母上计算定义概念，再导出匹配住院，因此可能比人口学或 ICD 筛选更慢。')}</div></div></div>` : ''}
+            ${support.ok && cohortPresetUsesConceptPrefilter(exCohortPreset) ? `<div class="note info mt-12" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Clinical cohort prefilter', '临床队列预筛')}</div><div class="d" style="font-size:11px;margin:0;">${t('This preset computes the defining concepts on the selected denominator before exporting matched stays, so it may take longer than demographic or ICD filters.', '该预设会先在所选分母上计算定义概念，再导出匹配住院，因此可能比人口学或 ICD 筛选更慢。')}</div></div></div>` : ''}
           </div>
           ${advRow(t('Age range at admission', '入院年龄范围'), ageRangeCtl())}
           ${advRow(t('Minimum ICU LOS', '最短 ICU 时长'), rangeCtl('los_min', exMinLosHours, 0, 168, 1, fmtHours(exMinLosHours)))}
           ${advRow(t('Observation window', '观察窗口'), rangeCtl('window', exWindowHours, 1, MAX_OBSERVATION_WINDOW_HOURS, 1, fmtObservationWindow(exWindowHours)))}
-          ${dataMode() === 'real' ? advRow(t('Cohort sample cap', '队列采样上限'), sampleCapCtl()) : ''}
+          ${advRow(t('Cohort sample cap', '队列采样上限'), sampleCapCtl())}
           ${advRow(t('Exclude readmissions', '排除再入院'), switchEl(exExcludeReadmissions, 'readmissions'))}
         </div>
         <div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:14px;">
@@ -1437,7 +1423,7 @@
     <div class="cfg ex-collapsible ${exportOpen ? 'open' : ''} ${stepMode ? 'ex-step-panel' : ''}" data-ex-export-panel>
       ${stepMode ? '' : `<div class="cfg-head">
         <div class="cfg-ico">${icon('download', 17)}</div>
-        <div class="grow"><div class="cfg-h">${t('Export settings', '导出设置')}</div><div class="cfg-sub">${exFormat.toUpperCase()} · ${exIncludeDefinitions ? t('definition manifest included', '包含定义清单') : t('definition manifest off', '不含定义清单')} · ${hostedServer() ? hostedCopy('savedSub') : destination ? escHtml(destination) : (dataMode() === 'demo' ? t('preview only in demo', '演示模式无需写入目录') : t('choose a local folder', '请选择本地目录'))}</div></div>
+        <div class="grow"><div class="cfg-h">${t('Export settings', '导出设置')}</div><div class="cfg-sub">${exFormat.toUpperCase()} · ${exIncludeDefinitions ? t('definition manifest included', '包含定义清单') : t('definition manifest off', '不含定义清单')} · ${hostedServer() ? hostedCopy('savedSub') : destination ? escHtml(destination) : t('choose a local folder', '请选择本地目录')}</div></div>
         <span class="pill"><span class="dot"></span>${exFormat.toUpperCase()}</span>
         <button class="ex-section-toggle" data-ex-adve aria-expanded="${exAdvExport ? 'true' : 'false'}">${exAdvExport ? t('Collapse', '收起') : t('Edit', '修改')} <span class="chev">${icon('chevdown', 13)}</span></button>
       </div>`}
@@ -1478,16 +1464,16 @@
   function summaryRail(options) {
     const showBack = !!(options && options.showBack);
     const support = cohortExportSupport();
-    const exportReady = dataMode() === 'demo' || hostedServer() || !!currentExportDir();
+    const exportReady = hostedServer() || !!currentExportDir();
     const extractDisabled = !selMods().length || !support.ok || !exportReady;
     const runMode = recommendedSelectionActive() ? 'recommended' : 'custom';
-    const summaryMessage = !exportReady ? exportDestinationRequiredMessage() : (support.ok ? (dataMode() === 'demo' ? t('Reproducible demo preview; no folder required', '可复现的演示预览，无需选择目录') : hostedCopy('dockLine', t('local-only · reproducible manifest', '仅本地 · 可复现清单'))) : support.message);
+    const summaryMessage = !exportReady ? exportDestinationRequiredMessage() : (support.ok ? hostedCopy('dockLine', t('local-only · reproducible manifest', '仅本地 · 可复现清单')) : support.message);
     return `
     <div class="ex-action-dock">
       <div class="ex-action-summary">
         <div class="ex-action-title">${t('Ready to extract', '准备抽取')}</div>
         <div class="ex-action-line">
-          <span>${dataMode() === 'real' ? escHtml(fmtSampleCap()) : '10 ' + t('demo stays', '条演示住院')}</span>
+          <span>${escHtml(fmtSampleCap())}</span>
           <span id="exSumMods">${selMods().length} ${t('modules', '个模块')}</span>
           <span id="exSumConc">${conceptN()} ${t('features', '个特征')}</span>
           <span>${exFormat.toUpperCase()}</span>
@@ -1507,7 +1493,7 @@
     // Truncation transparency: a capped sample must never masquerade as the
     // full cohort downstream (Patient Review / Agent read this export).
     const rep = exportCohortReport;
-    if (!rep || dataMode() !== 'real') return '';
+    if (!rep) return '';
     const sel = Number(rep.selected || 0);
     const before = Number(rep.selected_before_cap || 0);
     if (rep.sampling && before > sel) return t(`random sample of ${sel.toLocaleString()} from ${before.toLocaleString()} matched stays`, `从 ${before.toLocaleString()} 条匹配住院中随机抽取 ${sel.toLocaleString()} 条`);
@@ -1566,7 +1552,7 @@
       || t('Local ICU data', '本地 ICU 数据')
     ).trim();
     return {
-      ready: dataMode() === 'real' && exReal === 'ready' && !!path && !!database,
+      ready: exReal === 'ready' && !!path && !!database,
       data_source: {
         source_id: String(active && active.id || ''),
         path,
@@ -1745,7 +1731,7 @@
         <div class="st-t">${t('Extraction complete', '抽取完成')}</div>
         <div class="st-d">${r
           ? `${dataFileCount} ${t('data files', '个数据文件')} + ${supportFileCount} ${t('supporting files', '个配套文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''}. ${t('Written to', '写入')} ${canOpen ? `<button type="button" class="ex-output-path" data-ex-open-output title="${t('Open this folder in Finder', '在 Finder 中打开此文件夹')}"><span class="mono">${escHtml(outDir)}</span>${icon('folder', 12)}</button>` : `<span class="${hostedServer() ? '' : 'mono'}">${escHtml(outDir)}</span>`}. ${cohortScaleNote() ? `${t('Cohort', '队列')}: ${escHtml(cohortScaleNote())}. ` : ''}${hostedCopy('doneTail', t('Everything stayed on your machine.', '全部留在你的机器上。'))}`
-          : t('Seeded demo preview — no files were written to disk. The ledger below shows what a real run would produce; switch to Real to write an actual export.', '演示种子预览 —— 没有向磁盘写入任何文件。下方清单展示真实运行会产出什么；切换到真实模式才会写出实际导出。')}</div>
+          : t('No export result is attached here. The list below shows the selected modules; run the extraction to write the files.', '这里没有附带导出结果。下方列出所选模块；运行抽取后才会写出文件。')}</div>
         ${exOutputNotice ? `<div class="ex-output-feedback ok" role="status">${icon('check', 13)} ${escHtml(exOutputNotice)}</div>` : ''}
         ${exOutputError ? `<div class="ex-output-feedback bad" role="alert">${icon('alert', 13)} ${escHtml(exOutputError)}</div>` : ''}
         ${exSyncNotice ? `<div class="ex-output-feedback ok" role="status">${icon('check', 13)} ${escHtml(exSyncNotice)}</div>` : ''}
@@ -1793,13 +1779,12 @@
       if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) applyGuidedPrefill(window.EU_GUIDED_HANDOFF.take('extraction'));
       const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('extraction') : '';
       let body;
-      const real = dataMode() === 'real';
       if (exView === 'running') body = runningState();
       else if (exView === 'done') body = doneState();
-      else if (real && exReal === 'connect') body = connectState();
-      else if (real && exReal === 'scanning') body = scanningState();
-      else if (real && exReal === 'scanresult') body = scanResultState();
-      else if (real && exReal === 'converting') body = convertingState();
+      else if (exReal === 'connect') body = connectState();
+      else if (exReal === 'scanning') body = scanningState();
+      else if (exReal === 'scanresult') body = scanResultState();
+      else if (exReal === 'converting') body = convertingState();
       else {
         body = `${setupFlow()}${exSetupStep === 'modules' ? handoffBar() : ''}`;
       }
@@ -2000,8 +1985,8 @@
   window.EU_EXTRACTION_NATIVE_OWNER = {
     render: () => S.extraction.render(),
     bind: host => S.extraction.afterRender(host),
-    isReal: () => dataMode() === 'real',
-    isPreparedExport: () => dataMode() === 'real' && exSource === 'module' && exReal === 'ready',
+    isReal: () => true,
+    isPreparedExport: () => exSource === 'module' && exReal === 'ready',
     setupSummary: extractionSetupSummary,
     sourceBindingSnapshot,
     bindSourceToCopilot,
