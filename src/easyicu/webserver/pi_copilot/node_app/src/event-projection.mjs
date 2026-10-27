@@ -364,6 +364,13 @@ function toolResource(toolName, args) {
   });
 }
 
+// Keep in sync with the host's service.ALLOWED_TURN_ACTIONS. Only host-owned
+// details may identify the action the browser can request for this turn.
+const ALLOWED_TURN_ACTIONS = new Set([
+  "configure", "idea", "literature", "extract", "run", "provider_run",
+  "report_revision", "cancel", "workspace_write", "mcp_read",
+]);
+
 function toolReceipt(result) {
   const details = result?.details && typeof result.details === "object"
     ? result.details
@@ -390,6 +397,10 @@ function toolReceipt(result) {
     code: boundedText(details.code || "", 160),
     ...(receipt ? { receipt } : {}),
     owner: boundedText(details.owner || "", 240),
+    ...(ALLOWED_TURN_ACTIONS.has(ownerDetails.required_action)
+      ? { required_action: ownerDetails.required_action } : {}),
+    ...(typeof ownerDetails.grantable_by_turn === "boolean"
+      ? { grantable_by_turn: ownerDetails.grantable_by_turn } : {}),
     ...(jobId ? { job_id: jobId } : {}),
     ...(hostRebindAfterTurn ? { host_rebind_after_turn: true } : {}),
     ...(resource ? { resource } : {}),

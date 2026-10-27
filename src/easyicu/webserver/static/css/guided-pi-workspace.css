@@ -159,6 +159,8 @@
 .gpi-composer-drawer-row[data-gpi-attach-toggle][aria-pressed=true] strong::after{content:" ✓";color:var(--accent)}
 .gpi-composer-drawer-row[data-gpi-mention-add][aria-pressed=true]{cursor:default}.gpi-composer-drawer-row[data-gpi-mention-add][aria-pressed=true] strong::after{content:" ✓";color:var(--accent)}
 .gpi-composer-drawer-body>nav button:not(.gpi-mention-kind)+.gpi-mention-kind{position:relative;margin-top:11px}.gpi-composer-drawer-body>nav button:not(.gpi-mention-kind)+.gpi-mention-kind::before{content:"";position:absolute;top:-7px;left:4px;right:4px;border-top:1px solid var(--hair)}
+/* A step held for the researcher's go-ahead (screens-guided-pi-access.js), above the composer. */
+.gpi-action-ask{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:0 0 8px;padding:10px 12px;border:1px solid var(--hair);border-radius:8px;background:var(--wash)}.gpi-action-ask p{flex:1 1 220px;margin:0;color:var(--ink);font-size:13px;line-height:1.5}.gpi-action-ask-buttons{display:flex;flex-wrap:wrap;gap:8px}
 .gpi-attached-skill-error{margin:0 0 6px;color:var(--danger);font-size:12px;line-height:1.5}
 .gpi-composer-drawer>footer .gpi-attached-defaults{margin-top:4px}.gpi-composer-drawer>footer span.gpi-attached-defaults{display:block;padding:8px 0 0;color:var(--ink-3);font-size:12px}
 .gpi-message-skill{display:inline-block;margin-bottom:7px;padding:4px 7px;border:1px solid var(--hair);border-radius:6px;background:var(--wash);color:var(--muted);font-size:11px}

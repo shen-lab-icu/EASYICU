@@ -97,7 +97,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-header.js?v=20261021-help1" in index
     assert "js/screens-guided-pi-model-menu.js?v=20260923-keep-open1" in index
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
-    assert "css/guided-pi-workspace.css?v=20261027-chip1" in index
+    assert "css/guided-pi-workspace.css?v=20261027-access1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
     assert "js/screens-guided-pi-demo.js?v=20261026-fig2" in index
     assert "js/screens-guided-pi-demo-trace.js?v=20261026-demo3" in index
@@ -130,12 +130,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-provider-control.js") < index.index(
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
-    assert "js/screens-guided-pi-study-workspace.js?v=20261026-mention1" in index
-    assert "js/screens-guided-pi-events.js?v=20261027-chip1" in index
+    assert "js/screens-guided-pi-study-workspace.js?v=20261027-access1" in index
+    assert "js/screens-guided-pi-events.js?v=20261027-access1" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261026-six6" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261026-quick1" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261027-access1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -168,7 +168,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-iqr1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261026-int1" in index
-    assert "js/screens-guided-pi.js?v=20261027-top1" in index
+    assert "js/screens-guided-pi.js?v=20261027-access1" in index
     assert "js/screens-guided.js?v=20261026-projects1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -2324,11 +2324,17 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "provider_connection_unverified" in pi_owner
     assert "localStorage.setItem('easyicu_pi_api" not in pi_owner
     assert "keyInput.value = ''" in provider_control
-    assert "ACCESS_MODE_GRANTS" in pi_owner
+    # Modes, grants and wording belong to the access owner; the shell asks it.
+    access_owner = _read("js/screens-guided-pi-access.js")
+    assert "const ACCESS = MODULES.require('access');" in pi_owner
+    assert "ACCESS_MODE_GRANTS" not in pi_owner
     assert "data-gpi-access-mode" in events_owner
-    assert "Ask first" in pi_owner
-    assert "Confirm routine actions automatically" in pi_owner
-    assert "Allow additional actions" in pi_owner
+    assert "Ask me first" in access_owner
+    assert "Confirm routine actions automatically" in access_owner
+    assert "Allow additional actions" not in access_owner + pi_owner
+    assert "'cancel'" not in access_owner.split("const MODES")[0]
+    index = _read("index.html")
+    assert index.index("js/screens-guided-pi-access.js") < index.index("js/screens-guided-pi.js?")
     assert "data-gpi-grant" not in pi_owner
     assert "data-gpi-resource-file" in resource_owner
     assert "data-gpi-resource-run" in resource_owner
@@ -6594,8 +6600,8 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20261026-search2" in index
-    assert "screens-guided-pi.js?v=20261027-top1" in index
+    assert "screens-guided-pi-transcript.js?v=20261027-access1" in index
+    assert "screens-guided-pi.js?v=20261027-access1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

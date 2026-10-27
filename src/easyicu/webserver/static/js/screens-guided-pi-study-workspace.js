@@ -277,15 +277,13 @@
     function removeSkill() { skill = null; }
     function removeBuilder() { builder = null; }
     function removeMethod() { method = null; }
+    // Modes, their grants and their wording: screens-guided-pi-access.js.
     function renderAccessMode(mode, label, iconHtml) {
-      const modes = [
-        ['ask', tr('Ask before every tool action', '每次工具操作前都询问')],
-        ['assist', tr('Auto-approve low-risk setup and inspection; ask before extraction and full analysis', '自动批准低风险配置与检查；提取和完整分析前仍询问')],
-        ['full', tr('Allow all available tools; explicit scientific confirmation gates still apply', '允许所有可用工具；明确的科学确认门禁仍然有效')],
-      ];
-      const currentDescription = (modes.find(([key]) => key === mode) || modes[1])[1];
+      const access = window.EasyICU.guidedPi.require('access');
+      const modes = access.MODES.map(key => [key, access.description(key)]);
+      const currentDescription = access.description(mode);
       return `<details class="gpi-access-menu" data-popover-menu>
-        <summary aria-label="${esc(`${label(mode)}：${currentDescription}`)}" title="${esc(currentDescription)}">${iconHtml(mode === 'full' ? 'unlock' : 'shield', 15)}<span>${esc(label(mode))}</span><span class="gpi-access-chevron" aria-hidden="true">${iconHtml('chevron', 13)}</span></summary>
+        <summary aria-label="${esc(`${label(mode)}：${currentDescription}`)}" title="${esc(currentDescription)}">${iconHtml('shield', 15)}<span>${esc(label(mode))}</span><span class="gpi-access-chevron" aria-hidden="true">${iconHtml('chevron', 13)}</span></summary>
         <div class="gpi-access-popover" role="group" aria-label="${tr('Agent access level', 'Agent 访问级别')}">
           ${modes.map(([key, description]) => `<button type="button" data-gpi-access-mode="${key}" aria-pressed="${mode === key}"><span><strong>${esc(label(key))}</strong><small>${esc(description)}</small></span>${mode === key ? iconHtml('check', 15) : ''}</button>`).join('')}
         </div>

@@ -26,6 +26,8 @@ TESTS = ROOT / "tests" / "js"
 JS = ROOT / "src" / "easyicu" / "webserver" / "static" / "js"
 
 CONTRACTS: dict[str, list[str]] = {
+    "pi_action_authorization_receipts.test.js": [],
+    "pi_outbound_effort.test.js": [],
     "pi_personalization.test.js": [],
     "model_request_receipts.test.js": [],
     "figure_format_downloads.test.js": [],
@@ -145,6 +147,7 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-modules.js",
         "screens-guided-pi-error-text.js",
         "screens-guided-pi-resources.js",
+        "screens-guided-pi-access.js",
         "screens-guided-pi-study-workspace.js",
         "screens-guided-pi-run-outcome.js",
         "product-labels.js",
@@ -201,6 +204,12 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-agent-render.js",
         "product-labels.js",
         "screens-guided-pi-run-files.js",
+    ],
+    # Requires the module registry and the access owner.
+    "guided_pi_access.test.js": [
+        "screens-guided-pi-modules.js",
+        "html-escape.js",
+        "screens-guided-pi-access.js",
     ],
     # Requires the popover owner, the module registry, and the events and
     # study-workspace owners; reads the shell as text.

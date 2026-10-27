@@ -93,7 +93,7 @@ host.addEventListener = (name, handler) => { handlers[name] = handler; };
 const live = {};
 function paint() {
   const menu = (className, body) => el('details', { class: className, 'data-popover-menu': '' }, [el('summary'), body]);
-  live.accessButton = el('button', { type: 'button', 'data-gpi-access-mode': 'full' });
+  live.accessButton = el('button', { type: 'button', 'data-gpi-access-mode': 'ask' });
   live.layoutToggle = el('button', { type: 'button', 'data-gpi-layout-toggle': 'context', 'aria-pressed': 'false' }, [el('span'), el('span')]);
   live.modeSwitch = el('button', { type: 'button', 'data-gpi-mode-switch': 'workspace' });
   live.picker = el('button', { type: 'button', role: 'menuitem', 'data-gpi-composer-picker': 'materials' });
@@ -141,7 +141,7 @@ function press(target) {
 paint();
 live.access.open = true;
 press(live.accessButton);
-assert.equal(state.accessMode, 'full');
+assert.equal(state.accessMode, 'ask');
 assert.equal(live.access.open, false, 'The access menu closes with the choice');
 
 // A mode chosen in More, and a picker chosen in +, close their menu first.

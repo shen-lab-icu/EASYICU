@@ -9,6 +9,7 @@
   const STARTERS = MODULES.require('starters');
   const IDEA_SOURCE = MODULES.require('ideaSource');
   const EFFORT_MENU = MODULES.require('effortMenu');
+  const ACCESS = MODULES.require('access');
   const HEADER = MODULES.require('header');
   const REGENERATION = MODULES.require('regeneration');
   const STUDY_WORKSPACE = MODULES.require('studyWorkspace').create({ tr, esc, iconHtml });
@@ -24,18 +25,13 @@
     projectInitialization: null, projectIssue: '', workflow: null, latestRun: null, workflowError: '',
     projectLoading: false, projectDiscoveryLoading: false,
     workflowPromise: null, workflowPromiseId: '',
-    agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
+    agentMode: 'research', accessMode: ACCESS.preferred(), pendingAuthorityRebind: false,
     demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
     workflowReceipts: [], editingMessageId: '', sessionSelectionRevision: 0,
     pendingLanguageReload: false, pendingEntryIntent: '', regenerating: false, regeneration: null,
     openingQuestion: null, followUpDraft: null,
     startupPromise: null, projectPreparePromise: null, projectPrepareId: '',
   };
-  const ACCESS_MODE_GRANTS = Object.freeze({
-    ask: Object.freeze([]),
-    assist: Object.freeze(['idea', 'literature', 'configure', 'run', 'workspace_write', 'mcp_read']),
-    full: Object.freeze(['idea', 'literature', 'configure', 'extract', 'run', 'provider_run', 'cancel', 'workspace_write', 'mcp_read']),
-  });
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
   const { publicAssistantText } = MODULES.require('assistantText').create({ tr });
@@ -138,15 +134,8 @@
   function agentMode() {
     return (state.session && state.session.agent_mode) || state.agentMode || 'research';
   }
-  function accessModeLabel(mode) {
-    if (mode === 'ask') return tr('Ask first', '请求访问');
-    if (mode === 'full') return tr('Allow additional actions', '允许更多操作');
-    return tr('Confirm routine actions automatically', '常规操作自动确认');
-  }
-  function turnGrants() {
-    const grants = ACCESS_MODE_GRANTS[state.accessMode] || ACCESS_MODE_GRANTS.assist;
-    return grants.filter(action => action !== 'workspace_write' || agentMode() === 'workspace');
-  }
+  function accessModeLabel(mode) { return ACCESS.label(mode); }
+  function turnGrants() { return ACCESS.grants(state.accessMode, agentMode()); }
   function setShell(shell) {
     state.shell = shell === 'pi' ? 'pi' : 'legacy';
     if (state.shell !== 'pi') closeSourceView();
@@ -437,6 +426,7 @@
     governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
     togglePresentationPin, configureProvider, rememberSession, recordHostAction,
     HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP, MESSAGE_QUEUE, QUICK_ANSWERS, MULTI_DATABASE,
+    ACCESS, turnGrants,
   });
   const dismissHeaderOverflow = EVENTS.dismissHeaderOverflow;
   const wire = EVENTS.wire;

@@ -95,6 +95,7 @@
           status: event.is_error ? 'error' : 'complete', code: event.code || '',
           owner: event.owner || '', receipt: event.receipt || null, at, endedAt: at,
           jobId: event.job_id || '',
+          requiredAction: event.required_action || '', grantable: event.grantable_by_turn === true,
           resource: event.resource || null,
           resources: Array.isArray(event.resources) ? event.resources : [],
         });

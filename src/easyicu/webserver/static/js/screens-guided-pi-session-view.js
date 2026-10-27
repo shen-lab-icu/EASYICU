@@ -447,6 +447,12 @@
       // A research job runs in the server process and outlives the page
       // (jobs.py JobManager.submit; the workflow re-watches it on return).
       const serverNoteHtml = `<p class="gpi-compose-server-note">${esc(tr('EasyICU runs on the server; you can switch conversations or close the page and come back to the progress.', 'EasyICU 在服务器上运行，可以切换对话或关闭页面，回来后继续显示进度。'))}</p>`;
+      // A step the host held for the researcher's go-ahead asks above the composer.
+      const accessOwner = MODULES.optional('access');
+      const actionAskHtml = accessOwner && !workspace
+        ? accessOwner.render(accessOwner.pending(state.messages), {
+          disabled: interactionLocked || stale || Boolean(state.busy), mode: state.accessMode, agentMode: agentMode(),
+        }) : '';
       const emptyResearchHtml = STARTERS && typeof STARTERS.render === 'function'
         ? STARTERS.render({ tr, disabled: interactionLocked || stale,
           composer: `<div class="gpi-compose gpi-entry-compose">${composerCardHtml}</div>` })
@@ -472,7 +478,7 @@
             ${showProjectContinuationCards && !dataConsentRequired ? continuationCardsHtml() : ''}
           </div>
           ${state.error ? `<div class="gpi-error" role="alert"><span>${esc(state.error)}</span><button type="button" class="gpi-error-close" data-gpi-dismiss-error aria-label="${tr('Dismiss', '关闭提示')}">×</button></div>` : ''}
-          ${emptyResearch ? '' : `${activeChild ? serverNoteHtml : ''}<div class="gpi-compose">${composerCardHtml}</div>`}
+          ${emptyResearch ? '' : `${activeChild ? serverNoteHtml : ''}<div class="gpi-compose">${actionAskHtml}${composerCardHtml}</div>`}
       </div>`;
     }
 

@@ -54,11 +54,12 @@ function harness(language = 'zh') {
     },
   });
   for (const name of ['screens-guided-pi-modules.js', 'html-escape.js',
-    'screens-guided-pi-markdown.js', 'screens-guided-pi-resources.js', 'screens-guided-pi-events.js']) {
+    'screens-guided-pi-markdown.js', 'screens-guided-pi-resources.js', 'screens-guided-pi-access.js', 'screens-guided-pi-events.js']) {
     vm.runInContext(fs.readFileSync(path.join(js, name), 'utf8'), context);
   }
   const modules = context.window.EasyICU.guidedPi;
   context.MODULES = modules;
+  context.ACCESS = modules.require('access');
   context.esc = context.window.EU_HTML.esc;
   const resources = modules.require('resources').create({ esc: context.esc });
   // Use the unchanged production descriptor validator; never load file bytes.
@@ -123,7 +124,9 @@ for (const language of ['zh', 'en']) {
   test(`${language}: C27 labels describe routine actions without promising research approval`, () => {
     const h = harness(language);
     assert.equal(h.context.accessModeLabel('assist'), language === 'zh' ? '常规操作自动确认' : 'Confirm routine actions automatically');
-    assert.equal(h.context.accessModeLabel('full'), language === 'zh' ? '允许更多操作' : 'Allow additional actions');
+    assert.equal(h.context.accessModeLabel('ask'), language === 'zh' ? '每步先问我' : 'Ask me first');
+    // The retired mode reads as the routine default.
+    assert.equal(h.context.accessModeLabel('full'), language === 'zh' ? '常规操作自动确认' : 'Confirm routine actions automatically');
   });
 
   for (const origin of ['model_option', 'host_prompt']) {

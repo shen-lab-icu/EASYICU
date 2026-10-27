@@ -15,6 +15,7 @@ global.EU_HTML = { esc: value => String(value ?? '').replace(/&/g, '&amp;').repl
 require(path.join(jsRoot, 'screens-guided-pi-modules.js'));
 require(path.join(jsRoot, 'screens-guided-pi-error-text.js'));
 require(path.join(jsRoot, 'screens-guided-pi-resources.js'));
+require(path.join(jsRoot, 'screens-guided-pi-access.js'));
 require(path.join(jsRoot, 'screens-guided-pi-study-workspace.js'));
 require(path.join(jsRoot, 'screens-guided-pi-run-outcome.js'));
 const modules = global.EasyICU.guidedPi;
@@ -245,7 +246,9 @@ materialWorkspace.syncNavigation({
 });
 assert.match(taskRail.innerHTML, /data-gpi-rail-rename="pi_history"/);
 assert.doesNotMatch(taskRail.innerHTML, /data-gpi-rail-remove="pi_history"/);
-assert.match(materialWorkspace.renderAccessMode('assist', key => key, () => ''), /title="Auto-approve low-risk setup and inspection/);
+const accessMenu = materialWorkspace.renderAccessMode('assist', key => key, () => '');
+assert.match(accessMenu, /title="Setup, searches and the preflight check go ahead/);
+assert.equal((accessMenu.match(/data-gpi-access-mode=/g) || []).length, 2, 'Two access modes: ask first, routine');
 global.document.getElementById = originalGetElementById;
 
 // Missing/failed checks cannot acquire a positive scientific status through presentation.

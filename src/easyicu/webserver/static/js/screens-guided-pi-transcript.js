@@ -553,6 +553,7 @@
           Object.assign(toolStep, {
             status: receipt.is_error ? 'error' : 'complete', receipt: receipt.receipt || null,
             code: receipt.code || '', owner: receipt.owner || '',
+            requiredAction: receipt.required_action || '', grantable: receipt.grantable_by_turn === true,
             resource: receipt.resource || toolStep.resource || null,
             resources: Array.isArray(receipt.resources) ? receipt.resources : [],
             endedAt: rowAt,
@@ -676,7 +677,7 @@
           } else if (event.type === 'tool_progress') {
             upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at });
           } else if (event.type === 'tool_end') {
-            upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: event.is_error ? 'error' : 'complete', code: event.code || '', owner: event.owner || '', receipt: event.receipt || null, jobId: event.job_id || '', at, endedAt: at, resource: event.resource || null, resources: Array.isArray(event.resources) ? event.resources : [] });
+            upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: event.is_error ? 'error' : 'complete', code: event.code || '', owner: event.owner || '', receipt: event.receipt || null, jobId: event.job_id || '', requiredAction: event.required_action || '', grantable: event.grantable_by_turn === true, at, endedAt: at, resource: event.resource || null, resources: Array.isArray(event.resources) ? event.resources : [] });
           } else if (event.type === 'retry') upsertActivityStep(replayActivity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'complete', attempt: event.attempt, maxAttempts: event.max_attempts, at, startedAt: at, endedAt: at });
           else if (event.type === 'compaction_start') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: 'running', at, startedAt: at });
           else if (event.type === 'compaction_end') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: event.aborted ? 'error' : 'complete', at, endedAt: at });
