@@ -1113,8 +1113,40 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
         )
         is not None
     )
+    # Trajectories divided into an unnamed number of classes ask for those
+    # classes to be found ("into how many classes can the MAP trajectories be
+    # divided"); trajectories split into named, rule-defined groups do not.
+    classes_asked_for = (
+        re.search(
+            r"\btrajector(?:y|ies)\b[^.;?!]{0,80}?\b(?:divided|classified|grouped|"
+            r"categori[sz]ed|separated|partitioned|split)\s+into\s+"
+            r"(?:how\s+many|which|what|several|distinct|different|latent)\b"
+            r"[^.;?!]{0,24}\b(?:classes|groups|types|subgroups|clusters|subtypes)\b"
+            r"|\binto\s+(?:how\s+many|which|what)\s+(?:distinct\s+|latent\s+)?"
+            r"(?:classes|groups|types|subgroups|clusters|subtypes)\b[^.;?!]{0,80}?"
+            r"\btrajector(?:y|ies)\b[^.;?!]{0,80}?\b(?:divided|classified|grouped|"
+            r"categori[sz]ed|separated|partitioned|split)\b"
+            r"|\b(?:how\s+many|which|what)\s+(?:distinct\s+|latent\s+)?"
+            r"(?:classes|types|subgroups|subtypes)\s+of\s+(?:[a-z0-9_-]+\s+){0,4}"
+            r"trajector(?:y|ies)\b"
+            # Phenotypes asked for by number or kind: "how many phenotypes
+            # emerge", "which phenotypes can first-day values separate".
+            r"|\b(?:how\s+many|which|what)\s+(?:distinct\s+|latent\s+)?"
+            r"(?:sub[-\s]?phenotypes|phenotypes|subtypes|endotypes)\s+"
+            r"(?:emerge|exist|can\s+be\s+(?:identified|derived|distinguished|separated|found))\b"
+            r"|\b(?:separate|distinguish)\w*\s+(?:into\s+)?(?:how\s+many|which|what)\s+"
+            r"(?:distinct\s+)?(?:sub[-\s]?phenotypes|phenotypes|subtypes|endotypes)\b",
+            normalised,
+        )
+        is not None
+    )
     plural_discovery_target = bool(
-        (clusters_into_groups or profiles_form_groups or groups_discovered)
+        (
+            clusters_into_groups
+            or profiles_form_groups
+            or groups_discovered
+            or classes_asked_for
+        )
         and not existing_groups
     )
     chinese_discovery_disclaimer = (
@@ -1170,12 +1202,43 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
         )
         is not None
     )
+    # A question that asks how many, or which, phenotypes its features
+    # separate into ("首日生命体征和化验能分出哪几种表型") asks for them to be
+    # found; so do trajectories divided into an unnamed number of classes
+    # ("轨迹可分为哪几类", "有哪几类轨迹") and a trajectory subtyping
+    # ("轨迹分型").  Trajectories split into named groups ("分为上升组和下降组")
+    # are defined by a rule, and an existing subtype ("已知的亚型") is
+    # membership, neither discovered.
+    chinese_existing_groups = (
+        re.search(
+            r"(?:已有|已知|既往|现有|已发表|已定义|预先定义|预设)[^，。；;？?]{0,8}"
+            r"(?:表型|亚型|亚表型|内型|分型|类别)",
+            normalised,
+        )
+        is not None
+    )
+    chinese_classes_found = (
+        re.search(
+            r"(?:分为|分成|分出|划分为|划分成|划分出|区分出|区分为|归为|聚为|聚成)\s*"
+            r"(?:哪几|哪些|几|多少|若干)\s*(?:个|种|类)?\s*(?:亚表型|表型|亚型|内型)"
+            r"|(?:哪几|哪些|几|多少)\s*(?:个|种|类)\s*(?:亚表型|表型|亚型|内型)"
+            r"|轨迹[^，。；;？?]{0,8}(?:分为|分成|分出|划分为|划分成|归为|聚为|聚成)\s*"
+            r"(?:哪几|哪些|几|多少|若干|不同的?)\s*个?\s*"
+            r"(?:类别|类|种|型|组|亚型|模式)"
+            r"|轨迹\s*(?:分型|亚型|类别|潜在类别)"
+            r"|(?:哪几|哪些|几|多少)\s*(?:类|种|型)[^，。；;？?]{0,10}轨迹",
+            normalised,
+        )
+        is not None
+        and not chinese_existing_groups
+    )
     chinese_discovery = bool(
         not chinese_discovery_disclaimer
         and (
             chinese_action_target
             or chinese_named_grouping
             or chinese_clustered_into_groups
+            or chinese_classes_found
         )
     )
     chinese_explicit_discovery = bool(

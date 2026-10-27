@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -49,13 +50,16 @@ __all__ = [
     "longitudinal_capability_note",
     "normalize_trajectory_design",
     "proposed_trajectory_coordinates",
+    "recorded_measurement_concept",
     "sealed_trajectory_authority_body",
     "time_varying_role",
     "trajectory_coordinate_measurement",
     "trajectory_coordinate_proposal",
+    "trajectory_eligibility_basis",
     "trajectory_population_design",
     "trajectory_population_issues",
     "trajectory_window_design",
+    "unrecorded_trajectory_coordinates",
 ]
 
 _CONCEPT_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
@@ -131,9 +135,11 @@ FIXED_WINDOW_TRAJECTORY_DEFAULTS = MappingProxyType(
 TRAJECTORY_PRIMARY_ACTION = "phenotyping.trajectory_feature_clustering"
 _MAX_COORDINATE_CONCEPTS = 16
 #: The signed representation owner counts a stay's eligible windows on
-#: owner-available SOFA-2 evidence, the only coordinates that publish an
-#: availability receipt beside each value; a design without a SOFA-2
-#: coordinate would exclude every stay instead of measuring it.
+#: owner-available SOFA-2 evidence when the design has a SOFA-2 coordinate:
+#: those publish an availability receipt beside each value, which tells a
+#: carried-forward score from an absent one.  A design without one counts its
+#: windows on its coordinates' recorded values, which only a concept read
+#: directly from source rows has (``recorded_measurement_concept``).
 ELIGIBILITY_COORDINATE_PREFIX = "sofa2"
 _MAX_CANDIDATE_CLUSTERS = 12
 _MAX_WINDOWS = 48
@@ -311,7 +317,8 @@ def _concepts(value: Any, *, field: str, minimum: int) -> tuple[str, ...]:
     if len(concepts) < minimum:
         raise TrajectoryDesignError(
             "study_trajectory_concepts_insufficient",
-            f"{field} requires at least {minimum} distinct concepts.",
+            f"{field} requires at least {minimum} distinct "
+            + ("concept." if minimum == 1 else "concepts."),
             field=field,
         )
     if len(concepts) > _MAX_COORDINATE_CONCEPTS:
@@ -519,7 +526,7 @@ def normalize_trajectory_design(
         coordinate_concepts=_concepts(
             value.get("coordinate_concepts"),
             field="trajectory_design.coordinate_concepts",
-            minimum=2 if enforce_design_rules else 1,
+            minimum=1,
         ),
         descriptive_only_concepts=_concepts(
             value.get("descriptive_only_concepts"),
@@ -610,18 +617,94 @@ def proposed_trajectory_coordinates(
     return tuple(concepts)
 
 
+@lru_cache(maxsize=1)
+def _concept_dictionary() -> Any:
+    from ...resources import load_dictionary
+
+    return load_dictionary()
+
+
+#: Source-item fields that make a row stand for an interval (an infusion, a
+#: ventilation episode) rather than one charted value.
+_INTERVAL_SOURCE_FIELDS = ("stop_var", "end_var", "win_type")
+
+
+def recorded_measurement_concept(concept: str) -> bool:
+    """Whether the concept dictionary reads ``concept`` as charted values.
+
+    Such a concept is a time series read from source rows: no concept-level
+    callback, components or dependencies, and no source item spans an
+    interval.  Each row the materializer keeps is then one recorded value
+    (``evidence_state`` ``direct_observed``).  A derived concept -- a
+    composite score, an indicator -- or an interval expanded over time can
+    hold values between recordings, and without a per-row receipt a window
+    holding one is no evidence of a measurement.  A concept the dictionary
+    does not define is not one.
+    """
+
+    definition = _concept_dictionary().get(str(concept or "").strip())
+    if definition is None or not getattr(definition, "sources", None):
+        return False
+    if (
+        getattr(definition, "callback", None)
+        or getattr(definition, "sub_concepts", None)
+        or getattr(definition, "depends_on", None)
+        or getattr(definition, "target", None) not in (None, "ts_tbl")
+    ):
+        return False
+    return not any(
+        getattr(item, "dur_var", None)
+        or getattr(item, "target", None) not in (None, "ts_tbl")
+        or any((getattr(item, "params", None) or {}).get(key) for key in _INTERVAL_SOURCE_FIELDS)
+        for items in definition.sources.values()
+        for item in items
+    )
+
+
+def trajectory_eligibility_basis(coordinates: Sequence[str]) -> tuple[str, ...]:
+    """The coordinates on which the signed owner counts a stay's eligible windows.
+
+    Its SOFA-2 coordinates when the design has one, as it always did;
+    otherwise every coordinate, each of which must then be a recorded
+    measurement (:func:`unrecorded_trajectory_coordinates`).
+    """
+
+    sofa2 = tuple(
+        concept
+        for concept in coordinates
+        if str(concept).startswith(ELIGIBILITY_COORDINATE_PREFIX)
+    )
+    return sofa2 or tuple(coordinates)
+
+
+def unrecorded_trajectory_coordinates(coordinates: Sequence[str]) -> tuple[str, ...]:
+    """The coordinates a design without a SOFA-2 component cannot count windows on."""
+
+    if any(
+        str(concept).startswith(ELIGIBILITY_COORDINATE_PREFIX)
+        for concept in coordinates
+    ):
+        return ()
+    return tuple(
+        concept for concept in coordinates if not recorded_measurement_concept(concept)
+    )
+
+
 def executable_trajectory_coordinates(concepts: Sequence[str]) -> bool:
-    """Whether a proposed coordinate set can be a signed trajectory design."""
+    """Whether a proposed coordinate set can be a signed trajectory design.
+
+    One or more valid concepts whose eligibility basis carries evidence of
+    observation: a SOFA-2 component among them, or else every one a recorded
+    measurement.
+    """
 
     try:
         coordinates = _concepts(
-            list(concepts), field="trajectory_design.coordinate_concepts", minimum=2
+            list(concepts), field="trajectory_design.coordinate_concepts", minimum=1
         )
     except TrajectoryDesignError:
         return False
-    return any(
-        concept.startswith(ELIGIBILITY_COORDINATE_PREFIX) for concept in coordinates
-    )
+    return not unrecorded_trajectory_coordinates(coordinates)
 
 
 def longitudinal_capability_note(offered_components: Iterable[str]) -> str:
@@ -648,12 +731,14 @@ def longitudinal_capability_note(offered_components: Iterable[str]) -> str:
     return (
         "LONGITUDINAL CAPABILITY (a host fact, not a recommendation): for a "
         "question about trajectories over ICU time, the host's signed "
-        "fixed-window trajectory owner models per-window values of at least two "
-        "time-varying concepts. It counts each stay's eligible windows on SOFA-2 "
-        "components, which carry per-window observed/available receipts, so its "
-        "design needs at least one of: "
+        "fixed-window trajectory owner models per-window values of time-varying "
+        "concepts. It counts each stay's eligible windows on SOFA-2 components, "
+        "which carry per-window observed/available receipts, when its design has "
+        "at least one of: "
         + ", ".join(offered)
-        + ". Outcomes and one-value-per-stay concepts are never trajectory "
+        + ". A design without one counts them on measurements read directly from "
+        "source rows, never on another derived score. Outcomes and "
+        "one-value-per-stay concepts are never trajectory "
         "coordinates. If such a question names a score without its version and "
         "this catalog offers several versions, each is a faithful reading: "
         "select one version and say which, and why, in the rationale. Keep a "
@@ -668,9 +753,9 @@ def longitudinal_capability_note(offered_components: Iterable[str]) -> str:
 #: after that primary (``planning.phenotype_outline_rules``).
 TRAJECTORY_OUTCOME_DESCRIPTION_RULE = (
     "When a phenotyping.trajectory_feature_clustering primary's coordinates "
-    "meet the signed owner's rule (at least two time-varying study variables, "
-    "one of them a SOFA-2 component, a name starting with "
-    f"{ELIGIBILITY_COORDINATE_PREFIX!r}), the host replaces it with the signed "
+    "meet the signed owner's rule (time-varying study variables that include a "
+    f"SOFA-2 component, a name starting with {ELIGIBILITY_COORDINATE_PREFIX!r}, "
+    "or are all directly measured), the host replaces it with the signed "
     "fixed-window suite, which describes the requested outcomes on its frozen "
     "classes: keep outcomes and one-value-per-stay characteristics out of that "
     "primary's inputs. Only a primary whose coordinates cannot meet the rule "
@@ -679,9 +764,10 @@ TRAJECTORY_OUTCOME_DESCRIPTION_RULE = (
 
 TRAJECTORY_OWNER_PLANNER_RULE = (
     "The host executes a phenotyping.trajectory_feature_clustering primary with "
-    "its signed fixed-window owner only when the primary's inputs are at least "
-    "two time-varying study variables, one of them a SOFA-2 component (a name "
-    f"starting with {ELIGIBILITY_COORDINATE_PREFIX!r}), and no outcome or "
+    "its signed fixed-window owner only when the primary's inputs are one or "
+    "more time-varying study variables, including a SOFA-2 component (a name "
+    f"starting with {ELIGIBILITY_COORDINATE_PREFIX!r}) or all directly measured "
+    "(a vital sign or laboratory value, not a derived score), and no outcome or "
     "one-value-per-stay variable; otherwise its classes summarize per-stay "
     "values. When the question names a score without its version, the "
     "primary's intent says which version its coordinates use. "
@@ -728,10 +814,11 @@ def trajectory_coordinate_proposal(
     """What a trajectory plan's primary step clusters, under the owner's rule.
 
     The coordinates are the primary step's inputs that are study variables,
-    minus ``excluded`` identity columns.  They are executable when there are
-    at least two, one is a SOFA-2 component, and the step clusters no outcome
-    and no one-per-stay variable; otherwise the plan's own set is not a
-    design, and the remaining coordinates are never compiled on their own.
+    minus ``excluded`` identity columns.  They are executable when there is at
+    least one, they include a SOFA-2 component or are all recorded
+    measurements, and the step clusters no outcome and no one-per-stay
+    variable; otherwise the plan's own set is not a design, and the remaining
+    coordinates are never compiled on their own.
     """
 
     catalogue = list(variables)
@@ -758,6 +845,9 @@ def trajectory_coordinate_proposal(
         "one_per_stay_inputs": one_per_stay_inputs,
         "eligibility_coordinate_prefix": ELIGIBILITY_COORDINATE_PREFIX,
         "study_eligibility_coordinates": list(eligibility_coordinates(catalogue)),
+        # Derived coordinates a design without a SOFA-2 component cannot
+        # count eligible windows on.
+        "unrecorded_coordinates": list(unrecorded_trajectory_coordinates(coordinates)),
         # The time-varying coordinates alone would be a design; they are never
         # compiled while the step also clusters on anything else.
         "coordinates_executable": executable_trajectory_coordinates(coordinates),

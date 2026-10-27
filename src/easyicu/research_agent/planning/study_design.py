@@ -209,7 +209,11 @@ def _adaptive_triggers_for_context(
         )
     ):
         triggers.append(
-            "prevalence_or_event_rate_question: show exposure prevalence, "
+            "prevalence_or_event_rate_question: describe the requested outcome "
+            "or event rate in each discovered group with the outcome-by-cluster "
+            "description; there is no exposure contrast or adjusted model."
+            if family == "phenotyping"
+            else "prevalence_or_event_rate_question: show exposure prevalence, "
             "outcome incidence, or event rates before adjusted modelling."
         )
     if family == "prediction" and any(
@@ -262,7 +266,7 @@ def _display_modules_for_context(
 ) -> List[DisplayModuleSpec]:
     modules = display_modules_for_family(family)
     existing_ids = {module.module_id for module in modules}
-    for module in triggered_generic_modules(triggers):
+    for module in triggered_generic_modules(triggers, family):
         if module.module_id not in existing_ids:
             modules.append(module)
             existing_ids.add(module.module_id)

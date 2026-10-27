@@ -817,9 +817,12 @@ _ANCHOR_AFTER = re.compile(
 )
 #: "首24小时生理轨迹", "入ICU后前72小时内的SOFA轨迹", "插管后48小时的轨迹".
 #: "前" after an event means "before" it ("入ICU前72小时"), so it reads as
-#: "first" only at the start of a phrase or after 的/在/于.
+#: "first" only at the start of a phrase or after 的/在/于.  A Latin word in
+#: the anchor is often set off by single spaces ("入 ICU 后 48 小时").
 _ZH_TRAJECTORY_WINDOW = re.compile(
-    r"(?:(?P<anchor>[一-鿿A-Za-z0-9-]{1,12}?)后的?\s*"
+    r"(?:(?P<anchor>[一-鿿A-Za-z0-9-]"
+    r"(?:[一-鿿A-Za-z0-9-]| (?=[A-Za-z0-9])|(?<=[A-Za-z0-9]) (?=[一-鿿])){0,11}?)"
+    r"(?:(?<=[A-Za-z0-9]) )?后的?\s*"
     r"(?:(?:首|前|最初|头)\s*个?\s*)?"
     r"|(?:首|最初|头|(?:(?<![一-鿿A-Za-z0-9])|(?<=[的在于]))前)\s*个?\s*)"
     r"(?P<number>\d+(?:\.\d+)?)\s*个?\s*(?P<unit>小时|h|天|日)(?:以内|内)?"

@@ -2713,9 +2713,10 @@ def trajectory_representation_findings(
             + ", ".join(facts["one_per_stay_inputs"])
             + ")"
         )
-    if len(coordinates) < 2:
-        reasons.append("it names fewer than two time-varying coordinates")
-    if not any(name.startswith(prefix) for name in coordinates):
+    if not coordinates:
+        reasons.append("it names no time-varying coordinate")
+    unrecorded = list(facts.get("unrecorded_coordinates") or ())
+    if unrecorded:
         available = list(facts["study_eligibility_coordinates"])
         reasons.append(
             "none of its coordinates is a SOFA-2 component ("
@@ -2724,7 +2725,12 @@ def trajectory_representation_findings(
                 if available
                 else "this study's variables include none"
             )
-            + ")"
+            + "), and "
+            + ", ".join(unrecorded)
+            + (" is" if len(unrecorded) == 1 else " are")
+            + " not directly measured, so no window of "
+            + ("it" if len(unrecorded) == 1 else "them")
+            + " shows a recorded value"
         )
     if not window_executable:
         reasons.append(str(window.get("reason") or "its window is not a fixed-window design"))
@@ -2778,11 +2784,11 @@ def trajectory_representation_findings(
             evidence_refs=refs,
             remediation=(
                 "Where the question's own coordinates allow it, revise the "
-                "primary step to cluster at least two time-varying variables of "
-                "this study, including a SOFA-2 component (a variable whose name "
-                f"starts with {prefix!r}) on which the signed owner counts each "
-                "stay's eligible windows, and no outcome or one-per-stay "
-                "variable. Do not substitute another variable or score version "
+                "primary step to cluster time-varying variables of this study "
+                "that include a SOFA-2 component (a variable whose name starts "
+                f"with {prefix!r}) or are all directly measured, on which the "
+                "signed owner counts each stay's eligible windows, and no outcome "
+                "or one-per-stay variable. Do not substitute another variable or score version "
                 "for the one the question names; otherwise state that the "
                 "classes summarize per-stay values."
                 + (
@@ -3731,6 +3737,14 @@ def build_plan_scientific_review(
         # The proposed suite's event column has its owner; compiling the
         # design seals the suite that produces it.
         covered_outcomes = (*covered_outcomes, str(survival_suite["event_column"]))
+    # A validated post-clustering comparison is the phenotyping owner's
+    # executable contract for an outcome the question asks about: it describes
+    # that outcome by cluster.  The owner's check above reports any requested
+    # outcome it does not cover, and an invalid comparison covers nothing.
+    covered_outcomes = (
+        *covered_outcomes,
+        *sorted(compared_outcomes - set(covered_outcomes)),
+    )
     missing_model_outcomes = tuple(
         outcome for outcome in expected_outcomes if outcome not in covered_outcomes
     )

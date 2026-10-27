@@ -36,6 +36,14 @@ REVIEWABLE_PLAN_ITEM_ORDER = (
 )
 
 
+#: Families whose design can read a single variable: a description, or the
+#: classes of one measurement's trajectories, which pair no exposure with an
+#: outcome.  Every other design compares at least two.
+_SINGLE_VARIABLE_ANALYSIS_TYPES = frozenset(
+    {"descriptive_epidemiology", "trajectory_clustering"}
+)
+
+
 class ResearchDesignCandidate(BaseModel):
     """One pre-result design alternative for the same research question."""
 
@@ -65,8 +73,11 @@ class ResearchDesignCandidate(BaseModel):
     @field_validator("required_variables")
     @classmethod
     def _sufficient_variable_roster(cls, values: list[str], info: ValidationInfo) -> list[str]:
-        if info.data.get("analysis_type") != "descriptive_epidemiology" and len(values) < 2:
-            raise ValueError("non-descriptive design candidates require at least two variables")
+        if info.data.get("analysis_type") not in _SINGLE_VARIABLE_ANALYSIS_TYPES and len(values) < 2:
+            raise ValueError(
+                "design candidates other than a description or a trajectory "
+                "clustering require at least two variables"
+            )
         return values
 
     @field_validator(

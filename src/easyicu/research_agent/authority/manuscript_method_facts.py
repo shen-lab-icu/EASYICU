@@ -183,6 +183,11 @@ def _design_text(design: object) -> str:
             eligibility = (
                 f"with at least {design.minimum_observed_windows} observed windows"
             )
+        elif design.window_evidence == "any_recorded_coordinate_value":
+            eligibility = (
+                "when at least one model coordinate was recorded in at least "
+                f"{design.minimum_observed_windows} windows"
+            )
         else:
             eligibility = (
                 "when at least one SOFA-2 score was available in at least "

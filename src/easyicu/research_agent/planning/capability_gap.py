@@ -161,10 +161,103 @@ def capability_gap_confirmation_facts(
                                  for item in context.temporal_constraints],
         "fixed_window_association": fixed_window_association_facts(context),
         "stay_level_representation": stay_level_representation_facts(context),
+        "longitudinal_representation": longitudinal_representation_facts(context),
         **{field: [item.model_dump(mode="json") for item in context_stated_variables(context, field)]
            for field in STATED_VARIABLE_FIELDS},
     }
     return "Host facts for capability-gap confirmation:\n" + json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
+
+
+def longitudinal_representation_facts(context: ResearchContext) -> dict[str, Any] | None:
+    """The per-timepoint representation a trajectory-class question is planned on.
+
+    A study planned on a registered source's metadata holds no row yet: its
+    run materializes each stay's timed values of the trajectory design's
+    coordinates as a long panel over the design's own window, which the outer
+    stay-summary window does not bound (``acquisition``, the web trajectory
+    projection).  So the planning catalog lacking a time column is not the
+    source lacking repeated measurements.  ``None`` unless the question asks
+    for trajectories, the family router reads it as discovering their classes,
+    the study is planned on metadata, the window the question states is one
+    the signed fixed-window owner counts, and the roster holds a time-varying
+    variable that owner can count eligible windows on
+    (``contracts.trajectory_design``).  Which variables the question asks
+    about stays the Planner's reading; the host names the roster's candidates
+    and the exposure its reader bound.
+    """
+
+    from ..concept_availability import variable_source_unavailability
+    from ..contracts.concept_values import names_without_values
+    from ..contracts.trajectory_design import (
+        TRAJECTORY_PRIMARY_ACTION,
+        executable_trajectory_coordinates,
+        time_varying_role,
+        trajectory_window_design,
+    )
+    from ..research_context.stay_events import stay_outcome_columns
+    from ..research_context.temporal_semantics import trajectory_window_statements
+    from .analysis_types import infer_analysis_type, longitudinal_trajectory_requested
+    from .exposure_group_compile import planned_on_metadata
+
+    if (
+        not longitudinal_trajectory_requested(context)
+        or not planned_on_metadata(context)
+        or infer_analysis_type(context).key != "trajectory_clustering"
+    ):
+        return None
+    window = trajectory_window_design(
+        trajectory_window_statements(str(context.research_question or ""))
+    )
+    if window.get("executable") is not True:
+        return None
+    excluded = {*context.cohort.id_columns, *stay_outcome_columns(context)}
+    unavailable = names_without_values(context)
+    candidates = [
+        variable.name
+        for variable in context.variables
+        if variable.name not in excluded
+        and time_varying_role(variable.role)
+        and not variable_source_unavailability(variable, context.cohort.database)
+        and not {variable.name, variable.source_concept, *variable.derived_from_concepts} & unavailable
+        and executable_trajectory_coordinates([variable.name])
+    ]
+    if not candidates:
+        return None
+    named = [name for name in (context.primary_exposure,) if name in candidates]
+    span = (
+        f"{window['window_start_hours']}-{window['window_end_hours']} h after ICU admission "
+        f"in {window['grid_width_hours']}-hour windows"
+    )
+    window_clause = (
+        f"over {span}, the window the question states"
+        if window["source"] == "question"
+        else f"over its default {span}; the question states no trajectory window"
+    )
+    return {
+        "analysis_family": "trajectory_clustering",
+        "requires_longitudinal_representation": True,
+        "representation": "per_timepoint_panel_materialized_by_the_run",
+        "time_varying_variables": candidates,
+        "question_reading_variables": named,
+        "trajectory_window": window,
+        "planning_rule": (
+            "This study is planned on the source's metadata; its run materializes each "
+            "stay's timed values of the trajectory design's coordinates as a "
+            "per-timepoint panel over the design's window, which the outer stay-summary "
+            "window does not bound. Time-varying variables the signed fixed-window owner "
+            f"can model: {', '.join(candidates)}"
+            + (f" (the question's reading names {', '.join(named)})" if named else "")
+            + ". Plan trajectory_clustering with one primary "
+            f"{TRAJECTORY_PRIMARY_ACTION} step whose inputs are the time-varying "
+            "variables the question asks about, and no outcome or one-value-per-stay "
+            "variable; the host compiles them into the signed fixed-window trajectory "
+            f"design {window_clause}. An analysis the question asks of the frozen "
+            "classes that no offered step expresses (for example assigning a stay to a "
+            "class from features available earlier) goes in cannot_prove and the "
+            "rationale; the plan on the signed suite states it as a question "
+            "requirement for review."
+        ),
+    }
 
 
 def stay_level_representation_facts(context: ResearchContext) -> dict[str, Any] | None:
@@ -471,6 +564,9 @@ def check_capability_gap(
                 "unverified", "this study has a longitudinal representation"
             )
         if longitudinal_trajectory_requested(context):
+            planned = longitudinal_representation_facts(context)
+            if planned is not None:
+                return CapabilityGapCheck("unverified", planned["planning_rule"])
             return CapabilityGapCheck(
                 "verified", "the question requests within-stay trajectories or repeated measurements, "
                 "and this study has no longitudinal representation",
@@ -500,6 +596,7 @@ __all__ = [
     "capability_gap_stop",
     "check_capability_gap",
     "fixed_window_association_facts",
+    "longitudinal_representation_facts",
     "stay_level_representation_facts",
     "threshold_grouping_expressible",
 ]

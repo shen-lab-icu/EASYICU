@@ -273,7 +273,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
 
     @model_validator(mode="after")
     def _closed_contract(self) -> "TrajectoryScientificRuntimeAuthority":
-        if len(self.coordinate_concepts) < 2 or len(
+        if not self.coordinate_concepts or len(
             set(self.coordinate_concepts)
         ) != len(self.coordinate_concepts):
             raise ValueError("trajectory coordinate concepts must be unique")

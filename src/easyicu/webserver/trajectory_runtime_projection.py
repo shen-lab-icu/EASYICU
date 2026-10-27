@@ -38,6 +38,7 @@ from easyicu.research_agent.contracts.trajectory_design import (
     TrajectoryDesignError,
     load_trajectory_design,
     sealed_trajectory_authority_body,
+    unrecorded_trajectory_coordinates,
 )
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
     SIGNED_TRAJECTORY_POPULATION,
@@ -64,8 +65,9 @@ TRAJECTORY_ANALYSIS_FAMILY = "trajectory_clustering"
 _SUPPORTED_ANALYSIS_UNIT = "icu_stay"
 _SUPPORTED_VARIANCE_ESTIMATOR = "model_based"
 # The sealed representation owner defines eligibility as a count of windows
-# with owner-available SOFA-2 evidence, and reports exclusions under that
-# name. A design with no SOFA-2 coordinate cannot state eligibility at all.
+# with owner-available SOFA-2 evidence, or, in a design with no SOFA-2
+# coordinate, with a recorded coordinate value. A design whose coordinates
+# are derived scores without SOFA-2 receipts cannot state eligibility at all.
 _ELIGIBILITY_COORDINATE_PREFIX = ELIGIBILITY_COORDINATE_PREFIX
 #: The long panel's window as the cohort materializer records it
 #: (``_build_trajectory_long_from_resolved_source``).
@@ -372,20 +374,20 @@ def validate_trajectory_design_declaration(
     design = _typed_design(study)
     _require_supported_inference(study)
     _require_supported_population(study, design)
-    if not any(
-        concept.startswith(_ELIGIBILITY_COORDINATE_PREFIX)
-        for concept in design.coordinate_concepts
-    ):
+    unrecorded = unrecorded_trajectory_coordinates(design.coordinate_concepts)
+    if unrecorded:
         _fail(
             "web_trajectory_eligibility_coordinate_missing",
             (
                 "The signed representation owner counts owner-available SOFA-2 "
-                "windows to decide who is eligible for clustering, and reports "
-                "every exclusion under that rule. A design whose coordinates "
-                "contain no SOFA-2 component would silently exclude the whole "
-                "cohort instead of measuring it."
+                "windows, or in a design without a SOFA-2 component the windows "
+                "with a recorded coordinate value, to decide who is eligible for "
+                "clustering. A derived score carries no per-window receipt, so "
+                "a design without a SOFA-2 component that models one would "
+                "count windows its owner filled instead of measuring them."
             ),
             coordinate_concepts=list(design.coordinate_concepts),
+            unrecorded_coordinates=list(unrecorded),
             required_coordinate_prefix=_ELIGIBILITY_COORDINATE_PREFIX,
         )
     return design
