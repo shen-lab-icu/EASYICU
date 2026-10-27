@@ -337,8 +337,10 @@ def export_lactate_map_vaso_concepts_from_easyicu(
         unavailable_concepts.extend(unavailable)
         empty_data_concepts.extend(empty)
 
+    from easyicu import __version__
+
     manifest = {
-        "easyicu_version": "1.0.0",
+        "easyicu_version": __version__,
         "exported_at": datetime.now().isoformat(timespec="seconds"),
         "database": database,
         "entry_mode": "real",

@@ -36,6 +36,29 @@ def test_desktop_bundle_uses_one_private_runtime_and_local_loading_page():
     ]
 
 
+def test_package_and_desktop_declare_one_release_version():
+    import re
+
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib
+
+    package = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    cargo = tomllib.loads((DESKTOP / "src-tauri" / "Cargo.toml").read_text())["package"]["version"]
+    npm = json.loads((DESKTOP / "package.json").read_text(encoding="utf-8"))["version"]
+    lock = json.loads((DESKTOP / "package-lock.json").read_text(encoding="utf-8"))
+    tauri = json.loads((DESKTOP / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))["version"]
+    cargo_lock = re.search(r'name = "easyicu-desktop"\nversion = "([^"]+)"',
+                           (DESKTOP / "src-tauri" / "Cargo.lock").read_text()).group(1)
+    # A v<version> tag names the installers; every declaration must agree with it.
+    assert {cargo, npm, lock["version"], lock["packages"][""]["version"], tauri, cargo_lock} == {package}
+    # The in-app "what's new" notes describe the version being shipped.
+    from easyicu.webserver.release_notes import whats_new
+
+    assert whats_new(None)["latest_version"] == package
+
+
 def test_desktop_webview_has_no_shell_or_filesystem_permission():
     capabilities = json.loads(
         (DESKTOP / "src-tauri" / "capabilities" / "default.json").read_text(

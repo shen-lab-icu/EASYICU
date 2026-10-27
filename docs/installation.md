@@ -27,7 +27,7 @@
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "./easyicu-1.0.0-py3-none-any.whl[webapp]"
+python -m pip install "./easyicu-0.1.0-py3-none-any.whl[webapp]"
 python -m pip check
 easyicu-webapp
 ```
