@@ -205,3 +205,32 @@ def test_desktop_registers_durable_probe_after_the_web_startup_handlers(monkeypa
     imported = source.index("from easyicu.webserver.app import app")
     probe = source.index("_register_startup_probe(app)\n")
     assert imported < probe < source.index("server.run()")
+
+
+def test_the_startup_probe_calls_the_dispatcher_off_the_event_loop(monkeypatch, caplog):
+    import asyncio
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from easyicu.webserver import durable_research
+
+    module = _backend_entry_module()
+    calls = []
+
+    def status(identity):
+        # DBOS refuses its synchronous status call on a thread running an event loop.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            calls.append(identity)
+            return None
+        raise RuntimeError("get_workflow_status() was called while an event loop is running.")
+
+    monkeypatch.setattr(durable_research, "current_service", lambda: SimpleNamespace(
+        dispatcher=SimpleNamespace(status=status),
+    ))
+    app = FastAPI()
+    module._register_startup_probe(app)
+    with caplog.at_level("INFO", logger="uvicorn.error"), TestClient(app):
+        assert calls == ["desktop-startup-probe"]
+    assert "Durable dispatcher started (frozen=False)" in caplog.text
