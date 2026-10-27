@@ -146,3 +146,14 @@ def test_the_help_menu_is_wired_through_its_owner() -> None:
     assert "if (HELP && HELP.handleClick(event)) return;" in events
     assert "helpHtml: HELP ? HELP.render() : ''," in view
     assert sheet.startswith("/* Owner: screens-guided-pi-help.js")
+
+
+def test_the_help_menu_opens_toward_the_page_at_every_width() -> None:
+    # The control ends the conversation header at every width, so the menu
+    # hangs left from its right edge. A narrow-width left anchor pushed it
+    # off a 390 px screen.
+    sheet = _read("css/guided-pi-help.css")
+    menu = sheet.split(".gpi-help-menu{", 1)[1].split("}", 1)[0]
+
+    assert "right:0" in menu
+    assert ".gpi-help-menu{right:auto" not in sheet and "left:0" not in sheet
