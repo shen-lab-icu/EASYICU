@@ -2,8 +2,8 @@
 
 The 2026-07-29 review found a ricu-shaped low-level layer that nothing inside
 the package called, that no document mentioned, and whose three call-signature
-errors proved it had never run. Cleaning it up is a public-API change on a
-released 1.0.0, so the rules are:
+errors proved it had never run. Cleaning it up is a public-API change, so the
+rules are:
 
 * the exported names keep importing;
 * the deprecated ones say so, at call time, and say what replaces them;

@@ -1,6 +1,6 @@
 [package]
 name = "easyicu-desktop"
-version = "1.0.0"
+version = "0.1.0"
 description = "Local-first desktop shell for EasyICU"
 authors = ["Haibo Zhu and EasyICU contributors"]
 edition = "2021"
