@@ -94,7 +94,7 @@ _EXAMPLE_REQUIREMENTS = {
                                                                   "treatment_concepts": ("norepi_rate",)}),
     "example-first-day-phenotypes": ("aumc", "trajectory_clustering", {"outcome": "icu_death",
                                                                        "concepts": ("map", "hr", "lact", "crea", "glu", "plt")}),
-    "example-pressure-trajectories": ("eicu", "trajectory_clustering", {"concepts": ("map", "age", "sex", "lact")}),
+    "example-pressure-trajectories": ("eicu", "trajectory_clustering", {"outcome": "hospital_death", "concepts": ("map",)}),
     "example-vasopressor-use": ("aumc", "descriptive_epidemiology", {"concepts": ("vaso_ind",)}),
 }
 # A replication names its first database and the ones it repeats on; each
