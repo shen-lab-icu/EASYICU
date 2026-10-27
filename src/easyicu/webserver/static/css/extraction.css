@@ -72,9 +72,11 @@
   margin-left:6px;
 }
 
+/* The button moves under its copy once the copy would have less than 240px
+   beside it, so a long word never runs beneath the button. */
 .ex-connect-primary{
-  display:grid;
-  grid-template-columns:minmax(0,1fr) auto;
+  display:flex;
+  flex-wrap:wrap;
   gap:14px;
   align-items:center;
   margin-top:12px;
@@ -85,6 +87,7 @@
 }
 
 .ex-connect-copy{
+  flex:1 1 240px;
   display:flex;
   align-items:flex-start;
   gap:10px;
@@ -154,10 +157,6 @@
 }
 
 @media (max-width:720px){
-  .ex-connect-primary{
-    grid-template-columns:1fr;
-  }
-
   .ex-connect-analyze{
     width:100%;
   }
