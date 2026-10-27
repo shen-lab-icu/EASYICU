@@ -69,8 +69,8 @@
         title: tr('In-hospital mortality by sex', '男女的院内死亡率'),
         gets: tr('Mortality per group with 95% CI and denominators, their difference', '各组院内死亡率与 95% 置信区间、分母，组间差值'),
         prompt: tr(
-          'In MIMIC-III, what is the in-hospital mortality, and does it differ between men and women?',
-          '在 MIMIC-III 中，院内死亡率是多少？男性和女性之间有差别吗？',
+          'In MIMIC-III, for each patient\'s first ICU stay, what is the in-hospital mortality, and does it differ between men and women?',
+          '在 MIMIC-III 中，每位患者首次 ICU 入住的院内死亡率是多少？男性和女性之间有差别吗？',
         ),
       },
       {
