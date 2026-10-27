@@ -63,14 +63,21 @@ function lazyStream(_model, factory) {
   };
 }
 
+const sdkInstalled = fs.existsSync(
+  path.join(path.dirname(budgetFile), '../node_modules/@earendil-works/pi-ai/package.json'));
+const needsSdk = { skip: sdkInstalled ? false : 'Pinned Pi dependencies are not installed in this checkout' };
+
 const imports = Promise.all([
   import(pathToFileURL(budgetFile)),
   import(pathToFileURL(projectionFile)),
   import(pathToFileURL(retryFile)),
   // The usage ledger sits beside the budget guard and wraps each attempt.
   import(pathToFileURL(path.join(path.dirname(budgetFile), 'shell-usage.mjs'))),
-  // The data-source transition's quick-answer offer settles the decision call.
-  import(pathToFileURL(path.join(path.dirname(budgetFile), 'post-tool-finalization.mjs'))),
+  // The data-source transition's quick-answer offer settles the decision call
+  // through the pinned SDK, which only the Pi workspace security lane installs.
+  sdkInstalled
+    ? import(pathToFileURL(path.join(path.dirname(budgetFile), 'post-tool-finalization.mjs')))
+    : null,
 ]);
 
 async function harness(attempts, config = {}) {
@@ -159,7 +166,7 @@ async function harness(attempts, config = {}) {
     emit: envelope => { order.push('retry'); notices.push(envelope); },
     hostPostToolFinalization: () => config.finalization || null,
     quickAnswerOfferReply: () => config.quickOfferReply || '',
-    settleQuickAnswerOffer: finalization.settleQuickAnswerOffer,
+    settleQuickAnswerOffer: finalization?.settleQuickAnswerOffer,
     ...retry, retryTransientProviderStream: retryWithFastSleep,
   }, { filename: mainFile });
   if (config.sessionEvent) subscribed(config.sessionEvent);
@@ -616,7 +623,7 @@ const decided = (content, stopReason, usage) => [
   { type: 'done', reason: stopReason, message: { ...message(content, stopReason), usage } },
 ];
 
-test('a quick-answer offer the model declines shows only the host acknowledgement', async () => {
+test('a quick-answer offer the model declines shows only the host acknowledgement', needsSdk, async () => {
   const usage = { input: 40, output: 9, cacheRead: 0, cacheWrite: 0, totalTokens: 49, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
   const result = await harness([decided([{ type: 'text', text: 'Model prose with a number 2.1' }], 'stop', usage)], { quickOfferReply: ACK });
   assert.equal(result.calls.length, 1);
@@ -627,7 +634,7 @@ test('a quick-answer offer the model declines shows only the host acknowledgemen
   assert.deepEqual(result.usage.filter(row => row.state !== 'in_flight').map(row => row.state), ['completed']);
 });
 
-test('a quick-answer offer keeps the first reading call behind the acknowledgement', async () => {
+test('a quick-answer offer keeps the first reading call behind the acknowledgement', needsSdk, async () => {
   const first = { type: 'toolCall', id: 'call-quick', name: 'easyicu_quick_answer', arguments: { reading } };
   const result = await harness([decided([
     { type: 'text', text: 'I will submit it.' }, first,
@@ -641,7 +648,7 @@ test('a quick-answer offer keeps the first reading call behind the acknowledgeme
   ]);
 });
 
-test('a failed or aborted quick-answer decision keeps the transition safe', async () => {
+test('a failed or aborted quick-answer decision keeps the transition safe', needsSdk, async () => {
   const failedCall = await harness([[opened(1), failed('HTTP 401: authentication failed')]], { quickOfferReply: ACK });
   assert.equal(failedCall.result.stopReason, 'stop');
   assert.deepEqual(JSON.parse(JSON.stringify(failedCall.result.content)), [{ type: 'text', text: ACK }]);
