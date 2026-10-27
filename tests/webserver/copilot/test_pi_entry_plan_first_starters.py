@@ -6,6 +6,7 @@ demo card fills the composer with one runnable question that names the demo,
 so the conversation can offer that exact source.
 """
 
+import html as html_text
 import json
 import re
 import shutil
@@ -158,6 +159,22 @@ def test_every_example_asks_only_what_its_database_records():
             availability = profile.concept(concept)
             assert availability.mapped and availability.derivation_status in (None, "full"), (example, concept)
 
+
+def test_a_group_comparison_on_repeated_patients_asks_for_each_patients_first_stay():
+    """A quick between-group test needs each patient once.
+
+    MIMIC-III orders each patient's ICU stays, so the example asks about the
+    first one and is answered in one step instead of stopping to ask for it.
+    """
+
+    from easyicu.webserver.pi_copilot.study_context_update import (
+        _message_explicitly_selects_first_stay,
+    )
+
+    for lang in ("en", "zh"):
+        card = _render(lang).split('data-gpi-starter-example="example-mortality-by-sex"', 1)[1]
+        prompt = html_text.unescape(re.search(r'data-gpi-starter-compose="([^"]*)"', card).group(1))
+        assert _message_explicitly_selects_first_stay(prompt), (lang, prompt)
 
 def test_the_demo_card_is_offered_only_without_a_registered_full_source():
     assert 'class="gpi-starter-demo"' in _render_with("zh", {})
