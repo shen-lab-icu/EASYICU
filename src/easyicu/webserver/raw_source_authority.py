@@ -156,13 +156,17 @@ _NO_PATIENT_IDENTITY_FAMILIES = frozenset({"hirid"})
 # - MIMIC-IV and MIMIC-III ``intime``: dates are shifted by one offset per
 #   patient, so a patient's stays keep their order across hospitalizations.
 #   The earliest stay is the first; a tie fails closed.
-# - SICdb ``OffsetAfterFirstAdmission``: seconds since the patient's first
-#   admission, 0 at that admission.
 # - AmsterdamUMCdb ``admissioncount``: the patient's ICU/MCU admission number,
 #   1 at the first (``admittedat`` is the same patient-relative clock, 0 there).
-#   For these two the declared first value, not the earliest present one,
-#   marks the first stay, so a readmission is never promoted when the first
-#   admission is missing from the table; two first values fail closed.
+#   The declared first value, not the earliest present one, marks the first
+#   stay, so a readmission is never promoted when the first admission is
+#   missing from the table; two first values fail closed.
+# SICdb is absent until an order is verified.  Its ``OffsetAfterFirstAdmission``
+# is 0 on several cases of one patient for 2,964 of 21,583 patients (up to 12
+# cases) in the registered source (10-27, aggregate counts only), so it marks a
+# first admission, not a first ICU stay, and ``ICUOffset`` still leaves 854 of
+# them tied.  Dropping those patients would remove readmitted patients
+# selectively; SICdb stays are grouped by patient instead.
 # eICU is absent on purpose: ``unitvisitnumber`` orders stays only within one
 # hospitalization, and a discharge year cannot order two hospitalizations of
 # the same year.  HiRID has no patient identity to order by.
@@ -178,13 +182,6 @@ _FIRST_ICU_STAY_PROFILES = {
         "stay_column": "icustay_id",
         "patient_column": "subject_id",
         "order_column": "intime",
-    },
-    "sicdb": {
-        "table": "cases",
-        "stay_column": "CaseID",
-        "patient_column": "PatientID",
-        "order_column": "OffsetAfterFirstAdmission",
-        "first_order_value": 0,
     },
     "aumc": {
         "table": "admissions",
