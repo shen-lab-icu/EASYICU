@@ -198,7 +198,7 @@ def family_reading_conflict(question: Any, design: Any) -> Optional[Dict[str, An
 #: Families whose design the host records from the conversation's checked
 #: reading alone: their design is the family, unit and variance.
 _CHECKED_DESIGN_FAMILIES = frozenset(
-    {"association_study", "descriptive_epidemiology", "prediction_model"}
+    {"association_study", "descriptive_epidemiology", "prediction_model", "dynamic_prediction"}
 )
 
 
@@ -234,14 +234,26 @@ def checked_family_design(study: Mapping[str, Any], question: Any) -> CheckedFam
     reading = study_family_reading(question)
     if settled is None or (reading is not None and reading.family == settled):
         return CheckedFamily(disagreement=False, family=None, design=None)
+    # A planner family the settled question family covers is the design: a
+    # prediction question whose words state several prediction times and the
+    # horizon after each is a dynamic (landmark) prediction
+    # (``analysis_types.landmark_prediction_framing``), never a static model
+    # (pilot1 10-27: 「在入 ICU 第 24、48、72 小时…预测之后 7 天内 ICU 死亡」).
+    from easyicu.extensions.method_attachments import question_family_for_method
+
+    refined = planner_stated_family(question)
+    if refined and refined != settled and question_family_for_method(refined) == settled:
+        settled = refined
     design = family_design_for(study, settled) if settled in _CHECKED_DESIGN_FAMILIES else None
     return CheckedFamily(disagreement=False, family=settled, design=design)
 
 
 #: Families whose launch preparation reads the study's recorded design: a
 #: prediction study's population is the stays still in the ICU after its
-#: prediction time (``primary_cohort.cohort_required_concepts``).
-_PREPARED_FROM_DESIGN = frozenset({"prediction_model"})
+#: prediction time (``primary_cohort.cohort_required_concepts``), and a
+#: dynamic prediction is planned on its landmark design, never re-read as a
+#: static model.
+_PREPARED_FROM_DESIGN = frozenset({"prediction_model", "dynamic_prediction"})
 
 
 def record_unset_family_design(

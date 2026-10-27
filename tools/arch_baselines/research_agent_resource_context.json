@@ -1,9 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/planning/analysis_types.py",
-      "src/easyicu/research_agent/planning/study_design.py",
-      "src/easyicu/research_agent/planning/study_design_playbook.py"
+      "src/easyicu/research_agent/planning/analysis_types.py"
     ],
     "summary_changes": {}
   },
@@ -77,9 +75,16 @@
         "src/easyicu/research_agent/planning/study_design_playbook.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "icud: ICU-death and dynamic-prediction framing in planning/analysis_types.py (source digest only)",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/analysis_types.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "traj: class-discovery reading, phenotyping display ownership (source digests only)",
+  "baseline_reason": "icud: ICU-death and dynamic-prediction framing in planning/analysis_types.py (source digest only)",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -98,7 +103,7 @@
     "src/easyicu/research_agent/learning/runtime.py": "87743106defc0df92c826bcc5a16e9156c89877517ce1d29ce5be9654840925a",
     "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
-    "src/easyicu/research_agent/planning/analysis_types.py": "6a9e66676fb1003492b47e106260f33c2df0f2cadb9c12530bcc2945435a2890",
+    "src/easyicu/research_agent/planning/analysis_types.py": "cb8d22edd899bf71bc644ae1fbd708bce536f73107d4fd846d73b5210a6a02cf",
     "src/easyicu/research_agent/planning/cohort_contract.py": "e043ca40d59f613031a1b41f9280152ac3c58cefcc86e877d466d5142496899a",
     "src/easyicu/research_agent/planning/figure_strategy.py": "42b617ad40d993c585df27598613731ceedc2e4645f197a2cb96c54645f7cec2",
     "src/easyicu/research_agent/planning/study_design.py": "68a2ae898910c426ca714160e8fdc13d83bf42128159cf05acc8e9ed6fefe621",

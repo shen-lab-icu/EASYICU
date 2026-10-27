@@ -6,7 +6,9 @@ measured in days from ICU admission and administratively censored at the
 horizon.  The outcome materializer and the Web survival projection read the
 pairing here so neither can drift from the other.  The horizons a question
 states for death or survival are read here too, so a requested horizon is
-compared with an endpoint's in one vocabulary.
+compared with an endpoint's in one vocabulary, and so is the setting (ICU or
+hospital) a text states for death: a question naming ICU mortality asks for the
+native ``icu_death`` endpoint, never the dictionary's hospital ``death``.
 """
 
 from __future__ import annotations
@@ -533,6 +535,258 @@ def fixed_horizon_mortality_endpoint_stated_by(
     return admitted[0] if len(admitted) == 1 else None
 
 
+# Where death is counted.  ICU mortality (death before ICU discharge, the
+# native ``icu_death`` endpoint) and hospital mortality (death before hospital
+# discharge, the dictionary's generic ``death``) are different endpoints: a
+# question naming one is never answered with the other unless a reviewed plan
+# states the substitution.
+ICU_DEATH = "icu_death"
+HOSPITAL_DEATH = "hospital_death"
+# "ICU", a unit's own ICU ("MICU", "SICU", "CVICU", "neuro-ICU"), or the
+# spelled-out unit.
+_ICU_PLACE = (
+    r"(?:(?:m|s|c|cv|ct|n|p|t|neuro[\s-]*)?icu"
+    r"|intensive[\s-]+care(?:[\s-]+units?)?|critical[\s-]+care(?:[\s-]+units?)?)"
+)
+# "the medical ICU", "a surgical intensive care unit".
+_ICU_KIND = (
+    r"(?:(?:medical|surgical|cardiac|cardiothoracic|cardiovascular|coronary|neuro(?:logical)?|"
+    r"trauma|mixed|general|respiratory|paediatric|pediatric|neonatal)[\s-]+)?"
+)
+_ICU_PLACE_ZH = r"(?:ICU|重症监护(?:病房|室)?|重症病房|监护病房|监护室)"
+_SETTING_NOUN = r"(?:mortality|deaths?|case[\s-]+fatality)"
+_SETTING_DEATH = r"(?:deaths?|died|dies|die|dying|mortality)"
+_SETTING_DEATH_ZH = r"(?:死亡|病死)"
+# "Mortality in ICU patients", "in intensive care unit patients", "in
+# ICU-admitted patients", "in ICU septic patients" name a population, not where
+# death occurred.  Up to two modifiers may stand before the population noun,
+# but never a word that starts a new phrase ("death in the ICU among patients").
+_POPULATION_MODIFIER = (
+    r"(?:(?!(?:among|with|without|of|in|for|and|or|who|that|which|after|before|during|"
+    r"within|by|at|on|from|than|versus|vs)\b)[a-z]+[\s-]+)"
+)
+_NOT_A_POPULATION = (
+    r"(?![\s-]*(?:units?[\s-]+)?(?:admitted[\s-]+)?" + _POPULATION_MODIFIER + r"{0,2}"
+    r"(?:patients?|populations?|cohorts?|admissions?|survivors?|subjects?|adults?|children|"
+    r"stays?|cases?)\b)"
+)
+# "an ICU mortality score" names an instrument, not where death is counted.
+_NOT_AN_INSTRUMENT = (
+    r"(?![\s-]+(?:risk[\s-]+|prediction[\s-]+|predictive[\s-]+|probability[\s-]+)?"
+    r"(?:scores?|scoring|index|indices|indexes|scales?|calculators?|tools?)\b)"
+)
+_NOT_AN_INSTRUMENT_ZH = r"(?!\s*(?:率|风险)?\s*(?:预测)?\s*(?:评分|指数|量表|计算器))"
+_ICU_SETTING_PATTERNS = (
+    # "ICU mortality", "ICU deaths", "intensive care unit mortality", "in-ICU death",
+    # "MICU mortality"; never "post-ICU mortality" or "an ICU mortality score".
+    re.compile(
+        rf"(?<!post-)(?<!post )\b{_ICU_PLACE}[\s-]+{_SETTING_NOUN}\b{_NOT_AN_INSTRUMENT}",
+        re.IGNORECASE,
+    ),
+    # "death in the ICU", "died during the ICU stay", "die in the medical ICU".
+    re.compile(
+        rf"\b{_SETTING_DEATH}\s+(?:in|during|within|inside)\s+(?:(?:the|an?)\s+)?"
+        rf"{_ICU_KIND}{_ICU_PLACE}(?:[\s-]+stay)?\b{_NOT_A_POPULATION}",
+        re.IGNORECASE,
+    ),
+    # "death before ICU discharge", "died before discharge from the ICU".
+    re.compile(
+        rf"\b{_SETTING_DEATH}\s+(?:before|prior\s+to)\s+(?:the\s+)?"
+        rf"(?:{_ICU_PLACE}[\s-]+discharge|discharge\s+from\s+(?:the\s+)?{_ICU_PLACE})\b",
+        re.IGNORECASE,
+    ),
+    # 「ICU 死亡」「ICU 内死亡」「ICU 病死率」「ICU 住院期间死亡」「重症监护病房死亡」;
+    # never 「出 ICU 后 48 小时内死亡」, which counts deaths after the ICU.
+    re.compile(
+        rf"(?<!出)(?<!出 )(?<!离开)(?<!离开 ){_ICU_PLACE_ZH}"
+        rf"\s*(?:内|中|里|期间|住院期间|住院|停留期间|入住期间|治疗期间)?\s*的?\s*{_SETTING_DEATH_ZH}"
+        rf"{_NOT_AN_INSTRUMENT_ZH}",
+        re.IGNORECASE,
+    ),
+    # 「死于 ICU」「出 ICU 前死亡」.
+    re.compile(rf"(?:死于|死在)\s*{_ICU_PLACE_ZH}", re.IGNORECASE),
+    re.compile(
+        rf"(?:转出|离开|出)\s*{_ICU_PLACE_ZH}\s*(?:之)?前\s*的?\s*{_SETTING_DEATH_ZH}",
+        re.IGNORECASE,
+    ),
+)
+_HOSPITAL_SETTING_PATTERNS = (
+    # "in-hospital mortality", "hospital death".
+    re.compile(rf"\b(?:in[\s-]+)?hospital[\s-]+{_SETTING_NOUN}\b{_NOT_AN_INSTRUMENT}", re.IGNORECASE),
+    # "death in hospital", "died during the hospital stay".
+    re.compile(
+        rf"\b{_SETTING_DEATH}\s+(?:in|during|within)\s+(?:the\s+)?hospital"
+        rf"(?:[\s-]+stay)?\b{_NOT_A_POPULATION}",
+        re.IGNORECASE,
+    ),
+    # "death before hospital discharge".
+    re.compile(
+        rf"\b{_SETTING_DEATH}\s+(?:before|prior\s+to)\s+(?:the\s+)?"
+        rf"(?:hospital[\s-]+discharge|discharge\s+from\s+(?:the\s+)?hospital)\b",
+        re.IGNORECASE,
+    ),
+    # 「院内死亡」「住院期间死亡」「出院前死亡」「死于院内」.
+    re.compile(
+        rf"(?:医?院内|住院\s*(?:期间)?\s*的?|出院\s*(?:之)?前\s*的?)\s*{_SETTING_DEATH_ZH}"
+        rf"{_NOT_AN_INSTRUMENT_ZH}"
+    ),
+    re.compile(r"(?:死于|死在)\s*(?:医院|院内)"),
+)
+# Two settings sharing one death noun: "ICU and in-hospital mortality",
+# "ICU- and hospital mortality", "hospital and ICU mortality", "ICU or hospital
+# death", 「ICU 及院内死亡」「院内和 ICU 死亡」.  The elided setting is read where
+# it stands; never a place someone is moved to or from ("admitted to the ICU
+# and in-hospital mortality"), a population ("ICU patients and in-hospital
+# mortality") or an instrument ("an ICU and hospital mortality score").
+_SETTING_JOIN = r"\s*(?:and/or|and|or|&|/|vs\.?|versus)\s*"
+_SETTING_JOIN_ZH = r"\s*(?:以及|及|和|与|或|、|/)\s*"
+_NOT_A_DESTINATION = (
+    r"(?<!to )(?<!to the )(?<!to an )(?<!to a )(?<!into )(?<!into the )(?<!into an )"
+    r"(?<!into a )(?<!from )(?<!from the )(?<!from an )(?<!from a )"
+)
+_HOSPITAL_PLACE_ZH = r"(?:医?院内|住院(?:期间)?)"
+_ELIDED_ICU_PATTERNS = (
+    re.compile(
+        rf"{_NOT_A_DESTINATION}\b{_ICU_PLACE}-?(?={_SETTING_JOIN}(?:in[\s-]+)?hospital[\s-]+"
+        rf"{_SETTING_NOUN}\b{_NOT_AN_INSTRUMENT})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"(?<!出)(?<!出 )(?<!离开)(?<!离开 ){_ICU_PLACE_ZH}\s*(?:内|中)?"
+        rf"(?={_SETTING_JOIN_ZH}{_HOSPITAL_PLACE_ZH}\s*的?\s*{_SETTING_DEATH_ZH}"
+        rf"{_NOT_AN_INSTRUMENT_ZH})",
+        re.IGNORECASE,
+    ),
+)
+_ELIDED_HOSPITAL_PATTERNS = (
+    re.compile(
+        rf"{_NOT_A_DESTINATION}\b(?:in[\s-]+)?hospital-?(?={_SETTING_JOIN}{_ICU_PLACE}[\s-]+"
+        rf"{_SETTING_NOUN}\b{_NOT_AN_INSTRUMENT})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"(?:{_HOSPITAL_PLACE_ZH}|医院)(?={_SETTING_JOIN_ZH}{_ICU_PLACE_ZH}\s*(?:内|中)?\s*的?\s*"
+        rf"{_SETTING_DEATH_ZH}{_NOT_AN_INSTRUMENT_ZH})",
+        re.IGNORECASE,
+    ),
+)
+# The death noun first, then both places: "mortality in the ICU and in
+# hospital", "death in hospital or in the ICU".  The second place (group
+# ``second``) is read only where its phrase ends, so "mortality in the ICU and
+# hospital length of stay" names hospital length of stay, not hospital death.
+_PHRASE_END = (
+    r"(?=\s*(?:[,.;:?!)]|$|\b(?:and|or|among|in|for|with|within|by|at|after|during|"
+    r"between|compared|vs|versus|is|are|was|were|differ\w*)\b))"
+)
+_SECOND_PLACE_PATTERNS = (
+    (
+        HOSPITAL_DEATH,
+        re.compile(
+            rf"\b{_SETTING_DEATH}\s+(?:in|during|within|inside)\s+(?:(?:the|an?)\s+)?"
+            rf"{_ICU_KIND}{_ICU_PLACE}(?:[\s-]+stay)?{_SETTING_JOIN}"
+            rf"(?P<second>(?:(?:in|during|within)\s+)?(?:the\s+)?hospital(?:[\s-]+stay)?)"
+            rf"{_PHRASE_END}",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        ICU_DEATH,
+        re.compile(
+            rf"\b{_SETTING_DEATH}\s+(?:in|during|within)\s+(?:the\s+)?hospital(?:[\s-]+stay)?"
+            rf"{_SETTING_JOIN}(?P<second>(?:(?:in|during|within|inside)\s+)?(?:(?:the|an?)\s+)?"
+            rf"{_ICU_KIND}{_ICU_PLACE}(?:[\s-]+stay)?){_PHRASE_END}",
+            re.IGNORECASE,
+        ),
+    ),
+)
+# A setting the text directly declines is not requested: "do not use ICU
+# mortality", "rather than hospital mortality", 「不要使用 ICU 死亡」,
+# 「而不是院内死亡」.  Only a cue standing right before the mention declines
+# it, so "do not exclude patients with ICU mortality" still names it.
+_DECLINED_SETTING_BEFORE = re.compile(
+    r"(?:\b(?:not|never|cannot|can't|don't)\s+"
+    r"(?:(?:use|using|substitute|substituting|report|reporting|measure|measuring)\s+)?"
+    r"|\b(?:rather than|instead of)\s+"
+    r"|(?:不能|不得|不要|不应|不用|不使用|不采用|不以|不是|而非|而不是|并非)\s*"
+    r"(?:(?:使用|采用|报告|分析|计算|用|以)\s*)?)$",
+    re.IGNORECASE,
+)
+_DECLINED_REACH = 48
+
+
+@dataclass(frozen=True, slots=True)
+class StatedMortalitySetting:
+    """One place a text states where death is counted: ``text[start:end]``."""
+
+    #: ``icu_death`` or ``hospital_death``.
+    endpoint: str
+    start: int
+    end: int
+
+
+def stated_mortality_setting_mentions(text: str) -> tuple[StatedMortalitySetting, ...]:
+    """Every place ``text`` asks for ICU or hospital mortality, in text order.
+
+    ICU mortality: "ICU mortality", "ICU death", "death in the ICU", "died
+    before ICU discharge", 「ICU 死亡率」「ICU 内死亡」「ICU 病死率」「死于 ICU」
+    「出 ICU 前死亡」.  Hospital mortality: "in-hospital mortality", "death in
+    hospital", 「院内死亡」「住院期间死亡」「出院前死亡」.  Settings sharing one
+    noun ("ICU and in-hospital mortality", 「ICU 及院内死亡」) are both read.  A
+    hospital phrase inside an ICU one (「ICU 住院期间死亡」) is the ICU's.  A mention the text
+    directly declines ("not ICU mortality", 「不要用 ICU 死亡」) is not one, and
+    neither is a population ("mortality in ICU patients") or a death after
+    the ICU (「出 ICU 后 48 小时内死亡」).
+    """
+
+    source = str(text or "")
+    second = {
+        endpoint: [match.span("second") for match in pattern.finditer(source)]
+        for endpoint, pattern in _SECOND_PLACE_PATTERNS
+    }
+    icu = sorted(
+        [
+            (match.start(), match.end())
+            for pattern in (*_ICU_SETTING_PATTERNS, *_ELIDED_ICU_PATTERNS)
+            for match in pattern.finditer(source)
+        ]
+        + second[ICU_DEATH]
+    )
+    masked = list(source)
+    for start, end in icu:
+        masked[start:end] = " " * (end - start)
+    hospital = sorted(
+        [
+            (match.start(), match.end())
+            for pattern in _HOSPITAL_SETTING_PATTERNS
+            for match in pattern.finditer("".join(masked))
+        ]
+        + [
+            # Read before the ICU mention it shares a noun with is masked.
+            (match.start(), match.end())
+            for pattern in _ELIDED_HOSPITAL_PATTERNS
+            for match in pattern.finditer(source)
+        ]
+        + second[HOSPITAL_DEATH]
+    )
+    mentions: list[StatedMortalitySetting] = []
+    for endpoint, start, end in sorted(
+        [(ICU_DEATH, *span) for span in icu] + [(HOSPITAL_DEATH, *span) for span in hospital],
+        key=lambda item: (item[1], -item[2]),
+    ):
+        if any(item.start < end and start < item.end for item in mentions):
+            continue
+        if _DECLINED_SETTING_BEFORE.search(source[max(0, start - _DECLINED_REACH):start]):
+            continue
+        mentions.append(StatedMortalitySetting(endpoint=endpoint, start=start, end=end))
+    return tuple(mentions)
+
+
+def stated_mortality_settings(text: str) -> tuple[str, ...]:
+    """The distinct settings ``text`` asks for death in (``icu_death``, ``hospital_death``)."""
+
+    return tuple(dict.fromkeys(item.endpoint for item in stated_mortality_setting_mentions(text)))
+
+
 @dataclass(frozen=True, slots=True)
 class OutcomeConceptUnavailability:
     """A known structural absence, distinct from missing observed values."""
@@ -565,6 +819,8 @@ def structural_outcome_unavailability(
 __all__ = [
     "EICU_VENTILATOR_DAY_DATABASES",
     "FIXED_HORIZON_MORTALITY_ENDPOINTS",
+    "HOSPITAL_DEATH",
+    "ICU_DEATH",
     "FOLLOWUP_OUTCOME_DATABASES",
     "FixedHorizonMortalityEndpoint",
     "ICU_FREE_DAY_DATABASES",
@@ -573,10 +829,13 @@ __all__ = [
     "OutcomeConceptUnavailability",
     "StatedHorizon",
     "StatedHorizonMention",
+    "StatedMortalitySetting",
     "fixed_horizon_mortality_endpoint",
     "fixed_horizon_mortality_endpoint_stated_by",
     "mortality_horizon_spans",
     "stated_mortality_horizon_mentions",
     "stated_mortality_horizons",
+    "stated_mortality_setting_mentions",
+    "stated_mortality_settings",
     "structural_outcome_unavailability",
 ]

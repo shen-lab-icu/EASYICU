@@ -100,7 +100,12 @@ def host_question_family(question: Any) -> Optional[str]:
     reading = study_family_reading(text)
     if reading is not None:
         return _canonical(reading.family)
-    return _canonical(planner_stated_family(text))
+    from easyicu.extensions.method_attachments import question_family_for_method
+
+    # A planner family a question family covers is read as that question
+    # family: a dynamic (landmark) prediction is a prediction question.
+    stated = planner_stated_family(text)
+    return _canonical(question_family_for_method(stated) if stated else None)
 
 
 def check_question_family(stated: Any, question: Any) -> Dict[str, Any]:

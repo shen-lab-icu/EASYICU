@@ -20,10 +20,12 @@ from easyicu.research_agent.research_context.builder import _infer_outcome_seman
         ("Describe ICU mortality.", "icu_mortality"),
         ("Do not use hospital mortality, report ICU mortality.", "icu_mortality"),
         ("Do not exclude patients with ICU mortality.", "icu_mortality"),
-        ("Not only ICU mortality but also hospital mortality.", "icu_mortality"),
-        ("不能只报告院内死亡，也需要 ICU 死亡。", "icu_mortality"),
-        ("Describe hospital mortality, but also report ICU mortality.", "icu_mortality"),
-        ("不能用 ICU 死亡替代院内死亡，但还要单独报告 ICU 死亡。", "icu_mortality"),
+        # A question asking for both settings is answered by neither endpoint
+        # alone: it is a conflict, and ICU does not win.
+        ("Not only ICU mortality but also hospital mortality.", "mortality_setting_conflict"),
+        ("不能只报告院内死亡，也需要 ICU 死亡。", "mortality_setting_conflict"),
+        ("Describe hospital mortality, but also report ICU mortality.", "mortality_setting_conflict"),
+        ("不能用 ICU 死亡替代院内死亡，但还要单独报告 ICU 死亡。", "mortality_setting_conflict"),
     ],
 )
 def test_only_directly_rejected_endpoint_mentions_are_ignored(question, semantic):
