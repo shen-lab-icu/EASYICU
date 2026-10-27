@@ -349,6 +349,7 @@ _DATA_CODES = frozenset(
         "missing_data",
         "missing_required_concepts",
         "required_concepts_unavailable",
+        "study_coordinate_unavailable",
         "research_pipeline_required_concept_structurally_unavailable",
         "research_pipeline_required_concept_without_values",
         "research_pipeline_cohort_concept_unavailable",
@@ -512,6 +513,12 @@ def next_actions_for_stop(
         reason, cause, inner, _code(detail.get("intake_error_code")),
     }:
         return [_action("reexport_data", DataExtractionParams())]
+    # EasyICU's planning menu lacks a concept the source provides, or the host
+    # named a coordinate its dictionary does not know: no plan edit, drop or
+    # regeneration on this build fixes its own gap; the stop's receipt and
+    # diagnostic report are the way forward.
+    if {"planning_menu_missing_supported_concept", "study_coordinate_unrecognized"} & {reason, inner}:
+        return []
     policy = STOP_POLICIES.get(reason, "edit_plan")
     if reason not in _RETRY_CODES and inner in _SCOPE_CODES:
         policy = "scope"
@@ -540,10 +547,16 @@ def next_actions_for_stop(
                 ),
             )
         ]
+    # The study's own exposure or outcome is absent from this source: dropping
+    # it asks another question and a regeneration repeats the stop, so only an
+    # owner-issued alternative is a choice (``agent_pipeline_runs``).
+    coordinate_absent = "study_coordinate_unavailable" in {reason, inner}
     if policy == "data" and concepts:
         actions = []
         for missing in concepts:
             alternative = _available_alternative(missing, database, detail)
+            if coordinate_absent and not alternative:
+                continue
             actions.append(
                 _action(
                     "use_alternative_concept" if alternative else "drop_variable",
@@ -554,7 +567,7 @@ def next_actions_for_stop(
                     ),
                 )
             )
-        return [*actions, edit]
+        return actions if coordinate_absent else [*actions, edit]
     if (
         policy == "repair"
         and (element is not None or step is not None)

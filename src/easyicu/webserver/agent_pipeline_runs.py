@@ -921,6 +921,16 @@ _SAFE_CODEX_APP_SERVER_REASONS = frozenset(
 # locked by test_web_execution_runtime_preflight.py so a new reason code cannot
 # silently reach this boundary unprojected.
 _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER = "easyicu.execution.runtime_v1"
+#: The study's exposure or outcome is not on the source's planning menu at
+#: all, and its availability owner says the source cannot provide it, so no
+#: selection, plan or regeneration on this source can carry it.
+STUDY_COORDINATE_UNAVAILABLE = "study_coordinate_unavailable"
+#: The availability owner says the source provides the coordinate, yet the
+#: planning menu lacks it: EasyICU's own gap, never the data's.
+PLANNING_MENU_MISSING_SUPPORTED_CONCEPT = "planning_menu_missing_supported_concept"
+#: The owner does not know the coordinate's name at all (``concept_not_found``):
+#: the host handed the Planner a name the dictionary lacks, on any source.
+STUDY_COORDINATE_UNRECOGNIZED = "study_coordinate_unrecognized"
 _SAFE_RUNNER_UNAVAILABLE_REASONS = frozenset(
     {
         "docker_daemon_unreachable",
@@ -1872,6 +1882,7 @@ def _metadata_only_planning_acquisition(
     )
     from easyicu.research_agent.acquisition.foundation import (
         AcquisitionResult,
+        ConceptSelection,
         DataFoundationAgent,
     )
     from easyicu.database_config import ID_COLUMNS
@@ -1950,6 +1961,46 @@ def _metadata_only_planning_acquisition(
             )
         required_concepts = (*required_concepts, *required_coverage.available)
         operationalized_columns = (*operationalized_columns, *required.operationalized_columns)
+    # A study coordinate no menu entry resolves to fails every plan whatever
+    # the model selects (the check after selection below): stop before the
+    # selection call. The availability owner says whose gap it is: the source
+    # lacks it, or the menu lacks a concept the source provides.
+    absent_coordinates = [
+        value
+        for value in dict.fromkeys(str(item or "").strip() for item in required_coordinates)
+        if value and not assess_coverage([value], catalog).sufficient
+    ]
+    if absent_coordinates:
+        from easyicu.research_agent.concept_availability import explain_concept_availability
+
+        owner = {
+            value: explain_concept_availability(
+                concept=value, database=normalize_database_name(database),
+            )
+            for value in absent_coordinates
+        }
+        unrecognized = [value for value, found in owner.items() if found.reason == "concept_not_found"]
+        menu_gaps = [value for value, found in owner.items() if found.available]
+        return AcquisitionResult(
+            universe_path=None,
+            provenance_path=None,
+            selection=ConceptSelection(selected_concepts=[]),
+            materialized_concepts=[],
+            coverage=assess_coverage([], catalog),
+            blocked=True,
+            blocked_reason_code=(
+                STUDY_COORDINATE_UNRECOGNIZED if unrecognized
+                else PLANNING_MENU_MISSING_SUPPORTED_CONCEPT if menu_gaps
+                else STUDY_COORDINATE_UNAVAILABLE
+            ),
+            missing_concepts=tuple(unrecognized or menu_gaps or absent_coordinates),
+            note=(
+                "The study's exposure or outcome is not on this source's planning "
+                f"menu: {absent_coordinates}"
+                + (f"; the source provides {menu_gaps}" if menu_gaps else "")
+                + ". No model call was made and no patient data were read."
+            ),
+        )
     selection = DataFoundationAgent(llm).select_concepts(
         question=question,
         catalog=catalog,

@@ -896,6 +896,20 @@ def build_research_workflow_snapshot(
     plan_regeneration_required = bool(
         plan_regeneration_required or failed_pipeline_regeneration_required
     )
+    # The run stopped because its source cannot provide the study's own
+    # exposure or outcome (``agent_pipeline_runs.STUDY_COORDINATE_UNAVAILABLE``).
+    # A fresh plan on the same configuration repeats that stop, so none is
+    # offered while the availability owner still says so; a changed source or
+    # question, or a build that now provides it, offers one again.
+    gate_detail = run_row.get("gate_detail")
+    source_coordinate_gap = bool(
+        failed_pipeline_regeneration_required
+        and isinstance(gate_detail, Mapping)
+        and gate_detail.get("reason_code") == "study_coordinate_unavailable"
+        and len(planned_scientific_digest) == 64
+        and planned_scientific_digest == current_scientific_digest
+        and _coordinates_still_unavailable(gate_detail, study_row)
+    )
     # A retry resumes the failed step's sealed code with its restored repair
     # budget.  When that budget is spent and nothing it runs on changed, the
     # retry can only repeat the failure, so it is not offered.
@@ -1006,7 +1020,7 @@ def build_research_workflow_snapshot(
                 else "running"
                 if planning_running
                 else "blocked"
-                if export_cohort_blocks_plan or family_gap is not None
+                if export_cohort_blocks_plan or family_gap is not None or source_coordinate_gap
                 else "ready"
                 if plan_regeneration_required
                 else "complete"
@@ -1027,6 +1041,8 @@ def build_research_workflow_snapshot(
                 if export_cohort_blocks_plan
                 else family_gap["code"]
                 if family_gap is not None
+                else "study_coordinate_unavailable"
+                if source_coordinate_gap
                 else plan_regeneration_reason_code
                 if plan_regeneration_required
                 else "agent_plan_ready"
@@ -1262,6 +1278,30 @@ def build_research_workflow_snapshot(
         ),
         study_family_gap=family_gap,
     )
+
+
+def _coordinates_still_unavailable(detail: Mapping[str, Any], study_row: Mapping[str, Any]) -> bool:
+    """Whether the availability owner still says the bound source lacks them.
+
+    A name the owner does not know (``concept_not_found``) is EasyICU's gap on
+    every source, never the source's, so it holds no plan back.
+    """
+
+    from easyicu.research_agent.concept_availability import explain_concept_availability
+
+    source = study_row.get("data_source")
+    database = str(source.get("database") or "").strip() if isinstance(source, Mapping) else ""
+    concepts = [
+        value for value in detail.get("missing_concepts") or ()
+        if isinstance(value, str) and value.strip()
+    ]
+    if not database or not concepts:
+        return False
+    try:
+        found = [explain_concept_availability(concept=value, database=database) for value in concepts]
+        return not any(item.available or item.reason == "concept_not_found" for item in found)
+    except (KeyError, ValueError):
+        return False
 
 
 #: Runtime findings an approvable candidate may still carry that the Host

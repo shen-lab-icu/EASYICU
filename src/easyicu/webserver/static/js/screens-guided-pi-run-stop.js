@@ -90,7 +90,8 @@
       const receipt = (run.artifact_refs || []).find(ref => ref && ref.run_id === run.run_id && ref.artifact === 'source_run_manifest.json')
         || ((run.artifact_names || []).includes('source_run_manifest.json') ? { kind: 'research_artifact', run_id: run.run_id, artifact: 'source_run_manifest.json', media_type: 'application/json' } : null);
       if (receipt && typeof deps.resourceButton === 'function' && typeof deps.canPreview === 'function' && deps.canPreview()) {
-        controls.push(deps.resourceButton(receipt, labels.stopAction('receipt', tr)));
+        // A button like the stop's other choices, not the inline link style.
+        controls.push(deps.resourceButton(receipt, labels.stopAction('receipt', tr), { className: 'btn sm' }));
       }
       // A local diagnostic zip the researcher can send to support (runTrust).
       const registry = window.EasyICU && window.EasyICU.guidedPi;

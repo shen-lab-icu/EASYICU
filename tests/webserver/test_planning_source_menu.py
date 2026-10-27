@@ -1,5 +1,6 @@
 """Physical columns cannot overrule a canonical negative source contract."""
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -245,10 +246,38 @@ def test_a_study_coordinate_the_schema_cannot_carry_stops_before_the_planner(
             required_coordinates=coordinates,
         )
 
+    from easyicu.research_agent import concept_availability
+
+    # The owner knows the concept and says this source lacks it.
+    monkeypatch.setattr(
+        concept_availability, "explain_concept_availability",
+        lambda **kw: SimpleNamespace(available=False, reason="no_direct_source_or_dependencies"),
+    )
     blocked = run(("exposure_flag", "death"), "blocked")
     assert blocked.blocked
-    assert blocked.blocked_reason_code == "required_concepts_unavailable"
-    assert blocked.missing_concepts[0] == "exposure_flag"
+    # No menu entry resolves to it, so the run stops before the selection call.
+    assert blocked.blocked_reason_code == "study_coordinate_unavailable"
+    assert blocked.missing_concepts == ("exposure_flag",)
+    assert blocked.selection.selected_concepts == [] and blocked.selection_usage is None
+
+    # When the availability owner says the source provides it, the gap is the
+    # menu's, never the data's (user 2026-10-27, HiRID icu_death).
+    monkeypatch.setattr(
+        concept_availability, "explain_concept_availability",
+        lambda **kw: SimpleNamespace(available=kw["concept"] == "exposure_flag", reason="derived_outcome_supported"),
+    )
+    menu_gap = run(("exposure_flag", "death"), "menu-gap")
+    assert menu_gap.blocked_reason_code == "planning_menu_missing_supported_concept"
+    assert menu_gap.missing_concepts == ("exposure_flag",)
+
+    # A name the dictionary does not know is EasyICU's gap on every source.
+    monkeypatch.setattr(
+        concept_availability, "explain_concept_availability",
+        lambda **kw: SimpleNamespace(available=False, reason="concept_not_found"),
+    )
+    unknown = run(("exposure_flag", "death"), "unknown-name")
+    assert unknown.blocked_reason_code == "study_coordinate_unrecognized"
+    assert unknown.missing_concepts == ("exposure_flag",)
     assert not (tmp_path / "blocked").exists()
 
     carried = run(("exposure_flag_v2", "death"), "carried")

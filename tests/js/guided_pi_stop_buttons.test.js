@@ -15,7 +15,7 @@ const run = { run_ref: 'r1', run_id: 'synthetic', run_status: 'failed',
 let workflow = { next_action_code: 'failed_pipeline_execution_retry_available', runs: [{ ...run, authoritative: true }] };
 const owner = modules.require('runStop').create({ tr, runFailureText: () => tr('Stopped.', '已停止。'),
   workflow: () => workflow, latestRun: () => workflow.runs.find(row => row.authoritative),
-  resourceButton: (resource, label) => `<button data-resource="${resource.artifact}">${label}</button>`,
+  resourceButton: (resource, label, options) => `<button class="${(options && options.className) || 'gpi-resource-link'}" data-resource="${resource.artifact}">${label}</button>`,
   canAct: () => true, canPreview: () => true, hasRecovery: () => true });
 let statedDetail;
 modules.require('runStop').create({ tr, runFailureText: (_code, detail) => {
@@ -67,6 +67,7 @@ for (language of ['zh', 'en']) {
   const old = owner.render({ savedRuns: [historical] });
   assert.ok(!old.includes('data-gpi-stop-action'));
   assert.ok(old.includes('source_run_manifest.json'), 'historical stops retain their own receipt');
+  assert.ok(old.includes('class="btn sm" data-resource="source_run_manifest.json"'), 'the receipt is a button like the other choices');
   assert.equal(modules.require('runStop').currentRun(run,
     { runs: [{ run_id: 'new_authoritative_run', authoritative: true }] }, run), false,
   'the workflow authority wins over a stale local latest-run pointer');
