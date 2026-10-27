@@ -13,17 +13,6 @@
       connectionConfigured, connectionReady, errorText,
     } = options;
 
-    // How the saved API connection handles credentialed data
-    // (screens-guided-pi-provider-declaration.js).
-    const declarationOwner = window.EasyICU.guidedPi.optional('providerDeclaration');
-    const declaration = declarationOwner ? declarationOwner.create({
-      state, api, tr, render, errorText,
-      reloadStatus: async () => {
-        const payload = await api().loadPiCopilotStatus();
-        state.runtime = payload && payload.runtime;
-      },
-    }) : Object.freeze({ load: async () => {}, handleChange: () => false, handleSubmit: () => false });
-
     const OPENROUTER = Object.freeze({ provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1' });
     let openrouterReturn = null;
     (function landFromOpenRouter() {
@@ -327,15 +316,6 @@
 
     function handleClick(event) {
       if (event.target.closest && event.target.closest('[data-gpi-openrouter-login]')) { startOpenRouterLogin(); return true; }
-      // A run stopped because the model is not cleared for credentialed data:
-      // open the connection page with that one question first.
-      if (event.target.closest && event.target.closest('[data-gpi-stop-declare]')) {
-        state.declarationAsked = true; state.researchProvider = 'api'; state.showSetup = true; state.error = '';
-        render();
-        const page = state.host && state.host.querySelector && state.host.querySelector('[data-gpi-connection-page]');
-        if (page) page.scrollTop = 0;
-        return true;
-      }
       const button = event.target.closest && event.target.closest('[data-gpi-provider-rediscover]');
       if (!button) return false;
       const form = button.closest('[data-gpi-provider-form]');
@@ -407,8 +387,6 @@
         state.openrouterLogin = null;
         forgetCredential(providerForm(state.host));
         state.apiDraft = null; state.modelCatalog = null;
-        // A saved connection carries its own declaration record.
-        await declaration.load(false);
         if (!runtimeReady()) {
           state.error = tr('The model connection was saved, but the Copilot runtime is not ready yet.', '模型连接已保存，但研究助手运行环境尚未就绪。');
           return;
@@ -445,7 +423,6 @@
     }
 
     return Object.freeze({
-      declaration,
       stopCodexPoll,
       loadCodexModels,
       loadCodexResearchStatus,

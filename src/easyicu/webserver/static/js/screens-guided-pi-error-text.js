@@ -109,20 +109,6 @@
       if (error.code === 'pi_provider_connection_failed') {
         return tr('EasyICU could not reach the model service.', 'EasyICU 无法连接到模型服务，请检查地址和服务状态。');
       }
-      // The credentialed-data declaration (pi_copilot/provider_config.py).
-      const declaration = {
-        pi_provider_declaration_settings_only: ['The data-handling declaration can be changed only in the model settings.', '数据处理声明只能在模型设置中修改。'],
-        pi_provider_declaration_admin_required: ['On a shared server, only the administrator can set the data-handling declaration, in the server configuration.', '在共享服务器上，只有管理员能在服务器配置中设置数据处理声明。'],
-        pi_provider_declaration_notice_mismatch: ['The declaration notice changed after this page loaded. Read it again, then save.', '页面打开后声明说明已更新。请重新阅读后再保存。'],
-        pi_provider_declaration_value_invalid: ['Choose one of the listed options.', '请选择列出的选项之一。'],
-        pi_provider_declaration_administrator_configuration: ['The administrator set this declaration in the configuration, so it cannot be changed here.', '这项声明由管理员在配置中设定，无法在此修改。'],
-        pi_provider_declaration_connection_required: ['Connect a model first, then declare how it handles data.', '请先连接模型，再声明它如何处理数据。'],
-        pi_provider_declaration_connection_changed: ['The model connection changed while this form was open. Check the current connection, then save again.', '表单打开期间模型连接已更改。请核对当前连接后再保存。'],
-        pi_provider_declaration_record_unavailable: ['EasyICU could not read the declaration record, so this model is treated as undeclared. Check that the EasyICU data folder is readable, then try again.', 'EasyICU 无法读取声明记录，因此按未声明处理这个模型。请检查 EasyICU 数据文件夹是否可读，然后重试。'],
-        pi_provider_declaration_busy: ['A conversation turn is running. Change the declaration after it finishes.', '对话正在进行中，请在本轮结束后再修改声明。'],
-        pi_provider_declaration_gateway_unavailable: ['EasyICU could not apply the change to the model connection. Try again; if it fails again, restart EasyICU.', 'EasyICU 无法把更改应用到模型连接。请重试；如果仍然失败，请重启 EasyICU。'],
-      }[error.code];
-      if (declaration) return tr(declaration[0], declaration[1]);
       if (error.code === 'agentic_coder_credentialed_source_forbidden') {
         return tr('The desktop app does not run model-written code on credentialed data such as MIMIC-IV or eICU. No analysis was run.', '桌面版不会在 MIMIC-IV、eICU 等需授权的数据上运行模型临时写的代码。尚未运行任何分析。');
       }

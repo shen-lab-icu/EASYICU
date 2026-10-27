@@ -45,24 +45,19 @@ def test_no_stop_asks_for_a_data_handling_declaration() -> None:
         assert all(action["kind"] != "open_provider_settings" for action in projected)
 
 
-@pytest.mark.parametrize("params", [{"route": "retry"}, {"route": "plan_edit"},
-                                    {"route": "provider_settings", "execute": True}])
-def test_provider_settings_choice_rejects_execution_and_mismatched_params(params) -> None:
+def test_an_old_saved_provider_settings_choice_is_no_longer_a_choice() -> None:
+    # The declaration step is gone, so a choice saved before it went is not
+    # offered again: it no longer validates, and projection derives afresh.
+    saved = {
+        "action_id": "open_provider_settings_0123456789abcdef",
+        "kind": "open_provider_settings",
+        "label_key": "stop_next_actions.open_provider_settings",
+        "params": {"route": "provider_settings"},
+    }
     with pytest.raises(ValidationError):
-        owner.StopNextAction.model_validate({
-            "action_id": "open_provider_settings_0123456789abcdef",
-            "kind": "open_provider_settings",
-            "label_key": "stop_next_actions.open_provider_settings",
-            "params": params,
-        })
-
-
-def test_provider_settings_params_cannot_masquerade_as_retry() -> None:
-    with pytest.raises(ValidationError):
-        owner.StopNextAction.model_validate({
-            "action_id": "retry_0123456789abcdef", "kind": "retry",
-            "label_key": "stop_next_actions.retry", "params": {"route": "provider_settings"},
-        })
+        owner.StopNextAction.model_validate(saved)
+    gate = {"status": "blocked", "reason": "provider_not_cleared_for_credentialed_data", "next_actions": [saved]}
+    assert all(action["kind"] != "open_provider_settings" for action in owner.project_stop_next_actions(gate))
 
 
 def test_a_provider_stop_offers_retry_in_the_run_and_conversation(tmp_path) -> None:

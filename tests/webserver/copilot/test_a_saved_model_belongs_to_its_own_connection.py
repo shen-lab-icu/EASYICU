@@ -74,13 +74,13 @@ const control = window.EasyICU.guidedPi.require('providerControl').create({
   connectionReady: () => true, errorText: e => String(e),
 });
 const handled = control.handleClick({ target: { closest: sel => (sel === '[data-gpi-stop-declare]' ? {} : null) } });
-process.stdout.write(JSON.stringify({ handled, renders, state: { asked: state.declarationAsked, provider: state.researchProvider, setup: state.showSetup, error: state.error } }));
+process.stdout.write(JSON.stringify({ handled, renders, declaration: 'declaration' in control, state: { asked: state.declarationAsked === undefined ? null : state.declarationAsked, provider: state.researchProvider, setup: state.showSetup, error: state.error } }));
 """
 
 
 @pytest.mark.requires_node
 @pytest.mark.usefixtures("_load_guided_pi_module_harness")
-def test_a_stopped_run_asks_the_declaration_on_the_connection_page() -> None:
+def test_no_stopped_run_opens_a_declaration_on_the_connection_page() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is not installed")
@@ -89,4 +89,7 @@ def test_a_stopped_run_asks_the_declaration_on_the_connection_page() -> None:
         node, _ASK, str(js / "screens-guided-pi-provider.js"), str(js / "screens-guided-pi-provider-control.js"), check=True,
     ).stdout)
 
-    assert out == {"handled": True, "renders": 1, "state": {"asked": True, "provider": "api", "setup": True, "error": ""}}
+    # The declaration step is gone (owner decision 2026-10-27): the control
+    # has no declaration owner, and an old declare button does nothing.
+    assert out == {"handled": False, "renders": 0, "declaration": False,
+                   "state": {"asked": None, "provider": "codex", "setup": False, "error": "old"}}
