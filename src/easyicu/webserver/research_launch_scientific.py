@@ -1466,7 +1466,12 @@ def _metadata_only_planning_coordinates(
     descriptive study can name a categorical grouping as its exposure; a lone
     continuous measurement does not become an exposure. A checked, stated
     grouping can disambiguate the descriptive reader's measurement slot;
-    other families retain the conflict rule. The existing
+    other families retain the conflict rule.  In a descriptive study a
+    closed-level concept the question compares its patients across
+    (:func:`~easyicu.webserver.study_intent.stated_comparison_groupings`:
+    「接受与未接受 X 的患者」, "with and without X", "by X") is that grouping,
+    and the keyword outcome slot yields to it; a configured outcome does not.
+    The existing
     host family reading takes precedence over the study's typed design family
     (``analysis_family``, :func:`study_design_family`), which takes precedence
     over the keyword family hint: a question whose own words state no family
@@ -1489,6 +1494,7 @@ def _metadata_only_planning_coordinates(
         deterministic_intent,
         explicit_exposure_aggregation,
         named_study_concepts,
+        stated_comparison_groupings,
         substance_forms,
     )
     from easyicu.research_agent.planning.analysis_types import canonical_analysis_family
@@ -1540,8 +1546,9 @@ def _metadata_only_planning_coordinates(
         else family.get("value") == "description"
         and family.get("provenance") == KEYWORD_PROVENANCE
     )
+    question_names = named_study_concepts(question)
     question_concepts = frozenset(
-        concept for concepts, _ in named_study_concepts(question) for concept in concepts
+        concept for concepts, _ in question_names for concept in concepts
     ) | frozenset(catalog_named_concepts(question))
     question_concepts -= {named_concept("population")}
     from easyicu.concept.loader import load_dictionary
@@ -1555,6 +1562,40 @@ def _metadata_only_planning_coordinates(
             or (definition is not None and definition.class_name == "fct_cncpt"
                 and definition.target == "id_tbl")
         )
+
+    # A closed-level concept the question compares its patients across
+    # (「接受与未接受 X 的患者」, "with and without X", "by X") is a descriptive
+    # study's grouping, not its result: the keyword outcome slot, which reads
+    # the first event a sentence names, yields to it (pilot1 10-26: 「入 ICU
+    # 第一天接受与未接受有创机械通气的患者，基线特征有什么不同？」 sealed
+    # ventilation as the outcome; REQUESTED_OUTCOME_COVERAGE_INCOMPLETE).
+    # Other families keep their exposure and outcome reading.
+    stated_groupings: dict[str, str] = {}
+    if descriptive:
+        for reading in stated_comparison_groupings(question):
+            concept = reading.concept_id
+            if is_grouping(concept) and concept not in {
+                *declared_covariates, *required_subgroup_concepts, configured_outcome,
+            }:
+                stated_groupings.setdefault(concept, reading.evidence)
+        if target_outcome in stated_groupings:
+            target_outcome = None
+    # Every concept a grouping's words can denote (「急性肾损伤」 names its
+    # stage and dialysis too) names the groups, never the summarized quantity.
+    grouping_words = {
+        concept for concepts, _ in question_names if set(concepts) & set(stated_groupings)
+        for concept in concepts
+    } | set(stated_groupings)
+    field_concept = _stated_exposure_concept(stated_exposure, catalog_by_id)
+    field_names = _stated_catalog_concept(stated_exposure, catalog_by_id)
+    # One stated grouping is the exposure; the study's exposure field decides
+    # when it names another grouping.
+    stated_grouping = (
+        next(iter(stated_groupings))
+        if len(stated_groupings) == 1 and {
+            concept for concept in (field_concept, *field_names) if concept and is_grouping(concept)
+        } <= set(stated_groupings) else None
+    )
 
     checked_grouping = None
     if descriptive and stated_exposure_concept:
@@ -1572,12 +1613,12 @@ def _metadata_only_planning_coordinates(
     named_exposure = (
         None
         if prediction
-        else checked_grouping or _study_exposure_reading(
+        else checked_grouping or stated_grouping or _study_exposure_reading(
             named_concept("exposure"),
-            _stated_exposure_concept(stated_exposure, catalog_by_id),
+            field_concept,
             excluded={*declared_covariates, *required_subgroup_concepts, target_outcome, configured_outcome},
             named=question_concepts,
-            stated_names=_stated_catalog_concept(stated_exposure, catalog_by_id),
+            stated_names=field_names,
             demographic=frozenset(
                 concept for concept, item in catalog_by_id.items()
                 if getattr(item, "category", None) == "demographics"
@@ -1586,10 +1627,13 @@ def _metadata_only_planning_coordinates(
     )
     if descriptive and named_exposure:
         # Describing one factor's frequencies does not compare an outcome
-        # across its levels. Keep that concept in the measurement reading.
-        if not (target_outcome or configured_outcome or question_concepts - {
-            named_exposure, *declared_covariates, *required_subgroup_concepts,
-        }):
+        # across its levels. Keep that concept in the measurement reading,
+        # unless the question states it as the groups it compares.
+        if named_exposure not in stated_groupings and not (
+            target_outcome or configured_outcome or question_concepts - {
+                named_exposure, *declared_covariates, *required_subgroup_concepts,
+            }
+        ):
             named_exposure = None
         elif not is_grouping(named_exposure):
             named_exposure = None
@@ -1613,7 +1657,9 @@ def _metadata_only_planning_coordinates(
         # event in the intent reader. Only one owner-defined named quantity
         # can fill this otherwise empty slot; no convenient column is chosen.
         quantities = []
-        for name in sorted(question_concepts - {named_exposure, *declared_covariates, *required_subgroup_concepts}):
+        for name in sorted(question_concepts - {
+            named_exposure, *grouping_words, *declared_covariates, *required_subgroup_concepts,
+        }):
             item = catalog_by_id.get(name)
             operation = explicit_exposure_aggregation(question, concept_id=name)
             if item is not None:
@@ -1693,12 +1739,14 @@ def _metadata_only_planning_coordinates(
             # The slot's words quote the concept the keyword reader named; when
             # the stated exposure decided another one, they quote the wrong
             # concept, and the stated words are the reading's own.
+            # A stated grouping's words are the question's own for it.
             fragment = (
                 _clean_text(slot.get("evidence"), 160)
                 if named_concept(slot_name) == concept
-                else _clean_text(stated_exposure, 160) if role == "exposure" else ""
+                else stated_groupings.get(concept) or _clean_text(stated_exposure, 160)
+                if role == "exposure" else ""
             )
-            if not fragment and role == "outcome" and checked_grouping:
+            if not fragment and role == "outcome" and (checked_grouping or stated_grouping):
                 fragment = (
                     outcome_operation.evidence if outcome_operation is not None else
                     next((phrase for concepts, phrase in named_study_concepts(question)
