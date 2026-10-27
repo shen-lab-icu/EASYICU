@@ -1082,6 +1082,7 @@ def _apply_resume_plan_migrations(
         resume_state=resume_state,
         resume_from_step_id=resume_from_step_id,
         scientific_runtime_authorities=scientific_runtime_authorities,
+        context=agent_context,
         run_dir=run_dir,
         evidence=evidence,
         prompt_version=prompt_version,
@@ -2799,7 +2800,7 @@ class ResearchAgentPipeline:
             # it after generic input closure so measurement companions or other
             # host shaping cannot drift its exact executor contract.
             plan, scientific_runtime_compile_findings = (
-                self._scientific_runtime_authorities.bind_plan(plan)
+                self._scientific_runtime_authorities.bind_plan(plan, context=context)
             )
             findings.extend(scientific_runtime_compile_findings)
             plan = _figure_plan.apply_runtime_bound_figure_contracts(plan, findings)

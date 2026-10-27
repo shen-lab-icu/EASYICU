@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 import hashlib
 import json
 import math
@@ -81,6 +82,43 @@ SIGNED_TRAJECTORY_FIGURE_INPUTS = (
 SIGNED_TRAJECTORY_IDENTITY_COLUMN = "stay_id"
 
 
+@lru_cache(maxsize=None)
+def signed_trajectory_stay_identities(database: str | None = None) -> frozenset[str]:
+    """The names a description of the frozen classes may give the ICU stay.
+
+    The run that executes the suite materializes each source's ICU-stay key
+    as ``stay_id`` (``cohort.materializer``): the representation, the frozen
+    labels and the run cohort all carry that name.  A plan made on a source's
+    metadata names the same key as the source does (``patientunitstayid`` in
+    eICU, ``admissionid`` in AmsterdamUMCdb), and the run that executes it
+    plans again on the materialized cohort.  Given the database, only its own
+    key is that stay, and no other identity of that source, an admission's,
+    a hospital stay's or a patient's, joins the frozen labels.
+
+    Without the database, any registered source's ICU-stay key is admitted.
+    That union is structural only: one source's stay key can be another's
+    patient key (HiRID keys its stays by ``patientid``, which in
+    AmsterdamUMCdb names the patient).  Every check that knows the run's
+    source passes it: ``bind_plan``, the plan review, and the executor, which
+    requires the labels' identity in the run cohort's own id columns.
+    """
+
+    from easyicu.databases.profiles import get_database_profile, iter_database_profiles
+
+    if database is None:
+        keys = {profile.stay_id_col for profile in iter_database_profiles()}
+    else:
+        keys = set()
+        # A demo release keys its stays as its parent does.
+        for name in dict.fromkeys((str(database), str(database).removesuffix("_demo"))):
+            try:
+                keys = {get_database_profile(name).stay_id_col}
+            except KeyError:
+                continue
+            break
+    return frozenset({SIGNED_TRAJECTORY_IDENTITY_COLUMN, *keys})
+
+
 def signed_trajectory_plan_claimed(plan: object) -> bool:
     methods = [str(getattr(step, "method", "") or "") for step in getattr(plan, "steps", ()) or ()]
     return _REPRESENTATION in methods and bool(
@@ -106,13 +144,15 @@ def _owner_steps(plan: object) -> tuple[Any, ...] | None:
 
 
 def _frozen_class_description_errors(
-    descriptions: Sequence[Any], roots: Sequence[Any]
+    descriptions: Sequence[Any], roots: Sequence[Any], *, database: str | None
 ) -> list[str]:
     """Admit one description of the frozen classes on the host-bound run cohort.
 
     The host wires it (``bind_plan``): it reads the cohort the run selected,
     republished byte for byte by the interpretation-free root, and the
-    stability owner's labels and freeze record, and it feeds no owner.
+    stability owner's labels and freeze record, and it feeds no owner.  It
+    joins them on the ICU stay, by either name the stay has on ``database``
+    (``signed_trajectory_stay_identities``).
     """
 
     if len(descriptions) != 1 or len(roots) != 1:
@@ -134,7 +174,7 @@ def _frozen_class_description_errors(
         and cohort_key == root.expected_outputs[0]
         and getattr(description, "planned_analysis_role", None) == "secondary"
         and list(getattr(description, "expected_outputs", ()) or ()) == [COMPARISON_PRODUCT]
-        and getattr(spec, "identity_column", None) == SIGNED_TRAJECTORY_IDENTITY_COLUMN
+        and getattr(spec, "identity_column", None) in signed_trajectory_stay_identities(database)
     ):
         return [
             "signed trajectory description step "
@@ -144,7 +184,9 @@ def _frozen_class_description_errors(
     return []
 
 
-def _companion_errors(plan: object, owners: Sequence[Any]) -> list[str]:
+def _companion_errors(
+    plan: object, owners: Sequence[Any], *, database: str | None
+) -> list[str]:
     """A companion may only render the owners' tables or describe their classes.
 
     The host appends deterministic renderers after binding, such as the cohort
@@ -173,7 +215,7 @@ def _companion_errors(plan: object, owners: Sequence[Any]) -> list[str]:
         if str(getattr(step, "method", "") or "") == HOST_BOUND_COHORT_METHOD
     ]
     errors: list[str] = (
-        _frozen_class_description_errors(descriptions, roots)
+        _frozen_class_description_errors(descriptions, roots, database=database)
         if descriptions or roots
         else []
     )
@@ -199,10 +241,15 @@ def _companion_errors(plan: object, owners: Sequence[Any]) -> list[str]:
     return errors
 
 
-def signed_trajectory_plan_contract_errors(plan: object) -> list[str]:
+def signed_trajectory_plan_contract_errors(
+    plan: object, *, database: str | None = None
+) -> list[str]:
     """Require one closed representation -> selection -> stability -> figure DAG.
 
     Host companions that only render the owners' tables may sit beside it.
+    Given the run's ``database``, a description of the frozen classes must be
+    keyed by that source's own ICU stay; without it, by any registered
+    source's (``signed_trajectory_stay_identities``).
     """
 
     owners = _owner_steps(plan)
@@ -235,7 +282,7 @@ def signed_trajectory_plan_contract_errors(plan: object) -> list[str]:
     figure_inputs = tuple(getattr(steps[3], "inputs", ()) or ())
     if figure_inputs != SIGNED_TRAJECTORY_FIGURE_INPUTS:
         errors.append("signed trajectory diagnostic figure has invalid inputs")
-    errors.extend(_companion_errors(plan, owners))
+    errors.extend(_companion_errors(plan, owners, database=database))
     return errors
 
 
@@ -514,4 +561,5 @@ __all__ = [
     "signed_trajectory_plan_claimed",
     "signed_trajectory_plan_contract_errors",
     "signed_trajectory_runtime_bundle_errors",
+    "signed_trajectory_stay_identities",
 ]

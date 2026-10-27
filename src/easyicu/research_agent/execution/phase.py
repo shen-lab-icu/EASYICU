@@ -1044,7 +1044,7 @@ def _prepare_execute_phase_authority(
     if companion_input_findings:
         findings.extend(companion_input_findings)
         plan, runtime_compile_findings = (
-            pipeline._scientific_runtime_authorities.bind_plan(plan)
+            pipeline._scientific_runtime_authorities.bind_plan(plan, context=context)
         )
         findings.extend(runtime_compile_findings)
         if plan != plan_result.plan:

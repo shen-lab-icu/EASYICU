@@ -38,6 +38,7 @@ from ..planning.population_shadow import (
 )
 from ..planning.approval_stops import PLAN_APPROVAL_STOPS
 from ..planning.capability_gap import check_capability_gap
+from ..planning.family_spec.request import sealed_trajectory_suite_coordinates
 from ..planning.question_requirements import (
     QuestionRequirementsError,
     bind_named_question_concepts,
@@ -427,6 +428,14 @@ def question_requirement_outcome(
         for value in (context.primary_exposure or "", context.target_outcome or "")
         if value
     )
+    # The signed trajectory candidate owner fits the representation of the
+    # sealed coordinates; its inputs name only the representation's products.
+    suite = sealed_trajectory_suite_coordinates(planning_contract_context)
+    sealed_owner_concepts = (
+        {suite.candidate_owner: tuple(suite.coordinate_concepts)}
+        if suite is not None and suite.candidate_owner
+        else {}
+    )
     judged = judge_question_requirements(
         requirements,
         plan=plan,
@@ -435,6 +444,7 @@ def question_requirement_outcome(
         check_gap=lambda gap: check_capability_gap(
             gap, context=context, planning_contract_context=planning_contract_context
         ),
+        sealed_owner_concepts=sealed_owner_concepts,
     )
     unstated = (
         ()
@@ -461,6 +471,7 @@ def question_requirement_outcome(
             sealed=sealed,
             stated_measures=stated_measures,
             measures=measures,
+            sealed_owner_concepts=sealed_owner_concepts,
         ),
     )
     return question_requirement_findings(judged, unstated=unstated, measures=measures)

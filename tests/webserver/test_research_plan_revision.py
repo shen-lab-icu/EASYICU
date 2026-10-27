@@ -916,7 +916,7 @@ def test_revision_refuses_an_optional_analysis_added_by_host_shaping(monkeypatch
             calls.append("seal")
             return self
 
-        def bind_plan(self, plan):
+        def bind_plan(self, plan, *, context=None):
             calls.append("bind")
             return plan, []
 
@@ -969,7 +969,7 @@ def test_revision_compares_the_runtime_bound_plan_before_persisting(
         def seal_for_plan(self, plan):
             return self
 
-        def bind_plan(self, plan):
+        def bind_plan(self, plan, *, context=None):
             calls.append("runtime_binding")
             normalized = plan.model_copy(update={"steps": [
                 plan.steps[0].model_copy(update={"method": previous.steps[0].method}),

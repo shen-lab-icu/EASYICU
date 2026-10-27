@@ -294,7 +294,7 @@ FROZEN_CLASS_DESCRIPTION_STEP_ID = "05_frozen_class_description"
 
 
 def _carry_frozen_class_description(
-    *, draft: AnalysisPlan, bound: AnalysisPlan
+    *, draft: AnalysisPlan, bound: AnalysisPlan, database: str | None
 ) -> tuple[AnalysisPlan, dict[str, Any]]:
     """Keep a draft's description of the frozen classes, wired by the host.
 
@@ -305,6 +305,8 @@ def _carry_frozen_class_description(
     byte for byte by the interpretation-free root, and the stability owner's
     labels and freeze record.  A draft with several such steps is ambiguous,
     and a step the signed contract refuses is not carried; both are reported.
+    Given the run's ``database``, the step is carried only when keyed by that
+    source's own ICU stay.
     """
 
     sources = [
@@ -357,7 +359,7 @@ def _carry_frozen_class_description(
     except ValueError as exc:
         errors = [str(exc)]
     else:
-        errors = signed_trajectory_plan_contract_errors(plan)
+        errors = signed_trajectory_plan_contract_errors(plan, database=database)
     if errors:
         return bound, {
             "carried": False,
@@ -600,6 +602,8 @@ class ScientificRuntimeAuthorities:
     def bind_plan(
         self,
         plan: AnalysisPlan,
+        *,
+        context: ResearchContext | None = None,
     ) -> tuple[AnalysisPlan, list[ValidationFinding]]:
         """Compile host-owned wiring before the final plan is reviewed.
 
@@ -607,7 +611,10 @@ class ScientificRuntimeAuthorities:
         product/input wiring. Binding does not authorize the Planner to change
         a sealed scientific coordinate. A plan-bound roster is sealed first so
         the bound plan references the executed digest; callers persist that
-        sealed value through :meth:`seal_for_plan`.
+        sealed value through :meth:`seal_for_plan`. ``context`` is the run's
+        research context: the host wires a description of frozen trajectory
+        classes only when it is keyed by its source's ICU stay.  Without it the
+        check is the context-free one, any registered source's stay key.
         """
 
         trajectory_authority = self.trajectory
@@ -628,7 +635,9 @@ class ScientificRuntimeAuthorities:
                 ),
             )
             bound, description = _carry_frozen_class_description(
-                draft=plan, bound=bound
+                draft=plan,
+                bound=bound,
+                database=context.cohort.database if context is not None else None,
             )
             message = (
                 "Removed generic article-shaping additions and compiled "

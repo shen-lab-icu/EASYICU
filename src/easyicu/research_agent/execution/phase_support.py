@@ -1797,7 +1797,7 @@ def _step_maybe_replan(
     # calculation back to generated code.
     try:
         revised, scientific_runtime_findings = (
-            pipeline._scientific_runtime_authorities.bind_plan(revised)
+            pipeline._scientific_runtime_authorities.bind_plan(revised, context=context)
         )
         pipeline._scientific_runtime_authorities.validate_plan(revised)
     except (TypeError, ValueError) as exc:
