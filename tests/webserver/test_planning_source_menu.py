@@ -488,7 +488,9 @@ def test_the_planning_runner_requires_its_exposure_and_outcome_columns(
         "associated with ICU mortality?",
     })
 
-    assert tuple(captured["required_coordinates"]) == ("sep3", "death")
+    # "ICU mortality" names the native ICU death endpoint, which MIMIC-IV
+    # offers; it is never the dictionary's hospital death.
+    assert tuple(captured["required_coordinates"]) == ("sep3", "icu_death")
 
 
 def test_the_planning_roster_carries_the_concepts_a_trajectory_population_reads(

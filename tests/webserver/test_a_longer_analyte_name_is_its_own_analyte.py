@@ -38,7 +38,7 @@ def _read(question: str) -> tuple:
         ("Is the platelet to lymphocyte ratio associated with 28-day mortality?", "plr", "mort_28d"),
         ("platelet/lymphocyte ratio and in-hospital mortality", "plr", "death"),
         ("血小板与淋巴细胞比值与28天死亡", "plr", "mort_28d"),
-        ("Is direct bilirubin associated with ICU mortality?", "bili_dir", "death"),
+        ("Is direct bilirubin associated with ICU mortality?", "bili_dir", "icu_death"),
         ("直接胆红素与死亡", "bili_dir", "death"),
         ("Is diastolic blood pressure associated with AKI?", "dbp", "aki"),
         ("休克指数与28天死亡", "shock_index", "mort_28d"),
@@ -69,7 +69,7 @@ def test_a_term_of_a_measure_the_catalog_does_not_name_is_not_read(question):
     ("question", "exposure", "outcome"),
     [
         ("Is lactate associated with in-hospital mortality?", "lact", "death"),
-        ("Is total bilirubin associated with ICU mortality?", "bili", "death"),
+        ("Is total bilirubin associated with ICU mortality?", "bili", "icu_death"),
         ("Does creatinine predict 28-day mortality compared with lactate?", "crea", "mort_28d"),
         ("乳酸与死亡的比较", "lact", "death"),
         ("Is mean arterial pressure associated with AKI?", "map", "aki"),

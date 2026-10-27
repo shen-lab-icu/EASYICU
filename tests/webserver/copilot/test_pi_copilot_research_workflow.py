@@ -2216,7 +2216,7 @@ def test_metadata_only_planning_ignores_unmapped_display_labels(
         output_dir=tmp_path / "planning",
         required_concepts=(
             "death",
-            "ICU 住院期间死亡（death during the same ICU stay）",
+            "院内死亡（in-hospital death）",
             "入 ICU 后 24 小时内乳酸水平",
         ),
     )
@@ -2351,7 +2351,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
     prepared = _write_pipeline_export(tmp_path / "prepared-mimiciv")
     study = {
         **_design_free_study(prepared),
-        "outcome": "ICU 住院期间死亡（death during the same ICU stay）",
+        "outcome": "院内死亡（in-hospital death）",
         "primary_exposure": "入 ICU 后 24 小时内乳酸水平",
         "analysis_design": {
             "analysis_family": "association_study",
@@ -2409,6 +2409,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
     # and Sepsis-3 is then a question-named concept with the columns its name
     # can denote.
     withheld = outcome_configured and not named_operation
+    target, asked = ("death" if outcome_configured or named_operation else "icu_death"), ("death" if named_operation else "icu_death")  # ICU mortality is native ICU death; a confirmed outcome keeps precedence
     assert captured == {
         "cohort_rows": 0,
         "cohort_columns": [
@@ -2421,7 +2422,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             "lact",
             "sep3",
             "death",
-            *(["sep3_sofa2", "susp_inf"] if withheld else []),
+            *(["sep3_sofa2", "susp_inf"] if withheld else []), *([] if named_operation else ["icu_death"]),
             *(["los_icu"] if multiple_outcomes else []),
         ],
         "planning_authority": {
@@ -2451,11 +2452,11 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         },
         "cohort_authority_path": None,
         "id_columns": ["patient_stay_id"],
-        "target_outcome": "death",
+        "target_outcome": target,
         "primary_exposure": "lact_max" if named_operation else None if withheld else "sep3",
-        "outcome_columns": ("death", "los_icu") if multiple_outcomes else ("death",),
+        "outcome_columns": tuple(dict.fromkeys((asked, *(["los_icu"] if multiple_outcomes else []), target))),
         "endpoint": {
-            "name": "death",
+            "name": target,
             "kind": "binary",
             "absence_semantics": "no_absent_rows",
             "levels": [0, 1],

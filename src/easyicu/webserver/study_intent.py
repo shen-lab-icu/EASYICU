@@ -34,10 +34,12 @@ from typing import Any, Callable, Dict, Iterator, List, Literal, Mapping, Option
 
 from easyicu.ai_optin import AIOptInError
 from easyicu.outcome_availability import (
+    ICU_DEATH,
     fixed_horizon_mortality_endpoint_stated_by,
     mortality_horizon_spans,
     stated_mean_survival_mentions,
     stated_mortality_horizon_mentions,
+    stated_mortality_setting_mentions,
 )
 from easyicu.research_agent.planning.analysis_types import COMPETING_EVENT_TERMS
 from easyicu.research_agent.research_context.temporal_semantics import (
@@ -128,6 +130,10 @@ def _concept_groups() -> Dict[str, List[str]]:
 # no closed endpoint admits ("30-day mortality") is left to the generic
 # mortality reading.
 _FIXED_HORIZON_MORTALITY = "fixed_horizon_mortality"
+# Death in the ICU is read by the shared setting reader: "ICU mortality",
+# "death in the ICU", 「ICU 死亡率」「ICU 内死亡」「死于 ICU」 name the native
+# ICU death endpoint, never the dictionary's hospital ``death``.
+_ICU_DEATH_SETTING = "icu_death_setting"
 
 # Clinical phrasings (EN + ZH) mapped onto catalog concept ids. This is a
 # reading aid, not an allowlist of what a study may be about: an unmatched
@@ -187,9 +193,10 @@ _PHRASE_TO_CONCEPT: Tuple[Tuple[str, str], ...] = (
     (r"\bage\b|年龄", "age"),
     (r"\bsex\b|gender|性别", "sex"),
     (r"\badmission (?:type|category)\b|\btype of admission\b|入院类型|入院类别|入科类型", "adm"),
-    (r"in-?hospital mortality|hospital mortality|院内死亡|住院death|住院死亡", "death"),
+    # 「ICU 住院死亡率」 is ICU death, read by the setting reader below.
+    (r"in-?hospital mortality|hospital mortality|院内死亡|住院death|(?<!icu)(?<!icu )住院死亡", "death"),
     (_FIXED_HORIZON_MORTALITY, _FIXED_HORIZON_MORTALITY),
-    (r"icu mortality|icu 死亡", "death"),
+    (_ICU_DEATH_SETTING, _ICU_DEATH_SETTING),
     (r"mortality|death|死亡|病死", "death"),
     (r"icu\s*(?:住院)?(?:时长|时间)|重症监护(?:室)?住院(?:时长|时间)|length of stay|\blos\b|住院(?:总)?(?:时长|时间)", "los_icu"),
     (r"readmission|再入院", "icu_readmission"),
@@ -206,6 +213,7 @@ _PHRASE_TO_CONCEPT: Tuple[Tuple[str, str], ...] = (
 _OUTCOME_CONCEPTS_PRIMARY = frozenset(
     {
         "death",
+        "icu_death",
         "mort_28d",
         "mort_90d",
         "mort_365d",
@@ -471,7 +479,7 @@ def _population_restriction(text: str, concept: str, start: int, end: int) -> bo
 # stop one phrase from filling two different slots.
 _CONCEPT_FAMILIES: Tuple[frozenset, ...] = (
     frozenset({"aki", "aki_stage", "rrt"}),
-    frozenset({"death", "mort_28d", "mort_90d", "mort_365d"}),
+    frozenset({"death", "icu_death", "mort_28d", "mort_90d", "mort_365d"}),
     frozenset({"los_icu", "los_hosp"}),
     frozenset({"vent_ind", "vent_free_days_28", "peep", "tidal_vol"}),
     frozenset({"sep3", "sep3_sofa2", "susp_inf"}),
@@ -497,6 +505,11 @@ def _entry_readings(pattern: str, concept: str, text: str) -> Iterator[Tuple[str
             endpoint = fixed_horizon_mortality_endpoint_stated_by(mention.horizon)
             if endpoint is not None:
                 yield endpoint.event_concept, mention.start, mention.end
+        return
+    if concept == _ICU_DEATH_SETTING:
+        for setting in stated_mortality_setting_mentions(text):
+            if setting.endpoint == ICU_DEATH:
+                yield ICU_DEATH, setting.start, setting.end
         return
     for match in re.finditer(pattern, text, re.IGNORECASE):
         yield concept, match.start(), match.end()
@@ -1177,7 +1190,9 @@ def explicit_outcome_concepts(question: str) -> tuple[str, ...]:
     values: list[str] = []
     covered: list[tuple[int, int]] = []
     for pattern, entry in _PHRASE_TO_CONCEPT:
-        if entry not in _OUTCOME_CONCEPTS_PRIMARY and entry != _FIXED_HORIZON_MORTALITY:
+        if entry not in _OUTCOME_CONCEPTS_PRIMARY and entry not in (
+            _FIXED_HORIZON_MORTALITY, _ICU_DEATH_SETTING,
+        ):
             continue
         for reading in _entry_readings(pattern, entry, text):
             resolved = _resolved_reading(text, *reading)
