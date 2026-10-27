@@ -32,19 +32,6 @@
     const names = window.EU_DATABASE_NAMES;
     return names.keys().filter(key => Number(counts[key]) > 0).map(key => names.name(key));
   }
-  function hostedRail(owner) {
-    const contact = owner.supportContact();
-    return `
-      <div class="rail-sep"></div>
-      <div class="rail-block">
-        <div class="rail-head"><span class="t">${t('Where to go', '常用入口')}</span></div>
-        <div class="col gap-6" style="font-size:12.5px;color:var(--ink-3);">
-          <a class="nav-item" data-nav="guided" style="height:30px;"><span class="ico">${icon('agent', 15)}</span>${t('Research conversation', '研究对话')}</a>
-          <a class="nav-item" data-nav="patient" style="height:30px;"><span class="ico">${icon('patient', 15)}</span>${t('Patient Review', '患者审阅')}</a>
-        </div>
-        ${contact ? `<div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Administrator', '管理员')}</div><div style="font-size:12.5px;color:var(--ink-2);">${esc(contact)}</div>` : ''}
-      </div>`;
-  }
   function hostedRender(owner) {
     const contact = owner.supportContact();
     const databases = preparedDatabases();
@@ -240,7 +227,7 @@
   S.tutorial = {
     section: 'tutorial', nav: 'tutorial',
     crumbs: ['Home', 'Get Started'],
-    // The module shell's Help aside on a hosted instance (app.js).
+    // The module shell's Help aside (app.js): a hosted administrator's contact.
     contextAside() {
       const hosted = hostedOwner();
       const contact = hosted && hosted.supportContact();
@@ -249,31 +236,6 @@
     actionHtml() {
       if (hostedOwner()) return `<button class="btn primary" data-nav="guided" type="button">${t('Start a research conversation', '开始研究对话')}</button>`;
       return `<button class="btn primary" data-nav="guided" type="button">${t('Start a research conversation', '开始研究对话')}</button>`;
-    },
-    rail() {
-      const hosted = hostedOwner();
-      if (hosted) return hostedRail(hosted);
-      const workflow = [
-        [t('Extract', '抽取'), 'extract', 'extraction'],
-        [t('Review', '审阅'), 'patient', 'patient'],
-        [t('Benchmark', '基准'), 'benchmark', 'crossdb'],
-        [t('Agent', 'Agent'), 'agent', 'agent'],
-      ];
-      return `
-      <div class="rail-sep"></div>
-      <div class="rail-block">
-        <div class="rail-head"><span class="t">${t('The workflow', '工作流程')}</span></div>
-        <div class="col gap-6" style="font-size:12.5px;color:var(--ink-3);">
-          ${workflow.map(([label, ic, nav]) =>
-            `<a class="nav-item" data-nav="${nav}" style="height:30px;"><span class="ico">${icon(ic, 15)}</span>${label}</a>`).join('')}
-        </div>
-        <div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Shortcuts', '快捷键')}</div>
-        <div class="col" style="font-size:12px;">
-          <div class="shortcut-row"><span style="color:var(--ink-3);">${t('Open EasyICU Copilot', '打开 EasyICU 研究助手')}</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">K</span></span></div>
-          <div class="shortcut-row"><span style="color:var(--ink-3);">${t('Switch section', '切换区域')}</span><span class="keys"><span class="kbd">1</span>–<span class="kbd">5</span></span></div>
-          <div class="shortcut-row"><span style="color:var(--ink-3);">${t('Toggle language', '切换语言')}</span><span class="keys"><span class="kbd">L</span></span></div>
-        </div>
-      </div>`;
     },
     render() {
       const hosted = hostedOwner();

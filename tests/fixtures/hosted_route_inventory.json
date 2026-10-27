@@ -320,23 +320,6 @@
   },
   {
     "method": "POST",
-    "route": "/api/agent-runs/science-workbench",
-    "fields": [
-      "body:project_dir"
-    ],
-    "reaches": "run_refs.resolve / RunDirectory.resolve -> allowlisted artifact reads, signoff or bundle",
-    "protection": "instance-only project field guard + owner check (this patch): resolved directory; artifact basename/allowlist and symlink rejection",
-    "guarded_fields": [
-      "body:project_dir"
-    ],
-    "writes": "none",
-    "write_owner": "Read-only handler or in-memory response; no filesystem destination.",
-    "guarded_errors": {
-      "body:project_dir": "hosted_data_read_only"
-    }
-  },
-  {
-    "method": "POST",
     "route": "/api/agent-runs/signoff",
     "fields": [
       "body:project_dir",

@@ -279,36 +279,16 @@ def test_no_raw_backend_reason_code_is_rendered() -> None:
     assert "remote.reason" not in settings_js
 
 
-def test_shell_renders_stage_status_without_reaching_into_study_context() -> None:
-    """The stage indicator must not break the shell/owner boundary.
-
-    app.js is forbidden from reading EU_STUDY_CONTEXT (locked by
-    test_route_handoffs_have_sources_and_viz_mapping_has_its_own_owner), so the
-    derivation lives in study-progress.js and the shell renders its snapshot.
-    """
+def test_shell_does_not_read_the_study_context() -> None:
+    """app.js stays a router: the stage status it once drew in the old sidebar
+    is retired with that sidebar, and the shell still never reads the store."""
     shell = (STATIC_JS / "app.js").read_text(encoding="utf-8")
-    owner = (STATIC_JS / "study-progress.js").read_text(encoding="utf-8")
     index = (STATIC_JS.parent / "index.html").read_text(encoding="utf-8")
 
     assert "EU_STUDY_CONTEXT" not in shell
-    assert "window.EU_STUDY_PROGRESS.snapshot()" in shell
-    assert "stage-chip" in shell
-    assert "window.EU_STUDY_CONTEXT" in owner
-    assert "window.EU_STUDY_PROGRESS = { snapshot }" in owner
-    # Load order: the owner reads the context store, so it must come after it.
-    assert index.index("js/study-context.js") < index.index("js/study-progress.js")
-    assert index.index("js/study-progress.js") < index.index("js/app.js")
-
-
-def test_stage_status_is_evidence_based_not_optimistic() -> None:
-    """A stage may only read 'done' when the context carries its artifact."""
-    owner = (STATIC_JS / "study-progress.js").read_text(encoding="utf-8")
-    # Cross-DB is plan-only scope; it must not light the data stage as done.
-    assert "crossdb_review_completed" in owner
-    assert "function planOnly(context)" in owner
-    # With no context at all, nothing is 'active' — a first-time user must not
-    # be told they are mid-way through a study they never started.
-    assert "const started = !!context" in owner
+    assert "EU_STUDY_PROGRESS" not in shell
+    assert "js/study-progress.js" not in index
+    assert not (STATIC_JS / "study-progress.js").exists()
 
 
 def test_settings_offer_no_data_mode_switch() -> None:
@@ -321,47 +301,6 @@ def test_settings_offer_no_data_mode_switch() -> None:
     assert ".mode-seg" not in shell_css
     assert "set-data-mode" not in settings
     assert "data_mode" not in settings
-
-
-def test_shell_states_the_two_entry_paths_are_one_pipeline() -> None:
-    shell = (STATIC_JS / "app.js").read_text(encoding="utf-8")
-    assert "A topic, clinical observation, paper URL, or PDF all start in Copilot" in shell
-    assert "研究主题、临床现象、文章链接或 PDF 都从 Copilot 开始" in shell
-
-
-def test_a_refusal_names_what_would_clear_it() -> None:
-    """A fail-closed gate that only says "no" leaves the user with no move.
-
-    Every code the backend can block on must have a remedy entry, and a remedy
-    must carry a route — a requirement sentence with nowhere to go is the same
-    dead end in nicer words.
-    """
-    import re as _re
-
-    remedy_js = (STATIC_JS / "gate-remedy.js").read_text(encoding="utf-8")
-    from easyicu.webserver.ideas.mining import EXECUTION_GATE_BLOCKERS
-
-    declared = set(_re.findall(r"^    ([a-z_]+): \(\) => \(\{", remedy_js, _re.M))
-    missing = set(EXECUTION_GATE_BLOCKERS) - declared
-    assert not missing, f"gate codes with no remedy: {sorted(missing)}"
-    # Codes the route layer adds on top of the idea-mining gate.
-    for code in ("seed_gate_missing", "active_export_changed", "crossdb_plan_only"):
-        assert code in declared, f"{code} has no remedy"
-    # Every remedy block declares a route to send the user to.
-    blocks = remedy_js.split("    ")
-    assert remedy_js.count("route:") == len(declared)
-
-
-def test_remedies_are_keyed_on_codes_not_matched_against_prose() -> None:
-    """The gate decided from typed conditions; the UI re-derived it by regex.
-
-    screens-agent.js ran /prior-art/i and friends over the backend's English
-    sentences, so rewording a backend string silently dropped the remedy.
-    """
-    remedy_js = (STATIC_JS / "gate-remedy.js").read_text(encoding="utf-8")
-
-    # Unknown codes yield nothing rather than a guess.
-    assert "return build ? Object.assign" in remedy_js
 
 
 def test_execution_gate_ships_codes_beside_the_sentences() -> None:
@@ -407,16 +346,6 @@ def test_legacy_seed_sentences_recover_their_code_by_exact_match() -> None:
     assert _blocker_codes({"blocker_codes": ["export_not_real"]}, ["anything"]) == [
         "export_not_real"
     ]
-
-
-def test_data_workspace_shows_producer_before_consumers() -> None:
-    """Four peers hid that extraction must happen first."""
-    shell = (STATIC_JS / "app.js").read_text(encoding="utf-8")
-    shell_css = (STATIC_JS.parent / "css" / "shell.css").read_text(encoding="utf-8")
-    assert "role: 'produces'" in shell
-    assert shell.count("role: 'reads'") == 3
-    assert "wsg-step" in shell and ".wsg-step" in shell_css
-    assert ".wsitem.ws-reads" in shell_css
 
 
 def test_crossdb_states_its_scope_limit_before_the_agent_refuses() -> None:
@@ -468,20 +397,13 @@ def test_transitional_css_buckets_hold_no_route_rules() -> None:
         offenders = route_rule.findall(text)
         assert not offenders, f"{bucket} regained route-specific rules: {offenders[:5]}"
 
-    # The moved rules must still exist at their new owner, not have been dropped.
+    # The moved rules that still have a renderer live at their owner.
     agent_css = (css_dir / "agent.css").read_text(encoding="utf-8")
-    for selector in (
-        ".ag-wrap",
-        ".ag-list-head",
-        ".ag-newbtn",
-        ".ag-studies",
-        ".ag-tabs",
-    ):
+    for selector in (".ag-pipe", ".ag-tabs"):
         assert selector in agent_css, f"{selector} lost in the migration"
-    assert ".idea-band" in (css_dir / "ideas.css").read_text(encoding="utf-8")
-    # .agent-entry belongs beside its sibling .ideas-entry in the shell owner.
+    # The retired sidebar's entry cards left the shell owner with it.
     shell_css = (css_dir / "shell.css").read_text(encoding="utf-8")
-    assert ".agent-entry" in shell_css and ".ideas-entry" in shell_css
+    assert ".agent-entry" not in shell_css and ".ideas-entry" not in shell_css
 
 
 def test_picker_css_has_one_owner_and_is_not_injected_from_js() -> None:

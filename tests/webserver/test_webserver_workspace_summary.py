@@ -1107,7 +1107,7 @@ def test_guided_copilot_session_routes_locally_and_rejects_row_payload(
     message_body = message.json()
     assert message_body["session"]["goal"] == "idea_mining"
     assert message_body["session"]["step"] == "handoff_ready"
-    assert message_body["handoff"]["target_route"] == "ideas"
+    assert message_body["handoff"]["target_route"] == "guided"
     assert message_body["handoff"]["prefill"]["source"] == "guided_copilot"
 
     review_message = client.post(

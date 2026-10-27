@@ -66,26 +66,25 @@ def test_native_static_route_registry_contains_fallback_only_routes() -> None:
         )
 
     assert {
-        "entry",
         "extraction",
         "patient",
         "cohort",
         "crossdb",
-        "ideas",
         "settings",
         "dictionary",
-        "states",
         "tutorial",
         "guided",
     } <= screen_ids
+    # Retired pages alias to the conversation in app.js (test_webserver_home_flow).
+    assert not {"entry", "ideas", "states"} & screen_ids
 
 
 def test_native_hash_router_has_help_alias_and_unknown_hash_fails_safe() -> None:
     app_js = _static_js("app.js")
 
     assert "const FALLBACK_ROUTE = 'guided';" in app_js
-    assert "if (raw === 'entry')" in app_js
-    assert "replaceHash('guided')" in app_js
+    assert "const RETIRED_ROUTES = new Set(['entry', 'ideas', 'states']);" in app_js
+    assert "RETIRED_ROUTES.has(raw))) replaceHash(id)" in app_js
     assert "if (r === 'help') return 'tutorial';" in app_js
     assert "history.replaceState(null, '', next)" in app_js
     assert "resolveRoute(rawRouteFromHash(), { rewrite: true })" in app_js
@@ -120,7 +119,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "saveSetting('data_mode'" not in i18n_js
     assert "js/i18n.js?v=20261026-src1" in index_html
-    assert "js/api.js?v=20261026-quick1" in index_html
+    assert "js/api.js?v=20261027-old1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -128,8 +127,8 @@ def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
 
     The floating #cpFab sat on top of the composer's own send control on the
     guided route, and the route it opened is the page the user is already on.
-    app.js still opens the one #guided conversation from [data-cpopen] and
-    Cmd/Ctrl+K through EUPageGuide, so the hook must outlive the button.
+    app.js still opens the one #guided conversation from Cmd/Ctrl+K through
+    EUPageGuide, so the hook must outlive the button.
     """
 
     dock_css = _static_css("dock.css")
@@ -142,7 +141,7 @@ def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
     assert "window.EUPageGuide = { open, close, toggle, refreshLanguage }" in dock_js
     assert "window.EUCopilot = window.EUPageGuide" in dock_js
     assert "window.EUPageGuide || window.EUCopilot" in app_js
-    assert "data-cpopen" in app_js
+    assert "data-cpopen" not in app_js
 
 
 def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
@@ -154,11 +153,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     help_js = _static_js("screens-help.js")
     index_html = _static_html("index.html")
 
-    assert "EasyICU Copilot" in app_js
-    assert "打开唯一的 EasyICU 研究助手对话" in app_js
-    assert "window.EUPageGuide || window.EUCopilot" in app_js
-    assert "t('EasyICU Copilot', 'EasyICU 研究助手')" in app_js
-    # All shell affordances open the one #guided Pi conversation. Project
+    # Cmd/Ctrl+K opens the one #guided Pi conversation. Project
     # Monitor must not add an agent-specific conversation opener.
     assert "function open()" in dock_js
     assert "location.hash = '#guided'" in dock_js
@@ -170,7 +165,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Cancel accepted. Stopping the current database query" in extraction_js
     assert "Stopping extraction" in extraction_js
     assert "当前数据库读取可能会先完成" not in extraction_js
-    assert "Open EasyICU Copilot" in help_js
+    assert "window.EUPageGuide || window.EUCopilot" in app_js
 
     assert "Quick help" not in app_js
     assert "Quick help" not in dock_js
@@ -183,131 +178,13 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260827-no-fab1" in index_html
-    assert "js/app.js?v=20261026-src1" in index_html
-    assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
+    assert "js/app.js?v=20261027-old1" in index_html
+    assert "js/copilot-dock.js?v=20261027-old1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
     assert "js/screens-extraction.js?v=20261026-icudeath1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
-    assert "js/screens-help.js?v=20261026-eg2" in index_html
-
-
-def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
-    index_html = _static_html("index.html")
-    history_js = _static_js("screens-agent-run-history.js")
-
-    owner_asset = "js/screens-agent-run-history.js?v=20260823-run-history-owner1"
-    monitor_asset = "js/screens-guided-pi-run-files.js?v=20261026-replay1"
-    assert owner_asset in index_html
-    assert index_html.index(owner_asset) < index_html.index(monitor_asset)
-    assert "window.EU_AGENT_RUN_HISTORY_VIEW" in history_js
-
-
-def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
-    index_html = _static_html("index.html")
-    api_js = _static_js("api.js")
-    science_js = _static_js("screens-agent-science.js")
-    science_css = _static_css("agent-science.css")
-    science_detail_css = _static_css("agent-science-detail.css")
-    screens_css = _static_css("screens.css")
-    redesign_css = _static_css("redesign.css")
-
-    assert "css/agent-science.css?v=20260707-evidence-merge" in index_html
-    assert "css/agent-science-detail.css?v=20260702-science-workbench-v7" in index_html
-    assert "js/screens-agent-science.js?v=20260707-design" in index_html
-    assert "/api/agent-runs/science-workbench" in api_js
-    assert "loadAgentScienceWorkbench" in api_js
-    assert "/api/capabilities" in api_js
-    assert "hydrateCapabilities" in api_js
-    assert "checkCapabilityTool" in api_js
-    assert "searchZotero" in api_js
-    assert "loadCapabilityAuditEvents" in api_js
-
-    assert "window.EU_AGENT_SCIENCE" in science_js
-    assert "artifact_history" in science_js
-    assert "reviewer_gate" in science_js
-    assert "run_summary" in science_js
-    assert "workflow_scope" in science_js
-    assert "fig5_checklist" in science_js
-    assert "feature_alignment" in science_js
-    assert "discovery_pipeline" in science_js
-    assert "data-ag-sci-module" in science_js
-    assert "navMetric" in science_js
-    assert 'role="tab" aria-selected="' in science_js
-    assert 'aria-controls="ag-sci-module-panel"' in science_js
-    assert 'role="tabpanel"' in science_js
-    assert "scienceModuleBody" in science_js
-    assert "bi('Section status', '分区状态')" in science_js
-    assert "Evidence readiness checklist" in science_js
-    assert "bi('Evidence coverage', '证据覆盖')" in science_js
-    assert "bi('Discovery pipeline', '发现流程')" in science_js
-    assert "bi('Research tool stack', '研究工具栈')" in science_js
-    assert "bi('Skills', '技能')" in science_js
-    assert "bi('Connectors', '连接器')" in science_js
-    assert "bi('MCP tools', 'MCP 工具')" in science_js
-    assert "bi('Prompt contracts', '提示词契约')" in science_js
-    assert "bi('Tool audit', '工具审计')" in science_js
-    assert "bi('Compute', '计算环境')" in science_js
-    assert "window.EU_SETTINGS" in science_js
-    assert "window.EU_CAPABILITIES" in science_js
-    assert "data && data.capability_policy" in science_js
-    assert "policySetting(data, 'science_skills_enabled'" in science_js
-    assert "Skills disabled in Settings" in science_js
-    assert "connector_pubmed_enabled" in science_js
-    assert "connector_zotero_enabled" in science_js
-    assert "mcp_tools_enabled" in science_js
-    assert "prompt_contracts_enabled" in science_js
-    assert "tool_audit_enabled" in science_js
-    assert "remote_compute_enabled" in science_js
-    assert "Current capability switches from Settings" in science_js
-    assert "data-ag-sci-open-settings" in science_js
-    assert "核对 Claude Science 可借鉴模式是否落到 EasyICU 真实功能" not in science_js
-    assert "Function alignment" not in science_js
-    assert "工作台对齐清单" not in science_js
-    assert "data-ag-sci-focus-art" in science_js
-    assert "data-ag-sci-open-ideas" in science_js
-    assert "reusable_protocols" in science_js
-    assert "native_renderers" in science_js
-    assert ".ag-sci-module-nav" in science_css
-    assert ".ag-sci-module-card" in science_css
-    assert ".ag-sci-capstack" in science_css
-    assert ".ag-sci-capgrid" in science_css
-    assert ".ag-sci-capcard" in science_css
-    assert "grid-template-columns:repeat(3,minmax(0,1fr));" in science_css
-    assert "grid-template-columns:repeat(2,minmax(0,1fr));" in science_css
-    assert "grid-template-columns:repeat(5,minmax(112px,1fr));" in science_css
-    assert "min-height:44px;" in science_css
-    assert "min-height:104px;" not in science_css
-    assert "grid-template-columns:repeat(4,minmax(0,1fr));" in science_css
-    assert "min-height:112px;" in science_css
-    assert "-webkit-line-clamp:2;" in science_css
-    assert ".ag-wrap.list-collapsed .ag-sci-summary" in science_css
-    assert "grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr);" in science_css
-    assert ".ag-wrap.list-collapsed .ag-sci-kpi-grid" in science_css
-    assert ".ag-sci-summary" in science_css
-    assert ".ag-sci-checklist" in science_css
-    assert ".ag-sci-align" in science_css
-    assert ".ag-sci-discovery" in science_css
-    assert ".ag-sci-layout" in science_detail_css
-    assert ".ag-sci-tabpanel" in science_detail_css
-    assert ".ag-sci-card-grid" in science_detail_css
-    assert ".ag-sci-renderer" in science_detail_css
-    assert ".ag-sci-layout" not in science_css
-    assert ".ag-sci-card-grid" not in science_css
-    assert ".ag-sci-layout" not in screens_css
-    assert ".ag-sci-summary" not in screens_css
-    assert ".ag-sci-align" not in screens_css
-    assert ".ag-sci-discovery" not in screens_css
-    assert ".ag-sci-capstack" not in screens_css
-    assert ".ag-sci-capgrid" not in screens_css
-    assert ".ag-sci-module-nav" not in screens_css
-    assert ".ag-sci-layout" not in redesign_css
-    assert ".ag-sci-summary" not in redesign_css
-    assert ".ag-sci-align" not in redesign_css
-    assert ".ag-sci-discovery" not in redesign_css
-    assert ".ag-sci-capstack" not in redesign_css
-    assert ".ag-sci-capgrid" not in redesign_css
-    assert ".ag-sci-module-nav" not in redesign_css
+    assert "js/screens-help.js?v=20261027-old1" in index_html
 
 
 def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> None:
@@ -319,7 +196,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert "'Get Started': ['Get Started', '快速上手']" in app_js
     assert "const actionHtmlOf = (scr) =>" in app_js
     assert "typeof scr.actionHtml === 'function' ? scr.actionHtml()" in app_js
-    assert "crumbLabel(scr.crumbs[scr.crumbs.length - 1])" in app_js
+    assert "crumbLabel(crumbs[crumbs.length - 1])" in app_js
 
     assert "actionHtml() {" in help_js
     assert "t('Start a research conversation', '开始研究对话')" in help_js
@@ -336,8 +213,8 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20261026-src1" in index_html
-    assert "js/screens-help.js?v=20261026-eg2" in index_html
+    assert "js/app.js?v=20261027-old1" in index_html
+    assert "js/screens-help.js?v=20261027-old1" in index_html
 
 
 def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
@@ -350,9 +227,9 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "htmlOf(t.html)" in guided_js
     assert "你好，我是<strong>研究引导</strong>" in guided_js
     assert "脚本化演示流程" in guided_js
-    # The launcher that carried these labels is removed; the shell entry in
-    # app.js is now the only labelled opener.
-    assert "打开唯一的 EasyICU 研究助手对话" in _static_js("app.js")
+    # The launcher that carried these labels is removed, and so is the old
+    # top bar's opener: the conversation is the home.
+    assert "打开唯一的 EasyICU 研究助手对话" not in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
         "js/screens-guided-projects.js?v=20261027-proj1" in index_html
@@ -361,8 +238,8 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20261027-proj1" in index_html
-    assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
+    assert "js/screens-guided.js?v=20261027-old1" in index_html
+    assert "js/copilot-dock.js?v=20261027-old1" in index_html
 
 
 def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
@@ -399,8 +276,8 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20261026-quick1" in index_html
-    assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
+    assert "js/api.js?v=20261027-old1" in index_html
+    assert "js/copilot-dock.js?v=20261027-old1" in index_html
 
 
 def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questions() -> (
@@ -552,10 +429,10 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20261027-proj1" in index_html
+    assert "css/guided.css?v=20261027-old1" in index_html
     assert "css/guided-projects.css?v=20261027-proj1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20261026-quick1" in index_html
+    assert "js/api.js?v=20261027-old1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20261027-proj1" in index_html
     )
@@ -668,7 +545,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20261027-proj1" in index_html
+    assert "js/screens-guided.js?v=20261027-old1" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -699,20 +576,19 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     render_js = _static_js("screens-agent-render.js")
     agent_css = _static_css("agent.css")
     agent_layout_css = _static_css("agent-layout.css")
-    agent_header_css = _static_css("agent-header.css")
     agent_review_css = _static_css("agent-review.css")
-    agent_cap_css = _static_css("agent-capabilities.css")
     screens_css = _static_css("screens.css")
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?" not in index_html
+    for retired in ("agent-header.css", "agent-capabilities.css", "agent-question.css", "agent-project-source.css"):
+        assert f"css/{retired}" not in index_html, retired
+        assert not (STATIC_DIR / "css" / retired).exists(), retired
     assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
-    assert "css/agent.css?v=20260829-artifact-contents1" in index_html
-    assert "css/agent-layout.css?v=20260817-project-monitor-states2" in index_html
-    assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
+    assert "css/agent.css?v=20261027-old1" in index_html
+    assert "css/agent-layout.css?v=20261027-old1" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
-    assert "css/agent-capabilities.css?v=20260627-agent-capabilities" in index_html
     # Artifact renderers live in the screens-agent-render.js owner file.
     assert "function artifactStructuredView(name, payload, context)" in render_js
     assert "t('Overview', '概览')" in render_js
@@ -724,21 +600,13 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     # reader does not repeat it above every table.
     assert "Raw JSON is kept for audit, but the default view is table-based." not in render_js
     # The raw-JSON <details> lives in artifactViewer, which stays in main.
-    assert "Project Monitor route-owned layout fixes" in agent_css
     assert ".ag-pipe .pline" in agent_layout_css
     assert ".ag-pipe .pstep" in agent_layout_css
     assert ".ag-pipe .pt" in agent_layout_css
     assert ".ag-pipe .pd" in agent_layout_css
-    assert ".ag-wrap .chip" in agent_css
-    assert "Project Monitor focus layout" in agent_layout_css
-    assert ".ag-wrap.list-collapsed" in agent_layout_css
-    assert ".ag-wrap.list-collapsed .ag-list" in agent_layout_css
-    assert ".ag-wrap [data-ag-toggle-list]" in agent_layout_css
     assert ".ag-wrap.list-collapsed" not in agent_css
     assert ".ag-wrap.list-collapsed" not in screens_css
     assert ".ag-wrap.list-collapsed" not in redesign_css
-    assert ".ag-dhead.compact" in agent_header_css
-    assert ".ag-dhead.compact + .ag-tabs" in agent_header_css
     assert ".ag-dhead.compact" not in agent_css
     assert ".ag-dhead.compact" not in redesign_css
     assert ".ag-review-layout" in agent_review_css
@@ -748,17 +616,10 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     assert ".ag-review-claims" not in agent_css
     assert ".ag-review-layout" not in redesign_css
     assert ".ag-review-claims" not in redesign_css
-    assert "Project Monitor output review cards" in agent_css
-    assert ".ag-wrap .ag-output-brief" in agent_css
-    assert ".ag-wrap .ag-featured-results" in agent_css
-    assert ".ag-wrap .outcard.on" in agent_css
     assert ".ag-artifact-readable" in agent_css
     assert ".ag-artifact-table" in agent_css
     assert ".ag-raw-json" in agent_css
     assert ".ag-raw-json:not([open]) pre" in agent_css
-    assert "Project Monitor capability highlights" in agent_cap_css
-    assert ".ag-wrap .ag-cap-grid" in agent_cap_css
-    assert ".ag-wrap .ag-link-chain" in agent_cap_css
 
 
 def test_project_monitor_renders_one_load_state_and_fits_the_pipeline() -> None:
@@ -778,14 +639,6 @@ def test_project_monitor_renders_one_load_state_and_fits_the_pipeline() -> None:
     assert ".ag-pipe{ overflow:hidden; }" in layout_css
     assert ".ag-pipe .pstep{ flex:1 1 0; min-width:0; }" in layout_css
     assert ".ag-pipe .pd{ display:none; }" in layout_css
-
-
-def test_project_monitor_loads_persisted_run_history_before_claiming_zero() -> None:
-    history_js = _static_js("screens-agent-run-history.js")
-
-    assert "function rows(history, study)" in history_js
-    assert "function count(history, study, realMode)" in history_js
-    assert "persisted && persisted.project_dir" in history_js
 
 
 def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
@@ -827,7 +680,7 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
     assert "sendPiCopilotMessage" in guided_js
     assert "easyicu_run_submitted" in guided_js
     assert "data-gpi-provider-form" in provider_js
-    assert "css/agent.css?v=20260829-artifact-contents1" in index_html
+    assert "css/agent.css?v=20261027-old1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
 
@@ -933,15 +786,11 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
 
 def test_native_agent_historical_evaluation_import_uses_normal_project_surface() -> None:
     agent_css = _static_css("agent.css")
-    agent_cap_css = _static_css("agent-capabilities.css")
-    agent_question_css = _static_css("agent-question.css")
     app_js = _static_js("app.js")
-    ideas_js = _static_js("screens-ideas.js")
     guided_js = _static_js("screens-guided.js")
     index_html = _static_html("index.html")
     screens_css = _static_css("screens.css")
     redesign_css = _static_css("redesign.css")
-    ideas_css = _static_css("ideas.css")
     guided_css = _static_css("guided.css")
     agent_runs_py = (
         Path(__file__).resolve().parents[2]
@@ -967,17 +816,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert ".ag-score-grid" not in agent_css
     assert ".ag-figure-gallery" in agent_css
     assert ".ag-present-brief" in agent_css
-    assert ".ag-wrap .ag-output-brief" in agent_css
-    assert ".ag-wrap .ag-featured-results" in agent_css
-    assert ".ag-wrap .ag-cap-grid" in agent_cap_css
-    assert ".ag-wrap .ag-cap-card.evidence" in agent_cap_css
-    assert ".ag-wrap .ag-cap-card.cross" in agent_cap_css
-    assert "Project Monitor structured question brief" in agent_question_css
-    assert ".ag-wrap .ag-question-brief" in agent_question_css
-    assert ".ag-wrap .ag-q-section + .ag-q-section" in agent_question_css
-    assert ".ag-wrap .ag-req-list" in agent_question_css
-    assert "css/agent-question.css?v=20260629-ux-readability" in index_html
-    assert "css/agent.css?v=20260829-artifact-contents1" in index_html
+    assert "css/agent.css?v=20261027-old1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
 
@@ -990,9 +829,8 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
         assert name in agent_runs_py
 
     assert "canonical9_import" not in app_js
-    assert "canonical9_import" not in ideas_js
     assert "canonical9_import" not in guided_js
-    for css in (screens_css, redesign_css, ideas_css, guided_css):
+    for css in (screens_css, redesign_css, guided_css):
         assert ".ag-bench-card" not in css
         assert ".ag-bench-metrics" not in css
         assert ".ag-score-grid" not in css
@@ -1045,9 +883,10 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "easyicu_settings_diagnostics.json" in settings_js
     assert "lockedCtl" in settings_js
     # The Research Agent section used to hold four inert placards asserting run
-    # behaviour the page could not observe. It now points at the surface that
-    # actually owns those decisions.
-    assert "data-settings-open=\"agent\"" in settings_js
+    # behaviour the page could not observe. It now points at the conversation,
+    # which owns those decisions; the retired idea workbench has no entry.
+    assert "data-settings-open=\"guided\"" in settings_js
+    assert "data-settings-open=\"ideas\"" not in settings_js
     assert "strict enforced" not in settings_js
     assert "There is no telemetry collector" not in settings_js
     assert "恢复默认设置" in settings_js
@@ -1136,7 +975,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "css/tweaks.css?v=20260625-stage96" in index_html
     assert "css/settings.css?v=20261026-personal1" in index_html
     assert "js/screens-settings-extensions.js?v=20260812-extension-manager1" in index_html
-    assert "js/screens-settings.js?v=20261026-src1" in index_html
+    assert "js/screens-settings.js?v=20261027-old1" in index_html
     assert "js/screens-settings-personalization.js?v=20261026-personal1" in index_html
     assert index_html.index("js/screens-settings-personalization.js") < index_html.index("js/screens-settings.js")
     assert ".settings-cap-panel" in settings_css
@@ -1501,256 +1340,51 @@ def test_native_extraction_module_counts_match_backend_catalog() -> None:
     assert fallback_total != 219
 
 
-def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry() -> None:
+def test_native_idea_mining_api_client_remains_wired_after_the_workbench_retired() -> None:
+    """The conversation mines ideas; the standalone workbench and its sidebar
+    entry are gone, while the shared API client keeps the backend contract."""
     app_js = _static_js("app.js")
     api_js = _static_js("api.js")
     icons_js = _static_js("icons.js")
-    ideas_js = _static_js("screens-ideas.js")
-    ideas_zotero_js = _static_js("screens-ideas-zotero.js")
-    redesign_css = _static_css("redesign.css")
-    ideas_css = _static_css("ideas.css")
-    ideas_review_css = _static_css("ideas-review.css")
-    ideas_connectors_css = _static_css("ideas-connectors.css")
     shell_css = _static_css("shell.css")
     index_html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
     assert 'data-nav="ideas"' not in app_js
-    # The legacy deep route and its owner remain available while Copilot becomes
-    # the single user-facing discovery entry.
-    assert "Idea Mining" in app_js
-    assert "Find a Study Idea" not in app_js
-    assert "Discovery & Plan" in app_js
-    assert "ideas-entry" not in app_js
-    assert "paper, PDF, or topic → feasible plan" not in app_js
-    assert "研究主题、临床现象、文章链接或 PDF 都从 Copilot 开始" in app_js
-    assert "Project Monitor" not in app_js
-    assert "__euHistoryRequested" not in app_js
-    assert "runs · outputs · evidence · review" not in app_js
-    assert "Data & Review" in app_js
-    assert "Data Workspace" in app_js
-    # The misleading "N / 4" progress counter on the Data Workspace group was
-    # removed: patient/cohort/crossdb are parallel review lenses, not sequential
-    # steps, so a running counter framed them as ordered progress.
-    assert "workspaceIndex + 1} / ${CLASSIC.length}" not in app_js
-    assert 'class="wsg-prog"' not in app_js
+    assert "'Idea Mining'" not in app_js
+    assert "'Discovery & Plan'" not in app_js
+    assert "Classic Workspace" not in app_js
+    assert "wsi-sub" not in app_js
     assert "function render(opts = {})" in app_js
     assert "const resetScroll = !!opts.resetScroll;" in app_js
     assert "window.__euRender = function (opts) { render(opts || {}); };" in app_js
     assert "render({ resetScroll: true });" in app_js
-    assert "render();" in app_js
-    assert "stale: true" not in app_js
-    assert "jp-stale" not in app_js
-    assert "t('stale', '过期')" not in app_js
-    assert "window.EU_STALE && c.stale" not in app_js
-    assert "Math.min(cur, goal)" not in app_js
     assert "window.__euRender = render;" not in app_js
-    assert "Classic Workspace" not in app_js
-    assert "Copilot and Classic share one study" not in app_js
-    assert "Evidence and literature open in its review panel" in app_js
-    assert "wsi-sub" in app_js
-    assert "css/ideas.css?v=20261022-legacy1" in index_html
-    assert "css/shell.css?v=20261026-src1" in index_html
-    assert "js/icons.js?v=20261026-data1" in index_html
-    assert "js/app.js?v=20261026-src1" in index_html
-    assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
-    assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
-    assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
-    assert "js/screens-ideas.js?v=20260817-copilot-boundary1" in index_html
+    for retired in (
+        "css/ideas.css",
+        "css/ideas-review.css",
+        "css/ideas-connectors.css",
+        "js/screens-ideas.js",
+        "js/screens-ideas-zotero.js",
+    ):
+        assert retired not in index_html, retired
+    assert "css/shell.css?v=" in index_html
+    for selector in (".nav-sec", ".ideas-entry", ".wsi-sub", ".stage-chip", ".agent-entry"):
+        assert selector not in shell_css, selector
+    for endpoint in (
+        "/api/ideas/mine",
+        "/api/ideas/resolve-source",
+        "/api/ideas/ingest-pdf",
+        "/api/ideas/prior-art",
+        "/api/ideas/plan",
+        "/api/ideas/bounded-feasibility",
+        "/api/ideas/handoff",
+        "/api/ideas/history",
+        "/api/ideas/run",
+    ):
+        assert endpoint in api_js, endpoint
     assert "discoverIdeas" in api_js
-    assert "/api/ideas/discover" in ideas_js
-    assert "Discover papers" in ideas_js
-    assert "data-idea-use-discovery" in ideas_js
-    assert "/api/ideas/mine" in api_js
-    assert "/api/ideas/resolve-source" in api_js
-    assert "/api/ideas/ingest-pdf" in api_js
-    assert "/api/ideas/literature-folder" in api_js
-    assert "/api/ideas/prior-art" in api_js
-    assert "/api/ideas/plan" in api_js
     assert "planIdea" in api_js
-    assert "/api/ideas/bounded-feasibility" in api_js
-    assert "checkIdeaSampleFeasibility" in api_js
-    assert "/api/ideas/handoff" in api_js
-    assert "/api/ideas/create-agent-project" in api_js
-    assert "/api/ideas/agent-projects" in api_js
-    assert "/api/ideas/history" in api_js
-    assert "/api/ideas/run" in api_js
-    assert "S.ideas =" in ideas_js
-    assert "pre_experiment" in ideas_js
-    assert "Plan / replan before Agent" in ideas_js
-    assert "Generate study plan" in ideas_js
-    assert "Feasibility assessment on active export" in ideas_js
-    assert "Run bounded sample check" in ideas_js
-    assert "data-idea-sample-feasibility" in ideas_js
-    assert "Literature inspiration" in ideas_js
-    assert "ideas-plan-step" in ideas_js
-    assert "normalizePlanStep" in ideas_js
-    assert "Check literature" in ideas_js
-    assert "Reference method patterns" in ideas_js
-    assert "ICU constraints" in ideas_js
-    assert (
-        "Generate and review the study plan before freezing an Agent handoff"
-        in ideas_js
-    )
-    assert "data-idea-plan" in ideas_js
-    assert "data-idea-replan" in ideas_js
-    assert "Freeze handoff for Agent" in ideas_js
-    assert "selectedRecordKey" in ideas_js
-    assert "data-idea-record-key" in ideas_js
-    assert "if (!rows.some(r => String(r.id) === String(current.id)))" in ideas_js
-    assert "Create project seed" in ideas_js
-    assert "Resolve source" in ideas_js
-    assert "sourceResolvedNote" in ideas_js
-    assert "display_status" in ideas_js
-    assert "Source ready" in ideas_js
-    assert "来源已就绪" in ideas_js
-    assert "loadIdeaRun" in ideas_js
-    assert "data-idea-record" in ideas_js
-    assert "postLocalJSON('/api/ideas/run'" in ideas_js
-    assert "applyRunPayload(data, recordKey)" in ideas_js
-    assert "upsertHistoryRun(data)" in ideas_js
-    assert "activeStep = 'source';" in ideas_js
-    assert "data-idea-step" in ideas_js
-    assert 'button type="button" class="${cls}" data-idea-step' in ideas_js
-    assert "'ideas-summary-item'" in ideas_js
-    assert "function stepNav" not in ideas_js
-    assert "Create idea ledger" in ideas_js
-    assert "ideas-advanced" in ideas_js
-    assert "Network and provider opt-in" in ideas_js
-    assert "idea-workbench" in ideas_js
-    assert "ideas-work-grid" in ideas_js
-    assert "Local idea runs" in ideas_js
-    assert "stored on this machine · not Agent analysis runs" in ideas_js
-    assert "Idea Mining decides what is worth running" in ideas_js
-    assert "ideas-source-card" in ideas_js
-    assert "idea-ledger-card" in ideas_js
-    assert "idea-ledger-grid" in ideas_js
-    assert "ideas-pre-summary" in ideas_js
-    assert "ideas-feature-row" in ideas_js
-    assert "ideas-compact-details" in ideas_js
-    assert "ideas-prior-card" in ideas_js
-    assert "ideas-prior-gate" in ideas_js
-    assert "ideas-query-details" in ideas_js
-    assert "ideas-plan-edits" in ideas_js
-    assert "ideas-handoff-receipt" in ideas_js
-    assert "Source opt-in required" in ideas_js
-    assert "pubmedConnectorEnabled" in ideas_js
-    assert "sourceNetworkOptIn" in ideas_js
-    assert "window.EU_CAPABILITIES" in ideas_js
-    assert "connector_pubmed_enabled" in ideas_js
-    assert "PubMed connector is off" in ideas_js
-    assert "data-idea-open-settings" in ideas_js
-    assert "Project seed ready" in ideas_js
-    assert "可作为结果报告" in ideas_js
-    assert "querySelectorAll('#ideaNetworkOptIn')" in ideas_js
     assert "search: '<circle" in icons_js
-    assert "rail-block" in ideas_js
-    assert "setup-row" in ideas_js
-    assert "rail-title" not in ideas_js
-    assert "rail-kv" not in ideas_js
-    assert "rail-note" not in ideas_js
-    assert "grid4 mt-12" not in ideas_js
-    assert "css/ideas.css" in index_html
-    assert ".idea-workbench" in ideas_css
-    assert ".ideas-source-form" in ideas_css
-    assert ".ideas-source-gate" in ideas_css
-    assert ".ideas-secondary-fields" in ideas_css
-    assert ".ideas-list-context" in ideas_css
-    assert ".ideas-url-stack" in ideas_css
-    assert ".ideas-source-picker" in ideas_css
-    assert ".ideas-folder-source" in ideas_css
-    assert ".ideas-step-nav" not in ideas_css
-    assert ".ideas-advanced" in ideas_css
-    assert ".ideas-source-card" in ideas_css
-    assert ".idea-ledger-card" in ideas_css
-    assert ".idea-ledger-grid" in ideas_css
-    assert ".ideas-pre-summary" in ideas_css
-    assert ".ideas-feature-row" in ideas_css
-    assert ".ideas-query-details" in ideas_css
-    assert ".ideas-prior-card" in ideas_css
-    assert ".ideas-plan-edits" in ideas_css
-    assert ".ideas-prior-gate" in ideas_review_css
-    assert ".ideas-handoff-receipt" in ideas_review_css
-    assert ".ideas-handoff-actions" in ideas_review_css
-    assert "height:auto;" in ideas_css
-    assert "min-height:92px;" in ideas_css
-    assert "grid-template-columns:repeat(2,minmax(0,1fr));" in ideas_css
-    assert "@media (min-width:1680px)" not in ideas_css
-    assert ".idea-workbench .ideas-step-panel .statgrid" in ideas_css
-    assert ".idea-workbench .ideas-step-panel table" in ideas_css
-    assert ".idea-workbench" not in redesign_css
-    assert ".ideas-primary-grid" not in redesign_css
-    assert ".ideas-source-gate" not in redesign_css
-    assert ".ideas-secondary-fields" not in redesign_css
-    assert ".ideas-list-context" not in redesign_css
-    assert ".ideas-step-nav" not in redesign_css
-    assert ".ideas-advanced" not in redesign_css
-    assert ".ideas-entry" not in redesign_css
-    assert ".ideas-prior-gate" not in redesign_css
-    assert ".ideas-handoff-receipt" not in redesign_css
-    assert ".ideas-handoff-receipt" not in ideas_css
-    assert ".wsi-sub" not in redesign_css
-    assert ".nav-sec" in shell_css
-    assert ".ideas-entry" in shell_css
-    assert ".wsi-sub" in shell_css
-    assert "function validatePayload(payload)" in ideas_js
-    assert "function sourceSpecificForm()" in ideas_js
-    assert "function sourceModeGuide()" in ideas_js
-    assert "function optionalMetadataBlock(body, title)" in ideas_js
-    assert "function ideaListContext(rows)" in ideas_js
-    assert "ideas-source-form manual" in ideas_js
-    assert "ideas-source-form url" in ideas_js
-    assert "ideas-source-form pdf" in ideas_js
-    assert "ideas-source-form literature_folder" in ideas_js
-    assert "ideas-source-form frontier" in ideas_js
-    assert "Optional article metadata" in ideas_js
-    assert "Optional PDF metadata" in ideas_js
-    assert "These are metadata-only idea ledgers from this machine" in ideas_js
-    assert "Manual idea" in ideas_js
-    assert "Article URL" in ideas_js
-    assert "PDF file" in ideas_js
-    assert "Literature folder" in ideas_js
-    assert "Frontier topic" in ideas_js
-    assert "Article URL mode resolves bounded metadata" in ideas_js
-    assert "Choose a local PDF or paste a bounded PDF excerpt before mining" in ideas_js
-    assert "Literature folder mode scans local PDFs" in ideas_js
-    assert "data-idea-pdf-pick" in ideas_js
-    assert "data-idea-lit-scan" in ideas_js
-    assert "Zotero library" in ideas_js
-    assert "ideas-source-form zotero" in ideas_js
-    assert "window.EU_IDEA_ZOTERO.create" in ideas_js
-    assert "data-idea-zotero-search" in ideas_zotero_js
-    assert "data-idea-use-zotero" in ideas_zotero_js
-    assert "data-idea-zotero-import" in ideas_zotero_js
-    assert "ideaZoteroPaste" in ideas_zotero_js
-    assert "Use pasted source" in ideas_zotero_js
-    assert "使用粘贴文献" in ideas_zotero_js
-    assert "Literature source ready" in ideas_zotero_js
-    assert "文献来源已就绪" in ideas_zotero_js
-    assert "No Zotero setup required" in ideas_zotero_js
-    assert "不需要配置 Zotero" in ideas_zotero_js
-    assert "window.EU_API.zoteroSource" in ideas_zotero_js
-    assert "window.EU_API.importZoteroSource" in ideas_zotero_js
-    assert (
-        "setSourceType(value) { srcType = value; draft.source_type = value; }"
-        in ideas_js
-    )
-    assert "citation_key" in ideas_js
-    assert "zotero_key" in ideas_js
-    assert "source_origin" in ideas_js
-    assert "source_origin_label" in ideas_js
-    assert "pasted_zotero_source_ready" not in ideas_js
-    assert "pasted_zotero_source_ready" not in ideas_zotero_js
-    assert "zotero_source_ready" not in ideas_js
-    assert "zotero_source_ready" not in ideas_zotero_js
-    assert ".ideas-zotero-source" in ideas_connectors_css
-    assert ".ideas-zotero-results" in ideas_connectors_css
-    assert ".ideas-zotero-row" in ideas_connectors_css
-    assert ".ideas-zotero-paste" in ideas_connectors_css
-    assert ".ideas-zotero-source" not in ideas_css
-    assert ".ideas-zotero-source" not in ideas_review_css
-    assert ".ideas-zotero-source" not in redesign_css
-    assert ".ideas-zotero-paste" not in ideas_css
-    assert ".ideas-zotero-paste" not in redesign_css
     # DEMO_STUDIES data has a dedicated fixture owner; the renderer consumes it.
     assert "window.EU_AGENT_DEMO_STUDIES" in _static_js("screens-agent-fixtures.js")
     assert "const DEMO_STUDIES" in _static_js("screens-agent-render.js")
@@ -2075,7 +1709,6 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
             "cohort.css",
             "extraction.css",
             "guided.css",
-            "ideas.css",
             "patient.css",
             "settings.css",
         )
@@ -2301,20 +1934,11 @@ def test_native_crossdb_availability_matrix_is_a_heatmap() -> None:
 
 def test_native_dictionary_and_states_reference_controls_are_stateful() -> None:
     dict_js = _static_js("screens-dict.js")
-    states_js = _static_js("screens-states.js")
 
     assert "dictSearchInput" in dict_js
     assert "data-dict-clear" in dict_js
     assert "data-dict-cat" in dict_js
     assert "matchedRows()" in dict_js
-    assert "data-ctx" in states_js
-    assert "data-mode" in states_js
-    assert "data-state" in states_js
-    assert (
-        "actionHtml: `<span class=\"pill\">${icon('eye', 13)} Reference</span>`"
-        in states_js
-    )
-    assert 'aria-disabled="true" tabindex="-1"' in states_js
 
 
 def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() -> None:
@@ -2372,7 +1996,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20261026-akifold1" in index_html
-    assert "api.js?v=20261026-quick1" in index_html
+    assert "api.js?v=20261027-old1" in index_html
     assert "screens-dict.js?v=20261026-akifold1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
@@ -2391,9 +2015,7 @@ def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations(
             "screens-guided.js",
             "screens-guided-projects.js",
             "screens-help.js",
-            "screens-ideas.js",
             "screens-settings.js",
-            "screens-states.js",
             "screens-viz.js",
             "screens-viz-cohort.js",
             "screens-viz-cohort-view.js",
@@ -2670,14 +2292,14 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20261026-quick1" in index_html
+    assert "api.js?v=20261027-old1" in index_html
     assert "screens-guided-projects.js?v=20261027-proj1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20261027-proj1" in index_html
-    assert "guided.css?v=20261027-proj1" in index_html
+    assert "screens-guided.js?v=20261027-old1" in index_html
+    assert "guided.css?v=20261027-old1" in index_html
     assert "guided-projects.css?v=20261027-proj1" in index_html
     assert "gd-rail-heading" in projects_js
     assert "<summary title=\"${esc(t('Switch research project', '切换研究项目'))}\"><small>${t('Project', '项目')}</small><span title=\"${esc(pickerTitle)}\">${esc(pickerTitle)}</span><i aria-hidden=\"true\">⌄</i></summary>" in projects_js
@@ -2700,12 +2322,6 @@ def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
         "postJSON('/api/jobs/' + encodeURIComponent(jobId || '') + '/cancel'" in api_js
     )
     assert "data-ag-" not in provider_js
-    # The remedy sentences moved out of a regex-over-English table in
-    # screens-agent.js into gate-remedy.js, keyed on the backend reason code.
-    # Assert the property at its new owner rather than dropping it.
-    remedy_js = _static_js("gate-remedy.js")
-    assert "prior_art_not_reviewed" in remedy_js
-    assert "prior-art review" in remedy_js
 
 
 def test_native_patient_source_radios_are_real_controls() -> None:
@@ -2866,7 +2482,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert ".pt-module-ledger-card" in patient_css
     assert ".patient-flow-card" not in pages_css
     assert ".patient-flow-card" not in _static_css("cohort.css")
-    assert "css/pages.css?v=20261022-legacy1" in index_html
+    assert "css/pages.css?v=20261027-old1" in index_html
     assert "css/patient-navigation.css?v=20260710-bounded-pages" in index_html
     assert "css/patient-tables.css?v=20261026-data1" in index_html
     assert "css/patient.css?v=20261026-data1" in index_html
@@ -3300,36 +2916,26 @@ def test_native_webapp_foreground_interrupt_returns_shell_status(monkeypatch) ->
     assert webmain.run_app(port=9876) == 130
 
 
-def test_native_home_landing_styles_are_owned_by_home_css() -> None:
-    """Entry/Home landing page owns its CSS in home.css, not the shared
-    screens.css workflow-primitives file (split 2026-06-26)."""
-    home_css = _static_css("home.css")
+def test_retired_landing_page_left_no_styles_behind() -> None:
+    """The entry/home landing page is retired; its owner sheet went with it.
+    The one mark Get Started still uses lives in the tutorial's owner."""
     screens_css = _static_css("screens.css")
+    pages_css = _static_css("pages.css")
     index_html = _static_html("index.html")
 
-    # home.css owns the landing-page selectors
-    assert ".home-wrap" in home_css
-    assert ".entry-shell" in home_css
-    assert ".way-card" in home_css
-    assert ".mode-card" in home_css
-    assert ".col-entry" in home_css
-    assert "css/home.css?v=20261026-src1" in index_html
+    assert not (STATIC_DIR / "css" / "home.css").exists()
+    assert "css/home.css" not in index_html
+    assert ".mode-mark{" in pages_css
 
-    # screens.css is no longer a landing-page catch-all
-    assert ".home-wrap" not in screens_css
-    assert ".entry-shell" not in screens_css
-    assert ".way-card" not in screens_css
-    assert ".mode-card" not in screens_css
+    for selector in (".home-wrap", ".entry-shell", ".way-card", ".mode-card", ".col-entry"):
+        for sheet in ("screens.css", "redesign.css", "app.css", "pages.css"):
+            assert selector not in _static_css(sheet), (selector, sheet)
 
     # screens.css still owns the shared cross-screen workflow primitives
     assert ".preflight" in screens_css
     assert ".pipeline" in screens_css
     assert ".planlist" in screens_css
     assert ".ledger-row" in screens_css
-
-    # landing-page styles must not leak back into other transitional buckets
-    assert ".home-wrap" not in _static_css("redesign.css")
-    assert ".way-card" not in _static_css("app.css")
 
 
 def test_native_viz_demo_layer_is_split_into_owner_file() -> None:
@@ -3403,15 +3009,6 @@ def test_guided_handoff_banner_surfaces_full_study_design() -> None:
     assert "shortPath" in app_js
 
 
-def test_home_offers_no_data_mode_toggle() -> None:
-    """Every source takes one source-backed path, so the home page has no
-    Demo/Real toggle to route anywhere."""
-    entry_js = _static_js("screens-entry.js")
-    assert "setHomeData" not in entry_js
-    assert "data-hd=" not in entry_js
-    assert "setDataMode" not in entry_js
-
-
 def test_guided_terminal_path_opens_project_monitor_without_moving_setup_there() -> None:
     """After the guided mock preflight, the review action may open Project
     Monitor, but provider/model setup remains in Guided Copilot."""
@@ -3430,7 +3027,6 @@ def test_analysis_handoffs_route_to_copilot_and_monitor_links_use_one_name() -> 
     viz_js = _static_js("screens-viz.js")
     cohort_js = _static_js("screens-viz-cohort.js")
     crossdb_js = _static_js("screens-viz-crossdb-results.js")
-    ideas_js = _static_js("screens-ideas.js")
     help_js = _static_js("screens-help.js")
     ext_js = _static_js("screens-extraction.js")
     settings_js = _static_js("screens-settings.js")
@@ -3447,7 +3043,7 @@ def test_analysis_handoffs_route_to_copilot_and_monitor_links_use_one_name() -> 
     assert "Continue in Guided Copilot" in ext_js
     assert "Plan in Guided Copilot" in crossdb_js
 
-    for owner in (ideas_js, help_js, settings_js, guided_js):
+    for owner in (help_js, settings_js, guided_js):
         assert "Open conversation" in owner
         assert "Open Agent Projects" not in owner
     assert "t('Project Monitor', '项目监控')" not in app_js
@@ -3565,14 +3161,13 @@ def test_km_panel_surfaces_effect_size() -> None:
 
 def test_review_breadcrumb_parent_matches_sidebar_group() -> None:
     """[25]/[33] The review-screen breadcrumb parent must be 'Data Workspace' (the
-    sidebar group name), not the orphan 'Data Visualization'."""
+    data workspace's name), not the orphan 'Data Visualization'."""
     viz_js = _static_js("screens-viz.js")
     app_js = _static_js("app.js")
     assert "'Home', 'Data Workspace'" in viz_js
     assert "'Data Visualization'" not in viz_js  # gone as a crumb parent
     assert "'Data Workspace': 'patient'" not in app_js
     assert "CRUMB_NAV" not in app_js  # the group label is not a fake patient link
-    assert 'else node = `<span class="mid">${label}</span>`;' in app_js
 
 
 def test_seeded_demo_pipeline_is_named_guided_copilot_and_labeled() -> None:
@@ -3602,47 +3197,6 @@ def test_guided_frontdoor_offers_one_click_starter_folder() -> None:
     assert "Pick a goal to start" in guided_js
 
 
-def test_science_workbench_framed_as_part_of_study() -> None:
-    """[12] The Science Workbench must read as an advanced view OF the current study
-    (tied to Runs/Outputs), not a bolted-on second app with disconnected vocabulary."""
-    science_js = _static_js("screens-agent-science.js")
-    assert "Not a separate tool" in science_js
-    assert "the same run" in science_js.lower()
-    # implementation-heritage jargon must not leak to clinical users
-    assert "molecular biology renderers" not in science_js
-
-
-def test_science_tab_is_merged_into_agent_flow_as_evidence() -> None:
-    """[12] full IA merge: the standalone 'Science Workbench' identity is dissolved
-    into the Project Monitor flow. The tab is named 'Evidence', the panel no longer
-    announces a separate app, the Claude-Science reference card is removed, and the
-    Evidence view is cross-linked bidirectionally with Outputs."""
-    science_js = _static_js("screens-agent-science.js")
-    science_css = _static_css("agent-science.css")
-
-    # Tab renamed Science -> Evidence (both idea + full tab arrays); no user-facing
-    # "Science" / "科学工作台" identity strings survive in either owner file.
-    assert "Science Workbench" not in science_js
-    assert "科学工作台" not in science_js
-
-    # The panel is framed as Evidence & provenance, not a self-announcing app card.
-    assert "Evidence & provenance" in science_js
-    assert "ag-evidence-panel" in science_js
-
-    # The Claude-Science mimicry reference card is gone.
-    assert "referenceCard" not in science_js
-    assert "Claude Science" not in science_js
-    assert "visual_reference" not in science_js
-
-    # Bidirectional cross-links: Outputs -> Evidence and Evidence -> Outputs.
-    assert 'data-ag-tab="outputs"' in science_js  # Evidence "Back to Outputs"
-
-    # Inner section nav is de-emphasised to a subordinate sub-control (still a
-    # tablist for a11y), not a second app-level tab bar.
-    assert "ag-sci-sections-label" in science_js
-    assert ".ag-evidence-panel .ag-sci-sections-label" in science_css
-
-
 def test_seeded_autopilot_pipeline_is_demo_contained() -> None:
     """The seeded 'Product B' autopilot/welcome pipeline stays unreachable in Real
     mode: autopilot self-forces demo, the dock bridge routes Real -> real frontdoor,
@@ -3657,27 +3211,6 @@ def test_seeded_autopilot_pipeline_is_demo_contained() -> None:
     parse_call = guided_js.find("const fn = parseIntent(v);")
     assert frontdoor_guard != -1 and parse_call != -1
     assert frontdoor_guard < parse_call
-
-
-def test_evidence_module_has_no_hardcoded_dual_language_literals() -> None:
-    """Design-consistency lock: the Evidence module must localize via bi(en, zh)
-    like every other screen — never hardcoded 'English / 中文' dual literals that
-    ignore the language toggle and double the visual text density."""
-    import re
-
-    science_js = _static_js("screens-agent-science.js")
-    # single-quoted literals whose EN half precedes ' / ' and whose second half
-    # contains CJK — the pattern the 2026-07 cleanup removed (46+ instances)
-    dual_quoted = re.findall(r"'[A-Za-z][^'一-鿿]* / [^']*[一-鿿][^']*'", science_js)
-    assert dual_quoted == [], f"hardcoded dual literals reintroduced: {dual_quoted[:5]}"
-    # raw dual text embedded in HTML template markup
-    dual_html = re.findall(r">[A-Z][A-Za-z ,.-]+ / [一-鿿][^<]*<", science_js)
-    assert dual_html == [], f"hardcoded dual HTML text reintroduced: {dual_html[:5]}"
-    # backend payload labels also arrive as duals — the load-time localizer must
-    # stay wired so they render in ONE language like the rest of the app
-    assert "function biLabel(" in science_js
-    assert "function localizeDualLabels(" in science_js
-    assert "state.data = localizeDualLabels(data);" in science_js
 
 
 def test_destination_names_consistent_across_sidebar_crumb_and_page() -> None:

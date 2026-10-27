@@ -187,15 +187,6 @@
 .eu .ico{ flex:none; display:inline-flex; }
 .eu .ico svg{ display:block; }
 
-.eu .sec-label{
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-4);
-  padding: 0 10px;
-}
-
 .eu .card{
   background: var(--surface);
   border: 1px solid var(--hair);

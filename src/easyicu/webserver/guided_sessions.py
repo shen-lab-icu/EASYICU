@@ -55,8 +55,6 @@ _LOCK = threading.RLock()
 
 _VALID_GOALS = {"idea_mining", "data_extraction", "review_data", "run_agent"}
 _VALID_ROUTES = {
-    "entry",
-    "ideas",
     "extraction",
     "patient",
     "cohort",
@@ -64,7 +62,6 @@ _VALID_ROUTES = {
     "agent",
     "settings",
     "dictionary",
-    "states",
     "tutorial",
     "guided",
 }
@@ -73,7 +70,8 @@ _MAX_SLOT_ITEMS = 80
 _MAX_SLOT_TEXT = 700
 _GOAL_META = {
     "idea_mining": {
-        "target_route": "ideas",
+        # The research conversation mines ideas; the old workbench is retired.
+        "target_route": "guided",
         "label_en": "Find a Study Idea",
         "label_zh": "找研究想法",
         "summary_en": "Turn a paper, review topic, or hunch into an auditable idea ledger.",

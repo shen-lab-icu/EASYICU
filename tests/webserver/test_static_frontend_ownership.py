@@ -60,12 +60,10 @@ OVER_BUDGET_JS = {
     "screens-extraction.js": 2060,
     # Browser-safe activity rendering moved to screens-guided-pi-activity.js.
     "screens-guided-pi.js": 1787,
-    "screens-ideas.js": 1504,
 }
 OVER_BUDGET_CSS = {
     "guided.css": 2191,
     "patient.css": 702,
-    "ideas.css": 695,
     "extraction.css": 639,
     "app.css": 634,
 }
@@ -297,11 +295,6 @@ def test_runtime_appearance_tokens_meet_contrast_and_status_hierarchy() -> None:
     assert "`oklch(52% 0.07 ${h})`" in tweaks
     runtime_accent = "oklch(52% 0.07 205)"
     assert _contrast(runtime_accent, properties["accent-soft"]) >= 4.5
-
-
-def test_idea_history_preserves_full_title_for_truncated_rows() -> None:
-    ideas = (STATIC / "js" / "screens-ideas.js").read_text(encoding="utf-8")
-    assert 'data-idea-record-key="${esc(r.id)}" title="${esc(r.title)}"' in ideas
 
 
 # A categorical palette is an array literal holding three or more colours.

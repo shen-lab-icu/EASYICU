@@ -12,8 +12,13 @@
      ICD Cohort Filter is folded into the extraction cohort filter. Old deep
      links still resolve to the right place. */
   const FALLBACK_ROUTE = 'guided';
+  /* Retired pages: the classic home, the old Idea Mining workbench and the
+     workspace-state catalogue. Old links and bookmarks land in the research
+     conversation, which mines ideas from a topic, an article or a PDF. */
+  const RETIRED_ROUTES = new Set(['entry', 'ideas', 'states']);
 
   function normRoute(r) {
+    if (RETIRED_ROUTES.has(r)) { window.__euAlias = true; return 'guided'; }
     if (r === 'help') return 'tutorial';
     if (r === 'assistant') return 'guided';
     if (r === 'agent') { window.__euAlias = true; return 'guided'; }
@@ -24,10 +29,6 @@
   }
   function rawRouteFromHash() {
     const raw = (location.hash || `#${FALLBACK_ROUTE}`).slice(1).trim();
-    if (raw === 'entry') {
-      replaceHash('guided');
-      return 'guided';
-    }
     // A screen may address one of its records after '/', e.g. #skills/<id>;
     // the screen owner reads that part itself.
     const slash = raw.indexOf('/');
@@ -40,7 +41,7 @@
   function resolveRoute(raw, opts = {}) {
     const id = normRoute(raw || FALLBACK_ROUTE);
     if (window.SCREENS[id]) {
-      if (opts.rewrite && raw === 'agent') replaceHash(id);
+      if (opts.rewrite && (raw === 'agent' || RETIRED_ROUTES.has(raw))) replaceHash(id);
       return { id, fallback: false };
     }
     const fallback = window.SCREENS[FALLBACK_ROUTE] ? FALLBACK_ROUTE : Object.keys(window.SCREENS)[0];
@@ -102,49 +103,17 @@
     if (window.__euRender) window.__euRender();
   });
 
-  /* User-facing data workspace. Labels match each screen's own page title and
-     breadcrumb so a destination has ONE name across the sidebar, header, and
-     home entries (no sidebar-vs-title drift). Copilot is a separate, parallel
-     system that completes the same flow conversationally. */
-  /* Extraction produces the export the other three read. Listed as four peers,
-     a new user clicks Patient Review first and meets an empty state; the order
-     of operations was only discoverable by tripping over it. `role` renders
-     that dependency in the nav instead. */
-  const CLASSIC = [
-    { id: 'extraction', label: ['Data Extraction', '数据抽取'], sub: ['choose cohort + modules', '选择队列 + 模块'], ico: 'extract', role: 'produces' },
-    { id: 'patient', label: ['Patient Review', '患者审阅'], sub: ['tables · trends · patients', '表格 · 趋势 · 患者'], ico: 'patient', role: 'reads' },
-    { id: 'cohort', label: ['Cohort Statistics', '队列统计'], sub: ['groups + coverage', '分组 + 覆盖率'], ico: 'cohort', role: 'reads' },
-    { id: 'crossdb', label: ['Cross-database comparison', '跨库对比'], sub: ['coverage + distributions', '覆盖率 + 分布'], ico: 'benchmark', role: 'reads' },
-  ];
-  let classicOpen = true;
-
-  const MOBILE_NAV = [
-    { id: 'guided', label: ['Guide', '引导'], ico: 'spark' },
-    { id: 'ideas', label: ['Ideas', '想法'], ico: 'target' },
-    { id: 'extraction', label: ['Extract', '抽取'], ico: 'extract' },
-    { id: 'patient', label: ['Review', '审阅'], ico: 'patient' },
-  ];
   const L = (v) => Array.isArray(v) ? t(v[0], v[1]) : v;
-  /* A button's accessible name is its concatenated text content, so a title
-     span followed by a sublabel span was announced as one run-together string
-     ("Patient Reviewtables · trends · patients"). Rejoin them with a real
-     separator instead of hiding the sublabel — it carries information the
-     sighted user gets. The visible title stays first so voice control still
-     matches on it (WCAG 2.5.3 Label in Name). */
-  const navLabel = (label, sub) => `${L(label)} — ${L(sub)}`;
   const CRUMB_LABELS = {
     Home: ['Home', '首页'],
     'Get Started': ['Get Started', '快速上手'],
-    'Idea Mining': ['Idea Mining', '想法挖掘'],
     'Data Workspace': ['Data Workspace', '数据工作台'],
-    /* One destination, one name: these zh labels must match the sidebar CLASSIC
-       labels and each screen's own page title. Retired aliases include 患者明细
-       and 跨库基准. */
+    /* One destination, one name: these zh labels must match each screen's own
+       page title. Retired aliases include 患者明细 and 跨库基准. */
     'Patient Review': ['Patient Review', '患者审阅'],
     'Cohort Statistics': ['Cohort Statistics', '队列统计'],
     'Cross-database comparison': ['Cross-database comparison', '跨库对比'],
     Settings: ['Settings', '设置'],
-    'Workspace States': ['Workspace States', '工作区状态'],
   };
   const crumbLabel = (c) => L(CRUMB_LABELS[c] || c);
   function routeTitleOf(scr) {
@@ -186,11 +155,6 @@
       root.firstElementChild.setAttribute('role', 'main');
       root.firstElementChild.setAttribute('aria-label', t('Page content', '页面内容'));
     }
-    root.querySelectorAll('.sidebar [data-nav], .mbottomnav [data-nav]').forEach((control) => {
-      const current = control.dataset.nav === route;
-      if (current) control.setAttribute('aria-current', 'page');
-      else control.removeAttribute('aria-current');
-    });
     const language = window.EU_LANG === 'zh' ? 'zh' : 'en';
     root.querySelectorAll('[data-lang]').forEach((control) => {
       control.setAttribute('aria-pressed', String(control.dataset.lang === language));
@@ -198,154 +162,11 @@
   }
 
   function screenOf(id) { return window.SCREENS[id]; }
-  function sectionOf(id) { return screenOf(id).section; }
 
-  /* The three nav sections are the product's main line (plan -> data -> draft),
-     but they rendered as static categories, so nothing told the user how far
-     they had got or what was still missing. study-progress.js derives the
-     state from the active study context and exposes a small snapshot; the
-     shell renders that and never reads the context store itself (a layering
-     rule locked by test_route_handoffs_..._has_its_own_owner). */
-  function stageChip(stageId, progress) {
-    const state = (progress.byId || {})[stageId] || 'todo';
-    const label = {
-      done: t('done', '已完成'),
-      active: t('in progress', '进行中'),
-      todo: t('not started', '未开始'),
-    }[state];
-    const stale = state === 'done' && progress.stale;
-    const shown = stale ? t('out of date', '已过期') : label;
-    return `<span class="stage-chip ${stale ? 'stale' : state}" title="${shown}">${state === 'done' && !stale ? icon('check', 10) : ''}${shown}</span>`;
-  }
-
-  function navSection(stageId, labelEn, labelZh, progress) {
-    return `<div class="sec-label nav-sec stage-sec"><span>${t(labelEn, labelZh)}</span>${progress.started ? stageChip(stageId, progress) : ''}</div>`;
-  }
-
-  function sidebar() {
-    const scr = screenOf(route);
-    const classicActive = CLASSIC.some(c => c.id === route);
-    const wsOpen = classicOpen || classicActive;
-    const progress = (window.EU_STUDY_PROGRESS && window.EU_STUDY_PROGRESS.snapshot())
-      || { started: false, stale: false, planOnly: false, stages: [], byId: {} };
-
-    const rail = scr.rail ? scr.rail() : '';
-    const guidedSub = window.EU_HASWORK
-      ? t('continue discovery, evidence review, and research by chat', '用对话继续发掘、证据审阅与研究')
-      : t('mine ideas, review evidence, and plan by conversation', '用对话发掘想法、审阅证据并规划研究');
-
-    return `
-    <aside class="sidebar" aria-label="${t('Application sidebar', '应用侧边栏')}">
-      <button type="button" class="brand" data-nav="entry" aria-label="${navLabel('EasyICU', t('ICU Research Workspace', 'ICU 研究工作台'))}">
-        <span class="mark">${icon('flask', 18)}</span>
-        <span><span class="name">EasyICU</span><span class="tag">${t('ICU Research Workspace', 'ICU 研究工作台')}</span></span>
-      </button>
-      <nav class="shell-nav" aria-label="${t('Primary navigation', '主导航')}">
-      ${navSection('discovery', 'Discovery & Plan', '发现与计划', progress)}
-      <button type="button" class="cp-entry ${route === 'guided' ? 'on' : ''}" data-nav="guided" aria-label="${navLabel(t('EasyICU Copilot', 'EasyICU 研究助手'), guidedSub)}">
-        <span class="cp-ico">${icon('spark', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('EasyICU Copilot', 'EasyICU 研究助手')}</span><span class="cp-d">${guidedSub}</span></span>
-        <span class="cp-go">${icon('arrow', 14)}</span>
-      </button>
-      <div class="shared-note"><span class="ico">${icon('target', 11)}</span><span>${t('A topic, clinical observation, paper URL, or PDF all start in Copilot. Evidence and literature open in its review panel without leaving the conversation.', '研究主题、临床现象、文章链接或 PDF 都从 Copilot 开始；证据和文献直接在审阅区打开，无需离开对话。')}</span></div>
-      ${navSection('data', 'Data & Review', '数据与审阅', progress)}
-      <div class="wsnav">
-        <button type="button" class="wsgroup-head ${wsOpen ? 'open' : ''} ${classicActive ? 'active' : ''}" data-ws-toggle aria-expanded="${wsOpen}" aria-controls="data-workspace-links">
-          <span class="wsg-ico">${icon('grid', 15)}</span>
-          <span class="wsg-t">${t('Data Workspace', '数据工作台')}</span>
-          <span class="wsg-chev">${icon(wsOpen ? 'chevdown' : 'chevron', 13)}</span>
-        </button>
-        ${wsOpen ? `
-        <div class="wsg-children" id="data-workspace-links">
-          ${CLASSIC.map((c, i) => `
-            ${c.role === 'reads' && CLASSIC[i - 1] && CLASSIC[i - 1].role === 'produces'
-              ? `<div class="wsg-step">${t('then, from that export', '然后，基于该导出')}</div>` : ''}
-            <button type="button" class="wsitem ${route === c.id ? 'active' : ''} ws-${c.role}" data-nav="${c.id}" aria-label="${navLabel(c.label, c.sub)}">
-              <span class="ico">${icon(c.ico, 15)}</span>
-              <span class="wsi-copy"><span class="wsi-t">${L(c.label)}</span><span class="wsi-sub">${L(c.sub)}</span></span>
-            </button>`).join('')}
-        </div>` : ''}
-      </div>
-      ${progress.planOnly ? `<div class="shared-note plan-only"><span class="ico">${icon('shield', 11)}</span><span>${t('Cross-DB comparison is plan-only: it can shape an analysis plan, but a reviewed cohort is still required before a draft.', '跨库对比仅用于制定计划：它可以塑造分析方案，但出草稿前仍需要一个已审阅的队列。')}</span></div>` : ''}
-      <div class="sec-label" style="margin:16px 0 6px;">${t('Reference', '参考')}</div>
-      <div class="nav" style="padding-top:0;">
-        <button type="button" class="nav-item ${route === 'tutorial' ? 'active' : ''}" data-nav="tutorial"><span class="ico">${icon('help', 17)}</span>${t('Get Started', '快速上手')}</button>
-        <button type="button" class="nav-item ${route === 'dictionary' ? 'active' : ''}" data-nav="dictionary"><span class="ico">${icon('list', 17)}</span>${t('Data Dictionary', '数据字典')}</button>
-        <button type="button" class="nav-item ${route === 'skills' ? 'active' : ''}" data-nav="skills"><span class="ico">${icon('layers', 17)}</span>${t('Skills', '技能')}</button>
-        <button type="button" class="nav-item ${route === 'settings' ? 'active' : ''}" data-nav="settings"><span class="ico">${icon('gear', 17)}</span>${t('Settings', '设置')}</button>
-      </div>
-      </nav>
-      ${rail}
-      <div class="rail-spacer"></div>
-      <div class="rail-foot">
-        <button type="button" class="icobtn" title="${t('Back to home', '返回首页')}" aria-label="${t('Back to home', '返回首页')}" data-nav="entry">${icon('back', 16)}</button>
-        <button type="button" class="icobtn ${route === 'tutorial' ? 'on' : ''}" title="${t('Help', '帮助')}" aria-label="${t('Help', '帮助')}" data-nav="tutorial">${icon('help', 16)}</button>
-        <button type="button" class="icobtn ${route === 'settings' ? 'on' : ''}" title="${t('Settings', '设置')}" aria-label="${t('Settings', '设置')}" data-nav="settings">${icon('gear', 16)}</button>
-        <button type="button" class="icobtn" title="${t('Switch language', '切换语言')}" aria-label="${t('Switch language', '切换语言')}" data-lang-toggle>${icon('globe', 16)}</button>
-        <div class="avatar">LK</div>
-      </div>
-    </aside>`;
-  }
-
-  function topbar() {
-    const scr = screenOf(route);
-    const crumbs = (scr.crumbs || []).map((c, i, arr) => {
-      const label = crumbLabel(c);
-      if (i === arr.length - 1) return `<span class="cur" aria-current="page">${label}</span>`;
-      let node;
-      if (i === 0) node = `<button type="button" class="crumb-link" data-nav="entry">${label}</button>`;
-      else node = `<span class="mid">${label}</span>`;
-      return `${node}<span class="sep">/</span>`;
-    }).join(' ');
-    const actionHtml = actionHtmlOf(scr);
-    return `
-    <header class="topbar" aria-label="${t('Page controls', '页面控制')}">
-      <div class="crumbs">${crumbs}</div>
-      <div class="spacer"></div>
-      ${scr.status || ''}
-      <div class="lang-seg" role="group" aria-label="Language">
-        <button type="button" class="${window.EU_LANG !== 'zh' ? 'on' : ''}" data-lang="en" aria-pressed="${window.EU_LANG !== 'zh'}">EN</button>
-        <button type="button" class="${window.EU_LANG === 'zh' ? 'on' : ''}" data-lang="zh" aria-pressed="${window.EU_LANG === 'zh'}">中</button>
-      </div>
-      <button type="button" class="btn sm" data-cpopen title="${t('Open the one EasyICU Copilot conversation', '打开唯一的 EasyICU 研究助手对话')}">${icon('spark', 13)} ${t('EasyICU Copilot','研究助手')}</button>
-      ${actionHtml}
-    </header>`;
-  }
-
-  function mobileChrome() {
-    const scr = screenOf(route);
-    const title = scr.crumbs && scr.crumbs.length ? crumbLabel(scr.crumbs[scr.crumbs.length - 1]) : 'EasyICU';
-    const actionHtml = actionHtmlOf(scr);
-    const top = `
-      <header class="mtopbar" aria-label="${t('Mobile page controls', '移动端页面控制')}">
-        <button type="button" class="mark" data-nav="entry" aria-label="${t('Back to home', '返回首页')}">${icon('flask', 16)}</button>
-        <div class="name">${title}</div>
-        <div class="spacer"></div>
-        <button type="button" class="btn sm icon" data-cpopen title="${t('EasyICU Copilot', 'EasyICU 研究助手')}" aria-label="${t('Open EasyICU Copilot', '打开 EasyICU 研究助手')}">${icon('spark', 16)}</button>
-        ${actionHtml}
-      </header>`;
-    const bottom = `
-      <nav class="mbottomnav" aria-label="${t('Mobile navigation', '移动端导航')}">
-        ${MOBILE_NAV.map(n => `
-          <button type="button" data-nav="${n.id}" class="${route === n.id ? 'active' : ''}">
-            <span class="ico">${icon(n.ico, 19)}</span>${L(n.label)}
-          </button>`).join('')}
-      </nav>`;
-    return { top, bottom };
-  }
-
-  // A hosted instance (/api/capabilities -> deployment.hosted) serves
-  // clinicians: the design-reference catalogue is not one of its pages, and
-  // a stray key press must not switch the page or the language.
-  const HOSTED_HIDDEN_ROUTES = new Set(['states']);
   function hostedInstance() {
     return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true;
   }
   function render(opts = {}) {
-    if (hostedInstance() && HOSTED_HIDDEN_ROUTES.has(route)) {
-      route = FALLBACK_ROUTE;
-      replaceHash(route);
-    }
     document.documentElement.toggleAttribute('data-eu-hosted', hostedInstance());
     const resetScroll = !!opts.resetScroll;
     const priorContent = app.querySelector('.content');
@@ -365,9 +186,9 @@
     const moduleShell = window.EU_DESKTOP_MODULE_SHELL;
     const sharedDataRoute = moduleShell && moduleShell.isDataRoute(route) && route !== 'extraction';
     const sharedSettingsRoute = moduleShell && route === 'settings';
-    // A hosted Get Started page sits in the module shell under Help; its call
-    // to action is in the page, and the administrator's contact in the aside.
-    const sharedHelpRoute = moduleShell && route === 'tutorial' && hostedInstance();
+    // Get Started sits in the module shell under Help; on a hosted instance the
+    // aside carries the administrator's contact.
+    const sharedHelpRoute = moduleShell && route === 'tutorial';
     if (sharedDataRoute) {
       app.innerHTML = moduleShell.renderData({
         active: route,
@@ -395,20 +216,11 @@
         aside: scr.contextAside ? scr.contextAside() : '',
         content: scr.render(),
       });
-    } else if (scr.full) {
+    } else if (scr.full || !moduleShell) {
       app.innerHTML = scr.render();
     } else {
-      const m = mobileChrome();
-      app.innerHTML = `
-        <div class="app">
-          ${sidebar()}
-          <main class="main" aria-label="${t('Page content', '页面内容')}">
-            ${m.top}
-            ${topbar()}
-            <div class="content ${scr.wide ? 'wide' : ''}">${scr.render()}</div>
-          </main>
-          ${m.bottom}
-        </div>`;
+      // Pages that draw no shell of their own sit in the module shell.
+      app.innerHTML = moduleShell.render({ active: route, content: scr.render() });
     }
     if (scr.afterRender) scr.afterRender(app);
     syncShellAccessibility(app, !!scr.full);
@@ -444,7 +256,7 @@
     if (typeof document.startViewTransition !== 'function') {
       render(opts);
       const surface = app.querySelector(
-        '.gd-main.gpi-workspace .gd-conv, .eusk-main, .eudata-main, .euh-settings-main, .main .content'
+        '.gd-main.gpi-workspace .gd-conv, .eusk-main, .eudata-main, .euh-settings-main, .euh-main'
       );
       if (surface) {
         surface.classList.add('eu-route-enter');
@@ -472,14 +284,6 @@
     if (langToggleEl) { if (window.setLang) window.setLang(window.EU_LANG === 'zh' ? 'en' : 'zh'); return; }
     const goalEl = e.target.closest('[data-goal-cycle]');
     if (goalEl) { if (window.cycleGoal) window.cycleGoal(); return; }
-    const wsEl = e.target.closest('[data-ws-toggle]');
-    if (wsEl) { classicOpen = !classicOpen; render(); return; }
-    const cpEl = e.target.closest('[data-cpopen]');
-    if (cpEl) {
-      const guide = window.EUPageGuide || window.EUCopilot;
-      if (guide) guide.toggle();
-      return;
-    }
     const navEl = e.target.closest('[data-nav]');
     if (navEl && navEl.dataset.nav) {
       let id = normRoute(navEl.dataset.nav);
@@ -500,8 +304,8 @@
     if (window.SCREENS[r] && (r !== route || alias || resolved.fallback)) { route = r; renderRoute({ resetScroll: true }); }
   });
 
-  /* ---- global keyboard shortcuts (advertised on Get Started) ---- */
-  const SHORTCUT_SECTIONS = ['ideas', 'extraction', 'patient', 'crossdb', 'guided'];
+  /* ---- global keyboard shortcuts ---- */
+  const SHORTCUT_SECTIONS = ['guided', 'extraction', 'patient', 'crossdb'];
   function goto(id) { if (window.SCREENS[id]) { route = id; location.hash = '#' + id; renderRoute({ resetScroll: true }); } }
   document.addEventListener('keydown', (e) => {
     const tgt = e.target;
@@ -514,8 +318,8 @@
       return;
     }
     if (typing || e.metaKey || e.ctrlKey || e.altKey || hostedInstance()) return;
-    // 1–5 → switch section
-    if (e.key >= '1' && e.key <= '5') { goto(SHORTCUT_SECTIONS[+e.key - 1]); return; }
+    // 1–4 → switch section
+    if (e.key >= '1' && e.key <= '4') { goto(SHORTCUT_SECTIONS[+e.key - 1]); return; }
     // L → toggle language
     if (e.key === 'l' || e.key === 'L') { if (window.setLang) window.setLang(window.EU_LANG === 'zh' ? 'en' : 'zh'); }
   });

@@ -81,8 +81,10 @@ def test_override_is_resolved_per_call_not_at_import(monkeypatch, tmp_path) -> N
 # real home. Redirecting that with EASYICU_HOME would strand a user looking
 # for their own exported data, so dataio keeps calling Path.home() directly.
 # gateway._node_binary searches for an nvm-installed node, which likewise
-# lives in the real home.
-ALLOWED_REAL_HOME = {"dataio.py", "gateway.py", "state_paths.py"}
+# lives in the real home. guided_sessions.default_project_parent puts a
+# desktop user's project folders in their real Documents, because the desktop
+# app points EASYICU_HOME at its private state folder.
+ALLOWED_REAL_HOME = {"dataio.py", "gateway.py", "guided_sessions.py", "state_paths.py"}
 
 
 def test_no_module_rebuilds_a_state_root_from_path_home() -> None:

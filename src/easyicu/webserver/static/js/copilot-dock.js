@@ -4,7 +4,7 @@
    #guided. The historical page-guide dock intentionally is not constructed,
    and neither is a floating launcher: it overlapped the composer's own send
    control on the guided route. EUPageGuide remains the shell hook that app.js
-   uses for [data-cpopen] affordances and the Cmd/Ctrl+K shortcut. */
+   uses for the Cmd/Ctrl+K shortcut. */
 (function () {
   function routeOf() {
     return (location.hash || '#entry').slice(1);

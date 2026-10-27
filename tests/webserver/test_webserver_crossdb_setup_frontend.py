@@ -159,7 +159,6 @@ def test_crossdb_setup_owner_stays_route_pure_and_bounded() -> None:
             "cohort.css",
             "extraction.css",
             "guided.css",
-            "ideas.css",
             "patient.css",
             "settings.css",
         ):
