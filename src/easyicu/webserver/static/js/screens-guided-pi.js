@@ -1403,11 +1403,7 @@
     } catch (error) {
       if (!isCurrent()) return;
       state.busy = false; finishActivity('error', null, 'failed');
-      // A credentialed-data refusal opens the declaration in the connection
-      // settings instead of an error banner.
-      const clearance = MODULES.optional('dataClearance');
-      if (clearance && clearance.isRefusal(error)) { state.error = ''; state.showSetup = true; }
-      else state.error = errorText(error);
+      state.error = errorText(error);
       render();
     }
   }

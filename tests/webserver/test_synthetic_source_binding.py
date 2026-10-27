@@ -56,23 +56,19 @@ def _lease(sources, source):
 
 def test_only_verified_source_is_non_patient_for_egress_and_scope_resets(source):
     from easyicu.synthetic_sources import verify_source
-    from easyicu.research_agent.providers.client_trust import require_data_handling, ProviderConfigurationError
+    from easyicu.research_agent.providers.client_trust import source_requires_clearance
     from easyicu.webserver.demo_source_storage import public_demo_egress_scope
 
     database = verify_source(source)["database"]
     other = "sic" if database != "sic" else "hirid"
-    with pytest.raises(ProviderConfigurationError):
-        require_data_handling(database, "unspecified")
+    assert source_requires_clearance(database)
     with public_demo_egress_scope(str(source)):
-        require_data_handling(database, "unspecified")
-        with pytest.raises(ProviderConfigurationError):
-            require_data_handling(other, "unspecified")
-    with pytest.raises(ProviderConfigurationError):
-        require_data_handling(database, "unspecified")
+        assert not source_requires_clearance(database)
+        assert source_requires_clearance(other)
+    assert source_requires_clearance(database)
     (source / "unexpected.parquet").write_bytes(b"unverified payload")
     with public_demo_egress_scope(str(source)):
-        with pytest.raises(ProviderConfigurationError):
-            require_data_handling(database, "unspecified")
+        assert source_requires_clearance(database)
 
 
 def test_research_context_and_reports_disclose_synthetic_results(source):
@@ -131,12 +127,11 @@ def test_saved_machine_and_review_reports_disclose_synthetic_results(source, tmp
 
 def test_forged_report_disclosure_does_not_grant_egress(source):
     from easyicu.synthetic_source_provenance import mark_report, active_provenance
-    from easyicu.research_agent.providers.client_trust import require_data_handling, ProviderConfigurationError
+    from easyicu.research_agent.providers.client_trust import source_requires_clearance
     from easyicu.webserver.demo_source_storage import public_demo_egress_scope
 
     mark_report("Untrusted report", {"source_kind": "synthetic"})
-    with pytest.raises(ProviderConfigurationError):
-        require_data_handling("hirid", "unspecified")
+    assert source_requires_clearance("hirid")
     with pytest.raises(RuntimeError), public_demo_egress_scope(str(source)):
         assert active_provenance()
         raise RuntimeError("failed synthetic job")
@@ -148,7 +143,7 @@ def test_the_normal_extraction_handoff_preserves_synthetic_egress(source, tmp_pa
     from easyicu.api.concepts import clear_global_loader
     from easyicu.synthetic_sources import verify_source
     from easyicu.synthetic_source_provenance import source_fields
-    from easyicu.research_agent.providers.client_trust import require_data_handling, ProviderConfigurationError
+    from easyicu.research_agent.providers.client_trust import source_requires_clearance
     from easyicu.webserver import dataio, sources
     from easyicu.webserver.demo_source_storage import public_demo_egress_scope
 
@@ -169,7 +164,7 @@ def test_the_normal_extraction_handoff_preserves_synthetic_egress(source, tmp_pa
     bound = sources.register_source(str(out), active=True)["sources"][-1]
     assert bound["source_kind"] == "synthetic"
     with public_demo_egress_scope(str(out)):
-        require_data_handling(database, "unspecified")
+        assert not source_requires_clearance(database)
     # A copied manifest or edited output has no producer authority.
     import shutil
     clone = tmp_path / "copied"
@@ -180,8 +175,8 @@ def test_the_normal_extraction_handoff_preserves_synthetic_egress(source, tmp_pa
     frame.loc[0, "age"] += 1
     frame.to_parquet(target, index=False)
     assert not source_fields(out)
-    with public_demo_egress_scope(str(out)), pytest.raises(ProviderConfigurationError):
-        require_data_handling(database, "unspecified")
+    with public_demo_egress_scope(str(out)):
+        assert source_requires_clearance(database)
 
 
 def test_a_reader_rebuilt_after_the_job_keeps_its_saved_disclosure(source, tmp_path):
@@ -189,7 +184,7 @@ def test_a_reader_rebuilt_after_the_job_keeps_its_saved_disclosure(source, tmp_p
     from easyicu.research_agent.reporting.manuscript_reader import build_manuscript_reader
     from easyicu.synthetic_source_provenance import write_report
     from easyicu.webserver.demo_source_storage import public_demo_egress_scope
-    from easyicu.research_agent.providers.client_trust import require_data_handling, ProviderConfigurationError
+    from easyicu.research_agent.providers.client_trust import source_requires_clearance
 
     saved = tmp_path / "manuscript.md"
     with public_demo_egress_scope(str(source)):
@@ -197,5 +192,4 @@ def test_a_reader_rebuilt_after_the_job_keeps_its_saved_disclosure(source, tmp_p
     reader = build_manuscript_reader(manuscript=saved.read_text(), evidence=EvidenceStore(tmp_path / "evidence"))
     assert reader["source_kind"] == "synthetic"
     assert "not clinical findings" in reader["notice"]
-    with pytest.raises(ProviderConfigurationError):
-        require_data_handling("hirid", "unspecified")
+    assert source_requires_clearance("hirid")

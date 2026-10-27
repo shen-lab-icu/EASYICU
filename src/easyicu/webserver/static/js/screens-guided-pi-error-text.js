@@ -109,9 +109,6 @@
       if (error.code === 'pi_provider_connection_failed') {
         return tr('EasyICU could not reach the model service.', 'EasyICU 无法连接到模型服务，请检查地址和服务状态。');
       }
-      if (error.code === 'provider_not_cleared_for_credentialed_data') {
-        return tr('This model is not cleared for credentialed data such as MIMIC-IV or eICU, so this step did not call it. In Settings, declare that the model runs on this computer, that its service keeps no data, or that you accept this external service for these data.', '这个模型未获准处理 MIMIC-IV、eICU 等需授权的数据，所以这一步没有调用它。请在设置里声明：模型在本机运行、服务不保留数据，或你确认这个外部服务可以处理这些数据。');
-      }
       // The credentialed-data declaration (pi_copilot/provider_config.py).
       const declaration = {
         pi_provider_declaration_settings_only: ['The data-handling declaration can be changed only in the model settings.', '数据处理声明只能在模型设置中修改。'],
@@ -917,7 +914,7 @@
       if (resumeFailure) return resumeFailure;
       const suffix = runFailureDetailText(detail);
       const withDetail = text => (suffix ? `${text} ${suffix}` : text);
-      if (value === 'provider_not_cleared_for_credentialed_data' || value === 'agentic_coder_credentialed_source_forbidden' || value === 'requested_concept_no_data') {
+      if (value === 'agentic_coder_credentialed_source_forbidden' || value === 'requested_concept_no_data') {
         return withDetail(errorText({ code: value }));
       }
       // A failed-closed run did not pass a check after it started. Its detail

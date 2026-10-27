@@ -110,7 +110,7 @@ def test_cancelled_target_never_opens_its_source_or_provider(tmp_path, monkeypat
 
 def test_resume_enters_only_the_targets_verified_synthetic_scope(tmp_path, monkeypatch):
     from easyicu.synthetic_sources import generate_source
-    from easyicu.research_agent.providers.client_trust import ProviderConfigurationError, require_data_handling
+    from easyicu.research_agent.providers.client_trust import source_requires_clearance
     from easyicu.webserver import research_multi_pipeline as module, research_followup_source
 
     path = tmp_path / "synthetic"
@@ -129,15 +129,13 @@ def test_resume_enters_only_the_targets_verified_synthetic_scope(tmp_path, monke
     monkeypatch.setattr(module.agent_pipeline_runs, "pending_review", lambda _: {"budget_mode": "full_reviewed"})
     monkeypatch.setattr(module, "plan_approval_allowed", lambda _: True)
     def resume(**kwargs):
-        require_data_handling("hirid", "unspecified")
-        with pytest.raises(ProviderConfigurationError):
-            require_data_handling("miiv", "unspecified")
+        assert not source_requires_clearance("hirid")
+        assert source_requires_clearance("miiv")
         return {"run_id": "target"}
     monkeypatch.setattr(module.agent_pipeline_runs, "resume_research_pipeline", resume)
     monkeypatch.setattr(research_followup_source, "load_completed_result", lambda *a, **k: None)
     assert owner.execute(target, reviewer="reviewer", job=SimpleNamespace(id="job"), recovering=False) == {"run_id": "target"}
-    with pytest.raises(ProviderConfigurationError):
-        require_data_handling("hirid", "unspecified")
+    assert source_requires_clearance("hirid")
 
 
 @pytest.mark.parametrize("changed", ["source", "provider", "handling", "review"])

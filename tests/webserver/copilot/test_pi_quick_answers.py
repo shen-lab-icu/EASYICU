@@ -177,7 +177,7 @@ def test_chat_yes_is_not_approval_and_reader_cannot_replace_the_question(host):
                      ToolExecutionContext(session=record, user_message="yes", allowed_actions=["run", "resume"]))
 
 
-def test_credentialed_source_uses_the_existing_copilot_provider_gate(host, monkeypatch):
+def test_a_credentialed_source_needs_no_declaration_for_a_quick_answer(host, monkeypatch):
     service, record, registry = host
     source = registry["sources"][0]
     source["database"] = "miiv"
@@ -186,11 +186,11 @@ def test_credentialed_source_uses_the_existing_copilot_provider_gate(host, monke
     record.binding = service._binding_for_context(study)
     service._save_record(record)
     service.gateway.environ["EASYICU_PI_DATA_HANDLING"] = "unspecified"
-    from easyicu.research_agent.providers.client_trust import PROVIDER_NOT_CLEARED
-
+    # No declaration is asked (owner decision 2026-10-27); the quick path still
+    # needs a verified model connection before it reads the source.
     with pytest.raises(PiCopilotError) as failure:
         submit(host)
-    assert failure.value.code == PROVIDER_NOT_CLEARED
+    assert failure.value.code == "pi_provider_research_configuration_unverified"
     assert not list(service._quick_store().root.glob("*/qa_*"))
 
 

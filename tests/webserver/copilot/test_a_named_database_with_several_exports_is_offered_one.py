@@ -431,12 +431,9 @@ def test_a_named_question_recommends_and_binds_a_registered_synthetic_source(
 
 
 @pytest.mark.parametrize("database", ["hirid", "aumc", "sic"])
-def test_recommending_a_credentialed_source_does_not_grant_provider_clearance(
+def test_recommending_a_credentialed_source_does_not_activate_it(
     tmp_path, monkeypatch, database,
 ) -> None:
-    from easyicu.research_agent.providers.client_trust import PROVIDER_NOT_CLEARED
-    from easyicu.webserver.pi_copilot.contracts import PiCopilotError
-
     registry = _synthetic_catalog(database)
     registry["sources"][0]["path"] = str(tmp_path / "unverified")
     monkeypatch.setattr(tool_module.sources, "load_registry", lambda: registry)
@@ -444,10 +441,7 @@ def test_recommending_a_credentialed_source_does_not_grant_provider_clearance(
     assert recommendation.source["source_id"] == "src_synthetic"
     context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-uncleared"))
     policy = context.data_handling
-    with pytest.raises(PiCopilotError) as error:
-        tool_module.execute_tool("easyicu_list_data_sources", {"database": database}, context)
-    assert error.value.status_code == 403
-    assert error.value.code == PROVIDER_NOT_CLEARED
+    tool_module.execute_tool("easyicu_list_data_sources", {"database": database}, context)
     assert context.data_handling == policy
     assert not registry.get("active_path")
 

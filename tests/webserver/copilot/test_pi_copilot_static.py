@@ -95,7 +95,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-starters.js?v=20261027-st2" in index
     assert "js/screens-guided-pi-idea-source.js?v=20261026-mention1" in index
     assert "js/screens-guided-pi-header.js?v=20261021-help1" in index
-    assert "js/screens-guided-pi-model-menu.js?v=20261027-clr1" in index
+    assert "js/screens-guided-pi-model-menu.js?v=20261027-dc1" in index
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
     assert "css/guided-pi-workspace.css?v=20261027-proj1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
@@ -148,7 +148,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261027-clr1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261027-dc1" in index
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
     assert "js/screens-datamap.js?v=20261026-cal1copy" in index
@@ -165,10 +165,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-review-items.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "css/guided-pi-source-adjustments.css?v=20261026-six1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261026-quickoffer1" in index
-    assert "js/screens-guided-pi-quick-answers.js?v=20261027-iqr1" in index
+    assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261026-int1" in index
-    assert "js/screens-guided-pi.js?v=20261027-clr1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261027-dc1" in index
+    assert "js/screens-guided-pi.js?v=20261027-dc1" in index
     assert "js/screens-guided.js?v=20261027-old1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -2424,7 +2424,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "运行本地预检" not in confirmation_owner
     assert "授权 Research Agent Planner" not in confirmation_owner
     assert "provider_ready_to_generate_plan" in pi_owner
-    assert "开始生成研究计划" in confirmation_owner
+    assert "生成候选计划" in confirmation_owner
     assert "计划会先决定需要哪些数据，不读取患者行" in confirmation_owner
     assert "按计划准备或复用数据" in confirmation_owner
     assert "审核可执行计划并开始分析" in confirmation_owner
@@ -6599,7 +6599,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261027-access1" in index
-    assert "screens-guided-pi.js?v=20261027-clr1" in index
+    assert "screens-guided-pi.js?v=20261027-dc1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:
