@@ -1028,13 +1028,15 @@ def test_p1_6_canonical_digest_is_stable_and_json_safe(tmp_path):
     assert service_payload == PipelineServices(llm=_Client()).canonical_payload()
 
 
-def test_p2_1_mcp_server_reports_the_installed_package_version():
-    from importlib.metadata import version
+def test_p2_1_mcp_server_reports_the_installed_package_version(monkeypatch):
+    import importlib.metadata
 
-    from easyicu.research_agent.mcp_server import SERVER_INFO
+    from easyicu.research_agent import mcp_server
 
-    assert SERVER_INFO["version"] == version("easyicu")
-    assert SERVER_INFO["version"] != "0.1.0"
+    assert mcp_server.SERVER_INFO["version"] == importlib.metadata.version("easyicu")
+    # The version follows the installed metadata, never a frozen literal.
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "9.9.9+probe")
+    assert mcp_server._server_version() == "9.9.9+probe"
 
 
 def test_p2_2_dispatch_does_not_echo_internal_exception_text(roots, monkeypatch):
