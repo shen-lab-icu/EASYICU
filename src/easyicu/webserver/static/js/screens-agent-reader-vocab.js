@@ -68,6 +68,7 @@
     PREDICTION_PATIENT_GROUPING_UNAVAILABLE: ['数据来源无法按患者分组', '这份计划需要按患者划分或聚类住院。同一位患者可能有多次 ICU 住院，但这个数据来源无法提供患者分组。可以只保留每位患者的首次 ICU 住院后重新规划，或为数据来源登记患者身份。'],
     PREDICTION_PREDICTOR_TIMING_UNPROVEN: ['预测变量的观测时间无法确认', '这份计划无法证明预测变量都在预测时点之前观测到。'],
     PREDICTION_RISK_SET_NOT_KEPT: ['队列没有限定预测时点仍在 ICU 的住院', '队列没有限定为预测时点仍在 ICU 的住院。预测时点之前已死亡或已转出 ICU 的住院可能也进了分析，它们的结局可能在预测之前就已发生。人群条件里需要加上"预测时点仍在 ICU"。'],
+    PRIMARY_DESCRIPTIVE_SUMMARY_SCOPE_UNRESOLVED: ['主要描述性汇总无法执行', '主要描述性汇总只描述一个数值测量的取值，可按一个已声明的分类变量分组；当前计划不满足这一点，执行时会失败。几项测量有无记录、缺失多少，应由测量审计步骤报告；常规化验和生命体征的测量时间目前无法报告。'],
     PRIMARY_EXPOSURE_TIME_ANCHOR_MISMATCH: ['暴露定义的时间锚点不一致', '主暴露临床定义的时间锚点与研究声明的时间零点不一致。'],
     PRIMARY_EXPOSURE_TIME_ANCHOR_UNVERIFIED: ['暴露定义的时间锚点未核实', '主暴露临床定义的时间锚点是否与研究的时间零点一致，尚未核实。'],
     PRIMARY_MODEL_NOT_EVALUABLE_ON_SEALED_COHORT: ['主模型无法在封存队列上求值', '主模型无法在执行将读取的队列上求值，批准后的运行会在那里失败；需先把模型绑定到队列实际具有的列和水平。'],

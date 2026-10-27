@@ -75,6 +75,22 @@ def test_english_readers_keep_the_hosts_own_finding_message():
     assert "Method: Observational-study reporting, Repeated units per patient" in html
 
 
+def test_an_unrunnable_primary_summary_reads_in_both_languages():
+    review = {**REVIEW, "approval_allowed": False, "status": "changes_required", "findings": [{
+        "code": "PRIMARY_DESCRIPTIVE_SUMMARY_SCOPE_UNRESOLVED", "severity": "blocker",
+        "remediation_route": "agent_plan_revision",
+        "message": "The primary descriptive summary 'summary' cannot run.",
+        "remediation": "Plan several measurements as the measurement_audit step.",
+    }]}
+
+    zh = render("scientific_plan_review.json", review)
+    assert "主要描述性汇总无法执行" in zh and "测量审计" in zh
+    assert "cannot run" not in zh
+    assert "The primary descriptive summary 'summary' cannot run." in render(
+        "scientific_plan_review.json", review, lang="en",
+    )
+
+
 def test_result_tables_read_with_named_columns_and_display_precision():
     payload = {"tables": [
         {"name": "table_step_artifact_x__exposure_outcome_distribution.csv",
