@@ -13,9 +13,13 @@ patient identifier (:func:`resolve_derived_patient_grouping`): eICU's
 digest-verified for hospital-mortality follow-up -- through the export's own
 ``data_path`` or, for a legacy MIMIC-IV export, the private raw-source
 authority -- and the same verified bytes carry ``uniquepid`` or ``subject_id``.
-Requiring a second manual approval for a column inside an already-bound table
-would be ceremony without a privacy gain, so the host derives the bridge,
-materializes it into private state, and binds it by digest.
+MIMIC-III ``icustays``, SICdb ``cases`` and AmsterdamUMCdb ``admissions`` are
+bound the same way through ``data_path`` for their ``subject_id``,
+``PatientID`` and ``patientid``.  HiRID publishes no cross-admission identity,
+so its stays are never grouped.  Requiring a second manual approval for a
+column inside an already-bound table would be ceremony without a privacy gain,
+so the host derives the bridge, materializes it into private state, and binds
+it by digest.
 """
 
 from __future__ import annotations
@@ -329,7 +333,7 @@ def resolve_derived_patient_grouping(
     from easyicu.webserver import raw_source_authority
 
     try:
-        binding = raw_source_authority.resolve_raw_hospital_source_binding(
+        binding = raw_source_authority.resolve_raw_source_identity_binding(
             export_path=export_path, database=database
         )
     except raw_source_authority.RawSourceAuthorityError as exc:
@@ -476,7 +480,7 @@ def resolve_study_first_icu_stay(
     from easyicu.webserver import raw_source_authority
 
     try:
-        binding = raw_source_authority.resolve_raw_hospital_source_binding(
+        binding = raw_source_authority.resolve_raw_source_identity_binding(
             export_path=export_path, database=database
         )
     except raw_source_authority.RawSourceAuthorityError as exc:
@@ -517,6 +521,16 @@ def resolve_study_first_icu_stay(
             "identity_table_sha256": receipt["identity_table_sha256"],
             "order_column": receipt["order_column"],
             "order_rule": derived.receipt["order_rule"],
+            # A declared-first-value order names its value and the patients
+            # whose first admission the source lacks.
+            **{
+                key: derived.receipt[key]
+                for key in (
+                    "first_order_value",
+                    "patients_without_first_icu_stay_in_source",
+                )
+                if key in derived.receipt
+            },
             "tie_policy": derived.receipt["tie_policy"],
             "missing_order_policy": derived.receipt["missing_order_policy"],
             "patient_grouping_mapping_sha256": grouping_sha256,
@@ -536,7 +550,7 @@ def resolve_study_first_icu_stay_per_hospitalization(
     from easyicu.webserver import raw_source_authority
 
     try:
-        binding = raw_source_authority.resolve_raw_hospital_source_binding(
+        binding = raw_source_authority.resolve_raw_source_identity_binding(
             export_path=export_path, database=database,
         )
         if binding is None or not getattr(binding, "first_icu_stay_per_hospitalization_available", False):

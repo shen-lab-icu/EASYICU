@@ -70,7 +70,7 @@ def _first_stays_orderable(export_path, database) -> bool:
     from easyicu.webserver import raw_source_authority
 
     try:
-        binding = raw_source_authority.resolve_raw_hospital_source_binding(
+        binding = raw_source_authority.resolve_raw_source_identity_binding(
             export_path=export_path, database=database,
         )
     except raw_source_authority.RawSourceAuthorityError:

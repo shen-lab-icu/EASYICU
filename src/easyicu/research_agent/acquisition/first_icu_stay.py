@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, Optional
 
 import pandas as pd
 
@@ -30,6 +30,7 @@ FIRST_ICU_STAY_SCHEMA = "easyicu.derived_first_icu_stay/1"
 COORDINATE_STAY_COLUMN = "stay_id"
 COORDINATE_FLAG_COLUMN = "first_icu_stay"
 ORDER_RULE = "earliest_order_time_per_patient"
+DECLARED_FIRST_ORDER_RULE = "declared_first_admission_value_per_patient"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -53,6 +54,68 @@ class DerivedFirstIcuStay:
     receipt: Mapping[str, object]
 
 
+def _earliest_order_per_patient(frame: pd.DataFrame, values: pd.Series) -> pd.Series:
+    """Flag the stay with the earliest admission time of each patient."""
+
+    order = pd.Series(
+        pd.to_datetime(values, errors="coerce").to_numpy(), index=frame.index
+    )
+    repeated = frame.groupby("patient", sort=False)["stay"].transform("size").gt(1)
+    if bool(order.loc[repeated].isna().any()):
+        raise FirstIcuStayError(
+            "a patient with repeated stays has a stay without a usable admission time",
+            code="first_icu_stay_order_time_missing",
+        )
+    first = pd.Series(True, index=frame.index)
+    if bool(repeated.any()):
+        several = frame.loc[repeated]
+        earliest = order.loc[repeated].groupby(several["patient"], sort=False).transform("min")
+        first.loc[repeated] = order.loc[repeated].eq(earliest)
+        per_patient = first.loc[repeated].groupby(several["patient"], sort=False).sum()
+        if bool(per_patient.gt(1).any()):
+            raise FirstIcuStayError(
+                "two stays of one patient share the earliest admission time",
+                code="first_icu_stay_order_tied",
+            )
+    return first
+
+
+def _declared_first_per_patient(
+    frame: pd.DataFrame, values: pd.Series, first_order_value: int
+) -> tuple[pd.Series, int]:
+    """Flag the stay carrying the source's declared first-admission value.
+
+    Returns the flags and the number of patients the table holds no first
+    admission for: their stays are readmissions by the source's own column.
+    """
+
+    if bool(values.isna().any()):
+        raise FirstIcuStayError(
+            "a stay has no value in the declared first-admission order column",
+            code="first_icu_stay_order_time_missing",
+        )
+    try:
+        parsed = exact_integer_series(values, label="declared first-admission order")
+    except PatientGroupingError as exc:
+        raise FirstIcuStayError(
+            str(exc), code="first_icu_stay_order_value_invalid"
+        ) from exc
+    order = pd.Series(parsed.to_numpy(dtype="int64"), index=frame.index)
+    if bool(order.lt(first_order_value).any()):
+        raise FirstIcuStayError(
+            "a stay's order value precedes the declared first admission",
+            code="first_icu_stay_order_value_invalid",
+        )
+    first = order.eq(first_order_value)
+    per_patient = first.groupby(frame["patient"], sort=False).sum()
+    if bool(per_patient.gt(1).any()):
+        raise FirstIcuStayError(
+            "two stays of one patient carry the declared first-admission value",
+            code="first_icu_stay_order_tied",
+        )
+    return first, int(per_patient.eq(0).sum())
+
+
 def derive_first_icu_stay(
     identity_table: pd.DataFrame,
     *,
@@ -60,16 +123,33 @@ def derive_first_icu_stay(
     patient_column: str,
     order_column: str,
     identity_table_name: str,
+    first_order_value: Optional[int] = None,
 ) -> DerivedFirstIcuStay:
     """Mark each patient's first ICU stay in one verified official table.
 
-    The order is the table's own admission time.  A patient with one stay
-    needs no order.  For a patient with several, a missing or unparseable time,
-    or two stays sharing the earliest time, makes the whole coordinate
-    unusable: breaking the tie by stay number, or dropping that patient, would
-    silently change the population.
+    By default the order is the table's own admission time.  A patient with
+    one stay needs no order.  For a patient with several, a missing or
+    unparseable time, or two stays sharing the earliest time, makes the whole
+    coordinate unusable: breaking the tie by stay number, or dropping that
+    patient, would silently change the population.
+
+    ``first_order_value`` instead declares a per-patient column whose value at
+    the patient's first ICU admission the source itself fixes: an admission
+    number of 1, or an offset of 0 from the patient's first admission.  That
+    value, not the earliest one present, identifies the first stay, so a
+    patient whose first admission the table lacks keeps no first stay instead
+    of having a readmission promoted.  Every stay then needs an exact integer
+    at or after the declared value, and two stays of one patient carrying it
+    make the coordinate unusable.
     """
 
+    if first_order_value is not None and (
+        isinstance(first_order_value, bool) or not isinstance(first_order_value, int)
+    ):
+        raise FirstIcuStayError(
+            "the declared first-admission value must be an integer",
+            code="first_icu_stay_order_value_invalid",
+        )
     missing = [
         column
         for column in (stay_column, patient_column, order_column)
@@ -100,31 +180,24 @@ def derive_first_icu_stay(
             code="first_icu_stay_patient_identifier_missing",
         )
     frame = pd.DataFrame(
-        {
-            "stay": stays.to_numpy(dtype="int64"),
-            "patient": patients.to_numpy(),
-            "order": pd.to_datetime(
-                identity_table[order_column], errors="coerce"
-            ).to_numpy(),
-        }
+        {"stay": stays.to_numpy(dtype="int64"), "patient": patients.to_numpy()}
     )
-    repeated = frame.groupby("patient", sort=False)["stay"].transform("size").gt(1)
-    if bool(frame.loc[repeated, "order"].isna().any()):
-        raise FirstIcuStayError(
-            "a patient with repeated stays has a stay without a usable admission time",
-            code="first_icu_stay_order_time_missing",
+    values = identity_table[order_column]
+    if first_order_value is None:
+        first = _earliest_order_per_patient(frame, values)
+        rule: dict[str, object] = {"order_rule": ORDER_RULE}
+        missing_order_policy = "fail_closed_when_patient_has_repeated_stays"
+        absent: dict[str, object] = {}
+    else:
+        first, without_first = _declared_first_per_patient(
+            frame, values, first_order_value
         )
-    first = pd.Series(True, index=frame.index)
-    if bool(repeated.any()):
-        several = frame.loc[repeated]
-        earliest = several.groupby("patient", sort=False)["order"].transform("min")
-        first.loc[repeated] = several["order"].eq(earliest)
-        per_patient = first.loc[repeated].groupby(several["patient"], sort=False).sum()
-        if bool(per_patient.gt(1).any()):
-            raise FirstIcuStayError(
-                "two stays of one patient share the earliest admission time",
-                code="first_icu_stay_order_tied",
-            )
+        rule = {
+            "order_rule": DECLARED_FIRST_ORDER_RULE,
+            "first_order_value": int(first_order_value),
+        }
+        missing_order_policy = "fail_closed"
+        absent = {"patients_without_first_icu_stay_in_source": without_first}
     coordinate = (
         pd.DataFrame(
             {
@@ -143,13 +216,14 @@ def derive_first_icu_stay(
         "stay_column": str(stay_column),
         "patient_identifier_column": str(patient_column),
         "order_column": str(order_column),
-        "order_rule": ORDER_RULE,
+        **rule,
         "tie_policy": "fail_closed",
-        "missing_order_policy": "fail_closed_when_patient_has_repeated_stays",
+        "missing_order_policy": missing_order_policy,
         "stays": int(len(coordinate)),
         "patients": int(frame["patient"].nunique()),
         "first_icu_stays": first_stays,
         "non_first_icu_stays": int(len(coordinate)) - first_stays,
+        **absent,
         "identifier_values_returned": False,
     }
     return DerivedFirstIcuStay(frame=coordinate, receipt=receipt)
@@ -220,6 +294,7 @@ def load_verified_first_icu_stay(
 __all__ = [
     "COORDINATE_FLAG_COLUMN",
     "COORDINATE_STAY_COLUMN",
+    "DECLARED_FIRST_ORDER_RULE",
     "DerivedFirstIcuStay",
     "FIRST_ICU_STAY_SCHEMA",
     "FirstIcuStayBinding",
