@@ -166,7 +166,9 @@
         return tr('Choose a supported protocol under Advanced settings.', '请在高级设置中选择一个支持的兼容协议。');
       }
       if (error.code === 'external_llm_opt_in_required') {
-        return tr('Confirm the use of an external model service before connecting.', '连接前需要你确认使用外部模型服务。');
+        // Connecting a model turns this on (settings.py, one opt-in); it is
+        // off only when the Settings switch was turned off.
+        return tr('Outbound model calls are off. Turn on “Allow outbound model calls” in Settings, or connect the model again.', '外部模型调用已关闭。请在设置中打开「允许外部模型调用」，或重新连接模型。');
       }
       if (error.code === 'pi_session_busy') {
         return tr('Wait for the current reply or study run to finish, then try again.', '请等当前回复或研究运行结束后再试。');

@@ -452,3 +452,41 @@ def test_picker_css_has_one_owner_and_is_not_injected_from_js() -> None:
     assert links[-1] == "css/picker.css", (
         f"picker.css must be the last stylesheet, found {links[-1]}"
     )
+
+
+def test_a_connected_model_and_the_settings_switch_are_one_opt_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Connecting a model lets its research runs call it too (user 2026-10-27).
+
+    A file written between 2026-10-23 and 2026-10-27 holds the connection's
+    consent only as ``copilot_enabled``; the plan card's run was then refused
+    with nothing to click.
+    """
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    config_path = config_dir / "settings.json"
+    monkeypatch.setattr(settings_store, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(settings_store, "_CONFIG_PATH", config_path)
+
+    config_path.write_text('{"ai_enabled": false, "copilot_enabled": true}', encoding="utf-8")
+    assert settings_store.load_settings()["ai_enabled"] is True
+    # Any later write records the one opt-in under both names.
+    settings_store.update_settings({"density": "compact"})
+    assert json.loads(config_path.read_text(encoding="utf-8"))["ai_enabled"] is True
+
+    # The Settings switch turned off revokes the connection's consent too.
+    revoked = settings_store.update_settings({"ai_enabled": False})
+    assert revoked["ai_enabled"] is False and revoked["copilot_enabled"] is False
+    assert settings_store.load_settings()["copilot_enabled"] is False
+
+    granted = settings_store.update_settings({"copilot_enabled": True})
+    assert granted["ai_enabled"] is True
+    assert json.loads(config_path.read_text(encoding="utf-8"))["ai_enabled"] is True
+
+    # A patch naming both with different values revokes.
+    mixed = settings_store.update_settings({"ai_enabled": False, "copilot_enabled": True})
+    assert mixed["ai_enabled"] is False and mixed["copilot_enabled"] is False
+
+    config_path.write_text("{}", encoding="utf-8")
+    assert settings_store.load_settings()["ai_enabled"] is False

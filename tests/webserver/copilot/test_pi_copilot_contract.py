@@ -1763,7 +1763,7 @@ def test_verified_first_use_config_is_applied_before_chat_unlocks(
         enable_ai=True,
     )
 
-    assert current_settings["ai_enabled"] is False
+    # Connecting the model is the one external-model opt-in (settings.py).
     assert current_settings["copilot_enabled"] is True
     assert gateway.applied_config is not None
     assert gateway.applied_config.api_key == "private-setup-key"
