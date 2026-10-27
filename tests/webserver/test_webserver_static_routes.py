@@ -181,7 +181,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261027-dmap2" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261027-nodemo1" in index_html
+    assert "js/screens-extraction.js?v=20261027-nodemo2" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
     assert "js/screens-help.js?v=20261027-help3" in index_html
@@ -2481,7 +2481,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "css/patient-tables.css?v=20261026-data1" in index_html
     assert "css/patient.css?v=20261026-data1" in index_html
     assert "css/patient-series.css?v=20261022-legacy1" in index_html
-    assert "js/screens-viz-demo.js?v=20261022-zhlabels1" in index_html
+    assert "js/screens-viz-demo.js?v=20261027-nodemo2" in index_html
     assert "js/screens-viz-demo-drilldown.js" not in index_html
     assert "js/screens-viz-patient-features.js?v=20261022-zhlabels1" in index_html
     assert "js/screens-viz-patient-charts.js?v=20261026-data1" in index_html
@@ -2915,13 +2915,13 @@ def test_native_viz_demo_layer_is_split_into_owner_file() -> None:
 
     # demo generators + catalog accessors are DEFINED in the demo file
     assert "function demoCatalogModules(" in demo_js
-    assert "function demoRowsForModule(" in demo_js
-    assert "function demoCategorySection(" in demo_js
+    assert "function demoRowsForModule(" not in demo_js
+    assert "function demoCategorySection(" not in demo_js
     assert "function catalogModuleLabel(" in demo_js
     assert "function catalogFeatureMeta(" in demo_js
     assert "window.VIZ_DEMO = {" in demo_js
     assert "const DEMO_CHART_HOURS = [-1, 0.5, 2, 4, 7, 11" in demo_js
-    assert "DEMO_ENTITY_COUNT, DEMO_DURATION_HOURS, DEMO_CHART_HOURS" in demo_js
+    assert "DEMO_CHART_HOURS, demoCatalogModules, demoTableValue, demoSignal, demoTimeLanes, demoSignalDelta," in demo_js
 
     # they are NOT re-defined in the main file (no duplicate definitions)
     assert "function demoCatalogModules(" not in viz_js
@@ -3017,7 +3017,7 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
     output_css = _static_css("extraction-output.css")
 
     assert "css/extraction-output.css?v=20260824-local-open1" in index_html
-    assert "js/screens-extraction-embedded.js?v=20261026-src1" in index_html
+    assert "js/screens-extraction-embedded.js?v=20261027-nodemo2" in index_html
     assert "js/screens-guided-pi-starters.js?" in index_html
     assert "js/screens-guided-pi-header.js?" in index_html
     assert "js/screens-guided-pi.js?" in index_html
