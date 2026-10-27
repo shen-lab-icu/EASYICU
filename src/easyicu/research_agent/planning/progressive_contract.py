@@ -30,6 +30,7 @@ from ..contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
 from ..contracts.product_identity import is_canonical_typed_product_token
 from ..contracts.functional_form import FunctionalFormSpec
 from ..contracts.prediction_validation import BootstrapSpec
+from ..contracts.model_tokens import BinaryEffectMeasure
 from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from .design_selection import ResearchDesignSelection
@@ -827,6 +828,7 @@ COORDINATE_OWNED_STEP_FIELDS = (
     "phenotyping_comparison_variables",
     "repeated_unit_interval_method",
     "patient_weighted_interval_assumptions",
+    "effect_measure",
 )
 
 
@@ -839,6 +841,8 @@ def coordinate_owned_step_fields(
     """The coordinate-owned fields a step with this module, action and role may carry."""
 
     owned: set[str] = set()
+    if module_id == "adjusted_association":
+        owned.add("effect_measure")
     if module_id == "exposure_outcome_distribution":
         owned.update({"repeated_unit_interval_method", "patient_weighted_interval_assumptions"})
     if module_id == "custom_analysis" and planned_analysis_role == "sensitivity":
@@ -923,6 +927,9 @@ class ProgressiveSkeletonStep(BaseModel):
     bootstrap_spec: Optional[BootstrapSpec] = Field(default=None, exclude_if=lambda value: value is None)
     phenotyping_feature_columns: Optional[list[str]] = Field(default=None, min_length=2, max_length=64, exclude_if=lambda value: value is None)
     phenotyping_comparison_variables: Optional[list[ProgressiveTableOneVariable]] = Field(default=None, min_length=1, max_length=64, exclude_if=lambda value: value is None)
+    #: A binary adjusted association's reported measure.  ``None`` keeps the
+    #: logistic odds ratio; ``risk_ratio`` selects the modified-Poisson model.
+    effect_measure: Optional[BinaryEffectMeasure] = Field(default=None, exclude_if=lambda value: value is None)
     literature_bindings: list[ProgressiveLiteratureBinding] = Field(
         default_factory=list
     )
@@ -1039,6 +1046,8 @@ class ProgressiveSkeletonStep(BaseModel):
             raise ValueError("functional_form_spec belongs only to a custom sensitivity")
         if self.bootstrap_spec is not None and "bootstrap_spec" not in owned:
             raise ValueError("bootstrap_spec belongs only to the static prediction primary")
+        if self.effect_measure is not None and "effect_measure" not in owned:
+            raise ValueError("effect_measure belongs only to an adjusted_association step")
         if self.phenotyping_feature_columns is not None:
             if "phenotyping_feature_columns" not in owned:
                 raise ValueError("phenotyping_feature_columns belongs only to the primary cluster solution")

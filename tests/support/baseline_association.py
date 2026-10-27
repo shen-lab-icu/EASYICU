@@ -70,19 +70,22 @@ def baseline_context(exposure="sex", *, outcome="death", covariates=(), subgroup
     return context
 
 
-def baseline_plan_attempt(context, *, planning_contract_context="", scientific_authorities=None):
+def baseline_plan_attempt(context, *, planning_contract_context="", scientific_authorities=None, spec_fields=None,
+                          retry_spec_fields=()):
+    """Plan ``context`` from one scripted spec; ``retry_spec_fields`` script the Planner's repairs."""
     request = build_family_spec_request(
         context, analysis_types=("association_study",), variable_roster=[v.name for v in context.variables],
         allowed_literature_citation_keys=(), required_primary_cohort_selection_mode="all_input_rows",
         planning_contract_context=planning_contract_context,
     )
-    payload = {
+    base = {
         "schema_version": "easyicu.family_plan_spec/1", "family_id": request.family_id,
         "request_sha256": request.request_sha256, "adjustment_set": [],
         "reader_display_labels": [{"key": key, "value": "Clinical " + key.replace("_", " ")} for key in request.required_reader_label_keys],
         "comparator_applications": [], "roster_decision_note": "Keep the study's exact stated adjustment roster.",
     }
-    llm = ScriptedMockLLMClient([json.dumps(payload)])
+    llm = ScriptedMockLLMClient([json.dumps({**base, **(fields or {})})
+                                 for fields in (spec_fields, *retry_spec_fields)])
     result = ProgressivePlannerAgent(llm, scientific_authorities=scientific_authorities).run_attempt(
         context, planner_strategy=FAMILY_SPEC_STRATEGY, allowed_literature_citation_keys=(),
         required_primary_cohort_selection_mode="all_input_rows",

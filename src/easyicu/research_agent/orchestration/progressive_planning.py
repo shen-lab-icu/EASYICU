@@ -43,9 +43,11 @@ from ..planning.question_requirements import (
     bind_named_question_concepts,
     concept_relatives,
     judge_question_requirements,
+    judge_stated_effect_measures,
     named_question_concepts,
     outline_route_unstated,
     question_requirement_coverage,
+    question_effect_measures,
     question_requirement_findings,
     question_requirements_record,
     write_question_requirements,
@@ -412,7 +414,13 @@ def question_requirement_outcome(
         roster=[str(variable.name) for variable in context.variables],
         relatives=relatives,
     )
-    if not requirements and not named:
+    # The host reads the effect measure the question names itself; the plan's
+    # binary primary is held to it on every route.
+    stated_measures = question_effect_measures(context.research_question)
+    measures = judge_stated_effect_measures(
+        stated_measures, plan=plan, requirements=requirements
+    )
+    if not requirements and not named and not stated_measures and not measures:
         return []
     sealed = tuple(
         value
@@ -442,16 +450,20 @@ def question_requirement_outcome(
             named=named,
             judged=judged,
             unstated=unstated,
-            coverage=question_requirement_coverage(judged, context=context, plan=plan),
+            coverage=question_requirement_coverage(
+                judged, context=context, plan=plan, measures=measures
+            ),
             denoted={
                 concept: relatives(concept)
                 for item in requirements
                 for concept in item.concepts
             },
             sealed=sealed,
+            stated_measures=stated_measures,
+            measures=measures,
         ),
     )
-    return question_requirement_findings(judged, unstated=unstated)
+    return question_requirement_findings(judged, unstated=unstated, measures=measures)
 
 
 def run_progressive_planner(

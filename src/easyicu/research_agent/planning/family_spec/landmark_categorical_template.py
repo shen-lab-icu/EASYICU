@@ -81,7 +81,9 @@ from .contract import (
     SpecPopulation,
     accepted_baseline_additions,
     design_field_max_length,
+    family_effect_measures,
     landmark_design_roster,
+    landmark_ordinal_trend_present,
     prediction_risk_set_predicates,
     table_one_group_column,
 )
@@ -335,6 +337,8 @@ def _design_selection(
     exposure = _label(spec, request.primary_exposure)
     outcome = _label(spec, request.outcome)
     continuous_exposure = request.exposure_kind == "continuous"
+    # Declared only where the family reports it (``family_effect_measures``).
+    risk_ratio = spec.effect_measure == "risk_ratio"
     reference = request.exposure_levels[request.reference_level_index] if not continuous_exposure else ""
     contrast = request.exposure_levels[request.primary_contrast_level_index] if not continuous_exposure else ""
     hours = f"{request.landmark_hours:g}"
@@ -459,6 +463,10 @@ def _design_selection(
             "restricted cubic spline for the exposure, a per-unit linear sensitivity, adjusted absolute "
             "risks along the exposure range, and prespecified sensitivity refits."
             if continuous_exposure
+            else "Prespecified categorical-exposure modified Poisson model (log link, robust standard "
+            "errors) for the adjusted risk ratio after the landmark, with absolute risks by level and "
+            "prespecified sensitivity refits."
+            if risk_ratio
             else "Prespecified categorical-exposure logistic association model after the landmark, "
             "with absolute risks by level, a typed ordered trend, and prespecified sensitivity refits."
         ),
@@ -523,6 +531,9 @@ def _design_selection(
                     f"logistic 模型，{exposure} 以限制性立方样条表示（节点位于第 10/50/90 百分位，以中位数"
                     f"为参照），另做每单位线性敏感性分析；{adjustment_text_zh}。"
                     if continuous_exposure
+                    else f"修正 Poisson 模型（log 连接，稳健标准误）估计校正风险比（RR），采用处理对比"
+                    f"（{contrast} vs {reference}），{adjustment_text_zh}。"
+                    if risk_ratio
                     else f"logistic 模型，采用处理对比（{contrast} vs {reference}），{adjustment_text_zh}；"
                     "另按每级增量报告有序线性趋势项。"
                 ),
@@ -557,6 +568,9 @@ def _design_selection(
                     f"Logistic model with {exposure} as a restricted cubic spline (10/50/90 knots, median "
                     f"reference) and a per-unit linear sensitivity, {adjustment_text}."
                     if continuous_exposure
+                    else f"Modified Poisson model (log link, robust standard errors) for the adjusted "
+                    f"risk ratio with treatment contrasts ({contrast} vs {reference}), {adjustment_text}."
+                    if risk_ratio
                     else f"Logistic model with treatment contrasts ({contrast} vs {reference}), "
                     f"{adjustment_text}; an ordinal-linear trend term is reported per level increment."
                 ),
@@ -1098,12 +1112,16 @@ def build_landmark_categorical_skeleton(
     applications = spec.applications
     reference = request.exposure_levels[request.reference_level_index] if not continuous_exposure else ""
     contrast = request.exposure_levels[request.primary_contrast_level_index] if not continuous_exposure else ""
-    ordinal_present = bool(
-        not continuous_exposure
-        and secondary
-        and request.exposure_is_ordered
-        and len(request.exposure_levels) >= 3
-    )
+    ordinal_present = landmark_ordinal_trend_present(request)
+    risk_ratio = spec.effect_measure == "risk_ratio"
+    if risk_ratio and "risk_ratio" not in family_effect_measures(request):
+        # The spec contract refuses this first; a template must never fit an
+        # odds ratio under a risk-ratio declaration.
+        raise FamilySpecError(
+            "family_spec_effect_measure_unsupported",
+            f"the {request.family_id} primary cannot report a risk ratio",
+            path="effect_measure",
+        )
     functional_step_ids = [f"{name}_functional_form" for name in continuous]
 
     # Pass 1: the outline (scientific intent only).  Objectives are shared with
@@ -1136,6 +1154,11 @@ def build_landmark_categorical_skeleton(
             else f"Estimate the prespecified adjusted association between {exposure_label} and {outcome_label} "
             f"after the {hours} h landmark with treatment contrasts (primary contrast {contrast} vs "
             f"{reference}) and the declared dependence contract."
+            + (
+                " Report the adjusted risk ratio from a modified Poisson model with robust standard errors."
+                if risk_ratio
+                else ""
+            )
         ),
         "absolute_risk_context": (
             f"Report the absolute {outcome_label} risk across the {exposure_label} range in the primary "
@@ -1432,6 +1455,7 @@ def build_landmark_categorical_skeleton(
                 None if continuous_exposure else request.primary_contrast_level_index
             ),
             confidence_level=0.95,
+            effect_measure="risk_ratio" if risk_ratio else None,
             # The signed spline runtime owns the landmark obligation through the
             # primary fit itself; declaring the spec here keeps plan shaping from
             # projecting a duplicate analysis-only landmark step.

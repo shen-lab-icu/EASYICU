@@ -45,14 +45,19 @@ import math
 from typing import Any, Mapping, Optional, Sequence
 
 from .cohort_product_keys import sole_typed_cohort_input
-from .capability_ids import LANDMARK_CATEGORICAL_ANALYSIS_KIND
+from .capability_ids import (
+    LANDMARK_CATEGORICAL_ANALYSIS_KIND,
+    LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+)
 from .model_tokens import (
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
     ADJUSTED_ASSOCIATION_OUTPUT,
     ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
     ASSOCIATION_RR_ESTIMATOR,
+    BINARY_ESTIMATOR_BY_EFFECT_MEASURE,
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
+    binary_effect_measure,
     canonical_association_method,
     normalise_model_contract_token,
 )
@@ -410,6 +415,25 @@ def sole_primary_model_requirement(step: Any) -> Optional[Any]:
     return requirements[0] if len(requirements) == 1 else None
 
 
+def primary_binary_effect_measure(step: Any) -> Optional[str]:
+    """The binary effect measure a primary association step reports, else ``None``.
+
+    Read from typed coordinates only: the sole binary model requirement's
+    estimator token, or the signed landmark spline capability, whose
+    logistic suite replaces that requirement and reports odds ratios.
+    """
+
+    if (
+        str(getattr(step, "scientific_capability", "") or "").strip()
+        == LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
+    ):
+        return "odds_ratio"
+    requirement = sole_primary_model_requirement(step)
+    if requirement is None or str(getattr(requirement, "outcome_type", "") or "") != "binary":
+        return None
+    return binary_effect_measure(getattr(requirement, "method_family", None))
+
+
 def association_binary_sensitivity_plan_verdict(
     step: Any,
     *,
@@ -590,7 +614,14 @@ def association_binary_sensitivity_result_issues(
         analysis_id = str(row.get("analysis_id") or "").strip()
         n_stays = _nonnegative_integer(row.get("n_stays"))
         n_deaths = _nonnegative_integer(row.get("n_deaths"))
-        odds_ratio = _finite_number(row.get("odds_ratio"))
+        # The row names its measure; the estimate is read under that name
+        # only. A legacy row without one is an odds-ratio row.
+        measure = str(row.get("effect_measure") or "odds_ratio")
+        ratio = (
+            _finite_number(row.get(measure))
+            if measure in BINARY_ESTIMATOR_BY_EFFECT_MEASURE
+            else None
+        )
         ci_low = _finite_number(row.get("ci_low"))
         ci_high = _finite_number(row.get("ci_high"))
         invalid_fields: list[str] = []
@@ -598,17 +629,19 @@ def association_binary_sensitivity_result_issues(
             invalid_fields.append("n_stays")
         if n_deaths is None or (n_stays is not None and n_deaths > n_stays):
             invalid_fields.append("n_deaths")
-        if odds_ratio is None or odds_ratio <= 0:
-            invalid_fields.append("odds_ratio")
+        if ratio is None or ratio <= 0:
+            invalid_fields.append(
+                measure if measure in BINARY_ESTIMATOR_BY_EFFECT_MEASURE else "effect_measure"
+            )
         if ci_low is None or ci_low <= 0:
             invalid_fields.append("ci_low")
         if ci_high is None or ci_high <= 0:
             invalid_fields.append("ci_high")
         if (
-            odds_ratio is not None
+            ratio is not None
             and ci_low is not None
             and ci_high is not None
-            and not (0 < ci_low <= odds_ratio <= ci_high)
+            and not (0 < ci_low <= ratio <= ci_high)
         ):
             invalid_fields.append("effect_interval_order")
         if invalid_fields:
@@ -617,7 +650,8 @@ def association_binary_sensitivity_result_issues(
                     reason_code="association_binary_sensitivity_row_invalid",
                     message=(
                         "Each binary sensitivity row requires coherent finite "
-                        "counts and a positive odds ratio within its interval."
+                        "counts and a positive ratio (its effect_measure) within "
+                        "its interval."
                     ),
                     detail={
                         "row_index": index,
@@ -644,5 +678,6 @@ __all__ = [
     "association_estimator_support",
     "association_execution_verdict",
     "landmark_categorical_association_execution_verdict",
+    "primary_binary_effect_measure",
     "sole_primary_model_requirement",
 ]

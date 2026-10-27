@@ -27,6 +27,7 @@ from ...contracts.primary_cohort import (
     study_population_product_for,
 )
 from ...contracts.prediction_execution import MAX_BENCHMARK_COMPARATORS
+from ...contracts.model_tokens import BinaryEffectMeasure
 from ..adjustment_authority import HostTemporalRole
 from ..association_scope import MAX_ASSOCIATION_EXPOSURE_LEVELS
 from ..benchmark_comparator import ComparatorKind
@@ -41,6 +42,7 @@ from ..question_requirements import (
     MAX_QUESTION_REQUIREMENTS,
     NamedQuestionConcept,
     QuestionRequirement,
+    question_effect_measures,
     question_requirement_problems,
 )
 from ..progressive_contract import (
@@ -1326,6 +1328,39 @@ def planner_selects_adjustment(request: "FamilySpecRequest") -> bool:
     )
 
 
+def landmark_ordinal_trend_present(request: "FamilySpecRequest") -> bool:
+    """Whether the categorical landmark template drafts its ordered logistic trend."""
+
+    return bool(
+        request.family_id == LANDMARK_CATEGORICAL_FAMILY_ID
+        and request.exposure_kind == "categorical"
+        and request.secondary_continuous_outcome
+        and request.exposure_is_ordered
+        and len(request.exposure_levels) >= 3
+    )
+
+
+def family_effect_measures(request: "FamilySpecRequest") -> tuple[str, ...]:
+    """The binary effect measures this family's primary model can report.
+
+    Empty for a family without a binary adjusted-association primary.  The
+    odds ratio is every such family's default.  The baseline model and the
+    categorical landmark model can instead be fitted by modified Poisson for a
+    risk ratio; the signed landmark spline suite, and a categorical plan that
+    carries the ordered logistic trend, report odds ratios only.  The spec
+    contract, the written shape and the schema all read this one answer.
+    """
+
+    if request.family_id == BASELINE_ASSOCIATION_FAMILY_ID or (
+        request.family_id == LANDMARK_CATEGORICAL_FAMILY_ID
+        and not landmark_ordinal_trend_present(request)
+    ):
+        return ("odds_ratio", "risk_ratio")
+    if request.family_id in LANDMARK_FAMILY_IDS:
+        return ("odds_ratio",)
+    return ()
+
+
 def table_one_group_column(request: "FamilySpecRequest") -> Optional[str]:
     """The column a family's own Table 1 is grouped by, or ``None`` without one.
 
@@ -1438,6 +1473,11 @@ class FamilyPlanSpec(BaseModel):
         default_factory=list,
         max_length=MAX_QUESTION_REQUIREMENTS,
         exclude_if=lambda value: not value,
+    )
+    #: The binary primary's effect measure (``family_effect_measures``).
+    #: ``None`` keeps the odds ratio and is omitted from the spec digest.
+    effect_measure: Optional[BinaryEffectMeasure] = Field(
+        default=None, exclude_if=lambda value: value is None
     )
 
     @field_validator("reader_display_labels", mode="before")
@@ -1792,6 +1832,7 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
     _validate_literature_design_decisions(spec, request)
     _validate_population(spec, request)
     _validate_question_requirements(spec, request)
+    _validate_effect_measure(spec, request)
     _validate_benchmark_predictors(spec, request)
 
 
@@ -1855,6 +1896,86 @@ def _validate_question_requirements(
     if problems:
         first = problems[0]
         raise FamilySpecError(first.code, first.message, path=first.path)
+
+
+def _validate_effect_measure(spec: FamilyPlanSpec, request: FamilySpecRequest) -> None:
+    """The declared measure is one the family reports, and agrees with the question.
+
+    A requirement that names an effect measure is answered by the plan only
+    when the plan reports that measure, and is a gap only when this family
+    cannot report it: the host decides both from ``family_effect_measures``.
+    """
+
+    measures = family_effect_measures(request)
+    if spec.effect_measure is not None and spec.effect_measure not in measures:
+        raise FamilySpecError(
+            "family_spec_effect_measure_unsupported",
+            f"the {request.family_id} primary cannot report a {spec.effect_measure}"
+            + (f"; it reports {' or '.join(measures)}" if measures else "")
+            + ". Set effect_measure null and, if the question asks for that measure, "
+            "state the requirement as a capability gap",
+            path="effect_measure",
+        )
+    reported = spec.effect_measure or (measures[0] if measures else None)
+    for index, item in enumerate(spec.question_requirements):
+        if item.effect_measure is None:
+            continue
+        path = f"question_requirements[{index}]"
+        if item.coverage == "plan" and item.effect_measure != reported:
+            raise FamilySpecError(
+                "family_spec_effect_measure_mismatch",
+                f"{item.id} asks for a {item.effect_measure}, but the plan reports "
+                f"{reported or 'no binary effect measure'}: "
+                + (
+                    f"set effect_measure to {item.effect_measure}"
+                    if item.effect_measure in measures
+                    else "state the requirement as a capability gap"
+                ),
+                path=f"{path}.coverage",
+            )
+        if item.coverage == "capability_gap" and item.effect_measure in measures:
+            raise FamilySpecError(
+                "family_spec_effect_measure_gap_refuted",
+                f"{item.id} declares a gap, but this family's primary reports a "
+                f"{item.effect_measure}: set effect_measure to {item.effect_measure} "
+                "and coverage to plan",
+                path=f"{path}.gap",
+            )
+    if not measures:
+        return
+    # The host reads the measure the question names itself
+    # (``question_requirements.question_effect_measures``): the Planner neither
+    # switches to a risk ratio unasked nor leaves one the question asks for.
+    stated = {item.measure: item for item in question_effect_measures(request.research_question)}
+    if spec.effect_measure == "risk_ratio" and "risk_ratio" not in stated:
+        raise FamilySpecError(
+            "family_spec_effect_measure_unrequested",
+            "the question does not ask for a risk ratio or relative risk: set "
+            "effect_measure null, which reports the odds ratio",
+            path="effect_measure",
+        )
+    asked = stated.get("risk_ratio")
+    if asked is None or "odds_ratio" in stated:
+        return
+    if "risk_ratio" in measures and spec.effect_measure != "risk_ratio":
+        raise FamilySpecError(
+            "family_spec_effect_measure_not_declared",
+            f"the question asks for a risk ratio ({asked.quote!r}): set effect_measure "
+            "to risk_ratio",
+            path="effect_measure",
+        )
+    if "risk_ratio" not in measures and not any(
+        item.effect_measure == "risk_ratio" and item.coverage == "capability_gap"
+        for item in spec.question_requirements
+    ):
+        raise FamilySpecError(
+            "family_spec_effect_measure_gap_required",
+            f"the question asks for a risk ratio ({asked.quote!r}), which this family's "
+            "primary cannot report (it reports odds ratios only): state it as an estimand "
+            "requirement quoting the question, with effect_measure risk_ratio and coverage "
+            "capability_gap",
+            path="question_requirements",
+        )
 
 
 def population_required(request: FamilySpecRequest) -> bool:
@@ -2120,6 +2241,8 @@ __all__ = [
     "StudyPopulationOccurrence",
     "accepted_baseline_additions",
     "benchmark_comparators",
+    "family_effect_measures",
+    "landmark_ordinal_trend_present",
     "literature_design_card_keys_by_dimension",
     "population_required",
     "PredictionDeathTime",

@@ -2,7 +2,31 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from types import MappingProxyType
+from typing import Any, Mapping, Optional
+
+#: The structured EasyICU metric each paper-claim metric is compared with.  A
+#: ratio is compared only on its own scale: a paper's risk ratio with a
+#: reported risk ratio (``primary_rr``), never with an odds ratio.
+CLAIM_METRIC_KEYS: Mapping[str, str] = MappingProxyType(
+    {
+        "or": "primary_or",
+        "hr": "primary_or",
+        "rr": "primary_rr",
+        "auroc": "auroc",
+        "auc": "auroc",
+        "brier_score": "brier_score",
+        "p_value": "primary_pvalue",
+        "p": "primary_pvalue",
+        "n": "n_stays",
+    }
+)
+
+
+def claim_metric_key(metric: Optional[str]) -> Optional[str]:
+    """The EasyICU metric a paper claim's metric is compared with, if any."""
+
+    return None if metric is None else CLAIM_METRIC_KEYS.get(metric.lower())
 
 
 def compare_metric_values(
@@ -78,4 +102,4 @@ def compare_metric_values(
     return "not_aligned", "Generic numeric tolerance did not match."
 
 
-__all__ = ["compare_metric_values"]
+__all__ = ["CLAIM_METRIC_KEYS", "claim_metric_key", "compare_metric_values"]

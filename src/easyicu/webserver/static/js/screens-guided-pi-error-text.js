@@ -660,6 +660,10 @@
         progressive_model_term_duplicate: tr("The candidate model lists the same variable more than once, so planning stopped and no analysis was run. Generate the plan again.", "候选模型重复列出了同一个变量，因此规划已停止，没有运行分析。请重新生成计划。"),
         progressive_ordered_trend_continuous_outcome_ambiguous: tr("The candidate ordered-trend analysis does not identify a unique continuous outcome, so planning stopped and no analysis was run. Generate the plan again.", "候选有序趋势分析未确定唯一的连续结局，因此规划已停止，没有运行分析。请重新生成计划。"),
         progressive_ordered_trend_continuous_outcome_invalid: tr("The continuous outcome selected for the candidate ordered-trend analysis is unsuitable, so planning stopped and no analysis was run. Generate the plan again.", "候选有序趋势分析选择的连续结局不适用，因此规划已停止，没有运行分析。请重新生成计划。"),
+        progressive_ordered_trend_risk_ratio_unsupported: tr("The candidate ordered-trend analysis tests an odds-ratio slope, so it cannot follow a risk-ratio primary model. Planning stopped and no analysis was run. Generate the plan again.", "候选有序趋势分析检验的是比值比斜率，不能接在风险比主模型之后，因此规划已停止，没有运行分析。请重新生成计划。"),
+        progressive_effect_measure_unrequested: tr("The candidate plan reports a risk ratio, but the question does not ask for one; a binary outcome is reported as an odds ratio unless the question asks for a risk ratio. Planning stopped and no analysis was run. Generate the plan again, or ask for a risk ratio in the question.", "候选计划报告风险比，但问题没有要求风险比；二分类结局默认报告比值比，除非问题明确要求风险比。因此规划已停止，没有运行分析。请重新生成计划，或在问题中写明要求风险比。"),
+        progressive_effect_measure_not_declared: tr("The question asks for a risk ratio, but the candidate primary model reports an odds ratio, so planning stopped and no analysis was run. Generate the plan again.", "问题要求风险比，但候选主模型报告的是比值比，因此规划已停止，没有运行分析。请重新生成计划。"),
+        progressive_effect_measure_requires_binary_outcome: tr("The candidate plan asked for a risk ratio or odds ratio for an outcome that is not binary, so planning stopped and no analysis was run. Generate the plan again.", "候选计划为非二分类结局指定了风险比或比值比，因此规划已停止，没有运行分析。请重新生成计划。"),
         progressive_ordered_trend_domain_unsupported: tr("The candidate ordered-trend analysis needs an ordered category domain that is unavailable, so planning stopped and no analysis was run. Generate the plan again.", "候选有序趋势分析需要的有序分类范围不可用，因此规划已停止，没有运行分析。请重新生成计划。"),
         progressive_ordered_trend_primary_binding_invalid: tr("The candidate ordered-trend analysis cannot be tied to the primary result, so planning stopped and no analysis was run. Generate the plan again.", "候选有序趋势分析无法对应到主要结果，因此规划已停止，没有运行分析。请重新生成计划。"),
         progressive_ordered_trend_primary_columns_missing: tr("The candidate ordered-trend analysis lacks columns required by its primary result, so planning stopped and no analysis was run. Generate the plan again.", "候选有序趋势分析缺少其主要结果所需的列，因此规划已停止，没有运行分析。请重新生成计划。"),
@@ -733,6 +737,14 @@
         declared_exposure_level_empty: tr(
           'A declared group has no analysable stays, so the run stopped; generate a new plan that checks eligibility and preserves every group.',
           '计划中的一个分组没有可分析的住院，因此运行已停止，请重新生成计划，检查入组条件并保留所有分组。',
+        ),
+        landmark_spline_risk_ratio_unsupported: tr(
+          'The question asks for a risk ratio, but the landmark analysis of a continuous exposure fits a logistic spline that reports odds ratios only, so EasyICU stopped before any analysis ran instead of reporting an odds ratio. Ask for an odds ratio, or group the exposure, then generate the plan again.',
+          '问题要求风险比，但连续暴露的 landmark 分析使用 logistic 样条，只能报告比值比；为避免以比值比代替，EasyICU 在分析前停止。请改为比值比，或将暴露分组后重新生成计划。',
+        ),
+        association_model_grid_risk_ratio_unsupported: tr(
+          'The study\'s prespecified model grid refits odds ratios and cannot accompany a risk-ratio primary model, so EasyICU stopped before any analysis ran instead of mixing the two. Ask for an odds ratio, then generate the plan again.',
+          '本研究预设的模型网格重拟合的是比值比，不能与风险比主模型并列；为避免混用两种指标，EasyICU 在分析前停止。请改为比值比后重新生成计划。',
         ),
         landmark_spline_binary_sensitivity_unsupported: tr(
           'A sensitivity analysis in the plan reused the continuous exposure result for a two-group comparison, which needs its own grouped model, so EasyICU stopped before any analysis ran. Generate the plan again.',

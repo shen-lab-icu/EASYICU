@@ -19,7 +19,9 @@ from .association_binary_sensitivity_executor import run_association_binary_sens
 from .adjusted_association_figure_executor import run_adjusted_association_figure
 from .scientific_reporting_executor import run_scientific_reporting
 from .adjusted_association_executor import _coefficient_rows
-from .association_effect_modification import baseline_model_population, fit_baseline_association
+from .association_effect_modification import (
+    BINARY_EFFECT_SCALES, baseline_estimator_kind, baseline_model_population, fit_baseline_association,
+)
 from .exposure_outcome_distribution_executor import _distribution_rows, _verify_product
 from .typed_input_binding import contained_regular_file, load_step_cohort_frame, load_typed_input
 
@@ -167,11 +169,13 @@ def run_baseline_step(*, step_id, plan: AnalysisPlan, authority, runtime_project
             }
     else:
         population, design, result, rows, interaction = fit_baseline_association(frame, requirement=requirement, authority=authority)
+        kind = baseline_estimator_kind(requirement)
+        effect_scale = BINARY_EFFECT_SCALES[kind]
         table = "adjusted_association_estimates.csv"
         coefficient_rows = _coefficient_rows(result.terms, model_id=requirement.requirement_id,
                                              exposure=authority.exposure_column, adjustment=list(requirement.covariates),
                                              effect_modifiers=tuple(term.name for term in requirement.effect_modifiers),
-                                             effect_scale="odds_ratio", exposure_contrast_columns=tuple(
+                                             effect_scale=effect_scale, exposure_contrast_columns=tuple(
                                                  t.term for t in result.terms if t.source_variable == authority.exposure_column))
         pd.DataFrame(coefficient_rows).to_csv(out / "adjusted_association_coefficients.csv", index=False)
         headline = next(row for row in rows if row["is_primary_contrast"])
@@ -191,12 +195,16 @@ def run_baseline_step(*, step_id, plan: AnalysisPlan, authority, runtime_project
                        exposure=authority.exposure_column, outcome=authority.outcome_column, covariates=list(requirement.covariates),
                        adjustment_covariates=list(requirement.covariates), model_contracts=[contract],
                        coefficient_table="adjusted_association_coefficients.csv", n_total=len(population), n_events=result.n_events,
-                       adjusted_effect=headline["estimate"], effect_scale="odds_ratio", primary_estimate=headline["estimate"],
+                       adjusted_effect=headline["estimate"], effect_scale=effect_scale, primary_estimate=headline["estimate"],
                        primary_ci_low=headline["ci_low"], primary_ci_high=headline["ci_high"],
-                       primary_or=headline["estimate"], primary_estimate_interval=[headline["ci_low"], headline["ci_high"]],
+                       # One headline key per scale, as the generic association
+                       # owner writes: a risk ratio never carries the OR name.
+                       **({"primary_rr": headline["estimate"], "primary_rr_ci": [headline["ci_low"], headline["ci_high"]]}
+                          if kind == "glm_poisson" else {"primary_or": headline["estimate"]}),
+                       primary_estimate_interval=[headline["ci_low"], headline["ci_high"]],
                        variance_estimator=result.variance_estimator, cluster_count=result.cluster_count,
                        model_terms=serialise_model_terms(requirement.model_terms), design_columns=list(design.columns),
-                       estimator_kind="logistic", analysis_role="primary", analysis_set=requirement.analysis_set,
+                       estimator_kind=kind, analysis_role="primary", analysis_set=requirement.analysis_set,
                        interaction_tests=interaction, interpretation_ceiling="descriptive_not_causal")
     for row in rows:
         row["execution_contract_sha256"] = authority.execution_contract_sha256

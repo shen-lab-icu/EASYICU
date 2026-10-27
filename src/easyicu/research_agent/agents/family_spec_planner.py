@@ -60,6 +60,7 @@ from ..planning.family_spec.contract import (
     DistributionMissingPolicies,
     FamilyPlanSpec,
     FamilySpecRequest,
+    family_effect_measures,
     literature_design_card_keys_by_dimension,
     planner_selects_adjustment,
     population_required,
@@ -70,6 +71,7 @@ from ..planning.family_spec.landmark_categorical_template import reconcile_popul
 from ..planning.literature_bindings import missing_required_method_layers
 from ..planning.question_requirements import (
     QUESTION_REQUIREMENTS_GUIDE,
+    question_effect_measures,
     question_requirements_schema,
     question_requirements_shape,
 )
@@ -143,6 +145,43 @@ For a population restriction expressed by a typed kind, use population.populatio
 Return exactly one JSON object and nothing else, in the response contract attached to the request: the provided schema, or the written response shape when no schema is attached. Never invent variables, citations, results, or significance.
 """
 )
+
+
+def _requirement_effect_measures(request: FamilySpecRequest) -> tuple[str, ...]:
+    """Measures an estimand requirement may name: both, wherever a binary primary exists.
+
+    A family that reports only odds ratios still lets a requirement name the
+    risk ratio it cannot report, so that gap is typed rather than prose.
+    """
+
+    return ("odds_ratio", "risk_ratio") if family_effect_measures(request) else ()
+
+
+def _effect_measure_section(request: FamilySpecRequest) -> str:
+    measures = family_effect_measures(request)
+    if not measures:
+        return ""
+    choice = (
+        "set effect_measure to risk_ratio (modified Poisson, robust SE) only when the "
+        "question asks for a risk ratio or relative risk; otherwise null."
+        if "risk_ratio" in measures
+        else "its signed logistic primary reports odds ratios only, so a requested risk "
+        "ratio is a capability gap."
+    )
+    # What the host read in the question, which the spec contract holds the
+    # spec to (``question_requirements.question_effect_measures``).
+    named = question_effect_measures(request.research_question)
+    return (
+        "Effect measure (binary primary; null means the odds ratio): " + choice
+        + " An estimand requirement asking for a measure names it in effect_measure."
+        + (
+            " The question names: "
+            + "; ".join(f"{item.measure} ({item.quote!r})" for item in named)
+            + "."
+            if named
+            else ""
+        )
+    )
 
 
 def _candidate_rows(request: FamilySpecRequest) -> list[dict[str, Any]]:
@@ -344,6 +383,9 @@ def family_spec_user_prompt(
         "Required reader label keys:\n"
         + json.dumps([*request.required_reader_label_keys, *request.level_label_keys])
     )
+    measure_section = _effect_measure_section(request)
+    if measure_section:
+        sections.append(measure_section)
     sections.append(
         "Screened direct comparators (one application each):\n"
         + json.dumps(
@@ -679,6 +721,7 @@ def family_spec_structured_output_request(
             "roster_decision_note",
             *(["population"] if request.population_concepts else []),
             "question_requirements",
+            *(["effect_measure"] if len(family_effect_measures(request)) > 1 else []),
         ],
         "properties": {
             "schema_version": {"type": "string", "enum": [FAMILY_SPEC_SCHEMA_VERSION]},
@@ -788,7 +831,17 @@ def family_spec_structured_output_request(
                 else {}
             ),
             "question_requirements": question_requirements_schema(
-                request.variable_roster
+                request.variable_roster,
+                effect_measures=_requirement_effect_measures(request),
+            ),
+            **(
+                {
+                    "effect_measure": {
+                        "anyOf": [_enum(list(family_effect_measures(request))), {"type": "null"}]
+                    }
+                }
+                if len(family_effect_measures(request)) > 1
+                else {}
             ),
         },
     }
@@ -987,7 +1040,16 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
                 "be null and any additional population must use the legacy representation."
             )
         )
-    lines.append(question_requirements_shape(request.variable_roster))
+    lines.append(
+        question_requirements_shape(
+            request.variable_roster, effect_measures=_requirement_effect_measures(request)
+        )
+    )
+    if len(family_effect_measures(request)) > 1:
+        lines.append(
+            '- "effect_measure": null (odds ratio) or one of '
+            + json.dumps(list(family_effect_measures(request)))
+        )
     return "\n".join(lines)
 
 

@@ -471,6 +471,11 @@ def _bind_step_module_shape(
             "repeated_unit_interval_method", "patient_weighted_interval_assumptions"
         }]
         definitions.pop("PatientWeightedIntervalAssumptions", None)
+    # Likewise the effect measure is offered only to the adjusted-association
+    # step being materialized; every other schema keeps the odds-ratio default.
+    if locked_module_id != "adjusted_association":
+        properties.pop("effect_measure", None)
+        step["required"] = [field for field in step["required"] if field != "effect_measure"]
     form = definitions.get("FunctionalFormSpec")
     if isinstance(form, dict):
         # This closed comparison's version and method are host constants, not

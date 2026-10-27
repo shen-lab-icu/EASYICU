@@ -13,7 +13,10 @@ from ...authority.current_case_scientific_runtime import (
 )
 from ...authority.declared_levels import execution_model_requirement
 from ...authority.plausibility import FlagOnlyPlausibilityScope
-from ...contracts.association_execution import sole_primary_model_requirement
+from ...contracts.association_execution import (
+    association_estimator_kind,
+    sole_primary_model_requirement,
+)
 from ...contracts.capability_ids import LANDMARK_CATEGORICAL_ANALYSIS_KIND
 from ...schema import AnalysisPlan, AnalysisStep
 from .adjusted_association_executor import run_adjusted_association_from_env
@@ -368,7 +371,10 @@ def run_landmark_categorical_primary(
         outcome=requirement.outcome,
         covariates=requirement.covariates or (),
         model_terms=requirement.model_terms or (),
-        estimator_kind="logistic",
+        # The declared estimator decides the fit: logistic for the odds-ratio
+        # default, modified Poisson only for a declared risk ratio.  An
+        # unsupported contract yields "" and the owner refuses it.
+        estimator_kind=association_estimator_kind(requirement),
         analysis_set=requirement.analysis_set,
         analysis_role=requirement.analysis_role,
         method_family=requirement.method_family,

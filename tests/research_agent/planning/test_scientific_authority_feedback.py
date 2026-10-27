@@ -181,6 +181,25 @@ def test_approved_design_refusal_is_terminal(coordinate):
     assert len(llm.calls) == 1
 
 
+def test_a_risk_ratio_primary_is_refused_by_the_odds_ratio_spline_suite():
+    # The signed spline suite fits a logistic model: an approved plan that
+    # declares a risk ratio is a terminal design refusal, not a repair that
+    # would hand back an odds ratio under the risk-ratio request.
+    authorities, plan = _authorities(), _plan(sensitivity=False)
+    requirement = plan.steps[0].model_requirements[0]
+    plan.steps[0].model_requirements = [type(requirement).model_validate({
+        **requirement.model_dump(mode="json"), "method_family": "statsmodels_glm_poisson_log_robust",
+    })]
+    llm = ScriptedMockLLMClient(["{}", "{}"])
+    with pytest.raises(CurrentCaseScientificAuthorityError) as refused:
+        call_llm_with_structured_retry(
+            llm, [], parser=lambda _raw: authorities.check_planner_plan(plan, _context()),
+            retryable_parse_error=authorities.planner_retryable_error, max_retries=2,
+        )
+    assert refused.value.reason_code == "landmark_spline_risk_ratio_unsupported"
+    assert len(llm.calls) == 1
+
+
 def test_unknown_authority_refusal_is_terminal():
     authorities, plan = _authorities(), _plan(sensitivity=False)
     plan.steps[0].inputs = ["exposure_flag", "outcome_flag"]

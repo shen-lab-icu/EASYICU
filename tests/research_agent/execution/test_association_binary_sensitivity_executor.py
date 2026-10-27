@@ -22,6 +22,7 @@ from easyicu.research_agent.authority.typed_binding import (
 )
 from easyicu.research_agent.contracts.association_execution import (
     association_binary_sensitivity_result_issues,
+    association_estimator_kind,
 )
 from easyicu.research_agent.execution.runners.adjusted_association_executor import (
     run_adjusted_association_from_env,
@@ -64,7 +65,12 @@ def _frame() -> pd.DataFrame:
     )
 
 
-def _plan(*, sensitivity_inputs: list[str] | None = None, method: str = "first_stay_association", functional_form: dict | None = None) -> AnalysisPlan:
+LOGIT, MODIFIED_POISSON = "statsmodels_logit_mle", "statsmodels_glm_poisson_log_robust"
+#: The parent's declared estimator, and the measure every refit must report.
+SCALES = [(LOGIT, "odds_ratio", "or"), (MODIFIED_POISSON, "risk_ratio", "rr")]
+
+
+def _plan(*, sensitivity_inputs: list[str] | None = None, method: str = "first_stay_association", functional_form: dict | None = None, method_family: str = LOGIT) -> AnalysisPlan:
     sensitivity = {
         "step_id": "sensitivity_first_icu_stay_only",
         "planned_analysis_role": "sensitivity",
@@ -129,7 +135,7 @@ def _plan(*, sensitivity_inputs: list[str] | None = None, method: str = "first_s
                             "requirement_id": "primary_stage_model",
                             "outcome": "death",
                             "outcome_type": "binary",
-                            "method_family": "statsmodels_logit_mle",
+                            "method_family": method_family,
                             "exposure_source": "aki_stage_strict",
                             "analysis_role": "primary",
                             "analysis_set": "source_aware",
@@ -325,7 +331,7 @@ def _bind_parent(tmp_path, monkeypatch, plan: AnalysisPlan):
         outcome=requirement.outcome,
         covariates=list(requirement.covariates),
         model_terms=[term.model_dump(mode="json") for term in requirement.model_terms],
-        estimator_kind="logistic",
+        estimator_kind=association_estimator_kind(requirement),
         analysis_set=requirement.analysis_set,
         analysis_role="primary",
         method_family=requirement.method_family,
@@ -368,8 +374,9 @@ def _bind_parent(tmp_path, monkeypatch, plan: AnalysisPlan):
     return frame, cohort_path, table_path, parent_summary, out_dir
 
 
-def test_first_stay_variant_refits_the_parent_model_on_first_stays(tmp_path, monkeypatch) -> None:
-    plan = _plan()
+@pytest.mark.parametrize("method_family,measure,short", SCALES)
+def test_first_stay_variant_refits_the_parent_model_on_first_stays(tmp_path, monkeypatch, method_family, measure, short) -> None:
+    plan = _plan(method_family=method_family)
     frame, cohort_path, _, parent_summary, out_dir = _bind_parent(tmp_path, monkeypatch, plan)
     summary = run_association_binary_sensitivity(
         frame=frame,
@@ -387,35 +394,41 @@ def test_first_stay_variant_refits_the_parent_model_on_first_stays(tmp_path, mon
     assert row["n_restricted_rows"] == int((frame["first_icu_stay"] == 1).sum())
     assert row["n_stays"] == row["n_restricted_rows"]
     assert row["n_stays"] < parent_summary["n_total"]
-    assert 0 < row["ci_low"] <= row["odds_ratio"] <= row["ci_high"]
+    # The refit reports on the parent's declared scale, under that name only.
+    assert row["effect_measure"] == measure and {"odds_ratio", "risk_ratio"} & set(row) == {measure}
+    assert 0 < row["ci_low"] <= row[measure] <= row["ci_high"]
     assert row["exposure_level"] == "3" and row["reference_level"] == "0"
     # One stay per patient leaves nothing to cluster: the variance drops to one row per group.
     assert row["cluster_count"] == row["n_stays"]
-    assert summary["primary_reference"]["odds_ratio"] == pytest.approx(parent_summary["primary_estimate"])
+    assert summary["primary_reference"][measure] == pytest.approx(parent_summary["primary_estimate"])
     reporting = summary["reportable_sensitivity_results"]
     assert reporting["strategy"] == "first_stay" and reporting["covariate"] is None
+    assert reporting["effect_scale"] == measure
     assert (reporting["estimate"], reporting["lower"], reporting["upper"]) == (
-        row["odds_ratio"], row["ci_low"], row["ci_high"]
+        row[measure], row["ci_low"], row["ci_high"]
     )
     assert (reporting["n"], reporting["events"]) == (row["n_stays"], row["n_deaths"])
     [claim] = derive_scientific_claim_drafts(summary)
     assert claim.analysis_role == "sensitivity"
+    assert claim.estimand == "adjusted " + measure.replace("_", " ")
     assert claim.population.endswith("restricted to the first ICU stay of each patient")
     # A four-level exposure: the refit's claim names the contrast it reports.
     assert (reporting["exposure_level"], reporting["reference_level"]) == ("3", "0")
     assert claim.exposure == "aki_stage_strict=3 versus aki_stage_strict=0"
     table = pd.read_csv(out_dir / summary["output_files"]["table:sensitivity_first_icu_stay_only"])
-    assert table.loc[0, "odds_ratio"] == pytest.approx(row["odds_ratio"])
+    assert table.loc[0, measure] == pytest.approx(row[measure])
     code = association_binary_sensitivity_executor_code(plan.steps[2], plan=plan)
     compile(code, "sensitivity_step", "exec")
     assert "run_association_binary_sensitivity(" in code
     assert "typed_cohort_input='artifact:analysis_cohort'" in code
 
 
-def test_functional_form_variant_reports_spline_effect_and_nonlinearity(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("method_family,measure,short", SCALES)
+def test_functional_form_variant_reports_spline_effect_and_nonlinearity(tmp_path, monkeypatch, method_family, measure, short) -> None:
     plan = _plan(
         method="restricted_cubic_spline_sensitivity",
         functional_form=FUNCTIONAL_FORM,
+        method_family=method_family,
         sensitivity_inputs=[
             "age",
             "aki_stage_strict",
@@ -442,10 +455,15 @@ def test_functional_form_variant_reports_spline_effect_and_nonlinearity(tmp_path
     assert row["covariate"] == "age" and row["basis"] == "restricted_cubic_spline"
     assert row["n_stays"] == parent_summary["n_total"]
     assert row["n_deaths"] == parent_summary["n_events"]
-    assert row["primary_or_linear_covariate"] == pytest.approx(parent_summary["primary_estimate"])
+    assert row["effect_measure"] == measure and {"odds_ratio", "risk_ratio"} & set(row) == {measure}
+    assert row[f"primary_{short}_linear_covariate"] == pytest.approx(parent_summary["primary_estimate"])
     assert row["nonlinearity_df"] == 1 and 0.0 <= row["nonlinearity_p_value"] <= 1.0
-    assert row["log_or_delta_vs_linear"] == pytest.approx(
-        np.log(row["odds_ratio"]) - np.log(row["primary_or_linear_covariate"])
+    # A modified-Poisson refit tests nonlinearity with its own robust covariance.
+    assert row["nonlinearity_covariance"] == (
+        "model_based_without_clustering" if measure == "odds_ratio" else row["variance_estimator"]
+    )
+    assert row[f"log_{short}_delta_vs_linear"] == pytest.approx(
+        np.log(row[measure]) - np.log(row[f"primary_{short}_linear_covariate"])
     )
     assert len(row["knots"].split("|")) == 3
     receipt = summary["sensitivity_runtime_receipt"]
@@ -456,8 +474,9 @@ def test_functional_form_variant_reports_spline_effect_and_nonlinearity(tmp_path
     assert claim.claim_id == "sensitivity_age_restricted_cubic_spline"
     assert (reporting["exposure_level"], reporting["reference_level"]) == ("3", "0")
     assert claim.exposure == "aki_stage_strict=3 versus aki_stage_strict=0"
+    assert claim.estimand == "adjusted " + measure.replace("_", " ")
     assert (claim.point_estimate, claim.interval_lower, claim.interval_upper) == (
-        row["odds_ratio"], row["ci_low"], row["ci_high"]
+        row[measure], row["ci_low"], row["ci_high"]
     )
     assert any(column.startswith("age__rcs_") for column in receipt["design_columns"])
     assert (out_dir / "age_functional_form_sensitivity.csv").exists()

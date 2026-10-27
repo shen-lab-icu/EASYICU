@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 import pandas as pd
 
-from .metrics import compare_metric_values
+from .metrics import claim_metric_key, compare_metric_values
 from ..schema import (
     AnalysisManifest,
     AnalysisPlan,
@@ -342,6 +342,14 @@ def collect_easyicu_metrics(
             "primary_or",
             summary,
             ("primary_or", "odds_ratio", "statistic:primary_or"),
+        )
+        # A declared risk ratio is published under its own name; it is never
+        # read as an odds ratio.
+        _update_metric(
+            metrics,
+            "primary_rr",
+            summary,
+            ("primary_rr", "risk_ratio", "statistic:primary_rr"),
         )
         _update_metric(
             metrics, "primary_pvalue", summary, ("primary_pvalue", "p_value", "pvalue")
@@ -863,20 +871,7 @@ def _update_metric(
 
 
 def _map_claim_metric_to_easyicu_key(metric: Optional[str]) -> Optional[str]:
-    mapping = {
-        "or": "primary_or",
-        "hr": "primary_or",
-        "rr": "primary_or",
-        "auroc": "auroc",
-        "auc": "auroc",
-        "brier_score": "brier_score",
-        "p_value": "primary_pvalue",
-        "p": "primary_pvalue",
-        "n": "n_stays",
-    }
-    if metric is None:
-        return None
-    return mapping.get(metric.lower())
+    return claim_metric_key(metric)
 
 
 # ---------------------------------------------------------------------------

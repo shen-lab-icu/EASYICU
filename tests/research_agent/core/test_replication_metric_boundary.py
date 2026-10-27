@@ -42,3 +42,26 @@ def test_metric_comparison_behavior_is_stable() -> None:
         paper_direction=None,
         easyicu_value=0.2,
     ) == ("not_aligned", "Significance state did not match.")
+
+
+def test_a_paper_risk_ratio_is_compared_only_with_a_reported_risk_ratio() -> None:
+    from easyicu.research_agent.audits.publication import ReplicationResultComparator
+    from easyicu.research_agent.schema import PaperProfile, PaperResultLedger
+
+    assert metrics.claim_metric_key("RR") == "primary_rr"
+    assert metrics.claim_metric_key("OR") == "primary_or"
+    assert paper._map_claim_metric_to_easyicu_key("rr") == "primary_rr"
+    # A risk-ratio run publishes its own headline, never an odds ratio.
+    collected = paper.collect_easyicu_metrics(manifest={"per_step_records": [
+        {"step_summary": {"primary_rr": 1.4, "primary_ci_low": 1.1, "primary_ci_high": 1.8}},
+    ]})
+    assert collected["primary_rr"] == 1.4 and "primary_or" not in collected
+    profile = PaperProfile.model_construct(key_claims=[
+        type("Claim", (), {"claim_id": "c1", "sentence": "RR 1.5", "paper_value": "1.5",
+                           "numeric_value": 1.5, "direction": "positive", "metric": "rr"})(),
+    ])
+    rows = ReplicationResultComparator().compare(
+        paper_profile=profile,
+        ledger=PaperResultLedger.model_construct(easyicu_metrics={"primary_or": 9.0, "primary_rr": 1.4}),
+    )
+    assert (rows[0]["easyicu_value"], rows[0]["alignment_status"]) == ("1.4", "aligned")

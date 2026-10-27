@@ -37,6 +37,8 @@ from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require
 from ..contracts.model_tokens import (
     ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
+    ASSOCIATION_RR_ESTIMATOR,
+    BINARY_ESTIMATOR_BY_EFFECT_MEASURE,
 )
 from ..contracts.primary_cohort import (
     HOST_BOUND_COHORT_METHOD,
@@ -109,6 +111,7 @@ from .population_spec import (
     read_stated_population_spec,
     unquoted_criteria,
 )
+from .question_requirements import question_effect_measures
 from .progressive_contract import (
     OmittedRenderStep,
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
@@ -1096,6 +1099,20 @@ def _compile_ordered_stratified_contract(
         context=context, variables=variables, step=parent,
         step_index=skeleton.steps.index(parent),
     )
+    if any(item.method_family == ASSOCIATION_RR_ESTIMATOR for item in parent_requirements):
+        # The trend owner tests a logistic slope across ordered levels. A
+        # risk-ratio primary would need a different trend model, so refuse
+        # rather than test on a scale the primary does not report.
+        raise _fail(
+            "progressive_ordered_trend_risk_ratio_unsupported",
+            "association.ordinal_trend tests a logistic (odds-ratio) slope; it "
+            "cannot inherit a risk-ratio primary. Keep the primary's "
+            "effect_measure=risk_ratio and omit the ordered trend, or declare "
+            "effect_measure=null for an odds-ratio primary with its trend",
+            step=step,
+            step_index=step_index,
+            path="scientific_action_id",
+        )
     if (
         len(levels) < 3 or binary_levels != [0, 1]
         or parent.event_level_index not in (None, 1)
@@ -2064,8 +2081,51 @@ def _compile_adjusted_association(
         covariate_temporal_roles = {
             name: host_timed_roles[name] for name in covariates
         }
+    if step.effect_measure is not None and step.outcome_type != "binary":
+        raise _fail(
+            "progressive_effect_measure_requires_binary_outcome",
+            f"effect_measure={step.effect_measure!r} selects a binary-outcome "
+            f"estimator, but outcome_type is {step.outcome_type!r}; set "
+            "effect_measure=null for a non-binary outcome",
+            step=step,
+            step_index=step_index,
+            path="effect_measure",
+        )
+    # The host reads the measure the question names itself: a risk ratio is
+    # declared exactly when the question asks for one on a binary primary.
+    stated = {
+        item.measure: item for item in question_effect_measures(context.research_question)
+    }
+    if step.effect_measure == "risk_ratio" and "risk_ratio" not in stated:
+        raise _fail(
+            "progressive_effect_measure_unrequested",
+            "effect_measure='risk_ratio' is declared, but the question does not ask for "
+            "a risk ratio or relative risk; set effect_measure=null for the odds-ratio "
+            "default",
+            step=step,
+            step_index=step_index,
+            path="effect_measure",
+        )
+    asked = stated.get("risk_ratio")
+    if (
+        asked is not None
+        and "odds_ratio" not in stated
+        and step.outcome_type == "binary"
+        and step.planned_analysis_role == "primary"
+        and step.effect_measure != "risk_ratio"
+    ):
+        raise _fail(
+            "progressive_effect_measure_not_declared",
+            f"the question asks for a risk ratio ({asked.quote!r}); set "
+            "effect_measure='risk_ratio' on this binary primary",
+            step=step,
+            step_index=step_index,
+            path="effect_measure",
+        )
+    # The odds ratio is the binary default; the risk-ratio estimator is used
+    # only when the step declares it. Nothing here chooses from the data.
     method_family = (
-        ASSOCIATION_LOGIT_ESTIMATOR
+        BINARY_ESTIMATOR_BY_EFFECT_MEASURE[step.effect_measure or "odds_ratio"]
         if step.outcome_type == "binary"
         else ASSOCIATION_OLS_ESTIMATOR
     )
