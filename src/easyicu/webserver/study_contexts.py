@@ -112,6 +112,7 @@ _CONTEXT_FIELDS = {
     "question_wording",
     "stated_adjustments",
     "stated_subgroups",
+    "stated_variables_unread",
     "design_variance_basis",
     "sensitivity_specs",
     "time_window",
@@ -343,6 +344,7 @@ _SCIENTIFIC_CONFIGURATION_FIELDS = (
     "target_trial_design",
     "stated_adjustments",
     "stated_subgroups",
+    "stated_variables_unread",
     "primary_exposure_concept",
 )
 
@@ -1664,6 +1666,26 @@ def _sanitize_patch(
             raise StudyContextError({
                 "error": f"study_{field}_invalid", "field": field,
             }) from exc
+    from easyicu.webserver.unread_stated_variables import (
+        UNREAD_STATED_VARIABLES_FIELD, normalize_unread_stated_variables,
+    )
+
+    if UNREAD_STATED_VARIABLES_FIELD in raw:
+        # Written by the save tool with the readings it could not record.
+        if not allow_question_wording:
+            raise StudyContextError({
+                "error": "study_stated_variables_unread_server_owned",
+                "field": UNREAD_STATED_VARIABLES_FIELD,
+            })
+        try:
+            patch[UNREAD_STATED_VARIABLES_FIELD] = normalize_unread_stated_variables(
+                raw[UNREAD_STATED_VARIABLES_FIELD]
+            )
+        except ValueError as exc:
+            raise StudyContextError({
+                "error": "study_stated_variables_unread_invalid",
+                "field": UNREAD_STATED_VARIABLES_FIELD,
+            }) from exc
     if "design_variance_basis" in raw:
         # The host records it with the design (``study_family_design``).
         if not allow_design_variance_basis:
@@ -2485,6 +2507,11 @@ def upsert_context(
                         item for item in context[field]
                         if item["words"] in str(context.get("question") or "")
                     ]
+            if context.get("stated_variables_unread"):
+                # Owed until its field records it or the question stops naming it.
+                from easyicu.webserver.unread_stated_variables import pending_unread
+
+                context["stated_variables_unread"] = pending_unread(context)
             if design_variance_basis_is_stale(context):
                 context["design_variance_basis"] = None
             _validate_covariate_decision_contract(context)
@@ -2906,7 +2933,10 @@ def _scientific_fields_sha256(
     # Likewise a study that states no target trial.
     if not sanitized.get("target_trial_design"):
         sanitized.pop("target_trial_design", None)
-    for field in ("stated_adjustments", "stated_subgroups", "primary_exposure_concept"):
+    for field in (
+        "stated_adjustments", "stated_subgroups", "stated_variables_unread",
+        "primary_exposure_concept",
+    ):
         if not sanitized.get(field):
             sanitized.pop(field, None)
     encoded = json.dumps(
@@ -3125,6 +3155,7 @@ def restore_turn_configuration_snapshot(
         "question": "",
         "stated_adjustments": [],
         "stated_subgroups": [],
+        "stated_variables_unread": [],
         "purpose": "",
         "data_source": restored_source,
         "crossdb_selection": {},

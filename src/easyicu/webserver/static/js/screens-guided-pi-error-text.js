@@ -55,6 +55,7 @@
     function errorText(error) {
       if (!error) return '';
       if (/^result_append_(source_changed|execution_failed|unavailable)$/.test(error.code || '')) return runFailureText(error.code);
+      if (error.code === 'study_stated_variable_unrecorded') return runFailureText(error.code);
       if (error.code === 'job_interrupted_by_server_restart') return tr('The server restarted before this task finished. Review its saved state before continuing.', '服务器在任务完成前重启了，请核对保存的状态后再继续。');
       if (error.code === 'pi_followup_queue_full') return tr('Up to four follow-ups can wait. Remove one or wait for the current reply.', '最多排队四条消息，请移除一条或等待当前回复。');
       if (error.code === 'pi_followup_action_requires_idle' || error.code === 'pi_followup_plain_message_required') return tr('Queue a question or comment here. Send approvals, action requests, and source changes after the reply finishes.', '这里可排队提问或补充说明；请在当前回复结束后发送批准、执行请求或数据源变更。');
@@ -960,6 +961,10 @@
         question_named_level_undistinguished: tr(
           'The question names one kind of a clinical measure, such as invasive or non-invasive ventilation, but the prepared data record only whether it happened, not which kind. A plan would answer a broader question, so planning stopped and no analysis was run. Ask again without naming the kind, for example “mechanical ventilation”; the result then covers every kind.',
           '问题指定了某项临床指标的一种类型（例如有创或无创通气），但准备好的数据只记录是否发生，不区分类型；按这些数据做的计划会回答一个更宽的问题，因此规划已停止，没有运行分析。请去掉类型再问，例如写“机械通气”；结果将包含所有类型。',
+        ),
+        study_stated_variable_unrecorded: tr(
+          'The question asks to adjust for or analyse by subgroups of a variable that was not recorded from it, so planning stopped before any model was called and no analysis was run. Ask in the conversation to record it again in the question\'s own words, or remove it from the question.',
+          '问题要求调整或按其分组分析的一个变量没有记录下来，因此规划在调用模型前已停止，没有运行分析。请在对话里让它按问题原文重新记录这个变量，或在问题中去掉它。',
         ),
         research_pipeline_planning_identity_unavailable: tr(
           'The selected database has no ICU-stay identity definition for planning. Choose a supported database family and generate the plan again.',

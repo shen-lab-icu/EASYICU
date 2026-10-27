@@ -38,6 +38,7 @@ from easyicu.webserver.landmark_survival_runtime_projection import (
 from easyicu.webserver.causal_trial_design import stop_unset_causal_design
 from easyicu.webserver.study_family_scope import stop_family_out_of_scope
 from easyicu.webserver.study_family_design import record_unset_family_design
+from easyicu.webserver.unread_stated_variables import stop_unrecorded_stated_variables
 from easyicu.webserver.research_pipeline_run_errors import (
     ResearchPipelineRunError,
     WINDOWED_SUMMARY_STOP_MESSAGES,
@@ -265,6 +266,10 @@ def _prepare_scientific_launch(
         # A family v1 does not offer on the bound database is refused here,
         # on the family the plan would use (``study_family_scope``).
         stop_family_out_of_scope(study, question=question, database=database)
+        # A variable the question states that the conversation has not
+        # recorded stops a new plan instead of leaving it out silently
+        # (``unread_stated_variables``).
+        stop_unrecorded_stated_variables(study)
         # A resumed run continues on the package its sealed plan bound; a new
         # plan or run analyzes the bound export's rows as the study's own.
         _require_export_holds_study_cohort(study, request.export_path)
