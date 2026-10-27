@@ -762,6 +762,202 @@ def test_prediction_owner_executes_exact_complete_case_robustness_spec(
     assert unexecuted_locked_spec_ids(blank) == ["complete_case_narrower"]
 
 
+def _roster_complete_case_spec() -> RobustnessSpec:
+    return RobustnessSpec(
+        spec_id="complete_case_model_roster",
+        axis="missing",
+        description="Complete-case refit of the exact model roster.",
+        missing_override={
+            "strategy": "complete_case",
+            "variables": ["death", "age", "sex", "marker"],
+        },
+    )
+
+
+def _primary_split(tmp_path: Path, frame: pd.DataFrame) -> np.ndarray:
+    """The primary's patient split; it reads only patient groups and outcome."""
+
+    (tmp_path / "research_context.json").write_text(
+        _context(len(frame)).model_dump_json(indent=2), encoding="utf-8"
+    )
+    cohort_path = tmp_path / "cohort.csv"
+    frame.to_csv(cohort_path, index=False)
+    run_prediction_model(
+        frame=frame,
+        declared_columns=("age", "sex", "marker", "death"),
+        typed_cohort_input="artifact:analysis_cohort",
+        source_cohort=cohort_path,
+        out_dir=tmp_path / "split_probe",
+        run_dir=tmp_path,
+        step_id="split_probe",
+    )
+    return pd.read_csv(tmp_path / "split_probe" / "prediction_scores.csv")[
+        "split"
+    ].to_numpy()
+
+
+@pytest.mark.parametrize(
+    ("partition", "deaths_only", "reason"),
+    [
+        ("validation", False, "complete_case_partition_empty"),
+        ("validation", True, "complete_case_partition_single_outcome_class"),
+        ("development", False, "complete_case_partition_empty"),
+        ("development", True, "complete_case_partition_single_outcome_class"),
+    ],
+)
+def test_a_complete_case_variant_its_rows_cannot_answer_is_recorded_not_dropped(
+    tmp_path: Path, partition: str, deaths_only: bool, reason: str
+) -> None:
+    """pilot1 run_c056f6356c8c: a roster predictor few stays recorded.
+
+    The owner understood the locked complete-case spec, but no stay (or no
+    death) of one partition had every roster variable observed.  It used to
+    drop the spec silently, which the run gate cannot tell from a spec nobody
+    ran; it now records the closed reason, the partition and its counts.
+    """
+
+    frame = _frame()
+    split = _primary_split(tmp_path, frame)
+    blank = split == partition
+    if deaths_only:
+        blank &= frame["death"].eq(1).to_numpy()
+    sparse = frame.copy()
+    sparse.loc[blank, "marker"] = np.nan
+
+    rows, results = run_prediction_robustness_specs(
+        frame=sparse,
+        outcome=sparse["death"],
+        groups=sparse["patient_stay_id"].str.split(":s", n=1).str[0],
+        unit_ids=sparse["patient_stay_id"],
+        split=split,
+        features=("age", "sex", "marker"),
+        specs=[_roster_complete_case_spec()],
+    )
+
+    assert len(rows) == len(results) == 1
+    row, result = rows[0], results[0]
+    assert row["converged"] is False and row["n"] == 0
+    assert row["point_estimate"] is None and row["ci_low"] is None
+    assert row["not_estimable_reason"] == reason
+    assert f"{partition} partition" in row["notes"]
+    assert result["estimability_status"] == "not_estimable"
+    assert result["not_estimable_reason"] == reason
+    assert result["not_estimable_partition"] == partition
+    if partition == "validation":
+        # The development rows were judged first and are fit to refit.
+        assert result["development_n"] > 0 and result["development_event_n"] > 0
+    if deaths_only:
+        assert result[f"{partition}_n"] > 0 and result[f"{partition}_event_n"] == 0
+    else:
+        assert result[f"{partition}_n"] == 0
+    assert "auroc" not in result
+
+
+def test_the_run_panel_discloses_a_variant_the_owner_found_not_estimable(
+    ra, tmp_path: Path
+) -> None:
+    """End to end through the locked panel: a limitation, not a failed run.
+
+    The run validates only if the run-level finaliser raises no error; the
+    variant stays out of the estimated variants and keeps its reason.  The same
+    row written by a step the host did not select is still a hole.
+    """
+
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.robustness.panel import (
+        build_robustness_panel_from_records,
+        load_robustness_panel,
+        not_estimable_locked_specs,
+        unexecuted_locked_spec_ids,
+        write_locked_robustness_specs,
+    )
+    from easyicu.research_agent.robustness.runtime_panel import (
+        finalize_run_robustness_panel,
+    )
+
+    frame = _frame()
+    split = _primary_split(tmp_path, frame)
+    sparse = frame.copy()
+    sparse.loc[split == "validation", "marker"] = np.nan
+    spec = _roster_complete_case_spec()
+    evidence = ra.EvidenceStore(tmp_path)
+    write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=AnalysisPlan(
+            research_question="Predict mortality.", steps=[], robustness_specs=[spec]
+        ),
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="test",
+    )
+    summary = run_prediction_model(
+        frame=sparse,
+        declared_columns=("age", "sex", "marker", "death"),
+        typed_cohort_input="artifact:analysis_cohort",
+        source_cohort=tmp_path / "cohort.csv",
+        out_dir=tmp_path / "primary",
+        run_dir=tmp_path,
+        step_id="primary_performance",
+    )
+    assert summary["status"] == "ok"
+    record = {
+        "step_id": "primary_performance",
+        "status": "ok",
+        "deterministic_standard_analysis": PREDICTION_MODEL_ANALYSIS_KIND,
+        "step_summary": summary,
+        "step_summary_evidence_id": "primary_performance_summary",
+    }
+
+    result = finalize_run_robustness_panel(
+        run_dir=tmp_path,
+        plan=SimpleNamespace(robustness_specs=[spec], cohort=None),
+        per_step_records=[record],
+        cohort_path=None,
+        context=None,
+        evidence=evidence,
+        prompt_pack_version="test",
+    )
+
+    assert [item for item in result.findings if item.severity == "error"] == []
+    disclosed = [item for item in result.findings if item.validator == "robustness_panel"]
+    assert [item.severity for item in disclosed] == ["warning"]
+    assert disclosed[0].detail["not_estimable_spec_reasons"] == {
+        spec.spec_id: "complete_case_partition_empty"
+    }
+    panel = load_robustness_panel(tmp_path / "robustness_panel.json")
+    assert panel is not None and panel.n_variants == 0
+    assert unexecuted_locked_spec_ids(panel) == []
+    assert not_estimable_locked_specs(panel) == [
+        (spec.spec_id, "complete_case_partition_empty")
+    ]
+
+    generated = {
+        key: value
+        for key, value in record.items()
+        if key != "deterministic_standard_analysis"
+    }
+    hole = build_robustness_panel_from_records(specs=[spec], per_step_records=[generated])
+    assert unexecuted_locked_spec_ids(hole) == [spec.spec_id]
+    assert not_estimable_locked_specs(hole) == []
+
+    # Another host owner cannot use the prediction owner's words either.
+    other_owner = {**record, "deterministic_standard_analysis": "robustness_sensitivity"}
+    hole = build_robustness_panel_from_records(specs=[spec], per_step_records=[other_owner])
+    assert unexecuted_locked_spec_ids(hole) == [spec.spec_id]
+
+    # Nor does the reason cover a locked spec that is not a complete-case refit.
+    imputed = RobustnessSpec(
+        spec_id=spec.spec_id,
+        axis="missing",
+        description="Refit under another missing-data strategy.",
+        missing_override={**spec.missing_override, "strategy": "median_imputation"},
+    )
+    hole = build_robustness_panel_from_records(specs=[imputed], per_step_records=[record])
+    assert unexecuted_locked_spec_ids(hole) == [spec.spec_id]
+    assert not_estimable_locked_specs(hole) == []
+
+
 @pytest.mark.parametrize("one_stay_each", [False, True])
 def test_the_primary_auroc_interval_follows_repeat_stays(
     tmp_path: Path, one_stay_each: bool

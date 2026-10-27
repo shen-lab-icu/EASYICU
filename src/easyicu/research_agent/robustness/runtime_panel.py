@@ -16,6 +16,7 @@ from ..schema import ValidationFinding
 from .estimators import fit_robustness_rows_from_records
 from .panel import (
     build_robustness_panel_from_records,
+    not_estimable_locked_specs,
     robustness_specs_for_execution,
     unexecuted_locked_spec_ids,
     write_robustness_panel,
@@ -63,6 +64,8 @@ def finalize_run_robustness_panel(
     Finalisation deliberately disables implicit cohort refitting.  Variant
     rows must come from an exact registered primary-script replay; otherwise a
     locked-but-unexecuted specification is surfaced as a fail-closed finding.
+    A variant its host owner ran and found not estimable on the run's rows,
+    for a closed reason, is a disclosed limitation rather than a hole.
     Artifact-construction failures remain isolated warnings so the caller can
     report the precise robustness failure alongside other run findings.
     """
@@ -130,6 +133,31 @@ def finalize_run_robustness_panel(
                     ),
                     detail={
                         "unexecuted_spec_ids": unexecuted_locked_specs,
+                        "primary_spec_id": panel.primary_spec_id,
+                        "locked_spec_count": len(robustness_specs),
+                        "panel_path": "robustness_panel.json",
+                    },
+                )
+            )
+
+        not_estimable_specs = not_estimable_locked_specs(panel)
+        if not_estimable_specs:
+            findings.append(
+                ValidationFinding(
+                    validator="robustness_panel",
+                    severity="warning",
+                    message=(
+                        "Pre-specified robustness specifications were run by "
+                        "their host owner and are not estimable on this run's "
+                        "data, so the panel discloses them without a value: "
+                        + ", ".join(
+                            f"{spec_id} ({reason})"
+                            for spec_id, reason in not_estimable_specs
+                        )
+                        + ". They are not among the estimated variants."
+                    ),
+                    detail={
+                        "not_estimable_spec_reasons": dict(not_estimable_specs),
                         "primary_spec_id": panel.primary_spec_id,
                         "locked_spec_count": len(robustness_specs),
                         "panel_path": "robustness_panel.json",

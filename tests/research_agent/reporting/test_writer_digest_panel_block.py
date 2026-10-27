@@ -219,6 +219,44 @@ def test_digest_panel_block_handles_zero_converged(ra, tmp_path: Path) -> None:
     assert "no robustness variants converged" in digest
 
 
+def test_digest_reports_a_not_estimable_variant_with_its_reason(ra, tmp_path: Path) -> None:
+    """The writer may not count it, nor report it as a variant nobody ran."""
+
+    from easyicu.research_agent.reporting.writer_evidence import (
+        _render_writer_evidence_digest,
+    )
+    from easyicu.research_agent.robustness.panel import (
+        ROBUSTNESS_NOT_ESTIMABLE_REASONS,
+        RobustnessPanelRow,
+    )
+
+    _write_panel(
+        ra,
+        tmp_path,
+        [
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+            ),
+            RobustnessPanelRow(
+                "complete_case_model_roster", "missing", 0, None, None, None, None,
+                "", False, "Not estimable on this run's data.",
+                not_estimable_reason="complete_case_partition_empty",
+            ),
+        ],
+    )
+
+    digest = _render_writer_evidence_digest([], run_dir=tmp_path)
+
+    assert (
+        "pre-specified, run, and not estimable on this data: complete_case_model_roster ("
+        + ROBUSTNESS_NOT_ESTIMABLE_REASONS["complete_case_partition_empty"]
+        + ")"
+    ) in digest
+    assert "pre-specified but not estimated" not in digest
+    assert "no robustness variants converged" not in digest
+    assert "n_variants=0, no variant was estimated" in digest
+
+
 def test_digest_empty_panel_does_not_claim_a_failed_primary_or_sensitivity(
     ra, tmp_path: Path,
 ) -> None:
