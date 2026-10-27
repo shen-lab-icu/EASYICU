@@ -86,6 +86,19 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.match(detailed, /Data preparation did not pass/);
   assert.match(detailed, /icu_unit_type, charlson/);
   assert.match(runFailure('data_foundation_blocked', { code: 'outcome_concept_undeclared' }), /No executable outcome variable/);
+  // The study's own outcome or exposure: no advice to drop it from the question.
+  const coordinate = runFailure('data_foundation_blocked', { code: 'study_coordinate_unavailable', missing: ['icu_death'] });
+  assert.match(coordinate, /outcome or exposure from this database: icu_death/);
+  assert.match(coordinate, /before calling the model/);
+  assert.doesNotMatch(coordinate, /drop/);
+  // A concept the source provides but the menu lacks is EasyICU's gap.
+  const menuGap = runFailure('data_foundation_blocked', { code: 'planning_menu_missing_supported_concept', missing: ['icu_death'] });
+  assert.match(menuGap, /EasyICU's own planning list is missing a variable it can read from this database: icu_death/);
+  assert.match(menuGap, /not in your data/);
+  assert.doesNotMatch(menuGap, /another database|Choose a database|drop/);
+  const unknownName = runFailure('data_foundation_blocked', { code: 'study_coordinate_unrecognized', missing: ['icu_mortality_72h'] });
+  assert.match(unknownName, /did not recognise the name it gave this study's outcome or exposure: icu_mortality_72h/);
+  assert.doesNotMatch(unknownName, /another database|Choose a database|drop/);
   assert.equal(runFailure('data_foundation_blocked', { code: 'unknown_detail_code' }), runFailure('data_foundation_blocked'));
 
   // A typed compile stop names its own cause; the generic compile sentence

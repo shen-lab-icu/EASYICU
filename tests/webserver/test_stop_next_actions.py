@@ -488,6 +488,37 @@ def test_a_known_missing_alternative_is_never_offered(monkeypatch) -> None:
     ]
 
 
+@pytest.mark.parametrize("available", [True, False])
+def test_a_study_coordinate_the_source_lacks_offers_no_drop_or_regeneration(
+    monkeypatch, available
+) -> None:
+    # Dropping the study's own outcome asks another question, and regenerating
+    # on the same source repeats the stop (user 2026-10-27, HiRID icu_death).
+    monkeypatch.setattr(
+        owner, "concept_selection_policy",
+        lambda concept: SimpleNamespace(canonical_alternative="synthetic_alternative"),
+    )
+    monkeypatch.setattr(
+        owner, "explain_concept_availability",
+        lambda **kw: SimpleNamespace(available=available),
+    )
+    detail = {"reason_code": "study_coordinate_unavailable", "missing_concepts": ["synthetic_outcome"]}
+    for reason in ("data_foundation_blocked", "study_coordinate_unavailable"):
+        actions = owner.next_actions_for_stop(reason, detail, database="miiv")
+        assert [action.kind for action in actions] == (
+            ["use_alternative_concept"] if available else []
+        )
+
+
+def test_a_planning_menu_gap_offers_no_plan_change() -> None:
+    # The source provides the concept; EasyICU's menu lacks it. No edit, drop
+    # or alternative fixes that on this build.
+    for code, concept in (("planning_menu_missing_supported_concept", "icu_death"),
+                          ("study_coordinate_unrecognized", "icu_mortality_72h")):
+        detail = {"reason_code": code, "missing_concepts": [concept]}
+        assert owner.next_actions_for_stop("data_foundation_blocked", detail, database="hirid") == []
+
+
 def test_a_typed_single_missing_concept_can_be_dropped() -> None:
     actions = owner.next_actions_for_stop(
         "concept_unavailable", {"concept": "synthetic_marker"}

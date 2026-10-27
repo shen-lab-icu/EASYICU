@@ -745,6 +745,20 @@
         required_concepts_unavailable: list
           ? tr(`Variables this study needs are not in this data: ${list}. Choose another data source or drop them from the question.`, `这份数据里没有研究所需的变量：${list}。请更换数据源，或从问题中去掉这些变量。`)
           : tr('A variable this study needs is not in this data.', '这份数据里缺少研究所需的变量。'),
+        // The study's own exposure or outcome: nothing to drop or regenerate,
+        // and no model call was spent (agent_pipeline_runs).
+        study_coordinate_unavailable: list
+          ? tr(`EasyICU cannot read this study's outcome or exposure from this database: ${list}. Planning stopped before calling the model. Choose a database that records it.`, `EasyICU 在这个数据库里读不到本研究的结局或暴露变量：${list}。已在调用模型前停止。请换一个记录了它的数据库。`)
+          : tr('EasyICU cannot read this study\'s outcome or exposure from this database. Planning stopped before calling the model. Choose a database that records it.', 'EasyICU 在这个数据库里读不到本研究的结局或暴露变量。已在调用模型前停止。请换一个记录了它的数据库。'),
+        // The source provides it; EasyICU's own planning list lacks it. Never
+        // advise another database or dropping it (agent_pipeline_runs).
+        planning_menu_missing_supported_concept: list
+          ? tr(`EasyICU's own planning list is missing a variable it can read from this database: ${list}. This is a gap in EasyICU, not in your data. Planning stopped before calling the model; download the problem report and send it to support.`, `EasyICU 自己的规划清单漏了一个它能从这个数据库读取的变量：${list}。这是 EasyICU 的问题，不是数据的问题。已在调用模型前停止；请下载问题报告发给支持人员。`)
+          : tr('EasyICU\'s own planning list is missing a variable it can read from this database. This is a gap in EasyICU, not in your data. Planning stopped before calling the model; download the problem report and send it to support.', 'EasyICU 自己的规划清单漏了一个它能从这个数据库读取的变量。这是 EasyICU 的问题，不是数据的问题。已在调用模型前停止；请下载问题报告发给支持人员。'),
+        // EasyICU named a variable its own dictionary does not know.
+        study_coordinate_unrecognized: list
+          ? tr(`EasyICU did not recognise the name it gave this study's outcome or exposure: ${list}. This is a gap in EasyICU, not in your data. Planning stopped before calling the model; download the problem report and send it to support.`, `EasyICU 没有识别出它给本研究结局或暴露变量起的名字：${list}。这是 EasyICU 的问题，不是数据的问题。已在调用模型前停止；请下载问题报告发给支持人员。`)
+          : tr('EasyICU did not recognise the name it gave this study\'s outcome or exposure. This is a gap in EasyICU, not in your data. Planning stopped before calling the model; download the problem report and send it to support.', 'EasyICU 没有识别出它给本研究结局或暴露变量起的名字。这是 EasyICU 的问题，不是数据的问题。已在调用模型前停止；请下载问题报告发给支持人员。'),
         outcome_concept_undeclared: tr('No executable outcome variable was named; state the outcome in the question (for example in-hospital death).', '没有可执行的结局变量；请在问题中写明结局（例如住院死亡）。'),
         outcome_concept_unavailable: list
           ? tr(`The outcome variable ${list} is not in this data.`, `结局变量 ${list} 不在这份数据里。`)
