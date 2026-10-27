@@ -121,6 +121,15 @@ def _verify_durable_startup() -> None:
     )
 
 
+def _register_startup_probe(app) -> None:
+    """Run the durable probe after the Web app's own startup handlers.
+
+    Starlette 1.x removed ``app.add_event_handler``; FastAPI's router keeps the
+    startup list that ``app.on_event`` fills, and runs it in order.
+    """
+    app.router.add_event_handler("startup", _verify_durable_startup)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments[:1] == ["--easyicu-host-worker"]:
@@ -146,7 +155,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     from easyicu.webserver.app import app
 
-    app.add_event_handler("startup", _verify_durable_startup)
+    _register_startup_probe(app)
     server = uvicorn.Server(uvicorn.Config(
         app,
         host="127.0.0.1",

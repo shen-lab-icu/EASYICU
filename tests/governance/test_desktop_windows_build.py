@@ -376,8 +376,26 @@ def test_smoke_requires_frozen_durable_startup_even_when_the_launcher_fails():
     assert "if ($failure.Success) { throw $failure.Value }" in assertion
     assert "throw 'desktop_backend_startup_incomplete'" in assertion
     assert "throw 'durable_executor_unavailable'" in assertion
-    assert "finally {\n        Assert-FrozenBackendStartup" in smoke
+    # The launcher's failure is kept and thrown only when the log names nothing more specific.
+    assert "} catch {\n        $launchFailure = $_\n    }\n    Assert-FrozenBackendStartup" in smoke
+    assert "'logs\\desktop-smoke.log') $launchFailure" in smoke
+    assert assertion.rstrip().endswith("if ($LaunchFailure) { throw $LaunchFailure }\n}")
+    assert "finally {\n        Assert-FrozenBackendStartup" not in smoke
     assert smoke.index("Assert-FrozenBackendStartup (Join-Path") < smoke.index("if (-not $result.healthy")
+
+
+def test_smoke_names_the_exception_a_crashed_backend_logged():
+    smoke = (DESKTOP / "scripts/smoke_windows.ps1").read_text()
+    pattern = re.search(r"\[regex\]::Matches\(\$log, '([^']+)'\)", smoke).group(1)
+    # The frozen backend's log from a failed CI smoke (10-26), on a synthetic profile.
+    log = ('Traceback (most recent call last):\n  File "backend_entry.py", line 176, in <module>\n'
+           '  File "backend_entry.py", line 149, in main\n'
+           "AttributeError: 'FastAPI' object has no attribute 'add_event_handler'. "
+           "Did you mean: 'add_exception_handler'?\n"
+           "[PYI-9024:ERROR] Failed to execute script 'backend_entry' due to unhandled exception!\n")
+    raised = re.findall(pattern, log, re.MULTILINE)
+    assert raised[-1].startswith("AttributeError: 'FastAPI' object has no attribute 'add_event_handler'")
+    assert re.findall(pattern, "INFO:     Application startup complete.\n", re.MULTILINE) == []
 
 
 @pytest.mark.parametrize("code", ["durable_dependency_unavailable", "durable_launch_failed", "durable_executor_unavailable"])
