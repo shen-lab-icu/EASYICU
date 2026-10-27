@@ -119,12 +119,12 @@
         ),
       },
       {
-        id: 'example-ventilation-rmst', database: 'SICdb', kind: tr('Restricted mean survival', '限制性平均生存时间'),
-        title: tr('Ventilation and days alive in 28 days', '机械通气与 28 天内存活天数'),
-        gets: tr('Restricted mean survival time per group and their difference, survival curves', '各组限制性平均生存时间及差值、生存曲线'),
+        id: 'example-ventilation-rmst', database: 'SICdb', kind: tr('Survival with RMST', '生存分析与 RMST'),
+        title: tr('Ventilation and 28-day survival', '机械通气与 28 天生存'),
+        gets: tr('Kaplan–Meier curves, adjusted Cox hazard ratio, 28-day RMST difference (sensitivity)', 'Kaplan–Meier 曲线、调整后的 Cox 风险比、28 天 RMST 差值（敏感性分析）'),
         prompt: tr(
-          'In SICdb, with death within 28 days as the endpoint, how much does the restricted mean survival time of patients ventilated on the first ICU day differ from that of patients who are not, after adjusting for age and sex?',
-          '在 SICdb 中，以 28 天死亡为终点，入 ICU 第一天接受机械通气的患者与未通气的患者相比，调整年龄和性别后，限制性平均生存时间相差多少天？',
+          'In SICdb, does 28-day survival differ between patients ventilated on the first ICU day and those who are not, after adjusting for age and sex? Report the 28-day restricted mean survival time difference as a sensitivity analysis.',
+          '在 SICdb 中，入 ICU 第一天接受机械通气的患者与未通气的患者相比，调整年龄和性别后 28 天生存是否不同？并以 28 天限制性平均生存时间差作为敏感性分析。',
         ),
       },
       {
