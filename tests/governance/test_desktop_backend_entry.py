@@ -3,6 +3,7 @@ import os
 import threading
 from types import SimpleNamespace
 from pathlib import Path
+import warnings
 
 import pytest
 
@@ -179,8 +180,28 @@ def test_desktop_startup_retains_typed_durable_failure(monkeypatch, caplog, reas
     assert "Durable dispatcher started" not in caplog.text
 
 
-def test_desktop_registers_durable_probe_after_the_web_startup_handlers():
+def test_desktop_registers_durable_probe_after_the_web_startup_handlers(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    module = _backend_entry_module()
+    order = []
+    monkeypatch.setattr(module, "_verify_durable_startup", lambda: order.append("probe"))
+    app = FastAPI()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+
+        # The Web app registers its own startup handlers this way.
+        @app.on_event("startup")
+        def web_startup() -> None:
+            order.append("web")
+
+    # A registration the installed FastAPI lacks fails here, as the frozen app did.
+    module._register_startup_probe(app)
+    with TestClient(app):
+        assert order == ["web", "probe"]
+
     source = (Path(__file__).parents[2] / "desktop/backend_entry.py").read_text()
     imported = source.index("from easyicu.webserver.app import app")
-    probe = source.index('app.add_event_handler("startup", _verify_durable_startup)')
+    probe = source.index("_register_startup_probe(app)\n")
     assert imported < probe < source.index("server.run()")

@@ -62,15 +62,30 @@ function Wait-CheckedProcess($Process, [int]$Timeout, [string]$Stage) {
     Write-Host "$Stage finished in $([int]$clock.Elapsed.TotalSeconds) s"
 }
 
-function Assert-FrozenBackendStartup([string]$LogPath) {
-    if (-not (Test-Path -LiteralPath $LogPath)) { throw 'desktop_backend_startup_incomplete' }
+# Throw the most specific cause: the backend's typed failure, then the
+# exception it logged, then the launcher's own failure. A later check never
+# replaces a more specific earlier one.
+function Assert-FrozenBackendStartup([string]$LogPath, $LaunchFailure) {
+    if (-not (Test-Path -LiteralPath $LogPath)) {
+        if ($LaunchFailure) { throw "desktop_backend_startup_incomplete: no backend log; $LaunchFailure" }
+        throw 'desktop_backend_startup_incomplete'
+    }
     [string]$log = Get-Content -LiteralPath $LogPath -Raw -Encoding utf8
     # Retain the backend's typed failure (including durable_dependency_unavailable)
     # even when the launcher exits before it can write a health receipt.
     $failure = [regex]::Match($log, '(?m)(?<=DurableWorkflowError: )durable_[a-z0-9_]+\b')
     if ($failure.Success) { throw $failure.Value }
-    if (-not $log.Contains('Application startup complete.')) { throw 'desktop_backend_startup_incomplete' }
+    if (-not $log.Contains('Application startup complete.')) {
+        # The synthetic profile's log holds no clinical data; show its end here.
+        Write-Host '--- end of desktop-smoke.log ---'
+        $log -split "`r?`n" | Select-Object -Last 40 | ForEach-Object { Write-Host $_ }
+        $raised = [regex]::Matches($log, '(?m)^[A-Za-z_][\w.]*(?:Error|Exception)\b[^\r\n]*')
+        if ($raised.Count -gt 0) { throw "desktop_backend_startup_incomplete: $($raised[$raised.Count - 1].Value)" }
+        if ($LaunchFailure) { throw "desktop_backend_startup_incomplete: $LaunchFailure" }
+        throw 'desktop_backend_startup_incomplete'
+    }
     if (-not $log.Contains('Durable dispatcher started (frozen=True)')) { throw 'durable_executor_unavailable' }
+    if ($LaunchFailure) { throw $LaunchFailure }
 }
 
 # The hosted runner remains the OS user. Its temporary application-data profile
@@ -102,11 +117,13 @@ try {
     $app = Start-Process -FilePath $executable -ArgumentList '--smoke-test' -PassThru
     # The first launch also unpacks nothing but is scanned file by file.
     $dataRoot = Join-Path $env:LOCALAPPDATA 'EasyICU'
+    $launchFailure = $null
     try {
         Wait-CheckedProcess $app 300000 'First launch smoke test'
-    } finally {
-        Assert-FrozenBackendStartup (Join-Path $dataRoot 'logs\desktop-smoke.log')
+    } catch {
+        $launchFailure = $_
     }
+    Assert-FrozenBackendStartup (Join-Path $dataRoot 'logs\desktop-smoke.log') $launchFailure
     $result = Get-Content -LiteralPath (Join-Path $dataRoot 'runtime\desktop-smoke-result.json') -Raw | ConvertFrom-Json
     if (-not $result.healthy -or -not $result.unauthenticated_rejected) {
         throw 'Backend readiness/session checks did not pass'
