@@ -1,6 +1,13 @@
-"""A sealed binary model need not repeat a distribution-only event index."""
+"""The ordered trend binds to its one typed binary primary model.
+
+A sealed binary model need not repeat a distribution-only event index; the
+trend inherits the primary's estimator (logistic or modified Poisson) and may
+read a binary outcome alone or with one typed continuous outcome.
+"""
 
 import pytest
+
+from easyicu.research_agent.schema import VariableRole
 
 from easyicu.research_agent.planning.progressive_compiler import _compile_ordered_stratified_contract
 from easyicu.research_agent.planning.progressive_contract import (
@@ -63,22 +70,89 @@ def test_ordered_trend_keeps_unsupported_parent_semantics_closed(invalid):
         _compile(context, skeleton, trend)
 
 
-def test_an_ordered_trend_refuses_a_risk_ratio_parent():
-    """The trend owner tests a logistic slope; a risk-ratio primary stops with its own code."""
+@pytest.mark.parametrize("measure", ["risk_ratio", "odds_ratio"])
+def test_an_ordered_trend_inherits_the_primary_effect_measure(measure):
+    """The owner refits the primary's own estimator, so either ratio keeps its trend.
+
+    A logistic primary reports its trend per level as an odds ratio and a
+    modified-Poisson primary as a risk ratio; neither stops the plan.
+    """
 
     context, skeleton, trend = _case()
     # The question asks for the risk ratio, so the primary may declare it.
     asked = context.model_copy(update={
         "research_question": context.research_question.rstrip(".?") + ", reported as a risk ratio.",
-    })
+    }) if measure == "risk_ratio" else context
     skeleton.steps[0] = ProgressiveSkeletonStep.model_validate(
-        {**skeleton.steps[0].model_dump(mode="json"), "effect_measure": "risk_ratio"}
+        {**skeleton.steps[0].model_dump(mode="json"), "effect_measure": measure}
+    )
+    assert _compile(asked, skeleton, trend)
+
+
+def _binary_only(context, skeleton, trend, raw_inputs=("stage", "death")):
+    trend = trend.model_copy(update={"raw_inputs": list(raw_inputs)})
+    skeleton.steps[1] = trend
+    return context, skeleton, trend
+
+
+def test_a_binary_only_trend_binds_the_ordered_endpoint_domain():
+    """No continuous outcome is needed: the trend is the adjusted refit plus Cochran-Armitage."""
+
+    context, skeleton, trend = _binary_only(*_case())
+    without_continuous = context.model_copy(update={
+        "cohort": context.cohort.model_copy(update={"outcome_columns": ["death"]}),
+        "variables": [item for item in context.variables if item.name != "los_days"],
+    })
+    assert _compile(context, skeleton, trend)
+    assert _compile(without_continuous, skeleton, trend)
+
+
+def test_a_trend_with_two_additional_inputs_is_ambiguous():
+    context, skeleton, trend = _binary_only(
+        *_case(), raw_inputs=("stage", "death", "los_days", "death_flag"),
     )
     with pytest.raises(ProgressivePlanCompileError) as refused:
-        _compile(asked, skeleton, trend)
-    assert refused.value.reason_code == "progressive_ordered_trend_risk_ratio_unsupported"
-    # An explicit odds ratio is the default model and keeps its trend.
-    skeleton.steps[0] = ProgressiveSkeletonStep.model_validate(
-        {**skeleton.steps[0].model_dump(mode="json"), "effect_measure": "odds_ratio"}
-    )
-    assert _compile(context, skeleton, trend)
+        _compile(context, skeleton, trend)
+    assert refused.value.reason_code == "progressive_ordered_trend_continuous_outcome_ambiguous"
+
+
+@pytest.mark.parametrize("invalid", ["unordered", "reverse_domain", "logistic_free_parent"])
+def test_a_binary_only_trend_keeps_its_domain_closed(invalid):
+    context, skeleton, trend = _binary_only(*_case())
+    if invalid == "unordered":
+        context = context.model_copy(update={"variables": [
+            item.model_copy(update={"is_ordinal": False, "role": VariableRole.OTHER})
+            if item.name == "stage" else item
+            for item in context.variables
+        ]})
+    elif invalid == "reverse_domain":
+        context = context.model_copy(update={
+            "endpoint": context.endpoint.model_copy(update={"levels": [1, 0]}),
+        })
+    else:
+        skeleton.steps[0] = skeleton.steps[0].model_copy(update={"outcome_type": "continuous"})
+    with pytest.raises(ProgressivePlanCompileError) as refused:
+        _compile(context, skeleton, trend)
+    assert refused.value.reason_code == {
+        "unordered": "progressive_ordered_trend_domain_unsupported",
+        "reverse_domain": "progressive_ordered_trend_domain_unsupported",
+        "logistic_free_parent": "progressive_ordered_trend_primary_binding_invalid",
+    }[invalid]
+
+
+def test_a_primary_the_owner_cannot_refit_stops_the_plan(monkeypatch):
+    """The compiler applies the owner's refit predicate, so the step is never left unowned."""
+
+    from easyicu.research_agent.planning import progressive_compiler
+
+    context, skeleton, trend = _case()
+    compile_primary = progressive_compiler._compile_adjusted_association
+
+    def without_roster(**kwargs):
+        return [item.model_copy(update={"covariates": None}) for item in compile_primary(**kwargs)]
+
+    monkeypatch.setattr(progressive_compiler, "_compile_adjusted_association", without_roster)
+    with pytest.raises(ProgressivePlanCompileError) as refused:
+        _compile(context, skeleton, trend)
+    assert refused.value.reason_code == "progressive_ordered_trend_primary_binding_invalid"
+    assert "no adjustment set" in str(refused.value)

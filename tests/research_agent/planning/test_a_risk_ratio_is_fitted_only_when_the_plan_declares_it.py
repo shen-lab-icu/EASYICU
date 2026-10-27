@@ -4,9 +4,10 @@ The odds ratio stays every binary model's default.  When the question asks for
 a risk ratio (relative risk), the plan declares ``effect_measure`` and the
 compiler binds the modified-Poisson estimator; nothing switches it from the
 data.  Where an owner reports odds ratios only (the signed landmark spline
-suite, the ordered logistic trend), a requested risk ratio is a typed,
-host-verified gap or a stable refusal, never an odds ratio under the
-risk-ratio name.  Synthetic contexts and small synthetic cohorts only.
+suite), a requested risk ratio is a typed, host-verified gap or a stable
+refusal, never an odds ratio under the risk-ratio name.  The ordered trend
+refits the primary's own estimator, so it reports a risk ratio per level
+under a risk-ratio primary.  Synthetic contexts and small synthetic cohorts only.
 """
 
 from __future__ import annotations
@@ -40,8 +41,12 @@ from easyicu.research_agent.planning.family_spec import (
     FamilySpecError,
     validate_family_plan_spec,
 )
+from easyicu.research_agent.execution.runners.ordered_stratified_executor import (
+    ordered_stratified_spec_for_step,
+)
 from easyicu.research_agent.planning.family_spec.contract import (
     family_effect_measures,
+    landmark_ordinal_trend_present,
     spec_from_mapping,
 )
 from easyicu.research_agent.planning.progressive_compiler import _compile_adjusted_association
@@ -431,32 +436,39 @@ def test_a_spline_family_reports_odds_ratios_so_a_requested_risk_ratio_is_a_type
 
 
 # ---------------------------------------------------------------------------
-# The categorical landmark family: a risk ratio unless its logistic trend is drafted.
+# The categorical landmark family: either ratio, its ordered trend on the primary's scale.
 # ---------------------------------------------------------------------------
 
 
-def _categorical_without_trend() -> ResearchContext:
+def _categorical_risk_ratio(*, continuous: bool) -> ResearchContext:
     base = _landmark_context()
-    return base.model_copy(update={
-        "research_question": base.research_question.rstrip("?") + f", {RR_WORDS}?",
-        "cohort": base.cohort.model_copy(update={"outcome_columns": ["death"], "requested_outcome_columns": ["death"]}),
-        "user_preferences": base.user_preferences.model_copy(update={
+    update: dict = {"research_question": base.research_question.rstrip("?") + f", {RR_WORDS}?"}
+    if not continuous:
+        update["cohort"] = base.cohort.model_copy(
+            update={"outcome_columns": ["death"], "requested_outcome_columns": ["death"]}
+        )
+        update["user_preferences"] = base.user_preferences.model_copy(update={
             "must_have_outputs": "Generate figures for the primary result.",
-        }),
-    })
+        })
+    return base.model_copy(update=update)
 
 
-def test_the_categorical_landmark_trend_keeps_the_odds_ratio():
+def test_the_categorical_landmark_family_reports_either_ratio():
+    """Its ordered trend refits the primary's own estimator, so it no longer pins the odds ratio."""
+
     request = _landmark_request(_landmark_context())
     assert request.family_id == LANDMARK_CATEGORICAL_FAMILY_ID
-    assert family_effect_measures(request) == ("odds_ratio",)
+    assert landmark_ordinal_trend_present(request)
+    assert family_effect_measures(request) == ("odds_ratio", "risk_ratio")
+    # The question does not ask for a risk ratio, so the odds ratio stays the default.
     with pytest.raises(FamilySpecError) as refused:
         validate_family_plan_spec(spec_from_mapping(_landmark_payload(request, effect_measure="risk_ratio")), request)
-    assert refused.value.reason_code == "family_spec_effect_measure_unsupported"
+    assert refused.value.reason_code == "family_spec_effect_measure_unrequested"
 
 
-def test_a_categorical_landmark_plan_compiles_a_declared_risk_ratio():
-    context = _categorical_without_trend()
+@pytest.mark.parametrize("continuous", [False, True], ids=["binary_only", "with_continuous"])
+def test_a_categorical_landmark_plan_compiles_a_declared_risk_ratio_and_its_trend(continuous):
+    context = _categorical_risk_ratio(continuous=continuous)
     request = _landmark_request(context)
     assert request.family_id == LANDMARK_CATEGORICAL_FAMILY_ID
     assert family_effect_measures(request) == ("odds_ratio", "risk_ratio")
@@ -465,7 +477,17 @@ def test_a_categorical_landmark_plan_compiles_a_declared_risk_ratio():
     plan = result.output
     primary = next(step for step in plan.steps if step.planned_analysis_role == "primary")
     assert primary.model_requirements[0].method_family == ASSOCIATION_RR_ESTIMATOR
-    assert "ordinal_trend" not in {step.step_id for step in plan.steps}
+    trend = next(step for step in plan.steps if step.step_id == "ordinal_trend")
+    spec = ordered_stratified_spec_for_step(trend, plan=plan)
+    assert spec is not None
+    assert spec.trend_model.estimator_kind == "glm_poisson"
+    assert spec.trend_model.effect_measure == "risk_ratio"
+    assert spec.trend_model.covariates == list(primary.model_requirements[0].covariates)
+    assert (spec.continuous_outcome == "los_icu") is continuous
     design = plan.design_selection.candidates[0]
     assert "modified Poisson model (log link, robust standard errors)" in design.primary_method
-    assert any(line.startswith("Modified Poisson model") for line in design.reviewable_plan)
+    assert "an adjusted per-level ordered trend refit" in design.primary_method
+    [method] = [line for line in design.reviewable_plan if line.startswith("Modified Poisson model")]
+    assert "for the adjusted risk ratio per level increment" in method
+    assert "odds ratio" not in method
+    assert ("Jonckheere" in method) is continuous

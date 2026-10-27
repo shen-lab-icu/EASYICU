@@ -737,6 +737,14 @@ def scientific_claim_compilation_requested(summary: object) -> bool:
         # A binary sensitivity refit opts in through its versioned reporting
         # envelope; an older refit without one stays readable and claims nothing.
         return "reportable_sensitivity_results" in summary
+    if interpretation_class == "ordered_stratified_secondary":
+        # The ordered trend opts in with its adjusted per-level envelope; an
+        # older crude-tests-only summary stays readable and claims nothing.
+        from .ordered_trend_scientific_claims import (
+            ordered_trend_reporting_requests_claims,
+        )
+
+        return ordered_trend_reporting_requests_claims(summary)
     if interpretation_class == "absolute_risk_context":
         # Legacy summaries without the versioned reporting envelope remain
         # readable; they cannot acquire scientific authority from a label.
@@ -811,6 +819,12 @@ def derive_scientific_claim_drafts(
 
         return [ScientificClaimDraft.model_validate(payload)
                 for payload in derive_sensitivity_claim_payloads(summary)]
+
+    if summary.get("interpretation_class") == "ordered_stratified_secondary":
+        from .ordered_trend_scientific_claims import derive_ordered_trend_claim_payloads
+
+        return [ScientificClaimDraft.model_validate(payload)
+                for payload in derive_ordered_trend_claim_payloads(summary)]
 
     if summary.get("interpretation_class") == "absolute_risk_context":
         from .absolute_risk_scientific_claims import derive_absolute_risk_claim_payloads

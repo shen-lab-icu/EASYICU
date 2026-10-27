@@ -1341,12 +1341,20 @@ def planner_selects_adjustment(request: "FamilySpecRequest") -> bool:
 
 
 def landmark_ordinal_trend_present(request: "FamilySpecRequest") -> bool:
-    """Whether the categorical landmark template drafts its ordered logistic trend."""
+    """Whether the categorical landmark template drafts its ordered trend step.
+
+    An ordered exposure with at least three levels gets one: the primary model
+    refitted with the exposure as one per-level term, beside a crude
+    Cochran-Armitage test of the binary outcome.  A secondary continuous
+    outcome, when the request has one, joins the same step.  The request sets
+    ``exposure_is_ordered`` only where the compiler binds that step
+    (``ordinal_multi_outcome.resolve_ordered_trend_binding``), so the template
+    never plans a trend the compiler refuses.
+    """
 
     return bool(
         request.family_id == LANDMARK_CATEGORICAL_FAMILY_ID
         and request.exposure_kind == "categorical"
-        and request.secondary_continuous_outcome
         and request.exposure_is_ordered
         and len(request.exposure_levels) >= 3
     )
@@ -1358,15 +1366,13 @@ def family_effect_measures(request: "FamilySpecRequest") -> tuple[str, ...]:
     Empty for a family without a binary adjusted-association primary.  The
     odds ratio is every such family's default.  The baseline model and the
     categorical landmark model can instead be fitted by modified Poisson for a
-    risk ratio; the signed landmark spline suite, and a categorical plan that
-    carries the ordered logistic trend, report odds ratios only.  The spec
-    contract, the written shape and the schema all read this one answer.
+    risk ratio; a categorical plan's ordered trend refits the primary's own
+    estimator, so it reports on the same scale.  The signed landmark spline
+    suite reports odds ratios only.  The spec contract, the written shape and
+    the schema all read this one answer.
     """
 
-    if request.family_id == BASELINE_ASSOCIATION_FAMILY_ID or (
-        request.family_id == LANDMARK_CATEGORICAL_FAMILY_ID
-        and not landmark_ordinal_trend_present(request)
-    ):
+    if request.family_id in {BASELINE_ASSOCIATION_FAMILY_ID, LANDMARK_CATEGORICAL_FAMILY_ID}:
         return ("odds_ratio", "risk_ratio")
     if request.family_id in LANDMARK_FAMILY_IDS:
         return ("odds_ratio",)
