@@ -115,8 +115,8 @@ def run(proposal, source, tmp_path, *, provider=None, accept_substitutions=False
 
 
 @pytest.mark.parametrize("statistic,expected", [
-    ("mean", {"mean": 2.5}), ("median", {"median": 2.5}),
-    ("iqr", {"q1": 2.0, "q3": 3.0}), ("count", {"nonmissing_n": 60}),
+    ("mean", {"mean": 2.5}), ("median", {"median": 2.5, "q1": 2.0, "q3": 3.0}),
+    ("iqr", {"median": 2.5, "q1": 2.0, "q3": 3.0}), ("count", {"nonmissing_n": 60}),
 ])
 def test_windowed_measure_uses_the_descriptive_kernel(prepared, tmp_path, monkeypatch, statistic, expected):
     from easyicu.webserver.quick_answer import analysis
@@ -139,6 +139,8 @@ def test_windowed_measure_uses_the_descriptive_kernel(prepared, tmp_path, monkey
     assert answer.status == "ok", answer.reason
     actual = {row.statistic: row.value for row in answer.rows}
     assert all(actual[key] == value for key, value in expected.items())
+    # A mean is not reported with quartiles.
+    assert statistic in {"median", "iqr"} or not {"q1", "q3"} & actual.keys()
     assert calls == [True]
 
 

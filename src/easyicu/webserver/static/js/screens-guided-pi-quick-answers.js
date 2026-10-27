@@ -9,7 +9,7 @@
 
   const STATISTICS = {
     count: ['Count', '人数'], proportion: ['Proportion', '比例'], mean: ['Mean', '均值'],
-    median: ['Median', '中位数'], iqr: ['Interquartile range', '四分位数间距'],
+    median: ['Median (IQR)', '中位数（四分位数间距）'], iqr: ['Median (IQR)', '中位数（四分位数间距）'],
   };
   const SUMMARIES = {
     max: ['highest', '最高'], min: ['lowest', '最低'], first: ['first', '首次'],
@@ -117,11 +117,15 @@
         cells[key] = row;
         if (row.statistic === 'numerator' || row.statistic === 'percentage' || row.statistic === 'denominator') cells[row.statistic] = row;
       });
-      const withUnit = row => row ? `${number(row.value)}${row.unit && row.unit !== '%' ? ' ' + esc(row.unit) : row.unit === '%' ? '%' : ''}` : '';
+      const unitOf = row => row.unit && row.unit !== '%' ? ' ' + esc(row.unit) : row.unit === '%' ? '%' : '';
+      const withUnit = row => row ? `${number(row.value)}${unitOf(row)}` : '';
       const lines = groups.map(group => {
         const cells = byGroup.get(group);
         let result = '';
-        if (cells.median) result = withUnit(cells.median);
+        if (cells.median && cells.q1 && cells.q3) {
+          const quartiles = `${number(cells.q1.value)}–${number(cells.q3.value)}`;
+          result = `${number(cells.median.value)}${tr(` (IQR ${quartiles})`, `（${quartiles}）`)}${unitOf(cells.median)}`;
+        } else if (cells.median) result = withUnit(cells.median);
         else if (cells.mean) result = withUnit(cells.mean);
         else if (cells.q1 && cells.q3) result = `${number(cells.q1.value)}–${withUnit(cells.q3)}`;
         else if (cells.numerator && cells.denominator) {
