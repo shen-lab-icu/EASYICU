@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import ntpath
 import os
@@ -121,13 +122,19 @@ def _verify_durable_startup() -> None:
     )
 
 
+async def _verify_durable_startup_off_the_event_loop() -> None:
+    # Startup handlers run on the event-loop thread, where DBOS refuses its
+    # synchronous status call; Web routes reach it from the threadpool too.
+    await asyncio.to_thread(_verify_durable_startup)
+
+
 def _register_startup_probe(app) -> None:
     """Run the durable probe after the Web app's own startup handlers.
 
     Starlette 1.x removed ``app.add_event_handler``; FastAPI's router keeps the
     startup list that ``app.on_event`` fills, and runs it in order.
     """
-    app.router.add_event_handler("startup", _verify_durable_startup)
+    app.router.add_event_handler("startup", _verify_durable_startup_off_the_event_loop)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
