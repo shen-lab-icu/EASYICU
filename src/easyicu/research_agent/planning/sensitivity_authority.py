@@ -281,6 +281,20 @@ class PrespecifiedSensitivitySpec(BaseModel):
         )
 
 
+class PrespecifiedAnalysisOmission(BaseModel):
+    """Host decision about an unavailable default; never Planner transport."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    analysis: str
+    spec_id: str | None = None
+    reason_code: Literal[
+        "typed_restriction_unavailable", "typed_alternative_unavailable",
+        "strategy_not_supported", "primary_model_not_supported",
+        "no_continuous_adjustment", "already_restricted", "article_check_deferred",
+    ]
+
+
 def normalize_prespecified_sensitivities(
     value: Any,
 ) -> tuple[PrespecifiedSensitivitySpec, ...]:

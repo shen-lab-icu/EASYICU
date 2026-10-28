@@ -36,6 +36,7 @@ from .landmark_categorical_template import (
     FamilySkeletonDraft, _cohort_intent, _covariate_terms, _label,
     _materialization, _MEASUREMENT_AUDIT_OUTPUTS, _method_card_elements,
     _outline_step, _ref, _step_bindings, _table_one_summary,
+    association_default_checks,
 )
 
 
@@ -209,7 +210,7 @@ def build_baseline_association_skeleton(
             outputs=[ProgressiveOutputIntent(product_id="report:report", semantic_role="report")],
         ),
     ]
-    return first_result_subset(FamilySkeletonDraft(
+    return first_result_subset(association_default_checks(FamilySkeletonDraft(
         outline=outline,
         foundation=ProgressiveFoundationMaterialization(
             outline_sha256=canonical_sha256(outline.model_dump(mode="json")),
@@ -220,7 +221,7 @@ def build_baseline_association_skeleton(
             ),
         ),
         materializations=tuple(_materialization(bound[step.step_id], step) for step in steps),
-    ), request)
+    ), request, spec, bind_outline=bind_outline), request)
 
 
 # Result additions have their own typed roster and signed runtime. They reuse

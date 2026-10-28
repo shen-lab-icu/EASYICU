@@ -52,6 +52,7 @@ from ..cohort_predicate_domain import cohort_emptied_exposure_levels
 from ..progressive_compiler import planner_cohort_definition, progressive_cohort_concept_ids
 from ..design_selection import ResearchDesignCandidate, ResearchDesignSelection
 from ..method_literature import METHOD_CARDS
+from ..sensitivity_authority import PrespecifiedAnalysisOmission
 from ..progressive_contract import (
     ProgressiveCohortIntent,
     ProgressiveCohortPredicate,
@@ -135,6 +136,7 @@ class FamilySkeletonDraft:
     #: no model requirement (a proposed survival suite); the host keeps it
     #: plan-wide.
     adjustment_proposal: AdjustmentProposal | None = None
+    analysis_omissions: tuple[PrespecifiedAnalysisOmission, ...] = ()
 
 
 def _label(spec: FamilyPlanSpec, key: str) -> str:
@@ -1009,6 +1011,153 @@ def _ref(producer: str, product: str) -> ProgressiveProductRef:
     return ProgressiveProductRef(producer_step_id=producer, product_id=product)
 
 
+def association_default_checks(draft, request, spec, *, bind_outline=None):
+    """Project supported association checks before review, without changing the primary.
+
+    The refit owner supports categorical exposures without interactions. Its
+    covariate-form check and an explicitly bound first-stay flag require no new
+    source data. Other proposed axes get a typed omission, never a fabricated
+    definition or a silently reduced adjustment set.
+    """
+    from .contract import BASELINE_ASSOCIATION_FAMILY_ID
+
+    if request.family_id not in {BASELINE_ASSOCIATION_FAMILY_ID, LANDMARK_CATEGORICAL_FAMILY_ID}:
+        return draft
+    baseline = request.family_id == BASELINE_ASSOCIATION_FAMILY_ID
+    primary = next(item.step for item in draft.materializations if item.step.step_id == "adjusted_association")
+    additions = []
+    omissions = []
+
+    def omit(analysis, reason, spec_id=None):
+        omissions.append(PrespecifiedAnalysisOmission(analysis=analysis, reason_code=reason, spec_id=spec_id))
+
+    omit("alternative_adjustment", "strategy_not_supported")
+    omit("alternate_definition", "typed_alternative_unavailable")
+    if not request.alternate_exposures:
+        omit("alternate_exposure", "typed_alternative_unavailable")
+    else:
+        # The shared template's replay binds only a complete-case intent.
+        # Merely listing an alternative spec on it does not execute that axis.
+        for alternative in request.alternate_exposures:
+            omit("alternate_exposure", "strategy_not_supported", alternative.spec_id)
+    supported = request.exposure_kind == "categorical" and not (baseline and request.subgroup_columns)
+    continuous = [term.name for term in primary.model_terms if term.role == "covariate" and term.coding == "continuous"]
+    if not continuous:
+        omit("restricted_cubic_spline", "no_continuous_adjustment")
+    if baseline:
+        for name in continuous:
+            if not supported:
+                omit("restricted_cubic_spline", "primary_model_not_supported", request.functional_form_spec_ids.get(name))
+                continue
+            if request.execution_tier == "first_result" and name not in request.functional_form_spec_ids:
+                omit("restricted_cubic_spline", "article_check_deferred")
+                continue
+            additions.append(ProgressiveSkeletonStep(
+                step_id=f"{name}_functional_form", module_id="custom_analysis", planned_analysis_role="sensitivity",
+                objective=f"Refit the primary model with {_label(spec, name)} as a restricted cubic spline instead of linear; retain the primary specification regardless of the result.",
+                depends_on=["adjusted_association"], raw_inputs=[name],
+                product_inputs=[_ref("adjusted_association", "table:adjusted_association_estimates")],
+                custom_method=FUNCTIONAL_FORM_METHOD,
+                outputs=[ProgressiveOutputIntent(product_id=f"table:{name}_functional_form_sensitivity", semantic_role="scientific_sensitivity")],
+                sensitivity_spec_ids=[request.functional_form_spec_ids.get(name, f"{name}_restricted_cubic_spline")],
+                functional_form_spec=dict(target_column=name, comparison="restricted_cubic_spline_vs_linear",
+                                          knot_quantiles=list(FUNCTIONAL_FORM_KNOT_QUANTILES)),
+            ))
+    restriction = request.first_stay
+    if restriction is None:
+        omit("first_stay", "typed_restriction_unavailable")
+    elif not supported or set(restriction.execution_variables) & set(primary.raw_inputs):
+        omit("first_stay", "primary_model_not_supported", restriction.spec_id)
+    else:
+        additions.append(ProgressiveSkeletonStep(
+            step_id="prespecified_first_stay", module_id="custom_analysis", planned_analysis_role="sensitivity",
+            objective="Refit the same primary contrast and adjustment on first stay rows selected by the typed indicator; keep the primary population and estimate unchanged.",
+            depends_on=["adjusted_association"], raw_inputs=list(restriction.execution_variables),
+            product_inputs=[_ref("adjusted_association", "table:adjusted_association_estimates")],
+            custom_method="first_stay_association", sensitivity_spec_ids=[restriction.spec_id],
+            outputs=[ProgressiveOutputIntent(product_id="table:prespecified_first_stay", semantic_role="scientific_sensitivity")],
+        ))
+    if request.subgroup_columns and any(term.missing_handling == "unmeasured_category" for term in primary.model_terms):
+        omit("effect_modification", "primary_model_not_supported")
+    elif request.subgroup_columns:
+        additions.append(ProgressiveSkeletonStep(
+            step_id="prespecified_effect_modification", module_id="custom_analysis", planned_analysis_role="secondary",
+            objective=("Report the prespecified modifier stratum contrasts and joint interaction tests from the signed primary model."
+                       if baseline else "Estimate prespecified exposure-by-modifier interactions on the primary landmark cohort, retaining its contrast, adjustment and dependence; report stratum contrasts and joint tests without replacing the primary estimate."),
+            depends_on=["adjusted_association"],
+            raw_inputs=list(dict.fromkeys([request.primary_exposure, request.outcome, *[term.name for term in primary.model_terms], *request.subgroup_columns])),
+            product_inputs=[_ref("adjusted_association", "table:adjusted_association_estimates"), _ref("cohort_definition", "artifact:analysis_cohort")],
+            scientific_action_id="association.effect_modification", custom_method="prespecified_effect_modification",
+            outputs=[ProgressiveOutputIntent(product_id="table:prespecified_effect_modification", semantic_role="custom")],
+        ))
+    outlines = list(draft.outline.steps)
+    steps = [item.step for item in draft.materializations]
+    position = next((i for i, step in enumerate(steps) if step.module_id in {"visualization", "report"}), len(steps))
+    steps[position:position] = additions
+    outlines[position:position] = [
+        _outline_step(step_id=step.step_id, role=step.planned_analysis_role, module_id=step.module_id,
+                      objective=step.objective, depends_on=step.depends_on, variable_names=step.raw_inputs,
+                      citations=next(item for item in draft.outline.steps if item.step_id == "adjusted_association").literature_citation_keys,
+                      action=step.scientific_action_id)
+        for step in additions
+    ]
+    checks = [step for step in steps if step.functional_form_spec is not None or step in additions]
+    for i, step in enumerate(steps):
+        if step.module_id not in {"visualization", "report"}:
+            continue
+        dependencies = list(dict.fromkeys([*step.depends_on, *(check.step_id for check in checks)]))
+        refs = list(step.product_inputs)
+        present = {(ref.producer_step_id, ref.product_id) for ref in refs}
+        if step.module_id == "report":
+            refs += [_ref(check.step_id, output.product_id) for check in checks for output in check.outputs
+                     if (check.step_id, output.product_id) not in present]
+        steps[i] = step.model_copy(update={"depends_on": dependencies, "product_inputs": refs})
+        outlines[i] = outlines[i].model_copy(update={"depends_on": dependencies})
+    outline = draft.outline.model_copy(update={"steps": outlines})
+    if bind_outline is not None:
+        outline = bind_outline(outline)
+    bound = {step.step_id: step for step in outline.steps}
+    extra_columns = [name for step in additions for name in step.raw_inputs]
+    for i, step in enumerate(steps):
+        if step.step_id == "cohort_definition":
+            steps[i] = step.model_copy(update={"raw_inputs": list(dict.fromkeys([*step.raw_inputs, *extra_columns]))})
+        elif step in additions:
+            module = "functional_form" if step.functional_form_spec else "robustness_replay" if step.planned_analysis_role == "sensitivity" else "adjusted_association"
+            steps[i] = step.model_copy(update={"literature_bindings": _step_bindings(
+                bound[step.step_id], module=module, coordinate=step.objective,
+                comparator_applications=spec.applications,
+            )})
+    return replace(draft, outline=outline, analysis_omissions=tuple(omissions),
+                   foundation=draft.foundation.model_copy(update={"outline_sha256": canonical_sha256(outline.model_dump(mode="json"))}),
+                   materializations=tuple(_materialization(bound[step.step_id], step) for step in steps))
+
+
+def association_analysis_omissions(draft, context, request):
+    """Retain an explicit decision for supplied specs the template cannot bind."""
+    from .contract import BASELINE_ASSOCIATION_FAMILY_ID
+
+    omissions = list(draft.analysis_omissions)
+    if request.family_id not in {BASELINE_ASSOCIATION_FAMILY_ID, LANDMARK_CATEGORICAL_FAMILY_ID}:
+        return omissions
+    specs = context.user_preferences.sensitivity_specs if context.user_preferences else ()
+    requested = {spec.strategy for spec in specs}
+    omissions = [item for item in omissions if item.spec_id or item.analysis not in requested]
+    covered = {spec_id for item in draft.materializations for spec_id in item.step.sensitivity_spec_ids}
+    covered.update(item.spec_id for item in omissions if item.spec_id)
+    covered.add(request.landmark_spec_id)
+    for spec in specs:
+        if spec.spec_id in covered:
+            continue
+        absent = not spec.execution_variables or not set(spec.execution_variables) <= set(request.variable_roster)
+        reason = "strategy_not_supported"
+        if absent and spec.strategy in {"alternate_exposure", "alternate_definition"}:
+            reason = "typed_alternative_unavailable"
+        elif absent and spec.strategy == "first_stay":
+            reason = "typed_restriction_unavailable"
+        omissions.append(PrespecifiedAnalysisOmission(analysis=spec.strategy, spec_id=spec.spec_id, reason_code=reason))
+    return omissions
+
+
 def build_landmark_categorical_skeleton(
     request: FamilySpecRequest,
     spec: FamilyPlanSpec,
@@ -1663,9 +1812,9 @@ def build_landmark_categorical_skeleton(
         _materialization(bound[step.step_id], step) for step in steps
     )
     from .contract import first_result_subset
-    return first_result_subset(FamilySkeletonDraft(
+    return first_result_subset(association_default_checks(FamilySkeletonDraft(
         outline=outline, foundation=foundation, materializations=materializations
-    ), request)
+    ), request, spec, bind_outline=bind_outline), request)
 
 
 #: The one projection entry point for both landmark association families; the

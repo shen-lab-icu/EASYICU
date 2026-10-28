@@ -170,6 +170,7 @@ def test_one_call_compiles_the_exact_roster_plan() -> None:
         "age_functional_form",
         "comorbidity_index_functional_form",
         "ordinal_trend",
+        "prespecified_first_stay",
         "visualization",
         "report",
     ]
@@ -183,7 +184,7 @@ def test_one_call_compiles_the_exact_roster_plan() -> None:
     assert primary.primary_contrast_level == "3" and primary.exposure_reference_level == "0"
     metrics = result.facts.prompt_metrics
     assert metrics["planner_strategy"] == FAMILY_SPEC_STRATEGY
-    assert metrics["host_step_materialization_count"] == 11
+    assert metrics["host_step_materialization_count"] == 12
     assert metrics["family_spec_request_sha256"] == request.request_sha256
     assert metrics["compiled_plan_sha256"] == result.facts.compile_receipt.analysis_plan_sha256
     assert result.facts.complete_for_persistence
@@ -701,7 +702,7 @@ def test_orchestration_persists_the_family_spec_chain(tmp_path: Path) -> None:
     assert (tmp_path / "progressive_step_materializations.json").exists()
     checkpoints = sorted(tmp_path.glob("progressive_planner_checkpoint_*.json"))
     # outline + foundation + one per host-materialized step
-    assert len(checkpoints) == 2 + 11
+    assert len(checkpoints) == 2 + 12
     assert len(llm.calls) == 1
 
 

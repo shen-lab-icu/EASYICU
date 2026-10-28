@@ -146,7 +146,7 @@ class EValueArtifacts:
     markdown_path: Path
     evidence_id: str
     row_count: int
-    baseline_prevalence: float
+    baseline_prevalence: Optional[float]
     baseline_source_column: str
     baseline_population: str
     conversion_spec_sha256: str
@@ -269,89 +269,102 @@ def resolve_observed_event_rate(
 
 
 def _primary_association_evalue_rows(
-    path: Path,
-    *,
-    baseline_prevalence: float,
+    path: Path, *, baseline_prevalence: Optional[float],
 ) -> List[Dict[str, Any]]:
-    """Convert the verified primary-association CSV into E-value rows.
+    """Convert a verified primary-association CSV using its declared scales."""
+    import csv
 
-    The deterministic adjusted-association owner publishes the typed columns
-    ``estimate``, ``ci_low``, ``ci_high`` and ``effect_scale``.  Finalization
-    previously read only legacy column aliases such as ``odds_ratio`` and
-    therefore produced no E-value for the host-owned primary result.  A typed
-    scale declaration takes precedence: only ``effect_scale=odds_ratio`` is
-    converted; another declared scale is never guessed from its magnitude.
-    Legacy alias-shaped agent outputs remain readable only when no typed scale
-    is present.
+    with path.open("r", encoding="utf-8") as stream:
+        return _association_evalue_rows(csv.DictReader(stream), baseline_prevalence=baseline_prevalence)
+
+
+def _association_evalue_rows(
+    effect_rows,
+    *,
+    baseline_prevalence: Optional[float],
+) -> List[Dict[str, Any]]:
+    """Read declared OR/RR/HR/RD effects without guessing a conversion.
+
+    OR retains its observed-baseline Zhang-Yu conversion and legacy aliases.
+    HR uses the kernel's common-outcome approximation. RD is convertible only
+    with a same-row reference_risk: RR = (reference_risk + RD) / reference_risk.
+    Its endpointwise interval is conditional on that reference risk being fixed;
+    no covariance or uncertainty for an estimated reference risk is invented.
+    Unsupported scales remain outside this product; a recognized scale whose
+    conversion is unavailable carries a reason_code and no E-value.
     """
-
-    import csv as _csv
+    import math
 
     rows_out: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
-        for row in _csv.DictReader(fh):
-            scale = str(row.get("effect_scale") or "").strip().casefold()
-            scale = scale.replace("-", "_").replace(" ", "_")
-            estimate_keys: Tuple[str, ...]
-            low_keys: Tuple[str, ...]
-            high_keys: Tuple[str, ...]
-            if scale:
-                if scale != "odds_ratio":
+    for row in effect_rows:
+        scale = str(row.get("effect_scale") or "").strip().casefold().replace("-", "_").replace(" ", "_")
+        if scale and scale not in {"odds_ratio", "risk_ratio", "hazard_ratio", "risk_difference"}:
+            continue
+        typed = bool(scale)
+        named = [name for name in ("risk_ratio", "hazard_ratio", "risk_difference") if row.get(name) not in (None, "")]
+        if not typed and len(named) == 1 and not any(row.get(key) not in (None, "") for key in ("odds_ratio", "or", "OR")):
+            scale = named[0]
+        else:
+            scale = scale or "odds_ratio"
+
+        def number(keys):
+            for key in keys:
+                try:
+                    value = float(row.get(key))
+                except (TypeError, ValueError):
                     continue
-                estimate_keys = ("estimate",)
-                low_keys = ("ci_low",)
-                high_keys = ("ci_high",)
+                if math.isfinite(value):
+                    return value
+            return None
+
+        legacy_or = not typed and scale == "odds_ratio"
+        estimate = number(("estimate",) if typed else ("odds_ratio", "or", "OR") if legacy_or else (scale,))
+        low_keys = ("or_lower", "ci_lower") if legacy_or else ("ci_low",)
+        high_keys = ("or_upper", "ci_upper") if legacy_or else ("ci_high",)
+        low, high = number(low_keys), number(high_keys)
+        interval_present = any(row.get(key) not in (None, "") for key in (*low_keys, *high_keys))
+        ci = (low, high) if low is not None and high is not None else None
+        reference = number(("reference_risk",)) if scale == "risk_difference" else None
+        result = None
+        reason = ""
+        note = ""
+        if estimate is None or (scale != "risk_difference" and estimate <= 0):
+            reason = "e_value_effect_invalid"
+        elif interval_present and (ci is None or not low <= estimate <= high or (scale != "risk_difference" and low <= 0)):
+            reason = "e_value_interval_invalid"
+        elif scale == "risk_difference":
+            if row.get("reference_risk") in (None, ""):
+                reason = "e_value_rd_reference_risk_missing"
+            elif reference is None or not 0 < reference < 1:
+                reason = "e_value_rd_reference_risk_invalid"
+            elif not all(0 < reference + value <= 1 for value in (estimate, *(ci or ()))):
+                reason = "e_value_rd_implied_risk_invalid"
             else:
-                estimate_keys = ("odds_ratio", "or", "OR")
-                low_keys = ("or_lower", "ci_lower")
-                high_keys = ("or_upper", "ci_upper")
-
-            def _first_finite(keys: Tuple[str, ...]) -> Optional[float]:
-                for key in keys:
-                    value = row.get(key)
-                    if value in (None, "", "nan"):
-                        continue
-                    try:
-                        number = float(value)
-                    except (TypeError, ValueError):
-                        continue
-                    if number > 0.0 and number not in {float("inf"), float("-inf")}:
-                        return number
-                return None
-
-            odds_ratio = _first_finite(estimate_keys)
-            if odds_ratio is None:
-                continue
-            ci_low = _first_finite(low_keys)
-            ci_high = _first_finite(high_keys)
-            ci = (
-                (ci_low, ci_high)
-                if ci_low is not None and ci_high is not None and ci_low <= ci_high
-                else None
-            )
+                result = compute_e_value(
+                    estimate=1 + estimate / reference,
+                    ci=tuple(1 + value / reference for value in ci) if ci else None,
+                    estimate_type="rr",
+                )
+                note = "RD converted to RR at the same-row reference risk; endpointwise CI treats reference risk as fixed."
+        elif scale == "odds_ratio" and (baseline_prevalence is None or not 0 < baseline_prevalence < 1):
+            reason = "e_value_baseline_prevalence_unresolved"
+        else:
             result = compute_e_value(
-                estimate=odds_ratio,
-                ci=ci,
-                estimate_type="or",
+                estimate=estimate, ci=ci,
+                estimate_type={"odds_ratio": "or", "risk_ratio": "rr", "hazard_ratio": "hr"}[scale],
                 baseline_prevalence=baseline_prevalence,
             )
-            rows_out.append(
-                {
-                    "term": row.get("term")
-                    or row.get("variable")
-                    or row.get("predictor")
-                    or row.get("contrast")
-                    or row.get("exposure")
-                    or "",
-                    "odds_ratio": odds_ratio,
-                    "ci_lower": ci[0] if ci else "",
-                    "ci_upper": ci[1] if ci else "",
-                    "baseline_prevalence": baseline_prevalence,
-                    "e_value": result.e_value,
-                    "e_value_lower_bound": result.e_value_lower_bound,
-                    "note": result.note or "",
-                }
-            )
+        rows_out.append({
+            "term": next((row.get(key) for key in ("term", "variable", "predictor", "contrast", "exposure") if row.get(key)), ""),
+            "effect_scale": scale, "estimate": estimate,
+            "odds_ratio": estimate if scale == "odds_ratio" else "",
+            "ci_lower": ci[0] if ci else "", "ci_upper": ci[1] if ci else "",
+            "baseline_prevalence": baseline_prevalence if scale == "odds_ratio" else "",
+            "reference_risk": reference if reference is not None else "",
+            "e_value": result.e_value if result else None,
+            "e_value_lower_bound": result.e_value_lower_bound if result else None,
+            "reason_code": reason, "note": note or (result.note or "" if result else ""),
+        })
     return rows_out
 
 
@@ -407,6 +420,35 @@ def _current_verified_semantic_csv(
     return next(iter(unique.values()))
 
 
+def _current_survival_evalue_rows(*, evidence, per_step_records, run_dir):
+    """Use the suites' selected HR claims, never their diagnostic Cox rows.
+
+    These reporting contracts derive only HR association claims. Their primary
+    roles already follow the PH and functional-form decisions. Reading the
+    verified claim registry preserves those decisions without changing a suite.
+    """
+    from ..authority.survival_scientific_claims import survival_reporting_requests_claims
+    from ..authority.continuous_survival_scientific_claims import continuous_survival_reporting_requests_claims
+
+    sources = []
+    for record in evidence.current_verified_records(per_step_records):
+        if record.generation_mode != "deterministic_standard" or not (record.metadata or {}).get("scientific_claims"):
+            continue
+        path = verified_run_evidence_path(run_dir, record)
+        if path is None or path.suffix != ".json":
+            continue
+        summary = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(summary, dict) and (survival_reporting_requests_claims(summary) or continuous_survival_reporting_requests_claims(summary)):
+            sources.append(record.evidence_id)
+    if len(sources) != 1:
+        return [], []
+    rows = [dict(term=claim.claim_ref, effect_scale="hazard_ratio", estimate=claim.point_estimate,
+                 ci_low=claim.interval_lower, ci_high=claim.interval_upper)
+            for claim in evidence.authoritative_scientific_claims(per_step_records)
+            if claim.evidence_id == sources[0] and claim.claim_type == "association" and claim.analysis_role == "primary"]
+    return _association_evalue_rows(rows, baseline_prevalence=None), sources
+
+
 def _write_primary_association_evalue_artifacts(
     *,
     evidence: EvidenceStore,
@@ -414,12 +456,12 @@ def _write_primary_association_evalue_artifacts(
     run_dir: Path,
     spec: Optional[EValueConversionSpec],
 ) -> Optional[EValueArtifacts]:
-    """Write O23 from the current primary and outcome-rate authorities.
+    """Write O23 from current, digest-verified primary effect authorities.
 
-    This is the finalization boundary, not merely a CSV parser: both inputs
-    must resolve through the current successful-step ledger and pass evidence
-    digest verification before the typed association schema can produce and
-    register ``e_values.csv``.
+    OR conversion additionally requires the declared outcome-rate authority.
+    Survival suites supply selected primary claims through the verified claim
+    registry; other effects use the primary-association CSV. Both paths obey
+    the current successful-step ledger before registering ``e_values.csv``.
     """
 
     primary_source = _current_verified_semantic_csv(
@@ -428,9 +470,11 @@ def _write_primary_association_evalue_artifacts(
         run_dir=run_dir,
         semantic_id="primary_association",
     )
-    if primary_source is None:
+    rows, source_ids = _current_survival_evalue_rows(
+        evidence=evidence, per_step_records=per_step_records, run_dir=run_dir,
+    )
+    if primary_source is None and not rows:
         return None
-    primary_record, primary_path = primary_source
     outcome_rate_source = _current_verified_semantic_csv(
         evidence=evidence,
         per_step_records=per_step_records,
@@ -444,15 +488,14 @@ def _write_primary_association_evalue_artifacts(
         spec,
     )
     baseline_prevalence = resolved.value
-    if baseline_prevalence is None:
-        raise _EValueBaselineUnresolved(resolved)
-
-    rows = _primary_association_evalue_rows(
-        primary_path,
-        baseline_prevalence=baseline_prevalence,
-    )
+    if not rows:
+        primary_record, primary_path = primary_source
+        source_ids = [str(primary_record.evidence_id)]
+        rows = _primary_association_evalue_rows(primary_path, baseline_prevalence=baseline_prevalence)
     if not rows:
         return None
+    if all(row["reason_code"] == "e_value_baseline_prevalence_unresolved" for row in rows):
+        raise _EValueBaselineUnresolved(resolved)
 
     import csv as _csv
 
@@ -465,45 +508,32 @@ def _write_primary_association_evalue_artifacts(
             writer.writerow([row[key] for key in rows[0].keys()])
 
     markdown_lines = [
-        "# E-values for primary effects (O23)",
+        "# E-values for primary effects (O23)", "",
+        (f"OR baseline event prevalence: **{baseline_prevalence:.4f}** from "
+         f"`{resolved.source_column}` for `{resolved.population_column}={resolved.baseline_population}`."
+         if baseline_prevalence is not None else "No OR baseline conversion was available."),
         "",
-        f"Baseline event prevalence used: **{baseline_prevalence:.4f}** "
-        f"— read from `{resolved.source_column}` for "
-        f"`{resolved.population_column}={resolved.baseline_population}` in the "
-        "Planner-bound baseline-risk evidence.",
-        "",
-        "| Term | OR | 95% CI | E-value | E-value (CI bound) |",
-        "|---|---|---|---|---|",
+        "| Term | Effect scale | Estimate | 95% CI | E-value | E-value (CI bound) | Conversion / omission |",
+        "|---|---|---|---|---|---|---|",
     ]
+    def display(value):
+        return f"{value:.2f}" if isinstance(value, (int, float)) else "—"
+
     for row in rows:
-        ci_display = (
-            f"{row['ci_lower']:.2f} – {row['ci_upper']:.2f}"
-            if row["ci_lower"] != "" and row["ci_upper"] != ""
-            else "—"
-        )
+        ci_display = f"{display(row['ci_lower'])} – {display(row['ci_upper'])}"
         markdown_lines.append(
-            "| {term} | {odds_ratio:.2f} | {ci} | {e_value:.2f} | {bound} |".format(
-                term=str(row["term"])[:40],
-                odds_ratio=row["odds_ratio"],
-                ci=ci_display,
-                e_value=row["e_value"],
-                bound=(
-                    f"{row['e_value_lower_bound']:.2f}"
-                    if row["e_value_lower_bound"] is not None
-                    else "—"
-                ),
-            )
+            f"| {str(row['term'])[:40]} | {row['effect_scale']} | {display(row['estimate'])} | "
+            f"{ci_display} | {display(row['e_value'])} | {display(row['e_value_lower_bound'])} | "
+            f"{row['reason_code'] or row['note']} |"
         )
     markdown_path.write_text(
         "\n".join(markdown_lines) + "\n",
         encoding="utf-8",
     )
 
-    source_ids = [str(primary_record.evidence_id)]
     if outcome_rate_source is not None:
         source_ids.append(str(outcome_rate_source[0].evidence_id))
-    assert spec is not None
-    spec_payload = spec.model_dump(mode="json")
+    spec_payload = spec.model_dump(mode="json") if spec is not None else None
     spec_sha256 = hashlib.sha256(
         json.dumps(spec_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -511,7 +541,9 @@ def _write_primary_association_evalue_artifacts(
         "schema_version": "easyicu.evalue_conversion_receipt/1",
         "conversion_spec": spec_payload,
         "conversion_spec_sha256": spec_sha256,
-        "oracle_scope": "RR formula only; OR conversion requires this receipt",
+        "oracle_scope": "RR formula; OR uses the bound baseline; HR uses the common-outcome approximation; RD needs same-row reference risk",
+        "effect_scales": sorted({row["effect_scale"] for row in rows}),
+        "omissions": [{"term": row["term"], "reason_code": row["reason_code"]} for row in rows if row["reason_code"]],
     }
     csv_record = evidence.register_file(
         kind="statistic",
@@ -539,7 +571,7 @@ def _write_primary_association_evalue_artifacts(
         csv_path=csv_path,
         markdown_path=markdown_path,
         evidence_id=str(csv_record.evidence_id),
-        row_count=len(rows),
+        row_count=sum(row["e_value"] is not None for row in rows),
         baseline_prevalence=baseline_prevalence,
         baseline_source_column=resolved.source_column,
         baseline_population=resolved.baseline_population,
@@ -1064,16 +1096,15 @@ def finalise_success(
                     severity="info",
                     message=(
                         f"Computed E-values for {evalue_artifacts.row_count} primary "
-                        "effect row(s) at this run's observed event rate "
-                        f"{evalue_artifacts.baseline_prevalence:.4f} for declared "
-                        f"population {evalue_artifacts.baseline_population!r}."
+                        "effect row(s). Each row records its declared scale and conversion; "
+                        "unavailable conversions retain their omission reasons."
                     ),
                     evidence_ids=[evalue_artifacts.evidence_id],
                     detail={
                         "baseline_prevalence": (
                             evalue_artifacts.baseline_prevalence
                         ),
-                        "baseline_prevalence_source": "observed_outcome_rate",
+                        "baseline_prevalence_source": "observed_outcome_rate" if evalue_artifacts.baseline_prevalence is not None else None,
                         "baseline_prevalence_column": (
                             evalue_artifacts.baseline_source_column
                         ),

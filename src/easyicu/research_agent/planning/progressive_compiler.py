@@ -2399,7 +2399,13 @@ def _compile_inputs(
                 upstream.step_id in primary_producer_ids
                 and upstream.planned_analysis_role == "primary"
             ):
-                raw_names.extend(upstream.raw_inputs)
+                # The cohort already owns temporal eligibility. A refit needs
+                # model columns and dependence, not extra time/identity inputs
+                # that would masquerade as a second restriction coordinate.
+                dependence = context_dependence_authority(context)
+                raw_names.extend([upstream.primary_exposure, upstream.outcome,
+                                  *(term.name for term in upstream.model_terms),
+                                  *([dependence.group_source] if dependence is not None else [])])
     raw = _require_variables(
         [
             name
@@ -3121,6 +3127,37 @@ def _compile_one_step(
         )
     elif association_sensitivity_capability is not None:
         kwargs["scientific_capability"] = association_sensitivity_capability
+    elif (step.scientific_action_id == "association.effect_modification"
+          and step.custom_method == "prespecified_effect_modification"):
+        parents = [candidate for candidate in skeleton.steps[:step_index]
+                   if candidate.step_id in step.depends_on and candidate.module_id == "adjusted_association"
+                   and candidate.planned_analysis_role == "primary"]
+        if len(parents) != 1 or step.planned_analysis_role != "secondary":
+            raise _fail("progressive_adjusted_model_contract_invalid", "Effect modification needs one preceding primary model.",
+                        step=step, step_index=step_index, path="depends_on")
+        parent = _compile_adjusted_association(context=context, variables=variables, step=parents[0], step_index=step_index)[0]
+        modifiers = []
+        from .adjustment_authority import context_stated_variables
+        from .question_requirements import concept_relatives
+
+        relatives = concept_relatives(context)
+        modifier_names = dict.fromkeys(name for item in context_stated_variables(context, "stated_subgroups")
+                                       for name in step.raw_inputs if item.concept and name in relatives(item.concept))
+        for name in modifier_names:
+            existing = next((term for term in parent.model_terms if term.name == name), None)
+            levels = observed_levels_for(name=name, variables=dict(variables)) or list(declared_domain_for_variable(variables[name])[0] or ())
+            if len(levels) < 2:
+                raise _fail("progressive_adjusted_model_contract_invalid", "A modifier requires closed levels.",
+                            step=step, step_index=step_index, path="raw_inputs")
+            modifiers.append(existing or ModelTermSpec(name=name, role="covariate", coding="binary" if len(levels) == 2 else "categorical",
+                                                       levels=[level_spelling(value) for value in levels], reference_level=level_spelling(levels[0]),
+                                                       transform="treatment_contrast"))
+        if not modifiers:
+            raise _fail("progressive_adjusted_model_contract_invalid", "Effect modification needs a typed stated modifier.",
+                        step=step, step_index=step_index, path="raw_inputs")
+        from ..contracts.model_terms import EffectModificationBinding
+
+        kwargs["icu_rule_refs"] = [EffectModificationBinding.for_model(parent, modifiers).rule_ref()]
     try:
         compiled = AnalysisStep.model_validate(kwargs)
     except ValidationError as exc:
