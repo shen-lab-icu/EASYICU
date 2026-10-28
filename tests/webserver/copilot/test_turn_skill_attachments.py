@@ -312,6 +312,8 @@ def test_attachable_catalog_is_bounded_and_uses_frozen_user_identities(service, 
     row = next(row for row in catalog["items"] if row["source"] == "user")
     assert row["digest"] == original["digest"]
     assert {"id", "title", "title_zh", "category", "enabled"} <= row.keys()
+    layers = {row["layer"] for row in catalog["items"] if row["source"] == "builtin"}
+    assert "research_workflow" in layers and "analysis_module" in layers
     with pytest.raises(PiCopilotError):
         service.set_draft_skills(session["session_id"], project_id="foreign", attached_skills=[BUILTIN])
 

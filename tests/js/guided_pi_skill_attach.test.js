@@ -14,11 +14,11 @@ const JS = path.resolve(__dirname, '../../src/easyicu/webserver/static/js');
 const plain = value => JSON.parse(JSON.stringify(value));
 const CATALOG = [
   { source: 'builtin', id: 'survival-time-to-event', title: 'Survival analysis', title_zh: '生存分析（时间到事件）',
-    category: 'Survival', enabled: true, version: 'easyicu.method-skills/3' },
+    category: 'Survival', layer: 'research_workflow', enabled: true, version: 'easyicu.method-skills/3' },
   { source: 'builtin', id: 'clinical-risk-prediction', title: 'Risk prediction', title_zh: '临床风险预测模型',
-    category: 'Prediction', enabled: false, version: 'easyicu.method-skills/3' },
+    category: 'Prediction', layer: 'research_workflow', enabled: false, version: 'easyicu.method-skills/3' },
   { source: 'builtin', id: 'cohort-characterization-table-one', title: 'Table 1', title_zh: '队列描述与 Table 1',
-    category: 'Descriptive', enabled: true, version: 'easyicu.method-skills/3' },
+    category: 'Descriptive', layer: 'analysis_module', enabled: true, version: 'easyicu.method-skills/3' },
   { source: 'user', id: 'my-notes', title: 'my-notes', title_zh: '', category: 'user', enabled: true, digest: 'd'.repeat(64) },
 ];
 
@@ -57,11 +57,15 @@ test('attaching sends the catalogue identity, and the chip names the Skill', asy
   assert.equal(attach.attached(session, 'builtin', 'survival-time-to-event'), true);
   assert.equal(attach.hasDraft(session), true);
   const html = attach.chips(session);
-  assert.match(html, /<span>技能<\/span><strong>生存分析（时间到事件）<\/strong>/);
+  // A research workflow says so on its chip; a component stays a Skill.
+  assert.match(html, /<span>流程<\/span><strong>生存分析（时间到事件）<\/strong>/);
   assert.match(html, /data-gpi-attached-remove="builtin:survival-time-to-event"/);
   await attach.toggle('p1', session, 'user', 'my-notes');
   assert.deepEqual(plain(session.draft_attached_skills[1]), { source: 'user', id: 'my-notes', digest: 'd'.repeat(64) });
   assert.match(attach.chips(session), /<span>我的技能<\/span><strong>my-notes<\/strong>/);
+  await attach.remove('p1', session, 'user:my-notes');
+  await attach.toggle('p1', session, 'builtin', 'cohort-characterization-table-one');
+  assert.match(attach.chips(session), /<span>技能<\/span><strong>队列描述与 Table 1<\/strong>/);
 });
 
 test('picking an attached Skill again or its × removes it from the draft', async () => {

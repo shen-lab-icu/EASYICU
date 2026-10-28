@@ -89,7 +89,7 @@ class SkillAttachmentService(MentionService):
         enabled = record.agent_mode == "research" and capabilities.capability_settings()["science_skills_enabled"]
         items = [{
             **builtin_attachment(spec.skill_id), "title": spec.title, "title_zh": spec.title_zh,
-            "category": spec.category, "enabled": enabled and _has_attachment_capability(spec.skill_id),
+            "category": spec.category, "layer": spec.layer, "enabled": enabled and _has_attachment_capability(spec.skill_id),
         } for spec in METHOD_SKILLS]
         items.extend({
             "source": "user", "id": skill.name, "digest": skill.digest,
