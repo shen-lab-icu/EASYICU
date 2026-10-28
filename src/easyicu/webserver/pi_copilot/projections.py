@@ -761,6 +761,8 @@ def _project_job(
             "report_revision_id": stable_code(revision.get("revision_id")) if own_revision else "",
             "reportable": bool(gate.get("reportable")),
             "human_review_pending": bool(result.get("human_review_pending")),
+            # Planning stopped on a typed design choice the researcher makes.
+            **({"plan_decision_pending": True} if result.get("status") == "plan_decision_pending" else {}),
             **(
                 {"target_trial_compile": trial_compile}
                 if trial_compile is not None

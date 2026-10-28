@@ -186,6 +186,7 @@
         return Boolean(job && job.gate_status === 'blocked' && !job.human_review_pending);
       }
       if (!PLAN_HOST_ACTION_CODES.has(String(actionCode || ''))) return false;
+      if (job && job.plan_decision_pending === true) return false;
       const refs = Array.isArray(job && job.artifact_refs) ? job.artifact_refs : [];
       return !refs.some(ref => ref && String(ref.artifact || '') === 'agent_plan.json');
     }
@@ -303,6 +304,10 @@
       }).filter(Boolean).sort((left, right) => right[0] - left[0])[0];
       const actionArtifact = String(turn && turn.action_key || '').split(':').slice(1).join(':');
       let doneCopy = copy.done;
+      if (PLAN_HOST_ACTION_CODES.has(String(actionCode || '')) && job && job.plan_decision_pending === true) {
+        doneCopy = tr('Planning paused on one design choice for you; once you choose, the plan is generated again with it.',
+          '规划停在一项需要你决定的设计选择上；你选择后，会按你的选择重新生成计划。');
+      }
       const figureLimitations = (Array.isArray(job && job.limitations) ? job.limitations : [])
         .map(item => String(item && item.message || '')).filter(Boolean).join(' ');
       if (['execute_plan', 'retry_analysis'].includes(actionCode) && job && job.analysis_results_available && figureLimitations) {

@@ -5320,6 +5320,52 @@ def test_blocked_plan_job_is_not_presented_as_a_generated_plan() -> None:
     ]
 
 
+def test_a_plan_job_paused_on_a_design_choice_is_not_called_unfinished() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    transcript_owner = _read("js/screens-guided-pi-transcript.js")
+    script = f"""
+      global.window = {{
+        EU_GUIDED_PI_REPLAY: {{ lifecycleTurns: session => session.replayTurns || [] }},
+      }};
+      eval({transcript_owner!r});
+      const owner = window.EU_GUIDED_PI_TRANSCRIPT.create({{
+        tr: (en, zh) => zh,
+        activity: {{ focusLatest: rows => rows, startTurn: () => {{}}, finishTurn: () => {{}} }},
+        upsertActivityStep: (activity, step) => activity.steps.push(step),
+        timeMs: value => Date.parse(value || '2026-09-01T10:00:00Z'),
+        resourceKey: resource => JSON.stringify(resource || null),
+        modelErrorText: code => code,
+        workflowActionCode: () => 'failed_pipeline_requires_fresh_plan',
+      }});
+      const rows = owner.transcriptMessages({{
+        transcript: [],
+        replayTurns: [{{
+          job_id: 'host-plan-blocked', kind: 'host_action', action_code: 'generate_plan',
+          child_job_id: 'child-plan-blocked', status: 'done',
+          started_at: '2026-09-01T10:00:00Z', ended_at: '2026-09-01T10:01:00Z', events: [],
+        }}],
+        archived_child_jobs: [{{
+          job_id: 'child-plan-blocked', status: 'done', gate_status: 'blocked',
+          artifact_refs: [], plan_decision_pending: true,
+        }}],
+      }});
+      process.stdout.write(JSON.stringify(rows.map(row => ({{
+        role: row.role, text: row.text || '', status: row.status || '',
+      }}))));
+    """
+    completed = run_node(node, script, check=True)
+    assert json.loads(completed.stdout) == [
+        {"role": "activity", "text": "", "status": "complete"},
+        {
+            "role": "assistant",
+            "text": "规划停在一项需要你决定的设计选择上；你选择后，会按你的选择重新生成计划。",
+            "status": "",
+        },
+    ]
+
+
 def test_only_latest_successful_plan_action_is_projected_as_current_conversation() -> None:
     node = shutil.which("node")
     if node is None:
@@ -6630,7 +6676,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20261027-access1" in index
+    assert "screens-guided-pi-transcript.js?v=20261028-pend2" in index
     assert "screens-guided-pi.js?v=20261028-hub3" in index
 
 
