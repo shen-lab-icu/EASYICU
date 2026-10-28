@@ -27,6 +27,7 @@ import json
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic_core import PydanticCustomError
 
 from ...outcome_availability import fixed_horizon_mortality_endpoint
 from ...utils.death_time_semantics import DEATH_STATUS, DEATH_TIME_COMPANION
@@ -143,13 +144,14 @@ class TargetTrialConfirmation(_Closed):
 class TargetTrialRuntimeAuthority(_Closed):
     """Closed clone-censor-weight emulation of one grace-period target trial.
 
-    Every field is stated in the signed body: the digest is computed over the
-    body as the host wrote it, so a field with a default would digest
-    differently once validated.
+    The origin is digest-bound for workflow metadata. Legacy host-signed
+    bodies may omit it; only that origin permits the original body digest.
+    Other fields are stated exactly as the host wrote them.
     """
 
     schema_version: Literal["easyicu.target_trial_runtime_authority/1"]
     authority_kind: Literal["target_trial_suite"]
+    authority_origin: Literal["host_signed", "workflow_metadata"] = "host_signed"
     protocol_content_sha256: str = Field(pattern=_SHA256)
     execution_contract_sha256: str = Field(pattern=_SHA256)
     #: ``CompiledTargetTrial.sha256()`` of the record the plan was approved from.
@@ -292,8 +294,20 @@ class TargetTrialRuntimeAuthority(_Closed):
             raise ValueError("target trial plan outputs must equal the owned products")
         body = self.model_dump(mode="json", exclude={"execution_contract_sha256"})
         if canonical_sha256(body) != self.execution_contract_sha256:
-            raise ValueError("target trial authority digest mismatch")
+            if self.authority_origin == "host_signed":
+                body.pop("authority_origin")
+            if canonical_sha256(body) != self.execution_contract_sha256:
+                raise ValueError("target trial authority digest mismatch")
         return self
+
+    def require_execution_origin(self) -> None:
+        """Catalog metadata can describe a suite but cannot authorize it."""
+
+        if self.authority_origin == "workflow_metadata":
+            raise PydanticCustomError(
+                "workflow_metadata_not_executable", "Read-only workflow metadata cannot authorize execution.",
+            )
+        self._closed_contract()
 
     def _closed_resampling(self, source: tuple[str, ...]) -> None:
         group = (
@@ -403,6 +417,7 @@ class TargetTrialRuntimeAuthority(_Closed):
     def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
         """Compile the signed emulation and its source-bound renderer."""
 
+        self.require_execution_origin()
         primary = [
             step for step in plan.steps if step.planned_analysis_role == "primary"
         ]
@@ -536,6 +551,7 @@ class TargetTrialRuntimeAuthority(_Closed):
     ) -> AnalysisPlan:
         """Mechanically project this complete authority into one dev-only plan."""
 
+        self.require_execution_origin()
         if not self.development_execution_only_allowed:
             raise TargetTrialAuthorityError(
                 "target trial authority does not allow execution-only development"
@@ -579,6 +595,7 @@ class TargetTrialRuntimeAuthority(_Closed):
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         """Return the deterministic analysis owner after validating the suite."""
 
+        self.require_execution_origin()
         if len(plan.steps) != 3:
             raise TargetTrialAuthorityError(
                 "target trial suite must have cohort, analysis and figure owners"

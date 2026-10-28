@@ -11768,6 +11768,30 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.planning.family_spec.longitudinal_canonical",
+      "easyicu.research_agent.authority.target_trial_runtime"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.longitudinal_canonical",
+      "easyicu.research_agent.authority.time_varying_runtime"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.longitudinal_canonical",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.longitudinal_canonical",
+      "easyicu.research_agent.contracts.target_trial_design"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.longitudinal_canonical",
+      "easyicu.research_agent.planning.family_spec.contract"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.longitudinal_canonical",
+      "easyicu.research_agent.planning.family_spec.longitudinal_coordinates"
+    ],
+    [
       "easyicu.research_agent.planning.family_spec.longitudinal_coordinates",
       "easyicu.research_agent.authority.target_trial_runtime"
     ],
@@ -16888,9 +16912,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 4214,
+    "edge_count": 4220,
     "largest_scc_size": 0,
-    "module_count": 903,
+    "module_count": 904,
     "package_count": 42,
     "top_level_module_count": 37
   },
@@ -17484,6 +17508,7 @@
     "easyicu.research_agent.planning.family_spec.dynamic_landmark_template": "planning/family_spec/dynamic_landmark_template.py",
     "easyicu.research_agent.planning.family_spec.feasibility_template": "planning/family_spec/feasibility_template.py",
     "easyicu.research_agent.planning.family_spec.landmark_categorical_template": "planning/family_spec/landmark_categorical_template.py",
+    "easyicu.research_agent.planning.family_spec.longitudinal_canonical": "planning/family_spec/longitudinal_canonical.py",
     "easyicu.research_agent.planning.family_spec.longitudinal_coordinates": "planning/family_spec/longitudinal_coordinates.py",
     "easyicu.research_agent.planning.family_spec.longitudinal_template": "planning/family_spec/longitudinal_template.py",
     "easyicu.research_agent.planning.family_spec.phenotyping_template": "planning/family_spec/phenotyping_template.py",

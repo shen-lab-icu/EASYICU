@@ -27,9 +27,11 @@ from .typed_input_binding import sole_typed_cohort_input
 def _authority(
     value: TimeVaryingRuntimeAuthority | Mapping[str, Any],
 ) -> TimeVaryingRuntimeAuthority:
-    if isinstance(value, TimeVaryingRuntimeAuthority):
-        return value
-    return TimeVaryingRuntimeAuthority.model_validate_json(canonical_json(dict(value)))
+    sealed = value if isinstance(value, TimeVaryingRuntimeAuthority) else (
+        TimeVaryingRuntimeAuthority.model_validate_json(canonical_json(dict(value)))
+    )
+    sealed.require_execution_origin()
+    return sealed
 
 
 def _verified_panel(
