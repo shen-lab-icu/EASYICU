@@ -1,7 +1,5 @@
 """Only the explicit fit roster may affect the learned cluster assignments."""
 
-import json
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -14,6 +12,7 @@ from easyicu.research_agent.execution.runners.cross_sectional_phenotyping_execut
 from easyicu.research_agent.planning.progressive_compiler import compile_progressive_plan
 from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError, ProgressivePlanSkeleton
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
+from tests.support.schema_names import authority_schema_json
 
 from .test_cross_sectional_phenotyping_executor import _context, _frame, _primary_step
 from ..planning.progressive_planner_fixtures import _payload
@@ -53,7 +52,7 @@ def test_transport_closes_feature_names_without_increasing_the_schema_budget():
         allowed_literature_citation_keys=["strobe_2007"],
     )
     assert len(request.canonical_payload_json.encode()) < 12_000
-    branches = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"]["anyOf"]
+    branches = authority_schema_json(request.schema_json)["$defs"]["ProgressiveSkeletonStep"]["anyOf"]
     custom = next(branch for branch in branches if branch["properties"]["module_id"].get("const") == "custom_analysis")
     array = next(branch for branch in custom["properties"]["phenotyping_feature_columns"]["anyOf"] if branch.get("type") == "array")
     assert array["items"]["enum"] == ["marker_a", "marker_b", "death"]

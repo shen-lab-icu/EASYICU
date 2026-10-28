@@ -154,13 +154,17 @@ def test_a_real_product_disagreement_is_still_refused(tmp_path: Path) -> None:
 def test_the_alias_comes_from_the_shared_owner_not_a_second_copy() -> None:
     """If this module ever grows its own map, the two can drift apart again."""
 
+    from easyicu.research_agent.contracts import artifact_consumption, product_identity
     from easyicu.research_agent.contracts.declared_product import typed_product
 
+    assert typed_product is product_identity.typed_product
     assert typed_product("cohort:analysis_set") == typed_product("dataset:analysis_set")
     assert typed_product("table:analysis_set") != typed_product("dataset:analysis_set")
 
-    source = Path(
-        "src/easyicu/research_agent/execution/runners/typed_input_binding.py"
-    ).read_text(encoding="utf-8")
-    assert "declared_product import typed_product" in source
-    assert '"cohort": "dataset"' not in source
+    source = Path(artifact_consumption.__file__).read_text(encoding="utf-8")
+    assert "product_identity import typed_product" in source
+    for path in (
+        Path(artifact_consumption.__file__),
+        Path("src/easyicu/research_agent/execution/runners/typed_input_binding.py"),
+    ):
+        assert '"cohort": "dataset"' not in path.read_text(encoding="utf-8")

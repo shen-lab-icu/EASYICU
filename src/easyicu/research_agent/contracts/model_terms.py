@@ -428,6 +428,8 @@ class PlannedModelRequirement(BaseModel):
     must not infer required models from step prose or benchmark vocabulary.
     Ordered, free-day and count endpoints carry explicit estimands and their
     outcome definitions; repeated units use the declared dependence contract.
+    This roster does not represent survival or causal estimands; those use
+    separate family-primary-result contracts.
     """
 
     model_config = ConfigDict(extra="forbid")

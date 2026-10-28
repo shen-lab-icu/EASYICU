@@ -293,8 +293,10 @@ def _carry_family_cohort_flow_figure(*, draft: AnalysisPlan, bound: AnalysisPlan
     sources = [step for step in draft.steps if step.step_id == "family_cohort_flow_figure"]
     if not sources:
         return bound
-    from ..contracts.figure_plan import COHORT_FLOW_FIGURE_PANELS
-    from ..execution.runners.cohort_flow_figure_executor import cohort_flow_figure_executor_declares_step
+    from ..contracts.figure_plan import (
+        COHORT_FLOW_FIGURE_PANELS,
+        cohort_flow_figure_executor_declares_step,
+    )
     from ..schema import ArtifactConsumptionContract
 
     if (len(sources) != 1 or not cohort_flow_figure_executor_declares_step(sources[0])
