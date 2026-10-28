@@ -29,10 +29,16 @@ substituted default.
 from __future__ import annotations
 
 import math
+import json
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Annotated, Any, Iterable, Literal, Mapping, Sequence
+
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator
+
+from ..canonical_json import canonical_sha256
+from .cohort_product_keys import sole_typed_cohort_input
 
 __all__ = [
     "ELIGIBILITY_COORDINATE_PREFIX",
@@ -1361,3 +1367,230 @@ def sealed_trajectory_authority_body(
             else {}
         ),
     }
+
+
+# Repeated-outcome models retain a distinct design from latent trajectory classes.
+REPEATED_CAPABILITY = "repeated_measures_v1"
+REPEATED_ACTIONS = ("association.mixed_effects", "association.gee", "phenotyping.mixed_effects_growth")
+REPEATED_OUTPUTS = (
+    "table:repeated_measure_effects", "table:repeated_measure_diagnostics", "table:repeated_measure_profile",
+)
+DEATH_LIMITATION = (
+    "Death truncates repeated measurements and may cause informative dropout; "
+    "these observed-data estimates do not identify a trajectory after death."
+)
+
+
+class RepeatedMeasureSpec(BaseModel):
+    """Time is a numeric offset from ICU admission, never an inferred row index."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    identity_column: str = Field(min_length=1)
+    time_column: str = Field(min_length=1)
+    outcome_column: str = Field(min_length=1)
+    time_origin: Literal["icu_admission"]
+    time_unit: Literal["hours", "days"]
+    window_start: float = Field(ge=0)
+    window_end: float = Field(gt=0)
+    bin_width: float = Field(gt=0)
+    aggregation: Literal["mean", "median", "min", "max", "sum", "first", "last"]
+    model: Literal["mixed_intercept", "mixed_slope", "gee"]
+    family: Literal["gaussian", "binomial"]
+    time_basis: Literal["linear", "natural_cubic_spline"]
+    spline_knots: tuple[float, ...] = ()
+    working_correlation: Literal["exchangeable", "ar1", "independence"] | None = None
+    covariates: tuple[str, ...] = ()
+    dropout_limitation: Literal["death_may_cause_informative_dropout"]
+    dropout_sensitivity: Literal["survivors", "joint_model_note"]
+    death_column: str | None = None
+    ci_level: float = Field(default=0.95, gt=0, lt=1)
+
+    @model_validator(mode="after")
+    def _closed_design(self):
+        columns = [self.identity_column, self.time_column, self.outcome_column, *self.covariates]
+        if self.death_column is not None:
+            columns.append(self.death_column)
+        if len(columns) != len(set(columns)) or any(not name.strip() or name != name.strip() for name in columns):
+            raise ValueError("repeated-measure columns must be distinct exact names")
+        bins = (self.window_end - self.window_start) / self.bin_width
+        if bins < 2 or bins > 1000 or not math.isclose(bins, round(bins), abs_tol=1e-8):
+            raise ValueError("window must contain 2 to 1000 complete declared bins")
+        if self.model != "gee" and (self.family != "gaussian" or self.working_correlation is not None):
+            raise ValueError("mixed models require gaussian outcomes and no working correlation")
+        if self.model == "gee" and self.working_correlation is None:
+            raise ValueError("GEE requires a planned working_correlation")
+        if self.family == "binomial" and self.aggregation not in {"first", "last", "min", "max"}:
+            raise ValueError("binary repeated outcomes require a binary-preserving aggregation")
+        if self.time_basis == "linear" and self.spline_knots:
+            raise ValueError("linear time cannot declare spline knots")
+        if self.time_basis == "natural_cubic_spline" and (
+            not self.spline_knots or tuple(sorted(set(self.spline_knots))) != self.spline_knots
+            or not all(self.window_start < knot < self.window_end for knot in self.spline_knots)
+        ):
+            raise ValueError("spline time needs ordered distinct interior knots in the declared unit")
+        if self.dropout_sensitivity == "survivors" and not self.death_column:
+            raise ValueError("survivor sensitivity needs an explicit binary death_column")
+        return self
+
+    @property
+    def required_columns(self) -> tuple[str, ...]:
+        return (self.identity_column, self.time_column, self.outcome_column, *self.covariates,
+                *((self.death_column,) if self.death_column else ()))
+
+    @property
+    def action_id(self) -> str:
+        return "association.gee" if self.model == "gee" else "association.mixed_effects"
+
+
+class RepeatedMeasurePlanFields(BaseModel):
+    """Bounded progressive wire field; the scientific owner validates its JSON."""
+
+    repeated_measure_spec: Annotated[
+        RepeatedMeasureSpec | None, WithJsonSchema({"anyOf": [{"type": "string"}, {"type": "null"}]}),
+    ] = Field(default=None, exclude_if=lambda value: value is None)
+
+    @field_validator("repeated_measure_spec", mode="before")
+    @classmethod
+    def _decode_repeated_measure_spec(cls, value):
+        return RepeatedMeasureSpec.model_validate_json(value) if isinstance(value, str) else value
+
+
+def repeated_measure_method(spec: RepeatedMeasureSpec) -> str:
+    parsed = RepeatedMeasureSpec.model_validate(spec.model_dump())
+    return "repeated_measures(" + json.dumps(parsed.model_dump(mode="json"), sort_keys=True, separators=(",", ":")) + ")"
+
+
+def repeated_measure_spec_for_step(step: object) -> RepeatedMeasureSpec | None:
+    method = str(getattr(step, "method", "") or "")
+    if not method.startswith("repeated_measures("):
+        return None
+    if not method.endswith(")"):
+        raise ValueError("unclosed repeated-measure declaration")
+    spec = RepeatedMeasureSpec.model_validate_json(method[len("repeated_measures("):-1])
+    action = getattr(step, "scientific_action_id", None)
+    if action != spec.action_id and not (action == "phenotyping.mixed_effects_growth" and spec.model == "mixed_slope"):
+        raise ValueError("repeated-measure action and model differ")
+    return spec
+
+
+def repeated_measure_step_matches(step: object) -> bool:
+    try:
+        spec = repeated_measure_spec_for_step(step)
+    except ValueError:
+        return False
+    return bool(spec is not None and set(spec.required_columns) <= set(getattr(step, "inputs", ()))
+                and getattr(step, "scientific_capability", None) in (None, REPEATED_CAPABILITY)
+                and tuple(getattr(step, "expected_outputs", ())) == REPEATED_OUTPUTS
+                and bool(sole_typed_cohort_input(step))
+                and getattr(step, "planned_analysis_role", None) in {"primary", "secondary"}
+                and not any(getattr(step, field, None) for field in (
+                    "model_requirements", "table_one_spec", "trajectory_stability_spec", "cohort_definition_spec",
+                    "measurement_audit_spec", "phenotype_comparison_spec", "robustness_replay_spec",
+                )))
+
+
+def repeated_measure_result_receipt_valid(summary: object) -> bool:
+    """Reject missing, non-converged or specification-drifted core estimates."""
+    if not isinstance(summary, Mapping) or summary.get("status") != "ok" or summary.get("claim_ceiling") != "analysis_only":
+        return False
+    receipt = summary.get("repeated_measure_receipt")
+    if not isinstance(receipt, Mapping) or receipt.get("schema_version") != "easyicu.repeated_measure_result/1":
+        return False
+    try:
+        spec = RepeatedMeasureSpec.model_validate(receipt.get("specification"))
+        if receipt.get("specification_sha256") != canonical_sha256(spec.model_dump(mode="json")):
+            return False
+        fits = receipt["fits"]
+        populations = ["all_observed", "survivors"] if spec.dropout_sensitivity == "survivors" else ["all_observed"]
+        if [fit["population"] for fit in fits] != populations:
+            return False
+        for fit in fits:
+            result = fit["statistics"]
+            count = len(result["var_names"])
+            if result["converged"] is not True or count < 2 or result["n_obs"] <= count:
+                return False
+            for key in ("coef", "se", "ci_low", "ci_high"):
+                if len(result[key]) != count or not all(math.isfinite(v) for v in result[key]):
+                    return False
+            if any(se <= 0 or low > estimate or high < estimate for se, low, high, estimate in
+                   zip(result["se"], result["ci_low"], result["ci_high"], result["coef"], strict=True)):
+                return False
+            if spec.model == "gee":
+                if result["cov_type"] != "robust" or result["family"] != spec.family or result["cov_struct"] != spec.working_correlation:
+                    return False
+            elif result["random_slope_var"] is None and spec.model == "mixed_slope":
+                return False
+    except (TypeError, ValueError, KeyError):
+        return False
+    return True
+
+
+def _accepted_aggregation(context, outcome: str) -> str | None:
+    """Read a supplied preparation choice, never guess one from the concept name.
+
+    The optional data-constraints projection accepts a per-column aggregation
+    map when an upstream preparation owner has supplied one.
+    """
+    raw = getattr(getattr(context, "user_preferences", None), "data_constraints", None)
+    try:
+        constraints = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return None
+    preparation = constraints.get("data_preparation", {}) if isinstance(constraints, dict) else {}
+    aggregations = preparation.get("aggregations", {}) if isinstance(preparation, dict) else {}
+    return aggregations.get(outcome) if isinstance(aggregations, dict) else None
+
+
+def repeated_measure_plan_errors(context, plan, *, requested: bool = False) -> tuple[str, ...]:
+    steps = [s for s in plan.steps if s.scientific_action_id in REPEATED_ACTIONS
+             or str(s.method or "").startswith("repeated_measures(")]
+    requested = requested or plan.analysis_type == "repeated_measures"
+    if not steps:
+        return ("No reviewed repeated-measure model answers the change-over-time question.",) if requested else ()
+    errors = []
+    known = {variable.name for variable in context.variables} | set(context.cohort.id_columns)
+    for step in steps:
+        try:
+            spec = repeated_measure_spec_for_step(step)
+            if spec is None or not repeated_measure_step_matches(step):
+                raise ValueError("Require the complete time-axis, aggregation and death-dropout design with exact bound inputs and products.")
+            if not set(spec.required_columns) <= known:
+                raise ValueError("Repeated-measure time, identity, outcome and sensitivity columns must exist in the context.")
+            aggregate = _accepted_aggregation(context, spec.outcome_column)
+            if aggregate is not None and aggregate != spec.aggregation:
+                raise ValueError("Repeated-measure aggregation differs from the accepted data_preparation choice.")
+        except ValueError as exc:
+            errors.append(f"{step.step_id}: {exc}")
+    if plan.analysis_type == "repeated_measures" and not any(s.planned_analysis_role == "primary" for s in steps):
+        errors.append("The repeated-measure question requires one repeated-measure primary model.")
+    return tuple(errors)
+
+
+def repeated_measure_primary_matches(plan) -> bool:
+    primary = [s for s in plan.steps if s.planned_analysis_role == "primary"]
+    return len(primary) == 1 and repeated_measure_step_matches(primary[0])
+
+
+def repeated_measure_compiled_method(step):
+    """Keep the scientific packet intact across Progressive compilation."""
+    spec = step.repeated_measure_spec
+    if spec is None:
+        raise ValueError("Repeated-measure actions require repeated_measure_spec")
+    if not set(spec.required_columns) <= set(step.raw_inputs):
+        raise ValueError("Repeated-measure coordinates must all be explicit raw_inputs")
+    method = repeated_measure_method(spec)
+    # Check action/model agreement before any executable plan is produced.
+    proxy = type("RepeatedStep", (), {"method": method, "scientific_action_id": step.scientific_action_id})()
+    repeated_measure_spec_for_step(proxy)
+    return method
+
+
+def canonical_repeated_measure_spec() -> RepeatedMeasureSpec:
+    """Synthetic display coordinates, never data or execution authority."""
+    return RepeatedMeasureSpec(
+        identity_column="stay_id", time_column="hours_from_admission", outcome_column="measurement",
+        time_origin="icu_admission", time_unit="hours", window_start=0, window_end=144, bin_width=24,
+        aggregation="mean", model="mixed_slope", family="gaussian", time_basis="linear",
+        dropout_limitation="death_may_cause_informative_dropout", dropout_sensitivity="joint_model_note",
+    )

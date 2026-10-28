@@ -227,7 +227,7 @@ class RejectKernels(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectKernels())
 from easyicu.research_agent.method_skills import method_skill_catalog, method_skill_package
 items = method_skill_catalog(enabled=True)['items']
-assert len(items) == 23
+assert len(items) == 24
 for row in items:
     assert any(f.get('role') == 'host_implementation'
                for f in method_skill_package(row['id'], enabled=True)['files'])
@@ -238,7 +238,7 @@ print(len(items))
     result = subprocess.run([sys.executable, "-c", script], cwd=REPO_ROOT,
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "23"
+    assert result.stdout.strip() == "24"
 
 
 @pytest.mark.parametrize("qualname", ["renamed_prediction_binary", "prediction_binary.missing_nested"])

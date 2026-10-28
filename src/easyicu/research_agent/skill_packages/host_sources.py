@@ -101,12 +101,13 @@ _RUNTIME_ROOTS: dict[str, tuple[str, ...]] = {
     "execution.runners.cross_sectional_phenotyping_executor": ("run_primary_phenotyping", "run_phenotyping_diagnostic"),
     "execution.runners.exposure_outcome_distribution_executor": ("run_exposure_outcome_distribution_from_env",),
     "execution.runners.ordered_stratified_executor": ("run_ordered_stratified_from_env",),
-    "execution.runners.trajectory_scientific_representation_executor": ("run_trajectory_scientific_representation",),
+    "execution.runners.trajectory_scientific_representation_executor": ("run_trajectory_scientific_representation", "run_repeated_measures"),
     "execution.runners.trajectory_scientific_candidate_executor": ("run_trajectory_scientific_candidate_selection",),
     "execution.runners.trajectory_stability_executor": ("run_trajectory_stability",),
     "execution.runners.target_trial_executor": ("run_target_trial_suite",),
 }
 _ESTIMATOR_ROOTS: dict[str, tuple[tuple[str, str], ...]] = {
+    "execution.runners.trajectory_scientific_representation_executor": (("methods.mixed_effects", "fit_mixed_effects"), ("methods.gee", "fit_gee")),
     "execution.runners.adjusted_association_executor": (("robustness.estimators", "fit_estimator"),),
     "execution.runners.landmark_categorical_association_executor": (
         ("execution.runners.adjusted_association_executor", "run_adjusted_association_from_env"),

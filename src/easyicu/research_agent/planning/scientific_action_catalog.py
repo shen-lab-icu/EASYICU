@@ -31,6 +31,7 @@ from ..contracts.method_kernels import CURATED_METHOD_KERNELS, HOST_METHOD_KERNE
 from ..contracts.method_packages import BASELINE_PACKAGES, CURATED_METHOD_PACKAGES
 from ..contracts.cross_sectional_phenotyping_policy import CROSS_SECTIONAL_PHENOTYPING_POLICY
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
+from ..contracts.trajectory_design import REPEATED_ACTIONS, REPEATED_OUTPUTS
 from .analysis_method_suite import AnalysisMethod, get_suite
 from .method_adapter_catalog import (
     MethodAdapterContract,
@@ -108,6 +109,11 @@ _RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
                  "Require source history and timing in the selected database; never substitute baseline adjustment. "
                  "Only weighted pooled logistic MSM and single-point logistic g-formula are executable; no multi-interval g-formula."),
     ),
+    **{action: ScientificActionRuntimeContract(
+        outputs=tuple((product, "custom") for product in REPEATED_OUTPUTS),
+        required_product_inputs=("artifact:analysis_cohort",), standard_executor="repeated_measures",
+        execution_parameters=(("repeated_measure_spec", "JSON RepeatedMeasureSpec: ICU time axis/unit/window/bin/aggregation; mixed model or GEE correlation; death-dropout limitation and sensitivity"),),
+    ) for action in REPEATED_ACTIONS},
     "prediction.external_validation": ScientificActionRuntimeContract(
         outputs=(("table:external_validation", "custom"), ("table:external_calibration", "custom"),
                  ("table:external_decision_curve", "custom"), ("table:external_case_mix", "custom"),
@@ -457,6 +463,13 @@ def scientific_actions_for_analysis_type(value: str) -> ScientificActionCatalog:
         if suite is not None
         else ()
     )
+    # Repeated-outcome estimators have their own planning family and required
+    # design packet. Ordinary association steps must retain their original
+    # action/resource scope, rather than offering a different data layout.
+    actions = tuple(action for action in actions if (
+        action.primary_for_analysis_types != ("repeated_measures",)
+        or analysis_type == "repeated_measures"
+    ))
     catalog = ScientificActionCatalog(
         analysis_type=analysis_type,
         analysis_family=family,

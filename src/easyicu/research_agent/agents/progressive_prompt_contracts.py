@@ -710,6 +710,12 @@ def selected_counts_only_inference_coordinate(
 
 
 _COORDINATE_OWNED_FIELD_GUIDANCE = {
+    "repeated_measure_spec": (
+        "Set repeated_measure_spec to JSON text naming ICU admission as time origin, hours/days, window, bin width, "
+        "aggregation, model/family and fixed-time basis; GEE also declares working_correlation. Explicitly set "
+        "dropout_limitation='death_may_cause_informative_dropout' and dropout_sensitivity='survivors' with death_column "
+        "or 'joint_model_note'. Bind every coordinate column as raw input and use the action's exact aggregate products."
+    ),
     "external_validation_spec": (
         "external_validation_spec is a JSON-text object naming development_database, validation_databases, "
         "frozen_model_sha256, predictor_concepts, outcome_concept, recalibration and confirmed_changes. "
@@ -829,6 +835,7 @@ def step_materialization_shape_contract(
         "confidence_level": None, "sensitivity_spec_ids": [], "functional_form_spec": None,
         "bootstrap_spec": None,
         "external_validation_spec": None,
+        "repeated_measure_spec": None,
         "repeated_unit_interval_method": None,
         "patient_weighted_interval_assumptions": None,
         "phenotyping_feature_columns": None,

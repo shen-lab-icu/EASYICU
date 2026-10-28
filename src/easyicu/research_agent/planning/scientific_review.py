@@ -209,7 +209,7 @@ class PlanScientificFinding(BaseModel):
     )
 
 
-CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/18"
+CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/19"
 
 
 class PlanScientificReview(BaseModel):
@@ -217,8 +217,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # Archived reviews remain readable, but cannot substitute for a /18
-    # execution review, which also blocks requested values with no observations.
+    # Archived reviews remain readable, but cannot substitute for a /19
+    # execution review, which also requires the repeated-measure dropout design.
     schema_version: Literal[
         "easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11",
         "easyicu.plan_scientific_review/12",
@@ -228,6 +228,7 @@ class PlanScientificReview(BaseModel):
         "easyicu.plan_scientific_review/16",
         "easyicu.plan_scientific_review/17",
         "easyicu.plan_scientific_review/18",
+        "easyicu.plan_scientific_review/19",
     ] = (
         CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
     )
@@ -1954,6 +1955,10 @@ def render_plan_scientific_guardrails(context: ResearchContext, *, execution_tie
     """Render case-neutral, context-derived guardrails before Planner generation."""
 
     lines = ["PRE-APPROVAL SCIENTIFIC PLAN GUARDRAILS (host-derived):"]
+    from .analysis_types import repeated_measure_guardrails
+
+    if repeated_guardrails := repeated_measure_guardrails(context):
+        lines.append(repeated_guardrails)
     if execution_tier == "first_result":
         from ..contracts.claim_ceiling import first_result_instructions
         lines.append(first_result_instructions())
@@ -3705,6 +3710,15 @@ def build_plan_scientific_review(
     )
     findings.extend(unapplied_population_findings(plan))
     findings.extend(robustness_override_event_window_findings(context, plan))
+    from ..contracts.trajectory_design import repeated_measure_plan_errors
+    from .analysis_types import infer_analysis_type
+
+    if repeated_errors := repeated_measure_plan_errors(context, plan, requested=infer_analysis_type(context).key == "repeated_measures"):
+        findings.append(PlanScientificFinding(
+            code="REPEATED_MEASURE_DESIGN_UNRESOLVED", severity="blocker", dimension="design",
+            message=" ".join(repeated_errors), evidence_refs=["analysis_plan.json"],
+            remediation="Declare ICU time axis/unit, window, aggregation and model; explicitly state informative dropout from death and a survivor sensitivity or joint-model note.",
+        ))
     findings.extend(prediction_timing_findings(context, plan))
     findings.extend(prediction_patient_grouping_findings(context, plan))
     required_source_columns = {

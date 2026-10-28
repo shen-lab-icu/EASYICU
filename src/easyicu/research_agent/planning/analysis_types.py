@@ -20,6 +20,7 @@ import re
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ..schema import ResearchContext, VariableRole
+from ..contracts.trajectory_design import REPEATED_OUTPUTS
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,18 @@ _DECLINED_COMPETING_EVENT = re.compile(
 
 
 _REGISTRY: Dict[str, AnalysisTypeSpec] = {
+    "repeated_measures": AnalysisTypeSpec(
+        key="repeated_measures", name="Repeated-measure outcome trajectories",
+        description="Estimate change over ICU time in a repeated continuous or binary outcome using a reviewed mixed model or GEE.",
+        trigger_terms=("repeated measures", "repeated measurements", "重复测量", "随时间变化", "纵向变化"),
+        candidate_steps=("audit long-panel measurement density", "declare ICU time axis, window and aggregation",
+                         "association.mixed_effects or association.gee", "death-dropout sensitivity and aggregate reporting"),
+        guardrails=("Declare hours/days from ICU admission, window, bin width and measurement aggregation.",
+                    "Use RepeatedMeasureSpec; select GEE working correlation in the reviewed plan.",
+                    "Death may cause informative dropout: state the limitation and plan survivor restriction or a joint-model note.",
+                    "Growth curves do not identify latent classes; LCGA/GBTM remains planned."),
+        capability_id="repeated_measures_v1",
+    ),
     "descriptive_epidemiology": AnalysisTypeSpec(
         key="descriptive_epidemiology",
         name="Descriptive epidemiology / cohort characterization",
@@ -677,6 +690,7 @@ _FAMILY_ALIASES: Dict[str, str] = {
 CONCEPT_SET_FAMILIES: frozenset[str] = frozenset(
     {
         "trajectory_clustering",
+        "repeated_measures",
         "descriptive_epidemiology",
         "data_quality_audit",
         "measurement_bias_audit",
@@ -2138,6 +2152,8 @@ def _infer_analysis_type_with_basis(
         return _REGISTRY["causal_inference"], FAMILY_BASIS_KEYWORD
     if _strong_clustering_framing:
         return _REGISTRY["trajectory_clustering"], FAMILY_BASIS_KEYWORD
+    if repeated_measure_question(primary_question_text) and not landmark_prediction_framing(primary_question_text):
+        return _REGISTRY["repeated_measures"], FAMILY_BASIS_KEYWORD
     if strong_survival_framing:
         return _REGISTRY["survival"], FAMILY_BASIS_KEYWORD
     # A prediction made at several times, each over the horizon that follows
@@ -2453,16 +2469,12 @@ def locked_analysis_type_guide(spec: AnalysisTypeSpec) -> str:
     return (
         f"INFERRED ANALYSIS FAMILY SUGGESTION: `{spec.key}` — {spec.name}.\n"
         f"{spec.description}\n"
-        f"Default module backbone (use these as your step set unless the "
-        f"context clearly rules one out): {', '.join(spec.candidate_steps)}.\n"
+        f"Default module backbone (omit inapplicable steps): {', '.join(spec.candidate_steps)}.\n"
         f"Mandatory guardrails for this family: {' '.join(spec.guardrails)}\n"
-        "Use this family when it matches the estimand and pick methods/figures it "
-        "calls for. Do not default to a generic association/logistic plan when the "
-        "suggested family is survival, trajectory_clustering, dynamic_prediction, "
-        "causal_inference, etc. If the research question clearly belongs to a "
-        "different family than the suggestion above and the caller did not bind "
-        "a typed family, you may switch with an explicit one-line justification "
-        "in `rationale`; caller-bound family authority may not be replaced.\n"
+        "Use this family when it matches the estimand. Do not default to a generic "
+        "association/logistic plan for survival, trajectory_clustering, dynamic_prediction "
+        "or causal_inference. Without a caller-bound typed family, justify a better "
+        "family in `rationale`; otherwise preserve caller authority.\n"
     )
 
 
@@ -2508,3 +2520,32 @@ __all__ = [
     "locked_analysis_type_guide",
     "analysis_type_catalog_markdown",
 ]
+
+
+def repeated_measure_question(question: str) -> bool:
+    return bool(re.search(
+        r"\brepeated[ -]measur(?:es|ements)\b"
+        r"|\b(?:mixed[ -]effects?|gee|general[is]zed estimating equations?)\b.{0,100}\b(?:time|days?|hours?|longitudinal)\b"
+        r"|(?:change|changes|changing|growth|trend)\s+over\s+time"
+        r"|重复测量|随时间(?:变化|改变)|纵向变化|增长曲线"
+        r"|(?:混合效应|广义估计方程).{0,80}(?:时间|每日|纵向|每天)",
+        question, re.IGNORECASE,
+    ))
+
+
+def repeated_measure_guardrails(context) -> str:
+    if not repeated_measure_question(context.research_question or ""):
+        return ""
+    return (
+        "Repeated-measure outcome change uses analysis_type='repeated_measures', custom_analysis and "
+        "association.mixed_effects or association.gee, custom_method='repeated_measures'. Supply repeated_measure_spec as JSON with "
+        "identity_column, time_column, outcome_column, time_origin='icu_admission', time_unit='hours'/'days', "
+        "window_start, window_end, bin_width, aggregation, model='mixed_intercept'/'mixed_slope'/'gee', "
+        "family='gaussian'/'binomial', time_basis='linear'/'natural_cubic_spline', spline_knots if needed, "
+        "working_correlation for GEE, optional static covariates, dropout_limitation="
+        "'death_may_cause_informative_dropout', dropout_sensitivity='survivors' with death_column or "
+        "'joint_model_note'. Reuse accepted data_preparation aggregation choices when present. "
+        "Do not invent measurements after death or fill missing bins. Bind artifact:analysis_cohort and "
+        "all declared raw columns. Declare exactly " + ", ".join(REPEATED_OUTPUTS)
+        + ". Publish aggregate results only. LCGA/GBTM is planned: no validated package in the runner lock/image."
+    )

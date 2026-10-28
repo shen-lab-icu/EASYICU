@@ -43,6 +43,7 @@ from easyicu.synthetic_source_provenance import mark_report
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 from ..contracts.capability_ids import (
+    PRIMARY_DETERMINISTIC_RUNNER_KINDS,
     LANDMARK_SPLINE_ANALYSIS_KIND,
     PHENOTYPING_ANALYSIS_KIND,
     PHENOTYPING_CLUSTER_CAPABILITY_ID,
@@ -60,6 +61,7 @@ from ..contracts.source_feasibility_validation import (
     source_feasibility_runtime_bundle_errors,
 )
 from ..contracts.time_varying_exposure import TIME_VARYING_EXPOSURE_CAPABILITY
+from ..contracts.trajectory_design import repeated_measure_result_receipt_valid
 from ..contracts.time_varying_validation import time_varying_runtime_bundle_errors
 from ..gates.fallback_generation import (
     fallback_method_compatibility_errors,
@@ -1482,18 +1484,7 @@ def _partition_findings_by_supersession(
 
 
 # Exact primary owners that may bind a deterministic headline result.
-_PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
-    {
-        DESCRIPTIVE_SUMMARY_ANALYSIS_KIND,
-        ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
-        EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
-        PREDICTION_MODEL_ANALYSIS_KIND,
-        LANDMARK_SPLINE_ANALYSIS_KIND,
-        "signed_time_varying_exposure_cox",
-        PHENOTYPING_ANALYSIS_KIND,
-        SURVIVAL_PRIMARY_ANALYSIS_KIND,
-    }
-)
+_PRIMARY_DETERMINISTIC_RUNNERS = PRIMARY_DETERMINISTIC_RUNNER_KINDS
 
 
 def _deterministic_primary_estimate_bound(
@@ -1506,6 +1497,9 @@ def _deterministic_primary_estimate_bound(
     # C-F9: fallback steps are downgraded (not counted as primary) unless the
     # plan explicitly allows fallback as primary on that exact step.
     records = primary_records_for_readiness(per_step_records, plan)
+    if any(isinstance(record, dict) and record.get("deterministic_standard_analysis") == "repeated_measures"
+           and repeated_measure_result_receipt_valid(record.get("step_summary")) for record in records):
+        return True
 
     if any(
         isinstance(record, dict)

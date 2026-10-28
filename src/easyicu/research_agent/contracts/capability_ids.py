@@ -29,6 +29,14 @@ SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID: Final = (
 #: ceiling still ``analysis_only``.
 TARGET_TRIAL_CCW_CAPABILITY_ID: Final = "causal_target_trial_ccw_v1"
 
+# Shared execution/readiness vocabulary: admission still requires the owner's
+# bound result receipt. A runner name alone never proves a headline estimate.
+PRIMARY_DETERMINISTIC_RUNNER_KINDS: Final = frozenset({
+    "descriptive_cohort_summary", "adjusted_association_estimates", "exposure_outcome_distribution",
+    "static_prediction_model", LANDMARK_SPLINE_ANALYSIS_KIND, PHENOTYPING_ANALYSIS_KIND,
+    "survival_primary_cox", "signed_time_varying_exposure_cox", "repeated_measures",
+})
+
 CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     "survival_time_to_event_v1": "time_to_event",
     "causal_target_trial_v1": "causal_emulation",
@@ -37,6 +45,7 @@ CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID: "causal_emulation",
     "association_ordinal_trend_v1": "association",
     "association_adjusted_v1": "association",
+    "repeated_measures_v1": "association",
     "association_baseline_adjusted_v1": "association",
     LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID: "association",
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID: "association",

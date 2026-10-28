@@ -741,6 +741,7 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
 # role cannot be inferred safely from the family alone.
 _PRIMARY_RESULT_ROLES_BY_ANALYSIS_TYPE: Dict[str, frozenset[str]] = {
     "association_study": frozenset({"primary_estimand"}),
+    "repeated_measures": frozenset({"primary_estimand"}),
     "prediction_model": frozenset({"model_performance", "calibration"}),
     "dynamic_prediction": frozenset({"model_performance", "calibration"}),
     "validation": frozenset({"model_performance", "calibration"}),

@@ -24,6 +24,8 @@ These exact coordinates are published to Planner through the scientific-action c
 | `causal_emulation.doubly_robust` | `survival_inputs`, `doubly_robust` | — |
 | `causal_emulation.mediation` | `mediation` | — |
 | `causal_emulation.g_methods` | `msm`, `gformula` | — |
+| `association.mixed_effects` | `mixed_effects` | `statsmodels` |
+| `association.gee` | `gee` | `statsmodels` |
 | `association.proportional_odds` | — | `statsmodels` |
 | `association.free_days` | — | `statsmodels` |
 | `association.count_outcome` | — | `statsmodels` |
@@ -37,6 +39,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | `prediction.reclassification` | `reclassification` | — |
 | `prediction.dynamic_prediction` | `dynamic_prediction`, `temporal_features` | `sklearn` |
 | `phenotyping.early_subtype_assignment` | `subtype_assignment` | `sklearn` |
+| `phenotyping.mixed_effects_growth` | `mixed_effects` | `statsmodels` |
 
 ## Survival / time-to-event
 
@@ -68,6 +71,8 @@ These exact coordinates are published to Planner through the scientific-action c
 
 | Method | Tier | Implementation | Produces | Runner |
 | --- | --- | --- | --- | --- |
+| Linear mixed model for repeated outcomes | standard_supporting | deterministic ✅ | aggregate repeated_measure_effects.csv + repeated_measure_diagnostics.csv + repeated_measure_profile.csv | `repeated_measures` |
+| GEE for repeated binary or continuous outcomes | standard_supporting | deterministic ✅ | aggregate repeated_measure_effects.csv + repeated_measure_diagnostics.csv + repeated_measure_profile.csv | `repeated_measures` |
 | Ordinal dose-response (OR per +1 stage, per-stage forest, monotonicity) | primary | LLM-coded ⚠️ | agent-declared ordered trend + dose_response.csv; deterministic forest | — |
 | Adjusted association (binary / continuous / ordered / free-days / count) | primary | deterministic ✅ | host-bound adjusted effect + typed model/coefficient contract + deterministic forest | `adjusted_association_estimates` |
 | Proportional odds for ordered outcomes | standard_supporting | LLM-coded ⚠️ | common OR and CI + proportional-odds score test + ordered bar summary | — |
@@ -112,7 +117,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | Trajectory-feature clustering | primary | LLM-coded ⚠️ | agent-declared feature representation + cluster assignments + silhouette/stability/size QC + outcome-by-trajectory | `phenotyping` |
 | Early-feature assignment to frozen trajectory subtypes | exploratory | LLM-coded ⚠️ | held-out subtype probabilities + balanced accuracy/macro-F1/log-loss/multiclass-Brier + calibration/confusion/coefficient tables | — |
 | LCGA / group-based trajectory modelling (GBTM) | planned | planned ⛔ | latent-class trajectory model | — |
-| Mixed-effects / growth-mixture trajectory models | planned | planned ⛔ | mixed-effects / GMM trajectory model | — |
+| Mixed-effects growth curves | exploratory | deterministic ✅ | aggregate growth fixed effects, random-effect covariance, ICC at time zero and observed time profiles | `repeated_measures` |
 | DTW / time-series distance clustering | planned | planned ⛔ | DTW distance clustering | — |
 | Landmark trajectory prediction | planned | planned ⛔ | landmark trajectory-prediction model | — |
 
@@ -130,6 +135,6 @@ These exact coordinates are published to Planner through the scientific-action c
 | --- | --- | --- |
 | time_to_event | Time-varying coefficients / landmark survival | Relax the constant-HR assumption over follow-up. |
 | phenotyping | LCGA / group-based trajectory modelling (GBTM) | Latent-class growth / group-based trajectory model — a model-based longitudinal method. |
-| phenotyping | Mixed-effects / growth-mixture trajectory models | Random-effects longitudinal models with latent classes. |
 | phenotyping | DTW / time-series distance clustering | Cluster raw trajectories under a shape-aware (dynamic time warping) distance. |
 | phenotyping | Landmark trajectory prediction | Predict outcome from trajectory shape up to a landmark time. |
+

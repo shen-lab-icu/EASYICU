@@ -32,6 +32,8 @@ from dataclasses import dataclass, field, replace
 import re
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 from ..contracts.survival_execution import survival_execution_verdict
+from ..contracts.trajectory_design import REPEATED_CAPABILITY
+from ..contracts.trajectory_design import repeated_measure_primary_matches, repeated_measure_plan_errors
 
 from ..contracts.capability_ids import (
     CAPABILITY_FAMILIES,
@@ -238,6 +240,19 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         required_diagnostics=("per-interval positivity/overlap", "weight distribution, truncation and effective sample size for MSM", "observational causal assumptions"),
         fail_closed="Refuse unavailable person-period structure, incomplete history/timing, source/plan drift, positivity failure and failed fits; never substitute baseline adjustment.",
         notes="Selected by the standard time-varying executor registry. Multi-interval g-formula is unavailable; scientific interpretation stays analysis-only.",
+    ),
+    ScientificCapability(
+        family="association", label="Repeated-measure mixed models / GEE",
+        primary_analysis="deterministic", primary_estimand="Within-unit continuous growth or population-averaged binary/continuous change over ICU time",
+        primary_runner="repeated_measures", primary_runner_module="execution.runners.trajectory_scientific_representation_executor",
+        figure="llm_coded", figure_renderer=None, capability_id=REPEATED_CAPABILITY,
+        data_contract=("bound long-format repeated panel", "explicit ICU time axis/window/aggregation", "death-dropout limitation and sensitivity"),
+        fail_closed="Refuse absent time coordinates, model/correlation drift, omitted death-dropout design, rank loss or non-convergence.",
+        result_contract="RepeatedMeasureSpec + aggregate effects, diagnostics and observed time profile",
+        required_diagnostics=("fixed-effect CIs", "variance components and ICC at time zero for LMM", "robust SE and QIC availability for GEE", "informative death dropout"),
+        scientific_validation="analysis_only", scientific_validator_owner="execution.runners.trajectory_scientific_representation_executor",
+        scientific_validator_contract="RepeatedMeasureSpec + finite converged fit",
+        notes="Growth curves do not identify latent classes. LCGA/GBTM remains planned without a validated runner package.",
     ),
     ScientificCapability(
         family="association", label="Association — source-bound time-updated Cox",
@@ -1476,6 +1491,12 @@ def resolve_primary_capability(
     if capability is None or plan is None:
         return _verdict_for(capability, analysis_family=canonical)
 
+    if canonical == "repeated_measures":
+        claimed = repeated_measure_primary_matches(plan)
+        return _verdict_for(get_capability_by_id(REPEATED_CAPABILITY), analysis_family=canonical,
+                            owner_claimed=claimed, owner_reason="The reviewed repeated-measure packet owns time, aggregation, covariance and dropout.",
+                            **({} if claimed else {"failure_reason": "primary_capability_owner_mismatch", "detail": "Incomplete repeated-measure primary design."}))
+
     if source_feasibility_plan_claimed(plan):
         source_capability = get_capability_by_id(
             SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID
@@ -2004,6 +2025,8 @@ def assess_scientific_capability(
             input_contract_resolved = True
         except GMethodError:
             input_contract_resolved = False
+    elif capability.capability_id == REPEATED_CAPABILITY:
+        input_contract_resolved = plan is not None and not repeated_measure_plan_errors(context, plan)
     elif capability.family in {"association", "causal_emulation"}:
         input_contract_resolved = bool(exposure and outcome)
     elif capability.family == "prediction":

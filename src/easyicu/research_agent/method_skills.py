@@ -189,6 +189,22 @@ class MethodSkillSpec:
 
 METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
     MethodSkillSpec(
+        "repeated-measure-trajectory", "Repeated-measure trajectory study", "重复测量轨迹研究",
+        "Longitudinal analysis", "纵向分析",
+        "Estimate changes in repeated ICU measurements with mixed models or GEE, with explicit death-dropout limitations.",
+        "用混合效应模型或 GEE 估计 ICU 重复测量的时间变化，明确死亡导致的信息性脱落局限。",
+        "repeated_measures_v1", ("association.mixed_effects", "association.gee"),
+        "deterministic_host", "analysis_only",
+        "Use the Repeated-measure trajectory study. Review ICU time zero, hours/days, window, aggregation, mixed model or GEE working correlation, and informative death-dropout sensitivity before execution. My research question: ",
+        "请使用“重复测量轨迹研究”。执行前审阅 ICU 时间零点、小时或天、窗口、聚合方式、混合模型或 GEE 工作相关结构，以及死亡所致信息性脱落的敏感性分析。我的研究问题是：",
+        workflow_steps=("Audit the source long panel and measurement density.",
+                        "Freeze ICU time origin, unit, window, bin width, aggregation and fixed-time basis.",
+                        "Fit the reviewed random-intercept/time-slope model or robust GEE.",
+                        "Restrict to survivors as a sensitivity or state a joint-model note; retain the death-dropout limitation.",
+                        "Report aggregate effects, covariance/ICC or QIC, and observed time profiles."),
+        not_for=(("Discover latent trajectory classes", "发现潜在轨迹类别", "trajectory-phenotyping"),),
+    ),
+    MethodSkillSpec(
         "treatment-patterns", "Treatment patterns", "治疗使用模式", "Descriptive", "描述性研究",
         "Describe drug-class use during the ICU stay and time to first recorded use by group.",
         "按分组描述 ICU 期间某类药物的使用比例及首次记录用药的时间。",
@@ -634,6 +650,9 @@ _FAMILY_ZH = {
 }
 
 _COMPONENT_ZH = {
+    "association.mixed_effects": ("重复测量线性混合模型", "用随机截距及可选时间随机斜率估计连续结局变化，报告区间、方差及 ICC。"),
+    "association.gee": ("重复测量广义估计方程", "按预设工作相关结构估计二元或连续结局的平均变化，报告稳健标准误及可用的 QIC。"),
+    "phenotyping.mixed_effects_growth": ("混合效应增长曲线", "用随机截距和时间随机斜率描述增长曲线，保留死亡脱落局限；不生成潜在类别。"),
     "time_to_event.cox_hr": ("Cox 比例风险模型", "估计暴露与事件风险的调整后风险比。"),
     "time_to_event.km_logrank": ("Kaplan–Meier 与 log-rank", "展示分组生存曲线并进行未调整的 log-rank 比较。"),
     "time_to_event.ph_check": ("比例风险假设检验", "使用 Schoenfeld 残差检查 Cox 模型的比例风险假设。"),
@@ -896,6 +915,17 @@ def _example_requirements(family: str, *, outcome: str | None = "hospital_death"
 
 
 WORKFLOW_GUIDES = {
+    "repeated-measure-trajectory": WorkflowGuide(
+        ("Estimate observed change on an explicit ICU time axis; death can cause informative dropout.",
+         "在明确的 ICU 时间轴上估计实际观察到的变化；死亡可能导致信息性脱落。"),
+        ("time origin/unit/window, bin width, aggregation, linear or spline time, random effects or GEE correlation, death-dropout sensitivity",
+         "时间原点、单位、窗口、网格宽度、聚合方式、线性或样条时间、随机效应或 GEE 相关结构、死亡脱落敏感性分析"),
+        ("How does daily lactate change during ICU days 0–6?", "ICU 第 0 至 6 天每日乳酸如何变化？"),
+        ("Use the bound long panel; average measurements within each day from ICU admission. Fit a random-intercept/time-slope model; report CIs, covariance and ICC at time zero. State informative death dropout and a joint-model sensitivity note.",
+         "使用已绑定的长表，从 ICU 入院起按日取均值。拟合随机截距及时间随机斜率模型，报告置信区间、协方差及零时点 ICC，明确死亡所致信息性脱落，并提出联合模型敏感性分析说明。"),
+        _example_requirements("repeated_measures", outcome=None, concepts=("lact",)),
+        ("repeated_measure_effects.csv", "repeated_measure_diagnostics.csv", "repeated_measure_profile.csv"),
+    ),
     "adjusted-exposure-outcome-study": WorkflowGuide(
         ("Start with a clinical comparison and describe who was observed. Keep crude risks separate from the adjusted estimate. Adjustment addresses measured differences but does not establish a treatment effect.",
          "先明确临床比较，再描述实际观察到的人群。分别呈现各组粗率和调整后的估计。调整用于处理已测量的差异，不能据此认定治疗的因果效应。"),
@@ -1052,6 +1082,20 @@ _TRIPOD = (
 )
 
 METHOD_NOTES = {
+    "repeated-measure-trajectory": MethodNotes(
+        ("A reviewed host owner constructs the long panel and calls statsmodels; artifacts contain aggregate results only.",
+         "经审阅的主机执行组件构建长表并调用 statsmodels，产物只包含汇总结果。"),
+        (("LMM: correlated random intercept and optional time slope, fixed-effect CIs and covariance; ICC refers to time zero when slopes vary.",
+          "LMM：相关随机截距及可选时间斜率，报告固定效应区间和协方差；斜率随机时 ICC 指零时点。"),
+         ("GEE: binary/continuous outcome with robust SE and prespecified exchangeable, AR1 or independent working correlation; QIC when available.",
+          "GEE：二元或连续结局，使用稳健标准误和预设交换型、AR1 或独立工作相关结构，报告可用的 QIC。")),
+        (("Death truncates measurements: survivor restriction changes the estimand and does not correct informative dropout. A joint model is a note, not a fitted result.",
+          "死亡截断测量：幸存者限制改变估计目标，不能校正信息性脱落。联合模型仅为后续分析说明，并未实际拟合。"),
+         ("Growth curves have no latent classes. LCGA/GBTM remains planned until the runner has a validated package and BIC, APPA, entropy and group-size diagnostics.",
+          "增长曲线不生成潜在类别。LCGA/GBTM 须待运行镜像提供已验证软件包及 BIC、APPA、熵和组大小诊断后开放。")),
+        ("Laird NM, Ware JH. Random-effects models for longitudinal data. Biometrics. 1982;38:963–974.",
+         "Liang KY, Zeger SL. Longitudinal data analysis using generalized linear models. Biometrika. 1986;73:13–22."),
+    ),
     "adjusted-exposure-outcome-study": MethodNotes(
         ("EasyICU computes the primary model itself; the AI does not write analysis code for it.",
          "主要模型由 EasyICU 直接计算，不由 AI 编写分析代码。"),
@@ -1303,6 +1347,10 @@ _validate_method_notes()
 
 # These are translations of named diagnostics, not new validation rules.
 _DIAGNOSTIC_LABELS = {
+    "fixed-effect CIs": ("Fixed effects with confidence intervals", "固定效应及置信区间"),
+    "variance components and ICC at time zero for LMM": ("Variance components and ICC at time zero", "方差分量及零时点 ICC"),
+    "robust SE and QIC availability for GEE": ("Robust GEE standard errors and QIC availability", "GEE 稳健标准误及 QIC 可用性"),
+    "informative death dropout": ("Informative dropout from death", "死亡所致信息性脱落"),
     "denominators": ("Counts used as denominators", "分母所用人数"),
     "measurement availability": ("Which measurements are available", "哪些测量可用"),
     "empirical frequency reconciliation": ("Agreement between counts and frequencies", "人数与频率是否一致"),
