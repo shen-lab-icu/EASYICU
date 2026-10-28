@@ -4886,6 +4886,8 @@ def _write_projection(
         "result_tables.json": result_tables,
         "source_run_manifest.json": source_manifest,
     }
+    from .data_provenance_projection import load_data_provenance_projection
+    payloads["data_provenance.json"] = load_data_provenance_projection(run_dir)
     system_figure_gallery = None
     if run_dir is not None and axes.get("execution_complete"):
         system_figure_gallery = _system_validation_figure_gallery(

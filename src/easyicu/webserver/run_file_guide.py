@@ -43,6 +43,11 @@ _Text = Tuple[str, str, str, str, str]  # folder, title en/zh, purpose en/zh
 
 # Titles and purposes follow the run review's own labels.
 _FILES: Dict[str, _Text] = {
+    "data_provenance.json": (
+        "provenance", "Extraction data provenance", "提取数据来源",
+        "Run-bound dictionary mappings, conditional unit rules, definitions and code descriptions.",
+        "绑定本次运行的字典映射、条件单位规则、定义及编码描述。",
+    ),
     "manuscript_revision.pdf": (
         "manuscript", "Current report revision (PDF)", "当前报告修订（PDF）",
         "The current report, typeset from locked, evidence-bound results.",

@@ -2550,6 +2550,9 @@ def make_export_runner(
         )
         from easyicu.config import load_src_cfg
         from easyicu.resources import load_dictionary
+        from easyicu.concept.provenance_capture import ExtractionProvenanceCapture
+
+        provenance_capture = ExtractionProvenanceCapture()
 
         sel_modules = [
             m
@@ -2721,6 +2724,12 @@ def make_export_runner(
                     )
                 if _module_uses_sepsis_kwargs(list(load_plan.source_concepts)):
                     module_kwargs.update(sepsis_load_kwargs)
+                module_kwargs["_provenance_sink"] = provenance_capture.recorder(
+                    concepts=list(load_plan.source_concepts),
+                    cohort_contract=cohort_info.get("cohort_contract") or {},
+                    resolver_parameters=(sepsis_load_kwargs if _module_uses_sepsis_kwargs(
+                        list(load_plan.source_concepts)) else {}),
+                )
                 from easyicu.datasource import (
                     DuckDBQueryInterrupted,
                     get_duckdb_interrupt_callback,
@@ -2969,6 +2978,7 @@ def make_export_runner(
                 else {"included": False}
             ),
             "column_metadata": metadata_ref.to_dict(),
+            "data_provenance": provenance_capture.finish(),
         }
         (out / "_manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"

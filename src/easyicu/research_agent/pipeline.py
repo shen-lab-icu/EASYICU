@@ -272,6 +272,7 @@ from .concept_dict_audit import (
     verify_recorded_dict_match,
     write_concept_dict_fingerprint,
 )
+from .authority.provenance import register_run_metadata
 from .cohort.schema import (
     CohortAuthorityError,
     ensure_cohort_definition,
@@ -3336,23 +3337,13 @@ class ResearchAgentPipeline:
         self._approved_capability_resources = (
             self._capability_runtime.approved_resources
         )
-        concept_fingerprint_path = run_dir / "concept_dict_fingerprint.json"
-        concept_fingerprint = write_concept_dict_fingerprint(concept_fingerprint_path)
-        assert_concept_dict_matches(
-            concept_fingerprint,
+        register_run_metadata(
+            run_dir=run_dir, evidence=evidence,
+            write_fingerprint=write_concept_dict_fingerprint,
+            assert_matches=assert_concept_dict_matches,
             expected_concept_dict_sha=self._expected_concept_dict_sha,
             expected_sofa2_dict_sha=self._expected_sofa2_dict_sha,
-            mode="strict",
         )
-        if evidence.get("concept_dict_fingerprint") is None:
-            evidence.register_file(
-                kind="log",
-                description="SHA-256 fingerprint for EasyICU concept dictionaries.",
-                source_path=concept_fingerprint_path,
-                evidence_id="concept_dict_fingerprint",
-                producer="pipeline",
-                generation_mode="system",
-            )
         if (
             experiment_spec_path is not None
             and experiment_spec_path.exists()

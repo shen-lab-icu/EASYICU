@@ -36,6 +36,8 @@ from typing import (
 import pandas as pd
 import pyarrow.parquet as pq
 
+from easyicu.concept.provenance import ExportDataProvenance
+
 from easyicu.concept.metadata_sidecar import (
     COLUMN_METADATA_SIDECAR_SCHEMA,
     EXPORT_PHYSICAL_SCOPE,
@@ -547,6 +549,7 @@ class ExportPackage:
     column_metadata_file: Optional[str]
     column_metadata_scope: Optional[str]
     source_seal_kind: Optional[str]
+    data_provenance: Optional[ExportDataProvenance] = None
 
     def index_dict(self) -> Dict[str, Dict[str, object]]:
         """Return the compatibility index shape used by existing callers."""
@@ -1718,6 +1721,16 @@ def _open_export_package_impl(
         authorized_files=seen_paths,
         database=database,
     )
+    data_provenance = None
+    if "data_provenance" in manifest:
+        try:
+            data_provenance = ExportDataProvenance.model_validate(manifest["data_provenance"])
+            if any(snapshot.source_database != database for snapshot in data_provenance.snapshots):
+                raise ValueError("export provenance database mismatch")
+        except ValueError as exc:
+            raise ExportPackageError(
+                "invalid export data provenance", code="export_data_provenance_invalid",
+            ) from exc
     authority_payload = {
         "manifest_kind": manifest_kind,
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
@@ -1778,6 +1791,7 @@ def _open_export_package_impl(
             else None
         ),
         source_seal_kind=raw_seal_kind,
+        data_provenance=data_provenance,
     )
 
 

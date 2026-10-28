@@ -84,6 +84,7 @@ _RUN_ARTIFACT_NAMES = [
     "system_validation_report.json",
     "system_validation_report_receipt.json",
     "source_run_manifest.json",
+    "data_provenance.json",
     "evidence_ledger.json",
     "human_signoff.json",
 ]
@@ -764,6 +765,9 @@ def _scanned_json_artifact(artifact_path: Path, raw: bytes) -> Dict[str, Any]:
             "error": "artifact_json_not_object",
             "artifact": artifact_path.name,
         }
+    if artifact_path.name == "data_provenance.json":
+        from .data_provenance_projection import scan_data_provenance_artifact
+        return scan_data_provenance_artifact(payload)
     privacy_scan = run_artifact_disclosure.scan_artifact_payloads(
         {artifact_path.name: payload}
     )
@@ -1667,6 +1671,9 @@ def _public_review_payloads(
         }
     if "human_signoff.json" in payloads:
         public["human_signoff.json"] = payloads["human_signoff.json"]
+    if "data_provenance.json" in payloads:
+        from .data_provenance_projection import public_data_provenance
+        public["data_provenance.json"] = public_data_provenance(payloads["data_provenance.json"])
     return public
 
 

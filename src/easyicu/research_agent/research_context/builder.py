@@ -31,6 +31,7 @@ from ..icu_rules import (
     default_time_windows,
 )
 from .concept_hints import classify_variable
+from ..authority.provenance import provenance_from_verified_cohort
 from ..schema import (
     AggregationRule,
     ClinicalDefinitionReference,
@@ -1155,6 +1156,7 @@ def build_research_context(
             **granularity.provenance(),
             **planning_catalog_provenance,
             **_exposure_group_projections(verified_cohort, planning_catalog_provenance),
+            **provenance_from_verified_cohort(verified_cohort, legacy_materialization_provenance),
             **(
                 {
                     "replacement_row_identity": dict(typed_row_identity),

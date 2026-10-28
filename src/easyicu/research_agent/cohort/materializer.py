@@ -1027,6 +1027,8 @@ def _export_authority_provenance(
         "authority_sha256": package.authority_sha256,
         "export_format": package.export_format,
         "feature_definitions_sha256": package.feature_definitions_sha256,
+        **({"data_provenance": package.data_provenance.model_dump(mode="json")}
+           if package.data_provenance is not None else {}),
         "missing_selected_concepts": list(package.missing_selected_concepts),
         "files": [
             {
@@ -1687,6 +1689,8 @@ def _materialize_cohort_from_resolved_source(
             manifest_path=export_package.manifest_path,
         )
     source_handle: Union[Path, ExportPackage] = export_package or root
+    from easyicu.concept.provenance_capture import ExtractionProvenanceCapture
+    provenance_capture = ExtractionProvenanceCapture() if source_mode != "export" else None
     metadata_collector = MaterializedColumnMetadataCollector(export_package)
     if bounds_violation_policy not in {"reject", "exclude_with_receipt"}:
         raise MaterializedMetadataError("unsupported source bounds violation policy")
@@ -1697,15 +1701,17 @@ def _materialize_cohort_from_resolved_source(
     unavailable: List[str] = []
 
     def load(concept: str, *, event_time_column: Optional[str] = None) -> pd.DataFrame:
-        loaded = _load_concept(
-            source_mode,
-            source_handle,
-            concept,
-            database,
-            patient_ids,
-            unavailable,
-            event_time_column=event_time_column,
-        )
+        from contextlib import nullcontext
+        with provenance_capture.observing(concepts=[concept]) if provenance_capture else nullcontext():
+            loaded = _load_concept(
+                source_mode,
+                source_handle,
+                concept,
+                database,
+                patient_ids,
+                unavailable,
+                event_time_column=event_time_column,
+            )
         loaded, normalization_receipt = _normalize_legacy_export_categorical(
             loaded,
             concept=concept,
@@ -2213,6 +2219,7 @@ def _materialize_cohort_from_resolved_source(
         "source_mode": source_mode,
         "source": str(root),
         "export_authority": _export_authority_provenance(export_package),
+        **({"data_provenance": provenance_capture.finish()} if provenance_capture is not None else {}),
         "database": database,
         "cohort_window_hours": list(cohort_window),
         "feature_concepts": list(feature_concepts),
@@ -2330,6 +2337,8 @@ def _build_trajectory_long_from_resolved_source(
             manifest_path=export_package.manifest_path,
         )
     source_handle: Union[Path, ExportPackage] = export_package or root
+    from easyicu.concept.provenance_capture import ExtractionProvenanceCapture
+    provenance_capture = ExtractionProvenanceCapture() if source_mode != "export" else None
     metadata_collector = MaterializedColumnMetadataCollector(export_package)
     if bounds_violation_policy not in {"reject", "exclude_with_receipt"}:
         raise MaterializedMetadataError("unsupported source bounds violation policy")
@@ -2344,14 +2353,16 @@ def _build_trajectory_long_from_resolved_source(
     frames: List[pd.DataFrame] = []
     materialized: List[str] = []
     for concept in dict.fromkeys(concepts):
-        df = _load_concept(
-            source_mode,
-            source_handle,
-            concept,
-            database,
-            patient_ids,
-            unavailable,
-        )
+        from contextlib import nullcontext
+        with provenance_capture.observing(concepts=[concept]) if provenance_capture else nullcontext():
+            df = _load_concept(
+                source_mode,
+                source_handle,
+                concept,
+                database,
+                patient_ids,
+                unavailable,
+            )
         df, normalization_receipt = _normalize_legacy_export_categorical(
             df,
             concept=concept,
@@ -2551,6 +2562,7 @@ def _build_trajectory_long_from_resolved_source(
         "source_mode": source_mode,
         "source": str(root),
         "export_authority": _export_authority_provenance(export_package),
+        **({"data_provenance": provenance_capture.finish()} if provenance_capture is not None else {}),
         "database": database,
         "trajectory_window_hours": list(window) if window is not None else None,
         "trajectory_concepts_requested": list(dict.fromkeys(concepts)),

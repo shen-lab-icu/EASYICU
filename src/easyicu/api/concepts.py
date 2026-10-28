@@ -1346,6 +1346,8 @@ def load_concepts(
     )
 
     # 🚀 从 kwargs 中提取患者 ID（支持通过 patientunitstayid=, admissionid=, stay_id= 等传入）
+    from ..concept.provenance import record_resolver_inputs
+    record_resolver_inputs(kwargs, loader)
 
     # 🚀 处理患者数量别名（兼容旧测试/benchmark）
     n_patients_alias = kwargs.pop("n_patients", None)
