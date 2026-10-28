@@ -25,7 +25,16 @@ from easyicu.research_agent.planning.family_spec import (
     build_landmark_survival_skeleton,
     build_fixed_window_trajectory_skeleton,
 )
+from easyicu.research_agent.planning.family_spec import (
+    DYNAMIC_LANDMARK_FAMILY_ID,
+    TARGET_TRIAL_FAMILY_ID,
+    TIME_VARYING_SURVIVAL_FAMILY_ID,
+    build_dynamic_landmark_skeleton,
+    build_target_trial_skeleton,
+    build_time_varying_survival_skeleton,
+)
 from easyicu.research_agent.planning.family_spec.contract import AdjustmentCandidate, SealedTrajectoryCoordinates
+from easyicu.research_agent.planning.family_spec.longitudinal_canonical import canonical_longitudinal_request
 from easyicu.research_agent.planning.family_spec.request import proposed_survival_suite_coordinates
 from easyicu.research_agent.planning.family_spec.trajectory_template import CANDIDATE_OUTPUTS
 from easyicu.research_agent.schema import CohortDescriptor, ConceptDescriptor, ResearchContext, UserPreferences
@@ -41,6 +50,13 @@ TEMPLATES = {
     "cross-sectional-phenotyping": (PHENOTYPING_FAMILY_ID, build_phenotyping_skeleton),
     "survival-time-to-event": (LANDMARK_SURVIVAL_FAMILY_ID, build_landmark_survival_skeleton),
     "trajectory-phenotyping": (FIXED_WINDOW_TRAJECTORY_FAMILY_ID, build_fixed_window_trajectory_skeleton),
+}
+# Longitudinal families publish their own read-only catalog coordinates; the
+# authorities they embed are refused at runtime as workflow metadata.
+LONGITUDINAL_TEMPLATES = {
+    "target-trial-emulation": (TARGET_TRIAL_FAMILY_ID, build_target_trial_skeleton),
+    "time-varying-exposure-survival-study": (TIME_VARYING_SURVIVAL_FAMILY_ID, build_time_varying_survival_skeleton),
+    "dynamic-landmark-prediction": (DYNAMIC_LANDMARK_FAMILY_ID, build_dynamic_landmark_skeleton),
 }
 
 
@@ -68,6 +84,11 @@ def _survival_coordinates():
 
 def canonical_workflow_shape(skill_id: str):
     """Return an owner-built canonical draft and its typed role coordinates."""
+    longitudinal = LONGITUDINAL_TEMPLATES.get(skill_id)
+    if longitudinal is not None:
+        family, build = longitudinal
+        request, spec = canonical_longitudinal_request(family)
+        return request, build(request, spec), set()
     binding = TEMPLATES.get(skill_id)
     if binding is None:
         return None

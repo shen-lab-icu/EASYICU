@@ -75,7 +75,7 @@
     if (active === 'skills') return `<nav class="euh-context-nav" aria-label="${tr('Skill sections', '技能分区')}">
       <button type="button" class="${skillTab('workflows')}" data-sk-mode="workflows">${icon('map', 15)}<span>${tr('Research workflows', '研究流程')}</span></button>
       <button type="button" class="${skillTab('skills')}" data-sk-mode="skills">${icon('layers', 15)}<span>${tr('Skills', '技能')}</span></button>
-      <button type="button" class="${skillTab('methods')}" data-sk-mode="methods">${icon('book', 15)}<span>${tr('Method library', '方法库')}</span></button>
+      <button type="button" class="${skillTab('methods')}" data-sk-mode="methods">${icon('book', 15)}<span>${tr('Modules', '模块')}</span></button>
     </nav>`;
     if (active === 'tutorial') return `<nav class="euh-context-nav" aria-label="${tr('Help sections', '帮助分区')}">
       <button type="button" class="active" data-nav="tutorial" aria-current="page">${icon('help', 15)}<span>${tr('Get started', '快速上手')}</span></button>
