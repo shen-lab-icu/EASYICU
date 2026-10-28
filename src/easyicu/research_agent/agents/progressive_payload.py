@@ -604,7 +604,7 @@ def _bind_step_module_shape(
         standard["required"] = [name for name in standard["required"] if name != "population_scope"]
     # These contracts belong only to custom actions. Omit the irrelevant
     # fields entirely; the host fills their identical None defaults.
-    for custom_field in ("functional_form_spec", "bootstrap_spec", "phenotyping_feature_columns", "phenotyping_comparison_variables"):
+    for custom_field in ("functional_form_spec", "bootstrap_spec", "external_validation_spec", "phenotyping_feature_columns", "phenotyping_comparison_variables"):
         standard["properties"].pop(custom_field, None)
         standard["required"] = [name for name in standard["required"] if name != custom_field]
 
@@ -620,13 +620,14 @@ def _bind_step_module_shape(
         "sensitivity_spec_ids",
         "functional_form_spec",
         "bootstrap_spec",
+        "external_validation_spec",
         "phenotyping_feature_columns",
         "phenotyping_comparison_variables",
         "literature_bindings",
     )
     custom_properties = {
         field: copy.deepcopy(properties[field]) for field in custom_fields
-        if not (field in {"functional_form_spec", "bootstrap_spec", "phenotyping_comparison_variables"} and properties[field].get("type") == "null")
+        if not (field in {"functional_form_spec", "bootstrap_spec", "external_validation_spec", "phenotyping_comparison_variables"} and properties[field].get("type") == "null")
     }
     custom_properties["module_id"] = {
         "type": "string",
@@ -1071,6 +1072,8 @@ def _bind_step_rosters(
     if "prediction.discrimination_calibration" not in scientific_action_ids:
         step_properties["bootstrap_spec"] = {"type": "null"}
         definitions.pop("BootstrapSpec", None)
+    if "prediction.external_validation" not in scientific_action_ids:
+        step_properties["external_validation_spec"] = {"type": "null"}
     # Phenotyping actions cannot consume an association-model functional-form
     # contract (the compiler refuses that family mismatch). Do not carry its
     # schema into an exclusively phenotyping request.

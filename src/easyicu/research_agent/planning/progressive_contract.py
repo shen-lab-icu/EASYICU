@@ -31,6 +31,7 @@ from ..contracts.model_terms import OutcomeDefinition, OutcomeType
 from ..contracts.product_identity import is_canonical_typed_product_token
 from ..contracts.functional_form import FunctionalFormSpec
 from ..contracts.prediction_validation import BootstrapSpec
+from ..contracts.prediction_validation import ExternalValidationPlanFields, ExternalValidationSpec
 from ..contracts.model_tokens import BinaryEffectMeasure
 from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
@@ -822,6 +823,7 @@ class ProgressivePlanOutline(BaseModel):
 #: Step fields that only one outline coordinate may carry.  The step contract
 #: refuses them elsewhere, so a transport must not offer them elsewhere either.
 COORDINATE_OWNED_STEP_FIELDS = (
+    "external_validation_spec",
     "functional_form_spec",
     "bootstrap_spec",
     "phenotyping_feature_columns",
@@ -841,6 +843,8 @@ def coordinate_owned_step_fields(
     """The coordinate-owned fields a step with this module, action and role may carry."""
 
     owned: set[str] = set()
+    if scientific_action_id == "prediction.external_validation" and planned_analysis_role == "secondary":
+        owned.add("external_validation_spec")
     if module_id == "adjusted_association":
         owned.add("effect_measure")
     if module_id == "exposure_outcome_distribution":
@@ -859,10 +863,17 @@ def coordinate_owned_step_fields(
     return frozenset(owned)
 
 
-class ProgressiveSkeletonStep(BaseModel):
+class ProgressiveSkeletonStep(ExternalValidationPlanFields):
     """Strict detail for only the step currently being materialized by the host."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # This is a Planner wire contract. The inherited decoder restores the
+    # typed object before compilation, without expanding every family schema.
+    external_validation_spec: Annotated[
+        Optional[ExternalValidationSpec],
+        WithJsonSchema({"anyOf": [{"type": "string"}, {"type": "null"}]}),
+    ] = Field(default=None, exclude_if=lambda value: value is None)
 
     step_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_]{0,79}$")
     planned_analysis_role: Literal["primary", "secondary", "sensitivity", "auxiliary"]
@@ -1053,6 +1064,8 @@ class ProgressiveSkeletonStep(BaseModel):
             raise ValueError("functional_form_spec belongs only to a custom sensitivity")
         if self.bootstrap_spec is not None and "bootstrap_spec" not in owned:
             raise ValueError("bootstrap_spec belongs only to the static prediction primary")
+        if self.external_validation_spec is not None and "external_validation_spec" not in owned:
+            raise ValueError("external_validation_spec belongs only to a secondary external-validation action")
         if self.effect_measure is not None and "effect_measure" not in owned:
             raise ValueError("effect_measure belongs only to an adjusted_association step")
         if self.phenotyping_feature_columns is not None:

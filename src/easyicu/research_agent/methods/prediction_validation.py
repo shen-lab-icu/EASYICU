@@ -1,12 +1,25 @@
-"""Binary prediction metrics, pipeline bootstrap, and score recalibration.
+"""Binary prediction metrics, internal validation and frozen model transport.
 
 The probability-table evaluator remains non-training. Enhanced bootstrap
 accepts a full-pipeline refit callback from the executor, and score recalibration
-fits only the development rows supplied by that owner. No function chooses a
-cohort, outcome, predictor roster, or split.
+fits only the development rows supplied by that owner. The external route
+applies a fixed numeric logistic model and labels optional recalibration as
+apparent performance on its fitting cohort. No function chooses a cohort,
+outcome, predictor roster, or split.
 """
 
 from __future__ import annotations
+
+import hashlib
+from collections.abc import Sequence
+from dataclasses import dataclass
+from patsy import build_design_matrices, dmatrix
+from ..canonical_json import canonical_sha256
+from ..contracts.prediction_validation import (
+    ExternalValidationError, ExternalValidationSpec, FrozenLogisticModel,
+)
+from .decision_curve import net_benefit_curve
+from .delong_auc import delong_auc_ci
 
 import warnings
 from collections.abc import Callable, Mapping
@@ -477,3 +490,207 @@ def recalibrate_score(*, outcomes, scores, evaluation_scores) -> tuple[np.ndarra
 
 
 __all__ = ["evaluate_binary_predictions", "bootstrap_optimism_validation", "recalibrate_score"]
+
+
+@dataclass
+class ValidationSource:
+    """Metadata and a lazy reader; the runner supplies verified intake facts."""
+
+    database: str
+    columns: tuple[str, ...]
+    meanings: dict[str, str]
+    read: Callable[[], tuple[pd.DataFrame, str]]
+
+
+def _metrics(y: np.ndarray, p: np.ndarray) -> dict:
+    auc = delong_auc_ci(y, p)
+    status, intercept, slope, clipped = _calibration_model(y, p, epsilon=1e-6)
+    return {
+        "n": len(y), "event_n": int(y.sum()), "event_rate": float(y.mean()),
+        "mean_predicted_probability": float(p.mean()), "auroc": auc.auc,
+        "auroc_ci_low": auc.ci_low, "auroc_ci_high": auc.ci_high,
+        "auroc_ci_method": "delong_logit", "confidence_level": 0.95,
+        "calibration_in_the_large": calibration_in_the_large(y, p),
+        "calibration_joint_intercept": intercept, "calibration_slope": slope,
+        "calibration_status": status, "clipped_probability_n": clipped,
+        "brier_score": float(np.mean((y - p)**2)),
+    }
+
+
+def _flexible_calibration(y: np.ndarray, p: np.ndarray) -> tuple[list[dict], str]:
+    """Four-df cubic logistic spline, on a fixed 41-point aggregate grid."""
+    x = logit(np.clip(p, 1e-6, 1 - 1e-6))
+    if len(np.unique(x)) < 5 or min(y.sum(), len(y) - y.sum()) < 10:
+        return [], "not_estimable_insufficient_support"
+    grid = np.linspace(float(x.min()), float(x.max()), 41)
+    design = dmatrix("bs(x, df=4, degree=3) + 1", {"x": x})
+    grid_design = build_design_matrices([design.design_info], {"x": grid})[0]
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", PerfectSeparationWarning)
+            fit = sm.GLM(y, design, family=sm.families.Binomial()).fit(maxiter=100)
+        observed = fit.predict(grid_design)
+        if not fit.converged or not np.isfinite(observed).all():
+            return [], "not_estimable_nonconvergence"
+    except (ValueError, np.linalg.LinAlgError, PerfectSeparationError, PerfectSeparationWarning):
+        return [], "not_estimable_nonconvergence"
+    return [
+        {"predicted": float(a), "observed": float(b)}
+        for a, b in zip(expit(grid), observed, strict=True)
+    ], "cubic_logistic_spline_df4"
+
+
+def _source_gate(model: FrozenLogisticModel, spec: ExternalValidationSpec, source: ValidationSource) -> list[dict]:
+    required = {p.concept for p in model.predictors}
+    absent = sorted(required - set(source.columns))
+    if absent:
+        raise ExternalValidationError("predictor_unavailable", database=source.database, concepts=absent)
+    if model.outcome_concept not in source.columns:
+        raise ExternalValidationError("outcome_unavailable", database=source.database)
+    changes = []
+    meanings = {p.concept: p.meaning for p in model.predictors}
+    meanings[model.outcome_concept] = model.outcome_meaning
+    confirmations = {(c.database, c.concept): c for c in spec.confirmed_changes}
+    for concept, meaning in meanings.items():
+        observed = source.meanings.get(concept)
+        if not observed:
+            raise ExternalValidationError("concept_meaning_unavailable", database=source.database, concept=concept)
+        if observed == meaning:
+            continue
+        confirmation = confirmations.get((source.database, concept))
+        if (confirmation is None or confirmation.development_meaning != meaning
+                or confirmation.validation_meaning != observed):
+            raise ExternalValidationError(
+                "meaning_change_requires_confirmation", database=source.database, concept=concept,
+                development_meaning=meaning, validation_meaning=observed,
+            )
+        changes.append(confirmation.model_dump())
+    return changes
+
+
+def _read_after_freeze(provenance: list[dict], spec: ExternalValidationSpec, source: ValidationSource):
+    """A validation read is legal only behind this invocation's freeze event."""
+    if (not provenance or provenance[0].get("event") != "model_frozen"
+            or provenance[0].get("frozen_model_sha256") != spec.frozen_model_sha256
+            or provenance[0].get("plan_spec_sha256") != canonical_sha256(spec.model_dump(mode="json"))):
+        raise ExternalValidationError("model_not_frozen_before_validation_read")
+    frame, digest = source.read()
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise ExternalValidationError("validation_source_digest_invalid")
+    provenance.append({
+        "event": "validation_read", "database": source.database, "sequence": len(provenance),
+        "frozen_model_sha256": spec.frozen_model_sha256, "source_sha256": digest,
+    })
+    return frame
+
+
+def _arrays_and_case_mix(frame: pd.DataFrame, model: FrozenLogisticModel):
+    missing = sorted({p.concept for p in model.predictors} - set(frame.columns))
+    if missing:
+        raise ExternalValidationError("predictor_unavailable", concepts=missing)
+    if model.subject_id_column not in frame or frame[model.subject_id_column].isna().any() or frame[model.subject_id_column].duplicated().any():
+        raise ExternalValidationError("independent_subjects_required")
+    if frame[model.subject_id_column].map(lambda x: isinstance(x, str) and not x.strip()).any():
+        raise ExternalValidationError("independent_subjects_required")
+    if model.outcome_concept not in frame:
+        raise ExternalValidationError("outcome_unavailable")
+    outcome = frame[model.outcome_concept]
+    if not pd.api.types.is_numeric_dtype(outcome.dtype):
+        raise ExternalValidationError("outcome_invalid")
+    y = outcome.to_numpy(dtype=float, na_value=np.nan)
+    if not np.isin(y, (0, 1)).all() or len(np.unique(y)) != 2 or min(np.sum(y == 0), np.sum(y == 1)) < 2:
+        raise ExternalValidationError("outcome_invalid")
+    eta = np.full(len(frame), model.intercept, dtype=float)
+    case_mix = []
+    for predictor in model.predictors:
+        raw = frame[predictor.concept]
+        if not pd.api.types.is_numeric_dtype(raw.dtype) or pd.api.types.is_bool_dtype(raw.dtype):
+            raise ExternalValidationError("predictor_invalid", concept=predictor.concept)
+        values = raw.to_numpy(dtype=float, na_value=np.nan)
+        if np.isnan(values).all():
+            raise ExternalValidationError("predictor_unavailable", concepts=[predictor.concept])
+        if np.isinf(values).any():
+            raise ExternalValidationError("predictor_invalid", concept=predictor.concept)
+        observed = values[~np.isnan(values)]
+        estimable = len(observed) > 1
+        mean = float(observed.mean())
+        sd = float(observed.std(ddof=1)) if len(observed) > 1 else 0.0
+        pooled = np.sqrt((sd**2 + predictor.development_sd**2) / 2)
+        difference = mean - predictor.development_mean
+        case_mix.append({
+            "concept": predictor.concept, "development_mean": predictor.development_mean,
+            "validation_mean": mean, "development_sd": predictor.development_sd,
+            "validation_sd": sd if estimable else None, "validation_observed_n": len(observed),
+            "development_missing_fraction": predictor.development_missing_fraction,
+            "validation_missing_fraction": float(np.isnan(values).mean()),
+            "standardized_difference": (float(difference / pooled) if pooled else 0.0 if difference == 0 else None) if estimable else None,
+            "status": ("estimated" if pooled or difference == 0 else "not_estimable_zero_variance") if estimable else "not_estimable_insufficient_observations",
+        })
+        values = np.where(np.isnan(values), predictor.median, values)
+        eta += predictor.coefficient * ((values - predictor.center) / predictor.scale)
+    if not np.isfinite(eta).all():
+        raise ExternalValidationError("prediction_nonfinite")
+    return y.astype(int), expit(eta), case_mix
+
+
+def _recalibration(y: np.ndarray, p: np.ndarray, kind: str) -> dict | None:
+    if kind == "none":
+        return None
+    slope = 1.0
+    if kind == "intercept_only":
+        intercept = calibration_in_the_large(y, p)
+    else:
+        status, intercept, slope, _ = _calibration_model(y, p, epsilon=1e-6)
+        if status != "estimated":
+            return {"method": kind, "status": status, "evaluation_scope": "apparent_on_recalibration_cohort"}
+    updated = expit(intercept + slope * logit(np.clip(p, 1e-6, 1 - 1e-6)))
+    return {
+        "method": kind, "status": "estimated", "intercept": intercept, "slope": slope,
+        "evaluation_scope": "apparent_on_recalibration_cohort", "metrics": _metrics(y, updated),
+    }
+
+
+def run_external_validation(
+    *, model_bytes: bytes, spec: ExternalValidationSpec | Mapping,
+    sources: Sequence[ValidationSource] | Callable[[FrozenLogisticModel], Sequence[ValidationSource]],
+) -> dict:
+    """Freeze exact model bytes before even asking intake for source metadata.
+
+    The callable form lets the runner verify materialized sidecars after the
+    freeze: those verifiers can read cohort bytes to check their digests.
+    """
+    spec = ExternalValidationSpec.model_validate(spec)
+    if hashlib.sha256(model_bytes).hexdigest() != spec.frozen_model_sha256:
+        raise ExternalValidationError("frozen_model_digest_mismatch")
+    model = FrozenLogisticModel.model_validate_json(model_bytes)
+    if (model.development_database != spec.development_database
+            or model.outcome_concept != spec.outcome_concept
+            or tuple(p.concept for p in model.predictors) != spec.predictor_concepts):
+        raise ExternalValidationError("frozen_model_plan_mismatch")
+    provenance = [{
+        "event": "model_frozen", "sequence": 0, "frozen_model_sha256": spec.frozen_model_sha256,
+        "plan_spec_sha256": canonical_sha256(spec.model_dump(mode="json")),
+        "development_source_sha256": model.development_source_sha256,
+    }]
+    sources = tuple(sources(model) if callable(sources) else sources)
+    if tuple(s.database for s in sources) != spec.validation_databases:
+        raise ExternalValidationError("validation_database_roster_mismatch")
+    changes = [_source_gate(model, spec, source) for source in sources]
+    rows = []
+    for source, meaning_changes in zip(sources, changes, strict=True):
+        frame = _read_after_freeze(provenance, spec, source)
+        y, p, case_mix = _arrays_and_case_mix(frame, model)
+        curve, curve_status = _flexible_calibration(y, p)
+        rows.append({
+            "database": source.database, "transport": _metrics(y, p),
+            "flexible_calibration": curve, "flexible_calibration_status": curve_status,
+            "decision_curve": net_benefit_curve(y, p, thresholds=np.linspace(0.05, 0.5, 10)).to_dict("records"),
+            "case_mix": case_mix, "changed_estimand": bool(meaning_changes),
+            "meaning_changes": meaning_changes, "recalibration": _recalibration(y, p, spec.recalibration),
+        })
+    return {
+        "schema_version": "easyicu.external_prediction_validation/1",
+        "development_database": spec.development_database, "databases": rows,
+        "provenance": provenance, "authority_scope": "analysis_only",
+        "claim_ceiling": "transport_to_named_cohorts_only", "paper_authorization_allowed": False,
+    }

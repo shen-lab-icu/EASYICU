@@ -95,6 +95,16 @@ class ScientificActionRuntimeContract:
 
 
 _RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
+    "prediction.external_validation": ScientificActionRuntimeContract(
+        outputs=(("table:external_validation", "custom"), ("table:external_calibration", "custom"),
+                 ("table:external_decision_curve", "custom"), ("table:external_case_mix", "custom"),
+                 ("log:external_validation_provenance", "custom"), ("report:external_validation_tripod", "custom"),
+                 ("figure:external_calibration", "custom")),
+        required_product_inputs=("table:frozen_prediction_model",),
+        standard_executor="prediction_external_validation",
+        article_roles=("external_validation",),
+        purpose="Apply the frozen model to named external databases. The typed Progressive external_validation_spec compiles into method='prediction_external_validation(<JSON spec>)' on the sealed plan; classic plans use that exact serialization. Confirm changed meanings and report analysis-only transport separately from recalibration.",
+    ),
     "phenotyping.outcome_by_cluster": ScientificActionRuntimeContract(
         outputs=(("table:outcome_by_cluster", "custom"),),
         required_product_inputs=("artifact:analysis_cohort", "table:phenotype_assignments"),
@@ -701,6 +711,9 @@ def validate_plan_scientific_action_selections(
                 )
             )
     for step in getattr(plan, "steps", ()):
+        from ..contracts.prediction_validation import external_validation_spec_for_step
+
+        external_validation_spec_for_step(step)
         action_id = getattr(step, "scientific_action_id", None)
         if action_id is None:
             outputs = tuple(str(item) for item in getattr(step, "expected_outputs", ()))
@@ -730,6 +743,11 @@ def validate_plan_scientific_action_selections(
             analysis_type=analysis_type,
             action_id=action_id,
         )
+        if action_id == "prediction.external_validation":
+            from ..contracts.prediction_validation import external_validation_step_matches
+
+            if not external_validation_step_matches(step):
+                raise ValueError("external_validation_declaration_required: bind the reviewed frozen model and exact validation cohort roster")
         if action_id == PHENOTYPING_PRIMARY_ACTION:
             require_phenotyping_features(getattr(step, "phenotyping_feature_columns", None), inputs=step.inputs)
         if action_id == "phenotyping.outcome_by_cluster":

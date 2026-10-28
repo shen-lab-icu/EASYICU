@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import pandas as pd
+
 import hashlib
 from pathlib import Path
 from typing import Any, Mapping
@@ -175,3 +178,94 @@ def write_supplement_package(
 
 
 __all__ = ["write_supplement_package"]
+
+
+TRIPOD_EXTERNAL_MAP = (
+    ("5–6", "Development and validation settings and eligibility", "reviewed plan; development_database; source authority"),
+    ("7–8", "Outcome and predictor definitions", "frozen model; meaning_changes"),
+    ("9", "Missing data", "case_mix missing fractions; frozen imputation"),
+    ("10a–c", "Frozen model and performance assessment", "frozen model; external_validation.csv; external_calibration.csv"),
+    ("11", "Validation strategy", "reviewed plan; provenance; named databases"),
+    ("14", "Participants and development versus validation case mix", "n; event_n; external_case_mix.csv"),
+    ("16", "External validation results", "untouched_transport; recalibration reported separately"),
+    ("17", "Calibration figure", "external_calibration.png; per-database figures"),
+    ("19", "Decision curve", "external_decision_curve.csv"),
+    ("20", "Limitations and interpretation", "analysis_only; named cohorts; changed_estimand; apparent recalibration"),
+)
+
+
+def write_external_validation_report(result: dict, out_dir: Path) -> dict:
+    """Never serialize a row-level score, identifier or covariate value."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    performance, calibration, decisions, case_mix = [], [], [], []
+    figures = []
+    for row in result["databases"]:
+        database = row["database"]
+        common = {"database": database, "development_database": result["development_database"],
+                  "changed_estimand": row["changed_estimand"], "authority_scope": "analysis_only"}
+        performance.append({**common, "result_kind": "untouched_transport", **row["transport"]})
+        update = row["recalibration"]
+        if update:
+            performance.append({**common, "result_kind": "recalibration", "method": update["method"],
+                                "recalibration_status": update["status"], "evaluation_scope": update["evaluation_scope"],
+                                "update_intercept": update.get("intercept"), "update_slope": update.get("slope"),
+                                **update.get("metrics", {})})
+        calibration.extend({**common, **p, "method": row["flexible_calibration_status"]} for p in row["flexible_calibration"])
+        if not row["flexible_calibration"]:
+            calibration.append({**common, "predicted": None, "observed": None,
+                                "method": row["flexible_calibration_status"]})
+        decisions.extend({**common, **p} for p in row["decision_curve"])
+        case_mix.extend({**common, **p} for p in row["case_mix"])
+        fig, ax = plt.subplots(figsize=(4.2, 4.2), layout="constrained")
+        try:
+            ax.plot([0, 1], [0, 1], color="0.7", linestyle="--", linewidth=1)
+            curve = row["flexible_calibration"]
+            if curve:
+                ax.plot([p["predicted"] for p in curve], [p["observed"] for p in curve], color="#256589", linewidth=2)
+            else:
+                ax.text(0.5, 0.5, row["flexible_calibration_status"].replace("_", " "), ha="center", wrap=True)
+            ax.set(xlim=(0, 1), ylim=(0, 1), xlabel="Frozen model predicted risk",
+                   ylabel="Observed risk (spline)", title=f"{database}: untouched transport")
+            filename = f"external_calibration_{database}.png"
+            fig.savefig(out_dir / filename, dpi=160)
+            figures.append(filename)
+        finally:
+            plt.close(fig)
+    # One declared figure product contains every database; individual figures
+    # above remain available for per-setting review and supplementary material.
+    fig, axes = plt.subplots(1, len(result["databases"]), figsize=(4.2 * len(result["databases"]), 4.2),
+                             squeeze=False, layout="constrained")
+    try:
+        for ax, row in zip(axes[0], result["databases"], strict=True):
+            ax.plot([0, 1], [0, 1], color="0.7", linestyle="--", linewidth=1)
+            curve = row["flexible_calibration"]
+            if curve:
+                ax.plot([p["predicted"] for p in curve], [p["observed"] for p in curve], color="#256589")
+            else:
+                ax.text(0.5, 0.5, "Spline not estimable", ha="center")
+            ax.set(xlim=(0, 1), ylim=(0, 1), xlabel="Frozen model predicted risk", ylabel="Observed risk",
+                   title=row["database"])
+        fig.savefig(out_dir / "external_calibration.png", dpi=160)
+    finally:
+        plt.close(fig)
+    for filename, records in (
+        ("external_validation.csv", performance), ("external_calibration.csv", calibration),
+        ("external_decision_curve.csv", decisions), ("external_case_mix.csv", case_mix),
+    ):
+        pd.DataFrame(records).to_csv(out_dir / filename, index=False)
+    (out_dir / "external_validation_provenance.json").write_text(
+        json.dumps(result, sort_keys=True, ensure_ascii=False, allow_nan=False, indent=2) + "\n", encoding="utf-8",
+    )
+    checklist = ["# External validation: TRIPOD+AI reporting map", "",
+                 "Analysis only. Transport applies to the named cohorts. Recalibration performance is apparent on its fitting cohort.", "",
+                 "| Item | Reporting requirement | Evidence |", "| --- | --- | --- |"]
+    checklist.extend(f"| {item} | {requirement} | {evidence} |" for item, requirement, evidence in TRIPOD_EXTERNAL_MAP)
+    (out_dir / "external_validation_tripod.md").write_text("\n".join(checklist) + "\n", encoding="utf-8")
+    return {"validation_databases": [r["database"] for r in result["databases"]],
+            "performance_rows": len(performance), "calibration_figures": figures, "authority_scope": "analysis_only"}

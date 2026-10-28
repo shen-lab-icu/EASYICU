@@ -321,12 +321,14 @@ def _missingness_reason(context: StepExecutorContext) -> str:
 
 
 def _build_registry() -> StepExecutorRegistry:
+    from .prediction_validation_executor import external_validation_executor
     from ...authority.baseline_association_runtime import BaselineAssociationRuntimeAuthority
     from .baseline_association_executor import baseline_executor_owns_step, baseline_executor_code
     from .association_effect_modification import effect_modification_parent, effect_modification_executor_code
 
     registry = StepExecutorRegistry()
     routes = (
+        external_validation_executor(),
         StepExecutor(
             key="prespecified_effect_modification",
             owns=lambda c: effect_modification_parent(c.step, plan=c.plan, authority=c.current_case_scientific_runtime_authority) is not None,

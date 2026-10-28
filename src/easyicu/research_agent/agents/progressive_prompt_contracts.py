@@ -710,6 +710,11 @@ def selected_counts_only_inference_coordinate(
 
 
 _COORDINATE_OWNED_FIELD_GUIDANCE = {
+    "external_validation_spec": (
+        "external_validation_spec is a JSON-text object naming development_database, validation_databases, "
+        "frozen_model_sha256, predictor_concepts, outcome_concept, recalibration and confirmed_changes. "
+        "Use the supplied frozen model digest and exact reviewed meanings; never invent a model digest. "
+    ),
     "bootstrap_spec": (
         'Set bootstrap_spec to {"replicates": 200, "seed": 1729} for full-pipeline '
         "patient bootstrap optimism correction in the development partition, or null for split validation only. "
@@ -823,6 +828,7 @@ def step_materialization_shape_contract(
         "missing_exposure_policy": None, "missing_outcome_policy": None,
         "confidence_level": None, "sensitivity_spec_ids": [], "functional_form_spec": None,
         "bootstrap_spec": None,
+        "external_validation_spec": None,
         "repeated_unit_interval_method": None,
         "patient_weighted_interval_assumptions": None,
         "phenotyping_feature_columns": None,

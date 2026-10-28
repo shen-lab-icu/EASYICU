@@ -153,4 +153,9 @@ def canonical_workflow_shape(skill_id: str):
     }))
     required = {item.step.step_id for item in minimal.materializations}
     optional = {item.step.step_id for item in draft.materializations} - required
+    if family == PREDICTION_FAMILY_ID:
+        from easyicu.research_agent.planning.prediction_timing import external_validation_workflow_metadata
+
+        draft, external_optional = external_validation_workflow_metadata(draft)
+        optional |= external_optional
     return request, draft, optional

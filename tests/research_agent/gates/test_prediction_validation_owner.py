@@ -337,7 +337,7 @@ def test_result_digest_revalidates_model_copies() -> None:
         prediction_validation_result_sha256(invalid_result)
 
 
-def test_experimental_runner_is_not_wired_into_production_selection() -> None:
+def test_internal_compatibility_api_is_not_selected_as_the_external_route() -> None:
     root = Path(__file__).resolve().parents[3]
     selection = (
         root / "src/easyicu/research_agent/execution/runners/selection.py"
@@ -347,5 +347,6 @@ def test_experimental_runner_is_not_wired_into_production_selection() -> None:
         / "src/easyicu/research_agent/execution/runners/prediction_validation_executor.py"
     ).read_text(encoding="utf-8")
 
-    assert "prediction_validation" not in selection
+    assert "run_prediction_validation" not in selection
+    assert "import external_validation_executor" in selection
     assert "EvidenceStore" not in runner

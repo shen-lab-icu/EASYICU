@@ -83,6 +83,13 @@ class MethodKernel:
 
 CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
     MethodKernel(
+        module="prediction_validation", entrypoints=("run_external_validation",),
+        capability="Digest-bound frozen numeric logistic transport across named ICU databases; separate apparent recalibration.",
+        families=("prediction", "prediction_model"),
+        requires=("numpy", "pandas", "scipy", "statsmodels", "patsy"),
+        fallback="Refuse if the frozen model, complete predictor roster or reviewed source meanings cannot be verified; never refit.",
+    ),
+    MethodKernel(
         module="survival_inputs",
         requires=("numpy", "pandas"),
         entrypoints=("event_time_reconciliation_receipt", "SurvivalInputError"),

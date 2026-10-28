@@ -46,6 +46,7 @@ from ..contracts.primary_cohort import (
 )
 from ..contracts.product_identity import typed_product
 from ..contracts.prediction_execution import prediction_bootstrap_method
+from ..contracts.prediction_validation import external_validation_method
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -1231,11 +1232,16 @@ def _validate_scientific_action_runtime_contract(
             path="outputs",
         )
     declared_inputs = tuple(reference.product_id for reference in step.product_inputs)
-    if declared_inputs not in contract.accepted_product_inputs:
+    accepted_inputs = contract.accepted_product_inputs
+    if action.action_id == "prediction.external_validation":
+        from .prediction_timing import external_validation_product_inputs
+
+        accepted_inputs = (external_validation_product_inputs(step),)
+    if declared_inputs not in accepted_inputs:
         raise _fail(
             "progressive_scientific_action_inputs_mismatch",
             f"{action.action_id} requires exact product inputs "
-            f"{' or '.join(repr(list(inputs)) for inputs in contract.accepted_product_inputs)}",
+            f"{' or '.join(repr(list(inputs)) for inputs in accepted_inputs)}",
             step=step,
             step_index=step_index,
             path="product_inputs",
@@ -2998,7 +3004,8 @@ def _compile_one_step(
         "intent": step.objective,
         "inputs": inputs,
         "expected_outputs": [product for product, _role in output_pairs],
-        "method": prediction_bootstrap_method(step.bootstrap_spec) if step.bootstrap_spec else method,
+        "method": (external_validation_method(step.external_validation_spec) if step.external_validation_spec
+                   else prediction_bootstrap_method(step.bootstrap_spec) if step.bootstrap_spec else method),
         "scientific_action_id": step.scientific_action_id,
         "icu_rule_refs": [],
         "sensitivity_spec_ids": sensitivity_spec_ids,

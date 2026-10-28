@@ -89,12 +89,12 @@
       "summary_changes": {}
     },
     {
-      "reason": "Record the ICU outcome association catalogue in the offline prompt identity fixture. All existing maximum resource/context envelopes and hard planner-schema budgets remain unchanged; no LOC or budget ratchet is increased.",
+      "reason": "Record the ICU outcome association catalogue in the offline prompt identity fixture. All existing maximum resource/context envelopes and hard planner-schema budgets remain unchanged; no LOC or budget ratchet is increased. Also: Record external-validation registry receipt identities and its 287-byte prediction-context declaration. Sealed schema bytes, maximum context summaries, schema-size budgets, execution LOC gates and module-inventory ceilings remain unchanged; no provider calls.",
       "source_digest_changes": [],
       "summary_changes": {}
     }
   ],
-  "baseline_reason": "Record the ICU outcome association catalogue in the offline prompt identity fixture. All existing maximum resource/context envelopes and hard planner-schema budgets remain unchanged; no LOC or budget ratchet is increased.",
+  "baseline_reason": "Record ICU outcome association catalogue (out1) and external-validation registry receipts (ext1). No envelope, budget or LOC ratchet raised.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -154,7 +154,7 @@
   "tasks": [
     {
       "coder_resources": {
-        "bundle_sha256": "9f032527b6fe04ae46a70e92fe210c11f87eb8b4c57d7ffee9637363fe7277d3",
+        "bundle_sha256": "fa0baef13403bbc9ea4a2d6e1d80893317574c0f243ea045954dd6d7f483fe54",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 369,
         "prompt_limit_bytes": 8000,
@@ -174,9 +174,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "fece8ee5e852bc6af2d7209cf3fa0d976cb1a2eb3dfa6eac4eb6ad004a13f883",
-          "a8303ff3af3b366227ac73b6acaabdd67a8ed724c09dce5942e3de4ecefa2ad1",
-          "54b4ac737dc22697d9a965f23b18d40dd60c23793bb376edce4b8a3d4bf88bed"
+          "e1cbe9567cd5e8518ad2779ff77338e9aa454c785cb7fb993d9cc050943dde53",
+          "0a068ac4d0cde42099309b344c1cfa945e880ebb660a4acde8359551c7f0dc25",
+          "1b15b5a2bda6ffcf59fcd3775739c1f688c1eba7dc68357f7bf7381909c70405"
         ]
       },
       "fixture_concepts": [
@@ -250,7 +250,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "d11af7bef7c99069b0947f514d8f031c24a510fd61e5b11ef08da6008dbe93bb",
+        "bundle_sha256": "9e75a9d8b03e5b7aa10a44aca7b26e719dacf8b342cd997425e5525c028547f3",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1138,
         "prompt_limit_bytes": 8000,
@@ -288,9 +288,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "18bca7c67119913159e2fdf1be4d2fbd10102106c643c7e04d8c3fb296ecd1e9",
-          "cfeaebe116147f044967aa571610e3f1b200ebb85e42f698f329cd707735bda7",
-          "7c8484b94f429bfd964d5296982d89933af3e38e4b62fd840f63b6b6629e00eb"
+          "87b95dc541f2c95e20c9ea4b9de865ccf614b783297762f457a1a62013944f0d",
+          "9d929e9d4832116d6a9f66d4cdcf79f17e9755391f70240484f21154cea57dd9",
+          "aae272cdd8caad2642f2d2d00fde6df886d57925253ae8924a8b9219ab4cde8d"
         ]
       },
       "fixture_concepts": [
@@ -364,7 +364,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "092aa4f81b2017fc1f107aa42ef707fd66bb79a533a28cd8f2eb61daaf2eb4ab",
+        "bundle_sha256": "27368dbcb77658d7be382c88fdb0dffc6fe4df8fa3b06ccfe44a7d0e539d7195",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1138,
         "prompt_limit_bytes": 8000,
@@ -402,9 +402,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "b15e4b8062c101a899b6f9842b10c2e0a3ea2c3b5a29a4de63c6ffd3b7fd3745",
-          "0134c7b758fa614cfc838f01c29c79e478c01ac25029bfbc48bc5f1bc78f78b8",
-          "03cf04ae37d2165dff633db4b6b6eccf610e0447d14bad2866f55c92e43a5513"
+          "a34c94fdf4cd1eb413906372017a3f6fb3efd87e241c4661b42b6ed7cd1fee43",
+          "4b62b287002f4ade0a14dee40290ee5d386bf282aeeae00732a03b904dc98bfe",
+          "f14a7cb0dde5a06ce09d4f0ec2df45530ccf185ed024dcbf17daf906cc119b3c"
         ]
       },
       "fixture_concepts": [
@@ -464,7 +464,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "7d2537343105270f19b37fdfdff44b08fcff451177ff0a26af7091f1e2708081",
+        "bundle_sha256": "da75318be33b1742bf223b72b60379b3afd867c2480e3ee054274c032650b347",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1138,
         "prompt_limit_bytes": 8000,
@@ -502,9 +502,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "9f671cf313bd3f9f8effa173701baf0ec0f184be1171659e41aa1dcd74bf73b8",
-          "21d52fd6e005ded319dbdaa0e0e2337a270e9faf96e527d6cd0ce03b23c24ebd",
-          "9c4373b485f84d35ae24445598ad789ffda1867663ea9f0c92329447f59d44aa"
+          "42bbef467cd03b74c8c38b3e0cbcb9a80d53b205d52c3e7c249ff6c9fba74795",
+          "64c0f3b013d1563995dc851aa3be06179a6fd710d681fe4308b61d1740b077a4",
+          "84b0d5e5239fd0c62168a6256f57a639158fca74d6d4f322a3552115f5d60430"
         ]
       },
       "fixture_concepts": [
@@ -564,7 +564,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "ce66e6adc09333b083d745312fb4a1821d8b69e47ee4972b10c49066fcf96056",
+        "bundle_sha256": "4d4df1dc561da16057a8e6a3077ecf25d5f4f04556bfffa653ae9208f71cda6b",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 2026,
         "prompt_limit_bytes": 8000,
@@ -602,9 +602,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "c5d8095ee1b68f1824886750c86dcb84270ffafbd26f653c123d1736d942149c",
-          "ee3872cf2420bafc00238a3dca1d33bd56a7828cbb11237edd1d163c410ac1c8",
-          "6105e972b7e677375a9213f9d9ebed6f063120de5fb73f4aa01166faf774365c"
+          "6742ae1e36b878d06f628ccd6c312c5f99a989baec1c1f04146958d71afa9801",
+          "a6026f2f5b8ec4eb7255cf46b1f9ed0532fe4a66204a37e1efb389f3118690e5",
+          "d408e117628c9fed8685c923987ca1b6711cd534b9a6c4a725d587676583c17d"
         ]
       },
       "fixture_concepts": [
@@ -617,15 +617,15 @@
       "know_how_prompt_bytes": 4012,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15378,
+        "approx_input_tokens": 15450,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 48519,
+            "bytes": 48806,
             "included": true,
             "required": true,
-            "sha256": "a74d6378dc9b8eb67277899c494a870e42e8d40eee8ce0432331a18f4e5be22c"
+            "sha256": "226aa6b67f4aa189798be68d4020c0a18fb7e7314d349bbe6f268abdee6ff6b2"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -636,27 +636,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 61511,
+        "total_bytes": 61798,
         "truncated_strings": false,
-        "user_bytes": 53067
+        "user_bytes": 53354
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14241,
+        "approx_input_tokens": 14313,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 48519,
+            "bytes": 48806,
             "included": true,
             "required": true,
-            "sha256": "a74d6378dc9b8eb67277899c494a870e42e8d40eee8ce0432331a18f4e5be22c"
+            "sha256": "226aa6b67f4aa189798be68d4020c0a18fb7e7314d349bbe6f268abdee6ff6b2"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 56963,
+        "total_bytes": 57250,
         "truncated_strings": false,
-        "user_bytes": 48519
+        "user_bytes": 48806
       },
       "planning_contract_bytes": 7361,
       "planning_contract_sha256": "bfe258634fb7add9efb0ddfc113cde254a7772148b59c47af0f3f0182c0cc8bc",
@@ -679,7 +679,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "6df2941bc73178f3ec373a4a0e6fe7455604c7b7e302eef5eed664b802cfddc9",
+        "bundle_sha256": "afb95b3c031a0d2d1588d4e9cc0fa4e55c2ab7770947fefcac0858b940be69ab",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1280,
         "prompt_limit_bytes": 8000,
@@ -711,9 +711,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "73a387a2c514d6c2de93e58b51dc72b1c2e144a5328831fcbcf23c9ac929a61c",
-          "79d90d160287ae0c6d3c0beb863965137df9f39576cba349a67fc03a3806f04e",
-          "fbb546a70041a0b77ea5bedc2b7cd4363f1374b8d19f9e07c18d9a8c65faf353"
+          "b7666fcda5817736757e3f5b88876fcc05d40a9def4dec54139e624d9c83486e",
+          "1e537720119bc8c5ea2d0331569db2d77a36845ae3415e658ea9404628daf2c2",
+          "2da43d87add6a676a3df83c4080f5a0d9022175755506db40246f7f56e3d71b0"
         ]
       },
       "fixture_concepts": [
@@ -788,7 +788,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "2400513473b0a55e48a9320686f652e9c8da3ad02e2cd4e5c0443c8afdf77bf6",
+        "bundle_sha256": "0523a086401d02d1a4b294faf3e4bf731a9397c3198f3fb7944b31a921e36d2e",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 2255,
         "prompt_limit_bytes": 8000,
@@ -826,9 +826,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "a668ba5b750c1f8ece812fce4023cb77f120fb3a28dd23df1b94e6bd027d1d25",
-          "e7c037b1a46d6c74e638942370c3a8481e1e848d0deb082cc882379fece74222",
-          "b7b5002053e72ea07d2f6be46782d07a047c78432efa406d12b97bec25d84a27"
+          "9aeb56e00aec91df10ba3becf287853ad8666c2ada03abe0874af0851056f554",
+          "399604d547a317ce862ef57b4b8f0280f46a3899323671b4f24b2cd38b69f6ba",
+          "06e74f02121750322291d0eaab34b5475823585f0999b8675fa5300a50ef2d29"
         ]
       },
       "fixture_concepts": [
@@ -902,7 +902,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "72ced3b9f1d42fcd8e7854bbe14ccc4e2eab80bd4ec8e4802a8440fba4e9159a",
+        "bundle_sha256": "749972fa86f4f813cfdb97b31825dc3e185980e61e0adad25e6e02489e7c92c5",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1337,
         "prompt_limit_bytes": 8000,
@@ -940,9 +940,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "23df2935ac1e9f400a9d7b561983227badbc1daba290a64e28bcda7c3109b905",
-          "27b4f6eba6ff26cc387565eb976d1630221f6f47ada5fd78d28acbea64f3bc06",
-          "49d2c0339a4388982a61537c03c354264c368c57058c4fb5cffa67da3d99cf85"
+          "0984d6934d825355b11b308e11f4b0ed26e2af34bbf18dd3ec4dfe759282868c",
+          "3c7bd4efe18430feab92ec5d82c5d062e8ccd189c26a9577604e416ca5331936",
+          "4cc1aaabb897a4936a92036101dbf830adfa06fcd099863796c4793dab1c9821"
         ]
       },
       "fixture_concepts": [
@@ -1017,7 +1017,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "33e9b5baf6d4da2727e8b45537a71d62020306e2563d3bf9d29a4a879f98369e",
+        "bundle_sha256": "5793805256e73d429b255371c242e437bd5ae0ba551878ea21efdfaf7930a5fc",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1280,
         "prompt_limit_bytes": 8000,
@@ -1049,9 +1049,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "579b9f7f468f52ebcec074db6d9ed1dc76715393747b42014893262c08ef82a5",
-          "bb9683c06310a17272fb1668cb5d08f9c39652bec3dd01eff8f777df2c3e9df6",
-          "70ca975ec921c2ddfc19c0a6b9b055b8e98b03d4215911beebd2a3c0c715c9f1"
+          "beff5375652e6affa40853b3b573104d08f73c0d8344375078cba856ecc4e28e",
+          "cde186c33de399de7d74370b1692f59acd575d87ba1784b6fe4cb0bdea947125",
+          "3298c8c6d4691cfff26880e45d89274a214bf0a4ccbdb10e50bf2c1eaba36ddc"
         ]
       },
       "fixture_concepts": [

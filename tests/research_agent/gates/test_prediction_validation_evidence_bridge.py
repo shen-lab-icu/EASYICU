@@ -562,7 +562,8 @@ def test_analysis_policy_is_closed_and_planner_remains_unwired() -> None:
         root / "src/easyicu/research_agent/authority/prediction_validation_evidence.py"
     ).read_text(encoding="utf-8")
 
-    assert "prediction_validation" not in selection
+    assert "run_prediction_validation" not in selection
+    assert "import external_validation_executor" in selection
     assert 'capability_id="prediction_validation"' not in registry
     assert "execution.runners" not in bridge
     assert "register_numeric_claim" not in bridge

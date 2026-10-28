@@ -8,6 +8,9 @@ data frame and returns a result bound to the declaration digest.
 
 from __future__ import annotations
 
+import json
+from easyicu.databases.profiles import public_database_keys
+
 import math
 from enum import Enum
 from typing import Any, Literal, Mapping
@@ -711,3 +714,162 @@ __all__ = [
     "prediction_validation_spec_sha256",
     "prediction_validation_upstream_lineage_sha256",
 ]
+
+
+EXTERNAL_ACTION = "prediction.external_validation"
+FROZEN_MODEL_INPUT = "table:frozen_prediction_model"
+EXTERNAL_OUTPUTS = (
+    "table:external_validation", "table:external_calibration",
+    "table:external_decision_curve", "table:external_case_mix",
+    "log:external_validation_provenance", "report:external_validation_tripod",
+    "figure:external_calibration",
+)
+
+
+class ExternalValidationError(ValueError):
+    """A refusal with a stable machine-readable reason and aggregate detail."""
+
+    def __init__(self, reason_code: str, **detail: object) -> None:
+        self.reason_code = reason_code
+        self.detail = detail
+        super().__init__(f"{reason_code}: {detail}")
+
+
+class ConfirmedMeaningChange(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    database: str
+    concept: str
+    development_meaning: str = Field(min_length=1)
+    validation_meaning: str = Field(min_length=1)
+    confirmation: str = Field(min_length=12, max_length=500)
+
+
+class ExternalValidationSpec(BaseModel):
+    """A digest and a complete predictor roster, approved before cohort reads."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    development_database: str
+    validation_databases: tuple[str, ...] = Field(min_length=1, max_length=5)
+    frozen_model_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    predictor_concepts: tuple[str, ...] = Field(min_length=1, max_length=64)
+    outcome_concept: str = Field(min_length=1)
+    recalibration: Literal["none", "intercept_only", "logistic"] = "none"
+    confirmed_changes: tuple[ConfirmedMeaningChange, ...] = ()
+
+    @model_validator(mode="after")
+    def _closed_roster(self) -> ExternalValidationSpec:
+        databases = (self.development_database, *self.validation_databases)
+        if len(set(databases)) != len(databases) or not set(databases) <= set(public_database_keys()):
+            raise ValueError("external validation needs distinct canonical public databases")
+        if (len(set(self.predictor_concepts)) != len(self.predictor_concepts)
+                or any(not p.strip() or p != p.strip() for p in self.predictor_concepts)
+                or self.outcome_concept in self.predictor_concepts):
+            raise ValueError("external validation needs a unique predictor roster excluding the outcome")
+        coordinates = [(c.database, c.concept) for c in self.confirmed_changes]
+        if len(set(coordinates)) != len(coordinates) or any(
+            c.database not in self.validation_databases
+            or c.concept not in (*self.predictor_concepts, self.outcome_concept)
+            or c.development_meaning == c.validation_meaning for c in self.confirmed_changes
+        ):
+            raise ValueError("confirmed changes must name unique validation concepts and changed meanings")
+        return self
+
+
+class ExternalValidationPlanFields(BaseModel):
+    """Progressive option compiled into the sealed method coordinate."""
+
+    external_validation_spec: ExternalValidationSpec | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+
+    @field_validator("external_validation_spec", mode="before")
+    @classmethod
+    def _decode_compact_wire_spec(cls, value):
+        # Strict Planner transport encodes this optional object as JSON text;
+        # the reviewed plan always retains the fully validated typed object.
+        return json.loads(value) if isinstance(value, str) else value
+
+class FrozenPredictor(BaseModel):
+    """Numeric coefficient, train-fitted preprocessing and observed case mix."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    concept: str = Field(min_length=1)
+    meaning: str = Field(min_length=1)
+    coefficient: float
+    median: float
+    center: float
+    scale: float = Field(gt=0)
+    development_mean: float
+    development_sd: float = Field(ge=0)
+    development_missing_fraction: float = Field(ge=0, lt=1)
+
+
+class FrozenLogisticModel(BaseModel):
+    """No pickle or executable deserialization; every fitted byte is bound."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    schema_version: Literal["easyicu.frozen_logistic_transport/1"] = "easyicu.frozen_logistic_transport/1"
+    development_database: str
+    development_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    outcome_concept: str = Field(min_length=1)
+    outcome_meaning: str = Field(min_length=1)
+    subject_id_column: str = "subject_id"
+    intercept: float
+    predictors: tuple[FrozenPredictor, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _distinct_columns(self) -> FrozenLogisticModel:
+        names = [p.concept for p in self.predictors]
+        if (len(set(names)) != len(names)
+                or {self.outcome_concept, self.subject_id_column} & set(names)
+                or self.outcome_concept == self.subject_id_column):
+            raise ValueError("model identity, outcome and predictor columns must differ")
+        return self
+
+
+def external_cohort_input(database: str) -> str:
+    return f"dataset:external_validation_{database}"
+
+
+def external_validation_method(spec: ExternalValidationSpec) -> str:
+    """Carry the typed option through AnalysisStep without editing its seal."""
+    parsed = ExternalValidationSpec.model_validate(spec.model_dump())
+    payload = json.dumps(parsed.model_dump(mode="json"), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return f"prediction_external_validation({payload})"
+
+
+def external_validation_spec_for_step(step: object) -> ExternalValidationSpec | None:
+    """Parse one closed method serialization, following the bootstrap option."""
+    prefix = "prediction_external_validation("
+    method = str(getattr(step, "method", None) or "")
+    if not method.startswith(prefix):
+        return None
+    if getattr(step, "scientific_action_id", None) != EXTERNAL_ACTION:
+        raise ValueError("external_validation_spec belongs only to prediction.external_validation")
+    try:
+        if not method.endswith(")"):
+            raise ValueError("unclosed external validation declaration")
+        return ExternalValidationSpec.model_validate_json(method[len(prefix):-1])
+    except ValueError as exc:
+        raise ExternalValidationError("external_validation_declaration_required") from exc
+
+
+def external_validation_step_matches(step: object) -> bool:
+    spec = external_validation_spec_for_step(step)
+    return bool(
+        getattr(step, "scientific_action_id", None) == EXTERNAL_ACTION
+        and isinstance(spec, ExternalValidationSpec)
+        and tuple(getattr(step, "inputs", ())) == (
+            FROZEN_MODEL_INPUT, *(external_cohort_input(db) for db in spec.validation_databases)
+        )
+        and tuple(getattr(step, "expected_outputs", ())) == EXTERNAL_OUTPUTS
+        and getattr(step, "planned_analysis_role", None) == "secondary"
+        and not any(getattr(step, name, None) for name in (
+            "model_requirements", "table_one_spec", "cohort_definition_spec", "measurement_audit_spec",
+            "robustness_replay_spec", "trajectory_stability_spec", "family_primary_result_requirement",
+        ))
+    )

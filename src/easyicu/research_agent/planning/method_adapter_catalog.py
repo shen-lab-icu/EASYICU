@@ -327,6 +327,10 @@ _BY_ACTION = {item.action_id: item for item in HIGH_FREQUENCY_METHOD_ADAPTERS}
 def get_method_adapter_contract(action_id: str) -> MethodAdapterContract | None:
     """Return the exact adapter contract, or ``None`` without guessing."""
 
+    if str(action_id or "").strip() == "prediction.external_validation":
+        from .prediction_timing import external_validation_adapter
+
+        return external_validation_adapter(MethodAdapterContract)
     return _BY_ACTION.get(str(action_id or "").strip())
 
 

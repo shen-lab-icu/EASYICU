@@ -233,16 +233,15 @@ def test_missing_initial_cursor_cannot_leave_failed_job_running():
 
 def test_scientific_failure_still_terminates_when_error_progress_cannot_persist():
     from easyicu.research_agent.planning.scientific_action_catalog import (
-        ScientificActionGapError, resolve_scientific_action_request,
+        ScientificActionGapError,
     )
+    from tests.support.scientific_action_gap import scientific_action_gap
 
     def disk_unavailable(receipt):
         raise JobJournalError("job_journal_write_failed")
 
     def runner(job):
-        raise ScientificActionGapError(resolve_scientific_action_request(
-            analysis_type="prediction_model", action_id="prediction.external_validation",
-        ))
+        raise ScientificActionGapError(scientific_action_gap())
 
     job = Job("unreserved-failure", "agent-run", persist=disk_unavailable)
     JobManager()._run(job, runner)

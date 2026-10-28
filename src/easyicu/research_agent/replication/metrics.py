@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from easyicu.concept.metadata_sidecar import ColumnMetadataBinding
+from easyicu.databases.research_capabilities import ResearchCapabilityProfile
+from ..contracts.prediction_validation import ExternalValidationError, FrozenLogisticModel
+
 from types import MappingProxyType
 from typing import Any, Mapping, Optional
 
@@ -103,3 +108,40 @@ def compare_metric_values(
 
 
 __all__ = ["CLAIM_METRIC_KEYS", "claim_metric_key", "compare_metric_values"]
+
+
+def require_transport_capabilities(profile: ResearchCapabilityProfile, model: FrozenLogisticModel) -> None:
+    """A physical column cannot override an absent/degraded dictionary recipe."""
+    if not profile.source_registered:
+        raise ExternalValidationError("validation_database_unavailable", database=profile.database)
+    missing = [p.concept for p in model.predictors if not profile.concept(p.concept).mapped]
+    if missing:
+        raise ExternalValidationError("predictor_unavailable", database=profile.database, concepts=missing)
+    if not profile.concept(model.outcome_concept).mapped:
+        raise ExternalValidationError("outcome_unavailable", database=profile.database, concept=model.outcome_concept)
+
+
+def transport_concept_meaning(binding: ColumnMetadataBinding, profile: ResearchCapabilityProfile) -> str:
+    """Compare meaning, units, aggregation, window and representation, not names.
+
+    Source-table and local column names deliberately do not enter a meaning:
+    harmonized concepts can come from different tables in different databases.
+    """
+    metadata = binding.metadata
+    concept = metadata.source_concept
+    extra = None
+    if concept == "death":
+        extra = profile.mortality.meaning if profile.mortality else "unavailable"
+    elif concept in {"age", "weight"}:
+        representation = getattr(profile, concept)
+        extra = {
+            "kind": representation.kind, "top_code": representation.top_code,
+            "bin_edges": representation.bin_edges, "bin_values": representation.bin_values,
+            "exact_through": representation.exact_through,
+        }
+    return json.dumps({
+        "concept": concept, "role": metadata.role.value, "unit": metadata.canonical_unit,
+        "aggregation": metadata.aggregation,
+        "window": binding.derivation_window.to_dict() if binding.derivation_window else None,
+        "representation_transform": binding.representation_transform, "source_meaning": extra,
+    }, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
