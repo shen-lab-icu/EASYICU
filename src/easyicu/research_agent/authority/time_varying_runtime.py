@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic_core import PydanticCustomError
 
 from ..canonical_json import canonical_sha256
 
@@ -32,6 +33,7 @@ class TimeVaryingRuntimeAuthority(BaseModel):
         "easyicu.time_varying_runtime_authority/2",
     ]
     authority_kind: Literal["time_varying_exposure_association"]
+    authority_origin: Literal["host_signed", "workflow_metadata"] = "host_signed"
     protocol_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     execution_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     specification: TimeVaryingExposureSpecification
@@ -86,8 +88,21 @@ class TimeVaryingRuntimeAuthority(BaseModel):
             digest_exclusions = {"execution_contract_sha256"}
         body = self.model_dump(mode="json", exclude=digest_exclusions)
         if canonical_sha256(body) != self.execution_contract_sha256:
-            raise ValueError("time-varying authority digest mismatch")
+            # Preserve legacy host bodies; metadata always digests its origin.
+            if self.authority_origin == "host_signed":
+                body.pop("authority_origin")
+            if canonical_sha256(body) != self.execution_contract_sha256:
+                raise ValueError("time-varying authority digest mismatch")
         return self
+
+    def require_execution_origin(self) -> None:
+        """Catalog metadata can describe a suite but cannot authorize it."""
+
+        if self.authority_origin == "workflow_metadata":
+            raise PydanticCustomError(
+                "workflow_metadata_not_executable", "Read-only workflow metadata cannot authorize execution.",
+            )
+        self._closed()
 
     @property
     def plan_rule_ref(self) -> str:
@@ -105,6 +120,7 @@ class TimeVaryingRuntimeAuthority(BaseModel):
     def development_execution_only_plan(
         self, *, research_question: str
     ) -> AnalysisPlan:
+        self.require_execution_origin()
         recommendation = [
             "以每次 ICU 入住为分析单位；保留重复入住和早期死亡，以源数据合同明确记录无法构造随访的排除原因。",
             f"仅使用 ICU 入科后 0–24 小时已发生的 {self.specification.exposure_concept} 直接测量，随时间更新最大值；24 小时后冻结已观测状态。",
@@ -212,6 +228,7 @@ class TimeVaryingRuntimeAuthority(BaseModel):
         )
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
+        self.require_execution_origin()
         primary = [
             step for step in plan.steps if step.planned_analysis_role == "primary"
         ]

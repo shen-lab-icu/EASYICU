@@ -17,7 +17,7 @@ import json
 from dataclasses import replace
 from typing import Annotated, Any, Dict, Literal, Mapping, Tuple, Union
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from .landmark_continuous_survival_runtime import (
     LandmarkContinuousSurvivalRuntimeAuthority,
@@ -3033,7 +3033,19 @@ CurrentCaseScientificRuntimeAuthority = Annotated[
     ],
     Field(discriminator="authority_kind"),
 ]
-_AUTHORITY_ADAPTER = TypeAdapter(CurrentCaseScientificRuntimeAuthority)
+
+
+def _execution_authority(
+    value: CurrentCaseScientificRuntimeAuthority,
+) -> CurrentCaseScientificRuntimeAuthority:
+    if isinstance(value, (TargetTrialRuntimeAuthority, TimeVaryingRuntimeAuthority)):
+        value.require_execution_origin()
+    return value
+
+
+_AUTHORITY_ADAPTER = TypeAdapter(Annotated[
+    CurrentCaseScientificRuntimeAuthority, AfterValidator(_execution_authority),
+])
 
 
 def load_current_case_scientific_runtime_authority(
@@ -3054,6 +3066,8 @@ def load_current_case_scientific_runtime_authority(
             TargetTrialRuntimeAuthority,
         ),
     ):
+        if isinstance(value, (TargetTrialRuntimeAuthority, TimeVaryingRuntimeAuthority)):
+            return _AUTHORITY_ADAPTER.validate_python(value, strict=True)
         return value
     return _AUTHORITY_ADAPTER.validate_json(
         json.dumps(_plain(value), sort_keys=True), strict=True
