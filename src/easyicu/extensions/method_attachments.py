@@ -19,7 +19,8 @@ from easyicu.research_agent.planning.analysis_types import canonical_analysis_fa
 
 
 def question_family_for_method(family: str) -> str:
-    return {"ordinal_dose_response": "association_study", "dynamic_prediction": "prediction_model"}.get(family, family)
+    return {"ordinal_dose_response": "association_study", "repeated_measures": "association_study",
+            "dynamic_prediction": "prediction_model"}.get(family, family)
 
 
 def builtin_attachment(skill_id: str) -> dict:

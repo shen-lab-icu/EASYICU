@@ -47,6 +47,8 @@ from ..contracts.primary_cohort import (
 from ..contracts.product_identity import typed_product
 from ..contracts.prediction_execution import prediction_bootstrap_method
 from ..contracts.prediction_validation import external_validation_method
+from ..contracts.trajectory_design import REPEATED_ACTIONS
+from ..contracts.trajectory_design import repeated_measure_compiled_method
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -3004,7 +3006,8 @@ def _compile_one_step(
         "intent": step.objective,
         "inputs": inputs,
         "expected_outputs": [product for product, _role in output_pairs],
-        "method": (external_validation_method(step.external_validation_spec) if step.external_validation_spec
+        "method": (repeated_measure_compiled_method(step) if step.scientific_action_id in REPEATED_ACTIONS else
+                   external_validation_method(step.external_validation_spec) if step.external_validation_spec
                    else prediction_bootstrap_method(step.bootstrap_spec) if step.bootstrap_spec else method),
         "scientific_action_id": step.scientific_action_id,
         "icu_rule_refs": [],

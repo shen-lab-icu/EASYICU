@@ -84,6 +84,18 @@ class MethodKernel:
 
 CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
     MethodKernel(
+        module="mixed_effects", entrypoints=("fit_mixed_effects", "MixedEffectsResult", "result_sha256"),
+        capability="Continuous repeated outcomes: correlated random intercept/time slope, fixed-effect CIs, covariance and ICC at time zero.",
+        families=("repeated_measures",), requires=("numpy", "pandas", "statsmodels"),
+        fallback="Refuse if the reviewed long-panel time, grouping, aggregation or informative-death-dropout design is absent.",
+    ),
+    MethodKernel(
+        module="gee", entrypoints=("fit_gee", "GEEResult", "result_sha256"),
+        capability="Binary/continuous repeated outcomes with robust sandwich SE, planned working correlation and QIC when available.",
+        families=("repeated_measures",), requires=("numpy", "pandas", "statsmodels"),
+        fallback="Refuse absent grouping or working correlation; AR1 requires aligned consecutive time bins. Never substitute a pooled independent fit.",
+    ),
+    MethodKernel(
         module="prediction_validation", entrypoints=("run_external_validation",),
         capability="Digest-bound frozen numeric logistic transport across named ICU databases; separate apparent recalibration.",
         families=("prediction", "prediction_model"),
@@ -539,6 +551,8 @@ class UnreachableKernel:
 
 # Two specialised kernels remain parked here, not offered, for a measured
 # reason -- not as "wire it later" parking.
+# GEE and mixed effects now have exact repeated-measure actions and a separate
+# relevance family; they cannot evict resources from ordinary association steps.
 #
 # Measured 2026-09-18: broadly offering ``doubly_robust`` / ``gformula`` / ``msm``
 # fills all three Coder software slots of a causal landmark step
@@ -565,37 +579,7 @@ class UnreachableKernel:
 # refuses rather than guessing when that rate is unavailable. ``evalue.py`` was
 # deleted; the four properties only its tests covered moved to
 # ``test_evalue_observed_baseline.py``.
-DECLARED_UNREACHABLE_KERNELS: Tuple[UnreachableKernel, ...] = (
-    UnreachableKernel(
-        module="gee",
-        reason=(
-            "offering it under association fills all three Coder software "
-            "slots with association-family kernels (measured 2026-09-18: "
-            "mixed_effects, gee, rcs_dose_response) and evicts statsmodels "
-            "from plain adjusted-logistic steps. The kernel stays tested; "
-            "clustered/longitudinal steps keep the documented pooled-fit "
-            "fallback."
-        ),
-        pending_decision=(
-            "prerequisite-aware Coder ranking (or reserved prerequisite "
-            "slots); longitudinal/clustered steps need a family of their "
-            "own rather than borrowing association"
-        ),
-    ),
-    UnreachableKernel(
-        module="mixed_effects",
-        reason=(
-            "same slot-eviction collision as gee (measured 2026-09-18); "
-            "alphabetical tie-breaks among family-only matches make any "
-            "fourth association kernel evictive. The kernel stays tested."
-        ),
-        pending_decision=(
-            "prerequisite-aware Coder ranking (or reserved prerequisite "
-            "slots); longitudinal/clustered steps need a family of their "
-            "own rather than borrowing association"
-        ),
-    ),
-)
+DECLARED_UNREACHABLE_KERNELS: Tuple[UnreachableKernel, ...] = ()
 
 
 UNREACHABLE_MODULE_NAMES: frozenset = frozenset(

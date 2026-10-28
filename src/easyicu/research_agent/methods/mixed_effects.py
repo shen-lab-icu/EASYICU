@@ -1,4 +1,4 @@
-"""Linear mixed model with a random intercept (analysis only).
+"""Linear mixed model with a random intercept and optional time slope (analysis only).
 
 Thin wrapper around :class:`statsmodels.regression.mixed_linear_model.MixedLM`
 (wrap-vs-rewrite rule: the package owns the estimator; this kernel only pins
@@ -7,8 +7,9 @@ canonical digest). The model for a continuous outcome ``y`` in group ``g`` is::
 
     y_ig = x_ig @ beta + u_g + e_ig,  u_g ~ N(0, tau^2),  e_ig ~ N(0, sigma^2),
 
-i.e. a random intercept per group and fixed slopes. Only this specification
-is offered: random slopes need a separate validated kernel.
+i.e. a random intercept per group and fixed slopes. An explicit time vector
+or design-column name adds a correlated random time slope. ICC then refers to
+time zero; the within-group correlation is time-dependent elsewhere.
 
 Determinism contract: ``MixedLM`` maximises the (restricted) likelihood from
 fixed starting values with a deterministic optimiser and no RNG, so
@@ -191,6 +192,14 @@ class MixedEffectsResult:
     converged: bool
     claim_ceiling: str = "analysis_only"
     method: str = "mixedlm_random_intercept_statsmodels"
+    random_slope_var: float | None = None
+    intercept_slope_cov: float | None = None
+    random_effect_cov: tuple[tuple[float, ...], ...] = ()
+
+    @property
+    def icc(self) -> float:
+        """Variance partition at time zero (constant for intercept-only fits)."""
+        return self.group_var / (self.group_var + self.resid_scale)
 
     def to_json(self) -> Dict[str, Any]:
         return {
@@ -211,6 +220,11 @@ class MixedEffectsResult:
             "converged": bool(self.converged),
             "claim_ceiling": self.claim_ceiling,
             "method": self.method,
+            "random_slope_var": self.random_slope_var,
+            "intercept_slope_cov": self.intercept_slope_cov,
+            "random_effect_cov": [list(row) for row in self.random_effect_cov],
+            "icc": self.icc,
+            "icc_reference": "constant" if self.random_slope_var is None else "time_zero",
         }
 
 
@@ -231,8 +245,9 @@ def fit_mixed_effects(
     add_intercept: bool = True,
     reml: bool = True,
     ci_level: float = 0.95,
+    random_slope: object = None,
 ) -> MixedEffectsResult:
-    """Fit a random-intercept linear mixed model and report Wald statistics.
+    """Fit a linear mixed model and report Wald statistics and covariance.
 
     Parameters
     ----------
@@ -243,6 +258,9 @@ def fit_mixed_effects(
         Prepend a ``"const"`` column unless one is already present.
     reml:
         Restricted maximum likelihood (default) versus maximum likelihood.
+    random_slope:
+        Optional numeric time vector aligned with y, or its exact column in X.
+        Time must vary within every group; no random slope is inferred.
     """
 
     level = _require_ci_level(ci_level)
@@ -250,6 +268,27 @@ def fit_mixed_effects(
     n = int(y_values.shape[0])
     exog_frame = _coerce_design(X, n, feature_names)
     group_labels = _coerce_groups(groups, n)
+    if not np.isfinite(exog_frame.to_numpy()).all():
+        raise MixedEffectsError("X must contain only finite values (no NaN/inf)")
+    random_design = None
+    random_time_scale = 1.0
+    if random_slope is not None:
+        try:
+            times = np.asarray(
+                exog_frame[random_slope] if isinstance(random_slope, str) else random_slope,
+                dtype=float,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MixedEffectsError("random_slope must name a design column or an aligned numeric time vector") from exc
+        if times.shape != (n,) or not np.isfinite(times).all():
+            raise MixedEffectsError("random_slope time must be finite and aligned with y")
+        if any(np.ptp(times[group_labels == group]) <= 0 for group in set(group_labels)):
+            raise MixedEffectsError("random_slope time must vary within every group")
+        # Put random slopes on a stable numerical scale. The same physical
+        # trajectory expressed in hours or days must fit the same likelihood.
+        # Transform the covariance back into the caller's time unit below.
+        random_time_scale = float(np.std(times))
+        random_design = np.column_stack([np.ones(n), times / random_time_scale])
 
     if add_intercept:
         exog_frame = sm.add_constant(exog_frame, has_constant="skip")
@@ -266,7 +305,8 @@ def fit_mixed_effects(
             y_values,
             np.asarray(exog_frame, dtype=float),
             groups=group_labels,
-        ).fit(reml=bool(reml))
+            exog_re=random_design,
+        ).fit(reml=bool(reml), **({"method": "lbfgs"} if random_design is not None else {}))
     except MixedEffectsError:
         raise
     except Exception as exc:
@@ -275,7 +315,8 @@ def fit_mixed_effects(
         raise MixedEffectsError(
             "statsmodels MixedLM fit did not converge; refusing to report"
         )
-    if getattr(fitted.cov_re, "shape", (0, 0)) != (1, 1):
+    expected_size = 1 if random_design is None else 2
+    if getattr(fitted.cov_re, "shape", (0, 0)) != (expected_size, expected_size):
         raise MixedEffectsError(
             "expected a scalar random-intercept covariance; refusing an "
             "unexpected random-effects structure"
@@ -287,6 +328,10 @@ def fit_mixed_effects(
     pvalues = np.asarray(fitted.pvalues, dtype=float).ravel()[:n_fixed]
     intervals = np.asarray(fitted.conf_int(alpha=1.0 - level), dtype=float)[:n_fixed, :]
     group_var = float(np.asarray(fitted.cov_re, dtype=float).ravel()[0])
+    covariance = np.asarray(fitted.cov_re, dtype=float)
+    if random_design is not None:
+        inverse_scale = np.diag([1.0, 1.0 / random_time_scale])
+        covariance = inverse_scale @ covariance @ inverse_scale
     resid_scale = float(fitted.scale)
     loglike = float(fitted.llf)
     if not (
@@ -298,6 +343,7 @@ def fit_mixed_effects(
         and np.isfinite(group_var)
         and np.isfinite(resid_scale)
         and np.isfinite(loglike)
+        and np.isfinite(covariance).all()
     ):
         raise MixedEffectsError("statsmodels MixedLM fit produced non-finite statistics")
     if np.any(stderr <= 0.0):
@@ -308,6 +354,8 @@ def fit_mixed_effects(
         raise MixedEffectsError(
             "statsmodels MixedLM fit produced an inadmissible variance component"
         )
+    if np.linalg.eigvalsh(covariance).min() < -1e-10:
+        raise MixedEffectsError("random-effects covariance must be positive semidefinite")
 
     return MixedEffectsResult(
         var_names=tuple(names),
@@ -325,6 +373,10 @@ def fit_mixed_effects(
         n_obs=n,
         n_groups=len(set(group_labels.tolist())),
         converged=True,
+        random_slope_var=float(covariance[1, 1]) if expected_size == 2 else None,
+        intercept_slope_cov=float(covariance[0, 1]) if expected_size == 2 else None,
+        random_effect_cov=tuple(tuple(float(v) for v in row) for row in covariance),
+        method="mixedlm_random_intercept_slope_statsmodels" if expected_size == 2 else "mixedlm_random_intercept_statsmodels",
     )
 
 

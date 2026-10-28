@@ -8,6 +8,7 @@ question without a fixed family template keeps its package composition.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
 from easyicu.research_agent.planning.family_spec import (
     BASELINE_ASSOCIATION_FAMILY_ID,
@@ -39,6 +40,7 @@ from easyicu.research_agent.planning.family_spec.request import proposed_surviva
 from easyicu.research_agent.planning.family_spec.trajectory_template import CANDIDATE_OUTPUTS
 from easyicu.research_agent.schema import CohortDescriptor, ConceptDescriptor, ResearchContext, UserPreferences
 from easyicu.research_agent.trajectory.plan_contract import STABILITY_EXECUTOR_INPUTS
+from easyicu.research_agent.contracts.trajectory_design import canonical_repeated_measure_spec, REPEATED_OUTPUTS
 
 
 # Identity bindings only. Scientific content stays in the named owners.
@@ -84,6 +86,8 @@ def _survival_coordinates():
 
 def canonical_workflow_shape(skill_id: str):
     """Return an owner-built canonical draft and its typed role coordinates."""
+    if skill_id == "repeated-measure-trajectory":
+        return canonical_repeated_measure_workflow()
     longitudinal = LONGITUDINAL_TEMPLATES.get(skill_id)
     if longitudinal is not None:
         family, build = longitudinal
@@ -206,3 +210,60 @@ def g_method_workflow_metadata(draft):
             })
             materials[i] = item.model_copy(update={"step": report})
     return replace(draft, outline=draft.outline.model_copy(update={"steps": outlines}), materializations=tuple(materials)), {intake_id, msm_id}
+
+@dataclass(frozen=True)
+class RepeatedMeasureWorkflowCoordinates:
+    """Read-only hub coordinates; no source or execution authority is issued."""
+
+    family_id: str = "repeated_measure_trajectory"
+    survival_suite: None = None
+    exposure_kind: str = "none"
+    exposure_is_ordered: bool = False
+    observation_window_hours: float = 144
+    cohort_time_zero_hours: float = 0
+    observation_duration_column: None = None
+
+
+@dataclass(frozen=True)
+class RepeatedMeasureWorkflowDraft:
+    materializations: tuple
+
+
+def canonical_repeated_measure_workflow():
+    """Project the same spec and products that the reviewed execution owner uses."""
+    from easyicu.research_agent.canonical_json import canonical_sha256
+    from easyicu.research_agent.planning.progressive_contract import ProgressiveSkeletonStep, ProgressiveStepMaterialization
+
+    spec = canonical_repeated_measure_spec()
+    cohort = {"producer_step_id": "cohort_accounting", "product_id": "artifact:analysis_cohort"}
+    steps = [
+        ProgressiveSkeletonStep(
+            step_id="cohort_accounting", module_id="cohort_definition", planned_analysis_role="auxiliary",
+            objective="Account for the source population supplying the repeated long panel.", raw_inputs=[spec.identity_column],
+        ),
+        ProgressiveSkeletonStep(
+            step_id="measurement_audit", module_id="measurement_audit", planned_analysis_role="auxiliary",
+            objective="Audit measurement density and missingness on the reviewed ICU time grid.",
+            depends_on=["cohort_accounting"], raw_inputs=list(spec.required_columns), product_inputs=[cohort],
+            outputs=[{"product_id": "table:missingness_profile", "semantic_role": "missingness_profile"}],
+        ),
+        ProgressiveSkeletonStep(
+            step_id="repeated_model", module_id="custom_analysis", planned_analysis_role="primary",
+            custom_method="repeated_measures",
+            objective="Fit the reviewed growth model; state informative death dropout and its planned sensitivity.",
+            depends_on=["cohort_accounting", "measurement_audit"], raw_inputs=list(spec.required_columns),
+            product_inputs=[cohort], scientific_action_id=spec.action_id, repeated_measure_spec=spec,
+            outputs=[{"product_id": product, "semantic_role": "custom"} for product in REPEATED_OUTPUTS],
+        ),
+        ProgressiveSkeletonStep(
+            step_id="report", module_id="report", planned_analysis_role="auxiliary",
+            objective="Report aggregate effects, variance/ICC or robust GEE diagnostics and the informative-death-dropout limitation.",
+            depends_on=["repeated_model"],
+            product_inputs=[{"producer_step_id": "repeated_model", "product_id": product} for product in REPEATED_OUTPUTS],
+            outputs=[{"product_id": "report:report", "semantic_role": "report"}],
+        ),
+    ]
+    materials = tuple(ProgressiveStepMaterialization(
+        outline_step_sha256=canonical_sha256(step.model_dump(mode="json")), foundation=None, step=step,
+    ) for step in steps)
+    return RepeatedMeasureWorkflowCoordinates(), RepeatedMeasureWorkflowDraft(materials), set()

@@ -23,6 +23,7 @@ from .raw_source_authority import source_identity_capability_profiles
 
 
 EXAMPLES = {
+    "repeated-measure-trajectory": "example-repeated-measure-change",
     "adjusted-exposure-outcome-study": "example-lactate-death",
     "ordinal-dose-response-study": "example-sofa-trend",
     "fixed-landmark-association-study": "example-landmark-lactate",

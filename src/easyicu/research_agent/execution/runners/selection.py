@@ -283,6 +283,8 @@ from .trajectory_stability_executor import (
     trajectory_stability_executor_owns_step,
 )
 from .typed_input_binding import sole_typed_cohort_input
+from .trajectory_scientific_representation_executor import repeated_measure_executor_code
+from ...contracts.trajectory_design import REPEATED_ACTIONS, repeated_measure_step_matches
 
 __all__ = [
     "STANDARD_EXECUTORS",
@@ -329,6 +331,13 @@ def _build_registry() -> StepExecutorRegistry:
 
     registry = StepExecutorRegistry()
     routes = (
+        StepExecutor(
+            key="repeated_measures", applicable=lambda c: c.step.scientific_action_id in REPEATED_ACTIONS,
+            owns=lambda c: repeated_measure_step_matches(c.step), render=lambda c: repeated_measure_executor_code(c.step),
+            analysis_kind="repeated_measures", selection_reason="reviewed_repeated_measure_design",
+            progress_message="Fitting the reviewed repeated-outcome model and dropout sensitivity",
+            consumed_input_keys=lambda c: _consumed_typed_cohort_inputs(c.step),
+        ),
         external_validation_executor(),
         StepExecutor(
             key="time_varying_g_methods", analysis_kind="time_varying_g_methods",

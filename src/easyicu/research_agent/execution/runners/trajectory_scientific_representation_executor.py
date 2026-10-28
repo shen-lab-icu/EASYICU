@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import textwrap
 from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
+from patsy import dmatrix
+
+from ...canonical_json import canonical_sha256
+from ...contracts.trajectory_design import (DEATH_LIMITATION, RepeatedMeasureSpec, repeated_measure_spec_for_step, repeated_measure_step_matches)
+from ...methods.gee import fit_gee
+from ...methods.mixed_effects import fit_mixed_effects
+from ...trajectory.panel import FixedWindowGrid
+from .typed_input_binding import sole_typed_cohort_input
 
 from ...authority.prespecified_rule_outcomes import (
     RULE_OUTCOME_SCHEMA_VERSION,
@@ -443,3 +452,153 @@ __all__ = [
     "trajectory_scientific_representation_executor_code",
     "trajectory_scientific_representation_executor_owns_step",
 ]
+
+
+# Repeated-measure growth and marginal models share the reviewed long-grid owner.
+def _numeric(values: pd.Series, *, missing: bool = False) -> pd.Series:
+    result = pd.to_numeric(values, errors="raise").astype(float)
+    if (not missing and result.isna().any()) or np.isinf(result.to_numpy()).any():
+        raise ValueError("repeated-measure coordinates must be finite")
+    return result
+
+
+def prepare_repeated_panel(frame: pd.DataFrame, spec: RepeatedMeasureSpec) -> pd.DataFrame:
+    """Aggregate raw observations on the existing ICU grid, without filling gaps.
+
+    The grid's final edge is closed. Bins are labelled by their left edge in
+    the reviewed time unit; AR1 subsequently uses those bins as unit steps.
+    Baseline covariates and the binary death indicator must be constant per
+    analysis unit, so a time-varying confounder cannot become a baseline mean.
+    """
+    spec = RepeatedMeasureSpec.model_validate(spec.model_dump())
+    if set(spec.required_columns) - set(frame.columns) or frame.columns.duplicated().any():
+        raise ValueError("long panel is missing declared columns or has duplicate names")
+    identities = frame[spec.identity_column]
+    if identities.isna().any() or identities.astype(str).str.strip().eq("").any():
+        raise ValueError("repeated-measure identity must be nonmissing")
+    source = pd.DataFrame({
+        "unit": identities, "time": _numeric(frame[spec.time_column]),
+        "value": _numeric(frame[spec.outcome_column], missing=True),
+    })
+    if spec.family == "binomial" and not source.value.dropna().isin([0.0, 1.0]).all():
+        raise ValueError("binomial repeated outcomes must be binary before aggregation")
+    static = []
+    for i, name in enumerate(spec.covariates):
+        target = f"covariate_{i}"
+        source[target] = _numeric(frame[name])
+        static.append(target)
+    if spec.death_column:
+        source["death"] = _numeric(frame[spec.death_column])
+        if not source.death.isin([0.0, 1.0]).all():
+            raise ValueError("death indicator must be binary")
+        static.append("death")
+    if static and source.groupby("unit", sort=False)[static].nunique().gt(1).any().any():
+        raise ValueError("baseline covariates and death status must be constant per unit")
+    multiplier = 24.0 if spec.time_unit == "days" else 1.0
+    # Reuse the grid's geometry; the reviewed value aggregation is applied below.
+    grid = FixedWindowGrid(
+        width_hours=spec.bin_width * multiplier,
+        horizon_hours=(spec.window_end - spec.window_start) * multiplier,
+    )
+    hours = (source.time - spec.window_start) * multiplier
+    source = source.loc[hours.between(0, grid.horizon_hours) & source.value.notna()].copy()
+    source["bin"] = (hours.loc[source.index] // grid.width_hours).astype(int).clip(upper=len(grid.edges) - 1)
+    source = source.sort_values("time", kind="stable")
+    grouped = source.groupby(["unit", "bin"], sort=True, observed=True)
+    prepared = grouped.value.agg(spec.aggregation).rename("value").to_frame()
+    for name in static:
+        prepared[name] = grouped[name].first()
+    prepared = prepared.reset_index()
+    prepared["time"] = spec.window_start + prepared.bin * spec.bin_width
+    return prepared
+
+
+def _design(panel: pd.DataFrame, spec: RepeatedMeasureSpec) -> pd.DataFrame:
+    if spec.time_basis == "linear":
+        design = pd.DataFrame({"time": panel.time.to_numpy()})
+    else:
+        design = dmatrix(
+            "cr(time, knots=knots, lower_bound=lower, upper_bound=upper, constraints='center') - 1",
+            {"time": panel.time.to_numpy(), "knots": spec.spline_knots,
+             "lower": spec.window_start, "upper": spec.window_end}, return_type="dataframe",
+        )
+        design.columns = [f"time_spline_{i + 1}" for i in range(design.shape[1])]
+    for i, _name in enumerate(spec.covariates):
+        design[f"covariate_{i}"] = panel[f"covariate_{i}"].to_numpy()
+    if np.linalg.matrix_rank(np.column_stack([np.ones(len(design)), design])) < design.shape[1] + 1:
+        raise ValueError("repeated-measure fixed design is rank deficient")
+    return design
+
+
+def run_repeated_measures(*, frame: pd.DataFrame, spec: RepeatedMeasureSpec | Mapping, out_dir: Path) -> dict:
+    spec = RepeatedMeasureSpec.model_validate(spec)
+    panel = prepare_repeated_panel(frame, spec)
+    populations = [("all_observed", panel)]
+    if spec.dropout_sensitivity == "survivors":
+        populations.append(("survivors", panel.loc[panel.death.eq(0)].copy()))
+    effects, diagnostics, profiles, fits = [], [], [], []
+    for population, selected in populations:
+        if selected.empty or selected.groupby("unit", sort=False).size().max() < 2:
+            raise ValueError(f"{population} has no repeated observed time bins")
+        selected = selected.reset_index(drop=True)
+        x = _design(selected, spec)
+        y, groups = selected.value.to_numpy(), selected.unit.to_numpy()
+        if spec.model == "gee":
+            result = fit_gee(y, x, groups, family=spec.family, cov_struct=spec.working_correlation,
+                             time=selected.bin.to_numpy() if spec.working_correlation == "ar1" else None,
+                             ci_level=spec.ci_level)
+        else:
+            result = fit_mixed_effects(y, x, groups, ci_level=spec.ci_level,
+                                      random_slope=selected.time.to_numpy() if spec.model == "mixed_slope" else None)
+        for i, term in enumerate(result.var_names):
+            if term.startswith("covariate_"):
+                term = spec.covariates[int(term.removeprefix("covariate_"))]
+            effects.append(dict(population=population, term=term, estimate=result.coef[i], se=result.se[i],
+                                ci_low=result.ci_low[i], ci_high=result.ci_high[i], p=result.p[i]))
+        stats = result.to_json()
+        fits.append({"population": population, "statistics": stats})
+        diagnostics.append(dict(
+            population=population, model=spec.model, family=spec.family, n_obs=len(selected),
+            n_units=selected.unit.nunique(), source_rows=len(frame),
+            time_origin=spec.time_origin, time_unit=spec.time_unit, time_basis=spec.time_basis,
+            window_start=spec.window_start, window_end=spec.window_end, bin_width=spec.bin_width,
+            aggregation=spec.aggregation, working_correlation=spec.working_correlation,
+            limitation=DEATH_LIMITATION + (
+                " Survivor restriction changes the estimand and does not correct informative dropout."
+                if spec.dropout_sensitivity == "survivors" else
+                " Consider a joint longitudinal-survival model as a sensitivity; it is not fitted here."
+            ),
+            missing_measurements="Observed bins only; no imputation or post-death extrapolation.",
+            qic_comparison="Compare QIC only on identical outcomes/rows using a common scale.",
+            **{key: stats.get(key) for key in ("group_var", "random_slope_var", "intercept_slope_cov", "resid_scale",
+                                              "icc", "icc_reference", "loglike", "qic", "qicu", "qic_scale",
+                                              "qic_unavailable_reason", "cov_type", "converged")},
+        ))
+        profile = selected.groupby("time").value.agg(["count", "mean", "std"]).reset_index()
+        profile.insert(0, "population", population)
+        profiles.append(profile)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(effects).to_csv(out_dir / "repeated_measure_effects.csv", index=False)
+    pd.DataFrame(diagnostics).to_csv(out_dir / "repeated_measure_diagnostics.csv", index=False)
+    pd.concat(profiles, ignore_index=True).to_csv(out_dir / "repeated_measure_profile.csv", index=False)
+    return {"status": "ok", "claim_ceiling": "analysis_only", "n_populations": len(populations), "limitation": DEATH_LIMITATION,
+            "repeated_measure_receipt": {"schema_version": "easyicu.repeated_measure_result/1",
+                "specification": spec.model_dump(mode="json"),
+                "specification_sha256": canonical_sha256(spec.model_dump(mode="json")), "fits": fits}}
+
+
+def repeated_measure_executor_code(step) -> str:
+    if not repeated_measure_step_matches(step):
+        raise ValueError("repeated-measure step needs its exact reviewed specification and products")
+    spec = repeated_measure_spec_for_step(step)
+    return textwrap.dedent(f"""
+        import json
+        import os
+        from pathlib import Path
+        from easyicu.research_agent.execution.runners.typed_input_binding import load_step_cohort_frame
+        from easyicu.research_agent.execution.runners.trajectory_scientific_representation_executor import run_repeated_measures
+        frame, source = load_step_cohort_frame(typed_cohort_input={sole_typed_cohort_input(step)!r})
+        result = run_repeated_measures(frame=frame, spec={spec.model_dump(mode="json")!r}, out_dir=Path(os.environ["STEP_OUT_DIR"]))
+        print(json.dumps(result, allow_nan=False))
+    """).strip()

@@ -35,6 +35,7 @@ from ..contracts.prediction_validation import ExternalValidationPlanFields, Exte
 from ..contracts.model_tokens import BinaryEffectMeasure
 from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
+from ..contracts.trajectory_design import REPEATED_ACTIONS, RepeatedMeasurePlanFields
 from .design_selection import ResearchDesignSelection
 
 
@@ -823,6 +824,7 @@ class ProgressivePlanOutline(BaseModel):
 #: Step fields that only one outline coordinate may carry.  The step contract
 #: refuses them elsewhere, so a transport must not offer them elsewhere either.
 COORDINATE_OWNED_STEP_FIELDS = (
+    "repeated_measure_spec",
     "external_validation_spec",
     "functional_form_spec",
     "bootstrap_spec",
@@ -843,6 +845,8 @@ def coordinate_owned_step_fields(
     """The coordinate-owned fields a step with this module, action and role may carry."""
 
     owned: set[str] = set()
+    if module_id == "custom_analysis" and scientific_action_id in REPEATED_ACTIONS:
+        owned.add("repeated_measure_spec")
     if scientific_action_id == "prediction.external_validation" and planned_analysis_role == "secondary":
         owned.add("external_validation_spec")
     if module_id == "adjusted_association":
@@ -863,7 +867,7 @@ def coordinate_owned_step_fields(
     return frozenset(owned)
 
 
-class ProgressiveSkeletonStep(ExternalValidationPlanFields):
+class ProgressiveSkeletonStep(ExternalValidationPlanFields, RepeatedMeasurePlanFields):
     """Strict detail for only the step currently being materialized by the host."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -956,6 +960,11 @@ class ProgressiveSkeletonStep(ExternalValidationPlanFields):
 
     @model_validator(mode="after")
     def _module_shape(self) -> "ProgressiveSkeletonStep":
+        if self.repeated_measure_spec is not None and (
+            self.module_id != "custom_analysis" or self.scientific_action_id not in REPEATED_ACTIONS
+            or self.planned_analysis_role not in {"primary", "secondary"}
+        ):
+            raise ValueError("repeated_measure_spec belongs only to a repeated-measure analysis")
         if self.outcome_type in {"free_days", "ordinal", "count"}:
             if self.outcome_definition is None:
                 raise ValueError("new outcome types require an explicit outcome_definition and estimand")

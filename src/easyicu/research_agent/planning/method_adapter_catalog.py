@@ -336,6 +336,15 @@ def get_method_adapter_contract(action_id: str) -> MethodAdapterContract | None:
                                    "reviewed lags, censoring, overlap and truncation policies; analysis only"),
             validation_test_refs=("tests/research_agent/execution/test_longitudinal_g_methods.py::test_rendered_executor_consumes_digest_bound_history_and_rejects_tampering",),
         )
+    if action_id in {"association.mixed_effects", "association.gee", "phenotyping.mixed_effects_growth"}:
+        return _adapter_group(
+            (action_id,), owner_module="easyicu.research_agent.execution.runners.trajectory_scientific_representation_executor",
+            owner_entrypoint="repeated_measure_executor_code", selection_kind="repeated_measures",
+            required_declarations=("RepeatedMeasureSpec with ICU time axis, window, aggregation and model/correlation",
+                                   "informative-death-dropout limitation and survivor sensitivity or joint-model note",
+                                   "one digest-bound long-panel cohort and exact aggregate products"),
+            validation_test_refs=("tests/research_agent/execution/test_repeated_measure_executor.py::test_registry_executes_the_bound_long_panel_and_rejects_source_drift",),
+        )[0]
 
     if str(action_id or "").strip() == "prediction.external_validation":
         from .prediction_timing import external_validation_adapter

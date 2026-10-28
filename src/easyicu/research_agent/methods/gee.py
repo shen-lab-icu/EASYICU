@@ -26,8 +26,8 @@ Fail-closed inputs (all raise :class:`GEEError`, a ``ValueError``):
   0/1 with both classes observed), or a constant outcome;
 * fewer than two distinct clusters (a single cluster has no between-cluster
   variation for the sandwich variance to measure);
-* ``time`` missing for ``cov_struct="ar1"`` (AR(1) needs an explicit
-  within-cluster ordering), or ``time`` supplied for any other structure;
+* ``time`` missing for ``cov_struct="ar1"`` (AR(1) needs explicit unique,
+  consecutive unit-spaced grid coordinates), or time supplied otherwise;
 * length mismatches, non-finite values, or more parameters than observations.
 
 Claim ceiling: ``analysis_only``. GEE estimates a population-averaged effect
@@ -190,6 +190,10 @@ class GEEResult:
     converged: bool
     claim_ceiling: str = "analysis_only"
     method: str = "gee_statsmodels_robust"
+    qic: float | None = None
+    qicu: float | None = None
+    qic_scale: float | None = None
+    qic_unavailable_reason: str | None = None
 
     def to_json(self) -> Dict[str, Any]:
         return {
@@ -208,6 +212,11 @@ class GEEResult:
             "converged": bool(self.converged),
             "claim_ceiling": self.claim_ceiling,
             "method": self.method,
+            "cov_type": "robust",
+            "qic": self.qic,
+            "qicu": self.qicu,
+            "qic_scale": self.qic_scale,
+            "qic_unavailable_reason": self.qic_unavailable_reason,
         }
 
 
@@ -245,7 +254,8 @@ def fit_gee(
     add_intercept:
         Prepend a ``"const"`` column unless one is already present.
     time:
-        Required for ``cov_struct="ar1"`` (within-cluster ordering);
+        Required for ``cov_struct="ar1"``: consecutive unit-spaced bin indices
+        within each cluster. All aligned inputs are sorted together by time.
         refused for any other structure so an ignored argument can never
         silently change meaning.
     """
@@ -262,6 +272,8 @@ def fit_gee(
     n = int(y_values.shape[0])
     exog_frame, _ = _coerce_design(X, n, feature_names)
     group_labels = _coerce_clusters(clusters, n)
+    if not np.isfinite(exog_frame.to_numpy()).all():
+        raise GEEError("X must contain only finite values (no NaN/inf)")
 
     time_values = None
     if struct_name == "ar1":
@@ -276,7 +288,23 @@ def fit_gee(
             raise GEEError("time must be a numeric vector") from None
         if parsed_time.shape[0] != n or not np.all(np.isfinite(parsed_time)):
             raise GEEError("time must be finite with the same length as y")
-        time_values = parsed_time
+        # statsmodels constructs AR covariance in row order. Sort every aligned
+        # input together; sorting only time silently pairs the wrong outcomes.
+        rows = np.concatenate([
+            (indices := np.flatnonzero(group_labels == group))[
+                np.argsort(parsed_time[indices], kind="stable")
+            ] for group in dict.fromkeys(group_labels)
+        ])
+        for group in dict.fromkeys(group_labels):
+            delta = np.diff(np.sort(parsed_time[group_labels == group]))
+            if (delta <= 0).any():
+                raise GEEError("AR1 time must be unique within each cluster")
+            if len(delta) and not np.allclose(delta, 1.0):
+                raise GEEError("AR1 requires consecutive unit-spaced time grid coordinates")
+        time_values = parsed_time[rows]
+        y_values = y_values[rows]
+        group_labels = group_labels[rows]
+        exog_frame = exog_frame.iloc[rows]
     elif time is not None:
         raise GEEError(
             f"time is only meaningful with cov_struct='ar1', not {struct_name!r}; "
@@ -300,7 +328,7 @@ def fit_gee(
     if struct_name == "exchangeable":
         cov_obj = sm.cov_struct.Exchangeable()
     elif struct_name == "ar1":
-        cov_obj = sm.cov_struct.Autoregressive()
+        cov_obj = sm.cov_struct.Autoregressive(grid=False)
     else:
         cov_obj = sm.cov_struct.Independence()
 
@@ -312,7 +340,7 @@ def fit_gee(
             time=time_values,
             family=family_obj,
             cov_struct=cov_obj,
-        ).fit()
+        ).fit(cov_type="robust")
     except Exception as exc:
         raise GEEError(f"statsmodels GEE fit failed: {exc}") from exc
     if not bool(fitted.converged):
@@ -335,6 +363,15 @@ def fit_gee(
         raise GEEError("statsmodels GEE fit produced non-finite statistics")
     if np.any(stderr <= 0.0):
         raise GEEError("statsmodels GEE fit produced non-positive standard errors")
+    qic = qicu = None
+    qic_reason = None
+    try:
+        qic, qicu = (float(v) for v in fitted.qic(scale=float(fitted.scale)))
+        if not np.isfinite([qic, qicu]).all():
+            raise ValueError("non-finite QIC")
+    except (AttributeError, ImportError, NotImplementedError, ValueError) as exc:
+        qic = qicu = None
+        qic_reason = f"QIC unavailable: {type(exc).__name__}"
 
     return GEEResult(
         var_names=tuple(names),
@@ -350,6 +387,8 @@ def fit_gee(
         n_obs=n,
         n_clusters=len(set(group_labels.tolist())),
         converged=True,
+        qic=qic, qicu=qicu, qic_scale=float(fitted.scale),
+        qic_unavailable_reason=qic_reason,
     )
 
 

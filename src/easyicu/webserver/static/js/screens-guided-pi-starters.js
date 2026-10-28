@@ -182,6 +182,15 @@
         ),
       },
       {
+        id: 'example-repeated-measure-change', database: 'MIMIC-IV', kind: tr('Repeated measures', '重复测量'),
+        title: tr('Daily lactate change in the ICU', 'ICU 每日乳酸的变化'),
+        gets: tr('Estimated change with confidence intervals and a death-dropout sensitivity', '变化估计、置信区间及死亡脱落敏感性分析'),
+        prompt: tr(
+          'In MIMIC-IV, how do daily lactate measurements change over time during the first six ICU days? State the limitation from informative dropout due to death and plan a sensitivity analysis.',
+          '在 MIMIC-IV 中，入 ICU 前六天的每日乳酸如何随时间变化？请明确死亡所致信息性脱落的局限，并安排敏感性分析。',
+        ),
+      },
+      {
         id: 'example-pressure-trajectories', database: 'eICU', kind: tr('Trajectories', '轨迹分型'),
         title: tr('Blood-pressure trajectories', '血压变化轨迹分型'),
         gets: tr('Trajectory groups and how many, stability check, in-hospital death rate per group', '轨迹分组与分组数、稳定性检验、各类院内死亡率'),

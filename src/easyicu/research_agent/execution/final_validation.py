@@ -52,6 +52,8 @@ from ..contracts.prediction_execution import PREDICTION_MODEL_ANALYSIS_KIND
 from ..contracts.prediction_validation import PredictionValidationReceipt
 from ..contracts.capability_ids import LANDMARK_SPLINE_ANALYSIS_KIND
 from ..contracts.capability_ids import PHENOTYPING_ANALYSIS_KIND
+from ..contracts.capability_ids import PRIMARY_DETERMINISTIC_RUNNER_KINDS
+from ..contracts.trajectory_design import repeated_measure_result_receipt_valid
 from ..contracts.landmark_spline_validation import (
     landmark_spline_runtime_receipt_valid,
 )
@@ -74,16 +76,7 @@ from .figure_preparation import _family_has_deterministic_figure_renderer
 from .figure_plan_binding import validate_step_planned_figure_contract_binding
 
 
-_PRIMARY_DETERMINISTIC_RUNNERS: set[str] = {
-    DESCRIPTIVE_SUMMARY_ANALYSIS_KIND,
-    ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
-    EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
-    PREDICTION_MODEL_ANALYSIS_KIND,
-    LANDMARK_SPLINE_ANALYSIS_KIND,
-    PHENOTYPING_ANALYSIS_KIND,
-    SURVIVAL_PRIMARY_ANALYSIS_KIND,
-    "signed_time_varying_exposure_cox",
-}
+_PRIMARY_DETERMINISTIC_RUNNERS = PRIMARY_DETERMINISTIC_RUNNER_KINDS
 
 
 def _bind_findings_to_step_attempt(
@@ -120,6 +113,8 @@ def _primary_runner_core_estimate_present(
         return False
     if str(step_summary.get("status") or "").lower() != "ok":
         return False
+    if kind == "repeated_measures":
+        return repeated_measure_result_receipt_valid(step_summary)
     if kind == SURVIVAL_PRIMARY_ANALYSIS_KIND and (
         step_summary.get("receipt_issuer") != SURVIVAL_PRIMARY_OWNER
     ):
