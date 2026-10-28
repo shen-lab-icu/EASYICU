@@ -51,6 +51,94 @@ def describe_estimate_heterogeneity(estimates: Sequence[float], *, null_value: f
                 description_code="directions_differ" if len(directions) > 1 else "directions_agree")
 
 
+def compute_meta_analysis(
+    estimates: Sequence[float], standard_errors: Sequence[float], *,
+    model: str = "random", tau_method: str = "reml", hartung_knapp: bool = False,
+    confidence: float = .95,
+) -> dict:
+    """Inverse-variance pooling on an explicitly supplied analysis scale.
+
+    Ratios MUST arrive as log ratios with coefficient SEs. Independence and
+    equal estimands are the caller's governed prerequisites, not inferred here.
+    REML minimizes the intercept-only restricted negative log likelihood,
+    including its zero boundary. DL is available only as a labelled sensitivity.
+    Unmodified Hartung–Knapp uses Q_RE/(k-1), without a floor at one, and t(k-1).
+    The random-effects prediction interval uses t(k-2)*sqrt(tau²+Var(mean));
+    it is unavailable for k<3. I² is a percentage based on fixed-effect Q.
+    """
+    import numpy as np
+    from scipy.optimize import minimize_scalar
+    from scipy.stats import chi2, norm, t
+
+    y = np.asarray(estimates, dtype=float)
+    se = np.asarray(standard_errors, dtype=float)
+    if (y.ndim != 1 or se.shape != y.shape or len(y) < 2
+            or not np.isfinite(y).all() or not np.isfinite(se).all() or not (se > 0).all()
+            or model not in {"fixed", "random"} or tau_method not in {"reml", "dl"}
+            or not math.isfinite(confidence) or not 0 < confidence < 1):
+        raise ValueError("meta_analysis_invalid_input")
+    # Scaling keeps restricted-likelihood optimization accurate for small log
+    # effects and SEs as well as mean differences measured in large units.
+    origin = float(y[0])
+    scale = max(float(np.max(se)), float(np.ptp(y)))
+    if not math.isfinite(scale):
+        raise ValueError("meta_analysis_numerical_failure")
+    y = (y - origin) / scale
+    v = (se / scale) ** 2
+    if not (v > 0).all():
+        raise ValueError("meta_analysis_numerical_failure")
+    w_fixed = 1 / v
+    mean_fixed = float(np.dot(w_fixed, y) / w_fixed.sum())
+    q = float(np.dot(w_fixed, (y - mean_fixed) ** 2))
+    df = len(y) - 1
+    tau = 0.0
+    if model == "random" and tau_method == "dl":
+        denominator = float(w_fixed.sum() - np.dot(w_fixed, w_fixed) / w_fixed.sum())
+        tau = max(0.0, (q - df) / denominator)
+    elif model == "random":
+        def objective(variance):
+            weights = 1 / (v + variance)
+            mean = np.dot(weights, y) / weights.sum()
+            return float(np.log(v + variance).sum() + np.log(weights.sum())
+                         + np.dot(weights, (y - mean) ** 2))
+
+        upper = 4 * max(float(np.ptp(y)) ** 2, float(v.max()))
+        optimum = minimize_scalar(objective, bounds=(0, upper), method="bounded",
+                                  options={"xatol": 1e-13})
+        if not optimum.success:
+            raise ValueError("meta_analysis_reml_failed")
+        if objective(optimum.x) < objective(0):
+            tau = float(optimum.x)
+    weights = 1 / (v + tau)
+    mean = float(np.dot(weights, y) / weights.sum())
+    hk_scale = float(np.dot(weights, (y - mean) ** 2) / df) if hartung_knapp else None
+    variance = (hk_scale if hartung_knapp else 1.0) / float(weights.sum()) * scale ** 2
+    standard_error = math.sqrt(variance)
+    estimate = origin + mean * scale
+    tau_squared = tau * scale ** 2
+    alpha = (1 - confidence) / 2
+    critical = float(t.isf(alpha, df) if hartung_knapp else norm.isf(alpha))
+    width = critical * standard_error
+    pi_low = pi_high = pi_df = None
+    prediction_reason = "fixed_effect_model" if model == "fixed" else "at_least_three_databases_required"
+    if model == "random" and len(y) >= 3:
+        pi_df = len(y) - 2
+        pi_width = float(t.isf(alpha, pi_df)) * math.sqrt(tau_squared + variance)
+        pi_low, pi_high = estimate - pi_width, estimate + pi_width
+        prediction_reason = None
+    result = dict(model=model, tau_method=("none" if model == "fixed" else "REML" if tau_method == "reml"
+                  else "DerSimonian-Laird (sensitivity)"), n_databases=len(y), confidence=confidence,
+                  estimate=estimate, standard_error=standard_error, ci_low=estimate - width, ci_high=estimate + width,
+                  interval_method="Hartung-Knapp" if hartung_knapp else "normal", ci_df=df if hartung_knapp else None,
+                  hartung_knapp_scale=hk_scale, weights=[float(w) for w in weights / weights.sum()],
+                  q=q, q_df=df, q_p=float(chi2.sf(q, df)), i_squared=max(0., (q - df) / q) * 100 if q else 0.,
+                  tau_squared=tau_squared, prediction_low=pi_low, prediction_high=pi_high,
+                  prediction_df=pi_df, prediction_reason=prediction_reason)
+    if any(isinstance(value, float) and not math.isfinite(value) for value in result.values()):
+        raise ValueError("meta_analysis_numerical_failure")
+    return result
+
+
 # ---------------------------------------------------------------------------
 # E-value
 # ---------------------------------------------------------------------------
@@ -351,6 +439,7 @@ def run_negative_control_check(
 
 
 __all__ = [
+    "compute_meta_analysis",
     "BaselinePrevalenceRequiredError",
     "EValueResult",
     "NegativeControlResult",

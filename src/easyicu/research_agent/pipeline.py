@@ -5453,14 +5453,9 @@ class ResearchAgentPipeline:
         user_preferences: Optional[Dict[str, Any]] = None,
         notes: Optional[str] = None,
         manuscript_language: Optional[str] = None,
+        meta_analysis_hartung_knapp: bool = False,
     ) -> Dict[str, Any]:
-        """Run the same plan/question across multiple cohorts and compare effects.
-
-        This is the pipeline-native cross-database replication path requested
-        by the methods critique: instead of pushing replication into a separate
-        CLI layer, the orchestrator can now launch one analysis run per cohort
-        and emit a harmonised effect-comparison table.
-        """
+        """Run governed cohorts and pool compatible sealed aggregate effects."""
         if not cohorts:
             raise ValueError(
                 "`cohorts` must contain at least one database -> cohort entry."
@@ -5528,6 +5523,7 @@ class ResearchAgentPipeline:
                 target_outcome=target_outcome,
                 rows=comparison_rows,
                 run_summaries=run_summaries,
+                run_results=run_results, report_dir=replication_dir, hartung_knapp=meta_analysis_hartung_knapp,
             ),
             encoding="utf-8",
         )
@@ -5565,6 +5561,8 @@ class ResearchAgentPipeline:
             "summary_md": str(summary_md_path),
             "validation_report": str(validation_report_path),
             "summary_json": str(summary_path),
+            "meta_analysis_json": str(replication_dir / "meta_analysis.json"),
+            "meta_analysis_report": str(replication_dir / "meta_analysis_report.md"),
             "runs": run_results,
         }
 

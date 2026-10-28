@@ -15,7 +15,8 @@ from easyicu.webserver.research_multi_run import MultiDatabaseRun
 
 class SyntheticOwner:
     def __init__(self):
-        self.design_value = {"study": "synthetic", "outcome": "hospital_death", "population": "all_declared_rows"}
+        self.design_value = {"study": "synthetic", "outcome": "hospital_death", "population": "all_declared_rows",
+                             "estimand_sha256": "a" * 64}
         self.prepared = {}
         self.started = []
         self.results = {}
@@ -64,6 +65,7 @@ class SyntheticOwner:
         result = dict(database=key, run_id=target.review.run_id, source_sha256=target.source_sha256,
             plan_sha256=target.review.plan_sha256, estimand_sha256="a" * 64, estimand_label="adjusted_association",
             unit="odds_ratio", population_n=24, estimate=1.5, ci_low=1.1, ci_high=2.0,
+            standard_error=None, gate_passed=False, definition_codes=[],
             evidence_id="synthetic_primary", evidence_sha256="b" * 64,
             substitution_codes=[row.reason_code for row in target.decision.substitutions])
         self.results[key] = result
@@ -332,6 +334,46 @@ def test_duplicate_database_request_cannot_silently_drop_a_source():
     with pytest.raises(ValueError, match="multi_database_duplicate_target"):
         MultiDatabaseRequest(project_id="p", session_id="s", study_context_id="study",
             targets=(DatabaseTarget(database="miiv", source_id="one"), DatabaseTarget(database="miiv", source_id="two")))
+
+
+def test_combined_pool_uses_sealed_ses_and_excludes_capability_substitutions(batch):
+    from easyicu.webserver.research_multi_results import combined_answer
+
+    execute = batch.owner.execute
+    def with_se(target, **kwargs):
+        value = execute(target, **kwargs)
+        value.update(standard_error=.2, gate_passed=True)
+        return value
+    batch.owner.execute = with_se
+    approve(batch)
+    batch.execute()
+    answer = combined_answer(batch)
+    pooled = answer["meta_analysis"]
+    assert pooled["status"] == "pooled"
+    assert [row["database"] for row in pooled["included"]] == ["miiv", "sic"]
+    reasons = {row["database"]: row["reason_code"] for row in pooled["excluded"]}
+    assert reasons["aumc"] == "changed_estimand"
+    assert reasons["hirid"] == "result_gate_failed"
+    assert answer["meta_analysis_report"]["forest_svg"]
+    assert pooled["evidence_id"]
+    assert combined_answer(batch) == answer
+
+
+def test_failed_gate_database_cannot_enter_pool_even_when_completed(batch):
+    from easyicu.webserver.research_multi_results import combined_answer
+
+    execute = batch.owner.execute
+    def with_failed_gate(target, **kwargs):
+        value = execute(target, **kwargs)
+        value.update(standard_error=.2, gate_passed=target.target.database != "sic")
+        return value
+    batch.owner.execute = with_failed_gate
+    approve(batch)
+    batch.execute()
+    pooled = combined_answer(batch)["meta_analysis"]
+    assert pooled["status"] == "unavailable"
+    assert [row["database"] for row in pooled["included"]] == ["miiv"]
+    assert {row["database"]: row["reason_code"] for row in pooled["excluded"]}["sic"] == "result_gate_failed"
 
 
 @pytest.mark.parametrize("change", ["database", "source", "decision", "refusal"])

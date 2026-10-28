@@ -10,9 +10,10 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, Mapping
 
 from ..contracts.executor_stop import EXECUTOR_STOP_RECORD_NAME
+from ..contracts.association_execution import headline_association_row as _headline_association_row
 
 
 def _has_figure_exports(out_dir: Path) -> bool:
@@ -225,37 +226,6 @@ def _bind_registered_primary_or_statistic(
             primary_estimate_interval=[low, high],
             primary_or_ci=[low, high],
         )
-
-
-#: Spellings of "yes" a CSV round-trip can produce for a boolean column.
-_TRUE_TOKENS = frozenset({"true", "1", "yes"})
-
-
-def _headline_association_row(rows: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
-    """The one row the manuscript quotes, or None when that is ambiguous.
-
-    A binary or continuous exposure yields one row and this returns it, which
-    is what every recorded table before 2026-07-31 looks like.
-
-    A CATEGORICAL exposure yields one row per non-reference level -- a
-    four-level AKI stage is three contrasts -- and only the plan knows which of
-    them is the headline, so the producer marks it in ``is_primary_contrast``
-    and this reads the mark. It never takes the first row or the largest
-    estimate: picking by position is picking a scientific claim, and picking by
-    magnitude picks the most impressive one.
-
-    Ambiguity returns None, and the caller then binds no primary estimate at
-    all rather than binding a contrast nobody nominated.
-    """
-
-    marked = [
-        row
-        for row in rows
-        if str(row.get("is_primary_contrast") or "").strip().lower() in _TRUE_TOKENS
-    ]
-    if marked:
-        return marked[0] if len(marked) == 1 else None
-    return rows[0] if len(rows) == 1 else None
 
 
 def bind_primary_output(step_summary: Any, out_dir: Path) -> Dict[str, Any]:

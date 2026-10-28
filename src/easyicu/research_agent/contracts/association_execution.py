@@ -65,6 +65,20 @@ from .ownership_verdict import OwnershipVerdict
 from .model_terms import OUTCOME_ESTIMATORS, OUTCOME_RUNTIME_KINDS
 
 
+def headline_association_row(rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    """The uniquely nominated primary contrast of an aggregate model table.
+
+    A single binary/continuous contrast needs no marker. Multiple contrasts
+    require exactly one true is_primary_contrast; neither row order nor effect
+    magnitude can choose the headline. CSV boolean spellings are preserved.
+    """
+    marked = [row for row in rows if str(row.get("is_primary_contrast") or "").strip().lower()
+              in {"true", "1", "yes"}]
+    if marked:
+        return marked[0] if len(marked) == 1 else None
+    return rows[0] if len(rows) == 1 else None
+
+
 #: The one mapping from a declared outcome type to the exact estimator token the
 #: sealed executor implements.  Both directions matter: a continuous family such
 #: as quantile regression fitted as OLS, or a GLM-binomial family fitted as
