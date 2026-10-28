@@ -318,24 +318,53 @@ def test_attachable_catalog_is_bounded_and_uses_frozen_user_identities(service, 
         service.set_draft_skills(session["session_id"], project_id="foreign", attached_skills=[BUILTIN])
 
 
-def test_draft_api_and_turn_apply_the_builtin_through_the_real_study_store(service, monkeypatch, tmp_path):
+@pytest.mark.parametrize("skill_id,family,capability,action,question", [
+    (BUILTIN["id"], "association_study", "association_adjusted_v1", "association.adjusted_association",
+     "Is synthetic exposure associated with the synthetic outcome?"),
+    ("cohort-characterization-table-one", "descriptive_epidemiology", "descriptive_measurement_v1", "descriptive.table_one",
+     "Describe the distribution of synthetic baseline characteristics."),
+])
+def test_draft_api_and_turn_apply_the_builtin_through_the_real_study_store(
+    service, monkeypatch, tmp_path, skill_id, family, capability, action, question,
+):
     from easyicu.webserver.routes import skill_attachments as routes
 
     monkeypatch.setattr(study_contexts, "_CONFIG_PATH", tmp_path / "real-study-store.json")
     monkeypatch.setattr(study_contexts, "get_context", REAL_GET_CONTEXT)
     monkeypatch.setattr(study_contexts, "upsert_context", REAL_UPSERT)
-    study = REAL_UPSERT({"id": "study-test", "question": "Is synthetic exposure associated with the synthetic outcome?"})
+    study = REAL_UPSERT({"id": "study-test", "question": question})
     monkeypatch.setattr(service, "_resolve_project_context", lambda **kwargs: study)
     service.project_store.bind("synthetic-project", study["id"])
     session = _session(service)
     monkeypatch.setattr(routes, "get_pi_copilot_service", lambda: service)
-    result = routes.put_draft_skills(session["session_id"], routes.DraftSkillsRequest(project_id="synthetic-project", attached_skills=[BUILTIN]))
+    # This is the same session catalogue and draft write used by the slash menu.
+    catalog = service.attachable_skills(session["session_id"], project_id="synthetic-project")
+    selected = next(row for row in catalog["items"] if row["id"] == skill_id and row["enabled"])
+    reference = {key: selected[key] for key in ("source", "id", "version", "digest")}
+    result = routes.put_draft_skills(session["session_id"], routes.DraftSkillsRequest(
+        project_id="synthetic-project", attached_skills=[reference],
+    ))
     assert result["attached_skills"][0]["digest"]
     _send(service, session["session_id"])
     saved = REAL_GET_CONTEXT(study["id"])
     preferences = agent_pipeline_runs._research_user_preferences(saved)
-    assert preferences["inferred_analysis_family"] == "association_study"
-    assert json.loads(preferences["data_constraints"])["attached_skills"] == result["attached_skills"]
+    assert preferences["inferred_analysis_family"] == family
+    constraints = json.loads(preferences["data_constraints"])
+    assert constraints["attached_skills"] == result["attached_skills"]
+    assert constraints["method_skill_constraints"] == [{
+        "id": skill_id, "analysis_family": family, "capability_id": capability, "action_ids": [action],
+    }]
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext, UserPreferences
+    from easyicu.research_agent.agents.progressive_prompt_contracts import outline_study_anchors
+
+    context = ResearchContext(
+        research_question=question,
+        cohort=CohortDescriptor(cohort_name="synthetic", database="synthetic", n_patients=2, n_stays=2),
+        variables=[], user_preferences=UserPreferences(**preferences),
+    )
+    outbound = outline_study_anchors(context)
+    for expected in (skill_id, reference["digest"], capability, action):
+        assert expected in outbound
     assert service.gateway.tool_contexts[-1].session.binding.study_revision == saved["revision"]
     assert not service._get_record(session["session_id"]).draft_attached_skills
 

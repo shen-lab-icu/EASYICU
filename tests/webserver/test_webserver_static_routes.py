@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from fastapi.staticfiles import StaticFiles
 
 from easyicu import concept_catalog as cc
 from easyicu.webserver import dataio
@@ -26,6 +27,16 @@ def _static_css(name: str) -> str:
 
 def _static_html(name: str) -> str:
     return (STATIC_DIR / name).read_text(encoding="utf-8")
+
+
+def test_slash_composer_assets_resolve_through_the_static_route() -> None:
+    # Direct route ownership check: transport checks in this file run on the lead's Mac.
+    static = next(route.app for route in app.routes if isinstance(getattr(route, "app", None), StaticFiles))
+    index = _static_html("index.html")
+    for asset in ("js/screens-guided-pi-slash-menu.js", "css/guided-pi-composer-menus.css"):
+        path, stat = static.lookup_path(asset)
+        assert Path(path) == STATIC_DIR / asset and stat is not None
+        assert f"{asset}?v=20261028-slash1" in index
 
 
 def test_native_favicon_request_is_quiet() -> None:

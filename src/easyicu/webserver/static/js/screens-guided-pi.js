@@ -559,7 +559,7 @@
   }
   function render(preserveScroll) {
     if (!state.host) return;
-    STUDY_WORKSPACE.capture(state.host); PROVIDER_CONTROL.captureForm(state.host);
+    EVENTS.captureComposer(); STUDY_WORKSPACE.capture(state.host); PROVIDER_CONTROL.captureForm(state.host);
     const previousLog = preserveScroll && state.host.querySelector('[data-gpi-log]');
     const previousTop = previousLog ? previousLog.scrollTop : null;
     const previousConnection = state.host.querySelector('[data-gpi-connection-page]');
@@ -600,7 +600,7 @@
     const menus = window.EU_POPOVER_MENUS;
     if (menus && menus.keepOpen) menus.keepOpen(state.host, () => { state.host.innerHTML = markup; });
     else state.host.innerHTML = markup;
-    PROVIDER_CONTROL.restoreForm(state.host);
+    EVENTS.restoreComposer(); PROVIDER_CONTROL.restoreForm(state.host);
     const preview = MODULES.optional('preview');
     if (preview && preview.setWorkflowContext) {
       preview.setWorkflowContext(previewWorkflowContext());

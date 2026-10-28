@@ -21,3 +21,15 @@
 .gpi-entry-compose .gpi-compose-card .gpi-idea-source-popover,.gpi-entry-compose .gpi-compose-card .gpi-access-popover,.gpi-entry-compose .gpi-compose-card .gpi-model-popover{top:calc(100% + 8px);bottom:auto}
 /* On a short window the list below the entry card would run past the bottom edge. */
 @media(max-height:760px){.gpi-entry-compose .gpi-compose-card .gpi-model-rows{max-height:150px}}
+/* Inline skill selection shares the compose-card anchor and shell fit policy. */
+.gpi-slash-menu{position:static}
+.gpi-slash-summary{position:absolute;left:10px;top:0;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.gpi-compose-card .gpi-slash-popover{position:absolute;z-index:72;top:auto;bottom:calc(100% + 8px);left:10px;right:10px;max-height:min(320px,calc(100vh - 100px));overflow-y:auto;overscroll-behavior:contain;padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--surface);box-shadow:0 10px 32px #0002}
+.gpi-entry-compose .gpi-compose-card .gpi-slash-popover{top:calc(100% + 8px);bottom:auto}
+.gpi-slash-group{padding:6px 8px 3px;color:var(--muted);font-size:11px}
+.gpi-slash-row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:36px;padding:7px 8px;text-align:left;border:0;border-radius:6px;background:transparent;color:inherit;cursor:pointer}
+.gpi-slash-row strong{font-size:13px;font-weight:500;overflow-wrap:anywhere}
+.gpi-slash-row span{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.gpi-slash-row.is-active,.gpi-slash-row:hover{background:var(--surface-2)}
+.gpi-slash-row[aria-disabled=true]{opacity:.6;cursor:default}
+.gpi-slash-empty{margin:0;padding:10px 8px;color:var(--muted);font-size:12px}

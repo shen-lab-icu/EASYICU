@@ -159,6 +159,6 @@
 
   window.EasyICU.guidedPi.declare('skillAttach', {
     load, loadDefaults, toggle, ensure, remove, chips, defaultsControl, saveDefaults, attached, reset,
-    hasDraft: session => draft(session).length > 0,
+    hasDraft: session => draft(session).length > 0, maxAttached,
   });
 })();

@@ -1461,7 +1461,7 @@ def test_copilot_plus_menu_keeps_article_url_entry_in_the_conversation() -> None
     assert "粘贴文章链接" in payload["html"]
     assert 'data-gpi-composer-picker="materials"' in payload["html"]
     assert 'data-gpi-composer-picker="skills"' in payload["html"]
-    # The two drawers also open from the keyboard, as the reference's
+    # The resource drawer and inline Skill menu open from the keyboard, as the reference's
     # "Type @" / "Type /" rows say; the hint is a kbd chip, not a chevron.
     assert '<span class="gpi-menu-hint">输入 <kbd>@</kbd></span>' in payload["html"]
     assert '<span class="gpi-menu-hint">输入 <kbd>/</kbd></span>' in payload["html"]
@@ -1492,10 +1492,11 @@ def test_copilot_plus_menu_keeps_article_url_entry_in_the_conversation() -> None
     assert "window.sessionStorage.setItem('easyicu.settings.openCapabilityTab', manageExtensions.dataset.gpiManageExtensions || 'overview');" in events
     settings = _read("js/screens-settings.js")
     assert "if (requestedTab && capabilityTabs().some(([id]) => id === requestedTab)) {" in settings
-    assert "return /(^|\\s)[@/]$/.test(text) ? text.slice(-1) : '';" in events
-    assert "if (trigger === '@') openMentionDrawer();" in events
+    assert "return /(^|\\s)@$/.test(text) ? '@' : '';" in events
+    assert "optional('slashMenu')?.create" in events
+    assert "openMentionDrawer();" in events
     assert "STUDY_WORKSPACE.openMaterials(projectId(), state.session.session_id);" in events
-    assert "else { STUDY_WORKSPACE.openSkills(projectId(), state.session); loadAttachable(); }" in events
+    assert "STUDY_WORKSPACE.openSkills(projectId(), state.session);" in events
     assert "event.target.value = event.target.value.slice(0, -1);" in events
     assert "!event.isComposing" in events
     assert payload["handled"] is True

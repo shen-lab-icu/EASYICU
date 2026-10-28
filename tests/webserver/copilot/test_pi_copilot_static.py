@@ -134,7 +134,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261028-task1" in index
-    assert "js/screens-guided-pi-events.js?v=20261028-surv1" in index
+    assert "js/screens-guided-pi-events.js?v=20261028-slash1" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261026-six6" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261028-wait1" in index
@@ -155,7 +155,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
     assert "js/screens-dict-studies.js?v=20261027-dmap1" in index
-    assert "js/screens-guided-pi-skill-attach.js?v=20261028-chip1" in index
+    assert "js/screens-guided-pi-skill-attach.js?v=20261028-slash1" in index
+    assert "js/screens-guided-pi-slash-menu.js?v=20261028-slash1" in index
+    assert "css/guided-pi-composer-menus.css?v=20261028-slash1" in index
     # "@" mentions: databases, variables and project files resolved by the host (mt1).
     assert "js/screens-guided-pi-mentions.js?v=20261027-chip1" in index
     assert index.index("js/screens-guided-pi-mentions.js") < index.index("js/screens-guided-pi-study-workspace.js")
@@ -171,7 +173,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261027-coord1" in index
-    assert "js/screens-guided-pi.js?v=20261028-task1" in index
+    assert "js/screens-guided-pi.js?v=20261028-slash1" in index
     assert "js/screens-guided.js?v=20261027-old1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -6680,7 +6682,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261028-pend2" in index
-    assert "screens-guided-pi.js?v=20261028-task1" in index
+    assert "screens-guided-pi.js?v=20261028-slash1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:
