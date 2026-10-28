@@ -523,6 +523,39 @@ assert.ok(sessionRail.innerHTML.indexOf('data-gpi-rail-session="e2"')
   < sessionRail.innerHTML.indexOf('gpi-conversation-empty-group'), 'the selected draft is pinned, not buried');
 workspace.syncNavigation({ ...navigation, sessions: [...navigation.sessions, emptyDraft('e1')] });
 assert.doesNotMatch(sessionRail.innerHTML, /gpi-conversation-empty-group/);
+
+// Biomni-style task list: one line per task with its words in the tooltip,
+// tasks waiting on the researcher grouped on top with a count, the most
+// recent few below, and the rest one click away in the task table.
+const waiting = id => ({ session_id: id, title: `Plan ${id}`, has_history: true, conversation_status: 'needs_user' });
+const busy = id => ({ session_id: id, title: `Task ${id}`, has_history: true, last_turn_status: 'done' });
+const allCalls = [];
+const listed = [waiting('w1'), busy('b1'), waiting('w2'), ...Array.from({ length: 9 }, (_, i) => busy(`r${i}`))];
+workspace.syncNavigation({ ...navigation, sessions: listed, selectedId: 'r8', openAll: () => allCalls.push('all') });
+assert.match(sessionRail.innerHTML, /title="Current session · Completed"|title="Task b1 · Completed"/);
+assert.match(sessionRail.innerHTML, /<small class="shell-sr-only">Completed<\/small>/);
+assert.match(sessionRail.innerHTML, /<details class="gpi-task-group" data-gpi-rail-needs-group open><summary>.*Needs you<\/span><span class="gpi-task-group-count">2<\/span>/);
+const groupEnd = sessionRail.innerHTML.indexOf('</details><p class="gpi-task-divider">');
+assert.ok(groupEnd > sessionRail.innerHTML.indexOf('data-gpi-rail-session="w2"'), 'waiting tasks sit in the group');
+assert.ok(groupEnd < sessionRail.innerHTML.indexOf('data-gpi-rail-session="b1"'), 'other tasks follow it');
+assert.match(sessionRail.innerHTML, /data-gpi-rail-session="r6"/);
+assert.doesNotMatch(sessionRail.innerHTML, /data-gpi-rail-session="r7"/, 'only the recent few stay in the rail');
+assert.match(sessionRail.innerHTML, /data-gpi-rail-session="r8"/, 'the selected task is never cut');
+assert.match(sessionRail.innerHTML, /class="gpi-task-more" data-gpi-rail-all>View all 12<\/button>/);
+assert.match(sessionRail.innerHTML, /data-gpi-rail-all aria-label="All conversations in this project"/);
+sessionRail.onclick({ target: { closest: query => query === '[data-gpi-rail-all]' ? {} : null } });
+assert.deepEqual(allCalls, ['all']);
+// Folding the group survives the next repaint.
+sessionRail.onclick({ target: { closest: query => query === '[data-gpi-rail-needs-group] > summary' ? { parentElement: { open: true } } : null } });
+workspace.syncNavigation({ ...navigation, sessions: listed, openAll: () => {} });
+assert.match(sessionRail.innerHTML, /data-gpi-rail-needs-group><summary>/);
+sessionRail.onclick({ target: { closest: query => query === '[data-gpi-rail-needs-group] > summary' ? { parentElement: { open: false } } : null } });
+// Without a table owner nothing is cut and no entry is offered.
+workspace.syncNavigation({ ...navigation, sessions: listed });
+assert.match(sessionRail.innerHTML, /data-gpi-rail-session="r7"/);
+assert.doesNotMatch(sessionRail.innerHTML, /data-gpi-rail-all/);
+assert.equal(workspace.railKey(waiting('w1')), 'needs_user');
+assert.equal(workspace.railKey({ session_id: 'x' }), 'idle');
 assert.match(outcome.render(latest, workflow), /<table class="gpi-deliverables">/);
 assert.doesNotMatch(outcome.render(latest, workflow), /gpi-result-shortcut/);
 

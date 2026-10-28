@@ -50,7 +50,8 @@ def research_job_state(job: Mapping[str, Any]) -> ConversationStatus:
     if status != "done":
         # failed, cancelled, interrupted -- or a state no job reports.
         return "stopped"
-    if job.get("human_review_pending") is True:
+    # A plan paused on a design choice waits for the researcher, too.
+    if job.get("human_review_pending") is True or job.get("plan_decision_pending") is True:
         return "needs_user"
     # A run whose gate is blocked without a review to answer stopped short.
     if str(job.get("gate_status") or "") == "blocked":

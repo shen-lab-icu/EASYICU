@@ -54,6 +54,8 @@ def test_failed_later_reply_is_stopped(message):
     [
         ({"status": "failed", "run_type": "full"}, "stopped"),
         ({"status": "done", "human_review_pending": True}, "needs_user"),
+        ({"status": "done", "plan_decision_pending": True}, "needs_user"),
+        ({"status": "done", "plan_decision_pending": False}, "done"),
         ({"status": "done", "gate_status": "blocked"}, "stopped"),
         ({"status": "done", "analysis_outcome": {"status": "completed"}}, "done"),
         # Persisted done is task completion; it carries no analysis-stage claim.

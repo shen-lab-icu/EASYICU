@@ -99,6 +99,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
     assert "css/guided-pi-workspace.css?v=20261028-fit2" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
+    assert "css/guided-pi-task-list.css?v=20261028-task1" in index
+    assert index.index("css/guided-pi-skin.css?") < index.index("css/guided-pi-task-list.css?")
+    assert index.index("js/screens-guided-pi-task-table.js?v=20261028-task1") < index.index("js/screens-guided-pi.js?")
     assert "js/screens-guided-pi-demo.js?v=20261026-fig2" in index
     assert "js/screens-guided-pi-demo-trace.js?v=20261026-demo3" in index
     assert "js/screens-guided-pi-demo-walkthrough.js?v=20261026-demo3" in index
@@ -130,7 +133,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-provider-control.js") < index.index(
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
-    assert "js/screens-guided-pi-study-workspace.js?v=20261028-flow1" in index
+    assert "js/screens-guided-pi-study-workspace.js?v=20261028-task1" in index
     assert "js/screens-guided-pi-events.js?v=20261028-surv1" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261026-six6" in index
@@ -168,7 +171,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261027-coord1" in index
-    assert "js/screens-guided-pi.js?v=20261028-hub3" in index
+    assert "js/screens-guided-pi.js?v=20261028-task1" in index
     assert "js/screens-guided.js?v=20261027-old1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -6677,7 +6680,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261028-pend2" in index
-    assert "screens-guided-pi.js?v=20261028-hub3" in index
+    assert "screens-guided-pi.js?v=20261028-task1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:
