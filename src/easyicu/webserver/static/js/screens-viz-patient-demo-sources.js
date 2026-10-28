@@ -19,6 +19,9 @@
     loading: false,
     promise: null,
     job: null,
+    // A failed preparation belongs to its source's card. It is kept apart
+    // from `error` (the catalog's own failure), which a catalog refresh clears.
+    failure: null,
     pollTimer: null,
   };
 
@@ -249,11 +252,8 @@
     return { percent, text: parts.join(' · ') };
   }
 
-  function jobText(job, helpers) {
-    const event = job && job.event;
-    const phase = String((event && event.phase) || (event && event.type) || 'prepare');
-    const stage = String((event && event.stage) || '');
-    const labels = {
+  function phaseLabels(helpers) {
+    return {
       download: hT(helpers, 'Downloading official archive', '正在下载官方数据包'),
       extract: hT(helpers, 'Verifying and extracting', '正在校验并解压'),
       convert: hT(helpers, 'Converting to local Parquet', '正在转换为本地 Parquet'),
@@ -261,6 +261,13 @@
       register: hT(helpers, 'Registering Patient Review source', '正在注册患者审阅数据源'),
       prepare: hT(helpers, 'Preparing source', '正在准备数据源'),
     };
+  }
+
+  function jobText(job, helpers) {
+    const event = job && job.event;
+    const phase = String((event && event.phase) || (event && event.type) || 'prepare');
+    const stage = String((event && event.stage) || '');
+    const labels = phaseLabels(helpers);
     if (phase === 'download') {
       if (stage === 'resuming' || (
         stage === 'streaming' && finiteNumber(event && event.resume_from_bytes) > 0
@@ -280,6 +287,48 @@
       ? ` · ${current}/${total}`
       : '';
     return `${labels[phase] || phase}${progress}`;
+  }
+
+  // The job error is `demo_source_<phase>_failed: {detail}` from
+  // demo_source_prepare.lower_layer_diagnostic; keep its phase and the
+  // lower-layer message, and fall back to the raw text for anything else.
+  function failureFromJob(sourceId, raw) {
+    const text = String(raw || '').trim();
+    const match = text.match(/^(demo_source_[a-z_]+):\s*(\{[\s\S]*\})$/);
+    let phase = '';
+    let cause = text;
+    if (match) {
+      try {
+        const payload = JSON.parse(match[2]);
+        const detail = (payload && payload.detail) || {};
+        const lower = detail.cause || {};
+        phase = String(detail.phase || '');
+        cause = String((lower.detail && lower.detail.message) || lower.code || match[1]);
+      } catch (error) {
+        cause = text;
+      }
+    }
+    return { sourceId, phase, cause };
+  }
+
+  function failureText(failure, helpers) {
+    if (failure.phase === 'download') {
+      return hT(helpers, 'Could not download the archive from PhysioNet. Check the network or proxy, then try again.', '无法从 PhysioNet 下载数据包。请检查网络或代理后重试。');
+    }
+    const label = phaseLabels(helpers)[failure.phase];
+    return label
+      ? hT(helpers, `Preparation stopped at: ${label}. Try again.`, `准备在「${label}」这一步中断，请重试。`)
+      : hT(helpers, 'Preparation did not finish. Try again.', '准备没有完成，请重试。');
+  }
+
+  function renderFailure(failure, helpers) {
+    return `
+          <div class="note warn official-demo-failure" role="alert" data-demo-source-failure="${hEsc(helpers, failure.sourceId)}">
+            <div class="body">
+              <div class="d">${hEsc(helpers, failureText(failure, helpers))}</div>
+              ${failure.cause ? `<details><summary>${hEsc(helpers, hT(helpers, 'Details', '详情'))}</summary><span class="mono">${hEsc(helpers, failure.cause)}</span></details>` : ''}
+            </div>
+          </div>`;
   }
 
   function renderSource(source, helpers, options) {
@@ -343,6 +392,7 @@
             </div>
             ${progress ? `<progress class="official-demo-progress" max="100" value="${progress.percent.toFixed(2)}" aria-label="${hEsc(helpers, hT(helpers, 'Download progress', '下载进度'))}"></progress>` : ''}
           </div>` : ''}
+        ${!job && state.failure && state.failure.sourceId === source.id ? renderFailure(state.failure, helpers) : ''}
         <div class="official-demo-source-actions">
           ${canOpen
             ? `<button class="btn primary" type="button" data-demo-source-open="${hEsc(helpers, source.id)}">${hEsc(helpers, openLabel)}</button>`
@@ -448,9 +498,7 @@
       clearPollTimer();
       clearRememberedJob();
       const succeeded = ['done', 'completed'].includes(status);
-      if (!succeeded) {
-        state.error = String((snapshot && snapshot.error) || 'Demo source preparation failed.');
-      }
+      state.failure = succeeded ? null : failureFromJob(sourceId, snapshot && snapshot.error);
       state.catalog = null;
       if (config && config.refresh) config.refresh();
       loadCatalog(() => {
@@ -489,6 +537,7 @@
     if (activeJob()) return;
     clearPollTimer();
     state.error = null;
+    state.failure = null;
     state.job = {
       sourceId,
       status: 'running',
@@ -502,7 +551,7 @@
       rememberActiveJob(state.job);
       pollJob(response.job_id, sourceId, config, openAfterPrepare);
     }).catch(error => {
-      state.error = String((error && error.message) || error);
+      state.failure = failureFromJob(sourceId, (error && error.message) || error);
       state.job = null;
       clearRememberedJob();
       if (config && config.refresh) config.refresh();
@@ -555,6 +604,7 @@
     snapshot: () => ({
       catalog: state.catalog,
       error: state.error,
+      failure: state.failure,
       job: state.job,
       loading: state.loading,
     }),
