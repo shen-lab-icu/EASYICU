@@ -100,44 +100,50 @@
     });
     return result;
   }
+  // Rounded right-angle path through the given points (each corner is a bend).
+  function orthogonal(points) {
+    let d = `M${points[0][0]},${points[0][1]}`;
+    for (let i = 1; i < points.length - 1; i += 1) {
+      const [px, py] = points[i - 1], [x, y] = points[i], [nx, ny] = points[i + 1];
+      const r = Math.min(10, Math.hypot(x - px, y - py) / 2, Math.hypot(nx - x, ny - y) / 2);
+      const ux = Math.sign(x - px), uy = Math.sign(y - py), vx = Math.sign(nx - x), vy = Math.sign(ny - y);
+      d += ` L${x - ux * r},${y - uy * r} Q${x},${y} ${x + vx * r},${y + vy * r}`;
+    }
+    const [lx, ly] = points[points.length - 1];
+    return `${d} L${lx},${ly}`;
+  }
   function edgePaths(model) {
     const { edges, positions } = model;
     const starts = ports(edges, positions, 'source', 'target'), ends = ports(edges, positions, 'target', 'source');
-    // Each arrow between neighbouring columns turns at its own x. Downward arrows
-    // starting lower turn first and upward arrows starting higher turn first, so
-    // a fan nests instead of sharing one vertical line.
-    const turn = new Map(), byGap = new Map();
+    // Edges that skip a column run along the channel above the row nearest both ends.
+    const channelY = g => PAD + g * ROW - (ROW - BOX_H) / 2, used = new Map(), routes = new Map();
     edges.forEach(edge => {
-      const gap = positions.get(edge.source).x;
-      if (positions.get(edge.target).x - gap - BOX_W <= GAP_X) byGap.set(gap, [...(byGap.get(gap) || []), edge]);
-    });
-    byGap.forEach(list => {
-      const rank = edge => { const sy = starts.get(edge), dy = ends.get(edge) - sy; return dy > 0 ? -sy : dy < 0 ? 1e6 + sy : 5e5; };
-      list.sort((a, b) => rank(a) - rank(b))
-        .forEach((edge, i) => turn.set(edge, list.length > 1 ? 0.2 + 0.6 * i / (list.length - 1) : 0.5));
-    });
-    const used = new Map();
-    return edges.map(edge => {
-      const from = positions.get(edge.source), to = positions.get(edge.target);
-      const sx = from.x + BOX_W, sy = starts.get(edge), tx = to.x, ty = ends.get(edge);
-      let d;
-      if (tx - sx <= GAP_X) {
-        const bend = sx + (tx - sx) * turn.get(edge), r = Math.min(12, Math.abs(ty - sy) / 2);
-        const dir = Math.sign(ty - sy);
-        d = dir ? `M${sx},${sy} L${bend - r},${sy} Q${bend},${sy} ${bend},${sy + dir * r} L${bend},${ty - dir * r} Q${bend},${ty} ${bend + r},${ty} L${tx},${ty}`
-          : `M${sx},${sy} L${tx},${ty}`;
-      } else {
-        // Channel g lies in the gap above row g; pick the one nearest both ends.
-        const channelY = g => PAD + g * ROW - (ROW - BOX_H) / 2;
-        let best = 0;
-        for (let g = 0; g <= model.lanes; g += 1) {
-          if (Math.abs(channelY(g) - sy) + Math.abs(channelY(g) - ty) < Math.abs(channelY(best) - sy) + Math.abs(channelY(best) - ty)) best = g;
-        }
-        const n = used.get(best) || 0; used.set(best, n + 1);
-        const cy = channelY(best) + (n % 2 ? 1 : -1) * Math.ceil(n / 2) * 6;
-        const a = sx + GAP_X, b = tx - GAP_X;
-        d = `M${sx},${sy} C${sx + GAP_X / 2},${sy} ${sx + GAP_X / 2},${cy} ${a},${cy} L${b},${cy} C${b + GAP_X / 2},${cy} ${b + GAP_X / 2},${ty} ${tx},${ty}`;
+      const sx = positions.get(edge.source).x + BOX_W, tx = positions.get(edge.target).x;
+      const sy = starts.get(edge), ty = ends.get(edge);
+      if (tx - sx <= GAP_X) { routes.set(edge, { verticals: [[sx, sy, ty]] }); return; }
+      let best = 0;
+      for (let g = 0; g <= model.lanes; g += 1) {
+        if (Math.abs(channelY(g) - sy) + Math.abs(channelY(g) - ty) < Math.abs(channelY(best) - sy) + Math.abs(channelY(best) - ty)) best = g;
       }
+      const n = used.get(best) || 0; used.set(best, n + 1);
+      const cy = channelY(best) + (n % 2 ? 1 : -1) * Math.ceil(n / 2) * 6;
+      routes.set(edge, { cy, verticals: [[sx, sy, cy], [tx - GAP_X, cy, ty]] });
+    });
+    // Every vertical in one column gap turns at its own x. Downward runs starting
+    // lower turn first and upward runs starting higher turn first, so fans nest.
+    const byGap = new Map();
+    routes.forEach(route => route.verticals.forEach(vertical => byGap.set(vertical[0], [...(byGap.get(vertical[0]) || []), vertical])));
+    byGap.forEach(list => {
+      const rank = ([, from, to]) => to > from ? -from : to < from ? 1e6 + from : 5e5;
+      list.sort((a, b) => rank(a) - rank(b))
+        .forEach((vertical, i) => vertical.push(vertical[0] + GAP_X * (list.length > 1 ? 0.2 + 0.6 * i / (list.length - 1) : 0.5)));
+    });
+    return edges.map(edge => {
+      const route = routes.get(edge), tx = positions.get(edge.target).x;
+      const points = [[route.verticals[0][0], starts.get(edge)]];
+      route.verticals.forEach(([, from, to, x]) => { points.push([x, from], [x, to]); });
+      points.push([tx, ends.get(edge)]);
+      const d = orthogonal(points.filter((point, i) => !i || point[0] !== points[i - 1][0] || point[1] !== points[i - 1][1]));
       return `<path data-wf-edge="${esc(edge.source)}:${esc(edge.target)}" d="${d}" marker-end="url(#wf-arrow)"><title>${esc((edge.products || []).map(label).join(', '))}</title></path>`;
     }).join('');
   }

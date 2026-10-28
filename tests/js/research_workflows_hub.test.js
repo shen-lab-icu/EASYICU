@@ -169,9 +169,11 @@ test('the graph drops implied edges and routes column-skipping edges between ste
   const boxes = [...html.matchAll(/data-wf-node="([^"]+)" transform="translate\((\d+),(\d+)\)"/g)]
     .map(match => ({ id: match[1], x: Number(match[2]), y: Number(match[3]) }));
   const [, skip] = drawn.find(([id]) => id === 'summary:report');
-  // The straight segment of a skipping edge runs along one channel: "x1,y Lx2,y".
-  const [x1, y, x2] = skip.match(/ ([\d.]+),([\d.]+) L([\d.]+),/).slice(1).map(Number);
-  assert.ok(x2 > x1);
+  // The long horizontal run of a skipping edge lies along one channel.
+  const points = [...skip.matchAll(/([\d.]+),([\d.]+)/g)].map(match => [Number(match[1]), Number(match[2])]);
+  const run = points.slice(1).map((point, i) => [points[i], point]).find(([a, b]) => a[1] === b[1] && b[0] - a[0] > 176);
+  assert.ok(run, 'skipping edge has a channel run');
+  const [[x1, y], [x2]] = run;
   for (const box of boxes) {
     const overlapsX = box.x < x2 && box.x + 176 > x1;
     assert.ok(!overlapsX || y < box.y || y > box.y + 56, `channel crosses ${box.id}`);
