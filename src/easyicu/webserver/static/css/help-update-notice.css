@@ -1,0 +1,24 @@
+/* Owner: js/help-update-notice.js — the "Update" rail item and its popover menu.
+   The rails own the slot's place; this file sizes the item like its rail's own
+   buttons and fixes the panel to the window beside it. */
+[data-update-slot]:empty{display:none}
+.eu-update{position:relative}
+.eu-update>summary{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;box-sizing:border-box;list-style:none;cursor:pointer;color:var(--accent-ink,#174547)}
+.eu-update>summary::-webkit-details-marker{display:none}
+.eu-update>summary:focus-visible{outline:2px solid var(--accent,#246366);outline-offset:-2px}
+.euh-rail .eu-update>summary{width:54px;min-height:62px;padding:5px 2px;font-size:10.5px;line-height:1.15}
+.euh-rail .eu-update>summary svg{display:block;box-sizing:content-box;padding:6px;border-radius:9px}
+.euh-rail .eu-update>summary:hover svg,.euh-rail .eu-update[open]>summary svg{background:var(--sk-wash,#eeede8)}
+.gpi-global-nav .eu-update>summary{width:42px;min-height:44px;padding:4px 2px;border-radius:8px;font:400 10px/1.2 var(--font)}
+.gpi-global-nav .eu-update>summary:hover,.gpi-global-nav .eu-update[open]>summary{background:var(--surface-2,#f7f7f3)}
+.eu-update-dot{position:absolute;top:5px;right:9px;width:7px;height:7px;border-radius:50%;background:#c2410c}
+.eu-update-panel{position:fixed;z-index:80;box-sizing:border-box;width:min(300px,calc(100vw - 16px));padding:12px 14px;border:1px solid var(--line,#deded8);border-radius:8px;background:var(--surface,#fff);color:var(--ink,#252622);box-shadow:0 8px 24px rgba(42,38,34,.14);font-size:13px;line-height:19px;text-align:left}
+.eu-update-panel strong{display:block;margin:0 0 4px;font-size:13px;font-weight:600}
+.eu-update-panel p{margin:0;color:var(--ink-2,#43443e)}
+.eu-update-panel .eu-update-link{margin-top:6px;color:var(--ink-3,#73746c)}
+.eu-update-panel .eu-update-link span{color:var(--ink,#252622);overflow-wrap:anywhere;user-select:all}
+.eu-update-panel footer{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+/* The panel sits inside a rail whose own `button` rules size rail items. */
+.eu-update-panel footer button{flex-direction:row;width:auto;min-height:30px;padding:5px 12px;font-size:12.5px;line-height:18px}
+@media(max-width:700px){.euh-rail .eu-update>summary{width:43px}}
+@media(min-width:1181px){.gpi-global-nav .eu-update>summary{width:38px;border-radius:6px}}
