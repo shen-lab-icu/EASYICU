@@ -30,6 +30,7 @@ from easyicu.research_agent.schema import (
     TableOneVariableSpec,
     VariableRole,
 )
+from tests.support.schema_names import authority_schema_json
 
 from .test_cross_sectional_phenotyping_executor import _binding, _context, _primary_step
 from .test_phenotyping_feature_roles import _skeleton
@@ -524,7 +525,7 @@ def test_comparison_transport_remains_within_the_existing_schema_budget():
         allowed_literature_citation_keys=["strobe_2007"],
     )
     assert len(request.canonical_payload_json.encode()) < 12_000
-    branches = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
+    branches = authority_schema_json(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
         "anyOf"
     ]
     custom = next(

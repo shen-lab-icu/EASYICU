@@ -20,7 +20,12 @@ from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
-from ...contracts.figure_plan import COHORT_FLOW_FIGURE_PANELS, COHORT_FLOW_INPUT
+from ...contracts.figure_plan import (
+    COHORT_FLOW_FIGURE_PANELS,
+    COHORT_FLOW_INPUT,
+    cohort_flow_figure_executor_declares_step,
+    population_flow_input as _population_flow_input,
+)
 from ...figures.publication import (
     PALETTE_CLINICAL,
     apply_publication_style,
@@ -29,7 +34,7 @@ from ...figures.publication import (
 )
 from ...numeric_scalars import coerce_optional_finite_float as _finite
 from ...schema import AnalysisStep
-from ._shared import figure_product as _figure_product, method_head as _method_head
+from ._shared import figure_product as _figure_product
 
 __all__ = [
     "cohort_flow_figure_executor_declares_step",
@@ -94,18 +99,6 @@ def _is_trajectory_flow_contract(contract: Mapping[str, Any]) -> bool:
     )
 
 
-def _population_flow_input(step: AnalysisStep) -> str | None:
-    if len(step.inputs) != 1:
-        return None
-    input_key = str(step.inputs[0])
-    kind, separator, product = input_key.partition(":")
-    if kind != "table" or not separator:
-        return None
-    if product != "cohort_flow" and not product.endswith("population_flow"):
-        return None
-    return input_key
-
-
 def _binding_is_cohort_flow(binding: Any, *, input_key: str) -> bool:
     if not isinstance(binding, Mapping):
         return False
@@ -128,28 +121,6 @@ def _binding_is_cohort_flow(binding: Any, *, input_key: str) -> bool:
         and supported_columns
         and isinstance(consumption, Mapping)
         and consumption.get("mode") == "all_rows"
-    )
-
-
-def cohort_flow_figure_executor_declares_step(step: AnalysisStep) -> bool:
-    """Recognize the renderer's declaration before its table is produced."""
-
-    products = [_figure_product(value) for value in step.expected_outputs]
-    contracts = list(step.input_consumption_contracts or [])
-    source_input = _population_flow_input(step)
-    return bool(
-        step.planned_analysis_role == "auxiliary"
-        and _method_head(step.method) == "visualization"
-        and source_input is not None
-        and len(products) == 1
-        and products[0] is not None
-        and len(contracts) == 1
-        and contracts[0].input_key == source_input
-        and contracts[0].mode == "all_rows"
-        and not step.model_requirements
-        and step.table_one_spec is None
-        and step.trajectory_stability_spec is None
-        and step.exposure_outcome_distribution_spec is None
     )
 
 

@@ -1,12 +1,13 @@
 """Shared small helpers for deterministic execution runners (Owner: execution).
 
-This module is a pure relocation target for the tiny predicates and JSON
+This module shares the tiny predicates and JSON
 helpers that were copy-pasted across runner modules (``_method_head``,
 ``_figure_product``, ``_typed_product``, ``_report_product``,
 ``_is_safe_figure_product_id``, ``_read_json``, ``_write_json``).  Runners
 import these names (usually aliased back to their historical private spelling)
 instead of redefining them, so ownership-check semantics stay identical in one
-place.
+place. Product and method identity helpers are re-exported from contracts for
+consumers that must not depend on execution.
 
 Unification notes (fail-closed direction only):
 
@@ -31,26 +32,10 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
-#: Canonical figure product-id shape (bounded; enforced at the render boundary).
-FIGURE_PRODUCT_ID = re.compile(r"[a-z][a-z0-9_]{0,127}")
+from ...contracts.product_identity import FIGURE_PRODUCT_ID, figure_product, method_head
 
 #: Canonical ``kind:product`` token shape for generic inputs.
 TYPED_KEY = re.compile(r"([a-z][a-z0-9_]*):([a-z][a-z0-9_]*)")
-
-
-def method_head(value: Any) -> str:
-    """Return the method family head (text before ``" with "``)."""
-
-    return str(value or "").strip().casefold().split(" with ", 1)[0]
-
-
-def figure_product(value: Any) -> str | None:
-    """Return the figure product id for a ``figure:<id>`` token, else ``None``."""
-
-    kind, separator, product = str(value or "").strip().partition(":")
-    if kind != "figure" or not separator or not FIGURE_PRODUCT_ID.fullmatch(product):
-        return None
-    return product
 
 
 def typed_product_value(value: Any, expected_kind: str) -> str | None:

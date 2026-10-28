@@ -283,8 +283,10 @@ def test_a_directory_is_not_a_regular_file(tmp_path: Path) -> None:
 
 
 def test_the_owner_carries_no_case_specific_branch() -> None:
+    import easyicu.research_agent.contracts.artifact_consumption as owner
     import easyicu.research_agent.execution.runners.typed_input_binding as module
 
-    source = Path(module.__file__).read_text().lower()
-    for token in ("sepsis", "sep3", "e1_", "mortality", "icu_readmission"):
-        assert token not in source, f"case-specific token in production: {token}"
+    for subject in (owner, module):
+        source = Path(subject.__file__).read_text().lower()
+        for token in ("sepsis", "sep3", "e1_", "mortality", "icu_readmission"):
+            assert token not in source, f"case-specific token in {subject.__name__}: {token}"

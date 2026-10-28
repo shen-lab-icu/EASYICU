@@ -84,7 +84,7 @@ def validation_source_from_binding(
     run_dir: Path, resolved_inputs: Mapping, step_id: str,
 ) -> ValidationSource:
     """Called only after model freeze; sidecar verification can read file bytes."""
-    from ..execution.runners.typed_input_binding import contained_regular_file, load_typed_input
+    from ..contracts.artifact_consumption import contained_regular_file, load_typed_input
 
     binding = resolved_inputs.get("inputs", {}).get(input_key, {})
     path = contained_regular_file(run_dir / str(binding.get("relative_path", "")), run_dir)

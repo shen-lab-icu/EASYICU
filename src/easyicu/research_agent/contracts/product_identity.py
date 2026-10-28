@@ -4,15 +4,31 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from .product_files import KNOWN_FILE_SUFFIXES
 
 
 FIGURE_KIND_ALIASES = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
+FIGURE_PRODUCT_ID = re.compile(r"[a-z][a-z0-9_]{0,127}")
 CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN = (
     r"^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$"
 )
+
+
+def method_head(value: Any) -> str:
+    """Return the method family head (text before ``" with "``)."""
+
+    return str(value or "").strip().casefold().split(" with ", 1)[0]
+
+
+def figure_product(value: Any) -> str | None:
+    """Return the figure product id for a ``figure:<id>`` token, else ``None``."""
+
+    kind, separator, product = str(value or "").strip().partition(":")
+    if kind != "figure" or not separator or not FIGURE_PRODUCT_ID.fullmatch(product):
+        return None
+    return product
 
 
 #: Exact base names recognized as scientific effect products.
@@ -184,9 +200,12 @@ def normalised_method_head(method: str) -> str:
 __all__ = [
     "CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN",
     "FIGURE_KIND_ALIASES",
+    "FIGURE_PRODUCT_ID",
     "canonical_product_kind",
+    "figure_product",
     "is_canonical_typed_product_token",
     "normalize_product_token",
+    "method_head",
     "normalised_expected_output_names",
     "normalised_method_head",
     "normalised_structured_output_names",

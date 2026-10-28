@@ -13,7 +13,11 @@ from typing import Any, Collection, List, Literal, NamedTuple, Sequence, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .product_identity import is_canonical_typed_product_token
+from .product_identity import (
+    figure_product as _figure_product,
+    is_canonical_typed_product_token,
+    method_head as _method_head,
+)
 
 
 class FigurePresentationSpec(BaseModel):
@@ -902,6 +906,44 @@ COHORT_FLOW_FIGURE_PANELS = (
         source_products=(COHORT_FLOW_INPUT,),
     ),
 )
+
+
+def population_flow_input(step: Any) -> str | None:
+    """Return the single supported population-flow input, if declared."""
+
+    if len(step.inputs) != 1:
+        return None
+    input_key = str(step.inputs[0])
+    kind, separator, product = input_key.partition(":")
+    if kind != "table" or not separator:
+        return None
+    if product != "cohort_flow" and not product.endswith("population_flow"):
+        return None
+    return input_key
+
+
+def cohort_flow_figure_executor_declares_step(step: Any) -> bool:
+    """Recognize the renderer's declaration before its table is produced."""
+
+    products = [_figure_product(value) for value in step.expected_outputs]
+    contracts = list(step.input_consumption_contracts or [])
+    source_input = population_flow_input(step)
+    return bool(
+        step.planned_analysis_role == "auxiliary"
+        and _method_head(step.method) == "visualization"
+        and source_input is not None
+        and len(products) == 1
+        and products[0] is not None
+        and len(contracts) == 1
+        and contracts[0].input_key == source_input
+        and contracts[0].mode == "all_rows"
+        and not step.model_requirements
+        and step.table_one_spec is None
+        and step.trajectory_stability_spec is None
+        and step.exposure_outcome_distribution_spec is None
+    )
+
+
 DATA_QUALITY_FIGURE_PANELS = (
     DeterministicFigurePanelTemplate(
         panel_id="source_availability",
@@ -1000,7 +1042,9 @@ __all__ = [
     "balance_association_composite_panels",
     "data_quality_audit_source_candidates",
     "cohort_balance_association_composite_panels",
+    "cohort_flow_figure_executor_declares_step",
     "measurement_availability_figure_panels",
+    "population_flow_input",
     "CANONICAL_MEASUREMENT_PROCESS_PRODUCT_IDS",
     "LANDMARK_ASSOCIATION_COMPOSITE_INPUTS",
     "LandmarkCompositeRoles",

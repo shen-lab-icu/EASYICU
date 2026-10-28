@@ -15,6 +15,7 @@ from easyicu.research_agent.contracts.prediction_validation import (
     FROZEN_MODEL_INPUT, external_cohort_input,
 )
 from easyicu.research_agent.execution.runners.prediction_validation_executor import run_external_validation_step
+from easyicu.research_agent.execution.runners.typed_input_binding import TypedInputBindingError
 from easyicu.research_agent.intake import typed_cohort_source as intake
 from easyicu.research_agent.replication.metrics import (
     require_transport_capabilities, transport_concept_meaning,
@@ -123,6 +124,19 @@ def test_frozen_model_is_verified_before_intake_can_read_validation_bytes(tmp_pa
                                      run_dir=tmp_path, resolved_inputs=manifest,
                                      step_id="external", out_dir=tmp_path / "outputs")
     assert reads == []
+    assert not (tmp_path / "outputs").exists()
+
+
+def test_external_source_rejects_a_mismatched_consumption_digest(tmp_path, monkeypatch):
+    spec, manifest, _, _ = _fixture(tmp_path, monkeypatch)
+    key = external_cohort_input("eicu")
+    manifest["inputs"][key]["consumption_contract"]["artifact_sha256"] = "0" * 64
+    with pytest.raises(TypedInputBindingError) as excinfo:
+        run_external_validation_step(
+            spec=spec, run_dir=tmp_path, resolved_inputs=manifest,
+            step_id="external", out_dir=tmp_path / "outputs",
+        )
+    assert excinfo.value.reason_code == "consumption_contract_mismatch"
     assert not (tmp_path / "outputs").exists()
 
 
