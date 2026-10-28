@@ -32,7 +32,7 @@ function page(hosted, values = {}) {
     window: { EU_SETTINGS: { export_dir: '/Users/me/exports' }, t: (_en, zh) => zh },
     t: (_en, zh) => zh, icon: () => '', hostedServer: () => hosted, dataMode: () => 'real',
     exExportDir: null, exAdvExport: true, exFormat: 'parquet', exIncludeDefinitions: true, exMerge: 'separate',
-    advRow: (k, v) => `${k}${v}`, switchEl: () => '', pathDisplay: x => x, exPath: '/data/eicu',
+    advRow: (k, v) => `${k}${v}`, switchEl: () => '', sampleCapCtl: () => '<cap>', pathDisplay: x => x, exPath: '/data/eicu',
     ...values,
   });
   vm.runInContext(names, ctx);
@@ -103,6 +103,8 @@ test('hosted export settings name the workspace and offer no folder to browse or
   assert(!cfg.includes('data-ex-export-browse'));
   assert(!cfg.includes('data-ex-export-create'));
   assert(!cfg.includes('本机'));
+  // How many stays to take is an export setting, not a cohort criterion.
+  assert(cfg.includes('抽取住院数上限<cap>'));
 
   const local = page(false);
   vm.runInContext(section('  function exportCfg(options) {', '  /* ---- compact action summary ---- */'), local);

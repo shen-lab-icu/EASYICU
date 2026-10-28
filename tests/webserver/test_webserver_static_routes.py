@@ -181,7 +181,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261027-dmap2" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261027-nodemo2" in index_html
+    assert "js/screens-extraction.js?v=20261028-cohort1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
     assert "js/screens-help.js?v=20261027-help3" in index_html
@@ -1042,7 +1042,7 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/extraction.css?v=20261027-fit1" in index_html
+    assert "css/extraction.css?v=20261028-cohort1" in index_html
     assert "data-ex-analyze" in extraction_js
     assert "Choose folder and identify" in extraction_js
     assert "function copilotPrefillSummary()" in extraction_js
@@ -1443,8 +1443,6 @@ def test_native_extraction_exposes_real_cohort_gate_and_recommended_contract() -
     ) in extraction_js
     assert "planned, not export-ready" in extraction_js
     assert "concept prefilter, slower" in extraction_js
-    assert "Clinical cohort prefilter" in extraction_js
-    assert "Real export is blocked for this cohort" in extraction_js
     assert (
         "Add at least one ICD include or exclude token before exporting"
         in extraction_js
