@@ -20,7 +20,7 @@
   }
 
   function defaultParentDir(ctx) {
-    return String(ctx.guidedDrafts?.data?.default_parent_dir || '').trim();
+    return String((!hostedOwner() && window.EU_SETTINGS?.project_dir) || ctx.guidedDrafts?.data?.default_parent_dir || '').trim();
   }
 
   function parentPathLabel(ctx) {

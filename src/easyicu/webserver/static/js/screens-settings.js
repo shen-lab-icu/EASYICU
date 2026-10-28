@@ -27,6 +27,31 @@
   let settingsAuditLoading = false;
   let settingsZoteroTesting = false;
   let settingsZoteroTest = null;
+  let settingsEditingPath = '';
+  let settingsKeys = [];
+  let settingsKeysReadAt = 0;
+  let settingsKeysLoading = false;
+  let settingsStorageError = '';
+  let settingsKeysError = '';
+  const settingsPathDrafts = {};
+
+  function storageSection() {
+    let returnRoute = '';
+    try { returnRoute = window.sessionStorage.getItem('easyicu.settings.storageReturn') || ''; } catch (_) {}
+    return `<div class="sec-stack" id="set-storage"><h2>${T('Storage locations', '存储位置')}</h2></div>
+      <div class="card pad settings-storage">
+        ${[['data_dir', T('Data folder', '数据目录')], ['project_dir', T('Default project folder', '默认项目目录')]].map(([key, label]) => row(label,
+          `<span class="settings-storage-path">${h(S0()[key] || '')}</span>`,
+          settingsEditingPath === key ? `<form data-storage-form="${key}"><label><span class="sr-only">${label}</span><input name="path" aria-label="${label}" value="${h(settingsPathDrafts[key] ?? S0()[key] ?? '')}" required></label><button type="submit" class="btn">${T('Save', '保存')}</button><button type="button" class="btn" data-storage-cancel>${T('Cancel', '取消')}</button></form>` : `<button type="button" class="btn" data-storage-change="${key}">${T('Change', '更改')}</button>`)).join('')}
+        ${settingsStorageError ? `<p class="settings-storage-error" role="alert">${h(settingsStorageError)}</p>` : ''}
+        ${returnRoute ? `<button type="button" class="btn" data-storage-return>${T('Return to dataset', '返回数据卡片')}</button>` : ''}
+      </div>`;
+  }
+
+  function rememberedKeysSection() {
+    if ((S0().about || {}).deployment !== 'desktop') return '';
+    return `<div class="sec-stack" id="set-keys"><h2>${T('Model credentials', '模型密钥')}</h2></div><div class="card pad">${settingsKeys.length ? settingsKeys.map(item => row(h(item.provider), h(item.base_url), `<span>${T('Key remembered', '已记住密钥')} · <button type="button" class="btn sm" data-forget-key="${h(item.id)}">${T('Delete', '删除')}</button></span>`)).join('') : settingsKeysError ? '' : `<p>${T('No remembered keys.', '尚未记住密钥。')}</p>`}${settingsKeysError ? `<p class="settings-key-error" role="alert">${h(settingsKeysError)}</p>` : ''}</div>`;
+  }
 
   function sw(on, extra = '', settingKey = '') {
     const ds = settingKey ? ` data-setting="${settingKey}"` : '';
@@ -562,6 +587,7 @@
           ${[
             [dual('Capabilities', '能力'), 'layers', 'set-capabilities'],
             [T('Workspace', '工作区'), 'folder', 'set-workspace'],
+            [T('Storage locations', '存储位置'), 'folder', 'set-storage'],
             [T('Privacy', '隐私'), 'shield', 'set-privacy'],
             [T('Research Agent', '研究代理'), 'agent', 'set-research-agent'],
             [T('Personal', '个人'), 'edit', 'set-personal'],
@@ -595,6 +621,8 @@
       ${settingsNotice ? `<div class="note ok mt-12" data-settings-notice><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${T('Settings updated', '设置已更新')}</div><div class="d">${h(settingsNotice)}</div></div></div>` : ''}
 
       ${capabilityManager()}
+      ${storageSection()}
+      ${rememberedKeysSection()}
 
       <div class="sec-stack" id="set-workspace"><div class="lbl">${T('Workspace', '工作区')}</div><h2>${T('Local paths', '本地路径')}</h2></div>
       <div class="card pad">
@@ -623,6 +651,53 @@
     afterRender(root) {
       const rerender = () => { if (typeof window.__euRender === 'function') window.__euRender(); };
       const setNotice = msg => { settingsNotice = msg || ''; rerender(); };
+      if (!hostedInstance() && (S0().about || {}).deployment === 'desktop' && !settingsKeysLoading && Date.now() - settingsKeysReadAt > 3000 && window.EU_API?.loadRememberedProviderKeys) {
+        settingsKeysLoading = true;
+        window.EU_API.loadRememberedProviderKeys().then(payload => { settingsKeys = payload.credentials || []; settingsKeysError = ''; })
+          .catch(error => { settingsKeysError = error.message || T('Could not read remembered keys.', '无法读取已记住的密钥。'); })
+          .finally(() => { settingsKeysLoading = false; settingsKeysReadAt = Date.now(); rerender(); });
+      }
+      root.querySelectorAll('[data-forget-key]').forEach(button => button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          const payload = await window.EU_API.deleteRememberedProviderKey(button.getAttribute('data-forget-key'));
+          settingsKeys = payload.credentials || [];
+          settingsKeysError = '';
+          setNotice(T('Remembered key deleted.', '已删除本机记住的密钥。'));
+        } catch (error) { settingsKeysError = error.message; rerender(); }
+        finally { button.disabled = false; }
+      }));
+      root.querySelectorAll('[data-storage-change]').forEach(button => button.addEventListener('click', () => {
+        settingsEditingPath = button.getAttribute('data-storage-change'); settingsStorageError = ''; settingsPathDrafts[settingsEditingPath] = S0()[settingsEditingPath] || ''; rerender();
+      }));
+      root.querySelectorAll('[data-storage-cancel]').forEach(button => button.addEventListener('click', () => { settingsEditingPath = ''; settingsStorageError = ''; rerender(); }));
+      root.querySelectorAll('[data-storage-form]').forEach(form => form.addEventListener('submit', async event => {
+        event.preventDefault();
+        const key = form.getAttribute('data-storage-form');
+        const patch = { [key]: new FormData(form).get('path') };
+        settingsPathDrafts[key] = patch[key]; settingsStorageError = '';
+        if (key === 'data_dir') patch.data_dir_confirmed = true;
+        const button = form.querySelector('[type="submit"]'); button.disabled = true;
+        try {
+          await window.EU_API.saveSettings(patch);
+          settingsEditingPath = '';
+          delete settingsPathDrafts[key];
+          if (key === 'data_dir' && window.EU_OFFICIAL_DEMO_SOURCES) await window.EU_OFFICIAL_DEMO_SOURCES.ensureLoaded(null, true);
+          setNotice(T('Storage location saved.', '存储位置已保存。'));
+        } catch (error) { settingsStorageError = error.message; rerender(); }
+        finally { button.disabled = false; }
+      }));
+      root.querySelectorAll('[data-storage-return]').forEach(button => button.addEventListener('click', () => {
+        let route = '#data';
+        try { route = window.sessionStorage.getItem('easyicu.settings.storageReturn') || route; window.sessionStorage.removeItem('easyicu.settings.storageReturn'); } catch (_) {}
+        window.location.hash = /^#[a-z][a-z0-9-]*$/.test(route) ? route : '#data';
+      }));
+      try {
+        if (window.sessionStorage.getItem('easyicu.settings.openStorage')) {
+          root.querySelector('#set-storage')?.scrollIntoView({ block: 'start' });
+          window.sessionStorage.removeItem('easyicu.settings.openStorage');
+        }
+      } catch (_) {}
       if (root.querySelector('[data-ext-manager]') && extensionUi().bind) {
         extensionUi().bind(root, { rerender, setNotice });
       }

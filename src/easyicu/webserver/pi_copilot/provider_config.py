@@ -16,7 +16,7 @@ import os
 import stat
 import tempfile
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Literal, Mapping, Optional
 
@@ -38,6 +38,7 @@ from easyicu.webserver.provider_url_security import (
 )
 
 from .contracts import PiCopilotError, utc_now
+from .provider_credentials import CredentialBackend, ProviderCredentials
 
 DEFAULT_PROVIDER = "easyicu-local"
 DEFAULT_BASE_URL = "http://127.0.0.1:8317/v1"
@@ -159,7 +160,7 @@ class PiProviderConfig:
     """Validated private inputs consumed only by the Pi gateway."""
 
     provider: str
-    api_key: str
+    api_key: str = field(repr=False)
     base_url: str
     model: str
     api_transport: str
@@ -234,7 +235,7 @@ class PiProviderConfig:
 
 
 class PiProviderConfigStore:
-    """Own the private credential file and matching verification receipt."""
+    """Own connection coordinates, session/OS credentials and verification."""
 
     def __init__(
         self,
@@ -242,6 +243,7 @@ class PiProviderConfigStore:
         config_path: Optional[Path] = None,
         receipt_path: Optional[Path] = None,
         declaration_path: Optional[Path] = None,
+        credential_backend: CredentialBackend | None = None,
     ) -> None:
         self.config_path = Path(config_path or _DEFAULT_CONFIG_PATH)
         self.receipt_path = Path(receipt_path or _DEFAULT_RECEIPT_PATH)
@@ -249,6 +251,7 @@ class PiProviderConfigStore:
             self.receipt_path.with_name(self.receipt_path.stem + "-declarations.jsonl")
         )
         self._lock = threading.RLock()
+        self.credentials = ProviderCredentials(self.config_path, self._atomic_private_write, backend=credential_backend)
 
     def _declaration_record(self, connection: PiProviderConnection | None) -> PiProviderDeclarationRecord | None:
         """Persist an observed lapse so returning to an old connection cannot revive it."""
@@ -473,9 +476,11 @@ class PiProviderConfigStore:
         inference_location: Optional[InferenceLocation] = None,
         verifier: Optional[Verifier] = None,
         environ: Optional[Mapping[str, str]] = None,
+        remember_key: bool | None = None,
     ) -> tuple[PiProviderConfig, Dict[str, Any]]:
-        """Verify first, then atomically persist the credential and receipt."""
+        """Verify first, then save a session/OS credential and its receipt."""
 
+        self.credentials.check_remember(remember_key)
         config = self.make_connection_config(
             provider=provider,
             api_key=api_key,
@@ -491,7 +496,7 @@ class PiProviderConfigStore:
         policy = {key: source[key] for key in _POLICY_ENV_KEYS if key in source}
         with self._lock:
             self._declaration_record(config.connection())
-            self._write_config(config)
+            self._write_config(config, remember_key=remember_key)
             # Verify the effective policy without copying a human declaration
             # into administrator configuration. A new choice needs a new receipt.
             effective = self._require_stored_config(environ=policy)
@@ -585,13 +590,13 @@ class PiProviderConfigStore:
         environ: Optional[Mapping[str, str]] = None,
         include_file: bool = True,
     ) -> Dict[str, str]:
-        """Return process configuration with secure file values as fallback."""
+        """Overlay process configuration on session/OS credentials and metadata."""
 
         source = os.environ if environ is None else environ
         file_values, _status = (
             self._read_config_file() if include_file else ({}, "not_loaded")
         )
-        merged = dict(file_values)
+        merged = self.credentials.resolve(file_values) if include_file else dict(file_values)
         if _POLICY_ENV_KEYS.intersection(source):
             # Do not let an inherited inference_location undo an explicit env
             # clear of data_handling (or the converse).
@@ -724,6 +729,9 @@ class PiProviderConfigStore:
         verified = bool(
             config and receipt and receipt.get("fingerprint") == config.fingerprint()
         )
+        remembered = bool(config and self.credentials.identity(config.as_environment()) in {
+            row["id"] for row in self.credentials.remembered()
+        })
         return {
             "provider": str(values.get("EASYICU_PI_PROVIDER") or DEFAULT_PROVIDER),
             "base_url": str(values.get("EASYICU_PI_BASE_URL") or DEFAULT_BASE_URL),
@@ -742,7 +750,10 @@ class PiProviderConfigStore:
                 verified and receipt.get("inference_verified") is True
             ),
             "config_file_status": file_status,
-            "credential_storage": "private_local_file_0600",
+            "credential_storage": "os_credential_store" if remembered else "process_memory",
+            "remember_key_supported": self.credentials.supported(),
+            "remember_key_unavailable_reason": self.credentials.unavailable_reason(),
+            "credential_remembered": remembered,
             "secrets_returned": False,
         }
 
@@ -792,17 +803,17 @@ class PiProviderConfigStore:
             return {}
         return payload
 
-    def _write_config(self, config: PiProviderConfig) -> None:
-        lines = [
-            "# EasyICU private Pi Copilot model-service configuration",
-            "# Created by the local first-use setup. Do not commit this file.",
-        ]
-        for key, value in config.as_environment().items():
-            lines.append(f"{key}={json.dumps(value, ensure_ascii=False)}")
-        self._atomic_private_write(
-            self.config_path,
-            "\n".join(lines) + "\n",
-        )
+    def _write_config(self, config: PiProviderConfig, *, remember_key: bool | None = None) -> None:
+        self.credentials.save(config.as_environment(), remember=remember_key)
+
+    def remembered_credentials(self) -> list[dict[str, str]]:
+        with self._lock:
+            self.environment()
+            return self.credentials.remembered()
+
+    def delete_remembered_credential(self, account: str) -> None:
+        with self._lock:
+            self.credentials.delete(account)
 
     def _write_receipt(
         self,

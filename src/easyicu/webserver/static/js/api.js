@@ -139,6 +139,10 @@
   // Persist a single setting; updates the local cache from the server reply.
   async function saveSetting(key, value) {
     const patch = {}; patch[key] = value;
+    return saveSettings(patch);
+  }
+
+  async function saveSettings(patch) {
     window.EU_SETTINGS = await postJSON('/api/settings', patch);
     if (window.applySettingsState) window.applySettingsState(window.EU_SETTINGS);
     try {
@@ -495,6 +499,12 @@
   }
   function savePiCopilotProviderConfig(body) {
     return postJSON('/api/copilot/pi/provider-config', body || {});
+  }
+  function loadRememberedProviderKeys() {
+    return getJSON('/api/copilot/pi/provider-config/credentials');
+  }
+  function deleteRememberedProviderKey(id) {
+    return postJSON('/api/copilot/pi/provider-config/credentials/' + encodeURIComponent(id) + '/delete', {});
   }
   function discoverPiCopilotProviderModels(body) {
     return postJSON('/api/copilot/pi/provider-config/models', body || {});
@@ -922,6 +932,9 @@
   window.EU_API.hydrateCapabilities = hydrateCapabilities;
   window.EU_API.hydrateWorkspaceRegistry = hydrateWorkspaceRegistry;
   window.EU_API.saveSetting = saveSetting;
+  window.EU_API.saveSettings = saveSettings;
+  window.EU_API.loadRememberedProviderKeys = loadRememberedProviderKeys;
+  window.EU_API.deleteRememberedProviderKey = deleteRememberedProviderKey;
   window.EU_API.resetSettings = resetSettings;
   window.EU_API.saveWorkspaceRegistry = saveWorkspaceRegistry;
   window.EU_API.registerWorkspaceSource = registerWorkspaceSource;

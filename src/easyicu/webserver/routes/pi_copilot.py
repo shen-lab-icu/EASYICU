@@ -441,6 +441,7 @@ class PiProviderConfigRequest(BaseModel):
         "openai-responses",
     ] = "openai-completions"
     enable_ai: StrictBool = False
+    remember_key: StrictBool | None = None
     data_handling: Literal["on_device", "zero_retention_declared", "user_accepted_external", "unspecified"] = "unspecified"
     inference_location: Literal["on_device", "unspecified"] = "unspecified"
     credential_source: Literal["typed", "openrouter_login"] = "typed"
@@ -622,6 +623,7 @@ def post_pi_copilot_provider_config(
             model=body.model,
             api_transport=body.api_transport,
             enable_ai=body.enable_ai,
+            remember_key=body.remember_key,
             data_handling=body.data_handling,
             inference_location=body.inference_location,
         )
@@ -640,6 +642,27 @@ router.add_api_route(
     methods=["POST"],
     route_class_override=_PrivateProviderModelsRoute,
 )
+
+
+@router.get("/api/copilot/pi/provider-config/credentials")
+def get_pi_remembered_credentials() -> dict:
+    try:
+        return {"credentials": get_pi_copilot_service().provider_store.remembered_credentials()}
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/provider-config/credentials/{credential_id}/delete")
+def delete_pi_remembered_credential(credential_id: str) -> dict:
+    try:
+        service = get_pi_copilot_service()
+        with service._lock:
+            if service._busy_sessions:
+                raise PiCopilotError("pi_provider_config_busy", "Stop the active response before deleting a key.", status_code=409)
+            service.provider_store.delete_remembered_credential(credential_id)
+        return {"ok": True, "credentials": service.provider_store.remembered_credentials()}
+    except PiCopilotError as exc:
+        _raise_http(exc)
 
 
 @router.get("/api/copilot/pi/provider-config/declaration", response_model=PiProviderDeclarationState)

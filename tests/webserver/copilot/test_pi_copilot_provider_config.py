@@ -141,7 +141,7 @@ def test_verified_provider_config_is_private_and_never_returns_secret(
     assert "test-private-key" not in json.dumps(public)
     assert (config_path.stat().st_mode & 0o777) == 0o600
     assert (receipt_path.stat().st_mode & 0o777) == 0o600
-    assert "test-private-key" in config_path.read_text(encoding="utf-8")
+    assert "test-private-key" not in config_path.read_text(encoding="utf-8")
     assert "test-private-key" not in receipt_path.read_text(encoding="utf-8")
 
     restored = store.public_status()

@@ -70,7 +70,7 @@ process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20261028-wait1" in index
+    assert "css/guided-pi.css?v=20261028-wait1-cfg1" in index
     assert "css/guided-pi-clinical-card.css?v=20261025-owner-split1" in index
     # The connection dialog sheet reads the provider tokens the base sheet defines.
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261026-openrouter1") < index.index("css/guided-pi-header.css?v=")
@@ -125,10 +125,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-result-append.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "js/screens-guided-pi-activity.js?v=20261026-quick1" in index
     assert (
-        "js/screens-guided-pi-provider.js?v=20261027-dcl1"
+        "js/screens-guided-pi-provider.js?v=20261027-dcl1-cfg1"
         in index
     )
-    assert "js/screens-guided-pi-provider-control.js?v=20261027-dcl1" in index
+    assert "js/screens-guided-pi-provider-control.js?v=20261027-dcl1-cfg1" in index
     assert "js/screens-guided-pi-connect.js?v=20261021-hosted1" in index
     assert index.index("js/screens-guided-pi-provider-control.js") < index.index(
         "js/screens-guided-pi-connect.js"
@@ -179,7 +179,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20261028-set1" in index
+    assert "js/api.js?v=20261028-cfg1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -2342,14 +2342,12 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "google-generative-ai" in provider_owner
     assert "data-ag-" not in provider_owner
     assert "static_preview_no_backend" in pi_owner
-    assert "http://127.0.0.1:8765/#guided" in _read(
-        "js/screens-guided-pi-error-text.js"
-    )
+    assert "http://127.0.0.1:8765/#guided" in _read("js/screens-guided-pi-error-text.js")
     assert "data-gpi-provider-rediscover" in provider_owner
     assert "discoverPiCopilotProviderModels" in provider_control
     assert 'type="password"' in provider_owner
     assert 'name="enable_ai"' not in provider_owner
-    assert 'type="checkbox"' not in provider_owner
+    assert set(re.findall(r'type="checkbox" name="([^"]+)"', provider_owner)) == {"remember_key"}
     assert "验证并保存" in provider_owner
     assert "保存后，对话内容和你选择的文件可能发送至该服务" in provider_owner
     assert "savePiCopilotProviderConfig" in provider_control

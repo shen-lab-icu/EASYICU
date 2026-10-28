@@ -53,7 +53,10 @@ def jobs_demo_source_prepare(body: Dict[str, Any]) -> dict:
                 "allowed_source_ids": list(demo_store.allowed_source_ids()),
             },
         ) from exc
-    runner = demo_store.make_prepare_runner(source.id)
+    try:
+        runner = demo_store.make_prepare_runner(source.id)
+    except demo_store.DemoSourceError as exc:
+        raise HTTPException(status_code=409, detail={"error": exc.code, **exc.detail}) from None
     job = submit_job("demo-source-prepare", runner)
     return {"job_id": job.id, "kind": job.kind, "status": job.status}
 

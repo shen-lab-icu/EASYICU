@@ -171,6 +171,7 @@
           ${signedIn ? `<div class="wide gpi-config-note ok"><span class="gpi-dot"></span>${tr('Signed in with OpenRouter. The key stays on this computer.', '已用 OpenRouter 账户登录，密钥只保存在本机。')}</div>` : `
           ${preset.login ? `<div class="wide gpi-provider-login"><button class="btn" type="button" data-gpi-openrouter-login ${busy || options.staticPreview ? 'disabled' : ''}>${tr('Sign in with OpenRouter', '用 OpenRouter 账户登录')}</button></div>` : ''}
           <label class="wide"><span>${tr('API credential', 'API 凭据')}</span><input name="api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="${savedCredential ? tr('Leave blank to use the saved credential', '留空则沿用已保存的凭据') : tr('Paste once; it will not be shown again', '仅粘贴一次，之后不再显示')}"></label>`}
+          ${config.remember_key_supported === true ? `<label class="wide gpi-remember-key"><input type="checkbox" name="remember_key" ${state.apiDraft && typeof state.apiDraft.remember_key === 'boolean' ? (state.apiDraft.remember_key ? 'checked' : '') : 'checked'}><span>${tr('Remember this key on this computer', '在本机记住此密钥')}</span></label>` : config.remember_key_unavailable_reason ? `<label class="wide gpi-remember-key"><input type="checkbox" name="remember_key" disabled><span>${tr('Remember this key on this computer', '在本机记住此密钥')} · ${esc(config.remember_key_unavailable_reason)}</span></label>` : ''}
         </div>
         <details class="gpi-api-advanced">
           <summary>${tr('Advanced settings', '高级设置')}</summary>

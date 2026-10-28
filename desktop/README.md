@@ -223,6 +223,29 @@ uv pip compile pyproject.toml desktop/build-requirements.in \
   --output-file desktop/requirements-macos-arm64-py311.lock
 ```
 
+Settings → 存储位置 stores the data and project folder preferences. The data
+default is `Documents/EasyICU/Data`, with `EasyICU/Data` in the user's home as
+the fallback. Projects default to `Documents/EasyICU` or `EasyICU` in the home.
+The loopback webview has no native folder-picker capability, so Settings uses
+a path field validated by the backend. Older prepared data stays readable at
+its original coordinates, including after a folder preference changes.
+
+Remembered API keys use macOS Keychain via the fixed `/usr/bin/security`
+binary, or Windows Credential Manager via `advapi32` (generic credentials
+under `EasyICU/<connection id>`, persisted for this user on this machine).
+No additional packages or desktop lock changes are needed. Application files
+retain only connection coordinates and verification hashes. The store must
+be available and unlocked; other platforms disable remembering with a reason.
+There is no file fallback. On macOS the non-interactive `security -w` write
+briefly exposes the secret to local process-argument inspection. Arguments
+and command diagnostics are never logged or returned to the frontend.
+Unchecking 「在本机记住此密钥」 keeps the connection key in process memory until exit.
+Hosted and server deployments never persist newly entered user keys. Loading
+a remembered key does not change the external-model or per-run consent gates.
+Legacy Pi connection files on hosted/server deployments are also stripped of
+their key after it is loaded into memory; administrator-injected environment
+variables continue to work without being copied to a connection file.
+
 Existing pins are retained unless an upgrade is requested. Review intentional
 updates with `--upgrade-package <name>` and commit the resulting lock. Node uses
 the two committed `package-lock.json` files, and Rust uses `Cargo.lock`. Build

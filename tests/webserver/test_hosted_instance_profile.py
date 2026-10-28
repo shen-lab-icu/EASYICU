@@ -64,6 +64,7 @@ def test_settings_about_keeps_host_details_on_desktop_only(monkeypatch, hosted, 
             "python": settings.about()["python"],
             "config_path": str(settings._CONFIG_PATH),
             "local_access": settings.local_access_policy(),
+            "deployment": settings.about()["deployment"],
         }
 
 
