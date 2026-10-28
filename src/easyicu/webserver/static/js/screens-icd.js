@@ -4,6 +4,7 @@
    frequencies must come from the exact selected source during extraction;
    the browser never estimates them from seeded demo constants. */
 (function () {
+  const escHtml = window.EU_HTML.esc;
   function L(en, zh) { return t(en, zh); }
 
   let icdInclude = '';

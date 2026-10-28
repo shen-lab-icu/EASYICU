@@ -10,11 +10,17 @@ assert.ok(ownerPath, 'screens-icd.js path is required');
 global.window = global;
 global.t = en => en;
 global.icon = () => '';
-global.escHtml = value => String(value == null ? '' : value)
-  .replaceAll('&', '&amp;')
-  .replaceAll('<', '&lt;')
-  .replaceAll('>', '&gt;')
-  .replaceAll('"', '&quot;');
+// Only the shared escape owner is in scope. No other script defines a global
+// escHtml, and the extraction cohort step stopped rendering when this widget
+// assumed one.
+global.EU_HTML = {
+  esc: value => String(value == null ? '' : value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;'),
+};
+assert.equal(typeof global.escHtml, 'undefined');
 global.__euRender = () => {};
 global.setTimeout = () => 1;
 global.clearTimeout = () => {};
