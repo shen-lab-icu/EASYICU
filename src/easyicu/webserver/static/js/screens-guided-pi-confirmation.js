@@ -912,7 +912,8 @@
         evidenceStatus: tr(`${hours}-hour landmark · ${days}-day survival`, `第 ${hours} 小时 landmark · ${days} 天生存`),
         evidenceDetail: [
           covariates && tr(`Adjusted for ${covariates}.`, `调整：${covariates}。`),
-          rmst && tr(`Sensitivity: ${tau} restricted mean survival time.`, `敏感性分析：${tau}限制性平均生存时间。`),
+          rmst && tr(`Sensitivity: restricted mean survival time over the ${tau} from the landmark to day ${days}.`,
+            `敏感性分析：landmark 起至第 ${days} 天（${tau}）的限制性平均生存时间。`),
         ].filter(Boolean).join(' '),
         guidance: tr(
           `${exposure} is known only at hour ${hours}; following from admission would count the time before it as exposed survival. The landmark follows patients alive at hour ${hours} to day ${days}.`,

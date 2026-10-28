@@ -25,6 +25,7 @@ MODEL_FACING = (
     "data/research_know_how/*.json",
     "webserver/pi_copilot/plan_decisions.py",
     "webserver/pi_copilot/survival_plan_decision.py",
+    "webserver/pi_copilot/survival_decision_source.py",
     "webserver/static/js/screens-guided-pi-confirmation.js",
 )
 

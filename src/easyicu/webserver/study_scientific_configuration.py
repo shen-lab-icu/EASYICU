@@ -150,10 +150,10 @@ class ScientificConfiguration:
         authority = str(self.study.get("covariate_authority") or "").strip()
         if not authority:
             return None
-        if authority not in {"user", "agent_plan"}:
+        if authority not in {"user", "agent_plan", "researcher_stated"}:
             raise ScientificConfigurationError(
                 "research_pipeline_covariate_authority_invalid",
-                "StudyContext covariate_authority must be user or agent_plan.",
+                "StudyContext covariate_authority must be user, agent_plan or researcher_stated.",
             )
         return authority
 
