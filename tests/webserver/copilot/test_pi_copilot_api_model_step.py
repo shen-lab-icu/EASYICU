@@ -214,7 +214,7 @@ def test_connecting_lists_models_then_the_choice_is_verified_and_saved() -> None
     assert out["saveCall"] == {
         "provider": "easyicu-local", "base_url": "http://127.0.0.1:8317/v1",
         "api_transport": "openai-completions", "api_key": "sk-synthetic-secret",
-        "model": "m-large", "enable_ai": True,
+        "model": "m-large", "enable_ai": True, "remember_key": False,
     }
     assert out["afterSave"] == {"keyCleared": True, "draftHoldsNoKey": True, "catalog": None}
     assert out["closed"] == {"draft": None, "catalog": None, "keyRestored": False}

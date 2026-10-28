@@ -274,8 +274,9 @@ def test_hosted_settings_keep_the_clinicians_display_and_the_administrator_conta
     assert local["hosted"] is False
     assert local["adminControls"] is True
     assert local["reset"] is True
-    # Personal instructions are per install, so only the local rail offers them.
-    assert local["railTargets"] == 7
+    # Personal instructions and storage locations are per install, so only the
+    # local rail offers them.
+    assert local["railTargets"] == 8
 
 
 def test_a_hosted_skill_catalogue_imports_only_into_the_users_instance() -> None:

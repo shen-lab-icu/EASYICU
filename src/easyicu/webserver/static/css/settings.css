@@ -354,6 +354,15 @@
 /* The settings section rail jumps by anchor; the page keeps enough room below
    the last section so every anchor, not only the first two, can reach the top. */
 .settings-page{padding-bottom:min(60vh,640px)}
+.settings-storage .sr-main{min-width:0}
+.settings-storage-path{display:block;overflow-wrap:anywhere;font-family:var(--mono)}
+.settings-storage .sr-ctl{min-width:0;max-width:100%}
+.settings-storage form{display:flex;align-items:center;flex-wrap:wrap;gap:8px;max-width:100%}
+.settings-storage form label{flex:1;min-width:120px;max-width:100%}
+.settings-storage input{box-sizing:border-box;width:100%;min-height:32px;padding:6px 8px;border:1px solid var(--hair);border-radius:var(--r-2);background:var(--surface);color:var(--ink)}
+.settings-storage button,[data-forget-key]{min-width:24px;min-height:24px}
+.settings-storage-error,.settings-key-error{color:var(--danger);font-size:12px;overflow-wrap:anywhere}
+@media(max-width:720px){.settings-storage .set-row{flex-wrap:wrap;gap:12px}.settings-storage .sr-ctl{width:100%}}
 
 /* Owner: js/screens-settings-personalization.js — standing instructions for the Copilot. */
 .set-personal{display:grid;gap:10px}

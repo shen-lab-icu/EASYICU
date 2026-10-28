@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 from urllib.error import URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from easyicu.webserver import state_paths
+from easyicu.webserver import hosted, state_paths, storage_locations
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.export_producer_identity import native_export_producer_identity
 from easyicu.webserver.demo_source_contracts import (
@@ -50,7 +50,9 @@ def cache_root() -> Path:
     """Resolve the private cache root from the one supported override."""
 
     configured = os.getenv(CACHE_ENV)
-    root = Path(configured).expanduser() if configured else DEFAULT_CACHE_ROOT
+    root = Path(configured).expanduser() if configured else (
+        DEFAULT_CACHE_ROOT if hosted.is_hosted() else storage_locations.data_directory()
+    )
     return root.resolve()
 
 
@@ -69,6 +71,22 @@ def source_paths(source: DemoSourceSpec) -> DemoSourcePaths:
     """Compile all private paths for one immutable allowlist entry."""
 
     root = cache_root() / source.id
+    if not os.getenv(CACHE_ENV) and not hosted.is_hosted():
+        # Completed and resumable older locations retain their markers and
+        # coordinates. An unrecognised folder is never adopted as a cache.
+        candidates = tuple(_paths_at(parent / source.id, source) for parent in (
+            cache_root(), *storage_locations.previous_data_directories(), DEFAULT_CACHE_ROOT,
+        ))
+        for candidate in candidates:
+            if export_ready(candidate, source):
+                return candidate
+        for candidate in candidates:
+            if raw_ready(candidate, source) or archive_ready(candidate, source) or _resumable_partial_bytes(source, candidate):
+                return candidate
+    return _paths_at(root, source)
+
+
+def _paths_at(root: Path, source: DemoSourceSpec) -> DemoSourcePaths:
     raw = root / "raw"
     export = current_export_dir(root)
     return DemoSourcePaths(
@@ -80,6 +98,22 @@ def source_paths(source: DemoSourceSpec) -> DemoSourcePaths:
         converted_marker=raw / ".easyicu-demo-converted.json",
         prepared_marker=export / ".easyicu-demo-prepared.json",
     )
+
+
+def validate_prepare_destination(source: DemoSourceSpec, paths: DemoSourcePaths) -> None:
+    """Fail before submitting work, without changing integrity or resume rules."""
+    if export_ready(paths, source):
+        return
+    if not os.getenv(CACHE_ENV) and not storage_locations.data_directory_confirmed():
+        raise DemoSourceError("Confirm the data directory before downloading.",
+                              code="data_directory_confirmation_required",
+                              detail={"destination": str(cache_root())})
+    try:
+        storage_locations.validate_directory(paths.root.parent, required_bytes=(
+            source.size_bytes + 2 * source.max_uncompressed_bytes
+        ))
+    except storage_locations.StorageLocationError as exc:
+        raise DemoSourceError(exc.reason, code=exc.code, detail=exc.detail) from None
 
 
 def now() -> str:
@@ -416,7 +450,7 @@ def registry_state(paths: DemoSourcePaths) -> tuple[bool, bool]:
 
 
 def status_payload(source: DemoSourceSpec) -> dict[str, Any]:
-    """Return path-free cache readiness for one source."""
+    """Return cache readiness and a local user's visible destination."""
 
     paths = source_paths(source)
     partial_bytes = _resumable_partial_bytes(source, paths)
@@ -436,6 +470,10 @@ def status_payload(source: DemoSourceSpec) -> dict[str, Any]:
     marker = read_marker(paths.prepared_marker, source) if is_export_ready else None
     return {
         "state": state,
+        **({} if hosted.is_hosted() else {
+            "destination": str(paths.root.parent),
+            "data_dir_confirmed": bool(os.getenv(CACHE_ENV)) or storage_locations.data_directory_confirmed(),
+        }),
         "archive_ready": is_archive_ready,
         "raw_ready": is_raw_ready,
         "parquet_ready": is_parquet_ready,

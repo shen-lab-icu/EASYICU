@@ -220,6 +220,7 @@
         ...connectionValues(form),
         preset: preset ? preset.value : previous.preset,
         model: data.has('model') ? String(data.get('model') || '') : previous.model,
+        remember_key: form.querySelector('[name="remember_key"]') ? data.has('remember_key') : previous.remember_key,
       };
       heldKey = String(data.get('api_key') || '');
     }
@@ -381,6 +382,7 @@
           ...values,
           ...credentialFields(values, apiKey),
           model: String(data.get('model') || '').trim(),
+          remember_key: data.has('remember_key'),
           enable_ai: true,
         });
         state.runtime = payload && payload.runtime;

@@ -788,10 +788,11 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         model: str,
         api_transport: str,
         enable_ai: bool,
+        remember_key: bool | None = None,
         data_handling: str = "unspecified",
         inference_location: str = "unspecified",
     ) -> Dict[str, Any]:
-        """Verify and persist first-use Pi credentials before chat unlocks."""
+        """Verify the Pi connection with explicit opt-in before chat unlocks."""
 
         if data_handling != "unspecified" or inference_location != "unspecified":
             raise declaration_error("settings_only")
@@ -824,6 +825,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             base_url=base_url,
             model=model,
             api_transport=api_transport,
+            remember_key=remember_key,
         )
         apply_config(config)
         payload = self.runtime_status()

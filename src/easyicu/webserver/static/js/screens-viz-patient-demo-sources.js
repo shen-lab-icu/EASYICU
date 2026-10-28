@@ -346,6 +346,7 @@
     const canResume = Boolean(status.resume_available);
     const scope = String(options && options.scope || 'patient');
     const canOpen = scope === 'crossdb' ? isPrepared : isActive;
+    const needsLocation = status.data_dir_confirmed === false && status.state !== 'prepared';
     const openLabel = scope === 'cohort'
       ? hT(helpers, 'Open cohort statistics', '打开队列统计')
       : scope === 'crossdb'
@@ -375,6 +376,7 @@
         <div class="official-demo-source-facts">
           <span>${hEsc(helpers, scopeText(source, helpers))}</span>
           <span>${hEsc(helpers, download.size_label || '')}</span>
+          ${status.destination && !needsLocation ? `<span class="official-demo-destination" title="${hEsc(helpers, status.destination)}">${hEsc(helpers, status.destination)}</span>` : ''}
           ${canResume ? `<span>${hEsc(helpers, hT(helpers, `${formatBytes(status.partial_bytes)} saved`, `已保存 ${formatBytes(status.partial_bytes)}`))}</span>` : ''}
         </div>
         <div class="official-demo-source-provenance">
@@ -394,7 +396,7 @@
           </div>` : ''}
         ${!job && state.failure && state.failure.sourceId === source.id ? renderFailure(state.failure, helpers) : ''}
         <div class="official-demo-source-actions">
-          ${canOpen
+          ${needsLocation ? `<div class="official-demo-location"><span>${hEsc(helpers, hT(helpers, 'Will download to:', '将下载到：'))}<span class="official-demo-destination">${hEsc(helpers, status.destination || '')}</span></span><button class="btn primary" type="button" data-demo-source-confirm="${hEsc(helpers, source.id)}" ${job || anotherJob ? 'disabled' : ''}>${hT(helpers, 'Download here', '下载到这里')}</button><button class="btn" type="button" data-demo-source-location="${hEsc(helpers, source.id)}">${hT(helpers, 'Change location', '更改位置')}</button></div>` : canOpen
             ? `<button class="btn primary" type="button" data-demo-source-open="${hEsc(helpers, source.id)}">${hEsc(helpers, openLabel)}</button>`
             : `<button class="btn ${source.id.indexOf('mimic') >= 0 ? 'primary' : ''}" type="button" data-demo-source-prepare="${hEsc(helpers, source.id)}" ${isPrepared ? 'data-demo-source-open-after-prepare="true"' : ''} ${job || anotherJob ? 'disabled' : ''}>${hEsc(helpers, prepareLabel)}</button>`}
         </div>
@@ -535,6 +537,8 @@
     const api = window.EU_API;
     if (!api || typeof api.startOfficialDemoSourcePrepare !== 'function') return;
     if (activeJob()) return;
+    const status = sourceStatus(sourceById(sourceId));
+    if (status.data_dir_confirmed === false && status.state !== 'prepared') return;
     clearPollTimer();
     state.error = null;
     state.failure = null;
@@ -561,6 +565,39 @@
   function bind(root, config = {}) {
     if (!root || typeof root.querySelectorAll !== 'function') return;
     resumeRememberedJob(config);
+    root.querySelectorAll('[data-demo-source-location]').forEach(button => {
+      button.addEventListener('click', () => {
+        try {
+          window.sessionStorage.setItem('easyicu.settings.storageReturn', window.location.hash || '#data');
+          window.sessionStorage.setItem('easyicu.settings.storageCard', button.getAttribute('data-demo-source-location'));
+          window.sessionStorage.setItem('easyicu.settings.openStorage', '1');
+        } catch (_) {}
+        window.location.hash = '#settings';
+      });
+    });
+    root.querySelectorAll('[data-demo-source-confirm]').forEach(button => {
+      button.addEventListener('click', async () => {
+        if (activeJob() || !window.EU_API?.saveSettings) return;
+        const sourceId = button.getAttribute('data-demo-source-confirm');
+        const status = sourceStatus(sourceById(sourceId));
+        button.disabled = true;
+        try {
+          await window.EU_API.saveSettings({ data_dir: status.destination, data_dir_confirmed: true });
+          await loadCatalog(null, true);
+          prepare(sourceId, config);
+        } catch (error) {
+          state.failure = failureFromJob(sourceId, error && error.message);
+          if (config.refresh) config.refresh();
+        } finally { button.disabled = false; }
+      });
+    });
+    try {
+      const card = window.sessionStorage.getItem('easyicu.settings.storageCard');
+      if (card && ((state.catalog || {}).sources || []).some(source => source.id === card)) {
+        const node = root.querySelector(`[data-demo-source="${card}"]`);
+        if (node) { node.scrollIntoView({ block: 'nearest' }); window.sessionStorage.removeItem('easyicu.settings.storageCard'); }
+      }
+    } catch (_) {}
     root.querySelectorAll('[data-demo-source-retry]').forEach(button => {
       button.addEventListener('click', event => {
         event.preventDefault();

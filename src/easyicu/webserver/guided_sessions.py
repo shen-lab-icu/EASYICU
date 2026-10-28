@@ -15,6 +15,7 @@ import re
 import secrets
 import threading
 import unicodedata
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -24,7 +25,6 @@ from send2trash import send2trash as _send2trash
 
 from easyicu.webserver import state_paths
 from easyicu.webserver.hosted import (
-    deployment_kind,
     is_hosted,
     require_instance_path,
     unavailable,
@@ -645,9 +645,9 @@ def default_project_parent() -> Path:
 
     if is_hosted():
         return _PROJECTS_ROOT
-    home = Path.home() if deployment_kind() == "desktop" else state_paths.user_home()
-    documents = home / "Documents"
-    return (documents if documents.is_dir() else home) / "EasyICU"
+    from easyicu.webserver.storage_locations import project_directory
+
+    return project_directory()
 
 
 def _safe_project_parent_dir(value: Any) -> Path | None:
@@ -1423,7 +1423,7 @@ def _normalise_draft(
     branch = _choice(body.get("branch"), _VALID_BRANCHES, "predict")
     depth = _choice(body.get("depth"), _VALID_DEPTHS, "full")
     data_mode = _choice(body.get("data_mode"), _VALID_DATA_MODES, "real" if is_hosted() else "demo")
-    draft_id = existing_id or _draft_id("|".join([created, title, branch, depth]))
+    draft_id = existing_id or _draft_id("|".join([created, title, branch, depth, uuid.uuid4().hex]))
     project_dir = _project_dir_for(title, body.get("folder_slug"), body.get("parent_dir"))
     if project_dir is None:
         raise ValueError("invalid_guided_parent_dir")

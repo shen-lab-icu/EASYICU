@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from easyicu.webserver import research_run_submission, settings
+from easyicu.webserver import research_run_submission, settings, storage_locations
 from easyicu.webserver.pi_copilot import service as service_module
 from easyicu.webserver.pi_copilot.contracts import (
     PiSessionDataSourceAuthorization,
@@ -16,6 +16,22 @@ from easyicu.webserver.pi_copilot.contracts import (
 )
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfig
 from easyicu.webserver.pi_copilot.service import PiCopilotService
+
+
+class FakeCredentialBackend:
+    """Share a synthetic native credential store across simulated restarts."""
+
+    def __init__(self):
+        self.values = {}
+
+    def get_password(self, service, account):
+        return self.values.get((service, account))
+
+    def set_password(self, service, account, password):
+        self.values[service, account] = password
+
+    def delete_password(self, service, account):
+        self.values.pop((service, account), None)
 
 
 def record_pipeline_submission(
@@ -141,7 +157,7 @@ class FakeGateway:
 
 
 @pytest.fixture
-def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+def study_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     current = {
         "id": "study-test",
         "revision": 3,
@@ -158,6 +174,7 @@ def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(
         settings, "load_settings", lambda: {"ai_enabled": True, "language": "en"}
     )
+    monkeypatch.setattr(storage_locations, "data_directory", lambda: tmp_path / "demo-data")
     monkeypatch.setattr(
         service_module.study_contexts, "get_active_context", lambda: dict(current)
     )

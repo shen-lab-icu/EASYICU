@@ -90,7 +90,7 @@ _run_prepare_stage = _prepare.run_prepare_stage
 
 
 def demo_sources_catalog() -> dict[str, Any]:
-    """Return public release metadata plus path-free readiness booleans."""
+    """Return release metadata, readiness and the local download destination."""
 
     return source_store.demo_catalog_reader_labels(build_catalog(_status_payload))
 
@@ -104,6 +104,7 @@ def make_prepare_runner(source_id: str):
         hosted.unavailable()
     source = get_source(source_id)
     paths = _source_paths(source)
+    _storage.validate_prepare_destination(source, paths)
     operations = _prepare.PrepareOperations(
         download=_download_archive,
         extract=_extract_archive,

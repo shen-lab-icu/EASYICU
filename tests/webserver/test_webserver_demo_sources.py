@@ -33,7 +33,7 @@ def test_demo_catalog_uses_the_profile_reader_label_and_the_legacy_demos_own_rel
     assert rows["mimic_iv_demo_v2_2"]["reader_label"] == "MIMIC-IV Clinical Database Demo v2.2"
 
 
-def test_demo_catalog_is_fixed_safe_and_path_free(
+def test_demo_catalog_is_fixed_safe_and_exposes_local_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("EASYICU_DEMO_CACHE_DIR", str(tmp_path / "private-cache"))
@@ -75,8 +75,9 @@ def test_demo_catalog_is_fixed_safe_and_path_free(
         and row["provenance"]["license"]["short_name"] == "ODbL 1.0"
         for row in payload["sources"]
     )
-    serialized = json.dumps(payload)
-    assert str(tmp_path) not in serialized
+    assert all(row["status"]["destination"] == str(tmp_path / "private-cache") for row in payload["sources"])
+    assert all(row["status"]["data_dir_confirmed"] is True for row in payload["sources"])
+    assert all("raw" not in row["status"] and "export" not in row["status"] for row in payload["sources"])
     assert all(row["status"]["state"] == "not_downloaded" for row in payload["sources"])
 
 

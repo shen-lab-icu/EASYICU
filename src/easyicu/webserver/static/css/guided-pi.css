@@ -593,3 +593,5 @@
 .gpi-error-close:hover,.gpi-error-close:focus-visible{background:rgba(186,70,61,0.12);outline:0}
 
 .gpi-run-stop-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.gpi-api-form .gpi-remember-key{display:flex;align-items:center;gap:8px;min-height:24px;cursor:pointer}
+.gpi-api-form .gpi-remember-key input{width:24px;height:24px;flex:0 0 24px;min-height:24px}

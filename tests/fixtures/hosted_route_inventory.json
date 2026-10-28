@@ -2189,7 +2189,10 @@
     "method": "POST",
     "route": "/api/settings",
     "fields": [
-      "body:export_dir"
+      "body:export_dir",
+      "body:data_dir",
+      "body:project_dir",
+      "body:data_dir_confirmed"
     ],
     "reaches": "settings.update_settings -> export destination used by later jobs",
     "protection": "refused non-display settings when hosted",
@@ -2614,5 +2617,25 @@
     "protection": "no path inputs",
     "writes": "none",
     "write_owner": "Read-only built-in catalog projection; no filesystem destination."
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/provider-config/credentials",
+    "fields": [],
+    "reaches": "PiProviderConfigStore.remembered_credentials -> native OS credential store; returns connection IDs and coordinates only",
+    "protection": "no path inputs",
+    "writes": "instance home",
+    "write_owner": "ProviderCredentials.resolve sanitizes a fixed legacy connection file; desktop keys migrate to the OS store, hosted/server keys become process-only."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/provider-config/credentials/{credential_id}/delete",
+    "fields": [
+      "path:credential_id"
+    ],
+    "reaches": "ProviderCredentials.delete -> exact connection ID from the local key-free index and native OS credential deletion",
+    "protection": "ProviderCredentials requires explicit desktop deployment before credential-store or index writes; credential_id is opaque, never a filesystem coordinate",
+    "writes": "refused on hosted",
+    "write_owner": "ProviderCredentials.delete removes one OS credential and atomically updates the key-free index."
   }
 ]

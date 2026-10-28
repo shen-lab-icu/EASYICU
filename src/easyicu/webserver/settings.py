@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
 import easyicu
-from easyicu.webserver import state_paths
+from easyicu.webserver import state_paths, storage_locations
 from easyicu.webserver.host_security import local_access_policy
 from easyicu.webserver.input_validation import parse_bool
 from easyicu.webserver.hosted import is_hosted
@@ -50,6 +50,10 @@ DEFAULTS: Dict[str, Any] = {
     "language": "en",  # "en" | "zh"
     "data_mode": "demo",  # "demo" | "real"
     "export_dir": None,
+    "data_dir": None,
+    "project_dir": None,
+    "data_dir_confirmed": False,
+    "data_dir_history": [],
     "science_skills_enabled": True,
     "nature_figure_skill_enabled": True,
     "nature_writing_skill_enabled": True,
@@ -122,6 +126,9 @@ _COERCE = {
     "language": _choice("language"),
     "data_mode": _choice("data_mode"),
     "export_dir": _optional_path,
+    "data_dir": _optional_path,
+    "project_dir": _optional_path,
+    "data_dir_confirmed": parse_bool,
     "science_skills_enabled": parse_bool,
     "nature_figure_skill_enabled": parse_bool,
     "nature_writing_skill_enabled": parse_bool,
@@ -269,6 +276,7 @@ def _write_settings(payload: Dict[str, Any], config_path: Path | None = None) ->
 
 def _defaults() -> Dict[str, Any]:
     defaults = dict(DEFAULTS)
+    defaults.update(storage_locations.defaults())
     if is_hosted():
         defaults.update(language="zh", data_mode="real")
     return defaults
@@ -292,6 +300,10 @@ def _merged_from_disk(config_path: Path | None = None) -> Dict[str, Any]:
                 value = coerce(value)
             except (TypeError, ValueError):
                 continue
+        if key in storage_locations.PATH_KEYS and value is None:
+            continue
+        if key == "data_dir_history" and not isinstance(value, list):
+            continue
         merged[key] = value
     return merged
 
@@ -329,6 +341,7 @@ def update_settings(patch: Dict[str, Any], *, config_path: Path | None = None) -
     # process's EASYICU_HOME or the browser's settings store.
     with _LOCK, _file_lock(config_path):
         current = _one_opt_in(_merged_from_disk(config_path))
+        accepted = storage_locations.prepare_settings_patch(accepted, current)
         current.update(accepted)
         written = [bool(accepted[key]) for key in _ONE_OPT_IN if key in accepted]
         if written:
@@ -341,8 +354,13 @@ def update_settings(patch: Dict[str, Any], *, config_path: Path | None = None) -
 def reset_settings() -> Dict[str, Any]:
     """Reset preferences while retaining the administrator's contact."""
     with _LOCK, _file_lock():
+        previous = _merged_from_disk()
         current = _defaults()
-        current["support_contact"] = _merged_from_disk()["support_contact"]
+        current["support_contact"] = previous["support_contact"]
+        # Resetting preferences never loses coordinates of data already prepared.
+        current["data_dir_history"] = list(dict.fromkeys([
+            *(value for value in previous["data_dir_history"] if isinstance(value, str)), previous["data_dir"],
+        ]))
         _write_settings(current)
         return current
 
@@ -372,7 +390,9 @@ def about() -> Dict[str, Any]:
         "python": "{}.{}.{}".format(*sys.version_info[:3]),
     }
     if not is_hosted():
-        result.update(config_path=str(_CONFIG_PATH), local_access=local_access_policy())
+        from easyicu.webserver.hosted import deployment_kind
+
+        result.update(config_path=str(_CONFIG_PATH), local_access=local_access_policy(), deployment=deployment_kind())
     return result
 
 
@@ -381,4 +401,6 @@ def settings_response(settings: Dict[str, Any]) -> Dict[str, Any]:
     result = {**settings, "about": about()}
     if is_hosted():
         result.pop("export_dir", None)
+        for key in storage_locations.STORAGE_KEYS:
+            result.pop(key, None)
     return result

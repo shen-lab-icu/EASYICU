@@ -21,7 +21,7 @@ from easyicu.webserver.pi_copilot.contracts import PiCopilotError, PiSessionReco
 from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot.tools import execute_tool
 from easyicu.webserver.routes import pi_copilot as routes
-from tests.webserver.copilot.pi_copilot_contract_fixtures import FakeGateway
+from tests.webserver.copilot.pi_copilot_contract_fixtures import FakeCredentialBackend, FakeGateway
 
 
 CONNECTION = {"provider": "fixture", "base_url": "http://localhost:8317/v1", "model": "model-a"}
@@ -99,7 +99,11 @@ def _declare(store, **changes):
     } | changes))
 
 
-def test_a_settings_choice_is_recorded_and_used_after_restart(store):
+def test_a_settings_choice_is_recorded_and_used_after_restart(store, monkeypatch):
+    monkeypatch.setenv("EASYICU_DEPLOYMENT", "desktop")
+    backend = FakeCredentialBackend()
+    store.credentials.backend = backend
+    _save(store, remember_key=True)
     before = datetime.now(timezone.utc).replace(microsecond=0)
     state = _declare(store)
     record = json.loads(store.declaration_path.read_text().splitlines()[0])
@@ -117,7 +121,7 @@ def test_a_settings_choice_is_recorded_and_used_after_restart(store):
     assert state["value"] == "zero_retention_declared"
     assert store.declaration_path.stat().st_mode & 0o777 == 0o600
     assert "synthetic-key" not in store.declaration_path.read_text() + json.dumps(state)
-    restarted = owner.PiProviderConfigStore(config_path=store.config_path, receipt_path=store.receipt_path)
+    restarted = owner.PiProviderConfigStore(config_path=store.config_path, receipt_path=store.receipt_path, credential_backend=backend)
     assert restarted.declaration_status() == state
     assert restarted.public_status()["connection_verified"] is False
     with pytest.raises(PiCopilotError) as error:
