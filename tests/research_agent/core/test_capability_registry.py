@@ -221,6 +221,7 @@ def test_partition_helpers_are_consistent():
     det = set(cr.deterministic_primary_families())
     llm = set(cr.llm_coded_primary_families())
     assert det == {
+        "Longitudinal MSM / point-intervention g-formula",
         "Descriptive / empirical measurement summary",
         "Association — source-bound time-updated Cox",
         "Association — exact single-model adjusted",

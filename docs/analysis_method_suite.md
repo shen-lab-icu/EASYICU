@@ -23,6 +23,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | `causal_emulation.propensity_adjustment` | `propensity_weighting` | — |
 | `causal_emulation.doubly_robust` | `survival_inputs`, `doubly_robust` | — |
 | `causal_emulation.mediation` | `mediation` | — |
+| `causal_emulation.g_methods` | `msm`, `gformula` | — |
 | `association.proportional_odds` | — | `statsmodels` |
 | `association.free_days` | — | `statsmodels` |
 | `association.count_outcome` | — | `statsmodels` |
@@ -61,7 +62,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | Negative-control outcome / exposure | standard_supporting | LLM-coded ⚠️ | negative-control contrast | — |
 | Doubly-robust AIPTW sensitivity | exploratory | LLM-coded ⚠️ | AIPTW ATE + influence-function SE/CI + positivity diagnostics | — |
 | Product-method mediation sensitivity | exploratory | LLM-coded ⚠️ | natural direct/indirect/total effect table + bootstrap intervals | — |
-| g-formula / marginal structural models (time-varying treatment) | planned | planned ⛔ | g-computation / MSM effect | — |
+| Longitudinal MSM / point-intervention g-formula | exploratory | deterministic ✅ | g_method_estimates.csv + g_method_weight_diagnostics.csv + g_method_receipt.json + g_method_checklist.md | `time_varying_g_methods` |
 
 ## Association (general + graded ordinal / dose-response)
 
@@ -128,7 +129,6 @@ These exact coordinates are published to Planner through the scientific-action c
 | Family | Method | Why it matters |
 | --- | --- | --- |
 | time_to_event | Time-varying coefficients / landmark survival | Relax the constant-HR assumption over follow-up. |
-| causal_emulation | g-formula / marginal structural models (time-varying treatment) | Handle time-varying treatment and confounding affected by prior treatment. |
 | phenotyping | LCGA / group-based trajectory modelling (GBTM) | Latent-class growth / group-based trajectory model — a model-based longitudinal method. |
 | phenotyping | Mixed-effects / growth-mixture trajectory models | Random-effects longitudinal models with latent classes. |
 | phenotyping | DTW / time-series distance clustering | Cluster raw trajectories under a shape-aware (dynamic time warping) distance. |

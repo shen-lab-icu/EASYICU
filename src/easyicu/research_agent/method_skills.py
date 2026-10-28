@@ -319,7 +319,7 @@ METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
         "When the exposure changes during the stay (e.g. on or off vasopressors), update it over time and fit a Cox model.",
         "暴露在住院期间会变化（如是否在用血管活性药）时，按时间分段更新暴露，拟合 Cox 模型。",
         "association_time_varying_exposure_v1",
-        (),
+        ("causal_emulation.g_methods",),
         "deterministic_host",
         "analysis_only",
         "Use the Time-varying exposure Cox model method. The research plan proposes time zero, interval construction, exposure-update rules, event and censoring rules, and covariates; I review them together in the plan, and nothing runs before that review. My research question: ",
@@ -553,7 +553,7 @@ METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
         "State a hypothetical randomized trial (eligibility, treatment strategies, time zero, follow-up), then emulate it with observational data to estimate a treatment's causal effect. Starting a treatment within a grace period versus not starting it is computed by EasyICU's own clone-censor-weight estimator.",
         "先写明一个假想的随机试验（纳入标准、治疗策略、时间零点、随访），再用观察数据模拟它，估计治疗的因果效应。比较宽限期内开始与不开始某治疗时，由 EasyICU 用克隆-删失-加权方法直接计算。",
         "causal_target_trial_v1",
-        (),
+        ("causal_emulation.g_methods",),
         "agent_coded_with_host_gates",
         "analysis_only",
         "Use the Target-trial emulation method. The research plan proposes eligibility, treatment strategies, time zero, follow-up, causal contrast, and confounding control; I review them together in the plan, and nothing runs before that review. Results stay analysis-only unless the identification and readiness gates pass. My research question: ",
@@ -685,6 +685,12 @@ _COMPONENT_ZH = {
     "descriptive.table_one": ("基线特征表（Table 1）", "按组汇总参与者基线特征并保留真实分母。"),
     "descriptive.missingness_audit": ("缺失与完整性审计", "逐变量报告缺失、覆盖和测量可用性。"),
 }
+
+
+_COMPONENT_ZH["causal_emulation.g_methods"] = (
+    "纵向边际结构模型与单时点 g 公式",
+    "用序贯稳定 IPTW、可选删失权重和加权合并 logistic 拟合纵向 MSM，逐区间报告重叠、权重分布、有效样本量和截断；单时点 g 公式报告标准化风险差、风险比及 bootstrap 区间。尚不支持多区间 g 公式。",
+)
 
 
 def _method_component_catalog(*, enabled: bool) -> tuple[list[dict[str, Any]], int]:

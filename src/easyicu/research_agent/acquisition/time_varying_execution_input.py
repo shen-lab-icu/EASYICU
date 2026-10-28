@@ -53,6 +53,23 @@ class TimeVaryingExecutionInputError(ValueError):
     """A counting-process input cannot be sealed safely."""
 
 
+def prepare_g_method_execution_input(frame, *, specification, source_receipt):
+    """Verify an existing owner's person-period history before typed publication.
+
+    This does not derive histories from baseline rows or the running-maximum
+    exposure panel. Without an upstream source receipt it refuses. DataFrame
+    attrs persist as Parquet metadata and the typed input digest binds them.
+    """
+    from ..contracts.time_varying_exposure import G_METHOD_SOURCE_KEY
+    from ..methods.msm import validate_g_method_panel
+    from ..planning.target_trial_spec import require_g_method_source
+
+    require_g_method_source(specification, source_receipt, database=specification.database)
+    panel = validate_g_method_panel(frame, specification)
+    panel.attrs[G_METHOD_SOURCE_KEY] = dict(source_receipt)
+    return panel
+
+
 @dataclass(frozen=True, slots=True)
 class _BinaryCategoricalEncoding:
     """One explicit binary source-level encoding for a baseline covariate."""
@@ -511,4 +528,5 @@ __all__ = [
     "TimeVaryingExecutionInput",
     "TimeVaryingExecutionInputError",
     "build_time_varying_execution_input",
+    "prepare_g_method_execution_input",
 ]

@@ -88,7 +88,10 @@ def canonical_workflow_shape(skill_id: str):
     if longitudinal is not None:
         family, build = longitudinal
         request, spec = canonical_longitudinal_request(family)
-        return request, build(request, spec), set()
+        draft, optional = build(request, spec), set()
+        if skill_id in {"target-trial-emulation", "time-varying-exposure-survival-study"}:
+            draft, optional = g_method_workflow_metadata(draft)
+        return request, draft, optional
     binding = TEMPLATES.get(skill_id)
     if binding is None:
         return None
@@ -159,3 +162,47 @@ def canonical_workflow_shape(skill_id: str):
         draft, external_optional = external_validation_workflow_metadata(draft)
         optional |= external_optional
     return request, draft, optional
+
+
+def g_method_workflow_metadata(draft):
+    """Optional read-only branch; supplying verified history is an explicit prerequisite."""
+    from dataclasses import replace
+
+    from easyicu.research_agent.canonical_json import canonical_sha256
+    from easyicu.research_agent.contracts.time_varying_exposure import G_METHOD_ACTION, G_METHOD_OUTPUTS
+    from easyicu.research_agent.planning.progressive_contract import (
+        ProgressiveOutlineStep, ProgressiveOutputIntent, ProgressiveProductRef,
+        ProgressiveSkeletonStep, ProgressiveStepMaterialization,
+    )
+
+    intake_id, msm_id, product = "g_method_history", "longitudinal_msm", "cohort:person_period"
+    history = ProgressiveSkeletonStep(
+        step_id=intake_id, module_id="custom_analysis", planned_analysis_role="auxiliary",
+        depends_on=["measurement_audit"], custom_method="reviewed_g_method_history_intake",
+        objective="Supply source-verified person-period treatment and pretreatment confounder histories from the selected database; stop if unavailable. Baseline rows and running exposure maxima alone do not qualify.",
+        outputs=[ProgressiveOutputIntent(product_id=product, semantic_role="custom")],
+    )
+    msm = ProgressiveSkeletonStep(
+        step_id=msm_id, module_id="custom_analysis", planned_analysis_role="secondary",
+        scientific_action_id=G_METHOD_ACTION, custom_method="reviewed_g_method_metadata_only",
+        objective="Optionally review MSM treatment/confounder histories, lags, censoring weights and truncation. Estimate with weighted pooled logistic and report interval positivity, weights and ESS; observational assumptions remain unverified.",
+        depends_on=[intake_id], product_inputs=[ProgressiveProductRef(producer_step_id=intake_id, product_id=product)],
+        outputs=[ProgressiveOutputIntent(product_id=p, semantic_role="report" if p.startswith("report:") else "custom") for p in G_METHOD_OUTPUTS],
+    )
+    materials, outlines = list(draft.materializations), list(draft.outline.steps)
+    for step in (history, msm):
+        outline = ProgressiveOutlineStep(step_id=step.step_id, module_id=step.module_id,
+            planned_analysis_role=step.planned_analysis_role, objective=step.objective,
+            depends_on=step.depends_on, scientific_action_id=step.scientific_action_id,
+            variable_names=list(draft.outline.steps[0].variable_names))
+        outlines.insert(next(i for i, item in enumerate(outlines) if item.step_id == "report"), outline)
+        materials.insert(next(i for i, item in enumerate(materials) if item.step.step_id == "report"),
+            ProgressiveStepMaterialization(outline_step_sha256=canonical_sha256(outline.model_dump(mode="json")), foundation=None, step=step))
+    for i, item in enumerate(materials):
+        if item.step.step_id == "report":
+            report = item.step.model_copy(update={
+                "depends_on": [*item.step.depends_on, msm_id],
+                "product_inputs": [*item.step.product_inputs, *(ProgressiveProductRef(producer_step_id=msm_id, product_id=p) for p in G_METHOD_OUTPUTS)],
+            })
+            materials[i] = item.model_copy(update={"step": report})
+    return replace(draft, outline=draft.outline.model_copy(update={"steps": outlines}), materializations=tuple(materials)), {intake_id, msm_id}

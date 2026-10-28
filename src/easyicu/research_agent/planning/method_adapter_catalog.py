@@ -327,6 +327,16 @@ _BY_ACTION = {item.action_id: item for item in HIGH_FREQUENCY_METHOD_ADAPTERS}
 def get_method_adapter_contract(action_id: str) -> MethodAdapterContract | None:
     """Return the exact adapter contract, or ``None`` without guessing."""
 
+    if str(action_id or "").strip() == "causal_emulation.g_methods":
+        return MethodAdapterContract(
+            adapter_id="causal_g_methods_v1", action_id="causal_emulation.g_methods", scope="full_action",
+            owner_module="easyicu.research_agent.execution.runners.time_varying_executor",
+            owner_entrypoint="g_method_executor_code", selection_kind="time_varying_g_methods",
+            required_declarations=("g_methods(<GMethodSpec JSON>)", "source-verified person-period treatment/confounder histories",
+                                   "reviewed lags, censoring, overlap and truncation policies; analysis only"),
+            validation_test_refs=("tests/research_agent/execution/test_longitudinal_g_methods.py::test_rendered_executor_consumes_digest_bound_history_and_rejects_tampering",),
+        )
+
     if str(action_id or "").strip() == "prediction.external_validation":
         from .prediction_timing import external_validation_adapter
 

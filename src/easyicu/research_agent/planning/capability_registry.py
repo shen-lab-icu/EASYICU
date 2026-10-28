@@ -71,6 +71,7 @@ from ..contracts.time_varying_exposure import (
     TIME_VARYING_EXPOSURE_CAPABILITY, TIME_VARYING_EXPOSURE_METHOD, TIME_VARYING_ANALYSIS_KIND,
 )
 from ..contracts.prediction_execution import static_prediction_execution_verdict
+from ..contracts.time_varying_exposure import G_METHOD_CAPABILITY, GMethodError
 from ..contracts.cohort_summary import (
     DESCRIPTIVE_SUMMARY_ANALYSIS_KIND,
     declared_summary_columns,
@@ -227,6 +228,17 @@ class AuxiliaryRunner:
 # ---------------------------------------------------------------------------
 
 CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
+    ScientificCapability(
+        family="causal_emulation", label="Longitudinal MSM / point-intervention g-formula",
+        primary_analysis="deterministic", primary_estimand="Reviewed pooled-logistic MSM odds ratio or single-point standardized RD/RR",
+        primary_runner=None, primary_runner_module="execution.runners.time_varying_executor",
+        figure="llm_coded", figure_renderer=None, capability_id=G_METHOD_CAPABILITY,
+        data_contract=("one source-verified person-period input", "treatment/confounder histories and explicit lags", "reviewed censoring, positivity and truncation policies"),
+        result_contract="g_method_estimates + g_method_weight_diagnostics + g_method_receipt + g_method_checklist",
+        required_diagnostics=("per-interval positivity/overlap", "weight distribution, truncation and effective sample size for MSM", "observational causal assumptions"),
+        fail_closed="Refuse unavailable person-period structure, incomplete history/timing, source/plan drift, positivity failure and failed fits; never substitute baseline adjustment.",
+        notes="Selected by the standard time-varying executor registry. Multi-interval g-formula is unavailable; scientific interpretation stays analysis-only.",
+    ),
     ScientificCapability(
         family="association", label="Association — source-bound time-updated Cox",
         primary_analysis="deterministic",
@@ -1563,6 +1575,19 @@ def resolve_primary_capability(
         return _verdict_for(capability, analysis_family=canonical)
 
     primary = primary_steps[0]
+    from .target_trial_spec import require_g_method_step
+
+    try:
+        g_spec = require_g_method_step(primary)
+    except GMethodError as exc:
+        return _verdict_for(get_capability_by_id(G_METHOD_CAPABILITY), analysis_family=canonical,
+                            owner_claimed=False, failure_reason=exc.code, detail=str(exc))
+    if g_spec is not None:
+        valid = canonical == "causal_inference" and len(primary_steps) == 1
+        return _verdict_for(get_capability_by_id(G_METHOD_CAPABILITY), analysis_family=canonical,
+            owner_claimed=valid, owner_reason="reviewed g-method specification and exact typed products",
+            failure_reason=None if valid else "g_methods_family_mismatch",
+            detail="" if valid else "A primary g-method requires one causal-inference primary step.")
     if canonical == "descriptive_epidemiology":
         if len(primary_steps) == 1 and is_primary_descriptive_summary_step(primary):
             return _verdict_for(
@@ -1971,6 +1996,14 @@ def assess_scientific_capability(
         input_contract_resolved = not source_feasibility_plan_contract_errors(plan)
     elif capability.capability_id == SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID:
         input_contract_resolved = not signed_trajectory_plan_contract_errors(plan)
+    elif capability.capability_id == G_METHOD_CAPABILITY:
+        from .target_trial_spec import require_g_method_plan
+
+        try:
+            require_g_method_plan(context, plan)
+            input_contract_resolved = True
+        except GMethodError:
+            input_contract_resolved = False
     elif capability.family in {"association", "causal_emulation"}:
         input_contract_resolved = bool(exposure and outcome)
     elif capability.family == "prediction":

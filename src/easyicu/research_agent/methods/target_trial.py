@@ -62,6 +62,18 @@ import pandas as pd
 #: Evidence ceiling for every product of this module.
 EVIDENCE_CEILING = "analysis_only"
 
+
+def fit_target_trial_msm(frame, specification):
+    """Fit a reviewed person-period MSM; baseline CCW stays are not a history.
+
+    The time-varying runner owns the source/plan binding. This trial-method
+    entrypoint shares the longitudinal estimator rather than duplicating the
+    clone-censor-weight grace-period model or its baseline-only assumptions.
+    """
+    from .msm import fit_longitudinal_msm
+
+    return fit_longitudinal_msm(frame, specification)
+
 #: Exact label required for the manual causal-assumption list.
 MANUAL_ASSUMPTIONS_TITLE = "需人工确认的因果假设清单"
 

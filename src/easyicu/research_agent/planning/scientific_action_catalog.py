@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Literal, Tuple
 
-from ..contracts.method_kernels import CURATED_METHOD_KERNELS
+from ..contracts.method_kernels import CURATED_METHOD_KERNELS, HOST_METHOD_KERNELS
 from ..contracts.method_packages import BASELINE_PACKAGES, CURATED_METHOD_PACKAGES
 from ..contracts.cross_sectional_phenotyping_policy import CROSS_SECTIONAL_PHENOTYPING_POLICY
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
@@ -95,6 +95,19 @@ class ScientificActionRuntimeContract:
 
 
 _RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
+    "causal_emulation.g_methods": ScientificActionRuntimeContract(
+        outputs=(("table:g_method_estimates", "custom"), ("table:g_method_weight_diagnostics", "custom"),
+                 ("log:g_method_receipt", "custom"), ("report:g_method_checklist", "report")),
+        standard_executor="time_varying_g_methods",
+        purpose=("Declare g_methods(<GMethodSpec JSON>) in custom_method/method: choose longitudinal_msm or point_gformula; "
+                 "name identity/period/treatment/event columns, confounder_history, baseline_columns, treatment_lags, confounder_lags, "
+                 "intervals, interval_hours and time_zero, censoring_policy and censoring_column, ps_bounds, truncation_quantiles, random_seed, "
+                 "n_bootstrap (null for MSM; at least 20 for point g-formula), "
+                 "require_exchangeability, require_correct_specification and require_consistency. "
+                 "Bind a target-trial/time-varying owner-verified person-period input and all declared columns. "
+                 "Require source history and timing in the selected database; never substitute baseline adjustment. "
+                 "Only weighted pooled logistic MSM and single-point logistic g-formula are executable; no multi-interval g-formula."),
+    ),
     "prediction.external_validation": ScientificActionRuntimeContract(
         outputs=(("table:external_validation", "custom"), ("table:external_calibration", "custom"),
                  ("table:external_decision_curve", "custom"), ("table:external_case_mix", "custom"),
@@ -328,7 +341,7 @@ def _execution_mode(method: AnalysisMethod) -> ScientificExecutionMode:
 
 
 def _resource_indexes() -> tuple[dict[str, object], dict[str, object]]:
-    kernels = {kernel.module: kernel for kernel in CURATED_METHOD_KERNELS}
+    kernels = {kernel.module: kernel for kernel in (*CURATED_METHOD_KERNELS, *HOST_METHOD_KERNELS)}
     packages = {
         **{name: name for name in BASELINE_PACKAGES},
         **{package.import_name: package for package in CURATED_METHOD_PACKAGES},
@@ -714,6 +727,9 @@ def validate_plan_scientific_action_selections(
         from ..contracts.prediction_validation import external_validation_spec_for_step
 
         external_validation_spec_for_step(step)
+        from .target_trial_spec import require_g_method_step
+
+        require_g_method_step(step)
         action_id = getattr(step, "scientific_action_id", None)
         if action_id is None:
             outputs = tuple(str(item) for item in getattr(step, "expected_outputs", ()))
