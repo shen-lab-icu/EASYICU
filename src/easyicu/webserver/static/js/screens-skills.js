@@ -262,11 +262,15 @@
     const groups = files.reduce((result, file) => {
       const parts = String(file.path || '').split('/');
       const folder = parts.length > 1 ? parts[0] : 'root';
-      (result[folder] = result[folder] || []).push({ ...file, displayName: parts[parts.length - 1] });
+      // A host excerpt is named by its dotted module path; the tree shows the
+      // module's own file name and keeps the full path in the tooltip.
+      const name = parts[parts.length - 1];
+      const displayName = folder === 'implementation' ? name.replace(/\.py$/, '').split('.').pop() + '.py' : name;
+      (result[folder] = result[folder] || []).push({ ...file, displayName });
       return result;
     }, {});
     const order = ['root', 'references', 'scripts', ...Object.keys(groups).filter(key => !['root', 'references', 'scripts'].includes(key))];
-    const tree = order.filter(folder => groups[folder] && groups[folder].length).map(folder => `<section class="eusk-package-group"><h3>${folder === 'root' ? tr('Package file', '主文件') : `${icon('folder', 14)} ${esc(folder)}`}</h3>${groups[folder].map(file => `<button type="button" class="${active && active.path === file.path ? 'active' : ''}" data-sk-package-file="${esc(file.path)}">${icon('file', 15)}<span>${esc(file.displayName)}</span><small>${Number(file.size_bytes || 0)} B</small></button>`).join('')}</section>`).join('');
+    const tree = order.filter(folder => groups[folder] && groups[folder].length).map(folder => `<section class="eusk-package-group"><h3>${folder === 'root' ? tr('Package file', '主文件') : `${icon('folder', 14)} ${esc(folder)}`}</h3>${groups[folder].map(file => `<button type="button" class="${active && active.path === file.path ? 'active' : ''}" data-sk-package-file="${esc(file.path)}" title="${esc(file.path)}">${icon('file', 15)}<span>${esc(file.displayName)}</span><small>${Number(file.size_bytes || 0)} B</small></button>`).join('')}</section>`).join('');
     const renderedMarkdown = active ? packageMarkdown(active.content) : '';
     const activeBody = active && String(active.language || '').toLocaleLowerCase() === 'markdown'
       ? `<div class="eusk-rendered-markdown">${instructionHtml(renderedMarkdown)}</div>`
