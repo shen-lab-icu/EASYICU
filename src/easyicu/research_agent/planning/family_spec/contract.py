@@ -52,6 +52,16 @@ from ..progressive_contract import (
     ProgressivePredicateValue,
 )
 from ..population_spec import AgeYears, IcuStayHours, PopulationSpec
+from .longitudinal_coordinates import (
+    DYNAMIC_LANDMARK_FAMILY_ID,
+    LONGITUDINAL_FAMILY_IDS,
+    TARGET_TRIAL_FAMILY_ID,
+    TIME_VARYING_SURVIVAL_FAMILY_ID,
+    DynamicLandmarkCoordinates,
+    TargetTrialRuntimeAuthority,
+    TimeVaryingRuntimeAuthority,
+    longitudinal_request_problem,
+)
 
 FAMILY_SPEC_SCHEMA_VERSION = "easyicu.family_plan_spec/1"
 FAMILY_SPEC_REQUEST_SCHEMA_VERSION = "easyicu.family_spec_request/1"
@@ -84,10 +94,12 @@ POPULATION_FAMILY_IDS = frozenset(
 #: The anchor a population predicate counts from: the family's time zero is
 #: stated in hours after ICU admission.
 POPULATION_ANCHOR = "icu_admission"
-#: Families whose every scientific coordinate is a sealed runtime authority's;
-#: the Planner only labels columns and writes comparator applications.
+#: Families whose scientific coordinates are host-owned (a sealed runtime
+#: authority or explicit dynamic coordinates); the Planner only labels columns
+#: and writes comparator applications. This set grants no runtime authority.
 SEALED_SUITE_FAMILY_IDS = frozenset(
     {
+        *LONGITUDINAL_FAMILY_IDS,
         LANDMARK_SURVIVAL_FAMILY_ID,
         LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID,
         FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
@@ -95,6 +107,9 @@ SEALED_SUITE_FAMILY_IDS = frozenset(
     }
 )
 FamilyId = Literal[
+    "target_trial_emulation",
+    "time_varying_exposure_survival",
+    "dynamic_landmark_prediction",
     "baseline_adjusted_association",
     "landmark_categorical_association",
     "landmark_spline_association",
@@ -681,6 +696,7 @@ class FamilySpecRequest(BaseModel):
         "prediction_model",
         "survival",
         "causal_inference",
+        "dynamic_prediction",
     ] = "association_study"
     research_question: str = Field(min_length=1, max_length=6000)
     cohort_name: str = Field(min_length=1, max_length=128)
@@ -777,6 +793,16 @@ class FamilySpecRequest(BaseModel):
     )
     sealed_trajectory: Optional[SealedTrajectoryCoordinates] = None
     sealed_feasibility: Optional[SealedFeasibilityCoordinates] = None
+    #: Explicit builders only; omitted while absent to preserve existing digests.
+    sealed_target_trial: Optional[TargetTrialRuntimeAuthority] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    sealed_time_varying: Optional[TimeVaryingRuntimeAuthority] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    dynamic_landmark: Optional[DynamicLandmarkCoordinates] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     adjustment_selection: Literal["planner_selectable", "exact"]
     exact_roster: list[str] = Field(default_factory=list)
     exact_rationales: dict[str, str] = Field(default_factory=dict)
@@ -904,6 +930,10 @@ class FamilySpecRequest(BaseModel):
         columns = [self.outcome, self.secondary_continuous_outcome]
         if suite is not None:
             columns.extend((suite.event_column, suite.followup_time_column))
+        if self.sealed_target_trial is not None:
+            columns.append(self.sealed_target_trial.followup_time_column)
+        if self.dynamic_landmark is not None:
+            columns.extend((self.dynamic_landmark.event_time_column, self.dynamic_landmark.followup_end_column))
         return tuple(dict.fromkeys(column for column in columns if column))
 
     @property
@@ -958,6 +988,12 @@ class FamilySpecRequest(BaseModel):
     def _exposure_shape(self) -> "FamilySpecRequest":
         """A family's exposure kind fixes which level coordinates are meaningful."""
 
+        problem = longitudinal_request_problem(self)
+        if problem is not None:
+            code, message, path = problem
+            raise FamilySpecError(code, message, path=path)
+        if self.family_id in LONGITUDINAL_FAMILY_IDS:
+            return self
         landmark_fields = (
             self.landmark_hours,
             self.landmark_spec_id,
@@ -2227,6 +2263,10 @@ def spec_from_mapping(payload: Mapping[str, Any]) -> FamilyPlanSpec:
 
 
 __all__ = [
+    "DYNAMIC_LANDMARK_FAMILY_ID",
+    "TARGET_TRIAL_FAMILY_ID",
+    "TIME_VARYING_SURVIVAL_FAMILY_ID",
+    "DynamicLandmarkCoordinates",
     "AcceptedBaselineRow",
     "AcceptedFeatureGroup",
     "DistributionMissingPolicies",
