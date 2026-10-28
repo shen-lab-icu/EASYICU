@@ -4,7 +4,9 @@ Call chain: association family (`association_adjusted_v1`) →
 `association.adjusted_association` (`analysis_method_suite.py`,
 `method_adapter_catalog.py`) → `adjusted_association_executor_code` →
 `run_adjusted_association_from_env` → `execution.model_matrix.primary_model_rows`
-→ `robustness.estimators.fit_estimator`. The scripts call this same runtime owner.
+→ `robustness.estimators.fit_estimator` for binary/continuous outcomes, or
+`methods.ordered_trends.fit_outcome_model` for ordered/free-days/count outcomes.
+The scripts call this same runtime owner.
 
 The explicit `PlannedModelRequirement` selects statsmodels Logit MLE (logit link,
 Newton optimizer, maxiter=100, OR), OLS (identity link, default pseudoinverse fit,
@@ -18,6 +20,35 @@ environment, cluster covariance has use_correction=True, adjust_df=True and
 use_t=False (normal Wald inference); the host passes no overrides.
 OLS model-based intervals use its
 library-default t inference; binary model intervals use normal Wald inference.
+
+New outcome types require `outcome_definition.estimand`. An ordinal definition
+lists its ordered levels; `statsmodels_ordered_logit` estimates a common OR
+toward higher levels and reports a proportional-odds score test. Free days use
+that model over complete 24-hour free days: the plan declares the horizon,
+support concept (or union of support concepts) and death score -1 or 0. Death
+at or before the horizon overrides support duration. The callback unions
+duration-bearing support intervals clipped to [0, horizon], subtracts from
+the horizon and counts complete free days. All coordinates are hours from ICU
+admission. The concept owner requires support coverage and survival follow-up
+through the horizon; an admission flag, isolated samples or discharge alone
+cannot establish ventilator-free days. Missing source capability refuses with
+a typed reason. Derivation audits contain death-status counts, frequencies and
+median/IQR without identifiers or patient rows.
+
+Count definitions prespecify `statsmodels_count_poisson` or
+`statsmodels_negative_binomial` (NB2), and a positive exposure-time column or
+finite log offset; null exposure declares counts per observation. The offset
+coefficient is fixed at one. Both report a rate ratio and 95% normal Wald CI
+and an NB2 dispersion score under a Poisson null. Ordered and count models
+honor declared cluster covariance. Diagnostics never switch the model. A PO
+violation limits common-OR interpretation to analysis only. Changing the
+estimand, levels, death score, horizon or offset invalidates prior plan approval.
+Hurdle, zero-inflated and win-ratio sensitivities are not implemented.
+
+Ordered/free-days/count fits also publish an aggregate outcome distribution;
+free days include median/IQR, and ordered/free-days outcomes include an ordered
+bar figure. Table 1 uses the existing ordinal `median_iqr` or `count_percent`
+row contracts on callback-derived values.
 
 The host compiles every `ModelTermSpec` using the declared transform, closed
 levels, and reference. Categorical exposures yield every non-reference contrast

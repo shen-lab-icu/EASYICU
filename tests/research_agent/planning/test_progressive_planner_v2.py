@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from tests.support.schema_names import authority_schema_json as _schema_json
 import inspect
 from copy import deepcopy
 
@@ -99,7 +100,7 @@ from easyicu.research_agent.cohort.schema import (
     materialized_input_column_authority,
 )
 from easyicu.research_agent.providers.strict_json_schema import (
-    closed_pydantic_json_schema,
+    closed_pydantic_json_schema, compact_schema_definition_names, intern_schema_shapes,
 )
 from easyicu.research_agent.providers.structured_retry import (
     StructuredResponseFailure,
@@ -129,7 +130,6 @@ from tests.research_agent.planning.progressive_planner_fixtures import (
     _outline_payload as _outline_payload,
     _payload as _payload,
 )
-
 
 def test_progressive_orchestration_consumes_one_atomic_attempt_result() -> None:
     orchestration_source = inspect.getsource(run_progressive_planner)
@@ -2092,7 +2092,7 @@ def _walk_objects(node):
 
 
 def test_progressive_skeleton_schema_is_small_closed_and_case_neutral() -> None:
-    schema = closed_pydantic_json_schema(ProgressivePlanSkeleton)
+    schema = intern_schema_shapes(compact_schema_definition_names(closed_pydantic_json_schema(ProgressivePlanSkeleton)))
     encoded = json.dumps(schema, sort_keys=True, separators=(",", ":"))
 
     assert len(encoded.encode("utf-8")) < 16_000
@@ -2109,7 +2109,7 @@ def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> 
         variable_names=["exposure_flag", "outcome_flag", "age_years"],
         scientific_action_ids=["association.adjusted_association"],
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
     encoded = request.canonical_payload_json
 
     # Population choice and amendment rationale now belong to the whole-plan
@@ -2152,7 +2152,7 @@ def test_outline_schema_separates_reviewed_design_cards_from_method_sources() ->
         allowed_literature_citation_keys=["reviewed_card", "spline_method"],
         design_card_citation_keys=["reviewed_card"],
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
 
     candidate = schema["$defs"]["ResearchDesignCandidate"]["properties"]
     decision = schema["$defs"]["CandidateLiteratureDesignDecision"]["properties"]
@@ -2183,7 +2183,7 @@ def test_descriptive_outline_schema_advertises_only_scientific_step_owners() -> 
         variable_names=["exposure_flag", "outcome_flag"],
         scientific_action_ids=["descriptive.descriptive_summary"],
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
     modules = schema["$defs"]["ProgressiveOutlineStep"]["properties"]["module_id"][
         "enum"
     ]
@@ -2208,7 +2208,7 @@ def test_progressive_foundation_schema_is_outline_bound_and_has_no_step_fields()
         variable_names=["exposure_flag", "outcome_flag", "age_years"],
         cohort_concept_ids=["exposure_concept", "outcome_concept"],
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
 
     assert request.name == "easyicu_progressive_plan_foundation_v1"
     assert "outline_sha256" not in schema["properties"]
@@ -2224,7 +2224,7 @@ def test_foundation_schema_compiles_robustness_shape_invariant() -> None:
         outline_sha256="a" * 64,
         variable_names=["exposure_flag", "outcome_flag"],
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
     branches = schema["$defs"]["ProgressiveRobustnessIntent"]["anyOf"]
 
     assert len(branches) == 1
@@ -2249,7 +2249,7 @@ def test_foundation_transport_owns_required_label_keys_and_canonicalizes_values(
         required_reader_display_label_keys=["exposure_flag", "outcome_flag"],
         required_binary_display_label_scopes=["exposure_flag"],
     )
-    schema = json.loads(request.schema_json)["$defs"]["ProgressivePlanFoundation"]["properties"]["display_labels"]
+    schema = _schema_json(request.schema_json)["$defs"]["ProgressivePlanFoundation"]["properties"]["display_labels"]
     labels = {"exposure_flag": "Observed exposure", "outcome_flag": "Hospital outcome", "exposure_flag=0": "Unexposed", "exposure_flag=1": "Exposed"}
     validate(labels, schema)
     with pytest.raises(ValidationError):
@@ -2267,7 +2267,7 @@ def test_descriptive_foundation_schema_forbids_effect_robustness_intents() -> No
         variable_names=["exposure_flag", "outcome_flag"],
         analysis_type="descriptive_epidemiology",
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
     robustness = schema["$defs"]["ProgressivePlanFoundation"]["properties"][
         "robustness_intents"
     ]
@@ -2282,7 +2282,7 @@ def test_article_foundation_schema_requires_executable_robustness_intent() -> No
         analysis_type="association_study",
         require_robustness_intent=True,
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
     robustness = schema["$defs"]["ProgressivePlanFoundation"]["properties"][
         "robustness_intents"
     ]
@@ -2321,7 +2321,7 @@ def test_foundation_schema_binds_host_owned_all_input_cohort() -> None:
         required_cohort_selection_mode="all_input_rows",
         required_cohort_name="synthetic",
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
     cohort = schema["$defs"]["ProgressiveCohortIntent"]["properties"]
 
     assert cohort["name"] == {"type": "string", "const": "synthetic"}
@@ -2353,7 +2353,7 @@ def test_current_step_schema_locks_outline_coordinate_and_product_registry() -> 
         allowed_literature_citation_keys=["strobe_2007"],
         available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
 
     assert request.name == "easyicu_progressive_step_materialization_v1"
     assert "outline_step_sha256" not in schema["properties"]
@@ -2409,7 +2409,7 @@ def test_custom_step_schema_separates_generic_and_scientific_sensitivity_shapes(
         scientific_action_ids=(),
         available_product_refs=[("05_primary", "table:adjusted_association_estimates")],
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
     branches = schema["$defs"]["ProgressiveSkeletonStep"]["anyOf"]
     generic, scientific = branches
 
@@ -2465,7 +2465,7 @@ def test_current_step_schema_excludes_navigation_from_statistical_fields() -> No
         ],
         scientific_action_ids=["association.adjusted_association"],
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
     step = schema["$defs"]["ProgressiveSkeletonStep"]["properties"]
     model_term = schema["$defs"]["ProgressiveModelTermIntent"]["properties"]
 
@@ -2490,7 +2490,7 @@ def test_nonstatistical_step_accepts_navigation_only_raw_roster() -> None:
         executable_variable_names=[],
         scientific_action_ids=[],
     )
-    step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
+    step = _schema_json(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
         "properties"
     ]
 
@@ -2530,7 +2530,7 @@ def test_current_step_without_available_products_closes_product_inputs() -> None
         variable_names=["exposure_flag", "outcome_flag"],
         scientific_action_ids=[],
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
 
     assert schema["properties"]["foundation"] == {"type": "null"}
     step = schema["$defs"]["ProgressiveSkeletonStep"]["properties"]
@@ -2567,7 +2567,7 @@ def test_visualization_schema_hides_products_outside_direct_dependencies() -> No
             ("05_primary", "table:adjusted_association_estimates"),
         ],
     )
-    product_refs = json.loads(request.schema_json)["$defs"]["ProgressiveProductRef"][
+    product_refs = _schema_json(request.schema_json)["$defs"]["ProgressiveProductRef"][
         "anyOf"
     ]
 
@@ -2596,7 +2596,7 @@ def test_current_table_one_step_requires_its_module_fields_in_schema() -> None:
         scientific_action_ids=[],
         available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
     )
-    step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
+    step = _schema_json(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
         "properties"
     ]
 
@@ -2632,7 +2632,7 @@ def test_current_host_compiled_module_forbids_model_named_outputs(
         scientific_action_ids=[],
         available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
     )
-    outputs = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
+    outputs = _schema_json(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
         "properties"
     ]["outputs"]
 
@@ -2658,7 +2658,7 @@ def test_current_distribution_step_requires_non_null_contract_fields() -> None:
         scientific_action_ids=["descriptive.descriptive_summary"],
         available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
     )
-    step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
+    step = _schema_json(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
         "properties"
     ]
 
@@ -2822,7 +2822,7 @@ def test_current_adjusted_step_requires_model_contract_fields() -> None:
         scientific_action_ids=["association.adjusted_association"],
         available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
     )
-    step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
+    step = _schema_json(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
         "properties"
     ]
 
@@ -2931,7 +2931,7 @@ def test_current_artifact_module_requires_an_explicit_output(module_id: str) -> 
         scientific_action_ids=[],
         available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
     )
-    step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
+    step = _schema_json(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
         "properties"
     ]
 
@@ -2967,7 +2967,7 @@ def test_current_artifact_schema_binds_product_kind_to_module(
         scientific_action_ids=[],
         available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
     )
-    output = json.loads(request.schema_json)["$defs"]["ProgressiveOutputIntent"][
+    output = _schema_json(request.schema_json)["$defs"]["ProgressiveOutputIntent"][
         "properties"
     ]
 
@@ -3053,7 +3053,7 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
 @pytest.mark.parametrize("primary_population", [False, True])
 @pytest.mark.parametrize("declaration", ["legacy", "explicit", "without_reference", "conflict", "wrong_variables", "bound_same", "bound_drift", "bound_amendment"])
 def test_absolute_risk_context_module_compiles_existing_deterministic_owner(primary_population, declaration) -> None:
-    payload = json.loads(json.dumps(_payload()))
+    payload = _schema_json(json.dumps(_payload()))
     step = next(
         item for item in payload["steps"] if item["step_id"] == "03_distribution"
     )
@@ -3171,7 +3171,7 @@ def test_risk_transport_requires_a_closed_non_null_population_choice():
         outline_step=outline, outline_step_sha256=canonical_sha256(outline.model_dump(mode="json")),
         variable_names=outline.variable_names, scientific_action_ids=[],
     )
-    step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"]
+    step = _schema_json(request.schema_json)["$defs"]["ProgressiveSkeletonStep"]
     assert "population_scope" in step["required"]
     assert step["properties"]["population_scope"] == {
         "type": "string", "enum": ["analysis_cohort", "primary_model"],
@@ -3179,7 +3179,7 @@ def test_risk_transport_requires_a_closed_non_null_population_choice():
 
 
 def test_compiler_keeps_ordinal_linear_levels_out_of_treatment_contrasts() -> None:
-    payload = json.loads(json.dumps(_payload()))
+    payload = _schema_json(json.dumps(_payload()))
     primary = next(step for step in payload["steps"] if step["step_id"] == "05_primary")
     primary["raw_inputs"].append("severity_stage")
     primary["primary_exposure"] = "severity_stage"
@@ -3226,7 +3226,7 @@ def test_compiler_keeps_ordinal_linear_levels_out_of_treatment_contrasts() -> No
 
 
 def test_compiler_uses_declared_integer_range_for_metadata_only_ordinal_score() -> None:
-    payload = json.loads(json.dumps(_payload()))
+    payload = _schema_json(json.dumps(_payload()))
     primary = next(step for step in payload["steps"] if step["step_id"] == "05_primary")
     primary["raw_inputs"].append("severity_total")
     primary["model_terms"].append(
@@ -3353,8 +3353,8 @@ def test_distribution_compiler_reports_known_missing_exposure_rows() -> None:
 
 
 def test_report_orders_after_figure_without_reading_raster_as_data() -> None:
-    payload = json.loads(json.dumps(_payload()))
-    report = json.loads(json.dumps(payload["steps"][-1]))
+    payload = _schema_json(json.dumps(_payload()))
+    report = _schema_json(json.dumps(payload["steps"][-1]))
     report.update(
         {
             "step_id": "08_report",
@@ -4876,7 +4876,7 @@ def test_text_materialization_template_scopes_population_field_to_its_owner(modu
     contract = _step_materialization_shape_contract(
         outline_step=outline, outline_step_sha256="a" * 64,
     )
-    template = json.loads(contract.splitlines()[1])
+    template = _schema_json(contract.splitlines()[1])
     assert ("population_scope" in template["step"]) == (module == "absolute_risk_context")
 
 
@@ -6125,7 +6125,7 @@ def test_cross_family_action_is_rejected_before_analysis_plan_acceptance() -> No
 
 def test_preflight_batches_independent_suffix_findings() -> None:
     payload = _payload()
-    duplicate = json.loads(json.dumps(payload["steps"][3]))
+    duplicate = _schema_json(json.dumps(payload["steps"][3]))
     duplicate["step_id"] = "04b_measurement_detail"
     duplicate["depends_on"] = ["04_measurement"]
     payload["steps"].insert(4, duplicate)
@@ -6165,7 +6165,7 @@ def test_run_bound_schema_closes_runtime_rosters_under_twelve_kib() -> None:
         scientific_action_ids=["association.adjusted_association"],
         allowed_literature_citation_keys=["strobe_observational_reporting"],
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
     encoded = request.canonical_payload_json
 
     assert len(encoded.encode("utf-8")) < 12_000
@@ -6579,7 +6579,7 @@ def test_agent_host_compiles_caller_bound_all_input_cohort() -> None:
         "host_required_primary_cohort"
     )
     foundation_request = llm.calls[1][1]["structured_output"]
-    foundation_schema = json.loads(foundation_request.schema_json)
+    foundation_schema = _schema_json(foundation_request.schema_json)
     cohort = foundation_schema["$defs"]["ProgressiveCohortIntent"]["properties"]
     assert cohort["selection_mode"]["const"] == "all_input_rows"
     assert cohort["inclusion"]["maxItems"] == 0
@@ -6789,7 +6789,7 @@ def test_agent_replays_a_complete_checkpoint_without_provider_calls() -> None:
 
 def test_agent_repairs_only_the_current_materialization() -> None:
     materializations = _materialization_payloads()
-    invalid_primary = json.loads(json.dumps(materializations[4]))
+    invalid_primary = _schema_json(json.dumps(materializations[4]))
     invalid_primary["step"]["model_terms"][1]["name"] = "invented_covariate"
     responses = [
         _outline_payload(),
@@ -7009,7 +7009,7 @@ def test_agent_repairs_final_plan_dependent_method_layer_locally() -> None:
         )
     ]
     materializations = _materialization_payloads(payload)
-    repaired_final = json.loads(json.dumps(materializations[-1]))
+    repaired_final = _schema_json(json.dumps(materializations[-1]))
     repaired_final["step"]["literature_bindings"][0]["design_elements"] = [
         "reporting",
         "outcome",
@@ -7054,7 +7054,7 @@ def test_agent_repairs_final_plan_dependent_method_layer_locally() -> None:
 
 def test_agent_repairs_identical_distribution_contrast_locally() -> None:
     materializations = _materialization_payloads()
-    invalid_distribution = json.loads(json.dumps(materializations[2]))
+    invalid_distribution = _schema_json(json.dumps(materializations[2]))
     invalid_distribution["step"]["comparison_exposure_level_index"] = 0
     responses = [
         _outline_payload(),
@@ -7087,7 +7087,7 @@ def test_agent_repairs_identical_distribution_contrast_locally() -> None:
 
 def test_agent_repairs_outcome_covariate_at_the_current_model_step() -> None:
     materializations = _materialization_payloads()
-    invalid_primary = json.loads(json.dumps(materializations[4]))
+    invalid_primary = _schema_json(json.dumps(materializations[4]))
     invalid_primary["step"]["model_terms"].append(
         {
             "name": "outcome_flag",
@@ -7166,7 +7166,7 @@ def test_prefix_pydantic_failure_becomes_attributable_compiler_finding() -> None
 
 def test_agent_stops_after_two_host_compile_repairs_and_keeps_attempts() -> None:
     materializations = _materialization_payloads()
-    invalid_distribution = json.loads(json.dumps(materializations[2]))
+    invalid_distribution = _schema_json(json.dumps(materializations[2]))
     invalid_distribution["step"]["comparison_exposure_level_index"] = 0
     responses = [
         _outline_payload(),
@@ -7204,7 +7204,7 @@ def test_agent_stops_after_two_host_compile_repairs_and_keeps_attempts() -> None
 
 def test_agent_repairs_current_step_coordinate_drift_without_full_rewrite() -> None:
     materializations = _materialization_payloads()
-    drifted = json.loads(json.dumps(materializations[3]))
+    drifted = _schema_json(json.dumps(materializations[3]))
     drifted["step"]["objective"] = "Change the scientific purpose of the requested step."
     responses = [
         _outline_payload(),
@@ -7230,9 +7230,9 @@ def test_agent_repairs_current_step_coordinate_drift_without_full_rewrite() -> N
 
 def test_agent_carries_two_distinct_step_schema_failures_into_final_retry() -> None:
     materializations = _materialization_payloads()
-    first_invalid = json.loads(json.dumps(materializations[4]))
+    first_invalid = _schema_json(json.dumps(materializations[4]))
     first_invalid["step"]["raw_inputs"] = ["exposure_flag", " "]
-    second_invalid = json.loads(json.dumps(materializations[4]))
+    second_invalid = _schema_json(json.dumps(materializations[4]))
     second_invalid["step"]["depends_on"] = ["01_cohort", "01_cohort"]
     responses = [
         _outline_payload(),
@@ -7318,7 +7318,7 @@ def test_agent_repairs_duplicate_outline_literature_key_without_diagnostic_crash
             }
         ]
     materializations = _materialization_payloads(payload)
-    duplicate = json.loads(json.dumps(materializations[2]))
+    duplicate = _schema_json(json.dumps(materializations[2]))
     duplicate["step"]["literature_bindings"][1]["citation_key"] = "strobe_2007"
     responses = [
         _outline_payload(payload),
@@ -7360,7 +7360,7 @@ def test_step_transport_requires_each_outline_literature_key_once() -> None:
         scientific_action_ids=(),
         allowed_literature_citation_keys=outline_step.literature_citation_keys,
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
     bindings = schema["$defs"]["ProgressiveSkeletonStep"]["properties"][
         "literature_bindings"
     ]

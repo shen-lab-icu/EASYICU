@@ -36,6 +36,7 @@ __all__ = [
 _RATIO_SCALES = frozenset(
     {
         "odds_ratio",
+        "common_odds_ratio",
         "hazard_ratio",
         "risk_ratio",
         "rate_ratio",

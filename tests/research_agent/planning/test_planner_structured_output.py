@@ -7,6 +7,7 @@ import json
 import pytest
 
 from easyicu.research_agent.agents import plan_payload as payload_owner
+from tests.support.schema_names import authority_schema_json as _schema_json
 from easyicu.research_agent.agents.plan_payload import (
     PlannerHostOwnedFieldError,
     PlannerStructuredOutputSchemaError,
@@ -54,7 +55,7 @@ def _walk_schema(node):
 
 def test_planner_transport_schema_is_closed_compact_and_deterministic():
     request = planner_structured_output_request()
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
 
     assert request.name == "easyicu_analysis_plan_v1"
     assert request.strict is True
@@ -136,6 +137,11 @@ def test_shared_transport_shapes_preserve_every_scientific_constraint(monkeypatc
     assert len(json.dumps(shared)) < len(json.dumps(expanded_source))
 
 
+def test_compact_definition_names_preserve_the_authority_schema():
+    request = planner_structured_output_request()
+    assert _schema_json(request.schema_json) == payload_owner._planner_transport_schema()
+
+
 def _wire_model_requirement():
     return {
         "requirement_id": "age_adjusted",
@@ -154,7 +160,7 @@ def _wire_model_requirement():
 
 
 def test_covariate_decisions_use_closed_wire_rows_and_preserve_authority():
-    schema = json.loads(planner_structured_output_request().schema_json)
+    schema = _schema_json(planner_structured_output_request().schema_json)
     properties = schema["$defs"]["PlannedModelRequirement"]["properties"]
     for field in ("covariate_rationales", "covariate_temporal_roles"):
         assert properties[field]["type"] == "array"
@@ -216,7 +222,7 @@ def test_run_bound_literature_schema_closes_source_element_pairs():
     request = planner_structured_output_request(
         ["strobe_2007", "singer_sepsis3_2016", "strobe_2007"]
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
     step = schema["$defs"]["AnalysisStep"]["properties"]
 
     assert step["literature_citation_keys"]["items"]["enum"] == [
@@ -239,7 +245,7 @@ def test_run_bound_literature_schema_closes_source_element_pairs():
 
 
 def test_run_bound_literature_schema_groups_only_identical_authority_sets():
-    schema = json.loads(
+    schema = _schema_json(
         planner_structured_output_request(
             [
                 "suissa_immortal_time_2008",
@@ -281,7 +287,7 @@ def test_ten_source_run_bound_literature_schema_keeps_retry_headroom():
             "johnson_mimiciv_2023",
         ]
     )
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
 
     # Ratchet (reviewed 2026-09-17): 30_000 -> 30_100 to pay for the deliberate
     # planner-settable ``AnalysisStep.allow_fallback_as_primary`` permission
@@ -305,7 +311,7 @@ def test_descriptive_interval_limitations_are_not_planner_transport_fields(runti
         )
         if runtime_suffix else planner_structured_output_request()
     )
-    definitions = json.loads(request.schema_json)["$defs"]
+    definitions = _schema_json(request.schema_json)["$defs"]
     distribution = definitions["ExposureOutcomeDistributionSpec"]
 
     assert "interval_limitation" not in distribution["properties"]
@@ -376,7 +382,7 @@ def test_planner_null_interval_limitation_leaves_the_host_to_compile_it():
 
 
 def test_single_version_tags_are_host_defaults_but_version_choices_remain():
-    definitions = json.loads(planner_structured_output_request().schema_json)["$defs"]
+    definitions = _schema_json(planner_structured_output_request().schema_json)["$defs"]
 
     for name in (
         "CohortDefinitionSpec", "DescriptiveClaimContract",
@@ -432,7 +438,7 @@ def test_the_host_restores_a_projected_version_without_changing_the_design(
 
 def test_trajectory_stability_transport_keeps_only_planner_decisions():
     request = planner_structured_output_request()
-    schema = json.loads(request.schema_json)
+    schema = _schema_json(request.schema_json)
     properties = schema["$defs"]["TrajectoryStabilitySpec"]["properties"]
 
     assert set(properties) == {
@@ -482,7 +488,7 @@ def test_trajectory_stability_transport_keeps_only_planner_decisions():
 
 
 def test_empty_run_bound_literature_schema_requires_empty_arrays():
-    schema = json.loads(planner_structured_output_request([]).schema_json)
+    schema = _schema_json(planner_structured_output_request([]).schema_json)
     step = schema["$defs"]["AnalysisStep"]["properties"]
 
     assert step["literature_citation_keys"]["maxItems"] == 0

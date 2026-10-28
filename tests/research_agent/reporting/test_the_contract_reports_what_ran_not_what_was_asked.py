@@ -58,6 +58,9 @@ def test_the_fitted_method_is_the_exact_declared_estimator_token():
         "logistic": ASSOCIATION_LOGIT_ESTIMATOR,
         "linear": ASSOCIATION_OLS_ESTIMATOR,
         "glm_poisson": ASSOCIATION_RR_ESTIMATOR,
+        "proportional_odds": "statsmodels_ordered_logit",
+        "count_poisson": "statsmodels_count_poisson",
+        "negative_binomial": "statsmodels_negative_binomial",
     }
 
 

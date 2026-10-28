@@ -22,6 +22,104 @@ from .model_tokens import (
 )
 
 
+OutcomeType = Literal["binary", "continuous", "free_days", "ordinal", "count"]
+SupportConcept = Literal["mech_vent", "vent_ind", "icu_stay", "vaso_ind"]
+PROPORTIONAL_ODDS = "statsmodels_ordered_logit"
+COUNT_POISSON = "statsmodels_count_poisson"
+NEGATIVE_BINOMIAL = "statsmodels_negative_binomial"
+OUTCOME_ESTIMATORS = {
+    "free_days": (PROPORTIONAL_ODDS,),
+    "ordinal": (PROPORTIONAL_ODDS,),
+    "count": (COUNT_POISSON, NEGATIVE_BINOMIAL),
+}
+OUTCOME_RUNTIME_KINDS = {
+    PROPORTIONAL_ODDS: "proportional_odds",
+    COUNT_POISSON: "count_poisson",
+    NEGATIVE_BINOMIAL: "negative_binomial",
+}
+
+
+class FreeDaysDefinition(BaseModel):
+    """Complete 24-hour days free of support within [0, horizon].
+
+    Intervals are hours relative to the declared origin, clipped to the
+    horizon and unioned before counting. Death at or before the horizon
+    overrides support duration. Discharge is not proof of horizon survival.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    horizon_days: int = Field(ge=1, le=365)
+    support_concept: SupportConcept | list[SupportConcept]
+    death_score: Literal[-1, 0]
+    time_origin: Literal["icu_admission"] = "icu_admission"
+    intervals_column: ClassVar[str] = "support_intervals"
+    death_time_column: ClassVar[str] = "death_hours"
+    followup_time_column: ClassVar[str] = "followup_hours"
+
+    @model_validator(mode="after")
+    def _closed_support_roster(self):
+        if isinstance(self.support_concept, list) and (
+            len(self.support_concept) < 2 or len(set(self.support_concept)) != len(self.support_concept)
+        ):
+            raise ValueError("combined support needs at least two unique concepts")
+        return self
+
+
+class CountDefinition(BaseModel):
+    """A rate uses log(exposure time), or an explicitly precomputed log offset.
+
+    A null column explicitly requests counts per observation (unit exposure).
+    Model selection is prespecified; dispersion never changes the estimator.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    family: Literal["poisson", "negative_binomial"]
+    exposure_column: str | None = Field(default=None, min_length=1)
+    offset_scale: Literal["exposure", "log_offset"] = "exposure"
+
+
+class OutcomeDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    estimand: str = Field(min_length=8, max_length=600)
+    free_days: FreeDaysDefinition | None = None
+    ordered_levels: list[str] = Field(default_factory=list, max_length=366)
+    count: CountDefinition | None = None
+
+    @model_validator(mode="after")
+    def _one_outcome(self):
+        if not self.estimand.strip():
+            raise ValueError("the estimand must be stated")
+        if sum((self.free_days is not None, bool(self.ordered_levels), self.count is not None)) != 1:
+            raise ValueError("declare exactly one free_days, ordered_levels, or count definition")
+        if self.ordered_levels and (
+            len(self.ordered_levels) < 3
+            or len(set(self.ordered_levels)) != len(self.ordered_levels)
+            or any(not value.strip() for value in self.ordered_levels)
+        ):
+            raise ValueError("ordinal outcomes require at least three unique ordered levels")
+        return self
+
+    def require_type(self, outcome_type: str) -> None:
+        active = "free_days" if self.free_days else "count" if self.count else "ordinal"
+        if active != outcome_type:
+            raise ValueError("outcome_definition must match outcome_type")
+
+    @property
+    def estimator(self) -> str:
+        if self.count:
+            return COUNT_POISSON if self.count.family == "poisson" else NEGATIVE_BINOMIAL
+        return PROPORTIONAL_ODDS
+
+    @property
+    def input_columns(self) -> tuple[str, ...]:
+        if self.free_days:
+            return (self.free_days.intervals_column, self.free_days.death_time_column,
+                    self.free_days.followup_time_column)
+        if self.count and self.count.exposure_column:
+            return (self.count.exposure_column,)
+        return ()
+
+
 ModelTermRole = Literal["exposure", "covariate"]
 ModelTermCoding = Literal[
     "continuous",
@@ -328,8 +426,8 @@ class PlannedModelRequirement(BaseModel):
     The planner chooses these scientific commitments.  Execution validators
     only reconcile the emitted model contracts against this typed roster; they
     must not infer required models from step prose or benchmark vocabulary.
-    This v1 schema does not represent survival, prediction, mixed-effects, or
-    clustering contracts.
+    Ordered, free-day and count endpoints carry explicit estimands and their
+    outcome definitions; repeated units use the declared dependence contract.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -342,7 +440,8 @@ class PlannedModelRequirement(BaseModel):
 
     requirement_id: str
     outcome: str
-    outcome_type: Literal["binary", "continuous"]
+    outcome_type: OutcomeType
+    outcome_definition: Optional[OutcomeDefinition] = Field(default=None, exclude_if=lambda value: value is None)
     method_family: str
     exposure_source: str
     analysis_role: Literal["primary", "secondary", "sensitivity"]
@@ -490,12 +589,21 @@ class PlannedModelRequirement(BaseModel):
             ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES
             if self.outcome_type == "binary"
             else ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES
+            if self.outcome_type == "continuous"
+            else OUTCOME_ESTIMATORS[self.outcome_type]
         )
+        if self.outcome_type in OUTCOME_ESTIMATORS:
+            if self.outcome_definition is None:
+                raise ValueError("new outcome types require an explicit outcome_definition and estimand")
+            self.outcome_definition.require_type(self.outcome_type)
+            if self.method_family != self.outcome_definition.estimator:
+                raise ValueError("method_family must match the declared outcome estimator")
+        elif self.outcome_definition is not None:
+            raise ValueError("outcome_definition belongs to free_days, ordinal or count outcomes")
         method_family = _normalise_model_contract_token(self.method_family)
         if method_family not in supported:
             raise ValueError(
-                "model_requirements currently support only binary logistic/modified-Poisson "
-                "or continuous linear/quantile adjusted-association families; "
+                "model_requirements require an estimator supported for their outcome type; "
                 f"outcome_type={self.outcome_type!r} is incompatible with "
                 f"method_family={self.method_family!r}"
             )

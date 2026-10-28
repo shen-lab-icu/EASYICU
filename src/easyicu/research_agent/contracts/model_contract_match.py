@@ -8,6 +8,7 @@ from typing import Any, Mapping
 MODEL_REQUIREMENT_REPORT_FIELDS = (
     "outcome",
     "outcome_type",
+    "outcome_definition",
     "method_family",
     "exposure_source",
     "analysis_role",

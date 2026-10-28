@@ -23,6 +23,9 @@ These exact coordinates are published to Planner through the scientific-action c
 | `causal_emulation.propensity_adjustment` | `propensity_weighting` | — |
 | `causal_emulation.doubly_robust` | `survival_inputs`, `doubly_robust` | — |
 | `causal_emulation.mediation` | `mediation` | — |
+| `association.proportional_odds` | — | `statsmodels` |
+| `association.free_days` | — | `statsmodels` |
+| `association.count_outcome` | — | `statsmodels` |
 | `association.rcs_spline` | `rcs_dose_response` | — |
 | `prediction.delong_ci` | `delong_auc` | — |
 | `prediction.benchmark_comparison` | `delong_auc` | — |
@@ -64,7 +67,10 @@ These exact coordinates are published to Planner through the scientific-action c
 | Method | Tier | Implementation | Produces | Runner |
 | --- | --- | --- | --- | --- |
 | Ordinal dose-response (OR per +1 stage, per-stage forest, monotonicity) | primary | LLM-coded ⚠️ | agent-declared ordered trend + dose_response.csv; deterministic forest | — |
-| Adjusted association (logistic / modified Poisson RR / linear) | primary | deterministic ✅ | host-bound adjusted effect + typed model/coefficient contract + deterministic forest | `adjusted_association_estimates` |
+| Adjusted association (binary / continuous / ordered / free-days / count) | primary | deterministic ✅ | host-bound adjusted effect + typed model/coefficient contract + deterministic forest | `adjusted_association_estimates` |
+| Proportional odds for ordered outcomes | standard_supporting | LLM-coded ⚠️ | common OR and CI + proportional-odds score test + ordered bar summary | — |
+| Support-free days with explicit death scoring | standard_supporting | LLM-coded ⚠️ | aggregate derivation audit + median/IQR + ordered distribution + common OR and CI | — |
+| Poisson or negative-binomial count association | standard_supporting | LLM-coded ⚠️ | rate ratio and CI + dispersion test + exposure/offset receipt | — |
 | Multiple adjustment sets (crude / minimal / full) | standard_supporting | LLM-coded ⚠️ | nested-model effect table | — |
 | Effect modification / interaction + subgroup forest | standard_supporting | deterministic ✅ | interaction test + subgroup forest | `baseline_association` |
 | Missing-data audit + complete-case vs imputation sensitivity | standard_supporting | deterministic ✅ | missingness_summary.csv + sensitivity contrast | `missing_data` |

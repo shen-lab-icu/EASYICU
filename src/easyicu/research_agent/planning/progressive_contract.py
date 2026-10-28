@@ -27,6 +27,7 @@ from pydantic import (
 
 from ..canonical_json import canonical_sha256
 from ..contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
+from ..contracts.model_terms import OutcomeDefinition, OutcomeType
 from ..contracts.product_identity import is_canonical_typed_product_token
 from ..contracts.functional_form import FunctionalFormSpec
 from ..contracts.prediction_validation import BootstrapSpec
@@ -111,7 +112,6 @@ PROGRESSIVE_FIXED_MODULE_ACTION_IDS: Mapping[str, tuple[str, ...]] = {
     "robustness_replay": (),
 }
 TableOneMode = Literal["independent_inference", "descriptive_smd_only"]
-OutcomeType = Literal["binary", "continuous"]
 ModelTermCoding = Literal[
     "continuous",
     "binary",
@@ -883,6 +883,7 @@ class ProgressiveSkeletonStep(BaseModel):
     primary_exposure: Optional[str] = Field(default=None, max_length=128)
     outcome: Optional[str] = Field(default=None, max_length=128)
     outcome_type: Optional[OutcomeType] = None
+    outcome_definition: Optional[OutcomeDefinition] = Field(default=None, exclude_if=lambda value: value is None)
     model_terms: list[ProgressiveModelTermIntent] = Field(default_factory=list)
     event_level_index: Optional[int] = Field(default=None, ge=0)
     reference_exposure_level_index: Optional[int] = Field(default=None, ge=0)
@@ -944,6 +945,12 @@ class ProgressiveSkeletonStep(BaseModel):
 
     @model_validator(mode="after")
     def _module_shape(self) -> "ProgressiveSkeletonStep":
+        if self.outcome_type in {"free_days", "ordinal", "count"}:
+            if self.outcome_definition is None:
+                raise ValueError("new outcome types require an explicit outcome_definition and estimand")
+            self.outcome_definition.require_type(self.outcome_type)
+        elif self.outcome_definition is not None:
+            raise ValueError("outcome_definition belongs to free_days, ordinal or count outcomes")
         output_ids = [item.product_id for item in self.outputs]
         if len(output_ids) != len(set(output_ids)):
             raise ValueError("step output product ids must be unique")
