@@ -21,6 +21,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from easyicu.concept import catalog as cc
+from easyicu.outcome_availability import (
+    OUTCOME_CONCEPT_SUPPORTED_DATABASES,
+    structural_outcome_unavailability,
+)
 from easyicu.webserver import entity_ids as entity_id_contract
 from easyicu.webserver.catalog_metadata import (
     CONCEPT_VARIANTS,
@@ -130,6 +134,8 @@ def _coverage_metadata(
     active export's coverage is reported separately. ``data_audit_databases``
     keeps the count an earlier data audit recorded (CONCEPT_DB_COVERAGE) where
     one exists; it names no database, so it never replaces the declared list.
+    An outcome the outcome owner supports in no database is ``unsupported``,
+    with that owner's reason code, rather than an unmapped concept.
     """
     definitions = catalog_definitions() if definitions is None else definitions
     audit = dict(cc.CONCEPT_DB_COVERAGE)
@@ -140,6 +146,7 @@ def _coverage_metadata(
         "mappedAll": 0,
         "mappedPartial": 0,
         "unmapped": 0,
+        "unsupported": 0,
         "derived": 0,
         "dataAudited": 0,
     }
@@ -148,21 +155,33 @@ def _coverage_metadata(
         declared = _declared_databases(key, definitions)
         definition = definitions.get(key) or {}
         direct = any(mappings for mappings in (definition.get("sources") or {}).values())
+        unsupported = not declared and key in OUTCOME_CONCEPT_SUPPORTED_DATABASES
+        if direct:
+            kind = "mapped"
+        elif unsupported:
+            kind = "unsupported"
+        else:
+            kind = "derived" if declared or key not in definitions else "unmapped"
         entry: Dict[str, Any] = {
-            "kind": "mapped" if direct else ("derived" if declared or key not in definitions else "unmapped"),
+            "kind": kind,
             "databases": len(declared),
             "declared_databases": declared,
             "basis": "concept_dictionary",
         }
         if not direct and key in cc.COMPOSITE_CONCEPT_OUTPUT_SOURCES:
             entry["source"] = cc.COMPOSITE_CONCEPT_OUTPUT_SOURCES[key]
+        if unsupported:
+            receipt = structural_outcome_unavailability(key, cc.SUPPORTED_DB_KEYS[0])
+            entry["unavailable_reason"] = receipt.reason_code
         if key in audit:
             entry["data_audit_databases"] = int(audit[key])
             summary["dataAudited"] += 1
         metadata[key] = entry
         if entry["kind"] == "derived":
             summary["derived"] += 1
-        if not declared:
+        if unsupported:
+            summary["unsupported"] += 1
+        elif not declared:
             summary["unmapped"] += 1
         elif len(declared) == supported_count:
             summary["mappedAll"] += 1

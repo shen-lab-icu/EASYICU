@@ -1958,8 +1958,19 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert catalog["conceptCoverage"]["icu_unit_type"]["declared_databases"] == ["eicu"]
     assert catalog["conceptCoverage"]["sofa2_resp"]["kind"] == "derived"
     assert catalog["conceptCoverage"]["sofa2_resp"]["declared_databases"]
+    # An outcome the outcome owner supports in no database is not supported
+    # yet, with that owner's reason, and is not counted as unmapped.
+    for key in ("icu_free_days_28", "vent_free_days_28", "icu_readmission"):
+        assert catalog["conceptCoverage"][key]["kind"] == "unsupported"
+        assert catalog["conceptCoverage"][key]["unavailable_reason"] == "outcome_concept_structurally_unavailable"
+    assert catalog["conceptCoverage"]["mort_28d"]["kind"] == "derived"
+    assert "unavailable_reason" not in catalog["conceptCoverage"]["mort_28d"]
     summary = catalog["coverageSummary"]
-    assert summary["mappedAll"] + summary["mappedPartial"] + summary["unmapped"] == catalog["totalConcepts"]
+    assert summary["unsupported"] == 3
+    assert (
+        summary["mappedAll"] + summary["mappedPartial"] + summary["unmapped"] + summary["unsupported"]
+        == catalog["totalConcepts"]
+    )
     assert summary["unmapped"] < 10
     assert "notAudited" not in summary
     assert catalog["activeExportCoverage"]["payload_scope"] == "aggregate_only_no_rows"
@@ -1995,10 +2006,10 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20261026-akifold1" in index_html
     assert "api.js?v=20261027-nodemo1" in index_html
-    assert "screens-dict.js?v=20261027-dmap2" in index_html
+    assert "screens-dict.js?v=20261028-unsup1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
-    assert "deepdive.css?v=20261028-icdfit1" in index_html
+    assert "deepdive.css?v=20261028-unsup1" in index_html
 
 
 def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations() -> (

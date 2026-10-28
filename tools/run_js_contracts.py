@@ -321,6 +321,7 @@ CONTRACTS: dict[str, list[str]] = {
     ],
     "dictionary_hosted_instance.test.js": ["database-names.js", "screens-dict.js"],
     "dictionary_variant_fold.test.js": ["database-names.js", "screens-dict.js"],
+    "dictionary_unsupported_outcome.test.js": ["database-names.js", "screens-dict.js"],
     "dictionary_substitutes_and_study_view.test.js": [
         "html-escape.js", "database-names.js", "study-family-names.js", "screens-dict-studies.js", "screens-dict.js",
     ],
