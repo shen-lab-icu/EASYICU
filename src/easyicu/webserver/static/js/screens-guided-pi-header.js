@@ -46,9 +46,9 @@
           <div class="gpi-layout-popover" role="group" aria-label="${tr('Visible workspace panels', '工作区显示面板')}">
             <strong>${tr('Workspace panels', '工作区面板')}</strong>
             ${[
-              ['progress', tr('To-dos', '待办')],
-              ['results', tr('Results', '成果')],
-              ['notes', tr('Notes', '笔记')],
+              ['progress', tr('Project progress', '项目进度')],
+              ['results', tr('Project results', '项目成果')],
+              ['notes', tr('Project notes', '项目笔记')],
             ].map(([key, label]) => `<button type="button" data-gpi-layout-toggle="${key}" aria-label="${esc(label)}" aria-pressed="${Boolean(options.layout && options.layout[key])}"><span>${esc(label)}</span><span aria-hidden="true">${options.layout && options.layout[key] ? '✓' : ''}</span></button>`).join('')}
           </div>
         </details>

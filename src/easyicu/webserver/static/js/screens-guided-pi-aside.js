@@ -247,9 +247,9 @@
         const progress = notStarted
           ? `<div class="gd-pipeline-summary" data-gpi-project-workflow-not-started><div class="gd-pipeline-value">${tr('The research steps appear here once the first conversation starts.', '开始第一次对话后，研究步骤会列在这里。')}</div></div>`
           : `<div class="gd-pipeline-summary" data-gpi-project-workflow-loading role="status" aria-live="polite"><div class="gd-pipeline-value">${esc(error || tr('Loading project progress…', '正在读取项目进度…'))}</div></div>`;
-        body.innerHTML = section('progress', tr('To-dos', '待办'), progress)
-          + section('results', tr('Results', '成果'), emptyResults)
-          + section('notes', tr('Notes', '笔记'), notesPanel())
+        body.innerHTML = section('progress', tr('Project progress', '项目进度'), progress)
+          + section('results', tr('Project results', '项目成果'), emptyResults)
+          + section('notes', tr('Project notes', '项目笔记'), notesPanel())
           + (!panelKeys.some(key => visiblePanels[key]) ? `<p class="gpi-aside-empty gpi-panels-empty">${tr('Choose panels from Layout above.', '可从顶部「布局」重新显示面板。')}</p>` : '');
         body.oninput = event => {
           if (event.target.matches && event.target.matches('[data-gpi-project-notes]')) handleNotesInput(event.target);
@@ -419,9 +419,9 @@
       }).join('')}</ol>
       <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段已完成')}</span></div>
       </div>`;
-      body.innerHTML = section('progress', `${tr('To-dos', '待办')}<small class="gpi-aside-count">${done}/${total}</small>`, progress)
-        + section('results', tr('Results', '成果'), (results || emptyResults) + runHistoryHtml(workflow, runHistoryOpen(body, !results)))
-        + section('notes', tr('Notes', '笔记'), notesPanel())
+      body.innerHTML = section('progress', `${tr('Project progress', '项目进度')}<small class="gpi-aside-count">${done}/${total}</small>`, progress)
+        + section('results', tr('Project results', '项目成果'), (results || emptyResults) + runHistoryHtml(workflow, runHistoryOpen(body, !results)))
+        + section('notes', tr('Project notes', '项目笔记'), notesPanel())
         + (!panelKeys.some(key => visiblePanels[key]) ? `<p class="gpi-aside-empty gpi-panels-empty">${tr('Choose panels from Layout above.', '可从顶部「布局」重新显示面板。')}</p>` : '');
       body.oninput = event => {
         if (event.target.matches && event.target.matches('[data-gpi-project-notes]')) { handleNotesInput(event.target); return; }
