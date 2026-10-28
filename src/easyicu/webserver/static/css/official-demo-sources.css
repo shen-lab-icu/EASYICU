@@ -121,6 +121,20 @@
   font-family:var(--mono);
   font-size:9.5px;
 }
+.official-demo-failure{
+  margin-top:10px;
+}
+.official-demo-failure details{
+  margin-top:6px;
+  color:var(--ink-3);
+  font-size:11px;
+}
+.official-demo-failure details .mono{
+  display:block;
+  margin-top:4px;
+  font-family:var(--mono);
+  overflow-wrap:anywhere;
+}
 .official-demo-progress{
   width:100%;
   height:4px;

@@ -2487,10 +2487,10 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "js/screens-viz-patient-charts.js?v=20261026-data1" in index_html
     assert "js/screens-viz-patient-series.js?v=20261027-nodemo1" in index_html
     assert (
-        "js/screens-viz-patient-demo-sources.js?v=20261026-src2"
+        "js/screens-viz-patient-demo-sources.js?v=20261028-prepfail1"
         in index_html
     )
-    assert "css/official-demo-sources.css?v=20261026-src1" in index_html
+    assert "css/official-demo-sources.css?v=20261028-prepfail1" in index_html
     assert (
         "js/screens-viz-patient-navigation.js?v=20261027-nodemo1"
         in index_html
@@ -2868,7 +2868,7 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert "runOfficial()" in viz_js
     assert "owner.rememberPair(registrySources())" in viz_js
     assert ".official-demo-sources" in shared_css
-    assert "css/official-demo-sources.css?v=20261026-src1" in index_html
+    assert "css/official-demo-sources.css?v=20261028-prepfail1" in index_html
     assert "js/screens-viz-crossdb-setup.js?v=20261026-xdbq1" in index_html
     assert "js/screens-viz-crossdb-source.js?v=20261026-src1" in index_html
 

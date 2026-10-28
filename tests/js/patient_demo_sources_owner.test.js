@@ -105,6 +105,29 @@ const context = {
     loadJobSnapshot(jobId) {
       jobSnapshotLoads += 1;
       assert.equal(jobId, 'job-demo-1');
+      if (jobSnapshotMode === 'failed') {
+        const error = 'demo_source_download_failed: ' + JSON.stringify({
+          code: 'demo_source_download_failed',
+          detail: {
+            cause: {
+              code: 'unstructured_exception',
+              detail: { message: '<urlopen error Tunnel connection failed: 503 Service Unavailable>' },
+              structured: false,
+              type: 'URLError',
+            },
+            phase: 'download',
+          },
+        });
+        return Promise.resolve({
+          id: jobId,
+          status: 'failed',
+          error,
+          events: [
+            { type: 'progress', phase: 'download', stage: 'starting', bytes_received: 0 },
+            { type: 'end', status: 'failed', error },
+          ],
+        });
+      }
       if (jobSnapshotMode === 'streaming') {
         return Promise.resolve({
           id: jobId,
@@ -275,6 +298,47 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   await tick();
   await tick();
 
+  // A failed preparation stays on its card after the catalog refresh, as a
+  // sentence with the lower-layer cause folded below; pressing the button
+  // again clears it.
+  jobSnapshotMode = 'failed';
+  let failClick;
+  const failButton = {
+    getAttribute(name) {
+      return name === 'data-demo-source-prepare' ? 'mimic_iv_demo_v2_2' : null;
+    },
+    addEventListener(name, handler) {
+      if (name === 'click') failClick = handler;
+    },
+  };
+  const catalogLoadsBeforeFailure = catalogLoads;
+  owner.bind(
+    { querySelectorAll(selector) { return selector === '[data-demo-source-prepare]' ? [failButton] : []; } },
+    { refresh() {} },
+  );
+  failClick({ preventDefault() {} });
+  await tick();
+  await tick();
+  await tick();
+  const failedSnapshot = owner.snapshot();
+  assert(catalogLoads > catalogLoadsBeforeFailure, 'a failed preparation still refreshes source status');
+  assert.equal(failedSnapshot.error, null);
+  assert.equal(failedSnapshot.failure.sourceId, 'mimic_iv_demo_v2_2');
+  assert.equal(failedSnapshot.failure.phase, 'download');
+  const failedHtml = owner.render({ t: en => en, esc: value => String(value) });
+  assert.match(failedHtml, /data-demo-source-failure="mimic_iv_demo_v2_2"/);
+  assert.match(failedHtml, /Could not download the archive from PhysioNet/);
+  assert.match(failedHtml, /Tunnel connection failed: 503/);
+  assert.doesNotMatch(failedHtml, /demo_source_download_failed/);
+  assert.equal(failedHtml.match(/data-demo-source-failure=/g).length, 1, 'only the failed source carries the note');
+  jobSnapshotMode = 'done';
+  failClick({ preventDefault() {} });
+  assert.equal(owner.snapshot().failure, null);
+  assert.doesNotMatch(owner.render({ t: en => en, esc: value => String(value) }), /data-demo-source-failure/);
+  await tick();
+  await tick();
+  await tick();
+
   catalogPayload.sources[1].status.active = true;
   const activeHtml = owner.render({ t: en => en, esc: value => String(value) });
   assert.match(activeHtml, /data-demo-source-open="eicu_demo_v2_0_1"/);
@@ -351,6 +415,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
     official_pair_resolved: true,
     user_mode_remains_demo: true,
     no_synthetic_fallback: true,
+    prepare_failure_on_card: true,
   }));
 })().catch(error => {
   process.stderr.write(String(error && error.stack || error));

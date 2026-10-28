@@ -168,4 +168,5 @@ def test_patient_official_demo_source_owner_contract_executes() -> None:
         "shared_owner_contract": True,
         "user_mode_remains_demo": True,
         "no_synthetic_fallback": True,
+        "prepare_failure_on_card": True,
     }
