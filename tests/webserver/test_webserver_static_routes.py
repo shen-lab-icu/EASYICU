@@ -1042,7 +1042,7 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/extraction.css?v=20261028-cohort1" in index_html
+    assert "css/extraction.css?v=20261028-cohort2" in index_html
     assert "data-ex-analyze" in extraction_js
     assert "Choose folder and identify" in extraction_js
     assert "function copilotPrefillSummary()" in extraction_js
