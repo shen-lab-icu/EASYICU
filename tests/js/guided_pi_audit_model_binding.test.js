@@ -50,6 +50,7 @@ function harness(language = 'zh', initial = session()) {
   const view = declared.sessionView.create({
     state, modules, projectId: () => project, sessionIsStale: () => stale, agentMode: () => 'research',
     header: declared.header, tr, esc, iconHtml: () => '', projectTitle: () => 'Study', navigationSessionTitle: () => 'Conversation',
+    sessionMatchesUiLanguage: () => true, displaySessionTitle: value => String(value || ''),
     starters: { render: options => options.composer },
     transcript: { latestTurnCompletedIdeaExploration: () => false }, runFiles: { timeline: rows => rows, notice: () => '' },
     activity: { renderTimeline: () => '' }, runOutcome: { render: () => '', collection: () => [] },

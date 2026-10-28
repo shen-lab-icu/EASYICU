@@ -295,6 +295,15 @@
         skills: skills.map(row => ({ name: String(row.name || '') })),
       };
     }
+    // A project holds one study, so a new conversation continues the study
+    // its earlier conversations started; say so where the panel would
+    // otherwise look like another conversation's.
+    function projectContinuityHtml() {
+      const current = state.session && state.session.session_id;
+      const earlier = state.sessions.find(row => row.session_id !== current && sessionMatchesUiLanguage(row));
+      if (!earlier) return '';
+      return `<div class="gpi-project-continuity" role="note"><span>${tr('Progress and results on the right belong to this project. This conversation continues the same study; start a new project for a different one.', '右侧是本项目的进度和成果。这个对话会接着推进同一项研究；要做另一项研究，请新建项目。')}</span><button class="btn sm ghost" type="button" data-gpi-session="${esc(earlier.session_id)}">${tr('Open', '打开')}「${esc(displaySessionTitle(earlier.title))}」</button></div>`;
+    }
     function sessionPanel() {
       const session = state.session || {};
       const model = session.model || {};
@@ -470,6 +479,7 @@
           ${stale && !interactionLocked && !studyJobRunning ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
           <div class="gpi-log${messages ? '' : ' gpi-log-start'}" data-gpi-log>
             ${RUN_FILES.notice()}
+            ${freshTask ? projectContinuityHtml() : ''}
             ${conversation || (resultsView ? '' : workspace
                 ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
                 : emptyResearchHtml)}
