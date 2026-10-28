@@ -131,7 +131,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261028-flow1" in index
-    assert "js/screens-guided-pi-events.js?v=20261027-dcl1" in index
+    assert "js/screens-guided-pi-events.js?v=20261028-surv1" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261026-six6" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261028-wait1" in index
@@ -148,7 +148,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261027-dc1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261028-surv1" in index
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
     assert "js/screens-dict-studies.js?v=20261027-dmap1" in index
@@ -164,7 +164,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-review-items.js?v=20261026-review1" in index
     assert index.index("js/screens-guided-pi-review-items.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "css/guided-pi-source-adjustments.css?v=20261026-six1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20261026-quickoffer1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261028-surv1" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261027-coord1" in index
@@ -648,6 +648,38 @@ def test_confirmed_plan_choice_revises_in_place_without_a_fake_user_message() ->
         },
     }
     assert not any(call[0] == "host-action" for call in calls)
+
+
+def test_a_card_bound_plan_choice_sends_its_digest_and_others_send_none() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    owner = _read("js/screens-guided-pi-plan-actions.js")
+    script = f"""
+      global.window = {{EasyICU: {{guidedPi: {{optional: () => null}}}}}};
+      eval({owner!r});
+      const bodies = [];
+      const host = {{
+        tr: (en, zh) => zh, errorText: String, regeneration: {{}}, nextActions: {{}}, replay: {{}},
+        session: () => ({{session_id: 's1', binding: {{run_id: 'run_old', study_revision: 3}}}}),
+        workflow: () => ({{}}), busy: () => false, sessionIsStale: () => false,
+        api: () => ({{confirmPiCopilotPlanDecision: async (_id, body) => {{ bodies.push(body); return {{}}; }}}}),
+        projectId: () => 'p1', turnGrants: () => [], render: () => {{}},
+        refreshSession: async () => {{}}, loadWorkflow: async () => {{}},
+        setBusy: () => {{}}, setError: () => {{}}, setDraft: () => {{}},
+      }};
+      const actions = window.EU_GUIDED_PI_PLAN_ACTIONS.create(host);
+      (async () => {{
+        await actions.confirmDecision({{decision_code: 'SURVIVAL_LANDMARK_OWNER_NOT_SEALED',
+          option_id: 'fixed_landmark_survival', card_sha256: 'c'.repeat(64)}});
+        await actions.confirmDecision({{decision_code: 'ADJUSTMENT_SET_NOT_USER_CONFIRMED',
+          option_id: 'accept_proposed_adjustment', card_sha256: ''}});
+        process.stdout.write(JSON.stringify(bodies));
+      }})();
+    """
+    bodies = json.loads(run_node(node, script, check=True).stdout)
+    assert bodies[0]["card_sha256"] == "c" * 64
+    assert "card_sha256" not in bodies[1]
 
 
 def test_governed_plan_action_owner_executes_generation_review_and_retry() -> None:

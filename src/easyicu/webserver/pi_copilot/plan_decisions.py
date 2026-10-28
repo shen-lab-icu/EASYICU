@@ -300,6 +300,13 @@ def proposed_adjustment_set(plan: Mapping[str, Any]) -> list[str]:
 def decision_is_resolved(study: Mapping[str, Any], decision_code: str) -> bool:
     """Return whether the StudyContext already carries a typed human choice."""
 
+    if decision_code == _SURVIVAL_OWNER_FINDING:
+        from easyicu.webserver.landmark_survival_runtime_projection import validate_landmark_survival_declaration
+
+        try:
+            return validate_landmark_survival_declaration(study) is not None
+        except ValueError:
+            return False
     return ScientificConfiguration.inspect(study).decision_is_resolved(decision_code)
 
 
@@ -737,6 +744,11 @@ def plan_decision_context(
     """Project plan-bound coordinates needed to render one host decision."""
 
     code = str(decision_code or "").strip()
+    if code == _SURVIVAL_OWNER_FINDING and not plan:
+        from .survival_plan_decision import propose_survival_landmark
+
+        proposed = propose_survival_landmark(study or {})
+        return proposed.model_dump(mode="json") if proposed is not None else {}
     if code == _ENDPOINT_DECISION:
         options = endpoint_decision_options(study or {})
         if not options and _requested_endpoint_coordinates(study or {}).get("target_outcome"):
@@ -1030,6 +1042,7 @@ def _survival_design_configuration(
     codes: tuple[str, ...],
     review_facts: Mapping[str, Any] | None,
     first_stay_restricted: bool,
+    saved_study_roster: bool = False,
 ) -> CompiledAgentPlanConfiguration:
     """Declare the reviewed coordinates as the study's landmark survival design.
 
@@ -1038,6 +1051,10 @@ def _survival_design_configuration(
     landmark at the end of the window the plan was made on, and the plan's
     reviewed roster.  The suite owner validates the declaration, and the next
     plan runs on its signed authority.
+
+    A digest-validated pre-plan click sets ``saved_study_roster`` and supplies
+    the saved study's coordinates instead. It preserves their authority and
+    metadata; no reviewed plan or covariate rationale is invented.
     """
 
     from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
@@ -1061,7 +1078,7 @@ def _survival_design_configuration(
             "A survival design cannot be compiled together with other runtime coordinates.",
             details={"finding_codes": sorted(remaining)},
         )
-    if survival_family_declared(study):
+    if survival_family_declared(study) and not saved_study_roster:
         raise PlanDecisionError(
             "agent_plan_survival_design_already_declared",
             "The study already declares a survival design; a plan that does not use it needs a fresh plan, not a second design.",
@@ -1123,8 +1140,8 @@ def _survival_design_configuration(
         or not covariates
         or not isinstance(rationales, Mapping)
         or not isinstance(temporal_roles, Mapping)
-        or set(rationales) != set(covariates)
-        or set(temporal_roles) != set(covariates)
+        or (not saved_study_roster and set(rationales) != set(covariates))
+        or (not saved_study_roster and set(temporal_roles) != set(covariates))
     ):
         raise PlanDecisionError(
             "agent_plan_survival_coordinates_unavailable",
@@ -1136,7 +1153,7 @@ def _survival_design_configuration(
     planned_window = _planned_window_for_agent_landmark(study)
     window = planned_window if planned_window is not None else study.get("time_window")
     try:
-        window_hours = float(window.get("hours")) if isinstance(window, Mapping) else None
+        window_hours = float(window.get("hours", window.get("observation_hours"))) if isinstance(window, Mapping) else None
     except (TypeError, ValueError):
         window_hours = None
     if window_hours != landmark_hours:
@@ -1193,10 +1210,10 @@ def _survival_design_configuration(
         "covariate_selection": "exact",
         "covariate_authority": "agent_plan",
         "covariate_rationales": {
-            value: str(rationales[value]).strip() for value in covariates
+            value: str(rationales[value]).strip() for value in covariates if value in rationales
         },
         "covariate_temporal_roles": {
-            value: str(temporal_roles[value]).strip() for value in covariates
+            value: str(temporal_roles[value]).strip() for value in covariates if value in temporal_roles
         },
         "covariate_operationalizations": {value: value for value in covariates},
         "export_format": "parquet",
@@ -1212,6 +1229,19 @@ def _survival_design_configuration(
     }
     if planned_window is not None:
         patch["time_window"] = planned_window
+    if saved_study_roster:
+        for key in (
+            "covariate_authority", "covariate_rationales", "covariate_temporal_roles",
+            "covariate_operationalizations",
+        ):
+            if key in study:
+                patch[key] = study[key]
+        patch["confirmations"] = {
+            **confirmations,
+            "plan_adjustment_set_confirmed": (study.get("confirmations") or {}).get(
+                "plan_adjustment_set_confirmed", False,
+            ),
+        }
     try:
         validate_landmark_survival_declaration({**dict(study), **patch})
     except WebScientificRuntimeProjectionError as exc:
@@ -1598,11 +1628,20 @@ def compile_plan_decision(
     option_id: str,
     study: Mapping[str, Any],
     agent_plan: Mapping[str, Any],
+    decision_card: Mapping[str, Any] | None = None,
+    card_sha256: str | None = None,
 ) -> CompiledPlanDecision:
     """Return one typed patch for a known review decision and option."""
 
     code = str(decision_code or "").strip()
     option = str(option_id or "").strip()
+    if code == _SURVIVAL_OWNER_FINDING:
+        from .survival_plan_decision import compile_survival_landmark_choice
+
+        return compile_survival_landmark_choice(
+            study=study, option_id=option, decision_card=decision_card,
+            card_sha256=card_sha256,
+        )
     configuration = ScientificConfiguration.inspect(study)
     if code == _ENDPOINT_DECISION:
         chosen = next(

@@ -49,6 +49,7 @@ from easyicu.research_agent.contracts.sealed_suite_robustness import (
     prevalence_sensitivity_cutoffs_hours,
 )
 from easyicu.research_agent.icu_rules import VariableKind
+from easyicu.research_agent.contracts.rmst import RMSTSpec
 from easyicu.research_agent.intake.materialized_metadata import (
     MaterializedMetadataError,
     load_verified_materialized_cohort_authority,
@@ -109,6 +110,19 @@ def survival_inference_supported(design: Mapping[str, Any]) -> bool:
 
 def _hours_token(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:g}".replace(".", "p")
+
+
+def landmark_survival_rmst_spec(
+    *, exposure: str, landmark_hours: float, endpoint: Any,
+) -> RMSTSpec:
+    """The suite's exposed-minus-comparator RMST, from landmark to horizon."""
+    token = _hours_token(landmark_hours)
+    return RMSTSpec(
+        time_column=f"followup_days_from_{token}h_landmark",
+        event_column=f"death_after_{token}h_by_day{endpoint.horizon_days}",
+        group_column=f"incident_{exposure}_by_{token}h",
+        group_levels=("1", "0"), tau=endpoint.horizon_days - landmark_hours / 24.0,
+    )
 
 
 def _concept_display_name(concept_id: str) -> str:
@@ -390,6 +404,12 @@ def compile_landmark_survival_runtime_projection(
         else _ANALYSIS_UNIT_LABELS[_SUPPORTED_ANALYSIS_UNIT]
     )
     if exposure_kind == VariableKind.CONTINUOUS:
+        if any(spec.strategy == "restricted_mean_survival" for spec in sensitivity_specs):
+            raise WebScientificRuntimeProjectionError(
+                "web_rmst_study_binding_mismatch",
+                "The continuous survival suite has no two-group RMST contrast.",
+                details={"field": "sensitivity_specs"},
+            )
         # A continuous exposure is modelled per unit by its own sealed suite,
         # on the coordinates validated above.
         from .landmark_continuous_survival_runtime_projection import (
@@ -460,6 +480,16 @@ def compile_landmark_survival_runtime_projection(
     _require_present_onset(universe_path, onset_column)
 
     landmark_token = _hours_token(landmark_hours)
+    rmst_spec = landmark_survival_rmst_spec(
+        exposure=str(primary_exposure_source), landmark_hours=landmark_hours, endpoint=endpoint,
+    )
+    requested_rmst = [spec for spec in sensitivity_specs if spec.strategy == "restricted_mean_survival"]
+    if requested_rmst and (len(requested_rmst) != 1 or requested_rmst[0].rmst_execution != rmst_spec):
+        raise WebScientificRuntimeProjectionError(
+            "web_rmst_study_binding_mismatch",
+            "The RMST sensitivity differs from the landmark survival suite's contrast.",
+            details={"field": "sensitivity_specs"},
+        )
     exposure_name = _concept_display_name(str(primary_exposure_source))
     tau = endpoint.horizon_days - landmark_hours / 24.0
     cutpoints = [
@@ -524,13 +554,9 @@ def compile_landmark_survival_runtime_projection(
             f"No incident {exposure_name} by {landmark_token} h"
         ),
         "analysis_unit_label": analysis_unit_label,
-        "derived_exposure_column": (
-            f"incident_{primary_exposure_source}_by_{landmark_token}h"
-        ),
-        "derived_event_column": (
-            f"death_after_{landmark_token}h_by_day{endpoint.horizon_days}"
-        ),
-        "derived_time_column": f"followup_days_from_{landmark_token}h_landmark",
+        "derived_exposure_column": rmst_spec.group_column,
+        "derived_event_column": rmst_spec.event_column,
+        "derived_time_column": rmst_spec.time_column,
         "adjustment_columns": list(covariates),
         "categorical_adjustment_columns": list(categorical),
         "table_one_columns": list(covariates),

@@ -155,3 +155,44 @@ def test_english_readers_keep_the_hosts_question_and_evidence() -> None:
 
     assert question == f"Host question for {code}?"
     assert evidence == f"Host evidence for {code}."
+
+
+SURVIVAL_CARD = {
+    "decision_code": "SURVIVAL_LANDMARK_OWNER_NOT_SEALED", "option_id": "fixed_landmark_survival",
+    "scientific_configuration_sha256": "a" * 64, "exposure": "synthetic_exposure",
+    "landmark_hours": 48.0, "endpoint": "death_60d", "horizon_days": 60.0,
+    "followup_column": "followup_60d", "covariates": ["covariate_one", "covariate_two"],
+    "rmst_alternative": {"time_column": "t", "event_column": "e", "group_column": "g",
+                         "group_levels": ["0", "1"], "tau": 58.0, "time_unit": "days", "event_code": 1.0},
+    "card_sha256": "b" * 64,
+}
+
+
+def test_the_survival_landmark_card_states_the_offered_design_and_binds_its_digest() -> None:
+    html = _card("SURVIVAL_LANDMARK_OWNER_NOT_SEALED", lang="zh", decision_context=SURVIVAL_CARD)
+
+    assert "请确定生存随访从何时开始" in html
+    assert "第 48 小时 landmark · 60 天生存" in html
+    assert "调整：covariate_one、covariate_two。" in html
+    assert "敏感性分析：58 天限制性平均生存时间。" in html
+    assert 'data-gpi-plan-decision-option="fixed_landmark_survival"' in html
+    assert f'data-gpi-plan-decision-card="{"b" * 64}"' in html
+    assert "采用第 48 小时 landmark" in html
+    # The researcher can still choose another approach instead.
+    assert "data-gpi-confirm-edit" in html
+
+
+def test_a_survival_card_without_its_digest_offers_no_landmark_choice() -> None:
+    card = {key: value for key, value in SURVIVAL_CARD.items() if key != "card_sha256"}
+    html = _card("SURVIVAL_LANDMARK_OWNER_NOT_SEALED", lang="zh", decision_context=card)
+
+    assert "fixed_landmark_survival" not in html
+    assert "data-gpi-plan-decision-card" not in html
+
+
+def test_the_survival_landmark_card_reads_in_english() -> None:
+    html = _card("SURVIVAL_LANDMARK_OWNER_NOT_SEALED", lang="en", decision_context=SURVIVAL_CARD)
+
+    assert "Choose when survival follow-up starts" in html
+    assert "48-hour landmark · 60-day survival" in html
+    assert "Use the 48-hour landmark" in html

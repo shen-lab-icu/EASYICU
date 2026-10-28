@@ -33,6 +33,7 @@ from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificRuntimeAuthority,
     LandmarkCategoricalAssociationRuntimeAuthority,
     LandmarkSplineRuntimeAuthority,
+    LandmarkSurvivalRuntimeAuthority,
 )
 from ..cohort.schema import (
     context_materialized_columns,
@@ -1507,6 +1508,23 @@ def _sensitivity_facts(
                     ):
                         executed_spec_ids.add(spec_id)
                         primary_design_spec_ids.add(spec_id)
+                    rmst = spec.rmst_execution
+                    if (
+                        isinstance(runtime_authority, LandmarkSurvivalRuntimeAuthority)
+                        and runtime_authority.rmst_product in step.expected_outputs
+                        and rmst is not None
+                        and (
+                            rmst.time_column, rmst.event_column, rmst.group_column,
+                            rmst.tau, rmst.time_unit, rmst.event_code, rmst.group_levels,
+                        ) == (
+                            runtime_authority.derived_time_column,
+                            runtime_authority.derived_event_column,
+                            runtime_authority.derived_exposure_column,
+                            runtime_authority.endpoint_horizon_days - runtime_authority.landmark_hours / 24,
+                            "days", 1.0, ("1", "0"),
+                        )
+                    ):
+                        executed_spec_ids.add(spec_id)
             if method == "signed_landmark_categorical_association":
                 signed_refs = {
                     str(ref)

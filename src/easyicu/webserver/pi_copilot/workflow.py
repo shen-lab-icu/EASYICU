@@ -59,6 +59,7 @@ from .exposure_group_notes import project_exposure_groups
 from .question_requirement_notes import project_question_requirement_notes
 from .population_preparation import current_population_preparation
 from .population_acceptance import current_population_acceptance
+from .survival_plan_decision import SurvivalLandmarkDecision, pending_survival_decision
 from .source_adjustments import current_source_adjustments
 from .projections import (
     StudySetupReceipt,
@@ -133,6 +134,7 @@ class ResearchWorkflowSnapshot(BaseModel):
     )
     study_setup_receipt: StudySetupReceipt
     plan_review_summary: Optional[Mapping[str, Any]] = None
+    plan_decision: Optional[SurvivalLandmarkDecision] = None
     plan_conversation_preview: Optional[Mapping[str, Any]] = None
     plan_execution_ready: bool = False
     analysis_validation_retry_available: bool = False
@@ -1385,6 +1387,24 @@ def _enrich_plan_review(
 
     payloads = review.get("artifact_payloads")
     payloads = payloads if isinstance(payloads, Mapping) else {}
+    decision = pending_survival_decision(study, payloads)
+    if decision is not None and snapshot.next_action_code == "failed_pipeline_requires_fresh_plan":
+        return snapshot.model_copy(update={
+            "next_action_code": "plan_scientific_changes_required",
+            "next_actions": [],
+            "plan_decision": decision,
+            "plan_execution_ready": False,
+            "stages": [
+                stage.model_copy(update={
+                    "status": "review_required", "reason_code": "plan_scientific_changes_required",
+                }) if stage.id == "plan" else stage
+                for stage in snapshot.stages
+            ],
+            "plan_review_summary": {"authorization_questions": [{
+                "code": decision.decision_code, "requires_user_authorization": True,
+                "decision_context": decision.model_dump(mode="json"),
+            }]},
+        })
     agent_plan = payloads.get("agent_plan.json")
     review_summary = snapshot.plan_review_summary
     if (

@@ -260,11 +260,6 @@ def compile_web_scientific_runtime_projection(
     projection = compile_time_varying_runtime_projection(**coordinates)
     if projection is not None:
         return projection
-    from .rmst_runtime_projection import compile_rmst_runtime_projection
-
-    projection = compile_rmst_runtime_projection(**coordinates)
-    if projection is not None:
-        return projection
     from .landmark_survival_runtime_projection import (
         compile_landmark_survival_runtime_projection,
     )
@@ -272,6 +267,11 @@ def compile_web_scientific_runtime_projection(
     # A declared survival family with a landmark binds the sealed survival
     # suite; the association adapters below never re-model a survival design.
     projection = compile_landmark_survival_runtime_projection(**coordinates)
+    if projection is not None:
+        return projection
+    from .rmst_runtime_projection import compile_rmst_runtime_projection
+
+    projection = compile_rmst_runtime_projection(**coordinates)
     if projection is not None:
         return projection
     landmark_coordinates = dict(coordinates)

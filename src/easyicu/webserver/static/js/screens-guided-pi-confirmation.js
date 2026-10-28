@@ -783,7 +783,7 @@
         ? adjustmentOwner.render(((host.workflow() || {}).plan_review_summary || {}).source_adjustments) : '';
       const failureNotice = latestAttemptFailureHtml();
       const decisionActions = firstDecisionCopy && Array.isArray(firstDecisionCopy.options)
-        ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span>${option.requirement ? `<small>${esc(option.requirement)}</small>` : ''}</button>`).join('')
+        ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"${firstDecisionCopy.cardSha256 ? ` data-gpi-plan-decision-card="${esc(firstDecisionCopy.cardSha256)}"` : ''}><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span>${option.requirement ? `<small>${esc(option.requirement)}</small>` : ''}</button>`).join('')
         : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
@@ -892,8 +892,49 @@
       return (finding && finding.detail) || String((item && item.evidence) || localizedAuthorizationQuestion(item));
     }
 
+    function catalogName(concept) {
+      const row = (window.EU_CATALOG && window.EU_CATALOG.dict || {})[concept];
+      return row ? tr(row[0], row[1]) : String(concept || '');
+    }
+    // A survival question stopped before planning because follow-up has no start
+    // after the exposure window. The host offers one landmark design; it is used
+    // only when the researcher picks it.
+    function survivalLandmarkDecisionCopy(item) {
+      const card = item && item.decision_context && typeof item.decision_context === 'object' ? item.decision_context : {};
+      const hours = Number(card.landmark_hours), days = Number(card.horizon_days);
+      const exposure = catalogName(card.exposure);
+      const covariates = (Array.isArray(card.covariates) ? card.covariates : []).map(catalogName).join(tr(', ', '、'));
+      const rmst = card.rmst_alternative && Number(card.rmst_alternative.tau) > 0 ? card.rmst_alternative : null;
+      const tau = rmst ? `${Number(rmst.tau)} ${rmst.time_unit === 'hours' ? tr('hours', '小时') : tr('days', '天')}` : '';
+      return {
+        cardTitle: tr('Choose when survival follow-up starts', '请确定生存随访从何时开始'),
+        evidenceLabel: tr('Design to adopt', '将采用的设计'),
+        evidenceStatus: tr(`${hours}-hour landmark · ${days}-day survival`, `第 ${hours} 小时 landmark · ${days} 天生存`),
+        evidenceDetail: [
+          covariates && tr(`Adjusted for ${covariates}.`, `调整：${covariates}。`),
+          rmst && tr(`Sensitivity: ${tau} restricted mean survival time.`, `敏感性分析：${tau}限制性平均生存时间。`),
+        ].filter(Boolean).join(' '),
+        guidance: tr(
+          `${exposure} is known only at hour ${hours}; following from admission would count the time before it as exposed survival. The landmark follows patients alive at hour ${hours} to day ${days}.`,
+          `${exposure}要到第 ${hours} 小时才能判定；若从入 ICU 开始随访，判定前的存活时间会被算给暴露组。采用 landmark 后，只纳入第 ${hours} 小时仍存活者，从这一刻随访到第 ${days} 天。`,
+        ),
+        technicalEvidence: String((item && item.evidence) || ''),
+        technicalRemediation: String((item && item.remediation) || ''),
+        allowEdit: true,
+        cardSha256: String(card.card_sha256 || ''),
+        options: [{
+          optionId: String(card.option_id || 'fixed_landmark_survival'),
+          label: tr(`Use the ${hours}-hour landmark`, `采用第 ${hours} 小时 landmark`),
+          effect: tr('EasyICU then generates the plan again with this design.', '确认后按此设计重新生成研究计划。'),
+          requirement: tr(`Deaths before hour ${hours} are not part of the comparison.`, `第 ${hours} 小时前的死亡不进入比较。`),
+        }],
+      };
+    }
     function localizedAuthorizationDecisionCopy(item) {
       const code = String((item && item.code) || '');
+      if (code === 'SURVIVAL_LANDMARK_OWNER_NOT_SEALED' && item.decision_context && item.decision_context.card_sha256) {
+        return survivalLandmarkDecisionCopy(item);
+      }
       if (code === 'POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED') {
         const context = item && item.decision_context && typeof item.decision_context === 'object'
           ? item.decision_context : {};
