@@ -9,7 +9,7 @@
 
   const FILTERS = [
     ['all', 'All states', '全部状态'],
-    ['needs_user', 'Needs you', '待你处理'],
+    ['needs_user', 'Needs you', '待确认'],
     ['running', 'Running', '进行中'],
     ['stopped', 'Stopped', '已停止'],
     ['done', 'Finished', '已结束'],
