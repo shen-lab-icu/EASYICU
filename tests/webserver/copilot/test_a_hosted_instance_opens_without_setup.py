@@ -282,7 +282,7 @@ def test_a_hosted_skill_catalogue_offers_no_install() -> None:
     skills = _read("js/screens-skills.js")
     # The only upload entry sits in the menu a hosted instance leaves out.
     assert "const createMenu = hostedOwner && hostedOwner.active() ? '' : `" in skills
-    assert "<h1>${tr('Skills', '技能')}</h1></div>${createMenu}</div>" in skills
+    assert "<h1>${title}</h1></div>${createMenu}</div>" in skills
     assert skills.count("data-sk-upload aria-label") == 1
     menu = skills.split("const createMenu = ", 1)[1].split("</details>`;", 1)[0]
     assert "data-sk-upload aria-label" in menu

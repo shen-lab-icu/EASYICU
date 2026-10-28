@@ -4,8 +4,9 @@
   const { esc } = window.EU_HTML;
   const tr = (en, zh) => window.t(en, zh);
   const pick = (row, key) => window.EU_LANG === 'zh' && row[`${key}_zh`] || row[key] || '';
-  let catalog = { items: [] }, selected = '', pending = null, loadedAt = 0;
-  const rows = () => catalog.items || [];
+  // null until the host answers, so "loading" and "failed" never read as an empty catalogue.
+  let catalog = null, failed = false, selected = '', pending = null, loadedAt = 0;
+  const rows = () => (catalog && catalog.items) || [];
   const find = id => rows().find(row => row.id === id);
   const label = id => window.AGENT_READER_VOCAB?.tableTitle(id) || id;
   const bulletList = values => `<ul>${values.filter(Boolean).map(value => `<li>${esc(value)}</li>`).join('')}</ul>`;
@@ -184,6 +185,7 @@
   }
   function render(payload, selectedId, skills = []) {
     // Before the host answers there is nothing to call empty yet.
+    if (!payload && failed) return `<div class="eusk-empty" role="alert"><strong>${tr('Research workflows could not be loaded', '研究流程读取失败')}</strong><p>${tr('The local service did not answer. Try again.', '本机服务没有响应，请重试。')}</p><button type="button" data-wf-retry>${tr('Retry', '重试')}</button></div>`;
     if (!payload) return `<div class="eusk-empty" role="status">${tr('Loading research workflows…', '正在读取研究流程…')}</div>`;
     const items = payload.items || [], custom = window.EU_SKILL_CUSTOM_WORKFLOW;
     const customActive = !!custom && (selectedId || selected) === custom.ID;
@@ -198,7 +200,8 @@
   async function load() {
     if (Date.now() - loadedAt < 10000) return catalog;
     if (!pending && window.EU_API?.getJSON) pending = window.EU_API.getJSON('/api/capabilities/research-workflows')
-      .then(payload => { catalog = payload; loadedAt = Date.now(); return catalog; }).finally(() => { pending = null; });
+      .then(payload => { catalog = payload; failed = false; loadedAt = Date.now(); return catalog; })
+      .catch(error => { if (!catalog) failed = true; throw error; }).finally(() => { pending = null; });
     return pending;
   }
   // The request names the workflow and asks for the study's own inputs; the
@@ -219,6 +222,11 @@
     location.hash = '#guided';
   }
   function handle(target, skills) {
+    if (target.hasAttribute && target.hasAttribute('data-wf-retry')) {
+      failed = false; loadedAt = 0;
+      load().catch(() => {}).finally(() => { if (window.__euRender) window.__euRender(); });
+      return true;
+    }
     if (target.dataset.wfSelect) { selected = target.dataset.wfSelect; return true; }
     if (window.EU_SKILL_CUSTOM_WORKFLOW?.handle(target, skills)) return true;
     if (!target.dataset.wfStart) return false;
