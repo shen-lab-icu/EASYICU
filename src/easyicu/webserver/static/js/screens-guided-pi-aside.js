@@ -218,9 +218,18 @@
           ? String(host.runFailureText(run.gate_reason_code, { code: run.gate_detail_code, missing: run.gate_missing_concepts, cause: run.gate_detail_cause_code, mismatchFields: run.gate_detail_mismatch_fields || (run.gate_detail && run.gate_detail.mismatch_fields), statedVariable: run.gate_detail && run.gate_detail.stated_variable }) || '') : '';
         const count = Number(run.artifact_count || 0);
         const title = analysisComplete(run) ? status.label : `${runStage(run)} · ${status.label}`;
-        return `<li class="gpi-run-row is-${status.key}${run.authoritative ? ' is-current' : ''}"><span class="gpi-run-mark" aria-hidden="true"></span><div class="gpi-run-copy"><strong>${esc(title)}${run.authoritative ? `<span class="gpi-run-current">${tr('current', '当前')}</span>` : ''}</strong><small>${esc(when(run.updated_at))}${count ? ` · ${count} ${tr('files', '个文件')}` : ''}</small>${cause ? `<small class="gpi-run-cause">${esc(cause)}</small>` : ''}<details data-gpi-run-support><summary>${tr('Technical details', '技术详情')}</summary><code>${esc(run.run_id)}</code></details></div></li>`;
-      }).join('');
-      return `<details class="gpi-run-history" data-gpi-run-history${open ? ' open' : ''}><summary>${tr('Run record', '运行记录')}<small class="gpi-aside-count">${runs.length}</small></summary><ol>${rows}</ol></details>`;
+        return `<li class="gpi-run-row is-${status.key}${run.authoritative ? ' is-current' : ''}" data-gpi-run-row="${esc(run.run_id)}"><span class="gpi-run-mark" aria-hidden="true"></span><div class="gpi-run-copy"><strong>${esc(title)}${run.authoritative ? `<span class="gpi-run-current">${tr('current', '当前')}</span>` : ''}</strong><small>${esc(when(run.updated_at))}${count ? ` · ${count} ${tr('files', '个文件')}` : ''}</small>${cause ? `<small class="gpi-run-cause">${esc(cause)}</small>` : ''}<details data-gpi-run-support><summary>${tr('Technical details', '技术详情')}</summary><code>${esc(run.run_id)}</code></details></div></li>`;
+      });
+      // Attempts older than the current run that never reached an analysis
+      // were superseded by it; they fold behind one count so an early
+      // failure does not read as the project's present state.
+      const current = runs.findIndex(run => run.authoritative);
+      const superseded = current < 0 ? [] : runs.map((run, index) => index).filter(index => index > current && !analysisComplete(runs[index]));
+      const shown = rows.filter((_, index) => !superseded.includes(index)).join('');
+      // The fold keeps the state the researcher left it in across repaints.
+      const prior = typeof document !== 'undefined' && document.querySelector ? document.querySelector('[data-gpi-run-superseded]') : null;
+      const folded = superseded.length ? `<li class="gpi-run-superseded"><details data-gpi-run-superseded${prior && prior.open ? ' open' : ''}><summary>${tr(`${superseded.length} earlier attempts`, `较早的尝试 ${superseded.length}`)}</summary><ol>${superseded.map(index => rows[index]).join('')}</ol></details></li>` : '';
+      return `<details class="gpi-run-history" data-gpi-run-history${open ? ' open' : ''}><summary>${tr('Run record', '运行记录')}<small class="gpi-aside-count">${runs.length}</small></summary><ol>${shown}${folded}</ol></details>`;
     }
 
     function syncProjectWorkflowAside() {
