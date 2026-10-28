@@ -37,7 +37,7 @@
 .eusk-search{display:flex;align-items:center;gap:10px;height:46px;margin:26px 0 16px;padding:0 15px;border:1px solid var(--sk-line-strong);border-radius:8px;color:var(--sk-muted);background:var(--sk-surface)}
 .eusk-search:focus-within{border-color:var(--sk-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--sk-accent) 10%,transparent)}
 .eusk-search input{flex:1;min-width:0;height:100%;border:0;outline:0;background:transparent;color:var(--sk-ink);font-size:14px}
-.eusk-mode-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0 0 16px;padding:4px;border:1px solid var(--sk-line);border-radius:10px;background:var(--sk-wash)}
+.eusk-mode-tabs{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px;margin:0 0 16px;padding:4px;border:1px solid var(--sk-line);border-radius:10px;background:var(--sk-wash)}
 .eusk-mode-tabs button{display:flex;align-items:center;justify-content:start;gap:7px;min-height:43px;padding:0 14px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--sk-ink-2);text-align:left;font-size:13px}
 .eusk-mode-tabs button:hover{background:var(--sk-surface);color:var(--sk-ink)}.eusk-mode-tabs button[aria-selected=true]{border-color:var(--sk-line);background:var(--sk-surface);color:var(--sk-ink);font-weight:650;box-shadow:none}
 .eusk-mode-tabs span{display:inline-flex;align-items:center;justify-content:center;min-width:23px;height:20px;padding:0 6px;border-radius:999px;background:var(--sk-accent-soft);color:var(--sk-accent-ink);font-size:11px;font-weight:700}

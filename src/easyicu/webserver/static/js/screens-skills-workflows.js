@@ -78,7 +78,9 @@
       }).join('')}</div></section>`;
   }
   function render(payload, selectedId) {
-    const items = payload?.items || [];
+    // Before the host answers there is nothing to call empty yet.
+    if (!payload) return `<div class="eusk-empty" role="status">${tr('Loading research workflows…', '正在读取研究流程…')}</div>`;
+    const items = payload.items || [];
     const row = items.find(item => item.id === (selectedId || selected)) || items[0];
     if (!row) return `<div class="eusk-empty" role="status">${tr('No workflows available', '暂无研究流程')}</div>`;
     return `<div class="eusk-workflows"><nav class="eusk-workflow-list" aria-label="${tr('Research workflows', '研究流程')}">${items.map(item => `<button type="button" data-wf-select="${esc(item.id)}" aria-pressed="${item.id === row.id}"><strong>${esc(pick(item, 'title'))}</strong><span>${esc(pick(item, 'description'))}</span></button>`).join('')}</nav>
