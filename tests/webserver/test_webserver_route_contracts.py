@@ -118,6 +118,16 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "GET",
+        "/api/copilot/pi/provider-config/credentials",
+        "get_pi_remembered_credentials",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/provider-config/credentials/{credential_id}/delete",
+        "delete_pi_remembered_credential",
+    ),
+    (
+        "GET",
         "/api/copilot/pi/provider-config/declaration",
         "get_pi_copilot_provider_declaration",
     ),

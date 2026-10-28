@@ -106,13 +106,13 @@ def prepare_settings_patch(patch: dict[str, Any], current: dict[str, Any]) -> di
 def data_directory() -> Path:
     from easyicu.webserver.settings import load_settings
 
-    return Path(load_settings()["data_dir"])
+    return Path(load_settings().get("data_dir") or defaults()["data_dir"])
 
 
 def project_directory() -> Path:
     from easyicu.webserver.settings import load_settings
 
-    return Path(load_settings()["project_dir"])
+    return Path(load_settings().get("project_dir") or defaults()["project_dir"])
 
 
 def previous_data_directories() -> tuple[Path, ...]:
@@ -124,4 +124,4 @@ def previous_data_directories() -> tuple[Path, ...]:
 def data_directory_confirmed() -> bool:
     from easyicu.webserver.settings import load_settings
 
-    return bool(load_settings()["data_dir_confirmed"])
+    return bool(load_settings().get("data_dir_confirmed"))

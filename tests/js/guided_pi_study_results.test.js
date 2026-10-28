@@ -374,10 +374,10 @@ process.stdout.write('Current results, revision identity, historical isolation, 
   const html = panelBody.innerHTML;
   const fold = html.match(/<li class="gpi-run-superseded"><details data-gpi-run-superseded><summary>3 earlier attempts<\/summary>[\s\S]*?<\/details><\/li>/);
   assert.ok(fold, 'three superseded attempts fold behind one count');
-  for (const id of ['older_plan', 'old_failure_1', 'old_failure_2']) assert.match(fold[0], new RegExp(`data-gpi-run-row="${id}"`));
+  for (const id of ['older_plan', 'old_failure_1', 'old_failure_2']) assert.match(fold[0], new RegExp(`<code>${id}<\/code>`));
   for (const id of ['newer_failure', 'current_plan', 'old_analysis']) {
-    assert.doesNotMatch(fold[0], new RegExp(`data-gpi-run-row="${id}"`));
-    assert.match(html, new RegExp(`data-gpi-run-row="${id}"`));
+    assert.doesNotMatch(fold[0], new RegExp(`<code>${id}<\/code>`));
+    assert.match(html, new RegExp(`<code>${id}<\/code>`));
   }
   assert.match(html, /<small class="gpi-aside-count">6<\/small>/);
 }
