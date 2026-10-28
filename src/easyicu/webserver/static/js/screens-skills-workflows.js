@@ -30,7 +30,12 @@
     absolute_risk_context: tr('Absolute risk', '绝对风险'), robustness_replay: tr('Sensitivity', '敏感性分析'),
     visualization: tr('Figure', '图形'), report: tr('Report', '报告'),
     feature_functional_form: tr('Functional form', '函数形式检验'),
-    primary_survival_suite: tr('Survival models', '生存分析模型'), candidate_selection: tr('Model selection', '候选模型选择') });
+    primary_survival_suite: tr('Survival models', '生存分析模型'), candidate_selection: tr('Model selection', '候选模型选择'),
+    cohort_accounting: tr('Cohort accounting', '纳排与队列'), baseline_context: tr('Baseline table', '基线描述'),
+    time_varying_cox: tr('Time-varying Cox', '时变 Cox 模型'), target_trial_suite: tr('Clone-censor-weight', '克隆-删失-加权'),
+    landmark_features: tr('Landmark features', 'Landmark 特征'), horizon_labels: tr('Horizon outcomes', '预测时窗结局'),
+    patient_split: tr('Patient split', '按患者划分'), model_fit: tr('Model fit', '模型拟合'),
+    landmark_performance: tr('Performance by landmark', '各 landmark 表现') });
   // Fallback when a step has no short name: its typed kind, never the long step instruction.
   const kindNames = () => ({ cohort: tr('Cohort', '队列'), preflight: tr('Data check', '数据核查'),
     model: tr('Primary analysis', '主分析'), diagnostic: tr('Diagnostic', '诊断检验'),
@@ -177,13 +182,16 @@
         return `<span class="eusk-workflow-database ${esc(db.status)}" tabindex="0" title="${esc(reason)}" aria-describedby="${esc(id)}"><strong>${esc(db.label)}</strong> ${esc(statuses[db.status])}<span class="eusk-workflow-reason" role="tooltip" id="${esc(id)}">${esc(reason)}</span></span>`;
       }).join('')}</div></section>`;
   }
-  function render(payload, selectedId) {
+  function render(payload, selectedId, skills = []) {
     // Before the host answers there is nothing to call empty yet.
     if (!payload) return `<div class="eusk-empty" role="status">${tr('Loading research workflows…', '正在读取研究流程…')}</div>`;
-    const items = payload.items || [];
-    const row = items.find(item => item.id === (selectedId || selected)) || items[0];
-    if (!row) return `<div class="eusk-empty" role="status">${tr('No workflows available', '暂无研究流程')}</div>`;
-    return `<div class="eusk-workflows"><nav class="eusk-workflow-list" aria-label="${tr('Research workflows', '研究流程')}">${items.map(item => `<button type="button" data-wf-select="${esc(item.id)}" aria-pressed="${item.id === row.id}"><strong>${esc(pick(item, 'title'))}</strong><span>${esc(pick(item, 'description'))}</span></button>`).join('')}</nav>
+    const items = payload.items || [], custom = window.EU_SKILL_CUSTOM_WORKFLOW;
+    const customActive = !!custom && (selectedId || selected) === custom.ID;
+    const row = customActive ? null : items.find(item => item.id === (selectedId || selected)) || items[0];
+    if (!row && !customActive) return `<div class="eusk-empty" role="status">${tr('No workflows available', '暂无研究流程')}</div>`;
+    const nav = `<nav class="eusk-workflow-list" aria-label="${tr('Research workflows', '研究流程')}">${custom ? custom.navItem(customActive) : ''}${items.map(item => `<button type="button" data-wf-select="${esc(item.id)}" aria-pressed="${!customActive && item.id === row.id}"><strong>${esc(pick(item, 'title'))}</strong><span>${esc(pick(item, 'description'))}</span></button>`).join('')}</nav>`;
+    if (customActive) return `<div class="eusk-workflows">${nav}${custom.render(skills, graph)}</div>`;
+    return `<div class="eusk-workflows">${nav}
       <article class="eusk-workflow-detail"><header><h2>${esc(pick(row, 'title'))}</h2><p>${esc(pick(row, 'description'))}</p><small>${esc(row.version)}</small></header>
       <div class="eusk-workflow-actions"><button type="button" class="eusk-use" data-wf-start="${esc(row.id)}" ${row.enabled ? '' : 'disabled'}>${tr('Start with this workflow', '用此流程开始')}</button><button type="button" data-sk-open="builtin:${esc(row.id)}">${tr('Docs', '文档')}</button></div>${sections(row)}</article></div>`;
   }
@@ -212,6 +220,7 @@
   }
   function handle(target, skills) {
     if (target.dataset.wfSelect) { selected = target.dataset.wfSelect; return true; }
+    if (window.EU_SKILL_CUSTOM_WORKFLOW?.handle(target, skills)) return true;
     if (!target.dataset.wfStart) return false;
     const row = find(target.dataset.wfStart), skill = skills.find(item => item.name === row?.id);
     if (row?.enabled && skill) start(skill, row);

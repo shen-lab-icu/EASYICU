@@ -130,7 +130,7 @@
     const personalEntries = userSkills();
     const methodEntries = methodComponents();
     const skillEntries = [...workflowEntries, ...analysisModuleEntries, ...toolEntries, ...publicationEntries, ...personalEntries];
-    if (ui.catalogMode === 'workflows' && workflows()) return `<div class="eusk-head"><h1>${tr('Research workflows', '研究流程')}</h1></div>${modeTabs(skillEntries.length, methodEntries.length, workflowEntries.length)}${workflows().render(workflows().payload())}`;
+    if (ui.catalogMode === 'workflows' && workflows()) return `<div class="eusk-head"><h1>${tr('Research workflows', '研究流程')}</h1></div>${modeTabs(skillEntries.length, methodEntries.length, workflowEntries.length)}${workflows().render(workflows().payload(), undefined, allSkills())}`;
     const all = ui.catalogMode === 'methods' ? methodEntries : skillEntries;
     const categories = [...new Set(all.map(item => item.category))].sort((a, b) => a.localeCompare(b));
     const query = ui.query.trim().toLocaleLowerCase();
@@ -176,7 +176,7 @@
         <button type="button" role="menuitem" data-sk-create-with aria-label="${tr('Create with EasyICU', '使用 EasyICU 开发')}"><span>${icon('spark', 16)}</span><span><strong>${tr('Create with EasyICU', '使用 EasyICU 开发')}</strong><small>${tr('Open a new task with a Skill Builder draft', '在新任务中打开技能开发草稿')}</small></span></button>
       </div></details>`;
     return `<div class="eusk-head"><div><span class="eusk-eyebrow">SKILL HUB</span><h1>${tr('Skills', '技能')}</h1></div>${createMenu}</div>
-      <label class="eusk-search">${icon('search', 17)}<input data-sk-search type="search" placeholder="${ui.catalogMode === 'methods' ? tr('Search the method library…', '搜索方法库…') : tr('Search research skills…', '搜索研究技能…')}" value="${esc(ui.query)}" autocomplete="off"></label>
+      <label class="eusk-search">${icon('search', 17)}<input data-sk-search type="search" placeholder="${ui.catalogMode === 'methods' ? tr('Search modules…', '搜索模块…') : tr('Search research skills…', '搜索研究技能…')}" value="${esc(ui.query)}" autocomplete="off"></label>
       ${modeTabs(skillEntries.length, methodEntries.length, workflowEntries.length)}
       <div class="eusk-filters"><span class="eusk-filter-label">${tr('SOURCE', '来源')}</span>
       ${[['all', tr('All', '全部')], ['user', tr('Mine', '我的')], ['builtin', tr('EasyICU', 'EasyICU')]].map(([key, label]) =>
@@ -189,7 +189,7 @@
   function modeTabs(skills, methods, studies) {
     return `<div class="eusk-mode-tabs" role="tablist" aria-label="${tr('Catalog level', '目录层级')}">${[
       ['workflows', tr('Research workflows', '研究流程'), studies], ['skills', tr('Skills', '技能'), skills],
-      ['methods', tr('Method library', '方法库'), methods],
+      ['methods', tr('Modules', '模块'), methods],
     ].map(([mode, title, count]) => `<button type="button" role="tab" aria-selected="${ui.catalogMode === mode}" data-sk-mode="${mode}">${title} <span>${count}</span></button>`).join('')}</div>`;
   }
   function detail() {
@@ -203,8 +203,8 @@
     const masterOff = !user && (method ? methodCapabilities().enabled === false : publicationCapabilities().enabled === false);
     // The administrator owns skill state on a hosted instance: show it, offer no toggle.
     const stateOnly = method || Boolean(window.EasyICU?.guidedPi?.optional('hosted')?.active());
-    return `<button type="button" class="eusk-back" data-sk-back>← ${skill.kind === 'method_component' ? tr('Back to method library', '返回方法库') : tr('Back to skills', '返回技能目录')}</button>
-      <div class="eusk-detail-head"><div><span class="eusk-eyebrow">${esc(skill.category)} · ${skill.kind === 'method' ? layerLabel(skill) : skill.kind === 'method_component' ? tr('Method library', '方法库') : user && skill.copiedFrom ? copiedFromLabel(skill) : sourceLabel(skill.source)}</span>
+    return `<button type="button" class="eusk-back" data-sk-back>← ${skill.kind === 'method_component' ? tr('Back to modules', '返回模块') : tr('Back to skills', '返回技能目录')}</button>
+      <div class="eusk-detail-head"><div><span class="eusk-eyebrow">${esc(skill.category)} · ${skill.kind === 'method' ? layerLabel(skill) : skill.kind === 'method_component' ? tr('Module', '模块') : user && skill.copiedFrom ? copiedFromLabel(skill) : sourceLabel(skill.source)}</span>
       <h1>${esc(skill.title)}</h1><p>${esc(skill.description)}</p><small>${esc(user ? date(skill.updated_at) : skill.version)}</small>${user && skill.sourceUpdated ? `<p class="eusk-source-note">${tr('The original Skill has changed; your copy stays as it is.', '原技能已更新，你的副本保持不变。')} <button type="button" data-sk-open="builtin:${esc(skill.copiedFrom)}">${tr('View the original', '查看原技能')}</button></p>` : ''}</div>
       <div class="eusk-detail-actions">${stateOnly
         ? `<span class="eusk-state-button ${skill.enabled ? 'on' : ''}" aria-label="${skill.enabled ? tr('Available', '可用') : tr('Unavailable', '不可用')}">${skill.enabled ? '✓ ' + tr('Available', '可用') : tr('Unavailable', '不可用')}</span>`

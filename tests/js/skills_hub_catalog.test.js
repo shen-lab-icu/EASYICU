@@ -28,7 +28,7 @@ screen.afterRender({ querySelector: selector => selector === '.eusk-shell' ? hub
 const click = dataset => handlers.click({ target: { closest: selector => selector === 'button' ? { dataset } : null } });
 let html = screen.render();
 assert.match(html, /data-sk-mode="skills"[^>]*>Skills <span>81<\/span>/);
-assert.match(html, /data-sk-mode="methods"[^>]*>Method library <span>0<\/span>/);
+assert.match(html, /data-sk-mode="methods"[^>]*>Modules <span>0<\/span>/);
 assert.match(html, /All <span>81<\/span>/);
 assert.match(html, /Mine <span>81<\/span>/);
 assert.equal((html.match(/class="eusk-card /g) || []).length, 81);

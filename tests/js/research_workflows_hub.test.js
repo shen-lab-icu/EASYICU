@@ -187,3 +187,37 @@ test('the graph drops implied edges and routes column-skipping edges between ste
   assert.doesNotMatch(html, /Long instruction/);
   assert.match(html, /<title>主分析<\/title>/);
 });
+test('a custom workflow composes modules in order and starts a conversation request', () => {
+  const { owner, storage, location, window, context } = setup();
+  vm.runInContext(fs.readFileSync(path.join(JS, 'screens-skills-custom-workflow.js'), 'utf8'), context);
+  const custom = window.EU_SKILL_CUSTOM_WORKFLOW;
+  const skills = [
+    { name: 'tte.cox', kind: 'method_component', enabled: true, title: 'Cox 模型', category: '生存', description: 'HR' },
+    { name: 'tte.ph', kind: 'method_component', enabled: true, title: '比例风险检验', category: '生存', description: 'PH' },
+    { name: 'off', kind: 'method_component', enabled: false, title: '未启用', category: '生存', description: '' },
+  ];
+  const listHtml = owner.render({ items: [fixture] }, 'synthetic', skills);
+  assert.match(listHtml, /data-wf-select="__custom"/);
+  const button = attrs => ({ dataset: attrs, hasAttribute: name => name === 'data-wfc-start' && attrs.start === '' });
+  assert.equal(owner.handle(button({ wfcAdd: 'tte.ph' }), skills), true);
+  assert.equal(owner.handle(button({ wfcAdd: 'tte.cox' }), skills), true);
+  assert.equal(owner.handle(button({ wfcMove: '1:-1' }), skills), true);
+  const html = owner.render({ items: [fixture] }, '__custom', skills);
+  assert.doesNotMatch(html, /未启用/);
+  // Cohort first, the two modules in the chosen order, report last.
+  assert.equal((html.match(/data-wf-node=/g) || []).length, 4);
+  assert.equal((html.match(/data-wf-edge=/g) || []).length, 3);
+  assert.ok(html.indexOf('<span>Cox 模型</span>') < html.indexOf('<span>比例风险检验</span>'));
+  assert.equal(custom.handle(button({ start: '' }), skills), true);
+  assert.equal(location.hash, '#guided');
+  assert.match(storage.get('easyicu.skillHub.question'), /先定义队列，然后依次做 1\. Cox 模型；2\. 比例风险检验，最后写报告/);
+});
+test('a custom workflow cannot start without a module', () => {
+  const { owner, storage, location, window, context } = setup();
+  vm.runInContext(fs.readFileSync(path.join(JS, 'screens-skills-custom-workflow.js'), 'utf8'), context);
+  const html = owner.render({ items: [fixture] }, '__custom', []);
+  assert.match(html, /data-wfc-start disabled/);
+  window.EU_SKILL_CUSTOM_WORKFLOW.handle({ dataset: {}, hasAttribute: name => name === 'data-wfc-start' }, []);
+  assert.equal(location.hash, '#skills');
+  assert.equal(storage.get('easyicu.skillHub.question'), undefined);
+});
