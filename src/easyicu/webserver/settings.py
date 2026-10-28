@@ -56,9 +56,7 @@ DEFAULTS: Dict[str, Any] = {
     "connector_pubmed_enabled": True,
     "connector_zotero_enabled": False,
     "mcp_tools_enabled": False,
-    "prompt_contracts_enabled": True,
     "tool_audit_enabled": True,
-    "remote_compute_enabled": False,
     "density": "comfortable",
     "reduce_motion": False,
 }
@@ -70,6 +68,8 @@ DEFAULTS: Dict[str, Any] = {
 #: that pretends the write landed. Re-adding one is allowed — in the same
 #: change that adds its consumer.
 RETIRED_KEYS: Dict[str, str] = {
+    "prompt_contracts_enabled": "host prompts and evidence rules are versioned by their owners",
+    "remote_compute_enabled": "no remote compute adapter is installed; execution remains local",
     "evidence_gate": "evidence enforcement is decided per agent run, not globally",
     "demo_patients": "demo screens use bounded seeded fixtures with a fixed size",
     "demo_duration": "demo time windows are illustrative and not configurable",
@@ -128,9 +128,7 @@ _COERCE = {
     "connector_pubmed_enabled": parse_bool,
     "connector_zotero_enabled": parse_bool,
     "mcp_tools_enabled": parse_bool,
-    "prompt_contracts_enabled": parse_bool,
     "tool_audit_enabled": parse_bool,
-    "remote_compute_enabled": parse_bool,
     "density": _choice("density"),
     "reduce_motion": parse_bool,
 }

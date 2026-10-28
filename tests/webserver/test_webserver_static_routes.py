@@ -119,7 +119,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "saveSetting('data_mode'" not in i18n_js
     assert "js/i18n.js?v=20261027-nodemo1" in index_html
-    assert "js/api.js?v=20261028-upd1" in index_html
+    assert "js/api.js?v=20261028-set1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -276,7 +276,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20261028-upd1" in index_html
+    assert "js/api.js?v=20261028-set1" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
 
 
@@ -432,7 +432,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20261027-old1" in index_html
     assert "css/guided-projects.css?v=20261027-proj1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20261028-upd1" in index_html
+    assert "js/api.js?v=20261028-set1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20261028-upd1" in index_html
     )
@@ -895,7 +895,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "本地优先保障" in settings_js
     assert "研究代理" in settings_js
     assert "选择默认导出文件夹" in settings_js
-    assert "设置已恢复为后端默认值。" in settings_js
+    assert "显示与能力选项已恢复默认；已安装扩展和个人说明保留。" in settings_js
     assert "dual('Capabilities', '能力')" in settings_js
     assert "Research controls" in settings_js
     assert "settingsCapabilityTab" in settings_js
@@ -904,32 +904,31 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "window.EU_CAPABILITIES" in settings_js
     assert "cap('zotero_connector')" in settings_js
     assert "cap('mcp_tools')" in settings_js
-    assert "cap('prompt_contracts')" in settings_js
     assert "cap('tool_audit')" in settings_js
     assert "cap('remote_compute')" in settings_js
-    assert "Zotero auto-connect" in settings_js
+    assert "Zotero auto-connect" not in settings_js
     assert "Zotero local API" not in settings_js
-    assert "Backend policy" in settings_js
-    assert "Backend contract rules" in settings_js
-    assert "Compute adapter" in settings_js
+    assert "Installed tools" in settings_js
+    assert "Built-in prompts" in settings_js
+    assert "No remote adapter is installed" in settings_js
     assert "science_skills_enabled" in settings_js
     assert "connector_pubmed_enabled" in settings_js
     assert "connector_zotero_enabled" in settings_js
     assert "mcp_tools_enabled" in settings_js
-    assert "prompt_contracts_enabled" in settings_js
+    assert "prompt_contracts_enabled" not in settings_js
     assert "tool_audit_enabled" in settings_js
-    assert "remote_compute_enabled" in settings_js
-    assert "PubMed connector" in settings_js
+    assert "remote_compute_enabled:" not in settings_js
+    assert "PubMed / OpenAlex" in settings_js
     assert "dual('MCP tools', 'MCP 工具')" in settings_js
     assert "dual('Prompt contracts', '提示词契约')" in settings_js
-    assert "Tool audit ledger" in settings_js
+    assert "Connector event log" in settings_js
     assert "功能对齐" not in settings_js
     assert '"connector_pubmed_enabled": True' in settings_py
     assert '"connector_zotero_enabled": False' in settings_py
     assert '"mcp_tools_enabled": False' in settings_py
-    assert '"prompt_contracts_enabled": True' in settings_py
+    assert '"prompt_contracts_enabled": True' not in settings_py
     assert '"tool_audit_enabled": True' in settings_py
-    assert '"remote_compute_enabled": False' in settings_py
+    assert '"remote_compute_enabled": False' not in settings_py
     assert "crumbs: ['Home', 'Settings']" not in settings_js
     assert (
         "actionHtml: `<button class=\"btn\" data-settings-reset>${icon('refresh', 13)} Reset to defaults</button>`"
@@ -956,14 +955,17 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "zoteroSource" in api_js
     assert "importZoteroSource" in api_js
     assert "/api/extensions/skills/install" in api_js
+    assert "/api/extensions/skills/import" in api_js
+    assert "window.EU_API.importExtensionSkillPackage" in api_js
     assert "/api/extensions/mcp/install" in api_js
     assert "/api/extensions/mcp/test" in api_js
     assert "window.EU_API.loadExtensions" in api_js
     assert "window.EU_SETTINGS_EXTENSIONS" in extensions_js
-    assert "data-ext-install-skill" in extensions_js
+    assert "data-ext-install-skill" not in extensions_js
+    assert 'href="#skills"' in extensions_js
     assert "data-ext-test-mcp" in extensions_js
     assert "allowed_tools" in extensions_js
-    assert "Frozen into each new Copilot session and Agent run" in extensions_js
+    assert "enabled for new sessions" in extensions_js
     assert "capabilities: C0()" in settings_js
     assert "data-settings-zotero-test" in settings_js
     assert "data-settings-audit-refresh" in settings_js
@@ -974,8 +976,8 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert 'body[data-reduce-motion="true"]' in tweaks_css
     assert "css/tweaks.css?v=20260625-stage96" in index_html
     assert "css/settings.css?v=20261026-personal1" in index_html
-    assert "js/screens-settings-extensions.js?v=20260812-extension-manager1" in index_html
-    assert "js/screens-settings.js?v=20261027-old1" in index_html
+    assert "js/screens-settings-extensions.js?v=20261028-set1" in index_html
+    assert "js/screens-settings.js?v=20261028-set1" in index_html
     assert "js/screens-settings-personalization.js?v=20261026-personal1" in index_html
     assert index_html.index("js/screens-settings-personalization.js") < index_html.index("js/screens-settings.js")
     assert ".settings-cap-panel" in settings_css
@@ -2010,7 +2012,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20261028-readm1" in index_html
-    assert "api.js?v=20261028-upd1" in index_html
+    assert "api.js?v=20261028-set1" in index_html
     assert "screens-dict.js?v=20261028-readm1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
@@ -2306,7 +2308,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20261028-upd1" in index_html
+    assert "api.js?v=20261028-set1" in index_html
     assert "screens-guided-projects.js?v=20261028-upd1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"

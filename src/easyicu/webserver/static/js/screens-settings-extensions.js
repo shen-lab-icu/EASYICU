@@ -8,7 +8,6 @@
     error: '',
     busy: '',
     mcpTest: null,
-    skillDraft: '',
     mcpDraft: { name: '', url: '', tools: '' },
   };
 
@@ -30,18 +29,6 @@
   function emptyState(text) {
     return `<div class="settings-ext-empty">${esc(text)}</div>`;
   }
-  function skillCards(rows) {
-    if (!rows.length) return emptyState(tr('No user Skill is installed yet.', '尚未安装用户 Skill。'));
-    return `<div class="settings-ext-list">${rows.map(row => `
-      <article class="settings-ext-card ${row.enabled ? 'on' : ''}">
-        <div class="settings-ext-card-main">
-          <div class="settings-ext-title"><b>${esc(row.name)}</b><span class="settings-ext-kind">SKILL</span></div>
-          <p>${esc(row.description)}</p>
-          <div class="settings-ext-meta"><span>${(row.stages || []).map(stage => esc(stage)).join(' + ')}</span><span class="mono">sha256:${shortSha(row.digest)}</span></div>
-        </div>
-        <div class="settings-ext-actions">${toggleButton('skill', row)}<button type="button" class="btn sm danger" data-ext-remove="skill" data-ext-name="${esc(row.name)}">${tr('Remove', '移除')}</button></div>
-      </article>`).join('')}</div>`;
-  }
   function mcpCards(rows) {
     if (!rows.length) return emptyState(tr('No MCP server is installed yet.', '尚未安装 MCP 服务。'));
     return `<div class="settings-ext-list">${rows.map(row => `
@@ -61,21 +48,8 @@
   }
 
   function renderSkills() {
-    const data = registry();
-    const rows = data && Array.isArray(data.skills) ? data.skills : [];
-    return `<section class="settings-ext-manager" data-ext-manager="skills">
-      <div class="settings-ext-head"><div><b>${tr('User-installed Skills', '用户安装的 Skill')}</b><span>${tr('Frozen into each new Copilot session and Agent run. Writing Skills are advisory and cannot override evidence rules.', '在每个新的研究助手会话和 Agent 运行中固化版本。写作 Skill 仅作辅助，不能覆盖证据规则。')}</span></div><span class="pill info">${rows.filter(row => row.enabled).length}/${rows.length} ${tr('active', '启用')}</span></div>
-      ${statusBlock()}${skillCards(rows)}
-      <details class="settings-ext-add"><summary>${tr('Add or update a SKILL.md', '添加或更新 SKILL.md')}</summary>
-        <div class="settings-ext-form">
-          <label><span>${tr('Upload SKILL.md', '上传 SKILL.md')}</span><input type="file" accept=".md,text/markdown,text/plain" data-ext-skill-file></label>
-          <label class="wide"><span>${tr('Or paste the complete file', '或粘贴完整文件')}</span><textarea rows="8" maxlength="12000" data-ext-skill-md placeholder="---&#10;name: concise-writing&#10;description: Keep scientific prose concise.&#10;---&#10;Use short paragraphs…">${esc(state.skillDraft)}</textarea></label>
-          <fieldset class="settings-ext-stages"><legend>${tr('Workflow stages', '工作流阶段')}</legend><label><input type="checkbox" value="conversation" data-ext-skill-stage checked> ${tr('Conversation', '对话辅助')}</label><label><input type="checkbox" value="writing" data-ext-skill-stage> ${tr('Writing', '写作辅助')}</label></fieldset>
-          <label class="settings-ext-check"><input type="checkbox" data-ext-install-enabled checked> ${tr('Enable after review', '审阅后立即启用')}</label>
-          <button type="button" class="btn primary" data-ext-install-skill>${state.busy === 'skill-install' ? tr('Installing…', '安装中…') : tr('Install Skill', '安装 Skill')}</button>
-        </div>
-      </details>
-    </section>`;
+    const rows = (registry() || {}).skills || [];
+    return `<div class="settings-ext-head"><div><b>${tr('My skills', '我的技能')}</b><span>${rows.filter(row => row.enabled).length}/${rows.length} ${tr('enabled for new sessions', '对新会话启用')}</span></div><a class="btn sm" href="#skills">${tr('Import, edit or export', '导入、编辑或导出')}</a></div>`;
   }
 
   function renderMcp() {
@@ -84,7 +58,7 @@
     const master = !!(window.EU_SETTINGS && window.EU_SETTINGS.mcp_tools_enabled);
     const tested = state.mcpTest && Array.isArray(state.mcpTest.tools) ? state.mcpTest.tools : [];
     return `<section class="settings-ext-manager" data-ext-manager="mcp">
-      <div class="settings-ext-head"><div><b>${tr('Installed MCP servers', '已安装 MCP 服务')}</b><span>${tr('Streamable HTTP only; every callable tool must be allowlisted. The first release stores no tokens or custom headers.', '仅支持 Streamable HTTP；每个可调用工具必须进入白名单。第一版不保存令牌或自定义请求头。')}</span></div><span class="pill ${master ? 'ok' : 'warn'}">${master ? tr('master on', '总开关已开') : tr('master off', '总开关已关')}</span></div>
+      <div class="settings-ext-head"><div><b>${tr('Installed MCP servers', '已安装 MCP 服务')}</b><span>${tr('Allowlisted read-only tools are callable in new conversations after a per-turn grant. Streamable HTTP; no stored credentials.', '新对话可按次授权调用白名单内的只读工具。支持 Streamable HTTP，不保存凭证。')}</span></div><span class="pill ${master ? 'ok' : 'warn'}">${master ? tr('master on', '总开关已开') : tr('master off', '总开关已关')}</span></div>
       ${statusBlock()}${mcpCards(rows)}
       <details class="settings-ext-add"><summary>${tr('Add or update an MCP server', '添加或更新 MCP 服务')}</summary>
         <div class="settings-ext-form">
@@ -125,7 +99,7 @@
       const name = button.getAttribute('data-ext-name');
       const enabled = button.getAttribute('data-ext-enabled') !== 'true';
       state.busy = `${kind}-toggle`; state.error = '';
-      api().setExtensionState({ kind, name, enabled })
+      api().setExtensionState({ kind, name, enabled, expected_sha256: confirmRevision() })
         .then(() => notice(enabled ? tr('Extension enabled for new sessions and runs.', '扩展已对新会话和运行启用。') : tr('Extension disabled for new sessions and runs.', '扩展已对新会话和运行停用。')))
         .catch(error => { state.error = errorText(error); })
         .finally(() => { state.busy = ''; rerender(); });
@@ -137,25 +111,6 @@
       api().removeExtension({ kind, name, expected_sha256: confirmRevision() }).then(() => notice(tr('Extension removed from future activation.', '扩展已从后续激活中移除。')))
         .catch(error => { state.error = errorText(error); }).finally(rerender);
     }));
-    const file = root.querySelector('[data-ext-skill-file]');
-    if (file) file.addEventListener('change', () => {
-      const picked = file.files && file.files[0];
-      if (!picked) return;
-      if (picked.size > 12000) { state.error = tr('SKILL.md exceeds 12 KB.', 'SKILL.md 超过 12 KB。'); rerender(); return; }
-      picked.text().then(text => { state.skillDraft = text; rerender(); });
-    });
-    const skillInstall = root.querySelector('[data-ext-install-skill]');
-    if (skillInstall) skillInstall.addEventListener('click', () => {
-      const area = root.querySelector('[data-ext-skill-md]');
-      state.skillDraft = String((area && area.value) || '');
-      const stages = Array.from(root.querySelectorAll('[data-ext-skill-stage]:checked')).map(input => input.value);
-      const enabled = !!((root.querySelector('[data-ext-manager="skills"] [data-ext-install-enabled]') || {}).checked);
-      state.busy = 'skill-install'; state.error = '';
-      api().installExtensionSkill({ skill_md: state.skillDraft, stages, enabled, expected_sha256: confirmRevision() })
-        .then(() => { state.skillDraft = ''; notice(tr('Skill installed. It will enter newly created sessions and runs.', 'Skill 已安装，将进入之后新建的会话和运行。')); })
-        .catch(error => { state.error = errorText(error); })
-        .finally(() => { state.busy = ''; rerender(); });
-    });
     const test = root.querySelector('[data-ext-test-mcp]');
     if (test) test.addEventListener('click', () => {
       const draft = captureMcpDraft(root); state.busy = 'mcp-test'; state.error = ''; state.mcpTest = null;

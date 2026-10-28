@@ -1377,25 +1377,29 @@
     "method": "POST",
     "route": "/api/extensions/remove",
     "fields": [
+      "body:kind",
       "body:name",
-      "body:skill_md"
+      "body:expected_sha256"
     ],
-    "reaches": "ExtensionRegistry / MCP HTTP transport",
-    "protection": "refused route: unavailable_when_hosted",
-    "writes": "refused on hosted",
-    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
+    "reaches": "ExtensionRegistry under the signed-in instance home; Skill-only mutations when hosted",
+    "protection": "owner check: instance-owned extension root; exact activation revision; validated Skill names and instructions; hosted MCP changes refused",
+    "writes": "instance home",
+    "write_owner": "routes.extensions._registry requires an instance path; ExtensionRegistry writes immutable objects and registry under that root."
   },
   {
     "method": "POST",
     "route": "/api/extensions/skills/install",
     "fields": [
-      "body:name",
-      "body:skill_md"
+      "body:skill_md",
+      "body:reference_files",
+      "body:stages",
+      "body:enabled",
+      "body:expected_sha256"
     ],
-    "reaches": "ExtensionRegistry / MCP HTTP transport",
-    "protection": "refused route: unavailable_when_hosted",
-    "writes": "refused on hosted",
-    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
+    "reaches": "ExtensionRegistry under the signed-in instance home; Skill-only mutations when hosted",
+    "protection": "owner check: instance-owned extension root; exact activation revision; validated Skill names and instructions; hosted MCP changes refused",
+    "writes": "instance home",
+    "write_owner": "routes.extensions._registry requires an instance path; ExtensionRegistry writes immutable objects and registry under that root."
   },
   {
     "method": "POST",
@@ -1406,10 +1410,10 @@
       "body:stages",
       "body:expected_sha256"
     ],
-    "reaches": "ExtensionRegistry.copy_builtin_skill -> disabled personal Skill under the instance extension root",
-    "protection": "refused route: unavailable_when_hosted",
-    "writes": "refused on hosted",
-    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
+    "reaches": "ExtensionRegistry under the signed-in instance home; Skill-only mutations when hosted",
+    "protection": "owner check: instance-owned extension root; exact activation revision; validated Skill names and instructions; hosted MCP changes refused",
+    "writes": "instance home",
+    "write_owner": "routes.extensions._registry requires an instance path; ExtensionRegistry writes immutable objects and registry under that root."
   },
   {
     "method": "GET",
@@ -1426,13 +1430,14 @@
     "method": "POST",
     "route": "/api/extensions/state",
     "fields": [
+      "body:kind",
       "body:name",
-      "body:skill_md"
+      "body:expected_sha256"
     ],
-    "reaches": "ExtensionRegistry / MCP HTTP transport",
-    "protection": "refused route: unavailable_when_hosted",
-    "writes": "refused on hosted",
-    "write_owner": "hosted.guard_request rejects administrator actions before dispatch."
+    "reaches": "ExtensionRegistry under the signed-in instance home; Skill-only mutations when hosted",
+    "protection": "owner check: instance-owned extension root; exact activation revision; validated Skill names and instructions; hosted MCP changes refused",
+    "writes": "instance home",
+    "write_owner": "routes.extensions._registry requires an instance path; ExtensionRegistry writes immutable objects and registry under that root."
   },
   {
     "method": "POST",
@@ -2574,5 +2579,40 @@
     "guarded_errors": {},
     "writes": "instance home",
     "write_owner": "QuickAnswerStore under the session store's server-owned .quick-answers directory, named by sha256(session_id) and a quick_answer_id that must match ^qa_[a-f0-9]{32}$; execution files go to that record's own directory; the conversation replay and session index stay under state_paths. Client values never choose a path. The study context is updated through study_contexts under the instance home."
+  },
+  {
+    "method": "POST",
+    "route": "/api/extensions/skills/import",
+    "fields": [
+      "body:files",
+      "body:archive_base64",
+      "body:stages",
+      "body:enabled",
+      "body:expected_sha256"
+    ],
+    "reaches": "ExtensionRegistry.install_skill_package; bounded upload bytes only, no host path input or code execution",
+    "protection": "owner check: instance-owned root; revision check; safe relative package paths, UTF-8 instruction schema and package limits",
+    "writes": "instance home",
+    "write_owner": "ExtensionRegistry immutable Skill objects and registry in this user instance home."
+  },
+  {
+    "method": "GET",
+    "route": "/api/extensions/skills/{name}/package.zip",
+    "fields": [
+      "path:name"
+    ],
+    "reaches": "ExtensionRegistry.current_skill and export_skill_package; registry-selected digest only",
+    "protection": "owner check: instance-owned root; validated name and verified immutable package digest",
+    "writes": "none",
+    "write_owner": "ZIP response is assembled in memory, without extracting or writing uploaded paths."
+  },
+  {
+    "method": "GET",
+    "route": "/api/capabilities/research-workflows",
+    "fields": [],
+    "reaches": "research_workflow_catalog reads built-in method and workflow contracts under the research skills master switch",
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only built-in catalog projection; no filesystem destination."
   }
 ]

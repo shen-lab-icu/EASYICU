@@ -278,10 +278,12 @@ def test_hosted_settings_keep_the_clinicians_display_and_the_administrator_conta
     assert local["railTargets"] == 7
 
 
-def test_a_hosted_skill_catalogue_offers_no_install() -> None:
+def test_a_hosted_skill_catalogue_imports_only_into_the_users_instance() -> None:
     skills = _read("js/screens-skills.js")
-    # The only upload entry sits in the menu a hosted instance leaves out.
-    assert "const createMenu = hostedOwner && hostedOwner.active() ? '' : `" in skills
+    # Import is offered everywhere; on a hosted instance the route writes the
+    # signed-in user's own extension root (routes.extensions / hosted.guard_request).
+    assert "const createMenu = `" in skills
+    assert "hostedOwner && hostedOwner.active() ? '' :" not in skills
     assert "<h1>${title}</h1></div>${createMenu}</div>" in skills
     assert skills.count("data-sk-upload aria-label") == 1
     menu = skills.split("const createMenu = ", 1)[1].split("</details>`;", 1)[0]

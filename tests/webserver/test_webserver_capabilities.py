@@ -35,8 +35,8 @@ def test_capability_status_reflects_settings_and_tool_policy(monkeypatch) -> Non
     assert body["capabilities"]["pubmed_connector"]["status"] == "disabled"
     assert body["capabilities"]["zotero_connector"]["status"] == "disabled"
     mcp = body["capabilities"]["mcp_tools"]
-    assert "agent_artifact_reader" in mcp["allowed_tools"]
-    assert "pubmed_metadata_search" in mcp["blocked_tools"]
+    assert mcp["allowed_tools"] == []
+    assert mcp["blocked_tools"] == []
     assert body["capabilities"]["remote_compute"]["status"] == "disabled"
 
 
@@ -344,10 +344,11 @@ def test_capability_tool_check_blocks_unknown_and_external_tools(monkeypatch) ->
     ).json()
 
     assert external["allowed"] is False
-    assert external["reason"] == "mcp_tools_enabled_false"
+    assert external["reason"] == "unknown_tool"
     assert unknown["allowed"] is False
     assert unknown["reason"] == "unknown_tool"
-    assert local["allowed"] is True
+    assert local["allowed"] is False
+    assert local["reason"] == "unknown_tool"
 
 
 def test_zotero_search_fails_closed_when_connector_disabled(monkeypatch) -> None:

@@ -90,10 +90,10 @@ const settle = async () => { for (let i = 0; i < 12; i += 1) await new Promise(r
   html = screen.render();
   assert.match(html, /class="eusk-source-note">原技能已更新，你的副本保持不变。 <button type="button" data-sk-open="builtin:survival-time-to-event">查看原技能<\/button>/);
 
-  // A hosted instance's skills belong to its administrator: no copy action.
+  // A hosted user may create a personal copy; the built-in stays read-only.
   global.EasyICU = { guidedPi: { optional: name => name === 'hosted' ? { active: () => true } : null } };
   click({ skOpen: 'builtin:survival-time-to-event' });
   await settle();
-  assert.doesNotMatch(screen.render(), /data-sk-copy=/);
+  assert.match(screen.render(), /data-sk-copy=/);
   process.stdout.write('Built-in Skill copy, provenance and source-updated note passed.\n');
 })().catch(error => { console.error(error); process.exit(1); });
