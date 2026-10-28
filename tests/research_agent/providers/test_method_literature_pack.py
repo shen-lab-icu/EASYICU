@@ -105,13 +105,18 @@ def test_lactate_question_does_not_inherit_the_sepsis3_definition_paper() -> Non
     assert "singer_sepsis3_2016" not in keys
 
 
-def test_an_enabled_source_still_gets_a_real_prisma_flow() -> None:
+def test_an_enabled_source_still_gets_a_real_prisma_flow(monkeypatch) -> None:
     """The honesty fix must not disable reporting for runs that did search."""
 
     class _Client:
         def search_for_context(self, context: Any, retmax: int = 5) -> list[Any]:
             return []
 
+    from easyicu.research_agent import literature
+    from easyicu.research_agent.bibliographic_metadata import OpenAlexSearchResult
+
+    monkeypatch.setattr(literature, "PubMedLiteratureClient", lambda **_: _Client())
+    monkeypatch.setattr(literature.OpenAlexLiteratureClient, "search_review", lambda *_, **__: OpenAlexSearchResult())
     bundle = build_preplan_literature_bundle(
         _context(),
         enable_pubmed=True,
@@ -126,13 +131,16 @@ def test_an_enabled_source_still_gets_a_real_prisma_flow() -> None:
     assert set(bundle.prisma) >= {"identified", "screened", "included"}
 
 
-def test_a_source_that_returns_nothing_is_not_recorded_as_returning() -> None:
+def test_a_source_that_returns_nothing_is_not_recorded_as_returning(monkeypatch) -> None:
     """Enabled and productive are different claims about the same run."""
 
     class _EmptyClient:
         def search_for_context(self, context: Any, **kwargs: Any) -> list[Any]:
             return []
 
+    from easyicu.research_agent import literature
+
+    monkeypatch.setattr(literature, "TavilyLiteratureClient", lambda **_: _EmptyClient())
     bundle = build_preplan_literature_bundle(
         _context(),
         enable_tavily=True,

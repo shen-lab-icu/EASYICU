@@ -100,4 +100,6 @@ def test_a_dictionary_concept_keeps_its_dictionary_text() -> None:
     context = _context("charlson", "Charlson Comorbidity Index")
 
     assert not is_export_display_label("in hospital mortality", ["death"])
-    assert _protocol_search_term(context, "death") == "in hospital mortality"
+    # The outcome is searched in the researcher's stated wording when it names
+    # the same concept; the export display label is never used.
+    assert _protocol_search_term(context, "death") == "in-hospital mortality"

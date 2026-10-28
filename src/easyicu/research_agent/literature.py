@@ -45,7 +45,7 @@ from .concept_availability import (
     hypothesis_cross_database_feasibility,
     normalize_concept_name,
 )
-from .bibliographic_metadata import complete_missing_authors
+from .bibliographic_metadata import complete_missing_authors, OpenAlexLiteratureClient, search_pubmed_review
 from .contracts.exposure_group_rules import (
     EXPOSURE_GROUP_LABELS_KEY,
     EXPOSURE_GROUP_TRANSFORMS,
@@ -58,7 +58,12 @@ from .literature_concepts import (
     LiteratureConceptIdentity,
     is_export_display_label,
     literature_concept_identity,
+    question_aligned_identity,
 )
+from .bibliographic_metadata import CitationRecord, LiteratureScreeningDecision, PubMedContextSearchResult
+from .planning.literature_contract import ReviewPolicy, ReviewCoverage
+from .planning.literature_design_authority import assess_review, review_coverage, impact_rank
+from .literature_concepts import role_query_families
 from .literature_excerpt import select_source_backed_excerpt
 from .planning.analysis_types import (
     AnalysisTypeSpec,
@@ -135,48 +140,6 @@ def _record_transport_failures(
         sink.setdefault(source, []).extend(failures)
 
 
-class CitationRecord(BaseModel):
-    """A single literature reference."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    key: str = Field(..., description="Stable citation key, e.g. 'vincent_sofa_1996'.")
-    title: str
-    year: str
-    authors: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Author display names retained in source order from bibliographic "
-            "metadata. Missing names must not be inferred from the citation key."
-        ),
-    )
-    venue: Optional[str] = None
-    relevance: Optional[str] = Field(
-        default=None,
-        description="Why this paper is cited in this run — used by the writer to pick what to mention.",
-    )
-    doi: Optional[str] = None
-    url: Optional[str] = None
-    pmid: Optional[str] = None
-    publication_types: List[str] = Field(
-        default_factory=list,
-        max_length=20,
-        description=(
-            "Source-issued bibliographic publication types. These are retained "
-            "for deterministic comparator eligibility; absence is not proof of "
-            "an observational design."
-        ),
-    )
-    bibliographic_notices: List[str] = Field(
-        default_factory=list,
-        max_length=20,
-        description=(
-            "Source-issued corrections, retractions, expressions of concern, "
-            "or other notices discovered during bibliographic verification."
-        ),
-    )
-
-
 class LiteratureSearchTermRefusal(BaseModel):
     """A host refusal to search an implementation label as a clinical axis."""
 
@@ -213,6 +176,8 @@ class LiteratureSearchProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: str = "easyicu.literature_search_provenance/1"
+    review_policy: ReviewPolicy | None = None
+    query_roles: Dict[str, Dict[str, List[str]]] = Field(default_factory=dict)
     curated_seed_count: int = Field(
         ...,
         description="References supplied from the preset list, not retrieved.",
@@ -268,17 +233,6 @@ class LiteratureSearchProvenance(BaseModel):
     note: str = ""
 
 
-class PubMedContextSearchResult(BaseModel):
-    """Bounded multi-stratum PubMed result with exact query lineage."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    schema_version: str = "easyicu.pubmed_context_search/1"
-    records: List[CitationRecord] = Field(default_factory=list)
-    search_queries: List[str] = Field(default_factory=list)
-    record_queries: Dict[str, List[str]] = Field(default_factory=dict)
-
-
 class LiteratureAuthorityTrace(BaseModel):
     """Host coordinates for one verified, upstream retrieval receipt.
 
@@ -300,34 +254,10 @@ class LiteratureAuthorityTrace(BaseModel):
     retrieval_scope_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
-class LiteratureScreeningDecision(BaseModel):
-    """Deterministic, inspectable eligibility decision for one retrieved record."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    citation_key: str
-    source: str
-    disposition: Literal["include", "exclude"]
-    evidence_role: Literal[
-        "direct_comparator",
-        "design_analogue",
-        "definition",
-        "method",
-        "database",
-        "related_context",
-    ]
-    rationale: str
-    query: Optional[str] = None
-    population_match: bool = False
-    exposure_match: bool = False
-    outcome_match: bool = False
-    design_excerpt_available: bool = False
-    publication_type_eligible: bool = True
-
-
 class LiteratureBundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
     research_question: str
+    review: ReviewCoverage | None = None
     citations: List[CitationRecord] = Field(
         ...,
         description=(
@@ -368,8 +298,8 @@ class LiteratureBundle(BaseModel):
     design_evidence_cards: List["LiteratureDesignEvidenceCard"] = Field(
         default_factory=list,
         description=(
-            "Bounded reviewed full-text/supplement facts used to shape study design; "
-            "the article body is never stored here."
+            "Bounded source facts labelled as abstract or reviewed full text; "
+            "abstract cards never confer full-text-review authority."
         ),
     )
 
@@ -549,6 +479,13 @@ def render_hypothesis_blueprint_for_prompt(
             "- prior_literature_keys: " + ", ".join(blueprint.prior_literature_keys[:8])
         )
     if literature is not None:
+        if literature.review is not None:
+            lines.append(f"- literature_candidates_screened: {literature.review.screened_count}")
+            lines.append("- literature_role_counts: " + json.dumps(literature.review.role_counts, sort_keys=True))
+            lines.append("- literature_shortfalls: " + (
+                "; ".join(f"{item.role} {item.actual}/{item.target}" for item in literature.review.shortfalls)
+                or "configured coverage targets met; independent appraisal remains required"
+            ))
         if literature.design_evidence_cards:
             lines.append(
                 render_literature_design_cards_for_prompt(
@@ -1044,6 +981,18 @@ class PubMedLiteratureClient:
             },
         )
 
+    def search_review_context(
+        self, context: ResearchContext, *, policy: ReviewPolicy,
+    ) -> PubMedContextSearchResult:
+        families = build_review_query_families(context)
+        result = search_pubmed_review(
+            self, families=families, policy=policy,
+            excerpt_terms=(*_variable_focus_terms(context, context.primary_exposure),
+                           *_variable_focus_terms(context, context.target_outcome),
+                           "intensive care", "critical care", "ICU"),
+        )
+        return result.model_copy(update={"query_roles": families})
+
     def _hydrate_ids(
         self,
         pmids: Sequence[str],
@@ -1098,9 +1047,12 @@ class PubMedLiteratureClient:
             return []
         try:
             payload = json.loads(body)
-        except Exception:
+            ids = payload["esearchresult"]["idlist"]
+            if not isinstance(ids, list):
+                raise ValueError("idlist must be a list")
+        except Exception as exc:
+            self.record_transport_failure("esearch.fcgi", exc)
             return []
-        ids = payload.get("esearchresult", {}).get("idlist", [])
         return [str(x) for x in ids if x]
 
     def _esummary(self, pmids: Sequence[str]) -> List[CitationRecord]:
@@ -1118,7 +1070,10 @@ class PubMedLiteratureClient:
             return []
         try:
             payload = json.loads(body)
-        except Exception:
+            if not isinstance(payload.get("result"), dict):
+                raise ValueError("missing summary result")
+        except Exception as exc:
+            self.record_transport_failure("esummary.fcgi", exc)
             return []
         return parse_pubmed_esummary(payload)
 
@@ -1142,7 +1097,8 @@ class PubMedLiteratureClient:
             return {}
         try:
             root = ET.fromstring(body)
-        except Exception:
+        except Exception as exc:
+            self.record_transport_failure("efetch.fcgi", exc)
             return {}
         metadata: Dict[str, Dict[str, Any]] = {}
         for article in root.findall(".//PubmedArticle"):
@@ -1363,7 +1319,7 @@ def _variable_literature_identity(
     for key in dict.fromkeys(str(key) for key in keys if key):
         identity = literature_concept_identity(key)
         if identity is not None:
-            return identity
+            return question_aligned_identity(identity, context.research_question)
     return None
 
 
@@ -1394,6 +1350,15 @@ def _protocol_search_term(context: ResearchContext, name: Optional[str]) -> str:
     identity = _variable_literature_identity(context, name)
     if _grouped_literature_concept(context, name) is not None:
         return _guard_literature_term(identity.canonical_phrase, variable=name, context=context)
+    if identity is not None and name != context.target_outcome:
+        return _guard_literature_term(identity.canonical_phrase, variable=name, context=context)
+    if identity is not None and name == context.target_outcome:
+        stated = _clinical_phrase_from_description(context.research_question, allow_short=False)
+        if stated and any(
+            _normalise_clinical_text(term) in _normalise_clinical_text(stated)
+            for alternative in identity.retrieval_alternatives for term in alternative
+        ):
+            return _guard_literature_term(stated, variable=name, context=context)
     candidates: List[str] = []
     if variable is not None:
         description = " ".join(str(variable.description or "").strip().split())
@@ -1410,7 +1375,12 @@ def _protocol_search_term(context: ResearchContext, name: Optional[str]) -> str:
             candidates.append(identity.canonical_phrase)
         else:
             semantic_description = _clinical_phrase_from_description(description)
-            if semantic_description:
+            if semantic_description and (
+                identity is None or any(
+                    _normalise_clinical_text(term) in _normalise_clinical_text(semantic_description)
+                    for alternative in identity.retrieval_alternatives for term in alternative
+                )
+            ):
                 candidates.append(semantic_description)
         if identity is not None:
             candidates.append(identity.canonical_phrase)
@@ -1433,7 +1403,7 @@ def _protocol_search_term(context: ResearchContext, name: Optional[str]) -> str:
     return ""
 
 
-def _clinical_phrase_from_description(description: str) -> str:
+def _clinical_phrase_from_description(description: str, *, allow_short: bool = True) -> str:
     """Extract one bounded human clinical term from owner-issued metadata."""
 
     value = " ".join(str(description or "").strip().split())
@@ -1450,7 +1420,7 @@ def _clinical_phrase_from_description(description: str) -> str:
         match = re.search(pattern, value)
         if match:
             return " ".join(match.group(1).split())
-    if len(value.split()) <= 4:
+    if allow_short and len(value.split()) <= 4:
         # Dictionary descriptions sometimes append execution metadata such as
         # "window" or "measurement".  Those tokens describe materialisation,
         # not the clinical construct, and make literal bibliographic queries
@@ -2776,7 +2746,7 @@ def _rank_protocol_search_results(
     )
     _, time_terms = _time_horizon_retrieval_clause(context)
 
-    def score(record: CitationRecord) -> tuple[int, int]:
+    def score(record: CitationRecord) -> tuple:
         title = _normalise_clinical_text(record.title)
         source_blob = _normalise_clinical_text(
             " ".join((record.title, str(record.relevance or "")))
@@ -2825,9 +2795,34 @@ def _rank_protocol_search_results(
             value -= 12
         if title.startswith("correction "):
             value -= 12
-        return (value, -len(title))
+        return (value, *impact_rank(record, datetime.now(timezone.utc).year), -len(title))
 
     return sorted(records, key=score, reverse=True)
+
+
+def build_review_query_families(context: ResearchContext) -> Dict[str, List[str]]:
+    """Keep exact topic strata and add independent design-evidence families."""
+    def axis(name: str | None) -> str:
+        clause = _pubmed_identity_clause(context, name)
+        identity = _variable_literature_identity(context, name)
+        if identity is not None:
+            identity = question_aligned_identity(identity, context.research_question)
+            mesh = [f'"{term}"[MeSH Terms]' for term in identity.mesh_terms]
+            if mesh:
+                clause = "(" + " OR ".join([clause, *mesh]) + ")"
+        return clause
+
+    population = _ICU_FILTER
+    if _adult_population_required(context):
+        population += ' AND (adult[Title/Abstract] OR adults[Title/Abstract] OR "Adult"[MeSH Terms])'
+    return role_query_families(
+        topic_queries=build_pubmed_protocol_queries_for_context(context),
+        exposure=axis(context.primary_exposure)
+        or _question_topic_clause(context.research_question),
+        outcome=axis(context.target_outcome),
+        population=population, database=_database_retrieval_clause(context),
+        question=context.research_question,
+    )
 
 
 _SKIP_TITLE_WORDS = {
@@ -3205,7 +3200,10 @@ class LiteratureAgent:
         bound_seed: Optional[LiteratureBundle] = None,
         enable_pubmed: bool = False,
         pubmed_client: Optional["PubMedLiteratureClient"] = None,
-        pubmed_retmax: int = 8,
+        pubmed_retmax: int | None = None,
+        enable_openalex: bool = False,
+        openalex_client: OpenAlexLiteratureClient | None = None,
+        review_policy: ReviewPolicy | None = None,
         enable_tavily: bool = False,
         tavily_client: Optional["TavilyLiteratureClient"] = None,
         tavily_retmax: int = 5,
@@ -3214,14 +3212,21 @@ class LiteratureAgent:
         self.bound_seed = bound_seed
         self.enable_pubmed = bool(enable_pubmed)
         self.pubmed_client = pubmed_client
-        self.pubmed_retmax = int(pubmed_retmax)
+        self.review_policy = review_policy or ReviewPolicy()
+        if pubmed_retmax is not None:
+            self.review_policy = ReviewPolicy.model_validate({
+                **self.review_policy.model_dump(), "candidates_per_source": int(pubmed_retmax),
+            })
+        self.pubmed_retmax = self.review_policy.candidates_per_source
+        self.enable_openalex = bool(enable_openalex)
+        self.openalex_client = openalex_client
         self.enable_tavily = bool(enable_tavily)
         self.tavily_client = tavily_client
         self.tavily_retmax = int(tavily_retmax)
 
     def run(self, context: ResearchContext) -> LiteratureBundle:
         baseline = _curated_for(context)
-        if self.enable_pubmed or self.enable_tavily or self.bound_seed is not None:
+        if self.enable_pubmed or self.enable_openalex or self.enable_tavily or self.bound_seed is not None:
             try:
                 # Resolve all query axes before any source or bound-seed screen.
                 # A refused axis must not silently become a broader query.
@@ -3230,11 +3235,14 @@ class LiteratureAgent:
                 enabled = [
                     source for source, on in (
                         ("pubmed", self.enable_pubmed), ("tavily", self.enable_tavily),
+                        ("openalex", self.enable_openalex),
                     ) if on
                 ]
                 return LiteratureBundle(
                     research_question=context.research_question, citations=baseline,
+                    review=review_coverage([], [], policy=self.review_policy, screened=0, year=datetime.now(timezone.utc).year),
                     search_provenance=LiteratureSearchProvenance(
+                        review_policy=self.review_policy,
                         curated_seed_count=len(baseline), sources_enabled=enabled,
                         sources_failing={source: [str(exc)] for source in enabled},
                         term_refusals=[exc.refusal], search_conducted=False,
@@ -3266,6 +3274,7 @@ class LiteratureAgent:
         sources_returning: List[str] = []
         sources_failing: Dict[str, List[str]] = {}
         search_queries: Dict[str, List[str]] = {}
+        query_roles: Dict[str, Dict[str, List[str]]] = {}
         record_queries: Dict[str, List[str]] = {}
         screening_decisions: List[LiteratureScreeningDecision] = []
         bound_search_timestamp: Optional[str] = None
@@ -3299,6 +3308,9 @@ class LiteratureAgent:
             sources_enabled.extend(seed_sources)
             sources_returning.extend(seed_returning)
             if seed_provenance is not None:
+                query_roles.update(seed_provenance.query_roles)
+                for source, reasons in seed_provenance.sources_failing.items():
+                    sources_failing.setdefault(source, []).extend(reasons)
                 for source, queries in seed_provenance.search_queries.items():
                     search_queries[source] = list(queries)
                 record_queries.update(
@@ -3342,6 +3354,7 @@ class LiteratureAgent:
                     exact_reviewed_seed
                     and reviewed_decision is not None
                     and reviewed_card is not None
+                    and reviewed_card.access_mode != "abstract"
                     and reviewed_card.evidence_role
                     == reviewed_decision.evidence_role
                 ):
@@ -3389,8 +3402,15 @@ class LiteratureAgent:
                 client.reset_transport_failures()
             fallback_query = build_pubmed_protocol_query_for_context(context)
             try:
+                review_search = getattr(client, "search_review_context", None)
                 stratified_search = getattr(client, "search_context_strata", None)
-                if callable(stratified_search):
+                if callable(review_search):
+                    pubmed_result = review_search(context, policy=self.review_policy)
+                    hits = pubmed_result.records
+                    pubmed_queries = pubmed_result.search_queries
+                    pubmed_record_queries = pubmed_result.record_queries
+                    query_roles["pubmed"] = pubmed_result.query_roles
+                elif callable(stratified_search):
                     pubmed_result = PubMedContextSearchResult.model_validate(
                         stratified_search(context, retmax=self.pubmed_retmax)
                     )
@@ -3437,6 +3457,50 @@ class LiteratureAgent:
                 merged.append(rec)
                 if decision.disposition == "include":
                     retrieved_included_keys.add(rec.key)
+
+        if self.enable_openalex:
+            live_bibliographic_retrieval_attempted = True
+            sources_enabled.append("openalex")
+            client = self.openalex_client or OpenAlexLiteratureClient(pace=_pace_pubmed_request)
+            client.reset_transport_failures()
+            try:
+                result = client.search_review(
+                    families=build_review_query_families(context), policy=self.review_policy,
+                    excerpt_terms=(*_variable_focus_terms(context, context.primary_exposure),
+                                   *_variable_focus_terms(context, context.target_outcome),
+                                   "intensive care", "adult"),
+                )
+                search_queries["openalex"] = result.search_queries
+                query_roles["openalex"] = result.query_roles
+                if result.records:
+                    sources_returning.append("openalex")
+                identified += len(result.records)
+                for rec in result.records:
+                    duplicate = next((index for index, old in enumerate(merged)
+                                      if old.key == rec.key or (old.pmid and old.pmid == rec.pmid)
+                                      or (old.doi and rec.doi and old.doi.casefold().removeprefix("https://doi.org/")
+                                          == rec.doi.casefold().removeprefix("https://doi.org/"))), None)
+                    key = merged[duplicate].key if duplicate is not None else rec.key
+                    record_queries[key] = list(dict.fromkeys([
+                        *record_queries.get(key, []), *result.record_queries.get(rec.key, []),
+                    ]))
+                    if duplicate is not None:
+                        duplicates += 1
+                        merged[duplicate] = merged[duplicate].model_copy(update={"impact": rec.impact})
+                        continue
+                    merged.append(rec)
+                    seen_keys.add(rec.key)
+                    if rec.pmid:
+                        seen_pmids.add(rec.pmid)
+                    if rec.url:
+                        seen_urls.add(rec.url)
+                    screening_decisions.append(_screening_decision_for_record(
+                        context=context, record=rec, source="openalex",
+                        query=" || ".join(record_queries[key]) or None,
+                    ))
+            except Exception as exc:
+                sources_failing.setdefault("openalex", []).append(f"search: {_describe_transport_failure(exc)}")
+            _record_transport_failures(sources_failing, "openalex", client)
 
         # 3) Tavily live (O5) for non-PubMed-indexed material. Errors
         #    are swallowed for the same reason as PubMed: literature
@@ -3546,11 +3610,27 @@ class LiteratureAgent:
 
         sources_enabled = list(dict.fromkeys(sources_enabled))
         sources_returning = list(dict.fromkeys(sources_returning))
+        merged, screening_decisions, design_cards, coverage = assess_review(
+            merged, screening_decisions, policy=self.review_policy,
+            question=context.research_question, screened=max(0, identified - duplicates),
+            bound_cards=self.bound_seed.design_evidence_cards if self.bound_seed else (),
+        )
+        baseline_keys = {record.key for record in baseline}
+        retrieved_included_keys = {
+            decision.citation_key for decision in screening_decisions
+            if decision.disposition == "include" and decision.citation_key not in baseline_keys
+        }
+        ranked_keys = {record.key: i for i, record in enumerate(
+            _rank_protocol_search_results(context, merged) if design_cards else []
+        )}
+        design_cards.sort(key=lambda card: ranked_keys.get(card.citation_key, len(merged)))
         bibliographic_sources = {
             source for source in sources_enabled if source != "llm_extension"
         }
         search_conducted = bool(bibliographic_sources)
         provenance = LiteratureSearchProvenance(
+            review_policy=self.review_policy,
+            query_roles=query_roles,
             curated_seed_count=curated_seed_count,
             sources_enabled=sources_enabled,
             sources_returning=sources_returning,
@@ -3604,12 +3684,7 @@ class LiteratureAgent:
                 "identified": identified,
                 "duplicates_removed": duplicates,
                 "screened": max(0, identified - duplicates),
-                "eligible": sum(
-                    1
-                    for decision in screening_decisions
-                    if decision.source != "llm_extension"
-                    and decision.disposition == "include"
-                ),
+                "eligible": len(retrieved_included_keys),
                 "included": len(retrieved_included_keys),
             }
             if search_conducted
@@ -3620,6 +3695,7 @@ class LiteratureAgent:
             citations=merged,
             prisma=prisma,
             search_provenance=provenance,
+            review=coverage,
             authority_trace=(
                 self.bound_seed.authority_trace.model_dump(mode="json")
                 if self.bound_seed is not None
@@ -3627,11 +3703,7 @@ class LiteratureAgent:
                 else None
             ),
             screening_decisions=screening_decisions,
-            design_evidence_cards=(
-                list(self.bound_seed.design_evidence_cards)
-                if self.bound_seed is not None
-                else []
-            ),
+            design_evidence_cards=design_cards,
         )
 
 
@@ -3639,6 +3711,8 @@ def build_preplan_literature_bundle(
     context: ResearchContext,
     *,
     enable_pubmed: bool = False,
+    enable_openalex: bool | None = None,
+    review_policy: ReviewPolicy | None = None,
     pubmed_email: Optional[str] = None,
     pubmed_api_key: Optional[str] = None,
     enable_tavily: bool = False,
@@ -3653,6 +3727,8 @@ def build_preplan_literature_bundle(
         None,
         bound_seed=bound_seed,
         enable_pubmed=enable_pubmed,
+        enable_openalex=enable_pubmed if enable_openalex is None else enable_openalex,
+        review_policy=review_policy,
         pubmed_client=(
             PubMedLiteratureClient(email=pubmed_email, api_key=pubmed_api_key)
             if enable_pubmed

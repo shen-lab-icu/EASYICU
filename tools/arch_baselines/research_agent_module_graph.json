@@ -821,6 +821,10 @@
     ],
     [
       "easyicu.research_agent.agents.family_spec_planner",
+      "easyicu.research_agent.planning.family_spec.request"
+    ],
+    [
+      "easyicu.research_agent.agents.family_spec_planner",
       "easyicu.research_agent.planning.literature_bindings"
     ],
     [
@@ -878,6 +882,10 @@
     [
       "easyicu.research_agent.agents.family_spec_planner",
       "easyicu.research_agent.reporting.article_contract"
+    ],
+    [
+      "easyicu.research_agent.agents.family_spec_planner",
+      "easyicu.research_agent.research_context.concept_population"
     ],
     [
       "easyicu.research_agent.agents.family_spec_planner",
@@ -2620,6 +2628,18 @@
       "easyicu.research_agent.prediction_validation_owner"
     ],
     [
+      "easyicu.research_agent.authority.provenance",
+      "easyicu.research_agent.authority.evidence_store"
+    ],
+    [
+      "easyicu.research_agent.authority.provenance",
+      "easyicu.research_agent.authority.runtime_artifacts"
+    ],
+    [
+      "easyicu.research_agent.authority.provenance",
+      "easyicu.research_agent.intake.materialized_metadata"
+    ],
+    [
       "easyicu.research_agent.authority.provider_budget",
       "easyicu.research_agent.authority.provider_hard_stop"
     ],
@@ -3116,6 +3136,14 @@
       "easyicu.research_agent.icu_agent_bench"
     ],
     [
+      "easyicu.research_agent.bibliographic_metadata",
+      "easyicu.research_agent.literature_excerpt"
+    ],
+    [
+      "easyicu.research_agent.bibliographic_metadata",
+      "easyicu.research_agent.planning.literature_contract"
+    ],
+    [
       "easyicu.research_agent.case_plugins.builder",
       "easyicu.research_agent.cohort.primitives"
     ],
@@ -3526,6 +3554,10 @@
     [
       "easyicu.research_agent.contracts.model_covariates",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.contracts.model_terms",
+      "easyicu.research_agent.canonical_json"
     ],
     [
       "easyicu.research_agent.contracts.model_terms",
@@ -5885,6 +5917,14 @@
     ],
     [
       "easyicu.research_agent.execution.runners.association_effect_modification",
+      "easyicu.research_agent.authority.baseline_association_runtime"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.association_effect_modification",
+      "easyicu.research_agent.authority.current_case_scientific_runtime"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.association_effect_modification",
       "easyicu.research_agent.contracts.association_execution"
     ],
     [
@@ -5902,6 +5942,14 @@
     [
       "easyicu.research_agent.execution.runners.association_effect_modification",
       "easyicu.research_agent.execution.runners.landmark_spline_fit"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.association_effect_modification",
+      "easyicu.research_agent.execution.runners.plausibility_receipt"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.association_effect_modification",
+      "easyicu.research_agent.execution.runners.typed_input_binding"
     ],
     [
       "easyicu.research_agent.execution.runners.association_effect_modification",
@@ -7490,6 +7538,10 @@
     [
       "easyicu.research_agent.execution.runners.selection",
       "easyicu.research_agent.execution.runners.association_binary_sensitivity_executor"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.selection",
+      "easyicu.research_agent.execution.runners.association_effect_modification"
     ],
     [
       "easyicu.research_agent.execution.runners.selection",
@@ -9369,6 +9421,10 @@
     ],
     [
       "easyicu.research_agent.literature",
+      "easyicu.research_agent.planning.literature_contract"
+    ],
+    [
+      "easyicu.research_agent.literature",
       "easyicu.research_agent.planning.literature_design_authority"
     ],
     [
@@ -9398,6 +9454,10 @@
     [
       "easyicu.research_agent.literature_concepts",
       "easyicu.research_agent.concept_catalog"
+    ],
+    [
+      "easyicu.research_agent.literature_concepts",
+      "easyicu.research_agent.planning.literature_contract"
     ],
     [
       "easyicu.research_agent.mcp_server",
@@ -9761,6 +9821,10 @@
     ],
     [
       "easyicu.research_agent.orchestration.finalize",
+      "easyicu.research_agent.authority.continuous_survival_scientific_claims"
+    ],
+    [
+      "easyicu.research_agent.orchestration.finalize",
       "easyicu.research_agent.authority.evidence_store"
     ],
     [
@@ -9774,6 +9838,10 @@
     [
       "easyicu.research_agent.orchestration.finalize",
       "easyicu.research_agent.authority.runtime_artifacts"
+    ],
+    [
+      "easyicu.research_agent.orchestration.finalize",
+      "easyicu.research_agent.authority.survival_scientific_claims"
     ],
     [
       "easyicu.research_agent.orchestration.finalize",
@@ -11765,6 +11833,10 @@
     ],
     [
       "easyicu.research_agent.planning.family_spec.landmark_categorical_template",
+      "easyicu.research_agent.planning.sensitivity_authority"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.landmark_categorical_template",
       "easyicu.research_agent.schema"
     ],
     [
@@ -12246,6 +12318,14 @@
     [
       "easyicu.research_agent.planning.literature_bindings",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.literature_design_authority",
+      "easyicu.research_agent.bibliographic_metadata"
+    ],
+    [
+      "easyicu.research_agent.planning.literature_design_authority",
+      "easyicu.research_agent.planning.literature_contract"
     ],
     [
       "easyicu.research_agent.planning.method_literature",
@@ -15741,6 +15821,10 @@
     ],
     [
       "easyicu.research_agent.research_context.builder",
+      "easyicu.research_agent.authority.provenance"
+    ],
+    [
+      "easyicu.research_agent.research_context.builder",
       "easyicu.research_agent.cohort.artifact_facts"
     ],
     [
@@ -16912,7 +16996,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 4220,
+    "edge_count": 4241,
     "largest_scc_size": 0,
     "module_count": 904,
     "package_count": 42,

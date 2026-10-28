@@ -11,8 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import re
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Sequence
 
+from .planning.literature_contract import analysis_terms
 from .concept_availability import normalize_concept_name
 from .concept_catalog import ConceptCatalog, concept_dictionary_ids, load_concept_catalog
 
@@ -24,6 +25,7 @@ class LiteratureConceptIdentity:
     retrieval_alternatives: tuple[tuple[str, ...], ...]
     screening_role_term: str
     screening_required_terms: tuple[str, ...]
+    mesh_terms: tuple[str, ...] = ()
 
 
 _MATERIALIZED_SUFFIXES = (
@@ -281,6 +283,55 @@ def literature_concept_phrase(value: Any, *, fallback: Any = None) -> str:
     return identity.canonical_phrase if identity is not None else raw.replace("_", " ")
 
 
+def question_aligned_identity(
+    identity: LiteratureConceptIdentity, question: str,
+) -> LiteratureConceptIdentity:
+    """Prefer a catalog synonym actually stated by the researcher.
+
+    Export descriptions can describe storage or dosage rather than the clinical
+    axis. Only owner-issued aliases can replace the canonical phrase; free text
+    from the question cannot invent another resolved concept.
+    """
+    from dataclasses import replace
+
+    mesh_labels = {
+        "creatinine": ("Creatinine",),
+        "norepinephrine": ("Norepinephrine",),
+        "mortality": ("Mortality",),
+        "lactate": ("Lactic Acid",),
+        "mean arterial pressure": ("Arterial Pressure",),
+    }
+    if identity in _IDENTITIES.values() or identity.concept_id not in concept_dictionary_ids():
+        return replace(identity, mesh_terms=mesh_labels.get(identity.canonical_phrase.casefold(), identity.mesh_terms))
+    aliases = _shared_concept_catalog().concept_aliases.get(identity.concept_id) or []
+    aliases = [re.sub(r"(?i)\s+(?:window|windows|measurement|measurements|variable|variables)$", "", alias).strip()
+               for alias in aliases if not is_export_display_label(alias, (identity.concept_id,))]
+    normalized_question = " " + re.sub(r"[^a-z0-9]+", " ", question.casefold()) + " "
+    stated = [
+        alias for alias in aliases
+        if len(alias) > 3 and "_" not in alias
+        and " " + re.sub(r"[^a-z0-9]+", " ", alias.casefold()) + " " in normalized_question
+    ]
+    if identity.screening_required_terms:
+        return identity
+    phrase = max(stated, key=len) if stated else identity.canonical_phrase
+    synonyms = tuple(
+        (alias,) for alias in aliases[:8]
+        if len(alias) > 3 and "_" not in alias
+    )
+    # Reviewed controlled-vocabulary labels. Unknown concepts use their
+    # catalog text alternatives; we never manufacture a MeSH mapping.
+    mesh = mesh_labels.get(phrase.casefold(), identity.mesh_terms)
+    return replace(
+        identity, canonical_phrase=phrase,
+        screening_role_term=phrase if stated else identity.screening_role_term,
+        retrieval_alternatives=tuple(dict.fromkeys(
+            ((phrase,), *identity.retrieval_alternatives, *synonyms)
+        )),
+        mesh_terms=mesh,
+    )
+
+
 __all__ = [
     "LiteratureConceptIdentity",
     "concept_id",
@@ -288,3 +339,31 @@ __all__ = [
     "literature_concept_identity",
     "literature_concept_phrase",
 ]
+
+
+def role_query_families(
+    *, topic_queries: Sequence[str], exposure: str, outcome: str,
+    population: str, database: str, question: str,
+) -> dict[str, list[str]]:
+    """Query membership has no influence on scientific eligibility."""
+    def terms(*values: str) -> str:
+        return "(" + " OR ".join(f'"{v}"[Title/Abstract]' for v in values) + ")"
+
+    def conjunction(*values: str) -> str:
+        return " AND ".join(value for value in values if value)
+
+    clinical = conjunction(exposure or outcome, population)
+    methods = terms(*analysis_terms(question))
+    return {
+        "topic_gap": list(topic_queries),
+        "analysis_method": [conjunction(clinical, methods), conjunction(
+            methods, terms("statistical methods", "estimation", "methodology"))],
+        "definition": [conjunction(clinical, terms("definition", "measurement", "diagnostic criteria"))],
+        "adjustment": [conjunction(clinical, outcome, terms("confounders", "adjustment", "sensitivity analysis"))],
+        "data_source": [conjunction(database or terms("critical care database", "ICU database"), population)],
+        "reporting_guideline": [conjunction(
+            terms("reporting guideline", "reporting guidelines", "reporting standards"),
+            terms("prediction", "prognostic") if "prediction" in analysis_terms(question)
+            else terms("observational studies", "cohort studies"),
+        )],
+    }
