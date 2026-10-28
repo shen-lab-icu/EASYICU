@@ -35,7 +35,7 @@ def test_every_method_starter_leaves_design_choices_to_the_plan():
         assert row["prompt"].endswith("My research question: "), row["id"]
 
 
-def _render(lang):
+def _render(lang, focused=False):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node is not installed")
@@ -44,9 +44,18 @@ def _render(lang):
       eval({json.dumps(_read('js/html-escape.js'))});
       eval({json.dumps(_read('js/screens-guided-pi-starters.js'))});
       const tr = (en, zh) => {json.dumps(lang)} === 'zh' ? zh : en;
-      process.stdout.write(window.EU_GUIDED_PI_STARTERS.render({{tr, composer: '<textarea></textarea>'}}));
+      process.stdout.write(window.EU_GUIDED_PI_STARTERS.render({{tr, composer: '<textarea></textarea>', focused: {json.dumps(focused)}}}));
     """
     return run_node(node, script, check=True).stdout
+
+
+def test_a_conversation_opened_with_a_chosen_workflow_shows_only_the_composer():
+    focused = _render("zh", focused=True)
+    assert "<textarea></textarea>" in focused
+    assert "data-gpi-starter-example" not in focused
+    assert "data-gpi-starter-browse" not in focused
+    assert "gpi-starter-demo" not in focused
+    assert "data-gpi-starter-example" in _render("zh")
 
 
 def test_the_official_demo_card_offers_one_runnable_named_demo_question():

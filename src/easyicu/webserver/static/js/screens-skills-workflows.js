@@ -17,10 +17,13 @@
     concept: tr('Variables', '变量') });
   const kinds = () => ({ categorical: tr('Categorical', '分类'), continuous: tr('Continuous', '连续'),
     binary: tr('Binary', '二分类') });
-  function inputLabel(row) {
-    const concept = (window.EU_CATALOG?.dict || {})[row.concept];
-    const term = pick(row, 'label') || (concept ? tr(concept[0], concept[1]) : row.concept);
-    return [roles()[row.role] || row.role, term || kinds()[row.kind]].filter(Boolean).join(' · ');
+  // A workflow needs roles; which variables fill them comes from the researcher's
+  // question, so example concepts are not listed as requirements.
+  function inputLabels(inputs) {
+    const labels = inputs.map(row => row.role === 'concept'
+      ? tr('Adjustment variables · from your question', '调整变量 · 由研究问题决定')
+      : [roles()[row.role] || row.role, kinds()[row.kind]].filter(Boolean).join(' · '));
+    return [...new Set(labels)];
   }
   const nodeNames = () => ({ cohort_definition: tr('Cohort', '队列'), table_one: 'Table 1',
     measurement_audit: tr('Measurement audit', '测量核查'), adjusted_association: tr('Adjusted model', '调整后模型'),
@@ -167,7 +170,7 @@
   function sections(row) {
     if (!row) return '';
     const statuses = { supported: tr('Supported', '支持'), degraded: tr('Limited', '受限'), unavailable: tr('Unavailable', '不可用') };
-    return `<div class="eusk-workflow-products"><section><h2>${tr('Required inputs', '所需输入')}</h2>${bulletList((row.inputs || []).map(inputLabel))}</section><section><h2>${tr('Generated outputs', '生成的输出')}</h2>${bulletList((row.outputs || []).map(item => label(item.id)))}</section></div>
+    return `<div class="eusk-workflow-products"><section><h2>${tr('Required inputs', '所需输入')}</h2>${bulletList(inputLabels(row.inputs || []))}</section><section><h2>${tr('Generated outputs', '生成的输出')}</h2>${bulletList((row.outputs || []).map(item => label(item.id)))}</section></div>
       <section><h2>${tr('Workflow graph', '流程图')}</h2>${graph(row)}</section>
       <section><h2>${tr('Databases', '各数据库')}</h2><div class="eusk-workflow-databases">${(row.databases || []).map(db => {
         const reason = databaseReason(db) || statuses[db.status], id = `wf-reason-${row.id}-${db.id}`;
@@ -190,17 +193,21 @@
       .then(payload => { catalog = payload; loadedAt = Date.now(); return catalog; }).finally(() => { pending = null; });
     return pending;
   }
+  // The request names the workflow and asks for the study's own inputs; the
+  // researcher edits or sends it, and nothing runs before the plan is approved.
+  function startRequest(skill, row) {
+    const title = pick(row || {}, 'title') || skill.title || skill.name;
+    return tr(`Help me run a study with the "${title}" workflow. Follow the workflow guide, ask me for the research question, data source and analysis goal, and confirm the configuration before generating the plan.`,
+      `请用「${title}」流程帮我开展一项研究：按流程指南先问我研究问题、数据来源和分析目标，确认配置后再生成研究计划。`);
+  }
   function start(skill, row) {
-    const starter = window.EasyICU?.guidedPi?.optional('starters');
-    const example = row?.example && starter?.exampleQuestion(row.example, tr);
     window.sessionStorage.setItem('easyicu.skillHub.method', JSON.stringify({
       id: skill.name || skill.id, title: skill.title, kind: skill.kind || 'method',
       layer: skill.skillLayer || 'research_workflow', capability_id: skill.capabilityId || '',
       action_ids: skill.actionIds || [], included_module_ids: skill.includedModuleIds || [],
       method_family: skill.methodFamily || '', method_key: skill.methodKey || '', claim_ceiling: skill.claimCeiling,
     }));
-    window.sessionStorage.setItem('easyicu.skillHub.question', example?.prompt
-      || (skill.skillLayer !== 'research_workflow' && skill.prompt) || tr('Help me plan this study.', '请帮我规划这项研究。'));
+    window.sessionStorage.setItem('easyicu.skillHub.question', startRequest(skill, row));
     location.hash = '#guided';
   }
   function handle(target, skills) {

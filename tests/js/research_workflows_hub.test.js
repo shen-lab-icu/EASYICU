@@ -43,11 +43,11 @@ test('workflow list and detail render the fixture graph and metadata', () => {
   assert.match(html, /可选/);
   assert.match(html, /role="tooltip"/);
 });
-test('start preserves the starter request and queues the existing typed attachment intent', () => {
+test('start writes the workflow request and queues the existing typed attachment intent', () => {
   const { owner, storage, location } = setup();
   owner.start({ name: 'synthetic', title: '合成流程', kind: 'method', skillLayer: 'research_workflow' }, fixture);
   assert.equal(location.hash, '#guided');
-  assert.equal(storage.get('easyicu.skillHub.question'), '合成问题');
+  assert.equal(storage.get('easyicu.skillHub.question'), '请用「合成流程」流程帮我开展一项研究：按流程指南先问我研究问题、数据来源和分析目标，确认配置后再生成研究计划。');
   assert.deepEqual(JSON.parse(storage.get('easyicu.skillHub.method')), {
     id: 'synthetic', title: '合成流程', kind: 'method', layer: 'research_workflow',
     capability_id: '', action_ids: [], included_module_ids: [], method_family: '', method_key: '',
@@ -70,10 +70,12 @@ test('workflow overview replaces repeated template sections and retains other in
   assert.doesNotMatch(result, /Generic|## 输出|## 步骤与检查|## 各数据库说明/);
   assert.equal(owner.overviewMarkdown('## Outputs\nGeneric trailing section.'), '');
 });
-test('workflow without a matching starter uses a short editable request', () => {
+test('a workflow start asks for the study inputs instead of copying an example or long instructions', () => {
   const { owner, storage } = setup();
-  owner.start({ name: 'synthetic', skillLayer: 'research_workflow', prompt: 'Long instructions.' }, { example: 'unknown' });
-  assert.equal(storage.get('easyicu.skillHub.question'), '请帮我规划这项研究。');
+  owner.start({ name: 'synthetic', skillLayer: 'research_workflow', prompt: 'Long instructions.' }, { example: 'example' });
+  const request = storage.get('easyicu.skillHub.question');
+  assert.match(request, /^请用「synthetic」流程帮我开展一项研究：按流程指南先问我研究问题、数据来源和分析目标/);
+  assert.doesNotMatch(request, /合成问题|Long instructions/);
 });
 test('list selection and the start button use the selected host row', async () => {
   const { owner, storage } = setup({ items: [fixture] });
@@ -84,7 +86,7 @@ test('list selection and the start button use the selected host row', async () =
   assert.equal(storage.size, 0);
   assert.equal(owner.handle({ dataset: { wfStart: 'synthetic' } }, [{ name: 'synthetic', kind: 'method' }]), true);
   assert.equal(JSON.parse(storage.get('easyicu.skillHub.method')).id, 'synthetic');
-  assert.equal(storage.get('easyicu.skillHub.question'), '合成问题');
+  assert.equal(storage.get('easyicu.skillHub.question'), '请用「合成流程」流程帮我开展一项研究：按流程指南先问我研究问题、数据来源和分析目标，确认配置后再生成研究计划。');
 });
 test('workflow start reaches the removable typed Skill chip without consuming the question', async () => {
   const { owner, window, context, storage } = setup();
@@ -101,7 +103,7 @@ test('workflow start reaches the removable typed Skill chip without consuming th
   const workspace = modules.studyWorkspace.create({ tr: window.t, esc: window.EU_HTML.esc, iconHtml: () => '' });
   const session = { session_id: 's1', draft_attached_skills: [] };
   workspace.applyHubIntent('p1', session);
-  assert.equal(storage.get('easyicu.skillHub.question'), '请帮我规划这项研究。');
+  assert.match(storage.get('easyicu.skillHub.question'), /^请用「合成流程」流程帮我开展一项研究/);
   const intent = workspace.takeHubAttachment('p1', session);
   assert.equal(intent.source, 'builtin');
   await modules.skillAttach.toggle('p1', session, intent.source, intent.id);
@@ -110,13 +112,16 @@ test('workflow start reaches the removable typed Skill chip without consuming th
   await modules.skillAttach.remove('p1', session, 'builtin:synthetic');
   assert.equal(session.draft_attached_skills.length, 0);
 });
-test('six database chips expose reasons and owner-supplied input labels', () => {
+test('six database chips expose reasons; inputs list roles, not one example\'s variables', () => {
   const { owner } = setup();
   const html = owner.sections({ ...fixture,
-    inputs: [{ role: 'outcome', concept: 'synthetic_outcome', label: 'Example outcome', label_zh: '示例结局' }],
+    inputs: [{ role: 'outcome', concept: 'synthetic_outcome', label: 'Example outcome', label_zh: '示例结局', kind: 'binary' },
+      { role: 'concept', concept: 'a', label_zh: '示例甲' }, { role: 'concept', concept: 'b', label_zh: '示例乙' }],
     databases: Array.from({ length: 6 }, (_, i) => ({ ...fixture.databases[0], id: `synthetic_${i}` })),
   });
-  assert.match(html, /结局 · 示例结局/);
+  assert.match(html, /<li>结局 · 二分类<\/li>/);
+  assert.equal((html.match(/调整变量 · 由研究问题决定/g) || []).length, 1);
+  assert.doesNotMatch(html, /示例结局|示例甲|示例乙/);
   assert.equal((html.match(/class="eusk-workflow-database /g) || []).length, 6);
   assert.equal((html.match(/role="tooltip"/g) || []).length, 6);
   assert.equal((html.match(/aria-describedby=/g) || []).length, 6);
