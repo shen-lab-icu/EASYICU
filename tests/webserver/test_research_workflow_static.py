@@ -19,8 +19,8 @@ def test_workflow_dependencies_and_changed_cache_tokens_are_explicit():
     assert 'js/screens-guided-pi-study-workspace.js?v=20261028-task1"' in html
     for file in ["screens-guided-pi-starters.js", "screens-guided-pi-session-view.js"]:
         assert f'js/{file}?v=20261028-hub2"' in html
-    assert 'js/screens-guided-pi.js?v=20261028-task1"' in html
-    assert 'js/screens-guided-pi-skill-attach.js?v=20261028-chip1"' in html
+    assert 'js/screens-guided-pi.js?v=20261028-slash1"' in html
+    assert 'js/screens-guided-pi-skill-attach.js?v=20261028-slash1"' in html
     assert 'js/screens-skills.js?v=20261028-set1"' in html
     assert 'css/skills-workflows.css?v=20261028-cust1"' in html
 

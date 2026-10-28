@@ -23,6 +23,7 @@
       HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP, MESSAGE_QUEUE, QUICK_ANSWERS, MULTI_DATABASE,
       ACCESS, turnGrants,
     } = options;
+    const slash = window.EasyICU.guidedPi.optional('slashMenu')?.create({ state, projectId, render });
 
     // Outside presses, Escape, and opening another menu are handled for every
     // floating menu by popover-menus.js; this only closes a menu when an
@@ -135,6 +136,7 @@
 
     function wire() {
       if (!state.host) return;
+      if (slash) slash.wire();
       // Mentions (screens-guided-pi-mentions.js) finish host searches and lookups later.
       const MENTIONS = window.EasyICU.guidedPi.optional('mentions');
       if (MENTIONS) MENTIONS.onChange(() => render(true));
@@ -555,22 +557,19 @@
       }
       function composerPickerTrigger(value) {
         const text = String(value || '');
-        return /(^|\s)[@/]$/.test(text) ? text.slice(-1) : '';
+        return /(^|\s)@$/.test(text) ? '@' : '';
       }
       state.host.addEventListener('input', event => {
         if (event.target.matches('[data-gpi-input]')) {
           state.draft = event.target.value;
           if (!String(state.draft || '').trim()) state.followUpDraft = null;
-          // "@" opens the project-resource picker and "/" the Skill picker
-          // when typed at the start of the message or after a space — the
-          // same two drawers the + menu opens; the trigger character is
-          // removed so it never reaches the model.
+          // "@" opens the project-resource drawer. Inline /query belongs to
+          // screens-guided-pi-slash-menu.js and stays until a Skill is attached.
           const trigger = composerPickerTrigger(event.target.value);
           if (trigger && state.session && !state.busy && !state.childJobId && !event.isComposing) {
             event.target.value = event.target.value.slice(0, -1);
             state.draft = event.target.value;
-            if (trigger === '@') openMentionDrawer();
-            else { STUDY_WORKSPACE.openSkills(projectId(), state.session); loadAttachable(); }
+            openMentionDrawer();
             render(true);
             return;
           }
@@ -603,6 +602,7 @@
         if (PROVIDER_CONTROL && PROVIDER_CONTROL.handleChange(event)) return;
       });
       state.host.addEventListener('keydown', event => {
+        if (event.defaultPrevented) return;
         if (CONNECT && CONNECT.handleKeydown(event)) return;
         if (event.key === 'Escape') {
           if (state.host.querySelector('[data-gpi-material-picker]')) {
@@ -632,7 +632,8 @@
       });
     }
 
-    return Object.freeze({ dismissHeaderOverflow, wire, openResource, openResourceButton, referenceResource, revealPendingReview });
+    return Object.freeze({ dismissHeaderOverflow, wire, openResource, openResourceButton, referenceResource, revealPendingReview,
+      captureComposer: () => slash?.capture(), restoreComposer: () => slash?.restore() });
   }
 
   window.EasyICU.guidedPi.declare('events', { create });
