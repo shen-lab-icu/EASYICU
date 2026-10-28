@@ -289,10 +289,10 @@
         <p>${esc(introLine(tr))}</p>
       </header>
       ${options.composer || ''}
-      ${offersDemo() ? demoCard(disabled, tr) : ''}
+      ${options.focused ? '' : `${offersDemo() ? demoCard(disabled, tr) : ''}
       <div class="gpi-capability-head"><strong>${esc(tr('Try one of these questions', '试试这些问题'))}</strong></div>
       <div class="gpi-starter-actions gpi-starter-examples">${exampleQuestions(tr).map(row => exampleCard(row, disabled, tr)).join('')}</div>
-      <button class="gpi-starter-browse" type="button" data-gpi-starter-browse>${esc(tr('Browse all Skills and methods', '浏览全部技能与方法'))}</button>
+      <button class="gpi-starter-browse" type="button" data-gpi-starter-browse>${esc(tr('Browse all Skills and methods', '浏览全部技能与方法'))}</button>`}
     </section>`;
   }
 

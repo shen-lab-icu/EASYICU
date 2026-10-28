@@ -1772,6 +1772,8 @@
           state.draft = suggestion;
           window.sessionStorage.removeItem('easyicu.skillHub.question');
           render();
+          const input = state.host && state.host.querySelector('[data-gpi-input]');
+          if (input && !input.disabled) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
         }
       } catch (_) {}
     }).finally(() => {

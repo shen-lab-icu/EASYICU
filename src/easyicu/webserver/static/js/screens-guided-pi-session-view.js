@@ -466,8 +466,11 @@
         ? accessOwner.render(accessOwner.pending(state.messages), {
           disabled: interactionLocked || stale || Boolean(state.busy), mode: state.accessMode, agentMode: agentMode(),
         }) : '';
+      // A conversation opened with a chosen workflow or Skill goes straight to
+      // the composer; the starter gallery is for choosing one.
+      const chosenStart = Array.isArray(session.draft_attached_skills) && session.draft_attached_skills.length > 0;
       const emptyResearchHtml = STARTERS && typeof STARTERS.render === 'function'
-        ? STARTERS.render({ tr, disabled: interactionLocked || stale,
+        ? STARTERS.render({ tr, disabled: interactionLocked || stale, focused: chosenStart,
           composer: `<div class="gpi-compose gpi-entry-compose">${composerCardHtml}</div>` })
         : `<div class="gpi-empty"><strong>${tr('Start with the research question', '先描述研究问题')}</strong></div>`;
       // A turn or job of this conversation moves its own study binding and
@@ -483,7 +486,7 @@
           ${stale && !interactionLocked && !studyJobRunning ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
           <div class="gpi-log${messages ? '' : ' gpi-log-start'}" data-gpi-log>
             ${RUN_FILES.notice()}
-            ${freshTask ? projectContinuityHtml() : ''}
+            ${freshTask && !chosenStart ? projectContinuityHtml() : ''}
             ${conversation || (resultsView ? '' : workspace
                 ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
                 : emptyResearchHtml)}
