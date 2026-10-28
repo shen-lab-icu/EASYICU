@@ -318,6 +318,7 @@
     // conversation's language rather than as the raw state name.
     const LIFECYCLE_STATUS = {
       human_review_pending: ['Plan awaiting review', '计划待审阅'],
+      plan_decision_pending: ['awaiting your design choice', '待你选择设计'],
       failed: ['did not complete', '未完成'],
       running: ['running', '运行中'],
       queued: ['queued', '排队中'],

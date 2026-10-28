@@ -183,7 +183,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
     assert "js/screens-extraction.js?v=20261028-readm1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20261028-pend1" in index_html
     assert "js/screens-help.js?v=20261027-help3" in index_html
 
 
@@ -585,7 +585,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     for retired in ("agent-header.css", "agent-capabilities.css", "agent-question.css", "agent-project-source.css"):
         assert f"css/{retired}" not in index_html, retired
         assert not (STATIC_DIR / "css" / retired).exists(), retired
-    assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20261028-pend1" in index_html
     assert "css/agent.css?v=20261027-old1" in index_html
     assert "css/agent-layout.css?v=20261027-old1" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
@@ -682,7 +682,7 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
     assert "data-gpi-provider-form" in provider_js
     assert "css/agent.css?v=20261027-old1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20261028-pend1" in index_html
 
 
 def test_native_agent_render_layer_is_split_into_owner_file() -> None:
@@ -818,7 +818,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert ".ag-present-brief" in agent_css
     assert "css/agent.css?v=20261027-old1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20261028-pend1" in index_html
 
     for name in (
         "benchmark_scorecard.json",

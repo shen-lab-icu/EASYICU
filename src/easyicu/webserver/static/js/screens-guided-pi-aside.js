@@ -177,8 +177,10 @@
     }
     // Read reached-stage receipts, never the requested run_type or filenames:
     // result files can be placeholders even before a plan is approved.
+    // Planning stopped on a design choice the researcher makes in the conversation.
+    const decisionPending = run => String(run.run_status || '') === 'plan_decision_pending';
     function runStage(run) {
-      if (planPending(run)) return tr('Plan generation', '计划生成');
+      if (planPending(run) || decisionPending(run)) return tr('Plan generation', '计划生成');
       const codes = [run.gate_reason_code, run.gate_detail_code, run.gate_detail_cause_code];
       if (analysisComplete(run) || codes.includes('research_pipeline_execution_failed')) return tr('Analysis', '分析');
       if (codes.includes('data_foundation_blocked')) return tr('Data preparation', '数据准备');
@@ -187,6 +189,7 @@
     }
     function runStatus(run) {
       if (planPending(run)) return { key: 'review', label: tr('Awaiting review', '待审阅') };
+      if (decisionPending(run)) return { key: 'review', label: tr('Awaiting your choice', '待你选择') };
       if (analysisComplete(run)) return { key: 'done', label: tr('Analysis complete', '分析完成') };
       const status = String(run.run_status || '');
       const gate = String(run.gate_status || '');
@@ -208,7 +211,8 @@
       const when = typeof contracts.fmtRunTime === 'function' ? contracts.fmtRunTime : value => String(value || '');
       const rows = runs.map(run => {
         const status = runStatus(run);
-        const cause = run.manuscript_outcome && run.manuscript_outcome.status === 'not_passed' && status.key === 'done'
+        const cause = decisionPending(run) ? tr('Make one design choice in the conversation.', '需要你在对话中做一项设计选择。')
+          : run.manuscript_outcome && run.manuscript_outcome.status === 'not_passed' && status.key === 'done'
           ? host.manuscriptNotPassedText(run.manuscript_outcome.reason_code)
           : ['failed', 'blocked'].includes(status.key) && run.gate_reason_code && typeof host.runFailureText === 'function'
           ? String(host.runFailureText(run.gate_reason_code, { code: run.gate_detail_code, missing: run.gate_missing_concepts, cause: run.gate_detail_cause_code, mismatchFields: run.gate_detail_mismatch_fields || (run.gate_detail && run.gate_detail.mismatch_fields), statedVariable: run.gate_detail && run.gate_detail.stated_variable }) || '') : '';
