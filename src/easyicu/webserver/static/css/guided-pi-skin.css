@@ -280,7 +280,7 @@
 .gpi-trace-expand .ic{width:12px;height:12px;transform:none}
 .gpi-trace-expand[aria-expanded="true"] .ic{transform:rotate(180deg)}
 .gpi-turn-traces,.gpi-execution-history{max-width:865px;margin:-8px auto 16px;border:0}
-.gpi-turn-traces>summary{min-height:23px;padding:0;color:var(--skin-muted);font:400 15px/22.5px var(--skin-font)}
+.gpi-turn-traces>summary{min-height:24px;padding:0;color:var(--skin-muted);font:400 15px/22.5px var(--skin-font)}
 .gpi-turn-trace-list{max-height:300px;padding:8px 0 0;overflow-y:auto}
 
 /* —— Reply action bar (reference: right-aligned 22px icon buttons; always visible under a
