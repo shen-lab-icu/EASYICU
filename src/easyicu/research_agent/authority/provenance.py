@@ -1,4 +1,8 @@
-"""Raw EHR provenance hashing (O27).
+"""Raw EHR hashing and run-bound extraction metadata provenance.
+
+The metadata projection at the end of this module publishes only captured
+dictionary facts from a verified cohort/context, including explicit absence
+for historical runs. It never reconstructs an extraction from today's catalog.
 
 Before the research-agent pipeline runs, it normally receives a
 materialised cohort (``cohort.parquet``). That cohort was itself
@@ -26,9 +30,9 @@ Constraints:
   size, mtime, and a user-supplied ``role`` label. Filenames are
   kept because reviewers ask about MIMIC tables by name; no per-row
   content is echoed.
-* **No SDK creep.** Pure stdlib (hashlib / pathlib / os / json).
-* **Opt-in.** Users pass ``source_files=[...]`` to
-  ``pipeline.run``; default behaviour stays unchanged.
+* **Raw-file hashing is opt-in.** Users pass ``source_files=[...]`` to
+  ``pipeline.run``. The ordinary metadata artifact reads registered context
+  bytes using the existing typed metadata and evidence owners.
 """
 
 from __future__ import annotations
@@ -40,7 +44,13 @@ import stat
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, Union
+
+from pydantic import BaseModel, ConfigDict, model_validator
+
+from easyicu.concept.provenance import Digest, ExportDataProvenance
+from ..intake.materialized_metadata import VerifiedMaterializedCohortAuthority
+from .evidence_store import EvidenceStore
 
 
 # Streaming chunk. 1 MiB is a sweet spot — smaller than typical
@@ -308,3 +318,165 @@ __all__ = [
     "hash_sources",
     "sha256_file",
 ]
+
+
+class RunVariableProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    column: str
+    concept_id: str | None
+
+
+class RunPredicateWindow(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    anchor: str
+    start_offset_hours: float | str
+    end_offset_hours: float | str
+
+
+class RunCohortPredicate(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    concept_id: str
+    time_window: RunPredicateWindow
+    aggregation: str
+    op: str
+    value: str | int | float | bool | tuple[str | int | float | bool, ...] | None = None
+
+
+class RunCohortSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    inclusion: tuple[RunCohortPredicate, ...] = ()
+    exclusion: tuple[RunCohortPredicate, ...] = ()
+    selection_mode: str = "predicate_filtered"
+
+
+class DataProvenanceEvidenceRef(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    evidence_id: Literal["data_provenance"] = "data_provenance"
+    sha256: Digest
+
+
+class RunDataProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_version: Literal["easyicu.run-data-provenance/1"] = "easyicu.run-data-provenance/1"
+    run_id: str
+    status: Literal["recorded", "not_recorded"]
+    research_context_sha256: Digest | None = None
+    export_authority_sha256: Digest | None = None
+    materialization_sha256: Digest | None = None
+    cohort_file_sha256: Digest | None = None
+    data_provenance: ExportDataProvenance | None = None
+    variables: tuple[RunVariableProvenance, ...] = ()
+    cohort_selection: RunCohortSelection | None = None
+    evidence_ref: DataProvenanceEvidenceRef | None = None
+
+    @model_validator(mode="after")
+    def check_binding(self):
+        if self.status == "recorded" and (
+            self.data_provenance is None or not self.data_provenance.snapshots
+            or self.research_context_sha256 is None
+            or (self.export_authority_sha256 is None and (
+                self.materialization_sha256 is None or self.cohort_file_sha256 is None
+            ))
+        ):
+            raise ValueError("recorded provenance requires frozen input bindings")
+        if self.status == "not_recorded" and self.data_provenance is not None:
+            raise ValueError("unrecorded provenance cannot contain invented inputs")
+        return self
+
+
+def provenance_from_verified_cohort(
+    verified: VerifiedMaterializedCohortAuthority | None,
+    legacy_provenance: dict | None = None,
+) -> dict:
+    """Read only the already verified semantic receipt, never the live catalog."""
+    if verified is None and legacy_provenance is None:
+        return {}
+    semantic = verified.authority.to_dict()["semantic_provenance"] if verified else legacy_provenance
+    export = semantic.get("export_authority") or {}
+    captured = export.get("data_provenance") or semantic.get("data_provenance")
+    if captured is None:
+        return {}
+    snapshot = ExportDataProvenance.model_validate(captured)
+    if not snapshot.snapshots:
+        return {}
+    return {
+        "data_provenance": snapshot.model_dump(mode="json"),
+        "data_provenance_export_authority_sha256": export.get("authority_sha256"),
+        "data_provenance_materialization_sha256": (
+            verified.reference.sha256 if verified else legacy_provenance["provenance_sha256"]
+        ),
+        "data_provenance_cohort_file_sha256": semantic["cohort_file_sha256"],
+        "data_provenance_cohort_selection": (
+            RunCohortSelection.model_validate({
+                key: value for key, value in semantic["cohort_definition"].items()
+                if key in RunCohortSelection.model_fields
+            }).model_dump(mode="json")
+            if semantic.get("cohort_definition") else None
+        ),
+    }
+
+
+def publish_run_data_provenance(*, run_dir: Path, evidence: EvidenceStore):
+    """Register one immutable metadata artifact, including explicit legacy absence."""
+    context_record = evidence.get("research_context")
+    if context_record is None:
+        raise ValueError("data provenance requires registered research context")
+    from .runtime_artifacts import verified_run_evidence_path
+
+    context_path = verified_run_evidence_path(run_dir, context_record)
+    if context_path is None:
+        raise ValueError("registered research context digest mismatch")
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    provenance = context.get("cohort", {}).get("provenance") or {}
+    captured = provenance.get("data_provenance")
+    if captured is not None:
+        captured = ExportDataProvenance.model_validate(captured)
+        if not captured.snapshots:
+            captured = None
+    payload = RunDataProvenance(
+        run_id=run_dir.name, status="recorded" if captured else "not_recorded",
+        research_context_sha256=context_record.sha256,
+        export_authority_sha256=provenance.get("data_provenance_export_authority_sha256"),
+        materialization_sha256=provenance.get("data_provenance_materialization_sha256"),
+        cohort_file_sha256=provenance.get("data_provenance_cohort_file_sha256"),
+        data_provenance=captured,
+        cohort_selection=provenance.get("data_provenance_cohort_selection"),
+        variables=tuple(RunVariableProvenance(
+            column=variable["name"], concept_id=variable.get("source_concept"),
+        ) for variable in context.get("variables", [])),
+    )
+    raw = payload.model_dump_json().encode("utf-8")
+    existing = evidence.get("data_provenance")
+    if existing is not None:
+        if existing.sha256 != hashlib.sha256(raw).hexdigest():
+            raise ValueError("run data provenance changed from its registered digest")
+        if verified_run_evidence_path(run_dir, existing) is None:
+            raise ValueError("registered data provenance digest mismatch")
+        return existing
+    path = run_dir / "data_provenance.json"
+    path.write_bytes(raw)
+    return evidence.register_file(
+        kind="log", description="Frozen metadata-only extraction provenance for this run.",
+        source_path=path, evidence_id="data_provenance", inputs=["research_context"],
+        producer="pipeline", generation_mode="system",
+    )
+
+
+def register_run_metadata(
+    *, run_dir, evidence, write_fingerprint, assert_matches,
+    expected_concept_dict_sha, expected_sofa2_dict_sha,
+):
+    """Keep dictionary drift validation and run metadata registration together."""
+    path = run_dir / "concept_dict_fingerprint.json"
+    fingerprint = write_fingerprint(path)
+    assert_matches(
+        fingerprint, expected_concept_dict_sha=expected_concept_dict_sha,
+        expected_sofa2_dict_sha=expected_sofa2_dict_sha, mode="strict",
+    )
+    if evidence.get("concept_dict_fingerprint") is None:
+        evidence.register_file(
+            kind="log", description="SHA-256 fingerprint for EasyICU concept dictionaries.",
+            source_path=path, evidence_id="concept_dict_fingerprint",
+            producer="pipeline", generation_mode="system",
+        )
+    publish_run_data_provenance(run_dir=run_dir, evidence=evidence)
