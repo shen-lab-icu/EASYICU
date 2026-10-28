@@ -312,9 +312,10 @@
 .icd-db-note { font-size: 11px; color: var(--ink-4); }
 
 .icd-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
-.icd-field { display: flex; flex-direction: column; gap: 6px; }
+.icd-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .icd-field label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
 .icd-field input {
+  width: 100%; min-width: 0; box-sizing: border-box;
   height: 40px; padding: 0 13px; border: 1px solid var(--hair-2); border-radius: var(--r-2);
   background: var(--surface); font: inherit; font-size: 13px; color: var(--ink); outline: none;
   font-family: var(--font-mono);

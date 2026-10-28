@@ -1042,7 +1042,7 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/extraction.css?v=20261028-cohort2" in index_html
+    assert "css/extraction.css?v=20261028-cohort3" in index_html
     assert "data-ex-analyze" in extraction_js
     assert "Choose folder and identify" in extraction_js
     assert "function copilotPrefillSummary()" in extraction_js
@@ -1998,7 +1998,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert "screens-dict.js?v=20261027-dmap2" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
-    assert "deepdive.css?v=20261027-dmap1" in index_html
+    assert "deepdive.css?v=20261028-icdfit1" in index_html
 
 
 def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations() -> (
