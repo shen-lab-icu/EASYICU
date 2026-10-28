@@ -9,6 +9,7 @@ system-owned and never become extra instructions the researcher must write.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Mapping, Sequence
 
 from easyicu.research_agent.contracts.trajectory_design import (
@@ -1630,6 +1631,7 @@ def compile_plan_decision(
     agent_plan: Mapping[str, Any],
     decision_card: Mapping[str, Any] | None = None,
     card_sha256: str | None = None,
+    wrapper_dir: Path | None = None,
 ) -> CompiledPlanDecision:
     """Return one typed patch for a known review decision and option."""
 
@@ -1640,7 +1642,7 @@ def compile_plan_decision(
 
         return compile_survival_landmark_choice(
             study=study, option_id=option, decision_card=decision_card,
-            card_sha256=card_sha256,
+            card_sha256=card_sha256, wrapper_dir=wrapper_dir,
         )
     configuration = ScientificConfiguration.inspect(study)
     if code == _ENDPOINT_DECISION:

@@ -1517,7 +1517,7 @@ def _record_pipeline_failure(
         typed = _receipt_typed_failure(exc, code)
         from easyicu.webserver.pi_copilot.survival_plan_decision import family_stop_decision
 
-        decision = family_stop_decision(study, code=code, typed_failure=typed)
+        decision = family_stop_decision(study, code=code, typed_failure=typed, wrapper_dir=wrapper_dir)
         reason_code = typed.get("reason_code")
         cause_code = typed.get("cause_code")
         coordinates = {key: value for key, value in safe_stop_coordinates(typed).items() if not (key == "step_id" and value == "unknown")}
@@ -2794,7 +2794,10 @@ def _research_user_preferences(
         preferences["covariates"] = list(covariates)
         preferences["covariate_selection"] = "exact"
         if study.get("covariate_authority") is not None:
-            preferences["covariate_authority"] = study.get("covariate_authority")
+            # A question-stated roster is user-authored in the sealed Agent
+            # schema. StudyContext retains its more specific provenance.
+            authority = study.get("covariate_authority")
+            preferences["covariate_authority"] = "user" if authority == "researcher_stated" else authority
         preferences["covariate_rationales"] = dict(
             study.get("covariate_rationales") or {}
         )

@@ -1387,7 +1387,9 @@ def _enrich_plan_review(
 
     payloads = review.get("artifact_payloads")
     payloads = payloads if isinstance(payloads, Mapping) else {}
-    decision = pending_survival_decision(study, payloads)
+    decision = pending_survival_decision(
+        study, payloads, wrapper_dir=Path(review["project_dir"]) if review.get("project_dir") else None,
+    )
     if decision is not None and snapshot.next_action_code == "failed_pipeline_requires_fresh_plan":
         return snapshot.model_copy(update={
             "next_action_code": "plan_scientific_changes_required",

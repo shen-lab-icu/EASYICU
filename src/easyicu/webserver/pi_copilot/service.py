@@ -4001,11 +4001,14 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
     ) -> Dict[str, Any]:
         """Persist one host-rendered scientific choice without a provider turn."""
 
+        from .survival_plan_decision import DECISION_CODE, pending_survival_decision
+
+        clean_code = str(decision_code or "").strip()
         record = self._scoped_record(session_id, project_id=project_id)
         stale = self._stale_details(record)
         if stale.get("stale"):
             raise PiCopilotError(
-                "pi_session_authority_stale",
+                "plan_decision_source_superseded" if clean_code == DECISION_CODE else "pi_session_authority_stale",
                 "The StudyContext or reviewed plan changed before this option was selected.",
                 status_code=409,
                 details=stale,
@@ -4027,7 +4030,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         current_revision = int(context.get("revision") or 0)
         if int(expected_revision) != current_revision:
             raise PiCopilotError(
-                "plan_decision_revision_conflict",
+                "plan_decision_source_superseded" if clean_code == DECISION_CODE else "plan_decision_revision_conflict",
                 "The displayed plan choice is stale; reload the current review.",
                 status_code=409,
                 details={
@@ -4063,9 +4066,14 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         review = agent_runs.read_run_review(str(row.get("project_dir") or ""))
         payloads = review.get("artifact_payloads")
         payloads = payloads if isinstance(payloads, Mapping) else {}
-        from .survival_plan_decision import pending_survival_decision
-
-        pending_decision = pending_survival_decision(context, payloads)
+        pending_decision = pending_survival_decision(context, payloads, wrapper_dir=Path(row["project_dir"]))
+        manifest = payloads.get("source_run_manifest.json")
+        if pending_decision is None and isinstance(manifest, Mapping) and manifest.get("status") == "plan_decision_pending":
+            raise PiCopilotError(
+                "plan_decision_source_superseded",
+                "The landmark decision changed; reload its current card before choosing it.",
+                status_code=409,
+            )
         scientific_review = payloads.get("scientific_plan_review.json")
         findings = (
             scientific_review.get("findings")
@@ -4080,7 +4088,6 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         }
         if pending_decision is not None:
             authorized_codes.add(pending_decision.decision_code)
-        clean_code = str(decision_code or "").strip()
         if clean_code not in authorized_codes or plan_decisions.decision_is_resolved(context, clean_code):
             raise PiCopilotError(
                 "plan_decision_not_required_by_review",
@@ -4106,6 +4113,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 agent_plan=agent_plan,
                 decision_card=(pending_decision.model_dump(mode="json") if pending_decision else None),
                 card_sha256=card_sha256,
+                wrapper_dir=Path(row["project_dir"]),
             )
             updated = study_contexts.upsert_context(
                 {"id": context_id, **compiled.patch},

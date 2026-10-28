@@ -230,7 +230,7 @@ _ANALYSIS_DESIGN_FIELDS = frozenset(
     {"analysis_family", "analysis_unit", "variance_estimator", "cluster_unit"}
 )
 _COVARIATE_SELECTIONS = frozenset({"planner_selectable", "exact"})
-_COVARIATE_AUTHORITIES = frozenset({"user", "agent_plan"})
+_COVARIATE_AUTHORITIES = frozenset({"user", "agent_plan", "researcher_stated"})
 _COVARIATE_TEMPORAL_ROLES = frozenset(
     {"baseline_static", "at_or_before_time_zero"}
 )

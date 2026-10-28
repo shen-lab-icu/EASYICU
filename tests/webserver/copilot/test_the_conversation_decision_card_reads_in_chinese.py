@@ -174,7 +174,7 @@ def test_the_survival_landmark_card_states_the_offered_design_and_binds_its_dige
     assert "请确定生存随访从何时开始" in html
     assert "第 48 小时 landmark · 60 天生存" in html
     assert "调整：covariate_one、covariate_two。" in html
-    assert "敏感性分析：58 天限制性平均生存时间。" in html
+    assert "敏感性分析：landmark 起至第 60 天（58 天）的限制性平均生存时间。" in html
     assert 'data-gpi-plan-decision-option="fixed_landmark_survival"' in html
     assert f'data-gpi-plan-decision-card="{"b" * 64}"' in html
     assert "采用第 48 小时 landmark" in html

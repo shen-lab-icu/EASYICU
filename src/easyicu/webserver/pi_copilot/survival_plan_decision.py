@@ -25,6 +25,10 @@ from easyicu.webserver.landmark_survival_runtime_projection import (
 )
 from easyicu.webserver.study_scientific_configuration import ScientificConfiguration
 
+from .survival_decision_source import (
+    SurvivalDecisionSource, read_survival_decision_source, study_with_run_coordinates,
+)
+
 if TYPE_CHECKING:
     from .plan_decisions import CompiledPlanDecision
 
@@ -38,6 +42,8 @@ class SurvivalLandmarkDecision(BaseModel):
     decision_code: Literal["SURVIVAL_LANDMARK_OWNER_NOT_SEALED"] = DECISION_CODE
     option_id: Literal["fixed_landmark_survival"] = OPTION_ID
     scientific_configuration_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    source_run_id: str | None = Field(default=None, min_length=1, max_length=160)
+    research_context_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     exposure: str = Field(min_length=1, max_length=80)
     landmark_hours: float = Field(gt=0, le=8760)
     endpoint: str = Field(min_length=1, max_length=80)
@@ -54,12 +60,20 @@ def _card_digest(body: Mapping[str, Any]) -> str:
     ).encode()).hexdigest()
 
 
-def propose_survival_landmark(study: Mapping[str, Any]) -> SurvivalLandmarkDecision | None:
-    """Offer only a saved, executable event-window design, without defaulting it."""
+def propose_survival_landmark(
+    study: Mapping[str, Any], *, source: SurvivalDecisionSource | None = None,
+) -> SurvivalLandmarkDecision | None:
+    """Offer a saved or host-resolved event-window design, without adopting it."""
     from easyicu.outcome_availability import stated_mean_survival_mentions, stated_mortality_horizon_mentions
     from easyicu.webserver.question_mean_survival import asked_mean_survival
 
     try:
+        study_digest = study_contexts.scientific_configuration_sha256(dict(study))
+        if source is not None:
+            bound = study_with_run_coordinates(study, source)
+            if bound is None:
+                return None
+            study = bound
         configuration = ScientificConfiguration.inspect(study)
         if (not survival_family_declared(study)
                 or not survival_inference_supported(study["analysis_design"])
@@ -83,7 +97,7 @@ def propose_survival_landmark(study: Mapping[str, Any]) -> SurvivalLandmarkDecis
         catalog = {row.concept_id: row for row in build_database_capability_catalog(database).concepts}
         if exposure not in catalog or catalog[exposure].column_role != "event_status":
             return None
-        if len({exposure, endpoint.event_concept, *covariates}) != 2 + len(covariates):
+        if len({exposure, endpoint.event_concept, endpoint.followup_concept, *covariates}) != 3 + len(covariates):
             return None
         question = str(study.get("question") or "")
         if asked_mean_survival(question):
@@ -104,7 +118,9 @@ def propose_survival_landmark(study: Mapping[str, Any]) -> SurvivalLandmarkDecis
         ) if mean_survival else None
         body = {
             "decision_code": DECISION_CODE, "option_id": OPTION_ID,
-            "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(dict(study)),
+            "scientific_configuration_sha256": study_digest,
+            "source_run_id": source.run_id if source else None,
+            "research_context_sha256": source.context_sha256 if source else None,
             "exposure": exposure, "landmark_hours": hours,
             "endpoint": endpoint.event_concept, "horizon_days": float(endpoint.horizon_days),
             "followup_column": endpoint.followup_concept, "covariates": list(covariates),
@@ -118,17 +134,19 @@ def propose_survival_landmark(study: Mapping[str, Any]) -> SurvivalLandmarkDecis
 
 def family_stop_decision(
     study: Mapping[str, Any], *, code: str, typed_failure: Mapping[str, Any],
+    wrapper_dir: Path | None = None,
 ) -> dict[str, Any] | None:
     if (code != "research_pipeline_progressive_compile_failed"
             or typed_failure.get("owner") != "easyicu.planning.progressive_compiler_v1"
             or typed_failure.get("reason_code") != "progressive_family_result_contract_unwritable"):
         return None
-    proposed = propose_survival_landmark(study)
+    proposed = propose_survival_landmark(study, source=read_survival_decision_source(wrapper_dir))
     return proposed.model_dump(mode="json") if proposed else None
 
 
 def pending_survival_decision(
     study: Mapping[str, Any], payloads: Mapping[str, Any],
+    *, wrapper_dir: Path | None = None,
 ) -> SurvivalLandmarkDecision | None:
     manifest = payloads.get("source_run_manifest.json")
     if not isinstance(manifest, Mapping) or manifest.get("status") != "plan_decision_pending":
@@ -137,7 +155,8 @@ def pending_survival_decision(
         card = SurvivalLandmarkDecision.model_validate(manifest.get("plan_decision"))
     except ValidationError:
         return None
-    return card if card == propose_survival_landmark(study) else None
+    source = read_survival_decision_source(wrapper_dir)
+    return card if card == propose_survival_landmark(study, source=source) else None
 
 
 def family_stop_result(wrapper_dir: Path) -> dict[str, Any] | None:
@@ -161,12 +180,14 @@ def family_stop_result(wrapper_dir: Path) -> dict[str, Any] | None:
 def compile_survival_landmark_choice(
     *, study: Mapping[str, Any], option_id: str,
     decision_card: Mapping[str, Any] | None, card_sha256: str | None,
+    wrapper_dir: Path | None = None,
 ) -> CompiledPlanDecision:
     from .plan_decisions import (
         CompiledPlanDecision, PlanDecisionError, _survival_design_configuration,
     )
 
-    proposed = propose_survival_landmark(study)
+    source = read_survival_decision_source(wrapper_dir)
+    proposed = propose_survival_landmark(study, source=source)
     if (option_id != OPTION_ID or proposed is None
             or decision_card != proposed.model_dump(mode="json")
             or not hmac.compare_digest(str(card_sha256 or ""), proposed.card_sha256)):
@@ -174,19 +195,32 @@ def compile_survival_landmark_choice(
             "plan_decision_source_superseded",
             "The landmark decision changed; reload its current card before choosing it.",
         )
+    bound = study_with_run_coordinates(study, source) if source else dict(study)
     compiled = _survival_design_configuration(
-        study, codes=(DECISION_CODE,), first_stay_restricted=False,
+        bound, codes=(DECISION_CODE,), first_stay_restricted=False,
         saved_study_roster=True,
         review_facts={"landmark_survival_suite": {
             "sealed": False, "executable": True,
             "exposure": proposed.exposure, "event_column": proposed.endpoint,
             "followup_column": proposed.followup_column,
             "landmark_hours": proposed.landmark_hours, "covariates": proposed.covariates,
-            "covariate_rationales": study.get("covariate_rationales") or {},
-            "covariate_temporal_roles": study.get("covariate_temporal_roles") or {},
+            "covariate_rationales": bound.get("covariate_rationales") or {},
+            "covariate_temporal_roles": bound.get("covariate_temporal_roles") or {},
         }},
     )
     patch = dict(compiled.patch)
+    if source and bound.get("covariate_authority") == "researcher_stated":
+        # The compiler validates the declaration. Persist only this click's
+        # coordinates and timing/roster choice, preserving other study fields.
+        patch = {key: patch[key] for key in (
+            "execution_concepts", "covariates", "covariate_selection", "covariate_authority",
+            "covariate_rationales", "covariate_operationalizations", "sensitivity_specs",
+        )}
+        patch["time_window"] = bound["time_window"]
+        patch["confirmations"] = ScientificConfiguration.inspect(study).merge_confirmations(
+            plan_adjustment_set_confirmed=True, plan_timing_landmark_24h=True,
+            plan_timing_descriptive_only=False, plan_timing_time_varying=False,
+        )
     if proposed.rmst_alternative is not None:
         patch["sensitivity_specs"] = [*patch["sensitivity_specs"], {
             "spec_id": "landmark_survival_rmst", "axis": "estimand",
