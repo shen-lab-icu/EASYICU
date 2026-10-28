@@ -354,6 +354,33 @@ for (const language of ['en', 'zh']) {
   }
 }
 process.stdout.write('Current results, revision identity, historical isolation, in-place layout and review receipts passed.\n');
+// Attempts older than the current run that never reached an analysis fold
+// behind one count; a completed older analysis and newer attempts stay listed.
+{
+  const failedRun = (id, at) => ({ run_id: id, run_type: 'full', run_status: 'failed', gate_status: 'blocked',
+    gate_reason_code: 'research_pipeline_progressive_compile_failed', updated_at: at });
+  modules.require('aside').create({
+    tr: en => en, esc: EU_HTML.esc, iconHtml: () => '', projectId: () => 'project_current', manuscriptNotPassedText: () => '',
+    displayProjectTitle: value => value, demoMode: () => false, shell: () => 'pi', project: () => ({}),
+    workflow: () => ({ ...workflow, runs: [
+      failedRun('newer_failure', '2026-10-28T10:00:00Z'),
+      { run_id: 'current_plan', run_status: 'human_review_pending', authoritative: true, updated_at: '2026-10-28T09:25:00Z' },
+      { run_id: 'older_plan', run_status: 'human_review_pending', updated_at: '2026-10-28T09:21:00Z' },
+      failedRun('old_failure_1', '2026-10-28T09:13:00Z'),
+      { run_id: 'old_analysis', run_status: 'completed', gate_status: 'analysis_only', analysis_outcome: { status: 'completed' }, updated_at: '2026-10-28T08:00:00Z' },
+      failedRun('old_failure_2', '2026-10-28T00:13:00Z'),
+    ] }),
+  }).syncProjectWorkflowAside();
+  const html = panelBody.innerHTML;
+  const fold = html.match(/<li class="gpi-run-superseded"><details data-gpi-run-superseded><summary>3 earlier attempts<\/summary>[\s\S]*?<\/details><\/li>/);
+  assert.ok(fold, 'three superseded attempts fold behind one count');
+  for (const id of ['older_plan', 'old_failure_1', 'old_failure_2']) assert.match(fold[0], new RegExp(`data-gpi-run-row="${id}"`));
+  for (const id of ['newer_failure', 'current_plan', 'old_analysis']) {
+    assert.doesNotMatch(fold[0], new RegExp(`data-gpi-run-row="${id}"`));
+    assert.match(html, new RegExp(`data-gpi-run-row="${id}"`));
+  }
+  assert.match(html, /<small class="gpi-aside-count">6<\/small>/);
+}
 
 // Compact title chrome leaves model selection in the composer, preserving mode controls.
 require(path.join(jsRoot, 'screens-guided-pi-header.js'));
