@@ -93,7 +93,12 @@ class QuickAnswerService:
             return ""
         study = study_contexts.get_context(record.binding.study_context_id) or {}
         question = str(study.get("question") or "")
-        if not question or not (study.get("data_source") or {}).get("path") or study.get("active_job_id"):
+        path = str((study.get("data_source") or {}).get("path") or "")
+        if not question or not path or study.get("active_job_id"):
+            return ""
+        # A quick answer reads only a registered prepared export; a raw folder
+        # chosen for the study would always be stopped, so none is offered.
+        if sources.registered_source_identity(path) is None:
             return ""
         typed = {
             normalize_question_text(str(turn.get("text") or "")) for turn in context.user_turns
