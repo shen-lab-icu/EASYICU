@@ -67,7 +67,6 @@ from ..planning.progressive_compiler import (
 )
 from ..planning.figure_plan_mutation import requires_visualization_step as _requires_visualization_step
 from ..contracts.claim_ceiling import bind_plan_tier, tier_from_planning_contract
-from ..planning.family_spec import sealed_result_families
 from ..planning.dependence_authority import (
     context_counts_only_authority,
     descriptive_counts_only_required,
@@ -176,6 +175,7 @@ from .family_spec_planner import (
     family_result_stop,
     family_spec_fallback_reason,
     run_family_spec_attempt,
+    sealed_result_families_for_planning,
 )
 from .progressive_prompt_contracts import (
     CONTINUOUS_OUTCOME_SUMMARY_CONTRACT,
@@ -4105,7 +4105,7 @@ class ProgressivePlannerAgent:
         # The Progressive v2 compiler never writes a family result contract, so
         # a final plan whose every candidate family needs one cannot pass
         # acceptance: stop before any Provider call instead of spending.
-        sealed_families = sealed_result_families(planning_contract_context)
+        sealed_families = sealed_result_families_for_planning(context, planner_strategy, planning_contract_context)
         v2_compiles_final_plan = resume_checkpoint is None and not stop_after_outline and (
             planner_strategy != FAMILY_SPEC_STRATEGY or fallback_reason is not None
         )

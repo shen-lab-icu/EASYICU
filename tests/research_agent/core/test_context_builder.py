@@ -292,6 +292,27 @@ def test_build_context_basic(ra):
     assert sofa.pitfalls, "sofa2 must carry the missingness pitfall into context"
 
 
+@pytest.mark.parametrize("database,identity", [
+    ("sic", "CaseID"), ("sic", "caseid"), ("miiv", "stay_id"),
+    ("eicu", "patientunitstayid"), ("aumc", "admissionid"),
+])
+def test_raw_catalog_publishes_the_source_owned_stay_identity(ra, database, identity):
+    frame = pd.DataFrame({identity: pd.Series(dtype="int64"), "age": pd.Series(dtype="float64")})
+    frame.attrs["easyicu_planning_authority"] = {
+        "kind": "metadata_only_planning_catalog", "patient_rows_read": False,
+    }
+    context = ra.build_research_context(
+        research_question="Describe age among ICU stays.", cohort=frame,
+        cohort_name="synthetic-raw-catalog", database=database,
+    )
+    assert context.cohort.id_columns == [identity]
+    assert context.variable(identity).role.value == "id"
+    assert context.cohort.provenance["analysis_unit"] == "icu_stay"
+    assert context.cohort.provenance["stay_id_columns"] == [identity]
+    assert context.cohort.n_patients is None
+    assert context.cohort.n_stays == 0
+
+
 def test_metadata_only_planning_authority_survives_context_projection(ra):
     frame = pd.DataFrame(
         {

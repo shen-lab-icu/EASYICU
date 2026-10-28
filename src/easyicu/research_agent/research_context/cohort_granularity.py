@@ -13,6 +13,8 @@ from typing import Literal, Mapping, Sequence
 
 import pandas as pd
 
+from easyicu.database_config import ID_COLUMNS
+
 from ..contracts.dependence import (
     PlannedDependenceRequirement,
     PatientGroupResolutionError,
@@ -38,11 +40,9 @@ _PATIENT_ID_NAMES = frozenset(
 )
 _STAY_ID_NAMES = frozenset(
     {
-        "admissionid",
-        "icustay_id",
+        *(columns[0].casefold() for columns in ID_COLUMNS.values()
+          if columns[0].casefold() not in _PATIENT_ID_NAMES),
         "patient_stay_id",
-        "patientunitstayid",
-        "stay_id",
     }
 )
 

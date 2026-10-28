@@ -173,10 +173,8 @@ def test_a_family_template_route_owns_its_contract_and_is_not_stopped(monkeypatc
     assert getattr(stopped, "reason_code", None) not in STOPS.values()
 
 
-def test_a_sealed_survival_suite_keeps_survival_planning_open():
-    # The host sealed a landmark survival suite for another exposure, so the
-    # family router offers no template; the suite's owner is still accepted
-    # by its primary method, so planning is not stopped.
+def test_a_survival_suite_sealed_for_another_exposure_stops_before_planning():
+    # A signed owner cannot authorize an outline for a different exposure.
     disclosure = SEALED_SURVIVAL_SUITE_MARKER + "\n" + json.dumps(
         {
             "sealed_primary_owner": "signed_landmark_survival_suite",
@@ -192,8 +190,10 @@ def test_a_sealed_survival_suite_keeps_survival_planning_open():
 
     llm, stopped = _plan(_family_context("survival"), planning_contract_context=disclosure)
 
-    assert getattr(stopped, "reason_code", None) != UNWRITABLE
-    assert llm.calls
+    assert isinstance(stopped, ProgressivePlanCompileError)
+    assert stopped.reason_code == "progressive_family_spec_survival_coordinate_unavailable"
+    assert stopped.path == "primary_exposure"
+    assert llm.calls == []
 
 
 def test_a_design_canary_never_reaches_final_acceptance_and_is_not_stopped():
@@ -323,7 +323,7 @@ def test_an_outline_that_selects_an_executable_family_goes_on_to_its_steps():
     assert len(llm.calls) > 1
 
 
-def test_a_sealed_survival_suite_keeps_a_survival_outline_open():
+def test_a_signed_survival_outline_needs_a_published_identity_before_planning():
     disclosure = SEALED_SURVIVAL_SUITE_MARKER + "\n" + json.dumps(
         {
             "sealed_primary_owner": "signed_landmark_survival_suite",
@@ -341,8 +341,10 @@ def test_a_sealed_survival_suite_keeps_a_survival_outline_open():
         "survival", _outline_for("survival"), planning_contract_context=disclosure
     )
 
-    assert getattr(result, "reason_code", None) != UNWRITABLE
-    assert len(llm.calls) > 1
+    assert isinstance(result, ProgressivePlanCompileError)
+    assert result.reason_code == "progressive_identity_column_ambiguous"
+    assert result.path == "cohort.id_columns"
+    assert llm.calls == []
 
 
 def test_a_design_canary_returns_its_causal_outline():
