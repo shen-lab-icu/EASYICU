@@ -689,3 +689,49 @@ __all__ = [
     "serialise_model_terms",
     "validate_model_term_roster",
 ]
+
+
+class EffectModificationBinding(BaseModel):
+    """Host-issued modifier terms bound to the unchanged primary model.
+
+    The existing rule-reference channel carries this typed, canonical record
+    through plan approval and persistence. It is not Planner structured output
+    and does not widen the primary-only model_requirements field. Baseline
+    runtime binding adds the same modifiers to the primary; all other primary
+    coordinates must retain the digest recorded before binding.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.effect_modification_binding/1"] = "easyicu.effect_modification_binding/1"
+    primary_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    modifiers: tuple[ModelTermSpec, ...] = Field(min_length=1)
+
+    @staticmethod
+    def primary_digest(requirement):
+        from ..canonical_json import canonical_sha256
+
+        return canonical_sha256(requirement.model_dump(mode="json", exclude={"effect_modifiers"}))
+
+    @classmethod
+    def for_model(cls, requirement, modifiers):
+        # Reuse the model contract's closed, consistent categorical-term checks.
+        PlannedModelRequirement.model_validate({**requirement.model_dump(mode="python"), "effect_modifiers": modifiers})
+        return cls(primary_sha256=cls.primary_digest(requirement), modifiers=tuple(modifiers))
+
+    def rule_ref(self):
+        return "effect_modification_binding:" + self.model_dump_json()
+
+    @classmethod
+    def requirement_for(cls, step, parent_requirement):
+        prefix = "effect_modification_binding:"
+        refs = [ref for ref in step.icu_rule_refs if ref.startswith(prefix)]
+        if len(refs) != 1:
+            raise ValueError("effect modification needs one typed modifier binding")
+        binding = cls.model_validate_json(refs[0][len(prefix):])
+        if binding.primary_sha256 != cls.primary_digest(parent_requirement):
+            raise ValueError("effect-modification primary model digest mismatch")
+        return PlannedModelRequirement.model_validate({
+            **parent_requirement.model_dump(mode="python"), "requirement_id": step.step_id,
+            "analysis_role": "secondary", "effect_modifiers": binding.modifiers,
+        })

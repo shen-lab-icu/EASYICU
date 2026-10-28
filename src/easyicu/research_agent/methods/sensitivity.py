@@ -75,6 +75,17 @@ def _e_value_for_rr(rr: float) -> float:
     return r + math.sqrt(r * (r - 1.0))
 
 
+def _rr_from_hr(hr: float) -> float:
+    """Common-outcome HR approximation used by the EValue HR conversion.
+
+    RR = (1 - 0.5 ** sqrt(HR)) / (1 - 0.5 ** sqrt(1 / HR)).
+    This approximation needs no invented baseline risk or rare-outcome
+    assertion. It is not an exact fixed-horizon risk ratio. Apply the same
+    monotone transformation to both interval endpoints.
+    """
+    return math.expm1(math.log(0.5) * math.sqrt(hr)) / math.expm1(math.log(0.5) / math.sqrt(hr))
+
+
 class BaselinePrevalenceRequiredError(ValueError):
     """An odds ratio reached the E-value with no observed event rate.
 
@@ -118,6 +129,8 @@ def compute_e_value(
         baseline_prevalence: the cohort's OBSERVED event rate, in (0, 1).
             REQUIRED when ``estimate_type == "or"`` for the Zhang-Yu
             conversion, and refused when absent or out of range.
+            HRs use the common-outcome approximation in ``_rr_from_hr``;
+            they are never silently treated as risk ratios for rare events.
 
     Returns an :class:`EValueResult`. For an OR / RR / HR above 1 we
     compute the E-value for the *lower* CI bound; for estimates below
@@ -138,6 +151,8 @@ def compute_e_value(
     if kind not in {"or", "rr", "hr"}:
         raise ValueError(f"Unsupported estimate_type {estimate_type!r}")
     rr_point = float(estimate)
+    if not math.isfinite(rr_point) or rr_point <= 0:
+        raise ValueError("An E-value requires a finite positive ratio")
     note: Optional[str] = None
     if kind == "or":
         if baseline_prevalence is None:
@@ -158,17 +173,23 @@ def compute_e_value(
             f"{float(baseline_prevalence):.4f}"
         )
         rr_point = _rr_from_or(estimate, baseline_prevalence)
-    # HR ≈ RR for rare events; keep as-is.
+    elif kind == "hr":
+        rr_point = _rr_from_hr(rr_point)
+        note = "HR converted to approximate RR using the common-outcome transformation; not a fixed-horizon risk ratio."
     ev = _e_value_for_rr(rr_point)
     ev_bound: Optional[float] = None
     if ci is not None:
         lo, hi = float(ci[0]), float(ci[1])
+        if not all(math.isfinite(value) and value > 0 for value in (lo, hi)) or not lo <= estimate <= hi:
+            raise ValueError("An E-value interval must contain its finite positive ratio")
         if rr_point >= 1:
             bound = lo
         else:
             bound = hi
         if kind == "or":
             bound_rr = _rr_from_or(bound, baseline_prevalence)
+        elif kind == "hr":
+            bound_rr = _rr_from_hr(bound)
         else:
             bound_rr = bound
         # An interval that already contains the null has a CI E-value of

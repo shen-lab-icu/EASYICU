@@ -13,12 +13,15 @@ from typing import Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..canonical_json import canonical_sha256
-from ..contracts.association_execution import association_execution_verdict, sole_primary_model_requirement
+from ..contracts.association_execution import (
+    ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID, association_execution_verdict, association_binary_sensitivity_plan_verdict,
+    sole_primary_model_requirement,
+)
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..contracts.dependence import PlannedDependenceRequirement
 from ..contracts.exposure_group_rules import PlannedGroupColumn, read_grouping_rules
 from ..contracts.figure_plan import COHORT_FLOW_FIGURE_PANELS, DATA_QUALITY_FIGURE_PANELS
-from ..contracts.model_terms import ModelTermSpec
+from ..contracts.model_terms import EffectModificationBinding, ModelTermSpec
 from ..contracts.runtime_outcomes import RuntimeOutcomeContract
 from ..schema import AnalysisPlan, AnalysisStep, ArtifactConsumptionContract
 
@@ -247,6 +250,12 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
         requirement = self._requirement(self._primary(plan))
         steps = []
         for step in plan.steps:
+            if (step.scientific_capability == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+                    and step.method in {"first_stay_association", "restricted_cubic_spline_sensitivity"}):
+                extra = [key for key in step.inputs if ":" not in key and key not in self._primary(plan).inputs]
+                step = step.model_copy(update={"inputs": list(dict.fromkeys([
+                    "artifact:analysis_cohort", *self.required_columns, *extra, "table:adjusted_association_estimates",
+                ]))})
             if step.step_id in {"adjusted_association", "absolute_risk_context"}:
                 primary = step.step_id == "adjusted_association"
                 inputs = ["artifact:analysis_cohort", *self.required_columns]
@@ -279,18 +288,23 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
         return primary
 
     def validate_plan(self, plan: AnalysisPlan):
+        primary = self.governed_primary_step(plan)
         required_steps = BASELINE_STEPS
         if getattr(plan.design_selection, "execution_tier", "article") == "first_result":
             required_steps = BASELINE_STEPS[:6] if any(step.step_id == "visualization" for step in plan.steps) else BASELINE_STEPS[:5]
-        core, companions = plan.steps[:len(required_steps)], plan.steps[len(required_steps):]
+        checks = [step for step in plan.steps if self._prespecified_check(step, plan)]
+        remaining = [step for step in plan.steps if step not in checks]
+        core, companions = remaining[:len(required_steps)], remaining[len(required_steps):]
         profiles = [_article_display_profile(step, core) for step in companions]
         if (tuple(step.step_id for step in core) != required_steps
             or (companions and required_steps != BASELINE_STEPS)
             or None in profiles or len(profiles) != len(set(profiles))
+            or any(plan.steps.index(step) <= plan.steps.index(next(s for s in plan.steps if s.step_id == "absolute_risk_context"))
+                   or any(plan.steps.index(step) > plan.steps.index(s) for s in core if s.step_id in {"visualization", "report"})
+                   for step in checks)
             or len({step.step_id for step in plan.steps}) != len(plan.steps)):
             raise _refusal("baseline template step roster drifted", reason_code="baseline_association_step_roster_mismatch",
                            mismatch_fields=("step_roster",), step_id="plan")
-        primary = self.governed_primary_step(plan)
         if sole_typed_cohort_input(primary) != "artifact:analysis_cohort" or primary.expected_outputs != ["table:adjusted_association_estimates"]:
             raise _refusal("baseline primary product or cohort drifted", mismatch_fields=("expected_outputs", "inputs"))
         if primary.inputs != ["artifact:analysis_cohort", *self.required_columns]:
@@ -306,6 +320,39 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
             for key in (key for key in step.inputs if ":" in key):
                 if not any(contract.input_key == key and contract.mode == "all_rows" for contract in step.input_consumption_contracts):
                     raise _refusal("baseline evidence consumption binding drifted", mismatch_fields=("input_consumption_contracts",), step_id=step.step_id)
+
+    def _prespecified_check(self, step, plan):
+        """Admit only exact inherited refits and the stated modifier companion."""
+        if step.family_primary_result_requirement is not None:
+            return False
+        if (step.step_id == "prespecified_effect_modification"
+                and step.method == "prespecified_effect_modification"
+                and step.scientific_action_id == "association.effect_modification"
+                and step.planned_analysis_role == "secondary"
+                and self.subgroup_terms
+                and step.expected_outputs == ["table:prespecified_effect_modification"]):
+            expected = self._requirement(self._primary(plan)).model_copy(update={
+                "requirement_id": step.step_id, "analysis_role": "secondary",
+            })
+            try:
+                requirement = EffectModificationBinding.requirement_for(step, self._primary(plan).model_requirements[0])
+            except ValueError:
+                return False
+            return (not step.model_requirements and requirement == expected and
+                    set(step.inputs) == {"artifact:analysis_cohort", "table:adjusted_association_estimates", *self.required_columns})
+        if (step.model_requirements or self.subgroup_terms or self.exposure_encoding != "treatment_contrast"
+                or step.method not in {"first_stay_association", "restricted_cubic_spline_sensitivity"}
+                or not association_binary_sensitivity_plan_verdict(step, plan_steps=plan.steps).claimed
+                or len(step.sensitivity_spec_ids) != 1
+                or {key for key in step.inputs if ":" in key} != {"artifact:analysis_cohort", "table:adjusted_association_estimates"}):
+            return False
+        form = step.functional_form_spec
+        if step.method == "restricted_cubic_spline_sensitivity":
+            requirement = self._primary(plan).model_requirements[0]
+            return (form is not None and form.comparison == "restricted_cubic_spline_vs_linear"
+                    and form.target_column in {term.name for term in requirement.model_terms
+                                               if term.role == "covariate" and term.coding == "continuous"})
+        return form is None and len({key for key in step.inputs if ":" not in key} - set(self.required_columns)) == 1
 
     def planner_disclosure(self):
         return "BASELINE ASSOCIATION: preserve the signed exposure, outcome, adjustment and subgroup rosters.\n" + self.model_dump_json()

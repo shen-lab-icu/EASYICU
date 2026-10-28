@@ -26,6 +26,7 @@ from .population_spec_transport import (
 from ..canonical_json import canonical_sha256
 from ..planning.family_spec import (
     BASELINE_ASSOCIATION_FAMILY_ID,
+    LANDMARK_CATEGORICAL_FAMILY_ID,
     build_baseline_association_skeleton,
     FamilySpecError,
     FamilySkeletonDraft,
@@ -1380,6 +1381,11 @@ def run_family_spec_attempt(
     attempt.question_requirements = list(spec.question_requirements)
     attempt.family_template = True
 
+    from ..planning.family_spec.landmark_categorical_template import association_analysis_omissions
+
+    attempt.prompt_metrics["family_spec_analysis_omissions"] = [
+        item.model_dump(mode="json") for item in association_analysis_omissions(draft, context, request)
+    ]
     outline = draft.outline
     validate_outline(outline)
     attempt.outline = outline
@@ -1499,11 +1505,12 @@ def _stated_subgroups_need_outline(
     """Whether a stated subgroup needs a step this family template never drafts.
 
     The descriptive template reports its outcome in each level of the study's
-    exposure, which answers a subgroup that is that exposure.  No template
-    drafts a subgroup estimate.  Progressive planning can add the family's
-    subgroup owner while the accepted-baseline gate keeps the original Table 1
-    grouping and rows, so it plans instead, except where only the template
-    plans the primary (a static prediction): scientific review then stops on
+    exposure, which answers a subgroup that is that exposure. The baseline
+    template binds supported typed modifiers itself, and the landmark template
+    binds closed-level ones. Other subgroups plan through the outline, where the family subgroup owner can
+    be added while the accepted-baseline gate keeps the original Table 1
+    grouping and rows, except where only the template plans the primary (a
+    static prediction): scientific review then stops on
     the subgroup no route can answer.
     """
 
@@ -1518,6 +1525,16 @@ def _stated_subgroups_need_outline(
     if not subgroups or family_id in {PREDICTION_FAMILY_ID, BASELINE_ASSOCIATION_FAMILY_ID} or _template_sealed_for_run(
         family_id, planning_contract_context,
     ):
+        return False
+    if family_id == LANDMARK_CATEGORICAL_FAMILY_ID:
+        # The landmark template binds closed-level modifiers; anything else
+        # keeps the outline route rather than stopping on the template.
+        from ..planning.family_spec.request import _association_subgroups
+
+        try:
+            _association_subgroups(context, [item.name for item in context.variables])
+        except FamilySpecError:
+            return True
         return False
     exposure = str(context.primary_exposure or "").strip()
     relatives = concept_relatives(context)

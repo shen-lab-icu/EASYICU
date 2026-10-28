@@ -239,7 +239,7 @@ def test_first_result_keeps_a_question_requested_figure():
     ("age", "unit_death", ("sex",), None), ("age", "death", ("sex",), "sex"),
     ("age_group", "death", ("sex",), None),
 ])
-def test_seven_step_template_compiles(exposure, outcome, covariates, subgroup, tmp_path, monkeypatch):
+def test_baseline_template_compiles_with_prespecified_checks(exposure, outcome, covariates, subgroup, tmp_path, monkeypatch):
     import numpy as np
     import pandas as pd
     from easyicu.research_agent.execution.runners.baseline_association_executor import run_baseline_step
@@ -251,7 +251,7 @@ def test_seven_step_template_compiles(exposure, outcome, covariates, subgroup, t
     result, llm = baseline_plan_attempt(context)
     assert [step.step_id for step in result.output.steps] == [
         "cohort_definition", "table_one", "measurement_audit", "adjusted_association",
-        "absolute_risk_context", "visualization", "report",
+        "absolute_risk_context", *(["prespecified_effect_modification"] if subgroup else []), "visualization", "report",
     ]
     assert result.output.steps[3].model_requirements[0].covariates == list(covariates)
     assert len(llm.calls) == 1
@@ -375,6 +375,16 @@ def test_seven_step_template_compiles(exposure, outcome, covariates, subgroup, t
     if subgroup:
         assert set(estimates["stratum"].dropna().astype(int)) == {0, 1}
         assert estimates.loc[estimates["subgroup"].notna(), "interaction_p_value"].nunique() == 1
+        from easyicu.research_agent.execution.runners.association_effect_modification import run_effect_modification
+
+        projected = run_effect_modification(step_id="prespecified_effect_modification", plan=bound,
+                                           authority=sealed, frame=frame, primary_table=estimates,
+                                           output_dir=tmp_path / "modifiers")
+        assert projected["interaction_tests"] == pytest.approx(summary["interaction_tests"])
+        assert len(fit_calls) == 1
+        modifier_rows = pd.read_csv(tmp_path / "modifiers" / "prespecified_effect_modification.csv")
+        assert modifier_rows["estimate"].tolist() == estimates.loc[estimates["subgroup"].notna(), "estimate"].tolist()
+        assert modifier_rows["analysis_role"].eq("secondary").all()
     if exposure == "chronic_flag":
         import statsmodels.formula.api as smf
         independent = smf.logit("death_numeric ~ chronic_flag * sex + age + C(admission_type)",
@@ -391,10 +401,11 @@ def test_seven_step_template_compiles(exposure, outcome, covariates, subgroup, t
     # The figure owner receives the schema of the actual upstream product,
     # exactly as execution's typed-input resolver supplies it.
     bindings = {"table:adjusted_association_estimates": {"product_contract": {"columns": list(estimates.columns)}}}
-    if "table:absolute_risk_context" in bound.steps[5].inputs:
+    figure_step = next(step for step in bound.steps if step.step_id == "visualization")
+    if "table:absolute_risk_context" in figure_step.inputs:
         risk_table = pd.read_csv(tmp_path / "risk" / "absolute_risk_context.csv")
         bindings["table:absolute_risk_context"] = {"product_contract": {"columns": list(risk_table.columns)}}
-    figure = resolve_standard_executor(bound.steps[5], plan=bound, resolved_bindings=bindings)
+    figure = resolve_standard_executor(figure_step, plan=bound, resolved_bindings=bindings)
     assert figure.claimed_by == ("adjusted_association_figure" if exposure == "age" else "association_overview_figure")
     for step in bound.steps:
         decision = resolve_standard_executor(
@@ -495,7 +506,7 @@ def test_a_baseline_template_revision_passes_the_repair_guard(subgroup):
     services.validate_plan_revision(plan=revised, context=context)
     runtime.validate_plan(revised)
     assert build_plan_scientific_review(context=context, plan=revised, runtime_authority=runtime.current_case).approval_allowed
-    extra = revised.steps[5].model_copy(update={"step_id": "unrequested_figure"})
+    extra = next(step for step in revised.steps if step.step_id == "visualization").model_copy(update={"step_id": "unrequested_figure"})
     with pytest.raises(ResearchPipelineRunError) as error:
         services.validate_plan_revision(plan=revised.model_copy(update={"steps": [*revised.steps, extra]}), context=context)
     assert error.value.code == "revision_added_unrequested_analysis"

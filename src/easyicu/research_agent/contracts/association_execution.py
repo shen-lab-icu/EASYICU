@@ -532,6 +532,11 @@ def association_binary_sensitivity_plan_verdict(
         ),
     )
     requirement = sole_primary_model_requirement(parent)
+    if (getattr(parent, "scientific_capability", None) == "association_baseline_adjusted_v1"
+            and requirement is not None and not requirement.effect_modifiers
+            and any(term.role == "exposure" and term.transform == "treatment_contrast"
+                    for term in requirement.model_terms or ())):
+        parent_verdict = baseline_association_execution_verdict(parent)
     if (
         getattr(parent, "planned_analysis_role", None) != "primary"
         or not parent_verdict.claimed

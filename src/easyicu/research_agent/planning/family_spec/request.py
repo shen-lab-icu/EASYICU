@@ -1976,6 +1976,7 @@ def _family_spec_request(
         exact_temporal_roles=dict(adjustment.operational_temporal_roles) if adjustment.selection == "exact" else {},
         adjustment_candidates=candidates,
         alternate_exposures=alternates,
+        subgroup_columns=_association_subgroups(context, roster) if family_id == LANDMARK_CATEGORICAL_FAMILY_ID else [],
         first_stay=first_stay,
         complete_case_spec_id=complete_case_spec_id,
         functional_form_spec_ids=functional_form_spec_ids,
@@ -2151,6 +2152,37 @@ def _require_landmark_adjustment_timing(
                                   path="adjustment_set")
 
 
+def _association_subgroups(context, roster):
+    """Only available, closed-level modifiers explicitly bound by the question."""
+    from ..adjustment_authority import context_stated_variables
+
+    subgroups = []
+    relatives = concept_relatives(context)
+    for item in context_stated_variables(context, "stated_subgroups"):
+        matched = [name for name in roster if item.concept and name in relatives(item.concept)
+                   and _levels(context, name)]
+        if item.source_status != "available" or len(matched) != 1:
+            raise FamilySpecError("family_spec_subgroup_unavailable",
+                                  "A subgroup requires one bound closed-level variable.", path="subgroup_columns")
+        subgroups.extend(matched)
+    return list(dict.fromkeys(subgroups))
+
+
+def _baseline_sensitivity_bindings(context, roster):
+    """Copy executable coordinates, never invent a definition from a column name."""
+    specs = context.user_preferences.sensitivity_specs if context.user_preferences else ()
+    bindings = [SensitivityAxisBinding(spec_id=spec.spec_id, axis=spec.axis, strategy=spec.strategy,
+                                       execution_variables=list(spec.execution_variables))
+                for spec in specs if len(spec.execution_variables) == 1
+                and set(spec.execution_variables) <= set(roster)]
+    return dict(
+        first_stay=next((item for item in bindings if item.strategy == "first_stay"), None),
+        alternate_exposures=[item for item in bindings if item.strategy == "alternate_exposure"],
+        functional_form_spec_ids={item.execution_variables[0]: item.spec_id for item in bindings
+                                  if item.strategy == "restricted_cubic_spline"},
+    )
+
+
 def _build_baseline_request(
     context: ResearchContext,
     *,
@@ -2161,20 +2193,10 @@ def _build_baseline_request(
     comparator_titles: Mapping[str, str] | None,
     required_primary_cohort_selection_mode: str | None,
 ) -> FamilySpecRequest:
-    from ..adjustment_authority import context_stated_variables
-
     roster = list(dict.fromkeys(variable_roster))
     exposure, outcome = str(context.primary_exposure), str(context.target_outcome)
     adjustment = _association_adjustment(context, roster)
-    subgroups = []
-    relatives = concept_relatives(context)
-    for item in context_stated_variables(context, "stated_subgroups"):
-        matched = [name for name in roster if item.concept and name in relatives(item.concept)
-                   and _levels(context, name)]
-        if item.source_status != "available" or len(matched) != 1:
-            raise FamilySpecError("family_spec_subgroup_unavailable",
-                                  "A subgroup requires one bound closed-level variable.", path="subgroup_columns")
-        subgroups.extend(matched)
+    subgroups = _association_subgroups(context, roster)
     candidates = _candidates(context, variable_roster=roster, adjustment=adjustment)
     levels = _levels(context, exposure)
     reference, contrast = _stated_contrast(context, exposure, levels, reference=0,
@@ -2192,7 +2214,8 @@ def _build_baseline_request(
         exact_roster=list(adjustment.operational_covariates),
         exact_rationales=adjustment.operational_rationales,
         exact_temporal_roles=adjustment.operational_temporal_roles,
-        adjustment_candidates=candidates, subgroup_columns=list(dict.fromkeys(subgroups)),
+        adjustment_candidates=candidates, subgroup_columns=subgroups,
+        **_baseline_sensitivity_bindings(context, roster),
         required_reader_label_keys=list(dict.fromkeys([exposure, outcome, *adjustment.operational_covariates, *subgroups])),
         variable_roster=roster,
         allowed_literature_citation_keys=list(allowed_literature_citation_keys),

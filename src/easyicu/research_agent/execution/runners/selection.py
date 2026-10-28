@@ -323,9 +323,20 @@ def _missingness_reason(context: StepExecutorContext) -> str:
 def _build_registry() -> StepExecutorRegistry:
     from ...authority.baseline_association_runtime import BaselineAssociationRuntimeAuthority
     from .baseline_association_executor import baseline_executor_owns_step, baseline_executor_code
+    from .association_effect_modification import effect_modification_parent, effect_modification_executor_code
 
     registry = StepExecutorRegistry()
     routes = (
+        StepExecutor(
+            key="prespecified_effect_modification",
+            owns=lambda c: effect_modification_parent(c.step, plan=c.plan, authority=c.current_case_scientific_runtime_authority) is not None,
+            render=lambda c: effect_modification_executor_code(c.step, plan=c.plan, authority=c.current_case_scientific_runtime_authority,
+                                                              plausibility_scope=c.plausibility_scope),
+            analysis_kind="prespecified_effect_modification",
+            selection_reason="prespecified_effect_modification_contract_preflight",
+            progress_message="Reporting prespecified modifier contrasts and interaction tests",
+            consumed_input_keys=lambda c: ("artifact:analysis_cohort", "table:adjusted_association_estimates"),
+        ),
         StepExecutor(
             key="baseline_association",
             applicable=lambda c: isinstance(c.current_case_scientific_runtime_authority, BaselineAssociationRuntimeAuthority),

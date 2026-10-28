@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 
 from ...contracts.association_execution import association_estimator_support
-from ...contracts.model_terms import level_spelling
+from ...contracts.model_terms import EffectModificationBinding, level_spelling
 from ...robustness.estimators import fit_estimator
 from ..model_matrix import primary_model_rows
 from .adjusted_association_executor import _cluster_groups
@@ -176,3 +176,115 @@ def fit_baseline_association(frame, *, requirement, authority):
                                   risk_difference_ci_high=difference + z * risk_se,
                                   risk_estimand="model_standardized_difference")
     return population, design, result, output, tests
+
+
+def effect_modification_parent(step, *, plan, authority):
+    """Close a secondary interaction model against its signed binary parent."""
+    from ...authority.baseline_association_runtime import BaselineAssociationRuntimeAuthority
+    from ...authority.current_case_scientific_runtime import LandmarkCategoricalAssociationRuntimeAuthority
+
+    if (not isinstance(authority, (BaselineAssociationRuntimeAuthority, LandmarkCategoricalAssociationRuntimeAuthority))
+            or plan is None or step not in plan.steps
+            or step.method != "prespecified_effect_modification"
+            or step.scientific_action_id != "association.effect_modification"
+            or step.planned_analysis_role != "secondary"
+            or step.expected_outputs != ["table:prespecified_effect_modification"]
+            or step.model_requirements):
+        return None
+    authority.validate_plan(plan)
+    parent = authority.governed_primary_step(plan)
+    original = parent.model_requirements[0]
+    try:
+        requirement = EffectModificationBinding.requirement_for(step, original)
+    except ValueError:
+        return None
+    expected = original.model_copy(update={"requirement_id": step.step_id, "analysis_role": "secondary",
+                                           "effect_modifiers": requirement.effect_modifiers})
+    if (plan.steps.index(parent) >= plan.steps.index(step) or requirement != expected
+            or not requirement.effect_modifiers or requirement.baseline_missing_handling
+            or {value for value in step.inputs if ":" in value} != {"artifact:analysis_cohort", "table:adjusted_association_estimates"}
+            or not {requirement.exposure_source, requirement.outcome, *requirement.covariates,
+                    *(term.name for term in requirement.effect_modifiers)} <= set(step.inputs)):
+        return None
+    return parent
+
+
+def effect_modification_executor_code(step, *, plan, authority, plausibility_scope=None):
+    if effect_modification_parent(step, plan=plan, authority=authority) is None:
+        raise ValueError("effect-modification parent is not closed")
+    code = (
+        "from easyicu.research_agent.schema import AnalysisPlan\n"
+        "from easyicu.research_agent.authority.current_case_scientific_runtime import load_current_case_scientific_runtime_authority\n"
+        "from easyicu.research_agent.execution.runners.association_effect_modification import run_effect_modification\n"
+        f"run_effect_modification(step_id={step.step_id!r}, plan=AnalysisPlan.model_validate_json({plan.model_dump_json()!r}), "
+        f"authority=load_current_case_scientific_runtime_authority(__import__('json').loads({authority.model_dump_json()!r})))\n"
+    )
+    from .plausibility_receipt import host_plausibility_receipt_injected
+
+    return host_plausibility_receipt_injected(code, scope=plausibility_scope, already_satisfied=False)
+
+
+def run_effect_modification(*, step_id, plan, authority, frame=None, primary_table=None, output_dir=None):
+    """Reuse baseline interactions; fit the same declared model for a landmark secondary."""
+    import json
+    import os
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from .typed_input_binding import load_step_cohort_frame, load_typed_input
+
+    step = next(item for item in plan.steps if item.step_id == step_id)
+    parent = effect_modification_parent(step, plan=plan, authority=authority)
+    if parent is None:
+        raise ValueError("effect-modification parent is not closed")
+    original = parent.model_requirements[0]
+    requirement = EffectModificationBinding.requirement_for(step, original)
+    if frame is None:
+        frame, _ = load_step_cohort_frame(typed_cohort_input="artifact:analysis_cohort", require_consumption_contract=True)
+    if primary_table is None:
+        primary_table = load_typed_input(
+            input_key="table:adjusted_association_estimates", run_dir=Path(os.environ["EASYICU_RUN_DIR"]),
+            resolved_inputs=json.loads(Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]).read_text()),
+            step_id=step_id, expected_declared_kind="table", expected_evidence_kind="table",
+            minimum_row_count=1, require_consumption_contract=True,
+        ).frame
+    model_authority = SimpleNamespace(
+        exposure_column=original.exposure_source, outcome_column=original.outcome,
+        exposure_encoding=getattr(authority, "exposure_encoding", "treatment_contrast"),
+        exposure_reference_level=original.exposure_reference_level, primary_contrast_level=original.primary_contrast_level,
+        subgroup_terms=tuple(original.effect_modifiers), dependence=original.dependence,
+        spline_knot_quantiles=getattr(authority, "spline_knot_quantiles", (0.1, 0.5, 0.9)),
+    )
+    population, _ = baseline_model_population(frame, original, model_authority)
+    if (primary_table.empty or not primary_table["requirement_id"].eq(original.requirement_id).all()
+            or not primary_table["n"].eq(len(population)).all()
+            or not primary_table["n_events"].eq(int(population[original.outcome].sum())).all()):
+        raise ValueError("effect-modification source differs from the primary model population")
+    if original.effect_modifiers:
+        if (original.effect_modifiers != requirement.effect_modifiers
+                or not primary_table["execution_contract_sha256"].eq(authority.execution_contract_sha256).all()):
+            raise ValueError("effect-modification source differs from the signed interaction model")
+        rows = primary_table.loc[primary_table["subgroup"].fillna("").ne("")].to_dict("records")
+        tests = {row["subgroup"]: row["interaction_p_value"] for row in rows}
+    else:
+        model_authority.subgroup_terms = tuple(requirement.effect_modifiers)
+        population, _, _, rows, tests = fit_baseline_association(population, requirement=requirement, authority=model_authority)
+        rows = [row for row in rows if row["subgroup"]]
+    if set(tests) != {term.name for term in requirement.effect_modifiers} or not rows:
+        raise ValueError("effect-modification source lacks a declared modifier")
+    for row in rows:
+        row.update(analysis_role="secondary", is_primary_contrast=False, model_id=requirement.requirement_id,
+                   requirement_id=requirement.requirement_id, execution_contract_sha256=authority.execution_contract_sha256)
+    out = Path(output_dir or os.environ["STEP_OUT_DIR"])
+    out.mkdir(parents=True, exist_ok=True)
+    filename = "prespecified_effect_modification.csv"
+    pd.DataFrame(rows).to_csv(out / filename, index=False)
+    summary = dict(status="ok", analysis_family="association", analysis_role="secondary",
+                   interpretation_class="effect_modification", interpretation_ceiling="descriptive_not_causal",
+                   primary_model_requirement_id=original.requirement_id, interaction_tests=tests,
+                   n_total=len(population), n_events=int(population[original.outcome].sum()),
+                   output_files={step.expected_outputs[0]: filename})
+    (out / "step_summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False))
+    return summary
