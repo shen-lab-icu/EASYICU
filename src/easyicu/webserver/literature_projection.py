@@ -13,9 +13,15 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import quote, urlparse
 
+from pydantic import BaseModel, ValidationError
+
+from easyicu.research_agent.planning.literature_contract import (
+    ImpactProxies, RecordReview, ReviewCoverage, ReviewPolicy,
+)
+
 
 LITERATURE_EVIDENCE_SCHEMA_VERSION = "easyicu.web-literature-evidence/5"
-_MAX_CITATIONS = 80
+_MAX_CITATIONS = 400
 _MAX_STEPS = 80
 _GOVERNED_SCIENTIFIC_ROLES = {"primary", "secondary", "sensitivity"}
 
@@ -64,6 +70,15 @@ def _text(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+def _typed_review(value: Any, model: type[BaseModel]) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return model.model_validate(value).model_dump(mode="json")
+    except ValidationError:
+        return None
+
+
 def _source_url(row: Mapping[str, Any]) -> str | None:
     pmid = _text(row.get("pmid"), 32)
     if re.fullmatch(r"[0-9]{1,12}", pmid):
@@ -108,6 +123,8 @@ def _citation_projection(
         "title": _text(row.get("title"), 500),
         "year": _text(row.get("year"), 16) or None,
         "venue": _text(row.get("venue") or row.get("journal"), 240) or None,
+        "review": _typed_review(row.get("review"), RecordReview),
+        "impact": _typed_review(row.get("impact"), ImpactProxies),
         "relevance": relevance or None,
         "relevance_kind": "source_excerpt" if source_excerpt else "reference_note",
         "doi": _text(row.get("doi"), 240) or None,
@@ -338,6 +355,7 @@ def project_run_literature(
             bundle.get("research_question") or plan.get("research_question"), 2_000
         ),
         "status": status,
+        "review": _typed_review(bundle.get("review"), ReviewCoverage),
         "search": {
             "search_conducted": searched,
             "searched_at": _text(provenance.get("searched_at"), 80) or None,
@@ -356,12 +374,25 @@ def project_run_literature(
                 if _text(value, 80)
             ],
             "note": _text(provenance.get("note"), 1_200),
+            "review_policy": _typed_review(provenance.get("review_policy"), ReviewPolicy),
+            "sources_failing": {
+                _text(source, 80): [_text(reason, 600) for reason in list(reasons)[:12]]
+                for source, reasons in (provenance.get("sources_failing") or {}).items()
+                if isinstance(reasons, list)
+            } if isinstance(provenance.get("sources_failing"), Mapping) else {},
+            "query_roles": {
+                _text(source, 80): {
+                    _text(role, 80): [_text(query, 4000) for query in list(queries)[:12]]
+                    for role, queries in roles.items() if isinstance(queries, list)
+                } for source, roles in (provenance.get("query_roles") or {}).items()
+                if isinstance(roles, Mapping)
+            } if isinstance(provenance.get("query_roles"), Mapping) else {},
             "prisma": dict(prisma) if prisma else None,
             "queries": {
                 _text(source, 80): [
-                    _text(query, 1_500)
-                    for query in list(queries or [])[:4]
-                    if _text(query, 1_500)
+                    _text(query, 4_000)
+                    for query in list(queries or [])[:24]
+                    if _text(query, 4_000)
                 ]
                 for source, queries in raw_queries.items()
                 if _text(source, 80)
