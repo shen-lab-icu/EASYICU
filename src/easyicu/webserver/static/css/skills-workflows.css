@@ -10,7 +10,7 @@
 .eusk-workflow-detail header small{color:var(--sk-muted);overflow-wrap:anywhere}
 .eusk-workflow-detail section{margin-top:24px}.eusk-workflow-detail section h2{font-size:14px;margin:0 0 12px}
 .eusk-workflow-actions{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:20px 0}
-.eusk-workflow-actions button:not(.eusk-use){border:0;background:transparent;color:var(--sk-accent);text-decoration:underline}
+.eusk-workflow-actions button:not(.eusk-use){min-height:32px;padding:0 8px;border:0;background:transparent;color:var(--sk-accent);text-decoration:underline}
 .eusk-workflow-products{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
 .eusk-workflow-products ul{margin:0;padding-left:18px;font-size:12px;line-height:1.7;overflow-wrap:anywhere}
 .eusk-workflow-graph{max-width:100%;overflow-x:auto;border:1px solid var(--sk-line);border-radius:8px;background:var(--sk-surface)}
