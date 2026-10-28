@@ -3472,6 +3472,44 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
     }
 
 
+def describe_source_tables(raw_path: str) -> Dict[str, Any]:
+    """The tables and modules of a source folder, reading no table's rows.
+
+    A run start needs only that the bound folder still holds tables, and its
+    scope default only their modules. :func:`describe_export_source` also
+    counts each CSV's rows by reading it through, which on a raw source folder
+    took minutes (SICdb's 14 GB ``data_float_h.csv``) before the run's job
+    existed and the page could show any step.
+    """
+    from easyicu.webserver.hosted import require_path
+
+    require_path(raw_path, instance_owned=True)
+    path = Path(raw_path).expanduser()
+    try:
+        path = path.resolve()
+    except OSError:
+        pass
+    if not _safe_dir(path):
+        return {"ok": False, "error": "not_a_directory", "path": str(path)}
+
+    from easyicu.synthetic_source_provenance import source_description
+    synthetic = source_description(path)
+    if synthetic is not None:
+        return synthetic
+    manifest = _read_export_manifest(path)
+    files = _export_file_inventory(path, manifest, count_rows=False)
+    if not files:
+        return {"ok": False, "error": "no_export_files", "path": str(path), "files": []}
+    return {
+        "ok": True,
+        "path": str(path),
+        "label": str(manifest.get("database") or path.name or "local").upper(),
+        "database": manifest.get("database"),
+        "modules": sorted({f.get("module") for f in files if f.get("module")}),
+        "files": files,
+    }
+
+
 def _research_pipeline_intake_diagnostic(exc: BaseException) -> Dict[str, Any]:
     """Publish owner codes and remedies, never exception text or private names."""
 
@@ -3759,7 +3797,7 @@ def _positive_int(value: Any) -> Optional[int]:
 
 
 def _export_file_inventory(
-    path: Path, manifest: Dict[str, Any]
+    path: Path, manifest: Dict[str, Any], *, count_rows: bool = True
 ) -> List[Dict[str, Any]]:
     from easyicu.webserver.hosted import require_path
 
@@ -3783,7 +3821,7 @@ def _export_file_inventory(
             meta["file"] = f.name
         if "module" not in meta:
             meta["module"] = _infer_export_module(f)
-        if "rows" not in meta:
+        if "rows" not in meta and count_rows:
             meta["rows"] = _count_rows(f)
         meta["columns"] = _read_columns(f)
         out.append(meta)

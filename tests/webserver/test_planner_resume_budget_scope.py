@@ -178,7 +178,7 @@ def submit_source(sealed_source, tmp_path, monkeypatch):
     events = []
     monkeypatch.delenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", raising=False)
     monkeypatch.setattr(submission.context_store, "get_context", lambda _: study)
-    monkeypatch.setattr(submission.dataio, "describe_export_source", lambda _: {"ok": True})
+    monkeypatch.setattr(submission.dataio, "describe_source_tables", lambda _: {"ok": True})
     monkeypatch.setattr(submission.dataio, "prepared_export_manifest_path", lambda _: None)
     monkeypatch.setattr(submission.dataio, "validate_research_pipeline_source", lambda *a, **k: events.append("source"))
     monkeypatch.setattr(submission, "build_research_workflow_snapshot", lambda **k: SimpleNamespace(planning_prerequisites_missing=[]))

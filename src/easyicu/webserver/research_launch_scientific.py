@@ -957,7 +957,7 @@ def _neutral_materialization_scope(
         isinstance(raw_modules, (list, tuple)) and not raw_modules
     ):
         try:
-            described = dataio.describe_export_source(export_path)
+            described = dataio.describe_source_tables(export_path)
         except Exception:  # noqa: BLE001 - scope default must never mask the
             described = {}  # owner's own manifest/inventory error below
         available = [

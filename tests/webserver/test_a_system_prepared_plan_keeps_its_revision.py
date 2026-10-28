@@ -29,7 +29,7 @@ def launch(tmp_path, monkeypatch):
         "primary_exposure": "synthetic_assay", "target_outcome": "death",
         "endpoint": EndpointSpec(name="death", kind="binary", absence_semantics="no_absent_rows", levels=[0, 1]),
     })
-    monkeypatch.setattr(submission.dataio, "describe_export_source", lambda _: {"ok": True})
+    monkeypatch.setattr(submission.dataio, "describe_source_tables", lambda _: {"ok": True})
     monkeypatch.setattr(submission.dataio, "prepared_export_manifest_path", lambda _: None)
     monkeypatch.setattr(submission, "build_research_workflow_snapshot", lambda **_: SimpleNamespace(planning_prerequisites_missing=[]))
     monkeypatch.setattr(submission, "provider_environment_for_agent_run", lambda **_: {})
