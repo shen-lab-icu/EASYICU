@@ -522,6 +522,8 @@
   .ex-action-buttons .btn{ flex:1; }
   .ex-step-actions{ align-items:stretch; flex-direction:column-reverse; }
   .ex-step-actions .btn{ width:100%; justify-content:center; }
+  .ex-step-summary{ text-align:left; }
+  .ex-cohort-detail .icd-inputs{ grid-template-columns:1fr; }
 }
 
 @media (max-width:560px){
