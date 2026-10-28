@@ -6,6 +6,7 @@ import json
 from easyicu.databases.research_plan_requirements import _constraints, plan_capability_decision, unapplied_substitution_capabilities
 from easyicu.databases.research_substitutions import bind_source_substitutions, registered_source_profile, source_decision
 from easyicu.research_agent.canonical_json import canonical_sha256
+from easyicu.research_agent.replication.metrics import pooling_context_coordinates
 from .research_followup_compile import compile_new_study
 from .research_multi_contracts import MultiDatabaseError
 from .research_plan_revision import _scientific_binding, _step_coordinate
@@ -79,5 +80,14 @@ def compile_same_study(source, target_context):
     return proposed, plan, decision
 
 
-def estimand_identity(plan):
-    return canonical_sha256(scientific_design(plan))
+def estimand_identity(plan, context=None):
+    """Bind design plus declared population, endpoint and exposure timing.
+
+    Database names, observed sample sizes and source paths do not define the
+    estimand. Context declarations do: equal plan labels cannot hide a changed
+    population filter or observation window in a target's intake.
+    """
+    if context is None:
+        return canonical_sha256(scientific_design(plan))
+    return canonical_sha256(dict(design=scientific_design(plan),
+        context=pooling_context_coordinates(plan, context)))

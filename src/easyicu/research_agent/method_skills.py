@@ -734,6 +734,21 @@ def _method_component_catalog(*, enabled: bool) -> tuple[list[dict[str, Any]], i
                     ),
                 }
             )
+    items.append({
+        "id": "cross_database.meta_analysis", "title": "Per-database meta-analysis",
+        "title_zh": "跨数据库效应合并", "category": "Evidence synthesis", "category_zh": "证据合成",
+        "description": "Inverse-variance fixed effect and REML random effects yield a pooled observational estimate from independent, gate-passing databases with the same estimand. Changed estimands are excluded; execution approval does not authorize pooling them.",
+        "description_zh": "对通过自身审核且估计目标一致的独立数据库进行固定效应和 REML 随机效应合并，结果仅为观察性关联。估计目标改变的数据库予以排除；运行批准不等于合并批准。",
+        "version": METHOD_SKILL_REGISTRY_VERSION, "enabled": bool(enabled),
+        "method_family": "cross_database", "method_key": "meta_analysis", "tier": "standard_supporting",
+        "implementation": "deterministic", "execution_mode": "deterministic_host", "claim_ceiling": "analysis_only",
+        "outputs": ["forest.svg", "heterogeneity table", "leave-one-database-out sensitivity", "exclusion reasons"],
+        "reporting_items": ["Q with df and p", "I²", "tau²", "prediction interval", "exclusions", "leave-one-database-out",
+                            "inverse-variance weights", "REML", "Hartung-Knapp option", "DerSimonian-Laird labelled sensitivity"],
+        "kernel_modules": ["easyicu.research_agent.methods.sensitivity"],
+        "prompt": "Pool verified per-database estimates with their coefficient SEs after equal-estimand and capability checks. Report REML, heterogeneity, exclusions and sensitivity; claim only a pooled observational estimate. My research question: ",
+        "prompt_zh": "核对估计目标与数据库能力后，使用已核验的各数据库效应及系数标准误进行合并。报告 REML、异质性、排除原因和敏感性分析；仅描述合并后的观察性关联。我的研究问题是：",
+    })
     return items, planned_count
 
 
@@ -1250,6 +1265,9 @@ METHOD_NOTES = {
 
 
 def _method_lines(row: dict[str, Any], language: int) -> list[str]:
+    if row["id"] == "cross_database.meta_analysis":
+        return [("Inverse-variance fixed effect and REML random effects. Optional unmodified Hartung-Knapp t intervals; DerSimonian-Laird is a labelled sensitivity. Ratios use log coefficients and their SEs. Report Q with df and p, I², tau², weights, prediction interval, exclusions and leave-one-database-out recomputation. A prediction interval needs at least three independent databases.",
+                 "逆方差固定效应和 REML 随机效应；可选原始 Hartung-Knapp t 区间，DerSimonian-Laird 仅作为标注的敏感性分析。比值使用对数系数及其标准误。报告 Q 及自由度和 p 值、I²、tau²、权重、预测区间、排除原因和逐库剔除重算结果。预测区间至少需要三个独立数据库。")[language]]
     notes = METHOD_NOTES.get(row["id"])
     if notes is None:
         return []
@@ -1557,6 +1575,9 @@ def _package_skill_markdown(kind: str, row: dict[str, Any], *, language: int = 0
     )
     inputs = ("Inputs: an approved cohort with patient/stay identifiers, the specified measurements, units and timestamps, and outcome/follow-up information when used.",
               "输入：获准使用的队列，含患者及住院标识、所需测量、单位和时间戳，以及分析所用的结局与随访信息。")[language]
+    if row["id"] == "cross_database.meta_analysis":
+        inputs = ("Inputs: sealed per-database aggregate estimates, coefficient SEs, exact estimand identities, capability decisions and each run's passed gates. No patient rows or identifiers are pooling inputs.",
+                  "输入：各数据库已封存的汇总效应、系数标准误、精确估计目标标识、能力判定及各自通过的审核。合并不接收患者行或患者标识。")[language]
     boundary = ("EasyICU owns data access, execution, evidence records and the limits on conclusions. Review the full plan before running. Do not change definitions or fill gaps silently; preserve failed checks and revise the plan. Public demos support learning, not clinical conclusions.",
                 "EasyICU 负责数据访问、执行、证据记录和结论范围。运行前审阅完整计划；不能悄悄更改定义或填补缺口，须保留未通过的检查并修订计划。公共演示数据用于学习，不能支持临床结论。")[language]
     ceiling = (("Results can enter a report only after the host's required reviews pass.", "结果只有通过系统要求的审查后才能用于报告。")
