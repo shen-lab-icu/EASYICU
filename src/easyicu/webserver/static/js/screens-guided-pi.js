@@ -624,6 +624,11 @@
     DATA_BINDING.resumeWaiting();
     requestAnimationFrame(() => {
       STUDY_WORKSPACE.restoreMaterials(state.host); CONNECT.focusDialog(state.host);
+      const composer = state.focusComposerUntil > Date.now() && state.host && state.host.querySelector('[data-gpi-input]');
+      if (composer && !composer.disabled && document.activeElement !== composer) {
+        composer.focus();
+        composer.setSelectionRange(composer.value.length, composer.value.length);
+      }
       // Opening a deep-linked artifact while the project/session is still
       // restoring lets openSession() immediately close it and erase the URL.
       // Wait until the selected conversation is authoritative, then restore
@@ -1771,9 +1776,10 @@
         if (suggestion && state.session && (!previousSessionId || state.session.session_id !== previousSessionId)) {
           state.draft = suggestion;
           window.sessionStorage.removeItem('easyicu.skillHub.question');
+          // Attaching the chosen workflow repaints the composer once more; keep
+          // the cursor at the end of the request through those first paints.
+          state.focusComposerUntil = Date.now() + 3000;
           render();
-          const input = state.host && state.host.querySelector('[data-gpi-input]');
-          if (input && !input.disabled) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
         }
       } catch (_) {}
     }).finally(() => {
