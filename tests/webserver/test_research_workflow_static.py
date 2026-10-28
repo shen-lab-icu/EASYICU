@@ -13,7 +13,7 @@ def test_workflow_dependencies_and_changed_cache_tokens_are_explicit():
     assert [html.index(f"js/{file}?") for file in before] == sorted(html.index(f"js/{file}?") for file in before)
     assert html.index("screens-guided-pi-skill-attach.js?") < html.index("screens-guided-pi-study-workspace.js?")
     assert html.index("screens-guided-pi-starters.js?") < html.index("screens-guided-pi.js?")
-    assert 'js/screens-skills-workflows.js?v=20261028-flow3"' in html
+    assert 'js/screens-skills-workflows.js?v=20261028-graph1"' in html
     for file in ["desktop-module-shell.js",
                  "screens-guided-pi-starters.js", "screens-guided-pi-study-workspace.js", "screens-agent-reader-vocab.js"]:
         assert f'js/{file}?v=20261028-flow1"' in html

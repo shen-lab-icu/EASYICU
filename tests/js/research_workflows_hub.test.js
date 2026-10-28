@@ -157,3 +157,26 @@ test('a hub start keeps a workflow already attached as a project default', async
   assert.equal(await modules.skillAttach.ensure('p1', fresh, 'builtin', 'synthetic'), true);
   assert.equal(fresh.draft_attached_skills[0].id, 'synthetic');
 });
+test('the graph drops implied edges and routes column-skipping edges between step boxes', () => {
+  const { owner } = setup();
+  const step = (id, kind) => ({ id, kind, label: `Long instruction for ${id} that is not a name and keeps going past the box`, module_id: 'custom_analysis' });
+  const html = owner.graph({ id: 'g', title: 'G', steps: [step('cohort', 'cohort'), step('summary', 'diagnostic'),
+    step('audit', 'preflight'), step('fit', 'model'), step('check', 'sensitivity'), step('report', 'report')],
+  edges: [['cohort', 'summary'], ['cohort', 'audit'], ['audit', 'fit'], ['cohort', 'fit'], ['fit', 'check'],
+    ['check', 'report'], ['summary', 'report'], ['cohort', 'report'], ['fit', 'report']].map(([source, target]) => ({ source, target })) });
+  const drawn = [...html.matchAll(/data-wf-edge="([^"]+)" d="([^"]+)"/g)].map(match => [match[1], match[2]]);
+  assert.deepEqual(drawn.map(([id]) => id).sort(), ['audit:fit', 'check:report', 'cohort:audit', 'cohort:summary', 'fit:check', 'summary:report']);
+  const boxes = [...html.matchAll(/data-wf-node="([^"]+)" transform="translate\((\d+),(\d+)\)"/g)]
+    .map(match => ({ id: match[1], x: Number(match[2]), y: Number(match[3]) }));
+  const [, skip] = drawn.find(([id]) => id === 'summary:report');
+  // The straight segment of a skipping edge runs along one channel: "x1,y Lx2,y".
+  const [x1, y, x2] = skip.match(/ ([\d.]+),([\d.]+) L([\d.]+),/).slice(1).map(Number);
+  assert.ok(x2 > x1);
+  for (const box of boxes) {
+    const overlapsX = box.x < x2 && box.x + 176 > x1;
+    assert.ok(!overlapsX || y < box.y || y > box.y + 56, `channel crosses ${box.id}`);
+  }
+  // Long step instructions never become box names.
+  assert.doesNotMatch(html, /Long instruction/);
+  assert.match(html, /<title>主分析<\/title>/);
+});
