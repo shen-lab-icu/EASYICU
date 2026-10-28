@@ -297,7 +297,7 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
         core, companions = remaining[:len(required_steps)], remaining[len(required_steps):]
         profiles = [_article_display_profile(step, core) for step in companions]
         if (tuple(step.step_id for step in core) != required_steps
-            or (companions and required_steps != BASELINE_STEPS)
+            or (companions and required_steps != BASELINE_STEPS and profiles != ["figure:cohort_flow"])
             or None in profiles or len(profiles) != len(set(profiles))
             or any(plan.steps.index(step) <= plan.steps.index(next(s for s in plan.steps if s.step_id == "absolute_risk_context"))
                    or any(plan.steps.index(step) > plan.steps.index(s) for s in core if s.step_id in {"visualization", "report"})

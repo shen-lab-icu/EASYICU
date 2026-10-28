@@ -142,4 +142,7 @@ def draft(
                 robustness_intents=[], know_how_decisions=[],
             ),
         ), materializations=tuple(materializations),
+        # These families declare their own cohort and figure products. Their
+        # owners must authorize any additional participant-flow rendering.
+        cohort_flow_product_unavailable_reason="longitudinal_owned_products",
     )

@@ -396,7 +396,9 @@ def build_source_feasibility_skeleton(
         )
         for step in steps
     )
-    return FamilySkeletonDraft(outline=outline, foundation=foundation, materializations=materializations)
+    # Its signed one-step decision projection produces no cohort ledger.
+    return FamilySkeletonDraft(outline=outline, foundation=foundation, materializations=materializations,
+                               cohort_flow_product_unavailable_reason="signed_source_decision")
 
 
 __all__ = ["build_source_feasibility_skeleton"]

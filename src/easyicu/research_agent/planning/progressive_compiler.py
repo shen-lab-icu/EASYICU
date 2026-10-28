@@ -3013,6 +3013,12 @@ def _compile_one_step(
         "literature_design_bindings": literature,
         "input_consumption_contracts": consumption,
     }
+    if (step.step_id == "family_cohort_flow_figure" and step.module_id == "visualization"
+        and inputs == ["table:cohort_flow"] and output_pairs == [("figure:cohort_flow", "figure")]):
+        from ..contracts.figure_plan import COHORT_FLOW_FIGURE_PANELS
+
+        kwargs["figure_panels"] = [panel.bind(figure_output="figure:cohort_flow")
+                                   for panel in COHORT_FLOW_FIGURE_PANELS]
     if step.module_id == "cohort_definition" and not study_root:
         kwargs["cohort_definition_spec"] = CohortDefinitionSpec(
             identity_column=_identity_column(
@@ -3422,7 +3428,7 @@ def compile_progressive_plan(
                 )
             )
         )
-        if step.module_id not in allowed_modules or unsupported_descriptive_custom:
+        if (step.module_id not in allowed_modules and step.module_id not in progressive_module_ids_for_analysis_types((canonical_type,), step=step)) or unsupported_descriptive_custom:
             raise _fail(
                 "progressive_analysis_module_unavailable",
                 f"module {step.module_id!r} is unavailable for analysis type "

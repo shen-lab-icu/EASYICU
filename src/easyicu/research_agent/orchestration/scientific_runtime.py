@@ -288,6 +288,31 @@ def _carry_owner_literature(
     return bound.model_copy(update={"steps": steps}), carried
 
 
+def _carry_family_cohort_flow_figure(*, draft: AnalysisPlan, bound: AnalysisPlan) -> AnalysisPlan:
+    """Keep the count-only family figure when trajectory owners are projected."""
+    sources = [step for step in draft.steps if step.step_id == "family_cohort_flow_figure"]
+    if not sources:
+        return bound
+    from ..contracts.figure_plan import COHORT_FLOW_FIGURE_PANELS
+    from ..execution.runners.cohort_flow_figure_executor import cohort_flow_figure_executor_declares_step
+    from ..schema import ArtifactConsumptionContract
+
+    if (len(sources) != 1 or not cohort_flow_figure_executor_declares_step(sources[0])
+        or sources[0].inputs != ["table:cohort_flow"]
+        or sources[0].expected_outputs != ["figure:cohort_flow"]
+        or sum("table:cohort_flow" in step.expected_outputs for step in bound.steps) != 1
+        or any("figure:cohort_flow" in step.expected_outputs for step in bound.steps)):
+        raise ValueError("trajectory cohort-flow figure has an invalid source or declaration")
+    figure = AnalysisStep(
+        step_id="family_cohort_flow_figure", planned_analysis_role="auxiliary",
+        intent="Render the recorded cohort accounting counts as a participant flow figure.",
+        method="visualization", inputs=["table:cohort_flow"], expected_outputs=["figure:cohort_flow"],
+        input_consumption_contracts=[ArtifactConsumptionContract(input_key="table:cohort_flow", mode="all_rows")],
+        figure_panels=[panel.bind(figure_output="figure:cohort_flow") for panel in COHORT_FLOW_FIGURE_PANELS],
+    )
+    return bound.model_copy(update={"steps": [*bound.steps, figure]})
+
+
 #: Host step ids for the frozen-class description beside the signed owners.
 FROZEN_CLASS_COHORT_STEP_ID = "04_host_bound_analysis_cohort"
 FROZEN_CLASS_DESCRIPTION_STEP_ID = "05_frozen_class_description"
@@ -639,6 +664,7 @@ class ScientificRuntimeAuthorities:
                 bound=bound,
                 database=context.cohort.database if context is not None else None,
             )
+            bound = _carry_family_cohort_flow_figure(draft=plan, bound=bound)
             message = (
                 "Removed generic article-shaping additions and compiled "
                 "the four signed trajectory execution owners"

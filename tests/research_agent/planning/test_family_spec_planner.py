@@ -173,6 +173,7 @@ def test_one_call_compiles_the_exact_roster_plan() -> None:
         "prespecified_first_stay",
         "visualization",
         "report",
+        "family_cohort_flow_figure",
     ]
     primary = plan.steps[3].model_requirements[0]
     assert primary.covariates == ["age", "sex", "comorbidity_index"]
@@ -184,7 +185,7 @@ def test_one_call_compiles_the_exact_roster_plan() -> None:
     assert primary.primary_contrast_level == "3" and primary.exposure_reference_level == "0"
     metrics = result.facts.prompt_metrics
     assert metrics["planner_strategy"] == FAMILY_SPEC_STRATEGY
-    assert metrics["host_step_materialization_count"] == 12
+    assert metrics["host_step_materialization_count"] == len(plan.steps) == 13
     assert metrics["family_spec_request_sha256"] == request.request_sha256
     assert metrics["compiled_plan_sha256"] == result.facts.compile_receipt.analysis_plan_sha256
     assert result.facts.complete_for_persistence
@@ -702,7 +703,7 @@ def test_orchestration_persists_the_family_spec_chain(tmp_path: Path) -> None:
     assert (tmp_path / "progressive_step_materializations.json").exists()
     checkpoints = sorted(tmp_path.glob("progressive_planner_checkpoint_*.json"))
     # outline + foundation + one per host-materialized step
-    assert len(checkpoints) == 2 + 12
+    assert len(checkpoints) == 2 + len(result.plan.steps) == 2 + 13
     assert len(llm.calls) == 1
 
 
@@ -1163,6 +1164,7 @@ def test_descriptive_family_compiles_the_reference_layout_and_fails_closed_on_mo
         "baseline_context",
         "exposure_outcome_distribution",
         "measurement_audit",
+        "family_cohort_flow_figure",
     ]
     primary = plan.steps[2]
     assert primary.planned_analysis_role == "primary"
@@ -1238,6 +1240,7 @@ def test_phenotyping_family_offers_window_bound_features_and_compiles_the_refere
     assert [step.step_id for step in plan.steps] == [
         "cohort_accounting", "feature_quality_audit", "primary_cluster_solution",
         "cluster_number_selection", "cluster_stability", "cluster_characterization",
+        "family_cohort_flow_figure",
     ]
     primary = plan.steps[2]
     assert primary.scientific_action_id == "phenotyping.cluster_solution"
@@ -1355,6 +1358,7 @@ def test_prediction_family_compiles_the_host_owned_reference_layout() -> None:
     assert [step.step_id for step in plan.steps] == [
         "cohort_accounting", "baseline_context", "measurement_audit", "primary_performance",
         "calibration_metrics", "internal_validation", "clinical_utility", "visualization", "report",
+        "family_cohort_flow_figure",
     ]
     primary = plan.steps[3]
     assert primary.scientific_action_id == "prediction.discrimination_calibration"

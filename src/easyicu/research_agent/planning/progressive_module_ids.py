@@ -7,7 +7,7 @@ planning contract (``test_execution_kernel_identity``).
 
 from __future__ import annotations
 
-from typing import Literal, Sequence, get_args
+from typing import Any, Literal, Sequence, get_args
 
 from ..contracts.cohort_summary import DESCRIPTIVE_SUMMARY_ACTION as DESCRIPTIVE_SUMMARY_ACTION
 
@@ -34,8 +34,27 @@ def descriptive_custom_module_allowed(role: str, action: str | None) -> bool:
     )
 
 
+def _family_cohort_flow_figure(step: Any) -> bool:
+    """Recognize the family-owned count renderer without opening other modules."""
+    if (getattr(step, "step_id", None) != "family_cohort_flow_figure"
+        or getattr(step, "module_id", None) != "visualization"
+        or getattr(step, "planned_analysis_role", None) != "auxiliary"
+        or getattr(step, "scientific_action_id", None) is not None
+        or len(getattr(step, "depends_on", ())) != 1):
+        return False
+    if not hasattr(step, "product_inputs"):
+        return True  # The outline does not carry products; compilation checks them.
+    return (
+        not step.raw_inputs
+        and [(ref.producer_step_id, ref.product_id) for ref in step.product_inputs]
+        == [(step.depends_on[0], "table:cohort_flow")]
+        and [(output.product_id, output.semantic_role) for output in step.outputs]
+        == [("figure:cohort_flow", "figure")]
+    )
+
+
 def progressive_module_ids_for_analysis_types(
-    analysis_types: Sequence[str],
+    analysis_types: Sequence[str], *, step: Any = None,
 ) -> tuple[str, ...]:
     """Return the union of modules the selected analysis families can execute.
 
@@ -72,4 +91,6 @@ def progressive_module_ids_for_analysis_types(
                 "report",
             }
         ]
+        if step is not None and _family_cohort_flow_figure(step):
+            modules.append("visualization")
     return tuple(modules)

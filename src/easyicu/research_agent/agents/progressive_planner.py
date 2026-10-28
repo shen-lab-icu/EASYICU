@@ -2261,7 +2261,7 @@ class ProgressivePlannerAgent:
                     step.planned_analysis_role, step.scientific_action_id,
                 )
             )
-            if step.module_id not in allowed_modules or unsupported_descriptive_custom:
+            if (step.module_id not in allowed_modules and step.module_id not in progressive_module_ids_for_analysis_types((outline.analysis_type,), step=step)) or unsupported_descriptive_custom:
                 raise ProgressivePlanCompileError(
                     "progressive_outline_module_unavailable",
                     f"outline module {step.module_id!r} is unavailable for "

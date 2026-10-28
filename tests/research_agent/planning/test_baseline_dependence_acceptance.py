@@ -160,7 +160,8 @@ def test_dependence_feedback_cannot_relax_other_authority_coordinates(conflict):
     elif conflict == "outcome":
         candidate.steps[3].model_requirements[0].outcome_type = "continuous"
     elif conflict == "steps":
-        candidate.steps = candidate.steps[:-1]
+        # The cohort-flow figure is an optional companion; a missing core step is not.
+        candidate.steps = [step for step in candidate.steps if step.step_id != "report"]
     with pytest.raises(BaselineAssociationAuthorityError) as caught:
         runtime.check_planner_plan(candidate, context)
     assert not runtime.planner_retryable_error(caught.value)
