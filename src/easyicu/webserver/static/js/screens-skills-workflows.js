@@ -25,42 +25,118 @@
   const nodeNames = () => ({ cohort_definition: tr('Cohort', '队列'), table_one: 'Table 1',
     measurement_audit: tr('Measurement audit', '测量核查'), adjusted_association: tr('Adjusted model', '调整后模型'),
     absolute_risk_context: tr('Absolute risk', '绝对风险'), robustness_replay: tr('Sensitivity', '敏感性分析'),
-    visualization: tr('Figure', '图形'), report: tr('Report', '报告') });
+    visualization: tr('Figure', '图形'), report: tr('Report', '报告'),
+    feature_functional_form: tr('Functional form', '函数形式检验'),
+    primary_survival_suite: tr('Survival models', '生存分析模型'), candidate_selection: tr('Model selection', '候选模型选择') });
+  // Fallback when a step has no short name: its typed kind, never the long step instruction.
+  const kindNames = () => ({ cohort: tr('Cohort', '队列'), preflight: tr('Data check', '数据核查'),
+    model: tr('Primary analysis', '主分析'), diagnostic: tr('Diagnostic', '诊断检验'),
+    sensitivity: tr('Sensitivity', '敏感性分析'), figure: tr('Figure', '图形'), report: tr('Report', '报告') });
   function nodeLabel(node) {
-    const named = nodeNames()[node.module_id || node.kind];
-    return named || window.AGENT_READER_VOCAB?.tableTitle(node.id) || pick(node, 'label') || node.id;
+    const names = nodeNames(), module = node.module_id === 'custom_analysis' ? '' : node.module_id;
+    const named = names[node.id] || names[module || node.kind];
+    if (named) return named;
+    if (window.EU_LANG === 'zh' && node.label_zh) return node.label_zh;
+    const vocab = window.AGENT_READER_VOCAB?.tableTitle(node.id);
+    if (vocab && vocab !== node.id) return vocab;
+    const label = node.label || '';
+    return (window.EU_LANG === 'zh' || label.length > 40) && kindNames()[node.kind] || label || node.id;
   }
-  function graph(row) {
-    const nodes = row.steps || [], edges = row.edges || [];
-    const ids = new Set(nodes.map(node => node.id));
+  // Graph geometry: columns are dependency depth; rows are separated by channels
+  // that edges skipping a column travel along, so no edge crosses a step box.
+  const BOX_W = 176, BOX_H = 56, COL = 236, ROW = 96, PAD = 28, GAP_X = COL - BOX_W;
+  function reachesWithout(out, source, target) {
+    const seen = new Set(), stack = out.get(source).filter(id => id !== target);
+    while (stack.length) {
+      const id = stack.pop();
+      if (id === target) return true;
+      if (seen.has(id)) continue;
+      seen.add(id); stack.push(...out.get(id));
+    }
+    return false;
+  }
+  function layout(row) {
+    const nodes = row.steps || [], ids = new Set(nodes.map(node => node.id));
+    const all = (row.edges || []).filter(edge => ids.has(edge.source) && ids.has(edge.target) && edge.source !== edge.target);
+    const out = new Map(nodes.map(node => [node.id, []]));
+    all.forEach(edge => out.get(edge.source).push(edge.target));
+    // An edge implied by a longer path adds no ordering; drawing it only adds crossings.
+    const edges = all.filter(edge => !reachesWithout(out, edge.source, edge.target));
     const depths = new Map(), visiting = new Set();
     function depth(id) {
       if (depths.has(id)) return depths.get(id);
       if (visiting.has(id)) return 0;
       visiting.add(id);
-      const parents = edges.filter(edge => edge.target === id && ids.has(edge.source));
+      const parents = all.filter(edge => edge.target === id);
       const value = parents.length ? 1 + Math.max(...parents.map(edge => depth(edge.source))) : 0;
       visiting.delete(id); depths.set(id, value); return value;
     }
-    const lanes = new Map(), positions = new Map();
-    for (const node of nodes) {
-      const level = depth(node.id), lane = lanes.get(level) || 0;
-      lanes.set(level, lane + 1); positions.set(node.id, { x: 20 + level * 220, y: 20 + lane * 94 });
-    }
-    const width = Math.max(360, 40 + lanes.size * 220 - 30);
-    const height = 40 + Math.max(1, ...lanes.values()) * 94;
-    const links = edges.filter(edge => positions.has(edge.source) && positions.has(edge.target)).map(edge => {
+    const levels = [];
+    nodes.forEach(node => { const level = depth(node.id); (levels[level] = levels[level] || []).push(node.id); });
+    const index = new Map();
+    levels.forEach(level => (level || []).forEach((id, i) => index.set(id, i)));
+    for (let pass = 0; pass < 2; pass += 1) levels.forEach((level, l) => {
+      if (!l || !level) return;
+      const center = id => {
+        const parents = edges.filter(edge => edge.target === id).map(edge => index.get(edge.source));
+        return parents.length ? parents.reduce((a, b) => a + b, 0) / parents.length : index.get(id);
+      };
+      level.sort((a, b) => center(a) - center(b) || index.get(a) - index.get(b));
+      level.forEach((id, i) => index.set(id, i));
+    });
+    const positions = new Map();
+    levels.forEach((level, l) => (level || []).forEach((id, i) => positions.set(id, { x: PAD + l * COL, y: PAD + i * ROW })));
+    const lanes = Math.max(1, ...levels.map(level => (level || []).length));
+    return { nodes, edges, positions, levels: levels.length, lanes };
+  }
+  function ports(edges, positions, key, other) {
+    const result = new Map();
+    const groups = new Map();
+    edges.forEach(edge => { const id = edge[key]; groups.set(id, [...(groups.get(id) || []), edge]); });
+    groups.forEach((list, id) => {
+      const box = positions.get(id), step = Math.min(10, (BOX_H - 16) / Math.max(1, list.length - 1));
+      list.sort((a, b) => positions.get(a[other]).y - positions.get(b[other]).y || positions.get(a[other]).x - positions.get(b[other]).x)
+        .forEach((edge, i) => result.set(edge, box.y + BOX_H / 2 + (i - (list.length - 1) / 2) * step));
+    });
+    return result;
+  }
+  function edgePaths(model) {
+    const { edges, positions } = model;
+    const starts = ports(edges, positions, 'source', 'target'), ends = ports(edges, positions, 'target', 'source');
+    const used = new Map();
+    return edges.map(edge => {
       const from = positions.get(edge.source), to = positions.get(edge.target);
-      const x = from.x + 180, y = from.y + 30, endY = to.y + 30, mid = (x + to.x) / 2;
-      return `<path data-wf-edge="${esc(edge.source)}:${esc(edge.target)}" d="M${x},${y} C${mid},${y} ${mid},${endY} ${to.x},${endY}" marker-end="url(#wf-arrow)"><title>${esc((edge.products || []).map(label).join(', '))}</title></path>`;
+      const sx = from.x + BOX_W, sy = starts.get(edge), tx = to.x, ty = ends.get(edge);
+      let d;
+      if (tx - sx <= GAP_X) {
+        const mid = (sx + tx) / 2;
+        d = `M${sx},${sy} C${mid},${sy} ${mid},${ty} ${tx},${ty}`;
+      } else {
+        // Channel g lies in the gap above row g; pick the one nearest both ends.
+        const channelY = g => PAD + g * ROW - (ROW - BOX_H) / 2;
+        let best = 0;
+        for (let g = 0; g <= model.lanes; g += 1) {
+          if (Math.abs(channelY(g) - sy) + Math.abs(channelY(g) - ty) < Math.abs(channelY(best) - sy) + Math.abs(channelY(best) - ty)) best = g;
+        }
+        const n = used.get(best) || 0; used.set(best, n + 1);
+        const cy = channelY(best) + (n % 2 ? 1 : -1) * Math.ceil(n / 2) * 6;
+        const a = sx + GAP_X, b = tx - GAP_X;
+        d = `M${sx},${sy} C${sx + GAP_X / 2},${sy} ${sx + GAP_X / 2},${cy} ${a},${cy} L${b},${cy} C${b + GAP_X / 2},${cy} ${b + GAP_X / 2},${ty} ${tx},${ty}`;
+      }
+      return `<path data-wf-edge="${esc(edge.source)}:${esc(edge.target)}" d="${d}" marker-end="url(#wf-arrow)"><title>${esc((edge.products || []).map(label).join(', '))}</title></path>`;
     }).join('');
-    const boxes = nodes.map(node => {
-      const point = positions.get(node.id), text = nodeLabel(node);
-      const chars = Array.from(text), limit = /[\u3400-\u9fff]/.test(text) ? 12 : 22;
+  }
+  function graph(row) {
+    const model = layout(row);
+    const width = Math.max(360, PAD * 2 + (model.levels - 1) * COL + BOX_W);
+    const height = PAD + model.lanes * ROW - (ROW - BOX_H) + PAD;
+    const boxes = model.nodes.map(node => {
+      const point = model.positions.get(node.id), text = nodeLabel(node);
+      const chars = Array.from(text), limit = /[㐀-鿿]/.test(text) ? 12 : 22;
       const lines = [chars.slice(0, limit).join(''), chars.length > limit ? chars.slice(limit, limit * 2 - 1).join('') + (chars.length >= limit * 2 ? '…' : '') : ''].filter(Boolean);
-      return `<g data-wf-node="${esc(node.id)}" transform="translate(${point.x},${point.y})" class="${node.optional ? 'is-optional' : ''}" tabindex="0"><title>${esc(text)}</title><rect width="180" height="60" rx="7"/><text x="12" y="${lines.length > 1 ? 23 : 34}">${lines.map((line, i) => `<tspan x="12" dy="${i ? 18 : 0}">${esc(line)}</tspan>`).join('')}</text>${node.optional ? `<text class="wf-optional" x="12" y="78">${tr('Optional', '可选')}</text>` : ''}</g>`;
+      return `<g data-wf-node="${esc(node.id)}" transform="translate(${point.x},${point.y})" class="${node.optional ? 'is-optional' : ''}" tabindex="0"><title>${esc(text)}</title><rect width="${BOX_W}" height="${BOX_H}" rx="7"/><text x="12" y="${lines.length > 1 ? 23 : 33}">${lines.map((line, i) => `<tspan x="12" dy="${i ? 18 : 0}">${esc(line)}</tspan>`).join('')}</text>${node.optional ? `<text class="wf-optional" x="${BOX_W - 8}" y="14" text-anchor="end">${tr('Optional', '可选')}</text>` : ''}</g>`;
     }).join('');
-    return `<div class="eusk-workflow-graph" tabindex="0" role="region" aria-label="${tr('Workflow graph', '流程图')}"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(pick(row, 'title'))}"><defs><marker id="wf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z"/></marker></defs>${links}${boxes}</svg></div>`;
+    return `<div class="eusk-workflow-graph" tabindex="0" role="region" aria-label="${tr('Workflow graph', '流程图')}"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(pick(row, 'title'))}"><defs><marker id="wf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z"/></marker></defs>${edgePaths(model)}${boxes}</svg></div>`;
   }
   function databaseReason(row) {
     const decision = row.decision || {};
