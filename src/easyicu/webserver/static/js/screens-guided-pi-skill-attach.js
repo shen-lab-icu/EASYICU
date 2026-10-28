@@ -33,9 +33,16 @@
     const loaded = session && catalogs.get(session.session_id);
     return loaded && Number.isInteger(loaded.max) ? loaded.max : 8;
   }
+  function known(row, session) {
+    return catalogRows(session).find(item => keyOf(item) === keyOf(row)) || row;
+  }
   function title(row, session) {
-    const known = catalogRows(session).find(item => keyOf(item) === keyOf(row)) || row;
-    return (window.EU_LANG === 'zh' && known.title_zh) || known.title || row.id;
+    const item = known(row, session);
+    return (window.EU_LANG === 'zh' && item.title_zh) || item.title || row.id;
+  }
+  function kindLabel(row, session) {
+    if (row.source === 'user') return tr('Your Skill', '我的技能');
+    return known(row, session).layer === 'research_workflow' ? tr('Workflow', '流程') : tr('Skill', '技能');
   }
   function errorText(failure) {
     const code = failure && failure.code;
@@ -108,7 +115,7 @@
   function chips(session) {
     const rows = draft(session);
     if (!rows.length && !error) return '';
-    return `${rows.map(row => `<div class="gpi-composer-skill gpi-attached-skill" role="status"><span>${row.source === 'user' ? tr('Your Skill', '我的技能') : tr('Skill', '技能')}</span><strong>${esc(title(row, session))}</strong><button type="button" data-gpi-attached-remove="${esc(keyOf(row))}" aria-label="${esc(tr('Remove Skill', '移除技能'))}" ${busy ? 'disabled' : ''}>×</button></div>`).join('')}${error ? `<div class="gpi-attached-skill-error" role="alert">${esc(error)}</div>` : ''}`;
+    return `${rows.map(row => `<div class="gpi-composer-skill gpi-attached-skill" role="status"><span>${kindLabel(row, session)}</span><strong>${esc(title(row, session))}</strong><button type="button" data-gpi-attached-remove="${esc(keyOf(row))}" aria-label="${esc(tr('Remove Skill', '移除技能'))}" ${busy ? 'disabled' : ''}>×</button></div>`).join('')}${error ? `<div class="gpi-attached-skill-error" role="alert">${esc(error)}</div>` : ''}`;
   }
 
   // Project defaults are frozen into each new conversation when it is created;
