@@ -129,6 +129,8 @@
   background: var(--warn-soft);
   color: #81520a;
 }
+.cov-unsupported { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 3px; max-width: 100%; }
+.cov-unsupported .cov-why { font-size: 10.5px; line-height: 1.3; color: var(--ink-4); }
 
 .dict-empty {
   display: flex; flex-direction: column; align-items: center; gap: 10px;

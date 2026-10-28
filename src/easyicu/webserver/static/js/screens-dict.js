@@ -166,7 +166,31 @@
     return `<span class="cov-badge cov-declared${derived ? ' is-derived' : ''}" title="${html(title)}"><span class="cov-dbs">${all.map(mark).join('')}</span>${derived ? `<span class="cov-kind">${L('derived', '派生')}</span>` : ''}${audit}</span>`;
   }
 
+  // An outcome the outcome owner (outcome_availability.py) supports in no
+  // database yet: what it would need, short for the row and in full for the
+  // detail panel. A concept without its own entry reads the general reason.
+  const UNSUPPORTED_NEEDS = {
+    icu_free_days_28: [['Needs complete ICU stays and day-28 survival', '需完整 ICU 入住记录和第 28 天生存'], ['every ICU stay of a patient and whether they were alive on day 28', '患者的全部 ICU 入住记录和第 28 天时是否存活']],
+    vent_free_days_28: [['Needs complete ventilation and day-28 survival', '需完整通气记录和第 28 天生存'], ['every ventilation episode of a patient and whether they were alive on day 28', '患者的全部机械通气记录和第 28 天时是否存活']],
+    icu_readmission: [['Needs every ICU stay of the hospitalisation', '需同次住院的全部 ICU 入住'], ['every ICU stay in the same hospitalisation', '同一次住院的全部 ICU 入住记录']],
+  };
+  function unsupportedNeeds(k) {
+    const [short, full] = UNSUPPORTED_NEEDS[k] || [];
+    return {
+      short: short ? L(...short) : L('Not computed in any database yet', '暂未在任何库中计算'),
+      full: full
+        ? L(`EasyICU does not compute this outcome yet. It needs ${full[0]}; an export's stay length, hospital death flag or row order cannot stand in for that, and no database's export has been shown to carry it.`,
+          `EasyICU 暂不计算这个结局。它需要${full[1]}；导出里的住院时长、院内死亡标记或记录顺序都替代不了，目前也没有哪个库的导出被证明具备这些。`)
+        : L('EasyICU does not compute this outcome in any database yet.', 'EasyICU 暂未在任何库中计算这个结局。'),
+    };
+  }
+  function unsupportedBadge(k) {
+    const needs = unsupportedNeeds(k);
+    return `<span class="cov-unsupported" title="${html(needs.full)}"><span class="cov-badge unaudited">${L('Not supported yet', '暂不支持')}</span><span class="cov-why">${html(needs.short)}</span></span>`;
+  }
+
   function covBadge(k) {
+    if (coverageOf(k).kind === 'unsupported') return unsupportedBadge(k);
     const inst = instanceDbs();
     if (inst) {
       const covered = ((C().conceptCoverage || {})[k] || {}).instance_databases_covered || [];
@@ -257,6 +281,9 @@
   }
   function lineagePanel() {
     if (!dictSelected) return '';
+    if (coverageOf(dictSelected).kind === 'unsupported') {
+      return `<section class="dict-lineage"><div class="note warn"><div class="body"><div class="t">${L('Not supported yet', '暂不支持')}</div><div class="d">${html(unsupportedNeeds(dictSelected).full)}</div></div></div></section>`;
+    }
     if (dictLineageLoading) return `<section class="dict-lineage"><div class="state loading"><span class="spin"></span><div class="t">${L('Loading declared lineage…', '正在加载声明的血缘…')}</div></div></section>`;
     if (dictLineageError) return `<section class="dict-lineage"><div class="note warn"><div class="body"><div class="t">${L('Lineage unavailable', '血缘暂不可用')}</div><div class="d">${html(dictLineageError)}</div></div></div></section>`;
     if (!dictLineage) return '';
@@ -420,6 +447,8 @@
         dictSelectedDb = null;
         dictLineage = null;
         dictLineageError = '';
+        // An unsupported outcome's panel is its reason; it has no lineage to fetch.
+        if (coverageOf(dictSelected).kind === 'unsupported') { paintResults(); paintLineage(); return; }
         dictLineageLoading = true;
         paintResults(); paintLineage();
         try {
