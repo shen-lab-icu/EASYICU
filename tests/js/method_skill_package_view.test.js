@@ -89,7 +89,7 @@ const click = dataset => handlers.click({ target: { closest: selector => selecto
   assert.match(html, /<h1>Survival<\/h1>/);
   assert.doesNotMatch(html, /<pre># Survival/);
   assert.doesNotMatch(html, /machine metadata/);
-  assert.match(html, /只有该能力确有专用实现时才显示 scripts/);
+  assert.match(html, /implementation 是 EasyICU 实际运行的代码/);
 
   // A bilingual package opens on the reader's language, and a sibling it names
   // opens that Skill; a line without a sibling stays text.

@@ -5,8 +5,8 @@ module owns only the user-facing catalogue: a small set of discoverable method
 workflows whose capability and action identifiers are checked at import time.
 It also projects a read-only package for the desktop Skill Hub, separating the
 main instruction, reference contracts, validation rules, and any real
-capability-specific helpers. Shared host dispatch stays in the host runtime
-instead of being copied into every package.
+capability-specific helpers. Read-only host excerpts disclose the computing
+definitions without granting execution authority to the package.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from easyicu.databases.research_requirements import StudyRequirements, Threshold
 from .planning.capability_registry import CAPABILITY_REGISTRY
 from .planning.analysis_method_suite import METHOD_SUITE_REGISTRY
 from .planning.method_adapter_catalog import HIGH_FREQUENCY_METHOD_ADAPTERS
+from .skill_packages.host_sources import method_skill_implementation_files
 
 METHOD_SKILL_REGISTRY_VERSION = "easyicu.method-skills/3"
 METHOD_SKILL_PACKAGE_VERSION = "easyicu.method-skill-package/5"
@@ -31,7 +32,7 @@ METHOD_SKILL_PACKAGE_VERSION = "easyicu.method-skill-package/5"
 #: Workflows whose package ships an executable reference implementation from
 #: ``research_agent/skill_packages/<package>``: real ``scripts/`` that run the
 #: standard workflow through the host kernels, plus the package's own SKILL.md
-#: and method notes. Every other workflow is documentation only.
+#: and method notes. Other workflows still require host execution.
 REFERENCE_SCRIPT_PACKAGES: dict[str, str] = {
     "fixed-landmark-association-study": "landmark_categorical_association",
 }
@@ -1938,6 +1939,8 @@ def method_skill_package(skill_id: str, *, enabled: bool) -> dict[str, Any]:
                 "content": content,
             }
         )
+    if kind != "method_component":
+        files.extend(method_skill_implementation_files(row["id"], METHOD_SKILLS))
     package_canonical = json.dumps(
         [{"path": row["path"], "sha256": row["sha256"]} for row in files],
         ensure_ascii=False,
