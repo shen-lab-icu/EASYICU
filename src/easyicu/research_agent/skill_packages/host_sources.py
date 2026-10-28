@@ -92,7 +92,7 @@ _RUNTIME_ROOTS: dict[str, tuple[str, ...]] = {
         "run_landmark_categorical_cohort", "run_landmark_categorical_primary",
     ),
     "execution.runners.landmark_spline_executor": ("run_landmark_spline_association",),
-    "execution.runners.time_varying_executor": ("run_time_varying_association",),
+    "execution.runners.time_varying_executor": ("run_time_varying_association", "run_time_varying_g_method"),
     "execution.runners.survival_primary_executor": ("run_survival_primary",),
     "execution.runners.rmst_executor": ("run_rmst_contrast",),
     "execution.runners.prediction_model_executor": (
@@ -117,7 +117,11 @@ _ESTIMATOR_ROOTS: dict[str, tuple[tuple[str, str], ...]] = {
         ("execution.runners.landmark_spline_fit", "fit_binomial_model"),
         ("execution.runners.landmark_spline_fit", "restricted_cubic_spline_basis"),
     ),
-    "execution.runners.time_varying_executor": (("methods.time_varying_exposure_cox", "fit_cluster_robust_time_varying_cox"),),
+    "execution.runners.time_varying_executor": (
+        ("methods.time_varying_exposure_cox", "fit_cluster_robust_time_varying_cox"),
+        ("methods.msm", "fit_longitudinal_msm"), ("methods.gformula", "gformula_ate"),
+        ("contracts.time_varying_exposure", "GMethodSpec"),
+    ),
     "execution.runners.survival_primary_executor": (
         ("methods.ph_schoenfeld", "ph_test"),
         ("methods.competing_risks", "estimate_cif"),

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Final
 
 from .time_varying_exposure import TIME_VARYING_EXPOSURE_CAPABILITY
+from .time_varying_exposure import G_METHOD_CAPABILITY
 
 LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID: Final = "association_landmark_spline_v1"
 LANDMARK_SPLINE_ANALYSIS_KIND: Final = "signed_landmark_spline_association"
@@ -31,6 +32,7 @@ TARGET_TRIAL_CCW_CAPABILITY_ID: Final = "causal_target_trial_ccw_v1"
 CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     "survival_time_to_event_v1": "time_to_event",
     "causal_target_trial_v1": "causal_emulation",
+    G_METHOD_CAPABILITY: "causal_emulation",
     TARGET_TRIAL_CCW_CAPABILITY_ID: "causal_emulation",
     SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID: "causal_emulation",
     "association_ordinal_trend_v1": "association",

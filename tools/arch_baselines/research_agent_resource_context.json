@@ -92,9 +92,14 @@
       "reason": "Record the ICU outcome association catalogue in the offline prompt identity fixture. All existing maximum resource/context envelopes and hard planner-schema budgets remain unchanged; no LOC or budget ratchet is increased. Also: Record external-validation registry receipt identities and its 287-byte prediction-context declaration. Sealed schema bytes, maximum context summaries, schema-size budgets, execution LOC gates and module-inventory ceilings remain unchanged; no provider calls.",
       "source_digest_changes": [],
       "summary_changes": {}
+    },
+    {
+      "reason": "gm1: bind offline context identities to the reviewed g-method capability and full-action adapter; unchanged summary sizes, source digests and prompt budgets",
+      "source_digest_changes": [],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Record ICU outcome association catalogue (out1) and external-validation registry receipts (ext1). No envelope, budget or LOC ratchet raised.",
+  "baseline_reason": "gm1: bind offline context identities to the reviewed g-method capability and full-action adapter; unchanged summary sizes, source digests and prompt budgets",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -955,15 +960,15 @@
       "know_how_prompt_bytes": 3905,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15003,
+        "approx_input_tokens": 15201,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47126,
+            "bytes": 47919,
             "included": true,
             "required": true,
-            "sha256": "3f61cb6eb2039610c885f4d71227bd605c812eb1f5868ae435826a606d7bb30a"
+            "sha256": "4e319af066c24f0218e7ed3e0ac53f2a2462bbf09324e255622bbc9d4a0b025c"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -974,27 +979,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60011,
+        "total_bytes": 60804,
         "truncated_strings": false,
-        "user_bytes": 51567
+        "user_bytes": 52360
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13893,
+        "approx_input_tokens": 14091,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47126,
+            "bytes": 47919,
             "included": true,
             "required": true,
-            "sha256": "3f61cb6eb2039610c885f4d71227bd605c812eb1f5868ae435826a606d7bb30a"
+            "sha256": "4e319af066c24f0218e7ed3e0ac53f2a2462bbf09324e255622bbc9d4a0b025c"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 55570,
+        "total_bytes": 56363,
         "truncated_strings": false,
-        "user_bytes": 47126
+        "user_bytes": 47919
       },
       "planning_contract_bytes": 7064,
       "planning_contract_sha256": "aafe0c660d3095ecd5bb1da2d748f729f6bb180d98012f6af64edc302a9de199",

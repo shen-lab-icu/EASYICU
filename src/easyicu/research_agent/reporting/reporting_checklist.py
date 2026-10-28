@@ -206,7 +206,7 @@ _STROBE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         "id": "9",
         "section": "Methods",
         "statement": "Describe any efforts to address potential sources of bias.",
-        "required_evidence_aliases": ("missingness", "cohort_audit"),
+        "required_evidence_aliases": ("missingness", "cohort_audit", "g_method_weight_diagnostics"),
     },
     {
         "id": "10",
@@ -224,7 +224,7 @@ _STROBE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         "id": "12a",
         "section": "Methods",
         "statement": "Describe all statistical methods, including those used to control for confounding.",
-        "required_evidence_aliases": ("analysis_plan", "primary_association"),
+        "required_evidence_aliases": ("analysis_plan", "primary_association", "g_method_receipt"),
     },
     {
         "id": "12b",
@@ -320,6 +320,7 @@ _STROBE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         "required_evidence_aliases": (
             "primary_association",
             "final_results_summary",
+            "g_method_estimates",
             "adjusted_association",
             "association_estimates",
             "evidence_bound_answer_to_research",

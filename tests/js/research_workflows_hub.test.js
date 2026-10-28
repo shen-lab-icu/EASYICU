@@ -43,6 +43,17 @@ test('workflow list and detail render the fixture graph and metadata', () => {
   assert.match(html, /可选/);
   assert.match(html, /role="tooltip"/);
 });
+test('optional MSM nodes name the history prerequisite and estimator', () => {
+  const { owner } = setup();
+  const row = { ...fixture, steps: [
+    { id: 'g_method_history', kind: 'diagnostic', module_id: 'custom_analysis', optional: true, label: 'Synthetic history input' },
+    { id: 'longitudinal_msm', kind: 'model', module_id: 'custom_analysis', optional: true, label: 'Synthetic estimator' },
+  ], edges: [{ source: 'g_method_history', target: 'longitudinal_msm', products: [] }] };
+  const html = owner.render({ items: [row] }, 'synthetic');
+  assert.match(html, /治疗与混杂因素历史/);
+  assert.match(html, /边际结构模型/);
+  assert.match(html, /可选/);
+});
 test('start writes the workflow request and queues the existing typed attachment intent', () => {
   const { owner, storage, location } = setup();
   owner.start({ name: 'synthetic', title: '合成流程', kind: 'method', skillLayer: 'research_workflow' }, fixture);

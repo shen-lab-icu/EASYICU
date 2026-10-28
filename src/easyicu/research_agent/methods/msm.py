@@ -1,4 +1,11 @@
-"""Longitudinal MSM stabilised IPTW weights: sequential mechanical weighting.
+"""Longitudinal MSM weights and a reviewed person-period outcome model.
+
+``stabilized_iptw`` owns the array weighting mechanics below.
+``fit_longitudinal_msm`` binds a closed history specification to consecutive
+person-period risk sets, accumulates treatment and optional censoring weights,
+reports interval truncation and overlap, and fits weighted pooled logistic
+with person-cluster sandwich inference. Full weight-estimation bootstrap and
+multi-interval g-formula are not implemented.
 
 For follow-up visits ``t = 0, ..., T-1`` with binary visit treatments ``A[t]``,
 the stabilised inverse-probability weight for subject ``i`` is the cumulative
@@ -13,7 +20,7 @@ where ``f`` is the fitted visit propensity (Bernoulli). Concretely, with
     contrib[t]_i = ps_num/ps_den            if A[t]_i == 1
                    (1-ps_num)/(1-ps_den)    if A[t]_i == 0
 
-This module owns the *mechanics only*: fitting, seed derivation, cumulative
+The weighting API owns the *mechanics only*: fitting, seed derivation, cumulative
 multiplication, optional quantile truncation, per-visit diagnostics, and
 fail-closed positivity. The *confounding semantics* — which covariates belong
 in the denominator (treatment/confounder history) versus the numerator
@@ -53,7 +60,7 @@ Identification assumptions (untestable from the data — stated, not verified)
    see above; the screen can only see the fitted support, not the truth).
 3. Correct specification of each per-visit propensity model.
 
-What is NOT in this module (scope boundary)
+What the weighting API does not return (scope boundary)
 --------------------------------------------
 * The longitudinal g-formula (Monte-Carlo integration over time-varying
   confounders) — a different engine, not a flag on this one.
@@ -84,7 +91,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Sequence
 
+import warnings
+
 import numpy as np
+import pandas as pd
+from scipy.stats import norm
+
+from ..contracts.time_varying_exposure import GMethodError, GMethodSpec
 from sklearn.linear_model import LogisticRegression
 
 #: Evidence ceiling for every product of this module.
@@ -608,3 +621,195 @@ __all__ = [
     "MSMWeightsResult",
     "stabilized_iptw",
 ]
+
+
+@dataclass(frozen=True)
+class LongitudinalMSMResult:
+    estimates: pd.DataFrame
+    diagnostics: pd.DataFrame
+    weights: pd.DataFrame
+    receipt: dict[str, Any]
+
+
+def validate_g_method_panel(frame: pd.DataFrame, spec: GMethodSpec) -> pd.DataFrame:
+    """No baseline fallback, missing histories, silent row deletion or future filling."""
+    missing = set(spec.required_columns) - set(frame.columns)
+    if missing:
+        code = ("g_methods_confounder_history_unavailable" if missing.intersection(spec.confounder_history)
+                else "g_methods_person_period_unavailable")
+        raise GMethodError(code, "Person-period input lacks reviewed columns: " + ", ".join(sorted(missing)))
+    if (frame.empty or frame[spec.identity_column].isna().any()
+            or frame[spec.identity_column].astype("string").str.strip().eq("").any()):
+        raise GMethodError("g_methods_person_period_invalid", "A nonempty person-period input and complete identities are required.")
+    panel = frame[list(spec.required_columns)].copy()
+    numeric = [name for name in spec.required_columns if name != spec.identity_column]
+    try:
+        panel[numeric] = panel[numeric].apply(pd.to_numeric, errors="raise")
+        if not np.isfinite(panel[numeric].to_numpy(dtype=float)).all():
+            raise ValueError("incomplete history")
+    except (TypeError, ValueError) as exc:
+        raise GMethodError("g_methods_history_incomplete", "All declared numeric histories must be finite and complete; no imputation is implicit.") from exc
+    periods = panel[spec.period_column]
+    if (not periods.eq(np.floor(periods)).all() or set(periods) != set(range(spec.intervals))
+            or panel.duplicated([spec.identity_column, spec.period_column]).any()):
+        raise GMethodError("g_methods_person_period_invalid", "Require one row per person and consecutive declared integer interval, starting at zero.")
+    panel = panel.sort_values([spec.identity_column, spec.period_column]).reset_index(drop=True)
+    groups = panel.groupby(spec.identity_column, sort=False)
+    if not panel[spec.period_column].eq(groups.cumcount()).all():
+        raise GMethodError("g_methods_person_period_invalid", "Every history starts at zero and has no interval gaps or re-entry.")
+    for name in (spec.treatment_column, spec.outcome_column, spec.censoring_column):
+        if name and not panel[name].isin([0, 1]).all():
+            raise GMethodError("g_methods_nonbinary", "Treatment, event and censoring indicators must be binary.")
+    if any(groups[name].nunique().gt(1).any() for name in spec.baseline_columns):
+        raise GMethodError("g_methods_baseline_changed", "A baseline stabilizer changes within a person.")
+    last = ~panel[spec.identity_column].duplicated(keep="last")
+    event = panel[spec.outcome_column].eq(1)
+    censored = panel[spec.censoring_column].eq(1) if spec.censoring_column else pd.Series(False, index=panel.index)
+    final = panel[spec.period_column].eq(spec.intervals - 1)
+    if ((event | censored) & ~last).any() or (event & censored).any() or (censored & final).any():
+        raise GMethodError("g_methods_followup_invalid", "No follow-up after an event/censoring, simultaneous event/censoring or administrative-horizon censoring flag is allowed.")
+    if (last & ~event & ~censored & ~final).any():
+        raise GMethodError("g_methods_censoring_unavailable", "Early event-free dropout requires declared censoring and IPCW; complete follow-up cannot be assumed.")
+    return panel
+
+
+def _history(panel: pd.DataFrame, spec: GMethodSpec):
+    groups = panel.groupby(spec.identity_column, sort=False)
+    treatment = pd.DataFrame(index=panel.index)
+    confounders = pd.DataFrame(index=panel.index)
+    for lag in spec.treatment_lags:
+        treatment[f"treatment_lag_{lag}"] = groups[spec.treatment_column].shift(lag).fillna(0)
+    for name in spec.confounder_history:
+        for lag in spec.confounder_lags:
+            confounders[f"{name}_lag_{lag}"] = panel[name] if lag == 0 else groups[name].shift(lag).fillna(0)
+    return treatment, confounders
+
+
+def _increment(a, denominator, numerator, spec, period):
+    try:
+        return stabilized_iptw(
+            [a], [denominator], [numerator if numerator.shape[1] else None],
+            random_state=spec.random_seed + period, ps_trim=spec.ps_bounds,
+            require_sequential_exchangeability=spec.require_exchangeability,
+            require_correct_history_encoding=spec.require_correct_specification,
+        )
+    except MSMError as exc:
+        raise GMethodError(exc.code, str(exc), period=period) from exc
+
+
+def _interval_ess(weights):
+    return float(weights.sum() ** 2 / np.square(weights).sum())
+
+
+def _outcome_fit(panel, design, weights, spec):
+    import statsmodels.api as sm
+    from statsmodels.tools.sm_exceptions import PerfectSeparationError, PerfectSeparationWarning
+
+    x = design.to_numpy(dtype=float)
+    y = panel[spec.outcome_column].to_numpy(dtype=float)
+    if len(np.unique(y)) != 2 or np.linalg.matrix_rank(x) != x.shape[1]:
+        raise GMethodError("g_methods_outcome_not_estimable", "Pooled outcome model requires both event states and a full-rank reviewed design.")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", PerfectSeparationWarning)
+            fit = sm.GLM(y, x, family=sm.families.Binomial(), freq_weights=weights).fit(maxiter=200)
+        mu = fit.fittedvalues
+        if not fit.converged or not np.isfinite(fit.params).all() or np.max(np.abs(fit.params)) > 30:
+            raise ValueError("nonconvergence or separation")
+        bread = np.linalg.inv(x.T @ ((weights * mu * (1 - mu))[:, None] * x))
+        scores = pd.DataFrame(x * (weights * (y - mu))[:, None])
+        scores["__cluster"] = panel[spec.identity_column].to_numpy()
+        clusters = scores.groupby("__cluster", sort=False).sum().to_numpy()
+        n_clusters, p = clusters.shape
+        if n_clusters <= p or len(x) <= p:
+            raise ValueError("insufficient independent persons")
+        covariance = bread @ (clusters.T @ clusters) @ bread
+        covariance *= n_clusters / (n_clusters - 1) * (len(x) - 1) / (len(x) - p)
+        se = np.sqrt(np.diag(covariance))
+        if not np.isfinite(se).all() or np.any(se <= 0):
+            raise ValueError("nonfinite cluster covariance")
+    except (ValueError, np.linalg.LinAlgError, PerfectSeparationError, PerfectSeparationWarning) as exc:
+        raise GMethodError("g_methods_outcome_not_estimable", "Weighted pooled logistic outcome or person-cluster covariance could not be estimated.") from exc
+    estimates = pd.DataFrame(dict(
+        term=list(design), coefficient=fit.params, standard_error=se,
+        odds_ratio=np.exp(fit.params), ci_low=np.exp(fit.params - norm.ppf(.975) * se),
+        ci_high=np.exp(fit.params + norm.ppf(.975) * se),
+    ))
+    if not np.isfinite(estimates.drop(columns="term").to_numpy()).all():
+        raise GMethodError("g_methods_outcome_not_estimable", "The outcome interval or effect is nonfinite.")
+    return estimates, n_clusters
+
+
+def fit_longitudinal_msm(frame: pd.DataFrame, spec: GMethodSpec) -> LongitudinalMSMResult:
+    if spec.estimator != "longitudinal_msm":
+        raise GMethodError("g_methods_estimator_mismatch", "The longitudinal outcome owner requires an MSM specification.")
+    panel = validate_g_method_panel(frame, spec)
+    treatment_history, confounders = _history(panel, spec)
+    baseline = panel[list(spec.baseline_columns)]
+    numerator = pd.concat([baseline, treatment_history], axis=1)
+    denominator = pd.concat([numerator, confounders], axis=1)
+    previous_treatment: dict[Any, float] = {}
+    previous_censor: dict[Any, float] = {}
+    weight_rows, diagnostics = [], []
+    for period in range(spec.intervals):
+        rows = panel.loc[panel[spec.period_column].eq(period)]
+        index = rows.index
+        ids = rows[spec.identity_column]
+        fit = _increment(rows[spec.treatment_column].to_numpy(), denominator.loc[index].to_numpy(),
+                         numerator.loc[index].to_numpy(), spec, period)
+        increment = fit.weights
+        treatment_weight = ids.map(previous_treatment).fillna(1).to_numpy() * increment
+        censor_weight = ids.map(previous_censor).fillna(1).to_numpy()
+        combined = treatment_weight * censor_weight
+        bounds = np.quantile(combined, spec.truncation_quantiles) if spec.truncation_quantiles else (None, None)
+        analysis_weight = np.clip(combined, *bounds) if spec.truncation_quantiles else combined.copy()
+        if not np.isfinite(analysis_weight).all() or np.any(analysis_weight <= 0):
+            raise GMethodError("g_methods_weights_invalid", "Nonfinite or nonpositive cumulative weights.", period=period)
+        diagnostic = dict(period=period, n=len(rows), ps_den_min=fit.per_visit[0].ps_den_min,
+            ps_den_max=fit.per_visit[0].ps_den_max, ps_den_mean=fit.per_visit[0].ps_den_mean,
+            overlap_status="passed", weight_mean=float(analysis_weight.mean()),
+            weight_min=float(analysis_weight.min()), weight_max=float(analysis_weight.max()),
+            weight_p01=float(np.quantile(analysis_weight, .01)), weight_p50=float(np.median(analysis_weight)),
+            weight_p99=float(np.quantile(analysis_weight, .99)), weight_ess=_interval_ess(analysis_weight),
+            raw_weight_ess=_interval_ess(combined), raw_weight_max=float(combined.max()),
+            trunc_low=bounds[0], trunc_high=bounds[1], truncated_n=int((analysis_weight != combined).sum()),
+            censor_ps_min=1.0, censor_ps_max=1.0, censor_model="no_censoring_at_this_interval")
+        previous_treatment.update(zip(ids, treatment_weight))
+        if spec.censoring_column and period < spec.intervals - 1:
+            eligible = rows.loc[rows[spec.outcome_column].eq(0)]
+            retained = 1 - eligible[spec.censoring_column].to_numpy()
+            if len(retained) and np.any(retained == 0):
+                cnum = pd.concat([numerator.loc[eligible.index], eligible[[spec.treatment_column]]], axis=1)
+                cden = pd.concat([denominator.loc[eligible.index], eligible[[spec.treatment_column]]], axis=1)
+                censor = _increment(retained, cden.to_numpy(), cnum.to_numpy(), spec, period)
+                carried = eligible[spec.identity_column].map(previous_censor).fillna(1).to_numpy() * censor.weights
+                previous_censor.update(zip(eligible[spec.identity_column], carried))
+                diagnostic.update(censor_ps_min=censor.per_visit[0].ps_den_min,
+                                  censor_ps_max=censor.per_visit[0].ps_den_max, censor_model="stabilized_ipcw")
+        diagnostics.append(diagnostic)
+        weight_rows.append(pd.DataFrame(dict(person=ids.to_numpy(), period=period, increment=increment,
+            treatment_weight=treatment_weight, censor_weight=censor_weight,
+            combined_weight=combined, analysis_weight=analysis_weight), index=index))
+    weights = pd.concat(weight_rows).sort_index()
+    design = pd.DataFrame({"intercept": np.ones(len(panel)), "treatment": panel[spec.treatment_column]})
+    design = pd.concat([design, treatment_history, baseline,
+        pd.get_dummies(panel[spec.period_column], prefix="period", drop_first=True, dtype=float)], axis=1)
+    estimates, cluster_n = _outcome_fit(panel, design, weights.analysis_weight.to_numpy(), spec)
+    receipt = dict(schema_version="easyicu.longitudinal_msm/1", specification_sha256=spec.sha256,
+        outcome_model="weighted_pooled_logistic", variance_estimator="person_cluster_sandwich",
+        cluster_count=cluster_n, interval_rows=len(panel), intervals=spec.intervals,
+        interval_hours=spec.interval_hours, time_zero=spec.time_zero,
+        treatment_history=list(spec.treatment_lags), confounder_history=list(spec.confounder_history),
+        confounder_lags=list(spec.confounder_lags), baseline_stabilizers=list(spec.baseline_columns),
+        censoring_policy=spec.censoring_policy, censoring_column=spec.censoring_column,
+        truncation_quantiles=list(spec.truncation_quantiles) if spec.truncation_quantiles else None,
+        truncation_scope="combined cumulative weights within each risk interval",
+        estimand="Per-interval event odds ratio for current binary treatment, conditional on declared treatment lags and baseline stabilizers; not a marginal risk ratio or hazard ratio.",
+        claim_ceiling="analysis_only", publication_ready=False,
+        limitations=["Observational causal interpretation requires consistency, sequential exchangeability, positivity and correctly specified treatment, censoring and outcome models.",
+                     "Person-cluster sandwich treats fitted weights as fixed; full weight-estimation uncertainty is not estimated.",
+                     "Only numeric complete histories with consecutive intervals and binary treatments/events are supported; no dynamic regime optimization or multi-interval g-formula."])
+    return LongitudinalMSMResult(estimates, pd.DataFrame(diagnostics), weights, receipt)
+
+
+__all__ += ["LongitudinalMSMResult", "validate_g_method_panel", "fit_longitudinal_msm"]

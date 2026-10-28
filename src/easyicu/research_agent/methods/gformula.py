@@ -144,6 +144,9 @@ class GFormulaResult:
     ps_min: float
     ps_max: float
     ps_mean: float
+    risk_ratio: float | None = None
+    rr_ci_low: float | None = None
+    rr_ci_high: float | None = None
     limitations: tuple[str, ...] = LIMITATIONS
     evidence_ceiling: str = EVIDENCE_CEILING
     method: str = "point_gformula_standardisation"
@@ -157,6 +160,9 @@ class GFormulaResult:
             "ci_level": self.ci_level,
             "mu1_mean": self.mu1_mean,
             "mu0_mean": self.mu0_mean,
+            "risk_ratio": self.risk_ratio,
+            "rr_ci_low": self.rr_ci_low,
+            "rr_ci_high": self.rr_ci_high,
             "n": self.n,
             "n_treated": self.n_treated,
             "n_control": self.n_control,
@@ -541,6 +547,7 @@ def gformula_ate(
     # imputed; the usable count is recorded on the result.
     rng = np.random.default_rng(seed)
     boot: list[float] = []
+    boot_rr: list[float] = []
     for _ in range(n_boot):
         idx = rng.integers(0, n, n)
         a_b, y_b = a_vec[idx], y_vec[idx]
@@ -583,6 +590,12 @@ def gformula_ate(
         except GFormulaError:
             continue
         boot.append(float(np.mean(mu1_b - mu0_b)))
+        if outcome_model == "logistic":
+            risk0_b = float(np.mean(mu0_b))
+            risk1_b = float(np.mean(mu1_b))
+            if risk0_b <= 0 or not np.isfinite(risk1_b / risk0_b):
+                raise GFormulaError("Risk ratio is undefined in a bootstrap replicate", code="gformula_risk_ratio_undefined")
+            boot_rr.append(risk1_b / risk0_b)
     n_ok = len(boot)
     if n_ok == 0:
         raise GFormulaError(
@@ -617,6 +630,9 @@ def gformula_ate(
         ps_min=float(np.min(ps)),
         ps_max=float(np.max(ps)),
         ps_mean=float(np.mean(ps)),
+        risk_ratio=mu1_mean / mu0_mean if outcome_model == "logistic" else None,
+        rr_ci_low=float(np.quantile(boot_rr, alpha / 2)) if boot_rr else None,
+        rr_ci_high=float(np.quantile(boot_rr, 1 - alpha / 2)) if boot_rr else None,
     )
 
 

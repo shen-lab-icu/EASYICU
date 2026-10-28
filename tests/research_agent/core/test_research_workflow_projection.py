@@ -4,7 +4,6 @@ import ast
 import json
 from pathlib import Path
 import re
-import subprocess
 
 import pytest
 
@@ -21,6 +20,7 @@ from easyicu.webserver import research_workflows as projection
 from easyicu.webserver.research_workflows import research_workflow_catalog
 from easyicu.webserver.research_workflow_shapes import canonical_workflow_shape
 from easyicu.webserver.raw_source_authority import source_identity_capability_profiles
+from tests.support.node import run_node
 
 
 @pytest.fixture(scope="module")
@@ -154,16 +154,14 @@ def test_read_only_route_delegates_to_the_owner_and_honors_the_master_switch(mon
 def test_every_projected_product_has_a_shared_reader_label(workflows):
     vocabulary = Path(projection.__file__).parent / "static/js/screens-agent-reader-vocab.js"
     script = """
-const fs = require('node:fs');
 global.window = { t: (en, zh) => zh };
 require(process.argv[1]);
-const ids = JSON.parse(fs.readFileSync(0, 'utf8'));
+const ids = JSON.parse(process.argv[2]);
 const missing = ids.filter(id => !window.AGENT_READER_VOCAB.tableTitle(id));
 if (missing.length) { console.error(missing); process.exitCode = 1; }
 """
-    result = subprocess.run(["node", "-e", script, str(vocabulary)], input=json.dumps(
-        sorted({item["id"] for row in workflows for item in row["outputs"]})),
-        text=True, capture_output=True, check=False)
+    result = run_node("node", script, str(vocabulary), json.dumps(
+        sorted({item["id"] for row in workflows for item in row["outputs"]})), check=False)
     assert result.returncode == 0, result.stderr
 
 

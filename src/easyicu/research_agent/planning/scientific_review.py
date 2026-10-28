@@ -3502,6 +3502,10 @@ def build_plan_scientific_review(
 ) -> PlanScientificReview:
     """Score and adjudicate the exact proposed plan before human approval."""
 
+    from .target_trial_spec import require_g_method_plan
+
+    require_g_method_plan(context, plan)
+
     findings: list[PlanScientificFinding] = []
     unobserved = context_columns_without_data(
         context, (*requested_context_data_columns(context), *plan_value_columns(plan)),

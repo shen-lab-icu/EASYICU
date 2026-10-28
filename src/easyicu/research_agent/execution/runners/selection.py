@@ -19,7 +19,8 @@ from ...authority.rmst_runtime import RmstRuntimeAuthority
 from ...authority.target_trial_runtime import TargetTrialRuntimeAuthority
 from ...authority.time_varying_runtime import TimeVaryingRuntimeAuthority
 from ...authority.plausibility import FlagOnlyPlausibilityScope
-from ...contracts.time_varying_exposure import TIME_VARYING_ANALYSIS_KIND
+from ...contracts.time_varying_exposure import TIME_VARYING_ANALYSIS_KIND, G_METHOD_ACTION
+from ...planning.target_trial_spec import require_g_method_step
 from ...schema import AnalysisPlan, AnalysisStep
 from ..step_executor_registry import (
     AmbiguousExecutorOwnership,
@@ -261,7 +262,7 @@ from .rmst_executor import (
     RMST_CONTRAST_ANALYSIS_KIND,
     rmst_executor_code,
 )
-from .time_varying_executor import time_varying_executor_code
+from .time_varying_executor import g_method_executor_code, time_varying_executor_code
 from .trajectory_scientific_candidate_executor import (
     SCIENTIFIC_CANDIDATE_INPUTS,
     trajectory_scientific_candidate_executor_code,
@@ -329,6 +330,15 @@ def _build_registry() -> StepExecutorRegistry:
     registry = StepExecutorRegistry()
     routes = (
         external_validation_executor(),
+        StepExecutor(
+            key="time_varying_g_methods", analysis_kind="time_varying_g_methods",
+            applicable=lambda c: c.step.scientific_action_id == G_METHOD_ACTION or str(c.step.method).startswith("g_methods("),
+            owns=lambda c: require_g_method_step(c.step) is not None,
+            render=lambda c: g_method_executor_code(c.step, plausibility_scope=c.plausibility_scope),
+            selection_reason="reviewed_g_method_contract_preflight",
+            progress_message="Estimating the reviewed g-method with interval overlap and weight diagnostics",
+            consumed_input_keys=lambda c: c.typed_cohort_inputs(),
+        ),
         StepExecutor(
             key="prespecified_effect_modification",
             owns=lambda c: effect_modification_parent(c.step, plan=c.plan, authority=c.current_case_scientific_runtime_authority) is not None,

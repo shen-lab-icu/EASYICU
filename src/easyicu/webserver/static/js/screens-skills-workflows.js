@@ -34,6 +34,8 @@
     primary_survival_suite: tr('Survival models', '生存分析模型'), candidate_selection: tr('Model selection', '候选模型选择'),
     cohort_accounting: tr('Cohort accounting', '纳排与队列'), baseline_context: tr('Baseline table', '基线描述'),
     time_varying_cox: tr('Time-varying Cox', '时变 Cox 模型'), target_trial_suite: tr('Clone-censor-weight', '克隆-删失-加权'),
+    g_method_history: tr('Treatment and confounder histories', '治疗与混杂因素历史'),
+    longitudinal_msm: tr('Marginal structural model', '边际结构模型'),
     landmark_features: tr('Landmark features', 'Landmark 特征'), horizon_labels: tr('Horizon outcomes', '预测时窗结局'),
     patient_split: tr('Patient split', '按患者划分'), model_fit: tr('Model fit', '模型拟合'),
     landmark_performance: tr('Performance by landmark', '各 landmark 表现') });

@@ -56,6 +56,7 @@ from typing import Tuple
 __all__ = [
     "MethodKernel",
     "CURATED_METHOD_KERNELS",
+    "HOST_METHOD_KERNELS",
     "KERNEL_MODULE_NAMES",
     "UnreachableKernel",
     "DECLARED_UNREACHABLE_KERNELS",
@@ -501,7 +502,19 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
 )
 
 
-KERNEL_MODULE_NAMES: frozenset = frozenset(k.module for k in CURATED_METHOD_KERNELS)
+# Host bindings stay out of generic Coder ranking and cannot evict the
+# event-time reconciliation prerequisite from unrelated causal steps.
+HOST_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
+    MethodKernel(module="msm", entrypoints=("stabilized_iptw", "fit_longitudinal_msm"),
+        capability="Sequential stabilized IPTW with per-visit overlap, truncation and ESS; the target-trial MSM owner fits weighted pooled logistic outcomes.",
+        families=("causal_inference",), requires=("numpy", "pandas", "scipy", "sklearn", "statsmodels"),
+        fallback="Refuse missing person-period history or failed positivity; no baseline model substitution."),
+    MethodKernel(module="gformula", entrypoints=("gformula_ate",),
+        capability="Single-point logistic g-formula standardized RD/RR and percentile bootstrap intervals; no multi-interval g-formula.",
+        families=("causal_inference",), requires=("numpy", "sklearn"),
+        fallback="Refuse missing pretreatment confounders, assumptions or overlap; no longitudinal extrapolation."),
+)
+KERNEL_MODULE_NAMES: frozenset = frozenset(k.module for k in (*CURATED_METHOD_KERNELS, *HOST_METHOD_KERNELS))
 
 
 @dataclass(frozen=True)
@@ -524,7 +537,7 @@ class UnreachableKernel:
     pending_decision: str  # what must be decided; asserted non-empty
 
 
-# Four specialised kernels remain parked here, not offered, for a measured
+# Two specialised kernels remain parked here, not offered, for a measured
 # reason -- not as "wire it later" parking.
 #
 # Measured 2026-09-18: broadly offering ``doubly_robust`` / ``gformula`` / ``msm``
@@ -536,9 +549,9 @@ class UnreachableKernel:
 # so any three well-matched estimand kernels will always evict the
 # prerequisite. ``doubly_robust`` is now exposed only through its exact
 # scientific action, which requires both that kernel and ``survival_inputs``;
-# the scheduler reserves both before relevance ranking. The combined
-# g-formula/MSM action is still scientifically ambiguous, so those kernels
-# remain parked until it is split into exact estimand and diagnostics actions.
+# the scheduler reserves both before relevance ranking. G-formula/MSM now have
+# a closed host specification and outcome owner. HOST_METHOD_KERNELS binds
+# them without adding them to the generic Coder resource competition.
 #
 # Its only entry was ``evalue``: a second E-value kernel that agreed with the
 # wired ``sensitivity.compute_e_value`` on RR and HR but disagreed on OR -> RR,
@@ -553,30 +566,6 @@ class UnreachableKernel:
 # deleted; the four properties only its tests covered moved to
 # ``test_evalue_observed_baseline.py``.
 DECLARED_UNREACHABLE_KERNELS: Tuple[UnreachableKernel, ...] = (
-    UnreachableKernel(
-        module="gformula",
-        reason=(
-            "the combined g_methods entry does not distinguish a point-treatment "
-            "g-formula from longitudinal g-methods; broad family offering also "
-            "reproduces the measured survival_inputs slot eviction."
-        ),
-        pending_decision=(
-            "split scientific actions by estimand and bind survival_inputs as "
-            "a host-required prerequisite for the point-treatment action"
-        ),
-    ),
-    UnreachableKernel(
-        module="msm",
-        reason=(
-            "the combined g_methods entry does not distinguish MSM weight "
-            "construction from a downstream effect estimator; broad family "
-            "offering reproduces the measured survival_inputs slot eviction."
-        ),
-        pending_decision=(
-            "register a weight-diagnostics action with exact longitudinal "
-            "inputs and a separate downstream effect owner"
-        ),
-    ),
     UnreachableKernel(
         module="gee",
         reason=(
