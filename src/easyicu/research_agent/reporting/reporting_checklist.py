@@ -1,6 +1,6 @@
 """Reporting-guideline checklist auto-fill (O16).
 
-Populates two reporter-facing checklists automatically from the
+Populates reporter-facing checklists automatically from the
 research-agent run's artefacts:
 
 * **STROBE** — 22-item guideline for reporting observational studies
@@ -14,10 +14,12 @@ research-agent run's artefacts:
   regression. The prediction-task skill family (AUROC, calibration,
   external validation) naturally matches this. We answer the
   subset that the run's artefacts cover and flag the rest.
+* **RECORD** — the 2015 extension for routinely collected data.
+* **TARGET** — the 2025 target-trial emulation reporting guideline.
 
-Both checklists are written as **deterministic Markdown tables**
-with one row per item, three columns (item / addressed / evidence
-reference). Unaddressed items become ``info`` or ``warning``
+The checklists are written as **deterministic Markdown tables**
+with one row per item and columns for its section, statement, status and
+evidence. Unaddressed items become ``info`` or ``warning``
 findings so a reviewer can eyeball compliance at a glance without
 trusting an LLM to grade itself.
 
@@ -812,6 +814,286 @@ def _internal_phenotype_items() -> List[ChecklistItem]:
     ]
 
 
+# RECORD extension items supplement the primary study-design checklist. Item
+# identifiers follow the extension; wording is deliberately concise and local.
+_RECORD_TEMPLATE: Tuple[Dict[str, Any], ...] = (
+    {
+        "id": "1.1",
+        "section": "Title & Abstract",
+        "statement": "Name the source database in the title or abstract.",
+        "required_evidence_aliases": ("manuscript_scaffold_bound",),
+        "required_keywords": ("database", "registry", "electronic health record"),
+    },
+    {
+        "id": "1.2",
+        "section": "Title & Abstract",
+        "statement": "Summarise the source population, geography, data type and study period.",
+        "required_evidence_aliases": ("research_context",),
+        "required_keywords": (
+            "electronic health record",
+            "routinely collected",
+            "database",
+        ),
+    },
+    {
+        "id": "1.3",
+        "section": "Title & Abstract",
+        "statement": "Identify linked sources when the study combines records.",
+        "required_keywords": ("record linkage", "linked data", "linked records"),
+    },
+    {
+        "id": "6.1",
+        "section": "Methods",
+        "statement": "Share codes and algorithms used to select the study population.",
+        "required_evidence_aliases": ("cohort_code_list", "cohort_selection_codes"),
+    },
+    {
+        "id": "6.2",
+        "section": "Methods",
+        "statement": "Describe validation of population selection algorithms.",
+        "required_keywords": (
+            "validated algorithm",
+            "validation of the algorithm",
+            "algorithm validation",
+        ),
+    },
+    {
+        "id": "6.3",
+        "section": "Methods",
+        "statement": "Explain how the source population was filtered to the study cohort.",
+        "required_evidence_aliases": (
+            "cohort_attrition",
+            "cohort_flow",
+            "participant_flow",
+        ),
+    },
+    {
+        "id": "7.1",
+        "section": "Methods",
+        "statement": "Provide codes and algorithms defining exposures, outcomes and covariates.",
+        "required_evidence_aliases": (
+            "variable_code_list",
+            "variable_definition_codes",
+        ),
+    },
+    {
+        "id": "12.1",
+        "section": "Methods",
+        "statement": "Describe the investigators' access to the full database population.",
+    },
+    {
+        "id": "12.2",
+        "section": "Methods",
+        "statement": "Describe data cleaning and quality checks before analysis.",
+        "required_evidence_aliases": ("data_cleaning", "cleaning_log"),
+    },
+    {
+        "id": "12.3",
+        "section": "Methods",
+        "statement": "Explain linkage methods, level and quality where records were linked.",
+        "required_keywords": ("linkage method", "linkage quality", "linkage algorithm"),
+    },
+    {
+        "id": "13.1",
+        "section": "Results",
+        "statement": "Show counts through database selection and eligibility stages.",
+        "required_evidence_aliases": (
+            "cohort_attrition",
+            "cohort_flow",
+            "participant_flow",
+        ),
+    },
+    {
+        "id": "14.1",
+        "section": "Results",
+        "statement": "Report how many participants could be linked across sources.",
+        "required_evidence_aliases": ("linkage_counts", "linkage_flow"),
+    },
+    {
+        "id": "19.1",
+        "section": "Discussion",
+        "statement": "Discuss coding, missingness and other limitations of routinely collected data.",
+        "required_keywords": (
+            "coding accuracy",
+            "data quality",
+            "missing data",
+            "measurement error",
+        ),
+    },
+)
+
+# These are local row identifiers, not a replacement for the published TARGET
+# checklist. Each protocol element and its emulation mapping remains visible.
+_TARGET_TEMPLATE: Tuple[Dict[str, Any], ...] = (
+    {
+        "id": "T1",
+        "section": "Introduction",
+        "statement": "Explain the causal question and rationale for emulation.",
+        "required_keywords": ("target trial", "trial emulation"),
+    },
+    {
+        "id": "T2",
+        "section": "Target trial",
+        "statement": "Define eligibility for the hypothetical trial.",
+        "required_evidence_aliases": ("target_trial_protocol",),
+        "required_keywords": ("eligibility", "eligible"),
+    },
+    {
+        "id": "T3",
+        "section": "Target trial",
+        "statement": "Specify the treatment strategies being compared.",
+        "required_evidence_aliases": ("target_trial_protocol",),
+        "required_keywords": ("treatment strategies", "treatment strategy"),
+    },
+    {
+        "id": "T4",
+        "section": "Target trial",
+        "statement": "Describe how treatment would be assigned in the target trial.",
+    },
+    {
+        "id": "T5",
+        "section": "Target trial",
+        "statement": "Define time zero and align it with eligibility and assignment.",
+        "required_evidence_aliases": ("target_trial_protocol",),
+        "required_keywords": ("time zero",),
+    },
+    {
+        "id": "T6",
+        "section": "Target trial",
+        "statement": "Specify the start, end and duration of follow-up.",
+        "required_evidence_aliases": ("target_trial_protocol",),
+        "required_keywords": ("follow-up", "follow up"),
+    },
+    {
+        "id": "T7",
+        "section": "Target trial",
+        "statement": "Define the target trial outcome and its ascertainment.",
+        "required_evidence_aliases": ("target_trial_protocol",),
+        "required_keywords": ("outcome",),
+    },
+    {
+        "id": "T8",
+        "section": "Target trial",
+        "statement": "State the causal contrast and population to which it applies.",
+        "required_evidence_aliases": ("target_trial_protocol",),
+        "required_keywords": ("estimand", "causal contrast", "causal effect"),
+    },
+    {
+        "id": "T9",
+        "section": "Target trial",
+        "statement": "Describe the analysis planned for the hypothetical trial.",
+        "required_evidence_aliases": ("target_trial_protocol",),
+        "required_keywords": ("trial analysis", "analysis plan"),
+    },
+    {
+        "id": "T10",
+        "section": "Emulation",
+        "statement": "Describe the source data and study population for the emulation.",
+        "required_evidence_aliases": ("research_context",),
+        "required_keywords": (
+            "database",
+            "electronic health record",
+            "routinely collected",
+        ),
+    },
+    {
+        "id": "T11",
+        "section": "Emulation",
+        "statement": "Map trial eligibility to observable cohort selection rules.",
+        "required_evidence_aliases": ("target_trial_protocol",),
+        "required_keywords": ("eligibility", "eligible"),
+    },
+    {
+        "id": "T12",
+        "section": "Emulation",
+        "statement": "Map each trial strategy to observed treatment and timing.",
+        "required_evidence_aliases": ("target_trial_protocol",),
+        "required_keywords": ("treatment strategy", "treatment strategies"),
+    },
+    {
+        "id": "T13",
+        "section": "Emulation",
+        "statement": "Explain how assignment, eligibility and time zero were aligned.",
+        "required_evidence_aliases": ("target_trial_protocol",),
+        "required_keywords": ("time zero",),
+    },
+    {
+        "id": "T14",
+        "section": "Emulation",
+        "statement": "Explain follow-up, deviations, censoring and competing events.",
+        "required_keywords": ("censoring", "competing events", "treatment deviation"),
+    },
+    {
+        "id": "T15",
+        "section": "Emulation",
+        "statement": "Map the trial outcome to its measurement in the data.",
+        "required_evidence_aliases": ("target_trial_protocol",),
+        "required_keywords": ("outcome",),
+    },
+    {
+        "id": "T16",
+        "section": "Methods",
+        "statement": "State causal assumptions and how confounding and positivity were assessed.",
+        "required_keywords": (
+            "exchangeability",
+            "positivity",
+            "unmeasured confounding",
+        ),
+    },
+    {
+        "id": "T17",
+        "section": "Methods",
+        "statement": "Describe estimation, uncertainty and the emulation analysis.",
+        "required_evidence_aliases": (
+            "target_trial_weight_models",
+            "target_trial_effect_estimates",
+        ),
+    },
+    {
+        "id": "T18",
+        "section": "Methods",
+        "statement": "Explain missing-data handling and sensitivity analyses.",
+        "required_keywords": ("sensitivity analysis", "missing data"),
+    },
+    {
+        "id": "T19",
+        "section": "Results",
+        "statement": "Report participant flow from the source to the eligible cohort.",
+        "required_evidence_aliases": (
+            "target_trial_eligibility_flow",
+            "cohort_attrition",
+            "cohort_flow",
+        ),
+    },
+    {
+        "id": "T20",
+        "section": "Results",
+        "statement": "Report the causal estimates and their uncertainty.",
+        "required_evidence_aliases": ("target_trial_effect_estimates",),
+    },
+    {
+        "id": "T21",
+        "section": "Discussion",
+        "statement": "Interpret results alongside biases and deviations from the target trial.",
+        "required_keywords": (
+            "unmeasured confounding",
+            "immortal time bias",
+            "limitations",
+        ),
+    },
+    {
+        "id": "T22",
+        "section": "Discussion",
+        "statement": "Discuss applicability to other populations and settings.",
+        "required_keywords": (
+            "generalisability",
+            "generalizability",
+            "transportability",
+        ),
+    },
+)
+
+
 # ---------------------------------------------------------------------------
 # Auto-fill engine
 # ---------------------------------------------------------------------------
@@ -1050,6 +1332,78 @@ def build_tripod_ai_checklist(
     return ChecklistReport(name="TRIPOD+AI", version=version, items=items)
 
 
+def _build_extension_checklist(
+    *,
+    name: str,
+    version: str,
+    template: Sequence[Dict[str, Any]],
+    evidence_records: Iterable[Any],
+    bound_manuscript: str,
+) -> ChecklistReport:
+    aliases = _available_aliases(evidence_records)
+    items = []
+    for row in template:
+        item = ChecklistItem(
+            item_id=row["id"],
+            section=row["section"],
+            statement=row["statement"],
+            required_evidence_aliases=tuple(row.get("required_evidence_aliases", ())),
+            required_keywords=tuple(row.get("required_keywords", ())),
+        )
+        # The legacy matcher also accepts a shorter prefix of a required name.
+        # For these extension items a generic "target_trial" or "cohort"
+        # artifact cannot establish that a protocol, result, or flow exists.
+        specific_aliases = {
+            alias
+            for alias in aliases
+            if not any(
+                required.startswith(alias + "_")
+                for required in item.required_evidence_aliases
+            )
+        }
+        _autofill_item(
+            item=item, available_aliases=specific_aliases, manuscript_text=bound_manuscript
+        )
+        if item.status in {"open", "partial"}:
+            item.rationale = "Needs author review." + (
+                f" {item.rationale}" if item.rationale else ""
+            )
+        items.append(item)
+    return ChecklistReport(name=name, version=version, items=items)
+
+
+def build_record_checklist(
+    *,
+    evidence_records: Iterable[Any],
+    bound_manuscript: str,
+    version: str = "2015",
+) -> ChecklistReport:
+    """Assess RECORD extension items using the same evidence as STROBE."""
+    return _build_extension_checklist(
+        name="RECORD",
+        version=version,
+        template=_RECORD_TEMPLATE,
+        evidence_records=evidence_records,
+        bound_manuscript=bound_manuscript,
+    )
+
+
+def build_target_checklist(
+    *,
+    evidence_records: Iterable[Any],
+    bound_manuscript: str,
+    version: str = "2025",
+) -> ChecklistReport:
+    """Assess the target trial and its observational emulation."""
+    return _build_extension_checklist(
+        name="TARGET",
+        version=version,
+        template=_TARGET_TEMPLATE,
+        evidence_records=evidence_records,
+        bound_manuscript=bound_manuscript,
+    )
+
+
 def build_internal_phenotype_checklist(
     *,
     evidence_records: Iterable[Any],
@@ -1091,6 +1445,9 @@ _KIND_TO_CHECKLISTS: Dict[str, Tuple[str, ...]] = {
     "mortality_prediction": ("strobe", "tripod_ai"),
     "subphenotype_clustering": ("internal_phenotype",),
     "longitudinal_trajectory_analysis": ("internal_phenotype",),
+    "causal_inference": ("strobe", "target"),
+    "target_trial": ("strobe", "target"),
+    "target_trial_emulation": ("strobe", "target"),
 }
 
 
@@ -1104,24 +1461,81 @@ def checklist_names_for_kind(kind: Optional[str]) -> Tuple[str, ...]:
     return _KIND_TO_CHECKLISTS.get(str(kind or "").lower(), ("strobe",))
 
 
-def choose_checklist(analysis_type: Optional[str]) -> Tuple[str, ...]:
-    """Return which checklists to emit for a given analysis family.
+def plan_has_target_trial(plan: Any) -> bool:
+    """Recognise the signed primary method and registered trial capabilities."""
+    return any(
+        getattr(step, "planned_analysis_role", None) == "primary"
+        and (
+            getattr(step, "method", None) == "signed_target_trial_suite"
+            or getattr(step, "scientific_capability", None)
+            in {"causal_target_trial_v1", "causal_target_trial_ccw_v1"}
+        )
+        for step in (getattr(plan, "steps", None) or ())
+    )
 
-    Defaults to STROBE for every run, adds TRIPOD+AI when the
-    analysis family looks like prediction/validation/modelling.
+
+_PHENOTYPE_FAMILIES = frozenset(
+    {
+        "trajectory_clustering",
+        "subphenotype_clustering",
+        "longitudinal_trajectory_analysis",
+        "clustering",
+        "trajectory",
+        "subphenotype",
+        "subphenotyping",
+        "phenotyping",
+        "phenotype",
+        # Historical exact labels accepted by the public checklist selector.
+        "subphenotype clustering",
+        "phenotype discovery",
+    }
+)
+_PREDICTION_FAMILIES = frozenset(
+    {
+        "prediction",
+        "prediction_model",
+        "dynamic_prediction",
+        "validation",
+        "external_validation",
+        "mortality_prediction",
+        "prediction_study",
+        "validation_study",
+    }
+)
+
+
+def choose_checklist(
+    analysis_type: Optional[str],
+    *,
+    database: Optional[str] = None,
+    requested_names: Optional[Sequence[str]] = None,
+    target_trial: bool = False,
+) -> Tuple[str, ...]:
+    """Select the primary checklists and required study-specific extensions.
+
+    ``database`` is the structured cohort source tag, not manuscript text.
+    The causal family is the registry's target-trial capability. Explicit
+    checklist selections retain their existing primary choices but do not
+    suppress extensions required by the study's family or data source.
     """
-    base = ("strobe",)
-    if not analysis_type:
-        return base
-    at = str(analysis_type).lower()
-    # Clustering / trajectory phenotype discovery has no EQUATOR guideline, so
-    # it routes to the internal core instead of STROBE (checked first because
-    # the family key "trajectory_clustering" would otherwise miss).
-    if any(k in at for k in ("cluster", "trajector", "phenotyp", "subphenotype")):
-        return ("internal_phenotype",)
-    if any(k in at for k in ("predict", "classif", "regress", "prognost", "valida")):
-        return base + ("tripod_ai",)
-    return base
+    at = str(analysis_type or "").strip().lower()
+    if requested_names is not None:
+        chosen = tuple(str(name).lower() for name in requested_names)
+    elif at in _PHENOTYPE_FAMILIES:
+        chosen = ("internal_phenotype",)
+    elif at in _PREDICTION_FAMILIES:
+        chosen = ("strobe", "tripod_ai")
+    else:
+        chosen = ("strobe",)
+    if (
+        target_trial
+        or at
+        in {"causal_inference", "causal", "target_trial", "target_trial_emulation"}
+    ) and "target" not in chosen:
+        chosen += ("target",)
+    if database and str(database).strip() and "record" not in chosen:
+        chosen += ("record",)
+    return chosen
 
 
 __all__ = [
@@ -1129,6 +1543,8 @@ __all__ = [
     "ChecklistReport",
     "build_strobe_checklist",
     "build_tripod_ai_checklist",
+    "build_record_checklist",
+    "build_target_checklist",
     "build_internal_phenotype_checklist",
     "choose_checklist",
     "checklist_names_for_kind",

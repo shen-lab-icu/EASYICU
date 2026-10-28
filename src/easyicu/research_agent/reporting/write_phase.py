@@ -154,9 +154,12 @@ from ..replication.notebook import (
 )
 from .reporting_checklist import (
     build_internal_phenotype_checklist,
+    build_record_checklist,
     build_strobe_checklist,
+    build_target_checklist,
     build_tripod_ai_checklist,
     choose_checklist,
+    plan_has_target_trial,
 )
 from .reviewer import derive_reviewer_primary_result_bindings, run_reviewer_round
 from ..schema import AnalysisPlan, CritiqueReport, EvidenceRef, ManuscriptDraftPacket, ResearchContext
@@ -3132,11 +3135,8 @@ def _publish_and_audit_manuscript(
             )
         )
 
-    # O16 — Reporting-guideline checklist. Writes STROBE (always)
-    # and TRIPOD+AI (when the analysis family looks like a
-    # prediction / validation study). Findings are emitted at
-    # ``info`` severity by default so the paper can still be
-    # produced; reviewers see the coverage number and decide.
+    # O16 — Report the primary study-design guideline and the applicable
+    # routinely collected data / target-trial extensions.
     if pipeline._enable_reporting_checklist:
         try:
             bound_text = bound_path.read_text(encoding="utf-8")
@@ -3152,15 +3152,18 @@ def _publish_and_audit_manuscript(
         # score. Same digest-verified call, so an old or superseded record still
         # cannot leak in; only the moment it is taken differs.
         checklist_evidence_records = evidence.current_verified_records(per_step_records)
-        if pipeline._reporting_checklist_names is not None:
-            wanted = tuple(n.lower() for n in pipeline._reporting_checklist_names)
-        else:
-            analysis_family = (
-                (context.user_preferences.inferred_analysis_family or "")
-                if getattr(context, "user_preferences", None)
-                else ""
-            )
-            wanted = choose_checklist(analysis_family)
+        preferences = getattr(context, "user_preferences", None)
+        analysis_family = (
+            getattr(plan, "analysis_type", None)
+            or getattr(preferences, "inferred_analysis_family", None)
+            or getattr(pipeline, "_benchmark_task_kind", None)
+        )
+        wanted = choose_checklist(
+            analysis_family,
+            database=getattr(getattr(context, "cohort", None), "database", None),
+            requested_names=pipeline._reporting_checklist_names,
+            target_trial=plan_has_target_trial(plan),
+        )
         checklist_reports = []
         if "strobe" in wanted:
             checklist_reports.append(
@@ -3178,6 +3181,26 @@ def _publish_and_audit_manuscript(
                 (
                     "tripod_ai",
                     build_tripod_ai_checklist(
+                        evidence_records=checklist_evidence_records,
+                        bound_manuscript=bound_text,
+                    ),
+                )
+            )
+        if "target" in wanted:
+            checklist_reports.append(
+                (
+                    "target",
+                    build_target_checklist(
+                        evidence_records=checklist_evidence_records,
+                        bound_manuscript=bound_text,
+                    ),
+                )
+            )
+        if "record" in wanted:
+            checklist_reports.append(
+                (
+                    "record",
+                    build_record_checklist(
                         evidence_records=checklist_evidence_records,
                         bound_manuscript=bound_text,
                     ),
