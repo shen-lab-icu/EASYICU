@@ -312,5 +312,6 @@
     return null;
   }
 
-  window.EasyICU.guidedPi.declare('starters', { render, actionFromEvent, actionFromDiscoveryChoice });
+  function exampleQuestion(id, tr) { return exampleQuestions(tr).find(row => row.id === id) || null; }
+  window.EasyICU.guidedPi.declare('starters', { render, actionFromEvent, actionFromDiscoveryChoice, exampleQuestion });
 })();

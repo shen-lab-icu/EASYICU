@@ -1,0 +1,24 @@
+/* Owner: research workflow list and metadata graph, within the Skills hub. */
+.eusk-workflows{display:grid;grid-template-columns:minmax(180px,25%) minmax(0,1fr);gap:28px;margin-top:24px}
+.eusk-workflow-list{display:flex;flex-direction:column;gap:2px;min-width:0;align-self:start}
+.eusk-workflow-list button{padding:14px 12px;border:0;border-left:3px solid transparent;background:transparent;text-align:left;color:var(--sk-ink)}
+.eusk-workflow-list button[aria-pressed="true"]{border-left-color:var(--sk-accent);background:var(--sk-accent-soft)}
+.eusk-workflow-list strong,.eusk-workflow-list span{display:block;line-height:1.5}
+.eusk-workflow-list strong{font-size:13px}.eusk-workflow-list span{margin-top:5px;color:var(--sk-muted);font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.eusk-workflow-detail{min-width:0;border-left:1px solid var(--sk-line);padding-left:28px}
+.eusk-workflow-detail header h2{margin:0;font-size:24px;line-height:1.3}.eusk-workflow-detail header p{font-size:14px;line-height:1.6;color:var(--sk-ink-2)}
+.eusk-workflow-detail header small{color:var(--sk-muted);overflow-wrap:anywhere}
+.eusk-workflow-detail section{margin-top:24px}.eusk-workflow-detail section h2{font-size:14px;margin:0 0 12px}
+.eusk-workflow-actions{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:20px 0}
+.eusk-workflow-actions button:not(.eusk-use){border:0;background:transparent;color:var(--sk-accent);text-decoration:underline}
+.eusk-workflow-products{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
+.eusk-workflow-products ul{margin:0;padding-left:18px;font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.eusk-workflow-graph{max-width:100%;overflow-x:auto;border:1px solid var(--sk-line);border-radius:8px;background:var(--sk-surface)}
+.eusk-workflow-graph svg{display:block;min-width:360px}.eusk-workflow-graph path[data-wf-edge]{fill:none;stroke:var(--sk-muted);stroke-width:1.4}.eusk-workflow-graph marker path{fill:var(--sk-muted)}
+.eusk-workflow-graph rect{fill:var(--sk-accent-soft);stroke:var(--sk-accent-border)}.eusk-workflow-graph text{fill:var(--sk-ink);font-size:12px}.eusk-workflow-graph .is-optional rect{stroke-dasharray:4 3}.eusk-workflow-graph .wf-optional{fill:var(--sk-muted);font-size:10px}
+.eusk-workflow-databases{position:relative;display:flex;flex-wrap:wrap;gap:8px}.eusk-workflow-database{padding:6px 9px;border:1px solid var(--sk-line);border-radius:6px;font-size:11px;color:var(--sk-muted)}
+.eusk-workflow-reason{display:none;position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:1;padding:10px;border:1px solid var(--sk-line);border-radius:6px;background:var(--sk-surface);color:var(--sk-ink);overflow-wrap:anywhere;box-shadow:0 4px 12px #0001}.eusk-workflow-database:hover .eusk-workflow-reason,.eusk-workflow-database:focus .eusk-workflow-reason{display:block}
+.eusk-workflow-database strong{font-weight:600}.eusk-workflow-database.supported{color:var(--sk-accent-ink);background:var(--sk-accent-soft)}.eusk-workflow-database.degraded{color:#745119;background:#f7efd9}.eusk-workflow-database.unavailable{color:#81423d;background:#f8eeec}
+.eusk-workflows button:focus-visible,.eusk-workflow-graph:focus-visible,.eusk-workflow-graph g:focus-visible,.eusk-workflow-database:focus-visible{outline:2px solid var(--sk-accent);outline-offset:2px}
+@media(max-width:1100px){.eusk-workflows{grid-template-columns:180px minmax(0,1fr);gap:18px}.eusk-workflow-detail{padding-left:18px}.eusk-workflow-products{grid-template-columns:minmax(0,1fr);gap:0}}
+@media(max-width:700px){.eusk-workflows{grid-template-columns:minmax(0,1fr)}.eusk-workflow-list{max-height:240px;overflow-y:auto}.eusk-workflow-detail{padding-left:0;border-left:0;border-top:1px solid var(--sk-line);padding-top:20px}}

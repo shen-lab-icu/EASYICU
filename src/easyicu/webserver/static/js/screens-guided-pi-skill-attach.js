@@ -100,6 +100,10 @@
   function remove(projectId, session, key) {
     return saveDraft(projectId, session, draft(session).filter(row => keyOf(row) !== key));
   }
+  // A hub start keeps a matching project default; picking in the menu still toggles it.
+  function ensure(projectId, session, source, id) {
+    return attached(session, source, id) ? Promise.resolve(true) : toggle(projectId, session, source, id);
+  }
 
   function chips(session) {
     const rows = draft(session);
@@ -147,7 +151,7 @@
   function reset(sessionId) { if (sessionId) catalogs.delete(sessionId); error = ''; }
 
   window.EasyICU.guidedPi.declare('skillAttach', {
-    load, loadDefaults, toggle, remove, chips, defaultsControl, saveDefaults, attached, reset,
+    load, loadDefaults, toggle, ensure, remove, chips, defaultsControl, saveDefaults, attached, reset,
     hasDraft: session => draft(session).length > 0,
   });
 })();

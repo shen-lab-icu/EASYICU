@@ -192,6 +192,24 @@ _FIRST_ICU_STAY_PROFILES = {
     },
 }
 _PROFILE_COLUMN_KEYS = ("stay_column", "patient_column", "order_column")
+
+
+def source_identity_capability_profiles(database: str) -> dict[str, Any]:
+    """Declared identity recipes only; do not resolve or inspect a raw source.
+
+    A recipe's presence says nothing about a local table or verified binding.
+    Return copies so a metadata reader cannot mutate runtime authority.
+    """
+    family = _DATABASE_ALIASES.get(str(database).strip().casefold())
+    grouping = _PATIENT_GROUPING_PROFILES.get(family)
+    first = _FIRST_ICU_STAY_PROFILES.get(family)
+    return {
+        "patient_grouping": dict(grouping) if grouping is not None else None,
+        "first_icu_stay": dict(first) if first is not None else None,
+        "patient_identity_absent": family in _NO_PATIENT_IDENTITY_FAMILIES,
+    }
+
+
 # Which raw tables each database family needs for hospital-mortality follow-up
 # and the materializer name its public receipt advertises.
 _HOSPITAL_SOURCE_PROFILES = {

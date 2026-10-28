@@ -12,6 +12,7 @@ from easyicu.webserver import capabilities
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver.catalog import build_catalog, build_concept_lineage
 from easyicu.webserver.routes.request_parsing import body_int
+from easyicu.webserver.research_workflows import research_workflow_catalog
 
 router = APIRouter()
 
@@ -78,6 +79,12 @@ def post_settings_reset() -> dict:
 def get_capabilities() -> dict:
     """Return backend capability state consumed by Settings and Agent Science."""
     return capabilities.capability_status()
+
+
+@router.get("/api/capabilities/research-workflows")
+def get_research_workflows() -> dict:
+    """Workflow metadata only; starting a study still uses reviewed plans."""
+    return research_workflow_catalog(enabled=bool(capabilities.capability_settings()["science_skills_enabled"]))
 
 
 @router.get("/api/capabilities/method-skills/{skill_id}/package")

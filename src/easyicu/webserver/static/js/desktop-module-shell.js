@@ -28,14 +28,17 @@
   function navItem(active, id, iconName, en, zh) {
     const selected = active === id;
     const route = id === 'projects' ? 'guided' : id;
-    return `<button type="button" class="euh-rail-item ${selected ? 'active' : ''}" data-nav="${route}" ${selected ? 'aria-current="page"' : ''} title="${tr(en, zh)}" aria-label="${tr(en, zh)}">${icon(iconName, 19)}<span>${tr(en, zh)}</span></button>`;
+    const tab = id === 'skills' ? ' data-sk-mode="skills"' : '';
+    return `<button type="button" class="euh-rail-item ${selected ? 'active' : ''}" data-nav="${route}"${tab} ${selected ? 'aria-current="page"' : ''} title="${tr(en, zh)}" aria-label="${tr(en, zh)}">${icon(iconName, 19)}<span>${tr(en, zh)}</span></button>`;
   }
 
   function rail(active) {
-    const moduleActive = isDataRoute(active) ? 'extraction' : active;
+    const workflow = active === 'skills' && window.SCREENS?.skills?.activeTab?.() === 'workflows';
+    const moduleActive = isDataRoute(active) ? 'extraction' : workflow ? 'workflows' : active;
     return `<nav class="euh-rail" aria-label="${tr('EasyICU navigation', 'EasyICU 导航')}">
       <button type="button" class="euh-brand" data-nav="entry" title="EasyICU" aria-label="EasyICU">${icon('spark', 19)}</button>
       ${navItem(moduleActive, 'projects', 'folder', 'Projects', '项目')}
+      <button type="button" class="euh-rail-item ${workflow ? 'active' : ''}" data-nav="skills" data-sk-mode="workflows" ${workflow ? 'aria-current="page"' : ''} title="${tr('Workflows', '流程')}" aria-label="${tr('Workflows', '流程')}">${icon('list', 19)}<span>${tr('Workflows', '流程')}</span></button>
       ${navItem(moduleActive, 'skills', 'layers', 'Skills', '技能')}
       ${navItem(moduleActive, 'extraction', 'grid', 'Data', '数据')}
       <div class="euh-rail-spacer"></div>
@@ -65,12 +68,14 @@
   }
 
   function hostedInstance() { return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true; }
+  function skillTab(mode) { return (window.SCREENS?.skills?.activeTab?.() || 'skills') === mode ? 'active' : ''; }
   const HOSTED_SETTINGS = new Set(['set-language', 'set-account', 'set-about']);
   function moduleNavigation(active, options) {
     if (isDataRoute(active)) return dataNav(active, options.actions || '');
     if (active === 'skills') return `<nav class="euh-context-nav" aria-label="${tr('Skill sections', '技能分区')}">
-      <button type="button" class="active" data-sk-mode="skills">${icon('layers', 15)}<span>${tr('Skills', '技能')}</span></button>
-      <button type="button" data-sk-mode="methods">${icon('list', 15)}<span>${tr('Method library', '方法库')}</span></button>
+      <button type="button" class="${skillTab('workflows')}" data-sk-mode="workflows">${icon('list', 15)}<span>${tr('Research workflows', '研究流程')}</span></button>
+      <button type="button" class="${skillTab('skills')}" data-sk-mode="skills">${icon('layers', 15)}<span>${tr('Skills', '技能')}</span></button>
+      <button type="button" class="${skillTab('methods')}" data-sk-mode="methods">${icon('list', 15)}<span>${tr('Method library', '方法库')}</span></button>
     </nav>`;
     if (active === 'tutorial') return `<nav class="euh-context-nav" aria-label="${tr('Help sections', '帮助分区')}">
       <button type="button" class="active" data-nav="tutorial" aria-current="page">${icon('help', 15)}<span>${tr('Get started', '快速上手')}</span></button>
