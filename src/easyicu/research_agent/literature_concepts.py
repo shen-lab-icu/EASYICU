@@ -135,6 +135,16 @@ _IDENTITIES = {
         screening_role_term="ventilator breath type",
         screening_required_terms=(),
     ),
+    # The dictionary describes these exports by their storage form (durations,
+    # windows); the clinical axis searched in the literature is the exposure.
+    **{key: LiteratureConceptIdentity(
+        concept_id=key,
+        canonical_phrase="mechanical ventilation",
+        retrieval_alternatives=(("mechanical ventilation",), ("invasive mechanical ventilation",)),
+        screening_role_term="mechanical ventilation",
+        screening_required_terms=(),
+        mesh_terms=("Respiration, Artificial",),
+    ) for key in ("vent_ind", "mech_vent")},
     "vent_mode": LiteratureConceptIdentity(
         concept_id="vent_mode",
         canonical_phrase="mechanical ventilation mode",
