@@ -326,7 +326,7 @@ def submit_research_run(
     path = str(source.get("path") or "").strip()
     if not path:
         _reject({"error": "study_context_source_required"})
-    desc = dataio.describe_export_source(path)
+    desc = dataio.describe_source_tables(path)
     if not desc.get("ok"):
         _reject(desc)
     clock.mark("describe_source")

@@ -229,7 +229,7 @@ def test_owner_checks_readiness_before_consuming_authorization(
     )
     monkeypatch.setattr(
         research_run_submission.dataio,
-        "describe_export_source",
+        "describe_source_tables",
         lambda _path: {"ok": True},
     )
     authorizations: list[str] = []
@@ -280,7 +280,7 @@ def start_gate_launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     }
     monkeypatch.delenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", raising=False)
     monkeypatch.setattr(research_run_submission.context_store, "get_context", lambda _: study)
-    monkeypatch.setattr(research_run_submission.dataio, "describe_export_source", lambda _: {"ok": True})
+    monkeypatch.setattr(research_run_submission.dataio, "describe_source_tables", lambda _: {"ok": True})
     monkeypatch.setattr(research_run_submission.dataio, "prepared_export_manifest_path", lambda _: None)
     monkeypatch.setattr(
         research_run_submission, "build_research_workflow_snapshot",

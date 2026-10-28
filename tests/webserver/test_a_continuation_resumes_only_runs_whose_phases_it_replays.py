@@ -243,7 +243,7 @@ def submit(source, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", raising=False)
     monkeypatch.setattr(submission.context_store, "get_context", lambda _: study)
     monkeypatch.setattr(
-        submission.dataio, "describe_export_source", lambda _: {"ok": True}
+        submission.dataio, "describe_source_tables", lambda _: {"ok": True}
     )
     monkeypatch.setattr(
         submission.dataio, "prepared_export_manifest_path", lambda _: None

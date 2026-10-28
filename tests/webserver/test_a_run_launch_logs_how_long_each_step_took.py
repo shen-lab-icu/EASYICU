@@ -31,7 +31,7 @@ def launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     }
     monkeypatch.delenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", raising=False)
     monkeypatch.setattr(submission.context_store, "get_context", lambda _: study)
-    monkeypatch.setattr(submission.dataio, "describe_export_source", lambda _: {"ok": True})
+    monkeypatch.setattr(submission.dataio, "describe_source_tables", lambda _: {"ok": True})
     monkeypatch.setattr(submission.dataio, "prepared_export_manifest_path", lambda _: None)
     monkeypatch.setattr(
         submission, "build_research_workflow_snapshot",
@@ -98,7 +98,7 @@ def test_a_started_job_logs_each_steps_seconds(launch, caplog: pytest.LogCapture
 
 def test_a_refused_launch_logs_no_step_line(launch, monkeypatch, caplog) -> None:
     monkeypatch.setattr(
-        submission.dataio, "describe_export_source", lambda _: {"ok": False, "error": "no_export_files"},
+        submission.dataio, "describe_source_tables", lambda _: {"ok": False, "error": "no_export_files"},
     )
     with caplog.at_level(logging.INFO, logger=submission.__name__):
         with pytest.raises(submission.ResearchRunSubmissionError) as refused:
