@@ -179,7 +179,7 @@ def test_builtin_method_skill_package_exposes_reviewed_documentation(
     assert package["skill_id"] == "survival-time-to-event"
     assert package["kind"] == "research_workflow"
     assert package["read_only"] is True
-    assert package["execution_boundary"] == "documentation_only_host_execution_required"
+    assert package["execution_boundary"] == "host_reference_scripts_executable"
     files = {row["path"]: row for row in package["files"]}
     # The host code the package runs ships beside its documentation.
     assert any(path.startswith("implementation/") for path in files)
@@ -189,8 +189,17 @@ def test_builtin_method_skill_package_exposes_reviewed_documentation(
         "examples/public_demo.md",
         "examples/public_demo.zh.md",
         "references/composition.md",
+        "references/methods.md",
+        "references/reference_scripts.md",
         "references/validation_framework.md",
         "references/workflow_contract.md",
+        "scripts/example_data.py",
+        "scripts/export_all.py",
+        "scripts/generate_all_plots.py",
+        "scripts/load_cohort.py",
+        "scripts/run_all.py",
+        "scripts/run_analysis.py",
+        "scripts/spec.py",
     }
     assert '"capability_id": "survival_time_to_event_v1"' in files["references/workflow_contract.md"]["content"]
     skill_markdown = files["SKILL.md"]["content"]
@@ -201,7 +210,8 @@ def test_builtin_method_skill_package_exposes_reviewed_documentation(
     assert package["overview_paths"]["zh"] == "SKILL.zh.md"
     assert package["not_for"][0]["sibling_skill_id"] == "time-varying-exposure-survival-study"
     assert len(skill_markdown.encode("utf-8")) > 2500
-    assert all(not path.startswith("scripts/") for path in files)
+    # Its reference scripts run on their own (host_reference_scripts_executable).
+    assert "scripts/run_all.py" in files
     assert all(len(row["sha256"]) == 64 for row in files.values())
     assert len(package["package_sha256"]) == 64
 

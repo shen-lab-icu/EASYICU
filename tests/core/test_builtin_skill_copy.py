@@ -72,11 +72,12 @@ def test_copy_preserves_reviewed_markdown_and_provenance(
     assert installed["claim_ceiling"] == "analysis_only"
     assert installed["execution_boundary"] == "instructions_only"
     assert metadata["source"] == installed["source"]
-    # A workflow's machine contract is the reference that yields to its reader
-    # guide under the copy budget; the omission is disclosed, never truncated.
+    # Executable method notes also compete for the fixed reader-copy budget;
+    # every omitted reference is disclosed whole, never truncated.
     omitted = installed["source"]["omitted_reference_paths"]
     assert omitted == (
-        ["references/workflow_contract.md"] if builtin_id == "survival-time-to-event" else []
+        ["references/methods.md", "references/validation_framework.md", "references/workflow_contract.md"]
+        if builtin_id == "survival-time-to-event" else []
     )
     assert installed["source"] == {
         "builtin_id": builtin_id,
@@ -309,7 +310,8 @@ def test_reference_packing_is_stable_and_never_truncates_a_reference(
     copied = first.copy_builtin_skill("survival-time-to-event")
     detail = first.current_skill(copied["name"])
     assert copied["source"]["omitted_reference_paths"] == [
-        "references/large.md", "references/workflow_contract.md"]
+        "references/large.md", "references/methods.md",
+        "references/validation_framework.md", "references/workflow_contract.md"]
     assert "字" not in detail["skill_md"]
     assert detail["size_bytes"] <= 12_000
     package["files"].reverse()

@@ -340,7 +340,7 @@ def test_package_digest_binds_current_implementation_content(monkeypatch):
 
 
 @pytest.mark.parametrize("skill_id,boundary", [
-    ("survival-time-to-event", "documentation_only_host_execution_required"),
+    ("survival-time-to-event", "host_reference_scripts_executable"),
     ("sample-size-and-power", "host_reference_scripts_executable"),
     ("six-database-cohort-extraction", "owner_projection_no_execution"),
 ])
