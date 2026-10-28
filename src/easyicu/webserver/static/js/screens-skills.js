@@ -130,7 +130,10 @@
     const personalEntries = userSkills();
     const methodEntries = methodComponents();
     const skillEntries = [...workflowEntries, ...analysisModuleEntries, ...toolEntries, ...publicationEntries, ...personalEntries];
-    if (ui.catalogMode === 'workflows' && workflows()) return `<div class="eusk-head"><h1>${tr('Research workflows', '研究流程')}</h1></div>${modeTabs(skillEntries.length, methodEntries.length, workflowEntries.length)}${workflows().render(workflows().payload(), undefined, allSkills())}`;
+    // Every tab shares one header and the tab bar sits in the same place;
+    // only the controls under the tabs belong to the active tab.
+    const top = `${head()}${modeTabs(skillEntries.length, methodEntries.length, workflowEntries.length)}`;
+    if (ui.catalogMode === 'workflows' && workflows()) return `${top}${workflows().render(workflows().payload(), undefined, allSkills())}`;
     const all = ui.catalogMode === 'methods' ? methodEntries : skillEntries;
     const categories = [...new Set(all.map(item => item.category))].sort((a, b) => a.localeCompare(b));
     const query = ui.query.trim().toLocaleLowerCase();
@@ -167,6 +170,17 @@
           <span class="eusk-state ${item.enabled ? 'on' : ''}">${item.enabled ? tr('Enabled', '已启用') : tr('Off', '未启用')}</span></div>
         </article>`).join('')}</div></section>`;
     }).join('');
+    return `${top}
+      <label class="eusk-search">${icon('search', 17)}<input data-sk-search type="search" placeholder="${ui.catalogMode === 'methods' ? tr('Search modules…', '搜索模块…') : tr('Search research skills…', '搜索研究技能…')}" value="${esc(ui.query)}" autocomplete="off"></label>
+      <div class="eusk-filters"><span class="eusk-filter-label">${tr('SOURCE', '来源')}</span>
+      ${[['all', tr('All', '全部')], ['user', tr('Mine', '我的')], ['builtin', tr('EasyICU', 'EasyICU')]].map(([key, label]) =>
+        `<button type="button" class="eusk-pill ${ui.source === key ? 'active' : ''}" data-sk-source="${key}" aria-pressed="${ui.source === key}">${label} <span>${counts[key]}</span></button>`).join('')}
+      <label class="eusk-category"><span class="shell-sr-only">${tr('Category', '类别')}</span><select data-sk-category><option value="all">${tr('All categories', '全部类别')}</option>${categories.map(category => `<option value="${esc(category)}" ${ui.category === category ? 'selected' : ''}>${esc(category)}</option>`).join('')}</select></label>
+      <label class="eusk-hide"><input type="checkbox" data-sk-hide ${ui.hideDisabled ? 'checked' : ''}> ${tr('Hide disabled', '隐藏未启用')}</label></div>
+      ${ui.catalogMode === 'methods' && plannedCount ? `<p class="eusk-catalog-summary">${tr(`${plannedCount} planned methods are not listed yet.`, `另有 ${plannedCount} 个规划中的方法尚未上架。`)}</p>` : ''}
+      ${cards || `<div class="eusk-empty"><strong>${tr('Nothing matches', '没有匹配的技能')}</strong><p>${tr('Try a different source, category, or search term.', '试试其他来源、类别或关键词。')}</p></div>`}`;
+  }
+  function head() {
     // A hosted instance's skills are installed by the administrator
     // (screens-guided-pi-hosted.js); the clinician browses the catalogue.
     const hostedOwner = window.EasyICU?.guidedPi?.optional('hosted');
@@ -175,16 +189,8 @@
         <button type="button" role="menuitem" data-sk-upload aria-label="${tr('Upload SKILL.md', '上传 SKILL.md')}"><span>${icon('file', 16)}</span><span><strong>${tr('Upload SKILL.md', '上传 SKILL.md')}</strong><small>${tr('Review and install a local instruction file', '审阅并安装本地指令文件')}</small></span></button>
         <button type="button" role="menuitem" data-sk-create-with aria-label="${tr('Create with EasyICU', '使用 EasyICU 开发')}"><span>${icon('spark', 16)}</span><span><strong>${tr('Create with EasyICU', '使用 EasyICU 开发')}</strong><small>${tr('Open a new task with a Skill Builder draft', '在新任务中打开技能开发草稿')}</small></span></button>
       </div></details>`;
-    return `<div class="eusk-head"><div><span class="eusk-eyebrow">SKILL HUB</span><h1>${tr('Skills', '技能')}</h1></div>${createMenu}</div>
-      <label class="eusk-search">${icon('search', 17)}<input data-sk-search type="search" placeholder="${ui.catalogMode === 'methods' ? tr('Search modules…', '搜索模块…') : tr('Search research skills…', '搜索研究技能…')}" value="${esc(ui.query)}" autocomplete="off"></label>
-      ${modeTabs(skillEntries.length, methodEntries.length, workflowEntries.length)}
-      <div class="eusk-filters"><span class="eusk-filter-label">${tr('SOURCE', '来源')}</span>
-      ${[['all', tr('All', '全部')], ['user', tr('Mine', '我的')], ['builtin', tr('EasyICU', 'EasyICU')]].map(([key, label]) =>
-        `<button type="button" class="eusk-pill ${ui.source === key ? 'active' : ''}" data-sk-source="${key}" aria-pressed="${ui.source === key}">${label} <span>${counts[key]}</span></button>`).join('')}
-      <label class="eusk-category"><span class="shell-sr-only">${tr('Category', '类别')}</span><select data-sk-category><option value="all">${tr('All categories', '全部类别')}</option>${categories.map(category => `<option value="${esc(category)}" ${ui.category === category ? 'selected' : ''}>${esc(category)}</option>`).join('')}</select></label>
-      <label class="eusk-hide"><input type="checkbox" data-sk-hide ${ui.hideDisabled ? 'checked' : ''}> ${tr('Hide disabled', '隐藏未启用')}</label></div>
-      ${ui.catalogMode === 'methods' && plannedCount ? `<p class="eusk-catalog-summary">${tr(`${plannedCount} planned methods are not listed yet.`, `另有 ${plannedCount} 个规划中的方法尚未上架。`)}</p>` : ''}
-      ${cards || `<div class="eusk-empty"><strong>${tr('Nothing matches', '没有匹配的技能')}</strong><p>${tr('Try a different source, category, or search term.', '试试其他来源、类别或关键词。')}</p></div>`}`;
+    const title = { workflows: tr('Research workflows', '研究流程'), methods: tr('Modules', '模块') }[ui.catalogMode] || tr('Skills', '技能');
+    return `<div class="eusk-head"><div><span class="eusk-eyebrow">SKILL HUB</span><h1>${title}</h1></div>${createMenu}</div>`;
   }
   function modeTabs(skills, methods, studies) {
     return `<div class="eusk-mode-tabs" role="tablist" aria-label="${tr('Catalog level', '目录层级')}">${[

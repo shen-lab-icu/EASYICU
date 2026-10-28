@@ -72,6 +72,10 @@
 .eusk-empty{padding:55px 20px;text-align:center;color:#64706a}
 .eusk-empty strong{display:block;color:#2d362f;font-size:16px}
 .eusk-empty p{margin:8px 0 0;font-size:13px}
+/* One header for every tab: head, then the tab bar, then the tab's own controls. */
+.eusk-head+.eusk-mode-tabs{margin-top:24px}
+.eusk-mode-tabs+.eusk-search{margin-top:0}
+.eusk-empty button{min-height:32px;margin-top:14px;padding:0 14px;border:1px solid var(--sk-line-strong);border-radius:8px;background:var(--sk-surface);color:var(--sk-ink);font-size:13px;cursor:pointer}
 .eusk-back{margin-bottom:26px;padding:5px 0;border:0;background:transparent;color:#677168;font-size:13px}
 .eusk-back:hover{color:#203620}
 .eusk-detail-head{padding-bottom:28px;border-bottom:1px solid var(--sk-line)}

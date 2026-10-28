@@ -221,3 +221,22 @@ test('a custom workflow cannot start without a module', () => {
   assert.equal(location.hash, '#skills');
   assert.equal(storage.get('easyicu.skillHub.question'), undefined);
 });
+test('a catalogue still loading or failed to load never reads as empty', async () => {
+  const { owner, window } = setup();
+  assert.equal(owner.payload(), null);
+  assert.match(owner.render(owner.payload()), /正在读取研究流程/);
+  let calls = 0;
+  window.EU_API.getJSON = async () => { calls += 1; throw new Error('offline'); };
+  await assert.rejects(owner.load());
+  const failed = owner.render(owner.payload());
+  assert.match(failed, /role="alert"><strong>研究流程读取失败<\/strong>/);
+  assert.doesNotMatch(failed, /暂无研究流程/);
+  let repainted = 0;
+  window.__euRender = () => { repainted += 1; };
+  window.EU_API.getJSON = async () => { calls += 1; return { items: [fixture] }; };
+  assert.equal(owner.handle({ dataset: {}, hasAttribute: name => name === 'data-wf-retry' }, []), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 2);
+  assert.equal(repainted, 1);
+  assert.match(owner.render(owner.payload()), /合成流程/);
+});
