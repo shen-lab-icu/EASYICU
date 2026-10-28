@@ -16,9 +16,7 @@
     connector_pubmed_enabled: true,
     connector_zotero_enabled: false,
     mcp_tools_enabled: false,
-    prompt_contracts_enabled: true,
     tool_audit_enabled: true,
-    remote_compute_enabled: false,
     density: 'comfortable',
     reduce_motion: false,
   };
@@ -83,6 +81,10 @@
   function statusText(status) {
     if (!status) return '';
     const statusMap = {
+      disabled: dual('Off', '关闭'),
+      available: dual('Reachable', '可连接'),
+      unavailable: dual('Unavailable', '无法连接'),
+      unsupported: dual('Desktop only', '仅桌面可用'),
       literature_source_ready: dual('literature source ready', '文献来源已就绪'),
       pasted_source_ready: dual('pasted source ready', '粘贴文献已就绪'),
     };
@@ -91,6 +93,8 @@
       local_zotero_api_ready: dual('desktop link ready', '桌面连接已就绪'),
       local_zotero_api_http_error: dual('desktop link returned an error', '桌面连接返回错误'),
       local_zotero_api_unavailable: dual('desktop app not reachable', '暂时无法连接桌面应用'),
+      local_zotero_api_invalid_response: dual('not a Zotero API response', '未返回有效的 Zotero 数据'),
+      zotero_desktop_only: dual('not available on the hosted server', '托管版不连接服务器上的 Zotero'),
       local_zotero_search_failed: dual('desktop search failed', '桌面检索失败'),
       local_zotero_item_fetch_failed: dual('paper fetch failed', '文献读取失败'),
       pasted_source_ready: dual('pasted source ready', '粘贴文献已就绪'),
@@ -170,7 +174,8 @@
 
   function capRow(key, title, desc, fallback) {
     const on = settingOn(key, fallback);
-    return row(title, desc, `<div class="settings-cap-control">${capStatus(on)}${sw(on, '', key)}</div>`);
+    const active = key.startsWith('nature_') ? settingOn('science_skills_enabled', true) && on : on;
+    return row(title, desc, `<div class="settings-cap-control">${capStatus(active)}${sw(on, '', key)}</div>`);
   }
 
   function capabilityTabs() {
@@ -190,9 +195,7 @@
       ['connector_pubmed_enabled', true],
       ['connector_zotero_enabled', false],
       ['mcp_tools_enabled', false],
-      ['prompt_contracts_enabled', true],
       ['tool_audit_enabled', true],
-      ['remote_compute_enabled', false],
     ];
   }
 
@@ -231,12 +234,10 @@
     const mcpOn = settingOn('mcp_tools_enabled', false);
     const zotero = cap('zotero_connector');
     const mcp = cap('mcp_tools');
-    const prompts = cap('prompt_contracts');
     const audit = cap('tool_audit');
     const remote = cap('remote_compute');
     const allowedTools = Array.isArray(mcp.allowed_tools) ? mcp.allowed_tools.length : 0;
     const blockedTools = Array.isArray(mcp.blocked_tools) ? mcp.blocked_tools.length : 0;
-    const promptRules = Array.isArray(prompts.rules) ? prompts.rules.length : 0;
     const enabledCount = capabilityKeys().filter(([key, fallback]) => settingOn(key, fallback)).length;
     if (settingsCapabilityTab === 'skills') {
       const skillsMasterOn = settingOn('science_skills_enabled', true);
@@ -255,49 +256,46 @@
     }
     if (settingsCapabilityTab === 'connectors') {
       return `<div class="settings-cap-rows">
-        ${capRow('connector_pubmed_enabled', dual('PubMed connector', 'PubMed 连接器'), dual('Controls whether Idea Mining may use PubMed metadata after a source-level opt-in.', '控制 Idea Mining 在来源级 opt-in 后是否可以查询 PubMed 元数据。'), true)}
+        ${capRow('connector_pubmed_enabled', dual('Online literature · PubMed / OpenAlex', '在线文献 · PubMed / OpenAlex'), dual('Allows new literature searches in Idea Mining and before planning, with consent for each search or run. Existing bound literature is retained.', '允许 Idea Mining 和规划前发起在线文献检索，仍需按次检索或运行授权；已绑定文献保留。'), true)}
         ${capRow('connector_zotero_enabled', dual('Zotero desktop link', 'Zotero 桌面连接'), dual('Optional shortcut for searching Zotero Desktop. Idea Mining can still import pasted DOI, BibTeX, RIS, or title/abstract metadata without this switch.', '用于检索 Zotero Desktop 的可选快捷方式。即使不开启，Idea Mining 也能直接导入粘贴的 DOI、BibTeX、RIS 或标题摘要元数据。'), false)}
-        ${row(dual('Source opt-in', '来源 opt-in'), dual('Connectors are only a global availability switch. Each URL, paper, or topic still requires an explicit one-time network opt-in.', '连接器只是全局可用开关；每个 URL、文章或主题仍需单次网络 opt-in。'), truthCtl(dual('required per source', '按来源要求')))}
-        ${row(dual('Zotero auto-connect', 'Zotero 自动连接'), dual('When enabled, EasyICU checks whether Zotero Desktop is reachable before library search. Pasted source import does not need this.', '启用后，EasyICU 会检查是否能连接 Zotero Desktop 再检索文献库。粘贴文献导入不需要这一步。'), lockedCtl(statusText(zotero) || dual('disabled', '未启用'), dual('Zotero Desktop connection check', 'Zotero Desktop 连接检查')))}
+        ${row(dual('Search consent', '检索授权'), dual('The global switch permits access; each online search or planning run also needs consent.', '全局开关控制可用范围，在线检索或规划运行仍需单次授权。'), lockedCtl(dual('required per search', '按次授权')))}
         ${zoteroTestBlock(zotero)}
       </div>`;
     }
     if (settingsCapabilityTab === 'mcp') {
       return `<div class="settings-cap-rows">
-        ${capRow('mcp_tools_enabled', dual('MCP tools layer', 'MCP 工具层'), dual('Enables the standard tool boundary for future external systems. Current patient-data workflows remain local.', '为后续外部系统启用标准工具边界；当前患者数据工作流仍保持本地。'), false)}
+        ${capRow('mcp_tools_enabled', dual('Conversation MCP tools', '对话 MCP 工具'), dual('Allows installed servers in new conversations. Each read-only call also requires a turn grant; turning this off blocks calls in existing sessions.', '允许新对话使用已安装服务。只读调用仍需按次授权；关闭后也会阻止已有会话调用。'), false)}
         ${row(dual('Tool allowlist', '工具白名单'), dual('External tools must be explicitly scoped before they can be used from research workflows.', '外部工具必须先明确作用域，之后才能在研究工作流中使用。'), lockedCtl(dual('required', '必须要求'), dual('Tool scope is an audit contract, not a cosmetic preference.', '工具作用域是审计契约，不是视觉选项。')))}
-        ${row(dual('Backend policy', '后端策略'), dual('The API now returns allow/block decisions for the registered tool boundary.', 'API 现在会返回注册工具边界的允许/阻止决策。'), truthCtl(`${allowedTools} ${dual('allowed', '允许')} · ${blockedTools} ${dual('blocked', '阻止')}`))}
+        ${row(dual('Installed tools', '已安装工具'), dual('Counts installed allowlist entries available to new conversations, before per-turn authorization.', '按已安装服务的白名单项统计新对话可用工具，调用前仍需按次授权。'), lockedCtl(`${allowedTools}/${allowedTools + blockedTools} ${dual('enabled', '可用')}`))}
         ${extensionUi().renderMcp ? extensionUi().renderMcp() : ''}
       </div>`;
     }
     if (settingsCapabilityTab === 'prompts') {
       return `<div class="settings-cap-rows">
-        ${capRow('prompt_contracts_enabled', dual('Prompt contracts', '提示词契约'), dual('Keeps global prompts case-neutral while storing project-specific rules in protocols and rubrics.', '保持全局提示词 case-neutral，并把项目特定规则写入 protocol 和 rubric。'), true)}
-        ${row(dual('Case-specific rules', '个案规则'), dual('Study variables, figures, and benchmark cases belong in project protocols, not global prompts.', '研究变量、图件和 benchmark case 应写进项目 protocol，而不是全局提示词。'), truthCtl(dual('protocol-owned', '由 protocol 管理')))}
-        ${row(dual('Backend contract rules', '后端契约规则'), dual('The workbench payload exposes the active prompt-contract rule set for review.', '工作台 payload 会暴露当前启用的提示词契约规则，便于审阅。'), truthCtl(`${promptRules} ${dual('active rules', '条有效规则')}`))}
+        ${row(dual('Built-in prompts', '内置提示词'), dual('Host prompts are versioned with EasyICU. Study-specific configuration is reviewed in the conversation.', '内置提示词随 EasyICU 版本提供；研究专属配置在研究对话中审阅。'), lockedCtl(dual('host-owned', '内置')))}
+        ${row(dual('Study configuration', '研究配置'), dual('Review the study plan and its constraints in the conversation.', '在研究对话中审阅计划与约束。'), `<button class="btn sm" data-settings-open="guided">${dual('Open conversation', '打开研究对话')}</button>`)}
       </div>`;
     }
     if (settingsCapabilityTab === 'audit') {
       return `<div class="settings-cap-rows">
-        ${capRow('tool_audit_enabled', dual('Tool audit ledger', '工具审计账本'), dual('Records claims, tool use, citations, calculations, hashes, and reviewer-check state before draft release.', '草稿放行前记录论断、工具使用、引用、计算、哈希和审阅检查状态。'), true)}
-        ${capRow('remote_compute_enabled', dual('Remote compute control', '远程计算控制'), dual('Keeps remote or HPC execution disabled until credentials, data boundary, and artifact return rules are configured.', '在凭证、数据边界和产物回传规则配置前，保持远程或 HPC 执行关闭。'), false)}
+        ${capRow('tool_audit_enabled', dual('Connector event log', '连接器事件日志'), dual('Records connector checks and access decisions locally. Run evidence receipts are recorded separately by the execution owner.', '在本机记录连接检查与访问决策；运行证据回执由执行流程单独记录。'), true)}
         ${row(dual('Audit events', '审计事件'), dual('Tool and connector decisions are written only when the audit ledger switch is on.', '只有工具审计账本开启时，工具和连接器决策才会写入。'), truthCtl(`${Number(audit.event_count || 0)} ${dual('recent events', '条近期事件')}`))}
         ${auditEventsBlock(audit)}
-        ${row(dual('Compute adapter', '计算适配器'), dual('Non-local compute requests are rejected unless the remote compute switch and adapter are both ready.', '只有远程计算开关和适配器都就绪时，才允许非本地计算请求。'), lockedCtl(computeStateText(remote), dual('Remote compute backend status', '远程计算后端状态')))}
+        ${row(dual('Compute', '计算'), dual('No remote adapter is installed. Non-local compute requests are rejected.', '尚无远程计算适配器，非本地计算请求会被拒绝。'), lockedCtl(computeStateText(remote)))}
       </div>`;
     }
     return `<div class="settings-cap-overview">
       <div class="settings-cap-meter">
         <b>${enabledCount}/${capabilityKeys().length}</b>
-        <span>${dual('enabled capabilities', '已启用能力')}</span>
+        <span>${dual('enabled options', '已开启选项')}</span>
       </div>
       <div class="settings-cap-grid">
         ${capabilitySummaryTile('layers', dual('Skills', '技能'), settingOn('science_skills_enabled', true), dual('local workflow templates', '本地工作流模板'))}
-        ${capabilitySummaryTile('db', dual('Connectors', '连接器'), pubmedOn || zoteroOn, pubmedOn ? dual('PubMed ready; source opt-in still required', 'PubMed 可用；仍需来源 opt-in') : dual('off', '关闭'))}
+        ${capabilitySummaryTile('db', dual('Connectors', '连接器'), pubmedOn || zoteroOn, pubmedOn ? dual('PubMed / OpenAlex enabled; consent required', 'PubMed / OpenAlex 已开启；仍需授权') : zoteroOn ? statusText(zotero) : dual('off', '关闭'))}
         ${capabilitySummaryTile('globe', dual('MCP tools', 'MCP 工具'), mcpOn, `${allowedTools}/${allowedTools + blockedTools || 0} ${dual('tools allowed', '工具允许')}`)}
-        ${capabilitySummaryTile('file', dual('Prompt contracts', '提示词契约'), settingOn('prompt_contracts_enabled', true), `${promptRules} ${dual('backend rules', '条后端规则')}`)}
+        <div class="settings-cap-tile"><div><b>${dual('Prompt contracts', '提示词契约')}</b><span>${dual('Built into this version', '随版本提供')}</span></div>${lockedCtl(dual('host-owned', '内置'))}</div>
         ${capabilitySummaryTile('shield', dual('Audit', '审计'), settingOn('tool_audit_enabled', true), `${Number(audit.event_count || 0)} ${dual('events', '事件')}`)}
-        ${capabilitySummaryTile('gear', dual('Compute', '计算'), settingOn('remote_compute_enabled', false), computeStateText(remote))}
+        <div class="settings-cap-tile"><div><b>${dual('Compute', '计算')}</b><span>${dual('No remote adapter', '无远程适配器')}</span></div>${lockedCtl(dual('local only', '仅本地计算'))}</div>
       </div>
       <div class="settings-cap-actions">
         <button class="btn sm" data-settings-open="guided">${icon('agent', 12)} ${dual('Open conversation', '打开研究对话')}</button>
@@ -600,7 +598,7 @@
 
       <div class="sec-stack" id="set-workspace"><div class="lbl">${T('Workspace', '工作区')}</div><h2>${T('Local paths', '本地路径')}</h2></div>
       <div class="card pad">
-        ${row(T('Default export folder', '默认导出文件夹'), T('Optional destination for code, tables, figures, and the evidence ledger bundle. Project and guided-run folders are chosen inside their own workflows.', '用于代码、表格、图件和证据账本包的可选导出位置。项目和引导运行文件夹在各自工作流中选择。'),
+        ${row(T('Default export folder', '默认导出文件夹'), T('Default destination for Data Extraction tables and feature definitions. Research project folders are chosen in their own workflows.', '用于「数据提取」生成的表格和特征说明；研究项目文件夹在各自工作流中选择。'),
           pathCtl('export_dir', T('Not set - EasyICU creates a local run folder when extracting', '未设置 - 抽取时 EasyICU 会创建本地运行文件夹'), 'download'))}
       </div>
 
@@ -632,6 +630,7 @@
       const persist = (key, value, msg) => {
         if (key && window.EU_API && window.EU_API.saveSetting) {
           window.EU_API.saveSetting(key, value).then(() => {
+            if (key === 'connector_zotero_enabled') settingsZoteroTest = null;
             setNotice(msg || savedSettingMessage(key));
           }).catch(err =>
           {
@@ -695,7 +694,7 @@
           settingsAuditLoading = true;
           settingsNotice = '';
           rerender();
-          window.EU_API.loadCapabilityAuditEvents({ limit: 20 })
+          window.EU_API.loadCapabilityAuditEvents({ limit: 100 })
             .then(data => {
               settingsAuditEvents = data;
               settingsNotice = T('Audit ledger refreshed.', '审计账本已刷新。');
@@ -769,7 +768,10 @@
       root.querySelectorAll('[data-settings-reset]').forEach(btn => {
         btn.addEventListener('click', () => {
           if (!window.EU_API || !window.EU_API.resetSettings) return;
-          window.EU_API.resetSettings().then(() => setNotice(T('Settings reset to backend defaults.', '设置已恢复为后端默认值。'))).catch(err => {
+          window.EU_API.resetSettings().then(() => {
+            settingsZoteroTest = null; settingsAuditEvents = null;
+            setNotice(T('Display and capability options reset; installed extensions and personal instructions are kept.', '显示与能力选项已恢复默认；已安装扩展和个人说明保留。'));
+          }).catch(err => {
             console.error('[EasyICU] resetSettings failed', err);
             setNotice(T('Reset failed. Check the browser console for details.', '恢复失败，请查看浏览器 console。'));
           });

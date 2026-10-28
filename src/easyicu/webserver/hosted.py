@@ -116,8 +116,7 @@ def unavailable(*, status_code: int = 403) -> None:
 _ADMIN_ROUTES = frozenset({
     "/api/fs/mkdir", "/api/jobs/convert", "/api/jobs/demo-source-prepare",
     "/api/settings/reset",
-    "/api/extensions/skills/install", "/api/extensions/skills/copy", "/api/extensions/mcp/install",
-    "/api/extensions/state", "/api/extensions/remove", "/api/extensions/mcp/test",
+    "/api/extensions/mcp/install", "/api/extensions/mcp/test",
     "/api/copilot/pi/provider-config", "/api/copilot/pi/provider-config/models",
     "/api/copilot/pi/provider-config/declaration",
     "/api/copilot/pi/provider-config/openrouter/login",
@@ -200,5 +199,8 @@ async def guard_request(request: Request) -> None:
         return  # FastAPI owns invalid/missing-body validation.
     if path == "/api/settings" and request.method == "POST":
         if isinstance(payload, dict) and set(payload) - _DISPLAY_SETTINGS:
+            unavailable()
+    if path in {"/api/extensions/state", "/api/extensions/remove"} and request.method == "POST":
+        if not isinstance(payload, dict) or payload.get("kind") != "skill":
             unavailable()
     _check_coordinates(payload, instance_reads=instance_reads, instance_fields=instance_fields)

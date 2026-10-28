@@ -415,6 +415,11 @@
     if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
     return result;
   }
+  async function importExtensionSkillPackage(body) {
+    const result = await postJSON('/api/extensions/skills/import', body || {});
+    if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
+    return result;
+  }
   async function installExtensionMcp(body) {
     const result = await postJSON('/api/extensions/mcp/install', body || {});
     if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
@@ -968,6 +973,7 @@
   window.EU_API.calculateSampleSize = calculateSampleSize;
   window.EU_API.loadDataMap = loadDataMap;
   window.EU_API.installExtensionSkill = installExtensionSkill;
+  window.EU_API.importExtensionSkillPackage = importExtensionSkillPackage;
   window.EU_API.installExtensionMcp = installExtensionMcp;
   window.EU_API.setExtensionState = setExtensionState;
   window.EU_API.removeExtension = removeExtension;

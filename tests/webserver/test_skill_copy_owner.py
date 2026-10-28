@@ -74,7 +74,7 @@ def test_copy_request_requires_revision():
         routes.SkillCopyRequest(builtin_id="survival-time-to-event")
 
 
-def test_copy_uses_the_existing_hosted_administrator_boundary(monkeypatch):
+def test_copy_is_allowed_in_the_hosted_users_workspace(monkeypatch):
     monkeypatch.setenv("EASYICU_HOSTED", "1")
 
     async def payload():
@@ -86,7 +86,4 @@ def test_copy_uses_the_existing_hosted_administrator_boundary(monkeypatch):
         query_params={},
         json=payload,
     )
-    with pytest.raises(HTTPException) as caught:
-        asyncio.run(hosted.guard_request(request))
-    assert caught.value.status_code == 403
-    assert caught.value.detail["error"] == "unavailable_when_hosted"
+    asyncio.run(hosted.guard_request(request))

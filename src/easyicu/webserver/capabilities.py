@@ -24,6 +24,8 @@ from easyicu.webserver import state_paths
 from easyicu.webserver import sources
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver.hosted import is_hosted
+from easyicu.webserver.zotero_probe import probe_zotero
+from easyicu.extensions import ExtensionRegistry
 
 _STATE_DIR = state_paths.state_root()
 _AUDIT_PATH = _STATE_DIR / "capability_tool_audit.jsonl"
@@ -48,61 +50,8 @@ CAPABILITY_SETTINGS = {
     "connector_pubmed_enabled": True,
     "connector_zotero_enabled": False,
     "mcp_tools_enabled": False,
-    "prompt_contracts_enabled": True,
     "tool_audit_enabled": True,
-    "remote_compute_enabled": False,
 }
-
-MCP_TOOL_REGISTRY = [
-    {
-        "id": "pubmed_metadata_search",
-        "label": "PubMed metadata search",
-        "scope": "external_metadata",
-        "setting": "connector_pubmed_enabled",
-    },
-    {
-        "id": "zotero_local_search",
-        "label": "Zotero local library search",
-        "scope": "local_connector",
-        "setting": "connector_zotero_enabled",
-    },
-    {
-        "id": "agent_artifact_reader",
-        "label": "Agent artifact reader",
-        "scope": "local_artifact",
-        "setting": None,
-    },
-    {
-        "id": "idea_run_reader",
-        "label": "Idea Mining run reader",
-        "scope": "local_artifact",
-        "setting": None,
-    },
-    {
-        "id": "remote_compute_submit",
-        "label": "Remote compute submit",
-        "scope": "remote_compute",
-        "setting": "remote_compute_enabled",
-    },
-]
-
-PROMPT_CONTRACT_RULES = [
-    {
-        "id": "case_neutral_global_prompt",
-        "label": "Global prompts stay case-neutral",
-        "enforced": True,
-    },
-    {
-        "id": "case_rules_live_in_protocol",
-        "label": "Case-specific study rules live in protocols or rubrics",
-        "enforced": True,
-    },
-    {
-        "id": "patient_rows_never_in_provider_prompt",
-        "label": "Patient rows never enter provider prompts",
-        "enforced": True,
-    },
-]
 
 
 def _zotero_author(data: Dict[str, Any]) -> str:
@@ -308,40 +257,10 @@ def capability_settings() -> Dict[str, bool]:
 
 
 def zotero_status(settings: Dict[str, bool] | None = None) -> Dict[str, Any]:
-    settings = settings or capability_settings()
-    if not settings.get("connector_zotero_enabled", False):
-        return {
-            "enabled": False,
-            "available": False,
-            "status": "disabled",
-            "reason": "connector_zotero_enabled_false",
-            "local_api": _ZOTERO_LOCAL_API,
-        }
-    try:
-        req = urllib.request.Request(
-            f"{_ZOTERO_LOCAL_API}?limit=1",
-            headers={"Accept": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=_ZOTERO_TIMEOUT_SECONDS) as res:
-            status_code = int(getattr(res, "status", 200) or 200)
-            ok = 200 <= status_code < 300
-            return {
-                "enabled": True,
-                "available": ok,
-                "status": "available" if ok else "unavailable",
-                "reason": "local_zotero_api_ready" if ok else "local_zotero_api_http_error",
-                "http_status": status_code,
-                "local_api": _ZOTERO_LOCAL_API,
-            }
-    except Exception as exc:  # noqa: BLE001 - status probe must fail closed
-        return {
-            "enabled": True,
-            "available": False,
-            "status": "unavailable",
-            "reason": "local_zotero_api_unavailable",
-            "detail": exc.__class__.__name__,
-            "local_api": _ZOTERO_LOCAL_API,
-        }
+    settings = capability_settings() if settings is None else settings
+    return probe_zotero(enabled=bool(settings.get("connector_zotero_enabled", False)),
+                        hosted=is_hosted(), local_api=_ZOTERO_LOCAL_API,
+                        timeout=_ZOTERO_TIMEOUT_SECONDS)
 
 
 def test_zotero_connection() -> Dict[str, Any]:
@@ -552,18 +471,15 @@ def import_zotero_source(text: str) -> Dict[str, Any]:
 
 
 def mcp_tool_policy(settings: Dict[str, bool] | None = None) -> Dict[str, Any]:
-    settings = settings or capability_settings()
+    settings = capability_settings() if settings is None else settings
     mcp_enabled = settings.get("mcp_tools_enabled", False)
     tools = []
-    for row in MCP_TOOL_REGISTRY:
-        required = row.get("setting")
-        allowed = bool(mcp_enabled or row.get("scope") == "local_artifact")
-        if required:
-            allowed = allowed and bool(settings.get(str(required), False))
-        reason = "allowed" if allowed else "blocked_by_setting"
-        if not mcp_enabled and row.get("scope") != "local_artifact":
-            reason = "mcp_tools_enabled_false"
-        tools.append({**row, "allowed": allowed, "reason": reason})
+    for server in ExtensionRegistry().list_public()["mcp_servers"]:
+        for name in server["allowed_tools"]:
+            allowed = bool(mcp_enabled and server["enabled"])
+            tools.append({"id": f"{server['name']}.{name}", "server": server["name"],
+                          "tool": name, "scope": "external_metadata", "allowed": allowed,
+                          "reason": "allowed" if allowed else "mcp_tools_enabled_false" if not mcp_enabled else "server_disabled"})
     return {
         "enabled": bool(mcp_enabled),
         "tools": tools,
@@ -587,17 +503,11 @@ def check_tool_allowed(tool_id: str) -> Dict[str, Any]:
 
 
 def remote_compute_status(settings: Dict[str, bool] | None = None) -> Dict[str, Any]:
-    settings = settings or capability_settings()
-    enabled = bool(settings.get("remote_compute_enabled", False))
     return {
-        "enabled": enabled,
+        "enabled": False,
         "available": False,
-        "status": "adapter_not_configured" if enabled else "disabled",
-        "reason": (
-            "remote_compute_adapter_not_configured"
-            if enabled
-            else "remote_compute_enabled_false"
-        ),
+        "status": "disabled",
+        "reason": "remote_compute_adapter_not_configured",
     }
 
 
@@ -606,28 +516,14 @@ def validate_compute_target(body: Dict[str, Any]) -> Dict[str, Any]:
     if target in {"", "local", "browser", "native"}:
         return {"ok": True, "compute_target": "local"}
     status = remote_compute_status()
-    if not status.get("enabled"):
-        return {
-            "ok": False,
-            "compute_target": target,
-            "error": "remote_compute_disabled",
-            "status": status,
-        }
-    return {
-        "ok": False,
-        "compute_target": target,
-        "error": "remote_compute_adapter_not_configured",
-        "status": status,
-    }
+    return {"ok": False, "compute_target": target, "error": "remote_compute_disabled", "status": status}
 
 
 def prompt_contract_status(settings: Dict[str, bool] | None = None) -> Dict[str, Any]:
-    settings = settings or capability_settings()
-    enabled = bool(settings.get("prompt_contracts_enabled", True))
     return {
-        "enabled": enabled,
-        "status": "enforced" if enabled else "reminders_disabled",
-        "rules": PROMPT_CONTRACT_RULES if enabled else [],
+        "enabled": True,
+        "status": "host_owned",
+        "rules": [],
     }
 
 

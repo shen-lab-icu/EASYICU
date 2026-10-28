@@ -7,7 +7,8 @@
   const ui = { catalogMode: workflows() ? 'workflows' : 'skills', source: 'all', category: 'all', query: '', hideDisabled: false,
     selected: '', tab: 'overview', install: false, editing: '', draft: '', stages: ['conversation'],
     installEnabled: true, detail: null, loadingDetail: false, packageDetail: null,
-    packageFile: 'SKILL.md', loadingPackage: false, busy: false, error: '', notice: '' };
+    packageFile: 'SKILL.md', loadingPackage: false, busy: false, error: '', notice: '',
+    upload: null, uploadName: '', referenceFiles: {} };
   const tr = (en, zh) => window.t(en, zh);
   const api = () => window.EU_API || {};
   const registry = () => window.EU_EXTENSIONS || {};
@@ -181,12 +182,10 @@
       ${cards || `<div class="eusk-empty"><strong>${tr('Nothing matches', '没有匹配的技能')}</strong><p>${tr('Try a different source, category, or search term.', '试试其他来源、类别或关键词。')}</p></div>`}`;
   }
   function head() {
-    // A hosted instance's skills are installed by the administrator
-    // (screens-guided-pi-hosted.js); the clinician browses the catalogue.
-    const hostedOwner = window.EasyICU?.guidedPi?.optional('hosted');
-    const createMenu = hostedOwner && hostedOwner.active() ? '' : `
+    // Imported skills land in the signed-in user's own instance, hosted too.
+    const createMenu = `
       <details class="eusk-create-menu" data-popover-menu><summary class="eusk-new">${icon('plus', 15)} ${tr('New skill', '新建技能')}</summary><div role="menu">
-        <button type="button" role="menuitem" data-sk-upload aria-label="${tr('Upload SKILL.md', '上传 SKILL.md')}"><span>${icon('file', 16)}</span><span><strong>${tr('Upload SKILL.md', '上传 SKILL.md')}</strong><small>${tr('Review and install a local instruction file', '审阅并安装本地指令文件')}</small></span></button>
+        <button type="button" role="menuitem" data-sk-upload aria-label="${tr('Import skill', '导入技能')}"><span>${icon('file', 16)}</span><span><strong>${tr('Import skill', '导入技能')}</strong><small>${tr('SKILL.md, folder or ZIP', 'SKILL.md、文件夹或 ZIP')}</small></span></button>
         <button type="button" role="menuitem" data-sk-create-with aria-label="${tr('Create with EasyICU', '使用 EasyICU 开发')}"><span>${icon('spark', 16)}</span><span><strong>${tr('Create with EasyICU', '使用 EasyICU 开发')}</strong><small>${tr('Open a new task with a Skill Builder draft', '在新任务中打开技能开发草稿')}</small></span></button>
       </div></details>`;
     const title = { workflows: tr('Research workflows', '研究流程'), methods: tr('Modules', '模块') }[ui.catalogMode] || tr('Skills', '技能');
@@ -216,12 +215,12 @@
         ? `<span class="eusk-state-button ${skill.enabled ? 'on' : ''}" aria-label="${skill.enabled ? tr('Available', '可用') : tr('Unavailable', '不可用')}">${skill.enabled ? '✓ ' + tr('Available', '可用') : tr('Unavailable', '不可用')}</span>`
         : `<button type="button" class="eusk-state-button ${skill.enabled ? 'on' : ''}" data-sk-toggle="${esc(skill.id)}" ${ui.busy || masterOff ? 'disabled' : ''}>${skill.enabled ? '✓ ' + tr('Enabled', '已启用') : tr('Enable', '启用')}</button>`}
       <button type="button" class="eusk-use" data-sk-use="${esc(skill.id)}" ${skill.enabled ? '' : 'disabled'}>${skill.useAction && skill.useAction.owner === 'data_extraction' ? tr('Open Data Extraction', '打开数据提取') : workflow ? tr('Start workflow', '启动工作流') : method || (user && skill.enabled && skill.stages.includes('conversation')) ? tr('Use in new task', '在新任务中使用') : tr('Ask in new task', '在新任务中询问')} ↗</button>
-      ${method && !window.EasyICU?.guidedPi?.optional('hosted')?.active() ? `<button type="button" class="eusk-copy" data-sk-copy="${esc(skill.id)}" ${ui.busy ? 'disabled' : ''}>${tr('Copy to my skills', '复制为我的技能')}</button>` : ''}
-      ${user ? `<details class="eusk-actions-menu" data-popover-menu><summary aria-label="${tr('Skill actions', '技能操作')}">···</summary><div><button type="button" data-sk-edit-with aria-label="${tr('Edit with EasyICU', '使用 EasyICU 修订')}">${tr('Edit with EasyICU', '使用 EasyICU 修订')}</button><button type="button" data-sk-edit aria-label="${tr('Edit SKILL.md directly', '直接编辑 SKILL.md')}">${tr('Edit SKILL.md', '直接编辑 SKILL.md')}</button><button type="button" data-sk-download aria-label="${tr('Download SKILL.md', '下载 SKILL.md')}">${tr('Download SKILL.md', '下载 SKILL.md')}</button><button type="button" data-sk-remove aria-label="${tr('Remove skill', '移除技能')}">${tr('Remove skill', '移除技能')}</button></div></details>` : ''}</div></div>
+      ${method ? `<button type="button" class="eusk-copy" data-sk-copy="${esc(skill.id)}" ${ui.busy ? 'disabled' : ''}>${tr('Copy to my skills', '复制为我的技能')}</button>` : ''}
+      ${user ? `<details class="eusk-actions-menu" data-popover-menu><summary aria-label="${tr('Skill actions', '技能操作')}">···</summary><div><button type="button" data-sk-edit-with aria-label="${tr('Edit with EasyICU', '使用 EasyICU 修订')}">${tr('Edit with EasyICU', '使用 EasyICU 修订')}</button><button type="button" data-sk-edit aria-label="${tr('Edit SKILL.md directly', '直接编辑 SKILL.md')}">${tr('Edit SKILL.md', '直接编辑 SKILL.md')}</button><button type="button" data-sk-download aria-label="${tr('Export ZIP', '导出 ZIP')}">${tr('Export ZIP', '导出 ZIP')}</button><button type="button" data-sk-remove aria-label="${tr('Remove skill', '移除技能')}">${tr('Remove skill', '移除技能')}</button></div></details>` : ''}</div></div>
       <div class="eusk-tabs" role="tablist"><button type="button" role="tab" aria-selected="${ui.tab === 'overview'}" data-sk-tab="overview">${tr('Overview', '概览')}</button><button type="button" role="tab" aria-selected="${ui.tab === 'files'}" data-sk-tab="files">${tr('Files', '文件')}</button></div>
       ${ui.tab === 'files' ? `<div class="eusk-detail-body">${method ? methodPackage(skill, component) : user ? `<div class="eusk-file-row">${icon('file', 15)} SKILL.md <small>${skill.size_bytes || 0} B</small></div>
         ${ui.loadingDetail ? `<p>${tr('Loading the reviewed file…', '正在读取已审阅文件…')}</p>` : detail
-          ? `<div class="eusk-file-preview"><h2>SKILL.md</h2><pre>${esc(detail.skill_md || '')}</pre></div>`
+          ? `<div class="eusk-file-preview"><h2>SKILL.md</h2><pre>${esc(detail.skill_md || '')}</pre>${Object.entries(detail.reference_files || {}).map(([path, text]) => `<h2>${esc(path)}</h2><pre>${esc(text)}</pre>`).join('')}</div>`
           : `<p>${tr('This file could not be read.', '无法读取这个文件。')}</p>`}`
         : `<div class="eusk-empty"><strong>${tr('Host contract', '内置契约')}</strong><p>${tr('This built-in capability is implemented in EasyICU code and has no installable SKILL.md package.', '此内置能力由 EasyICU 代码实现，没有可安装的 SKILL.md 文件包。')}</p></div>`}</div>`
       : method ? `<div class="eusk-detail-body">${isTool(skill) && tools() ? tools().html(skill.name) : ''}${methodOverview(skill, component)}</div>`
@@ -293,12 +292,15 @@
   }
   function installer() {
     return `<button type="button" class="eusk-back" data-sk-cancel>← ${tr('Back to skills', '返回技能目录')}</button>
-      <div class="eusk-head"><div><span class="eusk-eyebrow">SKILL HUB</span><h1>${ui.editing ? tr('Edit SKILL.md', '编辑 SKILL.md') : tr('Upload a skill', '上传技能')}</h1><p>${tr('Review a local SKILL.md, choose where it applies, then install it for future sessions.', '审阅本地 SKILL.md，选择生效阶段，再安装到后续会话。')}</p></div></div>
-      <div class="eusk-install"><div class="eusk-upload-note"><span>${icon('file', 18)}</span><div><strong>${tr('One reviewed SKILL.md file', '一个经过审阅的 SKILL.md 文件')}</strong><p>${tr('EasyICU currently installs a single instruction file up to 12 KB. Supporting-file packages are not yet accepted.', 'EasyICU 当前可安装一个不超过 12 KB 的指令文件，暂不接收包含辅助文件的技能包。')}</p></div></div>
-      <label>${tr('Select SKILL.md', '选择 SKILL.md')}<input type="file" accept=".md,text/markdown,text/plain" data-sk-file></label>
+      <div class="eusk-head"><div><span class="eusk-eyebrow">SKILL HUB</span><h1>${ui.editing ? tr('Edit SKILL.md', '编辑 SKILL.md') : tr('Upload a skill', '上传技能')}</h1><p>${tr('Import instructions and text references for your workspace. Review before enabling in a new conversation.', '导入指令与文字参考资料到自己的工作区，审阅后再对新会话启用。')}</p></div></div>
+      <div class="eusk-install"><div class="eusk-upload-note"><span>${icon('file', 18)}</span><div><strong>${tr('SKILL.md and references', 'SKILL.md 与参考资料')}</strong><p>${tr('Main file: 12 KB; unpacked package: 48 KB / 64 entries; ZIP: 256 KB. Only references/*.md and *.txt are kept. Scripts are ignored.', '主文件限 12 KB；解包限 48 KB、64 项；ZIP 限 256 KB。仅保留 references 中的 .md、.txt，忽略脚本。')}</p></div></div>
+      ${ui.editing ? '' : `<label>${tr('Select SKILL.md or ZIP', '选择 SKILL.md 或 ZIP')}<input type="file" accept=".md,.zip" data-sk-file></label>
+      <label>${tr('Or select a folder', '或选择文件夹')}<input type="file" webkitdirectory multiple data-sk-folder></label>`}
+      ${ui.uploadName ? `<p role="status">${esc(ui.uploadName)} · ${tr('Import disabled, then review in My skills.', '导入后默认未启用，请在「我的技能」审阅。')}</p>` : ''}
       <p>${tr('Optional category: add category: Clinical Research to the SKILL.md frontmatter.', '可在 SKILL.md 的 frontmatter 中写 category: Clinical Research，供目录分类。')}</p>
-      <label>${tr('Or paste its complete content', '或粘贴完整内容')}<textarea data-sk-draft rows="12" maxlength="12000" spellcheck="false" placeholder="---&#10;name: concise-writing&#10;description: Keep scientific prose concise.&#10;category: Clinical Research&#10;---&#10;Instructions…">${esc(ui.draft)}</textarea></label>
+      <label>${tr('Or paste its complete content', '或粘贴完整内容')}<textarea data-sk-draft ${ui.upload ? 'disabled' : ''} rows="12" maxlength="12000" spellcheck="false" placeholder="---&#10;name: concise-writing&#10;description: Keep scientific prose concise.&#10;category: Clinical Research&#10;---&#10;Instructions…">${esc(ui.draft)}</textarea></label>
       <fieldset><legend>${tr('Workflow stages', '工作流阶段')}</legend><label><input type="checkbox" data-sk-stage="conversation" ${ui.stages.includes('conversation') ? 'checked' : ''}> ${tr('Conversation', '对话')}</label><label><input type="checkbox" data-sk-stage="writing" ${ui.stages.includes('writing') ? 'checked' : ''}> ${tr('Writing', '写作')}</label></fieldset>
+      ${Object.entries(ui.referenceFiles).map(([path, text]) => `<label>${esc(path)}<textarea data-sk-reference="${esc(path)}" rows="6" maxlength="48000" spellcheck="false">${esc(text)}</textarea></label>`).join('')}
       <label><input type="checkbox" data-sk-install-enabled ${ui.installEnabled ? 'checked' : ''}> ${tr('Enable after installation', '安装后启用')}</label>
       <div class="eusk-install-foot"><button type="button" data-sk-cancel>${tr('Cancel', '取消')}</button><button type="button" class="eusk-new" data-sk-install ${ui.busy ? 'disabled' : ''}>${ui.busy ? tr('Saving…', '保存中…') : ui.editing ? tr('Save skill', '保存技能') : tr('Install skill', '安装技能')}</button></div></div>`;
   }
@@ -463,7 +465,7 @@
       if (target.dataset.skEdit !== undefined) { void editSkill(); return; }
       if (target.dataset.skDownload !== undefined) { void downloadSkill(); return; }
       if (target.dataset.skRemove !== undefined) { void removeSkill(); return; }
-      if (target.dataset.skUpload !== undefined) { ui.install = true; ui.error = ''; rerender(); return; }
+      if (target.dataset.skUpload !== undefined) { ui.install = true; ui.editing = ''; ui.draft = ''; ui.upload = null; ui.uploadName = ''; ui.referenceFiles = {}; ui.error = ''; rerender(); return; }
       if (target.dataset.skCreateWith !== undefined) { openBuilder('create'); return; }
       if (target.dataset.skUse) {
         const skill = allSkills().find(item => item.id === target.dataset.skUse);
@@ -498,6 +500,7 @@
     hub.addEventListener('input', event => {
       if (event.target.matches('[data-sk-search]')) { ui.query = event.target.value; rerender(true); }
       if (event.target.matches('[data-sk-draft]')) ui.draft = event.target.value;
+      if (event.target.matches('[data-sk-reference]')) ui.referenceFiles[event.target.dataset.skReference] = event.target.value;
     });
     hub.addEventListener('change', event => {
       const target = event.target;
@@ -507,15 +510,36 @@
         ui.stages = Array.from(hub.querySelectorAll('[data-sk-stage]:checked')).map(el => el.dataset.skStage);
       }
       if (target.matches('[data-sk-install-enabled]')) ui.installEnabled = target.checked;
-      if (target.matches('[data-sk-file]')) {
-        const file = target.files && target.files[0]; if (!file) return;
-        if (file.size > 12000) { ui.error = tr('SKILL.md exceeds 12 KB.', 'SKILL.md 超过 12 KB。'); rerender(); return; }
-        file.text().then(content => { ui.draft = content; rerender(); });
+      if (target.matches('[data-sk-file]') || target.matches('[data-sk-folder]')) {
+        void pickPackage(Array.from(target.files || []), target.matches('[data-sk-folder]'));
       }
     });
   }
+  async function pickPackage(files, folder) {
+    if (!files.length) return;
+    ui.upload = null; ui.uploadName = ''; ui.referenceFiles = {}; ui.error = '';
+    try {
+      if (files.length > 64) throw new Error(tr('Choose at most 64 files.', '最多选择 64 项。'));
+      if (!folder && /\.zip$/i.test(files[0].name)) {
+        if (files[0].size > 256000) throw new Error(tr('ZIP exceeds 256 KB.', 'ZIP 超过 256 KB。'));
+        const bytes = new Uint8Array(await files[0].arrayBuffer());
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += 4096) binary += String.fromCharCode(...bytes.subarray(offset, offset + 4096));
+        ui.upload = { archive_base64: btoa(binary) };
+      } else if (folder) {
+        if (files.reduce((sum, file) => sum + file.size, 0) > 48000) throw new Error(tr('Folder exceeds 48 KB.', '文件夹超过 48 KB。'));
+        const entries = await Promise.all(files.map(async file => [file.webkitRelativePath || file.name, await file.text()]));
+        ui.upload = { files: Object.fromEntries(entries) };
+      } else {
+        if (files[0].size > 12000 || files[0].name !== 'SKILL.md') throw new Error(tr('Choose SKILL.md up to 12 KB.', '请选择不超过 12 KB 的 SKILL.md。'));
+        ui.draft = await files[0].text();
+      }
+      if (ui.upload) { ui.uploadName = files[0].name; ui.installEnabled = false; ui.draft = ''; }
+    } catch (error) { ui.error = String(error.message || error); }
+    rerender();
+  }
   async function install() {
-    if (!ui.draft.trim() || !ui.stages.length) {
+    if ((!ui.upload && !ui.draft.trim()) || !ui.stages.length) {
       ui.error = tr('Provide a SKILL.md and select at least one stage.', '请填写 SKILL.md 并选择至少一个阶段。'); rerender(); return;
     }
     if (ui.editing) {
@@ -526,10 +550,12 @@
     }
     ui.busy = true; ui.error = ''; rerender();
     try {
-      const result = await api().installExtensionSkill({ skill_md: ui.draft,
-        stages: ui.stages, enabled: ui.installEnabled,
-        expected_sha256: registry().activation_sha256 });
-      ui.draft = ''; ui.install = false; ui.editing = ''; ui.notice = tr('Skill saved for new sessions and runs.', '技能已保存，将用于新会话和运行。');
+      const options = { stages: ui.stages, enabled: ui.installEnabled, expected_sha256: registry().activation_sha256 };
+      const result = ui.upload
+        ? await api().importExtensionSkillPackage({ ...ui.upload, ...options })
+        : await api().installExtensionSkill({ skill_md: ui.draft, reference_files: ui.referenceFiles, ...options });
+      ui.draft = ''; ui.upload = null; ui.uploadName = ''; ui.referenceFiles = {}; ui.install = false; ui.editing = ''; ui.notice = tr('Skill saved for new sessions and runs.', '技能已保存，将用于新会话和运行。');
+      if ((result.skill.ignored_files || []).length) ui.notice += tr(' Scripts and unsupported files were ignored.', ' 已忽略脚本及不支持的文件。');
       ui.catalogMode = 'skills'; ui.source = 'user'; ui.category = 'all';
       ui.selected = `user:${result.skill.name}`; ui.tab = 'overview';
       await openSkill(ui.selected);
@@ -550,6 +576,7 @@
       const file = await reviewedFile();
       if (!file) return;
       ui.editing = file.name; ui.draft = file.skill_md; ui.stages = file.stages.slice();
+      ui.upload = null; ui.uploadName = ''; ui.referenceFiles = file.reference_files || {};
       ui.installEnabled = file.enabled; ui.install = true; ui.error = ''; rerender();
     } catch (error) { ui.error = String(error && error.message || error); rerender(); }
   }
@@ -557,10 +584,10 @@
     try {
       const file = await reviewedFile();
       if (!file) return;
-      const url = URL.createObjectURL(new Blob([file.skill_md], { type: 'text/markdown' }));
-      const link = document.createElement('a'); link.href = url; link.download = `${file.name}-SKILL.md`;
+      const link = document.createElement('a');
+      link.href = '/api/extensions/skills/' + encodeURIComponent(file.name) + '/package.zip';
+      link.download = `${file.name}.zip`;
       document.body.append(link); link.click(); link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) { ui.error = String(error && error.message || error); rerender(); }
   }
   // A copy is a personal, instructions-only Skill that starts off; a taken name gets the next free suffix.

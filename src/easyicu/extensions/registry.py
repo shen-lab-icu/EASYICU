@@ -31,6 +31,7 @@ from .contracts import (
     TOOL_PATTERN,
 )
 from .skill_copy import builtin_copy_markdown, builtin_source_status, parse_builtin_source
+from .skill_package import package_files, read_archive, with_references, write_archive
 
 REGISTRY_SCHEMA = "easyicu.extension-registry/1"
 MAX_REGISTRY_BYTES = 512 * 1024
@@ -299,10 +300,15 @@ class ExtensionRegistry:
                 os.unlink(temporary)
 
     def _write_skill_object_unlocked(self, parsed: Mapping[str, Any]) -> None:
-        target = self.skill_objects / f"{parsed['digest']}.md"
-        content = str(parsed["canonical_markdown"]).encode("utf-8")
+        references = parsed.get("reference_files") or {}
+        suffix = ".zip" if references else ".md"
+        target = self.skill_objects / f"{parsed['digest']}{suffix}"
+        content = (write_archive(parsed["canonical_markdown"], references) if references
+                   else str(parsed["canonical_markdown"]).encode("utf-8"))
         if target.exists():
-            if target.read_bytes() != content:
+            # ZIP timestamps are not part of the frozen content identity.
+            if (read_archive(target.read_bytes()) != read_archive(content) if references
+                    else target.read_bytes() != content):
                 raise ExtensionRegistryError(
                     "extension_skill_object_digest_collision",
                     "A stored Skill object does not match its content digest.",
@@ -334,8 +340,9 @@ class ExtensionRegistry:
         enabled: bool = True,
         expected_activation_sha256: str | None = None,
         overwrite: bool = True,
+        reference_files: Mapping[str, str] | None = None,
     ) -> Dict[str, Any]:
-        parsed = parse_skill_markdown(skill_markdown)
+        parsed = with_references(parse_skill_markdown(skill_markdown), reference_files)
         clean_stages = _normalise_stages(stages)
         if parsed["disable_model_invocation"] and enabled:
             raise ExtensionRegistryError(
@@ -379,6 +386,21 @@ class ExtensionRegistry:
             self._validate_active_limits(state)
             self._write_state_unlocked(state)
         return self._public_skill(row)
+
+    def install_skill_package(
+        self, *, files: Mapping[str, str | bytes] | None = None,
+        archive_bytes: bytes | None = None, **options,
+    ) -> Dict[str, Any]:
+        """Upload bytes only; no server path lookup and no code execution."""
+        if (files is None) == (archive_bytes is None):
+            raise ExtensionRegistryError("extension_skill_package_input_invalid", "Choose files or one ZIP.")
+        main, references, ignored = package_files(read_archive(archive_bytes) if archive_bytes is not None else files)
+        installed = self.install_skill(main, reference_files=references, **options)
+        return {**installed, "ignored_files": ignored}
+
+    def export_skill_package(self, name: str) -> bytes:
+        current = self.current_skill(name)
+        return write_archive(current["skill_md"], current["reference_files"])
 
     def copy_builtin_skill(
         self,
@@ -619,6 +641,7 @@ class ExtensionRegistry:
             **descriptor,
             "instructions": loaded["instructions"],
             "skill_md": loaded["canonical_markdown"],
+            "reference_files": loaded["reference_files"],
         }
 
     def snapshot(self) -> ExtensionActivationSnapshot:
@@ -668,13 +691,16 @@ class ExtensionRegistry:
             )
         target = self.skill_objects / f"{clean_digest}.md"
         try:
-            content = target.read_text(encoding="utf-8")
+            if target.exists():
+                parsed = with_references(parse_skill_markdown(target.read_text(encoding="utf-8")), None)
+            else:
+                main, references, _ = package_files(read_archive((self.skill_objects / f"{clean_digest}.zip").read_bytes()))
+                parsed = with_references(parse_skill_markdown(main), references)
         except FileNotFoundError as exc:
             raise ExtensionRegistryError(
                 "extension_skill_object_not_found",
                 "The frozen Skill object is no longer available.",
             ) from exc
-        parsed = parse_skill_markdown(content)
         if parsed["digest"] != clean_digest or parsed["name"] != clean_name:
             raise ExtensionRegistryError(
                 "extension_skill_object_mismatch",
@@ -689,6 +715,7 @@ class ExtensionRegistry:
                 "disable_model_invocation",
                 "instructions",
                 "canonical_markdown",
+                "reference_files",
             )
         }
 

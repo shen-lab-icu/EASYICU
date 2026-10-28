@@ -18,14 +18,18 @@ this confirmation is the only remaining barrier.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from typing import Any, Dict, Literal
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from easyicu.extensions import ExtensionRegistry, ExtensionRegistryError
 from easyicu.extensions.mcp_client import list_mcp_tools
 from easyicu.webserver import settings as settings_store
+from easyicu.webserver.hosted import require_instance_path
 
 router = APIRouter()
 
@@ -46,6 +50,17 @@ class SkillInstallRequest(BaseModel):
     stages: list[Literal["conversation", "writing"]] = Field(
         default_factory=lambda: ["conversation"], min_length=1, max_length=2
     )
+    enabled: StrictBool = True
+    expected_sha256: str = ExpectedRevision
+    reference_files: dict[str, str] = Field(default_factory=dict, max_length=63)
+
+
+class SkillPackageImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    files: dict[str, str] | None = Field(default=None, max_length=64)
+    archive_base64: str | None = Field(default=None, max_length=341_336)
+    stages: list[Literal["conversation", "writing"]] = Field(default_factory=lambda: ["conversation"], min_length=1, max_length=2)
     enabled: StrictBool = True
     expected_sha256: str = ExpectedRevision
 
@@ -95,7 +110,9 @@ class McpTestRequest(BaseModel):
 
 
 def _registry() -> ExtensionRegistry:
-    return ExtensionRegistry()
+    registry = ExtensionRegistry()
+    require_instance_path(registry.root)
+    return registry
 
 
 def _raise_extension_error(exc: ExtensionRegistryError) -> None:
@@ -139,8 +156,35 @@ def post_install_skill(body: SkillInstallRequest) -> Dict[str, Any]:
             stages=body.stages,
             enabled=body.enabled,
             expected_activation_sha256=body.expected_sha256,
+            reference_files=body.reference_files,
         )
         return {"ok": True, "skill": installed, "extensions": get_extensions()}
+    except ExtensionRegistryError as exc:
+        _raise_extension_error(exc)
+
+
+@router.post("/api/extensions/skills/import")
+def post_import_skill_package(body: SkillPackageImportRequest) -> Dict[str, Any]:
+    try:
+        content = base64.b64decode(body.archive_base64, validate=True) if body.archive_base64 is not None else None
+        installed = _registry().install_skill_package(
+            files=body.files, archive_bytes=content, stages=body.stages, enabled=body.enabled,
+            expected_activation_sha256=body.expected_sha256,
+        )
+        return {"ok": True, "skill": installed, "extensions": get_extensions()}
+    except (binascii.Error, ValueError) as exc:
+        if isinstance(exc, ExtensionRegistryError):
+            _raise_extension_error(exc)
+        raise HTTPException(status_code=400, detail={"error": "extension_skill_package_invalid"}) from exc
+
+
+@router.get("/api/extensions/skills/{name}/package.zip")
+def get_skill_package(name: str) -> Response:
+    try:
+        content = _registry().export_skill_package(name)
+        return Response(content, media_type="application/zip", headers={
+            "Content-Disposition": f'attachment; filename="{name}.zip"',
+        })
     except ExtensionRegistryError as exc:
         _raise_extension_error(exc)
 

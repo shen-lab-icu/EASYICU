@@ -62,6 +62,11 @@ def _submission_profile_ref(
         DESKTOP_FIRST_RESULT,
         DESKTOP_FIRST_RESULT_LIVE_PUBMED,
     )
+    from easyicu.webserver.capabilities import pubmed_connector_block_reason
+
+    # One host gate controls both bibliographic sources: the live profile's
+    # enable_pubmed flag also enables OpenAlex in build_preplan_literature_bundle.
+    live_pubmed = bool(live_pubmed and pubmed_connector_block_reason(path="preplan_literature") is None)
 
     if runner_kind == "host":
         return (DESKTOP_FIRST_RESULT_LIVE_PUBMED if live_pubmed else DESKTOP_FIRST_RESULT).ref
