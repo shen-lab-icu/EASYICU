@@ -4,16 +4,13 @@ from __future__ import annotations
 
 from easyicu.research_agent.planning.scientific_action_catalog import (
     ScientificActionGapError,
-    resolve_scientific_action_request,
 )
 from easyicu.webserver.jobs import Job, JobManager
+from tests.support.scientific_action_gap import scientific_action_gap
 
 
 def _unavailable_action_runner(_job: Job) -> None:
-    resolution = resolve_scientific_action_request(
-        analysis_type="prediction_model",
-        action_id="prediction.external_validation",
-    )
+    resolution = scientific_action_gap()
     raise ScientificActionGapError(resolution)
 
 

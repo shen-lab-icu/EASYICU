@@ -406,6 +406,14 @@
   // Tested before the renderer's own broader patterns, so a specific audit
   // table is never folded into a generic "measurement" title.
   const TABLES = [
+    [/frozen_prediction_model/, 'Frozen fitted prediction model', '冻结的已拟合预测模型'],
+    [/external_validation_tripod/, 'External validation TRIPOD checklist', '外部验证 TRIPOD 清单'],
+    [/external_validation_provenance/, 'Model freeze and validation provenance', '模型冻结与外部验证来源记录'],
+    [/external_validation_/, 'Independent external validation cohort', '独立外部验证队列'],
+    [/external_validation/, 'External validation performance', '外部验证性能'],
+    [/external_calibration/, 'External calibration', '外部校准'],
+    [/external_decision_curve/, 'External decision curves', '外部验证决策曲线'],
+    [/external_case_mix/, 'Development and validation case mix', '开发与验证病例构成'],
     [/table_one/, 'Baseline characteristics (Table 1)', '基线特征表（Table 1）'],
     [/analytic_denominators/, 'Analysis denominators', '分析分母'],
     [/event_timing_audit/, 'Event-timing audit', '事件时间审计'],

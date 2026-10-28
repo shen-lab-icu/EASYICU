@@ -29,6 +29,8 @@ static prediction primary instead of compiling one without them
 
 from __future__ import annotations
 
+from ..contracts.prediction_validation import EXTERNAL_ACTION, EXTERNAL_OUTPUTS, FROZEN_MODEL_INPUT, ExternalValidationSpec, external_cohort_input, external_validation_method
+
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -126,3 +128,84 @@ def static_prediction_timing_facts(context: Any, plan: Any) -> tuple[PredictionT
 
 
 __all__ = ["PredictionTimingFacts", "static_prediction_timing_facts"]
+
+
+def external_validation_adapter(adapter_type):
+    return adapter_type(
+        adapter_id="prediction_external_validation_v1", action_id=EXTERNAL_ACTION, scope="full_action",
+        owner_module="easyicu.research_agent.execution.runners.prediction_validation_executor",
+        owner_entrypoint="prediction_external_executor_code", selection_kind="prediction_external_validation",
+        required_declarations=("external_validation_spec", "digest-bound frozen numeric logistic model",
+                               "complete typed validation cohort roster; one row per subject"),
+        validation_test_refs=(
+            "tests/research_agent/planning/test_prediction_external_plan.py::test_external_action_is_host_owned_and_reaches_the_exact_runner",
+        ),
+    )
+
+
+def build_external_validation_step(spec: ExternalValidationSpec, *, step_id="external_validation"):
+    """Append to a reviewed plan whose intake products provide these exact keys."""
+    from ..schema import AnalysisStep
+
+    return AnalysisStep(
+        step_id=step_id, planned_analysis_role="secondary", scientific_action_id=EXTERNAL_ACTION,
+        method=external_validation_method(spec),
+        intent=(f"Apply the frozen {spec.development_database} model to {', '.join(spec.validation_databases)}; "
+                "report untouched transport and any recalibration separately, with an analysis-only ceiling."),
+        inputs=[FROZEN_MODEL_INPUT, *(external_cohort_input(db) for db in spec.validation_databases)],
+        expected_outputs=list(EXTERNAL_OUTPUTS),
+    )
+
+
+def external_validation_product_inputs(step):
+    spec = step.external_validation_spec
+    if spec is None or step.planned_analysis_role != "secondary" or step.raw_inputs:
+        raise ValueError("external_validation_declaration_required: declare the frozen model and validation sources")
+    return (FROZEN_MODEL_INPUT, *(external_cohort_input(db) for db in spec.validation_databases))
+
+
+def external_validation_workflow_metadata(draft):
+    """Extend a read-only hub example, never a runnable family-spec draft.
+
+    Supplied model and external cohorts are explicit intake prerequisites;
+    this projection does not pretend the internal runner already exports a
+    portable model or that a second database is the development cohort.
+    """
+    from dataclasses import replace
+
+    from ..canonical_json import canonical_sha256
+    from .progressive_contract import (
+        ProgressiveOutlineStep, ProgressiveOutputIntent, ProgressiveProductRef,
+        ProgressiveSkeletonStep, ProgressiveStepMaterialization,
+    )
+
+    intake_id, validation_id = "external_validation_intake", "external_validation"
+    inputs = (FROZEN_MODEL_INPUT, external_cohort_input("eicu"))
+    intake = ProgressiveSkeletonStep(
+        step_id=intake_id, module_id="custom_analysis", planned_analysis_role="auxiliary",
+        custom_method="reviewed_external_validation_intake",
+        objective="Supply the reviewed frozen fitted model and independently materialized validation cohort; verify model freeze before reading validation data.",
+        outputs=[ProgressiveOutputIntent(product_id=p, semantic_role="custom") for p in inputs],
+    )
+    validation = ProgressiveSkeletonStep(
+        step_id=validation_id, module_id="custom_analysis", planned_analysis_role="secondary",
+        custom_method="external_validation", scientific_action_id=EXTERNAL_ACTION,
+        objective="Optionally apply the frozen model across reviewed databases and report transport, calibration, case mix and separate recalibration.",
+        depends_on=[intake_id],
+        product_inputs=[ProgressiveProductRef(product_id=p, producer_step_id=intake_id) for p in inputs],
+        outputs=[ProgressiveOutputIntent(product_id=p, semantic_role=("figure" if p.startswith("figure:") else
+                 "report" if p.startswith("report:") else "custom")) for p in EXTERNAL_OUTPUTS],
+    )
+    materializations, outline_steps = list(draft.materializations), list(draft.outline.steps)
+    for step in (intake, validation):
+        outline = ProgressiveOutlineStep(
+            step_id=step.step_id, module_id=step.module_id, planned_analysis_role=step.planned_analysis_role,
+            objective=step.objective, depends_on=step.depends_on, scientific_action_id=step.scientific_action_id,
+            variable_names=list(draft.outline.steps[0].variable_names),
+        )
+        outline_steps.append(outline)
+        materializations.append(ProgressiveStepMaterialization(
+            outline_step_sha256=canonical_sha256(outline.model_dump(mode="json")), foundation=None, step=step,
+        ))
+    return replace(draft, outline=draft.outline.model_copy(update={"steps": outline_steps}),
+                   materializations=tuple(materializations)), {intake_id, validation_id}

@@ -86,6 +86,7 @@ _SKILL_ROOTS: dict[str, tuple[SourceDefinition, ...]] = {
 # Runtime roots supplement the registry's script-rendering callable. Local
 # helper definitions are followed by AST name references, without imports.
 _RUNTIME_ROOTS: dict[str, tuple[str, ...]] = {
+    "execution.runners.prediction_validation_executor": ("run_external_validation_step",),
     "execution.runners.adjusted_association_executor": ("run_adjusted_association_from_env",),
     "execution.runners.landmark_categorical_association_executor": (
         "run_landmark_categorical_cohort", "run_landmark_categorical_primary",
@@ -201,6 +202,8 @@ def _registered_render_sources(sources: _Sources) -> tuple[SourceDefinition, ...
 
 
 def _source_roots(specs: Sequence[SkillSourceSpec], sources: _Sources) -> dict[str, tuple[SourceDefinition, ...]]:
+    from ..planning.method_adapter_catalog import get_method_adapter_contract
+
     capabilities = {row.capability_id: row for row in CAPABILITY_REGISTRY}
     adapters = {row.action_id: row for row in HIGH_FREQUENCY_METHOD_ADAPTERS}
     methods = {f"{suite.family}.{method.key}": method for suite in METHOD_SUITE_REGISTRY for method in suite.methods}
@@ -215,7 +218,7 @@ def _source_roots(specs: Sequence[SkillSourceSpec], sources: _Sources) -> dict[s
                 SourceDefinition(_PREFIX + "execution.step_execution", "initial_code_origin"),
             ))
         for action in spec.action_ids:
-            adapter = adapters.get(action)
+            adapter = adapters.get(action) or get_method_adapter_contract(action)
             if adapter is not None:
                 roots.append(SourceDefinition(adapter.owner_module, adapter.owner_entrypoint))
             elif (method := methods.get(action)) is not None and method.runner is not None:

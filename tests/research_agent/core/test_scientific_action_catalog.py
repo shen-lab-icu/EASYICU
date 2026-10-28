@@ -132,15 +132,15 @@ def test_action_gap_resolution_is_typed_and_never_auto_substitutes():
     assert direct.status == "direct"
     assert direct.executable is True
 
-    alternative = resolve_scientific_action_request(
+    external = resolve_scientific_action_request(
         analysis_type="prediction_model",
         action_id="prediction.external_validation",
     )
-    assert alternative.status == "alternative"
-    assert alternative.selected_action_ids == ()
-    assert alternative.alternative_action_ids == ("prediction.internal_validation",)
-    assert alternative.requires_user_confirmation is True
-    assert alternative.issue_code == "scientific_action_requires_user_choice"
+    assert external.status == "direct"
+    assert external.selected_action_ids == ("prediction.external_validation",)
+    assert external.alternative_action_ids == ()
+    assert external.requires_user_confirmation is False
+    assert external.issue_code is None
 
     unknown = resolve_scientific_action_request(
         analysis_type="dynamic_prediction",
@@ -159,10 +159,10 @@ def test_action_gap_resolution_is_typed_and_never_auto_substitutes():
         )
 
         scientific_action_for_id(
-            analysis_type="prediction_model",
-            action_id="prediction.external_validation",
+            analysis_type="dynamic_prediction",
+            action_id="prediction.dynamic_forecast",
         )
-    assert captured.value.issue_code == "scientific_action_requires_user_choice"
+    assert captured.value.issue_code == "scientific_action_unregistered"
 
 
 def test_dynamic_plan_requires_the_exact_primary_action_before_execution():
@@ -274,7 +274,7 @@ def test_budget_ladder_retains_every_action_and_execution_boundary():
         assert all(action_id in guide for action_id in expected)
         assert "host_owned" in guide
         assert "coder_generated" in guide
-        assert "not_available" in guide
+        assert all(action.execution_mode in guide for action in scientific_actions_for_analysis_type("prediction_model").actions)
     assert sizes == sorted(sizes, reverse=True)
 
 
@@ -393,7 +393,7 @@ def test_typed_plan_selection_refuses_cross_family_and_unavailable_actions():
         )
 
 
-def test_real_planner_parser_fails_before_execution_on_unavailable_action():
+def test_real_planner_parser_fails_before_execution_on_underdeclared_external_action():
     context = schema.ResearchContext(
         research_question="Develop an ICU mortality prediction model.",
         cohort=schema.CohortDescriptor(
@@ -425,7 +425,7 @@ def test_real_planner_parser_fails_before_execution_on_unavailable_action():
 
     with pytest.raises(
         ValueError,
-        match="scientific_action_requires_user_choice.*require explicit user choice",
+        match="external_validation_declaration_required",
     ):
         PlannerAgent.__new__(PlannerAgent)._parse(raw, context)
 

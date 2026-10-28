@@ -15,7 +15,7 @@ def test_workflow_dependencies_and_changed_cache_tokens_are_explicit():
     assert html.index("screens-guided-pi-starters.js?") < html.index("screens-guided-pi.js?")
     assert 'js/screens-skills-workflows.js?v=20261028-hub4"' in html
     assert 'js/desktop-module-shell.js?v=20261028-cust1"' in html
-    assert 'js/screens-agent-reader-vocab.js?v=20261028-voc1"' in html
+    assert 'js/screens-agent-reader-vocab.js?v=20261028-voc2"' in html
     assert 'js/screens-guided-pi-study-workspace.js?v=20261028-task1"' in html
     for file in ["screens-guided-pi-starters.js", "screens-guided-pi-session-view.js"]:
         assert f'js/{file}?v=20261028-hub2"' in html

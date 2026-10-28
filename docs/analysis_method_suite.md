@@ -32,6 +32,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | `prediction.decision_curve` | `decision_curve` | — |
 | `prediction.feature_attribution` | — | `shap` |
 | `prediction.conformal_intervals` | `conformal` | — |
+| `prediction.external_validation` | `prediction_validation` | — |
 | `prediction.reclassification` | `reclassification` | — |
 | `prediction.dynamic_prediction` | `dynamic_prediction`, `temporal_features` | `sklearn` |
 | `phenotyping.early_subtype_assignment` | `subtype_assignment` | `sklearn` |
@@ -93,7 +94,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | Subgroup / fairness performance | standard_supporting | deterministic ✅ | per-subgroup performance table | `fairness` |
 | Internal validation (bootstrap optimism / cross-validation) | standard_supporting | LLM-coded ⚠️ | internal-validation performance table | — |
 | Conformal prediction intervals | exploratory | LLM-coded ⚠️ | conformal coverage table | — |
-| External / cross-database validation | planned | planned ⛔ | external-cohort performance + recalibration | — |
+| External / cross-database validation | standard_supporting | deterministic ✅ | per-database external performance, spline calibration figure, decision curve, case mix and TRIPOD map; separate recalibration | `prediction_external_validation` |
 | Net reclassification / IDI vs a baseline model | exploratory | LLM-coded ⚠️ | bootstrap categorical/continuous NRI + IDI table | — |
 | Dynamic / landmark prediction (time-updated risk) | primary | LLM-coded ⚠️ | landmark performance over time | — |
 
@@ -128,7 +129,6 @@ These exact coordinates are published to Planner through the scientific-action c
 | --- | --- | --- |
 | time_to_event | Time-varying coefficients / landmark survival | Relax the constant-HR assumption over follow-up. |
 | causal_emulation | g-formula / marginal structural models (time-varying treatment) | Handle time-varying treatment and confounding affected by prior treatment. |
-| prediction | External / cross-database validation | Transportability of discrimination + calibration to a second ICU database. |
 | phenotyping | LCGA / group-based trajectory modelling (GBTM) | Latent-class growth / group-based trajectory model — a model-based longitudinal method. |
 | phenotyping | Mixed-effects / growth-mixture trajectory models | Random-effects longitudinal models with latent classes. |
 | phenotyping | DTW / time-series distance clustering | Cluster raw trajectories under a shape-aware (dynamic time warping) distance. |
