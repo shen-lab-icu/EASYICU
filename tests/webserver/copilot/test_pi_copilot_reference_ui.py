@@ -666,6 +666,7 @@ def test_results_section_lists_the_project_run_record() -> None:
         {{ run_id: 'run_b', run_type: 'full', run_status: 'failed', gate_status: 'blocked', gate_reason_code: 'research_pipeline_planner_provider_unavailable', artifact_count: 1, updated_at: '2026-09-21T17:40:00Z', authoritative: false }},
         {{ run_id: 'run_a', run_type: 'full', run_status: 'human_review_pending', gate_status: 'blocked', plan_available: true, artifact_count: 12, updated_at: '2026-09-21T17:31:00Z', authoritative: true }},
         {{ run_id: 'run_0', run_type: 'full', run_status: 'pass', gate_status: 'pass', artifact_count: 20, updated_at: '2026-09-20T09:00:00Z', authoritative: false }},
+        {{ run_id: 'run_d', run_type: 'full', run_status: 'plan_decision_pending', gate_status: 'blocked', gate_reason_code: 'plan_scientific_changes_required', artifact_count: 4, updated_at: '2026-09-19T09:00:00Z', authoritative: false }},
       ];
       let results = '';
       const panel = window.EasyICU.guidedPi.require('aside').create({{
@@ -689,7 +690,8 @@ def test_results_section_lists_the_project_run_record() -> None:
         openWhenEmpty: emptyShelf.includes('<details class="gpi-run-history" data-gpi-run-history open>'),
         closedWithShelf: withShelf.includes('<details class="gpi-run-history" data-gpi-run-history>') && withShelf.indexOf('gpi-study-results') < withShelf.indexOf('gpi-run-history'),
         keptOpen: kept.includes('data-gpi-run-history open>'),
-        count: emptyShelf.includes('运行记录<small class="gpi-aside-count">3</small>'),
+        count: emptyShelf.includes('运行记录<small class="gpi-aside-count">4</small>'),
+        decisionRow: emptyShelf.includes('<strong>计划生成 · 待你选择</strong><small>T(09-19T09:00) · 4 个文件</small><small class="gpi-run-cause">需要你在对话中做一项设计选择。</small>'),
         rows: rowsOf(emptyShelf),
         failedRow: emptyShelf.includes('<strong>计划生成 · 失败</strong><small>T(09-21T17:40) · 1 个文件</small><small class="gpi-run-cause">模型服务不可用，规划未能完成。</small><details data-gpi-run-support><summary>技术详情</summary><code>run_b</code></details>'),
         currentRow: emptyShelf.includes('<strong>计划生成 · 待审阅<span class="gpi-run-current">当前</span></strong><small>T(09-21T17:31) · 12 个文件</small><details data-gpi-run-support><summary>技术详情</summary><code>run_a</code></details>'),
@@ -703,7 +705,8 @@ def test_results_section_lists_the_project_run_record() -> None:
         "closedWithShelf": True,
         "keptOpen": True,
         "count": True,
-        "rows": [" is-failed", " is-review is-current", " is-done"],
+        "rows": [" is-failed", " is-review is-current", " is-done", " is-review"],
+        "decisionRow": True,
         "failedRow": True,
         "currentRow": True,
         "passedRow": True,
