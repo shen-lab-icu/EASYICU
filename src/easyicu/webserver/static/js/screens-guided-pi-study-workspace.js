@@ -209,10 +209,9 @@
         }
         const methodIntent = JSON.parse(window.sessionStorage.getItem('easyicu.skillHub.method') || 'null');
         if (methodIntent && session && attachOwner() && methodIntent.kind === 'method' && methodIntent.id) {
-          // The hub's task-starter sentence is no longer needed: the Skill itself is attached.
+          // Keep the editable request; the Skill travels separately as a typed attachment.
           hubAttachment = { context: contextKey(projectId, session.session_id), source: 'builtin', id: String(methodIntent.id) };
           window.sessionStorage.removeItem('easyicu.skillHub.method');
-          window.sessionStorage.removeItem('easyicu.skillHub.question');
         } else if (methodIntent && session && methodIntent.id && (methodIntent.capability_id || methodIntent.method_family)) {
           method = { context: contextKey(projectId, session.session_id),
             id: String(methodIntent.id), title: String(methodIntent.title || methodIntent.id),

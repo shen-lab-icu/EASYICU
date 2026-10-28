@@ -1897,6 +1897,28 @@ def clinician_package_sources(row: dict) -> dict[str, str]:
     return sources
 
 
+def method_skill_workflow_metadata(skill_id: str, *, enabled: bool) -> dict[str, Any]:
+    """Read-only structured guide coordinates for host workflow projections.
+
+    This is separate from package generation: consumers need not parse prose
+    or know how package files and implementations are assembled.
+    """
+    kind, row, _ = _package_entry(skill_id, enabled=enabled)
+    if kind != "research_workflow":
+        raise MethodSkillPackageNotFound(skill_id)
+    guide = _workflow_guide(row)
+    return {
+        "requirements": guide.requirements.model_dump(mode="json"),
+        "input_labels": {value: {"label": _database_term(value, 0), "label_zh": _database_term(value, 1)}
+                         for value in (*guide.requirements.concepts, guide.requirements.outcome) if value},
+        "output_files": list(guide.output_files),
+        "planned_filenames": guide.planned_filenames,
+        "steps": [dict(id=step.skill_id, action_ids=list(step.action_ids),
+                       capability_id=step.capability_id, label=step.title[0], label_zh=step.title[1])
+                  for step in package_steps(row)],
+    }
+
+
 def method_skill_package(skill_id: str, *, enabled: bool) -> dict[str, Any]:
     """Return one digest-bound, read-only package grouped by purpose."""
 
@@ -1978,4 +2000,5 @@ __all__ = [
     "MethodSkillSpec",
     "method_skill_catalog",
     "method_skill_package",
+    "method_skill_workflow_metadata",
 ]

@@ -286,6 +286,7 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_pi_audit_stage_labels.test.js": [],
     "manuscript_reader_navigation.test.js": ["screens-guided-pi-preview.js"],
     "method_skills_hub.test.js": ["screens-skills.js"],
+    "research_workflows_hub.test.js": [],
     "skill_copy_hub.test.js": ["screens-skills.js"],
     "method_skill_package_view.test.js": ["screens-skills.js"],
     "report_progress_refresh.test.js": ["screens-guided-pi-childjob.js"],

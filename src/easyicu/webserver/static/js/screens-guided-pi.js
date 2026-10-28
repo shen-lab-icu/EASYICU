@@ -713,8 +713,8 @@
       const attachOwner = MODULES.optional('skillAttach');
       if (hubAttachment && attachOwner) {
         const session = state.session;
-        void attachOwner.toggle(expectedProjectId, session, hubAttachment.source, hubAttachment.id)
-          .then(() => { if (state.session === session) render(true); });
+        await attachOwner.ensure(expectedProjectId, session, hubAttachment.source, hubAttachment.id);
+        if (state.session !== session || expectedProjectId !== projectId()) return;
       }
       state.agentMode = state.session.agent_mode || state.agentMode;
       hydrateProjectedJob(state.workflow && state.workflow.active_job);

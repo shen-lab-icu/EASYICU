@@ -3,7 +3,8 @@
   'use strict';
   const S = (window.SCREENS = window.SCREENS || {});
   const { esc } = window.EU_HTML;
-  const ui = { catalogMode: 'skills', source: 'all', category: 'all', query: '', hideDisabled: false,
+  const workflows = () => window.EU_SKILL_WORKFLOWS;
+  const ui = { catalogMode: workflows() ? 'workflows' : 'skills', source: 'all', category: 'all', query: '', hideDisabled: false,
     selected: '', tab: 'overview', install: false, editing: '', draft: '', stages: ['conversation'],
     installEnabled: true, detail: null, loadingDetail: false, packageDetail: null,
     packageFile: 'SKILL.md', loadingPackage: false, busy: false, error: '', notice: '' };
@@ -129,6 +130,7 @@
     const personalEntries = userSkills();
     const methodEntries = methodComponents();
     const skillEntries = [...workflowEntries, ...analysisModuleEntries, ...toolEntries, ...publicationEntries, ...personalEntries];
+    if (ui.catalogMode === 'workflows' && workflows()) return `<div class="eusk-head"><h1>${tr('Research workflows', '研究流程')}</h1></div>${modeTabs(skillEntries.length, methodEntries.length, workflowEntries.length)}${workflows().render(workflows().payload())}`;
     const all = ui.catalogMode === 'methods' ? methodEntries : skillEntries;
     const categories = [...new Set(all.map(item => item.category))].sort((a, b) => a.localeCompare(b));
     const query = ui.query.trim().toLocaleLowerCase();
@@ -175,10 +177,7 @@
       </div></details>`;
     return `<div class="eusk-head"><div><span class="eusk-eyebrow">SKILL HUB</span><h1>${tr('Skills', '技能')}</h1></div>${createMenu}</div>
       <label class="eusk-search">${icon('search', 17)}<input data-sk-search type="search" placeholder="${ui.catalogMode === 'methods' ? tr('Search the method library…', '搜索方法库…') : tr('Search research skills…', '搜索研究技能…')}" value="${esc(ui.query)}" autocomplete="off"></label>
-      <div class="eusk-mode-tabs" role="tablist" aria-label="${tr('Catalog level', '目录层级')}">
-        <button type="button" role="tab" aria-selected="${ui.catalogMode === 'skills'}" data-sk-mode="skills">${tr('Skills', '技能')} <span>${skillEntries.length}</span></button>
-        <button type="button" role="tab" aria-selected="${ui.catalogMode === 'methods'}" data-sk-mode="methods">${tr('Method library', '方法库')} <span>${methodEntries.length}</span></button>
-      </div>
+      ${modeTabs(skillEntries.length, methodEntries.length, workflowEntries.length)}
       <div class="eusk-filters"><span class="eusk-filter-label">${tr('SOURCE', '来源')}</span>
       ${[['all', tr('All', '全部')], ['user', tr('Mine', '我的')], ['builtin', tr('EasyICU', 'EasyICU')]].map(([key, label]) =>
         `<button type="button" class="eusk-pill ${ui.source === key ? 'active' : ''}" data-sk-source="${key}" aria-pressed="${ui.source === key}">${label} <span>${counts[key]}</span></button>`).join('')}
@@ -186,6 +185,12 @@
       <label class="eusk-hide"><input type="checkbox" data-sk-hide ${ui.hideDisabled ? 'checked' : ''}> ${tr('Hide disabled', '隐藏未启用')}</label></div>
       ${ui.catalogMode === 'methods' && plannedCount ? `<p class="eusk-catalog-summary">${tr(`${plannedCount} planned methods are not listed yet.`, `另有 ${plannedCount} 个规划中的方法尚未上架。`)}</p>` : ''}
       ${cards || `<div class="eusk-empty"><strong>${tr('Nothing matches', '没有匹配的技能')}</strong><p>${tr('Try a different source, category, or search term.', '试试其他来源、类别或关键词。')}</p></div>`}`;
+  }
+  function modeTabs(skills, methods, studies) {
+    return `<div class="eusk-mode-tabs" role="tablist" aria-label="${tr('Catalog level', '目录层级')}">${[
+      ['workflows', tr('Research workflows', '研究流程'), studies], ['skills', tr('Skills', '技能'), skills],
+      ['methods', tr('Method library', '方法库'), methods],
+    ].map(([mode, title, count]) => `<button type="button" role="tab" aria-selected="${ui.catalogMode === mode}" data-sk-mode="${mode}">${title} <span>${count}</span></button>`).join('')}</div>`;
   }
   function detail() {
     const skill = selectedSkill();
@@ -232,7 +237,8 @@
     const preferred = pkg && pkg.overview_paths && pkg.overview_paths[window.EU_LANG === 'zh' ? 'zh' : 'en'];
     const main = files.find(file => file.path === preferred) || files.find(file => file.path === 'SKILL.md') || null;
     if (!main) return `<div class="eusk-package-fallback">${methodContract(skill, component)}</div>`;
-    return `<article class="eusk-rendered-markdown eusk-overview-document" data-sk-overview-source="${esc(main.path)}">${linkSiblings(packageMarkdown(main.content), pkg)}</article>`;
+    const markdown = workflows() ? workflows().overviewMarkdown(main.content) : main.content;
+    return `${workflows() ? workflows().sections(workflows().find(skill.name)) : ''}<article class="eusk-rendered-markdown eusk-overview-document" data-sk-overview-source="${esc(main.path)}">${linkSiblings(packageMarkdown(markdown), pkg)}</article>`;
   }
   // A guide's "when not to use" line names the Skill that fits instead; that
   // name opens it. Lines the guide words differently stay plain text.
@@ -306,6 +312,7 @@
     const requests = [];
     if (api().loadCapabilities) requests.push(api().loadCapabilities());
     if (api().loadExtensions) requests.push(api().loadExtensions());
+    if (workflows()) requests.push(workflows().load());
     const settled = await Promise.allSettled(requests);
     const failed = settled.find(result => result.status === 'rejected');
     if (failed) ui.error = String(failed.reason && failed.reason.message || failed.reason);
@@ -428,10 +435,10 @@
     hub.addEventListener('click', event => {
       const target = event.target.closest('button');
       if (!target) return;
+      if (workflows() && workflows().handle(target, allSkills())) { rerender(); return; }
       if (target.dataset.skRoute) { location.hash = '#' + target.dataset.skRoute; return; }
       if (target.dataset.skMode) {
-        ui.catalogMode = target.dataset.skMode; ui.source = 'all'; ui.category = 'all'; ui.query = '';
-        rerender(); return;
+        selectTab(target.dataset.skMode); return;
       }
       if (target.dataset.skSource) { ui.source = target.dataset.skSource; rerender(); return; }
       if (target.dataset.skOpen) { void openSkill(target.dataset.skOpen); return; }
@@ -457,6 +464,9 @@
         // A Skill whose host action opens Data Extraction goes there, not to a conversation.
         const action = skill && skill.useAction;
         if (action && action.kind === 'open_owner' && action.owner === 'data_extraction') { location.hash = '#extraction'; return; }
+        if (skill && workflows() && (skill.kind === 'method' || skill.kind === 'method_component')) {
+          workflows().start(skill, workflows().find(skill.name)); return;
+        }
         if (skill) try {
           if (skill.kind === 'method' || skill.kind === 'method_component') {
             window.sessionStorage.setItem('easyicu.skillHub.method', JSON.stringify({
@@ -587,7 +597,12 @@
     } catch (error) { ui.error = String(error && error.message || error); }
     finally { ui.busy = false; rerender(); }
   }
-  S.skills = { section: 'skills', full: true, get crumbs() { return [tr('Skills', '技能')]; },
+  function selectTab(mode) {
+    ui.catalogMode = mode; ui.selected = ''; ui.source = 'all'; ui.category = 'all'; ui.query = '';
+    writeSkillHash(''); rerender();
+  }
+  S.skills = { section: 'skills', full: true, selectTab, activeTab: () => ui.catalogMode,
+    get crumbs() { return [tr('Skills', '技能')]; },
     render: renderContent, afterRender(root) { bind(root); void hydrateIfStale(); syncSelectionFromHash(); } };
   let hydratedAt = 0;
   function hydrateIfStale() {
