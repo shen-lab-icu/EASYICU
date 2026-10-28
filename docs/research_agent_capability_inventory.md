@@ -215,6 +215,12 @@ It is an administrator tool; it is not selected by the Planner.
 | `../webserver/pi_copilot/mentions.py` | 250 | `experimental` | turn-mentions | Conversation-scoped bounded search and resolution → shared sk2 turn admission → digest, egress and material checks → study and replay receipts. | `tests/webserver/copilot/test_turn_mentions.py::test_direct_routes_reach_the_scoped_owners_and_return_stable_errors` | - | 2026-12-01 |
 | `../webserver/routes/mentions.py` | 49 | `experimental` | turn-mentions | GET picker, POST resolve and PUT draft adapter → conversation/project scope checks. UI copy and ASGI validation remain with the lead. | `tests/webserver/copilot/test_turn_mentions.py::test_direct_routes_reach_the_scoped_owners_and_return_stable_errors` | - | 2026-12-01 |
 
+## Survival plan decisions
+
+| module | LOC | status | owner | activation precondition | tests | route proof | review |
+| --- | ---: | --- | --- | --- | --- | --- | --- |
+| `../webserver/pi_copilot/survival_plan_decision.py` | 199 | `experimental` | survival-plan-decision | Typed unwritable survival stop plus saved event exposure, explicit window, supported endpoint and exact roster → digest-bound card → researcher click → existing plan decision compiler and StudyContext owner → signed landmark suite. Synthetic direct-owner coverage; ASGI and card presentation remain with the lead. | `tests/webserver/copilot/test_a_survival_stop_offers_the_landmark_decision.py::test_the_researchers_click_writes_through_the_real_study_owner` | - | 2026-12-01 |
+
 ## Multi-database studies
 
 | module | LOC | status | owner | activation precondition | tests | route proof | review |

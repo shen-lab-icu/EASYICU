@@ -3997,6 +3997,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         option_id: str,
         expected_revision: int,
         run_id: str,
+        card_sha256: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Persist one host-rendered scientific choice without a provider turn."""
 
@@ -4062,6 +4063,9 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         review = agent_runs.read_run_review(str(row.get("project_dir") or ""))
         payloads = review.get("artifact_payloads")
         payloads = payloads if isinstance(payloads, Mapping) else {}
+        from .survival_plan_decision import pending_survival_decision
+
+        pending_decision = pending_survival_decision(context, payloads)
         scientific_review = payloads.get("scientific_plan_review.json")
         findings = (
             scientific_review.get("findings")
@@ -4074,6 +4078,8 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             if isinstance(item, Mapping)
             and item.get("requires_user_authorization") is True
         }
+        if pending_decision is not None:
+            authorized_codes.add(pending_decision.decision_code)
         clean_code = str(decision_code or "").strip()
         if clean_code not in authorized_codes or plan_decisions.decision_is_resolved(context, clean_code):
             raise PiCopilotError(
@@ -4083,6 +4089,8 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 details={"decision_code": clean_code},
             )
         agent_plan = payloads.get("agent_plan.json")
+        if pending_decision is not None:
+            agent_plan = {}
         if not isinstance(agent_plan, Mapping):
             raise PiCopilotError(
                 "plan_decision_plan_missing",
@@ -4096,6 +4104,8 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 option_id=option_id,
                 study=context,
                 agent_plan=agent_plan,
+                decision_card=(pending_decision.model_dump(mode="json") if pending_decision else None),
+                card_sha256=card_sha256,
             )
             updated = study_contexts.upsert_context(
                 {"id": context_id, **compiled.patch},

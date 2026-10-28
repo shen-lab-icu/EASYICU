@@ -1376,6 +1376,7 @@ def _write_pipeline_failure_projection(
     detail_concepts: Sequence[str] = (),
     detail_action_coordinates: Mapping[str, Any] | None = None,
     analysis_started: bool = False,
+    plan_decision: Optional[Mapping[str, Any]] = None,
 ) -> bool:
     """Write a fail-closed terminal receipt that Project Monitor can index.
 
@@ -1455,6 +1456,11 @@ def _write_pipeline_failure_projection(
             "publication_authorized": False,
         },
     }
+    if plan_decision is not None:
+        gate.update(reason="plan_scientific_changes_required", next_actions=[])
+        payloads["source_run_manifest.json"].update(
+            status="plan_decision_pending", plan_decision=dict(plan_decision),
+        )
     privacy_scan = run_artifact_disclosure.scan_browser_projection(payloads)
     if not privacy_scan["passed"]:
         provider_public = {}
@@ -1509,6 +1515,9 @@ def _record_pipeline_failure(
     if execution_retry_id is None:
         # The allowlisted owner projection has already validated the code.
         typed = _receipt_typed_failure(exc, code)
+        from easyicu.webserver.pi_copilot.survival_plan_decision import family_stop_decision
+
+        decision = family_stop_decision(study, code=code, typed_failure=typed)
         reason_code = typed.get("reason_code")
         cause_code = typed.get("cause_code")
         coordinates = {key: value for key, value in safe_stop_coordinates(typed).items() if not (key == "step_id" and value == "unknown")}
@@ -1531,6 +1540,7 @@ def _record_pipeline_failure(
             detail_concepts=_typed_failure_concepts(typed),
             detail_action_coordinates=coordinates,
             analysis_started=typed.get("phase") in {"execute", "write", "finalise"},
+            plan_decision=decision,
         )
     return diagnostic
 
@@ -7827,6 +7837,11 @@ def make_research_pipeline_run_runner(
                     str(job.id) if execution_resume_target is not None else None
                 ),
             )
+            from easyicu.webserver.pi_copilot.survival_plan_decision import family_stop_result
+
+            decision_result = family_stop_result(wrapper_dir)
+            if decision_result is not None:
+                return decision_result
             if code == "research_pipeline_provider_timeout":
                 _progress(
                     job,

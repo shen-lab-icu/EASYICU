@@ -468,6 +468,7 @@
           confirmPlanDecision({
             decision_code: planDecision.dataset.gpiPlanDecisionCode,
             option_id: planDecision.dataset.gpiPlanDecisionOption,
+            card_sha256: planDecision.dataset.gpiPlanDecisionCard || '',
           });
           return;
         }

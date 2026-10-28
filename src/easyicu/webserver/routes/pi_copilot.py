@@ -205,6 +205,7 @@ class PiPlanDecisionSelectionRequest(BaseModel):
     option_id: ShortText
     expected_revision: int = Field(ge=1)
     run_id: RunIdText
+    card_sha256: Sha256Text | None = None
 
 
 class PiAgentPlanConfigurationRequest(BaseModel):
@@ -1231,6 +1232,7 @@ def post_pi_copilot_plan_decision_selection(
             option_id=body.option_id,
             expected_revision=body.expected_revision,
             run_id=body.run_id,
+            **({"card_sha256": body.card_sha256} if body.card_sha256 is not None else {}),
         )
     except PiCopilotError as exc:
         _raise_http(exc)

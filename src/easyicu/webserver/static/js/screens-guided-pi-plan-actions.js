@@ -931,6 +931,8 @@
           option_id: selection.option_id,
           expected_revision: expectedRevision,
           run_id: runId,
+          // A host-proposed card is bound to its digest; a changed card is refused.
+          ...(selection.card_sha256 ? { card_sha256: selection.card_sha256 } : {}),
         });
         // An edited fallback question may still be present in the composer
         // when the researcher answers through the structured decision card.
