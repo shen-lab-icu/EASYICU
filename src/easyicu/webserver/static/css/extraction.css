@@ -188,9 +188,20 @@
 .cohort-preset .cp-sub{ font-size:10.8px; color:var(--ink-4); line-height:1.35; }
 
 .range-ctl{ min-width:0; display:grid; grid-template-columns:minmax(120px,1fr) auto; align-items:center; gap:10px; }
-.range-pair{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .range-ctl input[type="range"]{ width:100%; accent-color:var(--accent); }
 .range-val{ min-width:58px; text-align:right; font-size:11px; color:var(--ink-3); white-space:nowrap; }
+.ex-cohort-group{ display:flex; flex-direction:column; gap:10px; }
+.ex-cohort-group + .ex-cohort-group{ margin-top:18px; padding-top:16px; border-top:1px solid var(--hair); }
+.ex-cohort-group > h3{ margin:0; color:var(--ink-2); font-size:12.5px; font-weight:650; }
+.ex-cohort-group > .cohort-preset-grid{ margin-top:0; }
+.ex-cohort-detail{ padding:12px; border:1px solid var(--hair); border-radius:var(--r-2); background:var(--surface-2); }
+.ex-cohort-missing{ display:flex; align-items:center; gap:6px; margin-top:8px; color:var(--warn,#a66a00); font-size:11.5px; }
+.ex-age-range{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.ex-age-range input{ width:72px; height:30px; padding:0 8px; border:1px solid var(--hair-2); border-radius:6px; background:var(--surface); color:var(--ink); font:inherit; font-size:12.5px; }
+.ex-age-unit{ color:var(--ink-3); font-size:11.5px; }
+.ex-locked-switch{ display:inline-flex; align-items:center; gap:8px; color:var(--ink-3); font-size:11.5px; }
+.switch.is-locked{ opacity:.55; cursor:not-allowed; }
+.ex-step-summary{ flex:1; min-width:0; color:var(--ink-3); font-size:11.5px; text-align:right; overflow-wrap:anywhere; }
 
 /* Extraction export destination */
 .ex-export-destination{
@@ -502,7 +513,6 @@
 @media (max-width:720px){
   .adv-row{ grid-template-columns:1fr; gap:6px; }
   .cohort-preset-grid{ grid-template-columns:1fr; }
-  .range-pair{ grid-template-columns:1fr; }
   .sepsis-def-grid{ grid-template-columns:1fr; }
   .sepsis-def-audit-strip{ grid-template-columns:1fr; }
   .sepsis-def-audit-meta{ justify-content:flex-start; }

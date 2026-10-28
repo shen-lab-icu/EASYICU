@@ -62,7 +62,7 @@
 
   const COHORT_PRESETS = [
     ['all_icu', 'All ICU stays', '全部 ICU 住院', 'Broad denominator; no diagnosis filter is applied.', '宽队列;不预设诊断筛选。'],
-    ['adult_first', 'Adult first ICU stay', '成年首次 ICU', 'Use only when the study requires an adult first-stay denominator.', '仅在研究明确需要成年首次住院分母时使用。'],
+    ['adult_first', 'Adult first ICU stay', '成年首次 ICU', 'Aged 18 or over; each patient\'s first ICU stay only.', '18 岁及以上；每位患者只取首次 ICU 住院。'],
     ['sepsis3', 'Sepsis-3 / suspected infection', 'Sepsis-3 / 疑似感染', 'Uses Sepsis concepts when available; ICD is not prefilled.', '可用时使用 Sepsis 概念;不会预填 ICD。'],
     ['aki', 'AKI / renal dysfunction', 'AKI / 肾功能异常', 'Renal cohort starting point for AKI studies.', 'AKI 研究的肾功能队列起点。'],
     ['ventilation', 'Mechanical ventilation', '机械通气', 'Ventilator exposure cohort starting point.', '机械通气暴露队列起点。'],
@@ -72,6 +72,11 @@
   ];
   const REAL_EXPORT_COHORT_PRESETS = new Set(['all_icu', 'adult_first', 'adult_all', 'sepsis3', 'aki', 'ventilation', 'vasopressor', 'respiratory', 'icd']);
   const CONCEPT_DERIVED_COHORT_PRESETS = new Set(['sepsis3', 'aki', 'ventilation', 'vasopressor', 'respiratory']);
+  // The export applies these as part of the preset (primary_cohort.py:
+  // ADULT_COHORT_PRESETS, and dataio keeps only the first ICU stay for
+  // adult_first), so the controls show them instead of contradicting them.
+  const ADULT_COHORT_PRESETS = new Set(['adult_all', 'adult_first']);
+  const ADULT_AGE_FLOOR_YEARS = 18;
 
   // Feature modules — aligned to the real concept catalog (concept_catalog.py:
   // CONCEPT_GROUP_NAMES, 19 groups). Counts are a fallback; render-time values
@@ -895,11 +900,15 @@
     if (n >= MAX_OBSERVATION_WINDOW_HOURS) return t('full available · 30d cap', '全可用 · 30天上限');
     return t('first ', '前 ') + fmtHours(n);
   }
+  function adultPreset() { return ADULT_COHORT_PRESETS.has(exCohortPreset); }
+  function effectiveAgeMin() { return adultPreset() ? Math.max(ADULT_AGE_FLOOR_YEARS, exAgeMin) : exAgeMin; }
+  function firstStayOnly() { return exExcludeReadmissions || exCohortPreset === 'adult_first'; }
   function fmtAgeRange() {
-    if (exAgeMin <= 0 && exAgeMax >= 100) return t('all ages', '全部年龄');
-    if (exAgeMin <= 0) return '≤ ' + exAgeMax;
-    if (exAgeMax >= 100) return '≥ ' + exAgeMin;
-    return exAgeMin + '–' + exAgeMax;
+    const ageMin = effectiveAgeMin();
+    if (ageMin <= 0 && exAgeMax >= 100) return t('all ages', '全部年龄');
+    if (ageMin <= 0) return '≤ ' + exAgeMax;
+    if (exAgeMax >= 100) return '≥ ' + ageMin;
+    return ageMin + '–' + exAgeMax;
   }
   function sepsisDefinitionRelevant() {
     const sepsis = window.EUExtractionSepsis;
@@ -1125,24 +1134,19 @@
       </div>`;
   }
   function ageRangeCtl() {
+    const floor = adultPreset() ? ADULT_AGE_FLOOR_YEARS : 0;
     return `
-      <div class="range-pair">
-        <div class="range-ctl">
-          <input type="range" min="0" max="100" step="1" value="${exAgeMin}" data-ex-range="age_min" />
-          <span class="range-val mono" data-ex-range-value="age_min">min ${exAgeMin}</span>
-        </div>
-        <div class="range-ctl">
-          <input type="range" min="0" max="100" step="1" value="${exAgeMax}" data-ex-range="age_max" />
-          <span class="range-val mono" data-ex-range-value="age_max">max ${exAgeMax >= 100 ? '100+' : exAgeMax}</span>
-        </div>
+      <div class="ex-age-range">
+        <input type="number" inputmode="numeric" min="${floor}" max="100" step="1" value="${effectiveAgeMin()}" data-ex-range="age_min" aria-label="${t('Minimum age', '最小年龄')}" />
+        <span>–</span>
+        <input type="number" inputmode="numeric" min="${floor}" max="100" step="1" value="${exAgeMax}" data-ex-range="age_max" aria-label="${t('Maximum age; 100 means no upper limit', '最大年龄；100 表示不设上限')}" />
+        <span class="ex-age-unit">${t('years', '岁')}${exAgeMax >= 100 ? t(' · no upper limit', ' · 不设上限') : ''}</span>
       </div>`;
   }
   function updateRangeLabel(root, key) {
     const el = root.querySelector(`[data-ex-range-value="${key}"]`);
     if (!el) return;
-    if (key === 'age_min') el.textContent = 'min ' + exAgeMin;
-    else if (key === 'age_max') el.textContent = 'max ' + (exAgeMax >= 100 ? '100+' : exAgeMax);
-    else if (key === 'los_min') el.textContent = fmtHours(exMinLosHours);
+    if (key === 'los_min') el.textContent = fmtHours(exMinLosHours);
     else if (key === 'window') el.textContent = fmtObservationWindow(exWindowHours);
   }
   function fmtSampleCap() {
@@ -1150,26 +1154,24 @@
       ? t('≤ ', '≤ ') + exMaxPatients.toLocaleString() + t(' stays (sample cap)', ' 次住院（采样上限）')
       : t('full cohort (no cap)', '完整队列（不限）');
   }
-  function cohortCountPill() {
-    // The matched count is computed server-side, so surface the sample cap.
-    return escHtml(fmtSampleCap());
-  }
   function sampleCapCtl() {
     const opts = [[200, '200'], [500, '500'], [2000, '2,000'], [0, t('All', '全部')]];
     return `<div class="row gap-6" data-ex-cap>
       ${opts.map(([v, lbl]) => `<button type="button" class="chip ${exMaxPatients === v ? 'solid on' : ''}" data-cap="${v}">${escHtml(lbl)}</button>`).join('')}
     </div>`;
   }
-  function cohortChips() {
+  function cohortSummaryLine() {
     const preset = cohortPresetMeta();
-    const chips = [
-      t(preset[1], preset[2]),
+    const icd = exCohortPreset === 'icd' && window.EUIcd && window.EUIcd.contract ? window.EUIcd.contract() : null;
+    const included = icd ? (icd.include_diagnoses || []).join(', ') : '';
+    const parts = [
+      included ? 'ICD ' + included : t(preset[1], preset[2]),
       t('age ', '年龄 ') + fmtAgeRange(),
-      exMinLosHours ? t('ICU LOS ≥ ', 'ICU 时长 ≥ ') + fmtHours(exMinLosHours) : t('any ICU LOS', '不限 ICU 时长'),
-      t('window: ', '观察窗:') + fmtObservationWindow(exWindowHours),
     ];
-    if (exExcludeReadmissions) chips.push(t('exclude readmissions', '排除再入院'));
-    return chips.map(c => `<span class="chip solid">${escHtml(c)}</span>`).join('');
+    if (exMinLosHours) parts.push(t('ICU LOS ≥ ', 'ICU 时长 ≥ ') + fmtHours(exMinLosHours));
+    if (firstStayOnly()) parts.push(t('first ICU stay', '首次 ICU 住院'));
+    parts.push(t('observe ', '观察 ') + fmtObservationWindow(exWindowHours));
+    return parts.map(escHtml).join(' · ');
   }
 
   function extractionSetupSummary() {
@@ -1194,47 +1196,49 @@
   }
 
   /* ---- cohort cfg ---- */
+  function cohortPresetDetail(support) {
+    if (exCohortPreset === 'icd') {
+      return `<div class="ex-cohort-detail">
+        ${window.EUIcd ? window.EUIcd.block(icdSourceContext()) : ''}
+        ${support.ok ? '' : `<div class="ex-cohort-missing" role="status">${icon('alert', 12)} ${support.message}</div>`}
+      </div>`;
+    }
+    return support.ok ? '' : `<div class="ex-cohort-missing" role="status">${icon('alert', 12)} ${support.message}</div>`;
+  }
+  function firstStayCtl() {
+    if (exCohortPreset === 'adult_first') {
+      return `<span class="ex-locked-switch"><span class="switch on is-locked" role="switch" aria-checked="true" aria-disabled="true"></span><span>${t('part of Adult first ICU stay', '「成年首次 ICU」已包含')}</span></span>`;
+    }
+    return switchEl(exExcludeReadmissions, 'readmissions');
+  }
   function cohortCfg(options) {
     const stepMode = !!(options && options.stepMode);
     const cohortOpen = stepMode || exAdvCohort;
     const preset = cohortPresetMeta();
-    const showICD = exCohortPreset === 'icd';
     const support = cohortExportSupport();
     return `
     <div class="cfg ex-collapsible ${cohortOpen ? 'open' : ''} ${stepMode ? 'ex-step-panel' : ''}">
       ${stepMode ? '' : `<div class="cfg-head">
         <div class="cfg-ico">${icon('cohort', 17)}</div>
         <div class="grow"><div class="cfg-h">${t('Cohort and time window', '队列与时间窗')}</div><div class="cfg-sub">${escHtml(t(preset[1], preset[2]))} · ${escHtml(fmtAgeRange())} · ${escHtml(fmtObservationWindow(exWindowHours))}</div></div>
-        <span class="pill"><span class="dot" style="background:var(--ok);"></span>${cohortCountPill()}</span>
         <button class="ex-section-toggle" data-ex-advc aria-expanded="${exAdvCohort ? 'true' : 'false'}">${exAdvCohort ? t('Collapse', '收起') : t('Edit', '修改')} <span class="chev">${icon('chevdown', 13)}</span></button>
       </div>`}
       <div class="cfg-body ex-advanced-body" ${cohortOpen ? '' : 'hidden'}>
-        <div class="cfg-chips">
-          ${cohortChips()}
-        </div>
-        <div class="col gap-12">
-          <div>
-            <div class="row" style="justify-content:space-between;gap:12px;align-items:flex-start;">
-              <div><div style="font-size:12.5px;font-weight:600;color:var(--ink-2);">${t('Cohort preset', '队列预设')}</div><div style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('Pick the clinical starting point; use ICD only when you want a diagnosis-code cohort.', '选择临床起点;只有需要诊断编码队列时才使用 ICD。')}</div></div>
-              <span class="pill">${escHtml(t(preset[1], preset[2]))}</span>
-            </div>
-            ${cohortPresetCards()}
-            ${!support.ok ? `<div class="note warn mt-12" style="padding:10px 12px;"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Real export is blocked for this cohort', '此队列暂不能真实导出')}</div><div class="d" style="font-size:11px;margin:0;">${support.message}</div></div></div>` : ''}
-            ${support.ok && cohortPresetUsesConceptPrefilter(exCohortPreset) ? `<div class="note info mt-12" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Clinical cohort prefilter', '临床队列预筛')}</div><div class="d" style="font-size:11px;margin:0;">${t('This preset computes the defining concepts on the selected denominator before exporting matched stays, so it may take longer than demographic or ICD filters.', '该预设会先在所选分母上计算定义概念，再导出匹配住院，因此可能比人口学或 ICD 筛选更慢。')}</div></div></div>` : ''}
-          </div>
-          ${advRow(t('Age range at admission', '入院年龄范围'), ageRangeCtl())}
+        <section class="ex-cohort-group">
+          <h3>${t('Starting population', '起点人群')}</h3>
+          ${cohortPresetCards()}
+          ${cohortPresetDetail(support)}
+        </section>
+        <section class="ex-cohort-group">
+          <h3>${t('Inclusion criteria', '纳入条件')}</h3>
+          ${advRow(t('Age at admission', '入院年龄'), ageRangeCtl())}
           ${advRow(t('Minimum ICU LOS', '最短 ICU 时长'), rangeCtl('los_min', exMinLosHours, 0, 168, 1, fmtHours(exMinLosHours)))}
-          ${advRow(t('Observation window', '观察窗口'), rangeCtl('window', exWindowHours, 1, MAX_OBSERVATION_WINDOW_HOURS, 1, fmtObservationWindow(exWindowHours)))}
-          ${advRow(t('Cohort sample cap', '队列采样上限'), sampleCapCtl())}
-          ${advRow(t('Exclude readmissions', '排除再入院'), switchEl(exExcludeReadmissions, 'readmissions'))}
-        </div>
-        <div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:14px;">
-          ${showICD && window.EUIcd ? window.EUIcd.block(icdSourceContext()) : `
-            <div class="note info" style="padding:10px 12px;">
-              <div class="ico">${icon('shield', 14)}</div>
-              <div class="body"><div class="t" style="font-size:12px;">${t('ICD filter is off by default', 'ICD 默认关闭')}</div><div class="d" style="font-size:11px;margin:0;">${t('Choose “Diagnosis / ICD cohort” above to enter code prefixes or diagnosis terms. Nothing is prefilled.', '在上方选择“诊断 / ICD 队列”后再输入编码前缀或诊断关键词。不会预填任何编码。')}</div></div>
-            </div>`}
-        </div>
+          ${advRow(t('First ICU stay only', '只取首次 ICU 住院'), firstStayCtl())}
+        </section>
+        <section class="ex-cohort-group">
+          <h3>${t('Observation time', '观察时间')}</h3>
+          ${advRow(t('Window after ICU admission', '入 ICU 后观察'), rangeCtl('window', exWindowHours, 1, MAX_OBSERVATION_WINDOW_HOURS, 1, fmtObservationWindow(exWindowHours)))}
+        </section>
       </div>
     </div>`;
   }
@@ -1362,6 +1366,7 @@
           ${cohortCfg({ stepMode: true })}
           <div class="ex-step-actions">
             <button class="btn ghost" data-ex-step-back="modules">${icon('back', 13)} ${t('Back to features', '返回特征')}</button>
+            <span class="ex-step-summary">${cohortSummaryLine()}</span>
             <button class="btn primary" data-ex-step-next="export" ${support.ok ? '' : 'disabled'}>${t('Confirm cohort', '确认队列')} ${icon('arrow', 13)}</button>
           </div>
         </section>`;
@@ -1454,6 +1459,7 @@
           ${switchEl(exIncludeDefinitions, 'definitions')}
         </div>
         <div class="col gap-12">
+          ${advRow(t('Stay sample cap', '抽取住院数上限'), sampleCapCtl())}
           ${advRow(t('Merge mode', '合并方式'), `<div class="seg" data-ex-merge><button class="${exMerge === 'separate' ? 'active' : ''}" data-val="separate">${t('Separate', '分文件')}</button><button class="${exMerge === 'merged' ? 'active' : ''}" data-val="merged">${t('Merge one', '合并单文件')}</button></div>`)}
         </div>
       </div>
@@ -1905,7 +1911,7 @@
           updateRangeLabel(root, key);
           window.EU_STALE = true;
         };
-        input.addEventListener('input', applyRange);
+        if (input.type !== 'number') input.addEventListener('input', applyRange);
         input.addEventListener('change', () => { applyRange(); repaint(); });
       });
       root.querySelectorAll('[data-ex-switch="readmissions"]').forEach(s => s.addEventListener('click', () => {
