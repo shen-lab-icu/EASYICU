@@ -263,3 +263,30 @@ def test_a_saved_reading_a_bound_source_lacks_stays_an_unavailable_requirement(m
     record, = writes[0]["stated_adjustments"]
     assert record["concept"] == "trial_score" and record["source_status"] == "unavailable"
     assert "stated_adjustments_unread" not in result["details"]
+
+
+def test_a_launch_on_a_raw_source_reads_its_database_menu_not_an_export(monkeypatch, tmp_path):
+    # A converted raw folder (SICdb 10-28) has no export manifest; reading it
+    # as an export package stopped every plan start with a server error.
+    from easyicu.webserver.research_launch_scientific import checked_stated_adjustments
+
+    (tmp_path / "conversion_manifest.json").write_text("{}", encoding="utf-8")
+    menus = []
+
+    def menu(database):
+        menus.append(database)
+        return SimpleNamespace(concepts=[SimpleNamespace(concept_id="age"), SimpleNamespace(concept_id="sex")])
+
+    def export_catalog(_path):
+        raise AssertionError("a raw source has no export catalog")
+
+    monkeypatch.setattr("easyicu.research_agent.acquisition.catalog.build_database_capability_catalog", menu)
+    monkeypatch.setattr("easyicu.research_agent.acquisition.catalog.build_available_catalog", export_catalog)
+    records = checked_stated_adjustments(
+        [{"variable": "年龄", "words": "调整年龄和性别后", "concept": "age"},
+         {"variable": "性别", "words": "调整年龄和性别后", "concept": "sex"}],
+        question="调整年龄和性别后 28 天生存是否不同？",
+        source={"path": str(tmp_path), "database": "sicdb"}, recheck=True,
+    )
+    assert menus == ["sicdb"]
+    assert [(item["concept"], item["source_status"]) for item in records] == [("age", "available"), ("sex", "available")]

@@ -1270,6 +1270,7 @@ def checked_stated_variables(
         build_database_capability_catalog,
     )
     from easyicu.research_agent.planning.adjustment_authority import normalize_stated_variables
+    from easyicu.research_agent.intake.export_package import is_export_package
     from easyicu.webserver.study_intent import catalog_named_concepts
     from easyicu.webserver.demo_source_storage import verified_public_demo_raw
 
@@ -1280,9 +1281,17 @@ def checked_stated_variables(
     # Its capability menu lets the plan request a later extraction. Final
     # prepared inputs retain their physical catalog and cannot borrow this menu.
     raw_demo = verified_public_demo_raw(Path(path)) if path else None
+    # Any other raw source chosen for the study (a converted folder, not an
+    # export package) is likewise planned on its database's capability menu;
+    # only an export package has a physical concept catalog to read.
+    raw_database = (
+        raw_demo.database if raw_demo is not None
+        else str(source.get("database") or database or "").strip()
+        if path and Path(path).is_dir() and not is_export_package(path) else ""
+    )
     available = (
-        {item.concept_id for item in build_database_capability_catalog(raw_demo.database).concepts}
-        if raw_demo is not None else
+        {item.concept_id for item in build_database_capability_catalog(raw_database).concepts}
+        if raw_database else
         {item.concept_id for item in build_available_catalog(Path(path)).concepts}
         if path else set()
     )
@@ -1551,14 +1560,14 @@ def _metadata_only_planning_coordinates(
     catalog_by_id = {item.concept_id: item for item in catalog.concepts}
     required_adjustments = checked_stated_adjustments(
         [_stated_reading(item) for item in stated_adjustments],
-        question=question, source={"path": export_path}, recheck=True,
+        question=question, source={"path": export_path, "database": database}, recheck=True,
     ) if stated_adjustments else []
     required_adjustment_concepts = [
         item["concept"] for item in required_adjustments if item["source_status"] == "available"
     ]
     required_subgroups = checked_stated_subgroups(
         [_stated_reading(item) for item in stated_subgroups],
-        question=question, source={"path": export_path}, recheck=True,
+        question=question, source={"path": export_path, "database": database}, recheck=True,
     ) if stated_subgroups else []
     required_subgroup_concepts = [
         item["concept"] for item in required_subgroups if item["source_status"] == "available"
