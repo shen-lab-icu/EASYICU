@@ -66,6 +66,6 @@ def test_fixed_landmark_package_ships_executable_reference_scripts() -> None:
 
 
 def test_other_workflows_remain_documentation_only() -> None:
-    package = method_skill_package("survival-time-to-event", enabled=True)
+    package = method_skill_package("missingness-measurement-audit", enabled=True)
     assert package["execution_boundary"] == DOCUMENTATION_ONLY_BOUNDARY
     assert all(not row["path"].startswith("scripts/") for row in package["files"])

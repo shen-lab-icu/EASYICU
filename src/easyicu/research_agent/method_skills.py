@@ -35,6 +35,9 @@ METHOD_SKILL_PACKAGE_VERSION = "easyicu.method-skill-package/5"
 #: and method notes. Other workflows still require host execution.
 REFERENCE_SCRIPT_PACKAGES: dict[str, str] = {
     "fixed-landmark-association-study": "landmark_categorical_association",
+    "cohort-characterization-table-one": "cohort_characterization_table_one",
+    "adjusted-association-model": "adjusted_association_model",
+    "survival-time-to-event": "survival_time_to_event",
 }
 DOCUMENTATION_ONLY_BOUNDARY = "documentation_only_host_execution_required"
 REFERENCE_SCRIPTS_BOUNDARY = "host_reference_scripts_executable"

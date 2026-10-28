@@ -16300,6 +16300,158 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.__main__",
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_all"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.example_data",
+      "easyicu.research_agent.skill_packages.adjusted_association_model.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.export_all",
+      "easyicu.research_agent.skill_packages.adjusted_association_model.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.export_all",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.generate_all_plots",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.load_cohort",
+      "easyicu.research_agent.skill_packages.adjusted_association_model.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.load_cohort",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_all",
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.example_data"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_all",
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.export_all"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_all",
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.generate_all_plots"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_all",
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.load_cohort"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_all",
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_analysis"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_all",
+      "easyicu.research_agent.skill_packages.adjusted_association_model.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_all",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_analysis",
+      "easyicu.research_agent.contracts.association_execution"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_analysis",
+      "easyicu.research_agent.execution.runners.adjusted_association_executor"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_analysis",
+      "easyicu.research_agent.skill_packages.adjusted_association_model.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_analysis",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.spec",
+      "easyicu.research_agent.contracts.association_execution"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.adjusted_association_model.spec",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.__main__",
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_all"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.example_data",
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.export_all",
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.export_all",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.load_cohort",
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.load_cohort",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_all",
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.example_data"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_all",
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.export_all"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_all",
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.generate_all_plots"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_all",
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.load_cohort"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_all",
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_analysis"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_all",
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_all",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_analysis",
+      "easyicu.research_agent.methods.table_one"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_analysis",
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_analysis",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.spec",
+      "easyicu.research_agent.execution.runners.table_one_executor"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.cohort_characterization_table_one.spec",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.skill_packages.host_sources",
       "easyicu.research_agent.planning.analysis_method_suite"
     ],
@@ -16460,6 +16612,90 @@
       "easyicu.research_agent.contracts.model_terms"
     ],
     [
+      "easyicu.research_agent.skill_packages.reference_io",
+      "easyicu.research_agent.execution.runners.effect_scale"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.reference_io",
+      "easyicu.research_agent.figures.publication"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.__main__",
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_all"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.example_data",
+      "easyicu.research_agent.skill_packages.survival_time_to_event.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.export_all",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.export_all",
+      "easyicu.research_agent.skill_packages.survival_time_to_event.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.generate_all_plots",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.load_cohort",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.load_cohort",
+      "easyicu.research_agent.skill_packages.survival_time_to_event.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_all",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_all",
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.example_data"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_all",
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.export_all"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_all",
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.generate_all_plots"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_all",
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.load_cohort"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_all",
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_analysis"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_all",
+      "easyicu.research_agent.skill_packages.survival_time_to_event.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_analysis",
+      "easyicu.research_agent.skill_packages.reference_io"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_analysis",
+      "easyicu.research_agent.skill_packages.survival_time_to_event.spec"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.spec",
+      "easyicu.research_agent.contracts.survival"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.spec",
+      "easyicu.research_agent.contracts.survival_execution"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.survival_time_to_event.spec",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.skills",
       "easyicu.research_agent.planning.analysis_types"
     ],
@@ -16552,10 +16788,10 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 4130,
+    "edge_count": 4189,
     "largest_scc_size": 0,
-    "module_count": 867,
-    "package_count": 36,
+    "module_count": 898,
+    "package_count": 42,
     "top_level_module_count": 37
   },
   "modules": {
@@ -17403,6 +17639,26 @@
     "easyicu.research_agent.scientific_adapters.sksurv": "scientific_adapters/sksurv.py",
     "easyicu.research_agent.script_runtime": "script_runtime.py",
     "easyicu.research_agent.skill_packages": "skill_packages/__init__.py",
+    "easyicu.research_agent.skill_packages.adjusted_association_model": "skill_packages/adjusted_association_model/__init__.py",
+    "easyicu.research_agent.skill_packages.adjusted_association_model.__main__": "skill_packages/adjusted_association_model/__main__.py",
+    "easyicu.research_agent.skill_packages.adjusted_association_model.scripts": "skill_packages/adjusted_association_model/scripts/__init__.py",
+    "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.example_data": "skill_packages/adjusted_association_model/scripts/example_data.py",
+    "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.export_all": "skill_packages/adjusted_association_model/scripts/export_all.py",
+    "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.generate_all_plots": "skill_packages/adjusted_association_model/scripts/generate_all_plots.py",
+    "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.load_cohort": "skill_packages/adjusted_association_model/scripts/load_cohort.py",
+    "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_all": "skill_packages/adjusted_association_model/scripts/run_all.py",
+    "easyicu.research_agent.skill_packages.adjusted_association_model.scripts.run_analysis": "skill_packages/adjusted_association_model/scripts/run_analysis.py",
+    "easyicu.research_agent.skill_packages.adjusted_association_model.spec": "skill_packages/adjusted_association_model/spec.py",
+    "easyicu.research_agent.skill_packages.cohort_characterization_table_one": "skill_packages/cohort_characterization_table_one/__init__.py",
+    "easyicu.research_agent.skill_packages.cohort_characterization_table_one.__main__": "skill_packages/cohort_characterization_table_one/__main__.py",
+    "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts": "skill_packages/cohort_characterization_table_one/scripts/__init__.py",
+    "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.example_data": "skill_packages/cohort_characterization_table_one/scripts/example_data.py",
+    "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.export_all": "skill_packages/cohort_characterization_table_one/scripts/export_all.py",
+    "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.generate_all_plots": "skill_packages/cohort_characterization_table_one/scripts/generate_all_plots.py",
+    "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.load_cohort": "skill_packages/cohort_characterization_table_one/scripts/load_cohort.py",
+    "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_all": "skill_packages/cohort_characterization_table_one/scripts/run_all.py",
+    "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts.run_analysis": "skill_packages/cohort_characterization_table_one/scripts/run_analysis.py",
+    "easyicu.research_agent.skill_packages.cohort_characterization_table_one.spec": "skill_packages/cohort_characterization_table_one/spec.py",
     "easyicu.research_agent.skill_packages.host_sources": "skill_packages/host_sources.py",
     "easyicu.research_agent.skill_packages.landmark_categorical_association": "skill_packages/landmark_categorical_association/__init__.py",
     "easyicu.research_agent.skill_packages.landmark_categorical_association.__main__": "skill_packages/landmark_categorical_association/__main__.py",
@@ -17414,6 +17670,17 @@
     "easyicu.research_agent.skill_packages.landmark_categorical_association.scripts.run_all": "skill_packages/landmark_categorical_association/scripts/run_all.py",
     "easyicu.research_agent.skill_packages.landmark_categorical_association.scripts.run_analysis": "skill_packages/landmark_categorical_association/scripts/run_analysis.py",
     "easyicu.research_agent.skill_packages.landmark_categorical_association.spec": "skill_packages/landmark_categorical_association/spec.py",
+    "easyicu.research_agent.skill_packages.reference_io": "skill_packages/reference_io.py",
+    "easyicu.research_agent.skill_packages.survival_time_to_event": "skill_packages/survival_time_to_event/__init__.py",
+    "easyicu.research_agent.skill_packages.survival_time_to_event.__main__": "skill_packages/survival_time_to_event/__main__.py",
+    "easyicu.research_agent.skill_packages.survival_time_to_event.scripts": "skill_packages/survival_time_to_event/scripts/__init__.py",
+    "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.example_data": "skill_packages/survival_time_to_event/scripts/example_data.py",
+    "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.export_all": "skill_packages/survival_time_to_event/scripts/export_all.py",
+    "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.generate_all_plots": "skill_packages/survival_time_to_event/scripts/generate_all_plots.py",
+    "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.load_cohort": "skill_packages/survival_time_to_event/scripts/load_cohort.py",
+    "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_all": "skill_packages/survival_time_to_event/scripts/run_all.py",
+    "easyicu.research_agent.skill_packages.survival_time_to_event.scripts.run_analysis": "skill_packages/survival_time_to_event/scripts/run_analysis.py",
+    "easyicu.research_agent.skill_packages.survival_time_to_event.spec": "skill_packages/survival_time_to_event/spec.py",
     "easyicu.research_agent.skills": "skills.py",
     "easyicu.research_agent.trajectory": "trajectory/__init__.py",
     "easyicu.research_agent.trajectory.bundle": "trajectory/bundle.py",
@@ -17462,8 +17729,14 @@
     "easyicu.research_agent.robustness",
     "easyicu.research_agent.scientific_adapters",
     "easyicu.research_agent.skill_packages",
+    "easyicu.research_agent.skill_packages.adjusted_association_model",
+    "easyicu.research_agent.skill_packages.adjusted_association_model.scripts",
+    "easyicu.research_agent.skill_packages.cohort_characterization_table_one",
+    "easyicu.research_agent.skill_packages.cohort_characterization_table_one.scripts",
     "easyicu.research_agent.skill_packages.landmark_categorical_association",
     "easyicu.research_agent.skill_packages.landmark_categorical_association.scripts",
+    "easyicu.research_agent.skill_packages.survival_time_to_event",
+    "easyicu.research_agent.skill_packages.survival_time_to_event.scripts",
     "easyicu.research_agent.trajectory"
   ],
   "schema_version": 2,
