@@ -44,7 +44,7 @@
   }
   // Graph geometry: columns are dependency depth; rows are separated by channels
   // that edges skipping a column travel along, so no edge crosses a step box.
-  const BOX_W = 176, BOX_H = 56, COL = 236, ROW = 96, PAD = 28, GAP_X = COL - BOX_W;
+  const BOX_W = 176, BOX_H = 56, COL = 236, ROW = 96, PAD = 36, GAP_X = COL - BOX_W;
   function reachesWithout(out, source, target) {
     const seen = new Set(), stack = out.get(source).filter(id => id !== target);
     while (stack.length) {
@@ -103,14 +103,29 @@
   function edgePaths(model) {
     const { edges, positions } = model;
     const starts = ports(edges, positions, 'source', 'target'), ends = ports(edges, positions, 'target', 'source');
+    // Each arrow between neighbouring columns turns at its own x. Downward arrows
+    // starting lower turn first and upward arrows starting higher turn first, so
+    // a fan nests instead of sharing one vertical line.
+    const turn = new Map(), byGap = new Map();
+    edges.forEach(edge => {
+      const gap = positions.get(edge.source).x;
+      if (positions.get(edge.target).x - gap - BOX_W <= GAP_X) byGap.set(gap, [...(byGap.get(gap) || []), edge]);
+    });
+    byGap.forEach(list => {
+      const rank = edge => { const sy = starts.get(edge), dy = ends.get(edge) - sy; return dy > 0 ? -sy : dy < 0 ? 1e6 + sy : 5e5; };
+      list.sort((a, b) => rank(a) - rank(b))
+        .forEach((edge, i) => turn.set(edge, list.length > 1 ? 0.2 + 0.6 * i / (list.length - 1) : 0.5));
+    });
     const used = new Map();
     return edges.map(edge => {
       const from = positions.get(edge.source), to = positions.get(edge.target);
       const sx = from.x + BOX_W, sy = starts.get(edge), tx = to.x, ty = ends.get(edge);
       let d;
       if (tx - sx <= GAP_X) {
-        const mid = (sx + tx) / 2;
-        d = `M${sx},${sy} C${mid},${sy} ${mid},${ty} ${tx},${ty}`;
+        const bend = sx + (tx - sx) * turn.get(edge), r = Math.min(12, Math.abs(ty - sy) / 2);
+        const dir = Math.sign(ty - sy);
+        d = dir ? `M${sx},${sy} L${bend - r},${sy} Q${bend},${sy} ${bend},${sy + dir * r} L${bend},${ty - dir * r} Q${bend},${ty} ${bend + r},${ty} L${tx},${ty}`
+          : `M${sx},${sy} L${tx},${ty}`;
       } else {
         // Channel g lies in the gap above row g; pick the one nearest both ends.
         const channelY = g => PAD + g * ROW - (ROW - BOX_H) / 2;
