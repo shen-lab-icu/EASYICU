@@ -825,7 +825,7 @@ def test_clinical_card_styles_have_one_owner_before_route_overrides() -> None:
     assert sheets.index("guided-pi.css") + 1 == sheets.index("guided-pi-clinical-card.css")
     assert sheets.index("guided-pi-clinical-card.css") < sheets.index("guided-pi-desktop.css")
     assert "css/guided-pi-clinical-card.css?v=20261025-owner-split1" in index
-    assert "css/guided-pi.css?v=20261028-proj3" in index
+    assert "css/guided-pi.css?v=20261028-wait1" in index
 
 
 def test_owner_js_files_do_not_grow_past_their_ratchet() -> None:

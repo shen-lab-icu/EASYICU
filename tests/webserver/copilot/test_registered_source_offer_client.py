@@ -107,7 +107,7 @@ def test_a_failed_registered_choice_renders_the_error_owner_sentence(language, s
       const tr = (en, zh) => LANGUAGE === 'zh' ? zh : en;
       const empty = () => '';
       const state = {session:{session_id:'s',data_source_authorization:{status:'pending'}},
-        messages:[],workflowReceipts:[],draft:'',error:''};
+        messages:[],workflowReceipts:[],sessions:[],draft:'',error:''};
       const originalSession = state.session;
       const modules = EasyICU.guidedPi;
       const errorText = modules.require('errorText').create({tr,staticPreview:()=>false}).errorText;
