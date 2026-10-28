@@ -302,7 +302,9 @@
       const current = state.session && state.session.session_id;
       const earlier = state.sessions.find(row => row.session_id !== current && sessionMatchesUiLanguage(row));
       if (!earlier) return '';
-      return `<div class="gpi-project-continuity" role="note"><span>${tr('Progress and results on the right belong to this project. This conversation continues the same study; start a new project for a different one.', '右侧是本项目的进度和成果。这个对话会接着推进同一项研究；要做另一项研究，请新建项目。')}</span><button class="btn sm ghost" type="button" data-gpi-session="${esc(earlier.session_id)}">${tr('Open', '打开')}「${esc(displaySessionTitle(earlier.title))}」</button></div>`;
+      const title = String(displaySessionTitle(earlier.title) || tr('Conversation', '对话'));
+      const shortTitle = title.length > 18 ? `${title.slice(0, 18)}…` : title;
+      return `<div class="gpi-project-continuity" role="note"><span>${tr('Progress and results on the right belong to this project. This conversation continues the same study; start a new project for a different one.', '右侧是本项目的进度和成果。这个对话会接着推进同一项研究；要做另一项研究，请新建项目。')}</span><button class="btn sm ghost" type="button" data-gpi-session="${esc(earlier.session_id)}" title="${esc(title)}">${tr('Back to', '回到')}「${esc(shortTitle)}」</button></div>`;
     }
     function sessionPanel() {
       const session = state.session || {};

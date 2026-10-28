@@ -70,7 +70,7 @@ process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20261028-proj2" in index
+    assert "css/guided-pi.css?v=20261028-proj3" in index
     assert "css/guided-pi-clinical-card.css?v=20261025-owner-split1" in index
     # The connection dialog sheet reads the provider tokens the base sheet defines.
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261026-openrouter1") < index.index("css/guided-pi-header.css?v=")
@@ -135,7 +135,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261026-six6" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261028-proj2" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261028-proj3" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
