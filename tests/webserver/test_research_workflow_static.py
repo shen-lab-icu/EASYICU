@@ -14,7 +14,7 @@ def test_workflow_dependencies_and_changed_cache_tokens_are_explicit():
     assert html.index("screens-guided-pi-skill-attach.js?") < html.index("screens-guided-pi-study-workspace.js?")
     assert html.index("screens-guided-pi-starters.js?") < html.index("screens-guided-pi.js?")
     assert 'js/screens-skills-workflows.js?v=20261028-graph3"' in html
-    assert 'js/desktop-module-shell.js?v=20261028-upd1"' in html
+    assert 'js/desktop-module-shell.js?v=20261028-rail1"' in html
     for file in ["screens-guided-pi-starters.js", "screens-guided-pi-study-workspace.js",
                  "screens-agent-reader-vocab.js"]:
         assert f'js/{file}?v=20261028-flow1"' in html
@@ -26,8 +26,10 @@ def test_workflow_dependencies_and_changed_cache_tokens_are_explicit():
 
 def test_workflow_navigation_uses_the_skills_route_and_existing_attachment_intent():
     shell = (STATIC / "js/desktop-module-shell.js").read_text()
-    assert 'data-nav="skills" data-sk-mode="workflows"' in shell
+    # Workflows open as a tab inside Skills; there is no separate route or rail item.
+    assert 'data-sk-mode="workflows"' in shell
     assert 'data-nav="workflows"' not in shell
+    assert 'data-nav="skills" data-sk-mode="workflows"' not in shell
     owner = (STATIC / "js/screens-skills-workflows.js").read_text()
     assert '/api/capabilities/research-workflows' in owner
     assert 'easyicu.skillHub.method' in owner

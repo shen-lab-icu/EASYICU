@@ -22,7 +22,7 @@ def test_data_and_skills_share_the_same_persistent_desktop_shell() -> None:
     extraction = _read("js", "screens-extraction.js")
     skills = _read("js", "screens-skills.js")
 
-    assert "js/desktop-module-shell.js?v=20261028-upd1" in index
+    assert "js/desktop-module-shell.js?v=20261028-rail1" in index
     assert index.index("js/desktop-module-shell.js?") < index.index(
         "js/screens-extraction.js?"
     )
@@ -32,8 +32,10 @@ def test_data_and_skills_share_the_same_persistent_desktop_shell() -> None:
     assert "window.EU_DESKTOP_MODULE_SHELL" in shell
     assert "function contextRail(active, options)" in shell
     assert "function rememberContext(value)" in shell
-    assert "const moduleActive = isDataRoute(active) ? 'extraction' : workflow ? 'workflows' : active" in shell
-    assert 'data-nav="skills" data-sk-mode="workflows"' in shell
+    # Research workflows are a Skills tab, not a separate rail category.
+    assert "const moduleActive = isDataRoute(active) ? 'extraction' : active" in shell
+    assert 'euh-rail-item' not in shell.split("navItem(moduleActive, 'skills'")[0].split("navItem(moduleActive, 'projects'")[1]
+    assert 'data-sk-mode="workflows">${icon(\'map\'' in shell
     assert "navItem(moduleActive, 'projects'" in shell
     assert "navItem(moduleActive, 'skills'" in shell
     assert "navItem(moduleActive, 'extraction'" in shell
