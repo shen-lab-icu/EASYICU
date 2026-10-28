@@ -214,11 +214,25 @@ def _declared_host_figure(
             return False
         producers.append(matches[0])
     if cohort_flow_figure_executor_declares_step(step):
-        return bool(
+        if (
             host_cohort_step is not None
             and len(producers) == 1
             and producers[0].step_id == host_cohort_step
-        )
+        ):
+            return True
+        # The signed trajectory representation owns its own aggregate flow.
+        # Validate the whole signed plan before accepting that future source;
+        # Execute still verifies the produced table's actual columns and digest.
+        trajectory = runtime_authority.get("trajectory_scientific_runtime_authority")
+        if trajectory is None or step.inputs != ["table:cohort_flow"] or len(producers) != 1:
+            return False
+        from ..trajectory.scientific_runtime_authority import load_trajectory_scientific_runtime_authority
+
+        try:
+            load_trajectory_scientific_runtime_authority(trajectory).validate_plan(plan)
+        except (TypeError, ValueError):
+            return False
+        return resolve_standard_executor(producers[0], plan=plan, **runtime_authority).claimed_by == "trajectory_signed_representation"
     if not missingness_measurement_figure_executor_declares_step(step, plan=plan):
         return False
     # Only the typed audit producer guarantees these two schemas. Legacy or

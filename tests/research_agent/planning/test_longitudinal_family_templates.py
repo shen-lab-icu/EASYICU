@@ -208,6 +208,16 @@ def test_target_trial_products_and_figure_inputs_are_the_signed_owners():
         assert stage in review
 
 
+@pytest.mark.parametrize("kind", BUILDERS)
+def test_longitudinal_products_exclude_the_generic_cohort_figure_with_a_typed_reason(kind):
+    _request_value, built = _build(kind)
+    assert built.cohort_flow_product_unavailable_reason == "longitudinal_owned_products"
+    assert all(item.step.step_id != "family_cohort_flow_figure" for item in built.materializations)
+    assert all(output.product_id != "figure:cohort_flow"
+               for item in built.materializations for output in item.step.outputs)
+    assert built.materializations[-1].step.outputs[0].product_id == "report:report"
+
+
 def test_time_varying_does_not_invent_diagnostic_or_figure_owners():
     request, built = _build("time_varying")
     steps = {item.step.step_id: item.step for item in built.materializations}

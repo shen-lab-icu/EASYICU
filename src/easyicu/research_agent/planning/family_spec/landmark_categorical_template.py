@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from typing import Callable
+from typing import Callable, Literal
 
 from ...canonical_json import canonical_sha256
 from ...contracts.exposure_group_rules import EXPOSURE_GROUP_LABELS_KEY
@@ -137,6 +137,55 @@ class FamilySkeletonDraft:
     #: plan-wide.
     adjustment_proposal: AdjustmentProposal | None = None
     analysis_omissions: tuple[PrespecifiedAnalysisOmission, ...] = ()
+    cohort_flow_product_unavailable_reason: Literal[
+        "signed_source_decision", "longitudinal_owned_products",
+    ] | None = None
+
+    def __post_init__(self) -> None:
+        """Give every cohort family a separate, count-only rendering step."""
+        if self.cohort_flow_product_unavailable_reason is not None or any(
+            output.product_id == "figure:cohort_flow"
+            for item in self.materializations for output in item.step.outputs
+        ):
+            return
+        owners = [step for step in self.outline.steps
+                  if step.module_id == "cohort_definition" and step.population_scope != STUDY_COHORT_SCOPE]
+        if not owners:
+            return
+        if len(owners) != 1:
+            raise ValueError("a cohort-flow figure requires exactly one analysis cohort owner")
+        cohort = owners[0]
+        step_id = "family_cohort_flow_figure"
+        if any(step.step_id == step_id for step in self.outline.steps):
+            raise ValueError("cohort-flow figure step id is already in use")
+        objective = (
+            "Render the recorded cohort accounting counts as a participant flow figure; "
+            "do not recalculate eligibility or exclusions."
+        )
+        outline_step = ProgressiveOutlineStep(
+            step_id=step_id, planned_analysis_role="auxiliary", module_id="visualization",
+            objective=objective, depends_on=[cohort.step_id], variable_names=cohort.variable_names,
+        )
+        step = ProgressiveSkeletonStep(
+            step_id=step_id, planned_analysis_role="auxiliary", module_id="visualization",
+            objective=objective, depends_on=[cohort.step_id], raw_inputs=[],
+            product_inputs=[ProgressiveProductRef(producer_step_id=cohort.step_id, product_id="table:cohort_flow")],
+            outputs=[ProgressiveOutputIntent(product_id="figure:cohort_flow", semantic_role="figure")],
+        )
+        materialization = ProgressiveStepMaterialization(
+            outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+            foundation=None, step=step,
+        )
+        outline_steps = list(self.outline.steps)
+        outline_steps.append(outline_step)
+        outline = self.outline.model_copy(update={"steps": outline_steps})
+        materials = list(self.materializations)
+        materials.append(materialization)
+        object.__setattr__(self, "outline", outline)
+        object.__setattr__(self, "foundation", self.foundation.model_copy(update={
+            "outline_sha256": canonical_sha256(outline.model_dump(mode="json")),
+        }))
+        object.__setattr__(self, "materializations", tuple(materials))
 
 
 def _label(spec: FamilyPlanSpec, key: str) -> str:

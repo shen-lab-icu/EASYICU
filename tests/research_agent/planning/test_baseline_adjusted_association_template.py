@@ -200,6 +200,7 @@ def test_first_result_template_has_no_article_steps(monkeypatch):
     assert attempt.output.design_selection.execution_tier == "first_result"
     assert [step.step_id for step in attempt.output.steps] == [
         "cohort_definition", "table_one", "measurement_audit", "adjusted_association", "absolute_risk_context",
+        "family_cohort_flow_figure",
     ]
     runtime = baseline_runtime(context, attempt.output).seal_for_plan(attempt.output)
     from types import SimpleNamespace
@@ -252,6 +253,7 @@ def test_baseline_template_compiles_with_prespecified_checks(exposure, outcome, 
     assert [step.step_id for step in result.output.steps] == [
         "cohort_definition", "table_one", "measurement_audit", "adjusted_association",
         "absolute_risk_context", *(["prespecified_effect_modification"] if subgroup else []), "visualization", "report",
+        "family_cohort_flow_figure",
     ]
     assert result.output.steps[3].model_requirements[0].covariates == list(covariates)
     assert len(llm.calls) == 1
@@ -318,7 +320,7 @@ def test_baseline_template_compiles_with_prespecified_checks(exposure, outcome, 
         assert decision.claimed_by in {"adjusted_association_estimates", "absolute_risk_context"}
     from easyicu.research_agent.authority.run_input import _declares_host_cohort_products
     assert _declares_host_cohort_products(bound.steps[0])
-    for step in [*bound.steps[1:3], bound.steps[-1]]:
+    for step in [*bound.steps[1:3], next(item for item in bound.steps if item.step_id == "report")]:
         decision = resolve_standard_executor(step, plan=bound)
         assert decision.claimed_by, (step.step_id, decision)
     if subgroup:
@@ -407,10 +409,16 @@ def test_baseline_template_compiles_with_prespecified_checks(exposure, outcome, 
         bindings["table:absolute_risk_context"] = {"product_contract": {"columns": list(risk_table.columns)}}
     figure = resolve_standard_executor(figure_step, plan=bound, resolved_bindings=bindings)
     assert figure.claimed_by == ("adjusted_association_figure" if exposure == "age" else "association_overview_figure")
+    cohort_binding = {"table:cohort_flow": {
+        "declared_kind": "table", "evidence_kind": "table", "product": "cohort_flow",
+        "product_contract": {"columns": ["step_order", "predicate_kind", "n_before", "n_excluded", "n_remaining"]},
+        "consumption_contract": {"mode": "all_rows"},
+    }}
     for step in bound.steps:
         decision = resolve_standard_executor(
             step, plan=bound, current_case_scientific_runtime_authority=sealed,
-            scientific_runtime_projection_sha256="f" * 64, resolved_bindings=bindings,
+            scientific_runtime_projection_sha256="f" * 64,
+            resolved_bindings=cohort_binding if step.step_id == "family_cohort_flow_figure" else bindings,
         )
         assert decision.claimed_by is not None, (step.step_id, decision)
         selected = decision.render_selection()

@@ -901,6 +901,13 @@ def ensure_cohort_accounting_figure_step(
     if getattr(plan.design_selection, "execution_tier", "article") == "first_result":
         return plan, []
     steps = list(plan.steps or [])
+    if any(
+        step.step_id == "family_cohort_flow_figure"
+        and step.inputs == [COHORT_FLOW_INPUT]
+        and step.expected_outputs == ["figure:cohort_flow"]
+        for step in steps
+    ):
+        return plan, []
     primary_population_sources = [
         (str(output), str(step.step_id))
         for step in steps
