@@ -1,5 +1,9 @@
 """Dependency-neutral authority for database-specific outcome support.
 
+It covers every output of the outcomes loader (``scores/outcomes.py``),
+including ``icu_stay_is_readmission``, a stay attribute read from the same
+ICU stay sequence as the ``icu_readmission`` outcome.
+
 It also owns the closed fixed-horizon mortality vocabulary: each ``mort_<h>d``
 event concept is paired with its ``followup_days_<h>d`` event/censoring time,
 measured in days from ICU admission and administratively censored at the
@@ -25,10 +29,16 @@ from typing import Mapping
 # time.  MIMIC-III and AmsterdamUMCdb record dates of death but no follow-up
 # of survivors, so a horizon there would be defined for the dead only.
 FOLLOWUP_OUTCOME_DATABASES = frozenset({"miiv", "miiv_demo", "sic", "sic_demo"})
-# Reserved compatibility sets. They remain empty until an owner can prove
-# complete ICU/ventilation trajectories and endpoint-specific day-28 survival.
-MIMIC_READMISSION_DATABASES = frozenset()
-ICU_FREE_DAY_DATABASES = frozenset()
+# ICU readmission needs every ICU stay of a hospitalisation, in order, from
+# the source's own stay table: MIMIC-IV icustays grouped by hadm_id, eICU unit
+# stays grouped by patienthealthsystemstayid.
+ICU_READMISSION_DATABASES = frozenset({"miiv", "miiv_demo", "eicu", "eicu_demo"})
+# ICU-free days to day 28 need every ICU stay of a patient in that window and
+# survival to day 28: MIMIC-IV has both (icustays by subject_id, and the
+# one-year death follow-up above).
+ICU_FREE_DAY_DATABASES = frozenset({"miiv", "miiv_demo"})
+# Reserved: empty until an owner can prove complete ventilation episodes and
+# day-28 survival.
 EICU_VENTILATOR_DAY_DATABASES = frozenset()
 
 OUTCOME_CONCEPT_SUPPORTED_DATABASES: Mapping[str, frozenset[str]] = MappingProxyType(
@@ -41,7 +51,8 @@ OUTCOME_CONCEPT_SUPPORTED_DATABASES: Mapping[str, frozenset[str]] = MappingProxy
         "followup_days_90d": FOLLOWUP_OUTCOME_DATABASES,
         "followup_days_365d": FOLLOWUP_OUTCOME_DATABASES,
         "icu_free_days_28": ICU_FREE_DAY_DATABASES,
-        "icu_readmission": MIMIC_READMISSION_DATABASES,
+        "icu_readmission": ICU_READMISSION_DATABASES,
+        "icu_stay_is_readmission": ICU_READMISSION_DATABASES,
         "vent_free_days_28": EICU_VENTILATOR_DAY_DATABASES,
     }
 )
@@ -927,7 +938,7 @@ __all__ = [
     "MEAN_SURVIVAL_PATTERN",
     "FixedHorizonMortalityEndpoint",
     "ICU_FREE_DAY_DATABASES",
-    "MIMIC_READMISSION_DATABASES",
+    "ICU_READMISSION_DATABASES",
     "OUTCOME_CONCEPT_SUPPORTED_DATABASES",
     "OutcomeConceptUnavailability",
     "StatedHorizon",

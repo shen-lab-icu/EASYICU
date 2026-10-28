@@ -512,7 +512,9 @@ def _runtime_readiness_review(
             "reason_code": "runtime_exposure_required",
         }
     )
-    readmission_ready = "icu_readmission" in catalog_by_id
+    from easyicu.research_agent.planning.sensitivity_authority import NON_READMISSION_INDICATOR
+
+    readmission_ready = NON_READMISSION_INDICATOR in catalog_by_id
     required_findings: list[str] = []
     design = study.get("analysis_design")
     design = design if isinstance(design, Mapping) else {}
@@ -570,7 +572,7 @@ def _runtime_readiness_review(
         "observation_duration": observation_duration,
         "readmission_indicator": {
             "status": "ready" if readmission_ready else "unavailable",
-            "source_concept": "icu_readmission",
+            "source_concept": NON_READMISSION_INDICATOR,
             "first_patient_stay_authority": False,
         },
         "required_findings": required_findings,

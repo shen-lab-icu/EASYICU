@@ -168,6 +168,7 @@ CONCEPT_DICTIONARY = {
     'sex': ('Sex', '性别', ''),
     'weight': ('Weight', '体重', 'kg'),
     'icu_unit_type': ('ICU Unit Type', 'ICU 类型', 'category'),
+    'icu_stay_is_readmission': ('ICU Stay Is a Readmission (same hospitalisation)', 'ICU 本段为再入 (同次住院)', 'boolean'),
 
     # SOFA-1 评分
     'sofa': ('SOFA Score (Total)', 'SOFA总分', '0-24'),
@@ -459,6 +460,9 @@ CONCEPT_DESCRIPTIONS = {
     # Outcomes
     'death': ('In-hospital mortality (0=survived, 1=died)', '院内死亡（0=存活，1=死亡）'),
     'los_icu': ('ICU length of stay in days', 'ICU住院时长（天）'),
+    'icu_readmission': ('Outcome: after this ICU stay the patient returned to an ICU in the same hospitalisation (a transfer within 60 minutes is the same stay); missing if they died in the ICU', '结局：本段 ICU 后同次住院内又回到 ICU（60 分钟内的直接转科算同一段）；在 ICU 内死亡者为空'),
+    'icu_stay_is_readmission': ('This ICU stay follows an earlier ICU stay in the same hospitalisation (a stay attribute, used to restrict repeat stays)', '本段 ICU 之前同次住院内已有 ICU 入住（本段属性，用于排除再入的分析）'),
+    'icu_free_days_28': ('Days alive and out of any ICU in the 28 days from this ICU admission; 0 if died by day 28', '自本次入 ICU 起 28 天内存活且不在任何 ICU 的天数；28 天内死亡记 0'),
     'los_hosp': ('Hospital length of stay in days', '总住院时长（天）'),
 
     # AKI
@@ -597,7 +601,7 @@ CONCEPT_GROUPS_INTERNAL = {
               'bun_creatinine_ratio', 'egfr'],
     'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx_proxy', 'delirium_tx_evidence', 'delirium_tx', 'icp'],
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 + 静脉血氧/楔压 (2026-07-04)
-    'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm', 'icu_unit_type'],
+    'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm', 'icu_unit_type', 'icu_stay_is_readmission'],
     'other_scores': ['qsofa', 'sirs', 'mews', 'news', 'apache_iv', 'apache_iv_pred_hosp_mort', 'saps3', 'charlson', 'elixhauser'],
     'outcome': ['death', 'icu_death', 'los_icu', 'los_hosp', 'mort_28d', 'mort_90d', 'mort_365d', 'followup_days_28d', 'followup_days_90d', 'followup_days_365d', 'icu_free_days_28', 'vent_free_days_28', 'icu_readmission', 'persistent_critical_illness'],
 }

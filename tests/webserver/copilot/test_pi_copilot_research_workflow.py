@@ -1639,7 +1639,7 @@ def test_metadata_only_planning_acquisition_writes_zero_patient_rows(
     assert acquisition.universe_path is not None
     cohort = pd.read_parquet(acquisition.universe_path)
     assert cohort.empty
-    assert list(cohort.columns) == ["stay_id", "lact", "sep3", "death"]
+    assert list(cohort.columns) == ["stay_id", "lact", "sep3", "death", "icu_stay_is_readmission"]
     receipt = json.loads(acquisition.provenance_path.read_text(encoding="utf-8"))
     assert receipt["row_identity_column"] == "stay_id"
     assert receipt["patient_rows_read"] is False
@@ -1662,7 +1662,7 @@ def test_metadata_only_planning_grounds_aliases_and_drops_unsupported_optional_n
                         "death",
                         "lactate",
                         "charlson",
-                        "icu_readmission",
+                        "vent_free_days_28",
                     ],
                     "inclusion_exclusion": ["ICU stays"],
                     "rationale": "AKI stage, outcome, and candidate covariates.",
@@ -1680,18 +1680,18 @@ def test_metadata_only_planning_grounds_aliases_and_drops_unsupported_optional_n
 
     assert acquisition.blocked is False
     assert acquisition.coverage.sufficient is True
-    assert acquisition.selection.selected_concepts == ["aki_stage", "death", "lact", "charlson"]
+    assert acquisition.selection.selected_concepts == ["aki_stage", "death", "lact", "charlson", "icu_stay_is_readmission"]
     assert list(pd.read_parquet(acquisition.universe_path).columns) == [
         "stay_id",
         "aki_stage",
         "death",
         "lact",
-        "charlson",  # a comorbidity index is on the menu where its loader runs
+        "charlson", "icu_stay_is_readmission",  # a comorbidity index is on the menu where its loader runs
     ]
     receipt = json.loads(acquisition.provenance_path.read_text(encoding="utf-8"))
-    assert receipt["selected_concepts"] == ["aki_stage", "death", "lact", "charlson"]
+    assert receipt["selected_concepts"] == ["aki_stage", "death", "lact", "charlson", "icu_stay_is_readmission"]
     assert receipt["unavailable_model_concepts"] == [
-        "icu_readmission",
+        "vent_free_days_28",
     ]
 
 
@@ -1713,11 +1713,11 @@ def test_metadata_only_planning_preserves_canonical_negative_source_contract(
             source="test-export",
             concepts=[
                 CatalogConcept(
-                    concept_id="icu_readmission",
-                    description="ICU readmission in the same hospitalization",
+                    concept_id="vent_free_days_28",
+                    description="Ventilator-free days to day 28",
                     category="outcome",
                     file_name="outcome.parquet",
-                    resolved_column="icu_readmission",
+                    resolved_column="vent_free_days_28",
                 )
             ],
         ),
@@ -1746,7 +1746,7 @@ def test_metadata_only_planning_preserves_canonical_negative_source_contract(
     assert list(pd.read_parquet(acquisition.universe_path).columns) == [
         "stay_id",
         "lact",
-        "death",
+        "death", "icu_stay_is_readmission",
     ]
     assert acquisition.coverage.missing == []
 
@@ -1902,7 +1902,7 @@ def test_metadata_only_planning_acquisition_projects_verified_patient_schema(
         "patient_stay_id",
         "lact_max",
         "lact",
-        "death",
+        "death", "icu_stay_is_readmission",
     ]
     receipt = json.loads(acquisition.provenance_path.read_text(encoding="utf-8"))
     assert receipt["patient_identity_column"] == "patient_stay_id"
@@ -2223,12 +2223,12 @@ def test_metadata_only_planning_ignores_unmapped_display_labels(
 
     assert acquisition.blocked is False
     assert acquisition.coverage.missing == []
-    assert acquisition.coverage.requested == ["lact", "sep3", "death"]
+    assert acquisition.coverage.requested == ["lact", "sep3", "death", "icu_stay_is_readmission"]
     assert list(pd.read_parquet(acquisition.universe_path).columns) == [
         "stay_id",
         "lact",
         "sep3",
-        "death",
+        "death", "icu_stay_is_readmission",
     ]
 
 
@@ -2423,7 +2423,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             "sep3",
             "death",
             *(["sep3_sofa2", "susp_inf"] if withheld else []), *([] if named_operation else ["icu_death"]),
-            *(["los_icu"] if multiple_outcomes else []),
+            *(["los_icu"] if multiple_outcomes else []), "icu_stay_is_readmission",  # MIMIC-IV's repeat-stay coordinate
         ],
         "planning_authority": {
             "kind": "metadata_only_planning_catalog",

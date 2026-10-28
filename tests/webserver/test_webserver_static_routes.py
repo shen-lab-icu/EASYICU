@@ -181,7 +181,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261027-dmap2" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261028-cohort1" in index_html
+    assert "js/screens-extraction.js?v=20261028-readm1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261026-replay1" in index_html
     assert "js/screens-help.js?v=20261027-help3" in index_html
@@ -1959,14 +1959,19 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert catalog["conceptCoverage"]["sofa2_resp"]["kind"] == "derived"
     assert catalog["conceptCoverage"]["sofa2_resp"]["declared_databases"]
     # An outcome the outcome owner supports in no database is not supported
-    # yet, with that owner's reason, and is not counted as unmapped.
-    for key in ("icu_free_days_28", "vent_free_days_28", "icu_readmission"):
-        assert catalog["conceptCoverage"][key]["kind"] == "unsupported"
-        assert catalog["conceptCoverage"][key]["unavailable_reason"] == "outcome_concept_structurally_unavailable"
-    assert catalog["conceptCoverage"]["mort_28d"]["kind"] == "derived"
-    assert "unavailable_reason" not in catalog["conceptCoverage"]["mort_28d"]
+    # yet, with that owner's reason, and is not counted as unmapped; the ICU
+    # stay sequence outputs name the databases whose stay tables carry them.
+    coverage = catalog["conceptCoverage"]
+    assert coverage["vent_free_days_28"]["kind"] == "unsupported"
+    assert coverage["vent_free_days_28"]["unavailable_reason"] == "outcome_concept_structurally_unavailable"
+    assert coverage["icu_readmission"]["declared_databases"] == ["miiv", "eicu"]
+    assert coverage["icu_stay_is_readmission"]["declared_databases"] == ["miiv", "eicu"]
+    assert coverage["icu_free_days_28"]["declared_databases"] == ["miiv"]
+    for key in ("mort_28d", "icu_readmission", "icu_stay_is_readmission", "icu_free_days_28"):
+        assert coverage[key]["kind"] == "derived"
+        assert "unavailable_reason" not in coverage[key]
     summary = catalog["coverageSummary"]
-    assert summary["unsupported"] == 3
+    assert summary["unsupported"] == 1
     assert (
         summary["mappedAll"] + summary["mappedPartial"] + summary["unmapped"] + summary["unsupported"]
         == catalog["totalConcepts"]
@@ -2004,9 +2009,9 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".dict-catalog-note" in deepdive_css
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
-    assert "data-catalog.js?v=20261026-akifold1" in index_html
+    assert "data-catalog.js?v=20261028-readm1" in index_html
     assert "api.js?v=20261027-nodemo1" in index_html
-    assert "screens-dict.js?v=20261028-unsup1" in index_html
+    assert "screens-dict.js?v=20261028-readm1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
     assert "deepdive.css?v=20261028-unsup1" in index_html

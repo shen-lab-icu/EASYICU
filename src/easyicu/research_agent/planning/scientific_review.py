@@ -165,6 +165,7 @@ from .requirement_coverage import PlanShapeRemediation
 from .sensitivity_authority import (
     EXECUTABLE_METHODS_BY_STRATEGY,
     FUNCTIONAL_FORM_EXECUTABLE_METHODS,
+    NON_READMISSION_INDICATOR,
 )
 from .capability_registry import assess_scientific_capability
 from .robustness_contract import complete_case_variables
@@ -1022,7 +1023,7 @@ def repeated_unit_design_closed(
         if has_patient_authority and method in _EXECUTABLE_DEPENDENCE_METHODS:
             continue
         if method == "non_readmission_restriction" and any(
-            variable == "icu_readmission"
+            variable == NON_READMISSION_INDICATOR
             for spec in _sensitivity_specs(context)
             if spec.spec_id in step.sensitivity_spec_ids
             and spec.axis == "repeated_stays"

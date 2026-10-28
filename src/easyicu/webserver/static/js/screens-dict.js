@@ -170,9 +170,7 @@
   // database yet: what it would need, short for the row and in full for the
   // detail panel. A concept without its own entry reads the general reason.
   const UNSUPPORTED_NEEDS = {
-    icu_free_days_28: [['Needs complete ICU stays and day-28 survival', '需完整 ICU 入住记录和第 28 天生存'], ['every ICU stay of a patient and whether they were alive on day 28', '患者的全部 ICU 入住记录和第 28 天时是否存活']],
     vent_free_days_28: [['Needs complete ventilation and day-28 survival', '需完整通气记录和第 28 天生存'], ['every ventilation episode of a patient and whether they were alive on day 28', '患者的全部机械通气记录和第 28 天时是否存活']],
-    icu_readmission: [['Needs every ICU stay of the hospitalisation', '需同次住院的全部 ICU 入住'], ['every ICU stay in the same hospitalisation', '同一次住院的全部 ICU 入住记录']],
   };
   function unsupportedNeeds(k) {
     const [short, full] = UNSUPPORTED_NEEDS[k] || [];

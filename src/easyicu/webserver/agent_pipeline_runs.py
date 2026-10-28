@@ -2052,10 +2052,14 @@ def _metadata_only_planning_acquisition(
         selection.selected_concepts = grounded
         selection.coverage = assess_coverage(grounded, catalog)
     # Patient grouping is not always present in a published research export.
-    # Keep the owner-issued readmission coordinate in the zero-row planning
-    # schema when it exists so the Agent can propose a dependence sensitivity
-    # without looking at patient values or asking the user to discover fields.
-    planning_required_concepts = (*required_concepts, "icu_readmission")
+    # Keep the owner-issued readmission coordinate (this stay follows an
+    # earlier ICU stay; not the icu_readmission outcome) in the zero-row
+    # planning schema when it exists so the Agent can propose a dependence
+    # sensitivity without looking at patient values or asking the user to
+    # discover fields.
+    from easyicu.research_agent.planning.sensitivity_authority import NON_READMISSION_INDICATOR
+
+    planning_required_concepts = (*required_concepts, NON_READMISSION_INDICATOR)
     resolvable_required = [
         value.strip()
         for value in planning_required_concepts
@@ -2103,7 +2107,7 @@ def _metadata_only_planning_acquisition(
         for value in planning_required_concepts
         if isinstance(value, str)
         and value.strip()
-        and value.strip() != "icu_readmission"
+        and value.strip() != NON_READMISSION_INDICATOR
         and value.strip() not in resolvable_required
     ]
     # Unresolvable required concepts keep their historical handling here (the

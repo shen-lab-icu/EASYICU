@@ -1928,11 +1928,15 @@ def _data_foundation_profile(
     outcome_concepts: List[str] = []
     required_feature_concepts: List[str] = []
     require_outcome = False
-    # Keep the owner-issued readmission indicator in a Planner-selectable
-    # universe when available. It is a dependence-safety coordinate, not an
-    # inferred exclusion: the plan may propose a first-stay analysis, while
-    # human review still owns whether that restriction is adopted.
-    readmission_meta = by_id.get("icu_readmission")
+    # Keep the owner-issued readmission indicator (this stay follows an
+    # earlier ICU stay of its hospitalisation, never the icu_readmission
+    # outcome) in a Planner-selectable universe when available. It is a
+    # dependence-safety coordinate, not an inferred exclusion: the plan may
+    # propose a first-stay analysis, while human review still owns whether
+    # that restriction is adopted.
+    from easyicu.research_agent.planning.sensitivity_authority import NON_READMISSION_INDICATOR
+
+    readmission_meta = by_id.get(NON_READMISSION_INDICATOR)
     if (
         _configured_covariate_selection(study) == "planner_selectable"
         and readmission_meta is not None
@@ -1942,9 +1946,9 @@ def _data_foundation_profile(
             not readmission_meta.typed_metadata
             or readmission_meta.column_role == "value"
         ):
-            static_concepts.append("icu_readmission")
+            static_concepts.append(NON_READMISSION_INDICATOR)
         else:
-            required_feature_concepts.append("icu_readmission")
+            required_feature_concepts.append(NON_READMISSION_INDICATOR)
     stay_bound_concepts = primary_cohort.cohort_required_concepts(study.get("cohort"))
     for concept_id in primary_cohort.cohort_required_concepts(
         study.get("cohort"), study.get("analysis_design")

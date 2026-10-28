@@ -27,7 +27,7 @@ from tests.research_agent.planning.progressive_planner_fixtures import (
 )
 
 
-def _with_source(*, concept="icu_readmission", database="miiv", derived=False):
+def _with_source(*, concept="vent_free_days_28", database="miiv", derived=False):
     context = _context()
     context.cohort.database = database
     context.variables.append(ConceptDescriptor(
@@ -70,7 +70,7 @@ def test_negative_source_receipt_reaches_both_planner_projections(derived):
     cards = ProgressivePlannerAgent._retrieved_data_cards(context, ["legacy_column"])
     for card in (payload["variables"][0], cards[0]):
         receipt = card["source_unavailability"][0]
-        assert receipt["concept_id"] == "icu_readmission"
+        assert receipt["concept_id"] == "vent_free_days_28"
         assert receipt["database"] == "miiv"
         assert receipt["reason_code"] == "outcome_concept_structurally_unavailable"
     assert context.model_dump_json() == original
@@ -89,7 +89,7 @@ def test_nonmissing_renamed_column_is_refused_by_the_real_consumer(derived):
     )
     assert findings[0].detail["reason"] == "declared_raw_input_structurally_unavailable"
     assert findings[0].detail["unavailable_inputs"] == ["legacy_column"]
-    assert "icu_readmission" in findings[0].message
+    assert "vent_free_days_28" in findings[0].message
     assert context.model_dump_json() == original
 
 
@@ -119,7 +119,7 @@ def test_saved_skeleton_is_refused_at_the_exact_raw_input_boundary():
     assert caught.value.reason_code == "progressive_raw_input_structurally_unavailable"
     assert caught.value.step_id == payload["steps"][1]["step_id"]
     assert caught.value.path == "raw_inputs"
-    assert "icu_readmission" in str(caught.value)
+    assert "vent_free_days_28" in str(caught.value)
 
 
 def test_outline_refuses_unsupported_inputs_before_materializing_steps():
@@ -151,7 +151,7 @@ def test_preapproval_review_blocks_and_routes_source_defects(anchor):
     assert not review.approval_allowed
     assert finding.severity == "blocker"
     assert finding.remediation_route == ("runtime_capability" if anchor else "agent_plan_revision")
-    assert "legacy_column" in finding.message and "icu_readmission" in finding.message
+    assert "legacy_column" in finding.message and "vent_free_days_28" in finding.message
 
 
 def test_unused_legacy_column_is_retained_without_blocking_an_unrelated_plan():
@@ -167,7 +167,7 @@ def test_unused_legacy_column_is_retained_without_blocking_an_unrelated_plan():
 
 def test_runtime_observation_record_cannot_erase_structural_source_prohibition():
     record = ConceptAvailabilityRecord(
-        concept="icu_readmission", database="miiv", reason="mapped_present", n_rows=120,
+        concept="vent_free_days_28", database="miiv", reason="mapped_present", n_rows=120,
         sources_defined=("legacy_export",),
     )
     cell = concept_database_availability_from_load_record(record)

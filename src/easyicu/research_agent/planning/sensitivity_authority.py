@@ -74,6 +74,12 @@ _STRATEGIES_BY_AXIS: dict[str, frozenset[str]] = {
     "outcome_definition": frozenset({"alternate_definition"}),
 }
 
+#: The stay attribute ``non_readmission_restriction`` keeps false: this ICU
+#: stay belongs to a later ICU episode of its hospitalisation (outcomes
+#: loader). Not ``icu_readmission``, the outcome of returning to the ICU after
+#: a stay: restricting on that would condition on the future.
+NON_READMISSION_INDICATOR = "icu_stay_is_readmission"
+
 EXECUTABLE_METHODS_BY_STRATEGY: dict[str, frozenset[str]] = {
     "landmark": frozenset(
         {"signed_landmark_restricted_cubic_spline", "landmark_analysis"}
@@ -304,6 +310,7 @@ def normalize_prespecified_sensitivities(
 
 __all__ = [
     "EXECUTABLE_METHODS_BY_STRATEGY",
+    "NON_READMISSION_INDICATOR",
     "PrespecifiedSensitivitySpec",
     "SensitivityAxis",
     "SensitivityStrategy",

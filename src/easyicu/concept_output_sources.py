@@ -76,6 +76,7 @@ COMPOSITE_CONCEPT_OUTPUT_SOURCES: dict[str, str] = {
     "icu_free_days_28": "outcomes_loader",
     "vent_free_days_28": "outcomes_loader",
     "icu_readmission": "outcomes_loader",
+    "icu_stay_is_readmission": "outcomes_loader",
     "culture_positive": "microbiology_loader",
     "bld_culture_positive": "microbiology_loader",
 }

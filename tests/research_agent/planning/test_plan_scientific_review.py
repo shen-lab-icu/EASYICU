@@ -2192,7 +2192,7 @@ def test_typed_sensitivities_do_not_hide_unclosed_primary_designs() -> None:
             "variables": [
                 *context.variables,
                 ConceptDescriptor(
-                    name="icu_readmission",
+                    name="icu_stay_is_readmission",
                     role=VariableRole.OTHER,
                     dtype="int64",
                 ),
@@ -2217,7 +2217,7 @@ def test_typed_sensitivities_do_not_hide_unclosed_primary_designs() -> None:
                         "spec_id": "non_readmission_only",
                         "axis": "repeated_stays",
                         "strategy": "non_readmission_restriction",
-                        "execution_variables": ["icu_readmission"],
+                        "execution_variables": ["icu_stay_is_readmission"],
                     },
                 ],
             ),
@@ -2241,7 +2241,7 @@ def test_typed_sensitivities_do_not_hide_unclosed_primary_designs() -> None:
                     step_id="non_readmission_only",
                     planned_analysis_role="sensitivity",
                     intent="Re-estimate after the prespecified readmission restriction.",
-                    inputs=["exposure", "death", "icu_readmission"],
+                    inputs=["exposure", "death", "icu_stay_is_readmission"],
                     expected_outputs=["table:non_readmission_sensitivity"],
                     method="non_readmission_restriction",
                     sensitivity_spec_ids=["non_readmission_only"],

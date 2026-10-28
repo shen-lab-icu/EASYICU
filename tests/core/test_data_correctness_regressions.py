@@ -1289,9 +1289,11 @@ def test_fixed_horizon_followup_time_pairs_events_and_censoring(monkeypatch):
     assert result.loc[3, "followup_days_28d"] == 28.0
 
 
-def test_unverified_stay_history_does_not_publish_free_days_or_readmission(
+def test_an_icu_stay_without_a_discharge_time_leaves_free_days_unknown(
     monkeypatch,
 ):
+    # The current-extract LOS is never the ICU time: a stay in the window
+    # without a discharge time leaves every overlapping window unknown.
     import easyicu.scores.outcomes as outcomes
 
     icu = pd.DataFrame(
@@ -1299,7 +1301,8 @@ def test_unverified_stay_history_does_not_publish_free_days_or_readmission(
             "subject_id": [1, 1],
             "hadm_id": [10, 10],
             "stay_id": [2, 1],
-            "intime": ["2020-01-02", "2020-01-01"],
+            "intime": ["2020-01-04", "2020-01-01"],
+            "outtime": [None, "2020-01-03"],
             "los": [None, 2.0],
         }
     )
@@ -1307,9 +1310,9 @@ def test_unverified_stay_history_does_not_publish_free_days_or_readmission(
     monkeypatch.setattr(outcomes, "_raw_table", _mimic_iv_tables(icu, patients))
 
     result = outcomes.load_outcomes("miiv")
-    assert "icu_free_days_28" not in result.columns
-    assert "icu_readmission" not in result.columns
     assert result["stay_id"].tolist() == [2, 1]
+    assert result["icu_free_days_28"].isna().all()
+    assert "icu_readmission" not in result.columns
 
 
 def test_sic_outcomes_use_icu_origin_and_censor_incomplete_365d_followup(
