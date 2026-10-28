@@ -1,11 +1,12 @@
-"""Read-only trust/help APIs. The desktop owns presentation and last-seen state."""
+"""Trust/help APIs. The desktop owns presentation and last-seen state; update_check
+owns the new-version check and its per-version snooze."""
 
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, Response
 
-from easyicu.webserver import run_refs
+from easyicu.webserver import run_refs, update_check
 from easyicu.webserver.hosted import require_instance_path
 from easyicu.webserver.model_request_records import conversation_egress, run_egress
 from easyicu.webserver.pi_copilot import get_pi_copilot_service
@@ -46,6 +47,31 @@ def get_whats_new(last_seen_version: str | None = None) -> JSONResponse:
     except ValueError as exc:
         code = "last_seen_version_invalid" if str(exc) == "last_seen_version_invalid" else "release_notes_invalid"
         raise HTTPException(status_code=400 if code == "last_seen_version_invalid" else 503, detail=code) from exc
+    return JSONResponse(payload, headers=_PRIVATE)
+
+
+@router.get("/api/help/update-check")
+def get_update_check() -> JSONResponse:
+    return JSONResponse(update_check.update_status(), headers=_PRIVATE)
+
+
+@router.post("/api/help/update-check/snooze")
+def snooze_update(body: dict) -> JSONResponse:
+    try:
+        payload = update_check.snooze(str((body or {}).get("version") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="version_invalid") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail="not_desktop") from exc
+    return JSONResponse(payload, headers=_PRIVATE)
+
+
+@router.post("/api/help/update-check/open")
+def open_update_page() -> JSONResponse:
+    try:
+        payload = update_check.open_release_page()
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail="no_update") from exc
     return JSONResponse(payload, headers=_PRIVATE)
 
 

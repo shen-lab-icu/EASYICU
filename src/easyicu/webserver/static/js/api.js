@@ -600,6 +600,10 @@
   function loadWhatsNew(lastSeenVersion) {
     return getJSON('/api/help/whats-new' + (lastSeenVersion ? '?last_seen_version=' + encodeURIComponent(lastSeenVersion) : ''));
   }
+  // Desktop only: whether a newer release is published; failures read as 'unavailable'.
+  function loadUpdateCheck() { return getJSON('/api/help/update-check'); }
+  function snoozeUpdate(version) { return postJSON('/api/help/update-check/snooze', { version }); }
+  function openUpdatePage() { return postJSON('/api/help/update-check/open', {}); }
   // A local diagnostic zip of one run's states and reason codes; nothing is uploaded.
   async function downloadProblemBundle(runRef) {
     const path = '/api/help/runs/' + encodeURIComponent(runRef) + '/problem-bundle';
@@ -1016,6 +1020,9 @@
   window.EU_API.loadRunEgress = loadRunEgress;
   window.EU_API.loadConversationEgress = loadConversationEgress;
   window.EU_API.loadWhatsNew = loadWhatsNew;
+  window.EU_API.loadUpdateCheck = loadUpdateCheck;
+  window.EU_API.snoozeUpdate = snoozeUpdate;
+  window.EU_API.openUpdatePage = openUpdatePage;
   window.EU_API.downloadProblemBundle = downloadProblemBundle;
   window.EU_API.downloadStudyReplay = downloadStudyReplay;
   window.EU_API.loadPiRunScientificReview = loadPiRunScientificReview;

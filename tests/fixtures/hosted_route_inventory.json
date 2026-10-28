@@ -1683,6 +1683,36 @@
     "write_owner": "Read-only packaged resource; acknowledging a version is client-side state."
   },
   {
+    "method": "GET",
+    "route": "/api/help/update-check",
+    "fields": [],
+    "reaches": "update_check.update_status -> desktop deployment only: one anonymous GET of the public GitHub releases list (or an EASYICU_UPDATE_FEED_URL that is https or loopback http), cached per process; per-version snooze read from state_paths.state_root()/desktop_update_check.json",
+    "protection": "no path inputs",
+    "guarded_fields": [],
+    "writes": "none",
+    "write_owner": "Read-only; a hosted or server deployment answers not_desktop without a network request."
+  },
+  {
+    "method": "POST",
+    "route": "/api/help/update-check/snooze",
+    "fields": ["body:version"],
+    "reaches": "update_check.snooze -> numeric major.minor.patch version -> state_paths.state_root()/desktop_update_check.json",
+    "protection": "hosted.guard_request; desktop deployment only (409 otherwise); version validated as major.minor.patch; fixed server-owned destination, no client path",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "update_check owns desktop_update_check.json (version + snooze expiry) under the instance state root."
+  },
+  {
+    "method": "POST",
+    "route": "/api/help/update-check/open",
+    "fields": [],
+    "reaches": "update_check.open_release_page -> webbrowser.open(the release page from this process's own check)",
+    "protection": "no path inputs",
+    "guarded_fields": [],
+    "writes": "none",
+    "write_owner": "Opens the system browser on the desktop machine at the server-checked release URL; never a client-supplied URL; 409 unless the desktop check found an update."
+  },
+  {
     "method": "POST",
     "route": "/api/ideas/agent-projects",
     "fields": [],

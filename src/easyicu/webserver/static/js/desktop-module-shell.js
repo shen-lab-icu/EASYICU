@@ -42,6 +42,7 @@
       ${navItem(moduleActive, 'skills', 'layers', 'Skills', '技能')}
       ${navItem(moduleActive, 'extraction', 'grid', 'Data', '数据')}
       <div class="euh-rail-spacer"></div>
+      <div data-update-slot></div>
       ${navItem(moduleActive, 'tutorial', 'help', 'Help', '帮助')}
       ${navItem(moduleActive, 'settings', 'gear', 'Settings', '设置')}
       <button type="button" class="euh-rail-item" data-lang-toggle title="${tr('Switch language', '切换语言')}" aria-label="${tr('Switch language', '切换语言')}">${icon('globe', 18)}<span>${window.EU_LANG === 'zh' ? 'EN' : '中'}</span></button>

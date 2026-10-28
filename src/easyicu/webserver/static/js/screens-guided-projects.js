@@ -235,6 +235,7 @@
           <button type="button" class="gpi-global-item" data-open="skills" title="${t('Research skills', '研究技能')}">${icon('layers', 19)}<span>${t('Skills', '技能')}</span></button>
           <button type="button" class="gpi-global-item" data-open="extraction" title="${t('Data workspace', '数据工作台')}">${icon('grid', 19)}<span>${t('Data', '数据')}</span></button>
           <div class="gpi-global-spacer"></div>
+          <div data-update-slot></div>
           <button type="button" class="gpi-global-item" data-open="settings" title="${t('Settings', '设置')}">${icon('gear', 18)}<span>${t('Settings', '设置')}</span></button>
           <button type="button" class="gpi-global-item" data-lang-toggle title="${t('Switch language', '切换语言')}">${icon('globe', 18)}<span>${window.EU_LANG === 'zh' ? 'EN' : '中'}</span></button>
         </nav>

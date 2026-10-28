@@ -100,6 +100,7 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_pi_run_trust.test.js": [],
     "guided_pi_project_open.test.js": [],
     "help_whats_new.test.js": [],
+    "help_update_notice.test.js": [],
     "skills_tools.test.js": [],
     "dictionary_study_types.test.js": [],
     "guided_pi_review_items.test.js": [],
