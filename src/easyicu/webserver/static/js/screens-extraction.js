@@ -84,7 +84,7 @@
   // [name_en, name_zh, fallbackConceptCount, selected, isCore]
   const MODS = [
     // —— recommended core ——
-    ['Demographics', '人口统计', 7, false, true],
+    ['Demographics', '人口统计', 8, false, true],
     ['Vital signs', '生命体征', 12, false, true],
     ['Lab — Chemistry', '实验室-生化', 49, false, true],
     ['SOFA-2 scores', 'SOFA-2 评分', 10, false, true],

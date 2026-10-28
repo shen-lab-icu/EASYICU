@@ -16,7 +16,7 @@ def source_menu(monkeypatch):
 
     base = AvailableCatalog(source="canonical", concepts=[CatalogConcept("death")])
     source = AvailableCatalog(source="legacy", concepts=[
-        CatalogConcept("icu_readmission", n_rows=0),
+        CatalogConcept("vent_free_days_28", n_rows=0),
         CatalogConcept("local_measurement", description="Source-owned measurement"),
         CatalogConcept("death", description="Source-owned death definition"),
     ])
@@ -29,7 +29,7 @@ def test_source_merge_preserves_negative_contract_and_local_metadata(source_menu
     merged = owner._metadata_only_planning_catalog(database="miiv", export_path="/metadata")
     assert merged.ids() == ["death", "local_measurement"]
     assert merged.concepts[0].description == "Source-owned death definition"
-    assert source_menu.ids() == ["icu_readmission", "local_measurement", "death"]
+    assert source_menu.ids() == ["vent_free_days_28", "local_measurement", "death"]
 
 
 def test_prepared_cohort_menu_contains_only_physical_source_columns(
@@ -55,7 +55,7 @@ def test_prepared_cohort_menu_contains_only_physical_source_columns(
     )
 
     assert catalog.ids() == ["local_measurement", "death"]
-    assert source_menu.ids() == ["icu_readmission", "local_measurement", "death"]
+    assert source_menu.ids() == ["vent_free_days_28", "local_measurement", "death"]
 
 
 def test_prepared_cohort_without_verifiable_catalog_fails_closed(
@@ -81,9 +81,9 @@ def test_prepared_cohort_without_verifiable_catalog_fails_closed(
 
 
 @pytest.mark.parametrize("requirement", [
-    {"required_concepts": ("icu_readmission",)},
-    {"target_outcome": "icu_readmission"},
-    {"question": "Compare ICU readmission after treatment."},
+    {"required_concepts": ("vent_free_days_28",)},
+    {"target_outcome": "vent_free_days_28"},
+    {"question": "Compare ventilator-free days through day 28 after treatment."},
 ])
 def test_explicit_required_unsupported_input_blocks_before_model_or_output(
     source_menu, tmp_path, requirement,
@@ -99,7 +99,7 @@ def test_explicit_required_unsupported_input_blocks_before_model_or_output(
             output_dir=tmp_path / "new-catalog", **options,
         )
     assert caught.value.code == "research_pipeline_required_concept_structurally_unavailable"
-    assert caught.value.details["required_concepts"] == ["icu_readmission"]
+    assert caught.value.details["required_concepts"] == ["vent_free_days_28"]
     assert llm.calls == []
     assert not (tmp_path / "new-catalog").exists()
 
@@ -108,18 +108,18 @@ def test_optional_unsupported_column_is_not_reintroduced(source_menu, tmp_path):
     import pyarrow.parquet as pq
 
     llm = ScriptedMockLLMClient([json.dumps({
-        "selected_concepts": ["death", "icu_readmission"],
+        "selected_concepts": ["death", "vent_free_days_28"],
         "rationale": "Mortality with optional covariate.", "inclusion_exclusion": [],
     })])
     result = owner._metadata_only_planning_acquisition(
-        database="miiv", export_path="/metadata", question="Describe death, not readmission.",
+        database="miiv", export_path="/metadata", question="Describe death, not ventilation.",
         llm=llm, output_dir=tmp_path / "catalog",
     )
     assert not result.blocked
     assert pq.read_schema(result.universe_path).names == ["stay_id", "death"]
     assert pq.read_metadata(result.universe_path).num_rows == 0
     receipt = json.loads(result.provenance_path.read_text())
-    assert receipt["unavailable_model_concepts"] == ["icu_readmission"]
+    assert receipt["unavailable_model_concepts"] == ["vent_free_days_28"]
 
 
 def test_demo_release_plans_with_its_family_stay_identity(source_menu, tmp_path):
@@ -564,3 +564,31 @@ def test_the_planning_roster_carries_the_concepts_a_trajectory_population_reads(
 
     required = {value for value in captured["required_concepts"] if value}
     assert {"sofa2_resp", "sofa2_cardio", "age", "lact"} <= required
+
+
+def test_the_readmitted_stay_attribute_rides_in_the_planning_schema(monkeypatch, tmp_path):
+    # The repeat-stay coordinate is the readmitted-stay attribute; the
+    # icu_readmission outcome in the same source does not stand in for it.
+    import pyarrow.parquet as pq
+    from easyicu.research_agent.acquisition import catalog
+
+    base = AvailableCatalog(source="canonical", concepts=[CatalogConcept("death")])
+    source = AvailableCatalog(source="export", concepts=[
+        CatalogConcept("death"),
+        CatalogConcept("icu_readmission"),
+        CatalogConcept("icu_stay_is_readmission"),
+    ])
+    monkeypatch.setattr(catalog, "build_database_capability_catalog", lambda _: base)
+    monkeypatch.setattr(catalog, "build_available_catalog", lambda _: source)
+    llm = ScriptedMockLLMClient([json.dumps({
+        "selected_concepts": ["death"], "rationale": "Mortality.", "inclusion_exclusion": [],
+    })])
+
+    result = owner._metadata_only_planning_acquisition(
+        database="miiv", export_path="/metadata", question="Describe death.",
+        llm=llm, output_dir=tmp_path / "catalog",
+    )
+
+    names = pq.read_schema(result.universe_path).names
+    assert "icu_stay_is_readmission" in names
+    assert "icu_readmission" not in names

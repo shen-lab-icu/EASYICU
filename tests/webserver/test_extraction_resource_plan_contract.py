@@ -24,6 +24,8 @@ def _patch_export_api(
 ) -> None:
     import easyicu.api as api_module
 
+    from easyicu.concept.export_metadata import concept_declares_event_status
+
     dictionary = load_dictionary(include_sofa2=True)
 
     @contextmanager
@@ -36,7 +38,8 @@ def _patch_export_api(
         payload: dict[str, object] = {"stay_id": ids}
         for concept in concepts:
             definition = dictionary.get(concept)
-            if definition is not None and definition.class_name == "lgl_cncpt":
+            # The export owner's own event rule, which also covers loader outputs.
+            if concept_declares_event_status(concept, definition):
                 payload[concept] = [index % 2 for index in range(len(ids))]
             else:
                 payload[concept] = [65.0] * len(ids)

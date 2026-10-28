@@ -15,10 +15,23 @@ Trial-style endpoints that the concept layer did not previously expose:
 * ``followup_days_28d`` / ``followup_days_90d`` /
   ``followup_days_365d`` — the event-or-administrative-censoring time paired
   with each fixed-horizon endpoint. Unknown follow-up remains missing.
-``icu_free_days_28``, ``vent_free_days_28``, and ``icu_readmission`` are
-intentionally unavailable until their trajectory/follow-up evidence contracts
-can be satisfied. A current-extract stay LOS, hospital mortality flag, or
-within-extract sort order is not sufficient evidence for those endpoints.
+* ``icu_free_days_28`` (MIMIC-IV) — from this stay's ICU admission, 0 if
+  the patient died by day 28, else 28 minus the days spent in any ICU stay of
+  the patient (this one, later ones, other admissions) within those 28 days.
+  Unknown day-28 survival or an ICU stay without a discharge time in the
+  window leaves it missing.
+* ``icu_readmission`` (MIMIC-IV, eICU) — the outcome: after this stay's ICU
+  episode the patient returned to an ICU in the same hospitalisation.  A
+  patient who died in that episode was not at risk, so it is missing for them.
+* ``icu_stay_is_readmission`` (MIMIC-IV, eICU) — a stay attribute, not an
+  outcome: this stay belongs to a later ICU episode of its hospitalisation.
+  The repeat-stay sensitivity analysis restricts on it.
+
+Both readmission columns read every ICU stay of the source's own stay table,
+whatever the extract's cohort.  Stays of one hospitalisation chain into one
+ICU episode when the next begins within ``ICU_EPISODE_TRANSFER_GAP_MINUTES``
+of the previous discharge (a direct transfer).  ``vent_free_days_28`` stays
+unavailable until ventilation episodes are validated.
 
 Like :mod:`easyicu.comorbidity`, this is a per-database loader because
 the death-time and stay schemas differ; the heavy lifting reuses the
@@ -36,10 +49,12 @@ import pandas as pd
 from easyicu.outcome_availability import (
     FIXED_HORIZON_MORTALITY_ENDPOINTS,
     FOLLOWUP_OUTCOME_DATABASES,
+    ICU_FREE_DAY_DATABASES,
+    ICU_READMISSION_DATABASES,
 )
 
 from .comorbidity import lower_cols
-from ..databases.profiles import normalize_database_key
+from ..databases.profiles import get_database_profile, normalize_database_key
 from ..io.identity import require_unique_keys
 
 LOGGER = logging.getLogger(__name__)
@@ -137,9 +152,13 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
     """MIMIC-IV: stay_id + days_from_icu_admit_to_death + los."""
     icu = lower_cols(_raw_table(database, data_path, "icustays"))
     stay_col = "stay_id" if "stay_id" in icu.columns else "icustay_id"
-    icu = icu[["subject_id", "hadm_id", stay_col, "intime", "los"]].copy()
+    # Mortality needs no discharge time; without one ICU-free days are unknown.
+    if "outtime" not in icu.columns:
+        icu["outtime"] = None
+    icu = icu[["subject_id", "hadm_id", stay_col, "intime", "outtime", "los"]].copy()
     require_unique_keys(icu, [stay_col], table="icustays")
     icu["intime"] = _parse_source_dates(icu["intime"])
+    icu["outtime"] = pd.to_datetime(_parse_source_dates(icu["outtime"]), errors="coerce")
     if icu["intime"].isna().any():
         raise ValueError("ICU mortality requires valid admission time origins")
     pat = lower_cols(_raw_table(database, data_path, "patients"))[
@@ -194,11 +213,13 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
     # Do not borrow the MIMIC-IV 2.0+ contract for failed joins or date
     # parsing failures. Those do not establish follow-up.
     df["followup_days"] = np.where(documented_absence, 365.0, np.nan)
-    return df.rename(columns={stay_col: "_stay", "intime": "_intime"})[
+    return df.rename(columns={stay_col: "_stay", "intime": "_intime", "outtime": "_outtime"})[
         [
             "_stay",
+            "subject_id",
             "hadm_id",
             "_intime",
+            "_outtime",
             "days_to_death",
             "los_days",
             "followup_days",
@@ -306,30 +327,200 @@ def _load_followup_outcomes(
         followup_time[known_alive] = float(horizon)
         out[followup_name] = followup_time
 
+    if db in ICU_FREE_DAY_DATABASES:
+        out["icu_free_days_28"] = _icu_free_days_28(base, out["mort_28d"])
+
     if patient_values is not None:
         stay_col = _STAY_OUT_COL[db]
         out = out[out[stay_col].isin(patient_values)]
     return out.reset_index(drop=True)
 
 
-def load_outcomes(database, data_path=None, *, patient_ids=None, max_patients=None,
-                  verbose=False, output_concepts=None):
-    """Load explicitly named endpoints without changing generic death meaning."""
-    requested = set(output_concepts or ())
-    options = dict(patient_ids=patient_ids, max_patients=max_patients)
-    if "icu_death" not in requested:
-        return _load_followup_outcomes(database, data_path, verbose=verbose, **options)
+_ICU_FREE_DAY_HORIZON = pd.Timedelta(days=28)
+
+
+def _icu_free_days_28(stays: pd.DataFrame, mort_28d) -> np.ndarray:
+    """ICU-free days to day 28 for each row of ``stays`` (every ICU stay).
+
+    ``stays`` carries ``subject_id``, ``_intime`` and ``_outtime``; each row's
+    window is its own ICU admission to 28 days later, and the ICU time in it is
+    the union of the patient's ICU stays clipped to that window.
+    """
+    index = pd.DataFrame({
+        "_i": np.arange(len(stays)),
+        "subject_id": stays["subject_id"].to_numpy(),
+        "_t0": stays["_intime"].to_numpy(),
+    })
+    other = pd.DataFrame({
+        "subject_id": stays["subject_id"].to_numpy(),
+        "_s": stays["_intime"].to_numpy(),
+        "_e": stays["_outtime"].to_numpy(),
+    })
+    pairs = index.merge(other, on="subject_id")
+    window_end = pairs["_t0"] + _ICU_FREE_DAY_HORIZON
+    pairs = pairs[(pairs["_s"] < window_end) & (pairs["_e"].isna() | (pairs["_e"] > pairs["_t0"]))]
+    # A stay in the window without a discharge time has unknown ICU time.
+    unknown = np.zeros(len(stays), dtype=bool)
+    unknown[pairs.loc[pairs["_e"].isna(), "_i"].to_numpy()] = True
+    pairs = pairs[pairs["_e"].notna()]
+    clip_start = pairs[["_s", "_t0"]].max(axis=1)
+    clip_end = pd.concat([pairs["_e"], pairs["_t0"] + _ICU_FREE_DAY_HORIZON], axis=1).min(axis=1)
+    pieces = pd.DataFrame({"_i": pairs["_i"], "_cs": clip_start, "_ce": clip_end})
+    pieces = pieces.sort_values(["_i", "_cs"], kind="mergesort")
+    # Union of overlapping pieces: count only time past the furthest end so far.
+    covered = pieces.groupby("_i")["_ce"].cummax().groupby(pieces["_i"]).shift()
+    begin = pieces["_cs"].where(covered.isna() | (pieces["_cs"] >= covered), covered)
+    seconds = (pieces["_ce"] - begin).dt.total_seconds().clip(lower=0)
+    icu_days = np.zeros(len(stays), dtype="float64")
+    summed = seconds.groupby(pieces["_i"]).sum() / 86400.0
+    icu_days[summed.index.to_numpy()] = summed.to_numpy()
+    dead = pd.Series(pd.array(mort_28d, dtype="boolean"))
+    died = dead.fillna(False).to_numpy(dtype=bool)
+    survival_unknown = dead.isna().to_numpy(dtype=bool)
+    free = np.clip(28.0 - icu_days, 0.0, 28.0)
+    return np.where(died, 0.0, np.where(survival_unknown | unknown, np.nan, free))
+
+
+# Two ICU stays of one hospitalisation make one ICU episode when the second
+# begins within this many minutes of the first's discharge: a direct transfer
+# between units, or eICU's step-down continuation, not a return to the ICU.
+# On the full sources (2026-10-28) eICU stays discharged to another ICU or a
+# step-down bed are followed by the next unit stay after a median of 0
+# minutes, and 13% of MIMIC-IV's later stays in one admission begin within an
+# hour of the previous discharge, almost all within minutes.
+ICU_EPISODE_TRANSFER_GAP_MINUTES = 60.0
+
+ICU_SEQUENCE_OUTPUTS = frozenset({"icu_readmission", "icu_stay_is_readmission"})
+
+
+def _icu_stay_sequence(database: str, data_path) -> pd.DataFrame:
+    """Every ICU stay of the source on one minute clock per hospitalisation.
+
+    Columns: ``_stay`` (native stay id), ``_hosp``, ``_order`` (the source's
+    order within the hospitalisation), ``_start`` and ``_end`` in minutes.
+    """
+    db = normalize_database_key(database)
+    profile = get_database_profile(db.removesuffix("_demo"))
+    stays = _raw_table(db, data_path, profile.stay_table)
+    if db.startswith("miiv"):
+        stays = lower_cols(stays)
+        needed = (profile.stay_id_col, "hadm_id", "intime", "outtime")
+    else:
+        needed = (profile.stay_id_col, "patienthealthsystemstayid", "unitvisitnumber",
+                  "hospitaladmitoffset", "unitdischargeoffset")
+    missing = sorted(set(needed) - set(stays.columns))
+    if missing:
+        raise ValueError("icu_readmission_source_field_missing:" + ",".join(missing))
+    require_unique_keys(stays, [profile.stay_id_col], table=profile.stay_table)
+    if db.startswith("miiv"):
+        epoch = pd.Timestamp(0)
+        start = (_parse_source_dates(stays["intime"]) - epoch).dt.total_seconds() / 60
+        end = (_parse_source_dates(stays["outtime"]) - epoch).dt.total_seconds() / 60
+        hosp, order = stays["hadm_id"], start
+    else:
+        # eICU offsets are minutes from unit admission; hospitaladmitoffset is
+        # the (negative) offset of hospital admission, so -offset puts every
+        # unit stay of a hospitalisation on that hospitalisation's clock.
+        start = -pd.to_numeric(stays["hospitaladmitoffset"], errors="coerce")
+        end = start + pd.to_numeric(stays["unitdischargeoffset"], errors="coerce")
+        hosp = stays["patienthealthsystemstayid"]
+        order = pd.to_numeric(stays["unitvisitnumber"], errors="coerce")
+    return pd.DataFrame({
+        "_stay": stays[profile.stay_id_col].to_numpy(),
+        "_hosp": hosp.to_numpy(),
+        "_order": pd.to_numeric(order, errors="coerce").to_numpy(),
+        "_start": start.to_numpy(dtype="float64"),
+        "_end": end.to_numpy(dtype="float64"),
+    })
+
+
+def _icu_episodes(seq: pd.DataFrame) -> pd.DataFrame:
+    """Number each stay's ICU episode (0, 1, ...) within its hospitalisation.
+
+    A hospitalisation with a stay lacking a time or an order, two stays sharing
+    an order, or an order that disagrees with admission time gets no episode
+    numbers: breaking the tie by stay id would decide a readmission by an
+    identifier.
+    """
+    seq = seq.sort_values(["_hosp", "_order", "_start"], kind="mergesort").reset_index(drop=True)
+    hosp = seq["_hosp"]
+    bad = seq[["_hosp", "_order", "_start", "_end"]].isna().any(axis=1)
+    bad |= seq.duplicated(["_hosp", "_order"], keep=False)
+    bad |= seq["_start"] < seq.groupby("_hosp")["_start"].shift()
+    bad |= seq["_end"] < seq["_start"]
+    bad_hosp = bad.groupby(hosp).transform("any").fillna(True).astype(bool) | hosp.isna()
+    furthest_end = seq.groupby("_hosp")["_end"].cummax().groupby(hosp).shift()
+    gap = seq["_start"] - furthest_end
+    new_episode = furthest_end.isna() | (gap > ICU_EPISODE_TRANSFER_GAP_MINUTES)
+    episode = new_episode.astype("int64").groupby(hosp).cumsum() - 1
+    seq["_episode"] = episode.astype("float64").where(~bad_hosp)
+    seq["_last_episode"] = seq.groupby("_hosp")["_episode"].transform("max").where(~bad_hosp)
+    return seq
+
+
+def _load_icu_readmission(database, data_path=None, *, patient_ids=None) -> pd.DataFrame:
+    """``icu_readmission`` and ``icu_stay_is_readmission`` per native ICU stay."""
+    db = normalize_database_key(database)
+    patient_values = _patient_values(patient_ids)
+    if db not in ICU_READMISSION_DATABASES or patient_values == []:
+        return pd.DataFrame()
     from .icu_mortality import load_icu_death
 
-    native = load_icu_death(database, data_path, **options)
-    if requested == {"icu_death"}:
-        return native
-    followup = _load_followup_outcomes(database, data_path, verbose=verbose, **options)
-    if followup.empty:
-        return native
-    identity = native.attrs["source_identifier"]
-    result = native.merge(followup, on=identity, how="left", validate="one_to_one")
-    result.attrs.update(native.attrs)
+    identifier = get_database_profile(db.removesuffix("_demo")).stay_id_col
+    seq = _icu_episodes(_icu_stay_sequence(db, data_path))
+    death = load_icu_death(db, data_path).set_index(identifier)["icu_death"]
+    seq["_died"] = pd.array(seq["_stay"].map(death), dtype="boolean")
+    # The episode ends at its last stay; did the patient die in that stay?
+    last = seq.groupby(["_hosp", "_episode"]).cumcount(ascending=False).eq(0) & seq["_episode"].notna()
+    ending = seq.loc[last, ["_hosp", "_episode", "_died"]].rename(columns={"_died": "_episode_died"})
+    seq = seq.merge(ending, on=["_hosp", "_episode"], how="left", validate="many_to_one")
+    known = seq["_episode"].notna().to_numpy()
+    returned = known & (seq["_episode"] < seq["_last_episode"]).to_numpy()
+    survived = known & seq["_episode_died"].eq(False).fillna(False).to_numpy(dtype=bool)
+    readmission = pd.array([pd.NA] * len(seq), dtype="boolean")
+    readmission[survived] = False
+    readmission[returned] = True
+    later_episode = pd.array([pd.NA] * len(seq), dtype="boolean")
+    later_episode[known] = (seq["_episode"] > 0).to_numpy()[known]
+    out = pd.DataFrame({
+        identifier: seq["_stay"].to_numpy(),
+        "icu_readmission": readmission,
+        "icu_stay_is_readmission": later_episode,
+    })
+    if patient_values is not None:
+        out = out[out[identifier].isin(patient_values)]
+    return out.reset_index(drop=True)
+
+
+def load_outcomes(database, data_path=None, *, patient_ids=None, max_patients=None,
+                  verbose=False, output_concepts=None):
+    """Load explicitly named endpoints without changing generic death meaning.
+
+    Without ``output_concepts`` this returns the follow-up endpoints only, as
+    before; the ICU death and ICU stay sequence columns load when named.
+    """
+    requested = set(output_concepts or ())
+    options = dict(patient_ids=patient_ids, max_patients=max_patients)
+    frames = []
+    if "icu_death" in requested:
+        from .icu_mortality import load_icu_death
+
+        frames.append(load_icu_death(database, data_path, **options))
+    if not requested or requested - {"icu_death"} - ICU_SEQUENCE_OUTPUTS:
+        frames.append(_load_followup_outcomes(database, data_path, verbose=verbose, **options))
+    if requested & ICU_SEQUENCE_OUTPUTS:
+        frames.append(_load_icu_readmission(database, data_path, patient_ids=patient_ids))
+    frames = [frame for frame in frames if not frame.empty]
+    if not frames:
+        return pd.DataFrame()
+    result = frames[0]
+    for frame in frames[1:]:
+        identity = [column for column in frame.columns if column in result.columns]
+        if len(identity) != 1:
+            raise ValueError("outcome_frames_share_no_single_stay_identifier")
+        attrs = dict(result.attrs)
+        result = result.merge(frame, on=identity, how="left", validate="one_to_one")
+        result.attrs.update(attrs)
     return result
 
 

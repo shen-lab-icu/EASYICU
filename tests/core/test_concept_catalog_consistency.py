@@ -168,7 +168,9 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # 2026-09-04: +eICU ICU-unit type as a typed demographics coordinate.
     # 323 -> 324. 2026-09-21: +RRT evidence reason receipt. 324 -> 325.
     # 2026-10-26: +icu_death, native ICU mortality (db6g). 325 -> 326.
-    assert len(CONCEPT_DICTIONARY) == 326
+    # 2026-10-28: +icu_stay_is_readmission, the readmitted-stay attribute
+    # the repeat-stay restriction reads. 326 -> 327.
+    assert len(CONCEPT_DICTIONARY) == 327
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)

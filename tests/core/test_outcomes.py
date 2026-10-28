@@ -29,7 +29,7 @@ def test_horizon_mortality_plausible_and_monotonic(database, lo28, hi28):
     m365 = out["mort_365d"].mean()
     assert lo28 <= m28 <= hi28, f"{database} 28d mortality {m28:.3f} out of band"
     assert m28 <= m90 <= m365 + 1e-9, "horizons must be monotonic"
-    assert "icu_free_days_28" not in out.columns
+    assert ("icu_free_days_28" in out.columns) == (database == "miiv")
 
 
 @pytest.mark.needs_real_data
@@ -44,11 +44,14 @@ def test_no_followup_returns_empty(database):
 
 
 @pytest.mark.needs_real_data
-def test_icu_readmission_is_unavailable_without_history_completeness():
+@pytest.mark.parametrize("database", ["miiv", "eicu"])
+def test_icu_readmission_rate_is_plausible(database):
     from easyicu.scores.outcomes import load_outcomes
 
-    out = load_outcomes("miiv")
-    assert "icu_readmission" not in out.columns
+    out = load_outcomes(database, output_concepts=["icu_readmission", "icu_stay_is_readmission"])
+    # Full sources, 2026-10-28: MIMIC-IV 9.3%, eICU 5.6% of stays at risk.
+    assert 0.03 <= out["icu_readmission"].mean() <= 0.15
+    assert out["icu_stay_is_readmission"].sum() > 0
 
 
 @pytest.mark.needs_real_data
@@ -57,7 +60,7 @@ def test_outcomes_via_load_concepts():
 
     df = load_concepts(["mort_28d", "icu_free_days_28"], database="miiv")
     assert "mort_28d" in df.columns and "stay_id" in df.columns
-    assert "icu_free_days_28" not in df.columns
+    assert df["icu_free_days_28"].between(0, 28).all()
 
 
 @pytest.mark.needs_real_data

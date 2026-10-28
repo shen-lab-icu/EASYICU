@@ -157,7 +157,7 @@ def _plan_bound_semantic_fixture(tmp_path):
              "missingness": {"fraction_missing": 0.0, "n_missing": 0, "n_total": 3,
                              "raw_n_missing": 2, "eligible_n": 1, "not_applicable_n": 2}},
             {"name": "age", "dtype": "int64"},
-            {"name": "copied_flag", "dtype": "bool", "source_concept": "icu_readmission"},
+            {"name": "copied_flag", "dtype": "bool", "source_concept": "vent_free_days_28"},
         ],
     )
     context_file = tmp_path / "research_context.json"
@@ -563,9 +563,8 @@ def test_review_proves_eligible_denominator_grouping_and_landmark_inputs(
                 ),
                 CatalogConcept("los_icu", file_name="outcome.parquet"),
                 CatalogConcept(
-                    "icu_readmission",
-                    file_name="outcome.parquet",
-                    column_role="event_status",
+                    "icu_stay_is_readmission",
+                    file_name="demographics.parquet",
                 ),
             ],
         ),
@@ -642,7 +641,7 @@ def test_review_proves_eligible_denominator_grouping_and_landmark_inputs(
                 "spec_id": "non_readmission",
                 "axis": "repeated_stays",
                 "strategy": "non_readmission_restriction",
-                "execution_variables": ["icu_readmission"],
+                "execution_variables": ["icu_stay_is_readmission"],
             },
         ],
     }
@@ -668,6 +667,7 @@ def test_review_proves_eligible_denominator_grouping_and_landmark_inputs(
     assert readiness["outcome_event_time"]["materialized_column"] == "death_time_hours"
     assert readiness["observation_duration"]["unit"] == "hours"
     assert readiness["readmission_indicator"]["status"] == "ready"
+    assert readiness["readmission_indicator"]["source_concept"] == "icu_stay_is_readmission"
     assert source_path not in json.dumps(payload)
 
 

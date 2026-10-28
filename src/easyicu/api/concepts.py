@@ -1275,6 +1275,7 @@ def load_concepts(
         "followup_days_365d",
         "icu_free_days_28",
         "icu_readmission",
+        "icu_stay_is_readmission",
         "vent_free_days_28",
     }
     # Microbiology culture-positivity (microbiology.py).

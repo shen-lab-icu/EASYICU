@@ -20,7 +20,7 @@ def test_unsupported_optional_design_input_retries_outline_and_completes_plan():
 
     context = _context()
     optional = context.variables[-1].model_copy(update={
-        "name": "optional_repeat_visit", "source_concept": "icu_readmission",
+        "name": "optional_repeat_visit", "source_concept": "vent_free_days_28",
     })
     context = context.model_copy(update={
         "cohort": context.cohort.model_copy(update={"database": "miiv"}),
@@ -199,7 +199,7 @@ def test_fresh_acceptance_attributes_rejection_without_message_leak(monkeypatch,
 @pytest.mark.parametrize("source_field", ["source_concept", "derived_from_concepts"])
 def test_reader_label_request_rejects_unsupported_source_before_copywriting(source_field):
     context = _context()
-    source = "icu_readmission" if source_field == "source_concept" else ["icu_readmission"]
+    source = "vent_free_days_28" if source_field == "source_concept" else ["vent_free_days_28"]
     variable = context.variables[0].model_copy(update={source_field: source})
     context = context.model_copy(update={
         "cohort": context.cohort.model_copy(update={"database": "miiv"}),

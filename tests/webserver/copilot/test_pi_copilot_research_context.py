@@ -409,8 +409,8 @@ def test_web_data_foundation_materializes_sensitivity_support_without_adjustment
                     column_role="event_status",
                 ),
                 CatalogConcept(
-                    concept_id="icu_readmission",
-                    file_name="outcome.parquet",
+                    concept_id="icu_stay_is_readmission",
+                    file_name="demographics.parquet",
                     typed_metadata=True,
                     column_role="value",
                 ),
@@ -423,7 +423,7 @@ def test_web_data_foundation_materializes_sensitivity_support_without_adjustment
                 "spec_id": "non_readmission_only",
                 "axis": "repeated_stays",
                 "strategy": "non_readmission_restriction",
-                "execution_variables": ["icu_readmission"],
+                "execution_variables": ["icu_stay_is_readmission"],
             }
         ]
     )
@@ -436,7 +436,7 @@ def test_web_data_foundation_materializes_sensitivity_support_without_adjustment
         sensitivity_specs=specs,
     )
 
-    assert profile["static_concepts"] == ("age", "icu_readmission")
+    assert profile["static_concepts"] == ("age", "icu_stay_is_readmission")
     assert profile["required_feature_concepts"] == ()
 
 
@@ -464,8 +464,8 @@ def test_web_data_foundation_keeps_available_readmission_safety_coordinate(
                     column_role="event_status",
                 ),
                 CatalogConcept(
-                    concept_id="icu_readmission",
-                    file_name="outcome.parquet",
+                    concept_id="icu_stay_is_readmission",
+                    file_name="demographics.parquet",
                     typed_metadata=True,
                     column_role="value",
                 ),
@@ -482,7 +482,56 @@ def test_web_data_foundation_keeps_available_readmission_safety_coordinate(
         target="death",
     )
 
-    assert profile["static_concepts"] == ("age", "icu_readmission")
+    assert profile["static_concepts"] == ("age", "icu_stay_is_readmission")
+
+
+def test_the_readmission_outcome_is_not_the_safety_coordinate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # icu_readmission is the outcome of returning after a stay; restricting
+    # on it would condition on the future, so it never stands in for the
+    # readmitted-stay attribute.
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(
+                    concept_id="age",
+                    file_name="demographics.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="death",
+                    file_name="outcome.parquet",
+                    typed_metadata=True,
+                    column_role="event_status",
+                ),
+                CatalogConcept(
+                    concept_id="icu_readmission",
+                    file_name="outcome.parquet",
+                    typed_metadata=True,
+                    column_role="event_status",
+                ),
+            ],
+        ),
+    )
+
+    profile = research_launch_scientific._data_foundation_profile(
+        export_path="/typed/demo",
+        study={
+            "modules": ["demographics", "outcome"],
+            "covariate_selection": "planner_selectable",
+        },
+        target="death",
+    )
+
+    assert "icu_readmission" not in profile["static_concepts"]
+    assert "icu_readmission" not in profile["required_feature_concepts"]
 
 
 def test_web_data_foundation_rejects_first_stay_without_verified_coordinate(

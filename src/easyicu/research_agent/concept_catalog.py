@@ -153,6 +153,12 @@ DERIVED_CONCEPT_HINTS: Dict[str, Tuple[List[str], bool]] = {
         ["ICU readmission", "readmission to the ICU", "return to the ICU"],
         True,
     ),
+    # A stay attribute from the same ICU stay sequence, not an outcome: the
+    # repeat-stay restriction keeps the stays where it is false.
+    "icu_stay_is_readmission": (
+        ["readmitted ICU stay", "ICU stay that is a readmission", "repeat ICU stay"],
+        False,
+    ),
     # Native ICU mortality (``scores.icu_mortality``): death before ICU
     # discharge.  It owns the ICU-mortality phrases; the dictionary's
     # ``death`` is hospital mortality and never answers to them.
