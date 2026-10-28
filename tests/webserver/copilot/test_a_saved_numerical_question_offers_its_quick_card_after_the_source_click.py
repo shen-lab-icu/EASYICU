@@ -340,3 +340,17 @@ def test_only_the_transition_may_offer_and_only_the_quick_answer_tool():
     assert "${QUICK_ANSWER_OFFER_MARKER}" in transition
     assert "call easyicu_quick_answer exactly once with a QuickReading whose question is exactly that text" in transition
     assert "Never calculate or state a value" in transition
+
+
+def test_a_source_that_is_not_a_registered_export_is_not_offered(conversation, monkeypatch):
+    # A raw folder chosen for the study has no registered export, so every
+    # quick answer on it would stop; the transition offers none instead.
+    service, record, _ = conversation
+    typed_turn(service, record, QUESTION)
+    context = ToolExecutionContext(session=record, user_message=TRANSITION)
+    context.bind_question_wording_context([
+        {"text": QUESTION, "message_origin": "typed"}, {"text": "", "message_origin": "host_transition"},
+    ], "")
+    assert service._transition_quick_question(context) == QUESTION
+    monkeypatch.setattr(sources, "registered_source_identity", lambda path: None)
+    assert service._transition_quick_question(context) == ""

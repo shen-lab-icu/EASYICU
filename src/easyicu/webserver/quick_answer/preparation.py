@@ -84,7 +84,9 @@ def prepare_registered_question(
 ) -> tuple[QuickProposal, PreparedSource | None]:
     """Materialize only a qualified reading, without a model or extraction run."""
     identity = sources.registered_source_identity(export_path)
-    if identity is None or identity.database != database:
+    if identity is None:
+        raise QuickStop("quick_prepared_source_required")
+    if identity.database != database:
         raise QuickStop("quick_source_identity_mismatch")
     reading = bind_concept_names(reading)
     if question != reading.question:
