@@ -18,6 +18,12 @@ family template and then compiled and validated by the unchanged Progressive
 v2 validators and compiler.  No plan gate is weakened: a template that cannot
 compile fails closed with the compiler's own reason code.
 
+The target-trial, time-varying exposure and dynamic-landmark builders are
+explicit opt-in projections for workflow graphs. Their host coordinates are
+typed here, but the context router does not select them. Signed suites retain
+their execution boundaries; dynamic model fitting remains analysis-only Coder
+work backed by the existing landmark feature, label and evaluation kernels.
+
 Boundaries
 ----------
 * Association requests bind stated/exact adjustment first, otherwise the
@@ -32,6 +38,10 @@ Boundaries
 from __future__ import annotations
 
 from .contract import (
+    DYNAMIC_LANDMARK_FAMILY_ID,
+    TARGET_TRIAL_FAMILY_ID,
+    TIME_VARYING_SURVIVAL_FAMILY_ID,
+    DynamicLandmarkCoordinates,
     BASELINE_ASSOCIATION_FAMILY_ID,
     DESCRIPTIVE_FAMILY_ID,
     FAMILY_SPEC_SCHEMA_VERSION,
@@ -82,8 +92,18 @@ from .phenotyping_template import build_phenotyping_skeleton
 from .prediction_template import build_prediction_skeleton
 from .survival_template import build_landmark_survival_skeleton
 from .trajectory_template import build_fixed_window_trajectory_skeleton
+from .target_trial_template import build_target_trial_skeleton
+from .time_varying_template import build_time_varying_survival_skeleton
+from .dynamic_landmark_template import build_dynamic_landmark_skeleton
 
 __all__ = [
+    "DYNAMIC_LANDMARK_FAMILY_ID",
+    "TARGET_TRIAL_FAMILY_ID",
+    "TIME_VARYING_SURVIVAL_FAMILY_ID",
+    "DynamicLandmarkCoordinates",
+    "build_dynamic_landmark_skeleton",
+    "build_target_trial_skeleton",
+    "build_time_varying_survival_skeleton",
     "BASELINE_ASSOCIATION_FAMILY_ID",
     "build_baseline_association_skeleton",
     "DESCRIPTIVE_FAMILY_ID",
