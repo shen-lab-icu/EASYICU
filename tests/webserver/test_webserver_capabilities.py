@@ -181,7 +181,9 @@ def test_builtin_method_skill_package_exposes_reviewed_documentation(
     assert package["read_only"] is True
     assert package["execution_boundary"] == "documentation_only_host_execution_required"
     files = {row["path"]: row for row in package["files"]}
-    assert set(files) == {
+    # The host code the package runs ships beside its documentation.
+    assert any(path.startswith("implementation/") for path in files)
+    assert {path for path in files if not path.startswith("implementation/")} == {
         "SKILL.md",
         "SKILL.zh.md",
         "examples/public_demo.md",
@@ -282,7 +284,9 @@ def test_composed_association_workflow_package_exposes_ordered_project_phases(
     files = {row["path"]: row for row in package["files"]}
 
     assert package["kind"] == "research_workflow"
-    assert set(files) == {
+    # The host code the package runs ships beside its documentation.
+    assert any(path.startswith("implementation/") for path in files)
+    assert {path for path in files if not path.startswith("implementation/")} == {
         "SKILL.md",
         "SKILL.zh.md",
         "examples/public_demo.md",

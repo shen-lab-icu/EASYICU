@@ -853,6 +853,10 @@
     ],
     [
       "easyicu.research_agent.agents.family_spec_planner",
+      "easyicu.research_agent.planning.publication_readiness"
+    ],
+    [
+      "easyicu.research_agent.agents.family_spec_planner",
       "easyicu.research_agent.planning.question_requirements"
     ],
     [
@@ -1358,6 +1362,10 @@
     [
       "easyicu.research_agent.agents.progressive_prompt_contracts",
       "easyicu.research_agent.planning.progressive_contract"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_prompt_contracts",
+      "easyicu.research_agent.planning.publication_readiness"
     ],
     [
       "easyicu.research_agent.agents.progressive_prompt_contracts",
@@ -3542,6 +3550,10 @@
     [
       "easyicu.research_agent.contracts.ordered_stratified",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.contracts.ordered_stratified_spec",
+      "easyicu.research_agent.contracts.association_execution"
     ],
     [
       "easyicu.research_agent.contracts.ordered_stratified_spec",
@@ -7041,10 +7053,6 @@
     ],
     [
       "easyicu.research_agent.execution.runners.ordered_stratified_executor",
-      "easyicu.research_agent.contracts.association_execution"
-    ],
-    [
-      "easyicu.research_agent.execution.runners.ordered_stratified_executor",
       "easyicu.research_agent.contracts.cohort_product_keys"
     ],
     [
@@ -9488,6 +9496,10 @@
       "easyicu.research_agent.planning.question_requirements"
     ],
     [
+      "easyicu.research_agent.method_skills",
+      "easyicu.research_agent.skill_packages.host_sources"
+    ],
+    [
       "easyicu.research_agent.methods.auc_interval",
       "easyicu.research_agent.methods.delong_auc"
     ],
@@ -9998,6 +10010,10 @@
     [
       "easyicu.research_agent.orchestration.progressive_planning",
       "easyicu.research_agent.planning.exposure_group_reader_names"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.planning.family_spec.request"
     ],
     [
       "easyicu.research_agent.orchestration.progressive_planning",
@@ -12481,6 +12497,10 @@
     ],
     [
       "easyicu.research_agent.planning.progressive_compiler",
+      "easyicu.research_agent.contracts.ordered_stratified_spec"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_compiler",
       "easyicu.research_agent.contracts.phenotyping_features"
     ],
     [
@@ -12781,6 +12801,30 @@
     ],
     [
       "easyicu.research_agent.planning.publication_readiness",
+      "easyicu.research_agent.contracts.cohort_product_keys"
+    ],
+    [
+      "easyicu.research_agent.planning.publication_readiness",
+      "easyicu.research_agent.contracts.cohort_summary"
+    ],
+    [
+      "easyicu.research_agent.planning.publication_readiness",
+      "easyicu.research_agent.contracts.continuous_outcome_summary"
+    ],
+    [
+      "easyicu.research_agent.planning.publication_readiness",
+      "easyicu.research_agent.contracts.phenotype_comparison"
+    ],
+    [
+      "easyicu.research_agent.planning.publication_readiness",
+      "easyicu.research_agent.contracts.phenotyping_features"
+    ],
+    [
+      "easyicu.research_agent.planning.publication_readiness",
+      "easyicu.research_agent.planning.adjustment_authority"
+    ],
+    [
+      "easyicu.research_agent.planning.publication_readiness",
       "easyicu.research_agent.planning.analysis_types"
     ],
     [
@@ -12793,6 +12837,14 @@
     ],
     [
       "easyicu.research_agent.planning.publication_readiness",
+      "easyicu.research_agent.planning.question_requirements"
+    ],
+    [
+      "easyicu.research_agent.planning.publication_readiness",
+      "easyicu.research_agent.planning.requirement_coverage"
+    ],
+    [
+      "easyicu.research_agent.planning.publication_readiness",
       "easyicu.research_agent.planning.study_design"
     ],
     [
@@ -12802,6 +12854,10 @@
     [
       "easyicu.research_agent.planning.publication_readiness",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.publication_readiness",
+      "easyicu.research_agent.trajectory.runtime_validation"
     ],
     [
       "easyicu.research_agent.planning.question_requirements",
@@ -15601,6 +15657,10 @@
     ],
     [
       "easyicu.research_agent.research_context.builder",
+      "easyicu.research_agent.planning.analysis_types"
+    ],
+    [
+      "easyicu.research_agent.research_context.builder",
       "easyicu.research_agent.planning.baseline_requirements"
     ],
     [
@@ -16041,6 +16101,10 @@
     ],
     [
       "easyicu.research_agent.robustness.panel",
+      "easyicu.research_agent.contracts.prediction_execution"
+    ],
+    [
+      "easyicu.research_agent.robustness.panel",
       "easyicu.research_agent.planning.cohort_contract"
     ],
     [
@@ -16234,6 +16298,18 @@
     [
       "easyicu.research_agent.skill_packages",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.host_sources",
+      "easyicu.research_agent.planning.analysis_method_suite"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.host_sources",
+      "easyicu.research_agent.planning.capability_registry"
+    ],
+    [
+      "easyicu.research_agent.skill_packages.host_sources",
+      "easyicu.research_agent.planning.method_adapter_catalog"
     ],
     [
       "easyicu.research_agent.skill_packages.landmark_categorical_association",
@@ -16476,9 +16552,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 4111,
+    "edge_count": 4130,
     "largest_scc_size": 0,
-    "module_count": 866,
+    "module_count": 867,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -17327,6 +17403,7 @@
     "easyicu.research_agent.scientific_adapters.sksurv": "scientific_adapters/sksurv.py",
     "easyicu.research_agent.script_runtime": "script_runtime.py",
     "easyicu.research_agent.skill_packages": "skill_packages/__init__.py",
+    "easyicu.research_agent.skill_packages.host_sources": "skill_packages/host_sources.py",
     "easyicu.research_agent.skill_packages.landmark_categorical_association": "skill_packages/landmark_categorical_association/__init__.py",
     "easyicu.research_agent.skill_packages.landmark_categorical_association.__main__": "skill_packages/landmark_categorical_association/__main__.py",
     "easyicu.research_agent.skill_packages.landmark_categorical_association.scripts": "skill_packages/landmark_categorical_association/scripts/__init__.py",
