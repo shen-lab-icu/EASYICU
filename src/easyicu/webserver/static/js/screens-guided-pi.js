@@ -527,7 +527,7 @@
     workflowConfirmationHtml, hostJobs: HOST_JOBS, followUps: MODULES.require('followUps'),
     effortMenu: EFFORT_MENU, workflowConfirmation, runFailureText, help: HELP,
     sessionMatchesUiLanguage, displaySessionTitle, sessionTraceLabel, providerBindingSummary,
-    quickAnswers: QUICK_ANSWERS, multiDatabase: MULTI_DATABASE,
+    quickAnswers: QUICK_ANSWERS, multiDatabase: MULTI_DATABASE, dataBinding: DATA_BINDING,
   });
   const { messageHtml, workflowHtml, sessionPanel, demoPanel,
     activatePanel, projectRequiredPanel, restoringPanel } = SESSION_VIEW;
@@ -621,6 +621,7 @@
       mark: id => { const attention = MODULES.optional('attention'); return attention ? attention.conversationMarkHtml(projectId(), id) : ''; } });
     const attention = MODULES.optional('attention');
     if (attention) void attention.seen();
+    DATA_BINDING.resumeWaiting();
     requestAnimationFrame(() => {
       STUDY_WORKSPACE.restoreMaterials(state.host); CONNECT.focusDialog(state.host);
       // Opening a deep-linked artifact while the project/session is still

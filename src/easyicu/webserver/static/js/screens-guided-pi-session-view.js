@@ -13,7 +13,7 @@
       workflowConfirmationHtml, hostJobs: HOST_JOBS, followUps: FOLLOW_UPS,
       effortMenu: EFFORT_MENU, workflowConfirmation, runFailureText, help: HELP,
       sessionMatchesUiLanguage, displaySessionTitle, sessionTraceLabel, providerBindingSummary,
-      quickAnswers: QUICK_ANSWERS, multiDatabase: MULTI_DATABASE,
+      quickAnswers: QUICK_ANSWERS, multiDatabase: MULTI_DATABASE, dataBinding: DATA_BINDING,
     } = deps;
     const modelMenu = MODULES.optional('modelMenu');
     if (modelMenu) modelMenu.bind({
@@ -408,7 +408,9 @@
           tr, esc, icon: iconHtml,
           namedDemo: HOST_JOBS && typeof HOST_JOBS.namedDemo === 'function' ? HOST_JOBS.namedDemo() : null,
           namedDatabase: HOST_JOBS && typeof HOST_JOBS.namedDatabase === 'function' ? HOST_JOBS.namedDatabase() : null,
-        })
+        }) + (DATA_BINDING && DATA_BINDING.waitingAction()
+          ? `<p class="gpi-data-consent-waiting" role="status">${tr('Noted. This opens as soon as the current step finishes.', '已记下，当前这一步结束后会自动打开。')}</p>`
+          : '')
         : '';
       const hostedOwner = MODULES.optional('hosted');
       const headerOptions = {

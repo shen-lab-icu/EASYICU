@@ -21,8 +21,31 @@
     const rememberSession = host.rememberSession;
     const continueAfterDataSourceConfirmation = host.continueAfterDataSourceConfirmation;
 
+    // A data-source click made while a turn is still running waits for that
+    // turn instead of racing its session write, then runs once it ends.
+    let waiting = null;
+
+    function waitingAction() {
+      const session = host.session();
+      return waiting && session && waiting.sessionId === session.session_id
+        && waiting.projectId === projectId() ? waiting : null;
+    }
+
+    function resumeWaiting() {
+      if (!waiting || host.busy()) return;
+      const next = waitingAction();
+      waiting = null;
+      if (!next || DATA_CONSENT.authorization(host.session()).status === 'confirmed') return;
+      setTimeout(() => { void authorizeDataSource(next.action, next.options); }, 0);
+    }
+
     async function authorizeDataSource(action, options) {
-      if (!host.session() || host.busy() || !api().authorizePiCopilotDataSource) return;
+      if (!host.session() || !api().authorizePiCopilotDataSource) return;
+      if (host.busy()) {
+        waiting = { action, options, sessionId: host.session().session_id, projectId: projectId() };
+        render();
+        return;
+      }
       const database = String(options && options.database || '').trim();
       const sourceId = String(options && options.sourceId || '').trim();
       const expectedSessionId = host.session().session_id;
@@ -274,7 +297,7 @@
       });
     }
 
-    return { authorizeDataSource, notifyExtractionHandoff, confirmDataSourceBinding, carryQuestionIntoSetup, leaveAbandonedSelection };
+    return { authorizeDataSource, waitingAction, resumeWaiting, notifyExtractionHandoff, confirmDataSourceBinding, carryQuestionIntoSetup, leaveAbandonedSelection };
   }
 
   window.EasyICU.guidedPi.declare('dataBinding', { create });
