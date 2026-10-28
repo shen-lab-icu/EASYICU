@@ -44,11 +44,17 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 import numpy as np
 from scipy.special import log_ndtr
 from scipy.stats import norm
+from scipy import stats
+from scipy.special import expit
+import pandas as pd
+import statsmodels.api as sm
+from statsmodels.discrete.discrete_model import NegativeBinomial, Poisson
+from statsmodels.miscmodels.ordinal_model import OrderedModel
 
 Alternative = Literal["two-sided", "greater", "less"]
 _MIN_REPORTED_P = 1e-300
@@ -494,6 +500,10 @@ def jonckheere_terpstra_trend(
 
 
 __all__ = [
+    "OutcomeFit",
+    "OutcomeTerm",
+    "fit_outcome_model",
+    "proportional_odds_score",
     "OrderedTrendResult",
     "WilsonInterval",
     "cochran_armitage_trend",
@@ -501,3 +511,183 @@ __all__ = [
     "normal_tail_probability",
     "wilson_interval",
 ]
+
+
+@dataclass(frozen=True)
+class OutcomeTerm:
+    term: str
+    source_variable: str
+    estimate: float
+    ci_low: float
+    ci_high: float
+    se: float
+
+
+@dataclass(frozen=True)
+class OutcomeFit:
+    estimate: float
+    ci_low: float
+    ci_high: float
+    se: float
+    n: int
+    terms: tuple[OutcomeTerm, ...]
+    diagnostics: dict
+    variance_estimator: str
+    cluster_count: int | None
+    notes: str = ""
+    converged: bool = True
+    n_events: None = None
+    separation_detected: None = None
+
+    @property
+    def point_estimate(self):
+        return self.estimate
+
+
+def proportional_odds_score(model, fitted, groups=None) -> dict:
+    """LM score for unequal slopes, with OPG nuisance projection.
+
+    For K categories and p slopes there are p(K-2) restrictions. Per-row
+    derivatives are of log(P(Y=k)) wrt each cumulative logit. Threshold and
+    common-slope scores are projected out before the quadratic score test.
+    With declared groups, independent group sums supply the score covariance.
+    """
+    x = np.asarray(model.exog, dtype=float)
+    y = np.asarray(model.endog, dtype=int)
+    n, p = x.shape
+    thresholds = model.transform_threshold_params(fitted.params)[1:-1]
+    cdf = expit(thresholds[None, :] - (x @ np.asarray(fitted.params)[:p])[:, None])
+    probabilities = np.diff(np.column_stack((np.zeros(n), cdf, np.ones(n))), axis=1)
+    if np.any(probabilities <= 0):
+        raise ValueError("proportional-odds score probabilities are numerically degenerate")
+    j = np.arange(len(thresholds))
+    eta_scores = cdf * (1 - cdf) * (
+        (y[:, None] == j) / probabilities[:, :-1]
+        - (y[:, None] == j + 1) / probabilities[:, 1:]
+    )
+    nuisance = np.column_stack((eta_scores, -x * eta_scores.sum(axis=1)[:, None]))
+    extra = (-eta_scores[:, :-1, None] * x[:, None, :]).reshape(n, -1)
+    df = extra.shape[1]
+    if df == 0:
+        return {"method": "proportional_odds_score", "df": 0, "statistic": 0.0,
+                "p_value": 1.0, "violated": False}
+    efficient = extra - nuisance @ np.linalg.lstsq(nuisance, extra, rcond=None)[0]
+    if groups is not None:
+        efficient = pd.DataFrame(efficient).groupby(np.asarray(groups), sort=False).sum().to_numpy()
+    covariance = efficient.T @ efficient
+    if np.linalg.matrix_rank(covariance) < df:
+        raise ValueError("proportional-odds score test is not estimable for this design")
+    score = efficient.sum(axis=0)
+    statistic = max(0.0, float(score @ np.linalg.solve(covariance, score)))
+    p_value = float(stats.chi2.sf(statistic, df))
+    return {"method": "proportional_odds_score", "df": df, "statistic": statistic,
+            "p_value": p_value, "violated": p_value < 0.05,
+            "covariance": "cluster_robust" if groups is not None else "opg"}
+
+
+def fit_outcome_model(
+    *, X: pd.DataFrame, y: pd.Series, term: str, kind: str,
+    ordered_levels=(), exposure_time=None, log_offset=None,
+    variance_estimator: str = "model_based", cluster_groups=None,
+    source_by_design_column: Mapping[str, str] | None = None,
+) -> OutcomeFit:
+    """Fit exactly the declared family, returning ratios with 95% Wald CIs.
+
+    OR > 1 means greater odds of a higher declared category. Counts use NB2
+    (Var(Y)=mu+alpha*mu²) or Poisson with log link. Offsets never enter as fitted
+    predictors. The caller supplies the exact complete-case model matrix.
+    """
+    x = X.astype(float).copy()
+    if (len(y) != len(x) or not X.index.equals(y.index) or term not in x
+            or len(y) <= x.shape[1] + 3 or not np.isfinite(x.to_numpy()).all()
+            or y.isna().any() or np.linalg.matrix_rank(x) != x.shape[1]):
+        raise ValueError("finite aligned full-rank complete model rows and focal term required")
+    if variance_estimator not in {"model_based", "cluster_robust"}:
+        raise ValueError("unsupported covariance contract")
+    fit_args: dict[str, Any] = {"disp": False, "maxiter": 300}
+    groups = None
+    if variance_estimator == "cluster_robust":
+        if cluster_groups is None or len(cluster_groups) != len(x):
+            raise ValueError("declared cluster groups required for every model row")
+        if isinstance(cluster_groups, pd.Series) and not cluster_groups.index.equals(x.index):
+            raise ValueError("cluster groups must align with exact model rows")
+        groups = np.asarray(cluster_groups)
+        if pd.isna(groups).any() or len(pd.unique(groups)) < 2:
+            raise ValueError("at least two observed clusters required")
+        fit_args.update(cov_type="cluster", cov_kwds={"groups": groups})
+    elif cluster_groups is not None:
+        raise ValueError("groups require an explicit cluster covariance contract")
+    diagnostics = {}
+    if kind == "proportional_odds":
+        if exposure_time is not None or log_offset is not None:
+            raise ValueError("offsets belong to count outcomes")
+        from ..contracts.model_terms import level_spelling
+        tokens = y.map(level_spelling)
+        levels = list(ordered_levels)
+        if len(levels) < 3 or len(set(levels)) != len(levels) or set(tokens) != set(levels):
+            raise ValueError("every declared ordered level must be observed, with no undeclared levels")
+        encoded = pd.Series(pd.Categorical(tokens, categories=levels, ordered=True), index=y.index)
+        model = OrderedModel(encoded, x, distr="logit")
+        fit = model.fit(method="bfgs", **fit_args)
+        diagnostics["proportional_odds"] = proportional_odds_score(model, fit, groups)
+        design_names = list(x.columns)
+    elif kind in {"count_poisson", "negative_binomial"}:
+        counts = np.asarray(y, dtype=float)
+        if not np.isfinite(counts).all() or (counts < 0).any() or (counts != np.floor(counts)).any():
+            raise ValueError("count outcome must contain finite nonnegative integers")
+        if exposure_time is not None and log_offset is not None:
+            raise ValueError("declare exposure time or log offset, never both")
+        for values in (exposure_time, log_offset):
+            if isinstance(values, pd.Series) and not values.index.equals(x.index):
+                raise ValueError("offset/exposure time must align with exact model rows")
+        if exposure_time is not None:
+            times = np.asarray(exposure_time, dtype=float)
+            if times.shape != counts.shape or not np.isfinite(times).all() or (times <= 0).any():
+                raise ValueError("exposure time must be finite and strictly positive for every model row")
+            offset = np.log(times)
+        elif log_offset is not None:
+            offset = np.asarray(log_offset, dtype=float)
+            if offset.shape != counts.shape or not np.isfinite(offset).all():
+                raise ValueError("log offset must be finite for every model row")
+        else:
+            offset = np.zeros(len(y))
+        design = sm.add_constant(x, has_constant="raise")
+        if np.linalg.matrix_rank(design) != design.shape[1]:
+            raise ValueError("count model design must have full rank including intercept")
+        poisson = Poisson(counts, design, offset=offset).fit(**fit_args)
+        mu = np.asarray(poisson.predict())
+        z = float(np.sum((counts - mu) ** 2 - counts) / np.sqrt(2 * np.sum(mu ** 2)))
+        if groups is not None:
+            dispersion_scores = pd.Series((counts - mu) ** 2 - counts).groupby(groups, sort=False).sum()
+            z = float(dispersion_scores.sum() / np.sqrt(np.sum(dispersion_scores ** 2)))
+        diagnostics["dispersion"] = {
+            "method": "poisson_nb2_score", "statistic": z,
+            "p_value": float(stats.norm.sf(z)), "overdispersed": bool(z > stats.norm.ppf(0.95)),
+            "pearson_ratio": float(np.sum((counts - mu) ** 2 / mu) / (len(y) - design.shape[1])),
+            "covariance": variance_estimator,
+        }
+        fit = (NegativeBinomial(counts, design, offset=offset, loglike_method="nb2").fit(**fit_args)
+               if kind == "negative_binomial" else poisson)
+        diagnostics["offset"] = "log_exposure" if exposure_time is not None else "log_offset" if log_offset is not None else "unit_exposure"
+        if kind == "negative_binomial":
+            diagnostics["alpha"] = float(fit.params["alpha"])
+        design_names = list(design.columns)
+    else:
+        raise ValueError("unsupported outcome model kind")
+    if not bool(fit.mle_retvals.get("converged", False)):
+        raise ValueError("declared outcome model did not converge")
+    intervals = np.asarray(fit.conf_int())
+    params, errors = np.asarray(fit.params), np.asarray(fit.bse)
+    source = dict(source_by_design_column or {})
+    terms = tuple(OutcomeTerm(name, source.get(name, name), float(np.exp(params[i])),
+                              float(np.exp(intervals[i, 0])), float(np.exp(intervals[i, 1])), float(errors[i]))
+                  for i, name in enumerate(design_names))
+    if not all(np.isfinite([row.estimate, row.ci_low, row.ci_high, row.se]).all() for row in terms):
+        raise ValueError("declared outcome model returned non-finite effects or intervals")
+    primary = next(row for row in terms if row.term == term)
+    diagnostics["aic"] = float(fit.aic)
+    diagnostics["effect_direction"] = "higher_ordered_category" if kind == "proportional_odds" else "higher_event_rate"
+    violated = diagnostics.get("proportional_odds", {}).get("violated", False)
+    return OutcomeFit(primary.estimate, primary.ci_low, primary.ci_high, primary.se, len(y), terms,
+                      diagnostics, variance_estimator, len(pd.unique(groups)) if groups is not None else None,
+                      "Proportional-odds assumption violated; common OR is model-dependent." if violated else "")

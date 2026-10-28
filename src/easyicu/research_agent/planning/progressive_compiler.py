@@ -1975,7 +1975,7 @@ def _compile_adjusted_association(
                 path=path,
             )
     _require_variables(
-        [exposure, outcome],
+        [exposure, outcome, *(step.outcome_definition.input_columns if step.outcome_definition else ())],
         variables=variables,
         step=step,
         step_index=step_index,
@@ -2131,6 +2131,7 @@ def _compile_adjusted_association(
     method_family = (
         BINARY_ESTIMATOR_BY_EFFECT_MEASURE[step.effect_measure or "odds_ratio"]
         if step.outcome_type == "binary"
+        else step.outcome_definition.estimator if step.outcome_definition is not None
         else ASSOCIATION_OLS_ESTIMATOR
     )
     # Only a family template sets this (the transport never carries it): the
@@ -2147,6 +2148,7 @@ def _compile_adjusted_association(
             requirement_id=f"{step.step_id}_primary",
             outcome=outcome,
             outcome_type=step.outcome_type,
+            outcome_definition=step.outcome_definition,
             method_family=method_family,
             exposure_source=exposure,
             analysis_role="primary",
@@ -3120,6 +3122,7 @@ def _compile_one_step(
                     str(step.primary_exposure),
                     str(step.outcome),
                     *(item.name for item in step.model_terms),
+                    *(step.outcome_definition.input_columns if step.outcome_definition else ()),
                     *(requirement.dependence.group_source for requirement in kwargs["model_requirements"]
                       if requirement.dependence is not None),
                 ]

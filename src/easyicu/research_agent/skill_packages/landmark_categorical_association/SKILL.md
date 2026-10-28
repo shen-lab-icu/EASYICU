@@ -60,7 +60,7 @@ Inputs: an approved cohort with patient/stay identifiers, the specified measurem
    - Missing-data audit + complete-case vs imputation sensitivity
 3. **Exposure and outcome distribution**. Host checks: Exposure and outcome groups account for all patients; Uncertainty calculation matches repeated observations; Interpretation stays descriptive.
 4. **Fixed-landmark association study**. Host checks: Eligibility and observation at the landmark; Recorded variable coding; Fitted model matches the reviewed model; Agreement of estimates and uncertainty intervals.
-   - Adjusted association (logistic / modified Poisson RR / linear)
+   - Adjusted association (binary / continuous / ordered / free-days / count)
 ### Reference scripts (executable)
 The reference implementation loads the cohort, runs the analysis, draws figures and exports a checked report. The existing completion messages include `✓ Analysis completed successfully!` and `=== Export Complete ===`; the latter appears only after export consistency checks pass.
 
@@ -99,7 +99,7 @@ These source facts do not verify local data access, landmark eligibility or whet
 
 ## References
 
-- STROBE 16: Adjusted association (logistic / modified Poisson RR / linear).
+- STROBE 16: Adjusted association (binary / continuous / ordered / free-days / count).
 - STROBE 12c: Missing-data audit + complete-case vs imputation sensitivity.
 - STROBE 14a: Baseline-characteristics table (Table 1).
 - STROBE 12c: Missing-data / completeness audit.

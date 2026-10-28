@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional
 from ..scores.urine_windows import assess_urine_windows, urine_evidence_columns
+from .free_days import free_days_callback
 
 import logging
 import os
@@ -8850,6 +8851,7 @@ def apply_vent_mode_frame(frame, value_column, db_name, axis, out_column):
 
 
 CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
+    "free_days": free_days_callback,
     "bmi": _callback_bmi,
     "anion_gap": _callback_anion_gap,
     "persistent_critical_illness": _callback_persistent_critical_illness,

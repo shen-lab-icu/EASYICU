@@ -62,6 +62,7 @@ from .model_tokens import (
     normalise_model_contract_token,
 )
 from .ownership_verdict import OwnershipVerdict
+from .model_terms import OUTCOME_ESTIMATORS, OUTCOME_RUNTIME_KINDS
 
 
 #: The one mapping from a declared outcome type to the exact estimator token the
@@ -203,6 +204,10 @@ def association_estimator_support(requirement: Any) -> AssociationEstimatorSuppo
     expected = ASSOCIATION_HOST_ESTIMATORS.get(outcome_type, "")
     if outcome_type == "binary" and declared == ASSOCIATION_RR_ESTIMATOR:
         expected = ASSOCIATION_RR_ESTIMATOR
+    if outcome_type in OUTCOME_ESTIMATORS and declared in OUTCOME_ESTIMATORS[outcome_type]:
+        definition = getattr(requirement, "outcome_definition", None)
+        if definition is not None and definition.estimator == declared:
+            expected = declared
     if not expected:
         return AssociationEstimatorSupport(
             supported=False,
@@ -231,7 +236,8 @@ def association_estimator_support(requirement: Any) -> AssociationEstimatorSuppo
     return AssociationEstimatorSupport(
         supported=True,
         runtime_kind=(
-            "glm_poisson" if declared == ASSOCIATION_RR_ESTIMATOR
+            OUTCOME_RUNTIME_KINDS[declared] if declared in OUTCOME_RUNTIME_KINDS
+            else "glm_poisson" if declared == ASSOCIATION_RR_ESTIMATOR
             else "logistic" if outcome_type == "binary" else "linear"
         ),
         declared_outcome_type=outcome_type,

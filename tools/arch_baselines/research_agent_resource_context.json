@@ -1,8 +1,6 @@
 {
   "baseline_change_summary": {
-    "source_digest_changes": [
-      "src/easyicu/research_agent/planning/analysis_types.py"
-    ],
+    "source_digest_changes": [],
     "summary_changes": {}
   },
   "baseline_history": [
@@ -89,9 +87,14 @@
         "src/easyicu/research_agent/planning/analysis_types.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Record the ICU outcome association catalogue in the offline prompt identity fixture. All existing maximum resource/context envelopes and hard planner-schema budgets remain unchanged; no LOC or budget ratchet is increased.",
+      "source_digest_changes": [],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "readers: competing-event and mean-survival family words in planning/analysis_types.py (source digest only)",
+  "baseline_reason": "Record the ICU outcome association catalogue in the offline prompt identity fixture. All existing maximum resource/context envelopes and hard planner-schema budgets remain unchanged; no LOC or budget ratchet is increased.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -299,15 +302,15 @@
       "know_how_prompt_bytes": 3791,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15036,
+        "approx_input_tokens": 15222,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47373,
+            "bytes": 48115,
             "included": true,
             "required": true,
-            "sha256": "99542a4958048fabe9b46a74987f51480fc0b76ec3d51b3a31765d72c736c974"
+            "sha256": "9035027a69902d2dbdfa3efc7cc5d2f895275ad6f39a67774ad3b3f63698ab4e"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -318,27 +321,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60144,
+        "total_bytes": 60886,
         "truncated_strings": false,
-        "user_bytes": 51700
+        "user_bytes": 52442
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13955,
+        "approx_input_tokens": 14140,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47373,
+            "bytes": 48115,
             "included": true,
             "required": true,
-            "sha256": "99542a4958048fabe9b46a74987f51480fc0b76ec3d51b3a31765d72c736c974"
+            "sha256": "9035027a69902d2dbdfa3efc7cc5d2f895275ad6f39a67774ad3b3f63698ab4e"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 55817,
+        "total_bytes": 56559,
         "truncated_strings": false,
-        "user_bytes": 47373
+        "user_bytes": 48115
       },
       "planning_contract_bytes": 7541,
       "planning_contract_sha256": "50e21b7661aafd128d44ec79f5ee5b0828e92a427a3c6c505273ad900529caa3",

@@ -31,6 +31,8 @@ from ..providers.protocol import StructuredOutputRequest
 from ..providers.strict_json_schema import (
     StrictJsonSchemaError,
     assert_closed_json_schema,
+    compact_schema_definition_names,
+    intern_schema_shapes,
     strictify_json_schema,
 )
 from .population_spec_transport import (
@@ -1608,7 +1610,7 @@ def _request_cached(
             if kind == "initial"
             else "easyicu_progressive_plan_suffix_v1"
         ),
-        schema=schema,
+        schema=intern_schema_shapes(compact_schema_definition_names(schema)),
         strict=True,
     )
 

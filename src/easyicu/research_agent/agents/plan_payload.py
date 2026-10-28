@@ -39,6 +39,8 @@ from ..planning.robustness_contract import (
 from ..providers.protocol import StructuredOutputRequest
 from ..providers.structured_retry import safe_structured_attempt_metadata
 from ..providers.strict_json_schema import (
+    compact_schema_definition_names,
+    transport_definition_name as transport_definition_name,
     StrictJsonSchemaError,
     assert_closed_json_schema,
     strictify_json_schema,
@@ -593,7 +595,7 @@ def _planner_structured_output_request_cached(
 
     return StructuredOutputRequest.from_schema(
         name="easyicu_analysis_plan_v1",
-        schema=_planner_transport_schema(allowed_literature_citation_keys),
+        schema=compact_schema_definition_names(_planner_transport_schema(allowed_literature_citation_keys)),
         strict=True,
     )
 

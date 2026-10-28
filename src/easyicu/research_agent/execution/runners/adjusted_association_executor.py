@@ -63,6 +63,9 @@ from ...contracts.model_tokens import (
     canonical_association_method,
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
+from easyicu.concept.free_days import derive_free_days
+from ...contracts.model_terms import OUTCOME_RUNTIME_KINDS, OutcomeDefinition
+from ...methods.ordered_trends import fit_outcome_model
 from ..model_matrix import ModelTermCompilationError, primary_model_rows
 from ...robustness.estimators import fit_estimator
 from ...schema import (
@@ -215,6 +218,7 @@ _BASELINE_MISSING_POLICY = "drop_missing_baseline"
 _MISSING_CATEGORY_POLICY = "explicit_missing_category"
 
 _FIT_METHODS = {
+    **{kind: method for method, kind in OUTCOME_RUNTIME_KINDS.items()},
     "logistic": ASSOCIATION_LOGIT_ESTIMATOR,
     "linear": ASSOCIATION_OLS_ESTIMATOR,
     "glm_poisson": ASSOCIATION_RR_ESTIMATOR,
@@ -223,6 +227,10 @@ _FIT_METHODS = {
 
 class AdjustedAssociationError(RuntimeError):
     """The declared model could not be fitted as declared."""
+
+    def __init__(self, message: str, *, code: str | None = None, database: str | None = None):
+        self.code, self.database = code, database
+        super().__init__(message)
 
 
 def _requirement(step: AnalysisStep) -> Optional[PlannedModelRequirement]:
@@ -243,7 +251,9 @@ def _estimator_kind(requirement: PlannedModelRequirement) -> str:
 
 
 def _effect_scale(kind: str) -> str:
-    return {"logistic": "odds_ratio", "glm_poisson": "risk_ratio", "linear": "coefficient"}[kind]
+    return {"logistic": "odds_ratio", "glm_poisson": "risk_ratio", "linear": "coefficient",
+            "proportional_odds": "common_odds_ratio", "count_poisson": "rate_ratio",
+            "negative_binomial": "rate_ratio"}[kind]
 
 
 def adjusted_association_executor_verdict(step: AnalysisStep) -> OwnershipVerdict:
@@ -314,6 +324,11 @@ def adjusted_association_executor_scaffold(
         if missing_handling is not None
         else ""
     )
+    if requirement.outcome_definition is not None:
+        declared_missing += (
+            '\n        declared_model["outcome_definition"] = '
+            + repr(requirement.outcome_definition.model_dump(mode="json"))
+        )
     receipt_code = (
         render_standard_plausibility_receipt_code(
             plausibility_scope, frame_name="frame"
@@ -606,6 +621,7 @@ def run_adjusted_association_from_env(
     analysis_set: str,
     analysis_role: str,
     method_family: str,
+    outcome_definition: Any = None,
     primary_contrast_level: Optional[str] = None,
     dependence: PlannedDependenceRequirement | Dict[str, Any] | None = None,
     missing_category_covariates: Sequence[str] = (),
@@ -632,12 +648,19 @@ def run_adjusted_association_from_env(
     travels in the message so the failure names itself.
     """
 
-    import pandas as pd  # local, so importing this module never requires pandas
+    import pandas as pd  # local data-frame operations
 
     if frame is None:
         frame, cohort_path = load_step_cohort_frame(
             typed_cohort_input=typed_cohort_input
         )
+    try:
+        frame, parsed_outcome, derivation_audit = prepare_outcome(
+            frame, outcome=outcome, kind=estimator_kind, definition=outcome_definition,
+        )
+    except ValueError as exc:
+        raise AdjustedAssociationError(str(exc), code=getattr(exc, "code", None),
+                                       database=getattr(exc, "database", None)) from exc
     canonical_method = canonical_association_method(method_family)
     expected_method = _FIT_METHODS.get(estimator_kind)
     if expected_method is None or canonical_method != expected_method:
@@ -673,6 +696,8 @@ def run_adjusted_association_from_env(
         ) from exc
     adjustment = [item.name for item in adjustment_terms]
     needed = [outcome, *[item.name for item in parsed_terms]]
+    if parsed_outcome is not None and parsed_outcome.count:
+        needed.extend(parsed_outcome.input_columns)
     if parsed_dependence is not None:
         needed.append(parsed_dependence.group_source)
     missing = [column for column in needed if column not in frame.columns]
@@ -719,18 +744,26 @@ def run_adjusted_association_from_env(
         focal_term = _contrast_column(exposure, primary)
     else:
         focal_term = compiled.exposure_columns[0]
-    result = fit_estimator(
-        cohort=None,
-        X=compiled.design,
-        y=model_frame.loc[fitting_rows, outcome],
-        kind=estimator_kind,
-        term=focal_term,
-        source_by_design_column=compiled.source_by_design_column,
-        variance_estimator=variance_estimator,
-        cluster_groups=(
-            cluster_groups.loc[fitting_rows] if cluster_groups is not None else None
-        ),
+    fitting_function = fit_declared_outcome if parsed_outcome is not None else fit_estimator
+    fitting_options = (
+        {"definition": parsed_outcome, "frame": model_frame} if parsed_outcome is not None
+        else {"cohort": None}
     )
+    try:
+        result = fitting_function(
+            **fitting_options,
+            X=compiled.design,
+            y=model_frame.loc[fitting_rows, outcome],
+            kind=estimator_kind,
+            term=focal_term,
+            source_by_design_column=compiled.source_by_design_column,
+            variance_estimator=variance_estimator,
+            cluster_groups=(
+                cluster_groups.loc[fitting_rows] if cluster_groups is not None else None
+            ),
+        )
+    except ValueError as exc:
+        raise AdjustedAssociationError(str(exc)) from exc
     estimate = _finite(result.point_estimate)
     ci_low = _finite(result.ci_low)
     ci_high = _finite(result.ci_high)
@@ -909,6 +942,12 @@ def run_adjusted_association_from_env(
         ),
         "cluster_count": result.cluster_count,
     }
+    if parsed_outcome is not None:
+        model_contract["outcome_type"] = (
+            "free_days" if parsed_outcome.free_days else "count" if parsed_outcome.count else "ordinal"
+        )
+        model_contract["outcome_definition"] = parsed_outcome.model_dump(mode="json")
+        model_contract["diagnostics"] = result.diagnostics
     if missing_category_covariates:
         # Declared, so present even when no row happened to be unmeasured:
         # the policy is the plan's, the terms are what this cohort needed.
@@ -950,6 +989,19 @@ def run_adjusted_association_from_env(
         "adjustment_covariates": list(adjustment),
         "coefficient_table": coefficient_path.name,
     }
+    if parsed_outcome is not None:
+        summary["outcome_definition"] = parsed_outcome.model_dump(mode="json")
+        summary["diagnostics"] = result.diagnostics
+        summary["claim_ceiling"] = "analysis_only" if result.diagnostics.get("proportional_odds", {}).get("violated") else "reportable"
+        descriptions, distribution = outcome_summaries(model_frame.loc[fitting_rows, outcome], parsed_outcome)
+        distribution.to_csv(out_dir / "outcome_distribution.csv", index=False)
+        summary["outcome_summary"] = descriptions
+        summary["outcome_distribution_table"] = "outcome_distribution.csv"
+        if parsed_outcome.count is None:
+            render_ordered_outcome_bars(distribution, out_dir / "outcome_distribution.svg")
+            summary["outcome_distribution_figure"] = "outcome_distribution.svg"
+        if derivation_audit is not None:
+            summary["free_days_derivation_audit"] = derivation_audit
     if missing_category_covariates:
         summary["missing_category_covariates"] = list(missing_category_covariates)
         summary["missing_category_terms"] = model_contract["missing_category_terms"]
@@ -984,3 +1036,77 @@ def run_adjusted_association_from_env(
     )
     print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
     return summary
+
+
+def prepare_outcome(frame, *, outcome, kind, definition):
+    parsed = OutcomeDefinition.model_validate(definition) if definition is not None else None
+    if kind in OUTCOME_RUNTIME_KINDS.values():
+        if parsed is None or OUTCOME_RUNTIME_KINDS[parsed.estimator] != kind:
+            raise ValueError("the exact typed outcome definition and estimator are required")
+    elif parsed is not None:
+        raise ValueError("outcome definition disagrees with the runtime estimator")
+    audit = None
+    if parsed is not None and parsed.free_days:
+        values, audit = derive_free_days(frame, **parsed.free_days.model_dump())
+        if outcome in frame and not frame[outcome].equals(values):
+            if not frame[outcome].eq(values).all():
+                raise ValueError("the supplied free-days outcome disagrees with its declared derivation")
+        frame = frame.copy()
+        frame[outcome] = values
+    return frame, parsed, audit
+
+
+def fit_declared_outcome(*, definition, frame, **kwargs):
+    options: dict[str, Any] = {}
+    if definition.count and definition.count.exposure_column:
+        column = definition.count.exposure_column
+        # The model matrix already fixes the fitted rows. An absent, zero, or
+        # missing exposure on those rows refuses rather than changing that set.
+        values = frame.loc[kwargs["X"].index, column]
+        options["exposure_time" if definition.count.offset_scale == "exposure" else "log_offset"] = values
+    if definition.free_days:
+        spec = definition.free_days
+        options["ordered_levels"] = [str(value) for value in sorted(frame.loc[kwargs["X"].index, kwargs["y"].name].unique())]
+        if any(float(value) < spec.death_score or float(value) > spec.horizon_days for value in options["ordered_levels"]):
+            raise ValueError("free days outside the declared horizon/death bounds")
+    elif definition.ordered_levels:
+        options["ordered_levels"] = definition.ordered_levels
+    return fit_outcome_model(**kwargs, **options)
+
+
+def outcome_summaries(series, definition):
+    """Table 1 compatible median/IQR plus ordered bar heights and denominators."""
+    from ...contracts.model_terms import level_spelling
+    observed = series.dropna()
+    if definition.ordered_levels:
+        levels = definition.ordered_levels
+    else:
+        levels = [level_spelling(value) for value in sorted(observed.unique())]
+    counts = observed.map(level_spelling).value_counts()
+    bars = [{"level": level, "n": int(counts.get(level, 0)),
+             "percent": float(100 * counts.get(level, 0) / len(observed)) if len(observed) else None}
+            for level in levels]
+    summary = {"n": len(observed), "missing_n": int(series.isna().sum()), "distribution": bars}
+    if not definition.ordered_levels and len(observed):
+        summary.update(median=float(observed.median()), q1=float(observed.quantile(0.25)),
+                       q3=float(observed.quantile(0.75)))
+    import pandas as pd
+    return summary, pd.DataFrame(bars, columns=["level", "n", "percent"])
+
+
+def render_ordered_outcome_bars(distribution, destination):
+    """Render aggregate counts in plan order, without retaining patient rows."""
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_svg import FigureCanvasSVG
+
+    figure = Figure(figsize=(7, 3.5))
+    FigureCanvasSVG(figure)
+    axis = figure.subplots()
+    positions = range(len(distribution))
+    axis.bar(positions, distribution["percent"], color="#27667b")
+    axis.set_xticks(list(positions), distribution["level"].astype(str))
+    axis.set_ylabel("Observed outcomes (%)")
+    axis.set_xlabel("Declared outcome order (low to high)")
+    figure.tight_layout()
+    figure.savefig(destination, format="svg")
+    figure.clear()

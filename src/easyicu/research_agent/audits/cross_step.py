@@ -33,6 +33,7 @@ from ..schema import (
 from ..authority.runtime_artifacts import (
     current_successful_step_records,
 )
+from .outcome_semantics import expected_model_denominator
 from .cross_step_source_status import (  # noqa: F401 — re-export facade
     CrossStepSourceStatusValidator,
 )
@@ -975,7 +976,7 @@ class PrimaryModelContractValidator:
             PLANNED_MODEL_REQUIREMENTS_OUTPUT,
         )
     }
-    _OUTCOME_TYPES = {"binary", "continuous"}
+    _OUTCOME_TYPES = {"binary", "continuous", "free_days", "ordinal", "count"}
     _BINARY_MODEL_FAMILIES = ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES
     _CONTINUOUS_MODEL_FAMILIES = ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES
     _CONTINUOUS_INCOMPATIBLE_SCALES = {
@@ -1191,12 +1192,12 @@ class PrimaryModelContractValidator:
                     "expected": requirement["exposure_source"],
                     "reported": reported["exposure_source"],
                 }
-            field = "dependence"
-            if requirement.get(field) != reported.get(field):
-                mismatches[field] = {
-                    "expected": requirement.get(field),
-                    "reported": reported.get(field),
-                }
+            for field in ("dependence", "outcome_definition"):
+                if requirement.get(field) != reported.get(field):
+                    mismatches[field] = {
+                        "expected": requirement.get(field),
+                        "reported": reported.get(field),
+                    }
             handling = requirement.get("baseline_missing_handling")
             if (requirement.get("effect_modifiers") or []) != (contract.get("effect_modifiers") or []):
                 mismatches["effect_modifiers"] = {
@@ -1892,6 +1893,11 @@ class PrimaryModelContractValidator:
             for value in rows["effect_scale"]
             if pd.notna(value) and str(value).strip()
         }
+        expected = {"free_days": "common_odds_ratio", "ordinal": "common_odds_ratio", "count": "rate_ratio"}.get(outcome_type)
+        if expected is not None:
+            return ([{"model_id": contract.get("model_id"), "issue": "effect_scale_model_family_mismatch",
+                      "outcome_type": outcome_type, "reported_effect_scales": sorted(scales)}]
+                    if scales != {expected} else [])
         incompatible = (
             scales & cls._CONTINUOUS_INCOMPATIBLE_SCALES
             if outcome_type == "continuous"
@@ -2048,74 +2054,8 @@ class PrimaryModelContractValidator:
         return mask
 
     @classmethod
-    def _expected_denominator(
-        cls,
-        *,
-        frame: pd.DataFrame,
-        outcome: str,
-        outcome_type: str,
-        covariates: Sequence[str],
-        contract: Mapping[str, Any],
-        raw_exposure_source: Optional[str] = None,
-    ) -> Optional[tuple[int, Optional[int]]]:
-        if outcome not in frame.columns:
-            return None
-        outcome_values = pd.to_numeric(frame[outcome], errors="coerce")
-        if outcome_type == "binary":
-            mask = outcome_values.isin([0, 1])
-        elif outcome_type == "continuous":
-            mask = outcome_values.notna() & outcome_values.map(math.isfinite)
-        else:
-            return None
-        kept = cls._declared_missing_category_covariates(contract)
-        if kept is not None:
-            declared_mask = cls._declared_policy_mask(
-                frame,
-                mask,
-                covariates=covariates,
-                kept=kept,
-                exposure=raw_exposure_source or str(contract.get("exposure_source") or ""),
-                outcome_values=outcome_values,
-            )
-            if declared_mask is None:
-                return None
-            event_n = (
-                int(outcome_values.loc[declared_mask].sum())
-                if outcome_type == "binary"
-                else None
-            )
-            return int(declared_mask.sum()), event_n
-        policy = cls._normalise(contract.get("baseline_missing_policy"))
-        if policy in {"drop_missing", "drop_missing_baseline", "complete_case"}:
-            for covariate in covariates:
-                if covariate not in frame.columns:
-                    return None
-                mask &= frame[covariate].notna()
-        elif policy not in {"explicit_missing_category", "missing_category"}:
-            return None
-
-        analysis_set = cls._normalise(contract.get("analysis_set"))
-        exposure_requires_observation = analysis_set == "complete_case" or (
-            analysis_set == "source_aware"
-            and policy in {"drop_missing", "drop_missing_baseline", "complete_case"}
-        )
-        if exposure_requires_observation:
-            exposure = raw_exposure_source or str(contract.get("exposure_source") or "")
-            if exposure not in frame.columns:
-                return None
-            values = frame[exposure]
-            mask &= values.notna()
-            if pd.api.types.is_numeric_dtype(values):
-                numeric = pd.to_numeric(values, errors="coerce")
-                mask &= numeric.map(
-                    lambda value: pd.notna(value) and abs(value) != float("inf")
-                )
-        elif analysis_set != "source_aware":
-            return None
-        event_n = (
-            int(outcome_values.loc[mask].sum()) if outcome_type == "binary" else None
-        )
-        return int(mask.sum()), event_n
+    def _expected_denominator(cls, **kwargs):
+        return expected_model_denominator(cls, **kwargs)
 
     @classmethod
     def _raw_exposure_source(
@@ -2906,7 +2846,7 @@ class PrimaryModelContractValidator:
                         "issue": "model_n_and_event_n_must_be_counts",
                     }
                 )
-            if outcome_type == "continuous" and contract.get("event_n") is not None:
+            if outcome_type != "binary" and contract.get("event_n") is not None:
                 issues.append(
                     {
                         "model_id": model_id,

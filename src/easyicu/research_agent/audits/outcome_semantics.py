@@ -7,6 +7,9 @@ import math
 import re
 from typing import Any, Optional, Sequence
 
+import pandas as pd
+from easyicu.concept.free_days import derive_free_days
+from ..contracts.model_terms import OutcomeDefinition
 from ..schema import ResearchContext
 
 
@@ -270,3 +273,104 @@ __all__ = [
     "_script_has_conflicting_mortality_semantics",
     "_script_uses_bound_outcome",
 ]
+
+
+def expected_model_denominator(owner, *, frame, outcome, outcome_type, covariates,
+                               contract, raw_exposure_source=None):
+    definition = contract.get("outcome_definition")
+    parsed = None
+    if outcome_type in {"free_days", "ordinal", "count"}:
+        try:
+            parsed = OutcomeDefinition.model_validate(definition)
+            parsed.require_type(outcome_type)
+            if parsed.free_days:
+                values, _ = derive_free_days(frame, **parsed.free_days.model_dump())
+                if outcome in frame and not frame[outcome].eq(values).all():
+                    return None
+                frame = frame.assign(**{outcome: values})
+        except (TypeError, ValueError):
+            return None
+    if outcome not in frame.columns:
+        return None
+    outcome_values = pd.to_numeric(frame[outcome], errors="coerce")
+    if parsed and parsed.ordered_levels:
+        from ..contracts.model_terms import level_spelling
+        outcome_values = frame[outcome]
+        if not set(outcome_values.dropna().map(level_spelling)).issubset(parsed.ordered_levels):
+            return None
+    if outcome_type == "binary":
+        mask = outcome_values.isin([0, 1])
+    elif outcome_type in {"continuous", "free_days", "count"}:
+        mask = outcome_values.notna() & outcome_values.map(math.isfinite)
+    elif outcome_type == "ordinal":
+        mask = outcome_values.notna()
+    else:
+        return None
+    kept = owner._declared_missing_category_covariates(contract)
+    if kept is not None:
+        declared_mask = owner._declared_policy_mask(
+            frame,
+            mask,
+            covariates=covariates,
+            kept=kept,
+            exposure=raw_exposure_source or str(contract.get("exposure_source") or ""),
+            outcome_values=outcome_values,
+        )
+        if declared_mask is None:
+            return None
+        if not _count_rows_valid(frame, outcome_values, declared_mask, parsed):
+            return None
+        event_n = (
+            int(outcome_values.loc[declared_mask].sum())
+            if outcome_type == "binary"
+            else None
+        )
+        return int(declared_mask.sum()), event_n
+    policy = owner._normalise(contract.get("baseline_missing_policy"))
+    if policy in {"drop_missing", "drop_missing_baseline", "complete_case"}:
+        for covariate in covariates:
+            if covariate not in frame.columns:
+                return None
+            mask &= frame[covariate].notna()
+    elif policy not in {"explicit_missing_category", "missing_category"}:
+        return None
+
+    analysis_set = owner._normalise(contract.get("analysis_set"))
+    exposure_requires_observation = analysis_set == "complete_case" or (
+        analysis_set == "source_aware"
+        and policy in {"drop_missing", "drop_missing_baseline", "complete_case"}
+    )
+    if exposure_requires_observation:
+        exposure = raw_exposure_source or str(contract.get("exposure_source") or "")
+        if exposure not in frame.columns:
+            return None
+        values = frame[exposure]
+        mask &= values.notna()
+        if pd.api.types.is_numeric_dtype(values):
+            numeric = pd.to_numeric(values, errors="coerce")
+            mask &= numeric.map(
+                lambda value: pd.notna(value) and abs(value) != float("inf")
+            )
+    elif analysis_set != "source_aware":
+        return None
+    if not _count_rows_valid(frame, outcome_values, mask, parsed):
+        return None
+    event_n = (
+        int(outcome_values.loc[mask].sum()) if outcome_type == "binary" else None
+    )
+    return int(mask.sum()), event_n
+
+
+def _count_rows_valid(frame, outcome_values, mask, parsed):
+    if parsed is None or parsed.count is None:
+        return True
+    counts = outcome_values.loc[mask]
+    if (counts < 0).any() or (counts % 1 != 0).any():
+        return False
+    column = parsed.count.exposure_column
+    if column:
+        if column not in frame:
+            return False
+        times = pd.to_numeric(frame[column], errors="coerce").loc[mask]
+        return bool(times.map(lambda value: math.isfinite(value) and (parsed.count.offset_scale == "log_offset" or value > 0)).all())
+    return True

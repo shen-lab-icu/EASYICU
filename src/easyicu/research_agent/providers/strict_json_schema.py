@@ -11,6 +11,9 @@ calls these helpers.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+from collections import Counter
 from typing import Any, Mapping
 
 from pydantic import BaseModel
@@ -134,3 +137,79 @@ __all__ = [
     "closed_pydantic_json_schema",
     "strictify_json_schema",
 ]
+
+
+def transport_definition_name(name: str) -> str:
+    # These names are read by downstream transport projections.
+    if name in {"AnalysisStep", "KnowHowDecision", "CohortDefinition"}:
+        return name
+    return hashlib.sha256(name.encode("utf-8")).hexdigest()[:4]
+
+
+def compact_schema_definition_names(schema: dict) -> dict:
+    definitions = schema.get("$defs", {})
+    names = {name: transport_definition_name(name) for name in definitions}
+    if len(set(names.values())) != len(names):
+        raise ValueError("transport schema definition alias collision")
+
+    def rewrite(node):
+        if isinstance(node, list):
+            return [rewrite(value) for value in node]
+        if not isinstance(node, dict):
+            return node
+        result = {}
+        for key, value in node.items():
+            if key == "$defs":
+                result[key] = {names[name]: rewrite(shape) for name, shape in value.items()}
+            elif key == "$ref" and value.startswith("#/$defs/"):
+                result[key] = "#/$defs/" + names[value.removeprefix("#/$defs/")]
+            else:
+                result[key] = rewrite(value)
+        return result
+    return rewrite(schema)
+
+
+def intern_schema_shapes(schema: dict) -> dict:
+    """Reference repeated schema shapes when doing so reduces wire bytes.
+
+    Each extraction replaces identical schema nodes with a local reference.
+    Property names, enum values, required lists and validation constraints are
+    preserved. Fresh definitions are inserted after replacement, avoiding a
+    self reference. The input schema is never mutated.
+    """
+    result = copy.deepcopy(schema)
+    def encode(value):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    while True:
+        counts = Counter()
+        def count(node):
+            if isinstance(node, dict):
+                if isinstance(node.get("type"), str) or isinstance(node.get("anyOf"), list):
+                    counts[encode(node)] += 1
+                for value in node.values():
+                    count(value)
+            elif isinstance(node, list):
+                for value in node:
+                    count(value)
+        count(result)
+        definitions = result.setdefault("$defs", {})
+        index = 0
+        while f"_s{index}" in definitions:
+            index += 1
+        name = f"_s{index}"
+        reference = {"$ref": f"#/$defs/{name}"}
+        candidates = [(n * (len(shape) - len(encode(reference))) - len(shape) - len(name) - 4, shape)
+                      for shape, n in counts.items() if n > 1]
+        if not candidates or max(candidates)[0] <= 0:
+            return result
+        _, selected = max(candidates)
+        def replace(node):
+            if isinstance(node, dict):
+                if encode(node) == selected:
+                    return dict(reference)
+                return {key: replace(value) for key, value in node.items()}
+            if isinstance(node, list):
+                return [replace(value) for value in node]
+            return node
+        result = replace(result)
+        result["$defs"][name] = json.loads(selected)
