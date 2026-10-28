@@ -1,0 +1,71 @@
+/* Owner: the conversation rail's task list (single-line rows, the "Needs you"
+   group, the "View all" entry) and the project's task table in the main
+   column. Markup: screens-guided-pi-study-workspace.js (rail) and
+   screens-guided-pi-task-table.js (table). Loaded after guided-pi-skin.css. */
+
+/* —— Rail rows: one line, state dot, title, time; ••• on hover —— */
+.gpi-conversation-row{align-items:center;margin-bottom:1px}
+.gpi-conversation-item{display:flex;align-items:center;gap:8px;min-height:32px;padding:5px 34px 5px 10px}
+.gpi-conversation-item .gpi-conversation-copy{flex:1 1 auto;min-width:0}
+.gpi-conversation-item .gpi-conversation-copy strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:20px}
+.gpi-conversation-item time{flex:0 0 auto;align-self:center;padding:0;color:var(--skin-muted-2);font-size:11.5px}
+.gpi-conversation-dot{flex:0 0 auto;box-sizing:border-box;width:7px;height:7px;border:1.5px solid var(--skin-muted-2);border-radius:50%}
+.gpi-conversation-item.is-running .gpi-conversation-dot{border-color:var(--accent);background:var(--accent);animation:gpi-task-pulse 1.6s ease-in-out infinite}
+.gpi-conversation-item.needs-user .gpi-conversation-dot{width:8px;height:8px;border:2px solid var(--accent);background:var(--skin-primary)}
+.gpi-conversation-item.needs-attention .gpi-conversation-dot{border-color:#b75e40;background:#b75e40}
+.gpi-conversation-item.is-complete .gpi-conversation-dot{border-color:var(--skin-muted-2);background:transparent}
+@keyframes gpi-task-pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.gpi-conversation-item.is-running .gpi-conversation-dot{animation:none}}
+.gpi-conversation-menu{margin:0 4px 0 0;align-self:center}
+.gpi-conversation-menu>summary{opacity:0}
+.gpi-conversation-row:hover .gpi-conversation-menu>summary,.gpi-conversation-row:focus-within .gpi-conversation-menu>summary,
+.gpi-conversation-menu[open]>summary,.gpi-conversation-item[aria-current]+.gpi-conversation-menu>summary{opacity:1}
+
+/* —— "Needs you" group and the recent divider —— */
+.gpi-task-group{margin:6px 0 2px}
+.gpi-task-group>summary{display:flex;align-items:center;gap:6px;min-height:28px;padding:4px 10px;border-radius:6px;color:var(--skin-ink);font:500 12px/1.3 var(--skin-font);list-style:none;cursor:pointer}
+.gpi-task-group>summary::-webkit-details-marker{display:none}
+.gpi-task-group>summary:hover,.gpi-task-group>summary:focus-visible{background:var(--skin-sunken);outline:0}
+.gpi-task-group>summary svg{transition:transform .12s ease}
+.gpi-task-group[open]>summary svg{transform:rotate(90deg)}
+.gpi-task-group-count{min-width:18px;padding:0 6px;border-radius:9px;background:var(--skin-primary);color:var(--skin-ink);font-size:11px;line-height:18px;text-align:center;font-variant-numeric:tabular-nums}
+.gpi-task-divider{margin:8px 10px 2px;padding-top:8px;border-top:1px solid var(--skin-line);color:var(--skin-muted);font:500 11px/1.3 var(--skin-font)}
+.gpi-task-more{display:block;width:calc(100% - 8px);min-height:30px;margin:4px 0 0 8px;padding:5px 12px;border:0;border-radius:6px;background:transparent;color:var(--skin-muted);font:500 12px/1.3 var(--skin-font);text-align:left;cursor:pointer}
+.gpi-task-more:hover,.gpi-task-more:focus-visible{background:var(--skin-sunken);color:var(--skin-ink);outline:0}
+
+/* —— Task table (main column) —— */
+.gpi-task-page{box-sizing:border-box;width:100%;max-width:1080px;margin:0 auto;padding:24px 28px 32px;color:var(--skin-ink);font-family:var(--skin-font)}
+.gpi-task-page>header{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.gpi-task-page h2{display:flex;align-items:baseline;gap:8px;margin:0;font:500 20px/1.3 var(--skin-font)}
+.gpi-task-page h2 span{color:var(--skin-muted);font-size:14px;font-variant-numeric:tabular-nums}
+.gpi-task-close{display:grid;place-items:center;width:30px;height:30px;margin-left:auto;padding:0;border:0;border-radius:6px;background:transparent;color:var(--skin-ink);cursor:pointer}
+.gpi-task-close:hover,.gpi-task-close:focus-visible{background:var(--skin-sunken)}
+.gpi-task-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px}
+.gpi-task-search{display:flex;flex:1 1 240px;align-items:center;gap:6px;min-width:0;height:32px;padding:0 10px;border:1px solid var(--skin-border);border-radius:6px;background:var(--skin-paper);color:var(--skin-muted)}
+.gpi-task-search input{flex:1;min-width:0;border:0;background:transparent;color:var(--skin-ink);font:13px var(--skin-font);outline:0}
+.gpi-task-toolbar select{height:32px;padding:0 8px;border:1px solid var(--skin-border);border-radius:6px;background:var(--skin-paper);color:var(--skin-ink);font:13px var(--skin-font)}
+.gpi-task-new{display:flex;align-items:center;gap:4px;height:32px;padding:0 12px;border:1px solid var(--skin-border);border-radius:6px;background:var(--skin-primary);color:var(--skin-ink);font:500 13px/1 var(--skin-font);cursor:pointer}
+.gpi-task-new:disabled{opacity:.5;cursor:not-allowed}
+.gpi-task-scroll{overflow-x:auto;border:1px solid var(--skin-border);border-radius:8px;background:var(--skin-paper)}
+.gpi-task-table{width:100%;border-collapse:collapse;font-size:13px}
+.gpi-task-table th{position:sticky;top:0;padding:0 12px;border-bottom:1px solid var(--skin-border);background:var(--skin-sunken);color:var(--skin-muted);font-weight:500;text-align:left;white-space:nowrap}
+.gpi-task-table th,.gpi-task-table th button{height:36px}
+.gpi-task-table th button{display:inline-flex;align-items:center;gap:3px;padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}
+.gpi-task-table th button svg{transform:rotate(90deg)}
+.gpi-task-table td{padding:0 12px;border-top:1px solid var(--skin-line);white-space:nowrap}
+.gpi-task-table tbody tr:first-child td{border-top:0}
+.gpi-task-table td:first-child{width:52%;max-width:0}
+.gpi-task-table td:first-child button{display:block;width:100%;min-height:40px;padding:0;overflow:hidden;border:0;background:transparent;color:var(--skin-ink);font:500 13.5px/40px var(--skin-font);text-align:left;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.gpi-task-table tbody tr:hover{background:var(--skin-primary-tint)}
+.gpi-task-table td:first-child button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.gpi-task-table td:not(:first-child){color:var(--skin-muted)}
+.gpi-task-state{display:inline-flex;align-items:center;gap:6px}
+.gpi-task-state i{box-sizing:border-box;width:7px;height:7px;border:1.5px solid var(--skin-muted-2);border-radius:50%}
+.gpi-task-state.is-running i{border-color:var(--accent);background:var(--accent)}
+.gpi-task-state.is-needs_user{color:var(--skin-ink)}
+.gpi-task-state.is-needs_user i{border:2px solid var(--accent);background:var(--skin-primary)}
+.gpi-task-state.is-stopped i{border-color:#b75e40;background:#b75e40}
+.gpi-task-empty{padding:28px 0;color:var(--skin-muted);font-size:13px;text-align:center}
+.gpi-task-empty[hidden]{display:none}
+@media (max-width:720px){.gpi-task-page{padding:16px}.gpi-task-table td:last-child,.gpi-task-table th:last-child{display:none}}
+.gpi-conversation-item small.shell-sr-only{display:block;margin:-1px}

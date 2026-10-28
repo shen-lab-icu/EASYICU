@@ -12,7 +12,7 @@
   const ACCESS = MODULES.require('access');
   const HEADER = MODULES.require('header');
   const REGENERATION = MODULES.require('regeneration');
-  const STUDY_WORKSPACE = MODULES.require('studyWorkspace').create({ tr, esc, iconHtml });
+  const STUDY_WORKSPACE = MODULES.require('studyWorkspace').create({ tr, esc, iconHtml }), TASKS = (MODULES.optional('taskTable') || { create: () => null }).create({ tr, esc, iconHtml, state: () => state, projectId, render, openSession, startEntry, title: navigationSessionTitle, sessions: () => state.sessions.filter(sessionMatchesUiLanguage), status: STUDY_WORKSPACE.sessionStatusLabel, railKey: STUDY_WORKSPACE.railKey });
 
   const state = {
     host: null, conv: null, runtime: null, sessions: [], session: null,
@@ -594,7 +594,7 @@
       ? statusBanner()
       : (state.demoMode ? demoPanel() : (state.projectIssue === 'pi_project_study_context_missing'
         ? activatePanel()
-        : (CONNECT.pageRequired() ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel()))))) + (setupFocused ? '' : CONNECT.dialogHtml());
+        : (CONNECT.pageRequired() ? setupPanel() : (!projectId() ? projectRequiredPanel() : (TASKS && TASKS.shown() ? TASKS.panel() : (state.session ? sessionPanel() : activatePanel())))))) + (setupFocused ? '' : CONNECT.dialogHtml());
     // A menu the researcher has open (layout, more, composer) survives the
     // repaint that every progress event of a running job triggers.
     const menus = window.EU_POPOVER_MENUS;
@@ -615,7 +615,7 @@
     STUDY_WORKSPACE.syncNavigation({ projectId: projectId(), sessions: state.sessions.filter(sessionMatchesUiLanguage), otherLanguageSessions: state.sessions.filter(row => !sessionMatchesUiLanguage(row)).length, switchLanguage: () => window.setLang && window.setLang(uiLanguage() === 'zh' ? 'en' : 'zh'),
       selectedId: state.session && state.session.session_id, loading: restoring, disabled: state.busy || Boolean(state.childJobId) || state.projectLoading,
       visible: state.shell !== 'legacy', title: navigationSessionTitle, status: STUDY_WORKSPACE.sessionStatusLabel,
-      time: STUDY_WORKSPACE.compactSessionTime, open: openSession, create: startEntry, search: openSearch,
+      time: STUDY_WORKSPACE.compactSessionTime, open: id => (TASKS ? TASKS.openSession(id) : openSession(id)), create: () => (TASKS ? TASKS.startEntry() : startEntry()), search: openSearch, openAll: TASKS ? TASKS.show : undefined,
       resources: RUN_OUTCOME.collection(state.latestRun, state.workflow), openResource: EVENTS.openResource,
       materialsInteractive: !emptySessionFocused, rename: renameSession, remove: removeSession,
       mark: id => { const attention = MODULES.optional('attention'); return attention ? attention.conversationMarkHtml(projectId(), id) : ''; } });

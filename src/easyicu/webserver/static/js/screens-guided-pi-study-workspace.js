@@ -376,6 +376,35 @@
         + `<details class="gpi-conversation-empty-group" data-gpi-rail-empty-group>`
         + `${summary}${empty.map(index => rendered[index]).join('')}</details>`;
     }
+    // Biomni-style task list: tasks waiting on the researcher sit in their own
+    // group on top; the rest show the most recent few, and the full list is
+    // one click away in the project's task table.
+    const RECENT_LIMIT = 8;
+    let needsGroupOpen = true;
+    function groupTaskRows(ctx, rendered) {
+      const needs = [];
+      const rest = [];
+      ctx.sessions.forEach((row, index) => (railState(row) === RAIL_STATES.needs_user ? needs : rest).push(index));
+      let shown = rest;
+      let hidden = 0;
+      if (typeof ctx.openAll === 'function') {
+        const busy = rest.filter(index => !isEmptyConversation(ctx.sessions[index]));
+        if (busy.length > RECENT_LIMIT) {
+          // The selected conversation is never cut from the list.
+          const keep = new Set(busy.slice(0, RECENT_LIMIT));
+          rest.forEach(index => { if (String(ctx.sessions[index].session_id) === String(ctx.selectedId)) keep.add(index); });
+          shown = rest.filter(index => keep.has(index) || isEmptyConversation(ctx.sessions[index]));
+          hidden = rest.length - shown.length;
+        }
+      }
+      const group = needs.length
+        ? `<details class="gpi-task-group" data-gpi-rail-needs-group${needsGroupOpen ? ' open' : ''}><summary>${iconHtml('chevron', 12)}<span>${tr('Needs you', '待你处理')}</span><span class="gpi-task-group-count">${needs.length}</span></summary>${needs.map(index => rendered[index]).join('')}</details>`
+        : '';
+      const recent = groupEmptyTaskRows(shown.map(index => ctx.sessions[index]), shown.map(index => rendered[index]), ctx.selectedId);
+      const divider = needs.length && shown.length ? `<p class="gpi-task-divider">${tr('Recent', '最近')}</p>` : '';
+      const more = hidden ? `<button type="button" class="gpi-task-more" data-gpi-rail-all>${tr(`View all ${ctx.sessions.length}`, `查看全部 ${ctx.sessions.length} 个对话`)}</button>` : '';
+      return group + divider + recent + more;
+    }
     // A conversation keeps the language it started in and the rail lists the
     // interface language's, so a list empty in this language names the
     // conversations kept in the other one instead of reading as empty.
@@ -393,7 +422,7 @@
       const locked = ctx.loading || ctx.disabled;
       const materials = (Array.isArray(ctx.resources) ? ctx.resources : []).filter(canReference).slice(0, 12);
       const materialsInteractive = ctx.materialsInteractive !== false;
-      const markup = `<div class="gpi-conversations-main"><div class="gpi-conversations-heading"><strong>${tr('Conversations', '对话')}</strong><span class="gpi-conversations-heading-actions"><button type="button" data-gpi-rail-task-search-toggle aria-label="${tr('Search all projects', '搜索全部项目')}" title="${tr('Search', '搜索')}">${iconHtml('search', 15)}</button><button type="button" data-gpi-rail-new ${locked ? 'disabled' : ''} aria-label="${tr('New conversation in this project', '在当前项目新建对话')}">${iconHtml('plus', 14)}<span>${tr('Conversation', '对话')}</span></button></span></div>
+      const markup = `<div class="gpi-conversations-main"><div class="gpi-conversations-heading"><strong>${tr('Conversations', '对话')}</strong><span class="gpi-conversations-heading-actions"><button type="button" data-gpi-rail-task-search-toggle aria-label="${tr('Search all projects', '搜索全部项目')}" title="${tr('Search', '搜索')}">${iconHtml('search', 15)}</button>${typeof ctx.openAll === 'function' ? `<button type="button" data-gpi-rail-all aria-label="${tr('All conversations in this project', '当前项目的全部对话')}" title="${tr('View all', '查看全部')}">${iconHtml('grid', 15)}</button>` : ''}<button type="button" data-gpi-rail-new ${locked ? 'disabled' : ''} aria-label="${tr('New conversation in this project', '在当前项目新建对话')}">${iconHtml('plus', 14)}<span>${tr('Conversation', '对话')}</span></button></span></div>
         <nav aria-label="${tr('Conversations in this project', '当前项目中的对话')}">${ctx.loading
           ? `<p role="status">${tr('Loading conversations…', '正在读取对话…')}</p>`
           : ctx.sessions.length ? (() => {
@@ -403,9 +432,11 @@
             const time = typeof ctx.time === 'function' ? ctx.time(row) : '';
             const stateClass = (railState(row) || { cls: '' }).cls;
             const title = ctx.title(row);
-            return `<div class="gpi-conversation-row" data-gpi-rail-session-row data-gpi-rail-session-text="${esc(`${title} ${status}`.toLowerCase())}"><button type="button" class="gpi-conversation-item${stateClass}" data-gpi-rail-session="${esc(row.session_id)}" ${row.session_id === ctx.selectedId ? 'aria-current="page"' : ''} ${locked ? 'disabled' : ''}><span class="gpi-conversation-copy"><strong>${esc(title)}</strong><small><i aria-hidden="true"></i>${esc(status)}</small></span>${typeof ctx.mark === 'function' ? ctx.mark(row.session_id) : ''}${time ? `<time datetime="${esc(row.last_activity_at || row.created_at || '')}">${esc(time)}</time>` : ''}</button><details class="gpi-conversation-menu" data-popover-menu data-popover-key="${esc(row.session_id)}"><summary aria-label="${esc(tr('Conversation actions', '对话操作'))}" title="${esc(tr('Conversation actions', '对话操作'))}">•••</summary><div><button type="button" data-gpi-rail-rename="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Rename', '重命名')}</button><button type="button" data-gpi-rail-remove="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Delete conversation', '删除对话')}</button></div></details></div>`;
+            // One line per task: the dot carries the state, the tooltip and
+            // the screen-reader text carry its words.
+            return `<div class="gpi-conversation-row" data-gpi-rail-session-row data-gpi-rail-session-text="${esc(`${title} ${status}`.toLowerCase())}"><button type="button" class="gpi-conversation-item${stateClass}" data-gpi-rail-session="${esc(row.session_id)}" title="${esc(`${title} · ${status}`)}" ${row.session_id === ctx.selectedId ? 'aria-current="page"' : ''} ${locked ? 'disabled' : ''}><i class="gpi-conversation-dot" aria-hidden="true"></i><span class="gpi-conversation-copy"><strong>${esc(title)}</strong><small class="shell-sr-only">${esc(status)}</small></span>${typeof ctx.mark === 'function' ? ctx.mark(row.session_id) : ''}${time ? `<time datetime="${esc(row.last_activity_at || row.created_at || '')}">${esc(time)}</time>` : ''}</button><details class="gpi-conversation-menu" data-popover-menu data-popover-key="${esc(row.session_id)}"><summary aria-label="${esc(tr('Conversation actions', '对话操作'))}" title="${esc(tr('Conversation actions', '对话操作'))}">•••</summary><div><button type="button" data-gpi-rail-rename="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Rename', '重命名')}</button><button type="button" data-gpi-rail-remove="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Delete conversation', '删除对话')}</button></div></details></div>`;
             });
-            return groupEmptyTaskRows(ctx.sessions, rendered, ctx.selectedId);
+            return groupTaskRows(ctx, rendered);
           })()
             : ctx.otherLanguageSessions > 0 ? otherLanguageNotice(ctx.otherLanguageSessions)
             : `<p>${tr('No conversations yet. Start one in this project.', '暂无对话，可在当前项目中开始。')}</p>`}</nav></div>
@@ -423,6 +454,17 @@
         const taskSearchToggle = event.target.closest('[data-gpi-rail-task-search-toggle]');
         if (taskSearchToggle) {
           if (typeof ctx.search === 'function') ctx.search();
+          return;
+        }
+        const needsSummary = event.target.closest('[data-gpi-rail-needs-group] > summary');
+        if (needsSummary) {
+          // The click runs before the toggle, so the group is still in its old state.
+          const group = needsSummary.parentElement;
+          needsGroupOpen = !(group && group.open);
+          return;
+        }
+        if (event.target.closest('[data-gpi-rail-all]') && typeof ctx.openAll === 'function') {
+          ctx.openAll();
           return;
         }
         const searchToggle = event.target.closest('[data-gpi-rail-material-search-toggle]');
@@ -545,7 +587,7 @@
     }
     function consume(projectId, sessionId) { if (current(projectId, sessionId)) reference = null; }
     function removeReference() { reference = null; }
-    return { sessionStatusLabel, compactSessionTime, capture, syncNavigation, messageView, openMaterials, renderMaterials, filterMaterials, setMaterialCategory, mentionKind, hasMaterials, restoreMaterials, selectedMaterial, closeMaterials,
+    return { sessionStatusLabel, compactSessionTime, railKey: row => Object.keys(RAIL_STATES).find(key => RAIL_STATES[key] === railState(row)) || 'idle', capture, syncNavigation, messageView, openMaterials, renderMaterials, filterMaterials, setMaterialCategory, mentionKind, hasMaterials, restoreMaterials, selectedMaterial, closeMaterials,
       openSkills, renderSkillPicker, filterSkills, setSkillCatalog, setSkillCategory, selectCatalog, selectSkill, selectFrozenSkill, selectMethodTemplate, applyHubIntent, takeHubAttachment, hasHubIntent, closeSkills, renderSkillReference, decorateSkillMessage, consumeSkill, removeSkill, removeBuilder, removeMethod, renderAccessMode,
       hasReference: (projectId, sessionId) => Boolean(current(projectId, sessionId)), canReference, setReference, renderReference, decorateMessage, consume, removeReference,
       isEmptyConversation };

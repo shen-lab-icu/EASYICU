@@ -57,6 +57,7 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_pi_multi_database_cards.test.js": ["screens-guided-pi-source-adjustments.js", "screens-guided-pi-multi-database.js"],
     "guided_pi_audit_desktop_copy.test.js": [],
     "guided_pi_message_queue.test.js": ["screens-guided-pi-message-queue.js"],
+    "guided_pi_task_table.test.js": ["screens-guided-pi-modules.js", "screens-guided-pi-task-table.js"],
     "windowed_summary_copy.test.js": ["screens-guided-pi-error-text.js"],
     "audit_regressions_20260915.test.js": [],
     "agent_render_security.test.js": ["screens-agent-render.js", "screens-agent-report-reader.js"],
