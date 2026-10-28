@@ -1491,20 +1491,18 @@ def _describe_column(
 
 
 def _guess_id_columns(df: pd.DataFrame) -> List[str]:
+    from easyicu.database_config import ID_COLUMNS
+
+    # Raw planning catalogs use their database's own identifier spelling.
+    # Read the source registry, including case, rather than a partial local
+    # list that silently drops a source's analysis-unit coordinate.
+    registered = {name.casefold() for columns in ID_COLUMNS.values() for name in columns}
     candidates = [
         c
         for c in df.columns
-        if c.lower()
-        in {
+        if c.casefold() in registered | {
             "patient_id",
-            "icustay_id",
-            "hadm_id",
-            "stay_id",
-            "subject_id",
             "patient_stay_id",
-            "patientunitstayid",
-            "uniquepid",
-            "admissionid",
         }
     ]
     return candidates[:3]

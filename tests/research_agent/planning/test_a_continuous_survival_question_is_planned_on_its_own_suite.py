@@ -247,10 +247,8 @@ def test_coordinates_the_host_cannot_close_propose_no_continuous_suite(case):
     ) is None
 
 
-def test_a_continuous_suite_sealed_for_another_exposure_keeps_planning_open():
-    # The router offers no template for a suite sealed on another exposure,
-    # but the suite's owner is accepted by its primary method, so the planner
-    # is not stopped before its first Provider call.
+def test_a_continuous_suite_sealed_for_another_exposure_stops_before_planning():
+    # A signed owner cannot authorize an outline for a different exposure.
     disclosure = SEALED_CONTINUOUS_SURVIVAL_SUITE_MARKER + "\n" + json.dumps({
         "sealed_primary_owner": "signed_landmark_continuous_survival_suite",
         "exposure_column": "another_lab_max", "exposure_window_summary": "max",
@@ -277,8 +275,9 @@ def test_a_continuous_suite_sealed_for_another_exposure_keeps_planning_open():
         )
     except Exception as exc:  # noqa: BLE001 - the test reads which stop it was
         stopped = exc
-    assert getattr(stopped, "reason_code", None) != "progressive_family_result_contract_unwritable"
-    assert llm.calls
+    assert getattr(stopped, "reason_code", None) == "progressive_family_spec_survival_coordinate_unavailable"
+    assert stopped.path == "primary_exposure"
+    assert llm.calls == []
 
 
 def test_the_spec_selects_only_host_timed_candidates_and_labels_them():

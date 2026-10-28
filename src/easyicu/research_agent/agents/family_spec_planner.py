@@ -48,6 +48,7 @@ from ..planning.family_spec import (
     build_source_feasibility_skeleton,
     family_template_id_for_context,
     keeps_unmeasured_covariate_rows,
+    sealed_result_families,
     sealed_continuous_survival_suite_coordinates,
     sealed_feasibility_coordinates,
     sealed_survival_suite_coordinates,
@@ -114,6 +115,7 @@ from ..providers.strict_json_schema import (
 )
 from ..providers.structured_retry import call_llm_with_structured_retry
 from ..reporting.article_contract import build_article_analysis_contract
+from ..research_context.concept_population import context_data_constraints
 from ..planning.publication_readiness import render_required_plan_shape
 from ..schema import AnalysisPlan, ResearchContext
 from ._support import _dump_raw
@@ -1457,6 +1459,62 @@ def run_family_spec_attempt(
     return plan
 
 
+def sealed_result_families_for_planning(
+    context: ResearchContext, planner_strategy: str, planning_contract_context: str,
+) -> frozenset[str]:
+    """Keep an adopted or signed survival design on its promised template.
+
+    A missing coordinate used to make family lookup return None, silently
+    sending a signed run through outline planning. Refuse before any Provider
+    call, naming the coordinate its owner must supply. An adopted declaration
+    also needs the host's signed disclosure; it cannot become a new proposal.
+    """
+    sealed = sealed_survival_suite_coordinates(planning_contract_context)
+    continuous = sealed_continuous_survival_suite_coordinates(planning_contract_context)
+    constraints = context_data_constraints(context)
+    confirmations = constraints.get("confirmations") or {}
+    adopted = isinstance(confirmations, Mapping) and confirmations.get("plan_timing_landmark_24h") is True
+    design = constraints.get("analysis_design") or {}
+    adopted = adopted and isinstance(design, Mapping) and design.get("analysis_family") == "survival"
+    if sealed is None and continuous is None and not adopted:
+        return sealed_result_families(planning_contract_context)
+
+    def refuse(path: str, message: str, *, identity: bool = False) -> None:
+        raise ProgressivePlanCompileError(
+            "progressive_identity_column_ambiguous" if identity
+            else "progressive_family_spec_survival_coordinate_unavailable",
+            message, path=path, metrics={"planner_provider_calls": 0},
+        )
+
+    identities = context.cohort.id_columns
+    if len(identities) != 1 or context.variable(identities[0]) is None:
+        refuse("cohort.id_columns", "the signed survival template needs one published analysis-unit identity", identity=True)
+    if (sealed is None) == (continuous is None):
+        refuse("planning_contract_context.sealed_suite", "the adopted survival design needs exactly one host-signed suite disclosure")
+    suite = sealed if sealed is not None else continuous
+    exposure = sealed.exposure_status_column if sealed is not None else continuous.exposure_column
+    for path, actual, expected in (
+        ("primary_exposure", context.primary_exposure, exposure),
+        ("target_outcome", context.target_outcome, suite.event_column),
+    ):
+        if actual != expected:
+            refuse(path, f"the signed survival template requires {path}={expected!r}")
+    for name in suite.source_columns:
+        if context.variable(name) is None:
+            refuse(f"variables.{name}", f"the signed survival template is missing its published source column {name!r}")
+    if family_template_id_for_context(
+        context, analysis_types=("survival",), planning_contract_context=planning_contract_context,
+    ) is None:
+        refuse("variables", "the signed survival template needs closed exposure and event domains")
+    if planner_strategy != FAMILY_SPEC_STRATEGY:
+        raise ProgressivePlanCompileError(
+            "progressive_family_template_required",
+            f"the signed survival suite must be planned by {FAMILY_SPEC_STRATEGY}",
+            path="planner_strategy", metrics={"planner_provider_calls": 0},
+        )
+    return sealed_result_families(planning_contract_context)
+
+
 def family_spec_fallback_reason(
     context: ResearchContext,
     *,
@@ -1471,6 +1529,7 @@ def family_spec_fallback_reason(
         return "development_resume_checkpoint_uses_progressive_v2"
     if stop_after_outline:
         return "design_canary_uses_progressive_v2"
+    sealed_result_families_for_planning(context, FAMILY_SPEC_STRATEGY, planning_contract_context)
     family_id = family_template_id_for_context(
         context, analysis_types=analysis_types,
         planning_contract_context=planning_contract_context,
