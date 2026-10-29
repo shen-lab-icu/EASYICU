@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Collection, Sequence
 
+from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
+
 from ..contracts.association_execution import association_execution_verdict
 from ..contracts.capability_ids import LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
 from ..contracts.model_terms import (
@@ -198,6 +200,20 @@ def family_result_stop_reason(
         "progressive_family_result_contract_unwritable",
         f"{lead}no host owner can write the primary result contract for {named}",
     )
+
+
+def missing_survival_followup(context: ResearchContext) -> tuple[str, ...]:
+    """Name an absent paired time column, without claiming a database cannot supply it.
+
+    The endpoint vocabulary owns this pairing. Other unsupported designs may
+    have their time column, or use an endpoint outside that vocabulary; neither
+    case is evidence that a particular column is missing from the input.
+    """
+
+    endpoint = fixed_horizon_mortality_endpoint(str(context.target_outcome or ""))
+    if endpoint is not None and context.variable(endpoint.followup_concept) is None:
+        return (endpoint.followup_concept,)
+    return ()
 
 
 def validate_required_primary_result(
@@ -589,6 +605,7 @@ __all__ = [
     "TTE_TRIAL_NOT_CONFIRMED",
     "families_requiring_family_result_contract",
     "family_result_stop_reason",
+    "missing_survival_followup",
     "family_primary_result_execution_guide",
     "model_terms_retry_guide",
     "primary_result_contract_guide",

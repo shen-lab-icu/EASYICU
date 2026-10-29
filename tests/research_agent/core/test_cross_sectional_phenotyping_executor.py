@@ -336,6 +336,35 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(
     assert phenotyping_runtime_receipt_valid(summary)
     assert phenotyping_runtime_bundle_errors(records) == []
 
+    # A successful cluster fit alone cannot discharge the plan's separate
+    # selection and stability steps. Exercise completion with real synthetic
+    # owner outputs rather than inferring success from files on disk.
+    from easyicu.research_agent.reporting.completion import completion_outcomes
+    from easyicu.research_agent.reporting.readiness import execution_gate_status
+
+    plan = AnalysisPlan(
+        research_question="Discover early measurement phenotypes and check their stability.",
+        analysis_type="trajectory_clustering",
+        steps=[AnalysisStep(step_id=key, intent=f"Execute {key}.")
+               for key in ("primary_phenotypes", "selection", "stability")],
+    )
+    ledger = [
+        {"step_id": step.step_id, "status": "ok", **record}
+        for step, record in zip(plan.steps, records, strict=True)
+    ]
+    complete = execution_gate_status(plan=plan, per_step_records=ledger)
+    assert complete["execution_complete"] is True
+    assert complete["completed_step_count"] == complete["required_step_count"] == 3
+    for incomplete in (ledger[:1], [*ledger[:2], {**ledger[2], "status": "failed"}]):
+        gate = execution_gate_status(plan=plan, per_step_records=incomplete)
+        assert gate["execution_complete"] is False
+        assert completion_outcomes(gate)["analysis_outcome"]["reason_code"] == (
+            "execution_complete_not_satisfied"
+        )
+    assert execution_gate_status(plan=plan, per_step_records=ledger[:1])["missing_steps"] == [
+        "selection", "stability",
+    ]
+
     tampered = copy.deepcopy(records)
     tampered[2]["step_summary"]["cluster_stability"]["replicates"][0][
         "adjusted_rand_index"
