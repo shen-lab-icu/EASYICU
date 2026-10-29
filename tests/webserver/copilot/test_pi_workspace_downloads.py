@@ -162,8 +162,13 @@ def test_csv_bridge_attachment_preserves_exact_utf8_and_reads_no_requested_csv_f
 def test_csv_bridge_rejects_missing_null_and_wrong_origins(workspace_client, origin):
     _, client = workspace_client
     headers = {"Origin": origin} if origin is not None else {}
-    assert client.post("/api/copilot/pi/projects/project-a/workspace/download-csv",
-                       data=_csv_form("a" * 64), headers=headers).status_code == 403
+    response = client.post("/api/copilot/pi/projects/project-a/workspace/download-csv",
+                           data=_csv_form("a" * 64), headers=headers)
+    assert response.status_code == 403
+    if origin == "null":
+        # Full app middleware must reject this before the CSV route; the route
+        # never receives a CSRF exception for native no-referrer form posts.
+        assert response.json() == {"detail": "Cross-origin write requests are not allowed."}
 
 
 @pytest.mark.parametrize("overrides", [
