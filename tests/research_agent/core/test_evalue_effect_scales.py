@@ -7,6 +7,7 @@ import math
 import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.contracts.post_analysis import EValueConversionSpec
 from easyicu.research_agent.methods.sensitivity import compute_e_value
 from easyicu.research_agent.orchestration.finalize import (
     _primary_association_evalue_rows,
@@ -104,6 +105,116 @@ def test_legacy_or_still_uses_the_observed_baseline(tmp_path):
     bound_rr = 1.2 / (0.8 + 0.2 * 1.2)
     assert row["e_value"] == pytest.approx(rr + math.sqrt(rr * (rr - 1)))
     assert row["e_value_lower_bound"] == pytest.approx(bound_rr + math.sqrt(bound_rr * (bound_rr - 1)))
+
+
+@pytest.mark.parametrize("scale,alias,estimate,low,high,kind", [
+    ("odds_ratio", "odds_ratio", 1.8, 1.2, 2.7, "or"),
+    ("odds_ratio", "or", 1.8, 1.2, 2.7, "or"),
+    ("odds_ratio", "OR", 1.8, 1.2, 2.7, "or"),
+    ("risk_ratio", "risk_ratio", 1.8, 1.2, 2.7, "rr"),
+    ("hazard_ratio", "hazard_ratio", 1.8, 1.2, 2.7, "hr"),
+    ("risk_difference", "risk_difference", -0.1, -0.15, -0.02, "rr"),
+])
+@pytest.mark.parametrize("empty_estimate", [None, ""])
+def test_declared_scale_reads_its_named_point_estimate(
+    tmp_path, scale, alias, estimate, low, high, kind, empty_estimate,
+):
+    # Association coefficients and their intervals also occur on the log scale.
+    # Only the named effect and its effect-scale bounds are E-value inputs.
+    row = dict(term="synthetic_marker", effect_scale=scale, coef=-0.5,
+               ci_lower=-0.7, ci_upper=-0.3, ci_low=low, ci_high=high,
+               reference_risk=0.2)
+    row[alias] = estimate
+    if empty_estimate is not None:
+        row["estimate"] = empty_estimate
+    path = tmp_path / "association.csv"
+    with path.open("w") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(row))
+        writer.writeheader()
+        writer.writerow(row)
+
+    result, = _primary_association_evalue_rows(path, baseline_prevalence=0.2)
+    expected = compute_e_value(
+        estimate=1 + estimate / 0.2 if scale == "risk_difference" else estimate,
+        ci=(1 + low / 0.2, 1 + high / 0.2) if scale == "risk_difference" else (low, high),
+        estimate_type=kind, baseline_prevalence=0.2,
+    )
+    assert result["estimate"] == estimate
+    assert result["effect_scale"] == scale
+    assert result["reason_code"] == ""
+    assert result["e_value"] == pytest.approx(expected.e_value)
+    assert result["e_value_lower_bound"] == pytest.approx(expected.e_value_lower_bound)
+
+
+@pytest.mark.parametrize("scale,estimate,low,high", [
+    ("odds_ratio", 1.8, 1.2, 2.7),
+    ("risk_ratio", 1.8, 1.2, 2.7),
+    ("hazard_ratio", 1.8, 1.2, 2.7),
+    ("risk_difference", -0.1, -0.15, -0.02),
+])
+def test_named_effect_reaches_the_registered_evalue_artifact(tmp_path, scale, estimate, low, high):
+    path = _effect(tmp_path, scale, "", low, high, **{scale: estimate, "reference_risk": 0.2})
+    evidence = EvidenceStore(tmp_path)
+    primary = evidence.register_file(
+        kind="table", description="Synthetic named association effect", source_path=path,
+        evidence_id="primary_association", produced_by_step="primary",
+    )
+    ledger = [dict(step_id="primary", status="ok", evidence_ids=[primary.evidence_id])]
+    spec = None
+    if scale == "odds_ratio":
+        rate_path = tmp_path / "outcome_rate.csv"
+        rate_path.write_text("population,outcome_rate\nanalysis_cohort,0.2\n")
+        rate = evidence.register_file(
+            kind="table", description="Synthetic declared baseline risk", source_path=rate_path,
+            evidence_id="outcome_rate", produced_by_step="outcome",
+        )
+        ledger.append(dict(step_id="outcome", status="ok", evidence_ids=[rate.evidence_id]))
+        spec = EValueConversionSpec(
+            baseline_risk_column="outcome_rate", population_column="population", baseline_population="analysis_cohort",
+        )
+    artifacts = _write_primary_association_evalue_artifacts(
+        evidence=evidence, per_step_records=ledger, run_dir=tmp_path, spec=spec,
+    )
+    assert artifacts is not None and artifacts.row_count == 1
+    row, = list(csv.DictReader(artifacts.csv_path.open()))
+    assert row["effect_scale"] == scale and float(row["estimate"]) == estimate
+    assert float(row["e_value"]) > 1 and float(row["e_value_lower_bound"]) > 1
+    assert row["reason_code"] == ""
+    assert evidence.get("e_values") is not None
+
+
+@pytest.mark.parametrize("estimate", [0, -1, "bad_effect", "nan", "inf"])
+def test_an_invalid_declared_estimate_cannot_be_replaced_by_an_alias(tmp_path, estimate):
+    row, = _primary_association_evalue_rows(
+        _effect(tmp_path, "odds_ratio", estimate, odds_ratio=1.8), baseline_prevalence=0.2,
+    )
+    assert row["e_value"] is None
+    assert row["reason_code"] == "e_value_effect_invalid"
+
+
+def test_declared_estimate_takes_precedence_over_a_conflicting_same_scale_alias(tmp_path):
+    row, = _primary_association_evalue_rows(
+        _effect(tmp_path, "odds_ratio", odds_ratio=99), baseline_prevalence=0.2,
+    )
+    assert row["estimate"] == 1.8
+    assert row["e_value"] == pytest.approx(compute_e_value(
+        estimate=1.8, estimate_type="or", baseline_prevalence=0.2,
+    ).e_value)
+
+
+@pytest.mark.parametrize("scale", ["odds_ratio", "risk_ratio", "hazard_ratio", "risk_difference"])
+def test_an_explicit_intercept_is_not_an_association_effect(tmp_path, scale):
+    path = _effect(tmp_path, scale, term_role="intercept", reference_risk=0.2)
+    assert _primary_association_evalue_rows(path, baseline_prevalence=0.2) == []
+
+
+@pytest.mark.parametrize("extra", [{"coef": 0.5}, {"odds_ratio": 1.8}])
+def test_a_missing_rr_estimate_does_not_borrow_another_scale(tmp_path, extra):
+    row, = _primary_association_evalue_rows(
+        _effect(tmp_path, "risk_ratio", "", **extra), baseline_prevalence=0.2,
+    )
+    assert row["e_value"] is None
+    assert row["reason_code"] == "e_value_effect_invalid"
 
 
 @pytest.mark.parametrize("scale,kind", [("hazard_ratio", "hr"), ("risk_ratio", "rr")])

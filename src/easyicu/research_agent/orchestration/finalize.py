@@ -286,6 +286,8 @@ def _association_evalue_rows(
     """Read declared OR/RR/HR/RD effects without guessing a conversion.
 
     OR retains its observed-baseline Zhang-Yu conversion and legacy aliases.
+    A declared scale may use its named effect column when estimate is absent;
+    a populated estimate remains authoritative, including invalid values.
     HR uses the kernel's common-outcome approximation. RD is convertible only
     with a same-row reference_risk: RR = (reference_risk + RD) / reference_risk.
     Its endpointwise interval is conditional on that reference risk being fixed;
@@ -297,6 +299,8 @@ def _association_evalue_rows(
 
     rows_out: List[Dict[str, Any]] = []
     for row in effect_rows:
+        if row.get("term_role") == "intercept":
+            continue
         scale = str(row.get("effect_scale") or "").strip().casefold().replace("-", "_").replace(" ", "_")
         if scale and scale not in {"odds_ratio", "risk_ratio", "hazard_ratio", "risk_difference"}:
             continue
@@ -318,7 +322,10 @@ def _association_evalue_rows(
             return None
 
         legacy_or = not typed and scale == "odds_ratio"
-        estimate = number(("estimate",) if typed else ("odds_ratio", "or", "OR") if legacy_or else (scale,))
+        estimate_keys = ("estimate",) if typed and row.get("estimate") not in (None, "") else (
+            ("odds_ratio", "or", "OR") if scale == "odds_ratio" else (scale,)
+        )
+        estimate = number(estimate_keys)
         low_keys = ("or_lower", "ci_lower") if legacy_or else ("ci_low",)
         high_keys = ("or_upper", "ci_upper") if legacy_or else ("ci_high",)
         low, high = number(low_keys), number(high_keys)
