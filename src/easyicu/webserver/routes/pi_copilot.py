@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from html import escape as html_escape
 from typing import Annotated, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -523,11 +524,14 @@ def _raise_codex_http(error: codex_account_sessions.CodexAccountSessionError) ->
     ) from error
 
 
-def _workspace_preview_document(*, file_name: str, artifact_html: str) -> str:
+def _workspace_preview_document(
+    *, file_name: str, artifact_html: str, allow_downloads: bool = False
+) -> str:
     """Keep Host provenance outside the sandboxed model-authored document."""
 
     safe_file = html_escape(file_name, quote=True)
     safe_srcdoc = html_escape(artifact_html, quote=True)
+    sandbox = "allow-scripts allow-downloads" if allow_downloads else "allow-scripts"
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -549,7 +553,7 @@ def _workspace_preview_document(*, file_name: str, artifact_html: str) -> str:
     <strong>Workspace artifact · Unvalidated / 工作区产物 · 未验证</strong>
     <span>Not scientific evidence; unsupported for clinical or manuscript claims. / 不是科学证据；不支持临床或论文结论。</span>
   </header>
-  <iframe id="easyicu-workspace-preview-content" sandbox="allow-scripts" referrerpolicy="no-referrer" title="Unvalidated workspace artifact: {safe_file}" srcdoc="{safe_srcdoc}"></iframe>
+  <iframe id="easyicu-workspace-preview-content" sandbox="{sandbox}" referrerpolicy="no-referrer" title="Unvalidated workspace artifact: {safe_file}" srcdoc="{safe_srcdoc}"></iframe>
 </body>
 </html>"""
 
@@ -878,6 +882,35 @@ def get_pi_copilot_workspace_file(
         _raise_http(exc)
 
 
+@router.get("/api/copilot/pi/projects/{project_id}/workspace/download")
+def get_pi_copilot_workspace_download(
+    project_id: ShortText,
+    file: WorkspaceFileText,
+    expected_sha256: Sha256Text,
+) -> Response:
+    try:
+        payload = get_pi_copilot_service().get_workspace_download(
+            project_id=project_id,
+            relative_file=file,
+            expected_sha256=expected_sha256,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+    artifact = payload["artifact"]
+    filename = str(artifact["file"]).rsplit("/", 1)[-1]
+    return Response(
+        content=artifact["content"],
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
+            "Content-Security-Policy": "sandbox; default-src 'none'",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-EasyICU-Artifact-SHA256": artifact["sha256"],
+        },
+    )
+
+
 @router.get(
     "/api/copilot/pi/projects/{project_id}/workspace/preview",
     response_class=HTMLResponse,
@@ -886,6 +919,7 @@ def get_pi_copilot_workspace_preview(
     project_id: ShortText,
     file: WorkspaceFileText,
     checked_sha256: Sha256Text,
+    allow_downloads: bool = False,
 ) -> HTMLResponse:
     try:
         payload = get_pi_copilot_service().get_workspace_preview(
@@ -900,10 +934,12 @@ def get_pi_copilot_workspace_preview(
         content=_workspace_preview_document(
             file_name=str(artifact["file"]),
             artifact_html=str(artifact["text"]),
+            allow_downloads=allow_downloads,
         ),
         headers={
             "Content-Security-Policy": (
-                "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; "
+                f"sandbox allow-scripts{' allow-downloads' if allow_downloads else ''}; "
+                "default-src 'none'; style-src 'unsafe-inline'; "
                 "script-src 'unsafe-inline'; img-src data:; "
                 "frame-src 'self'; "
                 "connect-src 'none'; form-action 'none'; base-uri 'none'; "

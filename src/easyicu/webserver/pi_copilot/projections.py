@@ -1288,7 +1288,7 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
                 if re.fullmatch(r"[a-f0-9]{64}", digest)
                 else {}
             ),
-            **({"checked_sha256": checked_digest} if kind == "webpage" else {}),
+            **({"checked_sha256": checked_digest} if re.fullmatch(r"[a-f0-9]{64}", checked_digest) else {}),
         }
     return None
 

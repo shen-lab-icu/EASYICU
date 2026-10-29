@@ -6892,7 +6892,7 @@ def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox()
     assert 'referrerpolicy="no-referrer"' in preview
     # D-P1-4: document and web iframes must both carry the sandbox (web branch
     # already had it; document branch was missing it).
-    assert preview.count('sandbox="allow-scripts"') >= 2
+    assert preview.count('sandbox="allow-scripts') >= 2
     assert "gpi-preview-document-frame" in preview
     document_iframes = re.findall(
         r"<iframe[^>]*gpi-preview-document-frame[^>]*>", preview
@@ -6909,7 +6909,7 @@ def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox()
     ]
     assert web_iframes, "web preview iframe must exist"
     assert all(
-        'sandbox="allow-scripts"' in row for row in web_iframes
+        'sandbox="allow-scripts' in row and "previewDownloadsAllowed()" in row for row in web_iframes
     ), "web preview iframe must carry sandbox"
     assert "EasyICU run artifact · Analysis-only" in preview
     assert "EasyICU run artifact · Reportable" not in preview

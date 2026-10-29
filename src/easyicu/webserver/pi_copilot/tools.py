@@ -4466,7 +4466,7 @@ def _workspace_resource(
         **dict(WORKSPACE_ARTIFACT_AUTHORITY),
     }
     checked_sha256 = str(payload.get("checked_sha256") or "").strip().lower()
-    if kind == "webpage" and re.fullmatch(r"[0-9a-f]{64}", checked_sha256):
+    if re.fullmatch(r"[0-9a-f]{64}", checked_sha256):
         resource["checked_sha256"] = checked_sha256
     return resource
 

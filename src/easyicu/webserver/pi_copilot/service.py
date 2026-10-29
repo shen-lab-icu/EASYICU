@@ -4501,6 +4501,21 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             },
         }
 
+    def get_workspace_download(
+        self,
+        *,
+        project_id: str,
+        relative_file: str,
+        expected_sha256: str,
+    ) -> Dict[str, Any]:
+        clean = self._assert_project_initialized(project_id)
+        return {
+            "ok": True,
+            "artifact": self.workspace.download_file(
+                clean, relative_file, expected_sha256=expected_sha256
+            ),
+        }
+
     def get_workspace_preview(
         self,
         *,

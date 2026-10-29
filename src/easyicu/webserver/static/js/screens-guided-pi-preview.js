@@ -36,6 +36,7 @@
     studyTitle: '',
     referenceResource: null,
     previousAsideCollapsed: null,
+    downloadsKey: '',
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -226,7 +227,7 @@
       file: file.slice(0, 240),
       label: String(value.label || file.split('/').pop() || file).slice(0, 160),
       media_type: String(value.media_type || 'text/plain').slice(0, 120),
-      ...(value.kind === 'webpage' && /^[a-f0-9]{64}$/.test(checkedSha256)
+      ...(/^[a-f0-9]{64}$/.test(checkedSha256)
         ? { checked_sha256: checkedSha256 } : {}),
       authority_class: 'workspace_artifact',
       scientific_evidence: false,
@@ -359,6 +360,32 @@
       || /\.html?$/i.test(state.resource.file)
     );
   }
+  function isCheckedWorkspaceHtml() {
+    return !!state.resource && ['file', 'webpage'].includes(state.resource.kind)
+      && isHtml() && /^[a-f0-9]{64}$/.test(String(state.resource.checked_sha256 || ''));
+  }
+  function workspacePreviewKey() {
+    return JSON.stringify([state.projectId, state.resource && state.resource.file,
+      state.resource && state.resource.checked_sha256]);
+  }
+  function previewDownloadsAllowed() {
+    return isCheckedWorkspaceHtml() && state.downloadsKey === workspacePreviewKey();
+  }
+  function workspaceActionsHtml() {
+    if (!state.resource || !['file', 'webpage'].includes(state.resource.kind)) return '';
+    const checked = String(state.resource.checked_sha256 || '');
+    const snapshot = state.artifact && state.artifact.file === state.resource.file
+      ? String(state.artifact.sha256 || '') : '';
+    const digest = /^[a-f0-9]{64}$/.test(checked) ? checked : snapshot;
+    const api = window.EU_API || {};
+    const url = /^[a-f0-9]{64}$/.test(digest) && api.piCopilotWorkspaceDownloadUrl
+      ? api.piCopilotWorkspaceDownloadUrl(state.projectId, state.resource.file, digest) : '';
+    const allowed = previewDownloadsAllowed();
+    const toggle = isCheckedWorkspaceHtml()
+      ? `<button type="button" data-gpi-preview-downloads aria-pressed="${allowed}" title="${tr('Only this checked version; network and application data remain blocked.', '仅当前已检查版本；仍禁止联网和访问应用数据。')}">${allowed ? tr('Disable page downloads', '关闭此页下载') : tr('Allow this page to download', '允许此页下载')}</button>` : '';
+    if (!url && !toggle) return '';
+    return `<div class="gpi-preview-file-actions">${url ? `<a href="${esc(url)}" download="${esc(state.resource.file.split('/').pop())}">${tr('Download file', '下载文件')}</a>` : ''}${toggle}</div>`;
+  }
   function previewUrl() {
     const api = window.EU_API || {};
     if (isDemoDocument()) {
@@ -382,6 +409,7 @@
           state.projectId,
           state.resource.file,
           checkedSha256,
+          previewDownloadsAllowed(),
         )
       : '';
   }
@@ -504,7 +532,7 @@
         <button type="button" role="tab" data-gpi-preview-mode="structured" aria-selected="${state.mode === 'structured'}">${icon('list', 14)} ${tr('Readable', '可读视图')}</button>
         <button type="button" role="tab" data-gpi-preview-mode="code" aria-selected="${state.mode === 'code'}">${icon('file', 14)} JSON</button>
         ${evidenceTabsView()}
-      </div>` : state.resource.kind === 'webpage' && isHtml() ? `
+      </div>` : (state.resource.kind === 'webpage' || isCheckedWorkspaceHtml()) && isHtml() ? `
       <div class="gpi-preview-tabs" role="tablist" aria-label="${tr('Artifact views', '产物视图')}">
         <button type="button" role="tab" data-gpi-preview-mode="code" aria-selected="${state.mode === 'code'}">${icon('file', 14)} ${tr('Code', '代码')}</button>
         <button type="button" role="tab" data-gpi-preview-mode="web" aria-selected="${state.mode === 'web'}">${icon('globe', 14)} ${tr('Web preview', '网页预览')}</button>
@@ -538,7 +566,7 @@
     } else if (state.mode === 'web' && isHtml()) {
       const url = previewUrl();
       body = url
-        ? `<iframe class="gpi-preview-frame" src="${esc(url)}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
+        ? `<iframe class="gpi-preview-frame" src="${esc(url)}" sandbox="allow-scripts${previewDownloadsAllowed() ? ' allow-downloads' : ''}" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
         : `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${tr('The checked file digest is missing. Run the static check and prepare the preview again.', '文件检查摘要缺失。请重新执行静态检查并准备预览。')}</span></div>`;
     } else if (state.mode === 'native' && isNativeWorkspace()) {
       body = `<div data-gpi-native-workspace-mount></div>`;
@@ -624,6 +652,7 @@
         <button class="gpi-preview-layout" type="button" data-gpi-preview-focus aria-pressed="${state.focused}">${state.focused ? tr('Show conversation', '边聊边看') : tr('Focus reading', '专注阅读')}</button>
         <button class="gpi-preview-close" type="button" data-gpi-preview-close aria-label="${tr('Close preview', '关闭预览')}" title="${tr('Close preview', '关闭预览')}">${icon('close', 15)}</button>
       </header>
+      ${workspaceActionsHtml()}
       <nav class="gpi-study-resource-tabs" data-gpi-study-resources aria-label="${tr('This run’s results', '本次运行成果')}"${studyResourcesHtml() ? '' : ' hidden'}>${studyResourcesHtml()}</nav>
       ${studyResourcesHtml() ? '' : recentPreviews}
       <details class="gpi-preview-inspector" data-gpi-preview-resource="${esc(currentKey)}"${inspectorOpen || state.mode === 'code' || state.mode === 'evidence' ? ' open' : ''}>
@@ -852,6 +881,7 @@
     const catalogResource = project === state.studyProjectId && state.studyResources.find(row =>
       resourceKey(row) === resourceKey(safe) && row.sha256 === safe.sha256);
     state.resource = catalogResource ? { ...safe, label: catalogResource.label } : safe;
+    state.downloadsKey = '';
     state.projectId = project;
     state.workflowContext = safeWorkflowContext(workflowContext);
     rememberResource(state.resource);
@@ -862,7 +892,7 @@
     state.evidenceTabs = [];
     state.activeEvidenceId = '';
     state.error = '';
-    state.mode = safe.kind === 'native_workspace' ? 'native' : safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' || safe.kind === 'data_workbench_snapshot' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'research_report' || safe.kind === 'idea_plan' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
+    state.mode = safe.kind === 'native_workspace' ? 'native' : safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' || safe.kind === 'data_workbench_snapshot' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'research_report' || safe.kind === 'idea_plan' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' || isCheckedWorkspaceHtml() ? 'web' : 'code'))));
     state.activeClaimId = '';
     if (typeof syncLocation === 'function') syncLocation(state.resource);
     render();
@@ -876,6 +906,7 @@
     const preserveLocation = Boolean(options && options.preserveLocation);
     state.request += 1;
     state.focused = false;
+    state.downloadsKey = '';
     state.resource = null; state.artifact = null; state.payload = null; state.studyContext = null; state.governance = null; state.error = ''; state.loading = false;
     state.evidenceTabs = []; state.activeEvidenceId = '';
     state.activeClaimId = '';
@@ -888,6 +919,11 @@
     if (!host) return;
     state.host = host;
     host.addEventListener('click', event => {
+      if (event.target.closest('[data-gpi-preview-downloads]') && isCheckedWorkspaceHtml()) {
+        state.downloadsKey = previewDownloadsAllowed() ? '' : workspacePreviewKey();
+        render();
+        return;
+      }
       if (event.target.closest('[data-gpi-preview-close]')) {
         // The researcher closed it: an owner whose panel this was may end
         // what the panel left open (the data binding's folder selection).

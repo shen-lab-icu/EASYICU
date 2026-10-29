@@ -204,6 +204,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "GET",
+        "/api/copilot/pi/projects/{project_id}/workspace/download",
+        "get_pi_copilot_workspace_download",
+    ),
+    (
+        "GET",
         "/api/copilot/pi/projects/{project_id}/workspace/preview",
         "get_pi_copilot_workspace_preview",
     ),
