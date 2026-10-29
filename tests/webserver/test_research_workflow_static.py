@@ -9,20 +9,24 @@ STATIC = Path(__file__).resolve().parents[2] / "src/easyicu/webserver/static"
 
 def test_workflow_dependencies_and_changed_cache_tokens_are_explicit():
     html = (STATIC / "index.html").read_text()
-    before = ["html-escape.js", "screens-agent-reader-vocab.js", "screens-skills-workflows.js", "screens-skills.js"]
+    before = ["html-escape.js", "screens-agent-reader-vocab.js", "screens-skills-workflows.js", "screens-skills-implementation.js", "screens-skills.js"]
     assert [html.index(f"js/{file}?") for file in before] == sorted(html.index(f"js/{file}?") for file in before)
     assert html.index("screens-guided-pi-skill-attach.js?") < html.index("screens-guided-pi-study-workspace.js?")
     assert html.index("screens-guided-pi-starters.js?") < html.index("screens-guided-pi.js?")
-    assert 'js/screens-skills-workflows.js?v=20261028-gm1"' in html
-    assert 'js/desktop-module-shell.js?v=20261028-cust1"' in html
-    assert 'js/screens-agent-reader-vocab.js?v=20261028-gm1"' in html
-    assert 'js/screens-guided-pi-study-workspace.js?v=20261028-task1"' in html
-    for file in ["screens-guided-pi-starters.js", "screens-guided-pi-session-view.js"]:
-        assert f'js/{file}?v=20261028-hub2"' in html
-    assert 'js/screens-guided-pi.js?v=20261028-slash1"' in html
-    assert 'js/screens-guided-pi-skill-attach.js?v=20261028-slash1"' in html
-    assert 'js/screens-skills.js?v=20261028-set1"' in html
-    assert 'css/skills-workflows.css?v=20261028-cust1"' in html
+    assert 'js/screens-skills-workflows.js?v=20261029-flow1"' in html
+    assert 'js/screens-skills-custom-workflow.js?v=20261029-flow1"' in html
+    # Shared dependencies keep explicit cache versions; their owners may bump
+    # them independently of the Skill Hub assets verified exactly below.
+    for file in ["desktop-module-shell.js", "screens-agent-reader-vocab.js",
+                 "screens-guided-pi-study-workspace.js", "screens-guided-pi-starters.js",
+                 "screens-guided-pi-session-view.js", "screens-guided-pi.js",
+                 "screens-guided-pi-skill-attach.js"]:
+        assert re.search(rf'js/{re.escape(file)}\?v=[^"\s]+"', html)
+    assert 'js/screens-skills-implementation.js?v=20261029-fn5"' in html
+    assert 'js/screens-skills.js?v=20261029-fn5"' in html
+    assert 'css/skills-implementation.css?v=20261029-fn5"' in html
+    assert html.index('css/skills-hub.css?') < html.index('css/skills-implementation.css?')
+    assert 'css/skills-workflows.css?v=20261029-flow1"' in html
 
 
 def test_workflow_navigation_uses_the_skills_route_and_existing_attachment_intent():

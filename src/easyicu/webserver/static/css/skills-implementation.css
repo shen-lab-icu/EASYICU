@@ -1,0 +1,45 @@
+/* Owner: Skill function inspection and bounded package source panes. */
+.eusk-tabs{display:inline-flex;max-width:100%;flex-wrap:wrap}
+.eusk-quick-guide>h2:first-child{margin-top:0}
+.eusk-quick-io{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 28px}
+.eusk-quick-io>div{min-width:0}
+.eusk-quick-io p,.eusk-quick-io li{overflow-wrap:anywhere}
+.eusk-implementation-preview{margin-top:24px;padding-top:4px;border-top:1px solid var(--sk-line)}
+.eusk-implementation-summary{padding:13px 16px;border:1px solid var(--sk-line);border-radius:9px;background:var(--sk-wash)}
+.eusk-implementation-summary p{margin:7px 0 0;font-size:13px;line-height:1.6}
+.eusk-implementation-mode{display:inline-flex;padding:3px 8px;border-radius:5px;background:var(--sk-accent-soft);color:var(--sk-accent-ink);font-size:12px;font-weight:650}
+.eusk-function-preview-list{display:grid;gap:8px;margin-top:12px}
+.eusk-function-link{display:grid;gap:4px;min-width:0;padding:12px 14px;border:1px solid var(--sk-line);border-radius:8px;background:var(--sk-surface);color:var(--sk-ink-2);text-align:left}
+.eusk-function-link:hover,.eusk-function-link:focus-visible,.eusk-function-link.active{background:var(--sk-accent-soft);border-color:var(--sk-accent);outline:0}
+.eusk-function-link>span,.eusk-function-heading>span{color:var(--sk-muted);font-size:11px}
+.eusk-function-link>strong{overflow-wrap:anywhere;font-size:13px}
+.eusk-function-link>code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+.eusk-open-implementation,.eusk-function-heading>button{margin-top:12px;padding:7px 10px;border:1px solid var(--sk-line);border-radius:6px;background:var(--sk-surface);color:var(--sk-accent-ink);font-size:12px}
+.eusk-implementation-layout{display:grid;grid-template-columns:240px minmax(0,1fr);align-items:start;gap:16px;margin-top:16px}
+.eusk-function-list{display:grid;gap:7px;max-height:62vh;overflow:auto;padding:1px}
+.eusk-function-detail{min-width:0;border:1px solid var(--sk-line);border-radius:9px;overflow:hidden;background:var(--sk-surface)}
+.eusk-function-heading{padding:14px 16px}
+.eusk-function-heading h2{margin:3px 0 10px;font-size:18px;overflow-wrap:anywhere}
+.eusk-function-heading>code{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 var(--font-mono,monospace)}
+.eusk-function-heading>p{margin:12px 0 0;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.eusk-function-docstring{max-height:8em;overflow:auto}
+.eusk-source-location{color:var(--sk-muted);font-family:var(--font-mono,monospace)}
+.eusk-source-location>span{font-size:10px}
+.eusk-detail-body .eusk-source-code{max-height:55vh;overflow:auto;margin:0;padding:12px 0;background:#fbfcfa;color:#29352d;font:12px/1.7 var(--font-mono,monospace);white-space:pre;overflow-wrap:normal;border-top:1px solid var(--sk-line)}
+.eusk-source-code>code{display:block;min-width:max-content}
+.eusk-source-line{display:flex;min-height:1.7em;padding-right:20px}
+.eusk-line-number{position:sticky;left:0;flex:none;width:56px;margin-right:14px;padding-right:12px;border-right:1px solid var(--sk-line);background:#fbfcfa;color:#8c958e;text-align:right;user-select:none}
+.eusk-syntax-keyword{color:#81449d;font-weight:600}
+.eusk-syntax-string{color:#257145}
+.eusk-syntax-comment{color:#7d887f}
+.eusk-source-missing{padding:0 16px 16px}
+.eusk-call-examples{margin-top:24px}
+.eusk-call-examples h3{margin-top:16px}
+.eusk-package-layout>.eusk-package-files{display:block;max-height:62vh;overflow-y:auto}
+.eusk-package-tree-head{position:sticky;top:0;z-index:1;background:var(--sk-surface)}
+.eusk-package-layout>.eusk-file-preview{min-width:0;position:sticky;top:16px}
+.eusk-package-layout>.eusk-file-preview>.eusk-rendered-markdown{max-height:58vh;overflow:auto}
+.eusk-package-layout>.eusk-file-preview h2{overflow-wrap:anywhere}
+.eusk-file-kind{margin:0;padding:8px 16px;border-bottom:1px solid var(--sk-line);color:var(--sk-muted);font-size:11px}
+@media(max-width:900px){.eusk-implementation-layout{grid-template-columns:200px minmax(0,1fr)}.eusk-package-layout>.eusk-package-files{max-height:220px}.eusk-package-layout>.eusk-file-preview{position:static}}
+@media(max-width:700px){.eusk-quick-io,.eusk-implementation-layout{grid-template-columns:1fr}.eusk-function-list{max-height:220px}.eusk-tabs button{min-width:100px;padding:9px 12px}.eusk-line-number{width:44px;margin-right:10px}.eusk-function-heading{padding:12px}}

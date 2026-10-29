@@ -47,6 +47,7 @@ from ..contracts.primary_cohort import (
 from ..contracts.product_identity import typed_product
 from ..contracts.prediction_execution import prediction_bootstrap_method
 from ..contracts.prediction_validation import external_validation_method
+from ..contracts.prediction_subgroup import prediction_subgroup_method
 from ..contracts.trajectory_design import REPEATED_ACTIONS
 from ..contracts.trajectory_design import repeated_measure_compiled_method
 from ..schema import (
@@ -1239,6 +1240,8 @@ def _validate_scientific_action_runtime_contract(
         from .prediction_timing import external_validation_product_inputs
 
         accepted_inputs = (external_validation_product_inputs(step),)
+    elif action.action_id == "prediction.subgroup_fairness" and step.prediction_subgroup_spec is not None:
+        accepted_inputs = (("table:prediction_scores", step.prediction_subgroup_spec.subgroup_input_key),)
     if declared_inputs not in accepted_inputs:
         raise _fail(
             "progressive_scientific_action_inputs_mismatch",
@@ -2320,6 +2323,14 @@ def _compile_inputs(
         materialized_input_column_authority(context).reserved_navigation_coordinates
     )
     raw_names = list(step.raw_inputs)
+    diagnostic_spec = step.covariate_balance_spec or step.cluster_size_spec
+    diagnostic_identity = diagnostic_spec.unit_id_column if diagnostic_spec is not None else None
+    if diagnostic_identity is not None and diagnostic_identity not in context.cohort.id_columns:
+        raise _fail(
+            "progressive_diagnostic_identity_not_bound",
+            "the diagnostic unit ID must name a sealed cohort identity column",
+            step=step, step_index=step_index, path="raw_inputs",
+        )
     if (step.planned_analysis_role == "primary"
             and step.scientific_action_id == "descriptive.descriptive_summary"
             and context.endpoint is not None and context.endpoint.kind == "continuous"):
@@ -2420,7 +2431,7 @@ def _compile_inputs(
         [
             name
             for name in raw_names
-            if name not in reserved_coordinates or name == comparison_identity
+            if name != diagnostic_identity and (name not in reserved_coordinates or name == comparison_identity)
         ],
         variables=variables,
         step=step,
@@ -2447,6 +2458,8 @@ def _compile_inputs(
                 detail={"column": name, "source_concepts": [r.concept_id for r in exc.receipts]},
             ) from exc
     inputs = list(raw)
+    if diagnostic_identity is not None:
+        inputs.append(diagnostic_identity)
     if (
         step.module_id not in {"cohort_definition", "visualization"}
         and step.population_scope != STUDY_COHORT_SCOPE
@@ -3008,6 +3021,7 @@ def _compile_one_step(
         "expected_outputs": [product for product, _role in output_pairs],
         "method": (repeated_measure_compiled_method(step) if step.scientific_action_id in REPEATED_ACTIONS else
                    external_validation_method(step.external_validation_spec) if step.external_validation_spec
+                   else prediction_subgroup_method(step.prediction_subgroup_spec) if step.prediction_subgroup_spec
                    else prediction_bootstrap_method(step.bootstrap_spec) if step.bootstrap_spec else method),
         "scientific_action_id": step.scientific_action_id,
         "icu_rule_refs": [],
@@ -3021,6 +3035,8 @@ def _compile_one_step(
         ),
         "phenotyping_feature_columns": step.phenotyping_feature_columns,
         "phenotype_comparison_spec": _compile_phenotype_comparison_spec(context, step, step_index),
+        "covariate_balance_spec": step.covariate_balance_spec,
+        "cluster_size_spec": step.cluster_size_spec,
         "literature_citation_keys": citation_keys,
         "literature_design_bindings": literature,
         "input_consumption_contracts": consumption,

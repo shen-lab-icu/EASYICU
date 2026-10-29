@@ -19,12 +19,12 @@
     observation_timing: tr('Measurement times', '测量时间'), treatment_timing: tr('Treatment times', '治疗时间'),
     concept: tr('Variables', '变量') });
   const kinds = () => ({ categorical: tr('Categorical', '分类'), continuous: tr('Continuous', '连续'),
-    binary: tr('Binary', '二分类') });
+    binary: tr('Binary', '二分类'), time_to_event: tr('Time to event', '时间到事件') });
   // A workflow needs roles; which variables fill them comes from the researcher's
   // question, so example concepts are not listed as requirements.
   function inputLabels(inputs) {
     const labels = inputs.map(row => row.role === 'concept'
-      ? tr('Adjustment variables · from your question', '调整变量 · 由研究问题决定')
+      ? tr('Study variables · from your question and data', '研究变量 · 由问题与数据决定')
       : [roles()[row.role] || row.role, kinds()[row.kind]].filter(Boolean).join(' · '));
     return [...new Set(labels)];
   }
@@ -157,7 +157,7 @@
       route.verticals.forEach(([, from, to, x]) => { points.push([x, from], [x, to]); });
       points.push([tx, ends.get(edge)]);
       const d = orthogonal(points.filter((point, i) => !i || point[0] !== points[i - 1][0] || point[1] !== points[i - 1][1]));
-      return `<path data-wf-edge="${esc(edge.source)}:${esc(edge.target)}" d="${d}" marker-end="url(#wf-arrow)"><title>${esc((edge.products || []).map(label).join(', '))}</title></path>`;
+      return `<path data-wf-edge="${esc(edge.source)}:${esc(edge.target)}" d="${d}" class="${edge.optional ? 'is-optional' : ''}" marker-end="url(#wf-arrow)"><title>${esc((edge.products || []).map(label).join(', '))}</title></path>`;
     }).join('');
   }
   function graph(row) {
@@ -184,27 +184,81 @@
     if (codes.length) return tr('Some required fields or definitions need review in the study plan.', '部分所需字段或定义需要在研究计划中核对。');
     return '';
   }
+  function outputLabel(item) {
+    const scoped = {
+      'table:table_one': tr('Baseline table · study cohort', '基线特征表（研究队列）'),
+      'table:landmark_table_one': tr('Baseline table · landmark risk set', '基线特征表（Landmark 风险集）'),
+      'table:cohort_flow': tr('Cohort exclusions · table', '队列纳排明细表'),
+      'figure:cohort_flow': tr('Cohort flow · figure', '队列纳排流程图'),
+    };
+    if (Object.prototype.hasOwnProperty.call(scoped, item.id)) return scoped[item.id];
+    const text = label(item.id), kind = String(item.id).split(':', 1)[0];
+    const formats = { table: tr('table', '表'), figure: tr('figure', '图'),
+      artifact: tr('data file', '数据文件'), manifest: tr('manifest', '清单') };
+    return formats[kind] ? `${text}${tr(` · ${formats[kind]}`, `（${formats[kind]}）`)}` : text;
+  }
+  function outputGroups(row) {
+    const groups = { main: [], design: [], checks: [] }, seen = new Set();
+    const producers = new Map((row.steps || []).map(step => [step.id, step]));
+    for (const item of row.outputs || []) {
+      // Different risk sets can share a translated label. Only identical
+      // product IDs are duplicates; retain and name their distinct scopes.
+      if (!item.id || seen.has(item.id)) continue;
+      seen.add(item.id);
+      const producer = producers.get(item.producer) || {};
+      const kind = item.producer_kind || producer.kind;
+      const optional = item.optional === true || producer.optional === true;
+      const design = optional || kind === 'sensitivity' || /(?:sensitivity|robustness|rmst)/.test(item.id);
+      const checks = /^(?:log|manifest):/.test(item.id)
+        || /(?:audit|diagnostic|measurement_|receipt|checklist)/.test(item.id);
+      groups[design ? 'design' : checks ? 'checks' : 'main'].push(outputLabel(item));
+    }
+    const section = (title, values) => values.length ? `<h3>${title}</h3>${bulletList(values)}` : '';
+    return section(tr('Main example products', '示例主要产物'), groups.main)
+      + section(tr('Design-specific and sensitivity results', '设计相关与敏感性结果'), groups.design)
+      + (groups.checks.length ? `<details class="eusk-workflow-checks"><summary>${tr('Checks and execution records', '核查与运行记录')}</summary>${bulletList(groups.checks)}</details>` : '');
+  }
+  function illustrationNote(row) {
+    const landmark = row.id === 'survival-time-to-event'
+      && (row.example_coordinates?.landmark_hours != null
+        || (row.outputs || []).some(item => /^table:landmark_/.test(item.id)));
+    return `<p class="eusk-workflow-note">${landmark
+      ? tr('This illustration uses a fixed-landmark survival design. Whether to use a landmark and how to define time zero depend on the research question and data.', '当前展示固定 Landmark 生存研究示例。是否采用 Landmark、如何定义时间起点，由研究问题与数据条件决定。')
+      : tr('This is an example structure. Variables, time windows, branches and deliverables are determined in the complete study plan.', '这是研究结构示例。具体变量、时间窗、分支和交付物由完整研究计划确定。')}</p>`;
+  }
+  function databaseAcceptance(row) {
+    return row.real_data_acceptance === 'not_verified'
+      ? tr('Real-data study acceptance not verified', '真实研究未验收')
+      : tr('Real-data acceptance requires a receipt', '真实验收记录待核对');
+  }
   function sections(row) {
     if (!row) return '';
-    const statuses = { supported: tr('Supported', '支持'), degraded: tr('Limited', '受限'), unavailable: tr('Unavailable', '不可用') };
-    return `<div class="eusk-workflow-products"><section><h2>${tr('Required inputs', '所需输入')}</h2>${bulletList(inputLabels(row.inputs || []))}</section><section><h2>${tr('Generated outputs', '生成的输出')}</h2>${bulletList((row.outputs || []).map(item => label(item.id)))}</section></div>
-      <section><h2>${tr('Workflow graph', '流程图')}</h2>${graph(row)}</section>
-      <section><h2>${tr('Databases', '各数据库')}</h2><div class="eusk-workflow-databases">${(row.databases || []).map(db => {
+    const statuses = { supported: tr('Field conditions supported', '字段条件支持'), degraded: tr('Definitions need review', '定义需核对'), unavailable: tr('Required conditions missing', '所需条件不足') };
+    const inputs = row.inputs || [], family = inputs.filter(item => item.scope !== 'canonical_example');
+    const example = inputs.filter(item => item.scope === 'canonical_example');
+    const familyLabels = inputLabels(family), exampleLabels = inputLabels(example).filter(value => !familyLabels.includes(value));
+    return `${illustrationNote(row)}<div class="eusk-workflow-products"><section><h2>${tr('Required inputs', '所需输入')}</h2><p class="eusk-workflow-note">${tr('Describe your question and data in conversation. The plan checks these requirements.', '在对话中说明研究问题和数据，计划会核对这些条件。')}</p>${bulletList(familyLabels)}${exampleLabels.length ? `<details><summary>${tr('Additional inputs in this example', '此示例的补充条件')}</summary>${bulletList(exampleLabels)}</details>` : ''}</section><section><h2>${tr('Example outputs', '示例输出')}</h2><p class="eusk-workflow-note">${tr('The approved plan determines which products are required.', '实际需要的产物以审阅后的完整计划为准。')}</p>${outputGroups(row)}</section></div>
+      <section><h2>${tr('Example dependency graph', '示例依赖图')}</h2><p class="eusk-workflow-note">${tr('Lines summarize prerequisite and product dependencies in this example, not the execution status of your study.', '连线概括示例中的前置条件与产物依赖，不代表你的研究执行状态。')}${(row.steps || []).some(step => step.optional) ? ` ${tr('Dashed branches are selected by the study plan.', '虚线分支按研究计划选择。')}` : ''}</p>${graph(row)}<ol class="eusk-workflow-gates"><li>${tr('Check data conditions', '核对数据条件')}</li><li>${tr('Review the complete plan', '审阅完整方案')}</li><li>${tr('Run analyses and diagnostics', '执行分析与诊断')}</li><li>${tr('Verify results and deliver', '核验结果后交付')}</li></ol><p class="eusk-workflow-note">${tr('Unresolved data or diagnostic checks must be addressed in the plan before drawing conclusions.', '数据条件或诊断检查未通过时，需要先处理问题或在方案中明确限制，再作结论。')}</p></section>
+      <section><h2>${tr('Database conditions and acceptance', '数据库条件与验收')}</h2><p class="eusk-workflow-note">${tr('Database-level field support is separate from real-data study acceptance. Your project data is checked in its plan.', '数据库级字段支持与真实研究验收分别列出，当前项目的数据仍需在计划中核对。')}</p><div class="eusk-workflow-databases">${(row.databases || []).map(db => {
         const reason = databaseReason(db) || statuses[db.status], id = `wf-reason-${row.id}-${db.id}`;
-        return `<span class="eusk-workflow-database ${esc(db.status)}" tabindex="0" title="${esc(reason)}" aria-describedby="${esc(id)}"><strong>${esc(db.label)}</strong> ${esc(statuses[db.status])}<span class="eusk-workflow-reason" role="tooltip" id="${esc(id)}">${esc(reason)}</span></span>`;
+        return `<span class="eusk-workflow-database ${esc(db.status)}" tabindex="0" title="${esc(reason)}" aria-describedby="${esc(id)}"><strong>${esc(db.label)}</strong> ${esc(statuses[db.status] || tr('Conditions require review', '条件待核对'))}<small>${esc(databaseAcceptance(db))}</small><span class="eusk-workflow-reason" role="tooltip" id="${esc(id)}">${esc(reason)}</span></span>`;
       }).join('')}</div></section>`;
   }
+  function questionEntry() {
+    return `<section class="eusk-workflow-entry"><div><h2>${tr('Start with your research question', '先描述研究问题')}</h2><p>${tr('Tell EasyICU what you want to study, where the data is, and what you need. It will recommend a design; the library below is available for comparison and adjustment.', '说明想研究什么、数据在哪里、希望得到什么。EasyICU 再推荐研究设计，下方流程库供你比较和调整。')}</p></div><button type="button" class="eusk-use" data-wf-question>${tr('Describe my question', '描述研究问题')}</button></section>`;
+  }
   function render(payload, selectedId, skills = []) {
+    const entry = questionEntry();
     // Before the host answers there is nothing to call empty yet.
-    if (!payload && failed) return `<div class="eusk-empty" role="alert"><strong>${tr('Research workflows could not be loaded', '研究流程读取失败')}</strong><p>${tr('The local service did not answer. Try again.', '本机服务没有响应，请重试。')}</p><button type="button" data-wf-retry>${tr('Retry', '重试')}</button></div>`;
-    if (!payload) return `<div class="eusk-empty" role="status">${tr('Loading research workflows…', '正在读取研究流程…')}</div>`;
+    if (!payload && failed) return `${entry}<div class="eusk-empty" role="alert"><strong>${tr('Research workflows could not be loaded', '研究流程读取失败')}</strong><p>${tr('The local service did not answer. Try again.', '本机服务没有响应，请重试。')}</p><button type="button" data-wf-retry>${tr('Retry', '重试')}</button></div>`;
+    if (!payload) return `${entry}<div class="eusk-empty" role="status">${tr('Loading research workflows…', '正在读取研究流程…')}</div>`;
     const items = payload.items || [], custom = window.EU_SKILL_CUSTOM_WORKFLOW;
     const customActive = !!custom && (selectedId || selected) === custom.ID;
     const row = customActive ? null : items.find(item => item.id === (selectedId || selected)) || items[0];
-    if (!row && !customActive) return `<div class="eusk-empty" role="status">${tr('No workflows available', '暂无研究流程')}</div>`;
-    const nav = `<nav class="eusk-workflow-list" aria-label="${tr('Research workflows', '研究流程')}">${custom ? custom.navItem(customActive) : ''}${items.map(item => `<button type="button" data-wf-select="${esc(item.id)}" aria-pressed="${!customActive && item.id === row.id}"><strong>${esc(pick(item, 'title'))}</strong><span>${esc(pick(item, 'description'))}</span></button>`).join('')}</nav>`;
-    if (customActive) return `<div class="eusk-workflows">${nav}${custom.render(skills, graph)}</div>`;
-    return `<div class="eusk-workflows">${nav}
+    if (!row && !customActive) return `${entry}<div class="eusk-empty" role="status">${tr('No workflows available', '暂无研究流程')}</div>`;
+    const nav = `<nav class="eusk-workflow-list" aria-label="${tr('Research workflows', '研究流程')}">${items.map(item => `<button type="button" data-wf-select="${esc(item.id)}" aria-pressed="${!customActive && item.id === row?.id}"><strong>${esc(pick(item, 'title'))}</strong><span>${esc(pick(item, 'description'))}</span></button>`).join('')}${custom ? custom.navItem(customActive) : ''}</nav>`;
+    if (customActive) return `${entry}<div class="eusk-workflows">${nav}${custom.render(skills, graph)}</div>`;
+    return `${entry}<div class="eusk-workflows">${nav}
       <article class="eusk-workflow-detail"><header><h2>${esc(pick(row, 'title'))}</h2><p>${esc(pick(row, 'description'))}</p><details><summary>${tr('Technical details', '技术详情')}</summary><small>${esc(row.version)}</small>${bulletList((row.databases || []).map(db => { const codes = databaseReasonCodes(db); return codes.length ? `${db.label}: ${codes.join(', ')}` : ''; }))}</details></header>
       <div class="eusk-workflow-actions"><button type="button" class="eusk-use" data-wf-start="${esc(row.id)}" ${row.enabled ? '' : 'disabled'}>${tr('Start with this workflow', '用此流程开始')}</button><button type="button" data-sk-open="builtin:${esc(row.id)}">${tr('Docs', '文档')}</button></div>${sections(row)}</article></div>`;
   }
@@ -219,8 +273,16 @@
   // researcher edits or sends it, and nothing runs before the plan is approved.
   function startRequest(skill, row) {
     const title = pick(row || {}, 'title') || skill.title || skill.name;
-    return tr(`Help me run a study with the "${title}" workflow. Follow the workflow guide, ask me for the research question, data source and analysis goal, and confirm the configuration before generating the plan.`,
-      `请用「${title}」流程帮我开展一项研究：按流程指南先问我研究问题、数据来源和分析目标，确认配置后再生成研究计划。`);
+    return tr(`Use the "${title}" workflow as a starting point. Assess its fit to my question and data, explain the recommended design, and ask only for missing information that affects that design. Put the cohort, timing, outcome, methods and deliverables in one complete plan for my review; do not run analyses before that review. My research question:`,
+      `请以「${title}」流程为研究起点，根据我的问题和数据判断是否适用，说明推荐的研究设计，只补问会影响设计的缺失信息。把人群、时间、结局、方法和交付要求放进一份完整计划供我审阅，审阅前不运行分析。我的研究问题是：`);
+  }
+  function startQuestion() {
+    window.sessionStorage.removeItem('easyicu.skillHub.method');
+    window.sessionStorage.setItem('easyicu.skillHub.question', tr(
+      'Recommend a study design for my research question and available data, explain why, and ask only for missing information that affects the design. Prepare one complete plan for my review before running analyses. My research question:',
+      '请根据我的研究问题和可用数据推荐合适的研究设计，说明理由，只补问会影响设计的缺失信息，并给出一份完整计划供我审阅，审阅前不运行分析。我的研究问题是：',
+    ));
+    location.hash = '#guided';
   }
   function start(skill, row) {
     window.sessionStorage.setItem('easyicu.skillHub.method', JSON.stringify({
@@ -233,6 +295,7 @@
     location.hash = '#guided';
   }
   function handle(target, skills) {
+    if (target.hasAttribute && target.hasAttribute('data-wf-question')) { startQuestion(); return true; }
     if (target.hasAttribute && target.hasAttribute('data-wf-retry')) {
       failed = false; loadedAt = 0;
       load().catch(() => {}).finally(() => { if (window.__euRender) window.__euRender(); });
@@ -254,6 +317,6 @@
     const button = event.target.closest('[data-sk-mode]');
     if (button) window.SCREENS?.skills?.selectTab(button.dataset.skMode);
   }, true);
-  window.EU_SKILL_WORKFLOWS = Object.freeze({ render, sections, graph, start, handle, load, find,
+  window.EU_SKILL_WORKFLOWS = Object.freeze({ render, sections, graph, start, startQuestion, handle, load, find,
     overviewMarkdown, payload: () => catalog });
 })();

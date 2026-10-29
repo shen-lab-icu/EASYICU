@@ -105,6 +105,29 @@ def _step_contract_findings(
         step=step, step_summary=step_summary, context=context,
         resolved_input_bindings=resolved_input_bindings, out_dir=out_dir,
     ))
+    # These diagnostic products have their own source-bound numeric replay.
+    # Import runners only for the matching action to keep catalog reads light.
+    if step.scientific_action_id == "causal_emulation.covariate_balance":
+        from ..execution.runners.covariate_balance_executor import covariate_balance_output_findings
+
+        findings.extend(covariate_balance_output_findings(
+            step=step, step_summary=step_summary, context=context,
+            resolved_input_bindings=resolved_input_bindings, out_dir=out_dir,
+        ))
+    if step.scientific_action_id == "phenotyping.cluster_sizes":
+        from ..execution.runners.cluster_sizes_executor import cluster_sizes_output_findings
+
+        findings.extend(cluster_sizes_output_findings(
+            step=step, step_summary=step_summary, context=context,
+            resolved_input_bindings=resolved_input_bindings, out_dir=out_dir,
+        ))
+    if step.scientific_action_id == "prediction.subgroup_fairness":
+        from ..contracts.prediction_subgroup_output import prediction_subgroup_output_findings
+
+        findings.extend(prediction_subgroup_output_findings(
+            step=step, step_summary=step_summary, context=context,
+            resolved_input_bindings=resolved_input_bindings, out_dir=out_dir,
+        ))
     # Figure-only follow-up steps (created by ``_split_table_and_figure_outputs_in_plan``)
     # inherit the parent's step_id with a ``_figure`` suffix, e.g.
     # ``04_primary_association_figure`` / ``01_model_training_figure``. Their

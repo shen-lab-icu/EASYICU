@@ -24,7 +24,10 @@ from easyicu.databases.research_requirements import StudyRequirements, Threshold
 from .planning.capability_registry import CAPABILITY_REGISTRY
 from .planning.analysis_method_suite import METHOD_SUITE_REGISTRY
 from .planning.method_adapter_catalog import HIGH_FREQUENCY_METHOD_ADAPTERS
-from .skill_packages.host_sources import method_skill_implementation_files
+from .skill_packages.host_sources import (
+    method_skill_implementation_files, method_skill_implementation_metadata,
+)
+from .skill_packages.component_sources import method_component_implementation
 
 METHOD_SKILL_REGISTRY_VERSION = "easyicu.method-skills/3"
 METHOD_SKILL_PACKAGE_VERSION = "easyicu.method-skill-package/5"
@@ -156,6 +159,10 @@ class MethodSkillSpec:
     included_module_ids: Tuple[str, ...] = ()
     workflow_steps: Tuple[str, ...] = ()
     not_for: tuple[tuple[str, str, str | None], ...] = ()
+    # Reader labels can narrow a module's broad family contract. Execution and
+    # scientific validation remain with the capability and action owners.
+    input_labels: Tuple[str, ...] = ()
+    output_labels: Tuple[str, ...] = ()
 
     def to_dict(self, *, enabled: bool) -> dict[str, Any]:
         capability = _CAPABILITY_BY_ID[self.capability_id]
@@ -179,8 +186,8 @@ class MethodSkillSpec:
             "execution_mode": self.execution_mode,
             "claim_ceiling": self.claim_ceiling,
             "scope": capability.primary_estimand,
-            "inputs": list(capability.data_contract),
-            "outputs": [capability.result_contract],
+            "inputs": list(self.input_labels or capability.data_contract),
+            "outputs": list(self.output_labels or (capability.result_contract,)),
             "diagnostics": list(capability.required_diagnostics),
             "prompt": self.prompt,
             "prompt_zh": self.prompt_zh,
@@ -213,6 +220,12 @@ METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
         "Use Treatment patterns with reviewed class capture, groups and ICU time origin. My research question: ",
         "请使用“治疗使用模式”，在计划中审阅药物覆盖、分组和 ICU 时间起点。我的研究问题是：",
         layer="analysis_module",
+        input_labels=("one row per ICU stay with reviewed grouping and TableOneSpec",
+                      "complete drug-class capture and source receipt",
+                      "exposure status, first-use time, ICU follow-up and resolved death/discharge flags"),
+        output_labels=("drug-class exposure counts and proportions by group",
+                       "first-use median/IQR among exposed stays only",
+                       "first-use cumulative incidence with death and alive ICU discharge as competing events"),
     ),
     MethodSkillSpec(
         "cohort-characterization-table-one",
@@ -229,6 +242,11 @@ METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
         "Use the Cohort characterization and Table 1 method. The research plan proposes the grouping levels, summarized variables, units, and summary rules; I review them together in the plan, and nothing runs before that review. My research question: ",
         "请使用“队列描述与 Table 1”方法。分组水平、汇总变量、单位与汇总规则由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         layer="analysis_module",
+        not_for=(("An adjusted exposure–outcome estimate", "需要调整后的暴露—结局估计", "adjusted-association-model"),),
+        input_labels=("one digest-bound typed cohort",
+                      "TableOneSpec with closed grouping levels and variable summaries",
+                      "table:table_one output contract"),
+        output_labels=("table_one.csv with per-variable observed and missing denominators",),
     ),
     MethodSkillSpec(
         "missingness-measurement-audit",
@@ -245,6 +263,12 @@ METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
         "Use the Missingness and measurement audit method. The research plan proposes the audited variables, time windows, denominators, and structural-absence rules; I review them together in the plan, and nothing runs before that review. My research question: ",
         "请使用“缺失与测量审计”方法。审计变量、时间窗、分母与结构性缺失规则由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         layer="analysis_module",
+        not_for=(("Creating measurements for structurally unavailable concepts", "为数据源结构性缺失的概念生成测量值", None),),
+        input_labels=("one closed cohort authority",
+                      "explicit audited variables or measurement products",
+                      "declared missingness output roles"),
+        output_labels=("declared missingness and measurement-audit tables with analytic denominators",
+                       "cohort flow and measurement-source distinctions when declared"),
     ),
     MethodSkillSpec(
         "exposure-outcome-distribution",
@@ -300,8 +324,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
         "Landmark 分类关联",
         "Association",
         "关联分析",
-        "Among patients still in hospital at a set time point (e.g. 24 h after ICU admission), compare outcomes across exposure groups without immortal-time bias.",
-        "在某个时间点（如入 ICU 后 24 小时）仍在院的患者中，比较不同暴露分组的结局，避免不死时间偏倚。",
+        "Among patients alive and still observed at a set time point (e.g. 24 h after ICU admission), compare subsequent outcomes using exposure recorded up to that point.",
+        "在某个时间点（如入 ICU 后 24 小时）仍存活且仍在观察中的患者中，按此前记录的暴露分组比较此后的结局。",
         "association_landmark_categorical_v1",
         ("association.adjusted_association",),
         "deterministic_host",
@@ -507,6 +531,11 @@ METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
         "Use the Restricted mean survival time method. The research plan proposes the groups and reference, time origin, event and censoring definitions, and restriction time; I review them together in the plan, and nothing runs before that review. My research question: ",
         "请使用“限制性平均生存时间（RMST）”方法。分组与参照、时间起点、事件与删失定义、限制时间由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         layer="analysis_module",
+        not_for=(("A comparison of more than two groups or a covariate-adjusted RMST contrast", "比较超过两组，或估计协变量调整后的 RMST 对比", None),),
+        input_labels=("one digest-bound typed cohort",
+                      "one reviewed two-group time/event/group/horizon RMST specification"),
+        output_labels=("rmst_summary.csv with group RMST, two-group difference and uncertainty intervals",
+                       "rmst_runtime_receipt.json"),
     ),
     MethodSkillSpec(
         "clinical-risk-prediction",
@@ -666,7 +695,7 @@ _COMPONENT_ZH = {
     "time_to_event.rmst": ("限制性平均生存时间", "比较指定时间范围内两组的平均无事件时间。"),
     "time_to_event.competing_risks_cif": ("竞争风险累积发生率与 Gray 比较", "使用 Aalen–Johansen 方法描述目标事件的累积发生率，并进行分析级组间比较。"),
     "causal_emulation.iptw_or": ("稳定化 IPTW 因果对比", "在目标试验方案下估计边际因果对比。"),
-    "causal_emulation.covariate_balance": ("协变量平衡与 Love plot", "用加权前后的标准化差异检查已测混杂平衡。"),
+    "causal_emulation.covariate_balance": ("协变量平衡（加权前后）", "用固定分母的标准化差异和有效样本量描述已测协变量的平衡；平衡不代表已排除混杂。"),
     "causal_emulation.positivity_overlap": ("阳性与重叠诊断", "检查治疗组之间的倾向评分重叠和极端权重。"),
     "causal_emulation.propensity_adjustment": ("倾向评分匹配与稳定化加权", "生成匹配或加权诊断，并检查重叠与协变量平衡。"),
     "causal_emulation.evalue": ("E-value 未测混杂敏感性", "量化未测混杂需要多强才能解释观察到的关联。"),
@@ -692,7 +721,7 @@ _COMPONENT_ZH = {
     "prediction.decision_curve": ("决策曲线与净获益", "在临床阈值范围内比较模型、全治和全不治策略。"),
     "prediction.threshold_metrics": ("临床阈值性能", "报告指定阈值下的敏感度、特异度、PPV 和 NPV。"),
     "prediction.feature_attribution": ("特征归因", "使用 SHAP、置换重要性或模型系数解释预测贡献。"),
-    "prediction.subgroup_fairness": ("亚组与公平性性能", "比较人口学亚组中的区分度与校准表现。"),
+    "prediction.subgroup_fairness": ("亚组预测性能", "在预设验证集和亚组内评估同一份冻结二分类预测，报告区分度、校准和 Brier 点估计；保留稀疏或无法估计的组及原因。"),
     "prediction.internal_validation": ("内部验证", "用 bootstrap 或交叉验证评估并校正开发集乐观偏倚。"),
     "prediction.external_validation": ("跨数据库外部验证", "在其他 ICU 数据库原样应用开发好的模型，报告区分度、校准和病例构成差异；单独报告再校准。"),
     "prediction.conformal_intervals": ("保形预测集", "生成具有边际或分层覆盖保证的预测集合。"),
@@ -702,7 +731,7 @@ _COMPONENT_ZH = {
     "phenotyping.k_selection": ("聚类数量选择", "使用 silhouette、gap 或 BIC 等预设标准选择聚类数。"),
     "phenotyping.cluster_stability": ("聚类稳定性与复现性", "通过重采样、共识或调整 Rand 指数检查稳定性。"),
     "phenotyping.trajectory_cluster_stability": ("轨迹聚类稳定性复拟合", "按预设方案重采样，复核所选轨迹模型的稳定性。"),
-    "phenotyping.cluster_sizes": ("聚类规模与退化检查", "报告各聚类规模并标记近空或退化聚类。"),
+    "phenotyping.cluster_sizes": ("聚类规模与退化检查", "按既有冻结标签统计各类规模、空类及未分配对象，按声明阈值标记近空类；不重新拟合聚类。"),
     "phenotyping.outcome_by_cluster": ("聚类间结局描述", "描述已确定的各聚类之间的临床结局差异，不作因果解释。"),
     "phenotyping.trajectory_feature_clustering": ("轨迹特征聚类", "根据预设时间窗和表示方法构建纵向轨迹表型。"),
     "phenotyping.early_subtype_assignment": ("用早期特征识别轨迹亚型", "用轨迹观察窗之前的临床特征判断患者属于哪一个已确定的亚型，并在另一批患者上验证。"),
@@ -839,11 +868,23 @@ def _validate_method_skills() -> None:
 _validate_method_skills()
 
 
+def _plan_first_prompt(prompt: str, *, language: int) -> str:
+    question = ("My research question: ", "我的研究问题是：")[language]
+    guidance = (
+        "Reuse the question, selected data and decisions already in context. Ask together only for missing information that would change the study design; propose routine choices in the complete plan for one review before analysis. ",
+        "复用上下文中的问题、已选数据和已有决定。只集中询问确实缺失且会改变研究设计的信息；常规选择由完整计划提出，分析前一次审阅。",
+    )[language]
+    return prompt.removesuffix(question) + guidance + question
+
+
 def method_skill_catalog(*, enabled: bool) -> dict[str, Any]:
     """Return the public, digest-bound method catalogue for the desktop UI."""
 
     items = [row.to_dict(enabled=enabled) for row in METHOD_SKILLS]
     components, planned_count = _method_component_catalog(enabled=enabled)
+    for row in (*items, *components):
+        row["prompt"] = _plan_first_prompt(row["prompt"], language=0)
+        row["prompt_zh"] = _plan_first_prompt(row["prompt_zh"], language=1)
     canonical = json.dumps(
         {"items": items, "components": components},
         ensure_ascii=False,
@@ -1597,8 +1638,9 @@ _PACKAGE_HEADINGS = (
 
 def _output_lines(row: dict[str, Any], language: int) -> list[str]:
     if row["id"] not in WORKFLOW_GUIDES:
-        return [("The result of this method, its diagnostic records and the study's selected tables or figures.",
-                 "此方法的结果、诊断记录，以及研究选定的表格或图形。")[language]]
+        return [*(f"- {output}" for output in row.get("outputs", ())),
+                ("These are expected products of the selected method, not recorded results. Review the exact outputs in the enclosing plan.",
+                 "这些是所选方法的预期产物，并非已记录的结果；确切输出在所属研究计划中审阅。")[language]]
     guide = _workflow_guide(row)
     supporting = ("table_one.csv",) if row["id"] in REFERENCE_SCRIPT_PACKAGES else ("table_one.csv", "missingness_summary.csv")
     files = (*supporting, *guide.output_files)
@@ -1634,8 +1676,13 @@ def _package_skill_markdown(kind: str, row: dict[str, Any], *, language: int = 0
         "This method answers one part of the reviewed question. The study plan determines the population and scientific choices. Its outputs and checks remain part of that study and do not create a separate primary question.",
         "此方法回答已审阅问题中的一部分。研究计划决定人群与科学选择。其输出和检查属于该研究，不会另行产生主要研究问题。",
     )
-    inputs = ("Inputs: an approved cohort with patient/stay identifiers, the specified measurements, units and timestamps, and outcome/follow-up information when used.",
-              "输入：获准使用的队列，含患者及住院标识、所需测量、单位和时间戳，以及分析所用的结局与随访信息。")[language]
+    inputs = ("Inputs: the selected method's required data or completed model/result products, as specified by its owner and reviewed in the study plan. Patient-level data are required only when that method uses them.",
+              "输入：所属方法要求的数据，或已完成模型及结果产物，由实际执行方规定并在研究计划中审阅。只有方法确实需要时才使用患者级数据。")[language]
+    if guide:
+        inputs = ("Inputs: an approved cohort with patient/stay identifiers, the specified measurements, units and timestamps, and outcome/follow-up information when used.",
+                  "输入：获准使用的队列，含患者及住院标识、所需测量、单位和时间戳，以及分析所用的结局与随访信息。")[language]
+    elif row.get("inputs"):
+        inputs = ("Inputs: ", "输入：")[language] + "; ".join(row["inputs"])
     if row["id"] == "cross_database.meta_analysis":
         inputs = ("Inputs: sealed per-database aggregate estimates, coefficient SEs, exact estimand identities, capability decisions and each run's passed gates. No patient rows or identifiers are pooling inputs.",
                   "输入：各数据库已封存的汇总效应、系数标准误、精确估计目标标识、能力判定及各自通过的审核。合并不接收患者行或患者标识。")[language]
@@ -2056,8 +2103,23 @@ def method_skill_package(skill_id: str, *, enabled: bool) -> dict[str, Any]:
                 "content": content,
             }
         )
-    if kind != "method_component":
-        files.extend(method_skill_implementation_files(row["id"], METHOD_SKILLS))
+    if kind == "method_component":
+        implementation_files, implementation = method_component_implementation(row)
+    else:
+        implementation_files = method_skill_implementation_files(row["id"], METHOD_SKILLS)
+        spec = next(spec for spec in METHOD_SKILLS if spec.skill_id == row["id"])
+        implementation = method_skill_implementation_metadata(spec, implementation_files, METHOD_SKILLS)
+    files.extend(implementation_files)
+    implementation["examples"] = [
+        {"language": "python", "path": path, "code": content,
+         "label_en": "Packaged reference/helper script", "label_zh": "包内既有参考或辅助脚本"}
+        for path, content in sources.items() if path.startswith("scripts/") and path.endswith(".py")
+    ]
+    implementation_content = json.dumps(implementation, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    implementation_bytes = implementation_content.encode("utf-8")
+    files.append({"path": "references/implementation.json", "language": "json",
+                  "size_bytes": len(implementation_bytes), "sha256": hashlib.sha256(implementation_bytes).hexdigest(),
+                  "content": implementation_content})
     package_canonical = json.dumps(
         [{"path": row["path"], "sha256": row["sha256"]} for row in files],
         ensure_ascii=False,
@@ -2077,6 +2139,7 @@ def method_skill_package(skill_id: str, *, enabled: bool) -> dict[str, Any]:
         "package_sha256": hashlib.sha256(package_canonical).hexdigest(),
         "read_only": True,
         "execution_boundary": execution_boundary,
+        "implementation": implementation,
         "files": files,
     }
 

@@ -96,6 +96,31 @@ class ScientificActionRuntimeContract:
 
 
 _RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
+    "causal_emulation.covariate_balance": ScientificActionRuntimeContract(
+        outputs=(("table:covariate_balance", "custom"), ("log:covariate_balance_receipt", "custom")),
+        required_product_inputs=("artifact:analysis_cohort",),
+        standard_executor="covariate_balance",
+        display_name="Covariate balance before and after weighting",
+        purpose="Compute descriptive SMD and effective sample sizes on the declared unit roster; preserve the unweighted pooled sample-variance denominator before and after weighting. Balance is not proof of absence of confounding.",
+        execution_parameters=(("covariate_balance_spec", "JSON CovariateBalanceSpec: unit_id_column, analysis_unit, treatment_column (0/1), closed covariates with kinds/levels, optional weight_column and abs_smd_threshold. Declare value columns in raw_inputs; the host binds the reviewed unit ID from the cohort."),),
+    ),
+    "phenotyping.cluster_sizes": ScientificActionRuntimeContract(
+        outputs=(("table:cluster_sizes", "custom"), ("log:cluster_sizes_receipt", "custom")),
+        required_product_inputs=("artifact:analysis_cohort", "table:phenotype_assignments"),
+        alternative_product_inputs=(("artifact:analysis_cohort", "table:cluster_assignments", "artifact:stability_freeze"),),
+        standard_executor="cluster_sizes",
+        display_name="Size of frozen clusters",
+        purpose="Count frozen labels against the declared roster, retain empty expected clusters and unassigned units, and apply only declared near-empty thresholds. No refit or selection of cluster count.",
+        execution_parameters=(("cluster_size_spec", "JSON ClusterSizeSpec: unit_id_column, analysis_unit, assignment_source, assignment_unit_id_column, label_column, expected_clusters, missing_label_policy, optional near_empty_n/fraction. raw_inputs=[]; the host binds the reviewed roster unit ID."),),
+    ),
+    "prediction.subgroup_fairness": ScientificActionRuntimeContract(
+        outputs=(("table:subgroup_performance", "custom"),),
+        required_product_inputs=("table:prediction_scores", "artifact:analysis_cohort"),
+        standard_executor="prediction_subgroup_performance",
+        display_name="Performance of frozen binary predictions by subgroup",
+        purpose="Evaluate the same frozen prediction artifact in one declared validation split and closed subgroups. Retain sparse, empty and undefined cells with reasons. Report descriptive point estimates only; no refit or normative fairness claim.",
+        execution_parameters=(("prediction_subgroup_spec", "JSON PredictionSubgroupSpec: analysis_unit, subgroup_input_key=artifact:analysis_cohort, subgroup_unit_id_column, axes with explicit closed levels, evaluation_split, missing_value_policy. Compiles to prediction_subgroup_performance(<JSON>) in the sealed method field. Inputs are exactly the score product and membership product; subgroup columns come from the membership product."),),
+    ),
     "causal_emulation.g_methods": ScientificActionRuntimeContract(
         outputs=(("table:g_method_estimates", "custom"), ("table:g_method_weight_diagnostics", "custom"),
                  ("log:g_method_receipt", "custom"), ("report:g_method_checklist", "report")),

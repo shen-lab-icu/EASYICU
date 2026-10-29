@@ -90,6 +90,30 @@ def _adapter_group(
 
 HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
     *_adapter_group(
+        ("causal_emulation.covariate_balance",),
+        owner_module="easyicu.research_agent.execution.runners.covariate_balance_executor",
+        owner_entrypoint="covariate_balance_executor_code",
+        selection_kind="covariate_balance",
+        required_declarations=("one digest-bound typed cohort", "closed CovariateBalanceSpec with fixed SMD denominator and weight policy"),
+        validation_test_refs=("tests/research_agent/core/test_standalone_balance_and_cluster_sizes.py::test_standalone_diagnostics_select_execute_and_replay_through_host_pipeline",),
+    ),
+    *_adapter_group(
+        ("phenotyping.cluster_sizes",),
+        owner_module="easyicu.research_agent.execution.runners.cluster_sizes_executor",
+        owner_entrypoint="cluster_sizes_executor_code",
+        selection_kind="cluster_sizes",
+        required_declarations=("digest-bound cohort roster and frozen existing assignments", "closed ClusterSizeSpec; no refit or cluster selection"),
+        validation_test_refs=("tests/research_agent/core/test_standalone_balance_and_cluster_sizes.py::test_standalone_diagnostics_select_execute_and_replay_through_host_pipeline",),
+    ),
+    *_adapter_group(
+        ("prediction.subgroup_fairness",),
+        owner_module="easyicu.research_agent.execution.runners.prediction_subgroup_executor",
+        owner_entrypoint="prediction_subgroup_executor_code",
+        selection_kind="prediction_subgroup_performance",
+        required_declarations=("digest-bound frozen binary predictions and subgroup membership", "prediction_subgroup_performance(<PredictionSubgroupSpec JSON>); declared validation split and closed groups; point estimates only"),
+        validation_test_refs=("tests/research_agent/execution/test_prediction_subgroup_executor.py::test_output_gate_refuses_a_different_schema_valid_result_with_its_valid_hashes", "tests/research_agent/core/test_prediction_subgroup.py::test_analytical_auroc_brier_and_logistic_calibration_oracle"),
+    ),
+    *_adapter_group(
         ("descriptive.table_one",),
         owner_module=("easyicu.research_agent.execution.runners.table_one_executor"),
         owner_entrypoint="table_one_executor_code",
@@ -252,7 +276,6 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
             "phenotyping.cluster_solution",
             "phenotyping.k_selection",
             "phenotyping.cluster_stability",
-            "phenotyping.cluster_sizes",
             "phenotyping.outcome_by_cluster",
         ),
         owner_module=(
@@ -270,7 +293,6 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
             "tests/research_agent/core/test_cross_sectional_phenotyping_executor.py::test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable",
         ),
         typed_subcontracts=(
-            "phenotyping.cluster_sizes",
             "phenotyping.outcome_by_cluster",
         ),
     ),
@@ -297,10 +319,8 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
 def _validate_catalog() -> None:
     adapter_ids = [item.adapter_id for item in HIGH_FREQUENCY_METHOD_ADAPTERS]
     action_ids = [item.action_id for item in HIGH_FREQUENCY_METHOD_ADAPTERS]
-    if not 15 <= len(action_ids) <= 20:
-        raise RuntimeError(
-            "high-frequency method-adapter batch must contain 15-20 actions"
-        )
+    if not action_ids:
+        raise RuntimeError("method-adapter catalog must not be empty")
     if len(adapter_ids) != len(set(adapter_ids)):
         raise RuntimeError("method-adapter ids must be unique")
     if len(action_ids) != len(set(action_ids)):

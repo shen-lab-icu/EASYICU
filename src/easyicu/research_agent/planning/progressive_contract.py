@@ -37,6 +37,8 @@ from ..contracts.model_tokens import BinaryEffectMeasure
 from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from ..contracts.trajectory_design import REPEATED_ACTIONS, RepeatedMeasurePlanFields
+from ..contracts.prediction_subgroup import PredictionSubgroupPlanFields, PredictionSubgroupSpec
+from .diagnostic_step_fields import DiagnosticPlanFields
 from .design_selection import ResearchDesignSelection
 
 
@@ -825,6 +827,9 @@ class ProgressivePlanOutline(BaseModel):
 #: Step fields that only one outline coordinate may carry.  The step contract
 #: refuses them elsewhere, so a transport must not offer them elsewhere either.
 COORDINATE_OWNED_STEP_FIELDS = (
+    "covariate_balance_spec",
+    "cluster_size_spec",
+    "prediction_subgroup_spec",
     "repeated_measure_spec",
     "external_validation_spec",
     "data_preparation",
@@ -847,6 +852,14 @@ def coordinate_owned_step_fields(
     """The coordinate-owned fields a step with this module, action and role may carry."""
 
     owned: set[str] = set()
+    diagnostics = {
+        "causal_emulation.covariate_balance": "covariate_balance_spec",
+        "phenotyping.cluster_sizes": "cluster_size_spec",
+        "prediction.subgroup_fairness": "prediction_subgroup_spec",
+    }
+    if module_id == "custom_analysis" and planned_analysis_role in {"secondary", "auxiliary"}:
+        if scientific_action_id in diagnostics:
+            owned.add(diagnostics[scientific_action_id])
     if module_id == "custom_analysis" and scientific_action_id in REPEATED_ACTIONS:
         owned.add("repeated_measure_spec")
     if scientific_action_id == "prediction.external_validation" and planned_analysis_role == "secondary":
@@ -873,7 +886,8 @@ def coordinate_owned_step_fields(
     return frozenset(owned)
 
 
-class ProgressiveSkeletonStep(ExternalValidationPlanFields, RepeatedMeasurePlanFields):
+class ProgressiveSkeletonStep(ExternalValidationPlanFields, RepeatedMeasurePlanFields,
+                              DiagnosticPlanFields, PredictionSubgroupPlanFields):
     """Strict detail for only the step currently being materialized by the host."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -882,6 +896,10 @@ class ProgressiveSkeletonStep(ExternalValidationPlanFields, RepeatedMeasurePlanF
     # typed object before compilation, without expanding every family schema.
     external_validation_spec: Annotated[
         Optional[ExternalValidationSpec],
+        WithJsonSchema({"anyOf": [{"type": "string"}, {"type": "null"}]}),
+    ] = Field(default=None, exclude_if=lambda value: value is None)
+    prediction_subgroup_spec: Annotated[
+        Optional[PredictionSubgroupSpec],
         WithJsonSchema({"anyOf": [{"type": "string"}, {"type": "null"}]}),
     ] = Field(default=None, exclude_if=lambda value: value is None)
 
@@ -1078,6 +1096,29 @@ class ProgressiveSkeletonStep(ExternalValidationPlanFields, RepeatedMeasurePlanF
             scientific_action_id=self.scientific_action_id,
             planned_analysis_role=self.planned_analysis_role,
         )
+        for field in ("covariate_balance_spec", "cluster_size_spec", "prediction_subgroup_spec"):
+            if getattr(self, field) is not None and field not in owned:
+                raise ValueError(f"{field} belongs only to its exact auxiliary or secondary diagnostic action")
+        diagnostic_field = {
+            "causal_emulation.covariate_balance": "covariate_balance_spec",
+            "phenotyping.cluster_sizes": "cluster_size_spec",
+            "prediction.subgroup_fairness": "prediction_subgroup_spec",
+        }.get(self.scientific_action_id)
+        if diagnostic_field is not None:
+            spec = getattr(self, diagnostic_field)
+            if spec is None or diagnostic_field not in owned:
+                raise ValueError(f"{self.scientific_action_id} requires its closed {diagnostic_field} on a supporting custom action")
+            if diagnostic_field == "prediction_subgroup_spec":
+                if self.raw_inputs:
+                    raise ValueError("subgroup performance consumes frozen scores and membership products, without raw inputs")
+            else:
+                required: set[str] = set()
+                if diagnostic_field == "covariate_balance_spec":
+                    required.update({spec.treatment_column, *(item.column for item in spec.covariates)})
+                    if spec.weight_column:
+                        required.add(spec.weight_column)
+                if not required <= set(self.raw_inputs):
+                    raise ValueError(f"{diagnostic_field} value columns must be explicit raw_inputs; the host binds the reviewed unit ID")
         if self.functional_form_spec is not None and "functional_form_spec" not in owned:
             raise ValueError("functional_form_spec belongs only to a custom sensitivity")
         if self.bootstrap_spec is not None and "bootstrap_spec" not in owned:

@@ -710,6 +710,23 @@ def selected_counts_only_inference_coordinate(
 
 
 _COORDINATE_OWNED_FIELD_GUIDANCE = {
+    "covariate_balance_spec": (
+        "Set covariate_balance_spec to JSON with unit_id_column, analysis_unit, treatment_column (0/1), "
+        "covariates [{column,kind,levels for categorical}], optional weight_column and abs_smd_threshold. "
+        "Declare value columns in raw_inputs; the host binds the reviewed cohort unit ID. Consume one typed cohort; fixed unweighted pooled sample variance is used for before/after SMD. No treatment effect is estimated. "
+    ),
+    "cluster_size_spec": (
+        "Set cluster_size_spec to JSON with unit_id_column, analysis_unit, assignment_source, assignment_unit_id_column, "
+        "label_column, expected_clusters and missing_label_policy=error|exclude; optional near_empty_n/fraction. "
+        "Consume the cohort and frozen existing assignments (plus stability_freeze for trajectory labels); raw_inputs=[]. The host binds the reviewed roster ID. Do not refit clusters. "
+    ),
+    "prediction_subgroup_spec": (
+        "Set prediction_subgroup_spec to JSON with analysis_unit, subgroup_input_key, subgroup_unit_id_column, "
+        "axes [{column,levels}], evaluation_split and missing_value_policy=error|complete_case. "
+        "Consume exactly table:prediction_scores then the membership product; raw_inputs=[]. "
+        "Declare prediction_typed_scalar key encoding only for keys produced with that encoding. "
+        "The host reports point estimates and sparse/undefined reasons, without refit or a normative fairness judgment. "
+    ),
     "repeated_measure_spec": (
         "Set repeated_measure_spec to JSON text naming ICU admission as time origin, hours/days, window, bin width, "
         "aggregation, model/family and fixed-time basis; GEE also declares working_correlation. Explicitly set "
@@ -843,6 +860,9 @@ def step_materialization_shape_contract(
         "missing_exposure_policy": None, "missing_outcome_policy": None,
         "confidence_level": None, "sensitivity_spec_ids": [], "functional_form_spec": None,
         "bootstrap_spec": None,
+        "covariate_balance_spec": None,
+        "cluster_size_spec": None,
+        "prediction_subgroup_spec": None,
         "external_validation_spec": None,
         "repeated_measure_spec": None,
         "data_preparation": None,

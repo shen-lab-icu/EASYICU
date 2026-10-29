@@ -4,10 +4,11 @@
   const S = (window.SCREENS = window.SCREENS || {});
   const { esc } = window.EU_HTML;
   const workflows = () => window.EU_SKILL_WORKFLOWS;
+  const implementation = () => window.EU_SKILL_IMPLEMENTATION;
   const ui = { catalogMode: workflows() ? 'workflows' : 'skills', source: 'all', category: 'all', query: '', hideDisabled: false,
     selected: '', tab: 'overview', install: false, editing: '', draft: '', stages: ['conversation'],
     installEnabled: true, detail: null, loadingDetail: false, packageDetail: null,
-    packageFile: 'SKILL.md', loadingPackage: false, busy: false, error: '', notice: '', catalogWarning: '',
+    packageFile: '', implementationEntry: null, loadingPackage: false, busy: false, error: '', notice: '', catalogWarning: '',
     upload: null, uploadName: '', referenceFiles: {} };
   const tr = (en, zh) => window.t(en, zh);
   const api = () => window.EU_API || {};
@@ -37,6 +38,7 @@
     source: 'builtin', kind: 'method', skillLayer: row.layer || 'research_workflow', enabled: !!row.enabled, toggleable: false,
     version: row.version, capabilityId: row.capability_id, actionIds: row.action_ids || [],
     includedModuleIds: row.included_module_ids || [],
+    notFor: row.not_for || [],
     executionMode: row.execution_mode, claimCeiling: row.claim_ceiling,
     scope: row.scope || '', inputs: row.inputs || [], outputs: row.outputs || [],
     diagnostics: row.diagnostics || [], prompt: window.EU_LANG === 'zh' ? row.prompt_zh : row.prompt,
@@ -89,11 +91,13 @@
     return owner && typeof owner.render === 'function'
       ? owner.render(text) : `<pre>${esc(text)}</pre>`;
   };
-  const sourceLabel = source => source === 'user' ? tr('Created by you', '我创建的') : tr('Verified by EasyICU', 'EasyICU 已验证');
-  const executionLabel = skill => skill.executionMode === 'deterministic_host'
-    ? tr('Computed by EasyICU', '由 EasyICU 直接计算') : tr('Model-written code, checked by EasyICU', '模型编写代码，EasyICU 核验');
+  const sourceLabel = source => source === 'user' ? tr('Created by you', '我创建的') : tr('Built into EasyICU', 'EasyICU 内置');
+  const executionLabel = skill => skill.executionMode === 'owner_projection'
+    ? tr('Opens the data or definition owner', '打开数据或定义工具') : skill.executionMode === 'deterministic_host'
+      ? tr('Computed by EasyICU', '由 EasyICU 直接计算') : tr('Model-written code, checked by EasyICU', '模型编写代码，EasyICU 核验');
   const ceilingLabel = skill => skill.claimCeiling === 'reportable'
-    ? tr('Report-ready', '可写入报告') : tr('Analysis only', '仅分析级');
+    ? tr('Report use after review', '审查后可用于报告') : tr('Analysis only', '仅分析级');
+  const catalogEvidence = () => `<p class="eusk-binding">${tr('This catalog describes registered capabilities and expected outputs. Acceptance for your research question and database is determined from each run’s evidence.', '目录描述已登记能力与预期输出；您的研究问题和数据库是否通过验收，以实际运行证据为准。')}</p>`;
   const tierLabel = skill => ({ primary: tr('Primary method', '主要方法'),
     standard_supporting: tr('Supporting method', '配套方法'), exploratory: tr('Exploratory method', '探索方法') }[skill.tier] || skill.tier || '');
   const methodFamilySpecs = () => [
@@ -104,6 +108,7 @@
     ['prediction', tr('Prediction', '预测模型')],
     ['causal_emulation', tr('Causal inference', '因果推断')],
     ['phenotyping', tr('Phenotyping', '表型与亚型')],
+    ['cross_database', tr('Evidence synthesis', '证据合成')],
   ];
   const familyName = family => (methodFamilySpecs().find(([key]) => key === family) || [])[1] || family;
   // Data-definition and planning Skills carry a working tool (screens-skills-tools.js).
@@ -205,6 +210,8 @@
     const method = skill.kind === 'method' || skill.kind === 'method_component';
     const component = skill.kind === 'method_component';
     const workflow = skill.kind === 'method' && skill.skillLayer === 'research_workflow';
+    const incomplete = method && ui.packageDetail && ui.packageDetail.skill_id === skill.name
+      && ui.packageDetail.implementation && ui.packageDetail.implementation.mode === 'unavailable';
     const detail = user && ui.detail && ui.detail.name === skill.name ? ui.detail : null;
     const masterOff = !user && (method ? methodCapabilities().enabled === false : publicationCapabilities().enabled === false);
     // The administrator owns skill state on a hosted instance: show it, offer no toggle.
@@ -213,19 +220,19 @@
       <div class="eusk-detail-head"><div><span class="eusk-eyebrow">${esc(skill.category)} · ${skill.kind === 'method' ? layerLabel(skill) : skill.kind === 'method_component' ? tr('Module', '模块') : user && skill.copiedFrom ? copiedFromLabel(skill) : sourceLabel(skill.source)}</span>
       <h1>${esc(skill.title)}</h1><p>${esc(skill.description)}</p><small>${esc(user ? date(skill.updated_at) : skill.version)}</small>${user && skill.sourceUpdated ? `<p class="eusk-source-note">${tr('The original Skill has changed; your copy stays as it is.', '原技能已更新，你的副本保持不变。')} <button type="button" data-sk-open="builtin:${esc(skill.copiedFrom)}">${tr('View the original', '查看原技能')}</button></p>` : ''}</div>
       <div class="eusk-detail-actions">${stateOnly
-        ? `<span class="eusk-state-button ${skill.enabled ? 'on' : ''}" aria-label="${skill.enabled ? tr('Available', '可用') : tr('Unavailable', '不可用')}">${skill.enabled ? '✓ ' + tr('Available', '可用') : tr('Unavailable', '不可用')}</span>`
+        ? `<span class="eusk-state-button ${skill.enabled && !incomplete ? 'on' : ''}" aria-label="${incomplete ? tr('Implementation incomplete', '实现待补齐') : skill.enabled ? tr('Available', '可用') : tr('Unavailable', '不可用')}">${incomplete ? tr('Implementation incomplete', '实现待补齐') : skill.enabled ? '✓ ' + tr('Available', '可用') : tr('Unavailable', '不可用')}</span>`
         : `<button type="button" class="eusk-state-button ${skill.enabled ? 'on' : ''}" data-sk-toggle="${esc(skill.id)}" ${ui.busy || masterOff ? 'disabled' : ''}>${skill.enabled ? '✓ ' + tr('Enabled', '已启用') : tr('Enable', '启用')}</button>`}
-      <button type="button" class="eusk-use" data-sk-use="${esc(skill.id)}" ${skill.enabled ? '' : 'disabled'}>${skill.useAction && skill.useAction.owner === 'data_extraction' ? tr('Open Data Extraction', '打开数据提取') : workflow ? tr('Start workflow', '启动工作流') : method || (user && skill.enabled && skill.stages.includes('conversation')) ? tr('Use in new task', '在新任务中使用') : tr('Ask in new task', '在新任务中询问')} ↗</button>
+      <button type="button" class="eusk-use" data-sk-use="${esc(skill.id)}" ${skill.enabled ? '' : 'disabled'}>${incomplete ? tr('Discuss in new task', '在新任务中讨论') : skill.useAction && skill.useAction.owner === 'data_extraction' ? tr('Open Data Extraction', '打开数据提取') : workflow ? tr('Start workflow', '启动工作流') : method || (user && skill.enabled && skill.stages.includes('conversation')) ? tr('Use in new task', '在新任务中使用') : tr('Ask in new task', '在新任务中询问')} ↗</button>
       ${method ? `<button type="button" class="eusk-copy" data-sk-copy="${esc(skill.id)}" ${ui.busy ? 'disabled' : ''}>${tr('Copy to my skills', '复制为我的技能')}</button>` : ''}
       ${user ? `<details class="eusk-actions-menu" data-popover-menu><summary aria-label="${tr('Skill actions', '技能操作')}">···</summary><div><button type="button" data-sk-edit-with aria-label="${tr('Edit with EasyICU', '使用 EasyICU 修订')}">${tr('Edit with EasyICU', '使用 EasyICU 修订')}</button><button type="button" data-sk-edit aria-label="${tr('Edit SKILL.md directly', '直接编辑 SKILL.md')}">${tr('Edit SKILL.md', '直接编辑 SKILL.md')}</button><button type="button" data-sk-download aria-label="${tr('Export ZIP', '导出 ZIP')}">${tr('Export ZIP', '导出 ZIP')}</button><button type="button" data-sk-remove aria-label="${tr('Remove skill', '移除技能')}">${tr('Remove skill', '移除技能')}</button></div></details>` : ''}</div></div>
-      <div class="eusk-tabs" role="tablist"><button type="button" role="tab" aria-selected="${ui.tab === 'overview'}" data-sk-tab="overview">${tr('Overview', '概览')}</button><button type="button" role="tab" aria-selected="${ui.tab === 'files'}" data-sk-tab="files">${tr('Files', '文件')}</button></div>
-      ${ui.tab === 'files' ? `<div class="eusk-detail-body">${method ? methodPackage(skill, component) : user ? `<div class="eusk-file-row">${icon('file', 15)} SKILL.md <small>${skill.size_bytes || 0} B</small></div>
+      <div class="eusk-tabs" role="tablist"><button type="button" role="tab" aria-selected="${ui.tab === 'overview'}" data-sk-tab="overview">${tr('Overview', '概览')}</button>${method && implementation() ? `<button type="button" role="tab" aria-selected="${ui.tab === 'implementation'}" data-sk-tab="implementation">${tr('Implementation / functions', '实现 / 函数')}</button>` : ''}<button type="button" role="tab" aria-selected="${ui.tab === 'files'}" data-sk-tab="files">${tr('Files', '文件')}</button></div>
+      ${ui.tab === 'implementation' && method && implementation() ? `<div class="eusk-detail-body">${ui.loadingPackage ? `<p>${tr('Loading implementation…', '正在读取实现…')}</p>` : implementation().render(ui.packageDetail, ui.implementationEntry)}</div>` : ui.tab === 'files' ? `<div class="eusk-detail-body">${method ? methodPackage(skill, component) : user ? `<div class="eusk-file-row">${icon('file', 15)} SKILL.md <small>${skill.size_bytes || 0} B</small></div>
         ${ui.loadingDetail ? `<p>${tr('Loading the reviewed file…', '正在读取已审阅文件…')}</p>` : detail
           ? `<div class="eusk-file-preview"><h2>SKILL.md</h2><pre>${esc(detail.skill_md || '')}</pre>${Object.entries(detail.reference_files || {}).map(([path, text]) => `<h2>${esc(path)}</h2><pre>${esc(text)}</pre>`).join('')}</div>`
           : `<p>${tr('This file could not be read.', '无法读取这个文件。')}</p>`}`
         : `<div class="eusk-empty"><strong>${tr('Host contract', '内置契约')}</strong><p>${tr('This built-in capability is implemented in EasyICU code and has no installable SKILL.md package.', '此内置能力由 EasyICU 代码实现，没有可安装的 SKILL.md 文件包。')}</p></div>`}</div>`
       : method ? `<div class="eusk-detail-body">${isTool(skill) && tools() ? tools().html(skill.name) : ''}${methodOverview(skill, component)}</div>`
-      : `<div class="eusk-detail-body"><h2>${tr('When to use', '适用场景')}</h2><p>${esc(user ? skill.description : skill.scope)}</p>
+      : `<div class="eusk-detail-body">${user ? '' : catalogEvidence()}<h2>${tr('When to use', '适用场景')}</h2><p>${esc(user ? skill.description : skill.scope)}</p>
         ${user ? `<div class="eusk-contract"><div><h3>${tr('Activation stages', '启用阶段')}</h3>${list(skill.stages)}</div><div><h3>${tr('Version', '版本')}</h3><code>sha256:${esc(String(skill.digest || '').slice(0, 16))}</code></div></div>`
           : `<div class="eusk-contract"><div><h3>${tr('Inputs', '输入')}</h3>${list(skill.inputs)}</div><div><h3>${tr('Outputs', '输出')}</h3>${list(skill.outputs)}</div><div><h3>${tr('Evidence rules', '证据规则')}</h3>${list(skill.invariants)}</div></div>`}
         ${user ? ui.loadingDetail ? `<p>${tr('Loading reviewed instructions…', '正在读取已审阅指令…')}</p>`
@@ -242,9 +249,17 @@
     const files = pkg && Array.isArray(pkg.files) ? pkg.files : [];
     const preferred = pkg && pkg.overview_paths && pkg.overview_paths[window.EU_LANG === 'zh' ? 'zh' : 'en'];
     const main = files.find(file => file.path === preferred) || files.find(file => file.path === 'SKILL.md') || null;
-    if (!main) return `<div class="eusk-package-fallback">${methodContract(skill, component)}</div>`;
+    if (!main) return `${catalogEvidence()}<div class="eusk-package-fallback">${methodContract(skill, component)}</div>`;
     const markdown = workflows() ? workflows().overviewMarkdown(main.content) : main.content;
-    return `${workflows() ? workflows().sections(workflows().find(skill.name)) : ''}<article class="eusk-rendered-markdown eusk-overview-document" data-sk-overview-source="${esc(main.path)}">${linkSiblings(packageMarkdown(markdown), pkg)}</article>`;
+    if (implementation()) {
+      const exclusions = Array.isArray(pkg.not_for) ? pkg.not_for : [];
+      const notFor = exclusions.length ? `<section><h2>${tr('When not to use', '何时不适用')}</h2>${linkSiblings(exclusions.map(item => {
+        const sibling = item.sibling_skill_id && methodSkills().find(row => row.name === item.sibling_skill_id);
+        return `- ${tr(item.situation_en, item.situation_zh)}${sibling ? ` → ${sibling.title}` : ''}`;
+      }).join('\n'), pkg)}</section>` : '';
+      return `${implementation().overview(pkg, skill, instructionHtml)}${implementation().preview(pkg)}${notFor}${workflows() ? workflows().sections(workflows().find(skill.name)) : ''}`;
+    }
+    return `${catalogEvidence()}${workflows() ? workflows().sections(workflows().find(skill.name)) : ''}<article class="eusk-rendered-markdown eusk-overview-document" data-sk-overview-source="${esc(main.path)}">${linkSiblings(packageMarkdown(markdown), pkg)}</article>`;
   }
   // A guide's "when not to use" line names the Skill that fits instead; that
   // name opens it. Lines the guide words differently stay plain text.
@@ -262,7 +277,8 @@
   }
   function methodContract(skill, component) {
     return `<div class="eusk-method-summary"><div><span>${component ? tr('Method family', '方法族') : tr('Capability', '能力')}</span>${component ? `<strong>${esc(familyName(skill.methodFamily))}</strong>` : `<code>${esc(skill.capabilityId)}</code>`}</div><div><span>${tr('Execution', '执行方式')}</span><strong>${esc(executionLabel(skill))}</strong></div><div><span>${component ? tr('Method role', '方法角色') : tr('Use of results', '结果用途')}</span><strong>${esc(component ? tierLabel(skill) : ceilingLabel(skill))}</strong></div></div>
-      <h2>${component ? tr('Implementation', '实现') : tr('Methods used', '使用的方法')}</h2>${component ? list([...new Set([skill.methodKey, ...skill.kernelModules])]) : skill.actionIds.length ? list(skill.actionIds) : `<p>${tr('This study runs through its own EasyICU capability.', '这项研究由 EasyICU 的对应能力直接运行。')}</p>`}
+      ${!component && skill.inputs.length ? `<h2>${tr('Inputs', '输入')}</h2>${list(skill.inputs)}` : ''}<h2>${component ? tr('Implementation', '实现') : tr('Methods used', '使用的方法')}</h2>${component ? list([...new Set([skill.methodKey, ...skill.kernelModules])]) : skill.actionIds.length ? list(skill.actionIds) : `<p>${tr('This study runs through its own EasyICU capability.', '这项研究由 EasyICU 的对应能力直接运行。')}</p>`}
+      ${!component && skill.notFor.length ? `<h2>${tr('When not to use', '何时不适用')}</h2>${list(skill.notFor.map(item => tr(item.situation_en, item.situation_zh)))}` : ''}
       <h2>${component ? tr('Reporting items', '报告规范条目') : tr('Required checks', '必做检查')}</h2>${list(component ? skill.reportingItems : skill.diagnostics)}${skill.skillLayer === 'research_workflow' ? `<h2>${tr('Included single analyses', '包含的单项分析')}</h2>${skill.includedModuleIds.length ? list(skill.includedModuleIds.map(id => (methodSkills().find(row => row.id === `builtin:${id}`) || {}).title || id)) : `<p>${tr('None by default.', '默认不包含。')}</p>`}` : ''}<h2>${tr('Outputs', '产出')}</h2>${list(skill.outputs)}`;
   }
   function methodPackage(skill, component) {
@@ -270,7 +286,8 @@
     const pkg = ui.packageDetail && ui.packageDetail.skill_id === skill.name ? ui.packageDetail : null;
     if (!pkg) return methodContract(skill, component);
     const files = Array.isArray(pkg.files) ? pkg.files : [];
-    const active = files.find(file => file.path === ui.packageFile) || files[0] || null;
+    const preferred = pkg.overview_paths && pkg.overview_paths[window.EU_LANG === 'zh' ? 'zh' : 'en'];
+    const active = files.find(file => file.path === ui.packageFile) || files.find(file => file.path === preferred) || files.find(file => file.path === 'SKILL.md') || files[0] || null;
     const groups = files.reduce((result, file) => {
       const parts = String(file.path || '').split('/');
       const folder = parts.length > 1 ? parts[0] : 'root';
@@ -286,10 +303,13 @@
     const renderedMarkdown = active ? packageMarkdown(active.content) : '';
     const activeBody = active && String(active.language || '').toLocaleLowerCase() === 'markdown'
       ? `<div class="eusk-rendered-markdown">${instructionHtml(renderedMarkdown)}</div>`
-      : active ? `<pre>${esc(active.content || '')}</pre>` : '';
-    return `<div class="eusk-package-note"><strong>${tr('Read-only built-in package', '只读内置技能包')}</strong><span>sha256:${esc(String(pkg.package_sha256 || '').slice(0, 16))}</span><p>${tr('SKILL.md is the main guide; references hold the scientific contract and validation rules; implementation holds the code EasyICU actually runs, read-only, with its source location and checksum. A scripts folder, when present, runs on its own.', 'SKILL.md 是主说明；references 保存科学契约与验证规则；implementation 是 EasyICU 实际运行的代码，只读，并标明源文件位置和校验值。有 scripts 的技能，其脚本可以单独运行。')}</p></div>
+      : active ? implementation() ? implementation().filePreview(active) : `<pre>${esc(active.content || '')}</pre>` : '';
+    const fileKind = active && (active.role === 'host_implementation' || active.path.startsWith('implementation/'))
+      ? tr('Read-only excerpts from EasyICU source; original line numbers are shown. This file is not a standalone script.', 'EasyICU 源码的只读摘录，保留原始行号；此文件不能作为独立脚本运行。')
+      : active && active.path.startsWith('scripts/') ? tr('Packaged reference script. View its inputs and usage in the guide.', '技能包参考脚本，输入与使用方式见说明。') : '';
+    return `<div class="eusk-package-note"><strong>${tr('Read-only built-in package', '只读内置技能包')}</strong><span>sha256:${esc(String(pkg.package_sha256 || '').slice(0, 16))}</span><p>${tr('The guide and references are complete documents. implementation contains read-only source excerpts; scripts, when present, contains reference scripts.', '说明与 references 保留完整文档。implementation 保存只读源码摘录；scripts（如有）保存参考脚本。')}</p></div>
       <div class="eusk-package-layout"><nav class="eusk-package-files" aria-label="${tr('Skill package files', '技能包文件')}"><div class="eusk-package-tree-head">${tr('Package files', '技能包文件')} <span>${files.length}</span></div>${tree}</nav>
-      ${active ? `<div class="eusk-file-preview"><h2>${esc(active.path)} <small>${esc(active.language || '')}</small></h2>${activeBody}</div>` : `<p>${tr('The package has no readable files.', '技能包没有可读取的文件。')}</p>`}</div>`;
+      ${active ? `<div class="eusk-file-preview"><h2>${esc(active.path)} <small>${esc(active.language || '')}</small></h2>${fileKind ? `<p class="eusk-file-kind">${fileKind}</p>` : ''}${activeBody}</div>` : `<p>${tr('The package has no readable files.', '技能包没有可读取的文件。')}</p>`}</div>`;
   }
   function installer() {
     return `<button type="button" class="eusk-back" data-sk-cancel>← ${tr('Back to skills', '返回技能目录')}</button>
@@ -362,7 +382,7 @@
   async function openSkill(id, options) {
     if (!(options && options.fromHash)) writeSkillHash(id);
     ui.selected = id; ui.tab = 'overview'; ui.detail = null; ui.packageDetail = null;
-    ui.packageFile = 'SKILL.md'; ui.loadingPackage = false; ui.error = ''; rerender();
+    ui.packageFile = ''; ui.implementationEntry = null; ui.loadingPackage = false; ui.error = ''; rerender();
     const skill = selectedSkill();
     if (skill && ['method', 'method_component'].includes(skill.kind)) {
       await loadMethodPackage(id);
@@ -459,10 +479,13 @@
       }
       if (target.dataset.skTab) {
         ui.tab = target.dataset.skTab; rerender();
-        if (ui.tab === 'files') void loadMethodPackage();
+        if (ui.tab === 'files' || ui.tab === 'implementation') void loadMethodPackage();
         return;
       }
-      if (target.dataset.skPackageFile) { ui.packageFile = target.dataset.skPackageFile; rerender(); return; }
+      if (target.dataset.skFunction !== undefined && implementation()) {
+        ui.implementationEntry = Number(target.dataset.skFunction); ui.tab = 'implementation'; rerender(); return;
+      }
+      if (target.dataset.skPackageFile) { ui.packageFile = target.dataset.skPackageFile; ui.tab = 'files'; rerender(); return; }
       if (target.dataset.skToggle) { void toggle(target.dataset.skToggle); return; }
       if (target.dataset.skCopy) { void copySkill(target.dataset.skCopy); return; }
       if (target.dataset.skEditWith !== undefined) { void editWithEasyICU(); return; }

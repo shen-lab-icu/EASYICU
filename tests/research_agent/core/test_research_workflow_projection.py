@@ -118,6 +118,75 @@ def test_master_switch_disables_every_workflow_without_hiding_the_metadata():
     assert rows and all(row["enabled"] is False and row["steps"] and row["outputs"] for row in rows)
 
 
+def test_canonical_examples_are_explicit_and_do_not_issue_execution_authority(workflows):
+    for row in workflows:
+        assert row["projection_kind"] == "canonical_example"
+        assert row["example_coordinates"]["family_id"] == row["graph_source"]
+        assert not any("authority" in key or "approval" in key or "sha256" in key
+                       for key in row["example_coordinates"])
+    survival = next(row for row in workflows if row["id"] == "survival-time-to-event")
+    assert survival["example_coordinates"]["landmark_hours"] == 24
+    assert survival["example_coordinates"]["cohort_time_zero_hours"] == 24
+    assert survival["example_coordinates"]["endpoint_horizon_days"] == 28
+    dynamic = next(row for row in workflows if row["id"] == "dynamic-landmark-prediction")
+    assert "observation_window_hours" not in dynamic["example_coordinates"]
+
+
+def test_example_concepts_do_not_become_universal_family_requirements(workflows):
+    from easyicu.databases.research_requirements import family_requirements
+
+    for row in workflows:
+        metadata = method_skill_workflow_metadata(row["id"], enabled=True)
+        expected = set(family_requirements(metadata["requirements"]["family"]))
+        assert {item["role"] for item in row["inputs"] if item["scope"] == "family"} == expected
+        assert all(item["scope"] == "canonical_example" for item in row["inputs"]
+                   if item["role"] in {"outcome", "concept", "exposure"})
+    survival = next(row for row in workflows if row["id"] == "survival-time-to-event")
+    time_zero = next(item for item in survival["inputs"] if item["role"] == "time_zero")
+    assert time_zero["scope"] == "family" and time_zero["anchor"] == "icu_admission"
+
+
+def test_survival_outcomes_keep_the_public_family_endpoint_kind(workflows):
+    for skill_id in ("survival-time-to-event", "time-varying-exposure-survival-study"):
+        row = next(row for row in workflows if row["id"] == skill_id)
+        assert next(item for item in row["inputs"] if item["role"] == "outcome")["kind"] == "time_to_event"
+
+
+def test_step_inputs_distinguish_raw_columns_from_produced_artifacts(workflows):
+    for row in workflows:
+        nodes = {step["id"]: step for step in row["steps"]}
+        for item in canonical_workflow_shape(row["id"])[1].materializations:
+            source = item.step
+            node = nodes[source.step_id]
+            assert node["raw_inputs"] == list(source.raw_inputs)
+            assert node["objective"] == source.objective
+            assert node["planned_analysis_role"] == source.planned_analysis_role
+            assert node["product_inputs"] == [dict(producer=ref.producer_step_id, id=ref.product_id)
+                                               for ref in source.product_inputs]
+            for ref in node["product_inputs"]:
+                assert ref["id"] in nodes[ref["producer"]]["outputs"]
+                assert any(edge["source"] == ref["producer"] and edge["target"] == node["id"]
+                           and ref["id"] in edge["products"] for edge in row["edges"])
+
+
+def test_optional_branches_keep_their_products_and_report_edges_conditional(workflows):
+    for row in workflows:
+        nodes = {step["id"]: step for step in row["steps"]}
+        for product in row["outputs"]:
+            producer = nodes[product["producer"]]
+            assert product["optional"] is producer["optional"]
+            assert product["producer_kind"] == producer["kind"]
+            assert product["planned_analysis_role"] == producer["planned_analysis_role"]
+            assert product.get("condition") == producer.get("condition")
+        for edge in row["edges"]:
+            assert edge["optional"] is (nodes[edge["source"]]["optional"] or nodes[edge["target"]]["optional"])
+            assert edge.get("condition") == ("branch_selected" if edge["optional"] else None)
+    trial = next(row for row in workflows if row["id"] == "target-trial-emulation")
+    assert next(node for node in trial["steps"] if node["id"] == "report")["optional"] is False
+    assert next(edge for edge in trial["edges"]
+                if edge["source"] == "longitudinal_msm" and edge["target"] == "report")["condition"] == "branch_selected"
+
+
 def test_workflow_version_references_and_example_ids_are_owner_bound(workflows):
     static = Path(projection.__file__).parent / "static" / "js"
     starters = (static / "screens-guided-pi-starters.js").read_text()

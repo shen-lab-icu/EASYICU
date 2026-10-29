@@ -62,6 +62,19 @@ LONGITUDINAL_TEMPLATES = {
 }
 
 
+def workflow_example_coordinates(request):
+    """Expose only declared display coordinates, without execution authority."""
+    result = {"family_id": request.family_id}
+    for name in ("observation_window_hours", "cohort_time_zero_hours", "landmark_hours"):
+        value = getattr(request, name, None)
+        if value is not None:
+            result[name] = value
+    suite = request.survival_suite
+    if suite is not None:
+        result.update(landmark_hours=suite.landmark_hours, endpoint_horizon_days=suite.endpoint_horizon_days)
+    return result
+
+
 def _survival_coordinates():
     """Ask the proposal owner for its canonical binary-exposure suite."""
     binary = {"is_binary": True, "n_unique": 2, "levels": [0, 1]}

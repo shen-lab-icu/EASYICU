@@ -39,6 +39,8 @@ from .contracts.capability_declaration import (
     validate_scientific_capability_id,
 )
 from .contracts.claim_ceiling import DescriptiveClaimContract
+from .contracts.covariate_balance import BALANCE_ACTION, BALANCE_OUTPUTS, CovariateBalanceSpec
+from .contracts.cluster_sizes import CLUSTER_SIZE_ACTION, CLUSTER_SIZE_OUTPUTS, ClusterSizeSpec
 from .contracts.closed_levels import (
     validate_closed_scalar_levels,
 )
@@ -1866,6 +1868,14 @@ class AnalysisStep(BaseModel):
             "a different product name instead of masquerading as Table 1."
         ),
     )
+    covariate_balance_spec: Optional[CovariateBalanceSpec] = Field(
+        default=None,
+        description="Reviewed unit, treatment, covariates, weights and fixed SMD denominator for a descriptive balance check.",
+    )
+    cluster_size_spec: Optional[ClusterSizeSpec] = Field(
+        default=None,
+        description="Reviewed unit roster and existing frozen assignments; counts labels without fitting or selecting clusters.",
+    )
     trajectory_stability_spec: Optional[TrajectoryStabilitySpec] = Field(
         default=None,
         description=(
@@ -1964,6 +1974,23 @@ class AnalysisStep(BaseModel):
 
     @model_validator(mode="after")
     def _model_requirement_ids_are_unique(self) -> "AnalysisStep":
+        for spec, action, outputs, columns in (
+            (self.covariate_balance_spec, BALANCE_ACTION, BALANCE_OUTPUTS,
+             {self.covariate_balance_spec.unit_id_column, self.covariate_balance_spec.treatment_column,
+              *(item.column for item in self.covariate_balance_spec.covariates),
+              *([self.covariate_balance_spec.weight_column] if self.covariate_balance_spec.weight_column else [])}
+             if self.covariate_balance_spec else set()),
+            (self.cluster_size_spec, CLUSTER_SIZE_ACTION, CLUSTER_SIZE_OUTPUTS,
+             {self.cluster_size_spec.unit_id_column} if self.cluster_size_spec else set()),
+        ):
+            if spec is None:
+                continue
+            if self.scientific_action_id != action or self.planned_analysis_role not in {"secondary", "auxiliary"}:
+                raise ValueError(f"{action} requires its exact auxiliary or secondary action")
+            if set(self.expected_outputs) != set(outputs) or len(self.expected_outputs) != len(outputs):
+                raise ValueError(f"{action} requires exactly its declared table and receipt outputs")
+            if not columns.issubset(self.inputs):
+                raise ValueError(f"{action} variables must be explicit step inputs")
         if self.phenotyping_feature_columns is not None:
             if self.scientific_action_id != PHENOTYPING_PRIMARY_ACTION or self.planned_analysis_role != "primary":
                 raise ValueError("phenotyping_feature_columns belongs only to the primary cluster solution")

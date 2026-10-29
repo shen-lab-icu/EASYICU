@@ -272,12 +272,12 @@ _PREDICTION = MethodSuite(
         ),
         AnalysisMethod(
             key="subgroup_fairness",
-            name="Subgroup / fairness performance",
-            purpose="Discrimination + calibration within demographic strata (age, sex).",
+            name="Subgroup prediction performance",
+            purpose="Descriptive point estimates for frozen binary predictions in predeclared validation subgroups; retain sparse or undefined cells with reasons.",
             tier="standard_supporting",
             implementation="deterministic",
             produces="per-subgroup performance table",
-            runner="fairness",  # research_agent/methods/fairness.py
+            runner="prediction_subgroup",
             reporting_items=("TRIPOD+AI 12", "TRIPOD+AI 18"),
         ),
         AnalysisMethod(
@@ -513,12 +513,12 @@ _CAUSAL = MethodSuite(
         ),
         AnalysisMethod(
             key="covariate_balance",
-            name="Covariate balance (SMD love plot, before vs after weighting)",
-            purpose="Show the weighting removed measured confounding imbalance.",
+            name="Covariate balance before and after weighting",
+            purpose="Describe measured imbalance with a fixed unweighted pooled sample-variance SMD denominator and effective sample sizes; balance does not establish absence of confounding.",
             tier="standard_supporting",
             implementation="deterministic",
-            produces="covariate_balance.csv (covariate, smd_before, smd_after) + love-plot panel",
-            runner="causal_emulation",  # deterministic figure renderer + causal_audit
+            produces="covariate_balance.csv and source-bound covariate_balance_receipt.json",
+            runner="covariate_balance",
             reporting_items=("STROBE 9",),
         ),
         AnalysisMethod(
@@ -871,11 +871,11 @@ _PHENOTYPING = MethodSuite(
         AnalysisMethod(
             key="cluster_sizes",
             name="Cluster sizes + degenerate-cluster flag",
-            purpose="Report each group's size and flag near-empty clusters.",
+            purpose="Count frozen cluster assignments against the cohort roster, retain empty clusters and unassigned units, and flag near-empty clusters only using declared thresholds.",
             tier="standard_supporting",
             implementation="deterministic",
-            produces="cluster_sizes.csv; figure panel",
-            runner="phenotyping",
+            produces="cluster_sizes.csv and source-bound cluster_sizes_receipt.json",
+            runner="cluster_sizes",
             reporting_items=("internal_phenotype P6",),
         ),
         AnalysisMethod(

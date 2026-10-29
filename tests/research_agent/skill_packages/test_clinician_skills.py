@@ -98,3 +98,45 @@ def test_clinician_packages_are_stable_and_siblings_exist():
             if " -> " in line and not line.startswith("##"):
                 sibling = line.split(" -> ")[1].split()[0].rstrip(".,")
                 assert sibling in ids
+
+
+@pytest.mark.parametrize("skill_id,action_id", [
+    ("cohort-characterization-table-one", "descriptive.table_one"),
+    ("missingness-measurement-audit", "descriptive.missingness_audit"),
+    ("restricted-mean-survival-time", "time_to_event.rmst"),
+])
+def test_narrow_module_inputs_match_the_dispatched_action_owner(skill_id, action_id):
+    from easyicu.research_agent.planning.method_adapter_catalog import get_method_adapter_contract
+
+    rows = {row["id"]: row for row in method_skill_catalog(enabled=True)["items"]}
+    adapter = get_method_adapter_contract(action_id)
+    assert rows[skill_id]["inputs"] == list(adapter.required_declarations)
+    # A narrow module must not advertise the enclosing family's main result.
+    assert all("distribution_summary" not in output and "Cox/PH" not in output
+               for output in rows[skill_id]["outputs"])
+
+
+def test_all_catalog_starters_reuse_context_and_ask_only_for_missing_design_information():
+    catalog = method_skill_catalog(enabled=True)
+    for row in catalog["items"] + catalog["components"]:
+        assert "Ask together only for missing information" in row["prompt"], row["id"]
+        assert "只集中询问确实缺失" in row["prompt_zh"], row["id"]
+        assert row["prompt"].endswith("My research question: "), row["id"]
+        assert row["prompt_zh"].endswith("我的研究问题是："), row["id"]
+
+
+def test_component_reader_outputs_project_the_registered_products():
+    from easyicu.research_agent.planning.analysis_method_suite import METHOD_SUITE_REGISTRY
+
+    catalog = method_skill_catalog(enabled=True)
+    for suite in METHOD_SUITE_REGISTRY:
+        for method in suite.methods:
+            if method.implementation == "planned":
+                continue
+            skill_id = f"{suite.family}.{method.key}"
+            package = method_skill_package(skill_id, enabled=True)
+            body = next(file["content"] for file in package["files"] if file["path"] == "SKILL.md")
+            output_section = body.split("## Outputs\n", 1)[1].split("\n## ", 1)[0]
+            assert method.produces in output_section
+            assert "an approved cohort with patient/stay identifiers" not in body
+    assert len(catalog["components"]) == 60
