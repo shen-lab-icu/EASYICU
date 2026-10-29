@@ -53,7 +53,8 @@ for (const language of ['zh', 'en']) {
     assert.match(exhausted, language === 'zh' ? /本轮无法继续/ : /turn cannot continue/);
     assert.doesNotMatch(exhausted, /发送.*继续|Send.*continue|reset|重置/i);
     assert.match(errors.modelErrorText('pi_model_provider_unavailable', true),
-      language === 'zh' ? /工具操作已完成/ : /tool action completed/);
+      language === 'zh' ? /已有工具结果/ : /Tool results were recorded/);
+    assert.doesNotMatch(errors.modelErrorText('pi_model_provider_unavailable', true), /工具操作已完成|tool action completed/);
     assert.match(errors.modelErrorText('pi_model_provider_unavailable', false),
       language === 'zh' ? /连接中断/ : /connection was interrupted/);
     assert.doesNotMatch(errors.errorText('pi_gateway_timeout_other'), language === 'zh' ? /本次等待已超时/ : /This wait timed out/);

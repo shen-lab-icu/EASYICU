@@ -432,8 +432,8 @@
       const value = String(code || '');
       if (completedAction) {
         return tr(
-          'An EasyICU tool action completed, but the model service could not finish the explanation. Review the completed receipt above; do not repeat the action automatically.',
-          'EasyICU 工具操作已完成，但模型服务未能生成最终说明。请以上方已完成的记录为准，不要自动重复执行该操作。'
+          'Tool results were recorded, but the model service could not finish the explanation. Review which actions succeeded, were blocked or remain unconfirmed; do not repeat them automatically.',
+          '本轮已有工具结果，但模型服务未能生成最终说明。请核对哪些操作已成功、被阻止或尚未确认；不要自动重复执行。'
         );
       }
       if (value === 'pi_shell_token_budget_exhausted' || value === 'pi_shell_session_provider_call_budget_exhausted'

@@ -170,7 +170,8 @@ def test_catalog_schema_accepts_legacy_and_batch_but_not_mixed_or_empty_batch():
 
 
 @pytest.mark.requires_node
-def test_actual_sdk_preparation_rejects_raw_coercion_cases_before_host_execution():
+@pytest.mark.parametrize("tool_name", ["easyicu_edit_project_file", "easyicu_write_project_file"])
+def test_actual_sdk_preparation_rejects_raw_coercion_cases_before_host_execution(tool_name):
     from tests.support.node import run_node
 
     root = Path(__file__).resolve().parents[3]
@@ -188,15 +189,18 @@ import {wrapToolDefinition} from './node_modules/@earendil-works/pi-coding-agent
 import {runAgentLoop} from './node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js';
 import assert from 'node:assert/strict';
 const source=readFileSync('./src/main.mjs','utf8');
-const line=source.split('\n').find(line=>line.includes('hostTool(sessionId, { name: "easyicu_edit_project_file"'));
-const schema=JSON.parse(readFileSync('../tool_catalog.json','utf8')).tools.find(row=>row.name==='easyicu_edit_project_file').model_schema;
+const toolName=__TOOL_NAME__;
+const line=source.split('\n').find(line=>line.includes('hostTool(sessionId, { name: "'+toolName+'"'));
+const schema=JSON.parse(readFileSync('../tool_catalog.json','utf8')).tools.find(row=>row.name===toolName).model_schema;
+const guardStart=source.indexOf('function strictCatalogArguments(');
+const guard=source.slice(guardStart,source.indexOf('\nconst RESEARCH_TOOL_NAMES',guardStart));
 let executed=0;
-const [definition]=runInNewContext('['+line.trim()+']',{sessionId:'strict-edit',Check,
-  TOOL_CATALOG_BY_NAME:new Map([['easyicu_edit_project_file',{model_schema:schema}]]),
+const [definition]=runInNewContext(guard+'\n['+line.trim()+']',{sessionId:'strict-artifact',Check,
+  TOOL_CATALOG_BY_NAME:new Map([[toolName,{model_schema:schema}]]),
   catalogParameters:()=>Type.Unsafe(schema),hostTool:(_id,definition)=>definition});
 const tool=wrapToolDefinition(defineTool({...definition,execute:async()=>{executed++;return {content:[{type:'text',text:'saved'}],details:{}};}}));
 const base={file:'page.html',expected_sha256:'a'.repeat(64)};
-const cases=[
+const cases=toolName==='easyicu_edit_project_file'?[
   [{...base,old_text:'a',new_text:'b'},true],
   [{...base,edits:[{old_text:'a',new_text:'b'}],check_after:true},true],
   [{...base,old_text:12,new_text:'b'},false],
@@ -205,6 +209,19 @@ const cases=[
   [{...base,edits:[{old_text:'a',new_text:false}]},false],
   [{...base,edits:[{old_text:'a',new_text:'b',extra:true}]},false],
   [{...base,edits:[{old_text:'a',new_text:'b'}],check_after:'false'},false],
+  [{...base,old_text:'a',new_text:'b',check_after:true,preview_after:true},true],
+  [{...base,old_text:'a',new_text:'b',preview_after:true},false],
+  [{...base,old_text:'a',new_text:'b',check_after:false,preview_after:true},false],
+  [{...base,old_text:'a',new_text:'b',check_after:true,preview_after:'false'},false],
+]:[
+  [{file:'page.html',content:'<p>new</p>'},true],
+  [{file:'page.html',content:'<p>new</p>',check_after:true,preview_after:true},true],
+  [{file:'page.html',content:12},false],
+  [{file:'page.html',content:'<p>new</p>',check_after:'true'},false],
+  [{file:'page.html',content:'<p>new</p>',check_after:true,preview_after:'true'},false],
+  [{file:'page.html',content:'<p>new</p>',preview_after:true},false],
+  [{file:'page.html',content:'<p>new</p>',check_after:false,preview_after:true},false],
+  [{file:'page.html',content:'<p>new</p>',extra:true},false],
 ];
 for (const [args,valid] of cases){
   const before=executed,results=[];
@@ -221,6 +238,7 @@ for (const [args,valid] of cases){
 }
 console.log(JSON.stringify({cases:cases.length,valid_host_executions:executed,invalid_host_executions:0}));
 """
-    completed = run_node(node, script, module=True, cwd=app, timeout=30, check=False)
+    completed = run_node(node, script.replace("__TOOL_NAME__", json.dumps(tool_name)), module=True, cwd=app, timeout=30, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
-    assert json.loads(completed.stdout) == {"cases": 8, "valid_host_executions": 2, "invalid_host_executions": 0}
+    expected = (12, 3) if tool_name == "easyicu_edit_project_file" else (8, 2)
+    assert json.loads(completed.stdout) == {"cases": expected[0], "valid_host_executions": expected[1], "invalid_host_executions": 0}

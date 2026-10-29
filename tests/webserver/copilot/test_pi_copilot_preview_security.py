@@ -280,7 +280,9 @@ def test_workspace_sidecar_requires_digest_for_edit_and_teaches_safe_egress() ->
         encoding="utf-8"
     )
     assert sidecar.count("expected_sha256") >= 1
-    assert "Create a new bounded artifact. Existing files must be changed" in sidecar
+    assert "Create a new bounded artifact" in sidecar
+    assert "existing files require exact edit" in sidecar
+    assert "Read the current artifact and pass expected_sha256 once" in sidecar
     assert "To change an existing file, read it first" in skill
     assert "expected_sha256" in skill
     assert "may be sent to the\nconfigured Pi model service" in skill

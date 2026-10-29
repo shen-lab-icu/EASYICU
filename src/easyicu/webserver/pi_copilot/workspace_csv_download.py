@@ -84,7 +84,7 @@ def csv_preview_bridge(
       'use strict';
       const nonce=NONCE, generateCsv=GENERATE_CSV, limit=1048576, objects=new Map();
       let enabled=ALLOW_DOWNLOADS, epoch='',selectionVersion=0;
-      const epochs=new Set();
+      const epochs=new Set(),choices=new Map();
       const create=URL.createObjectURL.bind(URL), revoke=URL.revokeObjectURL.bind(URL);
       const safeName=/^[A-Za-z0-9][A-Za-z0-9_.-]{0,115}\.csv$/;
       let busy=false, count=0, last=0;
@@ -115,7 +115,7 @@ def csv_preview_bridge(
         if(anchor && deliver(anchor)){event.preventDefault();event.stopImmediatePropagation();}
       },true);
       function selectionChanged(){
-        selectionVersion++;
+        selectionVersion++;choices.clear();
         if(enabled) parent.postMessage({type:'easyicu:workspace-csv-child-changed',nonce,epoch,selection_version:selectionVersion},'*');
       }
       document.addEventListener('input',selectionChanged,true);
@@ -146,13 +146,11 @@ def csv_preview_bridge(
         Promise.resolve().then(compare);
         requestAnimationFrame(()=>requestAnimationFrame(compare));
       },true);
-      function startGeneration(commandEpoch, waitForChecks){
-        let attempted=false,expired=false,waiting=false,waitTimer=0;
         function usable(element){
           const tag=String(element.tagName||'').toLowerCase();
           if(tag!=='button' && !(tag==='input' && /^(button|submit)$/i.test(element.type||''))
             && !(tag==='a' && element.hasAttribute('download'))) return false;
-          if(element.disabled || element.matches(':disabled') || element.getAttribute('aria-disabled')==='true'
+          if(element.isConnected===false || element.disabled || element.matches(':disabled') || element.getAttribute('aria-disabled')==='true'
             || element.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
           const style=getComputedStyle(element);
           return style.display!=='none' && style.visibility==='visible' && Number(style.opacity)!==0
@@ -185,18 +183,44 @@ def csv_preview_bridge(
             return Array.from(controls);
           }catch(_){return [];}
         }
+      function candidates(){
+        let controls=declaredControls();
+        if(controls===null){
+          const marked=document.querySelectorAll('[data-easyicu-export="csv"]');
+          controls=marked.length ? Array.from(marked).filter(usable)
+            : Array.from(document.querySelectorAll('button,input[type="button"],input[type="submit"],a[download]'))
+              .filter(element=>usable(element) && csvAction(element));
+        }
+        return controls;
+      }
+      function offerChoices(controls,commandEpoch){
+        const snapshot=filterState();
+        if(!commandEpoch || controls.length<2 || controls.length>8 || snapshot===null
+          || !window.crypto || typeof window.crypto.getRandomValues!=='function') return false;
+        choices.clear();
+        const options=[];
+        for(const element of controls){
+          const bytes=new Uint8Array(16);window.crypto.getRandomValues(bytes);
+          const token=Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('');
+          if(choices.has(token)){choices.clear();return false;}
+          const label=String(element.getAttribute('aria-label') || element.textContent || element.value
+            || element.getAttribute('title') || 'CSV export '+(options.length+1))
+            .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g,' ').replace(/\s+/g,' ').trim().slice(0,80);
+          choices.set(token,{element,selection:selectionVersion,snapshot});
+          options.push({token,label:label || 'CSV export '+(options.length+1)});
+        }
+        parent.postMessage({type:'easyicu:workspace-csv-child-options',nonce,epoch:commandEpoch,selection_version:selectionVersion,options},'*');
+        return true;
+      }
+      function startGeneration(commandEpoch, waitForChecks){
+        let attempted=false,expired=false,waiting=false,waitTimer=0;
         function generate(){
           if(attempted || expired) return;
           if(!enabled || epoch!==commandEpoch){expired=true;return;}
           if(window.__easyicuRuntimeQaRunning===true){waitForQa();return;}
           attempted=true;
-          let controls=declaredControls();
-          if(controls===null){
-            const marked=document.querySelectorAll('[data-easyicu-export="csv"]');
-            controls=marked.length ? Array.from(marked).filter(usable)
-              : Array.from(document.querySelectorAll('button,input[type="button"],input[type="submit"],a[download]'))
-                .filter(element=>usable(element) && csvAction(element));
-          }
+          const controls=candidates();
+          if(offerChoices(controls,commandEpoch)) return;
           let status='manual';
           if(controls.length===1){try{controls[0].click();status='generated';}catch(_){/* Manual export stays available. */}}
           if(commandEpoch) acknowledge(status,commandEpoch);
@@ -233,10 +257,22 @@ def csv_preview_bridge(
         const data=event.data;
         if(event.source!==parent || event.origin!=='null' || !data || data.type!=='easyicu:workspace-csv-control'
           || data.nonce!==nonce) return;
-        if(data.action==='disable'){enabled=false;epoch='';return;}
+        if(data.action==='disable'){enabled=false;epoch='';choices.clear();return;}
+        if(data.action==='select'){
+          if(!enabled || data.epoch!==epoch || data.selection_version!==selectionVersion
+            || typeof data.token!=='string' || !/^[a-f0-9]{32}$/.test(data.token)) return;
+          const choice=choices.get(data.token);
+          if(!choice || choice.selection!==selectionVersion) return;
+          choices.clear();
+          if(choice.snapshot!==filterState()){selectionChanged();return;}
+          if(window.__easyicuRuntimeQaRunning===true){acknowledge('qa_busy',epoch);return;}
+          if(!candidates().includes(choice.element) || !usable(choice.element)){acknowledge('manual',epoch);return;}
+          try{choice.element.click();acknowledge('generated',epoch);}catch(_){acknowledge('manual',epoch);}
+          return;
+        }
         if(data.action!=='generate' || typeof data.epoch!=='string' || !/^[a-f0-9]{64}$/.test(data.epoch)
           || epochs.has(data.epoch) || epochs.size>=16) return;
-        epochs.add(data.epoch);epoch=data.epoch;enabled=true;startGeneration(epoch,false);
+        epochs.add(data.epoch);epoch=data.epoch;enabled=true;choices.clear();startGeneration(epoch,false);
       });
       if(generateCsv && enabled) startGeneration('',true);
     })();</script>""".replace("NONCE", configuration).replace(
@@ -245,9 +281,9 @@ def csv_preview_bridge(
     wrapper = r"""<script>(function(){
       'use strict';
       const nonce=NONCE, frame=document.getElementById('easyicu-workspace-preview-content'),passive=PASSIVE;
-      let enabled=ALLOW_DOWNLOADS,epoch='',count=0,last=0,acknowledged=false,selectionVersion=-1;
+      let enabled=ALLOW_DOWNLOADS,epoch='',count=0,last=0,acknowledged=false,selectionVersion=-1,offered=false;
       let ready=typeof frame.addEventListener!=='function';
-      const epochs=new Set();
+      const epochs=new Set(),choices=new Set();
       function forwardGeneration(){
         if(ready && enabled && epoch) frame.contentWindow.postMessage({type:'easyicu:workspace-csv-control',nonce,epoch,action:'generate'},'*');
       }
@@ -257,11 +293,17 @@ def csv_preview_bridge(
         if(!data || data.nonce!==nonce) return;
         if(event.source===parent && data.type==='easyicu:workspace-csv-control'){
           if(data.action==='disable'){
-            enabled=false;epoch='';frame.contentWindow.postMessage({type:data.type,nonce,action:'disable'},'*');return;
+            enabled=false;epoch='';choices.clear();frame.contentWindow.postMessage({type:data.type,nonce,action:'disable'},'*');return;
+          }
+          if(data.action==='select'){
+            if(!enabled || data.epoch!==epoch || data.selection_version!==selectionVersion
+              || typeof data.token!=='string' || !choices.has(data.token)) return;
+            choices.clear();acknowledged=false;
+            frame.contentWindow.postMessage({type:data.type,nonce,epoch,action:'select',token:data.token,selection_version:selectionVersion},'*');return;
           }
           if(data.action!=='generate' || typeof data.epoch!=='string' || !/^[a-f0-9]{64}$/.test(data.epoch)
             || epochs.has(data.epoch) || epochs.size>=16) return;
-          epochs.add(data.epoch);epoch=data.epoch;enabled=true;acknowledged=false;selectionVersion=-1;
+          epochs.add(data.epoch);epoch=data.epoch;enabled=true;acknowledged=false;selectionVersion=-1;offered=false;choices.clear();
           forwardGeneration();return;
         }
         if(event.source!==frame.contentWindow || event.origin!=='null' || !enabled || (data.epoch||'')!==epoch) return;
@@ -272,12 +314,25 @@ def csv_preview_bridge(
         if(epoch && (!Number.isSafeInteger(data.selection_version) || data.selection_version<0
           || data.selection_version>1000000 || data.selection_version<selectionVersion)) return;
         if(epoch) selectionVersion=data.selection_version;
+        if(data.type==='easyicu:workspace-csv-child-options'){
+          if(!epoch || offered || !Array.isArray(data.options) || data.options.length<2 || data.options.length>8) return;
+          const options=[],tokens=new Set();
+          for(const option of data.options){
+            if(!option || typeof option.token!=='string' || !/^[a-f0-9]{32}$/.test(option.token)
+              || tokens.has(option.token) || typeof option.label!=='string' || !option.label.trim()
+              || option.label.length>80 || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(option.label)) return;
+            tokens.add(option.token);options.push({token:option.token,label:option.label});
+          }
+          choices.clear();tokens.forEach(token=>choices.add(token));acknowledged=true;offered=true;
+          parent.postMessage({type:'easyicu:workspace-csv-options',nonce,epoch,selection_version:selectionVersion,options},'*');return;
+        }
         if(data.type==='easyicu:workspace-csv-child-changed'){
+          choices.clear();
           parent.postMessage({type:'easyicu:workspace-csv-changed',nonce,epoch,selection_version:selectionVersion},'*');return;
         }
         if(data.type!=='easyicu:workspace-csv-child') return;
         if(count>=5 || Date.now()-last<1000 || data.media_type!=='text/csv' || typeof data.csv!=='string' || !data.csv.length || data.csv.length>1048576 || new TextEncoder().encode(data.csv).length>1048576 || data.csv.includes('\0') || typeof data.filename!=='string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,115}\.csv$/.test(data.filename) || !data.filename.endsWith('.csv')) return;
-        count++;last=Date.now();
+        count++;last=Date.now();offered=true;choices.clear();
         parent.postMessage({type:'easyicu:workspace-csv',nonce,epoch,selection_version:selectionVersion,filename:data.filename,media_type:'text/csv',csv:data.csv},'*');
       });
       if(passive) parent.postMessage({type:'easyicu:workspace-csv-ready-control',nonce},'*');

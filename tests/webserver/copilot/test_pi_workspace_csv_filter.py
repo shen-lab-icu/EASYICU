@@ -57,21 +57,36 @@ function setup(options={}){
   const rendered=scripts.map(source=>source.replaceAll('a'.repeat(64),nonce));
   const childURL={createObjectURL(){return 'blob:child/'+(++seq);},revokeObjectURL(){}};
   class Anchor{click(){nativeClicks++;}}
-  function exportCsv(){
-    clicks++;const rows=filters.sex==='F'&&filters.unit==='SICU'?5:24;
-    const anchor=new Anchor();anchor.download='synthetic.csv';
+  function exportCsv(original=false){
+    clicks++;const rows=!original&&filters.sex==='F'&&filters.unit==='SICU'?5:24;
+    const anchor=new Anchor();anchor.download=original?'original.csv':'synthetic.csv';
     anchor.href=childURL.createObjectURL(new Blob(['id,sex,unit\n'+Array.from({length:rows},(_,i)=>
       `${i+1},${filters.sex},${filters.unit}\n`).join('')],{type:'text/csv'}));
     anchor.click();childURL.revokeObjectURL(anchor.href);
   }
-  const control={tagName:'BUTTON',disabled:false,type:'button',textContent:'Download CSV',
-    getAttribute(){return null;},hasAttribute(){return false;},matches(){return false;},closest(){return null;},
-    getClientRects(){return [{width:100,height:30}];},click:exportCsv};
-  const childContext={Blob,TextEncoder,TextDecoder,URL:childURL,HTMLAnchorElement:Anchor,Date:{now:()=>now},
+  const total=options.count||(options.multi?2:1);
+  const controls=Array.from({length:total},(_,index)=>({
+    id:index===0?'downloadFiltered':index===1?'downloadOriginal':'extra'+index,
+    role:index===0?'filtered':index===1?'original':'extra'+index,
+    tagName:'BUTTON',disabled:false,isConnected:true,type:'button',
+    textContent:options.labels?.[index]||(total===1?'Download CSV':index===0?'下载当前筛选 CSV':index===1?'下载原始 CSV':'Export CSV '+(index+1)),
+    getAttribute(name){return name==='data-export'?this.role:null;},hasAttribute(){return false;},matches(){return false;},closest(){return null;},
+    getClientRects(){return [{width:100,height:30}];},click(){exportCsv(index===1);},
+  }));
+  const declaration={type:'application/json',textContent:JSON.stringify({schema:'easyicu.web-runtime-qa/1',
+    checks:controls.map((control,index)=>({id:'csv'+index,kind:'download_control',
+      selector:index<2?'button[data-export='+control.role+']':'#'+control.id}))})};
+  const childContext={Blob,TextEncoder,TextDecoder,crypto:require('node:crypto').webcrypto,URL:childURL,HTMLAnchorElement:Anchor,Date:{now:()=>now},
     parent:wrapperChildProxy,addEventListener(name,fn){receiveChild=fn;},
     document:{readyState:'complete',addEventListener(name,fn){const values=events.get(name)||[];values.push(fn);events.set(name,values);},
-      querySelectorAll(selector){return selector==='script[data-easyicu-runtime-qa]'?[]:
-        selector==='input,select,textarea'?[sexControl,unitControl]:[control];}},
+      querySelectorAll(selector){
+        if(selector==='script[data-easyicu-runtime-qa]')return total>1&&!options.noContract?[declaration]:[];
+        if(selector==='input,select,textarea')return [sexControl,unitControl];
+        if(selector==='[data-easyicu-export="csv"]')return [];
+        if(selector.startsWith('button[data-export='))return controls.filter(control=>'button[data-export='+control.role+']'===selector);
+        if(selector.startsWith('#'))return controls.filter(control=>'#'+control.id===selector);
+        return controls;
+      }},
     requestAnimationFrame(fn){frames.push(fn);},setTimeout(){throw new Error('No QA wait is expected');},clearTimeout(){},
     getComputedStyle(){return {display:'block',visibility:'visible',opacity:'1'};},
   };childContext.window=childContext;
@@ -88,10 +103,11 @@ function setup(options={}){
     addEventListener(name,fn){receiveWrapper=fn;}});
   if(!options.loading)loaded();
   bridge.bind(frame,slot,{projectId:'project',file:'demo.html',sha256:'b'.repeat(64)});
-  const api={bridge,slot,frame,filters,calls,commands,messages,revoked,childContext,hostContext,
+  const api={bridge,slot,frame,filters,calls,commands,messages,revoked,childContext,hostContext,controls,
     nonce,hostProxy,wrapperProxy,wrapperChildProxy,childProxy,
     clicks:()=>clicks,nativeClicks:()=>nativeClicks,
     manualExport:exportCsv,
+    pick(index){slot.children[index+1].handlers.click({preventDefault(){},stopPropagation(){}});},
     allow(){allowed=true;return bridge.generate();},generate(){now+=1001;return bridge.generate();},
     revoke(){allowed=false;bridge.revoke();},change(sex,unit){
       filters.sex=sex;filters.unit=unit;for(const fn of events.get('change')||[])fn();
