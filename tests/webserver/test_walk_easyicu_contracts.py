@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from easyicu.research_agent.method_skills import method_skill_package
+from easyicu.research_agent.method_skills import method_skill_catalog, method_skill_package
 from easyicu.webserver.host_action_contracts import HostActionRequest
 from easyicu.webserver.host_action_jobs import check_review_request
 from easyicu.webserver.research_workflows import research_workflow_catalog
@@ -61,3 +61,20 @@ def test_current_public_workflow_packages_supply_their_real_example_questions():
         assert question and len(question) < 8000, row["id"]
         assert not question.startswith(("#", "Public source:"))
         assert "proposed teaching plan" not in question
+
+
+def test_inventory_reads_the_current_public_catalogue_owner_shapes(tmp_path):
+    class CatalogueAPI(PhaseAPI):
+        def request(self, method, path, body=None, **kwargs):
+            if path == "/api/capabilities":
+                return {"capabilities": {"method_skills": method_skill_catalog(enabled=True)}}
+            if path == "/api/capabilities/research-workflows":
+                return research_workflow_catalog(enabled=True)
+            return super().request(method, path, body, **kwargs)
+
+    report = WalkRunner(replace(walk_options(tmp_path), only=("catalogue",)), api=CatalogueAPI()).run()
+    row = report["items"][-1]
+    assert row["status"] == "passed", [
+        item for item in row["metrics"]["catalogue_items"] if item["owner_status"] == "not_reported"]
+    assert row["metrics"]["unreported_owner_count"] == 0
+    assert all(item["implementation"] != "not_reported" for item in row["metrics"]["catalogue_items"])

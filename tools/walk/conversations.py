@@ -7,7 +7,7 @@ import uuid
 
 from .contracts import Status, WalkStop
 from .http import HTTPFailure
-from .privacy import token
+from .privacy import is_generated_job_id, token
 from .report import run_metrics
 
 
@@ -15,6 +15,12 @@ def _identity(value):
     if token(value) == "not_reported" or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,159}", value):
         raise WalkStop(Status.REFUSED, "server_identity_invalid")
     return value
+
+
+def _job_identity(value):
+    # POST message/agent-run/review returns JobManager.job_id, not a session
+    # or run ID. Its generated 12-character hex form can start with a digit.
+    return value if is_generated_job_id(value) else _identity(value)
 
 
 def example_question(package: dict) -> str | None:
@@ -35,7 +41,8 @@ def plan_metrics(snapshot: dict) -> dict:
     questions = review.get("authorization_questions") or []
     decision = workflow.get("plan_decision")
     pending = len(questions) + (1 if decision and not questions else 0)
-    return {"plan_valid": review.get("status") in {"pass", "analysis_only", "ready_for_approval"}
+    return {**run_metrics(snapshot),
+            "plan_valid": review.get("status") in {"pass", "analysis_only", "ready_for_approval"}
             if review else None,
             "plan_review_status": token(review.get("status")),
             "pending_design_choices": pending,
@@ -126,14 +133,41 @@ class ConversationWalk:
             raise WalkStop(Status.REFUSED, "foreign_project_refused")
         return payload
 
-    def _wait_message(self, key):
+    def _wait_idle(self, key):
         while True:
             session = self._session(key)
-            if not session.get("active_message_job_id") and not session.get("streaming"):
-                if session.get("last_turn_status") in {"failed", "cancelled", "interrupted"}:
-                    raise WalkStop(Status.FAILED, "conversation_turn_failed")
+            if (not session.get("active_message_job_id") and not session.get("streaming")
+                    and session.get("last_turn_status") != "running"):
                 return session
             self.pause()
+
+    def _wait_message(self, key):
+        session = self._wait_idle(key)
+        if session.get("last_turn_status") in {"failed", "cancelled", "interrupted"}:
+            terminal = next((event for event in reversed(session.get("last_turn_events") or [])
+                             if isinstance(event, dict) and event.get("type") == "message_end"), {})
+            if (session.get("last_turn_status") == "failed" and terminal.get("stop_reason") == "error"
+                    and terminal.get("error_code") == "pi_model_provider_unavailable"):
+                raise WalkStop(Status.REFUSED, "provider_unavailable")
+            raise WalkStop(Status.FAILED, "conversation_turn_failed")
+        return session
+
+    def _run_turn(self, key, send, *, started=False):
+        if not started and self._state(key).get("provider_retry_used"):
+            raise WalkStop(Status.REFUSED, "provider_unavailable")
+        while True:
+            try:
+                if not started:
+                    send()
+                return self._wait_message(key)
+            except WalkStop as exc:
+                if exc.code != "provider_unavailable" or self._state(key).get("provider_retry_used"):
+                    raise
+                # Persist the budget before waiting so another phase or resume
+                # cannot replay an exhausted provider turn again.
+                self._save_item(key, {"provider_retry_used": True})
+                self.pause(delay=1)
+                started = False
 
     def _send(self, key, message, *, mentions=None, intent=None, attachments=None):
         body = {"message": message, "allowed_actions": ["configure", "literature"], "message_origin": "typed"}
@@ -143,10 +177,21 @@ class ConversationWalk:
             body["attached_skills"] = attachments
         if intent:
             body["turn_intent"] = intent
-        result = self._session_request(key, "POST", "message", body)
+        while True:
+            self._wait_idle(key)
+            try:
+                result = self._session_request(key, "POST", "message", body)
+                break
+            except HTTPFailure as exc:
+                if exc.status == 409 and exc.code == "pi_session_busy":
+                    self.pause()
+                    continue
+                if 500 <= exc.status < 600 and exc.code in {"pi_model_provider_unavailable", "provider_unavailable"}:
+                    raise WalkStop(Status.REFUSED, "provider_unavailable") from None
+                raise
         job_id = result.get("job_id")
         if job_id:
-            self._save_item(key, {"message_job_id": _identity(job_id)})
+            self._save_item(key, {"message_job_id": _job_identity(job_id)})
         return result
 
     def _host_action(self, key, snapshot, code, family):
@@ -176,12 +221,13 @@ class ConversationWalk:
             "credential_source": provider.get("credential_source", ""),
             "host_action": self._host_action(key, snapshot, "generate_plan", "plan_transition"),
         })
-        self._save_item(key, {"plan_job_id": _identity(result.get("job_id"))})
+        self._save_item(key, {"plan_job_id": _job_identity(result.get("job_id"))})
 
     def _plan(self, example):
         key = example["id"]
         self._conversation(key)
-        if not self._state(key).get("question_sent"):
+
+        def send_question():
             question = example.get("example_question")
             if not isinstance(question, str) or not question.strip():
                 package = self.request("GET", f"/api/capabilities/method-skills/{key}/package")
@@ -192,7 +238,8 @@ class ConversationWalk:
             self._send(key, question + "\nPrepare a candidate plan and retrieve supporting literature for review.",
                        mentions=[mention], intent="implement_scientific_question")
             self._save_item(key, {"question_sent": True})
-        self._wait_message(key)
+
+        self._run_turn(key, send_question, started=self._state(key).get("question_sent", False))
         while True:
             snapshot = self._snapshot(key)
             workflow = snapshot.get("workflow") or {}
@@ -209,6 +256,8 @@ class ConversationWalk:
             if offer and needs_plan and not metrics["pending_design_choices"] and not self._state(key).get("plan_job_id"):
                 self._start_plan(key, snapshot)
                 continue
+            if workflow.get("next_action_code") == "failed_pipeline_requires_fresh_plan":
+                raise WalkStop(Status.REFUSED, "failed_pipeline_requires_fresh_plan", metrics)
             if metrics["pending_design_choices"] or workflow.get("plan_review_summary"):
                 return snapshot
             if any(row.get("plan_available") for row in snapshot.get("runs", [])):
@@ -264,8 +313,8 @@ class ConversationWalk:
             result = self.request("POST", "/api/jobs/agent-run-review", {
                 "run_id": rid, "study_context_id": state["study_context_id"],
                 "decision": "approved", "external_llm_opt_in": True, "host_action": action})
-            self._save_item(key, {"execution_job_id": _identity(result.get("job_id")), "run_id": rid})
-        job_id = _identity(self._state(key)["execution_job_id"])
+            self._save_item(key, {"execution_job_id": _job_identity(result.get("job_id")), "run_id": rid})
+        job_id = _job_identity(self._state(key)["execution_job_id"])
         try:
             while True:
                 job = self.request("GET", f"/api/jobs/{job_id}")
@@ -346,8 +395,9 @@ class ConversationWalk:
             snapshot = self._snapshot(key)
             if (snapshot.get("latest_run") or {}).get("execution_complete") is True:
                 self._session(key)
-                self._send(key, "Explain the completed run's limitations using aggregate evidence only.")
-                self._wait_message(key)
+                self._save_item(key, {"provider_retry_used": False})
+                self._run_turn(key, lambda: self._send(
+                    key, "Explain the completed run's limitations using aggregate evidence only."))
                 return {"status": "replied"}
         raise WalkStop(Status.SKIPPED, "finished_walk_run_required")
 
