@@ -213,6 +213,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "get_pi_copilot_workspace_preview",
     ),
     (
+        "POST",
+        "/api/copilot/pi/projects/{project_id}/workspace/download-csv",
+        "post_pi_copilot_workspace_csv_download",
+    ),
+    (
         "GET",
         "/api/copilot/pi/projects/{project_id}/runs/{run_id}/artifacts/{artifact_name}",
         "get_pi_copilot_research_artifact",
