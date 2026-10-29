@@ -85,7 +85,7 @@ from ..planning.literature_design_authority import (
     LiteratureDesignEvidenceCard,
     render_literature_design_card_facts,
 )
-from ..planning.primary_result_contract import family_result_stop_reason
+from ..planning.primary_result_contract import family_result_stop_reason, missing_survival_followup
 from ..planning.progressive_artifacts import ProgressivePlannerCheckpointEmitter
 from ..planning.progressive_compiler import (
     progressive_cohort_concept_ids,
@@ -1642,7 +1642,16 @@ def family_result_stop(
         template_strategy=FAMILY_SPEC_STRATEGY if templated else None,
         outline_selected=outline_selected,
     )
-    return ProgressivePlanCompileError(reason, message, path="analysis_type")
+    missing = (
+        missing_survival_followup(context)
+        if reason == "progressive_family_result_contract_unwritable" else ()
+    )
+    if missing:
+        message += "; this prepared input lacks the paired event or censoring time: " + ", ".join(missing)
+    return ProgressivePlanCompileError(
+        reason, message, path="analysis_type", concepts=missing,
+        cause_code="required_concepts_unavailable" if missing else None,
+    )
 
 
 __all__ = [

@@ -729,9 +729,10 @@ _PLANNING_STOP_SENTENCES = {
         "card and approve it again, then generate the plan."
     ),
     "progressive_family_result_contract_unwritable": (
-        "No executable EasyICU method can yet produce the primary result this "
+        "This prepared input and design cannot produce the primary result this "
         "survival question needs, so planning stopped before its analysis steps "
-        "were drafted. No analysis was run."
+        "were drafted. No analysis was run. Use data with event and censoring "
+        "times and review a supported survival design."
     ),
     "progressive_family_spec_cohort_eligibility_after_time_zero": (
         "This study decides who is in its cohort after the analysis time zero: "
@@ -857,6 +858,15 @@ def _progressive_compile_failure_message(exc: BaseException) -> str:
             "the question asks to adjust for. Add it to the adjustment variables, or remove it from "
             "the question. Planning stopped and no analysis was run. Generate the plan again after "
             "that change."
+        )
+    if (typed.get("reason_code") == "progressive_family_result_contract_unwritable"
+            and typed.get("cause_code") == "required_concepts_unavailable"
+            and typed.get("concepts")):
+        return (
+            "The prepared data lack the event or censoring time this survival question needs: "
+            + ", ".join(typed["concepts"])
+            + ". Planning stopped before its analysis steps were drafted. No analysis was run. "
+            "Prepare the follow-up data and review a supported survival design."
         )
     sentence = _PLANNING_STOP_SENTENCES.get(str(typed.get("reason_code") or ""))
     if sentence:

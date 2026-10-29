@@ -9,6 +9,57 @@ import pytest
 from easyicu.webserver import agent_pipeline_runs
 
 
+def test_a_survival_input_gap_reaches_the_gate_and_its_plain_message(tmp_path):
+    from easyicu.research_agent.agents.family_spec_planner import family_result_stop
+    from easyicu.webserver.pi_copilot.projections import gate_detail_projection
+    from tests.support.survival_proposal import survival_context
+
+    context = survival_context()
+    context = context.model_copy(update={
+        "cohort": context.cohort.model_copy(update={"database": "sic"}),
+        "variables": [v for v in context.variables if v.name != "followup_days_90d"],
+    })
+    stop = family_result_stop(
+        context, families=("survival",), planner_strategy="family_spec_v1",
+        planning_contract_context="",
+    )
+    agent_pipeline_runs._record_pipeline_failure(
+        wrapper_dir=tmp_path, study={"id": "synthetic-survival-input"}, provider={},
+        exc=stop, code=agent_pipeline_runs._pipeline_failure_code(stop), execution_retry_id=None,
+    )
+
+    gate = json.loads((tmp_path / "quality_gate.json").read_text())["gate"]
+    assert gate_detail_projection(gate["detail"]) == {
+        "gate_detail_code": "progressive_family_result_contract_unwritable",
+        "gate_detail_cause_code": "required_concepts_unavailable",
+        "gate_missing_concepts": ["followup_days_90d"],
+    }
+    message = agent_pipeline_runs._progressive_compile_failure_message(stop)
+    assert "prepared data lack the event or censoring time" in message
+    assert "followup_days_90d" in message
+    assert "No analysis was run" in message
+
+
+@pytest.mark.parametrize("reason, cause, concepts", [
+    ("progressive_family_result_contract_unwritable", None, ["followup_days_90d"]),
+    ("progressive_family_result_contract_unwritable", "required_concepts_unavailable", []),
+    ("progressive_unknown_literature_source", "required_concepts_unavailable", ["followup_days_90d"]),
+])
+def test_a_generic_stop_does_not_claim_a_survival_time_column_is_missing(reason, cause, concepts):
+    from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
+
+    stop = ProgressivePlanCompileError(
+        reason, "private synthetic detail",
+        cause_code=cause, concepts=concepts,
+    )
+    message = agent_pipeline_runs._progressive_compile_failure_message(stop)
+    assert "lack the event or censoring time" not in message
+    if reason == "progressive_family_result_contract_unwritable":
+        assert "prepared input and design" in message
+    assert "followup_days_90d" not in message
+    assert "private synthetic detail" not in message
+
+
 @pytest.mark.parametrize("cause_code", [
     "RUN_PROVIDER_ATTEMPT_LIMIT", "BATCH_PROVIDER_ATTEMPT_LIMIT",
     "RUN_TOKEN_LIMIT", "BATCH_TOKEN_LIMIT", "BATCH_COST_LIMIT",

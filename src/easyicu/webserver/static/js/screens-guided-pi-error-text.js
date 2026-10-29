@@ -565,6 +565,13 @@
       }
       const missing = Array.isArray(detail && detail.missing) ? detail.missing.map(String).filter(Boolean) : [];
       const list = missing.length ? missing.join(', ') : '';
+      if (code === 'progressive_family_result_contract_unwritable'
+          && cause === 'required_concepts_unavailable' && missing.length) {
+        return tr(
+          `The prepared data lack the event or censoring time this survival question needs: ${list}. Planning stopped before its analysis steps were drafted; no analysis was run. Prepare the follow-up data and review a supported survival design.`,
+          `准备好的数据缺少这个生存问题所需的事件或删失时间：${list}。规划在起草分析步骤之前已停止，没有运行分析。请准备随访数据，并审阅受支持的生存分析设计。`,
+        );
+      }
       if (code === 'execution_step_raised') {
         const step = String(detail && detail.step || '').trim();
         const name = {
@@ -767,7 +774,7 @@
           : tr('The outcome variable is not in this data.', '结局变量不在这份数据里。'),
         concept_selection_failed: tr('The model did not return a usable variable selection; retry or narrow the question.', '模型没有给出可用的变量选择；请重试或收窄问题。'),
         no_available_concepts: tr('None of the selected variables is available in this data.', '所选变量在这份数据里都不可用。'),
-        progressive_family_result_contract_unwritable: tr('No executable EasyICU method can yet produce the primary result this survival question needs, so planning stopped before its analysis steps were drafted. Ask whether the outcome occurred within a fixed time as an association question, or choose a survival design EasyICU can execute.', 'EasyICU 目前没有能给出这个生存问题所需主结果的可执行方法，规划在起草分析步骤之前停止。可以改为关联性问题（例如结局是否在固定时间内发生），或选用 EasyICU 能执行的生存分析设计。'),
+        progressive_family_result_contract_unwritable: tr('This prepared input and design cannot produce the primary result this survival question needs. No analysis was run. Use data with event and censoring times and review a supported survival design. Changing to whether the outcome occurred within a fixed time needs your confirmation of the revised question and plan.', '这份准备好的数据与研究设计无法给出这个生存问题所需的主结果，没有运行分析。请使用包含事件及删失时间的数据，并审阅受支持的生存分析设计。若改为结局是否在固定时间内发生，需要您确认修改后的问题和计划。'),
         progressive_family_spec_cohort_eligibility_after_time_zero: tr('This study decides who is in its cohort after the analysis time zero (its concept window or minimum ICU stay ends later), so planning stopped before the model was called and no analysis was run. End the concept window or minimum ICU stay by time zero, or move time zero later; then prepare the export again and generate a fresh plan.', '这项研究在分析时间零点之后才确定谁入组（概念人群的窗口或最短 ICU 住院时长晚于时间零点），规划在调用模型之前停止，没有运行分析。请让概念窗口或最短住院时长在时间零点前结束，或把时间零点后移；然后重新准备导出，再生成计划。'),
         progressive_family_spec_prediction_risk_set_unavailable: tr('A prediction model is made for the stays still in the ICU when it predicts, which needs each stay\'s ICU length of stay; EasyICU prepares it for a study declared as a prediction model. Planning stopped before the model was called and no analysis was run. Declare the study\'s analysis as a prediction model, then generate the plan again.', '预测模型只针对预测时点仍在 ICU 的入住，需要每次入住的 ICU 住院时长；研究声明为预测模型时，EasyICU 才会准备这一列。规划在调用模型之前停止，没有运行分析。请把研究的分析类型声明为预测模型，再生成计划。'),
         progressive_static_prediction_requires_family_template: tr('A prediction study of this kind is planned from the prediction template, which states the prediction time, the risk set and the predictors available then. This plan did not use the template, so planning stopped and no analysis was run. If prediction is the question you care about most, make it the study\'s primary question and plan again.', '这类预测研究要用预测模板规划，模板会写明预测时点、风险集和可用的预测变量。这份计划没有用模板，规划已停止，没有运行分析。如果预测是你最关心的问题，请把它作为研究的主要问题后重新规划。'),

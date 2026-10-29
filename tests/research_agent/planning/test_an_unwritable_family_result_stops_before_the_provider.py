@@ -122,6 +122,67 @@ def test_a_family_result_no_owner_can_write_stops_before_the_provider(family, st
     assert stopped.reason_code == STOPS[family]
     assert stopped.details["owner"] == "easyicu.planning.progressive_compiler_v1"
     assert stopped.path == "analysis_type"
+    assert not stopped.easyicu_safe_diagnostic.get("concepts")
+    assert not stopped.easyicu_safe_diagnostic.get("cause_code")
+    assert llm.calls == []
+
+
+@pytest.mark.parametrize("database", ["sic", "miiv"])
+@pytest.mark.parametrize("days", [28, 90, 365])
+def test_a_missing_followup_is_named_as_a_prepared_input_gap(database, days):
+    context = survival_context()
+    outcome, followup = f"mort_{days}d", f"followup_days_{days}d"
+    context = context.model_copy(update={
+        "cohort": context.cohort.model_copy(update={"database": database}),
+        "variables": [
+            v.model_copy(update={"name": outcome}) if v.name == "mort_90d" else v
+            for v in context.variables if v.name != "followup_days_90d"
+        ],
+        "target_outcome": outcome,
+    })
+
+    llm, stopped = _plan(context)
+
+    assert isinstance(stopped, ProgressivePlanCompileError)
+    assert stopped.reason_code == UNWRITABLE
+    assert stopped.easyicu_safe_diagnostic["cause_code"] == "required_concepts_unavailable"
+    assert stopped.easyicu_safe_diagnostic["concepts"] == [followup]
+    assert "prepared input" in str(stopped)
+    assert followup in str(stopped)
+    assert llm.calls == []
+
+
+def test_an_unwritable_design_does_not_invent_a_missing_followup():
+    context = survival_context()
+    # A three-level exposure has no proposable binary or continuous suite,
+    # even though the prepared input holds the endpoint's paired follow-up.
+    context.variable("rrt").observed_domain = {"levels": [0, 1, 2], "n_unique": 3}
+
+    llm, stopped = _plan(context)
+
+    assert isinstance(stopped, ProgressivePlanCompileError)
+    assert stopped.reason_code == UNWRITABLE
+    assert not stopped.easyicu_safe_diagnostic.get("concepts")
+    assert not stopped.easyicu_safe_diagnostic.get("cause_code")
+    assert llm.calls == []
+
+
+def test_a_causal_refusal_does_not_claim_a_survival_input_gap():
+    context = survival_context()
+    context = context.model_copy(update={
+        "research_question": "What is the effect of renal support on death within 90 days?",
+        "variables": [v for v in context.variables if v.name != "followup_days_90d"],
+        "user_preferences": context.user_preferences.model_copy(
+            update={"inferred_analysis_family": "causal_inference"}
+        ),
+    })
+
+    llm, stopped = _plan(context)
+
+    assert isinstance(stopped, ProgressivePlanCompileError)
+    assert stopped.reason_code == TTE_TRIAL_NOT_CONFIRMED
+    assert not stopped.easyicu_safe_diagnostic.get("cause_code")
+    assert not stopped.easyicu_safe_diagnostic.get("concepts")
     assert llm.calls == []
 
 

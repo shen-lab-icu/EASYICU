@@ -105,6 +105,8 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   // would name one that did not happen.
   const unwritable = runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_family_result_contract_unwritable' });
   assert.match(unwritable, /this survival question needs/);
+  assert.match(unwritable, /prepared input and design/);
+  assert.match(unwritable, /confirmation/);
   assert.doesNotMatch(unwritable, /variable level or model term/);
   assert.match(runFailure('research_pipeline_progressive_compile_failed'), /variable level or model term/);
 
@@ -118,6 +120,16 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.doesNotMatch(late, /variable level or model term/);
   const errorTextZh = guided.require('errorText').create({ tr: (en, zh) => zh, staticPreview: () => false });
   const runFailureZh = errorTextZh.runFailureText;
+  const missingFollowup = { code: 'progressive_family_result_contract_unwritable',
+    cause: 'required_concepts_unavailable', missing: ['followup_days_90d'] };
+  assert.match(runFailure('research_pipeline_progressive_compile_failed', missingFollowup), /prepared data lack the event or censoring time/);
+  assert.match(runFailure('research_pipeline_progressive_compile_failed', missingFollowup), /followup_days_90d/);
+  assert.match(runFailureZh('research_pipeline_progressive_compile_failed', missingFollowup), /缺少.*事件或删失时间/);
+  assert.match(runFailureZh('research_pipeline_progressive_compile_failed', missingFollowup), /followup_days_90d/);
+  assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code: missingFollowup.code }), /确认/);
+  assert.equal(runFailure('research_pipeline_progressive_compile_failed', { ...missingFollowup, cause: 'unknown_cause' }), unwritable);
+  assert.equal(runFailure('research_pipeline_progressive_compile_failed', { ...missingFollowup, missing: [] }), unwritable);
+  assert.doesNotMatch(runFailure('research_pipeline_progressive_compile_failed', { ...missingFollowup, code: 'progressive_unknown_literature_source' }), /censoring time/);
   const desktopStop = 'research_pipeline_plan_step_needs_sandbox';
   const desktopStopEn = 'One step in this plan needs code written by the model during the run, and the desktop app does not run such code. Remove or change that step, then approve the plan. No analysis has been run.';
   const desktopStopZh = '计划里有一步要靠模型临时写代码才能完成，桌面版不运行这类代码。请删除或修改这一步，再批准计划。尚未运行任何分析。';
