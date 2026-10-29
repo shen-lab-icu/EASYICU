@@ -2,6 +2,52 @@
   "schema_version": "easyicu.release-notes/1",
   "entries": [
     {
+      "version": "0.1.1",
+      "date": "2026-10-29",
+      "changes": [
+        {
+          "code": "task_list",
+          "zh": "对话侧栏按任务列出：待你处理的单独成组，最近的在前，可打开全部任务表搜索和筛选。",
+          "en": "The conversation rail lists tasks: those waiting for you are grouped first, recent ones follow, and a full task table can be searched and filtered."
+        },
+        {
+          "code": "superseded_attempts",
+          "zh": "项目成果里，被当前计划取代、没跑到分析的早期尝试会收起，不再一条条标红。",
+          "en": "In project results, early attempts superseded by the current plan that never reached an analysis are folded instead of listed in red."
+        },
+        {
+          "code": "new_outcome_types",
+          "zh": "研究可以使用无呼吸机天数等“存活且无事件天数”、有序结局和计数结局。",
+          "en": "Studies can use free-day outcomes such as ventilator-free days, ordinal outcomes and count outcomes."
+        },
+        {
+          "code": "advanced_methods",
+          "zh": "新增跨库外部验证、各数据库效应的 REML 合并、g-方法（MSM 与单时点 g-formula）和重复测量的混合模型与 GEE。",
+          "en": "Adds cross-database external validation, REML pooling of per-database effects, g-methods (MSM and point g-formula) and mixed models and GEE for repeated measures."
+        },
+        {
+          "code": "multiple_imputation",
+          "zh": "支持多重插补并按 Rubin 规则合并；数据预处理（异常值、时间窗汇总、单位统一、缺失处理、标准化）在计划中逐项可见。",
+          "en": "Supports multiple imputation pooled by Rubin's rules; data preparation (outliers, window aggregation, units, missing data, scaling) is listed step by step in the plan."
+        },
+        {
+          "code": "composer_skills",
+          "zh": "在输入框输入 / 可以直接选用技能。",
+          "en": "Typing / in the composer picks a skill directly."
+        },
+        {
+          "code": "storage_and_keys",
+          "zh": "设置中可选择数据和项目的存放位置；桌面版用系统钥匙串记住模型密钥。",
+          "en": "Settings choose where data and projects are stored; the desktop app remembers model keys in the system keychain."
+        },
+        {
+          "code": "skill_hub",
+          "zh": "技能中心各页统一标题与操作；技能可以打包导入导出。",
+          "en": "Skill Hub tabs share one header and actions; skills can be imported and exported as packages."
+        }
+      ]
+    },
+    {
       "version": "0.1.0",
       "date": "2026-10-26",
       "changes": [
