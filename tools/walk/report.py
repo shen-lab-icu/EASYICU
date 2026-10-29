@@ -10,7 +10,7 @@ from collections import Counter
 from pathlib import Path
 
 from .contracts import SCHEMA_VERSION, ItemResult, Status
-from .privacy import artifact_name, redact as redact, token
+from .privacy import artifact_name, is_generated_job_id, redact as redact, token
 
 
 def atomic_json(path: Path, payload: dict):
@@ -56,7 +56,8 @@ class ReceiptStore:
         for key in ("source_id", "database"):
             if key in state and token(state[key]) != state[key]:
                 raise ValueError("resume_state_invalid")
-        booleans = {"deleted", "source_bound", "question_sent"}
+        booleans = {"deleted", "source_bound", "question_sent", "provider_retry_used"}
+        jobs = {"message_job_id", "plan_job_id", "execution_job_id"}
         identities = {"project_id", "session_id", "study_context_id", "message_job_id", "plan_job_id",
                       "execution_job_id", "run_id"}
         for key, item in state["items"].items():
@@ -66,7 +67,7 @@ class ReceiptStore:
             for name, value in item.items():
                 if name in booleans and type(value) is not bool:
                     raise ValueError("resume_state_invalid")
-                if name in identities and value != "" and (
+                if name in identities and value != "" and not (name in jobs and is_generated_job_id(value)) and (
                         not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,159}", value)
                         or token(value) != value):
                     raise ValueError("resume_state_invalid")
@@ -118,6 +119,13 @@ class ReceiptStore:
 
 def run_metrics(projection: dict) -> dict:
     run = projection.get("latest_run") or {}
+    history = projection.get("runs") or []
+    # A failed latest attempt may coexist with an older authoritative review.
+    # The history is newest-first; do not attribute that older run's success to it.
+    if history and (run.get("present") is False or not run or (
+            (projection.get("workflow") or {}).get("next_action_code") == "failed_pipeline_requires_fresh_plan"
+            and "gate_reason_code" in history[0])):
+        run = history[0]
     refs = run.get("artifact_refs") or []
     names = [row.get("artifact", "") for row in refs if isinstance(row, dict)]
     names += list(run.get("artifact_names") or [])
@@ -137,4 +145,8 @@ def run_metrics(projection: dict) -> dict:
         "evidence_complete": run.get("evidence_complete") is True,
         "gate_status": token(run.get("gate_status")),
         "gate_reason_code": token(run.get("gate_reason_code")),
+        "gate_detail_code": token(run.get("gate_detail_code")),
+        "gate_detail_cause_code": token(run.get("gate_detail_cause_code")),
+        "gate_detail_step_id": token(run.get("gate_detail_step_id")),
+        "gate_detail_runner_kind": token(run.get("gate_detail_runner_kind")),
     }

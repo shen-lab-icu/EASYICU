@@ -17,6 +17,11 @@ _ROW_KEYS = re.compile(
 _TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/+-]{0,159}$")
 
 
+def is_generated_job_id(value: Any) -> bool:
+    """JobManager generates hex IDs; project/session/run IDs remain separate."""
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{12}", value) is not None
+
+
 def redact(value: Any) -> Any:
     """Secondary defense for identifier-like strings; raw payloads are never saved."""
     if isinstance(value, str):
@@ -56,7 +61,8 @@ _BOOLEANS = frozenset({
 _TOKENS = frozenset({
     "version", "commit", "runner_image_tag", "database", "source", "basis", "gate_status",
     "gate_reason_code", "run_outcome", "plan_review_status", "current_stage", "provider_status",
-    "id", "layer", "implementation", "owner_status", "status", "role", "scope",
+    "id", "layer", "implementation", "owner_status", "status", "role", "scope", "profile_database",
+    "gate_detail_code", "gate_detail_cause_code", "gate_detail_step_id", "gate_detail_runner_kind",
 })
 _LISTS = frozenset({"artifact_names", "refusal_codes", "planned_items", "unavailable", "shortfalls"})
 _HISTOGRAMS = frozenset({

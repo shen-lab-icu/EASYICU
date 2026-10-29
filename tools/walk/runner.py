@@ -75,11 +75,11 @@ class WalkRunner(MetadataWalk, ConversationWalk):
                            token(payload.get("error"), "api_operation_refused"))
         return payload
 
-    def pause(self):
+    def pause(self, *, delay=None):
         remaining = self._deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("phase_timeout")
-        time.sleep(min(self.options.poll_interval, remaining, 5))
+        time.sleep(min(self.options.poll_interval if delay is None else delay, remaining, 5))
 
     def item(self, phase, identity, action, *, execution_policy=False, reuse=True):
         policy = "approved" if execution_policy and self.options.approve_test_runs else "plan-only"
