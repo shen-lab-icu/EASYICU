@@ -131,6 +131,10 @@ _RATIONALE_MIN = 16
 _RATIONALE_MAX = 500
 _APPLICATION_MIN = 8
 _APPLICATION_MAX = 1200
+#: Direct comparators one plan applies.  Screening can include more; the
+#: first ones in screening order are the ones the Planner must apply, and the
+#: rest stay citable.  One bound for both sides keeps the contract satisfiable.
+MAX_COMPARATOR_APPLICATIONS = 8
 
 
 class FamilySpecError(ValueError):
@@ -912,6 +916,11 @@ class FamilySpecRequest(BaseModel):
             raise ValueError("request rosters must contain unique non-empty values")
         return cleaned
 
+    @field_validator("direct_comparator_literature_keys")
+    @classmethod
+    def _applicable_direct_comparators(cls, values: list[str]) -> list[str]:
+        return values[:MAX_COMPARATOR_APPLICATIONS]
+
     @property
     def typed_cohort_bounds(self) -> tuple[Optional[float], ...]:
         """The typed bounds a predicate-filtered cohort applies: ages, stay, prediction time."""
@@ -1505,7 +1514,7 @@ class FamilyPlanSpec(BaseModel):
     cohort_membership_column: Optional[str] = Field(default=None, max_length=128)
     reader_display_labels: list[SpecReaderLabel] = Field(default_factory=list, max_length=64)
     comparator_applications: list[SpecComparatorApplication] = Field(
-        default_factory=list, max_length=8
+        default_factory=list, max_length=MAX_COMPARATOR_APPLICATIONS
     )
     #: One decision per design dimension when the request carries reviewed
     #: design cards; omitted from the spec digest when absent.

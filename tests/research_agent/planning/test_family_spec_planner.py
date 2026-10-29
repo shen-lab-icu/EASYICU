@@ -371,6 +371,32 @@ def test_spec_validation_fails_closed(override, reason_code) -> None:
     assert caught.value.reason_code == reason_code
 
 
+def test_a_screening_with_more_direct_comparators_than_a_plan_applies_stays_satisfiable() -> None:
+    """Screening may include more direct comparators than one plan can apply; the plan applies the first ones."""
+
+    from easyicu.research_agent.agents.progressive_planner import (
+        candidate_analysis_types,
+        select_progressive_variables,
+    )
+    from easyicu.research_agent.planning.family_spec import build_family_spec_request
+    from easyicu.research_agent.planning.family_spec.contract import MAX_COMPARATOR_APPLICATIONS
+
+    screened = [f"screened_comparator_{index:02d}" for index in range(MAX_COMPARATOR_APPLICATIONS + 5)]
+    context = _context(exact=True)
+    variables = select_progressive_variables(context)
+    request = build_family_spec_request(
+        context,
+        analysis_types=candidate_analysis_types(context),
+        variable_roster=variables,
+        allowed_literature_citation_keys=[*ALLOWED_CITATIONS, *screened],
+        direct_comparator_literature_keys=screened,
+        comparison_literature_keys=screened,
+        cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
+    )
+    assert request.direct_comparator_literature_keys == screened[:MAX_COMPARATOR_APPLICATIONS]
+    validate_family_plan_spec(spec_from_mapping(_spec_payload(request)), request)
+
+
 def test_strict_schema_is_closed_and_run_bound() -> None:
     request = _request(_context(exact=False))
     schema = json.loads(family_spec_structured_output_request(request).schema_json)
