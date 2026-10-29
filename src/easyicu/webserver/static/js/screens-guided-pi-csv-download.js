@@ -36,11 +36,9 @@
       const form = document.createElement('form');
       form.method = 'post';
       form.action = '/api/copilot/pi/projects/' + encodeURIComponent(coordinates.projectId) + '/workspace/download-csv';
-      form.target = 'easyicu-workspace-csv-' + nonce + '-' + count;
-      const destination = document.createElement('iframe');
-      destination.name = form.target; destination.hidden = true;
-      destination.setAttribute('sandbox', 'allow-downloads');
-      destination.setAttribute('referrerpolicy', 'no-referrer');
+      // Use a normal user-initiated attachment navigation. Some embedded
+      // browsers do not deliver attachments submitted into hidden frames.
+      form.target = '_self';
       const bytes = new TextEncoder().encode(data.csv);
       let binary = '';
       for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
@@ -62,12 +60,8 @@
         // One pending export, one submission. A later page export may replace it.
         pending = false;
         button.disabled = true;
-        // Keep the target mounted while the HTTP attachment is in progress.
       }, { once: true });
-      // Preserve prior submitted targets: a slow attachment must survive the
-      // next export. The five-export budget also bounds these hidden frames.
       if (deliveryForm && deliveryForm.parentNode === slot) slot.removeChild(deliveryForm);
-      slot.appendChild(destination);
       slot.appendChild(form);
       deliveryForm = form;
     }
