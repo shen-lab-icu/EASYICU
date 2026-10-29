@@ -10,7 +10,10 @@ interactive explanation, or another browser-viewable artifact.
 
 1. List the current project files before choosing names.
 2. Prefer one self-contained HTML file with inline CSS and JavaScript so the
-   governed preview can render it without network access.
+   governed preview can render it without network access. If the user supplies
+   CSV, retain its original field strings, row order and empty fields for all
+   CSV exports. Parse separate numeric values for calculations; do not export
+   the numeric projection as though it were the original CSV.
 3. Label simulated values and unvalidated formulas explicitly. Never invent a
    clinically validated model, treatment recommendation, effect estimate, or
    patient-specific claim.
@@ -40,11 +43,17 @@ interactive explanation, or another browser-viewable artifact.
    Every nested child also needs its own globally unique `id`. All `expected`
    values are JSON numbers: to check the text `25.0%`, use `"expected":25.0`,
    never `"expected":"25.0%"`. Do not invent check kinds or field names.
-6. Read the saved file back, run the bounded static check, then request the web
-   preview tool. A static pass and a prepared preview do not verify rendered
-   charts, filter behavior, CSV transport, or actual file saving. The isolated
-   preview runs only the bounded declared UI checks; it grants no science or
-   download authority. Missing contracts produce partial observations.
+6. For HTML, prefer the write or exact-edit tool with `check_after:true` and
+   `preview_after:true`: one bounded operation saves the file, checks the exact
+   saved SHA and prepares its governed preview. Reuse its returned check and
+   preview receipts; do not repeat check or preview for the same ready SHA.
+   Read existing HTML before editing it. Read a newly written file back only
+   to resolve a concrete issue, rather than spending another model round on
+   an identical copy. Legacy separate check and preview tools remain available.
+   A static pass and a prepared preview do not verify rendered charts, filters,
+   CSV transport or actual file saving. The isolated preview runs only bounded
+   declared UI checks; it grants no science or download authority. Missing
+   contracts produce partial observations.
 7. A blocked check receipt with `pi_workspace_runtime_contract_invalid` lists
    JSON paths and required types. Read the relevant saved lines and fix all
    listed schema errors, then run one static check before previewing. Do not
@@ -57,7 +66,10 @@ interactive explanation, or another browser-viewable artifact.
    the declared data and failure history, then check and preview the new hash.
    On `partial`, state the uncovered interactions or pending CSV export. Do
    not loop or wait for a receipt that requires an unopened browser or a user
-   download permission. Respect `polling_allowed:false` and `next_action`.
+   download permission. If only `download_control` checks remain unobserved,
+   deliver the file and explain that saving is unverified, then stop using
+   tools for that request. Do not read or edit HTML merely because no CSV was
+   clicked. Respect `polling_allowed:false` and `next_action`.
    Never alter data, group definitions or expected answers simply to make a
    check pass. Correct a mistaken expectation only when the supplied data and
    definitions establish it. `complete` means only the declared UI checks passed.

@@ -282,6 +282,8 @@
       media_type: String(value.media_type || 'text/plain').slice(0, 120),
       ...(/^[a-f0-9]{64}$/.test(checkedSha256)
         ? { checked_sha256: checkedSha256 } : {}),
+      ...(value.kind === 'file' && /\.csv$/i.test(file) && /^[a-f0-9]{64}$/.test(String(value.sha256 || ''))
+        ? { sha256: String(value.sha256) } : {}),
       authority_class: 'workspace_artifact',
       scientific_evidence: false,
       validation_status: 'unvalidated',
@@ -407,7 +409,7 @@
   function isStructuredArtifact() { return isResearchArtifact() || isResearchReport() || isIdeaPlan() || isDemoArtifact() || isDataPackageReview() || isDataWorkbenchSnapshot(); }
   function isLiteratureSource() { return !!state.resource && state.resource.kind === 'literature_source'; }
   function isHtml() {
-    return !!state.resource && (
+    return !!state.resource && !isWorkspaceCsvAttachment() && (
       state.resource.kind === 'webpage'
       || state.resource.media_type === 'text/html'
       || /\.html?$/i.test(state.resource.file)
@@ -416,6 +418,9 @@
   function isCheckedWorkspaceHtml() {
     return !!state.resource && ['file', 'webpage'].includes(state.resource.kind)
       && isHtml() && /^[a-f0-9]{64}$/.test(String(state.resource.checked_sha256 || ''));
+  }
+  function isWorkspaceCsvAttachment() {
+    return !!state.resource && state.resource.kind === 'file' && /\.csv$/i.test(state.resource.file);
   }
   function workspacePreviewKey() {
     return JSON.stringify([state.projectId, state.resource && state.resource.file,
@@ -429,13 +434,14 @@
     const checked = String(state.resource.checked_sha256 || '');
     const snapshot = state.artifact && state.artifact.file === state.resource.file
       ? String(state.artifact.sha256 || '') : '';
-    const digest = /^[a-f0-9]{64}$/.test(checked) ? checked : snapshot;
+    const digest = isWorkspaceCsvAttachment() ? String(state.resource.sha256 || '')
+      : /^[a-f0-9]{64}$/.test(checked) ? checked : snapshot;
     const api = window.EU_API || {};
     const url = /^[a-f0-9]{64}$/.test(digest) && api.piCopilotWorkspaceDownloadUrl
       ? api.piCopilotWorkspaceDownloadUrl(state.projectId, state.resource.file, digest) : '';
     const allowed = previewDownloadsAllowed();
     const toggle = isCheckedWorkspaceHtml()
-      ? `<button type="button" data-gpi-preview-downloads aria-pressed="${allowed}" title="${tr('Only this checked version; network and application data remain blocked.', '仅当前已检查版本；仍禁止联网和访问应用数据。')}">${allowed ? tr('Disable page downloads', '关闭此页下载') : tr('Allow and generate CSV', '允许并生成 CSV')}</button><button type="button" data-gpi-preview-generate-csv${allowed ? '' : ' hidden'}>${tr('Generate CSV with current filters', '按当前筛选生成 CSV')}</button>` : '';
+      ? `<button type="button" data-gpi-preview-downloads aria-pressed="${allowed}" title="${tr('Only this checked version; network and application data remain blocked.', '仅当前已检查版本；仍禁止联网和访问应用数据。')}">${allowed ? tr('Disable page downloads', '关闭此页下载') : tr('Allow and generate CSV', '允许并生成 CSV')}</button><button type="button" data-gpi-preview-generate-csv${allowed ? '' : ' hidden'}>${tr('Generate CSV', '生成 CSV')}</button>` : '';
     if (!url && !toggle) return '';
     return `<div class="gpi-preview-file-actions">${url ? `<a href="${esc(url)}" download="${esc(state.resource.file.split('/').pop())}">${tr('Download file', '下载文件')}</a>` : ''}${toggle}<span data-gpi-csv-download-slot></span><span data-gpi-runtime-qa-slot>${esc(state.qaError)}</span></div>`;
   }
@@ -629,6 +635,8 @@
       body = url
         ? `<iframe data-gpi-workspace-frame class="gpi-preview-frame" src="${esc(url)}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
         : `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${tr('The checked file digest is missing. Run the static check and prepare the preview again.', '文件检查摘要缺失。请重新执行静态检查并准备预览。')}</span></div>`;
+    } else if (isWorkspaceCsvAttachment()) {
+      body = `<section class="gpi-preview-state" data-gpi-csv-attachment><strong>${tr('CSV file attachment', 'CSV 文件附件')}</strong><span>${/^[a-f0-9]{64}$/.test(String(state.resource.sha256 || '')) ? tr('Download the file above. Its CSV contents have not been verified.', '可从上方下载文件。CSV 内容尚未核验。') : tr('The file version is missing; download is unavailable. Refresh the task artifact.', '此文件缺少版本信息，暂不能下载。请刷新任务产物。')}</span></section>`;
     } else if (state.mode === 'native' && isNativeWorkspace()) {
       body = `<div data-gpi-native-workspace-mount></div>`;
     } else if (state.mode === 'workbench' && (isDataPackageReview() || isDataWorkbenchSnapshot())) {
@@ -807,7 +815,7 @@
     }
   }
   async function loadResource() {
-    if (!state.resource || isDocument() || (!state.projectId && !isDemoArtifact() && !isLiteratureSource())) return;
+    if (!state.resource || isDocument() || isWorkspaceCsvAttachment() || (!state.projectId && !isDemoArtifact() && !isLiteratureSource())) return;
     const ticket = ++state.request;
     state.loading = true; state.error = ''; render();
     try {

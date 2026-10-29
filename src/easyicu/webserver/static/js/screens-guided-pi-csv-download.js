@@ -4,7 +4,7 @@
   function create(currentKey) {
     let key = '', nonce = '', frame = null, slot = null, coordinates = null;
     let count = 0, last = 0, pending = false, revision = 0, request = null;
-    let epoch = '', passive = false, acknowledged = false, ackTimer = 0, selectionVersion = -1, readyReceived = false;
+    let epoch = '', passive = false, acknowledged = false, ackTimer = 0, selectionVersion = -1, readyReceived = false, optionsReceived = false;
     const urls = new Set();
     function clearDelivery() {
       revision += 1;
@@ -22,12 +22,13 @@
       window.crypto.getRandomValues(bytes);
       return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
     }
-    function command(action) {
+    function command(action, selection = null) {
       if (frame && frame.contentWindow && typeof frame.contentWindow.postMessage === 'function')
-        frame.contentWindow.postMessage({ type: 'easyicu:workspace-csv-control', nonce, epoch, action }, '*');
+        frame.contentWindow.postMessage({ type: 'easyicu:workspace-csv-control', nonce, epoch, action,
+          ...(selection ? { token: selection.token, selection_version: selection.version } : {}) }, '*');
     }
     function revoke() {
-      command('disable'); epoch = ''; acknowledged = false; selectionVersion = -1; clearDelivery();
+      command('disable'); epoch = ''; acknowledged = false; selectionVersion = -1; optionsReceived = false; clearDelivery();
     }
     function reset() {
       revoke();
@@ -50,10 +51,10 @@
     }
     function generate() {
       if (!active() || !passive) return false;
-      clearDelivery(); epoch = randomNonce(); acknowledged = false; selectionVersion = -1;
+      clearDelivery(); epoch = randomNonce(); acknowledged = false; selectionVersion = -1; optionsReceived = false;
       if (!epoch) return false;
       const sourceEpoch = epoch;
-      note('Generating CSV with the current page filters…', '正在按当前页面筛选生成 CSV…');
+      note('Preparing CSV export…', '正在准备 CSV 导出…');
       command('generate');
       ackTimer = setTimeout(() => {
         if (active() && epoch === sourceEpoch && !acknowledged && !pending)
@@ -74,7 +75,7 @@
         if (acknowledged || !['generated', 'manual', 'qa_busy'].includes(data.status)) return;
         acknowledged = true; clearTimeout(ackTimer);
         if (!pending && data.status === 'manual')
-          note('Use the page’s CSV export button, then click the save link here.', '未找到唯一 CSV 导出控件，请点击页面里的导出按钮，再点击此处的保存链接。');
+          note('CSV export is unavailable. Generate the export options again, or use the page’s export button.', '暂时无法生成 CSV；请重新生成导出选项，或使用页面里的导出按钮。');
         if (!pending && data.status === 'qa_busy')
           note('Page checks are still running. Export the current filters after they finish.', '页面检查尚未完成；完成后请在页面里导出当前筛选。');
         return;
@@ -83,6 +84,35 @@
         if (!Number.isSafeInteger(data.selection_version) || data.selection_version < 0
           || data.selection_version > 1000000 || data.selection_version < selectionVersion) return;
         selectionVersion = data.selection_version;
+      }
+      if (passive && data.type === 'easyicu:workspace-csv-options') {
+        if (pending || urls.size || optionsReceived || !Array.isArray(data.options) || data.options.length < 2 || data.options.length > 8) return;
+        const tokens = new Set();
+        for (const option of data.options) {
+          if (!option || typeof option.token !== 'string' || !/^[a-f0-9]{32}$/.test(option.token)
+            || tokens.has(option.token) || typeof option.label !== 'string' || !option.label.trim()
+            || option.label.length > 80 || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(option.label)) return;
+          tokens.add(option.token);
+        }
+        clearDelivery(); acknowledged = true; optionsReceived = true;
+        const ticket = revision, sourceFrame = frame, sourceNonce = nonce, sourceEpoch = epoch, version = selectionVersion;
+        const prompt = document.createElement('span'); prompt.setAttribute('role', 'status');
+        prompt.textContent = window.EU_LANG === 'zh' ? '请选择 CSV 导出内容：' : 'Choose a CSV export: ';
+        const buttons = data.options.map(option => {
+          const button = document.createElement('button'); button.type = 'button';
+          button.dataset.gpiCsvChoice = ''; button.textContent = option.label;
+          button.addEventListener('click', event => {
+            event.preventDefault(); event.stopPropagation();
+            if (!tokens.has(option.token) || ticket !== revision || !active() || pending
+              || frame !== sourceFrame || nonce !== sourceNonce || epoch !== sourceEpoch || selectionVersion !== version) return;
+            tokens.clear(); clearDelivery(); acknowledged = false;
+            note('Preparing the selected CSV export…', '正在生成所选 CSV…');
+            command('select', { token: option.token, version });
+          });
+          return button;
+        });
+        slot.replaceChildren(prompt, ...buttons);
+        return;
       }
       if (data.type === 'easyicu:workspace-csv-changed') {
         clearDelivery();

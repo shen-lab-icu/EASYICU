@@ -116,7 +116,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-analysis-report.js?v=20261022-prose1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-source-view.js?v=20261021-turn-layout1" in index
-    assert "js/screens-guided-pi-preview.js?v=20261029-freshfix6" in index
+    assert "js/screens-guided-pi-preview.js?v=20261029-freshfix7" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20261029-uxcomplete2" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20261026-review1" in index
@@ -171,7 +171,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261028-surv1" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261029-freshfix6" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261029-freshfix7" in index
     assert "js/screens-guided-pi.js?v=20261029-freshfix6" in index
     assert "js/screens-guided.js?v=20261027-old1" in index
     assert (
@@ -5636,7 +5636,7 @@ def test_provider_failure_after_successful_tool_preserves_the_tool_receipt() -> 
     assert completed.stdout.strip() == "tool-completed-final-explanation-failed"
     shell = _read("js/screens-guided-pi.js")
     assert "MODULES.require('errorText')" in shell
-    assert "EasyICU 工具操作已完成" in _read("js/screens-guided-pi-error-text.js")
+    assert "本轮已有工具结果" in _read("js/screens-guided-pi-error-text.js")
     assert "activityHasCompletedAction(activeActivity(true))" in shell
     # The latest reply keeps its choices unless a reply or a still-running
     # turn follows it; a finished host receipt recorded later does not.

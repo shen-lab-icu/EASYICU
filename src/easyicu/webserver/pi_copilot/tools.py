@@ -4726,6 +4726,9 @@ def _write_project_file(
     if blocked:
         return blocked
     assert workspace is not None and context.session.project_id
+    from .workspace_edit_batch import check_edited_html, prepare_checked_preview, validate_post_write_request
+
+    validate_post_write_request(params)
     try:
         mutation = context.grant.reserve_workspace_mutation("write")
     except WorkspaceMutationLimitError:
@@ -4740,15 +4743,29 @@ def _write_project_file(
         params["file"],
         params["content"],
     )
+    if params.get("check_after"):
+        payload = check_edited_html(workspace, context.session.project_id, payload)
+    if params.get("preview_after"):
+        payload = prepare_checked_preview(workspace, context.session.project_id, payload)
+    check, preview = payload.get("static_check"), payload.get("preview")
+    ready = (preview or {}).get("status") == "ready"
+    resource = (_workspace_resource(payload, kind="webpage" if ready else "file")
+                if (not params.get("check_after") or (check or {}).get("valid") is True)
+                and (not params.get("preview_after") or ready) else None)
+    summary = f"Created {payload['file']}."
+    if check:
+        summary += " Static check passed; runtime remains unverified." if check.get("valid") is True else " The write succeeded; static checking did not pass."
+    if preview:
+        summary += " Prepared the exact-SHA web preview; browser behavior remains pending." if ready else " The web preview was not prepared."
     return _workspace_result(
         context,
         status="ok",
         code="pi_workspace_file_written",
-        summary=f"Created {payload['file']}.",
+        summary=summary,
         details={
             **payload,
             "mutation_receipt": mutation.model_dump(mode="json"),
-            "resource": _workspace_resource(payload),
+            **({"resource": resource} if resource else {}),
         },
     )
 
@@ -4760,7 +4777,7 @@ def _edit_project_file(
     if blocked:
         return blocked
     assert workspace is not None and context.session.project_id
-    from .workspace_edit_batch import validate_edit_request
+    from .workspace_edit_batch import prepare_checked_preview, validate_edit_request
 
     validate_edit_request(params)
     try:
@@ -4778,12 +4795,19 @@ def _edit_project_file(
         expected_sha256=params["expected_sha256"],
         **{key: params[key] for key in ("old_text", "new_text", "edits", "check_after") if key in params},
     )
-    check = payload.get("static_check")
-    resource = _workspace_resource(payload) if not params.get("check_after") or (check or {}).get("valid") is True else None
+    if params.get("preview_after"):
+        payload = prepare_checked_preview(workspace, context.session.project_id, payload)
+    check, preview = payload.get("static_check"), payload.get("preview")
+    ready = (preview or {}).get("status") == "ready"
+    resource = (_workspace_resource(payload, kind="webpage" if ready else "file")
+                if (not params.get("check_after") or (check or {}).get("valid") is True)
+                and (not params.get("preview_after") or ready) else None)
     summary = (f"Edited {payload['file']} with one exact replacement." if "edits" not in params
                else f"Edited {payload['file']} with {payload['replacements']} exact replacements.")
     if check:
         summary += " Static check passed; runtime remains unverified." if check.get("valid") is True else " The write succeeded; static checking did not pass."
+    if preview:
+        summary += " Prepared the exact-SHA web preview; browser behavior remains pending." if ready else " The web preview was not prepared."
     return _workspace_result(
         context,
         status="ok",

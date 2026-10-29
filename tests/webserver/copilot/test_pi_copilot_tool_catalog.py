@@ -259,7 +259,7 @@ def test_the_target_trial_tool_offers_the_schema_the_host_generates() -> None:
         target_trial_setup.TARGET_TRIAL_STATE_TOOL: generated,
         "easyicu_quick_answer": QuickQuestionInput.model_json_schema(),
     }
-    assert set(TOOL_MODEL_SCHEMAS) == {*expected_schemas, "easyicu_edit_project_file"}
+    assert set(TOOL_MODEL_SCHEMAS) == {*expected_schemas, "easyicu_edit_project_file", "easyicu_write_project_file"}
     assert {name: TOOL_MODEL_SCHEMAS[name] for name in expected_schemas} == expected_schemas, (
         "tool_catalog.json's model_schema is stale; replace it with "
         "json.dumps(target_trial_setup.target_trial_statement_schema(), indent=2, "

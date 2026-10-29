@@ -11,11 +11,18 @@ MAX_BATCH_EDITS = 16
 MAX_EDIT_TEXT_CHARS = 120_000
 
 
+def validate_post_write_request(params: Mapping[str, Any]) -> None:
+    for flag in ("check_after", "preview_after"):
+        if flag in params and type(params[flag]) is not bool:
+            raise PiCopilotError(f"pi_workspace_{flag}_invalid", f"{flag} must be a boolean.")
+    if params.get("preview_after") is True and params.get("check_after") is not True:
+        raise PiCopilotError("pi_workspace_preview_requires_check", "preview_after requires check_after:true.")
+
+
 def validate_edit_request(params: Mapping[str, Any]) -> None:
     if "edits" in params and ("old_text" in params or "new_text" in params):
         raise PiCopilotError("pi_workspace_edit_modes_conflict", "Use either old_text/new_text or edits, not both.")
-    if "check_after" in params and type(params["check_after"]) is not bool:
-        raise PiCopilotError("pi_workspace_check_after_invalid", "check_after must be a boolean.")
+    validate_post_write_request(params)
     if "edits" not in params and ("old_text" not in params or not str(params.get("old_text") or "").strip()):
         raise PiCopilotError("pi_tool_arguments_required", "The EasyICU tool is missing required arguments.", details={"fields": ["old_text"]})
 
@@ -80,4 +87,30 @@ def check_edited_html(workspace: Any, project_id: str, payload: dict[str, Any]) 
         return result
     result["static_check"] = {**checked, "status": "passed", "code": "pi_workspace_file_checked"}
     result.update(checked_sha256=payload["sha256"], check_scope=checked.get("check_scope"), verification_scope="static_only", runtime_status="pending")
+    return result
+
+
+def prepare_checked_preview(workspace: Any, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Prepare one checked snapshot, discarding the preview's HTML body."""
+    result = dict(payload)
+    check = result.get("static_check") or {}
+    code = "pi_workspace_preview_static_check_required"
+    status = "not_prepared"
+    if check.get("valid") is True and result.get("checked_sha256") == result["sha256"]:
+        try:
+            preview = workspace.preview_file(project_id, result["file"], checked_sha256=result["sha256"])
+            if (preview.get("sha256") == preview.get("checked_sha256") == result["sha256"]
+                    and preview.get("file") == result["file"]):
+                result.update(preview={"status": "ready", "code": "pi_workspace_preview_ready"},
+                              verification_scope="preview_prepared", runtime_status="pending")
+                return result
+            code, status = "pi_workspace_file_changed", "unconfirmed"
+        except PiCopilotError as exc:
+            code, status = exc.code, "failed"
+        except Exception:
+            code, status = "pi_workspace_preview_unavailable", "failed"
+    # A past static receipt is retained under static_check, but cannot make
+    # an unprepared/changed current snapshot into a checked file resource.
+    result.pop("checked_sha256", None)
+    result["preview"] = {"status": status, "code": code}
     return result
