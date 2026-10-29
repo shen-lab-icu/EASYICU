@@ -750,6 +750,35 @@ class ProjectWorkspace:
             **_authority_metadata(),
         }
 
+    def download_file(
+        self,
+        project_id: str,
+        relative_file: Any,
+        *,
+        expected_sha256: Any,
+    ) -> Dict[str, Any]:
+        """Return one bounded, exact workspace snapshot for a Host attachment."""
+        with self._project_lock(project_id), self._project_file_lock(project_id):
+            candidate, relative, _text, raw = self._read_complete_file(
+                project_id, relative_file
+            )
+            expected = self._expected_sha256(expected_sha256)
+            current = hashlib.sha256(raw).hexdigest()
+            if expected is None or expected != current:
+                raise PiCopilotError(
+                    "pi_workspace_download_stale",
+                    "The file changed after it was opened; reopen it before downloading.",
+                    status_code=409,
+                    details={"file": relative},
+                )
+        return {
+            "file": relative,
+            "media_type": self._media_type(candidate),
+            "sha256": current,
+            "content": raw,
+            **_authority_metadata(),
+        }
+
     def preview_file(
         self,
         project_id: str,

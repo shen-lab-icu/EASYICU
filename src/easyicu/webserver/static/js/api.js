@@ -754,10 +754,16 @@
   function loadPiCopilotWorkspaceFile(projectId, file) {
     return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/workspace/file?file=' + encodeURIComponent(file));
   }
-  function piCopilotWorkspacePreviewUrl(projectId, file, checkedSha256) {
+  function piCopilotWorkspacePreviewUrl(projectId, file, checkedSha256, allowDownloads = false) {
     return '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
       + '/workspace/preview?file=' + encodeURIComponent(file)
-      + '&checked_sha256=' + encodeURIComponent(checkedSha256 || '');
+      + '&checked_sha256=' + encodeURIComponent(checkedSha256 || '')
+      + (allowDownloads === true ? '&allow_downloads=true' : '');
+  }
+  function piCopilotWorkspaceDownloadUrl(projectId, file, expectedSha256) {
+    return '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/workspace/download?file=' + encodeURIComponent(file)
+      + '&expected_sha256=' + encodeURIComponent(expectedSha256 || '');
   }
   function loadPiCopilotResearchArtifact(projectId, runId, artifact, expectedSha256) {
     const digest = String(expectedSha256 || '').trim().toLowerCase();
@@ -1079,6 +1085,7 @@
   window.EU_API.abortPiCopilotSession = abortPiCopilotSession;
   window.EU_API.loadPiCopilotWorkspaceFile = loadPiCopilotWorkspaceFile;
   window.EU_API.piCopilotWorkspacePreviewUrl = piCopilotWorkspacePreviewUrl;
+  window.EU_API.piCopilotWorkspaceDownloadUrl = piCopilotWorkspaceDownloadUrl;
   window.EU_API.loadPiCopilotResearchArtifact = loadPiCopilotResearchArtifact;
   window.EU_API.loadPiCopilotAppendOptions = loadPiCopilotAppendOptions;
   window.EU_API.proposePiCopilotAppend = proposePiCopilotAppend;

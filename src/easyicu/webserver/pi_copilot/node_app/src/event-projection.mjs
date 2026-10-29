@@ -261,7 +261,7 @@ function projectedResource(value) {
   const kind = value.kind === "webpage" ? "webpage" : "file";
   const fallbackLabel = file.split("/").at(-1) || file;
   const sha256 = safeSha256(value.sha256);
-  const checkedSha256 = kind === "webpage" ? safeSha256(value.checked_sha256) : "";
+  const checkedSha256 = safeSha256(value.checked_sha256);
   return {
     kind,
     file,

@@ -66,9 +66,15 @@
     }
     function forMessage(row, limit) {
       const rows = Array.isArray(row && row.resources) ? row.resources : [];
-      return rows
-        .filter(resource => key(resource))
-        .filter((resource, index, all) => all.findIndex(item => key(item) === key(resource)) === index)
+      const unique = new Map();
+      rows.forEach(resource => {
+        const identity = key(resource);
+        if (!identity) return;
+        // Keep the latest Host snapshot for a workspace file: an earlier
+        // write must not hide its later check, or retain a superseded check.
+        if (!unique.has(identity) || ['file', 'webpage'].includes(resource.kind)) unique.set(identity, resource);
+      });
+      return [...unique.values()]
         .sort((left, right) => rank(left) - rank(right))
         .slice(0, Number.isFinite(limit) ? limit : 8);
     }
@@ -128,6 +134,7 @@
         data-gpi-resource-entry-mode="${esc(resource.entry_mode || '')}"
         data-gpi-resource-view="${esc(resource.view || '')}"
         data-gpi-resource-authority="${esc(resource.authority_class || '')}"
+        data-gpi-resource-checked-digest="${esc(resource.checked_sha256 || '')}"
         data-gpi-resource-digest="${esc(resource.snapshot_sha256 || resource.review_sha256 || resource.checked_sha256 || resource.sha256 || '')}"${evidenceAttrs}>${opts.contentHtml ? String(opts.contentHtml) : esc(overrideLabel || label(resource))}</button>`;
     }
 
@@ -204,7 +211,8 @@
         authority_class: element.dataset.gpiResourceAuthority,
         snapshot_sha256: element.dataset.gpiResourceDigest,
         review_sha256: element.dataset.gpiResourceDigest,
-        checked_sha256: element.dataset.gpiResourceDigest,
+        checked_sha256: element.dataset.gpiResourceCheckedDigest
+          || (element.dataset.gpiResourceKind === 'webpage' ? element.dataset.gpiResourceDigest : ''),
         sha256: element.dataset.gpiResourceDigest,
       };
     }

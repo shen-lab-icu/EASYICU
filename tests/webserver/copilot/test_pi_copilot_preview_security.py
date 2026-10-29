@@ -77,6 +77,101 @@ def test_workspace_preview_never_requests_an_empty_checked_digest() -> None:
     ]
 
 
+def test_checked_html_card_previews_and_download_consent_is_per_opened_hash() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    source = _read("js/screens-guided-pi-preview.js")
+    resources = _read("js/screens-guided-pi-resources.js")
+    script = f"""
+      const assert = require('node:assert/strict');
+      const calls = [], handlers = {{}};
+      global.window = {{ EU_LANG: 'en', EU_API: {{
+        piCopilotWorkspacePreviewUrl(project, file, digest, downloads) {{
+          calls.push([project, file, digest, downloads]);
+          return '/preview?checked_sha256=' + digest + (downloads ? '&allow_downloads=true' : '');
+        }},
+        piCopilotWorkspaceDownloadUrl(project, file, digest) {{ return '/download?sha=' + digest; }},
+        async loadPiCopilotWorkspaceFile(project, file) {{
+          return {{artifact: {{file, text: '<p>source</p>', sha256: 'b'.repeat(64)}}}};
+        }},
+      }} }};
+      global.document = {{getElementById() {{return null;}}}};
+      eval({_ESCAPE_OWNER!r}); eval({resources!r}); eval({source!r});
+      const host = {{hidden: false, innerHTML: '',
+        addEventListener(name, handler) {{handlers[name] = handler;}},
+        querySelector() {{return null;}}, querySelectorAll() {{return [];}},
+        replaceChildren() {{this.innerHTML = '';}}}};
+      const preview = window.EU_GUIDED_PI_PREVIEW;
+      preview.mount(host);
+      const resource = {{kind:'file', file:'demo.html', media_type:'text/html', checked_sha256:'a'.repeat(64)}};
+      preview.open(resource, 'project-a');
+      assert.ok(host.innerHTML.includes('<iframe'));
+      assert.ok(host.innerHTML.includes('data-gpi-preview-mode="web"'));
+      assert.ok(host.innerHTML.includes('sandbox="allow-scripts"'));
+      assert.ok(!host.innerHTML.includes('allow-downloads'));
+      assert.ok(host.innerHTML.includes('/download?sha=' + 'a'.repeat(64)));
+      assert.equal(calls.at(-1)[3], false);
+      handlers.click({{target: {{closest(selector) {{return selector === '[data-gpi-preview-downloads]' ? {{}} : null;}}}}}});
+      assert.equal(calls.at(-1)[3], true);
+      assert.ok(host.innerHTML.includes('sandbox="allow-scripts allow-downloads"'));
+      assert.ok(host.innerHTML.includes('&amp;allow_downloads=true'));
+      for (const permission of ['allow-same-origin','allow-popups','allow-forms','allow-top-navigation']) assert.ok(!host.innerHTML.includes(permission));
+      preview.open({{...resource, checked_sha256:'c'.repeat(64)}}, 'project-a');
+      assert.equal(calls.at(-1)[2], 'c'.repeat(64));
+      assert.equal(calls.at(-1)[3], false);
+      preview.close(); preview.open(resource, 'project-a');
+      assert.equal(calls.at(-1)[3], false);
+      preview.open({{kind:'file', file:'demo.html', media_type:'text/html', sha256:'a'.repeat(64)}}, 'project-a');
+      assert.ok(!host.innerHTML.includes('<iframe'));
+      assert.ok(!host.innerHTML.includes('data-gpi-preview-downloads'));
+      console.log('passed');
+    """
+    assert run_node(node, script, check=True).stdout.strip() == "passed"
+
+
+def test_file_dom_transport_does_not_promote_an_unchecked_write_digest() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    script = f"""
+      const assert = require('node:assert/strict');
+      global.window = {{EU_LANG:'en'}};
+      eval({_ESCAPE_OWNER!r}); eval({_read('js/screens-guided-pi-resources.js')!r});
+      const owner = window.EasyICU.guidedPi.require('resources').create({{esc:window.EU_HTML.esc}});
+      const dataset = {{gpiResourceKind:'file',gpiResourceFile:'demo.html',gpiResourceDigest:'a'.repeat(64)}};
+      assert.equal(owner.fromButton({{dataset}}).checked_sha256, '');
+      dataset.gpiResourceCheckedDigest = 'b'.repeat(64);
+      assert.equal(owner.fromButton({{dataset}}).checked_sha256, 'b'.repeat(64));
+      assert.ok(owner.button({{kind:'file', file:'demo.html', checked_sha256:'b'.repeat(64)}}).includes('data-gpi-resource-checked-digest="'+'b'.repeat(64)+'"'));
+      const write = {{kind:'file',file:'demo.html',sha256:'a'.repeat(64)}};
+      const checked = {{kind:'file',file:'demo.html',checked_sha256:'b'.repeat(64)}};
+      assert.equal(owner.forMessage({{resources:[write,checked]}})[0].checked_sha256, 'b'.repeat(64));
+      assert.equal(owner.forMessage({{resources:[checked,write]}})[0].checked_sha256, undefined);
+      assert.equal(write.checked_sha256, undefined);
+      console.log('passed');
+    """
+    assert run_node(node, script, check=True).stdout.strip() == "passed"
+
+
+def test_sidecar_keeps_host_check_digest_on_file_receipts() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    module = (NODE_APP / "src/event-projection.mjs").as_uri()
+    script = f"""
+      (async () => {{
+        const assert = require('node:assert/strict');
+        const {{normalizePiEvent}} = await import({json.dumps(module)});
+        const project = resource => normalizePiEvent({{type:'tool_execution_end',toolName:'easyicu_check_project_file',result:{{details:{{status:'ok',details:{{resource}}}}}}}}).resource;
+        assert.equal(project({{kind:'file',file:'demo.html',checked_sha256:'a'.repeat(64)}}).checked_sha256, 'a'.repeat(64));
+        assert.equal(project({{kind:'file',file:'demo.html',sha256:'a'.repeat(64)}}).checked_sha256, undefined);
+        console.log('passed');
+      }})().catch(error => {{console.error(error); process.exitCode = 1;}});
+    """
+    assert run_node(node, script, check=True).stdout.strip() == "passed"
+
+
 def test_preview_keeps_bounded_project_scoped_recent_resources() -> None:
     node = shutil.which("node")
     if node is None:
