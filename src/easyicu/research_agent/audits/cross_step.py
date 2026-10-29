@@ -955,10 +955,7 @@ class PrimaryModelContractValidator:
     _EXPOSURE_ROLES = {"primary", "secondary"}
     _ANALYSIS_ROLES = {"primary", "secondary", "sensitivity"}
     _ANALYSIS_SETS = {"source_aware", "complete_case"}
-    _BASELINE_MISSING_POLICIES = {
-        "drop_missing_baseline",
-        "explicit_missing_category",
-    }
+    from ..contracts.model_terms import BASELINE_MISSING_POLICIES as _BASELINE_MISSING_POLICIES
     _FIT_STATUSES = {"fitted", "not_fitted", "separation_no_estimate"}
     _NONFITTED_RESULT_FIELDS = (
         "estimate",
@@ -2205,7 +2202,8 @@ class PrimaryModelContractValidator:
     ) -> List[ValidationFinding]:
         if not self._activates(step, context, step_summary):
             return []
-        issues: List[Dict[str, Any]] = []
+        from ..contracts.model_terms import preparation_result_issues
+        issues: List[Dict[str, Any]] = preparation_result_issues(step, step_summary)
         if self._is_closed_planner_owned_step(step) and not (
             getattr(step, "model_requirements", []) or []
         ):

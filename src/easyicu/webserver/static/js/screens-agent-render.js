@@ -966,6 +966,28 @@
     if (String(p.analysis_type || '') === 'data_quality_audit') gaps.push(t('This version answers data readiness only; it does not yet answer the stated association question.', '这一版只能回答数据是否可用，还不能回答原研究问题中的关联。'));
     const planReady = gaps.length === 0;
     const flowStages = agentPlanFlowStages(steps);
+    const preparationCard = step => {
+      const marker = ' with easyicu.data_preparation/1:';
+      const method = String(step.method || '');
+      if (!method.includes(marker)) return '';
+      let choice;
+      try { choice = JSON.parse(method.slice(method.indexOf(marker) + marker.length)); }
+      catch (_) { return `<p>${esc(t('Preparation declaration is invalid.', '预处理声明无效。'))}</p>`; }
+      const missing = choice.missing_data;
+      const lines = [];
+      if (missing) {
+        const mi = missing.strategy === 'multiple_imputation';
+        lines.push(t(`Primary: ${mi ? 'Multiple imputation' : 'Complete case'}; sensitivity: ${mi ? 'Complete case' : 'Multiple imputation'}`,
+          `主分析：${mi ? '多重插补' : '完整病例'}；敏感性分析：${mi ? '完整病例' : '多重插补'}`));
+        lines.push(`m=${missing.m}; ${t('seed', '随机种子')}=${missing.seed}; ${(missing.variables || []).map(row => `${agentPlanVariableLabel(row.name, labels)}: ${row.method}`).join(', ')}`);
+        if ((missing.auxiliaries || []).length) lines.push(`${t('Auxiliary variables', '辅助变量')}: ${missing.auxiliaries.map(name => agentPlanVariableLabel(name, labels)).join(', ')}`);
+      }
+      (choice.outliers || []).forEach(row => lines.push(`${agentPlanVariableLabel(row.variable, labels)}: ${row.rule} [${row.lower}, ${row.upper}]`));
+      (choice.windows || []).forEach(row => lines.push(`${agentPlanVariableLabel(row.variable, labels)}: [${row.start_hours}, ${row.end_hours}) h; ${row.function}`));
+      (choice.scaling_coding || []).forEach(row => lines.push(`${agentPlanVariableLabel(row.variable, labels)}: ${row.standardize ? t('standardize', '标准化') : ''}${row.reference_level != null ? ` ${t('reference', '参照')}=${row.reference_level}` : ''}${(row.spline_knots || []).length ? ` ${t('spline knots', '样条结点')}=${row.spline_knots.join(', ')}` : ''}`));
+      if (choice.unit_harmonisation) lines.push(t('Unit conversions: read-only captured dictionary status per database.', '单位换算：只读查看各数据库已捕获的字典规则。'));
+      return `<div class="ag-plan-preparation"><strong>${esc(t('Data preparation', '数据预处理'))}</strong><ul>${lines.map(line => `<li>${esc(line)}</li>`).join('')}</ul></div>`;
+    };
     const stepCards = steps.map((step, index) => {
       const outputs = Array.isArray(step && step.expected_outputs) ? step.expected_outputs : [];
       const shown = outputs.slice(0, 4);
@@ -973,7 +995,7 @@
       const note = (window.AGENT_PLAN_PROSE || { namedZh: (text, o) => (o.levels ? o.levels.inText(text) : text) }).namedZh(agentPlanStepIntent(step), { labels, levels });
       const title = agentPlanStepTitle(step, labels);
       const source = agentPlanStepStatedSource(step);
-      return `<li><span>${index + 1}</span><div><strong>${esc(title)}</strong>${note && note !== title ? `<p>${esc(note)}</p>` : ''}${source ? `<details class="ag-plan-step-source"><summary><small>${esc(t('Plan wording', '计划原文'))}</small></summary>${esc(source)}</details>` : ''}${outputs.length ? `<div class="ag-plan-step-outputs"><small>${esc(t('Planned output', '计划产物'))}</small>${shown.map(value => `<span>${esc(agentPlanOutputLabel(value))}</span>`).join('')}${hidden > 0 ? `<span class="is-more">+${hidden}</span>` : ''}</div>` : ''}</div></li>`;
+      return `<li><span>${index + 1}</span><div><strong>${esc(title)}</strong>${note && note !== title ? `<p>${esc(note)}</p>` : ''}${preparationCard(step)}${source ? `<details class="ag-plan-step-source"><summary><small>${esc(t('Plan wording', '计划原文'))}</small></summary>${esc(source)}</details>` : ''}${outputs.length ? `<div class="ag-plan-step-outputs"><small>${esc(t('Planned output', '计划产物'))}</small>${shown.map(value => `<span>${esc(agentPlanOutputLabel(value))}</span>`).join('')}${hidden > 0 ? `<span class="is-more">+${hidden}</span>` : ''}</div>` : ''}</div></li>`;
     }).join('');
     const variableChips = visibleVariables.map(value => `<span>${esc(agentPlanVariableLabel(value, labels))}</span>`).join('');
     const literatureSummary = citations.length

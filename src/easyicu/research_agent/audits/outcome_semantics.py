@@ -332,7 +332,7 @@ def expected_model_denominator(owner, *, frame, outcome, outcome_type, covariate
             if covariate not in frame.columns:
                 return None
             mask &= frame[covariate].notna()
-    elif policy not in {"explicit_missing_category", "missing_category"}:
+    elif policy not in {"explicit_missing_category", "missing_category", "multiple_imputation"}:
         return None
 
     analysis_set = owner._normalise(contract.get("analysis_set"))

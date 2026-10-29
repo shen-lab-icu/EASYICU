@@ -50,7 +50,7 @@ def static_prediction_bootstrap_spec(step: object) -> Optional[BootstrapSpec]:
     Historical method declarations retain the split-only default.
     """
 
-    method = str(getattr(step, "method", None) or "")
+    method = str(getattr(step, "method", None) or "").split(" with easyicu.data_preparation/1:", 1)[0]
     if not method.startswith(_BOOTSTRAP_METHOD):
         return None
     match = re.fullmatch(r"prediction_bootstrap_optimism\(replicates=([0-9]+),seed=([0-9]+)\)", method)

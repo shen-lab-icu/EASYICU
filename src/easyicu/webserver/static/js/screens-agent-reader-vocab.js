@@ -95,6 +95,7 @@
     ROBUSTNESS_SPECS_NOT_EXECUTABLE: ['部分稳健性分析没有执行组件', '计划声明的部分稳健性分析没有任何组件会执行。'],
     SCIENTIFIC_STEP_METHOD_SOURCE_NOT_BOUND: ['科学步骤缺少方法依据', '有科学步骤没有引用约束其方法的文献。'],
     STUDY_TIME_ZERO_MISMATCH: ['研究时间零点与观察窗起点不一致', '研究声明的时间零点不是已物化观察窗计时的起点；研究没有主暴露，无法由暴露定义承载这个时间零点。'],
+    DATA_PREPARATION_UNSUPPORTED: ['预处理方案无法执行', '所选数据源、变量类型或分析执行器不支持已声明的预处理方案。请审阅并更改相应设置；多重插补失败时不会自动改用完整病例。'],
     SURVIVAL_LANDMARK_OWNER_NOT_SEALED: ['生存分析组件尚未封存', '计划选用了 landmark 生存分析组件，但研究还没有声明生存设计。暴露、终点、随访、landmark 和协变量齐全时，由系统编译执行设置后重新规划；否则需修订计划。'],
     TABLE_ONE_INDEPENDENT_TESTS_IGNORE_REPEATED_UNITS: ['基线表检验忽略了重复单位', '队列保留了重复单位，基线表却要求按独立样本做检验。'],
     TIME_VARYING_RUNTIME_UNAVAILABLE: ['时变分析无法执行', '这个数据源或设计目前还不能执行时变分析。'],

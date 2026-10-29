@@ -11,7 +11,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .model_terms import ModelTermSpec, validate_model_term_roster
+from .model_terms import ModelTermSpec, PreparationRefusal, validate_model_term_roster
 from .survival import validate_competing_event
 from .model_tokens import (
     SURVIVAL_COX_ESTIMATOR,
@@ -75,7 +75,7 @@ class FamilyPrimaryResultRequirement(BaseModel):
     exposure_encoding: Optional[Literal["numeric_linear", "declared_model_terms"]] = (
         None
     )
-    missing_data_policy: Optional[Literal["complete_case"]] = "complete_case"
+    missing_data_policy: Optional[Literal["complete_case", "multiple_imputation"]] = "complete_case"
     time_unit: Optional[Literal["minutes", "hours", "days"]] = None
     event_value: Optional[int] = None
     time_horizon_value: Optional[float] = Field(default=None, gt=0)
@@ -137,6 +137,11 @@ class FamilyPrimaryResultRequirement(BaseModel):
             )
 
         if self.analysis_family == "causal_inference":
+            if self.missing_data_policy == "multiple_imputation":
+                raise PreparationRefusal(
+                    "mi_causal_model_unsupported",
+                    "The causal owner cannot execute or pool a multiple-imputation model",
+                )
             missing = [
                 name
                 for name in (

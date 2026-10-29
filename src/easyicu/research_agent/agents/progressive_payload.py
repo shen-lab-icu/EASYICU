@@ -1548,6 +1548,22 @@ def progressive_step_materialization_request(
         locked_has_dependencies=bool(outline_step.depends_on),
         locked_has_available_products=bool(normalized_products),
     )
+    owned = coordinate_owned_step_fields(module_id=outline_step.module_id,
+        scientific_action_id=outline_step.scientific_action_id, planned_analysis_role=outline_step.planned_analysis_role)
+    if "data_preparation" in owned:
+        from ..contracts.model_terms import DataPreparationPlan, DEFAULT_IMPUTATION_CONFIG
+
+        preparation_schema = DataPreparationPlan.model_json_schema()
+        definitions.update(preparation_schema.pop("$defs", {}))
+        definitions["DataPreparationPlan"] = preparation_schema
+        for field in ("m", "iterations", "donors", "seed"):
+            definitions["MissingDataPlan"]["properties"][field]["const"] = getattr(DEFAULT_IMPUTATION_CONFIG, field)
+        definitions["ImputationVariable"]["properties"]["name"] = _string_enum(normalized_executable_variables)
+        # Module shaping copies the step into a standard/custom branch. Bind
+        # every resulting owner branch, rather than an obsolete base object.
+        shaped = definitions["ProgressiveSkeletonStep"]
+        for branch in shaped.get("anyOf", [shaped]):
+            branch["properties"]["data_preparation"] = _nullable({"$ref": "#/$defs/DataPreparationPlan"})
     return _closed_request(
         name="easyicu_progressive_step_materialization_v1",
         schema=schema,
@@ -1591,6 +1607,7 @@ def _request_cached(
     definitions = schema.get("$defs")
     if not isinstance(definitions, dict):
         raise ProgressiveTransportSchemaError("progressive schema has no $defs")
+    definitions["ProgressiveSkeletonStep"]["properties"].pop("data_preparation", None)
     _bind_step_rosters(
         definitions,
         variable_names=variable_names,

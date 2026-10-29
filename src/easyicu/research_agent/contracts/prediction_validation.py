@@ -844,8 +844,10 @@ def external_validation_method(spec: ExternalValidationSpec) -> str:
 
 def external_validation_spec_for_step(step: object) -> ExternalValidationSpec | None:
     """Parse one closed method serialization, following the bootstrap option."""
+    from .model_terms import preparation_base_method
+
     prefix = "prediction_external_validation("
-    method = str(getattr(step, "method", None) or "")
+    method = preparation_base_method(getattr(step, "method", None))
     if not method.startswith(prefix):
         return None
     if getattr(step, "scientific_action_id", None) != EXTERNAL_ACTION:

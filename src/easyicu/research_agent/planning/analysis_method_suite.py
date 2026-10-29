@@ -43,7 +43,7 @@ it stays a light, unit-testable declaration a reviewer can read top-to-bottom.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple
 
 from .capability_registry import (
     AUXILIARY_DETERMINISTIC_RUNNERS,
@@ -129,7 +129,7 @@ class AnalysisMethod:
 class MethodSuite:
     """The standard method suite for one study-design family."""
 
-    family: StudyDesignFamily
+    family: StudyDesignFamily | Literal["data_preparation"]
     label: str
     methods: Tuple[AnalysisMethod, ...] = field(default_factory=tuple)
 
@@ -1023,7 +1023,62 @@ _DESCRIPTIVE = MethodSuite(
 )
 
 
+_DATA_PREPARATION = MethodSuite(
+    family="data_preparation", label="Data preparation", methods=(
+        AnalysisMethod(
+            key="outlier_rules", name="Plausibility ranges and winsorization",
+            purpose="Apply reviewed per-concept range filtering or fixed-bound winsorization to verified raw values; report removed/capped counts separately per database.",
+            tier="standard_supporting", implementation="deterministic",
+            produces="data_preparation_provenance.json: outlier rule and removed/capped counts",
+            runner="methods.missing", kernel_modules=("missing",),
+            reporting_items=("STROBE 8", "STROBE 12c"),
+            required_inputs=("verified raw numeric values in the selected database",),
+            notes="Refuse without raw-value authority; no inferred or cross-database conversion. Claim ceiling: analysis_only.",
+        ),
+        AnalysisMethod(
+            key="window_aggregation", name="Time-window aggregation",
+            purpose="Summarize each variable in a reviewed [start,end) window using first/min/max/mean/last and chronological measurement order.",
+            tier="standard_supporting", implementation="deterministic",
+            produces="data_preparation_provenance.json: window, function and measurement counts",
+            runner="methods.missing", kernel_modules=("missing",),
+            reporting_items=("STROBE 8",), required_inputs=("raw measurement times and analysis-unit identity",),
+            notes="Already aggregated exports cannot supply a different raw-data window. Claim ceiling: analysis_only.",
+        ),
+        AnalysisMethod(
+            key="unit_harmonisation", name="Unit harmonisation status",
+            purpose="Inspect the frozen concept-dictionary conversion rules applied by extraction, independently for all six databases.",
+            tier="standard_supporting", implementation="deterministic",
+            produces="data_preparation_provenance.json: captured per-database unit conversion status",
+            runner="methods.missing", kernel_modules=("missing",),
+            reporting_items=("STROBE 8",), required_inputs=("captured concept-dictionary source provenance",),
+            notes="Read-only status; conversions are not reapplied to materialized values. Absent database snapshots remain not_recorded. Claim ceiling: analysis_only.",
+        ),
+        AnalysisMethod(
+            key="missing_data", name="Complete case and multiple imputation",
+            purpose="Choose the primary missing-data policy and retain its complementary sensitivity: stochastic FCS with PMM/logistic/polytomous models, outcome and auxiliaries, fixed seed and Rubin pooling.",
+            tier="standard_supporting", implementation="deterministic",
+            produces="pooled coefficients, within/between variance, df, FMI and aggregate diagnostics in data_preparation_provenance.json",
+            runner="methods.missing_data", kernel_modules=("missing_data",),
+            reporting_items=("STROBE 12c", "TRIPOD+AI 7"),
+            required_inputs=("typed missing-data plan, observed outcome and supported conditional models",),
+            notes="Association, ordinary Cox and static prediction; prediction fits imputation within each training split. Unsupported inputs refuse; no complete-case fallback. Claim ceiling: analysis_only.",
+        ),
+        AnalysisMethod(
+            key="scaling_coding", name="Standardization, reference coding and spline knots",
+            purpose="Execute reviewed standardization, model reference levels and explicit covariate spline knots; fit prediction scaling only on training partitions.",
+            tier="standard_supporting", implementation="deterministic",
+            produces="model design columns and data_preparation_provenance.json: reviewed scaling/coding choices",
+            runner="methods.missing", kernel_modules=("missing", "rcs_dose_response"),
+            reporting_items=("STROBE 11", "TRIPOD+AI 10"),
+            required_inputs=("typed model terms and estimable training variance",),
+            notes="Exposure splines require the existing curve contract. Prediction reference/spline overrides refuse until a matching owner exists. Claim ceiling: analysis_only.",
+        ),
+    ),
+)
+
+
 METHOD_SUITE_REGISTRY: Tuple[MethodSuite, ...] = (
+    _DATA_PREPARATION,
     _SURVIVAL,
     _CAUSAL,
     _ASSOCIATION,

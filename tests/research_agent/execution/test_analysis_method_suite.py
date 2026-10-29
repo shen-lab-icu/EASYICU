@@ -48,6 +48,9 @@ _ALL_METHODS = [
 def test_every_suite_family_is_valid_and_in_capability_registry():
     reg_families = {c.family for c in cr.CAPABILITY_REGISTRY}
     for suite in ams.METHOD_SUITE_REGISTRY:
+        if suite.family == "data_preparation":
+            assert all(method.tier == "standard_supporting" for method in suite.methods)
+            continue
         assert suite.family in _VALID_FAMILIES, suite.family
         assert (
             suite.family in reg_families
@@ -127,6 +130,8 @@ def test_method_keys_unique_within_suite():
 
 def test_every_suite_has_a_primary_method():
     for suite in ams.METHOD_SUITE_REGISTRY:
+        if suite.family == "data_preparation":
+            continue  # Preparation supports a study; it declares no headline estimand.
         primaries = [m for m in suite.methods if m.tier == "primary"]
         assert primaries, f"{suite.family} suite has no primary method"
 

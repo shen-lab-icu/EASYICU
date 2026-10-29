@@ -32,6 +32,7 @@ from ..contracts.product_identity import is_canonical_typed_product_token
 from ..contracts.functional_form import FunctionalFormSpec
 from ..contracts.prediction_validation import BootstrapSpec
 from ..contracts.prediction_validation import ExternalValidationPlanFields, ExternalValidationSpec
+from ..contracts.model_terms import DataPreparationPlan
 from ..contracts.model_tokens import BinaryEffectMeasure
 from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
@@ -826,6 +827,7 @@ class ProgressivePlanOutline(BaseModel):
 COORDINATE_OWNED_STEP_FIELDS = (
     "repeated_measure_spec",
     "external_validation_spec",
+    "data_preparation",
     "functional_form_spec",
     "bootstrap_spec",
     "phenotyping_feature_columns",
@@ -849,6 +851,10 @@ def coordinate_owned_step_fields(
         owned.add("repeated_measure_spec")
     if scientific_action_id == "prediction.external_validation" and planned_analysis_role == "secondary":
         owned.add("external_validation_spec")
+    if module_id == "adjusted_association" or scientific_action_id in {
+        "prediction.discrimination_calibration", "prediction.external_validation", "time_to_event.cox_hr",
+    }:
+        owned.add("data_preparation")
     if module_id == "adjusted_association":
         owned.add("effect_measure")
     if module_id == "exposure_outcome_distribution":
@@ -941,6 +947,9 @@ class ProgressiveSkeletonStep(ExternalValidationPlanFields, RepeatedMeasurePlanF
     sensitivity_spec_ids: list[str] = Field(default_factory=list)
     functional_form_spec: Optional[FunctionalFormSpec] = Field(default=None, exclude_if=lambda value: value is None)
     bootstrap_spec: Optional[BootstrapSpec] = Field(default=None, exclude_if=lambda value: value is None)
+    # The complete typed option is offered at its per-step materialization
+    # coordinate. Broad legacy skeleton schemas retain their wire budgets.
+    data_preparation: Annotated[Optional[DataPreparationPlan], WithJsonSchema({"type": "null"})] = Field(default=None, exclude_if=lambda value: value is None)
     phenotyping_feature_columns: Optional[list[str]] = Field(default=None, min_length=2, max_length=64, exclude_if=lambda value: value is None)
     phenotyping_comparison_variables: Optional[list[ProgressiveTableOneVariable]] = Field(default=None, min_length=1, max_length=64, exclude_if=lambda value: value is None)
     #: A binary adjusted association's reported measure.  ``None`` keeps the
@@ -1075,6 +1084,8 @@ class ProgressiveSkeletonStep(ExternalValidationPlanFields, RepeatedMeasurePlanF
             raise ValueError("bootstrap_spec belongs only to the static prediction primary")
         if self.external_validation_spec is not None and "external_validation_spec" not in owned:
             raise ValueError("external_validation_spec belongs only to a secondary external-validation action")
+        if self.data_preparation is not None and "data_preparation" not in owned:
+            raise ValueError("data_preparation belongs only to an association, Cox or static prediction owner")
         if self.effect_measure is not None and "effect_measure" not in owned:
             raise ValueError("effect_measure belongs only to an adjusted_association step")
         if self.phenotyping_feature_columns is not None:

@@ -98,7 +98,7 @@ def survival_execution_verdict(
         unsupported.append("proportional_hazards_policy")
     if requirement.exposure_encoding != "declared_model_terms":
         unsupported.append("exposure_encoding")
-    if requirement.missing_data_policy != "complete_case":
+    if requirement.missing_data_policy not in {"complete_case", "multiple_imputation"}:
         unsupported.append("missing_data_policy")
     if requirement.event_value is None or requirement.event_value <= 0:
         unsupported.append("event_value")

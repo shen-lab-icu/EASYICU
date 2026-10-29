@@ -62,6 +62,7 @@ from ..schema import (
     TrajectoryStabilitySpec,
 )
 from ..research_context.prompt_variables import opaque_level_tokens
+from ..contracts.model_terms import DataPreparationPlan, preparation_method
 
 
 class PlannerStructuredOutputSchemaError(ValueError):
@@ -816,6 +817,11 @@ def decode_planner_transport_payload(
         for step_index, raw_step in enumerate(raw_steps):
             if not isinstance(raw_step, dict):
                 continue
+            preparation = raw_step.pop("data_preparation", None)
+            if preparation is not None:
+                raw_step["method"] = preparation_method(
+                    raw_step.get("method"), DataPreparationPlan.model_validate(preparation),
+                )
             trusted_steps = trusted.get("steps") or []
             trusted_step = next((
                 step for step in trusted_steps if isinstance(step, dict)

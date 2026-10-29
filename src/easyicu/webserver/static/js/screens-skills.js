@@ -97,6 +97,7 @@
   const tierLabel = skill => ({ primary: tr('Primary method', '主要方法'),
     standard_supporting: tr('Supporting method', '配套方法'), exploratory: tr('Exploratory method', '探索方法') }[skill.tier] || skill.tier || '');
   const methodFamilySpecs = () => [
+    ['data_preparation', tr('Data preparation', '数据预处理')],
     ['descriptive', tr('Descriptive', '描述性研究')],
     ['association', tr('Association', '关联分析')],
     ['time_to_event', tr('Survival', '生存分析')],

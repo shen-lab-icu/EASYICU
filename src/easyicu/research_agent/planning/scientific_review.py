@@ -102,6 +102,7 @@ from ..research_context.temporal_semantics import (
 )
 from ..research_context.typed import declared_domain_for_variable
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
+from ..contracts.model_terms import preparation_for_step
 from ..trajectory.contract import trajectory_phenotyping_contract_applies
 from ..trajectory.plan_contract import trajectory_context_is_bound
 from ..trajectory.runtime_validation import (
@@ -1411,6 +1412,13 @@ def _sensitivity_facts(
     typed_executable: set[str] = set()
     protocol_only: set[str] = set()
     for step in scientific_steps(plan):
+        preparation = preparation_for_step(step)
+        if preparation is not None and preparation.missing_data is not None:
+            from .primary_result_contract import preparation_step_issue
+
+            if preparation_step_issue(step, context) is None:
+                executable.add("missing")
+                typed_executable.add("missing")
         text = " ".join(
             [
                 step.step_id,
@@ -2366,6 +2374,12 @@ def _complete_case_specs_restating_primary(plan: AnalysisPlan) -> tuple[str, ...
     replay binds.
     """
 
+    if any(
+        step.planned_analysis_role == "primary" and (preparation := preparation_for_step(step)) is not None
+        and preparation.missing_data is not None and preparation.missing_data.strategy == "multiple_imputation"
+        for step in plan.steps
+    ):
+        return ()
     primaries = [
         requirement
         for step in plan.steps
@@ -4601,6 +4615,7 @@ def build_plan_scientific_review(
             getattr(spec, "missing_override", None)
             for spec in plan.robustness_specs
         )
+        and not any((preparation := preparation_for_step(step)) is not None and preparation.missing_data is not None for step in plan.steps)
     ):
         findings.append(
             PlanScientificFinding(
@@ -5049,6 +5064,16 @@ def build_plan_scientific_review(
     findings.extend(primary_model_retention_findings(model_retention))
     findings.extend(_missing_category_complete_case_findings(plan))
     findings.extend(_complete_case_repeats_primary_findings(plan))
+    from .primary_result_contract import preparation_step_issue
+    for preparation_step in plan.steps:
+        if preparation_issue := preparation_step_issue(preparation_step, context):
+            findings.append(PlanScientificFinding(
+                code="DATA_PREPARATION_UNSUPPORTED", severity="blocker", dimension="statistical_design",
+                message=f"The declared preparation cannot execute as reviewed ({preparation_issue}).",
+                evidence_refs=["analysis_plan.json", "research_context.json"],
+                remediation="Choose a source and typed preparation policy supported by the exact analysis owner; no missing-data fallback is authorized.",
+                remediation_route="runtime_capability",
+            ))
     from .publication_readiness import tier_review_findings
     findings = tier_review_findings(plan, findings)
     routed_findings = [

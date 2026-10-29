@@ -27,6 +27,7 @@ from ..contracts.executed_method_design import (
     EXPOSURE_INCREMENT_SPREAD_WORDS,
     WHOLE_RISK_SET_REASON_WORDS,
     FixedWindowRepresentationDesign,
+    DataPreparationDesign,
     LandmarkContinuousSurvivalDesign,
     LandmarkSurvivalDesign,
     LatentClassModelDesign,
@@ -78,7 +79,7 @@ def is_method_fact_candidate(text: str) -> bool:
             re.I,
         )
         or re.search(
-            r"\bExecuted (?:time design|class model|survival design|target trial design)\s*:",
+            r"\bExecuted (?:time design|class model|survival design|target trial design|data preparation)\s*:",
             text,
             re.I,
         )
@@ -136,6 +137,8 @@ def _executed_hour_spans(design: object) -> tuple[tuple[float, float], ...]:
     landmark, the prevalent-exposure and the exposure windows.  A class model
     runs on no time window."""
 
+    if isinstance(design, DataPreparationDesign):
+        return tuple((window.start_hours, window.end_hours) for window in design.preparation.windows)
     if isinstance(design, FixedWindowRepresentationDesign):
         start, width = design.window_start_hours, design.window_width_hours
         cells = tuple(
@@ -177,6 +180,8 @@ def _executed_hour_spans(design: object) -> tuple[tuple[float, float], ...]:
 def _design_text(design: object) -> str:
     """One closed sentence per executed design kind."""
 
+    if isinstance(design, DataPreparationDesign):
+        return design.reader_text(_quoted_source)
     if isinstance(design, FixedWindowRepresentationDesign):
         relation = "after" if design.window_start_hours >= 0 else "relative to"
         if design.window_evidence is None:
@@ -554,6 +559,7 @@ def _executed_design_facts(
                 source_sha256=record.sha256,
                 evidence_id=record.evidence_id,
                 executed_hour_spans=_executed_hour_spans(design),
+                typed_values=design.numeric_values() if isinstance(design, DataPreparationDesign) else (),
             )
         )
         if isinstance(design, TargetTrialDesign):

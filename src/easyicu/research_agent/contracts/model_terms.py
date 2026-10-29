@@ -7,17 +7,22 @@ level ordering, or reference levels from pandas dtypes or column names.
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from typing import ClassVar, Dict, Iterable, List, Literal, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..canonical_json import canonical_sha256
 from .dependence import PlannedDependenceRequirement
 from .model_tokens import (
     ASSOCIATION_GLM_BINOMIAL_ESTIMATOR,
     ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
     ASSOCIATION_RR_ESTIMATOR,
-    canonical_association_method as _canonical_association_method,
+)
+from .model_tokens import canonical_association_method as _canonical_association_method
+from .model_tokens import (
     normalise_model_contract_token as _normalise_model_contract_token,
 )
 
@@ -782,21 +787,6 @@ class PlannedModelRequirement(BaseModel):
             raise ValueError("primary_contrast_level must not be the reference level")
 
 
-__all__ = [
-    "ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES",
-    "ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES",
-    "AdjustmentProposal",
-    "BaselineMissingHandling",
-    "PlannedModelRequirement",
-    "ModelTermCoding",
-    "ModelTermRole",
-    "ModelTermSpec",
-    "ModelTermTransform",
-    "level_identity_class",
-    "level_spelling",
-    "serialise_model_terms",
-    "validate_model_term_roster",
-]
 
 
 class EffectModificationBinding(BaseModel):
@@ -843,3 +833,294 @@ class EffectModificationBinding(BaseModel):
             **parent_requirement.model_dump(mode="python"), "requirement_id": step.step_id,
             "analysis_role": "secondary", "effect_modifiers": binding.modifiers,
         })
+
+
+@dataclass(frozen=True)
+class ImputationConfig:
+    m: int = 20
+    iterations: int = 10
+    donors: int = 5
+    seed: int = 1729
+
+
+DEFAULT_IMPUTATION_CONFIG = ImputationConfig()
+
+
+class PreparationRefusal(ValueError):
+    """Stable refusal, with no patient values in the public message."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(f"{reason_code}: {message}")
+
+
+class _Choice(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+
+class ImputationVariable(_Choice):
+    name: str = Field(min_length=1)
+    method: Literal["pmm", "logistic", "polytomous"]
+    levels: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def closed_levels(self):
+        if len(set(self.levels)) != len(self.levels):
+            raise ValueError("imputation levels must be unique")
+        if self.method == "pmm" and self.levels:
+            raise ValueError("PMM requires numeric values without categorical levels")
+        if self.method == "logistic" and self.levels and len(self.levels) != 2:
+            raise ValueError("logistic imputation requires exactly two levels")
+        if self.method == "polytomous" and self.levels and len(self.levels) < 3:
+            raise ValueError(
+                "polytomous imputation requires at least three declared levels, or an observed training vocabulary"
+            )
+        return self
+
+
+class MissingDataPlan(_Choice):
+    """The primary policy and its complementary, explicitly reported sensitivity.
+
+    Even a complete-case primary declares an MI model for its sensitivity.
+    Defaults come from runtime policy, rather than a Planner instruction.
+    """
+
+    strategy: Literal["complete_case", "multiple_imputation"]
+    m: int = Field(default=DEFAULT_IMPUTATION_CONFIG.m, ge=2, le=100, strict=True)
+    iterations: int = Field(
+        default=DEFAULT_IMPUTATION_CONFIG.iterations, ge=2, le=100, strict=True
+    )
+    donors: int = Field(
+        default=DEFAULT_IMPUTATION_CONFIG.donors, ge=1, le=20, strict=True
+    )
+    seed: int = Field(
+        default=DEFAULT_IMPUTATION_CONFIG.seed, ge=0, le=4294967295, strict=True
+    )
+    variables: tuple[ImputationVariable, ...] = ()
+    auxiliaries: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def unique_variables(self):
+        names = [item.name for item in self.variables]
+        if len(names) != len(set(names)) or len(self.auxiliaries) != len(
+            set(self.auxiliaries)
+        ):
+            raise ValueError(
+                "imputation variables and auxiliaries must not repeat names"
+            )
+        return self
+
+    @property
+    def sensitivity_strategy(self) -> str:
+        return (
+            "complete_case"
+            if self.strategy == "multiple_imputation"
+            else "multiple_imputation"
+        )
+
+
+class OutlierRule(_Choice):
+    variable: str = Field(min_length=1)
+    rule: Literal["range_filter", "winsorize"]
+    lower: float
+    upper: float
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.lower >= self.upper:
+            raise ValueError("outlier lower bound must be below upper bound")
+        return self
+
+
+class WindowAggregation(_Choice):
+    variable: str = Field(min_length=1)
+    group_column: str = Field(min_length=1)
+    time_column: str = Field(min_length=1)
+    start_hours: float
+    end_hours: float
+    function: Literal["first", "min", "max", "mean", "last"]
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.start_hours >= self.end_hours:
+            raise ValueError("aggregation window must have positive width")
+        if len({self.variable, self.group_column, self.time_column}) != 3:
+            raise ValueError("aggregation value, identity and time must be distinct")
+        return self
+
+
+class ScalingCoding(_Choice):
+    variable: str = Field(min_length=1)
+    standardize: bool = False
+    reference_level: str | None = None
+    spline_knots: tuple[float, ...] = ()
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.spline_knots and (
+            len(self.spline_knots) < 3
+            or list(self.spline_knots) != sorted(set(self.spline_knots))
+        ):
+            raise ValueError(
+                "spline knots must be strictly increasing with at least three knots"
+            )
+        if self.reference_level is not None and (self.standardize or self.spline_knots):
+            raise ValueError(
+                "categorical reference coding cannot also standardize or spline"
+            )
+        return self
+
+
+class DataPreparationPlan(_Choice):
+    missing_data: MissingDataPlan | None = None
+    outliers: tuple[OutlierRule, ...] = ()
+    windows: tuple[WindowAggregation, ...] = ()
+    scaling_coding: tuple[ScalingCoding, ...] = ()
+    unit_harmonisation: bool = False
+
+    @model_validator(mode="after")
+    def unique_choices(self):
+        for choices in (self.outliers, self.windows, self.scaling_coding):
+            names = [item.variable for item in choices]
+            if len(names) != len(set(names)):
+                raise ValueError("one preparation rule per variable and operation")
+        return self
+
+
+_SUFFIX = " with easyicu.data_preparation/1:"
+
+
+def preparation_base_method(method: str | None) -> str:
+    return str(method or "").split(_SUFFIX, 1)[0]
+
+
+def preparation_method(method: str | None, plan: DataPreparationPlan) -> str:
+    base = preparation_base_method(method)
+    return (
+        base
+        + _SUFFIX
+        + json.dumps(
+            plan.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        )
+    )
+
+
+def preparation_from_method(method: str | None) -> DataPreparationPlan | None:
+    text = str(method or "")
+    if _SUFFIX not in text:
+        return None
+    if text.count(_SUFFIX) != 1:
+        raise PreparationRefusal(
+            "preparation_contract_invalid", "Multiple preparation declarations"
+        )
+    try:
+        return DataPreparationPlan.model_validate_json(text.split(_SUFFIX, 1)[1])
+    except ValueError as exc:
+        raise PreparationRefusal(
+            "preparation_contract_invalid", "Invalid typed preparation declaration"
+        ) from exc
+
+
+def preparation_for_step(step) -> DataPreparationPlan | None:
+    """Resolve one signed declaration; conflicting copies always refuse."""
+    options = [preparation_from_method(getattr(step, "method", None))]
+    requirements = list(getattr(step, "model_requirements", ()) or ())
+    family = getattr(step, "family_primary_result_requirement", None)
+    if family is not None:
+        requirements.append(family)
+    options += [getattr(item, "data_preparation", None) for item in requirements]
+    present = [value for value in options if value is not None]
+    if present and any(value != present[0] for value in present):
+        raise PreparationRefusal(
+            "preparation_contract_conflict", "Conflicting signed preparation choices"
+        )
+    return present[0] if present else None
+
+
+BASELINE_MISSING_POLICIES = {
+    "drop_missing_baseline",
+    "explicit_missing_category",
+    "multiple_imputation",
+}
+
+
+def preparation_result_issues(step, summary):
+    plan = preparation_for_step(step)
+    models = summary.get("model_contracts") or []
+    models = [row for row in models if isinstance(row, dict)] if isinstance(models, list) else []
+    receipt = summary.get("data_preparation")
+    if plan is None:
+        return (
+            [{"issue": "unplanned_multiple_imputation"}]
+            if any(
+                row.get("baseline_missing_policy") == "multiple_imputation"
+                for row in models
+            )
+            else []
+        )
+    issues = []
+    expected = plan.model_dump(mode="json")
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("plan") != expected
+        or receipt.get("plan_sha256") != canonical_sha256(expected)
+    ):
+        return [{"issue": "preparation_signed_plan_mismatch"}]
+    if plan.missing_data is None:
+        return issues
+    missing = plan.missing_data
+    mi_primary = missing.strategy == "multiple_imputation"
+    expected_policy = "multiple_imputation" if mi_primary else "drop_missing_baseline"
+    if any(row.get("baseline_missing_policy") != expected_policy for row in models):
+        issues.append(
+            {
+                "issue": "preparation_primary_policy_mismatch",
+                "expected": expected_policy,
+            }
+        )
+    diagnostic = receipt.get("missing_data") or {}
+    if mi_primary and any(
+        diagnostic.get(key) != getattr(missing, key)
+        for key in ("m", "seed", "iterations", "donors")
+    ):
+        issues.append({"issue": "preparation_imputation_policy_mismatch"})
+    sensitivity = receipt.get("sensitivity") or {}
+    if sensitivity.get("strategy") != missing.sensitivity_strategy or sensitivity.get(
+        "status"
+    ) not in {"fitted", "not_estimable"}:
+        issues.append({"issue": "preparation_complementary_sensitivity_missing"})
+    return issues
+
+
+def require_matching_survival_policy(step):
+    preparation = preparation_for_step(step)
+    requirement = getattr(step, "family_primary_result_requirement", None)
+    if requirement is None or requirement.analysis_family != "survival":
+        return
+    strategy = (
+        preparation.missing_data.strategy
+        if preparation and preparation.missing_data
+        else "complete_case"
+    )
+    if requirement.missing_data_policy != strategy:
+        raise PreparationRefusal(
+            "preparation_survival_policy_conflict",
+            "The Cox requirement and typed preparation must name the same primary policy",
+        )
+
+
+__all__ = [
+    "ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES",
+    "ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES",
+    "AdjustmentProposal",
+    "BaselineMissingHandling",
+    "PlannedModelRequirement",
+    "ModelTermCoding",
+    "ModelTermRole",
+    "ModelTermSpec",
+    "ModelTermTransform",
+    "level_identity_class",
+    "level_spelling",
+    "serialise_model_terms",
+    "validate_model_term_roster",
+]
