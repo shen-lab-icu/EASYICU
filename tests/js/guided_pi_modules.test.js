@@ -137,10 +137,12 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.equal(live({ code: desktopStop }), desktopStopEn);
   assert.equal(runFailureZh(desktopStop), desktopStopZh);
   assert.equal(errorTextZh.errorText({ code: desktopStop }), desktopStopZh);
-  // A reply that used up its own model budget asks to continue, not to wait for the service.
+  // Exhausted message budgets preserve completed work and close this turn.
   const modelErrorZh = errorTextZh.modelErrorText;
   for (const code of ['pi_shell_message_provider_call_budget_exhausted', 'pi_shell_message_cost_budget_exhausted']) {
-    assert.match(modelErrorZh(code, false), /发送“继续”/);
+    assert.match(modelErrorZh(code, false), /已保留/);
+    assert.match(modelErrorZh(code, false), /本轮无法继续/);
+    assert.doesNotMatch(modelErrorZh(code, false), /发送“继续”|新建|重试/);
   }
   assert.match(modelErrorZh('pi_shell_session_cost_budget_exhausted', false), /新建后续对话/);
   const splineCause = { code: 'landmark_spline_binary_sensitivity_unsupported' };

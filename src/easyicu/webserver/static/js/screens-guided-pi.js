@@ -400,6 +400,7 @@
     sendText,
     regenerate: regenerateMessage,
     continueReply: continueReplyExplanation,
+    retryUnstarted: continueReplyExplanation,
     resubmitHostGenerated: PLAN_ACTIONS.resubmitHostGenerated,
     host: () => state.host,
   });
@@ -438,17 +439,21 @@
   const dismissHeaderOverflow = EVENTS.dismissHeaderOverflow;
   const wire = EVENTS.wire;
 
-  function activeActivity() {
-    if (state.regenerating && state.regeneration && state.regeneration.activity.status === 'running') {
+  function activeActivity(includeTerminal) {
+    const belongsToJob = row => !state.jobId || String(row.messageJobId || '') === String(state.jobId);
+    if (state.regenerating && state.regeneration && belongsToJob(state.regeneration.activity)
+        && (includeTerminal || state.regeneration.activity.status === 'running')) {
       return state.regeneration.activity;
     }
-    return state.messages.slice().reverse().find(row => row.role === 'activity' && !row.childJobId && row.status === 'running');
+    return state.messages.slice().reverse().find(row => row.role === 'activity' && !row.childJobId
+      && belongsToJob(row) && (includeTerminal || row.status === 'running'));
   }
-  function ensureActivity(at) {
-    let row = activeActivity();
+  function ensureActivity(at, options) {
+    let row = options && options.newAttempt ? null : activeActivity();
     if (!row) {
       const startedAt = timeMs(at);
-      row = { id: 'activity-' + startedAt, role: 'activity', status: 'running', startedAt, steps: [], expanded: true };
+      row = { id: 'activity-' + (state.jobId || startedAt), messageJobId: String(state.jobId || ''),
+        role: 'activity', status: 'running', startedAt, steps: [], expanded: true };
       state.messages.push(row);
     }
     return row;
@@ -460,9 +465,9 @@
     else activity.steps.push(step);
   }
   function finishActivity(status, at, terminalKind) {
-    const activity = activeActivity();
+    const activity = activeActivity(true);
     if (!activity) return;
-    const endedAt = timeMs(at);
+    const endedAt = Math.max(Number(activity.startedAt || 0), Number(activity.endedAt || 0), timeMs(at));
     activity.steps.forEach(step => {
       if (step.status === 'running') {
         step.status = status === 'complete' ? 'complete' : 'error';
@@ -890,9 +895,10 @@
   function assistantRow() {
     if (state.regenerating && state.regeneration) return state.regeneration.message;
     let row = state.messages[state.messages.length - 1];
-    if (!row || row.role !== 'assistant' || row.complete) {
+    if (!row || row.role !== 'assistant' || row.complete
+        || String(row.messageJobId || '') !== String(state.jobId || '')) {
       row = {
-        id: 'live-' + Date.now(), role: 'assistant', text: '', complete: false,
+        id: 'live-' + Date.now(), messageJobId: String(state.jobId || ''), role: 'assistant', text: '', complete: false,
         resources: state.currentTurnResources.slice(0, 24),
       };
       state.messages.push(row);
@@ -1030,10 +1036,13 @@
       if (preserveTimeline && replyContinuation && replyContinuation.source_error_entry_id) {
         const savedFailure = (refreshed.transcript || []).find(row => row.entry_id === replyContinuation.source_error_entry_id);
         const liveFailure = state.messages.slice().reverse().find(row => row.role === 'assistant');
-        if (savedFailure && liveFailure && liveFailure.errorCode === savedFailure.error_code
+        const sameJob = liveFailure && liveFailure.messageJobId
+          && liveFailure.messageJobId === refreshed.last_message_job_id;
+        if (savedFailure && liveFailure && (sameJob || liveFailure.errorCode === savedFailure.error_code)
             && !liveFailure.entryId) {
           liveFailure.entryId = replyContinuation.source_error_entry_id;
-          liveFailure.hasCompletedAction = true;
+          liveFailure.hasCompletedAction = Boolean(liveFailure.hasCompletedAction
+            || replyContinuation.mutation_state === 'completed');
         }
       }
       state.sessions = [state.session].concat(
@@ -1330,29 +1339,71 @@
   function isActive() { return state.shell === 'pi'; }
   function watchJob(jobId) {
     closeSource();
+    state.jobId = jobId;
+    const pendingActivity = state.regenerating && state.regeneration ? state.regeneration.activity
+      : state.messages.slice().reverse().find(row => row.role === 'activity' && !row.childJobId
+        && row.status === 'running' && (!row.messageJobId || String(row.messageJobId) === String(jobId)));
+    if (pendingActivity) { pendingActivity.messageJobId = String(jobId); pendingActivity.steps = []; }
+    if (state.regenerating && state.regeneration) state.regeneration.message.messageJobId = String(jobId);
+    const expectedSessionId = state.session && state.session.session_id;
+    const expectedProjectId = projectId();
+    const selectionRevision = state.sessionSelectionRevision;
+    const isCurrentAttempt = () => String(state.jobId) === String(jobId)
+      && state.session && state.session.session_id === expectedSessionId
+      && projectId() === expectedProjectId && state.sessionSelectionRevision === selectionRevision;
     state.source = new EventSource('/api/jobs/' + encodeURIComponent(jobId) + '/events');
+    const watchedSource = state.source;
+    let lastSequence = -1;
     state.source.onmessage = async event => {
+      if (state.source !== watchedSource || !isCurrentAttempt()) return;
       let row = null; try { row = JSON.parse(event.data); } catch (e) { return; }
-      if (row.type === 'pi_event') handlePiEvent(row.event);
+      if (Number.isSafeInteger(row.seq)) {
+        if (row.seq <= lastSequence) return;
+        lastSequence = row.seq;
+      }
+      if (row.type === 'pi_event') handlePiEvent(row.event, jobId);
       if (row.type === 'end') {
         closeSource(); state.busy = false; state.continuingReplyEntryId = '';
         const replacedBranch = state.regenerating;
-        const completedAction = activityHasCompletedAction(activeActivity());
+        const completedAction = activityHasCompletedAction(activeActivity(true));
         const wrapupTimedOut = row.status === 'failed'
           && /^pi_gateway_timeout(?:\s*:|$)/.test(String(row.error || ''));
         if (row.status === 'failed') {
-          finishActivity('error', null, 'failed');
-          state.error = /^pi_model_/.test(String(row.error || ''))
+          finishActivity('error', row.timestamp, 'failed');
+          const failure = state.regenerating && state.regeneration ? state.regeneration.message
+            : state.messages.slice().reverse().find(item => item.role === 'assistant'
+              && String(item.messageJobId || '') === String(jobId) && (!item.complete || item.errorCode)) || assistantRow();
+          failure.complete = true;
+          const failureCode = String(row.error || '').split(/[\s:]/, 1)[0];
+          failure.errorCode = /^(?:pi_|easyicu_|research_)[A-Za-z0-9_.-]{1,150}$/.test(failureCode)
+            ? failureCode : 'pi_message_failed';
+          failure.hasCompletedAction = completedAction;
+          failure.hasSideEffectAttempt = activityHasSideEffectAttempt(activeActivity(true));
+          if (!failure.text) failure.text = wrapupTimedOut
+            ? tr('This attempt timed out; completed records are preserved.', '本次尝试等待超时，已完成记录已保留。')
+            : modelErrorText(failure.errorCode, completedAction);
+          state.error = wrapupTimedOut
+            ? tr('This wait timed out. Completed records are preserved; check the recovery action or specific blocker below the failed reply.', '本次等待已超时。已完成的记录已保留；请查看该条失败回复下的恢复操作或具体阻断原因。')
+            : /^pi_model_/.test(String(row.error || ''))
             ? modelErrorText(row.error, completedAction)
             : (row.error ? ERROR_TEXT.jobErrorText(row.error) : tr('Copilot message failed.', '研究助手消息失败。'));
         } else if (row.status === 'cancelled') {
-          finishActivity('cancelled', null, 'cancelled');
+          finishActivity('cancelled', row.timestamp, 'cancelled');
           state.error = tr('Copilot message stopped.', '研究助手消息已停止。');
         } else {
-          finishActivity('complete', null, 'settled');
+          finishActivity('complete', row.timestamp, 'settled');
+        }
+        if (replacedBranch && state.regeneration) {
+          const finished = state.regeneration;
+          state.messages = REGENERATION.visibleRows(state.messages, finished)
+            .map(message => REGENERATION.project(message, finished));
+          state.regenerating = false;
+          state.regeneration = null;
         }
         await refreshSession(!replacedBranch);
+        if (!isCurrentAttempt()) return;
         await MESSAGE_QUEUE.reconcile();
+        if (!isCurrentAttempt()) return;
         if (state.busy) return;
         if (!replacedBranch) adoptPersistedEntryIds();
         state.regenerating = false;
@@ -1365,6 +1416,7 @@
           await rebind();
         }
         await loadWorkflow();
+        if (!isCurrentAttempt()) return;
         // A conversation wrap-up can time out after its governed child job has already
         // produced a reviewable plan/checkpoint. The workflow projection is
         // authoritative for that durable outcome; do not put a raw transport
@@ -1379,17 +1431,16 @@
         if (!continued) render();
       }
     };
-    const watchedSource = state.source;
     let checkingConnection = false;
     state.source.onerror = async () => {
-      if (state.source !== watchedSource) return;
+      if (state.source !== watchedSource || !isCurrentAttempt()) return;
       if (!state.busy) { closeSource(); return; }
       if (checkingConnection) return;
       checkingConnection = true;
       try {
         await api().loadJobSnapshot(jobId);
       } catch (error) {
-        if (state.source !== watchedSource || Number(error.status) !== 404) return;
+        if (state.source !== watchedSource || !isCurrentAttempt() || Number(error.status) !== 404) return;
         closeSource();
         state.busy = false;
         state.regenerating = false;
@@ -1429,10 +1480,11 @@
     state.editingMessageId = '';
     const grants = Array.isArray(grantsOverride) ? grantsOverride : turnGrants();
     const submittedAt = Date.now();
+    state.jobId = '';
     state.currentTurnResources = [];
     if (visibleUserMessage) state.messages.push({ id: 'user-' + submittedAt, role: 'user', text, complete: true, messageOrigin: messageOrigin || 'unknown' });
     if (visibleUserMessage && openingQuestion) state.openingQuestion = { sessionId: state.session.session_id, text: openingQuestion };
-    const activity = ensureActivity(new Date(submittedAt).toISOString());
+    const activity = ensureActivity(new Date(submittedAt).toISOString(), { newAttempt: true });
     upsertActivityStep(activity, { id: 'submitted', kind: 'submitted', status: 'complete', at: submittedAt });
     if (visibleUserMessage) { state.draft = ''; state.followUpDraft = null; STUDY_WORKSPACE.consume(expectedProjectId, expectedSessionId); STUDY_WORKSPACE.consumeSkill(expectedProjectId, state.session); }
     state.busy = true; state.error = ''; render();
@@ -1460,6 +1512,8 @@
     if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
     const recovery = state.session.reply_continuation;
     if (!recovery || !recovery.available || recovery.source_error_entry_id !== sourceErrorEntryId) return;
+    const recoveryKind = recovery.recovery_kind || 'continue_explanation';
+    if (!['retry_unstarted', 'continue_explanation'].includes(recoveryKind)) return;
     const sessionId = state.session.session_id;
     const expectedProjectId = projectId();
     const revision = state.sessionSelectionRevision;
@@ -1467,9 +1521,11 @@
       && projectId() === expectedProjectId && state.sessionSelectionRevision === revision;
     state.busy = true; state.error = ''; state.currentTurnResources = [];
     state.continuingReplyEntryId = sourceErrorEntryId;
+    state.recoveringReplyKind = recoveryKind;
     render();
     try {
-      const payload = await api().continuePiCopilotReply(sessionId, {
+      const recover = recoveryKind === 'retry_unstarted' ? api().retryPiCopilotWorkspaceReply : api().continuePiCopilotReply;
+      const payload = await recover(sessionId, {
         project_id: expectedProjectId, source_error_entry_id: sourceErrorEntryId,
       });
       if (!isCurrent()) return;

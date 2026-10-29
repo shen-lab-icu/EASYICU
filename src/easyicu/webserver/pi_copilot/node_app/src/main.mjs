@@ -24,6 +24,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { Check } from "typebox/value";
 
 import {
   normalizePiEvent,
@@ -36,7 +37,7 @@ import {
   appendModelRequestReceipt,
 } from "./shell-budget.mjs";
 import { retryTransientProviderStream } from "./provider-retry.mjs";
-import { prepareReplyContinuation, replyContinuationState } from "./reply-continuation.mjs";
+import { prepareReplyContinuation, prepareWorkspaceRetry, replyContinuationState } from "./reply-continuation.mjs";
 import { ShellUsageLedger } from "./shell-usage.mjs";
 import { normalizePreferences, preferenceAdvisory } from "./personal-preferences.mjs";
 import { ResearchContextMemory } from "./research-context.mjs";
@@ -1145,7 +1146,7 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
     hostTool(sessionId, { name: "easyicu_list_project_files", label: "List project files", description: "List bounded text and web artifacts in this project's isolated workspace.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_read_project_file", label: "Read project file", description: "Read a bounded UTF-8 file from this project's isolated workspace.", parameters: Type.Object({ file: projectFile, start_line: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })), end_line: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_write_project_file", label: "Write project file", description: "Create a new bounded artifact. Existing files must be changed with the exact-edit tool. Requires the reusable host-held workspace-write capability for this message.", parameters: Type.Object({ file: projectFile, content: Type.String({ minLength: 1, maxLength: 262144 }) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_edit_project_file", label: "Edit project file", description: "Apply one exact replacement after reading the artifact and passing its current SHA-256 digest. Requires the reusable host-held workspace-write capability for this message.", parameters: Type.Object({ file: projectFile, old_text: Type.String({ minLength: 1, maxLength: 120000 }), new_text: Type.String({ maxLength: 120000 }), expected_sha256: fileSha256 }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_edit_project_file", label: "Edit project file", description: "Prefer one edits array for related changes to the same file, with check_after:true for HTML, rather than separate calls for each string. Read the current artifact and pass expected_sha256 once. Each of 1–16 old_text targets must be unique and non-overlapping in the original file; all replacements commit atomically as one mutation. Legacy old_text/new_text remains supported and is mutually exclusive with edits. check_after performs HTML/parser and runtime-contract schema checks only, never page execution or scientific validation. A saved write can have a failed check; use only a matching valid checked_sha256 to preview, then read runtime QA rather than assuming it passed. Requires the existing workspace-write capability.", parameters: catalogParameters("easyicu_edit_project_file"), prepareArguments: raw => { if (!Check(TOOL_CATALOG_BY_NAME.get("easyicu_edit_project_file").model_schema, raw)) throw Object.assign(new Error("pi_workspace_edit_arguments_invalid: Edit arguments must satisfy the raw schema."), { code: "pi_workspace_edit_arguments_invalid" }); return raw; } }),
     hostTool(sessionId, { name: "easyicu_check_project_file", label: "Check project file", description: "Run a bounded non-executing syntax or structure check on a project artifact.", parameters: Type.Object({ file: projectFile }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_preview_project_file", label: "Prepare web preview", description: "Preview the exact HTML bytes that already passed the bounded static check.", parameters: Type.Object({ file: projectFile, checked_sha256: fileSha256 }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_get_project_runtime_qa", label: "Read browser checks", description: "Read current-version declared browser UI checks; missing or partial receipts are not runtime success or scientific validation.", parameters: Type.Object({ file: projectFile, checked_sha256: fileSha256 }, { additionalProperties: false }) }),
@@ -1618,6 +1619,41 @@ async function regenerateSession(requestId, params) {
   }
 }
 
+async function retryWorkspaceSession(requestId, params) {
+  assertExactKeys(params, new Set(["session_id", "source_error_entry_id"]), "pi_workspace_retry_invalid");
+  const sessionId = boundedText(params.session_id, 160).trim();
+  const record = sessions.get(sessionId);
+  if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
+  if (activeRequestBySession.has(sessionId) || record.session.isStreaming) {
+    throw Object.assign(new Error("Copilot session already has an active prompt"), { code: "pi_session_busy" });
+  }
+  sessionLifecycle.admit({ excludeSessionId: sessionId });
+  sessionLifecycle.touch(sessionId);
+  const retry = prepareWorkspaceRetry(record, params.source_error_entry_id);
+  const activeTools = record.session.getActiveToolNames();
+  activeRequestBySession.set(sessionId, requestId);
+  try {
+    // Same branch and original message budget; no prompt rewind or new grant.
+    record.session.setActiveToolsByName(retry.tools);
+    record.researchContext.beginTurn(await currentTurnOwnerContext(sessionId));
+    record.sessionManager.appendCustomEntry("easyicu.workspace-retry/1", {
+      ...retry.message.details, state: "started",
+    });
+    await record.session.sendCustomMessage(retry.message, { triggerTurn: true });
+    const last = record.session.messages.at(-1);
+    record.sessionManager.appendCustomEntry("easyicu.workspace-retry/1", {
+      ...retry.message.details,
+      state: last?.role === "assistant" && last.stopReason === "stop" ? "completed" : "failed",
+    });
+  } finally {
+    record.researchContext.endTurn();
+    record.session.setActiveToolsByName(activeTools);
+    record.budgetGuard.endMessage();
+    activeRequestBySession.delete(sessionId);
+  }
+  return sessionState(record);
+}
+
 async function continueReplySession(requestId, params) {
   assertExactKeys(params, new Set(["session_id", "source_error_entry_id", "validation_context"]), "pi_reply_continuation_invalid");
   const sessionId = boundedText(params.session_id, 160).trim();
@@ -1698,6 +1734,8 @@ async function handleRequest(request) {
       return await promptSession(requestId, params);
     case "session.continue_reply":
       return await continueReplySession(requestId, params);
+    case "session.retry_failed_turn":
+      return await retryWorkspaceSession(requestId, params);
     case "session.regenerate.inspect": {
       assertExactKeys(params, new Set(["session_id", "user_entry_id"]), "pi_regenerate_inspect_invalid");
       const record = sessions.get(boundedText(params.session_id, 160).trim());

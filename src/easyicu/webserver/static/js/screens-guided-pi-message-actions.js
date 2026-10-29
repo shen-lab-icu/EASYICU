@@ -12,6 +12,7 @@
     const iconHtml = context.iconHtml;
     const unsafeRetryIds = new Set();
     const continuationTargets = new Map();
+    const recoveryKinds = new Map();
 
     function action(kind, label, icon, disabled) {
       return `<button type="button" data-gpi-message-${kind} title="${esc(label)}" aria-label="${esc(label)}" ${disabled ? 'disabled' : ''}>${iconHtml(icon, 14)}</button>`;
@@ -24,13 +25,15 @@
         return { editorHtml: '', actionsHtml: '' };
       }
       const id = String(row.id || '');
-      const completedFailure = role === 'assistant' && Boolean(row.errorCode || row.error_code)
-        && Boolean(options && (options.hasCompletedAction || options.hasSideEffectAttempt || options.canContinueReply || options.continuationReasonCode));
+      const completedFailure = role === 'assistant' && Boolean(row.errorCode || row.error_code || options && options.hostFailedAttempt)
+        && Boolean(options && (options.workspaceMode || options.hasCompletedAction || options.hasSideEffectAttempt || options.canContinueReply || options.continuationReasonCode));
       const pendingContinuation = Boolean(options && options.continuationPending);
       if (completedFailure || row.replyContinuation) unsafeRetryIds.add(id);
       else unsafeRetryIds.delete(id);
       const continuationId = options && options.canContinueReply
         ? String(options.sourceErrorEntryId || '') : '';
+      const recoveryKind = String(options && options.recoveryKind || 'continue_explanation');
+      recoveryKinds.set(id, recoveryKind);
       if (completedFailure && continuationId) continuationTargets.set(id, continuationId);
       else continuationTargets.delete(id);
       const editing = role === 'user' && Boolean(options && options.editing);
@@ -51,18 +54,34 @@
       const retry = role === 'assistant' && options && options.canRetry && options.retryUserEntryId && !completedFailure && !row.replyContinuation
         ? action('retry', tr('Regenerate response', '重新生成回答'), 'refresh', false)
         : '';
-      const continueReply = completedFailure && (continuationId || pendingContinuation) && typeof context.continueReply === 'function'
-        ? `<button type="button" data-gpi-message-continue-reply ${pendingContinuation ? 'disabled aria-busy="true"' : ''} title="${tr('Continue explanation without repeating completed actions', '保留已完成操作，继续完成说明')}" aria-label="${tr('Continue explanation', '继续完成说明')}">${iconHtml('refresh', 14)}<span>${pendingContinuation ? tr('Continuing explanation…', '正在继续完成说明…') : tr('Continue explanation', '继续完成说明')}</span></button>`
+      const retryUnstarted = recoveryKind === 'retry_unstarted';
+      const recoveryLabel = retryUnstarted ? tr('Retry task safely', '安全重试任务') : tr('Continue explanation', '继续完成说明');
+      const recoveryNote = retryUnstarted
+        ? tr('No file operation started. Retry uses the original model and remaining budget; the failed attempt stays in history.', '尚未开始文件操作；使用原模型和剩余预算重试，原失败记录保留。')
+        : tr('File operations are complete. Continue only the explanation, without repeating those operations.', '文件操作已完成；只继续说明，不重复执行文件操作。');
+      const continueReply = completedFailure && (continuationId || pendingContinuation)
+        && typeof (retryUnstarted ? context.retryUnstarted : context.continueReply) === 'function'
+        ? `<button type="button" class="gpi-message-recovery" ${retryUnstarted ? 'data-gpi-message-retry-unstarted' : 'data-gpi-message-continue-reply'} ${pendingContinuation ? 'disabled aria-busy="true"' : ''} title="${esc(recoveryNote)}" aria-label="${esc(recoveryLabel)}">${iconHtml('refresh', 14)}<span>${pendingContinuation ? (retryUnstarted ? tr('Retrying safely…', '正在安全重试…') : tr('Continuing explanation…', '正在继续完成说明…')) : recoveryLabel}</span></button>`
         : '';
       const blockedCode = completedFailure && !continuationId && !pendingContinuation && options
         ? String(options.continuationReasonCode || '') : '';
-      const blockedNote = !blockedCode ? '' : `<small class="gpi-message-continuation-note">${esc(
-        /budget_exhausted/.test(blockedCode)
-          ? tr('This message has exhausted its budget. Completed actions remain saved; explanation continuation is unavailable.', '本条消息的预算已用尽，无法继续说明；已完成操作已保留。')
-          : blockedCode === 'pi_reply_continuation_tool_outcome_unknown'
-            ? tr('A tool outcome is unconfirmed. Explanation continuation is unavailable until the execution record is checked.', '还有工具结果未确认，请先查看执行记录，暂不能继续说明。')
-            : tr('The original reply state cannot be verified safely. Completed records remain saved; explanation continuation is unavailable.', '原回复的模型或预算状态无法确认，暂不能继续说明；已完成记录已保留。')
-      )}</small>`;
+      const blockedReason = /budget_exhausted/.test(blockedCode) || options && options.budgetState === 'exhausted'
+        ? tr('This message has no remaining budget. Completed files and execution records are preserved; this turn cannot continue. Review the existing artifacts and records.', '本条消息的预算已用尽。已完成的文件和执行记录已保留，本轮无法继续。请查看现有产物和记录。')
+        : blockedCode === 'pi_reply_continuation_tool_outcome_unknown'
+          || options && options.mutationState === 'unconfirmed' && blockedCode !== 'pi_reply_continuation_terminal_state_unconfirmed'
+          ? tr('A file operation may have started but its outcome is unconfirmed. Review the execution record and file state before retrying.', '文件操作可能已经开始，但结果尚未确认。请先查看执行记录并核对文件状态，暂不重复执行。')
+          : blockedCode === 'pi_reply_continuation_model_changed'
+            ? tr('The current model differs from the failed attempt. Restore that model and refresh the conversation to check recovery.', '当前模型与失败时不同。请恢复原模型并刷新对话，重新核对恢复状态。')
+            : blockedCode === 'pi_reply_continuation_terminal_state_unconfirmed'
+              ? tr('The late model reply does not match the Host task outcome. Review the retained execution record; do not repeat the operation until that outcome is confirmed.', '模型的晚到回复与主机任务终态尚未核对一致。请先查看保留的执行记录，暂不重复执行。')
+            : blockedCode === 'pi_reply_continuation_budget_unknown' || options && options.budgetState === 'unverified'
+              ? tr('The original budget cannot be verified. Refresh the conversation to check it again; automatic replay is unavailable.', '原消息的剩余预算尚无法核对。请刷新对话重新核对，暂不自动重放。')
+              : blockedCode === 'pi_reply_continuation_no_completed_write'
+                ? tr('The Host has not confirmed a safe retry for this attempt. Refresh the conversation and review its execution record.', '本次尝试尚未确认可安全重试。请刷新对话并查看执行记录。')
+                : tr('Recovery is not available for this attempt. Refresh the conversation and review the retained execution record for its cause.', '本次尝试暂无可用的恢复操作。请刷新对话，并查看保留的执行记录了解原因。');
+      const blockedNote = blockedCode
+        ? `<small class="gpi-message-continuation-note">${esc(blockedReason)}</small>`
+        : continueReply ? `<small class="gpi-message-continuation-note">${esc(recoveryNote)}</small>` : '';
       // Copy, edit-and-resend, and regenerate each reach an owner. Rating
       // buttons were removed: EasyICU keeps no feedback ledger, so a thumb
       // that only toggled a class would promise a record it never wrote.
@@ -167,11 +186,15 @@
         context.renderHost();
         return true;
       }
-      const continueReply = event.target.closest('[data-gpi-message-continue-reply]');
+      const retryUnstarted = event.target.closest('[data-gpi-message-retry-unstarted]');
+      const continueReply = retryUnstarted || event.target.closest('[data-gpi-message-continue-reply]');
       if (continueReply) {
         const id = String(articleId(continueReply) || '');
         const target = continuationTargets.get(id);
-        if (target && typeof context.continueReply === 'function') context.continueReply(target, id);
+        const kind = recoveryKinds.get(id);
+        const callback = retryUnstarted && kind === 'retry_unstarted' ? context.retryUnstarted
+          : !retryUnstarted && kind === 'continue_explanation' ? context.continueReply : null;
+        if (target && typeof callback === 'function') callback(target, id);
         return true;
       }
       const retry = event.target.closest('[data-gpi-message-retry]');

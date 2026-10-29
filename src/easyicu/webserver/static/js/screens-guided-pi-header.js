@@ -41,6 +41,7 @@
       <div class="gpi-head-title"><span class="gpi-kicker" title="${esc(kickerText(options))}">${esc(kickerText(options))}</span><span class="gpi-head-separator" aria-hidden="true">/</span><span class="gpi-title" title="${esc(options.sessionTitle)}"><span class="gpi-session-title-text">${esc(options.sessionTitle)}</span></span>${liveStatus(options)}</div>
       <div class="gpi-head-meta">
         <button class="gpi-head-new" type="button" data-gpi-new>${icon('plus', 13)} ${tr('New conversation', '新对话')}</button>
+        <button class="gpi-head-new gpi-head-artifact-task" type="button" data-gpi-new-workspace ${options.busy ? 'disabled' : ''}>${icon('file', 13)} ${tr('New artifact task', '新建产物任务')}</button>
         <details class="gpi-layout-control" data-popover-menu>
           <summary>${icon('grid', 13)} ${tr('Layout', '布局')}</summary>
           <div class="gpi-layout-popover" role="group" aria-label="${tr('Visible workspace panels', '工作区显示面板')}">

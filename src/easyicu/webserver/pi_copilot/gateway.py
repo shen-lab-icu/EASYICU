@@ -704,7 +704,10 @@ class PiGatewayClient:
             else:
                 completed = self._wait_outside_host_tools(pending, timeout)
             if not completed:
-                if method == "session.prompt":
+                if method in {
+                    "session.prompt", "session.regenerate", "session.continue_reply",
+                    "session.retry_failed_turn",
+                }:
                     session_id = str((params or {}).get("session_id") or "")
                     if session_id:
                         self._recover_timed_out_prompt(session_id)

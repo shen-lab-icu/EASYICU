@@ -543,8 +543,10 @@ def _workspace_preview_document(
 
     safe_file = html_escape(file_name, quote=True)
     bridge = ""
-    if allow_downloads and download_nonce:
-        child, bridge = csv_preview_bridge(download_nonce, generate_csv=generate_csv)
+    if download_nonce:
+        child, bridge = csv_preview_bridge(
+            download_nonce, generate_csv=generate_csv, allow_downloads=allow_downloads,
+        )
         artifact_html = "<!doctype html>" + child + artifact_html
     if runtime_nonce:
         child, runtime_bridge = runtime_qa_bridge(runtime_nonce, source_sha256, runtime_contract)
@@ -958,7 +960,7 @@ def get_pi_copilot_workspace_preview(
     except PiCopilotError as exc:
         _raise_http(exc)
     except RuntimeQaError as exc:
-        raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
+        raise HTTPException(status_code=409, detail={"error": exc.code, "message": str(exc), "details": exc.details}) from exc
     artifact = payload["artifact"]
     return HTMLResponse(
         content=_workspace_preview_document(
@@ -1007,7 +1009,7 @@ def begin_pi_copilot_workspace_runtime_qa(project_id: ShortText, body: PiRuntime
     except PiCopilotError as exc:
         _raise_http(exc)
     except RuntimeQaError as exc:
-        raise HTTPException(status_code=422, detail={"error": str(exc)}) from exc
+        raise HTTPException(status_code=422, detail={"error": exc.code, "message": str(exc), "details": exc.details}) from exc
 
 
 @router.get("/api/copilot/pi/projects/{project_id}/workspace/runtime-qa")
@@ -1041,7 +1043,7 @@ async def post_pi_copilot_workspace_runtime_qa_report(project_id: ShortText, req
     except PiCopilotError as exc:
         _raise_http(exc)
     except RuntimeQaError as exc:
-        raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
+        raise HTTPException(status_code=409, detail={"error": exc.code, "message": str(exc), "details": exc.details}) from exc
 
 
 @router.post("/api/copilot/pi/projects/{project_id}/workspace/download-csv")
@@ -1461,6 +1463,16 @@ def post_pi_copilot_population_preparation(
 def post_pi_copilot_continue_reply(session_id: ShortText, body: PiContinueReplyRequest) -> dict:
     try:
         return get_pi_copilot_service().continue_reply(
+            session_id, project_id=body.project_id, source_error_entry_id=body.source_error_entry_id,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/retry-unstarted")
+def post_pi_copilot_retry_unstarted(session_id: ShortText, body: PiContinueReplyRequest) -> dict:
+    try:
+        return get_pi_copilot_service().retry_unstarted_reply(
             session_id, project_id=body.project_id, source_error_entry_id=body.source_error_entry_id,
         )
     except PiCopilotError as exc:

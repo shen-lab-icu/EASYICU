@@ -43,9 +43,10 @@
       if (!request) return;
       state.qaRequest = request;
       owner.prepare(key, request);
-    } catch (_) {
+    } catch (error) {
       if (ticket !== state.request || serial !== state.qaSerial || key !== workspacePreviewKey()) return;
-      state.qaError = tr('Browser checks could not start; this page is unverified.', '浏览器检查未能启动；此页尚未验证。');
+      state.qaError = typeof owner.failureText === 'function' ? owner.failureText(error)
+        : tr('Browser checks could not start; this page is unverified.', '浏览器检查未能启动；此页尚未验证。');
     }
     render();
   }
@@ -434,7 +435,7 @@
       ? api.piCopilotWorkspaceDownloadUrl(state.projectId, state.resource.file, digest) : '';
     const allowed = previewDownloadsAllowed();
     const toggle = isCheckedWorkspaceHtml()
-      ? `<button type="button" data-gpi-preview-downloads aria-pressed="${allowed}" title="${tr('Only this checked version; network and application data remain blocked.', '仅当前已检查版本；仍禁止联网和访问应用数据。')}">${allowed ? tr('Disable page downloads', '关闭此页下载') : tr('Allow and generate CSV', '允许并生成 CSV')}</button>` : '';
+      ? `<button type="button" data-gpi-preview-downloads aria-pressed="${allowed}" title="${tr('Only this checked version; network and application data remain blocked.', '仅当前已检查版本；仍禁止联网和访问应用数据。')}">${allowed ? tr('Disable page downloads', '关闭此页下载') : tr('Allow and generate CSV', '允许并生成 CSV')}</button><button type="button" data-gpi-preview-generate-csv${allowed ? '' : ' hidden'}>${tr('Generate CSV with current filters', '按当前筛选生成 CSV')}</button>` : '';
     if (!url && !toggle) return '';
     return `<div class="gpi-preview-file-actions">${url ? `<a href="${esc(url)}" download="${esc(state.resource.file.split('/').pop())}">${tr('Download file', '下载文件')}</a>` : ''}${toggle}<span data-gpi-csv-download-slot></span><span data-gpi-runtime-qa-slot>${esc(state.qaError)}</span></div>`;
   }
@@ -461,7 +462,7 @@
           state.projectId,
           state.resource.file,
           checkedSha256,
-          previewDownloadsAllowed(),
+          false,
           downloadNonce,
           state.qaRequest && state.qaRequest.nonce || '',
           state.generateCsv,
@@ -579,9 +580,10 @@
   }
   function render() {
     if (!state.host || !state.resource) return;
+    state.downloadsKey = '';
     const csvOwner = csvDownloadOwner();
     downloadNonce = csvOwner ? csvOwner.prepare(
-      previewDownloadsAllowed() && state.mode === 'web' ? workspacePreviewKey() : '',
+      isCheckedWorkspaceHtml() && state.mode === 'web' ? workspacePreviewKey() : '', { passive: true },
     ) : '';
     setAsideOpen(true);
     const selectedEvidence = activeEvidenceTab();
@@ -625,7 +627,7 @@
     } else if (state.mode === 'web' && isHtml()) {
       const url = previewUrl();
       body = url
-        ? `<iframe data-gpi-workspace-frame class="gpi-preview-frame" src="${esc(url)}" sandbox="allow-scripts${previewDownloadsAllowed() ? ' allow-downloads' : ''}" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
+        ? `<iframe data-gpi-workspace-frame class="gpi-preview-frame" src="${esc(url)}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
         : `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${tr('The checked file digest is missing. Run the static check and prepare the preview again.', '文件检查摘要缺失。请重新执行静态检查并准备预览。')}</span></div>`;
     } else if (state.mode === 'native' && isNativeWorkspace()) {
       body = `<div data-gpi-native-workspace-mount></div>`;
@@ -1005,13 +1007,25 @@
       });
     }
     host.addEventListener('click', event => {
+      if (event.target.closest('[data-gpi-preview-generate-csv]') && previewDownloadsAllowed()) {
+        const owner = csvDownloadOwner();
+        if (owner) owner.generate();
+        return;
+      }
       if (event.target.closest('[data-gpi-preview-downloads]') && isCheckedWorkspaceHtml()) {
         state.downloadsKey = previewDownloadsAllowed() ? '' : workspacePreviewKey();
-        state.generateCsv = previewDownloadsAllowed();
-        state.mode = 'web';
-        // Obtain a fresh QA nonce before rebuilding the frame once. Runtime
-        // filter checks restore the selection before the CSV bridge exports.
-        beginRuntimeQa();
+        const allowed = previewDownloadsAllowed(), owner = csvDownloadOwner();
+        if (owner) {
+          if (allowed) owner.generate();
+          else owner.revoke();
+        }
+        const button = event.target.closest('[data-gpi-preview-downloads]');
+        button.setAttribute('aria-pressed', String(allowed));
+        button.textContent = allowed ? tr('Disable page downloads', '关闭此页下载') : tr('Allow and generate CSV', '允许并生成 CSV');
+        const generateButton = state.host.querySelector('[data-gpi-preview-generate-csv]');
+        if (generateButton) generateButton.hidden = !allowed;
+        // Authorization changes the passive bridge in place. Rebuilding the
+        // iframe here would discard the user's live filter selections.
         return;
       }
       if (event.target.closest('[data-gpi-preview-close]')) {

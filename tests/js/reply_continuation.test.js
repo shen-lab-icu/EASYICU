@@ -68,6 +68,92 @@ test('continuation restores the original message budget and preserves the failed
   assert.equal(record.budgetGuard.state().provider_calls, 13);
 });
 
+async function unstartedFixture({ maxCalls = 8, readOnly = false } = {}) {
+  const [, { ShellBudgetGuard }] = await imports;
+  const f = await fixture();
+  const rows = [entry('user', { role: 'user', content: 'Create the original requested page.' }), receipt(1)];
+  if (readOnly) rows.push(entry('read-only', assistant([{ type: 'toolCall', id: 'read-skill', name: 'easyicu_load_skill' }])),
+    entry('skill-result', { role: 'toolResult', toolCallId: 'read-skill', toolName: 'easyicu_load_skill',
+      details: { status: 'ok', code: 'pi_workspace_skill_loaded' }, isError: false }));
+  rows.push(receipt(4), entry('failed', assistant([], 'error')));
+  f.entries.splice(0, f.entries.length, ...rows);
+  f.record.session.messages = rows.filter(item => item.type === 'message').map(item => item.message);
+  f.record.budgetGuard = new ShellBudgetGuard({ tokenBudget: 100000, maxOutputTokens: 256,
+    maxProviderCallsPerMessage: maxCalls, maxProviderCallsPerSession: 100, consumedTokens: () => 0,
+    persistedEntries: f.entries });
+  return f;
+}
+
+test('zero mutating attempts permit a same-branch workspace retry with the original cumulative budget', async () => {
+  const [{ replyContinuationState, prepareWorkspaceRetry, prepareReplyContinuation }] = await imports;
+  for (const readOnly of [false, true]) {
+    const { record, entries } = await unstartedFixture({ readOnly });
+    const before = JSON.stringify(entries);
+    const state = replyContinuationState(record);
+    assert.equal(state.recovery_kind, 'retry_unstarted');
+    assert.equal(state.mutation_state, 'not_started');
+    assert.equal(state.budget_state, 'available');
+    assert.throws(() => prepareReplyContinuation(record, 'failed'), error => error.code === 'pi_workspace_recovery_action_mismatch');
+    const retry = prepareWorkspaceRetry(record, 'failed');
+    assert.equal(record.budgetGuard.state().message_provider_calls, 4);
+    assert.equal(record.budgetGuard.state().provider_calls, 4);
+    record.budgetGuard.authorize({ messages: [] });
+    assert.equal(record.budgetGuard.state().message_provider_calls, 5);
+    assert.equal(retry.message.customType, 'easyicu_workspace_retry');
+    assert.equal(retry.message.display, false);
+    assert.ok(retry.tools.includes('easyicu_write_project_file'));
+    assert.ok(!retry.tools.some(name => ['easyicu_run', 'easyicu_call_mcp_tool', 'easyicu_quick_answer', 'easyicu_request_replan'].includes(name)));
+    assert.equal(JSON.stringify(entries), before, 'a retry does not rewind or replace the original user/error');
+  }
+});
+
+test('unstarted retry closes on spent or missing budgets and any unconfirmed read or write attempt', async () => {
+  const [{ replyContinuationState, prepareWorkspaceRetry }] = await imports;
+  const spent = await unstartedFixture({ maxCalls: 4 });
+  assert.equal(replyContinuationState(spent.record).budget_state, 'exhausted');
+  assert.throws(() => prepareWorkspaceRetry(spent.record, 'failed'), error => error.code === 'pi_shell_message_provider_call_budget_exhausted');
+  const missing = await unstartedFixture(); missing.entries.splice(1, 1); missing.entries.splice(1, 1);
+  assert.equal(replyContinuationState(missing.record).budget_state, 'unverified');
+  for (const name of ['easyicu_load_skill', 'easyicu_write_project_file', 'easyicu_run']) {
+    const f = await unstartedFixture();
+    f.entries.splice(-1, 0, entry('unconfirmed-call', assistant([{ type: 'toolCall', id: 'unconfirmed', name }])));
+    const state = replyContinuationState(f.record);
+    assert.equal(state.available, false);
+    assert.equal(state.mutation_state, name === 'easyicu_load_skill' ? 'not_started' : 'unconfirmed');
+  }
+});
+
+test('explicit read errors preserve completed writes and do not hide original budget exhaustion', async () => {
+  const [{ replyContinuationState }] = await imports;
+  for (const spent of [false, true]) {
+    const { record, entries } = await fixture({ maxCalls: spent ? 5 : 8 });
+    entries.splice(entries.findIndex(row => row.id === 'failed'), 0,
+      entry('read-call', assistant([{ type: 'toolCall', id: 'read-failed', name: 'easyicu_read_project_file' }])),
+      entry('read-error', { role: 'toolResult', toolCallId: 'read-failed', toolName: 'easyicu_read_project_file',
+        isError: true, details: { status: 'blocked', code: 'pi_projection_too_large' } }));
+    if (spent) entries.find(row => row.id === 'failed').message.errorMessage = 'pi_shell_message_provider_call_budget_exhausted: original ceiling exhausted';
+    const state = replyContinuationState(record);
+    assert.equal(state.mutation_state, 'completed');
+    assert.equal(state.read_error_count, 1);
+    assert.equal(state.available, !spent);
+    assert.equal(state.budget_state, spent ? 'exhausted' : 'available');
+    assert.equal(state.reason_code, spent ? 'pi_shell_message_provider_call_budget_exhausted' : 'pi_reply_continuation_available');
+  }
+});
+
+test('unpaired or outcome-unknown reads still block recovery without inventing an unknown write', async () => {
+  const [{ replyContinuationState }] = await imports;
+  const { record, entries } = await fixture();
+  entries.splice(entries.findIndex(row => row.id === 'failed'), 0,
+    entry('read-call', assistant([{ type: 'toolCall', id: 'read-unknown', name: 'easyicu_read_project_file' }])),
+    entry('read-error', { role: 'toolResult', toolCallId: 'read-unknown', toolName: 'easyicu_read_project_file',
+      isError: true, details: { status: 'blocked', code: 'pi_host_tool_outcome_unknown' } }));
+  const state = replyContinuationState(record);
+  assert.equal(state.available, false);
+  assert.equal(state.mutation_state, 'completed');
+  assert.equal(state.reason_code, 'pi_workspace_recovery_read_state_unconfirmed');
+});
+
 test('unknown outcomes, live tools, source errors, authority changes and stale targets fail closed', async () => {
   const [{ replyContinuationState, prepareReplyContinuation }] = await imports;
   for (const mutate of [
@@ -173,7 +259,7 @@ test('message action substitutes an explicit explanation continuation for unsafe
     continuationReasonCode: 'pi_reply_continuation_available' }).actionsHtml;
   assert.match(pending, /正在继续完成说明/);
   assert.match(pending, /disabled aria-busy="true"/);
-  assert.doesNotMatch(pending, /gpi-message-continuation-note/);
+  assert.doesNotMatch(pending, /原回复的模型或预算状态无法确认|原模型或预算状态无法确认/);
   assert.doesNotMatch(actions.render({ ...rows[1], errorCode: '', replyContinuation: true }, options).actionsHtml, /data-gpi-message-retry/);
   assert.doesNotMatch(actions.render(rows[1], { ...options, hasCompletedAction: false, hasSideEffectAttempt: true,
     canContinueReply: false }).actionsHtml, /data-gpi-message-retry/);
@@ -195,26 +281,24 @@ test('persisted recovery replay marks only its assistant explanation after a rel
   assert.equal(rows[2].replyContinuation, undefined);
 });
 
-test('real sidecar: write/check once, fail Provider, reload, continue explanation without tool replay', {
-  skip: !fs.existsSync(path.join(app, 'node_modules/@earendil-works/pi-ai/package.json')),
-  timeout: 60000,
-}, async () => {
+async function realSidecarRecovery({ unstarted = false } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'easyicu-reply-continuation-'));
   const artifact = path.join(temp, 'brief.html');
   const events = []; const requests = []; let recovered = false; let writes = 0; let checks = 0;
   const server = http.createServer(async (req, res) => {
     let text = ''; for await (const part of req) text += part;
     const body = JSON.parse(text); requests.push(body);
-    if (requests.length > 1 && !recovered) { res.writeHead(503); res.end('Synthetic upstream unavailable'); return; }
+    const writeDecision = unstarted ? recovered && !body.messages.some(message => message.role === 'tool') : requests.length === 1;
+    if (!recovered && (unstarted || requests.length > 1)) { res.writeHead(503); res.end('Synthetic upstream unavailable'); return; }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
-    const delta = requests.length === 1 ? { role: 'assistant', tool_calls: [
+    const delta = writeDecision ? { role: 'assistant', tool_calls: [
       { index: 0, id: 'write-1', type: 'function', function: { name: 'easyicu_write_project_file', arguments: JSON.stringify({ file: 'brief.html', content: '<!doctype html><title>Saved once</title><p>synthetic</p>' }) } },
       { index: 1, id: 'check-1', type: 'function', function: { name: 'easyicu_check_project_file', arguments: JSON.stringify({ file: 'brief.html' }) } },
-    ] } : { role: 'assistant', content: '文件已经保存；静态检查通过。当前运行时验收失败，尚未完成，不能称为已验收。' };
+    ] } : { role: 'assistant', content: unstarted ? '原任务的文件现已保存，静态检查通过；运行时尚未验收。' : '文件已经保存；静态检查通过。当前运行时验收失败，尚未完成，不能称为已验收。' };
     const chunk = (delta, finish_reason) => JSON.stringify({ id: 'synthetic', object: 'chat.completion.chunk', created: 1,
       model: 'local-recovery', choices: [{ index: 0, delta, finish_reason }] });
     res.write('data: ' + chunk(delta, null) + '\n\n');
-    res.write('data: ' + chunk({}, requests.length === 1 ? 'tool_calls' : 'stop') + '\n\n');
+    res.write('data: ' + chunk({}, writeDecision ? 'tool_calls' : 'stop') + '\n\n');
     res.end('data: [DONE]\n\n');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -264,43 +348,61 @@ test('real sidecar: write/check once, fail Provider, reload, continue explanatio
     start();
     await rpc('session.create', { session_id: 'recovery-test', agent_mode: 'workspace', language: 'zh' });
     const failed = await rpc('session.prompt', { session_id: 'recovery-test', message: '保存并检查 brief.html，然后说明结果。' });
-    assert.equal(writes, 1); assert.equal(checks, 1); assert.equal(requests.length, 5, 'one tool decision plus four guarded failed final explanations');
+    assert.equal(writes, unstarted ? 0 : 1); assert.equal(checks, unstarted ? 0 : 1);
+    assert.equal(requests.length, unstarted ? 4 : 5, 'each empty Provider failure consumes its original guarded attempt');
     assert.equal(failed.reply_continuation.available, true, JSON.stringify(failed.reply_continuation));
-    assert.equal(failed.shell_usage.message_provider_calls, 5);
-    const savedHash = hash(artifact); const originalErrorId = failed.reply_continuation.source_error_entry_id;
+    assert.equal(failed.reply_continuation.recovery_kind, unstarted ? 'retry_unstarted' : 'continue_explanation');
+    assert.equal(failed.shell_usage.message_provider_calls, unstarted ? 4 : 5);
+    const savedHash = unstarted ? null : hash(artifact); const originalErrorId = failed.reply_continuation.source_error_entry_id;
     assert.ok(failed.transcript.some(row => row.error_code === 'pi_model_provider_unavailable'));
     await stop(); start();
     const restored = await rpc('session.create', { session_id: 'recovery-test', session_file: failed.session_file, agent_mode: 'workspace', language: 'zh' });
     assert.equal(restored.reply_continuation.available, true, 'recovery remains available after sidecar reload');
     recovered = true;
-    const continued = await rpc('session.continue_reply', { session_id: 'recovery-test', source_error_entry_id: originalErrorId,
-      validation_context: { status: 'failed', summary: 'Synthetic current runtime acceptance failed' } });
-    assert.equal(writes, 1); assert.equal(checks, 1); assert.equal(hash(artifact), savedHash);
-    assert.equal(requests.length, 6); assert.equal((requests.at(-1).tools || []).length, 0, 'continuation request has zero tool capability');
-    assert.match(JSON.stringify(requests.at(-1).messages), /"status\\":\\"failed/);
+    const rpcMethod = unstarted ? 'session.retry_failed_turn' : 'session.continue_reply';
+    const continued = await rpc(rpcMethod, { session_id: 'recovery-test', source_error_entry_id: originalErrorId,
+      ...(unstarted ? {} : { validation_context: { status: 'failed', summary: 'Synthetic current runtime acceptance failed' } }) });
+    assert.equal(writes, 1); assert.equal(checks, 1);
+    if (!unstarted) assert.equal(hash(artifact), savedHash);
+    assert.equal(requests.length, 6);
+    if (unstarted) {
+      const tools = (requests.at(-1).tools || []).map(tool => tool.function?.name);
+      assert.ok(tools.includes('easyicu_write_project_file'));
+      assert.ok(!tools.includes('easyicu_run') && !tools.includes('easyicu_call_mcp_tool'));
+      assert.match(JSON.stringify(requests.at(-1).messages), /EASYICU_WORKSPACE_RETRY_V1/);
+    } else {
+      assert.equal((requests.at(-1).tools || []).length, 0, 'continuation request has zero tool capability');
+      assert.match(JSON.stringify(requests.at(-1).messages), /"status\\":\\"failed/);
+    }
     assert.equal(continued.shell_usage.message_provider_calls, 6, 'original message budget accumulates rather than resetting');
     assert.equal(continued.shell_usage.provider_calls, 6);
     assert.equal(continued.reply_continuation.available, false, 'successful explanation cannot be continued again');
     assert.ok(continued.transcript.some(row => row.error_code === 'pi_model_provider_unavailable' && row.entry_id === originalErrorId), 'the original failure is retained');
-    assert.ok(continued.transcript.some(row => JSON.stringify(row.content).includes('当前运行时验收失败')));
+    assert.ok(continued.transcript.some(row => JSON.stringify(row.content).includes(unstarted ? '原任务的文件现已保存' : '当前运行时验收失败')));
+    assert.equal(continued.transcript.filter(row => row.role === 'user').length, 1, 'recovery appends host context rather than replaying a user turn');
     assert.ok(events.some(row => row.event.type === 'message_end' && row.event.error_code === 'pi_model_provider_unavailable'));
-    assert.ok(events.some(row => row.event.type === 'text_delta' && row.event.delta.includes('当前运行时验收失败')));
+    assert.ok(events.some(row => row.event.type === 'text_delta' && row.event.delta.includes(unstarted ? '原任务的文件现已保存' : '当前运行时验收失败')));
     const jsonl = fs.readFileSync(failed.session_file, 'utf8').trim().split('\n').map(JSON.parse);
-    assert.ok(jsonl.some(row => row.customType === 'easyicu.reply-continuation/1' && row.data.state === 'completed'));
-    await assert.rejects(rpc('session.continue_reply', { session_id: 'recovery-test', source_error_entry_id: originalErrorId }));
+    assert.ok(jsonl.some(row => row.customType === (unstarted ? 'easyicu.workspace-retry/1' : 'easyicu.reply-continuation/1') && row.data.state === 'completed'));
+    await assert.rejects(rpc(rpcMethod, { session_id: 'recovery-test', source_error_entry_id: originalErrorId }));
     assert.equal(requests.length, 6);
     const outDir = process.env.EASYICU_REPLY_RECOVERY_RECEIPT_DIR;
     if (outDir) {
       fs.mkdirSync(outDir, { recursive: true });
-      fs.writeFileSync(path.join(outDir, 'deterministic-sidecar-recovery.json'), JSON.stringify({
+      fs.writeFileSync(path.join(outDir, unstarted ? 'deterministic-pretool-retry.json' : 'deterministic-sidecar-recovery.json'), JSON.stringify({
         schema_version: 'easyicu.reply-continuation-test/1', provider: 'loopback deterministic HTTP',
         original_failure_preserved: true, sidecar_reloaded_before_continuation: true,
         write_count: writes, check_count: checks, provider_calls: requests.length,
         original_message_provider_calls: continued.shell_usage.message_provider_calls,
         artifact_sha256_before: savedHash, artifact_sha256_after: hash(artifact),
         continuation_tools: (requests.at(-1).tools || []).length,
-        failed_current_qa_retained: true, actual_home_mutated: false,
+        recovery_kind: unstarted ? 'retry_unstarted' : 'continue_explanation',
+        failed_current_qa_retained: !unstarted, actual_home_mutated: false,
       }, null, 2) + '\n');
     }
   } finally { await stop(); await new Promise(resolve => server.close(resolve)); fs.rmSync(temp, { recursive: true, force: true }); }
-});
+}
+
+const sidecarOptions = { skip: !fs.existsSync(path.join(app, 'node_modules/@earendil-works/pi-ai/package.json')), timeout: 60000 };
+test('real sidecar: write/check once, fail Provider, reload, continue explanation without tool replay', sidecarOptions, () => realSidecarRecovery());
+test('real sidecar: pre-tool failure, reload, retry same task once with cumulative original budget', sidecarOptions, () => realSidecarRecovery({ unstarted: true }));

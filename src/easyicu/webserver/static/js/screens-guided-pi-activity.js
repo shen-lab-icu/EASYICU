@@ -1172,7 +1172,9 @@
       // One host sentence before a job's trace says what EasyICU will do.
       const owner = jobNarration();
       const openingText = owner && row ? owner.opening(row.jobCode, tr) : '';
-      const opening = openingText ? `<p class="gpi-turn-opening">${esc(openingText)}</p>` : '';
+      const historicalAttempt = row && row.supersededAttempt
+        ? `<p class="gpi-trace-note">${esc(tr('Earlier failed attempt · superseded by a resend · read only', '较早的失败尝试 · 已被重发替代 · 仅供查看'))}</p>` : '';
+      const opening = historicalAttempt + (openingText ? `<p class="gpi-turn-opening">${esc(openingText)}</p>` : '');
       const rowCount = visibleSteps.filter(step => !(owner && owner.replaces(step))).length;
       const longTrace = visibleSteps.length + narration.length > 5;
       const traceKey = String(row && (row.childJobId || row.id) || '');

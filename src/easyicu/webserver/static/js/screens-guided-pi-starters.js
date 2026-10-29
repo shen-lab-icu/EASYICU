@@ -298,6 +298,7 @@
         <div class="gpi-entry-title"><h2>${esc(tr('Start an ICU research task', '开始一项 ICU 研究'))}</h2></div>
         <p>${esc(introLine(tr))}</p>
       </header>
+      <div class="gpi-secondary-actions"><button class="btn" type="button" data-gpi-new-workspace ${disabled}>${esc(tr('New artifact task', '新建产物任务'))}</button></div>
       ${options.composer || ''}
       ${options.focused ? '' : `${offersDemo() ? demoCard(disabled, tr) : ''}
       <div class="gpi-capability-head"><strong>${esc(tr('Try one of these questions', '试试这些问题'))}</strong><div class="gpi-capability-tools"><label><span class="shell-sr-only">${esc(tr('Search example questions', '搜索示例问题'))}</span><input type="search" data-gpi-starter-search placeholder="${esc(tr('Database, question or method…', '搜索数据库、问题或方法…'))}" /></label></div></div>

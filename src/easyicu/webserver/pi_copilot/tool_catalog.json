@@ -2100,7 +2100,22 @@
     {"name": "easyicu_list_project_files", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}, "model_schema": null},
     {"name": "easyicu_read_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["end_line", "file", "start_line"], "host": [], "required": ["file"]}, "model_schema": null},
     {"name": "easyicu_write_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["content", "file"], "host": [], "required": ["content", "file"]}, "model_schema": null},
-    {"name": "easyicu_edit_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["expected_sha256", "file", "new_text", "old_text"], "host": [], "required": ["expected_sha256", "file", "old_text"]}, "model_schema": null},
+    {"name": "easyicu_edit_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["check_after", "edits", "expected_sha256", "file", "new_text", "old_text"], "host": [], "required": ["expected_sha256", "file"]}, "model_schema": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "file": {"type": "string", "minLength": 1, "maxLength": 240},
+        "expected_sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+        "old_text": {"type": "string", "minLength": 1, "maxLength": 120000},
+        "new_text": {"type": "string", "maxLength": 120000},
+        "edits": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "object", "additionalProperties": false, "required": ["old_text", "new_text"], "properties": {"old_text": {"type": "string", "minLength": 1, "maxLength": 120000}, "new_text": {"type": "string", "maxLength": 120000}}}},
+        "check_after": {"type": "boolean"}
+      },
+      "required": ["file", "expected_sha256"],
+      "oneOf": [
+        {"required": ["old_text"], "not": {"required": ["edits"]}},
+        {"required": ["edits"], "not": {"anyOf": [{"required": ["old_text"]}, {"required": ["new_text"]}]}}
+      ]
+    }},
     {"name": "easyicu_check_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["file"], "host": [], "required": ["file"]}, "model_schema": null},
     {"name": "easyicu_preview_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["checked_sha256", "file"], "host": [], "required": ["checked_sha256", "file"]}, "model_schema": null},
     {"name": "easyicu_get_project_runtime_qa", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["checked_sha256", "file"], "host": [], "required": ["checked_sha256", "file"]}, "model_schema": null}

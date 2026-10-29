@@ -8,12 +8,17 @@ const FILE_TOOLS = new Set([
   "easyicu_write_project_file", "easyicu_edit_project_file",
   "easyicu_check_project_file", "easyicu_preview_project_file",
   "easyicu_get_project_runtime_qa",
+  "easyicu_workspace_status", "easyicu_inspect_workflow", "easyicu_inspect_context",
+  "easyicu_list_extensions",
 ]);
+const MUTATING_TOOLS = new Set(["easyicu_write_project_file", "easyicu_edit_project_file"]);
 const WRITE_CODES = new Set(["pi_workspace_file_written", "pi_workspace_file_edited"]);
 const RECOVERABLE = new Set(["pi_model_provider_unavailable", "pi_model_rate_limited"]);
 
-function blocked(reason) {
-  return { available: false, reason_code: reason };
+function blocked(reason, details = {}) {
+  return { available: false, reason_code: reason,
+    recovery_kind: ["pi_reply_continuation_no_failed_reply", "pi_reply_continuation_workspace_only"].includes(reason) ? "none" : "blocked",
+    mutation_state: "unconfirmed", budget_state: "unverified", ...details };
 }
 
 function budgetAt(entry) {
@@ -69,17 +74,20 @@ export function replyContinuationState(record) {
   if (userIndex < 0) return blocked("pi_reply_continuation_no_failed_reply");
   const turn = branch.slice(userIndex + 1).filter(entry => entry.type === "message");
   const last = turn.at(-1);
-  if (last?.message?.role !== "assistant" || !RECOVERABLE.has(modelErrorCode(last.message))) {
+  if (last?.message?.role !== "assistant" || !["error", "aborted"].includes(last.message.stopReason)) {
     return blocked("pi_reply_continuation_no_failed_reply");
   }
-  const unavailable = reason => ({ ...blocked(reason), source_error_entry_id: last.id,
-    source_user_entry_id: branch[userIndex].id });
+  const failureCode = modelErrorCode(last.message);
+  let readErrorCount = 0;
+  const unavailable = (reason, details = {}) => ({ ...blocked(reason, details), source_error_entry_id: last.id,
+    source_user_entry_id: branch[userIndex].id, read_error_count: readErrorCount });
   const current = record.session.model;
   if (!current || ["api", "provider"].some(key => last.message[key] !== current[key])
       || last.message.model !== current.id) return unavailable("pi_reply_continuation_model_changed");
   const pending = new Map();
   let completed = 0;
   let written = false;
+  let mutatingAttempted = false;
   const resources = new Map();
   const seen = new Set();
   const artifactFiles = new Set();
@@ -94,12 +102,26 @@ export function replyContinuationState(record) {
           return unavailable("pi_reply_continuation_tool_outcome_unknown");
         }
         seen.add(part.id);
+        if (MUTATING_TOOLS.has(part.name)) mutatingAttempted = true;
         pending.set(part.id, part.name);
       }
     } else if (message.role === "toolResult") {
-      if (pending.get(message.toolCallId) !== message.toolName || message.isError === true
-          || message.details?.status !== "ok") {
+      if (pending.get(message.toolCallId) !== message.toolName) {
         return unavailable("pi_reply_continuation_tool_outcome_unknown");
+      }
+      const mutating = MUTATING_TOOLS.has(message.toolName);
+      const status = String(message.details?.status || "");
+      const code = String(message.details?.code || "").trim();
+      const confirmedReadError = !mutating && ["blocked", "failed", "error"].includes(status)
+        && code && !["pi_host_tool_outcome_unknown", "pi_host_tool_timeout"].includes(code);
+      if (confirmedReadError) {
+        pending.delete(message.toolCallId);
+        readErrorCount += 1;
+        continue;
+      }
+      if (message.isError === true || status !== "ok" || !code || (mutating && !WRITE_CODES.has(code))) {
+        return unavailable(mutating ? "pi_reply_continuation_tool_outcome_unknown" : "pi_workspace_recovery_read_state_unconfirmed",
+          mutating ? {} : { mutation_state: written ? "completed" : "not_started" });
       }
       pending.delete(message.toolCallId);
       completed += 1;
@@ -114,27 +136,47 @@ export function replyContinuationState(record) {
         resources.set(file, { file, sha256 });
       }
       if (WRITE_CODES.has(message.details?.code)
-          && ["easyicu_write_project_file", "easyicu_edit_project_file"].includes(message.toolName)) {
+          && MUTATING_TOOLS.has(message.toolName)) {
         written = true;
         if (!validIdentity) missingArtifactIdentities += 1;
         if (!validFile) unnamedArtifacts += 1;
       }
     }
   }
-  if (pending.size) return unavailable("pi_reply_continuation_tool_outcome_unknown");
-  if (!written) return blocked("pi_reply_continuation_no_completed_write");
+  if (pending.size) {
+    const mutationUnknown = [...pending.values()].some(name => MUTATING_TOOLS.has(name));
+    return unavailable(mutationUnknown ? "pi_reply_continuation_tool_outcome_unknown" : "pi_workspace_recovery_read_state_unconfirmed",
+      mutationUnknown ? {} : { mutation_state: written ? "completed" : "not_started" });
+  }
+  if (mutatingAttempted && !written) return unavailable("pi_reply_continuation_tool_outcome_unknown");
+  const mutationState = written ? "completed" : "not_started";
+  if (/^pi_shell_.*_budget_exhausted$/.test(failureCode)) {
+    return unavailable(failureCode, { mutation_state: mutationState, budget_state: "exhausted" });
+  }
+  if (!RECOVERABLE.has(failureCode) && last.message.stopReason !== "aborted") {
+    return unavailable("pi_workspace_recovery_provider_unavailable", { mutation_state: mutationState });
+  }
+  if (written && last.message.stopReason === "aborted") {
+    return unavailable("pi_workspace_recovery_cancelled_after_actions", { mutation_state: mutationState });
+  }
   let budget;
   try { budget = messageBudget(record, branch[userIndex].id); } catch { /* fail closed */ }
-  if (!budget) return unavailable("pi_reply_continuation_budget_unknown");
+  if (!budget) return unavailable("pi_reply_continuation_budget_unknown", { mutation_state: mutationState });
   try { record.budgetGuard.validateMessageContinuation(budget, {
     systemPrompt: record.session.agent?.state?.systemPrompt || "",
     messages: record.session.messages,
   }); } catch (error) {
-    return unavailable(error.code || "pi_reply_continuation_budget_unknown");
+    const code = error.code || "pi_reply_continuation_budget_unknown";
+    return unavailable(code, { mutation_state: mutationState,
+      budget_state: /_budget_exhausted$/.test(code) ? "exhausted" : "unverified" });
   }
   return {
     available: true,
-    reason_code: "pi_reply_continuation_available",
+    reason_code: written ? "pi_reply_continuation_available" : "pi_workspace_retry_available",
+    recovery_kind: written ? "continue_explanation" : "retry_unstarted",
+    mutation_state: mutationState,
+    budget_state: "available",
+    read_error_count: readErrorCount,
     source_error_entry_id: last.id,
     source_user_entry_id: branch[userIndex].id,
     completed_tool_count: completed,
@@ -146,8 +188,10 @@ export function replyContinuationState(record) {
 
 export function prepareReplyContinuation(record, sourceErrorEntryId, validationContext) {
   const state = replyContinuationState(record);
-  if (!state.available) {
-    throw Object.assign(new Error("This reply cannot be continued safely"), { code: state.reason_code });
+  if (!state.available || state.recovery_kind !== "continue_explanation") {
+    throw Object.assign(new Error("This reply cannot be continued safely"), {
+      code: state.available ? "pi_workspace_recovery_action_mismatch" : state.reason_code,
+    });
   }
   if (String(sourceErrorEntryId || "") !== state.source_error_entry_id) {
     throw Object.assign(new Error("The failed reply is no longer current"), { code: "pi_reply_continuation_stale" });
@@ -174,4 +218,27 @@ export function prepareReplyContinuation(record, sourceErrorEntryId, validationC
       details: { schema_version: "easyicu.reply-continuation/1", ...state, validation_status: validation.status, tools_disabled: true },
     },
   };
+}
+
+export function prepareWorkspaceRetry(record, sourceErrorEntryId) {
+  const state = replyContinuationState(record);
+  if (!state.available || state.recovery_kind !== "retry_unstarted") {
+    throw Object.assign(new Error("This workspace task cannot be retried safely"), {
+      code: state.available ? "pi_workspace_recovery_action_mismatch" : state.reason_code,
+    });
+  }
+  if (String(sourceErrorEntryId || "") !== state.source_error_entry_id) {
+    throw Object.assign(new Error("The failed reply is no longer current"), { code: "pi_reply_continuation_stale" });
+  }
+  record.budgetGuard.resumeMessage(messageBudget(record, state.source_user_entry_id));
+  const content = [
+    "[EASYICU_WORKSPACE_RETRY_V1]",
+    "The host confirmed that the latest user task failed before any file-changing or scientific tool was attempted. Continue that same original user task in this branch, using the existing confirmed read-only results. Do not resend the original user message, change its scope, or claim the earlier failure succeeded.",
+    "Only workspace file tools and the frozen Skill reader are available. The host preserves the original message and session budgets and its routine file permissions. No research run, approval, scientific protocol change, extraction, external MCP call, or new one-shot authority is granted by this retry.",
+    record.language === "zh" ? "用中文完成原先尚未开始写入的任务，并据实报告剩余步骤。" : "Complete the original unstarted workspace task and report any remaining steps accurately.",
+  ].join("\n");
+  return { state, tools: [...FILE_TOOLS], message: {
+    customType: "easyicu_workspace_retry", content, display: false,
+    details: { schema_version: "easyicu.workspace-retry/1", ...state, original_budget_preserved: true },
+  } };
 }

@@ -20,6 +20,7 @@
 .gpi-preview-file-actions{display:flex;flex-wrap:wrap;gap:8px;padding:8px 14px;border-bottom:1px solid var(--hair);background:var(--surface)}
 .gpi-preview-file-actions a,.gpi-preview-file-actions button{display:inline-flex;align-items:center;min-height:32px;padding:6px 10px;border:1px solid var(--hair);border-radius:6px;background:var(--surface);color:var(--ink-3);font:600 12px/1.4 var(--font);text-decoration:none;cursor:pointer}
 .gpi-preview-file-actions button[aria-pressed="true"]{background:var(--accent-soft);color:var(--ink)}
+.gpi-preview-file-actions button[hidden]{display:none}
 .gpi-preview-file-actions [data-gpi-csv-download-slot],.gpi-preview-file-actions form{max-width:100%;min-width:0}
 .gpi-preview-file-actions [data-gpi-csv-download-slot] button{max-width:100%;overflow-wrap:anywhere}
 .gpi-preview-file-actions a:focus-visible,.gpi-preview-file-actions button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}

@@ -23,13 +23,16 @@
       hostJobs: HOST_JOBS, assistantTextHtml, publicAssistantText, followUps: FOLLOW_UPS,
     } = host;
     let submittedJobId = '';
+    let failedReply = false;
 
-    function handlePiEvent(event) {
+    function handlePiEvent(event, jobId) {
       if (!event || typeof event !== 'object') return;
+      if (jobId && String(state.jobId || '') !== String(jobId)) return;
       const at = timeMs(event.at);
       const activity = ensureActivity(event.at);
       if (event.type === 'run_start') {
         submittedJobId = '';
+        failedReply = false;
         state.currentTurnResources = [];
         upsertActivityStep(activity, { id: 'agent', kind: 'agent', status: 'complete', at });
       } else if (event.type === 'turn_start') {
@@ -66,6 +69,7 @@
         // for every token made long transcripts stutter and reset selections.
         if (patchStreamingMessage(streamingRow)) return;
       } else if (event.type === 'message_end') {
+        failedReply = Boolean(event.error_code);
         let row = state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
         if (event.error_code && !submittedJobId) {
           row = row || assistantRow();
@@ -104,7 +108,7 @@
           resource: event.resource || null,
           resources: Array.isArray(event.resources) ? event.resources : [],
         });
-        addAssistantResources(toolResources);
+        if (!event.is_error) addAssistantResources(toolResources);
         const localWorkspace = !event.is_error && String(event.code || '') === 'easyicu_local_source_workspace_ready'
           ? toolResources.find(resource => resource && resource.kind === 'native_workspace')
           : null;
@@ -135,7 +139,7 @@
         const retry = activity.steps.slice().reverse().find(item => item.kind === 'retry' && item.status === 'running');
         if (retry) { retry.status = 'complete'; retry.endedAt = at; }
       } else if (event.type === 'run_end') {
-        finishActivity('complete', event.at, 'settled');
+        finishActivity(failedReply ? 'error' : 'complete', event.at, failedReply ? 'failed' : 'settled');
       }
       render();
     }

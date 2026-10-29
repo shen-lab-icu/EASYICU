@@ -70,9 +70,9 @@ from .conversation_status import (
     session_rail_status,
 )
 from .decision_records import conversation_job_ids, project_decision_records
-from .gateway import PiGatewayClient
+from .gateway import DEFAULT_REQUEST_TIMEOUT_SECONDS, PiGatewayClient
 from .followup_queue import FollowupQueue
-from .reply_continuation import public_state as public_reply_continuation
+from .reply_continuation import project_recovery_state
 from .message_input import prepare_user_message
 from .project_authority import (
     ProjectAuthorityStore,
@@ -117,7 +117,10 @@ from .workflow import (
 MAX_SESSIONS = 100
 # Bounds the Pi/model side of one turn; its host tools are bounded separately
 # (gateway.HOST_TOOL_SIDECAR_TIMEOUT_SECONDS).
-COPILOT_MESSAGE_TIMEOUT_SECONDS = 90
+# Artifact turns can spend several minutes generating and checking files. Use
+# the transport's finite model-time deadline; provider/cost/token limits remain
+# independently enforced by the sidecar, and abort stays available throughout.
+COPILOT_MESSAGE_TIMEOUT_SECONDS = DEFAULT_REQUEST_TIMEOUT_SECONDS
 MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES = 2 * 1024 * 1024
 ALLOWED_TURN_ACTIONS = frozenset(
     {
@@ -2533,6 +2536,13 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
 
         return continue_reply(self, session_id, project_id=project_id, source_error_entry_id=source_error_entry_id)
 
+    def retry_unstarted_reply(
+        self, session_id: str, *, project_id: str, source_error_entry_id: str,
+    ) -> Dict[str, Any]:
+        from .reply_continuation import retry_unstarted_reply
+
+        return retry_unstarted_reply(self, session_id, project_id=project_id, source_error_entry_id=source_error_entry_id)
+
     def send_message(
         self,
         session_id: str,
@@ -2782,6 +2792,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
 
             started = self._get_record(record.session_id)
             started.active_message_job_id = job.id
+            started.last_message_job_id = job.id
             started.last_turn_status = "running"
             started.conversation_updated_at = utc_now()
             started.last_turn_allowed_actions = sorted(requested_actions)
@@ -2838,6 +2849,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                         job_id=child_job_id,
                     )
 
+            terminal_assistant = None
             try:
                 if job.cancel_requested:
                     raise RuntimeError("pi_message_cancelled_before_delivery")
@@ -2940,7 +2952,6 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 refreshed.last_turn_status = "running"
                 self._save_record(refreshed)
                 transcript = state.get("transcript")
-                terminal_assistant = None
                 if isinstance(transcript, list):
                     terminal_assistant = next(
                         (
@@ -2981,6 +2992,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                     job_id=job.id,
                     status="cancelled" if job.cancel_requested else "done",
                     assistant_reply=assistant_reply,
+                    assistant_entry_id=str((terminal_assistant or {}).get("entry_id") or "") or None,
                 )
                 return {
                     "session": self._public_session(refreshed, gateway_state=state),
@@ -3001,6 +3013,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                             project_id=str(record.project_id),
                             job_id=job.id,
                             status=terminal.last_turn_status,
+                            assistant_entry_id=str((terminal_assistant or {}).get("entry_id") or "") or None,
                         )
                 except PiCopilotError:
                     pass
@@ -4563,11 +4576,17 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
     def get_workspace_runtime_qa(
         self, *, project_id: str, relative_file: str, checked_sha256: str,
     ) -> Dict[str, Any]:
+        from .workspace_runtime_qa import contract_preflight_receipt
+
         artifact = self.get_workspace_preview(
             project_id=project_id, relative_file=relative_file,
             checked_sha256=checked_sha256,
         )["artifact"]
-        return self.runtime_qa.read(project_id, artifact["file"], artifact["checked_sha256"])
+        observed = self.runtime_qa.read(project_id, artifact["file"], artifact["checked_sha256"])
+        preflight = contract_preflight_receipt(artifact["text"], artifact["checked_sha256"], observed=observed)
+        if preflight is not None:
+            return preflight
+        return observed
 
     def record_workspace_runtime_qa(
         self, *, project_id: str, relative_file: str, checked_sha256: str,
@@ -5477,7 +5496,11 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             # browser, and therefore never reach the next-step buttons the
             # front end parses out of this same text.
             "transcript": project_transcript(state.get("transcript")),
-            "reply_continuation": public_reply_continuation(state.get("reply_continuation")),
+            "reply_continuation": project_recovery_state(self, record, state),
+            "prior_failed_attempts": (
+                self.replay_store.prior_failed_attempts(session_id=record.session_id, project_id=str(record.project_id))
+                if include_replay and record.agent_mode == "workspace" else []
+            ),
             "quick_answers": self._quick_attachments(record, replay_turns) if include_replay else [],
             "transcript_page": (
                 dict(state.get("transcript_page") or {})

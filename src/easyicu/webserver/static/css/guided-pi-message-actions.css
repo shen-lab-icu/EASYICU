@@ -1,0 +1,24 @@
+/* Owner: text-bearing recovery actions in the Guided Copilot message bar. */
+.gpi-message-actions button.gpi-message-recovery,
+.gpi-workspace .gpi-message-actions button.gpi-message-recovery {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  width:auto;
+  min-width:max-content;
+  height:auto;
+  min-height:30px;
+  padding:4px 9px;
+  white-space:nowrap;
+  font:500 12px/1.4 var(--font);
+}
+.gpi-message-recovery .ic { flex:0 0 auto; }
+.gpi-message-continuation-note {
+  display:block;
+  max-width:64ch;
+  margin-top:6px;
+  color:var(--ink-3);
+  font-size:12px;
+  line-height:1.5;
+}

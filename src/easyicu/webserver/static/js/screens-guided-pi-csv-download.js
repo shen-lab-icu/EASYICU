@@ -4,32 +4,92 @@
   function create(currentKey) {
     let key = '', nonce = '', frame = null, slot = null, coordinates = null;
     let count = 0, last = 0, pending = false, revision = 0, request = null;
+    let epoch = '', passive = false, acknowledged = false, ackTimer = 0, selectionVersion = -1, readyReceived = false;
     const urls = new Set();
-    function reset() {
+    function clearDelivery() {
       revision += 1;
       if (request) request.abort();
       request = null;
+      clearTimeout(ackTimer); ackTimer = 0;
       urls.forEach(url => window.URL.revokeObjectURL(url));
       urls.clear();
       if (slot) slot.replaceChildren();
-      key = ''; nonce = ''; frame = null; slot = null; coordinates = null;
-      count = 0; last = 0; pending = false;
+      pending = false;
     }
-    function prepare(value) {
-      reset();
-      if (!value || !window.crypto || !window.crypto.getRandomValues) return '';
+    function randomNonce() {
+      if (!window.crypto || !window.crypto.getRandomValues) return '';
       const bytes = new Uint8Array(32);
       window.crypto.getRandomValues(bytes);
-      nonce = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+      return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+    function command(action) {
+      if (frame && frame.contentWindow && typeof frame.contentWindow.postMessage === 'function')
+        frame.contentWindow.postMessage({ type: 'easyicu:workspace-csv-control', nonce, epoch, action }, '*');
+    }
+    function revoke() {
+      command('disable'); epoch = ''; acknowledged = false; selectionVersion = -1; clearDelivery();
+    }
+    function reset() {
+      revoke();
+      key = ''; nonce = ''; frame = null; slot = null; coordinates = null;
+      count = 0; last = 0; passive = false; readyReceived = false;
+    }
+    function prepare(value, options = {}) {
+      reset();
+      if (!value || !(nonce = randomNonce())) return '';
+      passive = options.passive === true;
       key = value;
       return nonce;
     }
     function active() { return key && key === currentKey() && frame && frame.isConnected && slot && slot.isConnected; }
     function bind(targetFrame, targetSlot, source) { frame = targetFrame; slot = targetSlot; coordinates = source; }
+    function note(en, zh) {
+      if (!slot) return;
+      const status = document.createElement('span'); status.setAttribute('role', 'status');
+      status.textContent = window.EU_LANG === 'zh' ? zh : en; slot.replaceChildren(status);
+    }
+    function generate() {
+      if (!active() || !passive) return false;
+      clearDelivery(); epoch = randomNonce(); acknowledged = false; selectionVersion = -1;
+      if (!epoch) return false;
+      const sourceEpoch = epoch;
+      note('Generating CSV with the current page filters…', '正在按当前页面筛选生成 CSV…');
+      command('generate');
+      ackTimer = setTimeout(() => {
+        if (active() && epoch === sourceEpoch && !acknowledged && !pending)
+          note('Use the page’s CSV export button, then click the save link here.', '请点击页面里的 CSV 导出按钮，再点击此处的保存链接。');
+      }, 10000);
+      return true;
+    }
     async function receive(event) {
       const data = event.data;
-      if (!active() || pending || event.source !== frame.contentWindow || event.origin !== 'null'
-        || !data || data.type !== 'easyicu:workspace-csv' || data.nonce !== nonce
+      if (!active() || event.source !== frame.contentWindow || event.origin !== 'null'
+        || !data || data.nonce !== nonce) return;
+      if (passive && data.type === 'easyicu:workspace-csv-ready-control') {
+        if (!readyReceived) { readyReceived = true; if (epoch && !acknowledged) command('generate'); }
+        return;
+      }
+      if (passive && (!epoch || data.epoch !== epoch)) return;
+      if (data.type === 'easyicu:workspace-csv-ack') {
+        if (acknowledged || !['generated', 'manual', 'qa_busy'].includes(data.status)) return;
+        acknowledged = true; clearTimeout(ackTimer);
+        if (!pending && data.status === 'manual')
+          note('Use the page’s CSV export button, then click the save link here.', '未找到唯一 CSV 导出控件，请点击页面里的导出按钮，再点击此处的保存链接。');
+        if (!pending && data.status === 'qa_busy')
+          note('Page checks are still running. Export the current filters after they finish.', '页面检查尚未完成；完成后请在页面里导出当前筛选。');
+        return;
+      }
+      if (passive) {
+        if (!Number.isSafeInteger(data.selection_version) || data.selection_version < 0
+          || data.selection_version > 1000000 || data.selection_version < selectionVersion) return;
+        selectionVersion = data.selection_version;
+      }
+      if (data.type === 'easyicu:workspace-csv-changed') {
+        clearDelivery();
+        note('Filters changed. Generate CSV again with the current filters.', '筛选已更改，请按当前筛选重新生成 CSV。');
+        return;
+      }
+      if (pending || data.type !== 'easyicu:workspace-csv'
         || data.media_type !== 'text/csv' || typeof data.filename !== 'string'
         || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,115}\.csv$/.test(data.filename)
         || !data.filename.endsWith('.csv')
@@ -37,10 +97,10 @@
         || data.csv.includes('\0') || new TextEncoder().encode(data.csv).length > 1048576
         || count >= 5 || Date.now() - last < 1000) return;
       count += 1; last = Date.now(); pending = true;
-      const ticket = revision, sourceFrame = frame, sourceNonce = nonce;
+      const ticket = revision, sourceFrame = frame, sourceNonce = nonce, sourceEpoch = epoch;
       const source = { ...coordinates }, controller = new AbortController();
       request = controller;
-      const bound = () => ticket === revision && active() && frame === sourceFrame && nonce === sourceNonce;
+      const bound = () => ticket === revision && active() && frame === sourceFrame && nonce === sourceNonce && epoch === sourceEpoch;
       const current = () => bound() && !controller.signal.aborted;
       const status = document.createElement('span');
       status.setAttribute('role', 'status');
@@ -83,7 +143,7 @@
         urls.add(url);
         const link = document.createElement('a');
         link.href = url; link.download = data.filename; link.dataset.gpiCsvDownload = '';
-        link.textContent = (window.EU_LANG === 'zh' ? 'CSV 已生成，下载：' : 'CSV ready — Download CSV: ') + data.filename;
+        link.textContent = (window.EU_LANG === 'zh' ? 'CSV 已生成，点击保存：' : 'CSV ready — click to save: ') + data.filename;
         link.addEventListener('click', event => { if (!bound()) event.preventDefault(); });
         slot.replaceChildren(link);
         document.dispatchEvent(new CustomEvent('easyicu:workspace-csv-ready', {
@@ -98,7 +158,7 @@
       }
     }
     window.addEventListener('message', receive);
-    return { prepare, bind, reset };
+    return { prepare, bind, reset, generate, revoke };
   }
   window.EasyICU.guidedPi.declare('csvDownloads', { create });
 })();
